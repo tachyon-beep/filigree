@@ -1,0 +1,182 @@
+{
+  "verdict": "CHANGES_REQUESTED",
+  "summary": "Plan has 5 blocking issues after deduplication: SQL safety risk in WHERE IN construction, non-transactional schema migration with no rollback, template cache invalidation gap, missing logging infrastructure, and unspecified Phase 5 security. 8 warnings should be addressed. Plan structure, TDD approach, and symbol accuracy are strong.",
+  "plan_file": "/home/john/keel/docs/plans/2026-02-11-workflow-templates-implementation.md",
+  "reviewed_at": "2026-02-11",
+  "reviewers": ["reality", "architecture", "quality", "systems"],
+  "blocking_issues": [
+    {
+      "id": "B1",
+      "source": "quality+systems",
+      "issue": "SQL safety risk in Task 1.10 WHERE IN construction from template-derived state names",
+      "evidence": "Task 1.10 (plan line 1979): 'build a state list from all enabled types states with that category, then use WHERE status IN (...)'. No validation of state names specified. Existing safe pattern at core.py:646 uses parameterized placeholders but plan does not mandate this for state names. Phase 5 allows custom templates with arbitrary state names.",
+      "priority_score": 18,
+      "resolution": "1) Mandate parameterized placeholders matching core.py:646 pattern. 2) Add state name regex validation (^[a-z][a-z0-9_]{0,63}$) to parse_type_template() in Task 1.3. 3) Add empty state list guard in _get_states_for_category(). 4) Add StateDefinition.__post_init__ validation in Task 1.1."
+    },
+    {
+      "id": "B2",
+      "source": "systems+quality+architecture",
+      "issue": "Non-transactional schema migration v4->v5 with no rollback or error handling",
+      "evidence": "Task 1.7 (plan line 1751): creates tables, migrates data, drops old table. core.py:508-518 shows migration framework has no try/except. SQLite DDL auto-commits. If seeding fails after table drop, data is lost. Three reviewers independently flagged this.",
+      "priority_score": 18,
+      "resolution": "1) Backup old templates table before drop. 2) Wrap seeding in try/except with restore-from-backup on failure. 3) Post-migration validation step. 4) Add migration failure test. 5) Keep backup table for one schema version."
+    },
+    {
+      "id": "B3",
+      "source": "systems",
+      "issue": "Template cache invalidation requires process restart — MCP server gets stale templates",
+      "evidence": "Task 1.8 (plan line 1805): lazy TemplateRegistry cached per KeelDB lifetime. MCP server is long-lived subprocess. No reload mechanism in any phase. Agent enables pack via CLI -> MCP server still has old registry.",
+      "priority_score": 12,
+      "resolution": "Add reload-templates MCP tool (simplest: set self._template_registry = None). Add to Phase 3 MCP tools or as Task 1.8b. At minimum, document restart requirement."
+    },
+    {
+      "id": "B4",
+      "source": "quality",
+      "issue": "No logging infrastructure for template operations — 10+ error paths are silent",
+      "evidence": "No logging module imported or used in any template-related code across all 5 phases. Error paths include: template parse failures, migration errors, unknown type fallback (silently returns 'open'), soft warnings in tuples not persisted.",
+      "priority_score": 9,
+      "resolution": "Add Python logging to templates.py (Task 1.3) and migration (Task 1.7). WARNING for fallbacks, ERROR for failures, DEBUG for cache operations."
+    },
+    {
+      "id": "B5",
+      "source": "quality",
+      "issue": "Phase 5 custom template loading has no security specification",
+      "evidence": "Phase 5 enables custom templates from user-supplied JSON. State names flow into SQL queries (B1). No validation, sandboxing, size limits, or type name sanitization specified.",
+      "priority_score": 8,
+      "resolution": "Add validation framework in Task 1.3 parse_type_template() that Phase 5 inherits: state name regex, template size limits, field schema validation, type name validation, pack cycle detection."
+    }
+  ],
+  "warnings": [
+    {
+      "id": "W1",
+      "source": "architecture",
+      "issue": "High blast radius — Phase 1 touches 10 files, Task 1.9 modifies 6 core methods",
+      "priority_score": 6,
+      "recommendation": "Keep Phase 1 as single atomic PR with enabled_packs:[] feature flag. Explicitly document PR strategy in plan."
+    },
+    {
+      "id": "W2",
+      "source": "quality",
+      "issue": "Test coverage drops from full TDD (Tasks 1.1-1.5) to descriptions only (Tasks 1.6-1.15) to none (Phases 2-5)",
+      "priority_score": 6,
+      "recommendation": "Require full test code for Tasks 1.7, 1.9, 1.10 at minimum. Set coverage target of 90%."
+    },
+    {
+      "id": "W3",
+      "source": "systems",
+      "issue": "Summary regeneration not part of KeelDB contract — new template mutation paths may not trigger context.md update",
+      "priority_score": 6,
+      "recommendation": "Add _after_mutation() hook or document that new CLI/MCP template commands must call _refresh_summary()."
+    },
+    {
+      "id": "W4",
+      "source": "reality+architecture",
+      "issue": "Plan claims frozen dataclasses match existing Issue pattern, but Issue is not frozen",
+      "priority_score": 3,
+      "recommendation": "Update plan comment to clarify intentional distinction: templates are immutable config, Issues are mutable domain entities."
+    },
+    {
+      "id": "W5",
+      "source": "reality",
+      "issue": "Line number references are approximate and will drift as earlier tasks modify files",
+      "priority_score": 2,
+      "recommendation": "Add note that line numbers are approximate; implementors should search by function/symbol name."
+    },
+    {
+      "id": "W6",
+      "source": "systems",
+      "issue": "Hard enforcement could cause agent retry storms",
+      "priority_score": 4,
+      "recommendation": "Document expected agent behavior in MCP tool descriptions. Consider retry budget hint in error response."
+    },
+    {
+      "id": "W7",
+      "source": "quality",
+      "issue": "Empty state list from _get_states_for_category() would produce malformed SQL",
+      "priority_score": 4,
+      "recommendation": "Add guard: if state list empty, return empty result set without executing query. Tied to B1."
+    },
+    {
+      "id": "W8",
+      "source": "systems",
+      "issue": "Migration assumes 3-state default for old templates — custom states may be lost",
+      "priority_score": 3,
+      "recommendation": "Test migration with v4 database containing custom template states."
+    }
+  ],
+  "recommendations": [
+    {
+      "type": "DEPENDENCY_INJECTION",
+      "source": "architecture",
+      "suggestion": "Use TemplateRegistry constructor injection as primary path; lazy property as fallback only"
+    },
+    {
+      "type": "ROLLBACK_TESTING",
+      "source": "architecture",
+      "suggestion": "Add test verifying behavior when v5 migration fails midway"
+    },
+    {
+      "type": "PERFORMANCE_BUDGET",
+      "source": "architecture+quality",
+      "suggestion": "Assert template loading < 10ms; benchmark O(1) cache claims"
+    },
+    {
+      "type": "CIRCUIT_BREAKER",
+      "source": "systems",
+      "suggestion": "Fall back to minimal built-in templates if template loading fails entirely"
+    },
+    {
+      "type": "TEMPLATE_RELOAD",
+      "source": "systems",
+      "suggestion": "Add keel template reload CLI command and reload-templates MCP tool"
+    },
+    {
+      "type": "IDEMPOTENCY",
+      "source": "systems",
+      "suggestion": "Add idempotency markers to mutation operations for retry safety"
+    }
+  ],
+  "conflicts_resolved": [
+    {
+      "issue": "Migration risk assessment",
+      "architecture_view": "One-way door but mitigated",
+      "quality_view": "Blocking — no rollback",
+      "systems_view": "Blocking — non-transactional",
+      "resolution": "Classified as blocker B2. Architecture's mitigation assessment is aspirational; the plan describes intent but not error recovery."
+    },
+    {
+      "issue": "Frozen dataclass consistency",
+      "reality_view": "Aspirational claim, not literal",
+      "architecture_view": "Minor inconsistency, justified",
+      "resolution": "Classified as warning W4. Design choice is correct, comment is misleading."
+    },
+    {
+      "issue": "Lazy property vs dependency injection",
+      "architecture_view": "Recommends DI over lazy property",
+      "systems_view": "Flags cache staleness",
+      "resolution": "B3 addresses staleness. Architecture's DI recommendation is complementary, listed as recommendation."
+    }
+  ],
+  "reviewer_summaries": {
+    "reality": {
+      "status": "PASS",
+      "blocking": 0,
+      "warnings": 3
+    },
+    "architecture": {
+      "status": "ISSUES_FOUND",
+      "blocking": 0,
+      "warnings": 2
+    },
+    "quality": {
+      "status": "ISSUES_FOUND",
+      "blocking": 4,
+      "warnings": 7
+    },
+    "systems": {
+      "status": "ISSUES_FOUND",
+      "blocking": 3,
+      "warnings": 4
+    }
+  }
+}

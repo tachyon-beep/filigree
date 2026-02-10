@@ -1,0 +1,787 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Filigree Dashboard</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://unpkg.com/cytoscape@3.30.4/dist/cytoscape.min.js"></script>
+<script src="https://unpkg.com/dagre@0.8.5/dist/dagre.min.js"></script>
+<script src="https://unpkg.com/cytoscape-dagre@2.5.0/cytoscape-dagre.js"></script>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&display=swap');
+  body { font-family: 'JetBrains Mono', 'Fira Code', monospace; background: #0F172A; color: #F1F5F9; }
+  #cy { width: 100%; height: 100%; }
+  .card { transition: all 0.15s ease; }
+  .card:hover { background: #334155 !important; }
+  .ready-border { border-left: 4px solid #10B981; }
+  .scrollbar-thin::-webkit-scrollbar { width: 6px; }
+  .scrollbar-thin::-webkit-scrollbar-track { background: #1E293B; }
+  .scrollbar-thin::-webkit-scrollbar-thumb { background: #475569; border-radius: 3px; }
+  .detail-panel { transition: transform 0.2s ease; }
+  .kanban-col { min-width: 320px; }
+  #refreshIndicator { transition: opacity 0.3s ease; }
+</style>
+<script>
+tailwind.config = {
+  theme: {
+    extend: {
+      fontFamily: { mono: ['JetBrains Mono', 'Fira Code', 'monospace'] },
+    }
+  }
+}
+</script>
+</head>
+<body class="h-screen flex flex-col overflow-hidden text-sm">
+
+<!-- Top Nav -->
+<header class="flex items-center justify-between px-4 py-2 bg-slate-800 border-b border-slate-700 shrink-0">
+  <div class="flex items-center gap-4">
+    <span class="text-base font-semibold text-blue-400">&#9670; Filigree</span>
+    <div class="flex gap-1">
+      <button id="btnGraph" onclick="switchView('graph')" class="px-3 py-1 rounded text-xs font-medium">Graph</button>
+      <button id="btnKanban" onclick="switchView('kanban')" class="px-3 py-1 rounded text-xs font-medium">Kanban</button>
+    </div>
+  </div>
+
+  <!-- Filter bar -->
+  <div class="flex items-center gap-3">
+    <button id="btnReady" onclick="toggleReady()" class="px-2 py-1 rounded text-xs font-medium bg-emerald-900/50 text-emerald-400 border border-emerald-700">
+      &#9679; Ready (<span id="readyCount">0</span>)
+    </button>
+    <select id="filterPriority" onchange="applyFilters()" class="bg-slate-700 text-slate-200 text-xs rounded px-2 py-1 border border-slate-600">
+      <option value="all">Priority: All</option>
+      <option value="0-1">P0-P1</option>
+      <option value="2">P2</option>
+      <option value="3-4">P3-P4</option>
+    </select>
+    <input id="filterSearch" type="text" placeholder="Search..." oninput="applyFilters()"
+           class="bg-slate-700 text-slate-200 text-xs rounded px-3 py-1 border border-slate-600 w-40 focus:outline-none focus:border-blue-500">
+    <div class="flex gap-1 text-xs">
+      <label class="flex items-center gap-1 text-slate-400"><input type="checkbox" id="filterOpen" checked onchange="applyFilters()" class="accent-blue-500"> Open</label>
+      <label class="flex items-center gap-1 text-slate-400"><input type="checkbox" id="filterInProgress" checked onchange="applyFilters()" class="accent-blue-500"> Active</label>
+      <label class="flex items-center gap-1 text-slate-400"><input type="checkbox" id="filterClosed" onchange="applyFilters()" class="accent-blue-500"> Closed</label>
+    </div>
+  </div>
+
+  <div class="flex items-center gap-3 text-xs text-slate-400">
+    <span id="refreshIndicator" class="opacity-0 text-blue-400">Refreshing...</span>
+    <span>Open: <b id="statOpen" class="text-slate-200">0</b></span>
+    <span>Active: <b id="statActive" class="text-slate-200">0</b></span>
+    <span>Ready: <b id="statReady" class="text-emerald-400">0</b></span>
+  </div>
+</header>
+
+<!-- Main content area -->
+<div class="flex flex-1 overflow-hidden relative">
+  <!-- Graph view -->
+  <div id="graphView" class="flex-1 hidden flex flex-col">
+    <div class="flex items-center gap-2 px-4 py-1 bg-slate-800/50 text-xs text-slate-400 border-b border-slate-700">
+      <label class="flex items-center gap-1">
+        <input type="checkbox" id="graphEpicsOnly" checked onchange="renderGraph()" class="accent-blue-500"> Epics only
+      </label>
+      <button onclick="graphFit()" class="px-2 py-0.5 rounded bg-slate-700 hover:bg-slate-600">Fit</button>
+    </div>
+    <div id="cy" class="flex-1"></div>
+  </div>
+
+  <!-- Kanban view -->
+  <div id="kanbanView" class="flex-1 hidden flex flex-col">
+    <div class="flex items-center gap-2 px-4 py-1 bg-slate-800/50 text-xs text-slate-400 border-b border-slate-700">
+      <button id="btnStandard" onclick="switchKanbanMode('standard')" class="px-2 py-0.5 rounded">Standard</button>
+      <button id="btnCluster" onclick="switchKanbanMode('cluster')" class="px-2 py-0.5 rounded">Cluster</button>
+      <span class="text-slate-600">|</span>
+      <select id="filterType" onchange="applyTypeFilter()" class="bg-slate-700 text-slate-200 text-xs rounded px-2 py-0.5 border border-slate-600">
+        <option value="">All types</option>
+      </select>
+    </div>
+    <div class="flex gap-4 p-4 flex-1 overflow-x-auto" id="kanbanBoard"></div>
+  </div>
+
+  <!-- Detail panel (slides in from right) -->
+  <div id="detailPanel" class="detail-panel absolute top-0 right-0 h-full w-[400px] bg-slate-800 border-l border-slate-700 overflow-y-auto scrollbar-thin transform translate-x-full z-10">
+    <div id="detailContent" class="p-5"></div>
+  </div>
+</div>
+
+<!-- Stats bar -->
+<footer class="flex items-center gap-4 px-4 py-1 bg-slate-800 border-t border-slate-700 text-xs text-slate-400 shrink-0">
+  <span>Open: <b id="footOpen" class="text-slate-300">0</b></span>
+  <span>In Progress: <b id="footActive" class="text-slate-300">0</b></span>
+  <span>Ready: <b id="footReady" class="text-emerald-400">0</b></span>
+  <span>Blocked: <b id="footBlocked" class="text-red-400">0</b></span>
+  <span>Deps: <b id="footDeps" class="text-slate-300">0</b></span>
+</footer>
+
+<script>
+// ---------------------------------------------------------------------------
+// State
+// ---------------------------------------------------------------------------
+var allIssues = [];
+var allDeps = [];
+var stats = null;
+var issueMap = {};
+var currentView = 'kanban';
+var kanbanMode = 'standard';
+var readyFilter = true;
+var selectedIssue = null;
+var cy = null;
+var expandedEpics = new Set();
+
+var CATEGORY_COLORS = { open: '#64748B', wip: '#3B82F6', done: '#9CA3AF' };
+var PRIORITY_COLORS = { 0: '#EF4444', 1: '#F97316', 2: '#6B7280', 3: '#D1D5DB', 4: '#D1D5DB' };
+var TYPE_ICONS = { bug: '\u{1F41B}', feature: '\u2728', task: '\u{1F4CB}', epic: '\u{1F4CA}', milestone: '\u{1F3AF}', step: '\u25B6' };
+var typeTemplate = null;  // Cached type template for type-filtered kanban
+
+// ---------------------------------------------------------------------------
+// Data fetching
+// ---------------------------------------------------------------------------
+async function fetchData() {
+  document.getElementById('refreshIndicator').style.opacity = '1';
+  try {
+    var results = await Promise.all([
+      fetch('/api/issues'), fetch('/api/dependencies'), fetch('/api/stats')
+    ]);
+    allIssues = await results[0].json();
+    allDeps = await results[1].json();
+    stats = await results[2].json();
+    issueMap = {};
+    allIssues.forEach(function(i) { issueMap[i.id] = i; });
+    updateStats();
+    render();
+  } finally {
+    setTimeout(function() { document.getElementById('refreshIndicator').style.opacity = '0'; }, 300);
+  }
+}
+
+function updateStats() {
+  if (!stats) return;
+  var s = stats;
+  var byCat = s.by_category || {};
+  var open = byCat.open || 0;
+  var active = byCat.wip || 0;
+  document.getElementById('statOpen').textContent = open;
+  document.getElementById('statActive').textContent = active;
+  document.getElementById('statReady').textContent = s.ready_count;
+  document.getElementById('readyCount').textContent = s.ready_count;
+  document.getElementById('footOpen').textContent = open;
+  document.getElementById('footActive').textContent = active;
+  document.getElementById('footReady').textContent = s.ready_count;
+  document.getElementById('footBlocked').textContent = s.blocked_count;
+  document.getElementById('footDeps').textContent = s.total_dependencies;
+  populateTypeFilter();
+}
+
+// ---------------------------------------------------------------------------
+// Filtering
+// ---------------------------------------------------------------------------
+function getFilteredIssues() {
+  var items = allIssues.slice();
+  var showOpen = document.getElementById('filterOpen').checked;
+  var showActive = document.getElementById('filterInProgress').checked;
+  var showClosed = document.getElementById('filterClosed').checked;
+  items = items.filter(function(i) {
+    var cat = i.status_category || 'open';
+    if (cat === 'open' && !showOpen) return false;
+    if (cat === 'wip' && !showActive) return false;
+    if (cat === 'done' && !showClosed) return false;
+    return true;
+  });
+
+  var prio = document.getElementById('filterPriority').value;
+  if (prio === '0-1') items = items.filter(function(i) { return i.priority <= 1; });
+  else if (prio === '2') items = items.filter(function(i) { return i.priority === 2; });
+  else if (prio === '3-4') items = items.filter(function(i) { return i.priority >= 3; });
+
+  var search = document.getElementById('filterSearch').value.toLowerCase().trim();
+  if (search) items = items.filter(function(i) {
+    return i.title.toLowerCase().indexOf(search) >= 0 || i.id.toLowerCase().indexOf(search) >= 0;
+  });
+
+  if (readyFilter) items.sort(function(a, b) {
+    return (b.is_ready ? 1 : 0) - (a.is_ready ? 1 : 0) || a.priority - b.priority;
+  });
+
+  return items;
+}
+
+function applyFilters() { render(); }
+
+function toggleReady() {
+  readyFilter = !readyFilter;
+  var btn = document.getElementById('btnReady');
+  btn.className = readyFilter
+    ? 'px-2 py-1 rounded text-xs font-medium bg-emerald-900/50 text-emerald-400 border border-emerald-700'
+    : 'px-2 py-1 rounded text-xs font-medium bg-slate-700 text-slate-400 border border-slate-600';
+  render();
+}
+
+// ---------------------------------------------------------------------------
+// View switching
+// ---------------------------------------------------------------------------
+function switchView(view) {
+  currentView = view;
+  document.getElementById('graphView').classList.toggle('hidden', view !== 'graph');
+  document.getElementById('kanbanView').classList.toggle('hidden', view !== 'kanban');
+  document.getElementById('btnGraph').className = view === 'graph'
+    ? 'px-3 py-1 rounded text-xs font-medium bg-blue-600 text-white'
+    : 'px-3 py-1 rounded text-xs font-medium bg-slate-700 text-slate-300 hover:bg-slate-600';
+  document.getElementById('btnKanban').className = view === 'kanban'
+    ? 'px-3 py-1 rounded text-xs font-medium bg-blue-600 text-white'
+    : 'px-3 py-1 rounded text-xs font-medium bg-slate-700 text-slate-300 hover:bg-slate-600';
+  updateHash();
+  if (view === 'graph') renderGraph();
+  else renderKanban();
+}
+
+function switchKanbanMode(mode) {
+  kanbanMode = mode;
+  document.getElementById('btnStandard').className = mode === 'standard'
+    ? 'px-2 py-0.5 rounded bg-blue-600 text-white'
+    : 'px-2 py-0.5 rounded bg-slate-700 hover:bg-slate-600';
+  document.getElementById('btnCluster').className = mode === 'cluster'
+    ? 'px-2 py-0.5 rounded bg-blue-600 text-white'
+    : 'px-2 py-0.5 rounded bg-slate-700 hover:bg-slate-600';
+  updateHash();
+  renderKanban();
+}
+
+function render() {
+  if (currentView === 'graph') renderGraph();
+  else renderKanban();
+}
+
+// ---------------------------------------------------------------------------
+// Kanban
+// ---------------------------------------------------------------------------
+function renderKanban() {
+  var board = document.getElementById('kanbanBoard');
+  var items = getFilteredIssues();
+
+  // Type-filtered kanban: one column per type state, restricted to matching type
+  if (typeTemplate) {
+    var stateColumns = {};
+    typeTemplate.states.forEach(function(s) { stateColumns[s.name] = []; });
+    items.forEach(function(i) {
+      if (i.type === typeTemplate.type && stateColumns[i.status]) stateColumns[i.status].push(i);
+    });
+    board.innerHTML = renderTypeKanban(stateColumns, typeTemplate);
+    return;
+  }
+
+  // Default: 3-category columns (open/wip/done)
+  var columns = { open: [], wip: [], done: [] };
+  items.forEach(function(i) {
+    var cat = i.status_category || 'open';
+    if (columns[cat]) columns[cat].push(i);
+  });
+
+  if (kanbanMode === 'cluster') {
+    board.innerHTML = renderClusterKanban(columns);
+  } else {
+    board.innerHTML = renderStandardKanban(columns);
+  }
+}
+
+function renderStandardKanban(columns) {
+  var colDefs = [
+    { key: 'open', label: 'Open', color: '#64748B' },
+    { key: 'wip', label: 'In Progress', color: '#3B82F6' },
+    { key: 'done', label: 'Done', color: '#9CA3AF' },
+  ];
+  return colDefs.map(function(col) {
+    var issues = columns[col.key] || [];
+    return '<div class="kanban-col flex flex-col shrink-0">' +
+      '<div class="flex items-center gap-2 mb-2 px-1">' +
+        '<span class="w-2 h-2 rounded-full" style="background:' + col.color + '"></span>' +
+        '<span class="font-medium text-xs text-slate-300">' + col.label + '</span>' +
+        '<span class="text-xs text-slate-500">' + issues.length + '</span>' +
+      '</div>' +
+      '<div class="flex flex-col gap-2 overflow-y-auto scrollbar-thin pr-1" style="max-height: calc(100vh - 160px);">' +
+        issues.map(function(i) { return renderCard(i); }).join('') +
+      '</div></div>';
+  }).join('');
+}
+
+function renderClusterKanban(columns) {
+  var colDefs = [
+    { key: 'open', label: 'Open', color: '#64748B' },
+    { key: 'wip', label: 'In Progress', color: '#3B82F6' },
+    { key: 'done', label: 'Done', color: '#9CA3AF' },
+  ];
+  return colDefs.map(function(col) {
+    var issues = columns[col.key] || [];
+    var epicIssues = issues.filter(function(i) {
+      return (i.type === 'epic' || i.type === 'milestone') && i.children && i.children.length > 0;
+    });
+    var epicIds = new Set(epicIssues.map(function(i) { return i.id; }));
+    var childIds = new Set();
+    epicIssues.forEach(function(i) { (i.children || []).forEach(function(c) { childIds.add(c); }); });
+    var orphans = issues.filter(function(i) { return !epicIds.has(i.id) && !childIds.has(i.id); });
+
+    var epicCards = epicIssues.map(function(epic) { return renderClusterCard(epic); }).join('');
+    var orphanCards = orphans.map(function(i) { return renderCard(i); }).join('');
+
+    return '<div class="kanban-col flex flex-col shrink-0">' +
+      '<div class="flex items-center gap-2 mb-2 px-1">' +
+        '<span class="w-2 h-2 rounded-full" style="background:' + col.color + '"></span>' +
+        '<span class="font-medium text-xs text-slate-300">' + col.label + '</span>' +
+        '<span class="text-xs text-slate-500">' + issues.length + '</span>' +
+      '</div>' +
+      '<div class="flex flex-col gap-2 overflow-y-auto scrollbar-thin pr-1" style="max-height: calc(100vh - 160px);">' +
+        epicCards + orphanCards +
+      '</div></div>';
+  }).join('');
+}
+
+function renderClusterCard(epic) {
+  var children = (epic.children || []).map(function(cid) { return issueMap[cid]; }).filter(Boolean);
+  var counts = { open: 0, wip: 0, done: 0 };
+  children.forEach(function(c) { var cat = c.status_category || 'open'; if (counts[cat] !== undefined) counts[cat]++; });
+  var total = children.length;
+  var expanded = expandedEpics.has(epic.id);
+
+  var pctOpen = total ? (counts.open / total * 100) : 0;
+  var pctActive = total ? (counts.wip / total * 100) : 0;
+  var pctClosed = total ? (counts.done / total * 100) : 0;
+
+  var childHtml = '';
+  if (expanded) {
+    childHtml = '<div class="mt-2 ml-4 flex flex-col gap-1">' +
+      children.map(function(c) { return renderCard(c); }).join('') + '</div>';
+  }
+
+  return '<div class="bg-slate-800 rounded border border-slate-700 p-3 cursor-pointer ' +
+    (epic.is_ready ? 'ready-border' : '') +
+    '" onclick="toggleEpicExpand(\'' + epic.id + '\')">' +
+    '<div class="flex items-center justify-between mb-1">' +
+      '<span class="text-xs">' + (TYPE_ICONS[epic.type] || '') +
+        ' <span class="font-medium text-slate-200">' + escHtml(epic.title.slice(0, 40)) + '</span></span>' +
+      '<span class="text-xs text-slate-500">[' + total + ']</span>' +
+    '</div>' +
+    '<div class="w-full h-2 rounded-full bg-slate-900 flex overflow-hidden mb-1">' +
+      '<div style="width:' + pctClosed + '%;background:#9CA3AF"></div>' +
+      '<div style="width:' + pctActive + '%;background:#3B82F6"></div>' +
+      '<div style="width:' + pctOpen + '%;background:#64748B"></div>' +
+    '</div>' +
+    '<div class="text-xs text-slate-500">' + counts.open + ' open &middot; ' +
+      counts.wip + ' active &middot; ' + counts.done + ' done</div>' +
+    (expanded
+      ? '<div class="text-xs text-blue-400 mt-1">&#9660; expanded</div>'
+      : '<div class="text-xs text-slate-600 mt-1">&#9654; click to expand</div>') +
+    childHtml +
+  '</div>';
+}
+
+function renderCard(issue) {
+  var typeIcon = TYPE_ICONS[issue.type] || '';
+  var prioColor = PRIORITY_COLORS[issue.priority] || '#6B7280';
+  var cat = issue.status_category || 'open';
+  var catColor = CATEGORY_COLORS[cat] || '#64748B';
+  var blockedCount = (issue.blocked_by || []).filter(function(bid) {
+    var b = issueMap[bid];
+    return b && (b.status_category || 'open') !== 'done';
+  }).length;
+  var readyClass = issue.is_ready && cat === 'open' ? 'ready-border' : '';
+
+  return '<div class="card bg-slate-800 rounded border border-slate-700 p-3 cursor-pointer ' +
+    readyClass + '" onclick="openDetail(\'' + issue.id + '\')">' +
+    '<div class="flex items-center gap-2 mb-1">' +
+      '<span>' + typeIcon + '</span>' +
+      '<span class="w-2 h-2 rounded-full shrink-0" style="background:' + prioColor +
+        '" title="P' + issue.priority + '"></span>' +
+      '<span class="font-medium text-slate-200 truncate">' + escHtml(issue.title.slice(0, 50)) + '</span>' +
+    '</div>' +
+    '<div class="flex items-center gap-2 text-xs text-slate-500">' +
+      '<span>' + issue.id + '</span>' +
+      '<span class="rounded px-1" style="background:' + catColor + ';color:white">' + issue.status + '</span>' +
+      (blockedCount > 0 ? '<span class="text-red-400">\u{1F517} blocked by ' + blockedCount + '</span>' : '') +
+      (issue.assignee ? '<span class="text-slate-400">\u{1F464} ' + escHtml(issue.assignee) + '</span>' : '') +
+    '</div>' +
+  '</div>';
+}
+
+function toggleEpicExpand(epicId) {
+  if (expandedEpics.has(epicId)) expandedEpics.delete(epicId);
+  else expandedEpics.add(epicId);
+  renderKanban();
+}
+
+// ---------------------------------------------------------------------------
+// Type-filtered kanban (WFT-FR-064)
+// ---------------------------------------------------------------------------
+function populateTypeFilter() {
+  var select = document.getElementById('filterType');
+  if (!select) return;
+  var types = {};
+  allIssues.forEach(function(i) { types[i.type] = true; });
+  var currentVal = select.value;
+  // Preserve first option, rebuild the rest
+  select.innerHTML = '<option value="">All types</option>';
+  Object.keys(types).sort().forEach(function(t) {
+    var opt = document.createElement('option');
+    opt.value = t;
+    opt.textContent = t;
+    select.appendChild(opt);
+  });
+  select.value = currentVal;
+  // If the previously selected type no longer exists, the value silently
+  // falls back to "".  Clear stale typeTemplate so renderKanban() shows
+  // the default 3-category board instead of an empty type-specific board.
+  if (select.value !== currentVal) {
+    typeTemplate = null;
+  }
+}
+
+var _typeFilterSeq = 0;  // Monotonic counter to ignore stale async responses
+async function applyTypeFilter() {
+  var typeName = document.getElementById('filterType').value;
+  var seq = ++_typeFilterSeq;
+  if (!typeName) {
+    typeTemplate = null;
+    renderKanban();
+    return;
+  }
+  try {
+    var resp = await fetch('/api/type/' + typeName);
+    if (seq !== _typeFilterSeq) return;  // Superseded by newer selection
+    if (resp.ok) {
+      typeTemplate = await resp.json();
+    } else {
+      typeTemplate = null;
+    }
+  } catch (e) {
+    if (seq !== _typeFilterSeq) return;
+    typeTemplate = null;
+  }
+  renderKanban();
+}
+
+function renderTypeKanban(stateColumns, template) {
+  return template.states.map(function(state) {
+    var issues = stateColumns[state.name] || [];
+    var catColor = CATEGORY_COLORS[state.category] || '#64748B';
+    return '<div class="kanban-col flex flex-col shrink-0">' +
+      '<div class="flex items-center gap-2 mb-2 px-1">' +
+        '<span class="w-2 h-2 rounded-full" style="background:' + catColor + '"></span>' +
+        '<span class="font-medium text-xs text-slate-300">' + state.name + '</span>' +
+        '<span class="text-xs text-slate-500">' + issues.length + '</span>' +
+      '</div>' +
+      '<div class="flex flex-col gap-2 overflow-y-auto scrollbar-thin pr-1" style="max-height: calc(100vh - 160px);">' +
+        issues.map(function(i) { return renderCard(i); }).join('') +
+      '</div></div>';
+  }).join('');
+}
+
+// ---------------------------------------------------------------------------
+// Graph
+// ---------------------------------------------------------------------------
+function renderGraph() {
+  if (!allIssues.length) return;
+  var container = document.getElementById('cy');
+  var epicsOnly = document.getElementById('graphEpicsOnly').checked;
+
+  var showOpen = document.getElementById('filterOpen').checked;
+  var showActive = document.getElementById('filterInProgress').checked;
+  var showClosed = document.getElementById('filterClosed').checked;
+  var search = document.getElementById('filterSearch').value.toLowerCase().trim();
+
+  var visibleIds = new Set();
+  allIssues.forEach(function(n) {
+    var show = true;
+    var cat = n.status_category || 'open';
+    if (cat === 'open' && !showOpen) show = false;
+    if (cat === 'wip' && !showActive) show = false;
+    if (cat === 'done' && !showClosed) show = false;
+    if (epicsOnly && n.type !== 'epic' && n.type !== 'milestone') show = false;
+    if (show) visibleIds.add(n.id);
+  });
+
+  var cyNodes = allIssues.filter(function(n) { return visibleIds.has(n.id); }).map(function(n) {
+    var matchesSearch = !search ||
+      n.title.toLowerCase().indexOf(search) >= 0 ||
+      n.id.toLowerCase().indexOf(search) >= 0;
+    return {
+      data: {
+        id: n.id,
+        label: n.title.length > 30 ? n.title.slice(0, 28) + '..' : n.title,
+        status: n.status,
+        statusCategory: n.status_category || 'open',
+        priority: n.priority,
+        type: n.type,
+        isReady: n.is_ready,
+        childCount: n.children ? n.children.length : 0,
+        opacity: matchesSearch ? 1 : 0.2,
+      }
+    };
+  });
+
+  // allDeps: [{from: blocker_id, to: blocked_id, type}]
+  // edge direction: from (blocker) -> to (blocked) i.e. source blocks target
+  var cyEdges = allDeps.filter(function(e) {
+    return visibleIds.has(e.from) && visibleIds.has(e.to);
+  }).map(function(e, i) {
+    return { data: { id: 'e' + i, source: e.from, target: e.to } };
+  });
+
+  if (cy) cy.destroy();
+  cy = cytoscape({
+    container: container,
+    elements: cyNodes.concat(cyEdges),
+    layout: { name: 'dagre', rankDir: 'TB', rankSep: 80, nodeSep: 40, padding: 20 },
+    style: [
+      {
+        selector: 'node',
+        style: {
+          'label': 'data(label)',
+          'font-size': '11px',
+          'font-family': 'JetBrains Mono, monospace',
+          'text-valign': 'center',
+          'text-halign': 'center',
+          'text-wrap': 'wrap',
+          'text-max-width': '120px',
+          'color': '#F1F5F9',
+          'text-outline-color': '#0F172A',
+          'text-outline-width': 2,
+          'width': 'mapData(priority, 0, 4, 60, 35)',
+          'height': 'mapData(priority, 0, 4, 60, 35)',
+          'opacity': 'data(opacity)',
+          'background-color': function(ele) { return CATEGORY_COLORS[ele.data('statusCategory')] || '#64748B'; },
+          'border-width': function(ele) { return ele.data('isReady') ? 3 : 0; },
+          'border-color': '#10B981',
+          'shape': function(ele) {
+            var t = ele.data('type');
+            if (t === 'epic' || t === 'milestone') return 'hexagon';
+            if (t === 'bug') return 'diamond';
+            if (t === 'feature') return 'star';
+            return 'round-rectangle';
+          },
+        }
+      },
+      {
+        selector: 'edge',
+        style: {
+          'width': 1.5,
+          'line-color': '#475569',
+          'target-arrow-color': '#475569',
+          'target-arrow-shape': 'triangle',
+          'curve-style': 'bezier',
+          'arrow-scale': 0.8,
+        }
+      },
+      {
+        selector: 'node:selected',
+        style: { 'border-width': 3, 'border-color': '#3B82F6' }
+      }
+    ],
+    minZoom: 0.1,
+    maxZoom: 4,
+  });
+
+  cy.on('tap', 'node', function(evt) { openDetail(evt.target.id()); });
+  cy.fit(undefined, 30);
+}
+
+function graphFit() { if (cy) cy.fit(undefined, 30); }
+
+// ---------------------------------------------------------------------------
+// Detail Panel
+// ---------------------------------------------------------------------------
+async function openDetail(issueId) {
+  selectedIssue = issueId;
+  updateHash();
+  var panel = document.getElementById('detailPanel');
+  var content = document.getElementById('detailContent');
+
+  content.innerHTML = '<div class="text-slate-500 text-xs">Loading...</div>';
+  panel.classList.remove('translate-x-full');
+
+  // Fetch full issue detail (includes events, comments, dep_details)
+  var d = null;
+  var eventsData = [];
+  var commentsData = [];
+  try {
+    var resp = await fetch('/api/issue/' + issueId);
+    if (!resp.ok) throw new Error('Not found');
+    d = await resp.json();
+    eventsData = d.events || [];
+    commentsData = d.comments || [];
+  } catch (e) {
+    // Fall back to local data if detail endpoint fails
+    d = issueMap[issueId];
+    if (!d) {
+      content.innerHTML = '<div class="text-red-400 text-xs">Issue not found</div>';
+      return;
+    }
+  }
+
+  var statusCat = d.status_category || 'open';
+  var statusColor = CATEGORY_COLORS[statusCat] || '#64748B';
+  var prioColor = PRIORITY_COLORS[d.priority] || '#6B7280';
+  var typeIcon = TYPE_ICONS[d.type] || '';
+  var depDetails = d.dep_details || {};
+  // Show "state (category)" when they differ, e.g., "fixing (wip)"
+  var statusLabel = d.status;
+  if (statusCat !== d.status) statusLabel = d.status + ' (' + statusCat + ')';
+
+  var blockerHtml = (d.blocked_by || []).map(function(bid) {
+    var det = depDetails[bid] || issueMap[bid];
+    if (!det) return '<div class="text-xs text-slate-500">' + bid + '</div>';
+    var detCat = (det.status_category) || 'open';
+    var sc = CATEGORY_COLORS[detCat] || '#64748B';
+    return '<div class="flex items-center gap-2 text-xs cursor-pointer hover:text-blue-400" onclick="openDetail(\'' + bid + '\')">' +
+      '<span class="w-2 h-2 rounded-full" style="background:' + sc + '"></span>' +
+      '<span>' + escHtml(det.title.slice(0, 40)) + '</span>' +
+      '<span class="text-slate-600">' + det.status + '</span></div>';
+  }).join('');
+
+  var blocksHtml = (d.blocks || []).map(function(bid) {
+    var det = depDetails[bid] || issueMap[bid];
+    if (!det) return '<div class="text-xs text-slate-500">' + bid + '</div>';
+    var detCat = (det.status_category) || 'open';
+    var sc = CATEGORY_COLORS[detCat] || '#64748B';
+    return '<div class="flex items-center gap-2 text-xs cursor-pointer hover:text-blue-400" onclick="openDetail(\'' + bid + '\')">' +
+      '<span class="w-2 h-2 rounded-full" style="background:' + sc + '"></span>' +
+      '<span>' + escHtml(det.title.slice(0, 40)) + '</span>' +
+      '<span class="text-slate-600">' + det.status + '</span></div>';
+  }).join('');
+
+  var eventsHtml = eventsData.slice(0, 15).map(function(e) {
+    return '<div class="text-xs text-slate-500 flex gap-2">' +
+      '<span class="text-slate-600 shrink-0">' + (e.created_at ? e.created_at.slice(5, 16) : '') + '</span>' +
+      '<span>' + escHtml(e.event_type) + (e.new_value ? ': ' + escHtml(e.new_value) : '') + '</span></div>';
+  }).join('');
+
+  var commentsHtml = commentsData.map(function(c) {
+    return '<div class="bg-slate-900 rounded p-2 text-xs mb-1">' +
+      '<div class="text-slate-400 mb-1">' + escHtml(c.author || 'anonymous') +
+        ' &middot; ' + (c.created_at ? c.created_at.slice(0, 16) : '') + '</div>' +
+      '<div class="text-slate-300">' + escHtml(c.text) + '</div></div>';
+  }).join('');
+
+  var openBlockers = (d.blocked_by || []).filter(function(bid) {
+    var b = issueMap[bid];
+    return b && (b.status_category || 'open') !== 'done';
+  });
+  var readyBadge = statusCat === 'open' && openBlockers.length === 0
+    ? '<span class="text-xs bg-emerald-900/50 text-emerald-400 px-2 py-0.5 rounded">Ready</span>'
+    : openBlockers.length > 0
+      ? '<span class="text-xs bg-red-900/50 text-red-400 px-2 py-0.5 rounded">Blocked by ' + openBlockers.length + '</span>'
+      : '';
+
+  content.innerHTML =
+    '<div class="flex items-center justify-between mb-3">' +
+      '<span class="text-xs text-slate-500">' + d.id + '</span>' +
+      '<button onclick="closeDetail()" class="text-slate-500 hover:text-slate-300 text-lg">&times;</button>' +
+    '</div>' +
+    '<div class="flex items-center gap-2 mb-1">' +
+      '<span class="text-lg">' + typeIcon + '</span>' +
+      '<span class="text-lg font-semibold text-slate-100">' + escHtml(d.title) + '</span>' +
+    '</div>' +
+    '<div class="flex items-center gap-2 mb-4 flex-wrap">' +
+      '<span class="text-xs px-2 py-0.5 rounded" style="background:' + statusColor + ';color:white">' + statusLabel + '</span>' +
+      '<span class="w-2 h-2 rounded-full" style="background:' + prioColor + '" title="P' + d.priority + '"></span>' +
+      '<span class="text-xs text-slate-400">P' + d.priority + '</span>' +
+      readyBadge +
+      (d.assignee ? '<span class="text-xs text-slate-400">\u{1F464} ' + escHtml(d.assignee) + '</span>' : '') +
+    '</div>' +
+    (d.labels && d.labels.length
+      ? '<div class="flex gap-1 mb-3 flex-wrap">' + d.labels.map(function(l) {
+          return '<span class="text-xs bg-slate-700 text-slate-300 px-2 py-0.5 rounded">' + escHtml(l) + '</span>';
+        }).join('') + '</div>'
+      : '') +
+    (d.description
+      ? '<div class="mb-4"><div class="text-xs font-medium text-slate-400 mb-1">Description</div>' +
+        '<div class="text-xs text-slate-300 leading-relaxed whitespace-pre-wrap">' + escHtml(d.description) + '</div></div>'
+      : '') +
+    (d.notes
+      ? '<div class="mb-4"><div class="text-xs font-medium text-slate-400 mb-1">Notes</div>' +
+        '<div class="text-xs text-slate-300 leading-relaxed whitespace-pre-wrap">' + escHtml(d.notes) + '</div></div>'
+      : '') +
+    ((d.blocked_by || []).length
+      ? '<div class="mb-3"><div class="text-xs font-medium text-red-400 mb-1">Blocked by \u2190</div>' + blockerHtml + '</div>'
+      : '') +
+    ((d.blocks || []).length
+      ? '<div class="mb-3"><div class="text-xs font-medium text-blue-400 mb-1">Blocks \u2192</div>' + blocksHtml + '</div>'
+      : '') +
+    (commentsData.length
+      ? '<div class="mb-3"><div class="text-xs font-medium text-slate-400 mb-1">Comments</div>' + commentsHtml + '</div>'
+      : '') +
+    (eventsData.length
+      ? '<div class="mb-3"><div class="text-xs font-medium text-slate-400 mb-1">Timeline</div>' + eventsHtml + '</div>'
+      : '') +
+    '<div class="mt-4 text-xs text-slate-600 select-all">filigree show ' + d.id + '</div>';
+}
+
+function closeDetail() {
+  selectedIssue = null;
+  document.getElementById('detailPanel').classList.add('translate-x-full');
+  updateHash();
+}
+
+// ---------------------------------------------------------------------------
+// URL hash state
+// ---------------------------------------------------------------------------
+function updateHash() {
+  var hash = '#' + currentView;
+  if (currentView === 'kanban' && kanbanMode === 'cluster') hash = '#kanban-cluster';
+  if (selectedIssue) hash += '&issue=' + selectedIssue;
+  history.replaceState(null, '', hash);
+}
+
+function parseHash() {
+  var hash = location.hash.slice(1);
+  var parts = hash.split('&');
+  var view = parts[0] || 'kanban';
+  if (view === 'graph') currentView = 'graph';
+  else if (view === 'kanban-cluster') { currentView = 'kanban'; kanbanMode = 'cluster'; }
+  else { currentView = 'kanban'; kanbanMode = 'standard'; }
+
+  var issuePart = parts.find(function(p) { return p.indexOf('issue=') === 0; });
+  if (issuePart) selectedIssue = issuePart.split('=')[1];
+}
+
+// ---------------------------------------------------------------------------
+// Keyboard shortcuts
+// ---------------------------------------------------------------------------
+document.addEventListener('keydown', function(e) {
+  if (e.key === '/' && !e.ctrlKey && !e.metaKey) {
+    if (document.activeElement.tagName !== 'INPUT') {
+      e.preventDefault();
+      document.getElementById('filterSearch').focus();
+    }
+  }
+  if (e.key === 'Escape') {
+    if (selectedIssue) closeDetail();
+    else { document.getElementById('filterSearch').value = ''; applyFilters(); }
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Visibility-change refresh
+// ---------------------------------------------------------------------------
+document.addEventListener('visibilitychange', function() {
+  if (!document.hidden) fetchData();
+});
+
+// ---------------------------------------------------------------------------
+// Utilities
+// ---------------------------------------------------------------------------
+function escHtml(str) {
+  if (!str) return '';
+  return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+// ---------------------------------------------------------------------------
+// Init
+// ---------------------------------------------------------------------------
+parseHash();
+fetchData().then(function() {
+  switchView(currentView);
+  if (kanbanMode === 'cluster') switchKanbanMode('cluster');
+  else switchKanbanMode('standard');
+  if (selectedIssue) openDetail(selectedIssue);
+});
+</script>
+</body>
+</html>

@@ -1,0 +1,214 @@
+# tests/test_backward_compat.py
+"""Template integration tests — validates core behaviors work with templates.
+
+These tests lock in the guarantee that existing behavior is preserved when
+workflow templates are enabled. If these tests break, it means the template
+system is NOT backward compatible and must be fixed before merging.
+
+Validates: WFT-AR-011, WFT-SR-015
+"""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import pytest
+
+from filigree.core import FiligreeDB
+
+# ---------------------------------------------------------------------------
+# Fixtures
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def db(tmp_path: Path) -> FiligreeDB:
+    """Standard FiligreeDB with core + planning packs enabled."""
+    filigree_dir = tmp_path / ".filigree"
+    filigree_dir.mkdir()
+    config = {"prefix": "test", "version": 1, "enabled_packs": ["core", "planning"]}
+    (filigree_dir / "config.json").write_text(json.dumps(config))
+    db = FiligreeDB(filigree_dir / "filigree.db", prefix="test")
+    db.initialize()
+    return db
+
+
+# ---------------------------------------------------------------------------
+# Task type (the most critical backward compat guarantee)
+# ---------------------------------------------------------------------------
+
+
+class TestTaskTypeTemplates:
+    """Task type must behave identically to pre-template behavior."""
+
+    def test_task_creates_with_open(self, db: FiligreeDB) -> None:
+        issue = db.create_issue("Do something", type="task")
+        assert issue.status == "open"
+
+    def test_task_transitions_open_to_in_progress(self, db: FiligreeDB) -> None:
+        issue = db.create_issue("Do something", type="task")
+        updated = db.update_issue(issue.id, status="in_progress")
+        assert updated.status == "in_progress"
+
+    def test_task_transitions_in_progress_to_closed(self, db: FiligreeDB) -> None:
+        issue = db.create_issue("Do something", type="task")
+        db.update_issue(issue.id, status="in_progress")
+        updated = db.update_issue(issue.id, status="closed")
+        assert updated.status == "closed"
+        assert updated.closed_at is not None
+
+    def test_task_claim_assigns_only(self, db: FiligreeDB) -> None:
+        issue = db.create_issue("Do something", type="task")
+        claimed = db.claim_issue(issue.id, assignee="agent")
+        assert claimed.status == "open"  # status unchanged — claim only sets assignee
+        assert claimed.assignee == "agent"
+
+    def test_task_release_clears_assignee(self, db: FiligreeDB) -> None:
+        issue = db.create_issue("Do something", type="task")
+        db.claim_issue(issue.id, assignee="agent")
+        released = db.release_claim(issue.id)
+        assert released.status == "open"  # status unchanged — release only clears assignee
+        assert released.assignee == ""
+
+    def test_task_close_produces_closed(self, db: FiligreeDB) -> None:
+        issue = db.create_issue("Do something", type="task")
+        closed = db.close_issue(issue.id)
+        assert closed.status == "closed"
+        assert closed.closed_at is not None
+
+    def test_task_list_by_open_includes_task(self, db: FiligreeDB) -> None:
+        issue = db.create_issue("Do something", type="task")
+        issues = db.list_issues(status="open")
+        ids = {i.id for i in issues}
+        assert issue.id in ids
+
+    def test_task_get_ready_includes_task(self, db: FiligreeDB) -> None:
+        issue = db.create_issue("Do something", type="task")
+        ready = db.get_ready()
+        ids = {i.id for i in ready}
+        assert issue.id in ids
+
+
+class TestEpicTypeTemplates:
+    """Epic type must behave identically to pre-template behavior."""
+
+    def test_epic_creates_with_open(self, db: FiligreeDB) -> None:
+        issue = db.create_issue("Big feature", type="epic")
+        assert issue.status == "open"
+
+    def test_epic_transitions_to_in_progress(self, db: FiligreeDB) -> None:
+        issue = db.create_issue("Big feature", type="epic")
+        updated = db.update_issue(issue.id, status="in_progress")
+        assert updated.status == "in_progress"
+
+    def test_epic_close(self, db: FiligreeDB) -> None:
+        issue = db.create_issue("Big feature", type="epic")
+        closed = db.close_issue(issue.id)
+        assert closed.status == "closed"
+
+
+# ---------------------------------------------------------------------------
+# to_dict() output stability
+# ---------------------------------------------------------------------------
+
+
+class TestToDictStability:
+    """Issue.to_dict() must include all previously-existing keys."""
+
+    def test_to_dict_keys_superset(self, db: FiligreeDB) -> None:
+        """to_dict() must contain at least the original v1.0 keys."""
+        issue = db.create_issue("Task", type="task")
+        d = issue.to_dict()
+        required_keys = {
+            "id",
+            "title",
+            "status",
+            "priority",
+            "type",
+            "parent_id",
+            "assignee",
+            "created_at",
+            "updated_at",
+            "closed_at",
+            "description",
+            "notes",
+            "fields",
+            "labels",
+            "blocks",
+            "blocked_by",
+            "is_ready",
+            "children",
+        }
+        assert required_keys.issubset(set(d.keys()))
+
+    def test_to_dict_has_status_category(self, db: FiligreeDB) -> None:
+        """to_dict() now includes status_category (additive, not breaking)."""
+        issue = db.create_issue("Task", type="task")
+        d = issue.to_dict()
+        assert "status_category" in d
+
+    def test_to_dict_types_unchanged(self, db: FiligreeDB) -> None:
+        """Core field types should be unchanged."""
+        issue = db.create_issue("Task", type="task")
+        d = issue.to_dict()
+        assert isinstance(d["id"], str)
+        assert isinstance(d["title"], str)
+        assert isinstance(d["status"], str)
+        assert isinstance(d["priority"], int)
+        assert isinstance(d["labels"], list)
+        assert isinstance(d["fields"], dict)
+        assert isinstance(d["is_ready"], bool)
+
+
+# ---------------------------------------------------------------------------
+# Dependencies and blocking
+# ---------------------------------------------------------------------------
+
+
+class TestDependencyWithTemplates:
+    """Dependencies must work the same with templates enabled."""
+
+    def test_add_dependency(self, db: FiligreeDB) -> None:
+        a = db.create_issue("A", type="task")
+        b = db.create_issue("B", type="task")
+        db.add_dependency(b.id, a.id)
+        b_fresh = db.get_issue(b.id)
+        assert a.id in b_fresh.blocked_by
+
+    def test_cycle_detection(self, db: FiligreeDB) -> None:
+        a = db.create_issue("A", type="task")
+        b = db.create_issue("B", type="task")
+        db.add_dependency(b.id, a.id)
+        with pytest.raises(ValueError, match="cycle"):
+            db.add_dependency(a.id, b.id)
+
+    def test_closing_blocker_unblocks(self, db: FiligreeDB) -> None:
+        a = db.create_issue("Blocker", type="task")
+        b = db.create_issue("Blocked", type="task")
+        db.add_dependency(b.id, a.id)
+        assert db.get_issue(b.id).is_ready is False
+        db.close_issue(a.id)
+        assert db.get_issue(b.id).is_ready is True
+
+
+# ---------------------------------------------------------------------------
+# Batch operations
+# ---------------------------------------------------------------------------
+
+
+class TestBatchWithTemplates:
+    """Batch operations must work with templates."""
+
+    def test_batch_close(self, db: FiligreeDB) -> None:
+        a = db.create_issue("A", type="task")
+        b = db.create_issue("B", type="task")
+        results = db.batch_close([a.id, b.id])
+        assert all(r.status == "closed" for r in results)
+
+    def test_batch_update_status(self, db: FiligreeDB) -> None:
+        a = db.create_issue("A", type="task")
+        b = db.create_issue("B", type="task")
+        results, errors = db.batch_update([a.id, b.id], status="in_progress")
+        assert all(r.status == "in_progress" for r in results)
+        assert len(errors) == 0

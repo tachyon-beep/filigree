@@ -1,0 +1,168 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "filigree"
+version = "0.1.0"
+description = "Agent-native issue tracker with convention-based project discovery"
+requires-python = ">=3.11"
+license = "MIT"
+authors = [
+    {name = "John Morrissey"},
+]
+readme = "README.md"
+keywords = ["issue-tracker", "mcp", "agent", "sqlite", "cli"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Bug Tracking",
+    "Operating System :: OS Independent",
+    "Typing :: Typed",
+]
+dependencies = [
+    "click>=8.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/tachyon-beep/filigree"
+Repository = "https://github.com/tachyon-beep/filigree"
+Issues = "https://github.com/tachyon-beep/filigree/issues"
+Changelog = "https://github.com/tachyon-beep/filigree/blob/main/CHANGELOG.md"
+Documentation = "https://github.com/tachyon-beep/filigree#readme"
+
+[project.optional-dependencies]
+mcp = [
+    "mcp>=1.0,<2",
+]
+dashboard = [
+    "fastapi>=0.115",
+    "uvicorn>=0.34",
+]
+all = [
+    "filigree[mcp]",
+    "filigree[dashboard]",
+]
+
+[project.scripts]
+filigree = "filigree.cli:cli"
+filigree-mcp = "filigree.mcp_server:main"
+filigree-dashboard = "filigree.dashboard:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/filigree"]
+
+# ---------------------------------------------------------------------------
+# Dev dependencies (PEP 735 — used by uv, not published)
+# ---------------------------------------------------------------------------
+
+[dependency-groups]
+dev = [
+    "ruff>=0.9",
+    "mypy>=1.14",
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+    "pytest-cov>=6.0",
+    "coverage[toml]>=7.0",
+    "httpx>=0.28",
+    "pre-commit>=4.0",
+    "filigree[mcp]",
+    "filigree[dashboard]",
+]
+
+# ---------------------------------------------------------------------------
+# Ruff
+# ---------------------------------------------------------------------------
+
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+src = ["src"]
+
+[tool.ruff.lint]
+select = [
+    "E",     # pycodestyle errors
+    "W",     # pycodestyle warnings
+    "F",     # pyflakes
+    "I",     # isort
+    "N",     # pep8-naming
+    "UP",    # pyupgrade
+    "B",     # flake8-bugbear
+    "SIM",   # flake8-simplify
+    "RUF",   # ruff-specific
+    "S",     # flake8-bandit (security)
+    "T20",   # flake8-print
+    "PT",    # flake8-pytest-style
+    "PIE",   # flake8-pie
+    "C4",    # flake8-comprehensions
+    "DTZ",   # flake8-datetimez
+]
+ignore = [
+    "S603",  # subprocess-without-shell-check — we control the args
+    "S607",  # start-process-with-partial-path — we use shutil.which
+    "T201",  # print — used intentionally in MCP server startup
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = ["S101"]  # assert is fine in tests
+"src/filigree/core.py" = ["S608"]  # SQL placeholders are parameterized ?-markers, not injection
+"src/filigree/mcp_server.py" = ["E501"]  # MCP tool schemas have long inline JSON lines
+"src/filigree/dashboard.py" = ["E501", "S608"]  # Long HTML strings; SQL uses ? params
+
+[tool.ruff.lint.isort]
+known-first-party = ["filigree"]
+
+# ---------------------------------------------------------------------------
+# Mypy
+# ---------------------------------------------------------------------------
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+
+[[tool.mypy.overrides]]
+module = ["mcp.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["uvicorn"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["fastapi.*"]
+ignore_missing_imports = true
+
+# ---------------------------------------------------------------------------
+# Pytest
+# ---------------------------------------------------------------------------
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra -q"
+asyncio_mode = "auto"
+
+# ---------------------------------------------------------------------------
+# Coverage
+# ---------------------------------------------------------------------------
+
+[tool.coverage.run]
+source = ["filigree"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+skip_empty = true
+fail_under = 85
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "if __name__ == .__main__.",
+]
