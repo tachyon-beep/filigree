@@ -13,7 +13,10 @@ from __future__ import annotations
 
 import webbrowser
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from starlette.requests import Request
 
 from filigree.core import DB_FILENAME, FiligreeDB, find_filigree_root, read_config
 
@@ -33,8 +36,11 @@ def _get_db() -> FiligreeDB:
 
 def create_app() -> Any:
     """Create the FastAPI application with all dashboard endpoints."""
-    from fastapi import FastAPI
+    from fastapi import FastAPI, Request
     from fastapi.responses import HTMLResponse, JSONResponse
+
+    # Expose Request in module globals so PEP 563 deferred annotations resolve
+    globals()["Request"] = Request
 
     app = FastAPI(title="Filigree Dashboard", docs_url=None, redoc_url=None)
 
@@ -140,6 +146,81 @@ def create_app() -> Any:
                 ],
             }
         )
+
+    @app.get("/api/issue/{issue_id}/transitions")
+    async def api_issue_transitions(issue_id: str) -> JSONResponse:
+        """Valid next states for an issue."""
+        db = _get_db()
+        try:
+            transitions = db.get_valid_transitions(issue_id)
+        except KeyError:
+            return JSONResponse({"error": f"Not found: {issue_id}"}, status_code=404)
+        return JSONResponse(
+            [
+                {
+                    "to": t.to,
+                    "category": t.category,
+                    "enforcement": t.enforcement,
+                    "ready": t.ready,
+                    "missing_fields": list(t.missing_fields),
+                    "requires_fields": list(t.requires_fields),
+                }
+                for t in transitions
+            ]
+        )
+
+    @app.patch("/api/issue/{issue_id}")
+    async def api_update_issue(issue_id: str, request: Request) -> JSONResponse:
+        """Update issue fields (status, priority, assignee, etc.)."""
+        db = _get_db()
+        body = await request.json()
+        actor = body.pop("actor", "dashboard")
+        try:
+            issue = db.update_issue(
+                issue_id,
+                status=body.get("status"),
+                priority=body.get("priority"),
+                assignee=body.get("assignee"),
+                title=body.get("title"),
+                description=body.get("description"),
+                notes=body.get("notes"),
+                fields=body.get("fields"),
+                actor=actor,
+            )
+        except KeyError:
+            return JSONResponse({"error": f"Not found: {issue_id}"}, status_code=404)
+        except ValueError as e:
+            return JSONResponse({"error": str(e)}, status_code=409)
+        return JSONResponse(issue.to_dict())
+
+    @app.post("/api/issue/{issue_id}/close")
+    async def api_close_issue(issue_id: str, request: Request) -> JSONResponse:
+        """Close an issue."""
+        db = _get_db()
+        body = await request.json()
+        actor = body.get("actor", "dashboard")
+        reason = body.get("reason", "")
+        try:
+            issue = db.close_issue(issue_id, reason=reason, actor=actor)
+        except KeyError:
+            return JSONResponse({"error": f"Not found: {issue_id}"}, status_code=404)
+        except ValueError as e:
+            return JSONResponse({"error": str(e)}, status_code=409)
+        return JSONResponse(issue.to_dict())
+
+    @app.post("/api/issue/{issue_id}/reopen")
+    async def api_reopen_issue(issue_id: str, request: Request) -> JSONResponse:
+        """Reopen a closed issue."""
+        db = _get_db()
+        body = await request.json()
+        actor = body.get("actor", "dashboard")
+        try:
+            issue = db.reopen_issue(issue_id, actor=actor)
+        except KeyError:
+            return JSONResponse({"error": f"Not found: {issue_id}"}, status_code=404)
+        except ValueError as e:
+            return JSONResponse({"error": str(e)}, status_code=409)
+        return JSONResponse(issue.to_dict())
 
     return app
 

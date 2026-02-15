@@ -212,6 +212,192 @@ class TestWorkflowAwareAPI:
             assert "status_category" in issue
 
 
+class TestTransitionsAPI:
+    """GET /api/issue/{issue_id}/transitions — valid next states."""
+
+    async def test_transitions_for_open_issue(self, client: AsyncClient, dashboard_db: FiligreeDB) -> None:
+        ids = dashboard_db._test_ids  # type: ignore[attr-defined]
+        resp = await client.get(f"/api/issue/{ids['b']}/transitions")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert isinstance(data, list)
+        assert len(data) >= 1
+        # Each transition has required fields
+        for t in data:
+            assert "to" in t
+            assert "category" in t
+            assert "ready" in t
+
+    async def test_transitions_not_found(self, client: AsyncClient) -> None:
+        resp = await client.get("/api/issue/nonexistent/transitions")
+        assert resp.status_code == 404
+        assert "error" in resp.json()
+
+
+class TestUpdateAPI:
+    """PATCH /api/issue/{issue_id} — update issue fields."""
+
+    async def test_update_priority(self, client: AsyncClient, dashboard_db: FiligreeDB) -> None:
+        ids = dashboard_db._test_ids  # type: ignore[attr-defined]
+        resp = await client.patch(
+            f"/api/issue/{ids['b']}",
+            json={"priority": 0},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["priority"] == 0
+
+    async def test_update_assignee(self, client: AsyncClient, dashboard_db: FiligreeDB) -> None:
+        ids = dashboard_db._test_ids  # type: ignore[attr-defined]
+        resp = await client.patch(
+            f"/api/issue/{ids['b']}",
+            json={"assignee": "alice"},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["assignee"] == "alice"
+
+    async def test_update_status(self, client: AsyncClient, dashboard_db: FiligreeDB) -> None:
+        ids = dashboard_db._test_ids  # type: ignore[attr-defined]
+        resp = await client.patch(
+            f"/api/issue/{ids['b']}",
+            json={"status": "in_progress"},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "in_progress"
+
+    async def test_update_title(self, client: AsyncClient, dashboard_db: FiligreeDB) -> None:
+        ids = dashboard_db._test_ids  # type: ignore[attr-defined]
+        resp = await client.patch(
+            f"/api/issue/{ids['b']}",
+            json={"title": "Renamed Issue B"},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["title"] == "Renamed Issue B"
+
+    async def test_update_not_found(self, client: AsyncClient) -> None:
+        resp = await client.patch(
+            "/api/issue/nonexistent",
+            json={"priority": 1},
+        )
+        assert resp.status_code == 404
+        assert "error" in resp.json()
+
+    async def test_update_invalid_transition(self, client: AsyncClient, dashboard_db: FiligreeDB) -> None:
+        ids = dashboard_db._test_ids  # type: ignore[attr-defined]
+        # Trying to transition to an invalid state should 409
+        resp = await client.patch(
+            f"/api/issue/{ids['b']}",
+            json={"status": "totally_bogus_state"},
+        )
+        assert resp.status_code == 409
+        assert "error" in resp.json()
+
+    async def test_update_actor_defaults_to_dashboard(self, client: AsyncClient, dashboard_db: FiligreeDB) -> None:
+        ids = dashboard_db._test_ids  # type: ignore[attr-defined]
+        resp = await client.patch(
+            f"/api/issue/{ids['b']}",
+            json={"priority": 3},
+        )
+        assert resp.status_code == 200
+        # Verify actor was recorded (check events)
+        detail_resp = await client.get(f"/api/issue/{ids['b']}")
+        events = detail_resp.json()["events"]
+        # Most recent event should have actor "dashboard"
+        assert any(e.get("actor") == "dashboard" for e in events)
+
+    async def test_update_custom_actor(self, client: AsyncClient, dashboard_db: FiligreeDB) -> None:
+        ids = dashboard_db._test_ids  # type: ignore[attr-defined]
+        resp = await client.patch(
+            f"/api/issue/{ids['b']}",
+            json={"priority": 1, "actor": "bot-1"},
+        )
+        assert resp.status_code == 200
+        detail_resp = await client.get(f"/api/issue/{ids['b']}")
+        events = detail_resp.json()["events"]
+        assert any(e.get("actor") == "bot-1" for e in events)
+
+
+class TestCloseReopenAPI:
+    """POST /api/issue/{issue_id}/close and /reopen."""
+
+    async def test_close_issue(self, client: AsyncClient, dashboard_db: FiligreeDB) -> None:
+        ids = dashboard_db._test_ids  # type: ignore[attr-defined]
+        resp = await client.post(
+            f"/api/issue/{ids['b']}/close",
+            json={"reason": "completed"},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status_category"] == "done"
+
+    async def test_close_already_closed(self, client: AsyncClient, dashboard_db: FiligreeDB) -> None:
+        ids = dashboard_db._test_ids  # type: ignore[attr-defined]
+        # C is already closed
+        resp = await client.post(
+            f"/api/issue/{ids['c']}/close",
+            json={},
+        )
+        assert resp.status_code == 409
+        assert "error" in resp.json()
+
+    async def test_close_not_found(self, client: AsyncClient) -> None:
+        resp = await client.post(
+            "/api/issue/nonexistent/close",
+            json={},
+        )
+        assert resp.status_code == 404
+        assert "error" in resp.json()
+
+    async def test_reopen_closed_issue(self, client: AsyncClient, dashboard_db: FiligreeDB) -> None:
+        ids = dashboard_db._test_ids  # type: ignore[attr-defined]
+        # C is closed — reopen it
+        resp = await client.post(
+            f"/api/issue/{ids['c']}/reopen",
+            json={},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status_category"] == "open"
+
+    async def test_reopen_not_closed(self, client: AsyncClient, dashboard_db: FiligreeDB) -> None:
+        ids = dashboard_db._test_ids  # type: ignore[attr-defined]
+        # B is open — can't reopen
+        resp = await client.post(
+            f"/api/issue/{ids['b']}/reopen",
+            json={},
+        )
+        assert resp.status_code == 409
+        assert "error" in resp.json()
+
+    async def test_reopen_not_found(self, client: AsyncClient) -> None:
+        resp = await client.post(
+            "/api/issue/nonexistent/reopen",
+            json={},
+        )
+        assert resp.status_code == 404
+        assert "error" in resp.json()
+
+    async def test_close_with_actor(self, client: AsyncClient, dashboard_db: FiligreeDB) -> None:
+        ids = dashboard_db._test_ids  # type: ignore[attr-defined]
+        resp = await client.post(
+            f"/api/issue/{ids['b']}/close",
+            json={"actor": "bot-2"},
+        )
+        assert resp.status_code == 200
+
+    async def test_reopen_with_actor(self, client: AsyncClient, dashboard_db: FiligreeDB) -> None:
+        ids = dashboard_db._test_ids  # type: ignore[attr-defined]
+        # C is closed, reopen with actor
+        resp = await client.post(
+            f"/api/issue/{ids['c']}/reopen",
+            json={"actor": "bot-3"},
+        )
+        assert resp.status_code == 200
+
+
 class TestDashboardGetDb:
     """Cover _get_db when _db is None (lines 29-30)."""
 
