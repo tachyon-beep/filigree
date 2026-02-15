@@ -21,6 +21,11 @@
   .detail-panel { transition: transform 0.2s ease; }
   .kanban-col { min-width: 320px; }
   #refreshIndicator { transition: opacity 0.3s ease; }
+  @keyframes stale-pulse { 0%,100% { border-left-color: #EF4444; } 50% { border-left-color: #7F1D1D; } }
+  .aging-border { border-left: 4px solid #F59E0B; }
+  .stale-border { border-left: 4px solid #EF4444; animation: stale-pulse 2s infinite; }
+  .changed-flash { animation: flash 1s ease-out; }
+  @keyframes flash { 0% { box-shadow: 0 0 8px rgba(59,130,246,0.5); } 100% { box-shadow: none; } }
 </style>
 <script>
 tailwind.config = {
@@ -57,7 +62,7 @@ tailwind.config = {
       <option value="2">P2</option>
       <option value="3-4">P3-P4</option>
     </select>
-    <input id="filterSearch" type="text" placeholder="Search..." oninput="applyFilters()"
+    <input id="filterSearch" type="text" placeholder="Search..." oninput="debouncedSearch()"
            class="bg-slate-700 text-slate-200 text-xs rounded px-3 py-1 border border-slate-600 w-40 focus:outline-none focus:border-blue-500">
     <div class="flex gap-1 text-xs">
       <label class="flex items-center gap-1 text-slate-400"><input type="checkbox" id="filterOpen" checked onchange="applyFilters()" class="accent-blue-500"> Open</label>
@@ -175,10 +180,14 @@ async function fetchData() {
     stats = await results[2].json();
     issueMap = {};
     allIssues.forEach(function(i) { issueMap[i.id] = i; });
+    trackChanges(allIssues);
     updateStats();
     render();
   } finally {
-    setTimeout(function() { document.getElementById('refreshIndicator').style.opacity = '0'; }, 300);
+    setTimeout(function() {
+      document.getElementById('refreshIndicator').textContent = 'Updated ' + new Date().toLocaleTimeString();
+      document.getElementById('refreshIndicator').style.opacity = '0.5';
+    }, 300);
   }
 }
 
@@ -221,10 +230,9 @@ function getFilteredIssues() {
   else if (prio === '2') items = items.filter(function(i) { return i.priority === 2; });
   else if (prio === '3-4') items = items.filter(function(i) { return i.priority >= 3; });
 
-  var search = document.getElementById('filterSearch').value.toLowerCase().trim();
-  if (search) items = items.filter(function(i) {
-    return i.title.toLowerCase().indexOf(search) >= 0 || i.id.toLowerCase().indexOf(search) >= 0;
-  });
+  if (searchResults !== null) {
+    items = items.filter(function(i) { return searchResults.has(i.id); });
+  }
 
   if (readyFilter) items.sort(function(a, b) {
     return (b.is_ready ? 1 : 0) - (a.is_ready ? 1 : 0) || a.priority - b.priority;
@@ -422,8 +430,18 @@ function renderCard(issue) {
   }).length;
   var readyClass = issue.is_ready && cat === 'open' ? 'ready-border' : '';
 
+  var agingClass = '';
+  if (cat === 'wip' && issue.updated_at) {
+    var ageMs = Date.now() - new Date(issue.updated_at).getTime();
+    var ageHours = ageMs / 3600000;
+    if (ageHours > 24) agingClass = 'stale-border';
+    else if (ageHours > 4) agingClass = 'aging-border';
+  }
+
+  var changedClass = changedIds.has(issue.id) ? 'ring-1 ring-blue-500' : '';
+
   return '<div class="card bg-slate-800 rounded border border-slate-700 p-3 cursor-pointer ' +
-    readyClass + '" onclick="openDetail(\'' + issue.id + '\')">' +
+    readyClass + ' ' + agingClass + ' ' + changedClass + '" onclick="openDetail(\'' + issue.id + '\')">' +
     '<div class="flex items-center gap-2 mb-1">' +
       '<span>' + typeIcon + '</span>' +
       '<span class="w-2 h-2 rounded-full shrink-0" style="background:' + prioColor +
@@ -435,6 +453,15 @@ function renderCard(issue) {
       '<span class="rounded px-1" style="background:' + catColor + ';color:white">' + issue.status + '</span>' +
       (blockedCount > 0 ? '<span class="text-red-400">\u{1F517} blocked by ' + blockedCount + '</span>' : '') +
       (issue.assignee ? '<span class="text-slate-400">\u{1F464} ' + escHtml(issue.assignee) + '</span>' : '') +
+      (cat === 'wip' && issue.updated_at
+        ? (function() {
+            var mins = Math.floor((Date.now() - new Date(issue.updated_at).getTime()) / 60000);
+            if (mins < 60) return '<span class="text-slate-500">' + mins + 'm</span>';
+            var hrs = Math.floor(mins / 60);
+            if (hrs < 24) return '<span class="' + (hrs > 4 ? 'text-amber-400' : 'text-slate-500') + '">' + hrs + 'h</span>';
+            return '<span class="text-red-400">' + Math.floor(hrs / 24) + 'd</span>';
+          })()
+        : '') +
     '</div>' +
   '</div>';
 }
@@ -989,6 +1016,46 @@ async function loadActivity() {
 }
 
 // ---------------------------------------------------------------------------
+// Server-side search
+// ---------------------------------------------------------------------------
+var _searchTimeout = null;
+function debouncedSearch() {
+  clearTimeout(_searchTimeout);
+  _searchTimeout = setTimeout(doSearch, 200);
+}
+
+var searchResults = null;
+async function doSearch() {
+  var q = document.getElementById('filterSearch').value.trim();
+  if (!q) { searchResults = null; render(); return; }
+  try {
+    var resp = await fetch('/api/search?q=' + encodeURIComponent(q) + '&limit=100');
+    var data = await resp.json();
+    searchResults = new Set(data.results.map(function(i) { return i.id; }));
+  } catch (e) { searchResults = null; }
+  render();
+}
+
+// ---------------------------------------------------------------------------
+// Auto-refresh with change highlighting
+// ---------------------------------------------------------------------------
+var previousIssueState = {};
+var changedIds = new Set();
+var REFRESH_INTERVAL = 15000; // 15 seconds
+
+function trackChanges(newIssues) {
+  changedIds.clear();
+  newIssues.forEach(function(i) {
+    var prev = previousIssueState[i.id];
+    if (prev && (prev.status !== i.status || prev.priority !== i.priority || prev.assignee !== i.assignee || prev.updated_at !== i.updated_at)) {
+      changedIds.add(i.id);
+    }
+  });
+  previousIssueState = {};
+  newIssues.forEach(function(i) { previousIssueState[i.id] = {status: i.status, priority: i.priority, assignee: i.assignee, updated_at: i.updated_at}; });
+}
+
+// ---------------------------------------------------------------------------
 // Init
 // ---------------------------------------------------------------------------
 parseHash();
@@ -998,6 +1065,7 @@ fetchData().then(function() {
   else switchKanbanMode('standard');
   if (selectedIssue) openDetail(selectedIssue);
 });
+setInterval(function() { if (!document.hidden) fetchData(); }, REFRESH_INTERVAL);
 </script>
 </body>
 </html>
