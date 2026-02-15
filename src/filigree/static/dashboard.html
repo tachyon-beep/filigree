@@ -710,7 +710,49 @@ async function openDetail(issueId) {
     (eventsData.length
       ? '<div class="mb-3"><div class="text-xs font-medium text-slate-400 mb-1">Timeline</div>' + eventsHtml + '</div>'
       : '') +
-    '<div class="mt-4 text-xs text-slate-600 select-all">filigree show ' + d.id + '</div>';
+    // Actions section
+    '<div class="mt-4 border-t border-slate-700 pt-3">' +
+      '<div class="text-xs font-medium text-slate-400 mb-2">Actions</div>' +
+      '<div id="transitionBtns" class="flex flex-wrap gap-1 mb-2"></div>' +
+      '<div class="flex gap-2 mb-2">' +
+        '<select id="prioSelect" onchange="updateIssue(\'' + d.id + '\', {priority: parseInt(this.value)})" class="bg-slate-700 text-xs rounded px-2 py-1 border border-slate-600">' +
+          [0,1,2,3,4].map(function(p) {
+            return '<option value="' + p + '"' + (d.priority === p ? ' selected' : '') + '>P' + p + '</option>';
+          }).join('') +
+        '</select>' +
+        '<input id="assigneeInput" type="text" placeholder="Assignee" value="' + escHtml(d.assignee || '') + '"' +
+          ' onkeydown="if(event.key===\'Enter\')updateIssue(\'' + d.id + '\',{assignee:this.value})"' +
+          ' class="bg-slate-700 text-xs rounded px-2 py-1 border border-slate-600 flex-1">' +
+      '</div>' +
+      (statusCat !== 'done'
+        ? '<button onclick="closeIssue(\'' + d.id + '\')" class="text-xs bg-red-900/50 text-red-400 px-3 py-1 rounded border border-red-800 hover:bg-red-900 mb-2">Close</button>'
+        : '<button onclick="reopenIssue(\'' + d.id + '\')" class="text-xs bg-green-900/50 text-green-400 px-3 py-1 rounded border border-green-800 hover:bg-green-900 mb-2">Reopen</button>') +
+    '</div>' +
+    // Comment input
+    '<div class="mt-3 border-t border-slate-700 pt-3">' +
+      '<div class="text-xs font-medium text-slate-400 mb-1">Add Comment</div>' +
+      '<div class="flex gap-1">' +
+        '<input id="commentInput" type="text" placeholder="Comment..." onkeydown="if(event.key===\'Enter\')addComment(\'' + d.id + '\')"' +
+          ' class="bg-slate-700 text-xs rounded px-2 py-1 border border-slate-600 flex-1 focus:outline-none focus:border-blue-500">' +
+        '<button onclick="addComment(\'' + d.id + '\')" class="text-xs bg-blue-600 text-white px-2 py-1 rounded hover:bg-blue-700">Send</button>' +
+      '</div>' +
+    '</div>' +
+    '<div class="mt-3 text-xs text-slate-600 select-all">filigree show ' + d.id + '</div>';
+
+  // Load transitions async and render buttons
+  loadTransitions(issueId).then(function(transitions) {
+    var container = document.getElementById('transitionBtns');
+    if (!container || !transitions.length) return;
+    container.innerHTML = transitions.map(function(t) {
+      var cls = t.ready
+        ? 'bg-blue-600 text-white hover:bg-blue-700'
+        : 'bg-slate-700 text-slate-400 cursor-not-allowed';
+      var title = t.missing_fields.length ? 'Missing: ' + t.missing_fields.join(', ') : '';
+      return '<button ' + (t.ready ? 'onclick="updateIssue(\'' + issueId + '\',{status:\'' + t.to + '\'})"' : 'disabled') +
+        ' class="text-xs px-2 py-1 rounded ' + cls + '" title="' + escHtml(title) + '">' +
+        t.to + '</button>';
+    }).join('');
+  });
 }
 
 function closeDetail() {
@@ -770,6 +812,67 @@ document.addEventListener('visibilitychange', function() {
 function escHtml(str) {
   if (!str) return '';
   return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+// ---------------------------------------------------------------------------
+// Actions (write operations)
+// ---------------------------------------------------------------------------
+async function updateIssue(issueId, body) {
+  try {
+    var resp = await fetch('/api/issue/' + issueId, {
+      method: 'PATCH', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(body),
+    });
+    if (!resp.ok) {
+      var err = await resp.json();
+      alert('Error: ' + (err.error || 'Update failed'));
+      return null;
+    }
+    var updated = await resp.json();
+    await fetchData();
+    if (selectedIssue === issueId) openDetail(issueId);
+    return updated;
+  } catch (e) { alert('Network error'); return null; }
+}
+
+async function closeIssue(issueId) {
+  var reason = prompt('Close reason (optional):') || '';
+  var resp = await fetch('/api/issue/' + issueId + '/close', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({reason: reason}),
+  });
+  if (!resp.ok) { var err = await resp.json(); alert('Error: ' + (err.error || 'Close failed')); return; }
+  await fetchData();
+  if (selectedIssue === issueId) openDetail(issueId);
+}
+
+async function reopenIssue(issueId) {
+  var resp = await fetch('/api/issue/' + issueId + '/reopen', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({}),
+  });
+  if (!resp.ok) { var err = await resp.json(); alert('Error: ' + (err.error || 'Reopen failed')); return; }
+  await fetchData();
+  if (selectedIssue === issueId) openDetail(issueId);
+}
+
+async function addComment(issueId) {
+  var input = document.getElementById('commentInput');
+  var text = input ? input.value.trim() : '';
+  if (!text) return;
+  var resp = await fetch('/api/issue/' + issueId + '/comments', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({text: text}),
+  });
+  if (resp.ok) { input.value = ''; openDetail(issueId); }
+}
+
+async function loadTransitions(issueId) {
+  try {
+    var resp = await fetch('/api/issue/' + issueId + '/transitions');
+    if (resp.ok) return await resp.json();
+  } catch (e) {}
+  return [];
 }
 
 // ---------------------------------------------------------------------------
