@@ -12,7 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - SQLite-backed issue database with WAL mode and convention-based `.filigree/` project discovery
-- 42 MCP tools for native AI agent interaction (read, write, claim, batch, workflow, data management)
+- 43 MCP tools for native AI agent interaction (read, write, claim, batch, workflow, data management)
 - Full CLI with 30+ commands, `--json` output for scripting, and `--actor` flag for audit trails
 - 9 workflow templates across 2 packs:
   - **core**: task, bug, feature, epic

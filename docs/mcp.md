@@ -1,0 +1,422 @@
+# MCP Server Reference
+
+Filigree exposes an MCP (Model Context Protocol) server so AI agents interact natively without parsing CLI output. The server provides 43 tools, 1 resource, and 1 prompt.
+
+## Contents
+
+- [Setup](#setup)
+- [Resource](#resource)
+- [Prompt](#prompt)
+- [Tools](#tools)
+  - [Core Operations](#core-operations)
+  - [Ready and Blocked](#ready-and-blocked)
+  - [Dependencies](#dependencies)
+  - [Comments and Labels](#comments-and-labels)
+  - [Search](#search)
+  - [Planning](#planning)
+  - [Claiming](#claiming)
+  - [Batch Operations](#batch-operations)
+  - [Templates and Workflow](#templates-and-workflow)
+  - [Analytics](#analytics)
+  - [Data Management](#data-management)
+
+## Setup
+
+The simplest path:
+
+```bash
+filigree install --claude-code    # Writes .mcp.json (or uses `claude mcp add`)
+filigree install --codex          # Writes .codex/config.toml
+```
+
+Or manually add to `.mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "filigree": {
+      "type": "stdio",
+      "command": "filigree-mcp",
+      "args": ["--project", "/path/to/project"]
+    }
+  }
+}
+```
+
+Requires the MCP extra:
+
+```bash
+pip install "filigree[mcp]"
+```
+
+## Resource
+
+### `filigree://context`
+
+Auto-generated project summary containing:
+
+- Project vitals (prefix, issue counts, schema version)
+- Ready work queue (unblocked issues sorted by priority)
+- Blocked issues with their blockers
+- Recent activity
+
+Regenerated on every mutation. Agents read this at session start for instant orientation.
+
+## Prompt
+
+### `filigree-workflow`
+
+Workflow guide with optional live project context. Agents use this to understand how to interact with filigree — available types, state machines, transition rules.
+
+## Tools
+
+### Core Operations
+
+| Tool | Description |
+|------|-------------|
+| `get_issue` | Full issue details with deps, labels, children, ready status |
+| `list_issues` | Filter by status, type, priority, parent, assignee |
+| `create_issue` | Create with type, priority, deps, labels, fields |
+| `update_issue` | Update status, priority, title, assignee, fields |
+| `close_issue` | Close with optional reason |
+| `reopen_issue` | Reopen a closed issue to its initial state |
+| `undo_last` | Undo most recent reversible action |
+
+#### `get_issue`
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `id` | string | yes | Issue ID |
+| `include_transitions` | boolean | no | Include valid next states in response |
+
+#### `list_issues`
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `status` | string | no | Filter by exact status name |
+| `status_category` | enum | no | Filter by category: `open`, `wip`, `done` |
+| `type` | string | no | Filter by issue type |
+| `priority` | 0-4 | no | Filter by priority |
+| `parent_id` | string | no | Filter by parent issue ID |
+| `limit` | integer | no | Max results (default 100) |
+| `offset` | integer | no | Skip first N results |
+
+#### `create_issue`
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `title` | string | yes | Issue title |
+| `type` | string | no | Issue type (default: `task`) |
+| `priority` | 0-4 | no | Priority (default: 2) |
+| `description` | string | no | Issue description |
+| `notes` | string | no | Additional notes |
+| `labels` | string[] | no | Labels |
+| `deps` | string[] | no | Dependency issue IDs |
+| `parent_id` | string | no | Parent issue ID |
+| `fields` | object | no | Custom fields from template schema |
+| `actor` | string | no | Agent identity for audit trail |
+
+#### `update_issue`
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `id` | string | yes | Issue ID |
+| `status` | string | no | New status |
+| `priority` | 0-4 | no | New priority |
+| `title` | string | no | New title |
+| `description` | string | no | New description |
+| `notes` | string | no | New notes |
+| `assignee` | string | no | New assignee |
+| `parent_id` | string | no | New parent (empty string to clear) |
+| `fields` | object | no | Fields to merge into existing |
+| `actor` | string | no | Agent identity for audit trail |
+
+#### `close_issue`
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `id` | string | yes | Issue ID |
+| `reason` | string | no | Close reason |
+| `actor` | string | no | Agent identity for audit trail |
+
+#### `reopen_issue`
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `id` | string | yes | Issue ID |
+| `actor` | string | no | Agent identity for audit trail |
+
+#### `undo_last`
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `id` | string | yes | Issue ID |
+| `actor` | string | no | Agent identity for audit trail |
+
+### Ready and Blocked
+
+| Tool | Description |
+|------|-------------|
+| `get_ready` | Unblocked issues sorted by priority |
+| `get_blocked` | Blocked issues with their blocker lists |
+| `get_critical_path` | Longest dependency chain |
+
+These tools take no required parameters.
+
+### Dependencies
+
+| Tool | Description |
+|------|-------------|
+| `add_dependency` | Add blocker: `from_id` depends on `to_id` |
+| `remove_dependency` | Remove blocker relationship |
+
+#### `add_dependency` / `remove_dependency`
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `from_id` | string | yes | Issue that is blocked |
+| `to_id` | string | yes | Issue that blocks |
+| `actor` | string | no | Agent identity for audit trail |
+
+### Comments and Labels
+
+| Tool | Description |
+|------|-------------|
+| `add_comment` | Add comment to an issue |
+| `get_comments` | Get all comments on an issue |
+| `add_label` | Add label to an issue |
+| `remove_label` | Remove label from an issue |
+
+#### `add_comment`
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `issue_id` | string | yes | Issue ID |
+| `text` | string | yes | Comment text |
+| `actor` | string | no | Used as comment author |
+
+#### `get_comments`
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `issue_id` | string | yes | Issue ID |
+
+#### `add_label` / `remove_label`
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `issue_id` | string | yes | Issue ID |
+| `label` | string | yes | Label name |
+
+### Search
+
+| Tool | Description |
+|------|-------------|
+| `search_issues` | Search by title and description (FTS5) |
+| `get_summary` | Pre-computed project summary (same as `context.md`) |
+| `get_stats` | Project statistics: counts by status, type, ready/blocked |
+
+#### `search_issues`
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `query` | string | yes | Search query |
+| `limit` | integer | no | Max results (default 100) |
+| `offset` | integer | no | Skip first N results |
+
+### Planning
+
+| Tool | Description |
+|------|-------------|
+| `get_plan` | Milestone plan tree with progress |
+| `create_plan` | Create milestone/phase/step hierarchy in one call |
+
+#### `get_plan`
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `milestone_id` | string | yes | Milestone issue ID |
+
+#### `create_plan`
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `milestone` | object | yes | `{title, description?, priority?}` |
+| `phases` | array | yes | Array of `{title, description?, priority?, steps}` |
+| `actor` | string | no | Agent identity for audit trail |
+
+Step deps within a phase use integer indices. Cross-phase deps use `"phase_idx.step_idx"` format.
+
+### Claiming
+
+| Tool | Description |
+|------|-------------|
+| `claim_issue` | Atomically claim with optimistic locking |
+| `claim_next` | Claim highest-priority ready issue |
+| `release_claim` | Release back to open |
+
+#### `claim_issue`
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `id` | string | yes | Issue ID |
+| `assignee` | string | yes | Who is claiming |
+| `actor` | string | no | Agent identity (defaults to assignee) |
+
+#### `claim_next`
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `assignee` | string | yes | Who is claiming |
+| `type` | string | no | Filter by issue type |
+| `priority_min` | 0-4 | no | Minimum priority |
+| `priority_max` | 0-4 | no | Maximum priority |
+| `actor` | string | no | Agent identity (defaults to assignee) |
+
+#### `release_claim`
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `id` | string | yes | Issue ID |
+| `actor` | string | no | Agent identity for audit trail |
+
+### Batch Operations
+
+| Tool | Description |
+|------|-------------|
+| `batch_update` | Update multiple issues with the same changes |
+| `batch_close` | Close multiple with per-item error reporting |
+
+#### `batch_update`
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `ids` | string[] | yes | Issue IDs |
+| `status` | string | no | New status |
+| `priority` | 0-4 | no | New priority |
+| `assignee` | string | no | New assignee |
+| `fields` | object | no | Fields to merge |
+| `actor` | string | no | Agent identity for audit trail |
+
+#### `batch_close`
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `ids` | string[] | yes | Issue IDs |
+| `reason` | string | no | Close reason |
+| `actor` | string | no | Agent identity for audit trail |
+
+### Templates and Workflow
+
+| Tool | Description |
+|------|-------------|
+| `list_types` | All registered types with pack info |
+| `get_type_info` | Full workflow definition for a type |
+| `get_template` | Field schema for an issue type |
+| `get_valid_transitions` | Valid next states with readiness indicators |
+| `validate_issue` | Validate against template (warnings for missing fields) |
+| `list_packs` | Enabled workflow packs |
+| `get_workflow_guide` | Pack documentation |
+| `get_workflow_states` | States by category (open/wip/done) |
+| `explain_state` | State transitions and required fields |
+| `reload_templates` | Refresh templates from disk |
+
+#### `get_type_info`
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `type` | string | yes | Issue type name |
+
+#### `get_template`
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `type` | string | yes | Issue type name |
+
+#### `get_valid_transitions`
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `issue_id` | string | yes | Issue ID |
+
+#### `validate_issue`
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `issue_id` | string | yes | Issue ID |
+
+#### `get_workflow_guide`
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `pack` | string | yes | Pack name (e.g., `core`, `planning`) |
+
+#### `explain_state`
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `type` | string | yes | Issue type name |
+| `state` | string | yes | State name |
+
+### Analytics
+
+| Tool | Description |
+|------|-------------|
+| `get_metrics` | Cycle time, lead time, throughput |
+| `get_changes` | Events since a timestamp |
+| `get_issue_events` | Event history for one issue |
+
+#### `get_metrics`
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `days` | integer | no | Lookback window (default 30) |
+
+#### `get_changes`
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `since` | ISO timestamp | yes | Get events after this time |
+| `limit` | integer | no | Max events (default 100) |
+
+#### `get_issue_events`
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `issue_id` | string | yes | Issue ID |
+| `limit` | integer | no | Max events (default 50) |
+
+### Data Management
+
+| Tool | Description |
+|------|-------------|
+| `export_jsonl` | Export all data to JSONL |
+| `import_jsonl` | Import from JSONL |
+| `archive_closed` | Archive old closed issues |
+| `compact_events` | Compact event history |
+
+#### `export_jsonl`
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `output_path` | string | yes | File path for JSONL output |
+
+#### `import_jsonl`
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `input_path` | string | yes | File path to read JSONL from |
+| `merge` | boolean | no | Skip existing records (default false) |
+
+#### `archive_closed`
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `days_old` | integer | no | Archive issues closed more than N days ago (default 30) |
+| `actor` | string | no | Agent identity for audit trail |
+
+#### `compact_events`
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `keep_recent` | integer | no | Keep N most recent events per archived issue (default 50) |
