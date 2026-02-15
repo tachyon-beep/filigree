@@ -267,6 +267,98 @@ def create_app() -> Any:
         path = db.get_critical_path()
         return JSONResponse({"path": path, "length": len(path)})
 
+    @app.get("/api/activity")
+    async def api_activity(limit: int = 50, since: str = "") -> JSONResponse:
+        """Recent events across all issues."""
+        db = _get_db()
+        if since:
+            events = db.get_events_since(since, limit=limit)
+        else:
+            events = db.get_recent_events(limit=limit)
+        return JSONResponse(events)
+
+    @app.get("/api/plan/{milestone_id}")
+    async def api_plan(milestone_id: str) -> JSONResponse:
+        """Milestone plan tree."""
+        db = _get_db()
+        try:
+            plan = db.get_plan(milestone_id)
+        except KeyError:
+            return JSONResponse({"error": f"Not found: {milestone_id}"}, status_code=404)
+        return JSONResponse(plan)
+
+    @app.post("/api/batch/update")
+    async def api_batch_update(request: Request) -> JSONResponse:
+        """Batch update issues."""
+        db = _get_db()
+        body = await request.json()
+        issue_ids = body.get("issue_ids", [])
+        actor = body.get("actor", "dashboard")
+        updated, errors = db.batch_update(
+            issue_ids,
+            status=body.get("status"),
+            priority=body.get("priority"),
+            assignee=body.get("assignee"),
+            fields=body.get("fields"),
+            actor=actor,
+        )
+        return JSONResponse({
+            "updated": [i.to_dict() for i in updated],
+            "errors": errors,
+        })
+
+    @app.post("/api/batch/close")
+    async def api_batch_close(request: Request) -> JSONResponse:
+        """Batch close issues."""
+        db = _get_db()
+        body = await request.json()
+        issue_ids = body.get("issue_ids", [])
+        reason = body.get("reason", "")
+        actor = body.get("actor", "dashboard")
+        try:
+            closed = db.batch_close(issue_ids, reason=reason, actor=actor)
+        except ValueError as e:
+            return JSONResponse({"error": str(e)}, status_code=409)
+        return JSONResponse({"closed": [i.to_dict() for i in closed]})
+
+    @app.get("/api/types")
+    async def api_types_list() -> JSONResponse:
+        """List all registered issue types."""
+        db = _get_db()
+        types = db.templates.list_types()
+        return JSONResponse([
+            {
+                "type": t.type,
+                "display_name": t.display_name,
+                "pack": t.pack,
+                "initial_state": t.initial_state,
+            }
+            for t in types
+        ])
+
+    @app.post("/api/issues", status_code=201)
+    async def api_create_issue(request: Request) -> JSONResponse:
+        """Create a new issue."""
+        db = _get_db()
+        body = await request.json()
+        title = body.get("title", "")
+        try:
+            issue = db.create_issue(
+                title,
+                type=body.get("type", "task"),
+                priority=body.get("priority", 2),
+                parent_id=body.get("parent_id"),
+                assignee=body.get("assignee", ""),
+                description=body.get("description", ""),
+                notes=body.get("notes", ""),
+                labels=body.get("labels"),
+                deps=body.get("deps"),
+                actor=body.get("actor", ""),
+            )
+        except ValueError as e:
+            return JSONResponse({"error": str(e)}, status_code=400)
+        return JSONResponse(issue.to_dict(), status_code=201)
+
     return app
 
 

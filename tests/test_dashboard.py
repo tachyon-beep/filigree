@@ -551,6 +551,257 @@ class TestCriticalPathAPI:
             assert "type" in node
 
 
+class TestActivityAPI:
+    """GET /api/activity — recent events across all issues."""
+
+    async def test_activity_default(self, client: AsyncClient) -> None:
+        resp = await client.get("/api/activity")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert isinstance(data, list)
+        # populated_db creates events for epic, A, B, C (created, closed, dep_added, comment)
+        assert len(data) >= 1
+
+    async def test_activity_has_issue_title(self, client: AsyncClient) -> None:
+        resp = await client.get("/api/activity")
+        data = resp.json()
+        assert len(data) >= 1
+        event = data[0]
+        assert "issue_id" in event
+        assert "event_type" in event
+        assert "issue_title" in event
+        assert "created_at" in event
+
+    async def test_activity_with_limit(self, client: AsyncClient) -> None:
+        resp = await client.get("/api/activity", params={"limit": 2})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data) <= 2
+
+    async def test_activity_with_since(self, client: AsyncClient) -> None:
+        # Use a very old timestamp to get all events
+        resp = await client.get("/api/activity", params={"since": "2020-01-01T00:00:00"})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert isinstance(data, list)
+        assert len(data) >= 1
+
+    async def test_activity_since_returns_chronological(self, client: AsyncClient) -> None:
+        resp = await client.get("/api/activity", params={"since": "2020-01-01T00:00:00"})
+        data = resp.json()
+        if len(data) >= 2:
+            # Chronological: earliest first
+            assert data[0]["created_at"] <= data[-1]["created_at"]
+
+    async def test_activity_no_since_returns_newest_first(self, client: AsyncClient) -> None:
+        resp = await client.get("/api/activity")
+        data = resp.json()
+        if len(data) >= 2:
+            # Newest-first (no since param)
+            assert data[0]["created_at"] >= data[-1]["created_at"]
+
+
+class TestPlanAPI:
+    """GET /api/plan/{milestone_id} — milestone plan tree."""
+
+    async def test_plan_not_found(self, client: AsyncClient) -> None:
+        resp = await client.get("/api/plan/nonexistent")
+        assert resp.status_code == 404
+        assert "error" in resp.json()
+
+    async def test_plan_returns_tree(self, client: AsyncClient, dashboard_db: FiligreeDB) -> None:
+        # Create a mini milestone -> phase -> step hierarchy
+        milestone = dashboard_db.create_issue("Test Milestone", type="milestone")
+        phase = dashboard_db.create_issue("Phase 1", type="phase", parent_id=milestone.id)
+        dashboard_db.create_issue("Step 1", type="step", parent_id=phase.id)
+
+        resp = await client.get(f"/api/plan/{milestone.id}")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "milestone" in data
+        assert "phases" in data
+        assert "total_steps" in data
+        assert "completed_steps" in data
+        assert data["milestone"]["id"] == milestone.id
+        assert len(data["phases"]) == 1
+        assert data["total_steps"] == 1
+        assert data["completed_steps"] == 0
+
+
+class TestBatchAPI:
+    """POST /api/batch/update and /api/batch/close — batch operations."""
+
+    async def test_batch_update_priority(self, client: AsyncClient, dashboard_db: FiligreeDB) -> None:
+        ids = dashboard_db._test_ids  # type: ignore[attr-defined]
+        resp = await client.post(
+            "/api/batch/update",
+            json={"issue_ids": [ids["a"], ids["b"]], "priority": 0},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "updated" in data
+        assert "errors" in data
+        assert len(data["updated"]) == 2
+        assert all(i["priority"] == 0 for i in data["updated"])
+
+    async def test_batch_update_with_errors(self, client: AsyncClient, dashboard_db: FiligreeDB) -> None:
+        ids = dashboard_db._test_ids  # type: ignore[attr-defined]
+        resp = await client.post(
+            "/api/batch/update",
+            json={"issue_ids": [ids["a"], "nonexistent"], "priority": 1},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data["updated"]) == 1
+        assert len(data["errors"]) == 1
+        assert data["errors"][0]["id"] == "nonexistent"
+
+    async def test_batch_update_with_actor(self, client: AsyncClient, dashboard_db: FiligreeDB) -> None:
+        ids = dashboard_db._test_ids  # type: ignore[attr-defined]
+        resp = await client.post(
+            "/api/batch/update",
+            json={"issue_ids": [ids["b"]], "priority": 3, "actor": "batch-bot"},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data["updated"]) == 1
+
+    async def test_batch_close(self, client: AsyncClient, dashboard_db: FiligreeDB) -> None:
+        ids = dashboard_db._test_ids  # type: ignore[attr-defined]
+        resp = await client.post(
+            "/api/batch/close",
+            json={"issue_ids": [ids["b"]], "reason": "batch done"},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "closed" in data
+        assert len(data["closed"]) == 1
+        assert data["closed"][0]["id"] == ids["b"]
+
+    async def test_batch_close_already_closed(self, client: AsyncClient, dashboard_db: FiligreeDB) -> None:
+        ids = dashboard_db._test_ids  # type: ignore[attr-defined]
+        # C is already closed — should fail with 409
+        resp = await client.post(
+            "/api/batch/close",
+            json={"issue_ids": [ids["c"]]},
+        )
+        assert resp.status_code == 409
+        assert "error" in resp.json()
+
+    async def test_batch_close_with_actor(self, client: AsyncClient, dashboard_db: FiligreeDB) -> None:
+        ids = dashboard_db._test_ids  # type: ignore[attr-defined]
+        resp = await client.post(
+            "/api/batch/close",
+            json={"issue_ids": [ids["b"]], "actor": "closer-bot"},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data["closed"]) == 1
+
+
+class TestTypesListAPI:
+    """GET /api/types — list all registered issue types."""
+
+    async def test_types_list(self, client: AsyncClient) -> None:
+        resp = await client.get("/api/types")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert isinstance(data, list)
+        assert len(data) >= 1
+        # Check structure of each type entry
+        for t in data:
+            assert "type" in t
+            assert "display_name" in t
+            assert "pack" in t
+            assert "initial_state" in t
+
+    async def test_types_includes_task(self, client: AsyncClient) -> None:
+        resp = await client.get("/api/types")
+        data = resp.json()
+        type_names = [t["type"] for t in data]
+        assert "task" in type_names
+
+    async def test_types_includes_bug(self, client: AsyncClient) -> None:
+        resp = await client.get("/api/types")
+        data = resp.json()
+        type_names = [t["type"] for t in data]
+        assert "bug" in type_names
+
+
+class TestCreateIssueAPI:
+    """POST /api/issues — create a new issue."""
+
+    async def test_create_basic_issue(self, client: AsyncClient) -> None:
+        resp = await client.post(
+            "/api/issues",
+            json={"title": "New test issue"},
+        )
+        assert resp.status_code == 201
+        data = resp.json()
+        assert data["title"] == "New test issue"
+        assert "id" in data
+        assert data["type"] == "task"
+        assert data["priority"] == 2
+
+    async def test_create_with_all_fields(self, client: AsyncClient) -> None:
+        resp = await client.post(
+            "/api/issues",
+            json={
+                "title": "Full issue",
+                "type": "bug",
+                "priority": 0,
+                "description": "A bug report",
+                "notes": "Some notes",
+                "assignee": "alice",
+                "labels": ["critical", "ui"],
+                "actor": "api-user",
+            },
+        )
+        assert resp.status_code == 201
+        data = resp.json()
+        assert data["title"] == "Full issue"
+        assert data["type"] == "bug"
+        assert data["priority"] == 0
+        assert data["description"] == "A bug report"
+        assert data["assignee"] == "alice"
+
+    async def test_create_empty_title_returns_400(self, client: AsyncClient) -> None:
+        resp = await client.post(
+            "/api/issues",
+            json={"title": ""},
+        )
+        assert resp.status_code == 400
+        assert "error" in resp.json()
+
+    async def test_create_invalid_type_returns_400(self, client: AsyncClient) -> None:
+        resp = await client.post(
+            "/api/issues",
+            json={"title": "Bad type", "type": "nonexistent_type"},
+        )
+        assert resp.status_code == 400
+        assert "error" in resp.json()
+
+    async def test_create_with_parent(self, client: AsyncClient, dashboard_db: FiligreeDB) -> None:
+        ids = dashboard_db._test_ids  # type: ignore[attr-defined]
+        resp = await client.post(
+            "/api/issues",
+            json={"title": "Child issue", "parent_id": ids["epic"]},
+        )
+        assert resp.status_code == 201
+        data = resp.json()
+        assert data["parent_id"] == ids["epic"]
+
+    async def test_create_with_deps(self, client: AsyncClient, dashboard_db: FiligreeDB) -> None:
+        ids = dashboard_db._test_ids  # type: ignore[attr-defined]
+        resp = await client.post(
+            "/api/issues",
+            json={"title": "Dep issue", "deps": [ids["b"]]},
+        )
+        assert resp.status_code == 201
+        data = resp.json()
+        assert ids["b"] in data["blocked_by"]
+
+
 class TestDashboardGetDb:
     """Cover _get_db when _db is None (lines 29-30)."""
 
