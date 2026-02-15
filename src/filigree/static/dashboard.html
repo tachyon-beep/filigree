@@ -39,6 +39,7 @@ tailwind.config = {
 </script>
 </head>
 <body class="h-screen flex flex-col overflow-hidden text-sm">
+<a href="#kanbanBoard" class="sr-only focus:not-sr-only focus:absolute focus:top-2 focus:left-2 focus:bg-blue-600 focus:text-white focus:px-3 focus:py-1 focus:rounded focus:z-50">Skip to content</a>
 
 <!-- Top Nav -->
 <header class="flex items-center justify-between px-4 py-2 bg-slate-800 border-b border-slate-700 shrink-0">
@@ -68,6 +69,7 @@ tailwind.config = {
     </select>
     <input id="filterSearch" type="text" placeholder="Search..." oninput="debouncedSearch()"
            class="bg-slate-700 text-slate-200 text-xs rounded px-3 py-1 border border-slate-600 w-40 focus:outline-none focus:border-blue-500">
+    <button onclick="toggleMultiSelect()" id="btnMultiSelect" class="px-2 py-1 rounded text-xs font-medium bg-slate-700 text-slate-400 border border-slate-600">Select</button>
     <div class="flex gap-1 text-xs">
       <label class="flex items-center gap-1 text-slate-400"><input type="checkbox" id="filterOpen" checked onchange="applyFilters()" class="accent-blue-500"> Open</label>
       <label class="flex items-center gap-1 text-slate-400"><input type="checkbox" id="filterInProgress" checked onchange="applyFilters()" class="accent-blue-500"> Active</label>
@@ -77,9 +79,9 @@ tailwind.config = {
 
   <div class="flex items-center gap-3 text-xs text-slate-400">
     <span id="refreshIndicator" class="opacity-0 text-blue-400">Refreshing...</span>
-    <span>Open: <b id="statOpen" class="text-slate-200">0</b></span>
-    <span>Active: <b id="statActive" class="text-slate-200">0</b></span>
-    <span>Ready: <b id="statReady" class="text-emerald-400">0</b></span>
+    <span>Open: <b id="statOpen" class="text-slate-200" aria-live="polite">0</b></span>
+    <span>Active: <b id="statActive" class="text-slate-200" aria-live="polite">0</b></span>
+    <span>Ready: <b id="statReady" class="text-emerald-400" aria-live="polite">0</b></span>
   </div>
 </header>
 
@@ -107,7 +109,7 @@ tailwind.config = {
         <option value="">All types</option>
       </select>
     </div>
-    <div class="flex gap-4 p-4 flex-1 overflow-x-auto" id="kanbanBoard"></div>
+    <div class="flex gap-4 p-4 flex-1 overflow-x-auto" id="kanbanBoard" role="region" aria-label="Kanban Board"></div>
   </div>
 
   <!-- Metrics view -->
@@ -137,7 +139,7 @@ tailwind.config = {
   </div>
 
   <!-- Detail panel (slides in from right) -->
-  <div id="detailPanel" class="detail-panel absolute top-0 right-0 h-full w-[400px] bg-slate-800 border-l border-slate-700 overflow-y-auto scrollbar-thin transform translate-x-full z-10">
+  <div id="detailPanel" role="complementary" aria-label="Issue Detail" class="detail-panel absolute top-0 right-0 h-full w-[400px] bg-slate-800 border-l border-slate-700 overflow-y-auto scrollbar-thin transform translate-x-full z-10">
     <div id="detailContent" class="p-5"></div>
   </div>
 </div>
@@ -150,6 +152,13 @@ tailwind.config = {
   <span>Blocked: <b id="footBlocked" class="text-red-400">0</b></span>
   <span>Deps: <b id="footDeps" class="text-slate-300">0</b></span>
 </footer>
+
+<div id="batchBar" class="fixed bottom-12 left-1/2 -translate-x-1/2 bg-slate-800 border border-slate-600 rounded-lg px-4 py-2 flex items-center gap-3 shadow-xl hidden z-20">
+  <span id="batchCount" class="text-xs text-slate-300">0 selected</span>
+  <button onclick="batchSetPriority()" class="text-xs bg-slate-700 px-2 py-1 rounded hover:bg-slate-600">Set Priority</button>
+  <button onclick="batchCloseSelected()" class="text-xs bg-red-900/50 text-red-400 px-2 py-1 rounded border border-red-800 hover:bg-red-900">Close All</button>
+  <button onclick="toggleMultiSelect()" class="text-xs text-slate-500 hover:text-slate-300">Cancel</button>
+</div>
 
 <script>
 // ---------------------------------------------------------------------------
@@ -165,6 +174,9 @@ var readyFilter = true;
 var selectedIssue = null;
 var cy = null;
 var expandedEpics = new Set();
+var detailHistory = [];
+var selectedCards = new Set();
+var multiSelectMode = false;
 
 var CATEGORY_COLORS = { open: '#64748B', wip: '#3B82F6', done: '#9CA3AF' };
 var PRIORITY_COLORS = { 0: '#EF4444', 1: '#F97316', 2: '#6B7280', 3: '#D1D5DB', 4: '#D1D5DB' };
@@ -279,6 +291,24 @@ function toggleBlocked() {
   render();
 }
 
+function toggleMultiSelect() {
+  multiSelectMode = !multiSelectMode;
+  if (!multiSelectMode) selectedCards.clear();
+  var btn = document.getElementById('btnMultiSelect');
+  btn.className = multiSelectMode
+    ? 'px-2 py-1 rounded text-xs font-medium bg-blue-600 text-white'
+    : 'px-2 py-1 rounded text-xs font-medium bg-slate-700 text-slate-400 border border-slate-600';
+  render();
+}
+
+function toggleCardSelect(e, issueId) {
+  if (!multiSelectMode) return;
+  e.stopPropagation();
+  if (selectedCards.has(issueId)) selectedCards.delete(issueId);
+  else selectedCards.add(issueId);
+  render();
+}
+
 // ---------------------------------------------------------------------------
 // View switching
 // ---------------------------------------------------------------------------
@@ -322,6 +352,7 @@ function switchKanbanMode(mode) {
 function render() {
   if (currentView === 'graph') renderGraph();
   else renderKanban();
+  updateBatchBar();
 }
 
 // ---------------------------------------------------------------------------
@@ -467,9 +498,15 @@ function renderCard(issue) {
 
   var changedClass = changedIds.has(issue.id) ? 'ring-1 ring-blue-500' : '';
 
+  var checkbox = multiSelectMode
+    ? '<input type="checkbox" ' + (selectedCards.has(issue.id) ? 'checked' : '') +
+      ' onclick="toggleCardSelect(event,\'' + issue.id + '\')" class="accent-blue-500 mr-1">'
+    : '';
+
   return '<div class="card bg-slate-800 rounded border border-slate-700 p-3 cursor-pointer ' +
     readyClass + ' ' + agingClass + ' ' + changedClass + '" tabindex="0" data-id="' + issue.id + '" onclick="openDetail(\'' + issue.id + '\')">' +
     '<div class="flex items-center gap-2 mb-1">' +
+      checkbox +
       '<span>' + typeIcon + '</span>' +
       '<span class="w-2 h-2 rounded-full shrink-0" style="background:' + prioColor +
         '" title="P' + issue.priority + '"></span>' +
@@ -719,6 +756,7 @@ function graphFit() { if (cy) cy.fit(undefined, 30); }
 // Detail Panel
 // ---------------------------------------------------------------------------
 async function openDetail(issueId) {
+  if (selectedIssue && selectedIssue !== issueId) detailHistory.push(selectedIssue);
   selectedIssue = issueId;
   updateHash();
   var panel = document.getElementById('detailPanel');
@@ -803,11 +841,19 @@ async function openDetail(issueId) {
   content.innerHTML =
     '<div class="flex items-center justify-between mb-3">' +
       '<span class="text-xs text-slate-500">' + d.id + '</span>' +
-      '<button onclick="closeDetail()" class="text-slate-500 hover:text-slate-300 text-lg">&times;</button>' +
+      '<div>' +
+      (detailHistory.length
+        ? '<button onclick="detailBack()" class="text-slate-500 hover:text-slate-300 text-xs mr-2">&larr; Back</button>'
+        : '') +
+      '<button onclick="closeDetail()" class="text-slate-500 hover:text-slate-300 text-lg" aria-label="Close detail panel">&times;</button>' +
+      '</div>' +
     '</div>' +
     '<div class="flex items-center gap-2 mb-1">' +
       '<span class="text-lg">' + typeIcon + '</span>' +
       '<span class="text-lg font-semibold text-slate-100">' + escHtml(d.title) + '</span>' +
+      ((d.type === 'milestone' || d.type === 'epic')
+        ? '<button onclick="loadPlanView(\'' + d.id + '\')" class="text-xs bg-slate-700 px-2 py-1 rounded hover:bg-slate-600 ml-2">View Plan</button>'
+        : '') +
     '</div>' +
     '<div class="flex items-center gap-2 mb-4 flex-wrap">' +
       '<span class="text-xs px-2 py-0.5 rounded" style="background:' + statusColor + ';color:white">' + statusLabel + '</span>' +
@@ -884,12 +930,23 @@ async function openDetail(issueId) {
         t.to + '</button>';
     }).join('');
   });
+
+  trapFocus(document.getElementById('detailPanel'));
 }
 
 function closeDetail() {
   selectedIssue = null;
+  detailHistory = [];
   document.getElementById('detailPanel').classList.add('translate-x-full');
   updateHash();
+}
+
+function detailBack() {
+  if (detailHistory.length) {
+    var prev = detailHistory.pop();
+    selectedIssue = null; // prevent pushing to history again
+    openDetail(prev);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1215,6 +1272,104 @@ function computeImpactScores() {
     }
     impactScores[i.id] = visited.size;
   });
+}
+
+// ---------------------------------------------------------------------------
+// Plan/milestone tree view
+// ---------------------------------------------------------------------------
+async function loadPlanView(milestoneId) {
+  var panel = document.getElementById('detailContent');
+  panel.innerHTML = '<div class="text-slate-500 text-xs">Loading plan...</div>';
+  try {
+    var resp = await fetch('/api/plan/' + milestoneId);
+    if (!resp.ok) { panel.innerHTML = '<div class="text-red-400 text-xs">No plan found for this issue.</div>'; return; }
+    var plan = await resp.json();
+    var m = plan.milestone || {};
+    var phases = plan.phases || [];
+    var totalSteps = plan.total_steps || 0;
+    var completedSteps = plan.completed_steps || 0;
+    var pct = totalSteps ? Math.round(completedSteps / totalSteps * 100) : 0;
+
+    var html = '<div class="flex items-center justify-between mb-3">' +
+      '<span class="text-xs text-slate-500">' + escHtml(m.id || milestoneId) + '</span>' +
+      '<button onclick="openDetail(\'' + milestoneId + '\')" class="text-xs text-blue-400 hover:underline">Back to detail</button></div>' +
+      '<div class="text-lg font-semibold text-slate-100 mb-2">' + escHtml(m.title || 'Plan') + '</div>' +
+      '<div class="w-full h-3 rounded-full bg-slate-900 mb-1 overflow-hidden">' +
+        '<div class="h-full bg-emerald-500 rounded-full" style="width:' + pct + '%"></div></div>' +
+      '<div class="text-xs text-slate-500 mb-4">' + completedSteps + '/' + totalSteps + ' steps (' + pct + '%)</div>';
+
+    phases.forEach(function(p) {
+      var phase = p.phase || {};
+      var steps = p.steps || [];
+      var pDone = steps.filter(function(s) { return (s.status_category || 'open') === 'done'; }).length;
+      var pPct = steps.length ? Math.round(pDone / steps.length * 100) : 0;
+      html += '<div class="mb-3 bg-slate-800 rounded border border-slate-700 p-3">' +
+        '<div class="flex items-center justify-between mb-1">' +
+          '<span class="text-xs font-medium text-slate-300">' + escHtml(phase.title || 'Phase') + '</span>' +
+          '<span class="text-xs text-slate-500">' + pDone + '/' + steps.length + '</span></div>' +
+        '<div class="w-full h-1.5 rounded-full bg-slate-900 mb-2 overflow-hidden">' +
+          '<div class="h-full bg-blue-500 rounded-full" style="width:' + pPct + '%"></div></div>' +
+        steps.map(function(s) {
+          var catColor = CATEGORY_COLORS[s.status_category || 'open'] || '#64748B';
+          return '<div class="flex items-center gap-2 py-1 ml-4 cursor-pointer hover:text-blue-400" onclick="openDetail(\'' + s.id + '\')">' +
+            '<span class="w-2 h-2 rounded-full shrink-0" style="background:' + catColor + '"></span>' +
+            '<span class="text-xs text-slate-300">' + escHtml(s.title) + '</span>' +
+            '<span class="text-xs text-slate-600">' + s.status + '</span></div>';
+        }).join('') +
+      '</div>';
+    });
+
+    panel.innerHTML = html;
+  } catch (e) {
+    panel.innerHTML = '<div class="text-red-400 text-xs">Failed to load plan.</div>';
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Batch operations
+// ---------------------------------------------------------------------------
+function updateBatchBar() {
+  var bar = document.getElementById('batchBar');
+  if (!bar) return;
+  if (selectedCards.size > 0) {
+    bar.classList.remove('hidden');
+    document.getElementById('batchCount').textContent = selectedCards.size + ' selected';
+  } else {
+    bar.classList.add('hidden');
+  }
+}
+
+async function batchSetPriority() {
+  var p = prompt('Set priority (0-4):');
+  if (p === null || p === '') return;
+  var prio = parseInt(p);
+  if (isNaN(prio) || prio < 0 || prio > 4) { alert('Invalid priority'); return; }
+  await fetch('/api/batch/update', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({issue_ids: Array.from(selectedCards), priority: prio}),
+  });
+  selectedCards.clear();
+  multiSelectMode = false;
+  await fetchData();
+}
+
+async function batchCloseSelected() {
+  if (!confirm('Close ' + selectedCards.size + ' issues?')) return;
+  await fetch('/api/batch/close', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({issue_ids: Array.from(selectedCards)}),
+  });
+  selectedCards.clear();
+  multiSelectMode = false;
+  await fetchData();
+}
+
+// ---------------------------------------------------------------------------
+// Focus management
+// ---------------------------------------------------------------------------
+function trapFocus(panel) {
+  var focusable = panel.querySelectorAll('button, input, select, [tabindex]');
+  if (focusable.length) focusable[0].focus();
 }
 
 // ---------------------------------------------------------------------------
