@@ -222,6 +222,51 @@ def create_app() -> Any:
             return JSONResponse({"error": str(e)}, status_code=409)
         return JSONResponse(issue.to_dict())
 
+    @app.post("/api/issue/{issue_id}/comments", status_code=201)
+    async def api_add_comment(issue_id: str, request: Request) -> JSONResponse:
+        """Add a comment to an issue."""
+        db = _get_db()
+        try:
+            db.get_issue(issue_id)
+        except KeyError:
+            return JSONResponse({"error": f"Not found: {issue_id}"}, status_code=404)
+        body = await request.json()
+        text = body.get("text", "")
+        author = body.get("author", "")
+        try:
+            comment_id = db.add_comment(issue_id, text, author=author)
+        except ValueError as e:
+            return JSONResponse({"error": str(e)}, status_code=400)
+        return JSONResponse(
+            {"id": comment_id, "author": author, "text": text, "created_at": ""},
+            status_code=201,
+        )
+
+    @app.get("/api/search")
+    async def api_search(q: str = "", limit: int = 50, offset: int = 0) -> JSONResponse:
+        """Full-text search across issues."""
+        if not q.strip():
+            return JSONResponse({"results": [], "total": 0})
+        db = _get_db()
+        issues = db.search_issues(q, limit=limit, offset=offset)
+        return JSONResponse({"results": [i.to_dict() for i in issues], "total": len(issues)})
+
+    @app.get("/api/metrics")
+    async def api_metrics(days: int = 30) -> JSONResponse:
+        """Flow metrics: cycle time, lead time, throughput."""
+        from filigree.analytics import get_flow_metrics
+
+        db = _get_db()
+        metrics = get_flow_metrics(db, days=days)
+        return JSONResponse(metrics)
+
+    @app.get("/api/critical-path")
+    async def api_critical_path() -> JSONResponse:
+        """Longest dependency chain among open issues."""
+        db = _get_db()
+        path = db.get_critical_path()
+        return JSONResponse({"path": path, "length": len(path)})
+
     return app
 
 

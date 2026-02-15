@@ -398,6 +398,159 @@ class TestCloseReopenAPI:
         assert resp.status_code == 200
 
 
+class TestCommentAPI:
+    """POST /api/issue/{issue_id}/comments — add a comment."""
+
+    async def test_add_comment(self, client: AsyncClient, dashboard_db: FiligreeDB) -> None:
+        ids = dashboard_db._test_ids  # type: ignore[attr-defined]
+        resp = await client.post(
+            f"/api/issue/{ids['b']}/comments",
+            json={"text": "A new comment", "author": "alice"},
+        )
+        assert resp.status_code == 201
+        data = resp.json()
+        assert data["text"] == "A new comment"
+        assert data["author"] == "alice"
+        assert "id" in data
+        assert "created_at" in data
+
+    async def test_add_comment_default_author(self, client: AsyncClient, dashboard_db: FiligreeDB) -> None:
+        ids = dashboard_db._test_ids  # type: ignore[attr-defined]
+        resp = await client.post(
+            f"/api/issue/{ids['a']}/comments",
+            json={"text": "No author specified"},
+        )
+        assert resp.status_code == 201
+        data = resp.json()
+        assert data["text"] == "No author specified"
+        assert data["author"] == ""
+
+    async def test_add_comment_not_found(self, client: AsyncClient) -> None:
+        resp = await client.post(
+            "/api/issue/nonexistent/comments",
+            json={"text": "orphan comment"},
+        )
+        assert resp.status_code == 404
+        assert "error" in resp.json()
+
+    async def test_add_comment_empty_text(self, client: AsyncClient, dashboard_db: FiligreeDB) -> None:
+        ids = dashboard_db._test_ids  # type: ignore[attr-defined]
+        resp = await client.post(
+            f"/api/issue/{ids['b']}/comments",
+            json={"text": ""},
+        )
+        assert resp.status_code == 400
+        assert "error" in resp.json()
+
+    async def test_add_comment_whitespace_text(self, client: AsyncClient, dashboard_db: FiligreeDB) -> None:
+        ids = dashboard_db._test_ids  # type: ignore[attr-defined]
+        resp = await client.post(
+            f"/api/issue/{ids['b']}/comments",
+            json={"text": "   "},
+        )
+        assert resp.status_code == 400
+        assert "error" in resp.json()
+
+
+class TestSearchAPI:
+    """GET /api/search?q=... — server-side FTS5 search."""
+
+    async def test_search_finds_issue(self, client: AsyncClient) -> None:
+        resp = await client.get("/api/search", params={"q": "Issue A"})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "results" in data
+        assert "total" in data
+        assert data["total"] >= 1
+        titles = [r["title"] for r in data["results"]]
+        assert "Issue A" in titles
+
+    async def test_search_empty_query(self, client: AsyncClient) -> None:
+        resp = await client.get("/api/search", params={"q": ""})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["results"] == []
+        assert data["total"] == 0
+
+    async def test_search_no_results(self, client: AsyncClient) -> None:
+        resp = await client.get("/api/search", params={"q": "zzzznonexistentzzzz"})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["total"] == 0
+        assert data["results"] == []
+
+    async def test_search_with_limit(self, client: AsyncClient) -> None:
+        resp = await client.get("/api/search", params={"q": "Issue", "limit": 1})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data["results"]) <= 1
+
+    async def test_search_with_offset(self, client: AsyncClient) -> None:
+        # Get total first
+        resp_all = await client.get("/api/search", params={"q": "Issue"})
+        total_all = resp_all.json()["total"]
+        # Now with offset
+        resp = await client.get("/api/search", params={"q": "Issue", "offset": 1})
+        data = resp.json()
+        assert data["total"] <= total_all
+
+
+class TestMetricsAPI:
+    """GET /api/metrics?days=30 — flow metrics."""
+
+    async def test_metrics_default(self, client: AsyncClient) -> None:
+        resp = await client.get("/api/metrics")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "period_days" in data
+        assert "throughput" in data
+        assert "avg_cycle_time_hours" in data
+        assert "avg_lead_time_hours" in data
+        assert "by_type" in data
+        assert data["period_days"] == 30
+
+    async def test_metrics_custom_days(self, client: AsyncClient) -> None:
+        resp = await client.get("/api/metrics", params={"days": 7})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["period_days"] == 7
+
+    async def test_metrics_throughput(self, client: AsyncClient) -> None:
+        # populated_db has 1 closed issue (C), so throughput should be >= 1
+        resp = await client.get("/api/metrics", params={"days": 365})
+        data = resp.json()
+        assert data["throughput"] >= 1
+
+
+class TestCriticalPathAPI:
+    """GET /api/critical-path — longest dependency chain."""
+
+    async def test_critical_path(self, client: AsyncClient) -> None:
+        resp = await client.get("/api/critical-path")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "path" in data
+        assert "length" in data
+        assert isinstance(data["path"], list)
+        assert data["length"] == len(data["path"])
+
+    async def test_critical_path_has_dep_chain(self, client: AsyncClient) -> None:
+        # A depends on B, both open, so the critical path should be >= 2
+        resp = await client.get("/api/critical-path")
+        data = resp.json()
+        assert data["length"] >= 2
+
+    async def test_critical_path_node_structure(self, client: AsyncClient) -> None:
+        resp = await client.get("/api/critical-path")
+        data = resp.json()
+        if data["length"] > 0:
+            node = data["path"][0]
+            assert "id" in node
+            assert "title" in node
+            assert "priority" in node
+            assert "type" in node
+
+
 class TestDashboardGetDb:
     """Cover _get_db when _db is None (lines 29-30)."""
 
