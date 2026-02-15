@@ -24,7 +24,7 @@ Filigree is single-project and local-first. No server, no cloud, no accounts. Ju
 - **Hierarchical planning** — milestone/phase/step hierarchies with automatic unblocking
 - **Atomic claiming** — optimistic locking prevents double-work in multi-agent scenarios
 - **Pre-computed context** — `context.md` regenerated on every mutation for instant agent orientation
-- **Zero external runtime dependencies** — just Python + SQLite (click is the only install dep)
+- **Minimal dependencies** — just Python + SQLite + click (no framework overhead)
 - **Session resumption** — `get_changes --since <timestamp>` to catch up after downtime
 
 ## Quick Start

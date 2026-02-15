@@ -14,9 +14,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - SQLite-backed issue database with WAL mode and convention-based `.filigree/` project discovery
 - 43 MCP tools for native AI agent interaction (read, write, claim, batch, workflow, data management)
 - Full CLI with 30+ commands, `--json` output for scripting, and `--actor` flag for audit trails
-- 9 workflow templates across 2 packs:
+- 24 issue types across 9 workflow packs (core and planning enabled by default):
   - **core**: task, bug, feature, epic
   - **planning**: milestone, phase, step, work_package, deliverable
+  - **risk**, **spike**, **requirements**, **roadmap**, **incident**, **debt**, **release**
 - Enforced workflow state machines with transition validation and field requirements
 - Dependency graph with cycle detection, ready queue, and critical path analysis
 - Hierarchical planning (milestone/phase/step) with `create-plan` for bulk hierarchy creation

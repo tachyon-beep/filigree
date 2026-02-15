@@ -50,6 +50,7 @@ src/filigree/
   analytics.py       # Flow metrics (cycle time, lead time, throughput)
   install.py         # MCP config, CLAUDE.md injection, doctor checks
   migrate.py         # Beads-to-filigree migration
+  migrations.py      # Schema migration framework (registry, runner, SQLite helpers)
   dashboard.py       # FastAPI web dashboard
   logging.py         # Logging configuration
 ```
@@ -66,9 +67,11 @@ src/filigree/
 
 **`analytics.py`** — computes flow metrics from the event stream: cycle time (start to close), lead time (create to close), throughput (issues closed per period).
 
+**`migrations.py`** — schema migration framework. Defines the `MigrationFn` protocol and a `MIGRATIONS` registry mapping version numbers to migration functions. The `apply_pending_migrations()` runner reads the current schema version via `PRAGMA user_version`, applies each pending migration in its own transaction (with rollback on failure), and bumps the version after each success. Includes SQLite helpers for common DDL operations that work around ALTER TABLE limitations: `add_column`, `add_index`, `drop_index`, `rename_column`, and `rebuild_table` (the 12-step pattern for changes ALTER TABLE cannot express). Also provides migration templates as starting points for new migrations.
+
 ## Database Schema
 
-SQLite with WAL mode. Schema version 6.
+SQLite with WAL mode. Schema version 1.
 
 ### Tables
 
@@ -92,7 +95,7 @@ CREATE TABLE issues (
 );
 ```
 
-Indexed on `status`, `type`, `parent_id`, `priority`.
+Indexed on `status`, `type`, `parent_id`, `priority`, and a composite index on `(status, priority, created_at)` for efficient ready-queue queries.
 
 #### `dependencies`
 
@@ -105,6 +108,8 @@ CREATE TABLE dependencies (
     PRIMARY KEY (issue_id, depends_on_id)
 );
 ```
+
+Indexed on `depends_on_id` (reverse lookup for "what does this issue block?") and a composite index on `(issue_id, depends_on_id)`.
 
 #### `events`
 
@@ -121,7 +126,7 @@ CREATE TABLE events (
 );
 ```
 
-Indexed on `issue_id` and `created_at`. Powers the audit trail, undo, session resumption, and analytics.
+Indexed on `issue_id`, `created_at`, and a composite index on `(issue_id, created_at DESC)` for efficient per-issue history queries. Powers the audit trail, undo, session resumption, and analytics.
 
 #### `comments`
 
@@ -134,6 +139,8 @@ CREATE TABLE comments (
     created_at TEXT NOT NULL
 );
 ```
+
+Indexed on `(issue_id, created_at)` for chronological comment retrieval per issue.
 
 #### `labels`
 

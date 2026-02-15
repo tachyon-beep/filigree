@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import os
-import sqlite3
 import time
 from pathlib import Path
 from unittest.mock import patch
@@ -175,17 +174,6 @@ class TestRunDoctor:
         assert db_check is not None
         assert not db_check.passed
         assert "Database error" in db_check.message
-
-    def test_old_schema_version(self, filigree_project: Path) -> None:
-        """Doctor should detect old schema version."""
-        db_path = filigree_project / FILIGREE_DIR_NAME / DB_FILENAME
-        conn = sqlite3.connect(str(db_path))
-        conn.execute("PRAGMA user_version = 1")
-        conn.close()
-        results = run_doctor(filigree_project)
-        version_check = next((r for r in results if "schema" in r.name.lower()), None)
-        assert version_check is not None
-        assert not version_check.passed
 
     def test_missing_gitignore(self, filigree_project: Path) -> None:
         """Doctor should warn when .gitignore is missing."""

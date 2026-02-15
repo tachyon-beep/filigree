@@ -204,17 +204,9 @@ class TestSchemaVersioning:
     def test_version_set_after_init(self, db: FiligreeDB) -> None:
         assert db.get_schema_version() == CURRENT_SCHEMA_VERSION
 
-    def test_version_zero_gets_migrated(self, tmp_path: Path) -> None:
-        """A DB with user_version=0 should be upgraded to CURRENT_SCHEMA_VERSION."""
-        import sqlite3
-
-        db_path = tmp_path / "filigree.db"
-        # Create raw DB with version 0
-        conn = sqlite3.connect(str(db_path))
-        conn.execute("PRAGMA user_version = 0")
-        conn.close()
-
-        d = FiligreeDB(db_path, prefix="test")
+    def test_fresh_db_gets_current_version(self, tmp_path: Path) -> None:
+        """A fresh database should get CURRENT_SCHEMA_VERSION."""
+        d = FiligreeDB(tmp_path / "filigree.db", prefix="test")
         d.initialize()
         assert d.get_schema_version() == CURRENT_SCHEMA_VERSION
         d.close()

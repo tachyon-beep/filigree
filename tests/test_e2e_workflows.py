@@ -26,7 +26,8 @@ def db(tmp_path: Path) -> FiligreeDB:
 
     d = FiligreeDB(filigree_dir / "filigree.db", prefix="test")
     d.initialize()
-    return d
+    yield d
+    d.close()
 
 
 # ---------------------------------------------------------------------------
@@ -322,7 +323,8 @@ def req_db(tmp_path: Path) -> FiligreeDB:
     (filigree_dir / "config.json").write_text(json.dumps(config))
     d = FiligreeDB(filigree_dir / "filigree.db", prefix="test")
     d.initialize()
-    return d
+    yield d
+    d.close()
 
 
 @pytest.fixture
@@ -334,7 +336,8 @@ def roadmap_db(tmp_path: Path) -> FiligreeDB:
     (filigree_dir / "config.json").write_text(json.dumps(config))
     d = FiligreeDB(filigree_dir / "filigree.db", prefix="test")
     d.initialize()
-    return d
+    yield d
+    d.close()
 
 
 @pytest.fixture
@@ -346,7 +349,8 @@ def incident_db(tmp_path: Path) -> FiligreeDB:
     (filigree_dir / "config.json").write_text(json.dumps(config))
     d = FiligreeDB(filigree_dir / "filigree.db", prefix="test")
     d.initialize()
-    return d
+    yield d
+    d.close()
 
 
 @pytest.fixture
@@ -358,7 +362,8 @@ def debt_db(tmp_path: Path) -> FiligreeDB:
     (filigree_dir / "config.json").write_text(json.dumps(config))
     d = FiligreeDB(filigree_dir / "filigree.db", prefix="test")
     d.initialize()
-    return d
+    yield d
+    d.close()
 
 
 @pytest.fixture
@@ -370,7 +375,8 @@ def release_db(tmp_path: Path) -> FiligreeDB:
     (filigree_dir / "config.json").write_text(json.dumps(config))
     d = FiligreeDB(filigree_dir / "filigree.db", prefix="test")
     d.initialize()
-    return d
+    yield d
+    d.close()
 
 
 # ---------------------------------------------------------------------------

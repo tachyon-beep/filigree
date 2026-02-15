@@ -26,12 +26,46 @@ filigree --version                      # Show version
 
 ```bash
 filigree init                              # Create .filigree/ in current directory
-filigree install                           # Install MCP config, CLAUDE.md, .gitignore
-filigree install --claude-code             # Claude Code only
-filigree install --codex                   # OpenAI Codex only
+filigree init --prefix=myproject           # Custom ID prefix
+filigree install                           # Install everything: MCP, instructions, .gitignore
+filigree install --claude-code             # Claude Code MCP server only
+filigree install --codex                   # OpenAI Codex MCP server only
+filigree install --claude-md               # Inject instructions into CLAUDE.md only
+filigree install --agents-md               # Inject instructions into AGENTS.md only
+filigree install --gitignore               # Add .filigree/ to .gitignore only
 filigree doctor                            # Health check
 filigree doctor --fix                      # Auto-fix what's possible
+filigree doctor --verbose                  # Show all checks including passed
 ```
+
+### `init`
+
+Initialize `.filigree/` in the current directory.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `--prefix` | string | directory name | ID prefix for issues |
+
+### `install`
+
+Install filigree into the current project. With no flags, installs everything: MCP servers, instructions, and gitignore. With specific flags, installs only the selected components.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `--claude-code` | flag | Install MCP config for Claude Code only |
+| `--codex` | flag | Install MCP config for Codex only |
+| `--claude-md` | flag | Inject instructions into CLAUDE.md only |
+| `--agents-md` | flag | Inject instructions into AGENTS.md only |
+| `--gitignore` | flag | Add `.filigree/` to .gitignore only |
+
+### `doctor`
+
+Run health checks on the filigree installation.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `--fix` | flag | Auto-fix what's possible |
+| `--verbose` | flag | Show all checks including passed |
 
 ## Creating and Updating
 
@@ -42,8 +76,10 @@ filigree update <id> --status=in_progress
 filigree update <id> --priority=0 --assignee=alice
 filigree update <id> --field severity=high --field component=auth
 filigree close <id>
+filigree close <id1> <id2> <id3>                # Close multiple at once
 filigree close <id> --reason="Fixed in commit abc123"
 filigree reopen <id>
+filigree reopen <id1> <id2>                     # Reopen multiple at once
 filigree undo <id>                          # Undo last reversible action
 ```
 
@@ -77,24 +113,27 @@ Update an existing issue.
 | `--description` | string | New description |
 | `--notes` | string | New notes |
 | `--field` | key=value | Custom field (repeatable) |
-| `--parent` | string | New parent issue ID |
+| `--design` | string | New design field (shorthand for `--field design=...`) |
+| `--parent` | string | New parent issue ID (empty string to clear) |
 
 ### `close`
 
-Close an issue.
+Close one or more issues. Accepts multiple IDs.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `id` | string | Issue ID (positional) |
+| `ids` | string... | One or more issue IDs (positional, variadic) |
 | `--reason` | string | Close reason |
+
+When using `--json`, the output includes a `closed` array and an `unblocked` array showing issues that became ready after the close.
 
 ### `reopen`
 
-Reopen a closed issue, returning it to its type's initial state.
+Reopen one or more closed issues, returning them to their type's initial state. Accepts multiple IDs.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `id` | string | Issue ID (positional) |
+| `ids` | string... | One or more issue IDs (positional, variadic) |
 
 ### `undo`
 
@@ -132,6 +171,7 @@ List issues with optional filters.
 | `--type` | string | Filter by issue type |
 | `--priority` | 0-4 | Filter by priority |
 | `--assignee` | string | Filter by assignee |
+| `--label` | string | Filter by label |
 | `--parent` | string | Filter by parent issue ID |
 | `--limit` | integer | Max results (default 100) |
 | `--offset` | integer | Skip first N results |
@@ -152,6 +192,7 @@ Search issues by title and description (uses FTS5 full-text search).
 |-----------|------|-------------|
 | `query` | string | Search query (positional) |
 | `--limit` | integer | Max results (default 100) |
+| `--offset` | integer | Skip first N results |
 
 ### `blocked`
 
@@ -286,17 +327,18 @@ Close multiple issues.
 ## Planning
 
 ```bash
-filigree create-plan --file plan.json       # Create milestone/phase/step hierarchy
+filigree create-plan --file plan.json       # Create from JSON file
+cat plan.json | filigree create-plan        # Create from stdin
 filigree plan <milestone-id>                # Show plan tree with progress
 ```
 
 ### `create-plan`
 
-Create a full milestone/phase/step hierarchy from a JSON file.
+Create a full milestone/phase/step hierarchy from JSON. Reads from `--file` if provided, otherwise reads from stdin.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `--file` | path | JSON plan file (required) |
+| `--file` | path | JSON plan file (optional; reads from stdin if omitted) |
 
 Plan JSON structure:
 
@@ -336,9 +378,65 @@ filigree packs                              # List enabled packs
 filigree guide <pack>                       # Workflow guide for a pack
 filigree explain-state <type> <state>       # Explain a specific state
 filigree workflow-states                    # All states grouped by category
+filigree templates                          # List available templates
+filigree templates --type=bug               # Show specific template fields
+filigree templates reload                   # Reload templates from disk
 ```
 
 See [Workflow Templates](workflows.md) for details on types, packs, and state machines.
+
+### `types`
+
+List all registered issue types with their pack and state flow.
+
+### `type-info`
+
+Show the full workflow definition for an issue type: states, transitions, fields, and enforcement rules.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `type` | string | Issue type name (positional) |
+
+### `transitions`
+
+Show valid next states for an issue, with readiness indicators and missing field warnings.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `id` | string | Issue ID (positional) |
+
+### `validate`
+
+Validate an issue against its type template. Returns warnings for missing recommended fields.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `id` | string | Issue ID (positional) |
+
+### `packs`
+
+List all enabled workflow packs with their types and metadata.
+
+### `guide`
+
+Display the workflow guide for a pack, including state diagram, tips, and common mistakes.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `pack` | string | Pack name (positional) |
+
+### `explain-state`
+
+Explain a state within a type's workflow: its category, inbound/outbound transitions, and fields required at that state.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `type` | string | Issue type name (positional) |
+| `state` | string | State name (positional) |
+
+### `workflow-states`
+
+Show all workflow states grouped by category (open, wip, done) from enabled templates.
 
 ## Analytics and Events
 
@@ -386,9 +484,9 @@ filigree export backup.jsonl                # Export all data
 filigree import backup.jsonl --merge        # Import (skip existing)
 filigree archive --days=30                  # Archive old closed issues
 filigree compact --keep=50                  # Compact event history
-filigree doctor                             # Health check
-filigree doctor --fix                       # Auto-fix what's possible
+filigree migrate --from-beads              # Migrate from beads tracker
 filigree dashboard --port=8377              # Launch web UI
+filigree dashboard --no-browser            # Launch without opening browser
 ```
 
 ### `export`
@@ -424,19 +522,21 @@ Remove old events for archived issues.
 |-----------|------|---------|-------------|
 | `--keep` | integer | 50 | Keep N most recent events per archived issue |
 
-### `doctor`
+### `migrate`
 
-Run health checks on the filigree database.
+Migrate issues from another system. Currently supports migrating from the beads issue tracker.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `--fix` | flag | Auto-fix what's possible |
+| `--from-beads` | flag | Migrate from `.beads` database |
+| `--beads-db` | path | Path to beads.db (default: `.beads/beads.db`) |
 
 ### `dashboard`
 
-Launch the web dashboard.
+Launch the web dashboard. Requires `filigree[dashboard]` extra.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `--port` | integer | 8377 | Port to listen on |
+| `--no-browser` | flag | — | Don't auto-open browser |
 

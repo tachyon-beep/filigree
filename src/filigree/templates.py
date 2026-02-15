@@ -301,7 +301,45 @@ class TemplateRegistry:
                 if ra not in state_names:
                     errors.append(f"field '{f.name}' required_at '{ra}' is not in states list")
 
+        # Reachability: all states should be reachable from initial_state
+        if tpl.initial_state in state_names:
+            reachable: set[str] = set()
+            queue = [tpl.initial_state]
+            while queue:
+                current = queue.pop(0)
+                if current in reachable:
+                    continue
+                reachable.add(current)
+                for t in tpl.transitions:
+                    if t.from_state == current and t.to_state not in reachable:
+                        queue.append(t.to_state)
+            unreachable = state_names - reachable
+            for s in sorted(unreachable):
+                errors.append(f"state '{s}' is unreachable from initial_state '{tpl.initial_state}'")
+
         return errors
+
+    @staticmethod
+    def check_type_template_quality(tpl: TypeTemplate) -> list[str]:
+        """Check a TypeTemplate for quality issues (non-blocking warnings).
+
+        Returns:
+            List of warning messages. These don't prevent registration.
+        """
+        warnings: list[str] = []
+        state_names = {s.name for s in tpl.states}
+        done_states = {s.name for s in tpl.states if s.category == "done"}
+        from_states = {t.from_state for t in tpl.transitions}
+
+        # Dead-end detection: non-done states should have at least one outgoing transition
+        for s in sorted(state_names - done_states):
+            if s not in from_states:
+                cat = next(st.category for st in tpl.states if st.name == s)
+                warnings.append(
+                    f"state '{s}' (category={cat}) has no outgoing transitions (dead end)"
+                )
+
+        return warnings
 
     # -- Registration (internal) --------------------------------------------
 

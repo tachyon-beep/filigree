@@ -773,11 +773,11 @@ class TestBuiltInPackData:
         tpl = TemplateRegistry.parse_type_template(raw)
         assert tpl.initial_state == "identified"
 
-    def test_risk_type_has_two_hard_gates(self) -> None:
+    def test_risk_type_has_three_hard_gates(self) -> None:
         raw = BUILT_IN_PACKS["risk"]["types"]["risk"]
         tpl = TemplateRegistry.parse_type_template(raw)
         hard = [t for t in tpl.transitions if t.enforcement == "hard"]
-        assert len(hard) == 2
+        assert len(hard) == 3
 
     def test_risk_assessment_gate_requires_score_and_impact(self) -> None:
         raw = BUILT_IN_PACKS["risk"]["types"]["risk"]
@@ -1018,10 +1018,10 @@ class TestBuiltInPackData:
         errors = TemplateRegistry.validate_type_template(tpl)
         assert errors == [], f"Validation errors for {type_name}: {errors}"
 
-    def test_release_type_has_seven_states(self) -> None:
+    def test_release_type_has_eight_states(self) -> None:
         raw = BUILT_IN_PACKS["release"]["types"]["release"]
         tpl = TemplateRegistry.parse_type_template(raw)
-        assert len(tpl.states) == 7
+        assert len(tpl.states) == 8
 
     def test_release_freeze_requires_version(self) -> None:
         raw = BUILT_IN_PACKS["release"]["types"]["release"]

@@ -24,10 +24,17 @@ def _parse_iso(ts: str) -> datetime:
 
 
 def cycle_time(db: FiligreeDB, issue_id: str) -> float | None:
-    """Cycle time: hours from first in_progress to closed.
+    """Cycle time: hours from first WIP-category state to first done-category state.
 
-    Returns None if the issue hasn't been through in_progress→closed.
+    Uses the workflow template system to determine which states are WIP/done,
+    so this works correctly for all issue types (bugs, features, risks, etc.),
+    not just tasks with literal "in_progress"/"closed" states.
+
+    Returns None if the issue hasn't been through a WIP→done transition.
     """
+    wip_states = set(db._get_states_for_category("wip")) or {"in_progress"}
+    done_states = set(db._get_states_for_category("done")) or {"closed"}
+
     events = db.conn.execute(
         "SELECT event_type, new_value, created_at FROM events "
         "WHERE issue_id = ? AND event_type = 'status_changed' "
@@ -38,9 +45,9 @@ def cycle_time(db: FiligreeDB, issue_id: str) -> float | None:
     start: datetime | None = None
     end: datetime | None = None
     for evt in events:
-        if evt["new_value"] == "in_progress" and start is None:
+        if evt["new_value"] in wip_states and start is None:
             start = _parse_iso(evt["created_at"])
-        if evt["new_value"] == "closed":
+        if evt["new_value"] in done_states:
             end = _parse_iso(evt["created_at"])
 
     if start is None or end is None:
@@ -49,9 +56,9 @@ def cycle_time(db: FiligreeDB, issue_id: str) -> float | None:
 
 
 def lead_time(db: FiligreeDB, issue_id: str) -> float | None:
-    """Lead time: hours from creation to closed."""
+    """Lead time: hours from creation to done (any done-category state)."""
     issue = db.get_issue(issue_id)
-    if issue.status != "closed" or issue.closed_at is None:
+    if issue.status_category != "done" or issue.closed_at is None:
         return None
     created = _parse_iso(issue.created_at)
     closed = _parse_iso(issue.closed_at)
@@ -78,9 +85,9 @@ def get_flow_metrics(db: FiligreeDB, *, days: int = 30) -> dict[str, Any]:
     cutoff_dt = datetime.now(UTC) - timedelta(days=days)
     cutoff_iso = cutoff_dt.isoformat()
 
-    closed = db.list_issues(status="closed")
+    done_issues = db.list_issues(status="closed")  # "closed" expands to all done-category states
     # Filter to issues closed within the lookback window
-    recent_closed = [i for i in closed if i.closed_at and i.closed_at >= cutoff_iso]
+    recent_closed = [i for i in done_issues if i.closed_at and i.closed_at >= cutoff_iso]
 
     cycle_times: list[float] = []
     lead_times: list[float] = []

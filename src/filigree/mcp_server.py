@@ -246,6 +246,8 @@ async def list_tools() -> list[Tool]:
                     },
                     "priority": {"type": "integer", "minimum": 0, "maximum": 4, "description": "Filter by priority"},
                     "parent_id": {"type": "string", "description": "Filter by parent issue ID"},
+                    "assignee": {"type": "string", "description": "Filter by assignee"},
+                    "label": {"type": "string", "description": "Filter by label"},
                     "limit": {
                         "type": "integer",
                         "default": 100,
@@ -866,6 +868,8 @@ async def _dispatch(name: str, arguments: dict[str, Any], tracker: FiligreeDB) -
                 type=arguments.get("type"),
                 priority=arguments.get("priority"),
                 parent_id=arguments.get("parent_id"),
+                assignee=arguments.get("assignee"),
+                label=arguments.get("label"),
                 limit=arguments.get("limit", 100),
                 offset=arguments.get("offset", 0),
             )

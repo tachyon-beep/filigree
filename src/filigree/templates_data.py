@@ -70,6 +70,7 @@ _CORE_PACK: dict[str, Any] = {
                 {"from": "triage", "to": "confirmed", "enforcement": "soft"},
                 {"from": "triage", "to": "wont_fix", "enforcement": "soft"},
                 {"from": "confirmed", "to": "fixing", "enforcement": "soft"},
+                {"from": "confirmed", "to": "wont_fix", "enforcement": "soft"},
                 {"from": "fixing", "to": "verifying", "enforcement": "soft", "requires_fields": ["fix_verification"]},
                 {"from": "verifying", "to": "closed", "enforcement": "hard", "requires_fields": ["fix_verification"]},
                 {"from": "verifying", "to": "fixing", "enforcement": "soft"},
@@ -123,7 +124,9 @@ _CORE_PACK: dict[str, Any] = {
                 {"from": "proposed", "to": "approved", "enforcement": "soft"},
                 {"from": "proposed", "to": "deferred", "enforcement": "soft"},
                 {"from": "approved", "to": "building", "enforcement": "soft"},
+                {"from": "approved", "to": "deferred", "enforcement": "soft"},
                 {"from": "building", "to": "reviewing", "enforcement": "soft"},
+                {"from": "building", "to": "deferred", "enforcement": "soft"},
                 {"from": "reviewing", "to": "done", "enforcement": "soft"},
                 {"from": "reviewing", "to": "building", "enforcement": "soft"},
             ],
@@ -180,11 +183,12 @@ _CORE_PACK: dict[str, Any] = {
             "                 \\-> closed(D)\n"
             "\n"
             "bug:     triage(O) --> confirmed(O) --> fixing(W) --> verifying(W) --> closed(D)\n"
-            "                  \\-> wont_fix(D)                  \\-> fixing(W)  [loop]\n"
+            "                  \\-> wont_fix(D) \\-> wont_fix(D)  \\-> fixing(W)  [loop]\n"
             "         HARD: verifying-->closed requires fix_verification\n"
             "\n"
             "feature: proposed(O) --> approved(O) --> building(W) --> reviewing(W) --> done(D)\n"
-            "                    \\-> deferred(D)                  \\-> building(W) [loop]\n"
+            "                    \\-> deferred(D) \\-> deferred(D) \\-> deferred(D)\n"
+            "                                                    \\-> building(W) [loop]\n"
             "\n"
             "epic:    open(O) --> in_progress(W) --> closed(D)"
         ),
@@ -230,11 +234,14 @@ _PLANNING_PACK: dict[str, Any] = {
                 {"name": "active", "category": "wip"},
                 {"name": "closing", "category": "wip"},
                 {"name": "completed", "category": "done"},
+                {"name": "cancelled", "category": "done"},
             ],
             "initial_state": "planning",
             "transitions": [
                 {"from": "planning", "to": "active", "enforcement": "soft"},
+                {"from": "planning", "to": "cancelled", "enforcement": "soft"},
                 {"from": "active", "to": "closing", "enforcement": "soft"},
+                {"from": "active", "to": "cancelled", "enforcement": "soft"},
                 {"from": "closing", "to": "completed", "enforcement": "soft"},
             ],
             "fields_schema": [
@@ -263,6 +270,7 @@ _PLANNING_PACK: dict[str, Any] = {
                 {"from": "pending", "to": "active", "enforcement": "soft"},
                 {"from": "pending", "to": "skipped", "enforcement": "soft"},
                 {"from": "active", "to": "completed", "enforcement": "soft"},
+                {"from": "active", "to": "skipped", "enforcement": "soft"},
             ],
             "fields_schema": [
                 {"name": "sequence", "type": "number", "description": "Execution order within milestone"},
@@ -289,6 +297,7 @@ _PLANNING_PACK: dict[str, Any] = {
                 {"from": "pending", "to": "in_progress", "enforcement": "soft"},
                 {"from": "pending", "to": "skipped", "enforcement": "soft"},
                 {"from": "in_progress", "to": "completed", "enforcement": "soft"},
+                {"from": "in_progress", "to": "skipped", "enforcement": "soft"},
             ],
             "fields_schema": [
                 {"name": "sequence", "type": "number", "description": "Execution order within phase"},
@@ -311,12 +320,16 @@ _PLANNING_PACK: dict[str, Any] = {
                 {"name": "assigned", "category": "open"},
                 {"name": "executing", "category": "wip"},
                 {"name": "delivered", "category": "done"},
+                {"name": "cancelled", "category": "done"},
             ],
             "initial_state": "defined",
             "transitions": [
                 {"from": "defined", "to": "assigned", "enforcement": "soft"},
+                {"from": "defined", "to": "cancelled", "enforcement": "soft"},
                 {"from": "assigned", "to": "executing", "enforcement": "soft"},
+                {"from": "assigned", "to": "cancelled", "enforcement": "soft"},
                 {"from": "executing", "to": "delivered", "enforcement": "soft"},
+                {"from": "executing", "to": "cancelled", "enforcement": "soft"},
             ],
             "fields_schema": [
                 {"name": "effort_estimate", "type": "text", "description": "Estimated effort"},
@@ -336,6 +349,7 @@ _PLANNING_PACK: dict[str, Any] = {
                 {"name": "producing", "category": "wip"},
                 {"name": "reviewing", "category": "wip"},
                 {"name": "accepted", "category": "done"},
+                {"name": "rejected", "category": "done"},
             ],
             "initial_state": "planned",
             "transitions": [
@@ -343,6 +357,7 @@ _PLANNING_PACK: dict[str, Any] = {
                 {"from": "producing", "to": "reviewing", "enforcement": "soft"},
                 {"from": "reviewing", "to": "accepted", "enforcement": "soft"},
                 {"from": "reviewing", "to": "producing", "enforcement": "soft"},
+                {"from": "reviewing", "to": "rejected", "enforcement": "soft"},
             ],
             "fields_schema": [
                 {"name": "format", "type": "text", "description": "Expected format (document, code, artifact, etc.)"},
@@ -387,17 +402,20 @@ _PLANNING_PACK: dict[str, Any] = {
     "guide": {
         "state_diagram": (
             "milestone: planning(O) --> active(W) --> closing(W) --> completed(D)\n"
+            "                      \\-> cancelled(D) \\-> cancelled(D)\n"
             "\n"
             "phase:     pending(O) --> active(W) --> completed(D)\n"
-            "                     \\-> skipped(D)\n"
+            "                     \\-> skipped(D) \\-> skipped(D)\n"
             "\n"
             "step:      pending(O) --> in_progress(W) --> completed(D)\n"
-            "                     \\-> skipped(D)\n"
+            "                     \\-> skipped(D)       \\-> skipped(D)\n"
             "\n"
             "work_package: defined(O) --> assigned(O) --> executing(W) --> delivered(D)\n"
+            "                        \\-> cancelled(D)  \\-> cancelled(D)  \\-> cancelled(D)\n"
             "\n"
             "deliverable:  planned(O) --> producing(W) --> reviewing(W) --> accepted(D)\n"
-            "                                           \\-> producing(W) [rework loop]"
+            "                                           \\-> producing(W) [rework loop]\n"
+            "                                           \\-> rejected(D)"
         ),
         "overview": (
             "PMBOK-lite project planning. Structure work as milestones containing phases containing steps. "
@@ -629,6 +647,13 @@ _RISK_PACK: dict[str, Any] = {
                 {"from": "assessed", "to": "escalated", "enforcement": "soft"},
                 {"from": "mitigating", "to": "mitigated", "enforcement": "soft"},
                 {"from": "escalated", "to": "mitigating", "enforcement": "soft"},
+                {
+                    "from": "escalated",
+                    "to": "accepted",
+                    "enforcement": "hard",
+                    "requires_fields": ["risk_owner", "acceptance_rationale"],
+                },
+                {"from": "escalated", "to": "retired", "enforcement": "soft"},
             ],
             "fields_schema": [
                 {
@@ -733,6 +758,8 @@ _RISK_PACK: dict[str, Any] = {
             "risk:       identified(O) --> assessing(W) --> assessed(O) --> mitigating(W) --> mitigated(D)\n"
             "                          \\-> retired(D)                   \\-> accepted(D)\n"
             "                                                           \\-> escalated(O) --> mitigating(W)\n"
+            "                                                                            \\-> accepted(D)\n"
+            "                                                                            \\-> retired(D)\n"
             "            HARD: assessing-->assessed requires risk_score, impact\n"
             "            HARD: assessed-->accepted requires risk_owner, acceptance_rationale\n"
             "\n"
@@ -1515,16 +1542,19 @@ _RELEASE_PACK: dict[str, Any] = {
                 {"name": "staged", "category": "wip"},
                 {"name": "released", "category": "done"},
                 {"name": "rolled_back", "category": "done"},
+                {"name": "cancelled", "category": "done"},
             ],
             "initial_state": "planning",
             "transitions": [
                 {"from": "planning", "to": "development", "enforcement": "soft"},
+                {"from": "planning", "to": "cancelled", "enforcement": "soft"},
                 {
                     "from": "development",
                     "to": "frozen",
                     "enforcement": "hard",
                     "requires_fields": ["version"],
                 },
+                {"from": "development", "to": "cancelled", "enforcement": "soft"},
                 {"from": "frozen", "to": "testing", "enforcement": "soft"},
                 {"from": "frozen", "to": "development", "enforcement": "soft"},
                 {"from": "testing", "to": "staged", "enforcement": "soft"},
@@ -1611,6 +1641,7 @@ _RELEASE_PACK: dict[str, Any] = {
     "guide": {
         "state_diagram": (
             "release:      planning(O) --> development(W) --> frozen(W) --> testing(W) --> staged(W) --> released(D)\n"
+            "                          \\-> cancelled(D) \\-> cancelled(D)\n"
             "                             \\-> development(W) [unfreeze]       \\-> rolled_back(D)\n"
             "                                  \\-> development(W) [fix]\n"
             "                                       \\-> development(W) [fix]\n"
@@ -1632,6 +1663,7 @@ _RELEASE_PACK: dict[str, Any] = {
             "staged": "Release is deployed to staging and awaiting go/no-go",
             "released": "Release has been shipped to production",
             "rolled_back": "Release was reverted after shipping",
+            "cancelled": "Release was abandoned before shipping",
             "queued": "Item is proposed for inclusion in the release",
             "included": "Item is confirmed for this release",
             "verified": "Item has been tested and verified in the release",

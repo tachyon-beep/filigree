@@ -2,10 +2,13 @@
 
 Filigree is in early development (0.x). This roadmap outlines directions, not commitments.
 
+## Completed
+
+- **Custom workflow packs** -- 9 built-in packs with enable/disable via `config.json` (`enabled_packs`), plus support for user-defined templates in `.filigree/templates/`
+
 ## Near-term (0.x releases)
 
 - **Documentation site** -- mkdocs-based docs with tutorials and API reference
-- **Custom workflow packs** -- user-defined templates in `.filigree/templates/`
 - **GitHub integration** -- sync issues bidirectionally with GitHub Issues
 - **`filigree watch`** -- file-system triggered actions (auto-close on commit, etc.)
 - **Dashboard improvements** -- filtering, search, and dependency graph visualization

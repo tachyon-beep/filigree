@@ -31,7 +31,8 @@ def db(tmp_path: Path) -> FiligreeDB:
     (filigree_dir / "config.json").write_text(json.dumps(config))
     db = FiligreeDB(filigree_dir / "filigree.db", prefix="test")
     db.initialize()
-    return db
+    yield db
+    db.close()
 
 
 # ---------------------------------------------------------------------------

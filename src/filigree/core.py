@@ -13,7 +13,6 @@ import json
 import logging
 import sqlite3
 import uuid
-from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -102,7 +101,6 @@ CREATE TABLE IF NOT EXISTS issues (
     notes       TEXT DEFAULT '',
     fields      TEXT DEFAULT '{}',
 
-    CHECK (status IN ('open', 'in_progress', 'closed')),
     CHECK (priority BETWEEN 0 AND 4)
 );
 
@@ -110,6 +108,7 @@ CREATE INDEX IF NOT EXISTS idx_issues_status ON issues(status);
 CREATE INDEX IF NOT EXISTS idx_issues_type ON issues(type);
 CREATE INDEX IF NOT EXISTS idx_issues_parent ON issues(parent_id);
 CREATE INDEX IF NOT EXISTS idx_issues_priority ON issues(priority);
+CREATE INDEX IF NOT EXISTS idx_issues_status_priority ON issues(status, priority, created_at);
 
 CREATE TABLE IF NOT EXISTS dependencies (
     issue_id       TEXT NOT NULL REFERENCES issues(id),
@@ -120,6 +119,7 @@ CREATE TABLE IF NOT EXISTS dependencies (
 );
 
 CREATE INDEX IF NOT EXISTS idx_deps_depends_on ON dependencies(depends_on_id);
+CREATE INDEX IF NOT EXISTS idx_deps_issue_depends ON dependencies(issue_id, depends_on_id);
 
 CREATE TABLE IF NOT EXISTS events (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -134,6 +134,7 @@ CREATE TABLE IF NOT EXISTS events (
 
 CREATE INDEX IF NOT EXISTS idx_events_issue ON events(issue_id);
 CREATE INDEX IF NOT EXISTS idx_events_created ON events(created_at);
+CREATE INDEX IF NOT EXISTS idx_events_issue_time ON events(issue_id, created_at DESC);
 
 CREATE TABLE IF NOT EXISTS comments (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -143,17 +144,12 @@ CREATE TABLE IF NOT EXISTS comments (
     created_at TEXT NOT NULL
 );
 
+CREATE INDEX IF NOT EXISTS idx_comments_issue ON comments(issue_id, created_at);
+
 CREATE TABLE IF NOT EXISTS labels (
     issue_id TEXT NOT NULL REFERENCES issues(id),
     label    TEXT NOT NULL,
     PRIMARY KEY (issue_id, label)
-);
-
-CREATE TABLE IF NOT EXISTS templates (
-    type         TEXT PRIMARY KEY,
-    display_name TEXT NOT NULL,
-    description  TEXT DEFAULT '',
-    fields_schema TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS type_templates (
@@ -172,128 +168,32 @@ CREATE TABLE IF NOT EXISTS packs (
     is_builtin    BOOLEAN NOT NULL DEFAULT 0,
     enabled       BOOLEAN NOT NULL DEFAULT 1
 );
+
+-- FTS5 full-text search with sync triggers
+CREATE VIRTUAL TABLE IF NOT EXISTS issues_fts USING fts5(
+    title, description, content='issues', content_rowid='rowid'
+);
+
+CREATE TRIGGER IF NOT EXISTS issues_fts_insert AFTER INSERT ON issues BEGIN
+    INSERT INTO issues_fts(rowid, title, description) VALUES (new.rowid, new.title, new.description);
+END;
+CREATE TRIGGER IF NOT EXISTS issues_fts_update AFTER UPDATE OF title, description ON issues BEGIN
+    INSERT INTO issues_fts(issues_fts, rowid, title, description)
+        VALUES('delete', old.rowid, old.title, old.description);
+    INSERT INTO issues_fts(rowid, title, description) VALUES (new.rowid, new.title, new.description);
+END;
+CREATE TRIGGER IF NOT EXISTS issues_fts_delete AFTER DELETE ON issues BEGIN
+    INSERT INTO issues_fts(issues_fts, rowid, title, description)
+        VALUES('delete', old.rowid, old.title, old.description);
+END;
 """
 
-# Current schema version — increment when adding migrations
-CURRENT_SCHEMA_VERSION = 6
-
-# ---------------------------------------------------------------------------
-# Schema migrations
-# ---------------------------------------------------------------------------
+CURRENT_SCHEMA_VERSION = 1
 
 
-def _migrate_v2_fts5(conn: sqlite3.Connection) -> None:
-    """v1→v2: Add FTS5 full-text search virtual table with sync triggers."""
-    conn.executescript("""
-        CREATE VIRTUAL TABLE IF NOT EXISTS issues_fts USING fts5(
-            title, description, content='issues', content_rowid='rowid'
-        );
+def _seed_builtin_packs(conn: sqlite3.Connection, now: str) -> int:
+    """Seed built-in packs and type templates into the database.
 
-        -- Triggers to keep FTS in sync
-        CREATE TRIGGER IF NOT EXISTS issues_fts_insert AFTER INSERT ON issues BEGIN
-            INSERT INTO issues_fts(rowid, title, description) VALUES (new.rowid, new.title, new.description);
-        END;
-        CREATE TRIGGER IF NOT EXISTS issues_fts_update AFTER UPDATE OF title, description ON issues BEGIN
-            INSERT INTO issues_fts(issues_fts, rowid, title, description)
-                VALUES('delete', old.rowid, old.title, old.description);
-            INSERT INTO issues_fts(rowid, title, description)
-                VALUES (new.rowid, new.title, new.description);
-        END;
-        CREATE TRIGGER IF NOT EXISTS issues_fts_delete AFTER DELETE ON issues BEGIN
-            INSERT INTO issues_fts(issues_fts, rowid, title, description)
-                VALUES('delete', old.rowid, old.title, old.description);
-        END;
-
-        -- Populate FTS with existing data
-        INSERT INTO issues_fts(rowid, title, description) SELECT rowid, title, description FROM issues;
-    """)
-
-
-def _migrate_v3_custom_workflow(conn: sqlite3.Connection) -> None:
-    """v2→v3: Remove CHECK constraint on status to allow custom workflow states.
-
-    SQLite doesn't support ALTER TABLE DROP CONSTRAINT, so we recreate the table.
-    Foreign keys must be disabled during the table swap since other tables reference issues(id).
-    """
-    # Must disable FK enforcement outside of any transaction
-    conn.execute("PRAGMA foreign_keys=OFF")
-    conn.executescript("""
-        DROP TABLE IF EXISTS issues_new;
-
-        -- Recreate issues table without CHECK constraint on status
-        CREATE TABLE issues_new (
-            id          TEXT PRIMARY KEY,
-            title       TEXT NOT NULL,
-            status      TEXT NOT NULL DEFAULT 'open',
-            priority    INTEGER NOT NULL DEFAULT 2,
-            type        TEXT NOT NULL DEFAULT 'task',
-            parent_id   TEXT,
-            assignee    TEXT DEFAULT '',
-            created_at  TEXT NOT NULL,
-            updated_at  TEXT NOT NULL,
-            closed_at   TEXT,
-            description TEXT DEFAULT '',
-            notes       TEXT DEFAULT '',
-            fields      TEXT DEFAULT '{}',
-            CHECK (priority BETWEEN 0 AND 4)
-        );
-
-        INSERT INTO issues_new SELECT * FROM issues;
-        DROP TABLE issues;
-        ALTER TABLE issues_new RENAME TO issues;
-
-        -- Recreate indexes
-        CREATE INDEX IF NOT EXISTS idx_issues_status ON issues(status);
-        CREATE INDEX IF NOT EXISTS idx_issues_type ON issues(type);
-        CREATE INDEX IF NOT EXISTS idx_issues_parent ON issues(parent_id);
-        CREATE INDEX IF NOT EXISTS idx_issues_priority ON issues(priority);
-
-        -- Recreate FTS triggers (they reference the old table)
-        DROP TRIGGER IF EXISTS issues_fts_insert;
-        DROP TRIGGER IF EXISTS issues_fts_update;
-        DROP TRIGGER IF EXISTS issues_fts_delete;
-
-        CREATE TRIGGER issues_fts_insert AFTER INSERT ON issues BEGIN
-            INSERT INTO issues_fts(rowid, title, description) VALUES (new.rowid, new.title, new.description);
-        END;
-        CREATE TRIGGER issues_fts_update AFTER UPDATE OF title, description ON issues BEGIN
-            INSERT INTO issues_fts(issues_fts, rowid, title, description)
-                VALUES('delete', old.rowid, old.title, old.description);
-            INSERT INTO issues_fts(rowid, title, description)
-                VALUES (new.rowid, new.title, new.description);
-        END;
-        CREATE TRIGGER issues_fts_delete AFTER DELETE ON issues BEGIN
-            INSERT INTO issues_fts(issues_fts, rowid, title, description)
-                VALUES('delete', old.rowid, old.title, old.description);
-        END;
-    """)
-    conn.execute("PRAGMA foreign_keys=ON")
-
-
-def _migrate_v4_perf_indexes(conn: sqlite3.Connection) -> None:
-    """v3→v4: Add covering indexes for performance at scale."""
-    conn.executescript("""
-        -- Composite index for list_issues common query pattern
-        CREATE INDEX IF NOT EXISTS idx_issues_status_priority ON issues(status, priority, created_at);
-
-        -- Covering index for ready/blocked queries
-        CREATE INDEX IF NOT EXISTS idx_deps_issue_depends ON dependencies(issue_id, depends_on_id);
-
-        -- Index for events by issue + time (detail page queries)
-        CREATE INDEX IF NOT EXISTS idx_events_issue_time ON events(issue_id, created_at DESC);
-
-        -- Index for comments by issue
-        CREATE INDEX IF NOT EXISTS idx_comments_issue ON comments(issue_id, created_at);
-
-        -- Run ANALYZE to update query planner statistics
-        ANALYZE;
-    """)
-
-
-def _seed_builtin_packs_v5(conn: sqlite3.Connection, now: str) -> int:
-    """Seed built-in packs and type templates into v5 tables.
-
-    Separated from migration for testability (can be monkeypatched for failure tests).
     Returns the number of type templates seeded.
     """
     from filigree.templates_data import BUILT_IN_PACKS
@@ -319,226 +219,6 @@ def _seed_builtin_packs_v5(conn: sqlite3.Connection, now: str) -> int:
             logger.debug("Seeded type template: %s (pack=%s)", type_name, pack_name)
 
     return count
-
-
-def _migrate_v5_workflow_templates(conn: sqlite3.Connection) -> None:
-    """v4 -> v5: Create type_templates and packs tables, migrate old templates data.
-
-    Steps:
-    1. Back up old templates table to _templates_v4_backup (review B2)
-    2. Create type_templates and packs tables (IF NOT EXISTS for idempotency)
-    3. Migrate old templates rows into type_templates with default 3-state machines
-    4. Seed built-in packs and type templates
-    5. Post-migration validation (row count check)
-    6. Drop old templates table (only after validation passes)
-
-    On failure: backup table is preserved, old templates table is NOT dropped,
-    and the exception propagates to the caller.
-    """
-    logger.info("Starting v4 -> v5 migration: workflow templates")
-    now = datetime.now(UTC).isoformat()
-
-    # Step 1: Back up old templates table
-    conn.execute("CREATE TABLE IF NOT EXISTS _templates_v4_backup AS SELECT * FROM templates")
-    backup_count = conn.execute("SELECT COUNT(*) FROM _templates_v4_backup").fetchone()[0]
-    logger.debug("Backed up %d templates to _templates_v4_backup", backup_count)
-
-    # Step 2: Create new tables (IF NOT EXISTS for safe re-run after partial failure)
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS type_templates (
-            type          TEXT PRIMARY KEY,
-            pack          TEXT NOT NULL DEFAULT 'core',
-            definition    TEXT NOT NULL,
-            is_builtin    BOOLEAN NOT NULL DEFAULT 0,
-            created_at    TEXT NOT NULL,
-            updated_at    TEXT NOT NULL
-        )
-    """)
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS packs (
-            name          TEXT PRIMARY KEY,
-            version       TEXT NOT NULL,
-            definition    TEXT NOT NULL,
-            is_builtin    BOOLEAN NOT NULL DEFAULT 0,
-            enabled       BOOLEAN NOT NULL DEFAULT 1
-        )
-    """)
-    logger.debug("Created type_templates and packs tables")
-
-    # Step 3: Migrate old templates rows with default 3-state definitions
-    try:
-        old_templates = conn.execute("SELECT type, display_name, description, fields_schema FROM templates").fetchall()
-
-        for row in old_templates:
-            old_type = row[0]
-            old_display_name = row[1]
-            old_description = row[2]
-            old_fields_raw = row[3]
-
-            try:
-                old_fields = json.loads(old_fields_raw) if old_fields_raw else []
-            except (json.JSONDecodeError, TypeError):
-                old_fields = []
-
-            # Enrich with default 3-state machine (open/in_progress/closed)
-            enriched_definition = {
-                "type": old_type,
-                "display_name": old_display_name,
-                "description": old_description or "",
-                "pack": "custom",
-                "states": [
-                    {"name": "open", "category": "open"},
-                    {"name": "in_progress", "category": "wip"},
-                    {"name": "closed", "category": "done"},
-                ],
-                "initial_state": "open",
-                "transitions": [
-                    {"from": "open", "to": "in_progress", "enforcement": "soft"},
-                    {"from": "in_progress", "to": "closed", "enforcement": "soft"},
-                    {"from": "open", "to": "closed", "enforcement": "soft"},
-                ],
-                "fields_schema": old_fields,
-            }
-
-            conn.execute(
-                "INSERT OR IGNORE INTO type_templates (type, pack, definition, is_builtin, created_at, updated_at) "
-                "VALUES (?, 'custom', ?, 0, ?, ?)",
-                (old_type, json.dumps(enriched_definition), now, now),
-            )
-            logger.debug("Migrated old template: %s", old_type)
-
-        logger.debug("Migrated %d old templates to type_templates", len(old_templates))
-
-        # Step 4: Seed built-in packs and type templates (overwrites custom for built-in types)
-        seed_count = _seed_builtin_packs_v5(conn, now)
-        logger.debug("Seeded %d built-in type templates", seed_count)
-
-    except Exception:
-        logger.error(
-            "v4 -> v5 migration failed during data migration/seeding. "
-            "Backup preserved in _templates_v4_backup table. Old templates table NOT dropped."
-        )
-        raise
-
-    # Step 5: Post-migration validation
-    type_count = conn.execute("SELECT COUNT(*) FROM type_templates").fetchone()[0]
-    pack_count = conn.execute("SELECT COUNT(*) FROM packs").fetchone()[0]
-
-    min_types = 9
-    min_packs = 9
-    if type_count < min_types:
-        msg = f"Migration validation failed: expected >= {min_types} type_templates rows, got {type_count}"
-        logger.error(msg)
-        raise RuntimeError(msg)
-    if pack_count < min_packs:
-        msg = f"Migration validation failed: expected >= {min_packs} packs rows, got {pack_count}"
-        logger.error(msg)
-        raise RuntimeError(msg)
-
-    logger.debug("Post-migration validation passed: %d types, %d packs", type_count, pack_count)
-
-    # Step 6: Drop old templates table (only after validation passes)
-    conn.execute("DROP TABLE IF EXISTS templates")
-    logger.info(
-        "v4 -> v5 migration complete: %d type_templates, %d packs, backup in _templates_v4_backup",
-        type_count,
-        pack_count,
-    )
-
-
-def _migrate_v6_parent_fk(conn: sqlite3.Connection) -> None:
-    """v5→v6: Add ON DELETE SET NULL FK for parent_id via temp-table-swap.
-
-    Foreign keys must be disabled during the table swap since dependencies,
-    events, comments, and labels all reference issues(id).
-    """
-    logger.info("Running v5 -> v6 migration: parent_id FK with ON DELETE SET NULL")
-
-    # Step 1: NULL-ify orphaned parent_id values
-    orphaned = conn.execute(
-        "UPDATE issues SET parent_id = NULL WHERE parent_id IS NOT NULL AND parent_id NOT IN (SELECT id FROM issues)"
-    ).rowcount
-    if orphaned:
-        logger.info("Nullified %d orphaned parent_id references", orphaned)
-
-    # Step 2: Commit pending transaction so PRAGMA foreign_keys takes effect.
-    # (PRAGMA foreign_keys is a no-op inside a transaction per SQLite docs.)
-    conn.commit()
-
-    # Step 3: Disable FK enforcement for table swap (other tables reference issues(id))
-    conn.execute("PRAGMA foreign_keys=OFF")
-
-    # Step 4: Clean up leftover temp table from a previous partial migration attempt
-    conn.execute("DROP TABLE IF EXISTS issues_v6")
-
-    conn.executescript("""
-        CREATE TABLE issues_v6 (
-            id          TEXT PRIMARY KEY,
-            title       TEXT NOT NULL,
-            status      TEXT NOT NULL DEFAULT 'open',
-            priority    INTEGER NOT NULL DEFAULT 2,
-            type        TEXT NOT NULL DEFAULT 'task',
-            parent_id   TEXT REFERENCES issues_v6(id) ON DELETE SET NULL,
-            assignee    TEXT DEFAULT '',
-            created_at  TEXT NOT NULL,
-            updated_at  TEXT NOT NULL,
-            closed_at   TEXT,
-            description TEXT DEFAULT '',
-            notes       TEXT DEFAULT '',
-            fields      TEXT DEFAULT '{}',
-            CHECK (priority BETWEEN 0 AND 4)
-        );
-
-        INSERT INTO issues_v6 SELECT * FROM issues;
-
-        DROP TABLE issues;
-        ALTER TABLE issues_v6 RENAME TO issues;
-
-        -- Recreate indexes
-        CREATE INDEX IF NOT EXISTS idx_issues_status ON issues(status);
-        CREATE INDEX IF NOT EXISTS idx_issues_type ON issues(type);
-        CREATE INDEX IF NOT EXISTS idx_issues_parent ON issues(parent_id);
-        CREATE INDEX IF NOT EXISTS idx_issues_priority ON issues(priority);
-        CREATE INDEX IF NOT EXISTS idx_issues_status_priority ON issues(status, priority, created_at);
-
-        -- Recreate FTS triggers (they reference the issues table)
-        DROP TRIGGER IF EXISTS issues_fts_insert;
-        DROP TRIGGER IF EXISTS issues_fts_update;
-        DROP TRIGGER IF EXISTS issues_fts_delete;
-
-        CREATE TRIGGER IF NOT EXISTS issues_fts_insert AFTER INSERT ON issues BEGIN
-            INSERT INTO issues_fts(rowid, title, description) VALUES (new.rowid, new.title, new.description);
-        END;
-        CREATE TRIGGER IF NOT EXISTS issues_fts_update AFTER UPDATE OF title, description ON issues BEGIN
-            INSERT INTO issues_fts(issues_fts, rowid, title, description)
-                VALUES('delete', old.rowid, old.title, old.description);
-            INSERT INTO issues_fts(rowid, title, description) VALUES (new.rowid, new.title, new.description);
-        END;
-        CREATE TRIGGER IF NOT EXISTS issues_fts_delete AFTER DELETE ON issues BEGIN
-            INSERT INTO issues_fts(issues_fts, rowid, title, description)
-                VALUES('delete', old.rowid, old.title, old.description);
-        END;
-    """)
-
-    # Step 5: Re-enable FK enforcement
-    conn.execute("PRAGMA foreign_keys=ON")
-
-    # Step 6: Verify FK integrity
-    fk_violations = conn.execute("PRAGMA foreign_key_check(issues)").fetchall()
-    if fk_violations:
-        logger.warning("FK violations after migration: %s", fk_violations)
-
-    logger.info("v5 -> v6 migration complete: parent_id FK with ON DELETE SET NULL")
-
-
-# Migration registry: (target_version, function)
-MIGRATIONS: list[tuple[int, Callable[[sqlite3.Connection], None]]] = [
-    (2, _migrate_v2_fts5),
-    (3, _migrate_v3_custom_workflow),
-    (4, _migrate_v4_perf_indexes),
-    (5, _migrate_v5_workflow_templates),
-    (6, _migrate_v6_parent_fk),
-]
 
 
 # ---------------------------------------------------------------------------
@@ -665,23 +345,26 @@ class FiligreeDB:
         return self._conn
 
     def initialize(self) -> None:
-        """Create tables, run pending migrations, and seed templates."""
-        self.conn.executescript(SCHEMA_SQL)
-        self._run_migrations()
+        """Create tables (if new) or migrate (if existing), then seed templates.
+
+        For a fresh database (user_version == 0), creates all tables from
+        SCHEMA_SQL and stamps the current version. For an existing database,
+        applies any pending migrations to bring it up to CURRENT_SCHEMA_VERSION.
+        """
+        current_version = self.get_schema_version()
+
+        if current_version == 0:
+            # Fresh database — create everything from scratch
+            self.conn.executescript(SCHEMA_SQL)
+            self.conn.execute(f"PRAGMA user_version = {CURRENT_SCHEMA_VERSION}")
+        elif current_version < CURRENT_SCHEMA_VERSION:
+            # Existing database — apply pending migrations
+            from filigree.migrations import apply_pending_migrations
+
+            apply_pending_migrations(self.conn, CURRENT_SCHEMA_VERSION)
+
         self._seed_templates()
         self.conn.commit()
-
-    def _run_migrations(self) -> None:
-        """Run pending schema migrations based on PRAGMA user_version."""
-        current_version: int = self.conn.execute("PRAGMA user_version").fetchone()[0]
-        if current_version >= CURRENT_SCHEMA_VERSION:
-            return
-
-        for target_version, migrate_fn in MIGRATIONS:
-            if target_version > current_version:
-                migrate_fn(self.conn)
-
-        self.conn.execute(f"PRAGMA user_version = {CURRENT_SCHEMA_VERSION}")
 
     def get_schema_version(self) -> int:
         """Return the current schema version from PRAGMA user_version."""
@@ -711,18 +394,9 @@ class FiligreeDB:
     # -- Templates -----------------------------------------------------------
 
     def _seed_templates(self) -> None:
-        """Seed built-in templates into the type_templates/packs tables (v5+).
-
-        Legacy v4 templates table seeding is no longer performed — the v4→v5
-        migration handles conversion, and post-v5 schemas should not reseed
-        the deprecated table.
-        """
-        has_type_templates = self.conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='type_templates'"
-        ).fetchone()
-        if has_type_templates:
-            now = _now_iso()
-            _seed_builtin_packs_v5(self.conn, now)
+        """Seed built-in packs and type templates into the database."""
+        now = _now_iso()
+        _seed_builtin_packs(self.conn, now)
 
     def reload_templates(self) -> None:
         """Clear the cached template registry so it reloads on next access."""
@@ -1472,7 +1146,9 @@ class FiligreeDB:
         # Try FTS5 first, fall back to LIKE if FTS table doesn't exist
         try:
             # Quote each token and add * for prefix matching, then join with AND
-            tokens = query.strip().split()
+            # Strip double quotes from tokens to prevent FTS5 syntax injection
+            tokens = [t.replace('"', "") for t in query.strip().split()]
+            tokens = [t for t in tokens if t]  # drop empty tokens after stripping
             fts_query = " AND ".join(f'"{t}"*' for t in tokens) if tokens else '""'
             rows = self.conn.execute(
                 "SELECT i.id FROM issues i "
@@ -1565,18 +1241,12 @@ class FiligreeDB:
         return True
 
     def _would_create_cycle(self, issue_id: str, depends_on_id: str) -> bool:
-        """Check if adding issue_id -> depends_on_id would create a cycle (BFS)."""
+        """Check if adding issue_id -> depends_on_id would create a cycle.
+
+        Uses BFS from depends_on_id following existing dependency edges.
+        If issue_id is reachable, adding the new edge would close a cycle.
+        """
         visited: set[str] = set()
-        queue = [issue_id]
-        while queue:
-            current = queue.pop(0)
-            if current == depends_on_id:
-                return False  # We're adding issue_id depends_on depends_on_id; need to check reverse
-            if current in visited:
-                continue
-            visited.add(current)
-        # Check: can we reach issue_id from depends_on_id via existing deps?
-        visited.clear()
         queue = [depends_on_id]
         while queue:
             current = queue.pop(0)
@@ -1653,15 +1323,26 @@ class FiligreeDB:
             return []
 
         open_ph = ",".join("?" * len(open_states))
-        done_ph = ",".join("?" * len(done_states))
-        rows = self.conn.execute(
-            f"SELECT DISTINCT i.id FROM issues i "
-            f"JOIN dependencies d ON d.issue_id = i.id "
-            f"JOIN issues blocker ON d.depends_on_id = blocker.id "
-            f"WHERE i.status IN ({open_ph}) AND blocker.status NOT IN ({done_ph}) "
-            f"ORDER BY i.priority, i.created_at",
-            [*open_states, *done_states],
-        ).fetchall()
+        if done_states:
+            done_ph = ",".join("?" * len(done_states))
+            rows = self.conn.execute(
+                f"SELECT DISTINCT i.id FROM issues i "
+                f"JOIN dependencies d ON d.issue_id = i.id "
+                f"JOIN issues blocker ON d.depends_on_id = blocker.id "
+                f"WHERE i.status IN ({open_ph}) AND blocker.status NOT IN ({done_ph}) "
+                f"ORDER BY i.priority, i.created_at",
+                [*open_states, *done_states],
+            ).fetchall()
+        else:
+            # No done states defined — all blockers count
+            rows = self.conn.execute(
+                f"SELECT DISTINCT i.id FROM issues i "
+                f"JOIN dependencies d ON d.issue_id = i.id "
+                f"JOIN issues blocker ON d.depends_on_id = blocker.id "
+                f"WHERE i.status IN ({open_ph}) "
+                f"ORDER BY i.priority, i.created_at",
+                open_states,
+            ).fetchall()
 
         return self._build_issues_batch([r["id"] for r in rows])
 
@@ -2358,7 +2039,7 @@ class FiligreeDB:
     # -- Archival / Compaction ------------------------------------------------
 
     def archive_closed(self, *, days_old: int = 30, actor: str = "") -> list[str]:
-        """Archive closed issues older than `days_old` days.
+        """Archive done-category issues older than `days_old` days.
 
         Sets their status to 'archived' (preserving closed_at).
         Returns list of archived issue IDs.
@@ -2368,9 +2049,11 @@ class FiligreeDB:
         cutoff_dt = datetime.now(UTC) - timedelta(days=days_old)
         cutoff = cutoff_dt.isoformat()
 
+        done_states = self._get_states_for_category("done") or ["closed"]
+        done_ph = ",".join("?" * len(done_states))
         rows = self.conn.execute(
-            "SELECT id FROM issues WHERE status = 'closed' AND closed_at < ? AND closed_at IS NOT NULL",
-            (cutoff,),
+            f"SELECT id FROM issues WHERE status IN ({done_ph}) AND closed_at < ? AND closed_at IS NOT NULL",
+            [*done_states, cutoff],
         ).fetchall()
 
         archived_ids = [r["id"] for r in rows]
