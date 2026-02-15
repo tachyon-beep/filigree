@@ -14,6 +14,7 @@
   #cy { width: 100%; height: 100%; }
   .card { transition: all 0.15s ease; }
   .card:hover { background: #334155 !important; }
+  .card:focus { outline: 2px solid #3B82F6; outline-offset: -2px; }
   .ready-border { border-left: 4px solid #10B981; }
   .scrollbar-thin::-webkit-scrollbar { width: 6px; }
   .scrollbar-thin::-webkit-scrollbar-track { background: #1E293B; }
@@ -56,6 +57,9 @@ tailwind.config = {
     <button id="btnReady" onclick="toggleReady()" class="px-2 py-1 rounded text-xs font-medium bg-emerald-900/50 text-emerald-400 border border-emerald-700">
       &#9679; Ready (<span id="readyCount">0</span>)
     </button>
+    <button id="btnBlocked" onclick="toggleBlocked()" class="px-2 py-1 rounded text-xs font-medium bg-slate-700 text-slate-400 border border-slate-600">
+      &#128279; Blocked (<span id="blockedCount">0</span>)
+    </button>
     <select id="filterPriority" onchange="applyFilters()" class="bg-slate-700 text-slate-200 text-xs rounded px-2 py-1 border border-slate-600">
       <option value="all">Priority: All</option>
       <option value="0-1">P0-P1</option>
@@ -88,6 +92,7 @@ tailwind.config = {
         <input type="checkbox" id="graphEpicsOnly" checked onchange="renderGraph()" class="accent-blue-500"> Epics only
       </label>
       <button onclick="graphFit()" class="px-2 py-0.5 rounded bg-slate-700 hover:bg-slate-600">Fit</button>
+      <button id="btnCritPath" onclick="toggleCriticalPath()" class="px-2 py-0.5 rounded bg-slate-700 hover:bg-slate-600">Critical Path</button>
     </div>
     <div id="cy" class="flex-1"></div>
   </div>
@@ -181,6 +186,7 @@ async function fetchData() {
     issueMap = {};
     allIssues.forEach(function(i) { issueMap[i.id] = i; });
     trackChanges(allIssues);
+    computeImpactScores();
     updateStats();
     render();
   } finally {
@@ -206,6 +212,7 @@ function updateStats() {
   document.getElementById('footReady').textContent = s.ready_count;
   document.getElementById('footBlocked').textContent = s.blocked_count;
   document.getElementById('footDeps').textContent = s.total_dependencies;
+  document.getElementById('blockedCount').textContent = s.blocked_count;
   populateTypeFilter();
 }
 
@@ -238,6 +245,15 @@ function getFilteredIssues() {
     return (b.is_ready ? 1 : 0) - (a.is_ready ? 1 : 0) || a.priority - b.priority;
   });
 
+  if (blockedFilter) {
+    items = items.filter(function(i) {
+      return (i.blocked_by || []).some(function(bid) {
+        var b = issueMap[bid];
+        return b && (b.status_category || 'open') !== 'done';
+      });
+    });
+  }
+
   return items;
 }
 
@@ -248,6 +264,17 @@ function toggleReady() {
   var btn = document.getElementById('btnReady');
   btn.className = readyFilter
     ? 'px-2 py-1 rounded text-xs font-medium bg-emerald-900/50 text-emerald-400 border border-emerald-700'
+    : 'px-2 py-1 rounded text-xs font-medium bg-slate-700 text-slate-400 border border-slate-600';
+  render();
+}
+
+var blockedFilter = false;
+function toggleBlocked() {
+  blockedFilter = !blockedFilter;
+  if (blockedFilter) readyFilter = false;
+  var btn = document.getElementById('btnBlocked');
+  btn.className = blockedFilter
+    ? 'px-2 py-1 rounded text-xs font-medium bg-red-900/50 text-red-400 border border-red-700'
     : 'px-2 py-1 rounded text-xs font-medium bg-slate-700 text-slate-400 border border-slate-600';
   render();
 }
@@ -441,7 +468,7 @@ function renderCard(issue) {
   var changedClass = changedIds.has(issue.id) ? 'ring-1 ring-blue-500' : '';
 
   return '<div class="card bg-slate-800 rounded border border-slate-700 p-3 cursor-pointer ' +
-    readyClass + ' ' + agingClass + ' ' + changedClass + '" onclick="openDetail(\'' + issue.id + '\')">' +
+    readyClass + ' ' + agingClass + ' ' + changedClass + '" tabindex="0" data-id="' + issue.id + '" onclick="openDetail(\'' + issue.id + '\')">' +
     '<div class="flex items-center gap-2 mb-1">' +
       '<span>' + typeIcon + '</span>' +
       '<span class="w-2 h-2 rounded-full shrink-0" style="background:' + prioColor +
@@ -452,6 +479,7 @@ function renderCard(issue) {
       '<span>' + issue.id + '</span>' +
       '<span class="rounded px-1" style="background:' + catColor + ';color:white">' + issue.status + '</span>' +
       (blockedCount > 0 ? '<span class="text-red-400">\u{1F517} blocked by ' + blockedCount + '</span>' : '') +
+      (impactScores[issue.id] > 0 ? '<span class="text-amber-400" title="Blocks ' + impactScores[issue.id] + ' downstream">\u26A1' + impactScores[issue.id] + '</span>' : '') +
       (issue.assignee ? '<span class="text-slate-400">\u{1F464} ' + escHtml(issue.assignee) + '</span>' : '') +
       (cat === 'wip' && issue.updated_at
         ? (function() {
@@ -645,6 +673,44 @@ function renderGraph() {
 
   cy.on('tap', 'node', function(evt) { openDetail(evt.target.id()); });
   cy.fit(undefined, 30);
+
+  if (criticalPathActive && criticalPathIds.size) {
+    cy.nodes().forEach(function(n) {
+      if (!criticalPathIds.has(n.id())) n.style('opacity', 0.2);
+    });
+    cy.edges().forEach(function(e) {
+      if (criticalPathIds.has(e.source().id()) && criticalPathIds.has(e.target().id())) {
+        e.style({'width': 3, 'line-color': '#EF4444', 'target-arrow-color': '#EF4444'});
+      } else {
+        e.style('opacity', 0.1);
+      }
+    });
+  }
+
+  cy.on('mouseover', 'node', function(evt) {
+    if (criticalPathActive) return;
+    var nodeId = evt.target.id();
+    var downstream = new Set();
+    var queue = [nodeId];
+    while (queue.length) {
+      var cur = queue.shift();
+      cy.edges().forEach(function(e) {
+        if (e.source().id() === cur && !downstream.has(e.target().id())) {
+          downstream.add(e.target().id());
+          queue.push(e.target().id());
+        }
+      });
+    }
+    if (downstream.size) {
+      cy.nodes().forEach(function(n) {
+        if (n.id() !== nodeId && !downstream.has(n.id())) n.style('opacity', 0.15);
+      });
+    }
+  });
+  cy.on('mouseout', 'node', function() {
+    if (criticalPathActive) return;
+    cy.nodes().forEach(function(n) { n.style('opacity', n.data('opacity')); });
+  });
 }
 
 function graphFit() { if (cy) cy.fit(undefined, 30); }
@@ -854,15 +920,42 @@ function parseHash() {
 // Keyboard shortcuts
 // ---------------------------------------------------------------------------
 document.addEventListener('keydown', function(e) {
+  var active = document.activeElement;
+  if (active && (active.tagName === 'INPUT' || active.tagName === 'SELECT' || active.tagName === 'TEXTAREA')) return;
+
   if (e.key === '/' && !e.ctrlKey && !e.metaKey) {
-    if (document.activeElement.tagName !== 'INPUT') {
-      e.preventDefault();
-      document.getElementById('filterSearch').focus();
-    }
+    e.preventDefault();
+    document.getElementById('filterSearch').focus();
+    return;
   }
   if (e.key === 'Escape') {
     if (selectedIssue) closeDetail();
-    else { document.getElementById('filterSearch').value = ''; applyFilters(); }
+    else { document.getElementById('filterSearch').value = ''; searchResults = null; applyFilters(); }
+    return;
+  }
+
+  // j/k navigation
+  if (e.key === 'j' || e.key === 'k') {
+    var cards = Array.from(document.querySelectorAll('.card[tabindex]'));
+    if (!cards.length) return;
+    var idx = cards.indexOf(active);
+    if (e.key === 'j') idx = Math.min(idx + 1, cards.length - 1);
+    else idx = Math.max(idx - 1, 0);
+    cards[idx].focus();
+    return;
+  }
+
+  // Enter to open detail
+  if (e.key === 'Enter' && active && active.classList.contains('card')) {
+    var id = active.getAttribute('data-id');
+    if (id) openDetail(id);
+    return;
+  }
+
+  // Shortcuts when detail panel is open
+  if (selectedIssue) {
+    if (e.key === 'c') { var ci = document.getElementById('commentInput'); if (ci) { e.preventDefault(); ci.focus(); } }
+    if (e.key === 'x') { e.preventDefault(); closeIssue(selectedIssue); }
   }
 });
 
@@ -981,6 +1074,30 @@ async function loadMetrics() {
             '<th class="text-left py-1 pr-4">Type</th><th class="text-left py-1 pr-4">Avg Cycle</th><th class="text-left py-1">Count</th>' +
           '</tr></thead><tbody>' + byTypeHtml + '</tbody></table></div>'
         : '<div class="text-slate-500">No completed issues in this period.</div>');
+
+    // Agent workload
+    var agentLoad = {};
+    allIssues.forEach(function(i) {
+      if (i.assignee && (i.status_category || 'open') === 'wip') {
+        agentLoad[i.assignee] = (agentLoad[i.assignee] || 0) + 1;
+      }
+    });
+    var agents = Object.keys(agentLoad).sort(function(a, b) { return agentLoad[b] - agentLoad[a]; });
+    if (agents.length) {
+      var maxLoad = Math.max.apply(null, agents.map(function(a) { return agentLoad[a]; }));
+      var agentHtml = agents.map(function(a) {
+        var pct = (agentLoad[a] / maxLoad * 100);
+        return '<div class="flex items-center gap-2 mb-1">' +
+          '<span class="text-xs text-slate-300 w-24 truncate">' + escHtml(a) + '</span>' +
+          '<div class="flex-1 h-4 bg-slate-900 rounded overflow-hidden">' +
+            '<div class="h-full bg-blue-600 rounded" style="width:' + pct + '%"></div>' +
+          '</div>' +
+          '<span class="text-xs text-slate-400 w-6 text-right">' + agentLoad[a] + '</span></div>';
+      }).join('');
+      container.innerHTML += '<div class="bg-slate-800 rounded p-4 border border-slate-700 mt-4">' +
+        '<div class="text-xs font-medium text-slate-400 mb-2">Agent Workload (Active WIP)</div>' +
+        agentHtml + '</div>';
+    }
   } catch (e) {
     container.innerHTML = '<div class="text-red-400">Failed to load metrics.</div>';
   }
@@ -1053,6 +1170,51 @@ function trackChanges(newIssues) {
   });
   previousIssueState = {};
   newIssues.forEach(function(i) { previousIssueState[i.id] = {status: i.status, priority: i.priority, assignee: i.assignee, updated_at: i.updated_at}; });
+}
+
+// ---------------------------------------------------------------------------
+// Critical path overlay
+// ---------------------------------------------------------------------------
+var criticalPathIds = new Set();
+var criticalPathActive = false;
+
+async function toggleCriticalPath() {
+  criticalPathActive = !criticalPathActive;
+  var btn = document.getElementById('btnCritPath');
+  if (criticalPathActive) {
+    btn.className = 'px-2 py-0.5 rounded bg-red-600 text-white';
+    var resp = await fetch('/api/critical-path');
+    var data = await resp.json();
+    criticalPathIds = new Set(data.path.map(function(p) { return p.id; }));
+  } else {
+    btn.className = 'px-2 py-0.5 rounded bg-slate-700 hover:bg-slate-600';
+    criticalPathIds.clear();
+  }
+  renderGraph();
+}
+
+// ---------------------------------------------------------------------------
+// Impact scores (cascade analysis)
+// ---------------------------------------------------------------------------
+var impactScores = {};
+function computeImpactScores() {
+  var forward = {};
+  allDeps.forEach(function(d) {
+    if (!forward[d.to]) forward[d.to] = [];
+    forward[d.to].push(d.from);
+  });
+  impactScores = {};
+  allIssues.forEach(function(i) {
+    var visited = new Set();
+    var queue = [i.id];
+    while (queue.length) {
+      var cur = queue.shift();
+      (forward[cur] || []).forEach(function(next) {
+        if (!visited.has(next)) { visited.add(next); queue.push(next); }
+      });
+    }
+    impactScores[i.id] = visited.size;
+  });
 }
 
 // ---------------------------------------------------------------------------
