@@ -8,11 +8,12 @@ Handles:
 
 from __future__ import annotations
 
-import contextlib
 import json
+import logging
 import shutil
 import sqlite3
 import subprocess
+import tomllib
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -25,6 +26,8 @@ from filigree.core import (
     SUMMARY_FILENAME,
     find_filigree_root,
 )
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Workflow instructions (injected into CLAUDE.md / AGENTS.md)
@@ -175,8 +178,17 @@ def install_claude_code_mcp(project_root: Path) -> tuple[bool, str]:
     mcp_json_path = project_root / ".mcp.json"
     mcp_config: dict[str, Any] = {}
     if mcp_json_path.exists():
-        with contextlib.suppress(json.JSONDecodeError):
+        try:
             mcp_config = json.loads(mcp_json_path.read_text())
+        except json.JSONDecodeError:
+            # Back up the corrupt file and start fresh
+            backup_path = mcp_json_path.parent / (mcp_json_path.name + ".bak")
+            shutil.copy2(mcp_json_path, backup_path)
+            logger.warning(
+                "Malformed .mcp.json detected; backed up to %s and creating fresh config",
+                backup_path,
+            )
+            mcp_config = {}
 
     if "mcpServers" not in mcp_config:
         mcp_config["mcpServers"] = {}
@@ -211,15 +223,25 @@ def install_codex_mcp(project_root: Path) -> tuple[bool, str]:
     if config_path.exists():
         existing = config_path.read_text()
 
-    # Check if already configured
-    if "[mcp_servers.filigree]" in existing:
-        return True, "Already configured in .codex/config.toml"
+    # Check if already configured using proper TOML parsing
+    if existing.strip():
+        try:
+            parsed = tomllib.loads(existing)
+            if "filigree" in parsed.get("mcp_servers", {}):
+                return True, "Already configured in .codex/config.toml"
+        except tomllib.TOMLDecodeError:
+            # Existing config is malformed; we'll append anyway
+            pass
+
+    # Escape backslashes in paths for TOML double-quoted strings
+    safe_command = str(filigree_mcp).replace("\\", "\\\\")
+    safe_project = str(project_root).replace("\\", "\\\\")
 
     # Append MCP server config
     toml_block = f"""
 [mcp_servers.filigree]
-command = "{filigree_mcp}"
-args = ["--project", "{project_root}"]
+command = "{safe_command}"
+args = ["--project", "{safe_project}"]
 """
 
     with config_path.open("a") as f:
