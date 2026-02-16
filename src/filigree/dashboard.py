@@ -1,7 +1,9 @@
-"""Web dashboard for filigree — read-only project visualization.
+"""Web dashboard for filigree — interactive project management UI.
 
-Single-command local web server: kanban board, dependency graph, issue details.
-No build step, all client libraries loaded from CDN.
+Full-featured local web server: kanban board, dependency graph, metrics,
+activity feed, workflow visualization. Supports issue management (create,
+update, close, reopen, claim, dependency management), batch operations,
+and real-time auto-refresh.
 
 Usage:
     filigree dashboard                    # Opens browser at localhost:8377

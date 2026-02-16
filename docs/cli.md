@@ -540,3 +540,32 @@ Launch the web dashboard. Requires `filigree[dashboard]` extra.
 | `--port` | integer | 8377 | Port to listen on |
 | `--no-browser` | flag | — | Don't auto-open browser |
 
+## Dashboard
+
+```bash
+filigree dashboard                    # Opens browser at localhost:8377
+filigree dashboard --port 9000        # Custom port
+filigree dashboard --no-browser       # Skip auto-open
+```
+
+### `dashboard`
+
+Launch an interactive web dashboard at `http://localhost:8377`. Features:
+
+| View | Description |
+|------|-------------|
+| **Kanban** | Three-column board (open/wip/done) with cluster mode grouping by epic |
+| **Graph** | Cytoscape.js dependency graph with critical path overlay |
+| **Metrics** | Throughput, cycle time, lead time with agent workload chart |
+| **Activity** | Chronological event feed across all issues |
+| **Workflow** | State machine visualization for any issue type |
+
+**Interactive features:** Inline status transitions, priority/assignee changes, comments, issue creation, claim/release, dependency management, batch operations, keyboard navigation (`?` for shortcuts), filter presets, dark/light theme toggle, auto-refresh with change highlighting.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `--port` | int | 8377 | Port to serve on |
+| `--no-browser` | flag | false | Don't auto-open browser |
+
+The dashboard connects to `.filigree/` in the current directory. All write operations record `"dashboard"` as the actor for audit trail.
+
