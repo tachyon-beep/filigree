@@ -114,6 +114,7 @@ def apply_pending_migrations(conn: sqlite3.Connection, target_version: int) -> i
 
         logger.info("Applying migration v%d → v%d ...", version, version + 1)
         try:
+            conn.execute("BEGIN IMMEDIATE")
             migration(conn)
             conn.execute(f"PRAGMA user_version = {version + 1}")
             conn.commit()
@@ -244,7 +245,7 @@ def rebuild_table(
         )
 
     conn.execute(f"DROP TABLE IF EXISTS {temp_table}")  # Clean up any leftover from failed run
-    conn.executescript(temp_schema)
+    conn.execute(temp_schema)
 
     if column_mapping is None:
         # Auto-detect shared columns

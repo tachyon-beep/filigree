@@ -9,7 +9,7 @@ from typing import Any
 import pytest
 
 from filigree.core import DB_FILENAME, FILIGREE_DIR_NAME, SUMMARY_FILENAME, FiligreeDB, write_config
-from filigree.mcp_server import _text, call_tool, get_workflow_prompt, list_resources, read_context
+from filigree.mcp_server import _safe_path, _text, call_tool, get_workflow_prompt, list_resources, read_context
 
 
 def _parse(result: list[Any]) -> Any:
@@ -813,3 +813,81 @@ class TestInstructionsUpdate:
         assert "filigree packs" in FILIGREE_INSTRUCTIONS
         assert "filigree validate" in FILIGREE_INSTRUCTIONS
         assert "filigree guide" in FILIGREE_INSTRUCTIONS
+
+
+class TestSafePath:
+    """Tests for the _safe_path() path traversal guard."""
+
+    def test_rejects_absolute_path(self, mcp_db: FiligreeDB) -> None:
+        with pytest.raises(ValueError, match="Absolute paths not allowed"):
+            _safe_path("/etc/passwd")
+
+    def test_rejects_dotdot_escape(self, mcp_db: FiligreeDB) -> None:
+        with pytest.raises(ValueError, match="Path escapes project directory"):
+            _safe_path("../../etc/passwd")
+
+    def test_rejects_dotdot_in_middle(self, mcp_db: FiligreeDB) -> None:
+        with pytest.raises(ValueError, match="Path escapes project directory"):
+            _safe_path("subdir/../../etc/passwd")
+
+    def test_allows_valid_relative_path(self, mcp_db: FiligreeDB) -> None:
+        result = _safe_path("backup.jsonl")
+        assert result.name == "backup.jsonl"
+
+    def test_allows_subdirectory_path(self, mcp_db: FiligreeDB) -> None:
+        result = _safe_path("backups/export.jsonl")
+        assert result.name == "export.jsonl"
+        assert "backups" in str(result)
+
+    def test_rejects_another_absolute_path(self, mcp_db: FiligreeDB) -> None:
+        """Absolute paths on any platform should be rejected."""
+        with pytest.raises(ValueError, match="Absolute paths not allowed"):
+            _safe_path("/var/data/evil.jsonl")
+
+    def test_project_not_initialized(self) -> None:
+        """_safe_path fails gracefully when _filigree_dir is None."""
+        import filigree.mcp_server as mcp_mod
+
+        original = mcp_mod._filigree_dir
+        mcp_mod._filigree_dir = None
+        try:
+            with pytest.raises(ValueError, match="Project directory not initialized"):
+                _safe_path("test.jsonl")
+        finally:
+            mcp_mod._filigree_dir = original
+
+
+class TestExportImportPathTraversal:
+    """Tests that export_jsonl and import_jsonl MCP tools reject unsafe paths."""
+
+    async def test_export_rejects_absolute_path(self, mcp_db: FiligreeDB) -> None:
+        result = await call_tool("export_jsonl", {"output_path": "/var/data/evil.jsonl"})
+        data = _parse(result)
+        assert data["code"] == "invalid_path"
+        assert "Absolute paths not allowed" in data["error"]
+
+    async def test_export_rejects_path_traversal(self, mcp_db: FiligreeDB) -> None:
+        result = await call_tool("export_jsonl", {"output_path": "../../evil.jsonl"})
+        data = _parse(result)
+        assert data["code"] == "invalid_path"
+        assert "escapes project directory" in data["error"]
+
+    async def test_import_rejects_absolute_path(self, mcp_db: FiligreeDB) -> None:
+        result = await call_tool("import_jsonl", {"input_path": "/etc/passwd"})
+        data = _parse(result)
+        assert data["code"] == "invalid_path"
+        assert "Absolute paths not allowed" in data["error"]
+
+    async def test_import_rejects_path_traversal(self, mcp_db: FiligreeDB) -> None:
+        result = await call_tool("import_jsonl", {"input_path": "../../../etc/passwd"})
+        data = _parse(result)
+        assert data["code"] == "invalid_path"
+        assert "escapes project directory" in data["error"]
+
+    async def test_export_allows_valid_relative_path(self, mcp_db: FiligreeDB) -> None:
+        # Create an issue so there's data to export
+        mcp_db.create_issue("Export test")
+        result = await call_tool("export_jsonl", {"output_path": "test-export.jsonl"})
+        data = _parse(result)
+        assert data["status"] == "ok"
+        assert data["records"] >= 1

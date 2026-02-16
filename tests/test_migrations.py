@@ -428,6 +428,135 @@ class TestRebuildTable:
 
 
 # ---------------------------------------------------------------------------
+# Migration atomicity tests (BEGIN IMMEDIATE + execute vs executescript)
+# ---------------------------------------------------------------------------
+
+
+class TestMigrationAtomicity:
+    """Test that migrations are properly wrapped in transactions.
+
+    Verifies that BEGIN IMMEDIATE is issued before each migration and that
+    rebuild_table() using execute() (not executescript()) preserves the
+    active transaction so rollback works correctly.
+    """
+
+    def test_rebuild_table_failure_rolls_back(self, tmp_path: Path) -> None:
+        """A migration that calls rebuild_table() then fails should roll back completely.
+
+        Temp tables should be cleaned up and version should remain unchanged.
+        """
+        conn = _make_db(tmp_path)
+        conn.execute("CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT, priority INTEGER DEFAULT 2)")
+        conn.execute("INSERT INTO t VALUES (1, 'Alice', 2)")
+        conn.execute("PRAGMA user_version = 1")
+        conn.commit()
+
+        from filigree import migrations
+
+        original = migrations.MIGRATIONS.copy()
+
+        def bad_rebuild_migration(c: sqlite3.Connection) -> None:
+            """Migration that calls rebuild_table then raises."""
+            rebuild_table(
+                c,
+                "t",
+                "CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT, priority INTEGER CHECK(priority BETWEEN 0 AND 4))",
+            )
+            # Now fail after rebuild_table succeeded
+            raise RuntimeError("Intentional post-rebuild failure")
+
+        migrations.MIGRATIONS[1] = bad_rebuild_migration
+        try:
+            with pytest.raises(MigrationError, match="Intentional post-rebuild failure"):
+                apply_pending_migrations(conn, 2)
+
+            # Version should NOT have been bumped
+            assert _get_schema_version(conn) == 1
+
+            # The temp table should not exist
+            tables = _get_table_names(conn)
+            assert "_filigree_migrate_t" not in tables
+
+            # The original table should still exist with original data
+            assert "t" in tables
+            row = conn.execute("SELECT name FROM t WHERE id = 1").fetchone()
+            assert row[0] == "Alice"
+        finally:
+            migrations.MIGRATIONS.clear()
+            migrations.MIGRATIONS.update(original)
+            conn.close()
+
+    def test_begin_immediate_is_used(self, tmp_path: Path) -> None:
+        """Verify that BEGIN IMMEDIATE is issued before each migration.
+
+        We test this indirectly: if BEGIN IMMEDIATE is properly used, then
+        DML changes within a migration are rolled back on failure.
+        """
+        conn = _make_db(tmp_path)
+        conn.execute("CREATE TABLE t (id INTEGER PRIMARY KEY, val TEXT)")
+        conn.execute("INSERT INTO t VALUES (1, 'original')")
+        conn.execute("PRAGMA user_version = 1")
+        conn.commit()
+
+        from filigree import migrations
+
+        original = migrations.MIGRATIONS.copy()
+
+        def migration_with_dml_then_fail(c: sqlite3.Connection) -> None:
+            c.execute("UPDATE t SET val = 'modified' WHERE id = 1")
+            c.execute("INSERT INTO t VALUES (2, 'new_row')")
+            raise RuntimeError("Fail after DML")
+
+        migrations.MIGRATIONS[1] = migration_with_dml_then_fail
+        try:
+            with pytest.raises(MigrationError, match="Fail after DML"):
+                apply_pending_migrations(conn, 2)
+
+            # Version unchanged
+            assert _get_schema_version(conn) == 1
+            # DML rolled back
+            val = conn.execute("SELECT val FROM t WHERE id = 1").fetchone()[0]
+            assert val == "original"
+            # Inserted row rolled back
+            count = conn.execute("SELECT COUNT(*) FROM t").fetchone()[0]
+            assert count == 1
+        finally:
+            migrations.MIGRATIONS.clear()
+            migrations.MIGRATIONS.update(original)
+            conn.close()
+
+    def test_rebuild_table_uses_execute_not_executescript(self, tmp_path: Path) -> None:
+        """Verify rebuild_table works within a transaction (execute, not executescript).
+
+        executescript() implicitly commits, but execute() does not. We verify
+        this by running rebuild_table inside a manually started transaction and
+        checking that rollback undoes the rebuild.
+        """
+        conn = _make_db(tmp_path)
+        conn.execute("CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT)")
+        conn.execute("INSERT INTO t VALUES (1, 'Alice')")
+        conn.commit()
+
+        # Start a transaction, run rebuild_table, then rollback
+        conn.execute("BEGIN IMMEDIATE")
+        rebuild_table(
+            conn,
+            "t",
+            "CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT, extra TEXT DEFAULT '')",
+        )
+        conn.rollback()
+
+        # After rollback, the original table should be intact
+        cols = _get_table_columns(conn, "t")
+        assert "extra" not in cols
+        assert "name" in cols
+
+        row = conn.execute("SELECT name FROM t WHERE id = 1").fetchone()
+        assert row[0] == "Alice"
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
 # Schema equivalence test
 # ---------------------------------------------------------------------------
 
