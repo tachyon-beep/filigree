@@ -305,6 +305,7 @@ class FiligreeDB:
         prefix: str = "filigree",
         enabled_packs: list[str] | None = None,
         template_registry: TemplateRegistry | None = None,
+        check_same_thread: bool = True,
     ) -> None:
         self.db_path = Path(db_path)
         self.prefix = prefix
@@ -314,6 +315,7 @@ class FiligreeDB:
         )
         self._conn: sqlite3.Connection | None = None
         self._template_registry: TemplateRegistry | None = template_registry
+        self._check_same_thread = check_same_thread
 
     @classmethod
     def from_project(cls, project_path: Path | None = None) -> FiligreeDB:
@@ -340,6 +342,7 @@ class FiligreeDB:
             self._conn = sqlite3.connect(
                 str(self.db_path),
                 isolation_level="DEFERRED",
+                check_same_thread=self._check_same_thread,
             )
             self._conn.row_factory = sqlite3.Row
             self._conn.execute("PRAGMA journal_mode=WAL")

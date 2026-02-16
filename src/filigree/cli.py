@@ -150,7 +150,10 @@ def create(
     fields = {}
     for f in field:
         if "=" not in f:
-            click.echo(f"Invalid field format: {f} (expected key=value)", err=True)
+            if as_json:
+                click.echo(json_mod.dumps({"error": f"Invalid field format: {f} (expected key=value)"}))
+            else:
+                click.echo(f"Invalid field format: {f} (expected key=value)", err=True)
             sys.exit(1)
         k, v = f.split("=", 1)
         fields[k] = v
@@ -413,15 +416,15 @@ def reopen(ctx: click.Context, issue_ids: tuple[str, ...], as_json: bool) -> Non
             except KeyError:
                 if as_json:
                     click.echo(json_mod.dumps({"error": f"Not found: {issue_id}"}))
-                    sys.exit(1)
                 else:
                     click.echo(f"Not found: {issue_id}", err=True)
+                sys.exit(1)
             except ValueError as e:
                 if as_json:
                     click.echo(json_mod.dumps({"error": str(e)}))
-                    sys.exit(1)
                 else:
                     click.echo(f"Error reopening {issue_id}: {e}", err=True)
+                sys.exit(1)
         if as_json:
             click.echo(json_mod.dumps(reopened, indent=2, default=str))
         _refresh_summary(db)

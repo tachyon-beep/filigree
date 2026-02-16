@@ -13,7 +13,15 @@ from filigree.dashboard import STATIC_DIR, create_app
 
 @pytest.fixture
 def dashboard_db(populated_db: FiligreeDB) -> FiligreeDB:
-    """Use the populated_db fixture for dashboard tests."""
+    """Use the populated_db fixture for dashboard tests.
+
+    Enables check_same_thread=False so sync handlers run in FastAPI's threadpool.
+    """
+    populated_db._check_same_thread = False
+    if populated_db._conn is not None:
+        populated_db._conn.commit()
+        populated_db._conn.close()
+        populated_db._conn = None
     return populated_db
 
 
