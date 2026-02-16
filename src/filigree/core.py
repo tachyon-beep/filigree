@@ -305,6 +305,7 @@ class FiligreeDB:
         prefix: str = "filigree",
         enabled_packs: list[str] | None = None,
         template_registry: TemplateRegistry | None = None,
+        check_same_thread: bool = True,
     ) -> None:
         self.db_path = Path(db_path)
         self.prefix = prefix
@@ -313,6 +314,7 @@ class FiligreeDB:
             self._enabled_packs_override if self._enabled_packs_override is not None else ["core", "planning"]
         )
         self._conn: sqlite3.Connection | None = None
+        self._check_same_thread = check_same_thread
         self._template_registry: TemplateRegistry | None = template_registry
 
     @classmethod
@@ -340,6 +342,7 @@ class FiligreeDB:
             self._conn = sqlite3.connect(
                 str(self.db_path),
                 isolation_level="DEFERRED",
+                check_same_thread=self._check_same_thread,
             )
             self._conn.row_factory = sqlite3.Row
             self._conn.execute("PRAGMA journal_mode=WAL")
@@ -585,6 +588,15 @@ class FiligreeDB:
                 )
 
         if deps:
+            # Validate that all dep IDs reference existing issues
+            dep_ph = ",".join("?" * len(deps))
+            found = {
+                r["id"] for r in self.conn.execute(f"SELECT id FROM issues WHERE id IN ({dep_ph})", deps).fetchall()
+            }
+            missing = [d for d in deps if d not in found]
+            if missing:
+                msg = f"Invalid dependency IDs (not found): {', '.join(missing)}"
+                raise ValueError(msg)
             for dep_id in deps:
                 self.conn.execute(
                     "INSERT OR IGNORE INTO dependencies (issue_id, depends_on_id, type, created_at) "
@@ -958,33 +970,44 @@ class FiligreeDB:
 
         Sets assignee only — does NOT change status. Agent uses update_issue
         to advance through the workflow after claiming.
+
+        Uses a single atomic UPDATE with WHERE guard to prevent race conditions
+        where two agents try to claim the same issue concurrently.
         """
-        current = self.get_issue(issue_id)
+        # Look up the issue type so we know which states are "open"
+        row = self.conn.execute("SELECT type FROM issues WHERE id = ?", (issue_id,)).fetchone()
+        if row is None:
+            msg = f"Issue not found: {issue_id}"
+            raise KeyError(msg)
+        issue_type = row["type"]
 
         # Get all open-category states for this type
         open_states: list[str] = []
-        tpl = self.templates.get_type(current.type)
+        tpl = self.templates.get_type(issue_type)
         if tpl is not None:
             open_states = [s.name for s in tpl.states if s.category == "open"]
         if not open_states:
             open_states = ["open"]
 
-        if current.assignee and current.assignee != assignee:
-            msg = f"Cannot claim {issue_id}: already assigned to '{current.assignee}'"
-            raise ValueError(msg)
-
-        placeholders = ",".join("?" * len(open_states))
-        row = self.conn.execute(
-            f"UPDATE issues SET assignee = ?, updated_at = ? WHERE id = ? AND status IN ({placeholders})",
-            [assignee, _now_iso(), issue_id, *open_states],
+        # Atomic UPDATE: only succeeds if issue is unassigned OR already owned by this agent
+        status_ph = ",".join("?" * len(open_states))
+        cursor = self.conn.execute(
+            f"UPDATE issues SET assignee = ?, updated_at = ? "
+            f"WHERE id = ? AND status IN ({status_ph}) "
+            f"AND (assignee = '' OR assignee IS NULL OR assignee = ?)",
+            [assignee, _now_iso(), issue_id, *open_states, assignee],
         )
 
-        if row.rowcount == 0:
-            exists = self.conn.execute("SELECT status FROM issues WHERE id = ?", (issue_id,)).fetchone()
-            if exists is None:
+        if cursor.rowcount == 0:
+            # Figure out why it failed: wrong status or already claimed?
+            current = self.conn.execute("SELECT status, assignee FROM issues WHERE id = ?", (issue_id,)).fetchone()
+            if current is None:
                 msg = f"Issue not found: {issue_id}"
                 raise KeyError(msg)
-            msg = f"Cannot claim {issue_id}: status is '{exists['status']}', expected open-category state"
+            if current["assignee"] and current["assignee"] != assignee:
+                msg = f"Cannot claim {issue_id}: already assigned to '{current['assignee']}'"
+                raise ValueError(msg)
+            msg = f"Cannot claim {issue_id}: status is '{current['status']}', expected open-category state"
             raise ValueError(msg)
 
         self._record_event(issue_id, "claimed", actor=actor, new_value=assignee)
@@ -1491,100 +1514,105 @@ class FiligreeDB:
         phase_initial = self.templates.get_initial_state("phase")
         step_initial = self.templates.get_initial_state("step")
 
-        # Create milestone
-        ms_id = self._generate_id()
-        ms_fields = milestone.get("fields") or {}
-        self.conn.execute(
-            "INSERT INTO issues (id, title, status, priority, type, parent_id, assignee, "
-            "created_at, updated_at, description, notes, fields) "
-            "VALUES (?, ?, ?, ?, 'milestone', NULL, '', ?, ?, ?, '', ?)",
-            (
-                ms_id,
-                milestone["title"],
-                milestone_initial,
-                milestone.get("priority", 2),
-                now,
-                now,
-                milestone.get("description", ""),
-                json.dumps(ms_fields),
-            ),
-        )
-        self._record_event(ms_id, "created", actor=actor, new_value=milestone["title"])
-
-        # Track all created step IDs for cross-phase dependency resolution
-        # step_ids[phase_idx][step_idx] = issue_id
-        step_ids: list[list[str]] = []
-
-        for phase_idx, phase_data in enumerate(phases):
-            # Create phase
-            phase_id = self._generate_id()
-            phase_fields = phase_data.get("fields") or {}
-            phase_fields["sequence"] = phase_idx + 1
+        try:
+            # Create milestone
+            ms_id = self._generate_id()
+            ms_fields = milestone.get("fields") or {}
             self.conn.execute(
                 "INSERT INTO issues (id, title, status, priority, type, parent_id, assignee, "
                 "created_at, updated_at, description, notes, fields) "
-                "VALUES (?, ?, ?, ?, 'phase', ?, '', ?, ?, ?, '', ?)",
+                "VALUES (?, ?, ?, ?, 'milestone', NULL, '', ?, ?, ?, '', ?)",
                 (
-                    phase_id,
-                    phase_data["title"],
-                    phase_initial,
-                    phase_data.get("priority", 2),
                     ms_id,
+                    milestone["title"],
+                    milestone_initial,
+                    milestone.get("priority", 2),
                     now,
                     now,
-                    phase_data.get("description", ""),
-                    json.dumps(phase_fields),
+                    milestone.get("description", ""),
+                    json.dumps(ms_fields),
                 ),
             )
-            self._record_event(phase_id, "created", actor=actor, new_value=phase_data["title"])
+            self._record_event(ms_id, "created", actor=actor, new_value=milestone["title"])
 
-            # Create steps
-            phase_step_ids: list[str] = []
-            steps = phase_data.get("steps") or []
-            for step_idx, step_data in enumerate(steps):
-                step_id = self._generate_id()
-                step_fields = step_data.get("fields") or {}
-                step_fields["sequence"] = step_idx + 1
+            # Track all created step IDs for cross-phase dependency resolution
+            # step_ids[phase_idx][step_idx] = issue_id
+            step_ids: list[list[str]] = []
+
+            for phase_idx, phase_data in enumerate(phases):
+                # Create phase
+                phase_id = self._generate_id()
+                phase_fields = phase_data.get("fields") or {}
+                phase_fields["sequence"] = phase_idx + 1
                 self.conn.execute(
                     "INSERT INTO issues (id, title, status, priority, type, parent_id, assignee, "
                     "created_at, updated_at, description, notes, fields) "
-                    "VALUES (?, ?, ?, ?, 'step', ?, '', ?, ?, ?, '', ?)",
+                    "VALUES (?, ?, ?, ?, 'phase', ?, '', ?, ?, ?, '', ?)",
                     (
-                        step_id,
-                        step_data["title"],
-                        step_initial,
-                        step_data.get("priority", 2),
                         phase_id,
+                        phase_data["title"],
+                        phase_initial,
+                        phase_data.get("priority", 2),
+                        ms_id,
                         now,
                         now,
-                        step_data.get("description", ""),
-                        json.dumps(step_fields),
+                        phase_data.get("description", ""),
+                        json.dumps(phase_fields),
                     ),
                 )
-                self._record_event(step_id, "created", actor=actor, new_value=step_data["title"])
-                phase_step_ids.append(step_id)
-            step_ids.append(phase_step_ids)
+                self._record_event(phase_id, "created", actor=actor, new_value=phase_data["title"])
 
-        # Wire up dependencies after all steps exist
-        for phase_idx, phase_data in enumerate(phases):
-            steps = phase_data.get("steps") or []
-            for step_idx, step_data in enumerate(steps):
-                for dep_ref in step_data.get("deps", []):
-                    dep_ref_str = str(dep_ref)
-                    if "." in dep_ref_str:
-                        # Cross-phase: "phase_idx.step_idx"
-                        p_idx, s_idx = dep_ref_str.split(".", 1)
-                        dep_issue_id = step_ids[int(p_idx)][int(s_idx)]
-                    else:
-                        # Same phase: step index
-                        dep_issue_id = step_ids[phase_idx][int(dep_ref_str)]
+                # Create steps
+                phase_step_ids: list[str] = []
+                steps = phase_data.get("steps") or []
+                for step_idx, step_data in enumerate(steps):
+                    step_id = self._generate_id()
+                    step_fields = step_data.get("fields") or {}
+                    step_fields["sequence"] = step_idx + 1
                     self.conn.execute(
-                        "INSERT OR IGNORE INTO dependencies (issue_id, depends_on_id, type, created_at) "
-                        "VALUES (?, ?, 'blocks', ?)",
-                        (step_ids[phase_idx][step_idx], dep_issue_id, now),
+                        "INSERT INTO issues (id, title, status, priority, type, parent_id, assignee, "
+                        "created_at, updated_at, description, notes, fields) "
+                        "VALUES (?, ?, ?, ?, 'step', ?, '', ?, ?, ?, '', ?)",
+                        (
+                            step_id,
+                            step_data["title"],
+                            step_initial,
+                            step_data.get("priority", 2),
+                            phase_id,
+                            now,
+                            now,
+                            step_data.get("description", ""),
+                            json.dumps(step_fields),
+                        ),
                     )
+                    self._record_event(step_id, "created", actor=actor, new_value=step_data["title"])
+                    phase_step_ids.append(step_id)
+                step_ids.append(phase_step_ids)
 
-        self.conn.commit()
+            # Wire up dependencies after all steps exist
+            for phase_idx, phase_data in enumerate(phases):
+                steps = phase_data.get("steps") or []
+                for step_idx, step_data in enumerate(steps):
+                    for dep_ref in step_data.get("deps", []):
+                        dep_ref_str = str(dep_ref)
+                        if "." in dep_ref_str:
+                            # Cross-phase: "phase_idx.step_idx"
+                            p_idx, s_idx = dep_ref_str.split(".", 1)
+                            dep_issue_id = step_ids[int(p_idx)][int(s_idx)]
+                        else:
+                            # Same phase: step index
+                            dep_issue_id = step_ids[phase_idx][int(dep_ref_str)]
+                        self.conn.execute(
+                            "INSERT OR IGNORE INTO dependencies (issue_id, depends_on_id, type, created_at) "
+                            "VALUES (?, ?, 'blocks', ?)",
+                            (step_ids[phase_idx][step_idx], dep_issue_id, now),
+                        )
+
+            self.conn.commit()
+        except Exception:
+            self.conn.rollback()
+            raise
+
         return self.get_plan(ms_id)
 
     # -- Comments ------------------------------------------------------------
@@ -1644,24 +1672,42 @@ class FiligreeDB:
             blocked_count = 0
         else:
             open_ph = ",".join("?" * len(open_states))
-            done_ph = ",".join("?" * len(done_states))
-            ready_count = self.conn.execute(
-                f"SELECT COUNT(*) as cnt FROM issues i "
-                f"WHERE i.status IN ({open_ph}) "
-                f"AND NOT EXISTS ("
-                f"  SELECT 1 FROM dependencies d "
-                f"  JOIN issues blocker ON d.depends_on_id = blocker.id "
-                f"  WHERE d.issue_id = i.id AND blocker.status NOT IN ({done_ph})"
-                f")",
-                [*open_states, *done_states],
-            ).fetchone()["cnt"]
-            blocked_count = self.conn.execute(
-                f"SELECT COUNT(DISTINCT i.id) as cnt FROM issues i "
-                f"JOIN dependencies d ON d.issue_id = i.id "
-                f"JOIN issues blocker ON d.depends_on_id = blocker.id "
-                f"WHERE i.status IN ({open_ph}) AND blocker.status NOT IN ({done_ph})",
-                [*open_states, *done_states],
-            ).fetchone()["cnt"]
+            if done_states:
+                done_ph = ",".join("?" * len(done_states))
+                ready_count = self.conn.execute(
+                    f"SELECT COUNT(*) as cnt FROM issues i "
+                    f"WHERE i.status IN ({open_ph}) "
+                    f"AND NOT EXISTS ("
+                    f"  SELECT 1 FROM dependencies d "
+                    f"  JOIN issues blocker ON d.depends_on_id = blocker.id "
+                    f"  WHERE d.issue_id = i.id AND blocker.status NOT IN ({done_ph})"
+                    f")",
+                    [*open_states, *done_states],
+                ).fetchone()["cnt"]
+                blocked_count = self.conn.execute(
+                    f"SELECT COUNT(DISTINCT i.id) as cnt FROM issues i "
+                    f"JOIN dependencies d ON d.issue_id = i.id "
+                    f"JOIN issues blocker ON d.depends_on_id = blocker.id "
+                    f"WHERE i.status IN ({open_ph}) AND blocker.status NOT IN ({done_ph})",
+                    [*open_states, *done_states],
+                ).fetchone()["cnt"]
+            else:
+                # No done states configured — every dependency is an active blocker
+                ready_count = self.conn.execute(
+                    f"SELECT COUNT(*) as cnt FROM issues i "
+                    f"WHERE i.status IN ({open_ph}) "
+                    f"AND NOT EXISTS ("
+                    f"  SELECT 1 FROM dependencies d "
+                    f"  WHERE d.issue_id = i.id"
+                    f")",
+                    open_states,
+                ).fetchone()["cnt"]
+                blocked_count = self.conn.execute(
+                    f"SELECT COUNT(DISTINCT i.id) as cnt FROM issues i "
+                    f"JOIN dependencies d ON d.issue_id = i.id "
+                    f"WHERE i.status IN ({open_ph})",
+                    open_states,
+                ).fetchone()["cnt"]
 
         dep_count = self.conn.execute("SELECT COUNT(*) as cnt FROM dependencies").fetchone()["cnt"]
 
@@ -1772,9 +1818,16 @@ class FiligreeDB:
                     "UPDATE issues SET status = ?, updated_at = ? WHERE id = ?",
                     (old_status, now, issue_id),
                 )
-                # Clear closed_at if reverting from a done-category state
+                # Maintain closed_at consistency with the restored status
                 old_cat = self._resolve_status_category(current.type, old_status)
-                if old_cat != "done":
+                if old_cat == "done":
+                    # Restoring to a done state — set closed_at
+                    self.conn.execute(
+                        "UPDATE issues SET closed_at = ? WHERE id = ?",
+                        (now, issue_id),
+                    )
+                else:
+                    # Restoring to a non-done state — clear closed_at
                     self.conn.execute(
                         "UPDATE issues SET closed_at = NULL WHERE id = ?",
                         (issue_id,),
