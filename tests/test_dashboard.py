@@ -802,6 +802,84 @@ class TestCreateIssueAPI:
         assert ids["b"] in data["blocked_by"]
 
 
+class TestClaimAPI:
+    async def test_claim_issue(self, client: AsyncClient, dashboard_db: FiligreeDB) -> None:
+        ids = dashboard_db._test_ids  # type: ignore[attr-defined]
+        resp = await client.post(
+            f"/api/issue/{ids['a']}/claim",
+            json={"assignee": "agent-1"},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["assignee"] == "agent-1"
+
+    async def test_release_claim(self, client: AsyncClient, dashboard_db: FiligreeDB) -> None:
+        ids = dashboard_db._test_ids  # type: ignore[attr-defined]
+        dashboard_db.claim_issue(ids["a"], assignee="agent-1")
+        resp = await client.post(
+            f"/api/issue/{ids['a']}/release",
+            json={},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["assignee"] == ""
+
+    async def test_claim_next(self, client: AsyncClient, dashboard_db: FiligreeDB) -> None:
+        resp = await client.post(
+            "/api/claim-next",
+            json={"assignee": "agent-2"},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["assignee"] == "agent-2"
+
+    async def test_claim_not_found(self, client: AsyncClient) -> None:
+        resp = await client.post(
+            "/api/issue/nonexistent/claim",
+            json={"assignee": "x"},
+        )
+        assert resp.status_code == 404
+
+
+class TestDependencyManagementAPI:
+    async def test_add_dependency(self, client: AsyncClient, dashboard_db: FiligreeDB) -> None:
+        ids = dashboard_db._test_ids  # type: ignore[attr-defined]
+        resp = await client.post(
+            f"/api/issue/{ids['b']}/dependencies",
+            json={"depends_on": ids["c"]},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["added"] is True
+
+    async def test_remove_dependency(self, client: AsyncClient, dashboard_db: FiligreeDB) -> None:
+        ids = dashboard_db._test_ids  # type: ignore[attr-defined]
+        dashboard_db.add_dependency(ids["a"], ids["b"])
+        resp = await client.request(
+            "DELETE",
+            f"/api/issue/{ids['a']}/dependencies/{ids['b']}",
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["removed"] is True
+
+    async def test_add_dep_cycle_detection(self, client: AsyncClient, dashboard_db: FiligreeDB) -> None:
+        ids = dashboard_db._test_ids  # type: ignore[attr-defined]
+        dashboard_db.add_dependency(ids["a"], ids["b"])
+        resp = await client.post(
+            f"/api/issue/{ids['b']}/dependencies",
+            json={"depends_on": ids["a"]},
+        )
+        assert resp.status_code == 409
+
+    async def test_add_dep_not_found(self, client: AsyncClient) -> None:
+        resp = await client.post(
+            "/api/issue/nonexistent/dependencies",
+            json={"depends_on": "also-nonexistent"},
+        )
+        assert resp.status_code == 404
+
+
 class TestDashboardGetDb:
     """Cover _get_db when _db is None (lines 29-30)."""
 

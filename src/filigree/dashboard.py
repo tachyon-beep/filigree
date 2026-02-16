@@ -359,6 +359,73 @@ def create_app() -> Any:
             return JSONResponse({"error": str(e)}, status_code=400)
         return JSONResponse(issue.to_dict(), status_code=201)
 
+    @app.post("/api/issue/{issue_id}/claim")
+    async def api_claim_issue(issue_id: str, request: Request) -> JSONResponse:
+        """Claim an issue."""
+        db = _get_db()
+        body = await request.json()
+        assignee = body.get("assignee", "")
+        actor = body.get("actor", "dashboard")
+        try:
+            issue = db.claim_issue(issue_id, assignee=assignee, actor=actor)
+        except KeyError:
+            return JSONResponse({"error": f"Not found: {issue_id}"}, status_code=404)
+        except ValueError as e:
+            return JSONResponse({"error": str(e)}, status_code=409)
+        return JSONResponse(issue.to_dict())
+
+    @app.post("/api/issue/{issue_id}/release")
+    async def api_release_claim(issue_id: str, request: Request) -> JSONResponse:
+        """Release a claimed issue."""
+        db = _get_db()
+        body = await request.json()
+        actor = body.get("actor", "dashboard")
+        try:
+            issue = db.release_claim(issue_id, actor=actor)
+        except KeyError:
+            return JSONResponse({"error": f"Not found: {issue_id}"}, status_code=404)
+        except ValueError as e:
+            return JSONResponse({"error": str(e)}, status_code=409)
+        return JSONResponse(issue.to_dict())
+
+    @app.post("/api/claim-next")
+    async def api_claim_next(request: Request) -> JSONResponse:
+        """Claim the highest-priority ready issue."""
+        db = _get_db()
+        body = await request.json()
+        assignee = body.get("assignee", "")
+        actor = body.get("actor", "dashboard")
+        try:
+            issue = db.claim_next(assignee, actor=actor)
+        except ValueError as e:
+            return JSONResponse({"error": str(e)}, status_code=409)
+        return JSONResponse(issue.to_dict())
+
+    @app.post("/api/issue/{issue_id}/dependencies")
+    async def api_add_dependency(issue_id: str, request: Request) -> JSONResponse:
+        """Add a dependency: issue_id depends on depends_on."""
+        db = _get_db()
+        body = await request.json()
+        depends_on = body.get("depends_on", "")
+        actor = body.get("actor", "dashboard")
+        try:
+            added = db.add_dependency(issue_id, depends_on, actor=actor)
+        except KeyError as e:
+            return JSONResponse({"error": str(e)}, status_code=404)
+        except ValueError as e:
+            return JSONResponse({"error": str(e)}, status_code=409)
+        return JSONResponse({"added": added})
+
+    @app.delete("/api/issue/{issue_id}/dependencies/{dep_id}")
+    async def api_remove_dependency(issue_id: str, dep_id: str) -> JSONResponse:
+        """Remove a dependency."""
+        db = _get_db()
+        try:
+            removed = db.remove_dependency(issue_id, dep_id)
+        except KeyError as e:
+            return JSONResponse({"error": str(e)}, status_code=404)
+        return JSONResponse({"removed": removed})
+
     return app
 
 
