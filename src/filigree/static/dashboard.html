@@ -42,6 +42,15 @@
     #detailPanel { width: 450px !important; }
     .kanban-col { min-width: 280px; }
   }
+  body.light { background: #F8FAFC; color: #1E293B; }
+  .light .bg-slate-800 { background: #FFFFFF !important; }
+  .light .bg-slate-700 { background: #F1F5F9 !important; }
+  .light .bg-slate-900 { background: #E2E8F0 !important; }
+  .light .text-slate-200, .light .text-slate-100, .light .text-slate-300 { color: #1E293B !important; }
+  .light .text-slate-400 { color: #64748B !important; }
+  .light .border-slate-700, .light .border-slate-600 { border-color: #CBD5E1 !important; }
+  .light .card:hover { background: #F1F5F9 !important; }
+  .light #cy, .light #workflowCy { background: #F8FAFC; }
 </style>
 <script>
 tailwind.config = {
@@ -87,16 +96,21 @@ tailwind.config = {
     </select>
     <label for="filterSearch" class="text-xs text-slate-400 sr-only">Search</label>
     <input id="filterSearch" type="text" placeholder="Search..." oninput="debouncedSearch()"
-           class="bg-slate-700 text-slate-200 text-xs rounded px-3 py-1 border border-slate-600 w-40 focus:outline-none focus:border-blue-500">
+           class="bg-slate-700 text-slate-200 text-xs rounded px-3 py-1 border border-slate-600 w-56 focus:outline-none focus:border-blue-500">
     <button onclick="toggleMultiSelect()" id="btnMultiSelect" class="px-2 py-1 rounded text-xs font-medium bg-slate-700 text-slate-400 border border-slate-600">Select</button>
     <div class="flex gap-1 text-xs">
       <label class="flex items-center gap-1 text-slate-400"><input type="checkbox" id="filterOpen" checked onchange="applyFilters()" class="accent-blue-500"> Open</label>
       <label class="flex items-center gap-1 text-slate-400"><input type="checkbox" id="filterInProgress" checked onchange="applyFilters()" class="accent-blue-500"> Active</label>
       <label class="flex items-center gap-1 text-slate-400"><input type="checkbox" id="filterClosed" onchange="applyFilters()" class="accent-blue-500"> Closed</label>
     </div>
+    <select id="filterPreset" onchange="loadPreset()" class="bg-slate-700 text-slate-200 text-xs rounded px-2 py-1 border border-slate-600">
+      <option value="">Presets...</option>
+    </select>
+    <button onclick="savePreset()" class="text-xs bg-slate-700 text-slate-400 px-2 py-1 rounded border border-slate-600 hover:bg-slate-600" title="Save current filters as preset">Save</button>
   </div>
 
   <div class="flex items-center gap-3 text-xs text-slate-400">
+    <button onclick="toggleTheme()" id="themeToggle" class="text-xs px-2 py-1 rounded bg-slate-700 hover:bg-slate-600" title="Toggle theme">&#9788;</button>
     <span id="refreshIndicator" class="opacity-0 text-blue-400">Refreshing...</span>
     <span id="healthBadge" onclick="showHealthBreakdown()" class="cursor-pointer px-2 py-0.5 rounded text-xs font-bold" title="System Health Score">--</span>
     <span>Open: <b id="statOpen" class="text-slate-200" aria-live="polite">0</b></span>
@@ -182,6 +196,8 @@ tailwind.config = {
   <span>Ready: <b id="footReady" class="text-emerald-400">0</b></span>
   <span>Blocked: <b id="footBlocked" class="text-red-400">0</b></span>
   <span>Deps: <b id="footDeps" class="text-slate-300">0</b></span>
+  <canvas id="sparkline" width="100" height="20" title="14-day throughput trend" class="opacity-70"></canvas>
+  <span id="staleBadge" class="hidden text-xs bg-red-900/50 text-red-400 px-2 py-0.5 rounded border border-red-800 cursor-pointer" onclick="showStaleIssues()"></span>
 </footer>
 
 <div id="batchBar" class="fixed bottom-12 left-1/2 -translate-x-1/2 bg-slate-800 border border-slate-600 rounded-lg px-4 py-2 flex items-center gap-3 shadow-xl hidden z-20">
@@ -233,6 +249,8 @@ async function fetchData() {
     trackChanges(allIssues);
     computeImpactScores();
     computeHealthScore();
+    updateStaleBadge();
+    renderSparkline();
     updateStats();
     render();
   } finally {
@@ -441,7 +459,7 @@ function renderStandardKanban(columns) {
         '<span class="text-xs text-slate-500">' + issues.length + '</span>' +
       '</div>' +
       '<div class="flex flex-col gap-2 overflow-y-auto scrollbar-thin pr-1" style="max-height: calc(100vh - 160px);">' +
-        issues.map(function(i) { return renderCard(i); }).join('') +
+        (issues.length ? issues.map(function(i) { return renderCard(i); }).join('') : '<div class="text-xs text-slate-600 italic p-2">No issues</div>') +
       '</div></div>';
   }).join('');
 }
@@ -472,7 +490,7 @@ function renderClusterKanban(columns) {
         '<span class="text-xs text-slate-500">' + issues.length + '</span>' +
       '</div>' +
       '<div class="flex flex-col gap-2 overflow-y-auto scrollbar-thin pr-1" style="max-height: calc(100vh - 160px);">' +
-        epicCards + orphanCards +
+        (issues.length ? epicCards + orphanCards : '<div class="text-xs text-slate-600 italic p-2">No issues</div>') +
       '</div></div>';
   }).join('');
 }
@@ -496,7 +514,7 @@ function renderClusterCard(epic) {
 
   return '<div class="bg-slate-800 rounded border border-slate-700 p-3 cursor-pointer ' +
     (epic.is_ready ? 'ready-border' : '') +
-    '" onclick="toggleEpicExpand(\'' + epic.id + '\')">' +
+    '" aria-expanded="' + expanded + '" onclick="toggleEpicExpand(\'' + epic.id + '\')">' +
     '<div class="flex items-center justify-between mb-1">' +
       '<span class="text-xs">' + (TYPE_ICONS[epic.type] || '') +
         ' <span class="font-medium text-slate-200">' + escHtml(epic.title.slice(0, 40)) + '</span></span>' +
@@ -637,7 +655,7 @@ function renderTypeKanban(stateColumns, template) {
         '<span class="text-xs text-slate-500">' + issues.length + '</span>' +
       '</div>' +
       '<div class="flex flex-col gap-2 overflow-y-auto scrollbar-thin pr-1" style="max-height: calc(100vh - 160px);">' +
-        issues.map(function(i) { return renderCard(i); }).join('') +
+        (issues.length ? issues.map(function(i) { return renderCard(i); }).join('') : '<div class="text-xs text-slate-600 italic p-2">No issues</div>') +
       '</div></div>';
   }).join('');
 }
@@ -1038,6 +1056,30 @@ document.addEventListener('keydown', function(e) {
   if (e.key === 'Escape') {
     if (selectedIssue) closeDetail();
     else { document.getElementById('filterSearch').value = ''; searchResults = null; applyFilters(); }
+    return;
+  }
+
+  if (e.key === '?') {
+    var existing = document.getElementById('helpModal');
+    if (existing) { existing.remove(); return; }
+    var modal = document.createElement('div');
+    modal.id = 'helpModal';
+    modal.className = 'fixed inset-0 bg-black/50 flex items-center justify-center z-50';
+    modal.onclick = function(ev) { if (ev.target === modal) modal.remove(); };
+    modal.innerHTML = '<div class="bg-slate-800 rounded-lg border border-slate-600 p-5 w-80 shadow-xl">' +
+      '<div class="text-sm font-semibold text-slate-200 mb-3">Keyboard Shortcuts</div>' +
+      '<div class="text-xs text-slate-300 space-y-1">' +
+        '<div><kbd class="bg-slate-700 px-1 rounded">/</kbd> Focus search</div>' +
+        '<div><kbd class="bg-slate-700 px-1 rounded">Esc</kbd> Close panel / clear search</div>' +
+        '<div><kbd class="bg-slate-700 px-1 rounded">j</kbd> / <kbd class="bg-slate-700 px-1 rounded">k</kbd> Navigate cards</div>' +
+        '<div><kbd class="bg-slate-700 px-1 rounded">Enter</kbd> Open issue detail</div>' +
+        '<div><kbd class="bg-slate-700 px-1 rounded">c</kbd> Focus comment input (in detail)</div>' +
+        '<div><kbd class="bg-slate-700 px-1 rounded">x</kbd> Close issue (in detail)</div>' +
+        '<div><kbd class="bg-slate-700 px-1 rounded">?</kbd> This help</div>' +
+      '</div>' +
+      '<button onclick="document.getElementById(\'helpModal\').remove()" class="text-xs text-slate-500 mt-3 hover:text-slate-300">Close</button>' +
+    '</div>';
+    document.body.appendChild(modal);
     return;
   }
 
@@ -1762,6 +1804,143 @@ async function submitCreateForm() {
 }
 
 // ---------------------------------------------------------------------------
+// Filter presets (R26)
+// ---------------------------------------------------------------------------
+function getFilterState() {
+  return {
+    open: document.getElementById('filterOpen').checked,
+    active: document.getElementById('filterInProgress').checked,
+    closed: document.getElementById('filterClosed').checked,
+    priority: document.getElementById('filterPriority').value,
+    ready: readyFilter,
+    blocked: blockedFilter,
+    search: document.getElementById('filterSearch').value,
+  };
+}
+
+function applyFilterState(state) {
+  document.getElementById('filterOpen').checked = state.open;
+  document.getElementById('filterInProgress').checked = state.active;
+  document.getElementById('filterClosed').checked = state.closed;
+  document.getElementById('filterPriority').value = state.priority;
+  readyFilter = state.ready;
+  blockedFilter = state.blocked;
+  if (state.search) { document.getElementById('filterSearch').value = state.search; doSearch(); }
+  else { document.getElementById('filterSearch').value = ''; searchResults = null; }
+  render();
+}
+
+function savePreset() {
+  var existing = document.getElementById('presetNameModal');
+  if (existing) existing.remove();
+  var modal = document.createElement('div');
+  modal.id = 'presetNameModal';
+  modal.className = 'fixed inset-0 bg-black/50 flex items-center justify-center z-50';
+  modal.innerHTML = '<div class="bg-slate-800 rounded-lg border border-slate-600 p-4 w-72 shadow-xl">' +
+    '<div class="text-sm text-slate-200 mb-2">Save filter preset</div>' +
+    '<input id="presetNameInput" type="text" placeholder="Preset name..." class="w-full bg-slate-700 text-slate-200 text-xs rounded px-3 py-2 border border-slate-600 mb-3 focus:outline-none focus:border-blue-500">' +
+    '<div class="flex justify-end gap-2">' +
+      '<button onclick="document.getElementById(\'presetNameModal\').remove()" class="text-xs bg-slate-700 px-3 py-1.5 rounded hover:bg-slate-600">Cancel</button>' +
+      '<button onclick="confirmSavePreset()" class="text-xs bg-blue-600 text-white px-3 py-1.5 rounded hover:bg-blue-700">Save</button>' +
+    '</div></div>';
+  document.body.appendChild(modal);
+  modal.onclick = function(e) { if (e.target === modal) modal.remove(); };
+  document.getElementById('presetNameInput').focus();
+}
+
+function confirmSavePreset() {
+  var name = document.getElementById('presetNameInput').value.trim();
+  if (!name) { showToast('Name is required', 'error'); return; }
+  var presets = JSON.parse(localStorage.getItem('filigree_presets') || '{}');
+  presets[name] = getFilterState();
+  localStorage.setItem('filigree_presets', JSON.stringify(presets));
+  document.getElementById('presetNameModal').remove();
+  populatePresets();
+  showToast('Preset "' + name + '" saved', 'success');
+}
+
+function loadPreset() {
+  var name = document.getElementById('filterPreset').value;
+  if (!name) return;
+  var presets = JSON.parse(localStorage.getItem('filigree_presets') || '{}');
+  if (presets[name]) applyFilterState(presets[name]);
+  document.getElementById('filterPreset').value = '';
+}
+
+function populatePresets() {
+  var select = document.getElementById('filterPreset');
+  if (!select) return;
+  var presets = JSON.parse(localStorage.getItem('filigree_presets') || '{}');
+  select.innerHTML = '<option value="">Presets...</option>';
+  Object.keys(presets).sort().forEach(function(name) {
+    var opt = document.createElement('option');
+    opt.value = name; opt.textContent = name;
+    select.appendChild(opt);
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Sparkline and stale alerts (R27, R29)
+// ---------------------------------------------------------------------------
+async function renderSparkline() {
+  try {
+    var resp = await fetch('/api/activity?limit=500');
+    var events = await resp.json();
+    var closedByDay = {};
+    var now = Date.now();
+    events.forEach(function(e) {
+      if (e.event_type !== 'closed' && !(e.event_type === 'status_changed' && e.new_value === 'closed')) return;
+      var dayAgo = Math.floor((now - new Date(e.created_at).getTime()) / 86400000);
+      if (dayAgo < 14) closedByDay[dayAgo] = (closedByDay[dayAgo] || 0) + 1;
+    });
+    var data = [];
+    for (var i = 13; i >= 0; i--) data.push(closedByDay[i] || 0);
+    var canvas = document.getElementById('sparkline');
+    if (!canvas) return;
+    var ctx = canvas.getContext('2d');
+    var w = canvas.width, h = canvas.height;
+    ctx.clearRect(0, 0, w, h);
+    var max = Math.max.apply(null, data.concat([1]));
+    ctx.strokeStyle = '#3B82F6'; ctx.lineWidth = 1.5; ctx.beginPath();
+    data.forEach(function(v, i) {
+      var x = i / (data.length - 1) * w;
+      var y = h - (v / max * (h - 4)) - 2;
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    });
+    ctx.stroke();
+  } catch (e) {}
+}
+
+function updateStaleBadge() {
+  var stale = allIssues.filter(function(i) {
+    return (i.status_category || 'open') === 'wip' && i.updated_at &&
+      (Date.now() - new Date(i.updated_at).getTime()) > 2 * 3600000;
+  });
+  var badge = document.getElementById('staleBadge');
+  if (!badge) return;
+  if (stale.length) {
+    badge.textContent = stale.length + ' stale';
+    badge.classList.remove('hidden');
+  } else { badge.classList.add('hidden'); }
+  window._staleIssues = stale;
+}
+
+function showStaleIssues() {
+  var stale = window._staleIssues || [];
+  if (!stale.length) return;
+  openDetail(stale[0].id);
+}
+
+// ---------------------------------------------------------------------------
+// Theme toggle (R30)
+// ---------------------------------------------------------------------------
+function toggleTheme() {
+  var isLight = document.body.classList.toggle('light');
+  localStorage.setItem('filigree_theme', isLight ? 'light' : 'dark');
+  document.getElementById('themeToggle').textContent = isLight ? '\u263E' : '\u2606';
+}
+
+// ---------------------------------------------------------------------------
 // Focus management
 // ---------------------------------------------------------------------------
 function trapFocus(panel) {
@@ -1772,7 +1951,16 @@ function trapFocus(panel) {
 // ---------------------------------------------------------------------------
 // Init
 // ---------------------------------------------------------------------------
+(function() {
+  var saved = localStorage.getItem('filigree_theme');
+  if (saved === 'light') {
+    document.body.classList.add('light');
+    var btn = document.getElementById('themeToggle');
+    if (btn) btn.textContent = '\u263E';
+  }
+})();
 parseHash();
+populatePresets();
 fetchData().then(function() {
   switchView(currentView);
   if (kanbanMode === 'cluster') switchKanbanMode('cluster');
