@@ -135,6 +135,7 @@ CREATE TABLE IF NOT EXISTS events (
 CREATE INDEX IF NOT EXISTS idx_events_issue ON events(issue_id);
 CREATE INDEX IF NOT EXISTS idx_events_created ON events(created_at);
 CREATE INDEX IF NOT EXISTS idx_events_issue_time ON events(issue_id, created_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_events_dedup ON events(issue_id, event_type, actor, coalesce(old_value,''), coalesce(new_value,''), created_at);
 
 CREATE TABLE IF NOT EXISTS comments (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1692,7 +1693,7 @@ class FiligreeDB:
         comment: str = "",
     ) -> None:
         self.conn.execute(
-            "INSERT INTO events (issue_id, event_type, actor, old_value, new_value, comment, created_at) "
+            "INSERT OR IGNORE INTO events (issue_id, event_type, actor, old_value, new_value, comment, created_at) "
             "VALUES (?, ?, ?, ?, ?, ?, ?)",
             (issue_id, event_type, actor, old_value, new_value, comment, _now_iso()),
         )
@@ -1883,7 +1884,7 @@ class FiligreeDB:
 
     def bulk_insert_event(self, event_data: dict[str, Any]) -> None:
         self.conn.execute(
-            "INSERT INTO events (issue_id, event_type, actor, old_value, new_value, comment, created_at) "
+            "INSERT OR IGNORE INTO events (issue_id, event_type, actor, old_value, new_value, comment, created_at) "
             "VALUES (?, ?, ?, ?, ?, ?, ?)",
             (
                 event_data["issue_id"],
@@ -2016,7 +2017,7 @@ class FiligreeDB:
                     )
                 elif record_type == "event":
                     self.conn.execute(
-                        "INSERT INTO events (issue_id, event_type, actor, old_value, new_value, comment, created_at) "
+                        "INSERT OR IGNORE INTO events (issue_id, event_type, actor, old_value, new_value, comment, created_at) "
                         "VALUES (?, ?, ?, ?, ?, ?, ?)",
                         (
                             record.get("issue_id", ""),

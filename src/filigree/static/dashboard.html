@@ -651,6 +651,7 @@ function renderCard(issue) {
     '</div>' +
     '<div class="flex items-center gap-2 text-xs text-slate-500">' +
       '<span>' + issue.id + '</span>' +
+      '<span class="rounded px-1 bg-slate-700 text-slate-400">' + issue.type.replace(/_/g, ' ') + '</span>' +
       '<span class="rounded px-1" style="background:' + catColor + ';color:white">' + issue.status + '</span>' +
       (blockedCount > 0 ? '<span class="text-red-400">\u{1F517} blocked by ' + blockedCount + '</span>' : '') +
       (impactScores[issue.id] > 0 ? '<span class="text-amber-400" title="Impact: blocks ' + impactScores[issue.id] + ' downstream issue' + (impactScores[issue.id] !== 1 ? 's' : '') + ' — resolve this to unblock work">\u26A1' + impactScores[issue.id] + '</span>' : '') +
@@ -1299,8 +1300,10 @@ function showTourStep(index) {
       tooltip.style.top = (rect.bottom + 12) + 'px';
       tooltip.style.left = Math.max(16, Math.min(rect.left, window.innerWidth - 380)) + 'px';
     } else if (step.pos === 'top') {
-      tooltip.style.bottom = (window.innerHeight - rect.top + 12) + 'px';
       tooltip.style.left = Math.max(16, Math.min(rect.left, window.innerWidth - 380)) + 'px';
+      // Position above element, clamped so it never goes off-screen
+      var ttH = tooltip.offsetHeight;
+      tooltip.style.top = Math.max(16, rect.top - 12 - ttH) + 'px';
     }
   } else {
     tooltip.style.top = '50%';
