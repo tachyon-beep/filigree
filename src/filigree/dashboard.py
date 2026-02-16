@@ -402,6 +402,8 @@ def create_app() -> Any:
             issue = db.claim_next(assignee, actor=actor)
         except ValueError as e:
             return JSONResponse({"error": str(e)}, status_code=409)
+        if issue is None:
+            return JSONResponse({"error": "No ready issues to claim"}, status_code=404)
         return JSONResponse(issue.to_dict())
 
     @app.post("/api/issue/{issue_id}/dependencies")
