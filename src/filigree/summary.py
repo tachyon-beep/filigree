@@ -16,10 +16,17 @@ STALE_THRESHOLD_DAYS = 3
 
 
 def _parse_iso(ts: str) -> datetime:
-    """Parse an ISO timestamp, handling timezone-aware and naive formats."""
+    """Parse an ISO timestamp, handling timezone-aware and naive formats.
+
+    Always returns a UTC-aware datetime. Naive datetimes get UTC attached;
+    aware datetimes are converted to UTC via astimezone (not just replace).
+    """
     try:
-        return datetime.fromisoformat(ts)
-    except ValueError:
+        dt = datetime.fromisoformat(ts)
+        if dt.tzinfo is None:
+            return dt.replace(tzinfo=UTC)
+        return dt.astimezone(UTC)
+    except (ValueError, TypeError):
         return datetime.now(UTC)
 
 
@@ -31,7 +38,7 @@ def generate_summary(db: FiligreeDB) -> str:
     ready = db.get_ready()
     blocked = db.get_blocked()
     # WFT-FR-061: Use wip category to capture all work-in-progress states (fixing, verifying, etc.)
-    in_progress = db.list_issues(status="wip")
+    in_progress = db.list_issues(status="wip", limit=10000)
     recent = db.get_recent_events(limit=10)
 
     lines: list[str] = []
@@ -54,8 +61,8 @@ def generate_summary(db: FiligreeDB) -> str:
     lines.append("")
 
     # -- Active Plans (milestones)
-    milestones = db.list_issues(type="milestone", status="open")
-    milestones += db.list_issues(type="milestone", status="wip")
+    milestones = db.list_issues(type="milestone", status="open", limit=10000)
+    milestones += db.list_issues(type="milestone", status="wip", limit=10000)
     if milestones:
         lines.append("## Active Plans")
         for ms in milestones:
@@ -144,12 +151,12 @@ def generate_summary(db: FiligreeDB) -> str:
 
     # -- Stale (wip-category >3 days with no activity)
     stale_cutoff = now - timedelta(days=STALE_THRESHOLD_DAYS)
-    stale = [i for i in in_progress if _parse_iso(i.updated_at).replace(tzinfo=UTC) < stale_cutoff.replace(tzinfo=UTC)]
+    stale = [i for i in in_progress if _parse_iso(i.updated_at) < stale_cutoff]
     if stale:
         lines.append("## Stale (in_progress >3 days, no activity)")
         for issue in stale:
             updated = _parse_iso(issue.updated_at)
-            days_ago = (now.replace(tzinfo=UTC) - updated.replace(tzinfo=UTC)).days
+            days_ago = (now - updated).days
             line = f'- P{issue.priority} {issue.id} [{issue.type}] "{issue.title}" ({days_ago}d stale)'
             lines.append(line)
         lines.append("")
@@ -176,12 +183,12 @@ def generate_summary(db: FiligreeDB) -> str:
     lines.append("")
 
     # -- Epic Progress (WFT-NFR-010: limit 10; use status_category for done/open checks)
-    epics = db.list_issues(type="epic")
+    epics = db.list_issues(type="epic", limit=10000)
     open_epics = [e for e in epics if e.status_category != "done"]
     if open_epics:
         lines.append("## Epic Progress")
         for epic in open_epics[:10]:
-            children = db.list_issues(parent_id=epic.id)
+            children = db.list_issues(parent_id=epic.id, limit=10000)
             total = len(children)
             done = sum(1 for c in children if c.status_category == "done")
             ready_c = sum(1 for c in children if c.is_ready)

@@ -12,15 +12,19 @@ from typing import Any
 from filigree.core import FiligreeDB
 
 
-def _parse_iso(ts: str) -> datetime:
-    """Parse an ISO timestamp, handling timezone-aware and naive formats."""
+def _parse_iso(ts: str) -> datetime | None:
+    """Parse an ISO timestamp, handling timezone-aware and naive formats.
+
+    Returns None if the timestamp cannot be parsed (instead of datetime.now(UTC),
+    which would silently corrupt metric calculations).
+    """
     try:
         dt = datetime.fromisoformat(ts)
         if dt.tzinfo is None:
             return dt.replace(tzinfo=UTC)
         return dt
-    except ValueError:
-        return datetime.now(UTC)
+    except (ValueError, TypeError):
+        return None
 
 
 def cycle_time(db: FiligreeDB, issue_id: str) -> float | None:
@@ -30,7 +34,7 @@ def cycle_time(db: FiligreeDB, issue_id: str) -> float | None:
     so this works correctly for all issue types (bugs, features, risks, etc.),
     not just tasks with literal "in_progress"/"closed" states.
 
-    Returns None if the issue hasn't been through a WIP→done transition.
+    Returns None if the issue hasn't been through a WIP->done transition.
     """
     wip_states = set(db._get_states_for_category("wip")) or {"in_progress"}
     done_states = set(db._get_states_for_category("done")) or {"closed"}
@@ -49,6 +53,7 @@ def cycle_time(db: FiligreeDB, issue_id: str) -> float | None:
             start = _parse_iso(evt["created_at"])
         if evt["new_value"] in done_states:
             end = _parse_iso(evt["created_at"])
+            break  # Use first done event, not last (correct for reopen scenarios)
 
     if start is None or end is None:
         return None
@@ -62,6 +67,8 @@ def lead_time(db: FiligreeDB, issue_id: str) -> float | None:
         return None
     created = _parse_iso(issue.created_at)
     closed = _parse_iso(issue.closed_at)
+    if created is None or closed is None:
+        return None
     return (closed - created).total_seconds() / 3600
 
 
@@ -83,11 +90,15 @@ def get_flow_metrics(db: FiligreeDB, *, days: int = 30) -> dict[str, Any]:
     from datetime import timedelta
 
     cutoff_dt = datetime.now(UTC) - timedelta(days=days)
-    cutoff_iso = cutoff_dt.isoformat()
 
     done_issues = db.list_issues(status="closed")  # "closed" expands to all done-category states
-    # Filter to issues closed within the lookback window
-    recent_closed = [i for i in done_issues if i.closed_at and i.closed_at >= cutoff_iso]
+    # Filter to issues closed within the lookback window using proper datetime comparison
+    recent_closed = []
+    for i in done_issues:
+        if i.closed_at:
+            closed_dt = _parse_iso(i.closed_at)
+            if closed_dt is not None and closed_dt >= cutoff_dt:
+                recent_closed.append(i)
 
     cycle_times: list[float] = []
     lead_times: list[float] = []
