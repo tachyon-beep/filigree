@@ -27,6 +27,10 @@
   .stale-border { border-left: 4px solid #EF4444; animation: stale-pulse 2s infinite; }
   .changed-flash { animation: flash 1s ease-out; }
   @keyframes flash { 0% { box-shadow: 0 0 8px rgba(59,130,246,0.5); } 100% { box-shadow: none; } }
+  button, select, input[type="text"], input[type="checkbox"] { min-height: 36px; }
+  @media (pointer: coarse) { button, select, input[type="text"] { min-height: 44px; min-width: 44px; } }
+  button:focus-visible, select:focus-visible, input:focus-visible { outline: 2px solid #60A5FA; outline-offset: 2px; }
+  .btn-loading { opacity: 0.6; pointer-events: none; }
 </style>
 <script>
 tailwind.config = {
@@ -61,12 +65,14 @@ tailwind.config = {
     <button id="btnBlocked" onclick="toggleBlocked()" class="px-2 py-1 rounded text-xs font-medium bg-slate-700 text-slate-400 border border-slate-600">
       &#128279; Blocked (<span id="blockedCount">0</span>)
     </button>
+    <label for="filterPriority" class="text-xs text-slate-400 sr-only">Priority</label>
     <select id="filterPriority" onchange="applyFilters()" class="bg-slate-700 text-slate-200 text-xs rounded px-2 py-1 border border-slate-600">
       <option value="all">Priority: All</option>
       <option value="0-1">P0-P1</option>
       <option value="2">P2</option>
       <option value="3-4">P3-P4</option>
     </select>
+    <label for="filterSearch" class="text-xs text-slate-400 sr-only">Search</label>
     <input id="filterSearch" type="text" placeholder="Search..." oninput="debouncedSearch()"
            class="bg-slate-700 text-slate-200 text-xs rounded px-3 py-1 border border-slate-600 w-40 focus:outline-none focus:border-blue-500">
     <button onclick="toggleMultiSelect()" id="btnMultiSelect" class="px-2 py-1 rounded text-xs font-medium bg-slate-700 text-slate-400 border border-slate-600">Select</button>
@@ -159,6 +165,8 @@ tailwind.config = {
   <button onclick="batchCloseSelected()" class="text-xs bg-red-900/50 text-red-400 px-2 py-1 rounded border border-red-800 hover:bg-red-900">Close All</button>
   <button onclick="toggleMultiSelect()" class="text-xs text-slate-500 hover:text-slate-300">Cancel</button>
 </div>
+
+<div id="toastContainer" class="fixed top-4 right-4 z-50 flex flex-col gap-2" aria-live="polite"></div>
 
 <script>
 // ---------------------------------------------------------------------------
@@ -892,11 +900,13 @@ async function openDetail(issueId) {
       '<div class="text-xs font-medium text-slate-400 mb-2">Actions</div>' +
       '<div id="transitionBtns" class="flex flex-wrap gap-1 mb-2"></div>' +
       '<div class="flex gap-2 mb-2">' +
+        '<label for="prioSelect" class="text-xs text-slate-400">Priority</label> ' +
         '<select id="prioSelect" onchange="updateIssue(\'' + d.id + '\', {priority: parseInt(this.value)})" class="bg-slate-700 text-xs rounded px-2 py-1 border border-slate-600">' +
           [0,1,2,3,4].map(function(p) {
             return '<option value="' + p + '"' + (d.priority === p ? ' selected' : '') + '>P' + p + '</option>';
           }).join('') +
         '</select>' +
+        '<label for="assigneeInput" class="text-xs text-slate-400">Assignee</label> ' +
         '<input id="assigneeInput" type="text" placeholder="Assignee" value="' + escHtml(d.assignee || '') + '"' +
           ' onkeydown="if(event.key===\'Enter\')updateIssue(\'' + d.id + '\',{assignee:this.value})"' +
           ' class="bg-slate-700 text-xs rounded px-2 py-1 border border-slate-600 flex-1">' +
@@ -907,7 +917,7 @@ async function openDetail(issueId) {
     '</div>' +
     // Comment input
     '<div class="mt-3 border-t border-slate-700 pt-3">' +
-      '<div class="text-xs font-medium text-slate-400 mb-1">Add Comment</div>' +
+      '<label for="commentInput" class="text-xs font-medium text-slate-400 mb-1">Add Comment</label>' +
       '<div class="flex gap-1">' +
         '<input id="commentInput" type="text" placeholder="Comment..." onkeydown="if(event.key===\'Enter\')addComment(\'' + d.id + '\')"' +
           ' class="bg-slate-700 text-xs rounded px-2 py-1 border border-slate-600 flex-1 focus:outline-none focus:border-blue-500">' +
@@ -925,7 +935,7 @@ async function openDetail(issueId) {
         ? 'bg-blue-600 text-white hover:bg-blue-700'
         : 'bg-slate-700 text-slate-400 cursor-not-allowed';
       var title = t.missing_fields.length ? 'Missing: ' + t.missing_fields.join(', ') : '';
-      return '<button ' + (t.ready ? 'onclick="updateIssue(\'' + issueId + '\',{status:\'' + t.to + '\'})"' : 'disabled') +
+      return '<button ' + (t.ready ? 'onclick="updateIssue(\'' + issueId + '\',{status:\'' + t.to + '\'},this)"' : 'disabled') +
         ' class="text-xs px-2 py-1 rounded ' + cls + '" title="' + escHtml(title) + '">' +
         t.to + '</button>';
     }).join('');
@@ -1031,10 +1041,29 @@ function escHtml(str) {
   return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
+function setLoading(el, loading) {
+  if (!el) return;
+  if (loading) { el.classList.add('btn-loading'); el.dataset.origText = el.textContent; el.textContent = 'Saving...'; }
+  else { el.classList.remove('btn-loading'); if (el.dataset.origText) { el.textContent = el.dataset.origText; delete el.dataset.origText; } }
+}
+
+function showToast(message, type) {
+  var container = document.getElementById('toastContainer');
+  var toast = document.createElement('div');
+  var bg = type === 'error' ? 'bg-red-900/90 border-red-700 text-red-200'
+         : type === 'success' ? 'bg-emerald-900/90 border-emerald-700 text-emerald-200'
+         : 'bg-slate-800/90 border-slate-600 text-slate-200';
+  toast.className = 'px-4 py-2 rounded border text-xs shadow-lg ' + bg;
+  toast.textContent = message;
+  container.appendChild(toast);
+  setTimeout(function() { toast.remove(); }, 4000);
+}
+
 // ---------------------------------------------------------------------------
 // Actions (write operations)
 // ---------------------------------------------------------------------------
-async function updateIssue(issueId, body) {
+async function updateIssue(issueId, body, btnEl) {
+  if (btnEl) setLoading(btnEl, true);
   try {
     var resp = await fetch('/api/issue/' + issueId, {
       method: 'PATCH', headers: {'Content-Type': 'application/json'},
@@ -1042,25 +1071,46 @@ async function updateIssue(issueId, body) {
     });
     if (!resp.ok) {
       var err = await resp.json();
-      alert('Error: ' + (err.error || 'Update failed'));
+      showToast('Error: ' + (err.error || 'Update failed'), 'error');
       return null;
     }
     var updated = await resp.json();
     await fetchData();
     if (selectedIssue === issueId) openDetail(issueId);
     return updated;
-  } catch (e) { alert('Network error'); return null; }
+  } catch (e) { showToast('Network error', 'error'); return null; }
+  finally { if (btnEl) setLoading(btnEl, false); }
 }
 
 async function closeIssue(issueId) {
-  var reason = prompt('Close reason (optional):') || '';
-  var resp = await fetch('/api/issue/' + issueId + '/close', {
-    method: 'POST', headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({reason: reason}),
-  });
-  if (!resp.ok) { var err = await resp.json(); alert('Error: ' + (err.error || 'Close failed')); return; }
-  await fetchData();
-  if (selectedIssue === issueId) openDetail(issueId);
+  var existing = document.getElementById('closeReasonModal');
+  if (existing) existing.remove();
+  var modal = document.createElement('div');
+  modal.id = 'closeReasonModal';
+  modal.className = 'fixed inset-0 bg-black/50 flex items-center justify-center z-50';
+  modal.innerHTML = '<div class="bg-slate-800 rounded-lg border border-slate-600 p-4 w-80 shadow-xl">' +
+    '<div class="text-sm text-slate-200 mb-2">Close reason (optional)</div>' +
+    '<input id="closeReasonInput" type="text" class="w-full bg-slate-700 text-slate-200 text-xs rounded px-3 py-2 border border-slate-600 mb-3 focus:outline-none focus:border-blue-500">' +
+    '<div class="flex justify-end gap-2">' +
+      '<button id="closeReasonCancel" class="text-xs bg-slate-700 px-3 py-1.5 rounded hover:bg-slate-600">Cancel</button>' +
+      '<button id="closeReasonConfirm" class="text-xs bg-red-600 text-white px-3 py-1.5 rounded hover:bg-red-700">Close Issue</button>' +
+    '</div></div>';
+  document.body.appendChild(modal);
+  document.getElementById('closeReasonInput').focus();
+  document.getElementById('closeReasonCancel').onclick = function() { modal.remove(); };
+  modal.onclick = function(e) { if (e.target === modal) modal.remove(); };
+  document.getElementById('closeReasonConfirm').onclick = async function() {
+    var reason = document.getElementById('closeReasonInput').value || '';
+    modal.remove();
+    var resp = await fetch('/api/issue/' + issueId + '/close', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({reason: reason}),
+    });
+    if (!resp.ok) { var err = await resp.json(); showToast('Error: ' + (err.error || 'Close failed'), 'error'); return; }
+    showToast('Issue closed', 'success');
+    await fetchData();
+    if (selectedIssue === issueId) openDetail(issueId);
+  };
 }
 
 async function reopenIssue(issueId) {
@@ -1068,7 +1118,7 @@ async function reopenIssue(issueId) {
     method: 'POST', headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({}),
   });
-  if (!resp.ok) { var err = await resp.json(); alert('Error: ' + (err.error || 'Reopen failed')); return; }
+  if (!resp.ok) { var err = await resp.json(); showToast('Error: ' + (err.error || 'Reopen failed'), 'error'); return; }
   await fetchData();
   if (selectedIssue === issueId) openDetail(issueId);
 }
@@ -1340,28 +1390,65 @@ function updateBatchBar() {
 }
 
 async function batchSetPriority() {
-  var p = prompt('Set priority (0-4):');
-  if (p === null || p === '') return;
-  var prio = parseInt(p);
-  if (isNaN(prio) || prio < 0 || prio > 4) { alert('Invalid priority'); return; }
-  await fetch('/api/batch/update', {
-    method: 'POST', headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({issue_ids: Array.from(selectedCards), priority: prio}),
-  });
-  selectedCards.clear();
-  multiSelectMode = false;
-  await fetchData();
+  var existing = document.getElementById('batchPrioModal');
+  if (existing) existing.remove();
+  var modal = document.createElement('div');
+  modal.id = 'batchPrioModal';
+  modal.className = 'fixed inset-0 bg-black/50 flex items-center justify-center z-50';
+  modal.innerHTML = '<div class="bg-slate-800 rounded-lg border border-slate-600 p-4 w-72 shadow-xl">' +
+    '<div class="text-sm text-slate-200 mb-2">Set priority for ' + selectedCards.size + ' issues</div>' +
+    '<select id="batchPrioSelect" class="w-full bg-slate-700 text-slate-200 text-xs rounded px-2 py-2 border border-slate-600 mb-3">' +
+      '<option value="0">P0 — Critical</option><option value="1">P1 — High</option>' +
+      '<option value="2" selected>P2 — Medium</option><option value="3">P3 — Low</option><option value="4">P4 — Backlog</option>' +
+    '</select>' +
+    '<div class="flex justify-end gap-2">' +
+      '<button id="batchPrioCancel" class="text-xs bg-slate-700 px-3 py-1.5 rounded hover:bg-slate-600">Cancel</button>' +
+      '<button id="batchPrioConfirm" class="text-xs bg-blue-600 text-white px-3 py-1.5 rounded hover:bg-blue-700">Apply</button>' +
+    '</div></div>';
+  document.body.appendChild(modal);
+  document.getElementById('batchPrioCancel').onclick = function() { modal.remove(); };
+  modal.onclick = function(e) { if (e.target === modal) modal.remove(); };
+  document.getElementById('batchPrioConfirm').onclick = async function() {
+    var prio = parseInt(document.getElementById('batchPrioSelect').value);
+    modal.remove();
+    await fetch('/api/batch/update', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({issue_ids: Array.from(selectedCards), priority: prio}),
+    });
+    selectedCards.clear();
+    multiSelectMode = false;
+    showToast('Priority updated', 'success');
+    await fetchData();
+  };
 }
 
 async function batchCloseSelected() {
-  if (!confirm('Close ' + selectedCards.size + ' issues?')) return;
-  await fetch('/api/batch/close', {
-    method: 'POST', headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({issue_ids: Array.from(selectedCards)}),
-  });
-  selectedCards.clear();
-  multiSelectMode = false;
-  await fetchData();
+  var existing = document.getElementById('batchCloseModal');
+  if (existing) existing.remove();
+  var count = selectedCards.size;
+  var modal = document.createElement('div');
+  modal.id = 'batchCloseModal';
+  modal.className = 'fixed inset-0 bg-black/50 flex items-center justify-center z-50';
+  modal.innerHTML = '<div class="bg-slate-800 rounded-lg border border-slate-600 p-4 w-72 shadow-xl">' +
+    '<div class="text-sm text-slate-200 mb-3">Close ' + count + ' issue' + (count !== 1 ? 's' : '') + '?</div>' +
+    '<div class="flex justify-end gap-2">' +
+      '<button id="batchCloseCancel" class="text-xs bg-slate-700 px-3 py-1.5 rounded hover:bg-slate-600">Cancel</button>' +
+      '<button id="batchCloseConfirm" class="text-xs bg-red-600 text-white px-3 py-1.5 rounded hover:bg-red-700">Close All</button>' +
+    '</div></div>';
+  document.body.appendChild(modal);
+  document.getElementById('batchCloseCancel').onclick = function() { modal.remove(); };
+  modal.onclick = function(e) { if (e.target === modal) modal.remove(); };
+  document.getElementById('batchCloseConfirm').onclick = async function() {
+    modal.remove();
+    await fetch('/api/batch/close', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({issue_ids: Array.from(selectedCards)}),
+    });
+    selectedCards.clear();
+    multiSelectMode = false;
+    showToast(count + ' issue' + (count !== 1 ? 's' : '') + ' closed', 'success');
+    await fetchData();
+  };
 }
 
 // ---------------------------------------------------------------------------
