@@ -2,10 +2,10 @@
 
 Agent-native issue tracker with convention-based project discovery.
 
-![CI](https://github.com/tachyon-beep/filigree/actions/workflows/ci.yml/badge.svg)
-![PyPI](https://img.shields.io/pypi/v/filigree)
-![Python 3.11+](https://img.shields.io/pypi/pyversions/filigree)
-![License: MIT](https://img.shields.io/pypi/l/filigree)
+[![CI](https://github.com/tachyon-beep/filigree/actions/workflows/ci.yml/badge.svg)](https://github.com/tachyon-beep/filigree/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/filigree)](https://pypi.org/project/filigree/)
+[![Python 3.11+](https://img.shields.io/pypi/pyversions/filigree)](https://pypi.org/project/filigree/)
+[![License: MIT](https://img.shields.io/pypi/l/filigree)](https://github.com/tachyon-beep/filigree/blob/main/LICENSE)
 
 ## What Is Filigree?
 
