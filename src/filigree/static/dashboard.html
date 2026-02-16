@@ -31,6 +31,17 @@
   @media (pointer: coarse) { button, select, input[type="text"] { min-height: 44px; min-width: 44px; } }
   button:focus-visible, select:focus-visible, input:focus-visible { outline: 2px solid #60A5FA; outline-offset: 2px; }
   .btn-loading { opacity: 0.6; pointer-events: none; }
+  @media (max-width: 768px) {
+    .kanban-col { min-width: 100% !important; }
+    #detailPanel { width: 100% !important; }
+    header { flex-wrap: wrap; gap: 0.5rem; }
+    header > div:nth-child(2) { flex-wrap: wrap; }
+    footer { flex-wrap: wrap; }
+  }
+  @media (min-width: 769px) and (max-width: 1200px) {
+    #detailPanel { width: 450px !important; }
+    .kanban-col { min-width: 280px; }
+  }
 </style>
 <script>
 tailwind.config = {
@@ -49,11 +60,13 @@ tailwind.config = {
 <header class="flex items-center justify-between px-4 py-2 bg-slate-800 border-b border-slate-700 shrink-0">
   <div class="flex items-center gap-4">
     <span class="text-base font-semibold text-blue-400">&#9670; Filigree</span>
+    <button onclick="showCreateForm()" class="text-xs bg-blue-600 text-white px-2 py-1 rounded hover:bg-blue-700" title="Create Issue">+ New</button>
     <div class="flex gap-1">
       <button id="btnGraph" onclick="switchView('graph')" class="px-3 py-1 rounded text-xs font-medium">Graph</button>
       <button id="btnKanban" onclick="switchView('kanban')" class="px-3 py-1 rounded text-xs font-medium">Kanban</button>
       <button id="btnMetrics" onclick="switchView('metrics')" class="px-3 py-1 rounded text-xs font-medium">Metrics</button>
       <button id="btnActivity" onclick="switchView('activity')" class="px-3 py-1 rounded text-xs font-medium">Activity</button>
+      <button id="btnWorkflow" onclick="switchView('workflow')" class="px-3 py-1 rounded text-xs font-medium">Workflow</button>
     </div>
   </div>
 
@@ -85,6 +98,7 @@ tailwind.config = {
 
   <div class="flex items-center gap-3 text-xs text-slate-400">
     <span id="refreshIndicator" class="opacity-0 text-blue-400">Refreshing...</span>
+    <span id="healthBadge" onclick="showHealthBreakdown()" class="cursor-pointer px-2 py-0.5 rounded text-xs font-bold" title="System Health Score">--</span>
     <span>Open: <b id="statOpen" class="text-slate-200" aria-live="polite">0</b></span>
     <span>Active: <b id="statActive" class="text-slate-200" aria-live="polite">0</b></span>
     <span>Ready: <b id="statReady" class="text-emerald-400" aria-live="polite">0</b></span>
@@ -144,8 +158,19 @@ tailwind.config = {
     </div>
   </div>
 
+  <!-- Workflow view -->
+  <div id="workflowView" class="flex-1 hidden flex flex-col">
+    <div class="flex items-center gap-2 px-4 py-1 bg-slate-800/50 text-xs text-slate-400 border-b border-slate-700">
+      <label for="workflowType" class="text-xs text-slate-400">Type:</label>
+      <select id="workflowType" onchange="loadWorkflow()" class="bg-slate-700 text-slate-200 text-xs rounded px-2 py-1 border border-slate-600">
+        <option value="">Select type...</option>
+      </select>
+    </div>
+    <div id="workflowCy" class="flex-1"></div>
+  </div>
+
   <!-- Detail panel (slides in from right) -->
-  <div id="detailPanel" role="complementary" aria-label="Issue Detail" class="detail-panel absolute top-0 right-0 h-full w-[400px] bg-slate-800 border-l border-slate-700 overflow-y-auto scrollbar-thin transform translate-x-full z-10">
+  <div id="detailPanel" role="complementary" aria-label="Issue Detail" class="detail-panel absolute top-0 right-0 h-full w-[500px] bg-slate-800 border-l border-slate-700 overflow-y-auto scrollbar-thin transform translate-x-full z-10">
     <div id="detailContent" class="p-5"></div>
   </div>
 </div>
@@ -207,6 +232,7 @@ async function fetchData() {
     allIssues.forEach(function(i) { issueMap[i.id] = i; });
     trackChanges(allIssues);
     computeImpactScores();
+    computeHealthScore();
     updateStats();
     render();
   } finally {
@@ -326,6 +352,7 @@ function switchView(view) {
   document.getElementById('kanbanView').classList.toggle('hidden', view !== 'kanban');
   document.getElementById('metricsView').classList.toggle('hidden', view !== 'metrics');
   document.getElementById('activityView').classList.toggle('hidden', view !== 'activity');
+  document.getElementById('workflowView').classList.toggle('hidden', view !== 'workflow');
   document.getElementById('btnGraph').className = view === 'graph'
     ? 'px-3 py-1 rounded text-xs font-medium bg-blue-600 text-white'
     : 'px-3 py-1 rounded text-xs font-medium bg-slate-700 text-slate-300 hover:bg-slate-600';
@@ -338,10 +365,14 @@ function switchView(view) {
   document.getElementById('btnActivity').className = view === 'activity'
     ? 'px-3 py-1 rounded text-xs font-medium bg-blue-600 text-white'
     : 'px-3 py-1 rounded text-xs font-medium bg-slate-700 text-slate-300 hover:bg-slate-600';
+  document.getElementById('btnWorkflow').className = view === 'workflow'
+    ? 'px-3 py-1 rounded text-xs font-medium bg-blue-600 text-white'
+    : 'px-3 py-1 rounded text-xs font-medium bg-slate-700 text-slate-300 hover:bg-slate-600';
   updateHash();
   if (view === 'graph') renderGraph();
   else if (view === 'metrics') loadMetrics();
   else if (view === 'activity') loadActivity();
+  else if (view === 'workflow') loadWorkflow();
   else renderKanban();
 }
 
@@ -976,6 +1007,7 @@ function parseHash() {
   if (view === 'graph') currentView = 'graph';
   else if (view === 'metrics') currentView = 'metrics';
   else if (view === 'activity') currentView = 'activity';
+  else if (view === 'workflow') currentView = 'workflow';
   else if (view === 'kanban-cluster') { currentView = 'kanban'; kanbanMode = 'cluster'; }
   else { currentView = 'kanban'; kanbanMode = 'standard'; }
 
@@ -1324,6 +1356,69 @@ function computeImpactScores() {
   });
 }
 
+function computeHealthScore() {
+  if (!allIssues.length) return;
+  var openIssues = allIssues.filter(function(i) { return (i.status_category || 'open') !== 'done'; });
+  var blockedCount = openIssues.filter(function(i) {
+    return (i.blocked_by || []).some(function(bid) {
+      var b = issueMap[bid]; return b && (b.status_category || 'open') !== 'done';
+    });
+  }).length;
+  var blockedRatio = openIssues.length ? blockedCount / openIssues.length : 0;
+  var blockedScore = Math.round(25 * (1 - blockedRatio));
+  var wipIssues = allIssues.filter(function(i) { return (i.status_category || 'open') === 'wip'; });
+  var staleWip = wipIssues.filter(function(i) {
+    return i.updated_at && (Date.now() - new Date(i.updated_at).getTime()) > 24 * 3600000;
+  }).length;
+  var freshScore = wipIssues.length ? Math.round(25 * (1 - staleWip / wipIssues.length)) : 25;
+  var readyCount = allIssues.filter(function(i) { return i.is_ready; }).length;
+  var readyScore = openIssues.length ? Math.min(25, Math.round(25 * readyCount / Math.max(openIssues.length * 0.3, 1))) : 25;
+  var agentWip = {};
+  wipIssues.forEach(function(i) { if (i.assignee) agentWip[i.assignee] = (agentWip[i.assignee] || 0) + 1; });
+  var vals = Object.values(agentWip);
+  var maxWip = vals.length ? Math.max.apply(null, vals) : 0;
+  var balanceScore = maxWip > 5 ? 10 : maxWip > 3 ? 18 : 25;
+  var score = blockedScore + freshScore + readyScore + balanceScore;
+  var badge = document.getElementById('healthBadge');
+  if (!badge) return;
+  badge.textContent = score;
+  badge.title = 'Health: ' + score + '/100';
+  if (score >= 75) badge.className = 'cursor-pointer px-2 py-0.5 rounded text-xs font-bold bg-emerald-900/50 text-emerald-400 border border-emerald-700';
+  else if (score >= 50) badge.className = 'cursor-pointer px-2 py-0.5 rounded text-xs font-bold bg-amber-900/50 text-amber-400 border border-amber-700';
+  else badge.className = 'cursor-pointer px-2 py-0.5 rounded text-xs font-bold bg-red-900/50 text-red-400 border border-red-700';
+  window._healthBreakdown = {
+    score: score,
+    blocked: { score: blockedScore, max: 25, detail: blockedCount + ' blocked of ' + openIssues.length + ' open' },
+    freshness: { score: freshScore, max: 25, detail: staleWip + ' stale WIP of ' + wipIssues.length },
+    ready: { score: readyScore, max: 25, detail: readyCount + ' ready issues' },
+    balance: { score: balanceScore, max: 25, detail: 'Max agent WIP: ' + maxWip },
+  };
+}
+
+function showHealthBreakdown() {
+  var b = window._healthBreakdown;
+  if (!b) return;
+  var panel = document.getElementById('detailContent');
+  var dp = document.getElementById('detailPanel');
+  dp.classList.remove('translate-x-full');
+  selectedIssue = null;
+  panel.innerHTML =
+    '<div class="flex items-center justify-between mb-3">' +
+      '<span class="text-base font-semibold text-slate-200">System Health: ' + b.score + '/100</span>' +
+      '<button onclick="closeDetail()" class="text-slate-500 hover:text-slate-300 text-lg">&times;</button></div>' +
+    ['blocked', 'freshness', 'ready', 'balance'].map(function(k) {
+      var f = b[k];
+      var pct = Math.round(f.score / f.max * 100);
+      return '<div class="mb-3"><div class="flex justify-between text-xs mb-1">' +
+        '<span class="text-slate-300 capitalize">' + k + '</span>' +
+        '<span class="text-slate-400">' + f.score + '/' + f.max + '</span></div>' +
+        '<div class="w-full h-2 rounded-full bg-slate-900 overflow-hidden">' +
+          '<div class="h-full rounded-full ' + (pct >= 75 ? 'bg-emerald-500' : pct >= 50 ? 'bg-amber-500' : 'bg-red-500') +
+          '" style="width:' + pct + '%"></div></div>' +
+        '<div class="text-xs text-slate-500 mt-0.5">' + f.detail + '</div></div>';
+    }).join('');
+}
+
 // ---------------------------------------------------------------------------
 // Plan/milestone tree view
 // ---------------------------------------------------------------------------
@@ -1373,6 +1468,65 @@ async function loadPlanView(milestoneId) {
   } catch (e) {
     panel.innerHTML = '<div class="text-red-400 text-xs">Failed to load plan.</div>';
   }
+}
+
+// Workflow state machine visualization
+async function loadWorkflow() {
+  var wfSelect = document.getElementById('workflowType');
+  // Populate type dropdown if not done
+  if (wfSelect && wfSelect.options.length <= 1) {
+    var types = {}; allIssues.forEach(function(i) { types[i.type] = true; });
+    Object.keys(types).sort().forEach(function(t) {
+      var opt = document.createElement('option'); opt.value = t; opt.textContent = t;
+      wfSelect.appendChild(opt);
+    });
+  }
+  var typeName = wfSelect ? wfSelect.value : '';
+  if (!typeName) return;
+  try {
+    var resp = await fetch('/api/type/' + typeName);
+    if (!resp.ok) return;
+    var tpl = await resp.json();
+    var stateCounts = {};
+    allIssues.filter(function(i) { return i.type === typeName; }).forEach(function(i) {
+      stateCounts[i.status] = (stateCounts[i.status] || 0) + 1;
+    });
+    renderWorkflowGraph(tpl, stateCounts);
+  } catch (e) {}
+}
+
+function renderWorkflowGraph(template, stateCounts) {
+  var container = document.getElementById('workflowCy');
+  var nodes = template.states.map(function(s) {
+    var count = stateCounts[s.name] || 0;
+    return { data: { id: s.name, label: s.name + (count ? ' (' + count + ')' : ''), category: s.category, count: count } };
+  });
+  var edges = template.transitions.map(function(t, i) {
+    return { data: { id: 'wt' + i, source: t.from, target: t.to, enforcement: t.enforcement } };
+  });
+  if (window._workflowCy) window._workflowCy.destroy();
+  window._workflowCy = cytoscape({
+    container: container,
+    elements: nodes.concat(edges),
+    layout: { name: 'dagre', rankDir: 'LR', rankSep: 100, nodeSep: 60, padding: 30 },
+    style: [
+      { selector: 'node', style: {
+        'label': 'data(label)', 'font-size': '12px', 'font-family': 'JetBrains Mono, monospace',
+        'text-valign': 'center', 'text-halign': 'center', 'color': '#F1F5F9',
+        'text-outline-color': '#0F172A', 'text-outline-width': 2,
+        'width': 80, 'height': 40, 'shape': 'round-rectangle',
+        'background-color': function(ele) { return CATEGORY_COLORS[ele.data('category')] || '#64748B'; },
+      }},
+      { selector: 'edge', style: {
+        'width': 2, 'line-color': '#475569', 'target-arrow-color': '#475569',
+        'target-arrow-shape': 'triangle', 'curve-style': 'bezier', 'arrow-scale': 0.8,
+        'label': 'data(enforcement)', 'font-size': '9px', 'color': '#94A3B8',
+        'text-rotation': 'autorotate', 'text-margin-y': -10,
+      }},
+    ],
+    minZoom: 0.3, maxZoom: 3,
+  });
+  window._workflowCy.fit(undefined, 40);
 }
 
 // ---------------------------------------------------------------------------
@@ -1449,6 +1603,72 @@ async function batchCloseSelected() {
     showToast(count + ' issue' + (count !== 1 ? 's' : '') + ' closed', 'success');
     await fetchData();
   };
+}
+
+async function showCreateForm() {
+  var existing = document.getElementById('createModal');
+  if (existing) existing.remove();
+  var types = [];
+  try { var tr = await fetch('/api/types'); types = await tr.json(); } catch(e) {}
+  var typeOpts = types.map(function(t) {
+    return '<option value="' + t.type + '"' + (t.type === 'task' ? ' selected' : '') + '>' + t.display_name + '</option>';
+  }).join('');
+  var modal = document.createElement('div');
+  modal.id = 'createModal';
+  modal.className = 'fixed inset-0 bg-black/50 flex items-center justify-center z-50';
+  modal.innerHTML = '<div class="bg-slate-800 rounded-lg border border-slate-600 p-5 w-96 shadow-xl max-h-[80vh] overflow-y-auto">' +
+    '<div class="text-sm font-semibold text-slate-200 mb-3">Create Issue</div>' +
+    '<div class="flex flex-col gap-3">' +
+      '<div><label for="createTitle" class="text-xs text-slate-400">Title *</label>' +
+        '<input id="createTitle" type="text" class="w-full bg-slate-700 text-slate-200 text-xs rounded px-3 py-2 border border-slate-600 mt-1 focus:outline-none focus:border-blue-500"></div>' +
+      '<div class="flex gap-2">' +
+        '<div class="flex-1"><label for="createType" class="text-xs text-slate-400">Type</label>' +
+          '<select id="createType" class="w-full bg-slate-700 text-slate-200 text-xs rounded px-2 py-2 border border-slate-600 mt-1">' + typeOpts + '</select></div>' +
+        '<div class="w-20"><label for="createPriority" class="text-xs text-slate-400">Priority</label>' +
+          '<select id="createPriority" class="w-full bg-slate-700 text-slate-200 text-xs rounded px-2 py-2 border border-slate-600 mt-1">' +
+            '<option value="0">P0</option><option value="1">P1</option><option value="2" selected>P2</option><option value="3">P3</option><option value="4">P4</option>' +
+          '</select></div></div>' +
+      '<div><label for="createDesc" class="text-xs text-slate-400">Description</label>' +
+        '<textarea id="createDesc" rows="3" class="w-full bg-slate-700 text-slate-200 text-xs rounded px-3 py-2 border border-slate-600 mt-1 focus:outline-none focus:border-blue-500 resize-none"></textarea></div>' +
+      '<div><label for="createAssignee" class="text-xs text-slate-400">Assignee</label>' +
+        '<input id="createAssignee" type="text" class="w-full bg-slate-700 text-slate-200 text-xs rounded px-3 py-2 border border-slate-600 mt-1 focus:outline-none focus:border-blue-500"></div>' +
+      '<div><label for="createLabels" class="text-xs text-slate-400">Labels (comma-separated)</label>' +
+        '<input id="createLabels" type="text" class="w-full bg-slate-700 text-slate-200 text-xs rounded px-3 py-2 border border-slate-600 mt-1 focus:outline-none focus:border-blue-500"></div>' +
+    '</div>' +
+    '<div class="flex justify-end gap-2 mt-4">' +
+      '<button onclick="document.getElementById(\'createModal\').remove()" class="text-xs bg-slate-700 px-3 py-1.5 rounded hover:bg-slate-600">Cancel</button>' +
+      '<button onclick="submitCreateForm()" class="text-xs bg-blue-600 text-white px-3 py-1.5 rounded hover:bg-blue-700">Create</button>' +
+    '</div></div>';
+  document.body.appendChild(modal);
+  modal.onclick = function(e) { if (e.target === modal) modal.remove(); };
+  document.getElementById('createTitle').focus();
+}
+
+async function submitCreateForm() {
+  var title = document.getElementById('createTitle').value.trim();
+  if (!title) { showToast('Title is required', 'error'); return; }
+  var labelsRaw = document.getElementById('createLabels').value.trim();
+  var labels = labelsRaw ? labelsRaw.split(',').map(function(l) { return l.trim(); }).filter(Boolean) : null;
+  var body = {
+    title: title,
+    type: document.getElementById('createType').value,
+    priority: parseInt(document.getElementById('createPriority').value),
+    description: document.getElementById('createDesc').value.trim(),
+    assignee: document.getElementById('createAssignee').value.trim(),
+  };
+  if (labels && labels.length) body.labels = labels;
+  try {
+    var resp = await fetch('/api/issues', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(body),
+    });
+    if (!resp.ok) { var err = await resp.json(); showToast('Error: ' + (err.error || 'Create failed'), 'error'); return; }
+    var created = await resp.json();
+    document.getElementById('createModal').remove();
+    showToast('Created ' + created.id, 'success');
+    await fetchData();
+    openDetail(created.id);
+  } catch (e) { showToast('Network error', 'error'); }
 }
 
 // ---------------------------------------------------------------------------
