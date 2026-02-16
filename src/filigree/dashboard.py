@@ -273,10 +273,7 @@ def create_app() -> Any:
     async def api_activity(limit: int = 50, since: str = "") -> JSONResponse:
         """Recent events across all issues."""
         db = _get_db()
-        if since:
-            events = db.get_events_since(since, limit=limit)
-        else:
-            events = db.get_recent_events(limit=limit)
+        events = db.get_events_since(since, limit=limit) if since else db.get_recent_events(limit=limit)
         return JSONResponse(events)
 
     @app.get("/api/plan/{milestone_id}")
@@ -304,10 +301,12 @@ def create_app() -> Any:
             fields=body.get("fields"),
             actor=actor,
         )
-        return JSONResponse({
-            "updated": [i.to_dict() for i in updated],
-            "errors": errors,
-        })
+        return JSONResponse(
+            {
+                "updated": [i.to_dict() for i in updated],
+                "errors": errors,
+            }
+        )
 
     @app.post("/api/batch/close")
     async def api_batch_close(request: Request) -> JSONResponse:
@@ -328,15 +327,17 @@ def create_app() -> Any:
         """List all registered issue types."""
         db = _get_db()
         types = db.templates.list_types()
-        return JSONResponse([
-            {
-                "type": t.type,
-                "display_name": t.display_name,
-                "pack": t.pack,
-                "initial_state": t.initial_state,
-            }
-            for t in types
-        ])
+        return JSONResponse(
+            [
+                {
+                    "type": t.type,
+                    "display_name": t.display_name,
+                    "pack": t.pack,
+                    "initial_state": t.initial_state,
+                }
+                for t in types
+            ]
+        )
 
     @app.post("/api/issues", status_code=201)
     async def api_create_issue(request: Request) -> JSONResponse:
@@ -401,6 +402,8 @@ def create_app() -> Any:
             issue = db.claim_next(assignee, actor=actor)
         except ValueError as e:
             return JSONResponse({"error": str(e)}, status_code=409)
+        if issue is None:
+            return JSONResponse({"error": "No ready issues to claim"}, status_code=404)
         return JSONResponse(issue.to_dict())
 
     @app.post("/api/issue/{issue_id}/dependencies")
