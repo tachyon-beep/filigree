@@ -335,9 +335,7 @@ class TemplateRegistry:
         for s in sorted(state_names - done_states):
             if s not in from_states:
                 cat = next(st.category for st in tpl.states if st.name == s)
-                warnings.append(
-                    f"state '{s}' (category={cat}) has no outgoing transitions (dead end)"
-                )
+                warnings.append(f"state '{s}' (category={cat}) has no outgoing transitions (dead end)")
 
         return warnings
 

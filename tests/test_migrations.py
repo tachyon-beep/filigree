@@ -33,7 +33,6 @@ from filigree.migrations import (
     rename_column,
 )
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -56,17 +55,13 @@ def _get_table_columns(conn: sqlite3.Connection, table: str) -> dict[str, str]:
 
 def _get_index_names(conn: sqlite3.Connection) -> set[str]:
     """Return all user-created index names."""
-    rows = conn.execute(
-        "SELECT name FROM sqlite_master WHERE type='index' AND name NOT LIKE 'sqlite_%'"
-    ).fetchall()
+    rows = conn.execute("SELECT name FROM sqlite_master WHERE type='index' AND name NOT LIKE 'sqlite_%'").fetchall()
     return {row[0] for row in rows}
 
 
 def _get_table_names(conn: sqlite3.Connection) -> set[str]:
     """Return all table names (excluding FTS shadow tables)."""
-    rows = conn.execute(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
-    ).fetchall()
+    rows = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").fetchall()
     return {row[0] for row in rows}
 
 

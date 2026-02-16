@@ -135,7 +135,9 @@ CREATE TABLE IF NOT EXISTS events (
 CREATE INDEX IF NOT EXISTS idx_events_issue ON events(issue_id);
 CREATE INDEX IF NOT EXISTS idx_events_created ON events(created_at);
 CREATE INDEX IF NOT EXISTS idx_events_issue_time ON events(issue_id, created_at DESC);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_events_dedup ON events(issue_id, event_type, actor, coalesce(old_value,''), coalesce(new_value,''), created_at);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_events_dedup
+  ON events(issue_id, event_type, actor,
+    coalesce(old_value,''), coalesce(new_value,''), created_at);
 
 CREATE TABLE IF NOT EXISTS comments (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -2017,7 +2019,8 @@ class FiligreeDB:
                     )
                 elif record_type == "event":
                     self.conn.execute(
-                        "INSERT OR IGNORE INTO events (issue_id, event_type, actor, old_value, new_value, comment, created_at) "
+                        "INSERT OR IGNORE INTO events "
+                        "(issue_id, event_type, actor, old_value, new_value, comment, created_at) "
                         "VALUES (?, ?, ?, ?, ?, ?, ?)",
                         (
                             record.get("issue_id", ""),

@@ -257,7 +257,9 @@ def rebuild_table(
         insert_cols = ", ".join(column_mapping.keys())
         select_cols = ", ".join(column_mapping.values())
 
-    conn.execute(f"INSERT INTO {temp_table} ({insert_cols}) SELECT {select_cols} FROM {table}")
+    # S608: table/column names are from internal schema, not user input
+    insert_sql = f"INSERT INTO {temp_table} ({insert_cols}) SELECT {select_cols} FROM {table}"  # noqa: S608
+    conn.execute(insert_sql)
     conn.execute(f"DROP TABLE {table}")
     conn.execute(f"ALTER TABLE {temp_table} RENAME TO {table}")
 
