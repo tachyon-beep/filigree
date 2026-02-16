@@ -251,22 +251,20 @@ class TestMCPExportImport:
         from filigree.mcp_server import call_tool
 
         self.db.create_issue("Export me")
-        out = str(self.tmp_path / "mcp_export.jsonl")
-        result = await call_tool("export_jsonl", {"output_path": out})
+        result = await call_tool("export_jsonl", {"output_path": "mcp_export.jsonl"})
         data = self._parse(result)
         assert data["status"] == "ok"
         assert data["records"] > 0
-        assert Path(out).exists()
+        assert (self.tmp_path / "mcp_export.jsonl").exists()
 
     async def test_import_via_mcp(self) -> None:
         from filigree.mcp_server import call_tool
 
         self.db.create_issue("Import source")
-        out = str(self.tmp_path / "mcp_roundtrip.jsonl")
-        await call_tool("export_jsonl", {"output_path": out})
+        await call_tool("export_jsonl", {"output_path": "mcp_roundtrip.jsonl"})
 
         # Import into same DB with merge
-        result = await call_tool("import_jsonl", {"input_path": out, "merge": True})
+        result = await call_tool("import_jsonl", {"input_path": "mcp_roundtrip.jsonl", "merge": True})
         data = self._parse(result)
         assert data["status"] == "ok"
 
@@ -275,7 +273,7 @@ class TestMCPExportImport:
 
         result = await call_tool("import_jsonl", {"input_path": "/nonexistent/file.jsonl"})
         data = self._parse(result)
-        assert data["code"] == "invalid"
+        assert data["code"] == "invalid_path"
 
 
 # ---------------------------------------------------------------------------

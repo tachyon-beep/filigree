@@ -63,6 +63,33 @@ def _refresh_summary() -> None:
         write_summary(_get_db(), _filigree_dir / SUMMARY_FILENAME)
 
 
+def _safe_path(raw: str) -> Path:
+    """Resolve a user-supplied path safely within the project root.
+
+    Raises ValueError for paths that escape the project directory.
+    """
+    if Path(raw).is_absolute():
+        msg = f"Absolute paths not allowed: {raw}"
+        raise ValueError(msg)
+
+    if _filigree_dir is None:
+        msg = "Project directory not initialized"
+        raise ValueError(msg)
+
+    # Resolve relative to project root (parent of .filigree/)
+    base = _filigree_dir.resolve().parent
+    resolved = (base / raw).resolve()
+
+    # Ensure resolved path is under the project root
+    try:
+        resolved.relative_to(base)
+    except ValueError:
+        msg = f"Path escapes project directory: {raw}"
+        raise ValueError(msg) from None
+
+    return resolved
+
+
 def _text(content: Any) -> list[TextContent]:
     if isinstance(content, str):
         return [TextContent(type="text", text=content)]
@@ -1212,14 +1239,21 @@ async def _dispatch(name: str, arguments: dict[str, Any], tracker: FiligreeDB) -
                 return _text({"error": str(e), "code": "conflict"})
 
         case "export_jsonl":
-            count = tracker.export_jsonl(arguments["output_path"])
-            return _text({"status": "ok", "records": count, "path": arguments["output_path"]})
+            try:
+                safe = _safe_path(arguments["output_path"])
+                count = tracker.export_jsonl(safe)
+                return _text({"status": "ok", "records": count, "path": str(safe)})
+            except ValueError as e:
+                return _text({"error": str(e), "code": "invalid_path"})
 
         case "import_jsonl":
             try:
-                count = tracker.import_jsonl(arguments["input_path"], merge=arguments.get("merge", False))
+                safe = _safe_path(arguments["input_path"])
+                count = tracker.import_jsonl(safe, merge=arguments.get("merge", False))
                 _refresh_summary()
-                return _text({"status": "ok", "records": count, "path": arguments["input_path"]})
+                return _text({"status": "ok", "records": count, "path": str(safe)})
+            except ValueError as e:
+                return _text({"error": str(e), "code": "invalid_path"})
             except Exception as e:
                 return _text({"error": str(e), "code": "invalid"})
 
