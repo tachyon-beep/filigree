@@ -27,6 +27,13 @@
   .stale-border { border-left: 4px solid #EF4444; animation: stale-pulse 2s infinite; }
   .changed-flash { animation: flash 1s ease-out; }
   @keyframes flash { 0% { box-shadow: 0 0 8px rgba(59,130,246,0.5); } 100% { box-shadow: none; } }
+  .popover { position: absolute; z-index: 60; max-width: 320px; }
+  .help-icon { display: inline-flex; align-items: center; justify-content: center;
+    width: 16px; height: 16px; border-radius: 50%; font-size: 10px; line-height: 1;
+    cursor: pointer; vertical-align: middle; margin-left: 4px; flex-shrink: 0; }
+  .tour-highlight { outline: 3px solid #3B82F6 !important; outline-offset: 4px; position: relative; z-index: 55; }
+  .tour-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 50; }
+  .tour-tooltip { position: fixed; z-index: 56; max-width: 360px; }
   button, select, input[type="text"], input[type="checkbox"] { min-height: 36px; }
   @media (pointer: coarse) { button, select, input[type="text"] { min-height: 44px; min-width: 44px; } }
   button:focus-visible, select:focus-visible, input:focus-visible { outline: 2px solid #60A5FA; outline-offset: 2px; }
@@ -71,22 +78,24 @@ tailwind.config = {
     <span class="text-base font-semibold text-blue-400">&#9670; Filigree</span>
     <button onclick="showCreateForm()" class="text-xs bg-blue-600 text-white px-2 py-1 rounded hover:bg-blue-700" title="Create Issue">+ New</button>
     <div class="flex gap-1">
-      <button id="btnGraph" onclick="switchView('graph')" class="px-3 py-1 rounded text-xs font-medium">Graph</button>
-      <button id="btnKanban" onclick="switchView('kanban')" class="px-3 py-1 rounded text-xs font-medium">Kanban</button>
-      <button id="btnMetrics" onclick="switchView('metrics')" class="px-3 py-1 rounded text-xs font-medium">Metrics</button>
-      <button id="btnActivity" onclick="switchView('activity')" class="px-3 py-1 rounded text-xs font-medium">Activity</button>
-      <button id="btnWorkflow" onclick="switchView('workflow')" class="px-3 py-1 rounded text-xs font-medium">Workflow</button>
+      <button id="btnGraph" onclick="switchView('graph')" class="px-3 py-1 rounded text-xs font-medium" title="Dependency graph visualization">Graph</button>
+      <button id="btnKanban" onclick="switchView('kanban')" class="px-3 py-1 rounded text-xs font-medium" title="Kanban board view">Kanban</button>
+      <button id="btnMetrics" onclick="switchView('metrics')" class="px-3 py-1 rounded text-xs font-medium" title="Flow metrics — throughput, cycle time, lead time">Metrics</button>
+      <button id="btnActivity" onclick="switchView('activity')" class="px-3 py-1 rounded text-xs font-medium" title="Recent events across all issues">Activity</button>
+      <button id="btnWorkflow" onclick="switchView('workflow')" class="px-3 py-1 rounded text-xs font-medium" title="Workflow state machine diagram">Workflow</button>
     </div>
   </div>
 
   <!-- Filter bar -->
   <div class="flex items-center gap-3">
-    <button id="btnReady" onclick="toggleReady()" class="px-2 py-1 rounded text-xs font-medium bg-emerald-900/50 text-emerald-400 border border-emerald-700">
+    <button id="btnReady" onclick="toggleReady()" class="px-2 py-1 rounded text-xs font-medium bg-emerald-900/50 text-emerald-400 border border-emerald-700" title="Toggle: sort ready (unblocked) issues first">
       &#9679; Ready (<span id="readyCount">0</span>)
     </button>
-    <button id="btnBlocked" onclick="toggleBlocked()" class="px-2 py-1 rounded text-xs font-medium bg-slate-700 text-slate-400 border border-slate-600">
+    <button onclick="showReadyHelp(this)" class="help-icon bg-slate-700 text-slate-400 hover:text-slate-200" title="What does Ready mean?" aria-label="Explain ready filter">?</button>
+    <button id="btnBlocked" onclick="toggleBlocked()" class="px-2 py-1 rounded text-xs font-medium bg-slate-700 text-slate-400 border border-slate-600" title="Toggle: show only blocked issues">
       &#128279; Blocked (<span id="blockedCount">0</span>)
     </button>
+    <button onclick="showBlockedHelp(this)" class="help-icon bg-slate-700 text-slate-400 hover:text-slate-200" title="What does Blocked mean?" aria-label="Explain blocked filter">?</button>
     <label for="filterPriority" class="text-xs text-slate-400 sr-only">Priority</label>
     <select id="filterPriority" onchange="applyFilters()" class="bg-slate-700 text-slate-200 text-xs rounded px-2 py-1 border border-slate-600">
       <option value="all">Priority: All</option>
@@ -95,9 +104,13 @@ tailwind.config = {
       <option value="3-4">P3-P4</option>
     </select>
     <label for="filterSearch" class="text-xs text-slate-400 sr-only">Search</label>
-    <input id="filterSearch" type="text" placeholder="Search..." oninput="debouncedSearch()"
-           class="bg-slate-700 text-slate-200 text-xs rounded px-3 py-1 border border-slate-600 w-56 focus:outline-none focus:border-blue-500">
-    <button onclick="toggleMultiSelect()" id="btnMultiSelect" class="px-2 py-1 rounded text-xs font-medium bg-slate-700 text-slate-400 border border-slate-600">Select</button>
+    <div class="relative">
+      <input id="filterSearch" type="text" placeholder="Search..." oninput="debouncedSearch()"
+             class="bg-slate-700 text-slate-200 text-xs rounded px-3 py-1 pr-6 border border-slate-600 w-56 focus:outline-none focus:border-blue-500">
+      <button id="searchClear" onclick="document.getElementById('filterSearch').value='';searchResults=null;this.classList.add('hidden');render();"
+              class="hidden absolute right-1.5 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300 text-xs leading-none" title="Clear search" aria-label="Clear search">&times;</button>
+    </div>
+    <button onclick="toggleMultiSelect()" id="btnMultiSelect" class="px-2 py-1 rounded text-xs font-medium bg-slate-700 text-slate-400 border border-slate-600" title="Toggle multi-select mode for batch operations">Select</button>
     <div class="flex gap-1 text-xs">
       <label class="flex items-center gap-1 text-slate-400"><input type="checkbox" id="filterOpen" checked onchange="applyFilters()" class="accent-blue-500"> Open</label>
       <label class="flex items-center gap-1 text-slate-400"><input type="checkbox" id="filterInProgress" checked onchange="applyFilters()" class="accent-blue-500"> Active</label>
@@ -112,7 +125,8 @@ tailwind.config = {
   <div class="flex items-center gap-3 text-xs text-slate-400">
     <button onclick="toggleTheme()" id="themeToggle" class="text-xs px-2 py-1 rounded bg-slate-700 hover:bg-slate-600" title="Toggle theme">&#9788;</button>
     <span id="refreshIndicator" class="opacity-0 text-blue-400">Refreshing...</span>
-    <span id="healthBadge" onclick="showHealthBreakdown()" class="cursor-pointer px-2 py-0.5 rounded text-xs font-bold" title="System Health Score">--</span>
+    <span id="healthBadge" onclick="showHealthBreakdown()" class="cursor-pointer px-2 py-0.5 rounded text-xs font-bold" title="System Health Score — click for breakdown">--</span>
+    <button onclick="showHealthHelp(this)" class="help-icon bg-slate-700 text-slate-400 hover:text-slate-200" title="What is Health Score?" aria-label="Explain health score">?</button>
     <span>Open: <b id="statOpen" class="text-slate-200" aria-live="polite">0</b></span>
     <span>Active: <b id="statActive" class="text-slate-200" aria-live="polite">0</b></span>
     <span>Ready: <b id="statReady" class="text-emerald-400" aria-live="polite">0</b></span>
@@ -127,21 +141,75 @@ tailwind.config = {
       <label class="flex items-center gap-1">
         <input type="checkbox" id="graphEpicsOnly" checked onchange="renderGraph()" class="accent-blue-500"> Epics only
       </label>
-      <button onclick="graphFit()" class="px-2 py-0.5 rounded bg-slate-700 hover:bg-slate-600">Fit</button>
-      <button id="btnCritPath" onclick="toggleCriticalPath()" class="px-2 py-0.5 rounded bg-slate-700 hover:bg-slate-600">Critical Path</button>
+      <button onclick="graphFit()" class="px-2 py-0.5 rounded bg-slate-700 hover:bg-slate-600" title="Reset zoom and center the graph">Fit</button>
+      <button id="btnCritPath" onclick="toggleCriticalPath()" class="px-2 py-0.5 rounded bg-slate-700 hover:bg-slate-600" title="Highlight the longest dependency chain">Critical Path</button>
+      <button id="btnGraphLegend" onclick="toggleGraphLegend()" class="px-2 py-0.5 rounded bg-slate-700 hover:bg-slate-600">Legend</button>
     </div>
-    <div id="cy" class="flex-1"></div>
+    <div class="relative flex-1">
+      <div id="cy" class="absolute inset-0"></div>
+      <div id="graphLegend" class="hidden absolute top-2 right-4 bg-slate-900/95 border border-slate-600 rounded-lg p-3 text-xs z-10 max-w-xs shadow-xl">
+        <div class="text-slate-200 font-medium mb-2">Graph Legend</div>
+        <div class="text-slate-400 space-y-2">
+          <div>
+            <div class="font-medium text-slate-300 mb-1">Node Shapes</div>
+            <div class="grid grid-cols-2 gap-x-3 gap-y-0.5">
+              <div>&#11043; Hexagon = Epic</div>
+              <div>&#9670; Diamond = Bug</div>
+              <div>&#9733; Star = Feature</div>
+              <div>&#9645; Rectangle = Task</div>
+            </div>
+          </div>
+          <div>
+            <div class="font-medium text-slate-300 mb-1">Colors</div>
+            <div class="flex gap-3">
+              <div><span class="inline-block w-3 h-3 rounded" style="background:#64748B"></span> Open</div>
+              <div><span class="inline-block w-3 h-3 rounded" style="background:#3B82F6"></span> In Progress</div>
+              <div><span class="inline-block w-3 h-3 rounded" style="background:#9CA3AF"></span> Done</div>
+            </div>
+          </div>
+          <div>
+            <div class="font-medium text-slate-300 mb-1">Indicators</div>
+            <div>Green border = Ready (no blockers)</div>
+            <div>Larger node = Higher priority</div>
+            <div>Arrows = blocks &rarr; blocked</div>
+          </div>
+          <div>
+            <div class="font-medium text-slate-300 mb-1">Interactions</div>
+            <div>Click node &rarr; Open detail panel</div>
+            <div>Hover node &rarr; Highlight downstream</div>
+          </div>
+        </div>
+        <button onclick="toggleGraphLegend()" class="text-slate-500 hover:text-slate-300 mt-2">Close</button>
+      </div>
+    </div>
   </div>
 
   <!-- Kanban view -->
   <div id="kanbanView" class="flex-1 hidden flex flex-col">
     <div class="flex items-center gap-2 px-4 py-1 bg-slate-800/50 text-xs text-slate-400 border-b border-slate-700">
-      <button id="btnStandard" onclick="switchKanbanMode('standard')" class="px-2 py-0.5 rounded">Standard</button>
-      <button id="btnCluster" onclick="switchKanbanMode('cluster')" class="px-2 py-0.5 rounded">Cluster</button>
+      <button id="btnStandard" onclick="switchKanbanMode('standard')" class="px-2 py-0.5 rounded" title="Three columns: Open, In Progress, Done">Standard</button>
+      <button id="btnCluster" onclick="switchKanbanMode('cluster')" class="px-2 py-0.5 rounded" title="Group issues by parent epic with progress bars">Cluster</button>
       <span class="text-slate-600">|</span>
-      <select id="filterType" onchange="applyTypeFilter()" class="bg-slate-700 text-slate-200 text-xs rounded px-2 py-0.5 border border-slate-600">
+      <select id="filterType" onchange="applyTypeFilter()" class="bg-slate-700 text-slate-200 text-xs rounded px-2 py-0.5 border border-slate-600" title="Filter to one issue type and show its workflow states as columns">
         <option value="">All types</option>
       </select>
+      <span class="text-slate-600">|</span>
+      <button id="btnKanbanLegend" onclick="toggleKanbanLegend()" class="px-2 py-0.5 rounded bg-slate-700 hover:bg-slate-600">Legend</button>
+    </div>
+    <div id="kanbanLegend" class="hidden bg-slate-900/95 border-b border-slate-600 px-4 py-2 text-xs">
+      <div class="flex flex-wrap gap-x-6 gap-y-1 text-slate-400">
+        <span class="font-medium text-slate-300">Card Borders:</span>
+        <span><span class="inline-block w-3 h-0.5 bg-emerald-500 mr-1 align-middle"></span>Ready (no blockers)</span>
+        <span><span class="inline-block w-3 h-0.5 bg-amber-500 mr-1 align-middle"></span>Aging (WIP &gt;4h)</span>
+        <span><span class="inline-block w-3 h-0.5 bg-red-500 mr-1 align-middle"></span>Stale (WIP &gt;24h)</span>
+        <span class="font-medium text-slate-300 ml-4">Badges:</span>
+        <span><span class="text-red-400">&#128279;</span> Blocked by N</span>
+        <span><span class="text-amber-400">&#9889;</span>N = Blocks N downstream</span>
+        <span>&#128100; = Assignee</span>
+        <span class="font-medium text-slate-300 ml-4">Modes:</span>
+        <span>Standard = Open / WIP / Done</span>
+        <span>Cluster = Grouped by epic</span>
+      </div>
     </div>
     <div class="flex gap-4 p-4 flex-1 overflow-x-auto" id="kanbanBoard" role="region" aria-label="Kanban Board"></div>
   </div>
@@ -197,7 +265,7 @@ tailwind.config = {
   <span>Blocked: <b id="footBlocked" class="text-red-400">0</b></span>
   <span>Deps: <b id="footDeps" class="text-slate-300">0</b></span>
   <canvas id="sparkline" width="100" height="20" title="14-day throughput trend" class="opacity-70"></canvas>
-  <span id="staleBadge" class="hidden text-xs bg-red-900/50 text-red-400 px-2 py-0.5 rounded border border-red-800 cursor-pointer" onclick="showStaleIssues()"></span>
+  <span id="staleBadge" class="hidden text-xs bg-red-900/50 text-red-400 px-2 py-0.5 rounded border border-red-800 cursor-pointer" onclick="showStaleIssues()" title="WIP issues with no updates for >2 hours. Click to view."></span>
 </footer>
 
 <div id="batchBar" class="fixed bottom-12 left-1/2 -translate-x-1/2 bg-slate-800 border border-slate-600 rounded-lg px-4 py-2 flex items-center gap-3 shadow-xl hidden z-20">
@@ -419,6 +487,14 @@ function renderKanban() {
   var board = document.getElementById('kanbanBoard');
   var items = getFilteredIssues();
 
+  // Search no-results state
+  if (!items.length && searchResults !== null) {
+    board.innerHTML = '<div class="flex-1 flex items-center justify-center text-slate-500 text-xs">' +
+      '<div class="text-center"><div class="text-slate-300 mb-2">No matches found</div>' +
+      '<div>Try broader search terms or <button onclick="document.getElementById(\'filterSearch\').value=\'\';searchResults=null;render();" class="text-blue-400 hover:underline">clear search</button></div></div></div>';
+    return;
+  }
+
   // Type-filtered kanban: one column per type state, restricted to matching type
   if (typeTemplate) {
     var stateColumns = {};
@@ -459,7 +535,11 @@ function renderStandardKanban(columns) {
         '<span class="text-xs text-slate-500">' + issues.length + '</span>' +
       '</div>' +
       '<div class="flex flex-col gap-2 overflow-y-auto scrollbar-thin pr-1" style="max-height: calc(100vh - 160px);">' +
-        (issues.length ? issues.map(function(i) { return renderCard(i); }).join('') : '<div class="text-xs text-slate-600 italic p-2">No issues</div>') +
+        (issues.length ? issues.map(function(i) { return renderCard(i); }).join('') :
+          '<div class="text-xs text-slate-500 p-4 text-center">' +
+            (col.key === 'open' ? '<div class="mb-2">No open issues</div><button onclick="showCreateForm()" class="text-blue-400 hover:underline">+ Create an issue</button>'
+             : col.key === 'wip' ? '<div>No work in progress</div><div class="text-slate-600 mt-1">Move an open issue to in-progress to start</div>'
+             : '<div>No completed issues yet</div>') + '</div>') +
       '</div></div>';
   }).join('');
 }
@@ -566,14 +646,14 @@ function renderCard(issue) {
       checkbox +
       '<span>' + typeIcon + '</span>' +
       '<span class="w-2 h-2 rounded-full shrink-0" style="background:' + prioColor +
-        '" title="P' + issue.priority + '"></span>' +
+        '" title="Priority ' + issue.priority + ' (' + ['Critical','High','Medium','Low','Backlog'][issue.priority] + ')"></span>' +
       '<span class="font-medium text-slate-200 truncate">' + escHtml(issue.title.slice(0, 50)) + '</span>' +
     '</div>' +
     '<div class="flex items-center gap-2 text-xs text-slate-500">' +
       '<span>' + issue.id + '</span>' +
       '<span class="rounded px-1" style="background:' + catColor + ';color:white">' + issue.status + '</span>' +
       (blockedCount > 0 ? '<span class="text-red-400">\u{1F517} blocked by ' + blockedCount + '</span>' : '') +
-      (impactScores[issue.id] > 0 ? '<span class="text-amber-400" title="Blocks ' + impactScores[issue.id] + ' downstream">\u26A1' + impactScores[issue.id] + '</span>' : '') +
+      (impactScores[issue.id] > 0 ? '<span class="text-amber-400" title="Impact: blocks ' + impactScores[issue.id] + ' downstream issue' + (impactScores[issue.id] !== 1 ? 's' : '') + ' — resolve this to unblock work">\u26A1' + impactScores[issue.id] + '</span>' : '') +
       (issue.assignee ? '<span class="text-slate-400">\u{1F464} ' + escHtml(issue.assignee) + '</span>' : '') +
       (cat === 'wip' && issue.updated_at
         ? (function() {
@@ -767,6 +847,7 @@ function renderGraph() {
 
   cy.on('tap', 'node', function(evt) { openDetail(evt.target.id()); });
   cy.fit(undefined, 30);
+  if (cy.zoom() > 1.5) { cy.zoom(1.5); cy.center(); }
 
   if (criticalPathActive && criticalPathIds.size) {
     cy.nodes().forEach(function(n) {
@@ -807,7 +888,7 @@ function renderGraph() {
   });
 }
 
-function graphFit() { if (cy) cy.fit(undefined, 30); }
+function graphFit() { if (cy) { cy.fit(undefined, 30); if (cy.zoom() > 1.5) { cy.zoom(1.5); cy.center(); } } }
 
 // ---------------------------------------------------------------------------
 // Detail Panel
@@ -981,7 +1062,7 @@ async function openDetail(issueId) {
         '<button onclick="addComment(\'' + d.id + '\')" class="text-xs bg-blue-600 text-white px-2 py-1 rounded hover:bg-blue-700">Send</button>' +
       '</div>' +
     '</div>' +
-    '<div class="mt-3 text-xs text-slate-600 select-all">filigree show ' + d.id + '</div>';
+    '<div class="mt-3 text-xs text-slate-600 select-all" title="Copy this command to view in terminal">filigree show ' + d.id + '</div>';
 
   // Load transitions async and render buttons
   loadTransitions(issueId).then(function(transitions) {
@@ -1059,6 +1140,13 @@ document.addEventListener('keydown', function(e) {
     return;
   }
 
+  if (e.key === '?' && e.shiftKey) {
+    e.preventDefault();
+    localStorage.removeItem('filigree_tour_done');
+    startTour();
+    return;
+  }
+
   if (e.key === '?') {
     var existing = document.getElementById('helpModal');
     if (existing) { existing.remove(); return; }
@@ -1076,8 +1164,12 @@ document.addEventListener('keydown', function(e) {
         '<div><kbd class="bg-slate-700 px-1 rounded">c</kbd> Focus comment input (in detail)</div>' +
         '<div><kbd class="bg-slate-700 px-1 rounded">x</kbd> Close issue (in detail)</div>' +
         '<div><kbd class="bg-slate-700 px-1 rounded">?</kbd> This help</div>' +
+        '<div><kbd class="bg-slate-700 px-1 rounded">Shift+?</kbd> Replay guided tour</div>' +
       '</div>' +
-      '<button onclick="document.getElementById(\'helpModal\').remove()" class="text-xs text-slate-500 mt-3 hover:text-slate-300">Close</button>' +
+      '<div class="mt-3 pt-2 border-t border-slate-700">' +
+        '<button onclick="document.getElementById(\'helpModal\').remove();startTour();" class="text-xs text-blue-400 hover:text-blue-300">Take the guided tour &rarr;</button>' +
+      '</div>' +
+      '<button onclick="document.getElementById(\'helpModal\').remove()" class="text-xs text-slate-500 mt-2 hover:text-slate-300">Close</button>' +
     '</div>';
     document.body.appendChild(modal);
     return;
@@ -1121,6 +1213,110 @@ document.addEventListener('visibilitychange', function() {
 function escHtml(str) {
   if (!str) return '';
   return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+// ---------------------------------------------------------------------------
+// Contextual help system
+// ---------------------------------------------------------------------------
+var _activePopover = null;
+function showPopover(anchorEl, html) {
+  closePopover();
+  var pop = document.createElement('div');
+  pop.id = 'activePopover';
+  pop.className = 'popover bg-slate-900 border border-slate-600 rounded-lg shadow-xl p-3 text-xs';
+  pop.innerHTML = html +
+    '<div class="flex justify-end mt-2"><button onclick="closePopover()" class="text-slate-500 hover:text-slate-300 text-xs">Dismiss</button></div>';
+  document.body.appendChild(pop);
+  var rect = anchorEl.getBoundingClientRect();
+  pop.style.top = (rect.bottom + window.scrollY + 8) + 'px';
+  pop.style.left = Math.max(8, Math.min(rect.left + window.scrollX, window.innerWidth - 340)) + 'px';
+  _activePopover = pop;
+  setTimeout(function() { document.addEventListener('click', _popoverOutsideClick); }, 0);
+}
+function _popoverOutsideClick(e) {
+  if (_activePopover && !_activePopover.contains(e.target)) closePopover();
+}
+function closePopover() {
+  if (_activePopover) { _activePopover.remove(); _activePopover = null; }
+  document.removeEventListener('click', _popoverOutsideClick);
+}
+
+// ---------------------------------------------------------------------------
+// Onboarding tour
+// ---------------------------------------------------------------------------
+var TOUR_STEPS = [
+  { el: '#btnKanban', text: 'The dashboard has 5 views: Kanban (default), Graph, Metrics, Activity, and Workflow. Each shows your issues differently.', pos: 'bottom' },
+  { el: '#btnReady', text: 'Ready issues have no blockers and can be worked on immediately. Toggle this to sort them first.', pos: 'bottom' },
+  { el: '#filterSearch', text: 'Search issues by title or ID. Press "/" anywhere to focus this field instantly.', pos: 'bottom' },
+  { el: '#healthBadge', text: 'Health score (0\u2013100) measures project flow. Click it for a detailed breakdown of what affects the score.', pos: 'bottom' },
+  { el: '#kanbanBoard', text: 'Click any card to open its detail panel. Use j/k to navigate between cards with your keyboard.', pos: 'top' },
+  { el: null, text: 'Press "?" anytime to see all keyboard shortcuts. Look for small "?" icons next to features for contextual help. Happy tracking!', pos: 'center' },
+];
+
+function startTour() {
+  showTourStep(0);
+}
+
+function showTourStep(index) {
+  var prev = document.getElementById('tourOverlay');
+  if (prev) prev.remove();
+  document.querySelectorAll('.tour-tooltip').forEach(function(el) { el.remove(); });
+  document.querySelectorAll('.tour-highlight').forEach(function(el) { el.classList.remove('tour-highlight'); });
+
+  if (index >= TOUR_STEPS.length) {
+    localStorage.setItem('filigree_tour_done', 'true');
+    return;
+  }
+
+  var step = TOUR_STEPS[index];
+  var targetEl = step.el ? document.querySelector(step.el) : null;
+  if (targetEl) targetEl.classList.add('tour-highlight');
+
+  var overlay = document.createElement('div');
+  overlay.id = 'tourOverlay';
+  overlay.className = 'tour-overlay';
+
+  var tooltip = document.createElement('div');
+  tooltip.className = 'tour-tooltip bg-slate-800 border border-blue-500 rounded-lg p-4 shadow-xl';
+  tooltip.innerHTML =
+    '<div class="text-sm text-slate-200 mb-3 leading-relaxed">' + step.text + '</div>' +
+    '<div class="flex items-center justify-between">' +
+      '<span class="text-xs text-slate-500">' + (index + 1) + ' of ' + TOUR_STEPS.length + '</span>' +
+      '<div class="flex gap-2">' +
+        '<button onclick="endTour()" class="text-xs text-slate-500 hover:text-slate-300 px-2 py-1">Skip</button>' +
+        '<button onclick="showTourStep(' + (index + 1) + ')" class="text-xs bg-blue-600 text-white px-3 py-1.5 rounded hover:bg-blue-700">' +
+          (index === TOUR_STEPS.length - 1 ? 'Done' : 'Next') +
+        '</button>' +
+      '</div>' +
+    '</div>';
+
+  document.body.appendChild(overlay);
+  document.body.appendChild(tooltip);
+
+  if (targetEl) {
+    var rect = targetEl.getBoundingClientRect();
+    if (step.pos === 'bottom') {
+      tooltip.style.top = (rect.bottom + 12) + 'px';
+      tooltip.style.left = Math.max(16, Math.min(rect.left, window.innerWidth - 380)) + 'px';
+    } else if (step.pos === 'top') {
+      tooltip.style.bottom = (window.innerHeight - rect.top + 12) + 'px';
+      tooltip.style.left = Math.max(16, Math.min(rect.left, window.innerWidth - 380)) + 'px';
+    }
+  } else {
+    tooltip.style.top = '50%';
+    tooltip.style.left = '50%';
+    tooltip.style.transform = 'translate(-50%, -50%)';
+  }
+
+  overlay.onclick = function() { endTour(); };
+}
+
+function endTour() {
+  var overlay = document.getElementById('tourOverlay');
+  if (overlay) overlay.remove();
+  document.querySelectorAll('.tour-tooltip').forEach(function(el) { el.remove(); });
+  document.querySelectorAll('.tour-highlight').forEach(function(el) { el.classList.remove('tour-highlight'); });
+  localStorage.setItem('filigree_tour_done', 'true');
 }
 
 function setLoading(el, loading) {
@@ -1206,8 +1402,32 @@ async function reopenIssue(issueId) {
 }
 
 async function claimIssue(issueId) {
-  var name = window.prompt('Claim as:');
-  if (!name) return;
+  var existing = document.getElementById('claimModal');
+  if (existing) existing.remove();
+  var saved = localStorage.getItem('filigree_claim_name') || '';
+  var modal = document.createElement('div');
+  modal.id = 'claimModal';
+  modal.className = 'fixed inset-0 bg-black/50 flex items-center justify-center z-50';
+  modal.innerHTML = '<div class="bg-slate-800 rounded-lg border border-slate-600 p-4 w-72 shadow-xl">' +
+    '<div class="text-sm text-slate-200 mb-2">Claim issue</div>' +
+    '<input id="claimNameInput" type="text" value="' + escHtml(saved) + '" placeholder="Your name..." class="w-full bg-slate-700 text-slate-200 text-xs rounded px-3 py-2 border border-slate-600 mb-3 focus:outline-none focus:border-blue-500">' +
+    '<div class="flex justify-end gap-2">' +
+      '<button onclick="document.getElementById(\'claimModal\').remove()" class="text-xs bg-slate-700 px-3 py-1.5 rounded hover:bg-slate-600">Cancel</button>' +
+      '<button onclick="confirmClaim(\'' + issueId + '\')" class="text-xs bg-emerald-600 text-white px-3 py-1.5 rounded hover:bg-emerald-700">Claim</button>' +
+    '</div></div>';
+  document.body.appendChild(modal);
+  modal.onclick = function(e) { if (e.target === modal) modal.remove(); };
+  var inp = document.getElementById('claimNameInput');
+  inp.focus();
+  inp.addEventListener('keydown', function(e) { if (e.key === 'Enter') confirmClaim(issueId); });
+}
+
+async function confirmClaim(issueId) {
+  var name = document.getElementById('claimNameInput').value.trim();
+  if (!name) { showToast('Name is required', 'error'); return; }
+  localStorage.setItem('filigree_claim_name', name);
+  var modal = document.getElementById('claimModal');
+  if (modal) modal.remove();
   var resp = await fetch('/api/issue/' + issueId + '/claim', {
     method: 'POST', headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({assignee: name}),
@@ -1344,7 +1564,11 @@ async function loadMetrics() {
           '<table class="text-xs w-full"><thead><tr class="text-slate-500">' +
             '<th class="text-left py-1 pr-4">Type</th><th class="text-left py-1 pr-4">Avg Cycle</th><th class="text-left py-1">Count</th>' +
           '</tr></thead><tbody>' + byTypeHtml + '</tbody></table></div>'
-        : '<div class="text-slate-500">No completed issues in this period.</div>');
+        : '<div class="text-slate-500 p-6 text-center">' +
+            '<div class="text-slate-300 font-medium mb-2">No completed issues in this period</div>' +
+            '<div class="text-slate-500">Metrics track throughput, cycle time, and lead time.</div>' +
+            '<div class="text-slate-500 mt-1">Close issues to see flow data here.</div>' +
+            '<div class="mt-3"><button onclick="document.getElementById(\'metricsDays\').value=\'90\';loadMetrics()" class="text-blue-400 hover:underline text-xs">Try 90-day window</button></div></div>');
 
     // Agent workload
     var agentLoad = {};
@@ -1383,14 +1607,25 @@ async function loadActivity() {
   try {
     var resp = await fetch('/api/activity?limit=50');
     var events = await resp.json();
-    if (!events.length) { container.innerHTML = '<div class="text-slate-500">No recent activity.</div>'; return; }
+    if (!events.length) { container.innerHTML = '<div class="text-slate-500 p-6 text-center"><div class="text-slate-300 font-medium mb-2">No recent activity</div><div>Events appear here when issues are created, updated, or closed.</div></div>'; return; }
+    var lastDay = '';
     container.innerHTML = events.map(function(e) {
       var time = e.created_at ? e.created_at.slice(5, 16) : '';
+      var day = e.created_at ? e.created_at.slice(0, 10) : '';
+      var separator = '';
+      if (day && day !== lastDay) {
+        lastDay = day;
+        separator = '<div class="flex items-center gap-2 py-2 mt-2 first:mt-0">' +
+          '<div class="flex-1 border-t border-slate-700"></div>' +
+          '<span class="text-xs text-slate-500 font-medium shrink-0">' + day + '</span>' +
+          '<div class="flex-1 border-t border-slate-700"></div>' +
+        '</div>';
+      }
       var title = e.issue_title ? escHtml(e.issue_title.slice(0, 50)) : e.issue_id;
       var detail = '';
       if (e.event_type === 'status_changed') detail = e.old_value + ' \u2192 ' + e.new_value;
       else if (e.new_value) detail = e.new_value;
-      return '<div class="flex items-start gap-3 py-2 border-b border-slate-800 cursor-pointer hover:bg-slate-800/50" onclick="openDetail(\'' + e.issue_id + '\')">' +
+      return separator + '<div class="flex items-start gap-3 py-2 border-b border-slate-800 cursor-pointer hover:bg-slate-800/50" onclick="openDetail(\'' + e.issue_id + '\')">' +
         '<span class="text-slate-600 shrink-0 w-24">' + time + '</span>' +
         '<span class="text-slate-400 shrink-0 w-32">' + escHtml(e.event_type) + '</span>' +
         '<span class="text-slate-300 truncate">' + title + '</span>' +
@@ -1415,6 +1650,8 @@ function debouncedSearch() {
 var searchResults = null;
 async function doSearch() {
   var q = document.getElementById('filterSearch').value.trim();
+  var clearBtn = document.getElementById('searchClear');
+  if (clearBtn) clearBtn.classList.toggle('hidden', !q);
   if (!q) { searchResults = null; render(); return; }
   try {
     var resp = await fetch('/api/search?q=' + encodeURIComponent(q) + '&limit=100');
@@ -1448,6 +1685,24 @@ function trackChanges(newIssues) {
 // ---------------------------------------------------------------------------
 var criticalPathIds = new Set();
 var criticalPathActive = false;
+
+function toggleGraphLegend() {
+  var legend = document.getElementById('graphLegend');
+  legend.classList.toggle('hidden');
+  var btn = document.getElementById('btnGraphLegend');
+  btn.className = legend.classList.contains('hidden')
+    ? 'px-2 py-0.5 rounded bg-slate-700 hover:bg-slate-600'
+    : 'px-2 py-0.5 rounded bg-blue-600 text-white';
+}
+
+function toggleKanbanLegend() {
+  var legend = document.getElementById('kanbanLegend');
+  legend.classList.toggle('hidden');
+  var btn = document.getElementById('btnKanbanLegend');
+  btn.className = legend.classList.contains('hidden')
+    ? 'px-2 py-0.5 rounded bg-slate-700 hover:bg-slate-600'
+    : 'px-2 py-0.5 rounded bg-blue-600 text-white';
+}
 
 async function toggleCriticalPath() {
   criticalPathActive = !criticalPathActive;
@@ -1552,6 +1807,44 @@ function showHealthBreakdown() {
 }
 
 // ---------------------------------------------------------------------------
+// Contextual help popovers
+// ---------------------------------------------------------------------------
+function showHealthHelp(btn) {
+  showPopover(btn,
+    '<div class="text-slate-200 font-medium mb-2">Health Score (0\u2013100)</div>' +
+    '<div class="text-slate-400 space-y-1">' +
+      '<div><span class="text-emerald-400 font-medium">Blocked</span> (25 pts) \u2014 Fewer blocked issues = higher score</div>' +
+      '<div><span class="text-blue-400 font-medium">Freshness</span> (25 pts) \u2014 WIP items updated recently, not stale</div>' +
+      '<div><span class="text-amber-400 font-medium">Ready</span> (25 pts) \u2014 Enough unblocked work available</div>' +
+      '<div><span class="text-slate-300 font-medium">Balance</span> (25 pts) \u2014 No agent overloaded with WIP</div>' +
+    '</div>' +
+    '<div class="text-slate-500 mt-2 pt-2 border-t border-slate-700">Click the badge number for a detailed breakdown.</div>'
+  );
+}
+
+function showReadyHelp(btn) {
+  showPopover(btn,
+    '<div class="text-slate-200 font-medium mb-2">Ready Issues</div>' +
+    '<div class="text-slate-400 space-y-1">' +
+      '<div>Issues with <span class="text-emerald-400">no open blockers</span> that can be worked on immediately.</div>' +
+      '<div class="mt-1"><span class="text-emerald-400">&#9679;</span> Green left border on cards = ready</div>' +
+      '<div class="mt-1">Toggle this button to sort ready issues to the top.</div>' +
+    '</div>'
+  );
+}
+
+function showBlockedHelp(btn) {
+  showPopover(btn,
+    '<div class="text-slate-200 font-medium mb-2">Blocked Issues</div>' +
+    '<div class="text-slate-400 space-y-1">' +
+      '<div>Issues that <span class="text-red-400">depend on other incomplete work</span>.</div>' +
+      '<div class="mt-1"><span class="text-red-400">&#128279;</span> Shows "blocked by N" on cards</div>' +
+      '<div class="mt-1">Toggle to filter to only blocked issues \u2014 useful for identifying bottlenecks.</div>' +
+    '</div>'
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Plan/milestone tree view
 // ---------------------------------------------------------------------------
 async function loadPlanView(milestoneId) {
@@ -1607,11 +1900,14 @@ async function loadWorkflow() {
   var wfSelect = document.getElementById('workflowType');
   // Populate type dropdown if not done
   if (wfSelect && wfSelect.options.length <= 1) {
-    var types = {}; allIssues.forEach(function(i) { types[i.type] = true; });
-    Object.keys(types).sort().forEach(function(t) {
-      var opt = document.createElement('option'); opt.value = t; opt.textContent = t;
-      wfSelect.appendChild(opt);
-    });
+    var WORKFLOW_HIDDEN = {phase:1, step:1, work_package:1, deliverable:1};
+    try {
+      var tr = await fetch('/api/types'); var registered = await tr.json();
+      registered.filter(function(t) { return !WORKFLOW_HIDDEN[t.type]; }).forEach(function(t) {
+        var opt = document.createElement('option'); opt.value = t.type; opt.textContent = t.display_name || t.type;
+        wfSelect.appendChild(opt);
+      });
+    } catch(e) {}
   }
   var typeName = wfSelect ? wfSelect.value : '';
   if (!typeName) return;
@@ -1659,6 +1955,7 @@ function renderWorkflowGraph(template, stateCounts) {
     minZoom: 0.3, maxZoom: 3,
   });
   window._workflowCy.fit(undefined, 40);
+  if (window._workflowCy.zoom() > 1.5) { window._workflowCy.zoom(1.5); window._workflowCy.center(); }
 }
 
 // ---------------------------------------------------------------------------
@@ -1758,14 +2055,16 @@ async function showCreateForm() {
           '<select id="createType" class="w-full bg-slate-700 text-slate-200 text-xs rounded px-2 py-2 border border-slate-600 mt-1">' + typeOpts + '</select></div>' +
         '<div class="w-20"><label for="createPriority" class="text-xs text-slate-400">Priority</label>' +
           '<select id="createPriority" class="w-full bg-slate-700 text-slate-200 text-xs rounded px-2 py-2 border border-slate-600 mt-1">' +
-            '<option value="0">P0</option><option value="1">P1</option><option value="2" selected>P2</option><option value="3">P3</option><option value="4">P4</option>' +
+            '<option value="0">P0 \u2014 Critical</option><option value="1">P1 \u2014 High</option><option value="2" selected>P2 \u2014 Medium</option><option value="3">P3 \u2014 Low</option><option value="4">P4 \u2014 Backlog</option>' +
           '</select></div></div>' +
+      '<div class="text-xs text-slate-500 -mt-1">Type determines workflow states. Use P0\u2013P1 sparingly.</div>' +
       '<div><label for="createDesc" class="text-xs text-slate-400">Description</label>' +
         '<textarea id="createDesc" rows="3" class="w-full bg-slate-700 text-slate-200 text-xs rounded px-3 py-2 border border-slate-600 mt-1 focus:outline-none focus:border-blue-500 resize-none"></textarea></div>' +
       '<div><label for="createAssignee" class="text-xs text-slate-400">Assignee</label>' +
         '<input id="createAssignee" type="text" class="w-full bg-slate-700 text-slate-200 text-xs rounded px-3 py-2 border border-slate-600 mt-1 focus:outline-none focus:border-blue-500"></div>' +
       '<div><label for="createLabels" class="text-xs text-slate-400">Labels (comma-separated)</label>' +
-        '<input id="createLabels" type="text" class="w-full bg-slate-700 text-slate-200 text-xs rounded px-3 py-2 border border-slate-600 mt-1 focus:outline-none focus:border-blue-500"></div>' +
+        '<input id="createLabels" type="text" class="w-full bg-slate-700 text-slate-200 text-xs rounded px-3 py-2 border border-slate-600 mt-1 focus:outline-none focus:border-blue-500">' +
+        '<div class="text-xs text-slate-500 mt-0.5">Example: ui, backend, urgent</div></div>' +
     '</div>' +
     '<div class="flex justify-end gap-2 mt-4">' +
       '<button onclick="document.getElementById(\'createModal\').remove()" class="text-xs bg-slate-700 px-3 py-1.5 rounded hover:bg-slate-600">Cancel</button>' +
@@ -1966,6 +2265,7 @@ fetchData().then(function() {
   if (kanbanMode === 'cluster') switchKanbanMode('cluster');
   else switchKanbanMode('standard');
   if (selectedIssue) openDetail(selectedIssue);
+  if (!localStorage.getItem('filigree_tour_done')) setTimeout(startTour, 1500);
 });
 setInterval(function() { if (!document.hidden) fetchData(); }, REFRESH_INTERVAL);
 </script>
