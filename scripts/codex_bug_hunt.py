@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import os
 import re
 import shutil
 import sys
@@ -145,16 +146,27 @@ def _display_path(path: Path, base: Path) -> Path:
 # ── File discovery ──────────────────────────────────────────────────────
 
 
-def _is_excluded(path: Path) -> bool:
-    return any(part in EXCLUDE_DIRS for part in path.parts) or path.suffix in {".pyc", ".pyo"}
-
-
 def _is_python(path: Path) -> bool:
     return path.suffix == ".py" and not path.name.startswith("test_")
 
 
-def find_files(root: Path, *, file_type: str) -> list[Path]:
-    candidates = sorted(p for p in root.rglob("*") if p.is_file() and not _is_excluded(p))
+def find_files(root: Path, *, file_type: str, exclude_dirs: set[Path] | None = None) -> list[Path]:
+    """Walk *root* collecting files, pruning EXCLUDE_DIRS and *exclude_dirs* in-place."""
+
+    extra_exclude = {p.resolve() for p in exclude_dirs} if exclude_dirs else set()
+    candidates: list[Path] = []
+    for dirpath, dirnames, filenames in os.walk(root):
+        # Prune in-place so os.walk never descends into excluded subtrees
+        dirnames[:] = [
+            d for d in dirnames if d not in EXCLUDE_DIRS and (Path(dirpath) / d).resolve() not in extra_exclude
+        ]
+        for fname in filenames:
+            fpath = Path(dirpath) / fname
+            if fpath.suffix in {".pyc", ".pyo"}:
+                continue
+            candidates.append(fpath)
+
+    candidates.sort()
     if file_type == "python":
         candidates = [p for p in candidates if _is_python(p)]
     else:
@@ -385,7 +397,7 @@ def main() -> int:
         print(f"Error: scan root is not a directory: {root_dir}", file=sys.stderr)
         return 1
 
-    files = find_files(root_dir, file_type=args.file_type)
+    files = find_files(root_dir, file_type=args.file_type, exclude_dirs={output_dir})
     if not files:
         print(f"No files found under {root_dir}", file=sys.stderr)
         return 1
