@@ -11,7 +11,7 @@ Agent-native issue tracker with convention-based project discovery.
 
 Filigree is a lightweight, SQLite-backed issue tracker designed for AI coding agents (Claude Code, Codex, etc.) to use as first-class citizens. It exposes 43 MCP tools so agents interact natively, plus a full CLI for humans and background subagents.
 
-Traditional issue trackers are human-first — agents have to scrape CLI output or parse API responses. Filigree flips this: agents read a pre-computed `context.md` at session start, claim work with optimistic locking, follow enforced workflow state machines, and resume sessions via event streams.
+Traditional issue trackers are human-first — agents have to scrape CLI output or parse API responses. Filigree flips this: agents read a pre-computed `context.md` at session start, claim work with optimistic locking, follow enforced workflow state machines, and resume sessions via event streams. For Claude Code, `filigree install` wires up session hooks and a workflow skill pack so agents get project context automatically.
 
 Filigree is single-project and local-first. No server, no cloud, no accounts. Just a `.filigree/` directory (like `.git/`) containing a SQLite database, configuration, and auto-generated context summary.
 
@@ -19,11 +19,13 @@ Filigree is single-project and local-first. No server, no cloud, no accounts. Ju
 
 - **MCP server** with 43 tools — agents interact natively without parsing text
 - **Full CLI** with `--json` output for background subagents and `--actor` for audit trails
+- **Claude Code integration** — session hooks inject project snapshots at startup; bundled skill pack teaches agents workflow patterns
 - **Workflow templates** — 24 issue types across 9 packs with enforced state machines
 - **Dependency graph** — blockers, ready-queue, critical path analysis
 - **Hierarchical planning** — milestone/phase/step hierarchies with automatic unblocking
 - **Atomic claiming** — optimistic locking prevents double-work in multi-agent scenarios
 - **Pre-computed context** — `context.md` regenerated on every mutation for instant agent orientation
+- **Web dashboard** — real-time project overview with filtering and search (optional extra)
 - **Minimal dependencies** — just Python + SQLite + click (no framework overhead)
 - **Session resumption** — `get_changes --since <timestamp>` to catch up after downtime
 
@@ -33,7 +35,7 @@ Filigree is single-project and local-first. No server, no cloud, no accounts. Ju
 pip install filigree        # or: uv add filigree
 cd my-project
 filigree init               # Create .filigree/ directory
-filigree install             # Set up MCP, CLAUDE.md, .gitignore
+filigree install             # Set up MCP, hooks, skills, CLAUDE.md, .gitignore
 filigree create "Set up CI pipeline" --type=task --priority=1
 filigree ready               # See what's ready to work on
 filigree update <id> --status=in_progress
@@ -63,6 +65,19 @@ cd filigree && uv sync
 | `filigree` | CLI interface |
 | `filigree-mcp` | MCP server (stdio transport) |
 | `filigree-dashboard` | Web UI (port 8377) |
+
+### Claude Code Setup
+
+`filigree install` configures everything in one step. To install individual components:
+
+```bash
+filigree install --claude-code   # MCP server + CLAUDE.md instructions
+filigree install --hooks         # SessionStart hooks (project snapshot + dashboard auto-start)
+filigree install --skills        # Workflow skill pack for agents
+filigree doctor                  # Verify installation health
+```
+
+The session hook runs `filigree session-context` at startup, giving the agent a snapshot of in-progress work, ready tasks, and the critical path. The skill pack (`filigree-workflow`) teaches agents triage patterns, team coordination, and sprint planning via progressive disclosure.
 
 ## Why Filigree?
 

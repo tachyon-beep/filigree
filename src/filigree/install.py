@@ -411,6 +411,41 @@ def install_claude_code_hooks(project_root: Path) -> tuple[bool, str]:
 
 
 # ---------------------------------------------------------------------------
+# Claude Code skills
+# ---------------------------------------------------------------------------
+
+SKILL_NAME = "filigree-workflow"
+SKILL_MARKER = "SKILL.md"
+
+
+def _get_skills_source_dir() -> Path:
+    """Return the path to the bundled skills directory inside the package."""
+    return Path(__file__).parent / "skills"
+
+
+def install_skills(project_root: Path) -> tuple[bool, str]:
+    """Copy filigree skill pack into ``.claude/skills/`` for the project.
+
+    Idempotent — overwrites existing skill files to keep them up-to-date
+    with the installed filigree version.
+    """
+    source_dir = _get_skills_source_dir()
+    skill_source = source_dir / SKILL_NAME
+    if not skill_source.is_dir():
+        return False, f"Skill source not found at {skill_source}"
+
+    target_dir = project_root / ".claude" / "skills" / SKILL_NAME
+    target_dir.parent.mkdir(parents=True, exist_ok=True)
+
+    # Copy the skill, overwriting to pick up version upgrades
+    if target_dir.exists():
+        shutil.rmtree(target_dir)
+    shutil.copytree(skill_source, target_dir)
+
+    return True, f"Installed skill pack to {target_dir}"
+
+
+# ---------------------------------------------------------------------------
 # Doctor checks
 # ---------------------------------------------------------------------------
 
@@ -665,7 +700,21 @@ def run_doctor(project_root: Path | None = None) -> list[CheckResult]:
             )
         )
 
-    # 9. Check CLAUDE.md has instructions
+    # 9. Check Claude Code skills
+    skill_md = (filigree_dir.parent) / ".claude" / "skills" / SKILL_NAME / SKILL_MARKER
+    if skill_md.exists():
+        results.append(CheckResult("Claude Code skills", True, f"{SKILL_NAME} skill installed"))
+    else:
+        results.append(
+            CheckResult(
+                "Claude Code skills",
+                False,
+                f"{SKILL_NAME} skill not found in .claude/skills/",
+                fix_hint="Run: filigree install --skills",
+            )
+        )
+
+    # 10. Check CLAUDE.md has instructions
     claude_md = (filigree_dir.parent) / "CLAUDE.md"
     if claude_md.exists():
         content = claude_md.read_text()
@@ -690,7 +739,7 @@ def run_doctor(project_root: Path | None = None) -> list[CheckResult]:
             )
         )
 
-    # 10. Check AGENTS.md has instructions
+    # 11. Check AGENTS.md has instructions
     agents_md = (filigree_dir.parent) / "AGENTS.md"
     if agents_md.exists():
         content = agents_md.read_text()
@@ -707,7 +756,7 @@ def run_doctor(project_root: Path | None = None) -> list[CheckResult]:
             )
     # AGENTS.md is optional — don't warn if it doesn't exist
 
-    # 11. Check git working tree status
+    # 12. Check git working tree status
     try:
         result = subprocess.run(
             ["git", "-C", str(filigree_dir.parent), "status", "--porcelain"],

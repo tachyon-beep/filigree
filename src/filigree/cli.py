@@ -777,6 +777,7 @@ def migrate(from_beads: bool, beads_db: str | None) -> None:
 @click.option("--agents-md", is_flag=True, help="Inject instructions into AGENTS.md only")
 @click.option("--gitignore", is_flag=True, help="Add .filigree/ to .gitignore only")
 @click.option("--hooks", "hooks_only", is_flag=True, help="Install Claude Code hooks only")
+@click.option("--skills", "skills_only", is_flag=True, help="Install Claude Code skills only")
 def install(
     claude_code: bool,
     codex: bool,
@@ -784,10 +785,11 @@ def install(
     agents_md: bool,
     gitignore: bool,
     hooks_only: bool,
+    skills_only: bool,
 ) -> None:
     """Install filigree into the current project.
 
-    With no flags, installs everything: MCP servers, instructions, gitignore, hooks.
+    With no flags, installs everything: MCP servers, instructions, gitignore, hooks, skills.
     With specific flags, installs only the selected components.
     """
     from filigree.install import (
@@ -796,6 +798,7 @@ def install(
         install_claude_code_hooks,
         install_claude_code_mcp,
         install_codex_mcp,
+        install_skills,
     )
 
     try:
@@ -805,7 +808,7 @@ def install(
         sys.exit(1)
 
     project_root = filigree_dir.parent
-    install_all = not any([claude_code, codex, claude_md, agents_md, gitignore, hooks_only])
+    install_all = not any([claude_code, codex, claude_md, agents_md, gitignore, hooks_only, skills_only])
 
     results: list[tuple[str, bool, str]] = []
 
@@ -832,6 +835,10 @@ def install(
     if install_all or claude_code or hooks_only:
         ok, msg = install_claude_code_hooks(project_root)
         results.append(("Claude Code hooks", ok, msg))
+
+    if install_all or claude_code or skills_only:
+        ok, msg = install_skills(project_root)
+        results.append(("Claude Code skills", ok, msg))
 
     for name, ok, msg in results:
         icon = "OK" if ok else "!!"
