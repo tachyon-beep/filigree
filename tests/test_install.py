@@ -21,6 +21,7 @@ from filigree.install import (
     _find_filigree_mcp_command,
     ensure_gitignore,
     inject_instructions,
+    install_claude_code_hooks,
     install_claude_code_mcp,
     install_codex_mcp,
     run_doctor,
@@ -388,6 +389,87 @@ class TestInstallCodexMcp:
             ok, msg = install_codex_mcp(tmp_path)
         assert ok
         assert "Already configured" in msg
+
+
+class TestInstallClaudeCodeHooks:
+    def test_creates_settings_json(self, tmp_path: Path) -> None:
+        ok, _msg = install_claude_code_hooks(tmp_path)
+        assert ok
+        settings_path = tmp_path / ".claude" / "settings.json"
+        assert settings_path.exists()
+        data = json.loads(settings_path.read_text())
+        assert "hooks" in data
+        cmds = [h["command"] for m in data["hooks"]["SessionStart"] for h in m["hooks"]]
+        assert "filigree session-context" in cmds
+
+    def test_merges_with_existing_settings(self, tmp_path: Path) -> None:
+        claude_dir = tmp_path / ".claude"
+        claude_dir.mkdir()
+        existing = {"someOtherKey": True}
+        (claude_dir / "settings.json").write_text(json.dumps(existing))
+        ok, _msg = install_claude_code_hooks(tmp_path)
+        assert ok
+        data = json.loads((claude_dir / "settings.json").read_text())
+        assert data["someOtherKey"] is True
+        assert "hooks" in data
+
+    def test_idempotent(self, tmp_path: Path) -> None:
+        install_claude_code_hooks(tmp_path)
+        install_claude_code_hooks(tmp_path)
+        data = json.loads((tmp_path / ".claude" / "settings.json").read_text())
+        cmds = [h["command"] for m in data["hooks"]["SessionStart"] for h in m["hooks"]]
+        # Should appear exactly once
+        assert cmds.count("filigree session-context") == 1
+
+    def test_handles_corrupt_settings(self, tmp_path: Path) -> None:
+        claude_dir = tmp_path / ".claude"
+        claude_dir.mkdir()
+        (claude_dir / "settings.json").write_text("{corrupt json!!!")
+        ok, _msg = install_claude_code_hooks(tmp_path)
+        assert ok
+        # Backup should exist
+        assert (claude_dir / "settings.json.bak").exists()
+
+    def test_dashboard_hook_conditional(self, tmp_path: Path) -> None:
+        """Dashboard hook is added only when dashboard extra is importable."""
+        ok, _msg = install_claude_code_hooks(tmp_path)
+        assert ok
+        data = json.loads((tmp_path / ".claude" / "settings.json").read_text())
+        cmds = [h["command"] for m in data["hooks"]["SessionStart"] for h in m["hooks"]]
+        # filigree.dashboard is available in this test env
+        # so ensure-dashboard should be registered
+        try:
+            import filigree.dashboard  # noqa: F401
+
+            assert "filigree ensure-dashboard" in cmds
+        except ImportError:
+            assert "filigree ensure-dashboard" not in cmds
+
+
+class TestDoctorHooksCheck:
+    def test_passes_when_hooks_registered(self, filigree_project: Path) -> None:
+        install_claude_code_hooks(filigree_project)
+        results = run_doctor(filigree_project)
+        hooks_check = next((r for r in results if r.name == "Claude Code hooks"), None)
+        assert hooks_check is not None
+        assert hooks_check.passed
+
+    def test_fails_when_settings_missing(self, filigree_project: Path) -> None:
+        results = run_doctor(filigree_project)
+        hooks_check = next((r for r in results if r.name == "Claude Code hooks"), None)
+        assert hooks_check is not None
+        assert not hooks_check.passed
+        assert "No .claude/settings.json" in hooks_check.message
+
+    def test_fails_when_hooks_absent(self, filigree_project: Path) -> None:
+        claude_dir = filigree_project / ".claude"
+        claude_dir.mkdir()
+        (claude_dir / "settings.json").write_text(json.dumps({"hooks": {}}))
+        results = run_doctor(filigree_project)
+        hooks_check = next((r for r in results if r.name == "Claude Code hooks"), None)
+        assert hooks_check is not None
+        assert not hooks_check.passed
+        assert "session-context hook not found" in hooks_check.message
 
 
 class TestCheckResult:
