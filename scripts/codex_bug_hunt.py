@@ -131,6 +131,17 @@ For each bug found, use this format:
 """
 
 
+# ── Helpers ─────────────────────────────────────────────────────────────
+
+
+def _display_path(path: Path, base: Path) -> Path:
+    """Best-effort relative path for display; falls back to absolute."""
+    try:
+        return path.relative_to(base)
+    except ValueError:
+        return path
+
+
 # ── File discovery ──────────────────────────────────────────────────────
 
 
@@ -262,7 +273,7 @@ async def analyse_files(
             if skip_existing and out.exists():
                 done += 1
                 report_paths.append(out)
-                print(f"  [skip] {fpath.relative_to(repo_root)}", file=sys.stderr)
+                print(f"  [skip] {_display_path(fpath, repo_root)}", file=sys.stderr)
                 continue
 
             prompt = PROMPT_TEMPLATE.format(file_path=fpath, context=context)
@@ -282,10 +293,10 @@ async def analyse_files(
             done += 1
             if isinstance(result, Exception):
                 failed.append((fpath, result))
-                print(f"  FAIL {fpath.relative_to(repo_root)}: {result}", file=sys.stderr)
+                print(f"  FAIL {_display_path(fpath, repo_root)}: {result}", file=sys.stderr)
             else:
                 report_paths.append(out)
-                print(f"  [{done}/{total}] {fpath.relative_to(repo_root)}", file=sys.stderr)
+                print(f"  [{done}/{total}] {_display_path(fpath, repo_root)}", file=sys.stderr)
 
     # ── Summary stats (scoped to this run's reports only) ────────
     stats: Counter[str] = Counter()
@@ -362,6 +373,10 @@ def main() -> int:
 
     args = parser.parse_args()
 
+    if args.batch_size < 1:
+        print("Error: --batch-size must be at least 1", file=sys.stderr)
+        return 1
+
     repo_root = Path(__file__).resolve().parents[1]
     root_dir = (repo_root / args.root).resolve()
     output_dir = (repo_root / args.output_dir).resolve()
@@ -378,7 +393,7 @@ def main() -> int:
     if args.dry_run:
         print(f"Would analyse {len(files)} files:")
         for f in files:
-            print(f"  {f.relative_to(repo_root)}")
+            print(f"  {_display_path(f, repo_root)}")
         return 0
 
     if shutil.which("codex") is None:
