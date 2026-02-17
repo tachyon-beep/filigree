@@ -1562,6 +1562,7 @@ _RELEASE_PACK: dict[str, Any] = {
                 {"from": "staged", "to": "released", "enforcement": "soft"},
                 {"from": "staged", "to": "development", "enforcement": "soft"},
                 {"from": "released", "to": "rolled_back", "enforcement": "soft"},
+                {"from": "rolled_back", "to": "development", "enforcement": "soft"},
             ],
             "fields_schema": [
                 {

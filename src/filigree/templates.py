@@ -220,9 +220,33 @@ class TemplateRegistry:
             msg = f"Invalid type name '{type_name}': must match ^[a-z][a-z0-9_]{{0,63}}$"
             raise ValueError(msg)
 
+        # Defensive shape checks (must come before size limits to avoid TypeError on None)
+        raw_states = raw.get("states")
+        if not isinstance(raw_states, list):
+            msg = f"Type '{type_name}': 'states' must be a list, got {type(raw_states).__name__}"
+            raise ValueError(msg)
+        for i, s in enumerate(raw_states):
+            if not isinstance(s, dict) or "name" not in s or "category" not in s:
+                msg = f"Type '{type_name}': state at index {i} must be a dict with 'name' and 'category'"
+                raise ValueError(msg)
+
+        # Enforcement validation
+        valid_enforcement = {"hard", "soft", "none"}
+        for t in raw.get("transitions", []):
+            enforcement_val = t.get("enforcement")
+            if enforcement_val not in valid_enforcement:
+                allowed = ", ".join(sorted(valid_enforcement))
+                msg = (
+                    f"Type '{type_name}': transition "
+                    f"{t.get('from')}->{t.get('to')} "
+                    f"has invalid enforcement '{enforcement_val}' "
+                    f"(must be one of: {allowed})"
+                )
+                raise ValueError(msg)
+
         # Size limit checks (review B5 -- prevent DoS via huge templates)
-        if len(raw.get("states", [])) > TemplateRegistry.MAX_STATES:
-            msg = f"Type '{type_name}' has {len(raw['states'])} states (max {TemplateRegistry.MAX_STATES})"
+        if len(raw_states) > TemplateRegistry.MAX_STATES:
+            msg = f"Type '{type_name}' has {len(raw_states)} states (max {TemplateRegistry.MAX_STATES})"
             raise ValueError(msg)
         if len(raw.get("transitions", [])) > TemplateRegistry.MAX_TRANSITIONS:
             n = len(raw["transitions"])
@@ -235,7 +259,7 @@ class TemplateRegistry:
         logger.debug("Parsing template for type: %s", type_name)
 
         # StateDefinition.__post_init__ validates each state name format
-        states = tuple(StateDefinition(name=s["name"], category=s["category"]) for s in raw["states"])
+        states = tuple(StateDefinition(name=s["name"], category=s["category"]) for s in raw_states)
         transitions = tuple(
             TransitionDefinition(
                 from_state=t["from"],
@@ -612,7 +636,7 @@ class TemplateRegistry:
                         continue
                     self._load_pack_data(pack_data)
                     logger.info("Loaded installed pack: %s from %s", pack_name, pack_file.name)
-                except (ValueError, KeyError) as exc:
+                except (ValueError, KeyError, TypeError, AttributeError) as exc:
                     logger.warning("Skipping invalid pack file %s: %s", pack_file.name, exc)
 
         # Layer 3: Project-local overrides from .filigree/templates/*.json
@@ -628,7 +652,7 @@ class TemplateRegistry:
                         continue
                     self._register_type(tpl)  # Overwrites built-in with same name
                     logger.info("Loaded project-local template override: %s", tpl.type)
-                except (ValueError, KeyError) as exc:
+                except (ValueError, KeyError, TypeError, AttributeError) as exc:
                     logger.warning("Skipping invalid template file %s: %s", tpl_file.name, exc)
 
         self._loaded = True
@@ -649,7 +673,7 @@ class TemplateRegistry:
                     continue
                 self._register_type(tpl)
                 types_dict[type_name] = tpl
-            except (ValueError, KeyError) as exc:
+            except (ValueError, KeyError, TypeError, AttributeError) as exc:
                 logger.warning("Skipping unparseable type %s in pack %s: %s", type_name, pack_name, exc)
 
         # Register the pack itself
