@@ -44,10 +44,16 @@ def setup_logging(filigree_dir: Path) -> logging.Logger:
     Returns a logger that writes JSONL with rotation.
     """
     logger = logging.getLogger("filigree")
-    if logger.handlers:
-        return logger
-
     log_path = filigree_dir / _LOG_FILENAME
+    if logger.handlers:
+        # Check if we already have a handler pointing to the desired log path.
+        # If a handler for a different path is requested, add it rather than
+        # silently ignoring the new filigree_dir.
+        for h in logger.handlers:
+            if isinstance(h, RotatingFileHandler) and h.baseFilename == str(log_path.resolve()):
+                return logger
+        # No handler for this path yet — fall through to add one
+
     handler = RotatingFileHandler(
         str(log_path),
         maxBytes=_MAX_BYTES,

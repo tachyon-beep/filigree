@@ -11,6 +11,7 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass
+from dataclasses import replace as _dc_replace
 from pathlib import Path
 from typing import Any, Literal
 
@@ -667,6 +668,10 @@ class TemplateRegistry:
         for type_name, type_data in pack_data.get("types", {}).items():
             try:
                 tpl = self.parse_type_template(type_data)
+                # Ensure the type is tagged with the actual pack name,
+                # not the default "custom" from missing pack field in type data
+                if tpl.pack != pack_name:
+                    tpl = _dc_replace(tpl, pack=pack_name)
                 errors = self.validate_type_template(tpl)
                 if errors:
                     logger.warning("Skipping invalid type %s in pack %s: %s", type_name, pack_name, errors)

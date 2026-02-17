@@ -250,5 +250,5 @@ def write_summary(db: FiligreeDB, output_path: str | Path) -> None:
     summary = generate_summary(db)
     output = Path(output_path)
     tmp_path = output.with_suffix(".tmp")
-    tmp_path.write_text(summary)
+    tmp_path.write_text(summary, encoding="utf-8")
     os.replace(str(tmp_path), str(output))

@@ -252,6 +252,10 @@ def rebuild_table(
         old_cols = {row[1] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
         new_cols = [row[1] for row in conn.execute(f"PRAGMA table_info({temp_table})").fetchall()]
         shared = [c for c in new_cols if c in old_cols]
+        if not shared:
+            conn.execute(f"DROP TABLE IF EXISTS {temp_table}")
+            msg = f"No shared columns between old and new schema for table '{table}'"
+            raise ValueError(msg)
         select_cols = ", ".join(shared)
         insert_cols = select_cols
     else:

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re as _re
 import sqlite3
 import uuid
 from dataclasses import dataclass, field
@@ -1172,9 +1173,11 @@ class FiligreeDB:
     def search_issues(self, query: str, *, limit: int = 100, offset: int = 0) -> list[Issue]:
         # Try FTS5 first, fall back to LIKE if FTS table doesn't exist
         try:
+            # Sanitize: strip non-alphanumeric chars except * (prefix) and " (phrase)
+            sanitized = _re.sub(r'[^\w\s*"]', "", query)
             # Quote each token and add * for prefix matching, then join with AND
             # Strip double quotes from tokens to prevent FTS5 syntax injection
-            tokens = [t.replace('"', "") for t in query.strip().split()]
+            tokens = [t.replace('"', "") for t in sanitized.strip().split()]
             tokens = [t for t in tokens if t]  # drop empty tokens after stripping
             fts_query = " AND ".join(f'"{t}"*' for t in tokens) if tokens else '""'
             rows = self.conn.execute(

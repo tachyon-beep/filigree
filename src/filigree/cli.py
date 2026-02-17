@@ -891,7 +891,7 @@ def metrics(as_json: bool, days: int) -> None:
     if data["by_type"]:
         click.echo("\n  By type:")
         for t, m in sorted(data["by_type"].items()):
-            ct_str = f"{m['avg_cycle_time_hours']}h" if m["avg_cycle_time_hours"] else "n/a"
+            ct_str = f"{m['avg_cycle_time_hours']}h" if m["avg_cycle_time_hours"] is not None else "n/a"
             click.echo(f"    {t:<12} {m['count']} closed, avg cycle: {ct_str}")
 
 
