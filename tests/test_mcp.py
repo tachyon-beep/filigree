@@ -9,7 +9,15 @@ from typing import Any
 import pytest
 
 from filigree.core import DB_FILENAME, FILIGREE_DIR_NAME, SUMMARY_FILENAME, FiligreeDB, write_config
-from filigree.mcp_server import _safe_path, _text, call_tool, get_workflow_prompt, list_resources, read_context
+from filigree.mcp_server import (
+    _MAX_LIST_RESULTS,
+    _safe_path,
+    _text,
+    call_tool,
+    get_workflow_prompt,
+    list_resources,
+    read_context,
+)
 
 
 def _parse(result: list[Any]) -> Any:
@@ -90,7 +98,8 @@ class TestListAndSearch:
         mcp_db.create_issue("List B")
         result = await call_tool("list_issues", {})
         data = _parse(result)
-        assert len(data) == 2
+        assert len(data["issues"]) == 2
+        assert data["has_more"] is False
 
     async def test_list_issues_filter(self, mcp_db: FiligreeDB) -> None:
         mcp_db.create_issue("Open one")
@@ -98,15 +107,78 @@ class TestListAndSearch:
         mcp_db.close_issue(b.id)
         result = await call_tool("list_issues", {"status": "open"})
         data = _parse(result)
-        assert len(data) == 1
+        assert len(data["issues"]) == 1
 
     async def test_search(self, mcp_db: FiligreeDB) -> None:
         mcp_db.create_issue("Authentication bug")
         mcp_db.create_issue("Something else")
         result = await call_tool("search_issues", {"query": "auth"})
         data = _parse(result)
-        assert len(data) == 1
-        assert data[0]["title"] == "Authentication bug"
+        assert len(data["issues"]) == 1
+        assert data["issues"][0]["title"] == "Authentication bug"
+        assert data["has_more"] is False
+
+
+class TestListPagination:
+    """Pagination cap and has_more for list_issues / search_issues."""
+
+    async def test_list_issues_capped(self, mcp_db: FiligreeDB) -> None:
+        """Default cap limits results to _MAX_LIST_RESULTS."""
+        for i in range(_MAX_LIST_RESULTS + 5):
+            mcp_db.create_issue(f"Issue {i}")
+        result = await call_tool("list_issues", {})
+        data = _parse(result)
+        assert len(data["issues"]) == _MAX_LIST_RESULTS
+        assert data["has_more"] is True
+        assert data["limit"] == _MAX_LIST_RESULTS
+        assert data["offset"] == 0
+
+    async def test_list_issues_no_limit(self, mcp_db: FiligreeDB) -> None:
+        """no_limit=true bypasses the cap."""
+        for i in range(_MAX_LIST_RESULTS + 5):
+            mcp_db.create_issue(f"Issue {i}")
+        result = await call_tool("list_issues", {"no_limit": True})
+        data = _parse(result)
+        assert len(data["issues"]) == _MAX_LIST_RESULTS + 5
+        assert data["has_more"] is False
+
+    async def test_list_issues_offset(self, mcp_db: FiligreeDB) -> None:
+        """Offset works with the capped limit."""
+        for i in range(_MAX_LIST_RESULTS + 10):
+            mcp_db.create_issue(f"Issue {i}")
+        result = await call_tool("list_issues", {"offset": _MAX_LIST_RESULTS})
+        data = _parse(result)
+        assert len(data["issues"]) == 10
+        assert data["has_more"] is False
+        assert data["offset"] == _MAX_LIST_RESULTS
+
+    async def test_list_issues_requested_limit_below_cap(self, mcp_db: FiligreeDB) -> None:
+        """Explicit limit below _MAX_LIST_RESULTS is respected."""
+        for i in range(10):
+            mcp_db.create_issue(f"Issue {i}")
+        result = await call_tool("list_issues", {"limit": 3})
+        data = _parse(result)
+        assert len(data["issues"]) == 3
+        assert data["has_more"] is True
+        assert data["limit"] == 3
+
+    async def test_search_issues_capped(self, mcp_db: FiligreeDB) -> None:
+        """search_issues respects the same cap."""
+        for i in range(_MAX_LIST_RESULTS + 5):
+            mcp_db.create_issue(f"Bug {i}")
+        result = await call_tool("search_issues", {"query": "Bug"})
+        data = _parse(result)
+        assert len(data["issues"]) == _MAX_LIST_RESULTS
+        assert data["has_more"] is True
+
+    async def test_search_issues_no_limit(self, mcp_db: FiligreeDB) -> None:
+        """search_issues with no_limit=true bypasses the cap."""
+        for i in range(_MAX_LIST_RESULTS + 5):
+            mcp_db.create_issue(f"Bug {i}")
+        result = await call_tool("search_issues", {"query": "Bug", "no_limit": True})
+        data = _parse(result)
+        assert len(data["issues"]) == _MAX_LIST_RESULTS + 5
+        assert data["has_more"] is False
 
 
 class TestUpdateAndClose:
@@ -706,10 +778,11 @@ class TestMCPMutationEnhancements:
         mcp_db.update_issue(mcp_db.list_issues()[-1].id, status="in_progress")
         result = await call_tool("list_issues", {"status_category": "open"})
         data = _parse(result)
+        issues = data["issues"]
         # Should return open issues (not in_progress ones)
-        statuses = {d["status"] for d in data}
+        statuses = {d["status"] for d in issues}
         assert "in_progress" not in statuses
-        assert a.id in [d["id"] for d in data]
+        assert a.id in [d["id"] for d in issues]
 
     async def test_update_issue_error_includes_transitions(self, mcp_db: FiligreeDB) -> None:
         issue = mcp_db.create_issue("Error test", type="bug")

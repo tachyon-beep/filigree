@@ -776,17 +776,29 @@ def migrate(from_beads: bool, beads_db: str | None) -> None:
 @click.option("--claude-md", is_flag=True, help="Inject instructions into CLAUDE.md only")
 @click.option("--agents-md", is_flag=True, help="Inject instructions into AGENTS.md only")
 @click.option("--gitignore", is_flag=True, help="Add .filigree/ to .gitignore only")
-def install(claude_code: bool, codex: bool, claude_md: bool, agents_md: bool, gitignore: bool) -> None:
+@click.option("--hooks", "hooks_only", is_flag=True, help="Install Claude Code hooks only")
+@click.option("--skills", "skills_only", is_flag=True, help="Install Claude Code skills only")
+def install(
+    claude_code: bool,
+    codex: bool,
+    claude_md: bool,
+    agents_md: bool,
+    gitignore: bool,
+    hooks_only: bool,
+    skills_only: bool,
+) -> None:
     """Install filigree into the current project.
 
-    With no flags, installs everything: MCP servers, instructions, gitignore.
+    With no flags, installs everything: MCP servers, instructions, gitignore, hooks, skills.
     With specific flags, installs only the selected components.
     """
     from filigree.install import (
         ensure_gitignore,
         inject_instructions,
+        install_claude_code_hooks,
         install_claude_code_mcp,
         install_codex_mcp,
+        install_skills,
     )
 
     try:
@@ -796,7 +808,7 @@ def install(claude_code: bool, codex: bool, claude_md: bool, agents_md: bool, gi
         sys.exit(1)
 
     project_root = filigree_dir.parent
-    install_all = not any([claude_code, codex, claude_md, agents_md, gitignore])
+    install_all = not any([claude_code, codex, claude_md, agents_md, gitignore, hooks_only, skills_only])
 
     results: list[tuple[str, bool, str]] = []
 
@@ -819,6 +831,14 @@ def install(claude_code: bool, codex: bool, claude_md: bool, agents_md: bool, gi
     if install_all or gitignore:
         ok, msg = ensure_gitignore(project_root)
         results.append((".gitignore", ok, msg))
+
+    if install_all or claude_code or hooks_only:
+        ok, msg = install_claude_code_hooks(project_root)
+        results.append(("Claude Code hooks", ok, msg))
+
+    if install_all or claude_code or skills_only:
+        ok, msg = install_skills(project_root)
+        results.append(("Claude Code skills", ok, msg))
 
     for name, ok, msg in results:
         icon = "OK" if ok else "!!"
@@ -906,6 +926,27 @@ def dashboard(port: int, no_browser: bool) -> None:
         click.echo('Dashboard requires extra dependencies. Install with: pip install "filigree[dashboard]"', err=True)
         sys.exit(1)
     dashboard_main(port=port, no_browser=no_browser)
+
+
+@cli.command("session-context")
+def session_context() -> None:
+    """Output project snapshot for Claude Code session context."""
+    from filigree.hooks import generate_session_context
+
+    context = generate_session_context()
+    if context:
+        click.echo(context)
+
+
+@cli.command("ensure-dashboard")
+@click.option("--port", default=8377, type=int, help="Dashboard port (default 8377)")
+def ensure_dashboard_cmd(port: int) -> None:
+    """Ensure the filigree dashboard is running."""
+    from filigree.hooks import ensure_dashboard_running
+
+    message = ensure_dashboard_running(port=port)
+    if message:
+        click.echo(message)
 
 
 @cli.command("critical-path")

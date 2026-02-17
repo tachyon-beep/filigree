@@ -15,10 +15,14 @@ Filigree is an issue tracker designed for AI coding agents. Version 1.0 has ship
 - **Session resumption** -- event streams with `get_changes --since` for agent catch-up
 - **Pre-computed context** -- `context.md` regenerated on every mutation
 - **Documentation** -- CLI reference, MCP tools, workflow guides, agent integration patterns
+- **Claude Code session hooks** -- `filigree session-context` injects a project snapshot (in-progress, ready queue, critical path, stats) at session start; `filigree ensure-dashboard` auto-starts the web dashboard
+- **Workflow skill pack** -- `filigree-workflow` skill teaches agents triage patterns, sprint planning, dependency management, and multi-agent team coordination via progressive disclosure
+- **One-stop install** -- `filigree install` wires up MCP, hooks, skills, CLAUDE.md, and .gitignore; `filigree doctor` validates everything
+- **MCP pagination** -- list endpoints cap at 50 results with `has_more` indicator and `no_limit` override
 
 ## Near-term (1.x releases)
 
-- **Hook system** -- extensible pre/post hooks on state transitions for custom automation
+- **Event-driven plugin system** -- extensible pre/post hooks on state transitions for custom automation
 - **GitHub integration** -- sync issues bidirectionally with GitHub Issues
 - **`filigree watch`** -- file-system triggered actions (auto-close on commit, etc.)
 - **Dashboard enhancements** -- dependency graph visualization, drag-and-drop prioritization

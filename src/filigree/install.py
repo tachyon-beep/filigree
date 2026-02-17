@@ -313,6 +313,139 @@ def ensure_gitignore(project_root: Path) -> tuple[bool, str]:
 
 
 # ---------------------------------------------------------------------------
+# Claude Code hooks
+# ---------------------------------------------------------------------------
+
+SESSION_CONTEXT_COMMAND = "filigree session-context"
+ENSURE_DASHBOARD_COMMAND = "filigree ensure-dashboard"
+
+
+def _has_hook_command(settings: dict[str, Any], command: str) -> bool:
+    """Check whether *command* already appears in SessionStart hooks."""
+    for matcher in settings.get("hooks", {}).get("SessionStart", []):
+        for hook in matcher.get("hooks", []):
+            if hook.get("command") == command:
+                return True
+    return False
+
+
+def install_claude_code_hooks(project_root: Path) -> tuple[bool, str]:
+    """Register ``filigree session-context`` and ``filigree ensure-dashboard``
+    as Claude Code SessionStart hooks in ``.claude/settings.json``.
+
+    Idempotent — won't duplicate existing entries.
+    """
+    claude_dir = project_root / ".claude"
+    claude_dir.mkdir(exist_ok=True)
+    settings_path = claude_dir / "settings.json"
+
+    settings: dict[str, Any] = {}
+    if settings_path.exists():
+        try:
+            raw = settings_path.read_text()
+            parsed = json.loads(raw)
+            if isinstance(parsed, dict):
+                settings = parsed
+            else:
+                # Non-object JSON — back up and start fresh
+                backup = settings_path.with_suffix(".json.bak")
+                import shutil as _shutil
+
+                _shutil.copy2(settings_path, backup)
+                logger.warning("Non-object settings.json; backed up to %s", backup)
+        except json.JSONDecodeError:
+            backup = settings_path.with_suffix(".json.bak")
+            import shutil as _shutil
+
+            _shutil.copy2(settings_path, backup)
+            logger.warning("Corrupt settings.json; backed up to %s", backup)
+
+    # Build list of commands to add
+    commands_to_add: list[str] = []
+    if not _has_hook_command(settings, SESSION_CONTEXT_COMMAND):
+        commands_to_add.append(SESSION_CONTEXT_COMMAND)
+
+    # Only add dashboard hook if the [dashboard] extra is available
+    try:
+        import filigree.dashboard  # noqa: F401
+
+        if not _has_hook_command(settings, ENSURE_DASHBOARD_COMMAND):
+            commands_to_add.append(ENSURE_DASHBOARD_COMMAND)
+    except ImportError:
+        pass
+
+    if not commands_to_add:
+        return True, "Hooks already registered in .claude/settings.json"
+
+    # Ensure structure exists
+    if "hooks" not in settings:
+        settings["hooks"] = {}
+    if "SessionStart" not in settings["hooks"]:
+        settings["hooks"]["SessionStart"] = []
+
+    # Find or create the matcher block for filigree hooks
+    filigree_hooks: list[dict[str, Any]] = []
+    matcher_block = None
+    for matcher in settings["hooks"]["SessionStart"]:
+        for hook in matcher.get("hooks", []):
+            cmd = hook.get("command", "")
+            if "filigree" in cmd:
+                matcher_block = matcher
+                filigree_hooks = matcher.get("hooks", [])
+                break
+        if matcher_block is not None:
+            break
+
+    if matcher_block is None:
+        matcher_block = {"hooks": []}
+        settings["hooks"]["SessionStart"].append(matcher_block)
+        filigree_hooks = matcher_block["hooks"]
+
+    for cmd in commands_to_add:
+        filigree_hooks.append({"type": "command", "command": cmd, "timeout": 5000})
+    matcher_block["hooks"] = filigree_hooks
+
+    settings_path.write_text(json.dumps(settings, indent=2) + "\n")
+    added = ", ".join(commands_to_add)
+    return True, f"Registered hooks in .claude/settings.json: {added}"
+
+
+# ---------------------------------------------------------------------------
+# Claude Code skills
+# ---------------------------------------------------------------------------
+
+SKILL_NAME = "filigree-workflow"
+SKILL_MARKER = "SKILL.md"
+
+
+def _get_skills_source_dir() -> Path:
+    """Return the path to the bundled skills directory inside the package."""
+    return Path(__file__).parent / "skills"
+
+
+def install_skills(project_root: Path) -> tuple[bool, str]:
+    """Copy filigree skill pack into ``.claude/skills/`` for the project.
+
+    Idempotent — overwrites existing skill files to keep them up-to-date
+    with the installed filigree version.
+    """
+    source_dir = _get_skills_source_dir()
+    skill_source = source_dir / SKILL_NAME
+    if not skill_source.is_dir():
+        return False, f"Skill source not found at {skill_source}"
+
+    target_dir = project_root / ".claude" / "skills" / SKILL_NAME
+    target_dir.parent.mkdir(parents=True, exist_ok=True)
+
+    # Copy the skill, overwriting to pick up version upgrades
+    if target_dir.exists():
+        shutil.rmtree(target_dir)
+    shutil.copytree(skill_source, target_dir)
+
+    return True, f"Installed skill pack to {target_dir}"
+
+
+# ---------------------------------------------------------------------------
 # Doctor checks
 # ---------------------------------------------------------------------------
 
@@ -532,7 +665,56 @@ def run_doctor(project_root: Path | None = None) -> list[CheckResult]:
             )
         )
 
-    # 8. Check CLAUDE.md has instructions
+    # 8. Check Claude Code hooks
+    settings_json = (filigree_dir.parent) / ".claude" / "settings.json"
+    if settings_json.exists():
+        try:
+            s = json.loads(settings_json.read_text())
+            if _has_hook_command(s, SESSION_CONTEXT_COMMAND):
+                results.append(CheckResult("Claude Code hooks", True, "session-context hook registered"))
+            else:
+                results.append(
+                    CheckResult(
+                        "Claude Code hooks",
+                        False,
+                        "session-context hook not found in .claude/settings.json",
+                        fix_hint="Run: filigree install --hooks",
+                    )
+                )
+        except json.JSONDecodeError:
+            results.append(
+                CheckResult(
+                    "Claude Code hooks",
+                    False,
+                    "Invalid .claude/settings.json",
+                    fix_hint="Fix .claude/settings.json or run: filigree install --hooks",
+                )
+            )
+    else:
+        results.append(
+            CheckResult(
+                "Claude Code hooks",
+                False,
+                "No .claude/settings.json found",
+                fix_hint="Run: filigree install --hooks",
+            )
+        )
+
+    # 9. Check Claude Code skills
+    skill_md = (filigree_dir.parent) / ".claude" / "skills" / SKILL_NAME / SKILL_MARKER
+    if skill_md.exists():
+        results.append(CheckResult("Claude Code skills", True, f"{SKILL_NAME} skill installed"))
+    else:
+        results.append(
+            CheckResult(
+                "Claude Code skills",
+                False,
+                f"{SKILL_NAME} skill not found in .claude/skills/",
+                fix_hint="Run: filigree install --skills",
+            )
+        )
+
+    # 10. Check CLAUDE.md has instructions
     claude_md = (filigree_dir.parent) / "CLAUDE.md"
     if claude_md.exists():
         content = claude_md.read_text()
@@ -557,7 +739,7 @@ def run_doctor(project_root: Path | None = None) -> list[CheckResult]:
             )
         )
 
-    # 9. Check AGENTS.md has instructions
+    # 11. Check AGENTS.md has instructions
     agents_md = (filigree_dir.parent) / "AGENTS.md"
     if agents_md.exists():
         content = agents_md.read_text()
@@ -574,7 +756,7 @@ def run_doctor(project_root: Path | None = None) -> list[CheckResult]:
             )
     # AGENTS.md is optional — don't warn if it doesn't exist
 
-    # 10. Check git working tree status
+    # 12. Check git working tree status
     try:
         result = subprocess.run(
             ["git", "-C", str(filigree_dir.parent), "status", "--porcelain"],

@@ -57,6 +57,22 @@ filigree-dashboard = "filigree.dashboard:main"
 [tool.hatch.build.targets.wheel]
 packages = ["src/filigree"]
 
+[tool.hatch.build.targets.sdist]
+exclude = [
+    "/.claude",
+    "/.github",
+    "/.mcp.json",
+    "/.pre-commit-config.yaml",
+    "/.python-version",
+    "/docs/plans",
+    "/scripts",
+    "/Makefile",
+    "/uv.lock",
+    "/CLAUDE.md",
+    "/ROADMAP.md",
+    "/.uv-cache",
+]
+
 # ---------------------------------------------------------------------------
 # Dev dependencies (PEP 735 — used by uv, not published)
 # ---------------------------------------------------------------------------

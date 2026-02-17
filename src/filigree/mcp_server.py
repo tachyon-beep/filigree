@@ -41,6 +41,14 @@ from filigree.core import (
 from filigree.summary import generate_summary, write_summary
 
 # ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
+
+# Hard cap on list_issues / search_issues results to keep MCP response size
+# within token limits.  Callers can pass no_limit=true to bypass.
+_MAX_LIST_RESULTS = 50
+
+# ---------------------------------------------------------------------------
 # Server setup
 # ---------------------------------------------------------------------------
 
@@ -285,6 +293,11 @@ async def list_tools() -> list[Tool]:
                         "description": "Max results (default 100)",
                     },
                     "offset": {"type": "integer", "default": 0, "minimum": 0, "description": "Skip first N results"},
+                    "no_limit": {
+                        "type": "boolean",
+                        "default": False,
+                        "description": "Bypass the default result cap. Use with caution on large projects.",
+                    },
                 },
             },
         ),
@@ -436,6 +449,11 @@ async def list_tools() -> list[Tool]:
                         "description": "Max results (default 100)",
                     },
                     "offset": {"type": "integer", "default": 0, "minimum": 0, "description": "Skip first N results"},
+                    "no_limit": {
+                        "type": "boolean",
+                        "default": False,
+                        "description": "Bypass the default result cap. Use with caution on large projects.",
+                    },
                 },
                 "required": ["query"],
             },
@@ -893,6 +911,34 @@ async def _dispatch(name: str, arguments: dict[str, Any], tracker: FiligreeDB) -
                 if category_states:
                     # Use the category name which list_issues already handles
                     status_filter = status_category
+
+            no_limit = arguments.get("no_limit", False)
+            requested_limit = arguments.get("limit", 100)
+            offset = arguments.get("offset", 0)
+
+            if no_limit:
+                # Bypass cap — return everything the caller asked for
+                issues = tracker.list_issues(
+                    status=status_filter,
+                    type=arguments.get("type"),
+                    priority=arguments.get("priority"),
+                    parent_id=arguments.get("parent_id"),
+                    assignee=arguments.get("assignee"),
+                    label=arguments.get("label"),
+                    limit=requested_limit,
+                    offset=offset,
+                )
+                return _text(
+                    {
+                        "issues": [i.to_dict() for i in issues],
+                        "limit": requested_limit,
+                        "offset": offset,
+                        "has_more": False,
+                    }
+                )
+
+            effective_limit = min(requested_limit, _MAX_LIST_RESULTS)
+            # Overfetch by 1 to detect whether more results exist
             issues = tracker.list_issues(
                 status=status_filter,
                 type=arguments.get("type"),
@@ -900,10 +946,20 @@ async def _dispatch(name: str, arguments: dict[str, Any], tracker: FiligreeDB) -
                 parent_id=arguments.get("parent_id"),
                 assignee=arguments.get("assignee"),
                 label=arguments.get("label"),
-                limit=arguments.get("limit", 100),
-                offset=arguments.get("offset", 0),
+                limit=effective_limit + 1,
+                offset=offset,
             )
-            return _text([i.to_dict() for i in issues])
+            has_more = len(issues) > effective_limit
+            if has_more:
+                issues = issues[:effective_limit]
+            return _text(
+                {
+                    "issues": [i.to_dict() for i in issues],
+                    "limit": effective_limit,
+                    "offset": offset,
+                    "has_more": has_more,
+                }
+            )
 
         case "create_issue":
             try:
@@ -1090,16 +1146,44 @@ async def _dispatch(name: str, arguments: dict[str, Any], tracker: FiligreeDB) -
             return _text(comments)
 
         case "search_issues":
+            no_limit = arguments.get("no_limit", False)
+            requested_limit = arguments.get("limit", 100)
+            offset = arguments.get("offset", 0)
+
+            def _slim(i: Any) -> dict[str, Any]:
+                return {"id": i.id, "title": i.title, "status": i.status, "priority": i.priority, "type": i.type}
+
+            if no_limit:
+                issues = tracker.search_issues(
+                    arguments["query"],
+                    limit=requested_limit,
+                    offset=offset,
+                )
+                return _text(
+                    {
+                        "issues": [_slim(i) for i in issues],
+                        "limit": requested_limit,
+                        "offset": offset,
+                        "has_more": False,
+                    }
+                )
+
+            effective_limit = min(requested_limit, _MAX_LIST_RESULTS)
             issues = tracker.search_issues(
                 arguments["query"],
-                limit=arguments.get("limit", 100),
-                offset=arguments.get("offset", 0),
+                limit=effective_limit + 1,
+                offset=offset,
             )
+            has_more = len(issues) > effective_limit
+            if has_more:
+                issues = issues[:effective_limit]
             return _text(
-                [
-                    {"id": i.id, "title": i.title, "status": i.status, "priority": i.priority, "type": i.type}
-                    for i in issues
-                ]
+                {
+                    "issues": [_slim(i) for i in issues],
+                    "limit": effective_limit,
+                    "offset": offset,
+                    "has_more": has_more,
+                }
             )
 
         case "get_template":

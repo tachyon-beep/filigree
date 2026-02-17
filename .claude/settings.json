@@ -1,0 +1,20 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "filigree session-context",
+            "timeout": 5000
+          },
+          {
+            "type": "command",
+            "command": "filigree ensure-dashboard",
+            "timeout": 5000
+          }
+        ]
+      }
+    ]
+  }
+}
