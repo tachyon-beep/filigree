@@ -4,7 +4,7 @@
 Scans Python files, runs `codex exec` on each with a static-analysis prompt,
 and writes one markdown report per file into an output directory.
 
-No external dependencies beyond Python 3.12+ and `codex` on PATH.
+No external dependencies beyond Python 3.11+ and `codex` on PATH.
 
 Usage:
     python scripts/codex_bug_hunt.py                    # scan src/filigree/
@@ -322,9 +322,10 @@ def organise_by_priority(output_dir: Path) -> None:
             continue
         priorities = re.findall(r"Priority:\s*(P\d)", text, re.IGNORECASE)
         pri = min((p.upper() for p in priorities), key=lambda p: pri_order.get(p, 99)) if priorities else "unknown"
-        dest = by_pri / pri
-        dest.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(md, dest / md.name)
+        rel_path = md.relative_to(output_dir)
+        dest_path = by_pri / pri / rel_path
+        dest_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(md, dest_path)
 
 
 # ── Context loader ──────────────────────────────────────────────────────
@@ -361,13 +362,13 @@ def main() -> int:
 
     args = parser.parse_args()
 
-    if shutil.which("codex") is None:
-        print("Error: `codex` not found on PATH", file=sys.stderr)
-        return 1
-
     repo_root = Path(__file__).resolve().parents[1]
     root_dir = (repo_root / args.root).resolve()
     output_dir = (repo_root / args.output_dir).resolve()
+
+    if not root_dir.is_dir():
+        print(f"Error: scan root is not a directory: {root_dir}", file=sys.stderr)
+        return 1
 
     files = find_files(root_dir, file_type=args.file_type)
     if not files:
@@ -379,6 +380,10 @@ def main() -> int:
         for f in files:
             print(f"  {f.relative_to(repo_root)}")
         return 0
+
+    if shutil.which("codex") is None:
+        print("Error: `codex` not found on PATH", file=sys.stderr)
+        return 1
 
     context = load_context(repo_root)
 
