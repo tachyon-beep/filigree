@@ -213,6 +213,9 @@ async def list_prompts() -> list[Prompt]:
 
 @server.get_prompt()  # type: ignore[untyped-decorator,no-untyped-call]
 async def get_workflow_prompt(name: str, arguments: dict[str, str] | None = None) -> GetPromptResult:
+    if name != "filigree-workflow":
+        msg = f"Unknown prompt: {name}"
+        raise ValueError(msg)
     messages: list[PromptMessage] = [
         PromptMessage(role="user", content=TextContent(type="text", text=_build_workflow_text())),
     ]

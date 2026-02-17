@@ -251,8 +251,15 @@ def create_app() -> Any:
             comment_id = db.add_comment(issue_id, text, author=author)
         except ValueError as e:
             return JSONResponse({"error": str(e)}, status_code=400)
+        # Fetch the comment from DB to get the real created_at timestamp
+        comments = db.get_comments(issue_id)
+        created_at = ""
+        for c in comments:
+            if c["id"] == comment_id:
+                created_at = c["created_at"]
+                break
         return JSONResponse(
-            {"id": comment_id, "author": author, "text": text, "created_at": ""},
+            {"id": comment_id, "author": author, "text": text, "created_at": created_at},
             status_code=201,
         )
 

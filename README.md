@@ -101,7 +101,7 @@ git clone https://github.com/tachyon-beep/filigree.git
 cd filigree
 uv sync --group dev
 
-make ci              # ruff check + mypy strict + pytest
+make ci              # ruff check + mypy strict + pytest with 85% coverage gate
 make lint            # Ruff check + format check
 make format          # Auto-format with ruff
 make typecheck       # Mypy strict mode
@@ -116,6 +116,10 @@ make test-cov        # Pytest with coverage (fail-under=85%)
 - **Pytest** with pytest-asyncio for MCP server tests
 - **Coverage** threshold at 85%
 - Tests in `tests/`, source in `src/filigree/`
+
+## Acknowledgements
+
+Filigree was inspired by Steve Yegge's [beads](https://github.com/steveyegge/beads) project. Filigree builds on the core idea of git-friendly issue tracking, focusing on MCP-native workflows and local-first operation.
 
 ## License
 
