@@ -316,6 +316,7 @@ class FiligreeDB:
         self._conn: sqlite3.Connection | None = None
         self._check_same_thread = check_same_thread
         self._template_registry: TemplateRegistry | None = template_registry
+        self._check_same_thread = check_same_thread
 
     @classmethod
     def from_project(cls, project_path: Path | None = None) -> FiligreeDB:

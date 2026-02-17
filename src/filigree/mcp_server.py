@@ -1064,14 +1064,25 @@ async def _dispatch(name: str, arguments: dict[str, Any], tracker: FiligreeDB) -
                 return _text({"error": f"Milestone not found: {arguments['milestone_id']}", "code": "not_found"})
 
         case "add_comment":
-            comment_id = tracker.add_comment(
-                arguments["issue_id"],
-                arguments["text"],
-                author=arguments.get("actor", "mcp"),
-            )
+            try:
+                tracker.get_issue(arguments["issue_id"])
+            except KeyError:
+                return _text({"error": f"Issue not found: {arguments['issue_id']}", "code": "not_found"})
+            try:
+                comment_id = tracker.add_comment(
+                    arguments["issue_id"],
+                    arguments["text"],
+                    author=arguments.get("actor", "mcp"),
+                )
+            except ValueError as e:
+                return _text({"error": str(e), "code": "validation_error"})
             return _text({"status": "ok", "comment_id": comment_id})
 
         case "get_comments":
+            try:
+                tracker.get_issue(arguments["issue_id"])
+            except KeyError:
+                return _text({"error": f"Issue not found: {arguments['issue_id']}", "code": "not_found"})
             comments = tracker.get_comments(arguments["issue_id"])
             return _text(comments)
 
@@ -1095,13 +1106,27 @@ async def _dispatch(name: str, arguments: dict[str, Any], tracker: FiligreeDB) -
             return _text(tpl)
 
         case "add_label":
-            added = tracker.add_label(arguments["issue_id"], arguments["label"])
+            try:
+                tracker.get_issue(arguments["issue_id"])
+            except KeyError:
+                return _text({"error": f"Issue not found: {arguments['issue_id']}", "code": "not_found"})
+            try:
+                added = tracker.add_label(arguments["issue_id"], arguments["label"])
+            except ValueError as e:
+                return _text({"error": str(e), "code": "validation_error"})
             _refresh_summary()
             status = "added" if added else "already_exists"
             return _text({"status": status, "issue_id": arguments["issue_id"], "label": arguments["label"]})
 
         case "remove_label":
-            removed = tracker.remove_label(arguments["issue_id"], arguments["label"])
+            try:
+                tracker.get_issue(arguments["issue_id"])
+            except KeyError:
+                return _text({"error": f"Issue not found: {arguments['issue_id']}", "code": "not_found"})
+            try:
+                removed = tracker.remove_label(arguments["issue_id"], arguments["label"])
+            except ValueError as e:
+                return _text({"error": str(e), "code": "validation_error"})
             _refresh_summary()
             status = "removed" if removed else "not_found"
             return _text({"status": status, "issue_id": arguments["issue_id"], "label": arguments["label"]})

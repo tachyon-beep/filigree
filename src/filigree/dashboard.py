@@ -47,18 +47,18 @@ def create_app() -> Any:
     app = FastAPI(title="Filigree Dashboard", docs_url=None, redoc_url=None)
 
     @app.get("/", response_class=HTMLResponse)
-    async def index() -> HTMLResponse:
+    def index() -> HTMLResponse:
         html = (STATIC_DIR / "dashboard.html").read_text()
         return HTMLResponse(html)
 
     @app.get("/api/issues")
-    async def api_issues() -> JSONResponse:
+    def api_issues() -> JSONResponse:
         db = _get_db()
         issues = db.list_issues(limit=10000)
         return JSONResponse([i.to_dict() for i in issues])
 
     @app.get("/api/graph")
-    async def api_graph() -> JSONResponse:
+    def api_graph() -> JSONResponse:
         """Graph data: nodes (issues) + edges (dependencies) for Cytoscape.js."""
         db = _get_db()
         issues = db.list_issues(limit=10000)
@@ -78,14 +78,14 @@ def create_app() -> Any:
         return JSONResponse({"nodes": nodes, "edges": edges})
 
     @app.get("/api/stats")
-    async def api_stats() -> JSONResponse:
+    def api_stats() -> JSONResponse:
         db = _get_db()
         stats = db.get_stats()
         stats["prefix"] = _prefix
         return JSONResponse(stats)
 
     @app.get("/api/issue/{issue_id}")
-    async def api_issue_detail(issue_id: str) -> JSONResponse:
+    def api_issue_detail(issue_id: str) -> JSONResponse:
         """Full issue detail with dependency details, events, and comments."""
         db = _get_db()
         try:
@@ -125,13 +125,13 @@ def create_app() -> Any:
         return JSONResponse(data)
 
     @app.get("/api/dependencies")
-    async def api_dependencies() -> JSONResponse:
+    def api_dependencies() -> JSONResponse:
         db = _get_db()
         deps = db.get_all_dependencies()
         return JSONResponse(deps)
 
     @app.get("/api/type/{type_name}")
-    async def api_type_template(type_name: str) -> JSONResponse:
+    def api_type_template(type_name: str) -> JSONResponse:
         """Workflow template for a given issue type (WFT-FR-065)."""
         db = _get_db()
         tpl = db.templates.get_type(type_name)
@@ -150,7 +150,7 @@ def create_app() -> Any:
         )
 
     @app.get("/api/issue/{issue_id}/transitions")
-    async def api_issue_transitions(issue_id: str) -> JSONResponse:
+    def api_issue_transitions(issue_id: str) -> JSONResponse:
         """Valid next states for an issue."""
         db = _get_db()
         try:
@@ -175,7 +175,10 @@ def create_app() -> Any:
     async def api_update_issue(issue_id: str, request: Request) -> JSONResponse:
         """Update issue fields (status, priority, assignee, etc.)."""
         db = _get_db()
-        body = await request.json()
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
         actor = body.pop("actor", "dashboard")
         try:
             issue = db.update_issue(
@@ -199,7 +202,10 @@ def create_app() -> Any:
     async def api_close_issue(issue_id: str, request: Request) -> JSONResponse:
         """Close an issue."""
         db = _get_db()
-        body = await request.json()
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
         actor = body.get("actor", "dashboard")
         reason = body.get("reason", "")
         try:
@@ -214,7 +220,10 @@ def create_app() -> Any:
     async def api_reopen_issue(issue_id: str, request: Request) -> JSONResponse:
         """Reopen a closed issue."""
         db = _get_db()
-        body = await request.json()
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
         actor = body.get("actor", "dashboard")
         try:
             issue = db.reopen_issue(issue_id, actor=actor)
@@ -232,7 +241,10 @@ def create_app() -> Any:
             db.get_issue(issue_id)
         except KeyError:
             return JSONResponse({"error": f"Not found: {issue_id}"}, status_code=404)
-        body = await request.json()
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
         text = body.get("text", "")
         author = body.get("author", "")
         try:
@@ -245,7 +257,7 @@ def create_app() -> Any:
         )
 
     @app.get("/api/search")
-    async def api_search(q: str = "", limit: int = 50, offset: int = 0) -> JSONResponse:
+    def api_search(q: str = "", limit: int = 50, offset: int = 0) -> JSONResponse:
         """Full-text search across issues."""
         if not q.strip():
             return JSONResponse({"results": [], "total": 0})
@@ -254,7 +266,7 @@ def create_app() -> Any:
         return JSONResponse({"results": [i.to_dict() for i in issues], "total": len(issues)})
 
     @app.get("/api/metrics")
-    async def api_metrics(days: int = 30) -> JSONResponse:
+    def api_metrics(days: int = 30) -> JSONResponse:
         """Flow metrics: cycle time, lead time, throughput."""
         from filigree.analytics import get_flow_metrics
 
@@ -263,21 +275,21 @@ def create_app() -> Any:
         return JSONResponse(metrics)
 
     @app.get("/api/critical-path")
-    async def api_critical_path() -> JSONResponse:
+    def api_critical_path() -> JSONResponse:
         """Longest dependency chain among open issues."""
         db = _get_db()
         path = db.get_critical_path()
         return JSONResponse({"path": path, "length": len(path)})
 
     @app.get("/api/activity")
-    async def api_activity(limit: int = 50, since: str = "") -> JSONResponse:
+    def api_activity(limit: int = 50, since: str = "") -> JSONResponse:
         """Recent events across all issues."""
         db = _get_db()
         events = db.get_events_since(since, limit=limit) if since else db.get_recent_events(limit=limit)
         return JSONResponse(events)
 
     @app.get("/api/plan/{milestone_id}")
-    async def api_plan(milestone_id: str) -> JSONResponse:
+    def api_plan(milestone_id: str) -> JSONResponse:
         """Milestone plan tree."""
         db = _get_db()
         try:
@@ -290,7 +302,10 @@ def create_app() -> Any:
     async def api_batch_update(request: Request) -> JSONResponse:
         """Batch update issues."""
         db = _get_db()
-        body = await request.json()
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
         issue_ids = body.get("issue_ids", [])
         actor = body.get("actor", "dashboard")
         updated, errors = db.batch_update(
@@ -312,18 +327,23 @@ def create_app() -> Any:
     async def api_batch_close(request: Request) -> JSONResponse:
         """Batch close issues."""
         db = _get_db()
-        body = await request.json()
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
         issue_ids = body.get("issue_ids", [])
         reason = body.get("reason", "")
         actor = body.get("actor", "dashboard")
         try:
             closed = db.batch_close(issue_ids, reason=reason, actor=actor)
+        except KeyError as e:
+            return JSONResponse({"error": f"Not found: {e}"}, status_code=404)
         except ValueError as e:
             return JSONResponse({"error": str(e)}, status_code=409)
         return JSONResponse({"closed": [i.to_dict() for i in closed]})
 
     @app.get("/api/types")
-    async def api_types_list() -> JSONResponse:
+    def api_types_list() -> JSONResponse:
         """List all registered issue types."""
         db = _get_db()
         types = db.templates.list_types()
@@ -343,7 +363,10 @@ def create_app() -> Any:
     async def api_create_issue(request: Request) -> JSONResponse:
         """Create a new issue."""
         db = _get_db()
-        body = await request.json()
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
         title = body.get("title", "")
         try:
             issue = db.create_issue(
@@ -366,7 +389,10 @@ def create_app() -> Any:
     async def api_claim_issue(issue_id: str, request: Request) -> JSONResponse:
         """Claim an issue."""
         db = _get_db()
-        body = await request.json()
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
         assignee = body.get("assignee", "")
         actor = body.get("actor", "dashboard")
         try:
@@ -381,7 +407,10 @@ def create_app() -> Any:
     async def api_release_claim(issue_id: str, request: Request) -> JSONResponse:
         """Release a claimed issue."""
         db = _get_db()
-        body = await request.json()
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
         actor = body.get("actor", "dashboard")
         try:
             issue = db.release_claim(issue_id, actor=actor)
@@ -395,7 +424,10 @@ def create_app() -> Any:
     async def api_claim_next(request: Request) -> JSONResponse:
         """Claim the highest-priority ready issue."""
         db = _get_db()
-        body = await request.json()
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
         assignee = body.get("assignee", "")
         actor = body.get("actor", "dashboard")
         try:
@@ -410,7 +442,10 @@ def create_app() -> Any:
     async def api_add_dependency(issue_id: str, request: Request) -> JSONResponse:
         """Add a dependency: issue_id depends on depends_on."""
         db = _get_db()
-        body = await request.json()
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
         depends_on = body.get("depends_on", "")
         actor = body.get("actor", "dashboard")
         try:
@@ -422,7 +457,7 @@ def create_app() -> Any:
         return JSONResponse({"added": added})
 
     @app.delete("/api/issue/{issue_id}/dependencies/{dep_id}")
-    async def api_remove_dependency(issue_id: str, dep_id: str) -> JSONResponse:
+    def api_remove_dependency(issue_id: str, dep_id: str) -> JSONResponse:
         """Remove a dependency."""
         db = _get_db()
         try:
@@ -445,7 +480,7 @@ def main(port: int = DEFAULT_PORT, *, no_browser: bool = False) -> None:
     filigree_dir = find_filigree_root()
     config = read_config(filigree_dir)
     _prefix = config.get("prefix", "filigree")
-    _db = FiligreeDB(filigree_dir / DB_FILENAME, prefix=_prefix)
+    _db = FiligreeDB(filigree_dir / DB_FILENAME, prefix=_prefix, check_same_thread=False)
     _db.initialize()
 
     app = create_app()
