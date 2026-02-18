@@ -829,6 +829,27 @@ class TestCreatePlanCli:
         assert result.exit_code == 1
         assert "Invalid JSON" in result.output or "error" in result.output.lower()
 
+    def test_create_plan_validation_error_exits_1(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        """Backend ValueError (e.g. empty title) should exit 1, not crash."""
+        runner, _ = cli_in_project
+        plan_json = json.dumps({"milestone": {"title": ""}, "phases": [{"title": "P1"}]})
+        result = runner.invoke(cli, ["create-plan"], input=plan_json)
+        assert result.exit_code == 1
+        assert "error" in result.output.lower()
+
+    def test_create_plan_bad_dep_ref_exits_1(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        """IndexError from bad dep refs should exit 1, not crash."""
+        runner, _ = cli_in_project
+        plan_json = json.dumps(
+            {
+                "milestone": {"title": "MS"},
+                "phases": [{"title": "P1", "steps": [{"title": "S1", "deps": [99]}]}],
+            }
+        )
+        result = runner.invoke(cli, ["create-plan"], input=plan_json)
+        assert result.exit_code == 1
+        assert "error" in result.output.lower()
+
 
 class TestBatchCli:
     def test_batch_update(self, cli_in_project: tuple[CliRunner, Path]) -> None:

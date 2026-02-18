@@ -1412,7 +1412,14 @@ def create_plan(ctx: click.Context, file_path: str | None, as_json: bool) -> Non
         sys.exit(1)
 
     with _get_db() as db:
-        result = db.create_plan(data["milestone"], data["phases"], actor=ctx.obj["actor"])
+        try:
+            result = db.create_plan(data["milestone"], data["phases"], actor=ctx.obj["actor"])
+        except (ValueError, IndexError) as e:
+            if as_json:
+                click.echo(json_mod.dumps({"error": str(e)}))
+            else:
+                click.echo(f"Error: {e}", err=True)
+            sys.exit(1)
 
         if as_json:
             click.echo(json_mod.dumps(result, indent=2, default=str))
