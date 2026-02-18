@@ -553,44 +553,9 @@ class FiligreeDB:
             raise ValueError(msg)
 
         self._validate_parent_id(parent_id)
-        issue_id = self._generate_id()
-        now = _now_iso()
-        fields = fields or {}
 
-        # Determine initial state from template
-        initial_state = self.templates.get_initial_state(type)
-
-        self.conn.execute(
-            "INSERT INTO issues (id, title, status, priority, type, parent_id, assignee, "
-            "created_at, updated_at, description, notes, fields) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (
-                issue_id,
-                title,
-                initial_state,
-                priority,
-                type,
-                parent_id,
-                assignee,
-                now,
-                now,
-                description,
-                notes,
-                json.dumps(fields),
-            ),
-        )
-
-        self._record_event(issue_id, "created", actor=actor, new_value=title)
-
-        if labels:
-            for label in labels:
-                self.conn.execute(
-                    "INSERT OR IGNORE INTO labels (issue_id, label) VALUES (?, ?)",
-                    (issue_id, label),
-                )
-
+        # Validate deps BEFORE any writes to prevent partial commits
         if deps:
-            # Validate that all dep IDs reference existing issues
             dep_ph = ",".join("?" * len(deps))
             found = {
                 r["id"] for r in self.conn.execute(f"SELECT id FROM issues WHERE id IN ({dep_ph})", deps).fetchall()
@@ -599,14 +564,57 @@ class FiligreeDB:
             if missing:
                 msg = f"Invalid dependency IDs (not found): {', '.join(missing)}"
                 raise ValueError(msg)
-            for dep_id in deps:
-                self.conn.execute(
-                    "INSERT OR IGNORE INTO dependencies (issue_id, depends_on_id, type, created_at) "
-                    "VALUES (?, ?, 'blocks', ?)",
-                    (issue_id, dep_id, now),
-                )
 
-        self.conn.commit()
+        issue_id = self._generate_id()
+        now = _now_iso()
+        fields = fields or {}
+
+        # Determine initial state from template
+        initial_state = self.templates.get_initial_state(type)
+
+        try:
+            self.conn.execute(
+                "INSERT INTO issues (id, title, status, priority, type, parent_id, assignee, "
+                "created_at, updated_at, description, notes, fields) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    issue_id,
+                    title,
+                    initial_state,
+                    priority,
+                    type,
+                    parent_id,
+                    assignee,
+                    now,
+                    now,
+                    description,
+                    notes,
+                    json.dumps(fields),
+                ),
+            )
+
+            self._record_event(issue_id, "created", actor=actor, new_value=title)
+
+            if labels:
+                for label in labels:
+                    self.conn.execute(
+                        "INSERT OR IGNORE INTO labels (issue_id, label) VALUES (?, ?)",
+                        (issue_id, label),
+                    )
+
+            if deps:
+                for dep_id in deps:
+                    self.conn.execute(
+                        "INSERT OR IGNORE INTO dependencies (issue_id, depends_on_id, type, created_at) "
+                        "VALUES (?, ?, 'blocks', ?)",
+                        (issue_id, dep_id, now),
+                    )
+
+            self.conn.commit()
+        except Exception:
+            self.conn.rollback()
+            raise
+
         return self.get_issue(issue_id)
 
     def get_issue(self, issue_id: str) -> Issue:
@@ -744,32 +752,47 @@ class FiligreeDB:
     ) -> Issue:
         current = self.get_issue(issue_id)
         now = _now_iso()
-        updates: list[str] = []
-        params: list[Any] = []
 
-        if title is not None and title != current.title:
-            self._record_event(issue_id, "title_changed", actor=actor, old_value=current.title, new_value=title)
-            updates.append("title = ?")
-            params.append(title)
+        # --- Validate all inputs BEFORE any writes to prevent partial commits ---
+        if priority is not None and priority != current.priority and not (0 <= priority <= 4):
+            msg = f"Priority must be between 0 and 4, got {priority}"
+            raise ValueError(msg)
 
+        if parent_id is not None and parent_id != "":
+            if parent_id == issue_id:
+                msg = f"Issue {issue_id} cannot be its own parent"
+                raise ValueError(msg)
+            self._validate_parent_id(parent_id)
+            # Check for circular parent chain
+            ancestor = parent_id
+            while ancestor is not None:
+                row = self.conn.execute("SELECT parent_id FROM issues WHERE id = ?", (ancestor,)).fetchone()
+                if row is None:
+                    break
+                ancestor = row["parent_id"]
+                if ancestor == issue_id:
+                    msg = f"Setting parent_id to '{parent_id}' would create a circular parent chain"
+                    raise ValueError(msg)
+
+        # Cache transition validation result for reuse in write phase (warnings)
+        _transition_result = None
         if status is not None and status != current.status:
             self._validate_status(status, current.type)
 
             if not _skip_transition_check:
                 # WFT-FR-069: Atomic transition-with-fields
-                # Merge proposed fields into current fields BEFORE transition validation
-                # so that hard enforcement sees the fields being set in this same call.
                 merged_fields = {**current.fields}
                 if fields is not None:
                     merged_fields.update(fields)
 
-                # Validate transition via template system (unknown types pass through)
                 tpl = self.templates.get_type(current.type)
                 if tpl is not None:
-                    result = self.templates.validate_transition(current.type, current.status, status, merged_fields)
-                    if not result.allowed:
-                        if result.missing_fields:
-                            missing_str = ", ".join(result.missing_fields)
+                    _transition_result = self.templates.validate_transition(
+                        current.type, current.status, status, merged_fields
+                    )
+                    if not _transition_result.allowed:
+                        if _transition_result.missing_fields:
+                            missing_str = ", ".join(_transition_result.missing_fields)
                             msg = (
                                 f"Cannot transition '{current.status}' -> '{status}' for type "
                                 f"'{current.type}': missing required fields: {missing_str}"
@@ -781,9 +804,21 @@ class FiligreeDB:
                             )
                         raise ValueError(msg)
 
-                    # Soft enforcement: record warning events
-                    if result.warnings:
-                        for warning in result.warnings:
+        # --- All validation passed — now record events and apply changes ---
+        updates: list[str] = []
+        params: list[Any] = []
+
+        try:
+            if title is not None and title != current.title:
+                self._record_event(issue_id, "title_changed", actor=actor, old_value=current.title, new_value=title)
+                updates.append("title = ?")
+                params.append(title)
+
+            if status is not None and status != current.status:
+                # Record soft-enforcement warnings from cached validation result
+                if _transition_result is not None:
+                    if _transition_result.warnings:
+                        for warning in _transition_result.warnings:
                             self._record_event(
                                 issue_id,
                                 "transition_warning",
@@ -792,123 +827,113 @@ class FiligreeDB:
                                 new_value=status,
                                 comment=warning,
                             )
-                    if result.missing_fields and result.enforcement == "soft":
+                    if _transition_result.missing_fields and _transition_result.enforcement == "soft":
                         self._record_event(
                             issue_id,
                             "transition_warning",
                             actor=actor,
                             old_value=current.status,
                             new_value=status,
-                            comment=f"Missing recommended fields: {', '.join(result.missing_fields)}",
+                            comment=f"Missing recommended fields: {', '.join(_transition_result.missing_fields)}",
                         )
 
-            self._record_event(issue_id, "status_changed", actor=actor, old_value=current.status, new_value=status)
-            updates.append("status = ?")
-            params.append(status)
+                self._record_event(issue_id, "status_changed", actor=actor, old_value=current.status, new_value=status)
+                updates.append("status = ?")
+                params.append(status)
 
-            # Set closed_at when entering a done-category state
-            status_cat = self.templates.get_category(current.type, status)
-            is_done = (status_cat or self._infer_status_category(status)) == "done"
+                # Set closed_at when entering a done-category state
+                status_cat = self.templates.get_category(current.type, status)
+                is_done = (status_cat or self._infer_status_category(status)) == "done"
 
-            if is_done:
-                updates.append("closed_at = ?")
+                if is_done:
+                    updates.append("closed_at = ?")
+                    params.append(now)
+                else:
+                    # Clear closed_at when leaving a done-category state
+                    old_cat = self.templates.get_category(current.type, current.status)
+                    if (old_cat or self._infer_status_category(current.status)) == "done":
+                        updates.append("closed_at = NULL")
+
+            if priority is not None and priority != current.priority:
+                self._record_event(
+                    issue_id,
+                    "priority_changed",
+                    actor=actor,
+                    old_value=str(current.priority),
+                    new_value=str(priority),
+                )
+                updates.append("priority = ?")
+                params.append(priority)
+
+            if assignee is not None and assignee != current.assignee:
+                self._record_event(
+                    issue_id, "assignee_changed", actor=actor, old_value=current.assignee, new_value=assignee
+                )
+                updates.append("assignee = ?")
+                params.append(assignee)
+
+            if description is not None and description != current.description:
+                self._record_event(
+                    issue_id,
+                    "description_changed",
+                    actor=actor,
+                    old_value=current.description,
+                    new_value=description,
+                )
+                updates.append("description = ?")
+                params.append(description)
+
+            if notes is not None and notes != current.notes:
+                self._record_event(
+                    issue_id,
+                    "notes_changed",
+                    actor=actor,
+                    old_value=current.notes,
+                    new_value=notes,
+                )
+                updates.append("notes = ?")
+                params.append(notes)
+
+            if parent_id is not None:
+                if parent_id == "":
+                    # Clear parent
+                    if current.parent_id is not None:
+                        self._record_event(
+                            issue_id,
+                            "parent_changed",
+                            actor=actor,
+                            old_value=current.parent_id or "",
+                            new_value="",
+                        )
+                        updates.append("parent_id = NULL")
+                else:
+                    if parent_id != current.parent_id:
+                        self._record_event(
+                            issue_id,
+                            "parent_changed",
+                            actor=actor,
+                            old_value=current.parent_id or "",
+                            new_value=parent_id,
+                        )
+                        updates.append("parent_id = ?")
+                        params.append(parent_id)
+
+            if fields is not None:
+                # Merge into existing fields
+                merged = {**current.fields, **fields}
+                updates.append("fields = ?")
+                params.append(json.dumps(merged))
+
+            if updates:
+                updates.append("updated_at = ?")
                 params.append(now)
-            else:
-                # Clear closed_at when leaving a done-category state
-                old_cat = self.templates.get_category(current.type, current.status)
-                if (old_cat or self._infer_status_category(current.status)) == "done":
-                    updates.append("closed_at = NULL")
-
-        if priority is not None and priority != current.priority:
-            if not (0 <= priority <= 4):
-                msg = f"Priority must be between 0 and 4, got {priority}"
-                raise ValueError(msg)
-            self._record_event(
-                issue_id, "priority_changed", actor=actor, old_value=str(current.priority), new_value=str(priority)
-            )
-            updates.append("priority = ?")
-            params.append(priority)
-
-        if assignee is not None and assignee != current.assignee:
-            self._record_event(
-                issue_id, "assignee_changed", actor=actor, old_value=current.assignee, new_value=assignee
-            )
-            updates.append("assignee = ?")
-            params.append(assignee)
-
-        if description is not None and description != current.description:
-            self._record_event(
-                issue_id,
-                "description_changed",
-                actor=actor,
-                old_value=current.description,
-                new_value=description,
-            )
-            updates.append("description = ?")
-            params.append(description)
-
-        if notes is not None and notes != current.notes:
-            self._record_event(
-                issue_id,
-                "notes_changed",
-                actor=actor,
-                old_value=current.notes,
-                new_value=notes,
-            )
-            updates.append("notes = ?")
-            params.append(notes)
-
-        if parent_id is not None:
-            if parent_id == "":
-                # Clear parent
-                if current.parent_id is not None:
-                    self._record_event(
-                        issue_id,
-                        "parent_changed",
-                        actor=actor,
-                        old_value=current.parent_id or "",
-                        new_value="",
-                    )
-                    updates.append("parent_id = NULL")
-            else:
-                if parent_id == issue_id:
-                    msg = f"Issue {issue_id} cannot be its own parent"
-                    raise ValueError(msg)
-                self._validate_parent_id(parent_id)
-                # Check for circular parent chain
-                ancestor = parent_id
-                while ancestor is not None:
-                    row = self.conn.execute("SELECT parent_id FROM issues WHERE id = ?", (ancestor,)).fetchone()
-                    if row is None:
-                        break
-                    ancestor = row["parent_id"]
-                    if ancestor == issue_id:
-                        msg = f"Setting parent_id to '{parent_id}' would create a circular parent chain"
-                        raise ValueError(msg)
-                if parent_id != current.parent_id:
-                    self._record_event(
-                        issue_id,
-                        "parent_changed",
-                        actor=actor,
-                        old_value=current.parent_id or "",
-                        new_value=parent_id,
-                    )
-                    updates.append("parent_id = ?")
-                    params.append(parent_id)
-
-        if fields is not None:
-            # Merge into existing fields
-            merged = {**current.fields, **fields}
-            updates.append("fields = ?")
-            params.append(json.dumps(merged))
-
-        if updates:
-            updates.append("updated_at = ?")
-            params.append(now)
-            params.append(issue_id)
-            sql = f"UPDATE issues SET {', '.join(updates)} WHERE id = ?"
-            self.conn.execute(sql, params)
-            self.conn.commit()
+                params.append(issue_id)
+                sql = f"UPDATE issues SET {', '.join(updates)} WHERE id = ?"
+                self.conn.execute(sql, params)
+                self.conn.commit()
+        except Exception:
+            self.conn.rollback()
+            raise
 
         return self.get_issue(issue_id)
 
@@ -964,8 +989,12 @@ class FiligreeDB:
             raise ValueError(msg)
 
         initial_state = self.templates.get_initial_state(current.type)
-        self._record_event(issue_id, "reopened", actor=actor, old_value=current.status, new_value=initial_state)
-        return self.update_issue(issue_id, status=initial_state, actor=actor, _skip_transition_check=True)
+        try:
+            self._record_event(issue_id, "reopened", actor=actor, old_value=current.status, new_value=initial_state)
+            return self.update_issue(issue_id, status=initial_state, actor=actor, _skip_transition_check=True)
+        except Exception:
+            self.conn.rollback()
+            raise
 
     def claim_issue(self, issue_id: str, *, assignee: str, actor: str = "") -> Issue:
         """Atomically claim an open-category issue with optimistic locking.

@@ -96,6 +96,98 @@ class TestCreatePlanRollback:
         assert plan["phases"][0]["total"] == 2
 
 
+class TestCreateIssuePartialWriteRollback:
+    """Bug fix: filigree-340ce9 — create_issue leaves partial writes on dep failure."""
+
+    def test_invalid_deps_no_orphan_issue(self, db: FiligreeDB) -> None:
+        """create_issue with invalid deps must not leave an orphaned issue row."""
+        issues_before = len(db.list_issues())
+
+        with pytest.raises(ValueError, match="Invalid dependency IDs"):
+            db.create_issue("Orphan candidate", deps=["nonexistent-dep-id"])
+
+        # Force a commit to simulate MCP's long-lived connection
+        db.conn.commit()
+
+        issues_after = len(db.list_issues())
+        assert issues_after == issues_before, (
+            f"Expected {issues_before} issues, got {issues_after} — "
+            "orphaned issue was committed after failed create_issue"
+        )
+
+    def test_invalid_deps_no_orphan_events(self, db: FiligreeDB) -> None:
+        """create_issue with invalid deps must not leave orphaned events."""
+        events_before = db.conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]
+
+        with pytest.raises(ValueError, match="Invalid dependency IDs"):
+            db.create_issue("Event orphan candidate", deps=["ghost-id"])
+
+        # Force commit
+        db.conn.commit()
+
+        events_after = db.conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]
+        assert events_after == events_before, (
+            f"Expected {events_before} events, got {events_after} — "
+            "orphaned 'created' event was committed after failed create_issue"
+        )
+
+    def test_invalid_deps_no_orphan_labels(self, db: FiligreeDB) -> None:
+        """create_issue with labels + invalid deps must not leave orphaned labels."""
+        labels_before = db.conn.execute("SELECT COUNT(*) FROM labels").fetchone()[0]
+
+        with pytest.raises(ValueError, match="Invalid dependency IDs"):
+            db.create_issue("Label orphan", labels=["bug", "urgent"], deps=["missing-id"])
+
+        db.conn.commit()
+
+        labels_after = db.conn.execute("SELECT COUNT(*) FROM labels").fetchone()[0]
+        assert labels_after == labels_before, (
+            f"Expected {labels_before} labels, got {labels_after} — "
+            "orphaned labels were committed after failed create_issue"
+        )
+
+
+class TestUpdateIssuePartialEventRollback:
+    """Bug fix: filigree-1c0a33 — update_issue persists false events on validation failure."""
+
+    def test_invalid_priority_no_orphan_title_event(self, db: FiligreeDB) -> None:
+        """update_issue with valid title + invalid priority must not leave title_changed event."""
+        issue = db.create_issue("Original title")
+        events_before = db.conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]
+
+        with pytest.raises(ValueError, match="Priority must be between 0 and 4"):
+            db.update_issue(issue.id, title="New title", priority=99)
+
+        # Force commit to simulate MCP long-lived connection
+        db.conn.commit()
+
+        events_after = db.conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]
+        assert events_after == events_before, (
+            f"Expected {events_before} events, got {events_after} — "
+            "orphaned title_changed event was committed after failed update_issue"
+        )
+
+        # Title should remain unchanged
+        refreshed = db.get_issue(issue.id)
+        assert refreshed.title == "Original title"
+
+    def test_circular_parent_no_orphan_events(self, db: FiligreeDB) -> None:
+        """update_issue with valid title + circular parent must not leave orphaned events."""
+        parent = db.create_issue("Parent")
+        child = db.create_issue("Child", parent_id=parent.id)
+        events_before = db.conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]
+
+        with pytest.raises(ValueError, match="circular parent chain"):
+            db.update_issue(parent.id, title="Renamed parent", parent_id=child.id)
+
+        db.conn.commit()
+
+        events_after = db.conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]
+        assert events_after == events_before, (
+            f"Expected {events_before} events, got {events_after} — orphaned events committed after failed update_issue"
+        )
+
+
 class TestInvalidDepValidation:
     """Bug fix: filigree-1acc4b — create_issue dep FK crash."""
 

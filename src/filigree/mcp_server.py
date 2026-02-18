@@ -881,6 +881,12 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
         if _logger:
             _logger.info("tool_call", extra={"tool": name, "args_data": arguments, "duration_ms": duration_ms})
         return result
+    finally:
+        # Safety net: roll back any uncommitted transaction left by a failed
+        # mutation.  Successful mutations commit explicitly; only partial
+        # failures leave dirty state that would be flushed by the next commit.
+        if tracker.conn.in_transaction:
+            tracker.conn.rollback()
 
 
 async def _dispatch(name: str, arguments: dict[str, Any], tracker: FiligreeDB) -> list[TextContent]:

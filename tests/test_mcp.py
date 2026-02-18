@@ -996,3 +996,66 @@ class TestExportImportPathTraversal:
         data = _parse(result)
         assert "error" in data
         assert data["code"] != "invalid_path"
+
+
+class TestMCPTransactionSafety:
+    """MCP-level safety net: no dirty transactions survive after failed tool calls."""
+
+    async def test_failed_create_no_dirty_transaction(self, mcp_db: FiligreeDB) -> None:
+        """create_issue with invalid deps returns error AND leaves no dirty txn."""
+        result = await call_tool(
+            "create_issue",
+            {"title": "Should fail", "deps": ["nonexistent-dep-id"]},
+        )
+        data = _parse(result)
+        assert "error" in data
+
+        assert not mcp_db.conn.in_transaction, (
+            "Dirty transaction left after failed create_issue — next successful commit would flush orphaned writes"
+        )
+
+    async def test_failed_update_no_dirty_transaction(self, mcp_db: FiligreeDB) -> None:
+        """update_issue with invalid priority returns error AND leaves no dirty txn."""
+        create_result = await call_tool("create_issue", {"title": "Valid issue"})
+        issue_id = _parse(create_result)["id"]
+
+        result = await call_tool(
+            "update_issue",
+            {"id": issue_id, "title": "New title", "priority": 99},
+        )
+        data = _parse(result)
+        assert "error" in data
+
+        assert not mcp_db.conn.in_transaction, (
+            "Dirty transaction left after failed update_issue — next successful commit would flush orphaned events"
+        )
+
+    async def test_unhandled_error_rolls_back_dirty_transaction(self, mcp_db: FiligreeDB) -> None:
+        """Safety net: unhandled exception from _dispatch rolls back any dirty txn.
+
+        Simulates a core function that writes to the DB then raises without
+        rolling back — the MCP call_tool() safety net must clean up.
+        """
+
+        async def _bad_dispatch(name: str, arguments: dict[str, Any], tracker: FiligreeDB) -> list[Any]:
+            # Simulate a buggy mutation: INSERT a row, then crash
+            tracker.conn.execute(
+                "INSERT INTO issues (id, title, type, status, priority, description, "
+                "notes, assignee, parent_id, fields, created_at, updated_at) "
+                "VALUES ('orphan-1', 'Orphan', 'task', 'open', 2, '', '', '', NULL, "
+                "'{}', '2026-01-01', '2026-01-01')"
+            )
+            msg = "Simulated unprotected crash"
+            raise RuntimeError(msg)
+
+        with patch("filigree.mcp_server._dispatch", _bad_dispatch), pytest.raises(RuntimeError):
+            await call_tool("create_issue", {"title": "Irrelevant"})
+
+        # The safety net in call_tool() should have rolled back the dirty txn
+        assert not mcp_db.conn.in_transaction, (
+            "MCP safety net failed — dirty transaction survived after unhandled exception"
+        )
+
+        # The orphan row should NOT be visible after rollback
+        orphan = mcp_db.conn.execute("SELECT id FROM issues WHERE id = 'orphan-1'").fetchone()
+        assert orphan is None, "Orphan issue row survived — rollback did not happen"
