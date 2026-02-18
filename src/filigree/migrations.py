@@ -265,7 +265,32 @@ def rebuild_table(
     # S608: table/column names are from internal schema, not user input
     insert_sql = f"INSERT INTO {temp_table} ({insert_cols}) SELECT {select_cols} FROM {table}"  # noqa: S608
     conn.execute(insert_sql)
-    conn.execute(f"DROP TABLE {table}")
+
+    try:
+        conn.execute(f"DROP TABLE {table}")
+    except sqlite3.IntegrityError:
+        # FK constraint prevents direct drop — temporarily disable FK enforcement.
+        # PRAGMA foreign_keys only takes effect outside transactions, so we
+        # commit, toggle, do the drop-rename, then re-enable and resume.
+        in_txn = conn.in_transaction
+        if in_txn:
+            conn.commit()
+        conn.execute("PRAGMA foreign_keys=OFF")
+        try:
+            conn.execute("BEGIN")
+            conn.execute(f"DROP TABLE {table}")
+            conn.execute(f"ALTER TABLE {temp_table} RENAME TO {table}")
+            conn.execute("PRAGMA foreign_key_check")
+            conn.commit()
+        except BaseException:
+            conn.rollback()
+            raise
+        finally:
+            conn.execute("PRAGMA foreign_keys=ON")
+        if in_txn:
+            conn.execute("BEGIN")
+        return
+
     conn.execute(f"ALTER TABLE {temp_table} RENAME TO {table}")
 
 
@@ -332,7 +357,9 @@ def _template_new_table_migration(conn: sqlite3.Connection) -> None:
       - new table 'attachments' for file references
       - new index on attachments(issue_id)
     """
-    conn.executescript("""\
+    # Use execute() not executescript() — executescript implicitly commits,
+    # breaking the migration runner's per-migration transaction guarantees.
+    conn.execute("""\
         CREATE TABLE IF NOT EXISTS attachments (
             id         INTEGER PRIMARY KEY AUTOINCREMENT,
             issue_id   TEXT NOT NULL REFERENCES issues(id),
@@ -340,6 +367,5 @@ def _template_new_table_migration(conn: sqlite3.Connection) -> None:
             mime_type  TEXT DEFAULT '',
             size_bytes INTEGER DEFAULT 0,
             created_at TEXT NOT NULL
-        );
-        CREATE INDEX IF NOT EXISTS idx_attachments_issue ON attachments(issue_id);
-    """)
+        )""")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_attachments_issue ON attachments(issue_id)")

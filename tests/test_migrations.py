@@ -411,6 +411,29 @@ class TestRebuildTable:
         assert val == 4
         conn.close()
 
+    def test_rebuild_fk_referenced_table(self, tmp_path: Path) -> None:
+        """rebuild_table must work on tables referenced by FK from other tables."""
+        conn = _make_db(tmp_path)
+        conn.execute("CREATE TABLE parent (id TEXT PRIMARY KEY, name TEXT)")
+        conn.execute("CREATE TABLE child (id TEXT PRIMARY KEY, parent_id TEXT REFERENCES parent(id))")
+        conn.execute("INSERT INTO parent VALUES ('p1', 'Parent 1')")
+        conn.execute("INSERT INTO child VALUES ('c1', 'p1')")
+        conn.commit()
+
+        # Rebuild parent — this should not fail even though child references it
+        rebuild_table(
+            conn,
+            "parent",
+            "CREATE TABLE parent (id TEXT PRIMARY KEY, name TEXT, extra TEXT DEFAULT '')",
+        )
+        conn.commit()
+
+        row = conn.execute("SELECT name FROM parent WHERE id = 'p1'").fetchone()
+        assert row[0] == "Parent 1"
+        cols = _get_table_columns(conn, "parent")
+        assert "extra" in cols
+        conn.close()
+
     def test_cleans_up_leftover_temp_table(self, tmp_path: Path) -> None:
         """If a previous migration failed mid-rebuild, temp table is cleaned up."""
         conn = _make_db(tmp_path)
@@ -485,6 +508,29 @@ class TestMigrationAtomicity:
             migrations.MIGRATIONS.clear()
             migrations.MIGRATIONS.update(original)
             conn.close()
+
+    def test_template_new_table_uses_execute_not_executescript(self, tmp_path: Path) -> None:
+        """_template_new_table_migration must use execute(), not executescript().
+
+        executescript() implicitly commits, breaking transaction rollback.
+        """
+        from filigree.migrations import _template_new_table_migration
+
+        conn = _make_db(tmp_path)
+        # Create the issues table that the template references
+        conn.execute("CREATE TABLE issues (id TEXT PRIMARY KEY)")
+        conn.execute("PRAGMA user_version = 3")
+        conn.commit()
+
+        # Run inside a transaction and then rollback
+        conn.execute("BEGIN IMMEDIATE")
+        _template_new_table_migration(conn)
+        conn.rollback()
+
+        # After rollback, the attachments table should NOT exist
+        tables = _get_table_names(conn)
+        assert "attachments" not in tables
+        conn.close()
 
     def test_begin_immediate_is_used(self, tmp_path: Path) -> None:
         """Verify that BEGIN IMMEDIATE is issued before each migration.
