@@ -179,9 +179,12 @@ def install_claude_code_mcp(project_root: Path) -> tuple[bool, str]:
     mcp_config: dict[str, Any] = {}
     if mcp_json_path.exists():
         try:
-            mcp_config = json.loads(mcp_json_path.read_text())
-        except json.JSONDecodeError:
-            # Back up the corrupt file and start fresh
+            raw = json.loads(mcp_json_path.read_text())
+            if not isinstance(raw, dict):
+                raise ValueError("not a JSON object")
+            mcp_config = raw
+        except (json.JSONDecodeError, ValueError):
+            # Back up the corrupt/non-object file and start fresh
             backup_path = mcp_json_path.parent / (mcp_json_path.name + ".bak")
             shutil.copy2(mcp_json_path, backup_path)
             logger.warning(
@@ -610,6 +613,8 @@ def run_doctor(project_root: Path | None = None) -> list[CheckResult]:
     if mcp_json.exists():
         try:
             mcp = json.loads(mcp_json.read_text())
+            if not isinstance(mcp, dict):
+                raise ValueError("not a JSON object")
             if "filigree" in mcp.get("mcpServers", {}):
                 results.append(CheckResult("Claude Code MCP", True, "Configured in .mcp.json"))
             else:
@@ -621,7 +626,7 @@ def run_doctor(project_root: Path | None = None) -> list[CheckResult]:
                         fix_hint="Run: filigree install --claude-code",
                     )
                 )
-        except json.JSONDecodeError:
+        except (json.JSONDecodeError, ValueError):
             results.append(
                 CheckResult(
                     "Claude Code MCP",

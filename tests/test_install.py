@@ -147,6 +147,15 @@ class TestRunDoctor:
         assert not config_check.passed
         assert "Invalid JSON" in config_check.message
 
+    def test_non_dict_mcp_json_does_not_crash(self, filigree_project: Path) -> None:
+        """Doctor should handle .mcp.json containing a list instead of a dict."""
+        mcp_path = filigree_project / ".mcp.json"
+        mcp_path.write_text("[]")
+        results = run_doctor(filigree_project)
+        mcp_check = next((r for r in results if "Claude Code MCP" in r.name), None)
+        assert mcp_check is not None
+        assert not mcp_check.passed
+
     def test_missing_config_json(self, filigree_project: Path) -> None:
         """Doctor should detect missing config.json."""
         config_path = filigree_project / FILIGREE_DIR_NAME / CONFIG_FILENAME
@@ -370,6 +379,15 @@ class TestInstallClaudeCodeMcp:
         assert ok
         data = json.loads((tmp_path / ".mcp.json").read_text())
         assert "other_tool" in data["mcpServers"]
+        assert "filigree" in data["mcpServers"]
+
+    def test_handles_non_dict_mcp_json(self, tmp_path: Path) -> None:
+        """Non-object .mcp.json should be backed up and reset, not crash."""
+        (tmp_path / ".mcp.json").write_text("[]")
+        with patch("filigree.install.shutil.which", return_value=None):
+            ok, _msg = install_claude_code_mcp(tmp_path)
+        assert ok
+        data = json.loads((tmp_path / ".mcp.json").read_text())
         assert "filigree" in data["mcpServers"]
 
 
