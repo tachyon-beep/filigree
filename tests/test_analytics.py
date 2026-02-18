@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from unittest.mock import patch
+
 from filigree.analytics import cycle_time, get_flow_metrics, lead_time
 from filigree.core import FiligreeDB
 
@@ -86,3 +88,20 @@ class TestFlowMetrics:
         data_7 = get_flow_metrics(db, days=7)
         assert data_7["period_days"] == 7
         assert data_7["throughput"] >= 1  # recently closed, still in 7d window
+
+    def test_flow_metrics_uses_high_limit(self, db: FiligreeDB) -> None:
+        """get_flow_metrics must not use default limit=100 for list_issues."""
+        original = db.list_issues
+        call_limits: list[int | None] = []
+
+        def tracking(**kwargs):  # type: ignore[no-untyped-def]
+            call_limits.append(kwargs.get("limit"))
+            return original(**kwargs)
+
+        with patch.object(db, "list_issues", side_effect=tracking):
+            get_flow_metrics(db)
+
+        # Every call should use a high limit, not the default 100
+        for limit in call_limits:
+            assert limit is not None, "list_issues called without explicit limit"
+            assert limit > 100, f"list_issues called with limit={limit}, expected >100"

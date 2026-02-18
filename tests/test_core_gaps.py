@@ -468,6 +468,57 @@ class TestCreatePlan:
         with pytest.raises(ValueError, match="Milestone 'title' is required"):
             db.create_plan({"title": "   "}, [{"title": "Phase 1"}])
 
+    def test_plan_rejects_negative_dep_index(self, db: FiligreeDB) -> None:
+        """Negative indices silently resolve to wrong step via Python list[-1]."""
+        with pytest.raises((ValueError, IndexError)):
+            db.create_plan(
+                {"title": "MS"},
+                [{"title": "Phase", "steps": [{"title": "S1", "deps": [-1]}]}],
+            )
+
+    def test_plan_rejects_self_dependency(self, db: FiligreeDB) -> None:
+        """Step referencing itself as a dep should raise, not silently insert."""
+        with pytest.raises(ValueError, match="self-dependency"):
+            db.create_plan(
+                {"title": "MS"},
+                [{"title": "Phase", "steps": [{"title": "S1", "deps": [0]}]}],
+            )
+
+    def test_plan_rejects_cycle(self, db: FiligreeDB) -> None:
+        """Mutual deps between steps should raise, not silently insert."""
+        with pytest.raises(ValueError, match="cycle"):
+            db.create_plan(
+                {"title": "MS"},
+                [
+                    {
+                        "title": "Phase",
+                        "steps": [
+                            {"title": "S1", "deps": [1]},
+                            {"title": "S2", "deps": [0]},
+                        ],
+                    },
+                ],
+            )
+
+    def test_plan_records_dependency_events(self, db: FiligreeDB) -> None:
+        """Dependencies created in a plan should have events, like add_dependency()."""
+        plan = db.create_plan(
+            {"title": "MS"},
+            [
+                {
+                    "title": "Phase",
+                    "steps": [
+                        {"title": "S1"},
+                        {"title": "S2", "deps": [0]},
+                    ],
+                },
+            ],
+        )
+        step_2_id = plan["phases"][0]["steps"][1]["id"]
+        events = db.get_issue_events(step_2_id)
+        dep_events = [e for e in events if e["event_type"] == "dependency_added"]
+        assert len(dep_events) == 1
+
 
 class TestBatchOperations:
     def test_batch_close(self, db: FiligreeDB) -> None:

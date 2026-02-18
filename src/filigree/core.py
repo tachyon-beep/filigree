@@ -1601,15 +1601,35 @@ class FiligreeDB:
                         dep_ref_str = str(dep_ref)
                         if "." in dep_ref_str:
                             # Cross-phase: "phase_idx.step_idx"
-                            p_idx, s_idx = dep_ref_str.split(".", 1)
-                            dep_issue_id = step_ids[int(p_idx)][int(s_idx)]
+                            p_idx_str, s_idx_str = dep_ref_str.split(".", 1)
+                            p_idx_int, s_idx_int = int(p_idx_str), int(s_idx_str)
+                            if p_idx_int < 0 or s_idx_int < 0:
+                                msg = f"Negative dep index not allowed: {dep_ref_str}"
+                                raise ValueError(msg)
+                            dep_issue_id = step_ids[p_idx_int][s_idx_int]
                         else:
                             # Same phase: step index
-                            dep_issue_id = step_ids[phase_idx][int(dep_ref_str)]
+                            same_idx = int(dep_ref_str)
+                            if same_idx < 0:
+                                msg = f"Negative dep index not allowed: {dep_ref_str}"
+                                raise ValueError(msg)
+                            dep_issue_id = step_ids[phase_idx][same_idx]
+
+                        issue_id = step_ids[phase_idx][step_idx]
+                        if issue_id == dep_issue_id:
+                            msg = f"Cannot add self-dependency: {issue_id}"
+                            raise ValueError(msg)
+                        if self._would_create_cycle(issue_id, dep_issue_id):
+                            msg = f"Dependency {issue_id} -> {dep_issue_id} would create a cycle"
+                            raise ValueError(msg)
+
                         self.conn.execute(
                             "INSERT OR IGNORE INTO dependencies (issue_id, depends_on_id, type, created_at) "
                             "VALUES (?, ?, 'blocks', ?)",
-                            (step_ids[phase_idx][step_idx], dep_issue_id, now),
+                            (issue_id, dep_issue_id, now),
+                        )
+                        self._record_event(
+                            issue_id, "dependency_added", actor=actor, new_value=f"blocks:{dep_issue_id}"
                         )
 
             self.conn.commit()

@@ -251,6 +251,43 @@ class TestTemplateRegistry:
         """Unknown type returns None."""
         assert registry.get_category("unknown", "open") is None
 
+    def test_override_type_clears_stale_category_cache(self, registry: TemplateRegistry) -> None:
+        """Overriding a type must remove old state entries from _category_cache."""
+        # Pre-condition: old states exist in cache
+        assert registry.get_category("task", "open") == "open"
+        assert registry.get_category("task", "in_progress") == "wip"
+        assert registry.get_category("task", "closed") == "done"
+
+        # Override "task" with completely different states
+        override = TypeTemplate(
+            type="task",
+            display_name="Custom Task",
+            description="Overridden",
+            pack="core",
+            states=(
+                StateDefinition("todo", "open"),
+                StateDefinition("doing", "wip"),
+                StateDefinition("complete", "done"),
+            ),
+            initial_state="todo",
+            transitions=(
+                TransitionDefinition("todo", "doing", "soft"),
+                TransitionDefinition("doing", "complete", "soft"),
+            ),
+            fields_schema=(),
+        )
+        registry._register_type(override)
+
+        # New states should work
+        assert registry.get_category("task", "todo") == "open"
+        assert registry.get_category("task", "doing") == "wip"
+        assert registry.get_category("task", "complete") == "done"
+
+        # Old states must NOT be in cache — they're no longer valid
+        assert registry.get_category("task", "open") is None
+        assert registry.get_category("task", "in_progress") is None
+        assert registry.get_category("task", "closed") is None
+
     def test_get_valid_states(self, registry: TemplateRegistry) -> None:
         states = registry.get_valid_states("bug")
         assert states is not None

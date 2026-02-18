@@ -91,7 +91,7 @@ def get_flow_metrics(db: FiligreeDB, *, days: int = 30) -> dict[str, Any]:
 
     cutoff_dt = datetime.now(UTC) - timedelta(days=days)
 
-    done_issues = db.list_issues(status="closed")  # "closed" expands to all done-category states
+    done_issues = db.list_issues(status="closed", limit=10000)  # bypass default limit=100
     # Filter to issues closed within the lookback window using proper datetime comparison
     recent_closed = []
     for i in done_issues:

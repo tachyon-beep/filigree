@@ -372,6 +372,10 @@ class TemplateRegistry:
         self._types[tpl.type] = tpl
 
         # Build category cache -- O(1) lookup (WFT-SR-002)
+        # Clear stale entries first (type may be overridden with different states)
+        stale = [k for k in self._category_cache if k[0] == tpl.type]
+        for k in stale:
+            del self._category_cache[k]
         for state in tpl.states:
             self._category_cache[(tpl.type, state.name)] = state.category
 
