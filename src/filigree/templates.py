@@ -614,6 +614,8 @@ class TemplateRegistry:
             if config_path.exists():
                 try:
                     config = _json.loads(config_path.read_text())
+                    if not isinstance(config, dict):
+                        raise ValueError("config.json must contain a JSON object")
                     enabled_packs = config.get("enabled_packs", ["core", "planning"])
                 except (ValueError, KeyError):
                     logger.warning("Could not read config.json — using default enabled_packs")

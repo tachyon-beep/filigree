@@ -179,6 +179,8 @@ def create_app() -> Any:
             body = await request.json()
         except Exception:
             return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
+        if not isinstance(body, dict):
+            return JSONResponse({"error": "Request body must be a JSON object"}, status_code=400)
         actor = body.pop("actor", "dashboard")
         try:
             issue = db.update_issue(
@@ -206,6 +208,8 @@ def create_app() -> Any:
             body = await request.json()
         except Exception:
             return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
+        if not isinstance(body, dict):
+            return JSONResponse({"error": "Request body must be a JSON object"}, status_code=400)
         actor = body.get("actor", "dashboard")
         reason = body.get("reason", "")
         try:
@@ -224,6 +228,8 @@ def create_app() -> Any:
             body = await request.json()
         except Exception:
             return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
+        if not isinstance(body, dict):
+            return JSONResponse({"error": "Request body must be a JSON object"}, status_code=400)
         actor = body.get("actor", "dashboard")
         try:
             issue = db.reopen_issue(issue_id, actor=actor)
@@ -245,6 +251,8 @@ def create_app() -> Any:
             body = await request.json()
         except Exception:
             return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
+        if not isinstance(body, dict):
+            return JSONResponse({"error": "Request body must be a JSON object"}, status_code=400)
         text = body.get("text", "")
         author = body.get("author", "")
         try:
@@ -313,6 +321,8 @@ def create_app() -> Any:
             body = await request.json()
         except Exception:
             return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
+        if not isinstance(body, dict):
+            return JSONResponse({"error": "Request body must be a JSON object"}, status_code=400)
         issue_ids = body.get("issue_ids", [])
         actor = body.get("actor", "dashboard")
         updated, errors = db.batch_update(
@@ -338,6 +348,8 @@ def create_app() -> Any:
             body = await request.json()
         except Exception:
             return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
+        if not isinstance(body, dict):
+            return JSONResponse({"error": "Request body must be a JSON object"}, status_code=400)
         issue_ids = body.get("issue_ids", [])
         reason = body.get("reason", "")
         actor = body.get("actor", "dashboard")
@@ -374,6 +386,8 @@ def create_app() -> Any:
             body = await request.json()
         except Exception:
             return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
+        if not isinstance(body, dict):
+            return JSONResponse({"error": "Request body must be a JSON object"}, status_code=400)
         title = body.get("title", "")
         try:
             issue = db.create_issue(
@@ -400,6 +414,8 @@ def create_app() -> Any:
             body = await request.json()
         except Exception:
             return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
+        if not isinstance(body, dict):
+            return JSONResponse({"error": "Request body must be a JSON object"}, status_code=400)
         assignee = body.get("assignee", "")
         actor = body.get("actor", "dashboard")
         try:
@@ -418,6 +434,8 @@ def create_app() -> Any:
             body = await request.json()
         except Exception:
             return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
+        if not isinstance(body, dict):
+            return JSONResponse({"error": "Request body must be a JSON object"}, status_code=400)
         actor = body.get("actor", "dashboard")
         try:
             issue = db.release_claim(issue_id, actor=actor)
@@ -435,6 +453,8 @@ def create_app() -> Any:
             body = await request.json()
         except Exception:
             return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
+        if not isinstance(body, dict):
+            return JSONResponse({"error": "Request body must be a JSON object"}, status_code=400)
         assignee = body.get("assignee", "")
         actor = body.get("actor", "dashboard")
         try:
@@ -453,6 +473,8 @@ def create_app() -> Any:
             body = await request.json()
         except Exception:
             return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
+        if not isinstance(body, dict):
+            return JSONResponse({"error": "Request body must be a JSON object"}, status_code=400)
         depends_on = body.get("depends_on", "")
         actor = body.get("actor", "dashboard")
         try:

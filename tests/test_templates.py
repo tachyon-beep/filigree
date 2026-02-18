@@ -1279,3 +1279,16 @@ class TestTemplateLoading:
         reg = TemplateRegistry()
         reg.load(filigree_dir)
         assert reg.get_type("extra_type") is None
+
+    def test_load_non_dict_config_json_uses_defaults(self, tmp_path: Path) -> None:
+        """config.json containing non-dict JSON (e.g. []) must not crash load()."""
+        filigree_dir = tmp_path / ".filigree"
+        filigree_dir.mkdir()
+        # Write a valid JSON array — not a dict
+        (filigree_dir / "config.json").write_text("[]")
+
+        reg = TemplateRegistry()
+        reg.load(filigree_dir)  # Should not raise
+        # Should fall back to defaults (core + planning)
+        assert reg.get_type("task") is not None
+        assert reg.get_type("milestone") is not None

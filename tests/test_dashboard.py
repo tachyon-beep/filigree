@@ -888,6 +888,26 @@ class TestDependencyManagementAPI:
         assert resp.status_code == 404
 
 
+class TestNonObjectBodyReturns400:
+    """Non-dict JSON bodies (e.g. []) must return 400, not crash with 500."""
+
+    async def test_update_issue_rejects_array_body(self, client: AsyncClient) -> None:
+        resp = await client.patch("/api/issue/test-1", content="[]")
+        assert resp.status_code == 400
+
+    async def test_create_issue_rejects_array_body(self, client: AsyncClient) -> None:
+        resp = await client.post("/api/issues", content="[]")
+        assert resp.status_code == 400
+
+    async def test_close_issue_rejects_array_body(self, client: AsyncClient) -> None:
+        resp = await client.post("/api/issue/test-1/close", content="[]")
+        assert resp.status_code == 400
+
+    async def test_batch_update_rejects_array_body(self, client: AsyncClient) -> None:
+        resp = await client.post("/api/batch/update", content="[]")
+        assert resp.status_code == 400
+
+
 class TestDashboardGetDb:
     """Cover _get_db when _db is None (lines 29-30)."""
 

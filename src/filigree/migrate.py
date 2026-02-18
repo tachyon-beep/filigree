@@ -48,15 +48,20 @@ def _is_missing_table_error(e: sqlite3.OperationalError) -> bool:
 
 
 def migrate_from_beads(beads_db_path: str | Path, tracker: FiligreeDB) -> int:
-    """Migrate all non-deleted issues from beads to filigree. Returns count."""
+    """Migrate all non-deleted issues from beads to filigree. Returns count.
+
+    The migration is atomic: if any step fails, all changes are rolled back.
+    """
     beads_conn = sqlite3.connect(str(beads_db_path))
     try:
         beads_conn.row_factory = sqlite3.Row
 
-        # -- Migrate issues
+        # -- Migrate issues (two-pass to avoid FK ordering issues)
         rows = beads_conn.execute("SELECT * FROM issues WHERE deleted_at IS NULL").fetchall()
         migrated_ids = {row["id"] for row in rows}
 
+        # Pass 1: build issue data and insert WITHOUT parent_id to avoid FK ordering
+        parent_map: dict[str, str] = {}  # id -> parent_id for pass 2
         count = 0
         for row in rows:
             # Build fields bag from beads-specific columns
@@ -101,13 +106,17 @@ def migrate_from_beads(beads_db_path: str | Path, tracker: FiligreeDB) -> int:
             if parent_id and parent_id not in migrated_ids:
                 parent_id = None
 
+            # Defer parent_id to pass 2 so insert order doesn't matter
+            if parent_id:
+                parent_map[row["id"]] = parent_id
+
             issue_data = {
                 "id": row["id"],
                 "title": row["title"] or "(untitled)",
                 "status": status,
                 "priority": priority,
                 "type": issue_type,
-                "parent_id": parent_id,
+                "parent_id": None,
                 "assignee": row["assignee"] or "",
                 "created_at": row["created_at"] or "",
                 "updated_at": row["updated_at"] or "",
@@ -119,6 +128,10 @@ def migrate_from_beads(beads_db_path: str | Path, tracker: FiligreeDB) -> int:
 
             tracker.bulk_insert_issue(issue_data, validate=False)
             count += 1
+
+        # Pass 2: set parent_id now that all issues exist
+        for issue_id, pid in parent_map.items():
+            tracker.conn.execute("UPDATE issues SET parent_id = ? WHERE id = ?", (pid, issue_id))
 
         # -- Migrate dependencies (only where both sides were migrated)
         deps = beads_conn.execute("SELECT * FROM dependencies").fetchall()
@@ -193,5 +206,10 @@ def migrate_from_beads(beads_db_path: str | Path, tracker: FiligreeDB) -> int:
 
         tracker.bulk_commit()
         return count
+    except BaseException:
+        # Roll back any uncommitted writes on the target DB
+        with contextlib.suppress(Exception):
+            tracker.conn.rollback()
+        raise
     finally:
         beads_conn.close()
