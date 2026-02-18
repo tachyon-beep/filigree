@@ -979,3 +979,20 @@ class TestExportImportPathTraversal:
         data = _parse(result)
         assert data["status"] == "ok"
         assert data["records"] >= 1
+
+    async def test_export_io_error_returns_structured_error(self, mcp_db: FiligreeDB) -> None:
+        """export_jsonl to a nonexistent directory must return error, not crash."""
+        result = await call_tool("export_jsonl", {"output_path": "nonexistent-dir/out.jsonl"})
+        data = _parse(result)
+        assert "error" in data
+        assert data["code"] == "io_error"
+
+    async def test_import_malformed_jsonl_returns_parse_error_not_invalid_path(self, mcp_db: FiligreeDB) -> None:
+        """import_jsonl with malformed JSONL must not report 'invalid_path'."""
+        project_root = mcp_db.db_path.parent.parent
+        bad_file = project_root / "bad.jsonl"
+        bad_file.write_text("this is not valid json\n")
+        result = await call_tool("import_jsonl", {"input_path": "bad.jsonl"})
+        data = _parse(result)
+        assert "error" in data
+        assert data["code"] != "invalid_path"

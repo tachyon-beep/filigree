@@ -873,6 +873,15 @@ class TestBatchCli:
         assert "updated" in data
         assert "errors" in data
 
+    def test_batch_update_json_malformed_field_returns_json(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        """batch-update --json with bad --field must emit JSON error, not plain text."""
+        runner, _ = cli_in_project
+        r1 = runner.invoke(cli, ["create", "A"])
+        id1 = _extract_id(r1.output)
+        result = runner.invoke(cli, ["batch-update", id1, "--field", "no-equals-sign", "--json"])
+        data = json.loads(result.output)
+        assert "error" in data
+
     def test_batch_close(self, cli_in_project: tuple[CliRunner, Path]) -> None:
         runner, _ = cli_in_project
         r1 = runner.invoke(cli, ["create", "A"])

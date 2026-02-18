@@ -1361,17 +1361,20 @@ async def _dispatch(name: str, arguments: dict[str, Any], tracker: FiligreeDB) -
                 return _text({"status": "ok", "records": count, "path": str(safe)})
             except ValueError as e:
                 return _text({"error": str(e), "code": "invalid_path"})
+            except OSError as e:
+                return _text({"error": str(e), "code": "io_error"})
 
         case "import_jsonl":
             try:
                 safe = _safe_path(arguments["input_path"])
+            except ValueError as e:
+                return _text({"error": str(e), "code": "invalid_path"})
+            try:
                 count = tracker.import_jsonl(safe, merge=arguments.get("merge", False))
                 _refresh_summary()
                 return _text({"status": "ok", "records": count, "path": str(safe)})
-            except ValueError as e:
-                return _text({"error": str(e), "code": "invalid_path"})
             except Exception as e:
-                return _text({"error": str(e), "code": "invalid"})
+                return _text({"error": str(e), "code": "import_error"})
 
         case "archive_closed":
             archived = tracker.archive_closed(

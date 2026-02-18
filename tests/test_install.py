@@ -69,6 +69,26 @@ class TestInjectInstructions:
         assert "Before" in content
         assert "<!-- /filigree:instructions -->" in content
 
+    def test_end_marker_before_start_marker_does_not_corrupt(self, tmp_path: Path) -> None:
+        """End marker appearing before start marker must not cause malformed output."""
+        end_marker = "<!-- /filigree:instructions -->"
+        target = tmp_path / "CLAUDE.md"
+        # Craft content where end marker appears before start marker
+        target.write_text(
+            f"Preamble\n{end_marker}\nMiddle\n{FILIGREE_INSTRUCTIONS_MARKER}\nold content\n{end_marker}\nAfter\n"
+        )
+        ok, _msg = inject_instructions(target)
+        assert ok
+        content = target.read_text()
+        # Preamble and the stray end marker before start should be preserved
+        assert "Preamble" in content
+        # The "After" section should be preserved
+        assert "After" in content
+        # "old content" between the real markers must be replaced, not duplicated
+        assert "old content" not in content
+        # "Middle" (between stray end marker and real start) must appear exactly once
+        assert content.count("Middle") == 1
+
 
 class TestEnsureGitignore:
     def test_create_gitignore(self, tmp_path: Path) -> None:
@@ -409,6 +429,21 @@ class TestInstallCodexMcp:
             ok, msg = install_codex_mcp(tmp_path)
         assert ok
         assert "Already configured" in msg
+
+    def test_escapes_double_quotes_in_path(self, tmp_path: Path) -> None:
+        """Paths with double quotes must produce valid TOML."""
+        import tomllib
+
+        # Use a project root whose name contains a double quote
+        weird_root = tmp_path / 'proj"name'
+        weird_root.mkdir()
+        with patch("filigree.install.shutil.which", return_value=None):
+            ok, _msg = install_codex_mcp(weird_root)
+        assert ok
+        config_text = (weird_root / ".codex" / "config.toml").read_text()
+        # Must be parseable as valid TOML
+        parsed = tomllib.loads(config_text)
+        assert "filigree" in parsed["mcp_servers"]
 
 
 class TestInstallClaudeCodeHooks:

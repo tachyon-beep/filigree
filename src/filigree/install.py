@@ -236,9 +236,9 @@ def install_codex_mcp(project_root: Path) -> tuple[bool, str]:
             # Existing config is malformed; we'll append anyway
             pass
 
-    # Escape backslashes in paths for TOML double-quoted strings
-    safe_command = str(filigree_mcp).replace("\\", "\\\\")
-    safe_project = str(project_root).replace("\\", "\\\\")
+    # Escape backslashes and double quotes in paths for TOML double-quoted strings
+    safe_command = str(filigree_mcp).replace("\\", "\\\\").replace('"', '\\"')
+    safe_project = str(project_root).replace("\\", "\\\\").replace('"', '\\"')
 
     # Append MCP server config
     toml_block = f"""
@@ -271,8 +271,9 @@ def inject_instructions(file_path: Path) -> tuple[bool, str]:
             # Replace existing block
             start = content.index(FILIGREE_INSTRUCTIONS_MARKER)
             end_marker = "<!-- /filigree:instructions -->"
-            if end_marker in content:
-                end = content.index(end_marker) + len(end_marker)
+            end_pos = content.find(end_marker, start)
+            if end_pos != -1:
+                end = end_pos + len(end_marker)
                 content = content[:start] + FILIGREE_INSTRUCTIONS + content[end:]
             else:
                 # Malformed — just replace from marker to end

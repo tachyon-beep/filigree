@@ -1456,7 +1456,10 @@ def batch_update(
         fields = {}
         for f in field:
             if "=" not in f:
-                click.echo(f"Invalid field format: {f}", err=True)
+                if as_json:
+                    click.echo(json_mod.dumps({"error": f"Invalid field format: {f} (expected key=value)"}))
+                else:
+                    click.echo(f"Invalid field format: {f}", err=True)
                 sys.exit(1)
             k, v = f.split("=", 1)
             fields[k] = v
