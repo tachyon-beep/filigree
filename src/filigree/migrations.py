@@ -267,18 +267,32 @@ def rebuild_table(
     try:
         conn.execute(f"DROP TABLE {table}")
     except sqlite3.IntegrityError:
-        # FK constraint prevents direct drop — temporarily disable FK enforcement.
-        # PRAGMA foreign_keys only takes effect outside transactions, so we
-        # commit, toggle, do the drop-rename, then re-enable and resume.
+        # FK constraint prevents direct drop — must temporarily disable FK
+        # enforcement.  PRAGMA foreign_keys=OFF only takes effect outside a
+        # transaction, so we commit any active transaction first.
+        #
+        # IMPORTANT: This creates a "point of no return" for the caller's
+        # transaction.  If the caller (e.g. migration runner) later fails,
+        # the rebuild itself CANNOT be rolled back.  This is an inherent
+        # SQLite limitation — there is no way to atomically rebuild an
+        # FK-referenced table within a single transaction.  Alternatives
+        # (defer_foreign_keys, RENAME dance) do not work because SQLite's
+        # commit-time FK check and RENAME-time FK reference updates prevent
+        # them from succeeding.
+        #
+        # Migrations that rebuild FK-referenced tables should place the
+        # rebuild as the LAST operation to minimize post-rebuild failure risk.
         in_txn = conn.in_transaction
         if in_txn:
             conn.commit()
         conn.execute("PRAGMA foreign_keys=OFF")
         try:
-            conn.execute("BEGIN")
+            conn.execute("BEGIN IMMEDIATE")
             conn.execute(f"DROP TABLE {table}")
             conn.execute(f"ALTER TABLE {temp_table} RENAME TO {table}")
-            conn.execute("PRAGMA foreign_key_check")
+            violations = conn.execute("PRAGMA foreign_key_check").fetchall()
+            if violations:
+                raise sqlite3.IntegrityError(f"Foreign key violations after rebuilding '{table}': {violations}")
             conn.commit()
         except BaseException:
             conn.rollback()
@@ -286,7 +300,7 @@ def rebuild_table(
         finally:
             conn.execute("PRAGMA foreign_keys=ON")
         if in_txn:
-            conn.execute("BEGIN")
+            conn.execute("BEGIN IMMEDIATE")
         return
 
     conn.execute(f"ALTER TABLE {temp_table} RENAME TO {table}")
@@ -319,6 +333,10 @@ def _template_table_rebuild_migration(conn: sqlite3.Connection) -> None:
       - issues: drop legacy 'foo' column
 
     Uses rebuild_table because ALTER TABLE can't modify constraints.
+
+    NOTE: If the rebuilt table is referenced by FK from other tables,
+    place the rebuild_table() call LAST — see rebuild_table() docstring
+    for details on the non-atomic FK rebuild limitation.
     """
     new_schema = """\
     CREATE TABLE issues (
