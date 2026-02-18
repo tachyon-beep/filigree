@@ -66,9 +66,13 @@ def _get_db() -> FiligreeDB:
 
 
 def _refresh_summary() -> None:
-    """Regenerate context.md after mutations."""
+    """Regenerate context.md after mutations (best-effort, never fatal)."""
     if _filigree_dir is not None:
-        write_summary(_get_db(), _filigree_dir / SUMMARY_FILENAME)
+        try:
+            write_summary(_get_db(), _filigree_dir / SUMMARY_FILENAME)
+        except Exception:
+            if _logger:
+                _logger.warning("Failed to refresh context.md", exc_info=True)
 
 
 def _safe_path(raw: str) -> Path:

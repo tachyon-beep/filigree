@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
 import pytest
 
@@ -90,6 +91,20 @@ class TestCreateAndGet:
         result = await call_tool("get_issue", {"id": "nonexistent-xyz"})
         data = _parse(result)
         assert data["code"] == "not_found"
+
+
+class TestRefreshSummaryBestEffort:
+    async def test_mutation_succeeds_when_summary_refresh_fails(self, mcp_db: FiligreeDB) -> None:
+        """If _refresh_summary() raises, the mutation result should still be returned."""
+        with patch("filigree.mcp_server.write_summary", side_effect=OSError("disk full")):
+            result = await call_tool("create_issue", {"title": "Should succeed"})
+        data = _parse(result)
+        # Mutation must succeed — the issue was created in the DB
+        assert "id" in data
+        assert data["title"] == "Should succeed"
+        # Verify it's actually in the DB
+        issue = mcp_db.get_issue(data["id"])
+        assert issue.title == "Should succeed"
 
 
 class TestListAndSearch:
