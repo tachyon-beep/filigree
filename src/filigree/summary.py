@@ -6,7 +6,9 @@ that agents can read in a single file read at session start.
 
 from __future__ import annotations
 
+import contextlib
 import os
+import tempfile
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -249,6 +251,12 @@ def write_summary(db: FiligreeDB, output_path: str | Path) -> None:
     """Generate and write the summary atomically (write-temp then rename)."""
     summary = generate_summary(db)
     output = Path(output_path)
-    tmp_path = output.with_suffix(".tmp")
-    tmp_path.write_text(summary, encoding="utf-8")
-    os.replace(str(tmp_path), str(output))
+    fd, tmp_name = tempfile.mkstemp(dir=output.parent, suffix=".tmp", prefix=".context_")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(summary)
+        os.replace(tmp_name, str(output))
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp_name)
+        raise

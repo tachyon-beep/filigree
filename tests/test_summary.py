@@ -224,3 +224,25 @@ class TestWriteSummary:
         write_summary(db, output)
         tmp_file = output.with_suffix(".tmp")
         assert not tmp_file.exists()
+
+    def test_temp_file_is_unique_per_call(self, db: FiligreeDB, tmp_path: Path) -> None:
+        """Temp filenames must be unique to avoid races between concurrent writers."""
+        import os
+        from unittest.mock import patch
+
+        output = tmp_path / "context.md"
+        temp_paths: list[str] = []
+
+        original_replace = os.replace
+
+        def capture_replace(src: str, dst: str) -> None:
+            temp_paths.append(src)
+            return original_replace(src, dst)
+
+        with patch("filigree.summary.os.replace", side_effect=capture_replace):
+            write_summary(db, output)
+            write_summary(db, output)
+
+        # Two calls must use different temp paths
+        assert len(temp_paths) == 2
+        assert temp_paths[0] != temp_paths[1]
