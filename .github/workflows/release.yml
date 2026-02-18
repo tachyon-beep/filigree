@@ -4,11 +4,11 @@ on:
   push:
     tags: ["v*"]
 
-permissions:
-  contents: write
-
 jobs:
   ci:
+    uses: ./.github/workflows/ci.yml
+
+  validate-tag:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -29,21 +29,15 @@ jobs:
             echo "::error::Tag $GITHUB_REF_NAME doesn't match pyproject.toml version $TOML_VERSION"
             exit 1
           fi
-      - uses: astral-sh/setup-uv@v7
-        with:
-          python-version: "3.11"
-      - run: uv sync --group dev
-      - run: uv run ruff check src/ tests/
-      - run: uv run ruff format --check src/ tests/
-      - run: uv run mypy src/filigree/
-      - run: uv run pytest --cov --cov-report=term-missing --cov-fail-under=85
 
   build:
-    needs: ci
+    needs: [ci, validate-tag]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
       - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
       - run: uv build
       - uses: actions/upload-artifact@v6
         with:
@@ -63,8 +57,28 @@ jobs:
           path: dist/
       - uses: pypa/gh-action-pypi-publish@release/v1
 
+  verify:
+    needs: publish
+    runs-on: ubuntu-latest
+    steps:
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.12"
+      - name: Wait for PyPI propagation and verify
+        run: |
+          for attempt in 1 2 3 4 5; do
+            if uv pip install --system "filigree==${GITHUB_REF_NAME#v}" 2>/dev/null; then
+              filigree --version
+              exit 0
+            fi
+            echo "Attempt $attempt: package not yet available, waiting 15s..."
+            sleep 15
+          done
+          echo "::error::Package filigree==${GITHUB_REF_NAME#v} not available on PyPI after 75s"
+          exit 1
+
   github-release:
-    needs: [build, publish]
+    needs: [publish, verify]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -74,7 +88,9 @@ jobs:
         with:
           name: dist
           path: dist/
-      - name: Create GitHub Release
+      - name: Create or update GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "${{ github.ref_name }}" dist/* --generate-notes
+        run: |
+          gh release create "${{ github.ref_name }}" dist/* --generate-notes ||
+          gh release upload "${{ github.ref_name }}" dist/* --clobber
