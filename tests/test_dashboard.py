@@ -908,6 +908,57 @@ class TestNonObjectBodyReturns400:
         assert resp.status_code == 400
 
 
+class TestDashboardConcurrency:
+    """Bug filigree-4b8e41: sync handlers run in thread pool, creating races on shared DB."""
+
+    def test_all_route_handlers_are_async(self) -> None:
+        """All handlers must be async to avoid thread pool dispatch and shared-DB races.
+
+        FastAPI runs sync handlers in a thread pool (anyio.to_thread). With a single
+        shared SQLite connection, this causes concurrent multi-thread access.
+        Making all handlers async keeps them on the event loop thread — naturally serialized.
+        """
+        import asyncio
+
+        app = create_app()
+        sync_handlers: list[str] = []
+        for route in app.routes:
+            if hasattr(route, "endpoint") and not asyncio.iscoroutinefunction(route.endpoint):
+                sync_handlers.append(f"{route.path} ({route.endpoint.__name__})")
+        assert sync_handlers == [], f"Sync handlers run in thread pool, racing on shared DB: {sync_handlers}"
+
+    async def test_concurrent_requests_no_errors(self, client: AsyncClient, dashboard_db: FiligreeDB) -> None:
+        """Concurrent reads + writes must all succeed without SQLite threading errors."""
+        import asyncio
+
+        ids = dashboard_db._test_ids  # type: ignore[attr-defined]
+
+        async def read_issues() -> int:
+            resp = await client.get("/api/issues")
+            return resp.status_code
+
+        async def read_stats() -> int:
+            resp = await client.get("/api/stats")
+            return resp.status_code
+
+        async def update_priority(p: int) -> int:
+            resp = await client.patch(
+                f"/api/issue/{ids['b']}",
+                json={"priority": p % 5},
+            )
+            return resp.status_code
+
+        # Mix 10 reads and 5 writes concurrently
+        tasks: list[asyncio.Task[int]] = []
+        for i in range(5):
+            tasks.append(asyncio.ensure_future(read_issues()))
+            tasks.append(asyncio.ensure_future(read_stats()))
+            tasks.append(asyncio.ensure_future(update_priority(i)))
+
+        results = await asyncio.gather(*tasks)
+        assert all(r == 200 for r in results), f"Got status codes: {results}"
+
+
 class TestDashboardGetDb:
     """Cover _get_db when _db is None (lines 29-30)."""
 

@@ -294,38 +294,20 @@ class TestDashboardMalformedJSON:
 # ===========================================================================
 
 
-class TestDashboardGetHandlersAreSync:
-    """Key GET endpoints should be plain def (not async def) for threadpooling."""
+class TestDashboardHandlersAreAsync:
+    """All endpoints must be async to avoid thread pool dispatch and shared-DB races.
 
-    def test_get_handlers_are_sync(self) -> None:
-        """Verify GET/DELETE handlers are plain functions, not coroutines."""
+    Supersedes the old sync-handler test. See TestDashboardConcurrency in test_dashboard.py
+    for the full concurrency safety test (filigree-4b8e41).
+    """
+
+    def test_all_handlers_are_async(self) -> None:
+        """All route handlers must be async def (not plain def)."""
         app = create_app()
-        # Collect route handlers — check only GET and DELETE routes
-        sync_expected_paths = {
-            "/",
-            "/api/issues",
-            "/api/graph",
-            "/api/stats",
-            "/api/issue/{issue_id}",
-            "/api/dependencies",
-            "/api/type/{type_name}",
-            "/api/issue/{issue_id}/transitions",
-            "/api/search",
-            "/api/metrics",
-            "/api/critical-path",
-            "/api/activity",
-            "/api/plan/{milestone_id}",
-            "/api/types",
-            "/api/issue/{issue_id}/dependencies/{dep_id}",
-        }
         for route in app.routes:
-            if not hasattr(route, "path") or not hasattr(route, "methods"):
+            if not hasattr(route, "endpoint"):
                 continue
-            methods = route.methods  # type: ignore[union-attr]
-            path = route.path  # type: ignore[union-attr]
-            # Only check GET and DELETE routes
-            if path in sync_expected_paths and methods & {"GET", "DELETE"}:
-                handler = route.endpoint  # type: ignore[union-attr]
-                assert not inspect.iscoroutinefunction(handler), (
-                    f"Handler for {methods} {path} should be plain def, not async def"
-                )
+            handler = route.endpoint  # type: ignore[union-attr]
+            assert inspect.iscoroutinefunction(handler), (
+                f"Handler {route.path} must be async def to avoid thread pool dispatch"  # type: ignore[union-attr]
+            )

@@ -47,18 +47,18 @@ def create_app() -> Any:
     app = FastAPI(title="Filigree Dashboard", docs_url=None, redoc_url=None)
 
     @app.get("/", response_class=HTMLResponse)
-    def index() -> HTMLResponse:
+    async def index() -> HTMLResponse:
         html = (STATIC_DIR / "dashboard.html").read_text()
         return HTMLResponse(html)
 
     @app.get("/api/issues")
-    def api_issues() -> JSONResponse:
+    async def api_issues() -> JSONResponse:
         db = _get_db()
         issues = db.list_issues(limit=10000)
         return JSONResponse([i.to_dict() for i in issues])
 
     @app.get("/api/graph")
-    def api_graph() -> JSONResponse:
+    async def api_graph() -> JSONResponse:
         """Graph data: nodes (issues) + edges (dependencies) for Cytoscape.js."""
         db = _get_db()
         issues = db.list_issues(limit=10000)
@@ -78,14 +78,14 @@ def create_app() -> Any:
         return JSONResponse({"nodes": nodes, "edges": edges})
 
     @app.get("/api/stats")
-    def api_stats() -> JSONResponse:
+    async def api_stats() -> JSONResponse:
         db = _get_db()
         stats = db.get_stats()
         stats["prefix"] = _prefix
         return JSONResponse(stats)
 
     @app.get("/api/issue/{issue_id}")
-    def api_issue_detail(issue_id: str) -> JSONResponse:
+    async def api_issue_detail(issue_id: str) -> JSONResponse:
         """Full issue detail with dependency details, events, and comments."""
         db = _get_db()
         try:
@@ -125,13 +125,13 @@ def create_app() -> Any:
         return JSONResponse(data)
 
     @app.get("/api/dependencies")
-    def api_dependencies() -> JSONResponse:
+    async def api_dependencies() -> JSONResponse:
         db = _get_db()
         deps = db.get_all_dependencies()
         return JSONResponse(deps)
 
     @app.get("/api/type/{type_name}")
-    def api_type_template(type_name: str) -> JSONResponse:
+    async def api_type_template(type_name: str) -> JSONResponse:
         """Workflow template for a given issue type (WFT-FR-065)."""
         db = _get_db()
         tpl = db.templates.get_type(type_name)
@@ -150,7 +150,7 @@ def create_app() -> Any:
         )
 
     @app.get("/api/issue/{issue_id}/transitions")
-    def api_issue_transitions(issue_id: str) -> JSONResponse:
+    async def api_issue_transitions(issue_id: str) -> JSONResponse:
         """Valid next states for an issue."""
         db = _get_db()
         try:
@@ -272,7 +272,7 @@ def create_app() -> Any:
         )
 
     @app.get("/api/search")
-    def api_search(q: str = "", limit: int = 50, offset: int = 0) -> JSONResponse:
+    async def api_search(q: str = "", limit: int = 50, offset: int = 0) -> JSONResponse:
         """Full-text search across issues."""
         if not q.strip():
             return JSONResponse({"results": [], "total": 0})
@@ -281,7 +281,7 @@ def create_app() -> Any:
         return JSONResponse({"results": [i.to_dict() for i in issues], "total": len(issues)})
 
     @app.get("/api/metrics")
-    def api_metrics(days: int = 30) -> JSONResponse:
+    async def api_metrics(days: int = 30) -> JSONResponse:
         """Flow metrics: cycle time, lead time, throughput."""
         from filigree.analytics import get_flow_metrics
 
@@ -290,21 +290,21 @@ def create_app() -> Any:
         return JSONResponse(metrics)
 
     @app.get("/api/critical-path")
-    def api_critical_path() -> JSONResponse:
+    async def api_critical_path() -> JSONResponse:
         """Longest dependency chain among open issues."""
         db = _get_db()
         path = db.get_critical_path()
         return JSONResponse({"path": path, "length": len(path)})
 
     @app.get("/api/activity")
-    def api_activity(limit: int = 50, since: str = "") -> JSONResponse:
+    async def api_activity(limit: int = 50, since: str = "") -> JSONResponse:
         """Recent events across all issues."""
         db = _get_db()
         events = db.get_events_since(since, limit=limit) if since else db.get_recent_events(limit=limit)
         return JSONResponse(events)
 
     @app.get("/api/plan/{milestone_id}")
-    def api_plan(milestone_id: str) -> JSONResponse:
+    async def api_plan(milestone_id: str) -> JSONResponse:
         """Milestone plan tree."""
         db = _get_db()
         try:
@@ -362,7 +362,7 @@ def create_app() -> Any:
         return JSONResponse({"closed": [i.to_dict() for i in closed]})
 
     @app.get("/api/types")
-    def api_types_list() -> JSONResponse:
+    async def api_types_list() -> JSONResponse:
         """List all registered issue types."""
         db = _get_db()
         types = db.templates.list_types()
@@ -486,7 +486,7 @@ def create_app() -> Any:
         return JSONResponse({"added": added})
 
     @app.delete("/api/issue/{issue_id}/dependencies/{dep_id}")
-    def api_remove_dependency(issue_id: str, dep_id: str) -> JSONResponse:
+    async def api_remove_dependency(issue_id: str, dep_id: str) -> JSONResponse:
         """Remove a dependency."""
         db = _get_db()
         try:
