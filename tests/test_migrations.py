@@ -449,6 +449,21 @@ class TestRebuildTable:
         assert "t" in tables
         conn.close()
 
+    def test_lowercase_create_table(self, tmp_path: Path) -> None:
+        """rebuild_table must handle lowercase SQL keywords."""
+        conn = _make_db(tmp_path)
+        conn.execute("create table t (id INTEGER PRIMARY KEY, name TEXT)")
+        conn.execute("INSERT INTO t VALUES (1, 'Alice')")
+        conn.commit()
+
+        rebuild_table(conn, "t", "create table t (id INTEGER PRIMARY KEY, name TEXT, age INTEGER DEFAULT 0)")
+        conn.commit()
+
+        rows = conn.execute("SELECT * FROM t ORDER BY id").fetchall()
+        assert len(rows) == 1
+        assert rows[0][1] == "Alice"
+        conn.close()
+
 
 # ---------------------------------------------------------------------------
 # Migration atomicity tests (BEGIN IMMEDIATE + execute vs executescript)

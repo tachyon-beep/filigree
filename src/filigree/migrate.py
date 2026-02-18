@@ -127,7 +127,8 @@ def migrate_from_beads(beads_db_path: str | Path, tracker: FiligreeDB) -> int:
             }
 
             tracker.bulk_insert_issue(issue_data, validate=False)
-            count += 1
+            if tracker.conn.execute("SELECT changes()").fetchone()[0] > 0:
+                count += 1
 
         # Pass 2: set parent_id now that all issues exist
         for issue_id, pid in parent_map.items():

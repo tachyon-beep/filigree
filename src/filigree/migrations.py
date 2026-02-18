@@ -27,6 +27,7 @@ SQLite ALTER TABLE limitations (why helpers exist):
 from __future__ import annotations
 
 import logging
+import re
 import sqlite3
 from typing import Protocol
 
@@ -234,15 +235,12 @@ def rebuild_table(
     """
     temp_table = f"_filigree_migrate_{table}"
 
-    # Create temp table with new schema (replace table name in CREATE statement)
-    temp_schema = new_schema_sql.replace(f"CREATE TABLE {table}", f"CREATE TABLE {temp_table}", 1)
-    if f"CREATE TABLE {temp_table}" not in temp_schema:
-        # Try with IF NOT EXISTS variant
-        temp_schema = new_schema_sql.replace(
-            f"CREATE TABLE IF NOT EXISTS {table}",
-            f"CREATE TABLE {temp_table}",
-            1,
-        )
+    # Create temp table with new schema (case-insensitive replace of table name)
+    pattern = re.compile(
+        rf"CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?{re.escape(table)}\b",
+        re.IGNORECASE,
+    )
+    temp_schema = pattern.sub(f"CREATE TABLE {temp_table}", new_schema_sql, count=1)
 
     conn.execute(f"DROP TABLE IF EXISTS {temp_table}")  # Clean up any leftover from failed run
     conn.execute(temp_schema)

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any
@@ -50,7 +51,7 @@ def setup_logging(filigree_dir: Path) -> logging.Logger:
         # If a handler for a different path is requested, add it rather than
         # silently ignoring the new filigree_dir.
         for h in logger.handlers:
-            if isinstance(h, RotatingFileHandler) and h.baseFilename == str(log_path.resolve()):
+            if isinstance(h, RotatingFileHandler) and h.baseFilename == os.path.abspath(str(log_path)):
                 return logger
         # No handler for this path yet — fall through to add one
 

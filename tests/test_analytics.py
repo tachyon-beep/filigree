@@ -29,6 +29,32 @@ class TestCycleTime:
         ct = cycle_time(db, issue.id)
         assert ct is None
 
+    def test_cycle_time_skips_unparsable_done_timestamp(self, db: FiligreeDB) -> None:
+        """If first done event has corrupt timestamp, later valid done events should be used."""
+        issue = db.create_issue("CT corrupt test")
+        # Manually insert all events with controlled timestamps
+        # 1) WIP event with valid timestamp
+        db.conn.execute(
+            "INSERT OR IGNORE INTO events (issue_id, event_type, old_value, new_value, created_at) "
+            "VALUES (?, 'status_changed', 'open', 'in_progress', '2026-01-10T10:00:00+00:00')",
+            (issue.id,),
+        )
+        # 2) Done event with corrupt/empty timestamp (first done — should be skipped)
+        db.conn.execute(
+            "INSERT OR IGNORE INTO events (issue_id, event_type, old_value, new_value, created_at) "
+            "VALUES (?, 'status_changed', 'in_progress', 'closed', 'not-a-date')",
+            (issue.id,),
+        )
+        # 3) Done event with valid timestamp (should be used)
+        db.conn.execute(
+            "INSERT OR IGNORE INTO events (issue_id, event_type, old_value, new_value, created_at) "
+            "VALUES (?, 'status_changed', 'in_progress', 'closed', '2026-01-15T12:00:00+00:00')",
+            (issue.id,),
+        )
+        db.conn.commit()
+        ct = cycle_time(db, issue.id)
+        assert ct is not None
+
 
 class TestLeadTime:
     def test_lead_time_basic(self, db: FiligreeDB) -> None:

@@ -47,6 +47,23 @@ def generate_summary(db: FiligreeDB) -> str:
     lines.append(f"# Project Pulse (auto-generated {now_iso})")
     lines.append("")
 
+    # Batch-fetch parent titles to avoid N+1 queries in render loops
+    parent_ids: set[str] = set()
+    for issue in ready:
+        if issue.parent_id:
+            parent_ids.add(issue.parent_id)
+    for issue in in_progress:
+        if issue.parent_id:
+            parent_ids.add(issue.parent_id)
+    parent_titles: dict[str, str] = {}
+    if parent_ids:
+        placeholders = ",".join("?" * len(parent_ids))
+        rows = db.conn.execute(
+            f"SELECT id, title FROM issues WHERE id IN ({placeholders})",  # noqa: S608
+            list(parent_ids),
+        ).fetchall()
+        parent_titles = {r["id"]: r["title"] for r in rows}
+
     # WFT-FR-060: Vitals use category counts (open/wip/done) instead of literal status names
     by_cat = stats.get("by_category", {})
     open_count = by_cat.get("open", 0)
@@ -101,12 +118,8 @@ def generate_summary(db: FiligreeDB) -> str:
     if ready:
         for issue in ready[:12]:
             parent_ctx = ""
-            if issue.parent_id:
-                try:
-                    parent = db.get_issue(issue.parent_id)
-                    parent_ctx = f" ({parent.title})"
-                except KeyError:
-                    pass
+            if issue.parent_id and issue.parent_id in parent_titles:
+                parent_ctx = f" ({parent_titles[issue.parent_id]})"
             # WFT-FR-061: Show state in parens when it differs from the default "open"
             state_info = f" ({issue.status})" if issue.status != "open" else ""
             lines.append(f'- P{issue.priority} {issue.id} [{issue.type}] "{issue.title}"{state_info}{parent_ctx}')
@@ -121,12 +134,8 @@ def generate_summary(db: FiligreeDB) -> str:
     if in_progress:
         for issue in in_progress:
             parent_ctx = ""
-            if issue.parent_id:
-                try:
-                    parent = db.get_issue(issue.parent_id)
-                    parent_ctx = f" ({parent.title})"
-                except KeyError:
-                    pass
+            if issue.parent_id and issue.parent_id in parent_titles:
+                parent_ctx = f" ({parent_titles[issue.parent_id]})"
             # WFT-FR-061: Show state in parens when it differs from the default "in_progress"
             state_info = f" ({issue.status})" if issue.status != "in_progress" else ""
             lines.append(f'- {issue.id} [{issue.type}] "{issue.title}"{state_info}{parent_ctx}')

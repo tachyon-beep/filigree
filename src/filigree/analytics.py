@@ -53,7 +53,8 @@ def cycle_time(db: FiligreeDB, issue_id: str) -> float | None:
             start = _parse_iso(evt["created_at"])
         if evt["new_value"] in done_states:
             end = _parse_iso(evt["created_at"])
-            break  # Use first done event, not last (correct for reopen scenarios)
+            if end is not None:
+                break  # Use first parseable done event
 
     if start is None or end is None:
         return None

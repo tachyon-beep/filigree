@@ -92,6 +92,31 @@ class TestGenerateSummary:
         summary = generate_summary(db)
         assert "Stale" not in summary
 
+    def test_parent_lookup_not_n_plus_one(self, db: FiligreeDB) -> None:
+        """Parent titles for in-progress issues must not trigger per-issue get_issue calls."""
+        from unittest.mock import patch
+
+        parent = db.create_issue("Parent epic", type="epic")
+        for i in range(5):
+            child = db.create_issue(f"Child {i}", parent_id=parent.id)
+            db.update_issue(child.id, status="in_progress")
+
+        original_get_issue = db.get_issue
+        get_issue_calls: list[str] = []
+
+        def tracking_get_issue(issue_id: str) -> object:
+            get_issue_calls.append(issue_id)
+            return original_get_issue(issue_id)
+
+        with patch.object(db, "get_issue", side_effect=tracking_get_issue):
+            summary = generate_summary(db)
+
+        assert "Parent epic" in summary
+        # With batch lookup, get_issue should NOT be called for parent lookups.
+        # Before the fix, it was called once per in-progress child with a parent.
+        parent_lookups = [c for c in get_issue_calls if c == parent.id]
+        assert len(parent_lookups) <= 1, f"Expected at most 1 parent lookup, got {len(parent_lookups)}"
+
 
 class TestCategoryAwareSummary:
     """Workflow-aware summary tests (Phase 4 — WFT-FR-060, WFT-FR-061, WFT-NFR-010, WFT-FR-071)."""

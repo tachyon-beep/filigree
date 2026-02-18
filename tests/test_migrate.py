@@ -91,6 +91,15 @@ class TestMigration:
         assert weird.status == "open"  # "review" → "open"
 
 
+class TestMigrationRerunCount:
+    def test_rerun_returns_zero_for_already_migrated(self, beads_db: Path, db: FiligreeDB) -> None:
+        """Re-running migration should report 0 (not re-count existing rows)."""
+        count1 = migrate_from_beads(beads_db, db)
+        assert count1 == 4
+        count2 = migrate_from_beads(beads_db, db)
+        assert count2 == 0
+
+
 class TestMigrationParentOrdering:
     def test_child_before_parent_does_not_cause_fk_error(self, tmp_path: Path, db: FiligreeDB) -> None:
         """Migration must handle child rows appearing before parent rows."""

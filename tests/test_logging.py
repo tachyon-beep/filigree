@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from pathlib import Path
 
 from filigree.logging import setup_logging
@@ -36,6 +37,19 @@ class TestSetupLogging:
     def test_idempotent_setup(self, tmp_path: Path) -> None:
         logger1 = setup_logging(tmp_path)
         logger2 = setup_logging(tmp_path)
+        assert logger1 is logger2
+        assert len(logger1.handlers) == 1
+
+    def test_no_duplicate_handlers_via_symlink(self, tmp_path: Path) -> None:
+        """setup_logging via symlinked dir twice must not add duplicate handlers."""
+        real_dir = tmp_path / "real"
+        real_dir.mkdir()
+        link_dir = tmp_path / "link"
+        os.symlink(str(real_dir), str(link_dir))
+        # Call twice via the symlink — baseFilename uses abspath (keeps symlink),
+        # but dedup check used resolve() (follows symlink), causing mismatch.
+        logger1 = setup_logging(link_dir)
+        logger2 = setup_logging(link_dir)
         assert logger1 is logger2
         assert len(logger1.handlers) == 1
 
