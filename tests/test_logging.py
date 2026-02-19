@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import logging.handlers
 import os
 from pathlib import Path
 
@@ -52,6 +53,36 @@ class TestSetupLogging:
         logger2 = setup_logging(link_dir)
         assert logger1 is logger2
         assert len(logger1.handlers) == 1
+
+    def test_no_duplicate_handlers_under_concurrency(self, tmp_path: Path) -> None:
+        """Concurrent setup_logging calls must not produce duplicate handlers."""
+        import threading
+
+        results: list[logging.Logger] = []
+        barrier = threading.Barrier(4)
+
+        def call_setup() -> None:
+            barrier.wait()
+            results.append(setup_logging(tmp_path))
+
+        threads = [threading.Thread(target=call_setup) for _ in range(4)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert len(results) == 4
+        # All should be the same logger
+        assert all(r is results[0] for r in results)
+        # Must have exactly 1 handler for this path
+        logger = logging.getLogger("filigree")
+        file_handlers = [
+            h
+            for h in logger.handlers
+            if isinstance(h, logging.handlers.RotatingFileHandler)
+            and h.baseFilename == os.path.abspath(str(tmp_path / "filigree.log"))
+        ]
+        assert len(file_handlers) == 1, f"Expected 1 handler, got {len(file_handlers)}"
 
     def teardown_method(self) -> None:
         """Clean up the filigree logger handlers between tests."""

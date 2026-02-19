@@ -117,6 +117,24 @@ class TestGenerateSummary:
         parent_lookups = [c for c in get_issue_calls if c == parent.id]
         assert len(parent_lookups) <= 1, f"Expected at most 1 parent lookup, got {len(parent_lookups)}"
 
+    def test_title_with_newlines_stays_single_line(self, db: FiligreeDB) -> None:
+        """Issue titles with newlines must not break summary line structure."""
+        db.create_issue("Normal start\n## Injected Header\nmore text")
+        summary = generate_summary(db)
+        # The title should appear sanitized — no raw newlines breaking the markdown
+        for line in summary.split("\n"):
+            if "Injected Header" in line or "Normal start" in line:
+                # The title content should be on a single line, not split
+                assert line.startswith("- "), f"Title broke out of list item: {line!r}"
+
+    def test_title_with_control_chars_sanitized(self, db: FiligreeDB) -> None:
+        """Control characters in titles should be stripped."""
+        db.create_issue("Clean\x00title\x1bwith\x07control")
+        summary = generate_summary(db)
+        assert "\x00" not in summary
+        assert "\x1b" not in summary
+        assert "\x07" not in summary
+
 
 class TestCategoryAwareSummary:
     """Workflow-aware summary tests (Phase 4 — WFT-FR-060, WFT-FR-061, WFT-NFR-010, WFT-FR-071)."""

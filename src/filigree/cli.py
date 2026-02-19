@@ -25,6 +25,7 @@ Usage:
 from __future__ import annotations
 
 import json as json_mod
+import sqlite3
 import sys
 from pathlib import Path
 from typing import Any
@@ -1005,7 +1006,7 @@ def import_data(input_file: str, merge: bool) -> None:
     with _get_db() as db:
         try:
             count = db.import_jsonl(input_file, merge=merge)
-        except (json_mod.JSONDecodeError, KeyError, ValueError) as e:
+        except (json_mod.JSONDecodeError, KeyError, ValueError, sqlite3.IntegrityError) as e:
             click.echo(f"Import failed: {e}", err=True)
             sys.exit(1)
         _refresh_summary(db)

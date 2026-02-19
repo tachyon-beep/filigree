@@ -1253,6 +1253,19 @@ class TestExportImportCli:
         assert result.exit_code == 0
         assert "Imported" in result.output
 
+    def test_import_conflict_without_merge_shows_clean_error(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        """Import without --merge on duplicate data should show clean error, not traceback."""
+        runner, project_root = cli_in_project
+        runner.invoke(cli, ["create", "Conflict me"])
+        export_path = str(project_root / "export.jsonl")
+        runner.invoke(cli, ["export", export_path])
+        # Import same data again without --merge → should fail cleanly
+        result = runner.invoke(cli, ["import", export_path])
+        assert result.exit_code != 0
+        assert "Import failed" in result.output or "Import failed" in (result.output + (result.output or ""))
+        # Must NOT contain a raw Python traceback
+        assert "Traceback" not in (result.output or "")
+
 
 class TestBlockedJson:
     def test_blocked_json(self, cli_in_project: tuple[CliRunner, Path]) -> None:

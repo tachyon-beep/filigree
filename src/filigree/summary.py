@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import contextlib
 import os
+import re
 import tempfile
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -15,6 +16,25 @@ from pathlib import Path
 from filigree.core import FiligreeDB, Issue
 
 STALE_THRESHOLD_DAYS = 3
+
+# Matches C0/C1 control characters except tab/newline (which we handle separately)
+_CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]")
+
+
+def _sanitize_title(text: str) -> str:
+    """Sanitize untrusted text for safe markdown interpolation.
+
+    Strips control characters, collapses newlines/carriage returns to spaces,
+    and truncates to a reasonable length.
+    """
+    text = _CONTROL_CHARS_RE.sub("", text)
+    text = text.replace("\r\n", " ").replace("\r", " ").replace("\n", " ")
+    # Collapse multiple spaces
+    text = " ".join(text.split())
+    # Truncate overly long titles
+    if len(text) > 200:
+        text = text[:197] + "..."
+    return text
 
 
 def _parse_iso(ts: str) -> datetime:
@@ -62,7 +82,7 @@ def generate_summary(db: FiligreeDB) -> str:
             f"SELECT id, title FROM issues WHERE id IN ({placeholders})",  # noqa: S608
             list(parent_ids),
         ).fetchall()
-        parent_titles = {r["id"]: r["title"] for r in rows}
+        parent_titles = {r["id"]: _sanitize_title(r["title"]) for r in rows}
 
     # WFT-FR-060: Vitals use category counts (open/wip/done) instead of literal status names
     by_cat = stats.get("by_category", {})
@@ -93,7 +113,7 @@ def generate_summary(db: FiligreeDB) -> str:
                 bar = "\u2588" * bar_filled + "\u2591" * (10 - bar_filled)
             else:
                 bar = "\u2591" * 10
-            lines.append(f"### {ms.title} [{bar}] {done}/{total} steps")
+            lines.append(f"### {_sanitize_title(ms.title)} [{bar}] {done}/{total} steps")
 
             for phase_data in plan["phases"]:
                 phase = phase_data["phase"]
@@ -109,7 +129,7 @@ def generate_summary(db: FiligreeDB) -> str:
                     marker = "\u25cb"
 
                 ready_note = f", {p_ready} ready" if p_ready > 0 else ""
-                lines.append(f"  {marker} {phase['title']} ({p_done}/{p_total} complete{ready_note})")
+                lines.append(f"  {marker} {_sanitize_title(phase['title'])} ({p_done}/{p_total} complete{ready_note})")
 
             lines.append("")
 
@@ -122,7 +142,8 @@ def generate_summary(db: FiligreeDB) -> str:
                 parent_ctx = f" ({parent_titles[issue.parent_id]})"
             # WFT-FR-061: Show state in parens when it differs from the default "open"
             state_info = f" ({issue.status})" if issue.status != "open" else ""
-            lines.append(f'- P{issue.priority} {issue.id} [{issue.type}] "{issue.title}"{state_info}{parent_ctx}')
+            title = _sanitize_title(issue.title)
+            lines.append(f'- P{issue.priority} {issue.id} [{issue.type}] "{title}"{state_info}{parent_ctx}')
         if len(ready) > 12:
             lines.append(f"  ...and {len(ready) - 12} more")
     else:
@@ -138,7 +159,7 @@ def generate_summary(db: FiligreeDB) -> str:
                 parent_ctx = f" ({parent_titles[issue.parent_id]})"
             # WFT-FR-061: Show state in parens when it differs from the default "in_progress"
             state_info = f" ({issue.status})" if issue.status != "in_progress" else ""
-            lines.append(f'- {issue.id} [{issue.type}] "{issue.title}"{state_info}{parent_ctx}')
+            lines.append(f'- {issue.id} [{issue.type}] "{_sanitize_title(issue.title)}"{state_info}{parent_ctx}')
     else:
         lines.append("- (none)")
     lines.append("")
@@ -153,7 +174,7 @@ def generate_summary(db: FiligreeDB) -> str:
         lines.append("## Needs Attention")
         for attn_issue, missing_fields in needs_attention[:8]:
             lines.append(
-                f'- {attn_issue.id} [{attn_issue.type}] "{attn_issue.title}" ({attn_issue.status})'
+                f'- {attn_issue.id} [{attn_issue.type}] "{_sanitize_title(attn_issue.title)}" ({attn_issue.status})'
                 f" — missing: {', '.join(missing_fields)}"
             )
         if len(needs_attention) > 8:
@@ -168,7 +189,7 @@ def generate_summary(db: FiligreeDB) -> str:
         for issue in stale:
             updated = _parse_iso(issue.updated_at)
             days_ago = (now - updated).days
-            line = f'- P{issue.priority} {issue.id} [{issue.type}] "{issue.title}" ({days_ago}d stale)'
+            line = f'- P{issue.priority} {issue.id} [{issue.type}] "{_sanitize_title(issue.title)}" ({days_ago}d stale)'
             lines.append(line)
         lines.append("")
 
@@ -185,7 +206,8 @@ def generate_summary(db: FiligreeDB) -> str:
                 except KeyError:
                     blocker_names.append(bid)
             blockers_str = ", ".join(blocker_names) if blocker_names else "?"
-            line = f'- P{issue.priority} {issue.id} [{issue.type}] "{issue.title}" \u2190 blocked by: {blockers_str}'
+            title = _sanitize_title(issue.title)
+            line = f'- P{issue.priority} {issue.id} [{issue.type}] "{title}" \u2190 blocked by: {blockers_str}'
             lines.append(line)
         if len(blocked) > 10:
             lines.append(f"  ...and {len(blocked) - 10} more")
@@ -218,7 +240,7 @@ def generate_summary(db: FiligreeDB) -> str:
                 extra.append(f"{blocked_c} blocked")
             extra_str = f" ({', '.join(extra)})" if extra else ""
 
-            lines.append(f"- {epic.title:<40} [{bar}] {done}/{total}{extra_str}")
+            lines.append(f"- {_sanitize_title(epic.title):<40} [{bar}] {done}/{total}{extra_str}")
         lines.append("")
 
     # -- Critical Path
@@ -227,7 +249,8 @@ def generate_summary(db: FiligreeDB) -> str:
         lines.append(f"## Critical Path ({len(crit_path)} issues)")
         for i, item in enumerate(crit_path):
             arrow = " -> " if i > 0 else ""
-            lines.append(f'  {arrow}P{item["priority"]} {item["id"]} [{item["type"]}] "{item["title"]}"')
+            title = _sanitize_title(item["title"])
+            lines.append(f'  {arrow}P{item["priority"]} {item["id"]} [{item["type"]}] "{title}"')
         lines.append("")
 
     # -- Recent Activity
@@ -235,10 +258,10 @@ def generate_summary(db: FiligreeDB) -> str:
     if recent:
         for evt in recent:
             evt_type = evt["event_type"].upper().replace("_", " ")
-            title = evt.get("issue_title", evt["issue_id"])
-            # Truncate long JSON values from beads migration
-            old_v = evt["old_value"] or ""
-            new_v = evt["new_value"] or ""
+            title = _sanitize_title(evt.get("issue_title", evt["issue_id"]))
+            # Sanitize event values — may contain untrusted titles or field data
+            old_v = _sanitize_title(evt["old_value"] or "")
+            new_v = _sanitize_title(evt["new_value"] or "")
             if len(old_v) > 50:
                 old_v = old_v[:47] + "..."
             if len(new_v) > 50:
