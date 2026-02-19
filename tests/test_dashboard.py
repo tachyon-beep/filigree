@@ -28,8 +28,16 @@ def dashboard_db(populated_db: FiligreeDB) -> FiligreeDB:
 
 
 @pytest.fixture
-async def client(dashboard_db: FiligreeDB) -> AsyncClient:
+async def client(
+    dashboard_db: FiligreeDB, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> AsyncClient:
     """Create a test client backed by a ProjectManager with the test DB injected."""
+    # Isolate registry to temp dir so tests don't collide with real ~/.filigree/
+    reg_dir = tmp_path / ".filigree-registry"
+    monkeypatch.setattr("filigree.registry.REGISTRY_DIR", reg_dir)
+    monkeypatch.setattr("filigree.registry.REGISTRY_FILE", reg_dir / "registry.json")
+    monkeypatch.setattr("filigree.registry.REGISTRY_LOCK", reg_dir / "registry.lock")
+
     registry = Registry()
     pm = ProjectManager(registry)
     # Directly inject the test DB as a cached connection

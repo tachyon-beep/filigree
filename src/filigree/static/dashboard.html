@@ -76,6 +76,12 @@ tailwind.config = {
 <header class="flex items-center justify-between px-4 py-2 bg-slate-800 border-b border-slate-700 shrink-0">
   <div class="flex items-center gap-4">
     <span class="text-base font-semibold text-blue-400">&#9670; Filigree</span>
+    <div id="projectSwitcherWrap" style="display:none">
+      <select id="projectSwitcher" onchange="setProject(this.value)"
+        class="bg-slate-700 text-slate-200 text-xs rounded px-2 py-1 border border-slate-600"
+        aria-label="Switch project">
+      </select>
+    </div>
     <button onclick="showCreateForm()" class="text-xs bg-blue-600 text-white px-2 py-1 rounded hover:bg-blue-700" title="Create Issue">+ New</button>
     <div class="flex gap-1">
       <button id="btnGraph" onclick="switchView('graph')" class="px-3 py-1 rounded text-xs font-medium" title="Dependency graph visualization">Graph</button>
@@ -301,13 +307,52 @@ var TYPE_ICONS = { bug: '\u{1F41B}', feature: '\u2728', task: '\u{1F4CB}', epic:
 var typeTemplate = null;  // Cached type template for type-filtered kanban
 
 // ---------------------------------------------------------------------------
+// Multi-project support
+// ---------------------------------------------------------------------------
+var API_BASE = '/api';
+var currentProjectKey = '';
+var allProjects = [];
+
+function setProject(key) {
+  currentProjectKey = key;
+  API_BASE = key ? '/api/p/' + encodeURIComponent(key) : '/api';
+  var sel = document.getElementById('projectSwitcher');
+  if (sel) sel.value = key;
+  if (key) history.replaceState(null, '', '#project=' + key);
+  var proj = allProjects.find(function(p) { return p.key === key; });
+  document.title = proj ? proj.name + ' \u2014 Filigree' : 'Filigree Dashboard';
+  closeDetail();
+  fetchData();
+}
+
+async function loadProjects() {
+  try {
+    var resp = await fetch('/api/projects?ttl=6');
+    if (!resp.ok) return;
+    allProjects = await resp.json();
+    var sel = document.getElementById('projectSwitcher');
+    if (!sel) return;
+    sel.innerHTML = '';
+    allProjects.forEach(function(p) {
+      var opt = document.createElement('option');
+      opt.value = p.key;
+      opt.textContent = p.name;
+      if (p.key === currentProjectKey) opt.selected = true;
+      sel.appendChild(opt);
+    });
+    var wrap = document.getElementById('projectSwitcherWrap');
+    if (wrap) wrap.style.display = allProjects.length > 1 ? '' : 'none';
+  } catch(e) { /* best-effort */ }
+}
+
+// ---------------------------------------------------------------------------
 // Data fetching
 // ---------------------------------------------------------------------------
 async function fetchData() {
   document.getElementById('refreshIndicator').style.opacity = '1';
   try {
     var results = await Promise.all([
-      fetch('/api/issues'), fetch('/api/dependencies'), fetch('/api/stats')
+      fetch(API_BASE + '/issues'), fetch(API_BASE + '/dependencies'), fetch(API_BASE + '/stats')
     ]);
     allIssues = await results[0].json();
     allDeps = await results[1].json();
@@ -711,7 +756,7 @@ async function applyTypeFilter() {
     return;
   }
   try {
-    var resp = await fetch('/api/type/' + typeName);
+    var resp = await fetch(API_BASE + '/type/' + typeName);
     if (seq !== _typeFilterSeq) return;  // Superseded by newer selection
     if (resp.ok) {
       typeTemplate = await resp.json();
@@ -909,7 +954,7 @@ async function openDetail(issueId) {
   var eventsData = [];
   var commentsData = [];
   try {
-    var resp = await fetch('/api/issue/' + issueId);
+    var resp = await fetch(API_BASE + '/issue/' + issueId);
     if (!resp.ok) throw new Error('Not found');
     d = await resp.json();
     eventsData = d.events || [];
@@ -1346,7 +1391,7 @@ function showToast(message, type) {
 async function updateIssue(issueId, body, btnEl) {
   if (btnEl) setLoading(btnEl, true);
   try {
-    var resp = await fetch('/api/issue/' + issueId, {
+    var resp = await fetch(API_BASE + '/issue/' + issueId, {
       method: 'PATCH', headers: {'Content-Type': 'application/json'},
       body: JSON.stringify(body),
     });
@@ -1383,7 +1428,7 @@ async function closeIssue(issueId) {
   document.getElementById('closeReasonConfirm').onclick = async function() {
     var reason = document.getElementById('closeReasonInput').value || '';
     modal.remove();
-    var resp = await fetch('/api/issue/' + issueId + '/close', {
+    var resp = await fetch(API_BASE + '/issue/' + issueId + '/close', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({reason: reason}),
     });
@@ -1395,7 +1440,7 @@ async function closeIssue(issueId) {
 }
 
 async function reopenIssue(issueId) {
-  var resp = await fetch('/api/issue/' + issueId + '/reopen', {
+  var resp = await fetch(API_BASE + '/issue/' + issueId + '/reopen', {
     method: 'POST', headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({}),
   });
@@ -1431,7 +1476,7 @@ async function confirmClaim(issueId) {
   localStorage.setItem('filigree_claim_name', name);
   var modal = document.getElementById('claimModal');
   if (modal) modal.remove();
-  var resp = await fetch('/api/issue/' + issueId + '/claim', {
+  var resp = await fetch(API_BASE + '/issue/' + issueId + '/claim', {
     method: 'POST', headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({assignee: name}),
   });
@@ -1442,7 +1487,7 @@ async function confirmClaim(issueId) {
 }
 
 async function releaseIssue(issueId) {
-  var resp = await fetch('/api/issue/' + issueId + '/release', {
+  var resp = await fetch(API_BASE + '/issue/' + issueId + '/release', {
     method: 'POST', headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({}),
   });
@@ -1453,7 +1498,7 @@ async function releaseIssue(issueId) {
 }
 
 async function removeDependency(issueId, depId) {
-  var resp = await fetch('/api/issue/' + issueId + '/dependencies/' + depId, { method: 'DELETE' });
+  var resp = await fetch(API_BASE + '/issue/' + issueId + '/dependencies/' + depId, { method: 'DELETE' });
   if (!resp.ok) { var err = await resp.json(); showToast('Error: ' + (err.error || 'Remove failed'), 'error'); return; }
   showToast('Dependency removed', 'success');
   await fetchData();
@@ -1485,7 +1530,7 @@ async function showAddBlocker(issueId) {
       var results = document.getElementById('blockerResults');
       if (!q) { results.innerHTML = ''; return; }
       try {
-        var resp = await fetch('/api/search?q=' + encodeURIComponent(q) + '&limit=10');
+        var resp = await fetch(API_BASE + '/search?q=' + encodeURIComponent(q) + '&limit=10');
         var data = await resp.json();
         results.innerHTML = data.results.filter(function(r) { return r.id !== issueId; }).map(function(r) {
           return '<div class="flex items-center gap-2 py-1 px-1 cursor-pointer hover:bg-slate-700 rounded" onclick="addDependency(\'' + issueId + '\',\'' + r.id + '\')">' +
@@ -1500,7 +1545,7 @@ async function showAddBlocker(issueId) {
 async function addDependency(issueId, dependsOnId) {
   var modal = document.getElementById('addBlockerModal');
   if (modal) modal.remove();
-  var resp = await fetch('/api/issue/' + issueId + '/dependencies', {
+  var resp = await fetch(API_BASE + '/issue/' + issueId + '/dependencies', {
     method: 'POST', headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({depends_on: dependsOnId}),
   });
@@ -1514,7 +1559,7 @@ async function addComment(issueId) {
   var input = document.getElementById('commentInput');
   var text = input ? input.value.trim() : '';
   if (!text) return;
-  var resp = await fetch('/api/issue/' + issueId + '/comments', {
+  var resp = await fetch(API_BASE + '/issue/' + issueId + '/comments', {
     method: 'POST', headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({text: text}),
   });
@@ -1523,7 +1568,7 @@ async function addComment(issueId) {
 
 async function loadTransitions(issueId) {
   try {
-    var resp = await fetch('/api/issue/' + issueId + '/transitions');
+    var resp = await fetch(API_BASE + '/issue/' + issueId + '/transitions');
     if (resp.ok) return await resp.json();
   } catch (e) {}
   return [];
@@ -1537,7 +1582,7 @@ async function loadMetrics() {
   var container = document.getElementById('metricsContent');
   container.innerHTML = '<div class="text-slate-500">Loading...</div>';
   try {
-    var resp = await fetch('/api/metrics?days=' + days);
+    var resp = await fetch(API_BASE + '/metrics?days=' + days);
     var m = await resp.json();
     var byTypeHtml = Object.keys(m.by_type || {}).map(function(t) {
       var d = m.by_type[t];
@@ -1608,7 +1653,7 @@ async function loadActivity() {
   var container = document.getElementById('activityContent');
   container.innerHTML = '<div class="text-slate-500">Loading...</div>';
   try {
-    var resp = await fetch('/api/activity?limit=50');
+    var resp = await fetch(API_BASE + '/activity?limit=50');
     var events = await resp.json();
     if (!events.length) { container.innerHTML = '<div class="text-slate-500 p-6 text-center"><div class="text-slate-300 font-medium mb-2">No recent activity</div><div>Events appear here when issues are created, updated, or closed.</div></div>'; return; }
     var lastDay = '';
@@ -1657,7 +1702,7 @@ async function doSearch() {
   if (clearBtn) clearBtn.classList.toggle('hidden', !q);
   if (!q) { searchResults = null; render(); return; }
   try {
-    var resp = await fetch('/api/search?q=' + encodeURIComponent(q) + '&limit=100');
+    var resp = await fetch(API_BASE + '/search?q=' + encodeURIComponent(q) + '&limit=100');
     var data = await resp.json();
     searchResults = new Set(data.results.map(function(i) { return i.id; }));
   } catch (e) { searchResults = null; }
@@ -1712,7 +1757,7 @@ async function toggleCriticalPath() {
   var btn = document.getElementById('btnCritPath');
   if (criticalPathActive) {
     btn.className = 'px-2 py-0.5 rounded bg-red-600 text-white';
-    var resp = await fetch('/api/critical-path');
+    var resp = await fetch(API_BASE + '/critical-path');
     var data = await resp.json();
     criticalPathIds = new Set(data.path.map(function(p) { return p.id; }));
   } else {
@@ -1854,7 +1899,7 @@ async function loadPlanView(milestoneId) {
   var panel = document.getElementById('detailContent');
   panel.innerHTML = '<div class="text-slate-500 text-xs">Loading plan...</div>';
   try {
-    var resp = await fetch('/api/plan/' + milestoneId);
+    var resp = await fetch(API_BASE + '/plan/' + milestoneId);
     if (!resp.ok) { panel.innerHTML = '<div class="text-red-400 text-xs">No plan found for this issue.</div>'; return; }
     var plan = await resp.json();
     var m = plan.milestone || {};
@@ -1905,7 +1950,7 @@ async function loadWorkflow() {
   if (wfSelect && wfSelect.options.length <= 1) {
     var WORKFLOW_HIDDEN = {phase:1, step:1, work_package:1, deliverable:1};
     try {
-      var tr = await fetch('/api/types'); var registered = await tr.json();
+      var tr = await fetch(API_BASE + '/types'); var registered = await tr.json();
       registered.filter(function(t) { return !WORKFLOW_HIDDEN[t.type]; }).forEach(function(t) {
         var opt = document.createElement('option'); opt.value = t.type; opt.textContent = t.display_name || t.type;
         wfSelect.appendChild(opt);
@@ -1915,7 +1960,7 @@ async function loadWorkflow() {
   var typeName = wfSelect ? wfSelect.value : '';
   if (!typeName) return;
   try {
-    var resp = await fetch('/api/type/' + typeName);
+    var resp = await fetch(API_BASE + '/type/' + typeName);
     if (!resp.ok) return;
     var tpl = await resp.json();
     var stateCounts = {};
@@ -1997,7 +2042,7 @@ async function batchSetPriority() {
   document.getElementById('batchPrioConfirm').onclick = async function() {
     var prio = parseInt(document.getElementById('batchPrioSelect').value);
     modal.remove();
-    await fetch('/api/batch/update', {
+    await fetch(API_BASE + '/batch/update', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({issue_ids: Array.from(selectedCards), priority: prio}),
     });
@@ -2026,7 +2071,7 @@ async function batchCloseSelected() {
   modal.onclick = function(e) { if (e.target === modal) modal.remove(); };
   document.getElementById('batchCloseConfirm').onclick = async function() {
     modal.remove();
-    await fetch('/api/batch/close', {
+    await fetch(API_BASE + '/batch/close', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({issue_ids: Array.from(selectedCards)}),
     });
@@ -2041,7 +2086,7 @@ async function showCreateForm() {
   var existing = document.getElementById('createModal');
   if (existing) existing.remove();
   var types = [];
-  try { var tr = await fetch('/api/types'); types = await tr.json(); } catch(e) {}
+  try { var tr = await fetch(API_BASE + '/types'); types = await tr.json(); } catch(e) {}
   var typeOpts = types.map(function(t) {
     return '<option value="' + t.type + '"' + (t.type === 'task' ? ' selected' : '') + '>' + t.display_name + '</option>';
   }).join('');
@@ -2092,7 +2137,7 @@ async function submitCreateForm() {
   };
   if (labels && labels.length) body.labels = labels;
   try {
-    var resp = await fetch('/api/issues', {
+    var resp = await fetch(API_BASE + '/issues', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
       body: JSON.stringify(body),
     });
@@ -2186,7 +2231,7 @@ function populatePresets() {
 // ---------------------------------------------------------------------------
 async function renderSparkline() {
   try {
-    var resp = await fetch('/api/activity?limit=500');
+    var resp = await fetch(API_BASE + '/activity?limit=500');
     var events = await resp.json();
     var closedByDay = {};
     var now = Date.now();
@@ -2263,7 +2308,20 @@ function trapFocus(panel) {
 })();
 parseHash();
 populatePresets();
-fetchData().then(function() {
+(async function() {
+  await loadProjects();
+  // Check URL hash for project selection
+  var hash = window.location.hash;
+  var match = hash.match(/project=([^&]+)/);
+  if (match) {
+    var found = allProjects.find(function(p) { return p.key === match[1]; });
+    if (found) { setProject(found.key); } else if (allProjects.length > 0) { setProject(allProjects[0].key); } else { fetchData(); }
+  } else if (allProjects.length > 0) {
+    setProject(allProjects[0].key);
+  } else {
+    fetchData();  // Fallback: no projects in registry, use default /api/
+  }
+})().then(function() {
   switchView(currentView);
   if (kanbanMode === 'cluster') switchKanbanMode('cluster');
   else switchKanbanMode('standard');
@@ -2271,6 +2329,7 @@ fetchData().then(function() {
   if (!localStorage.getItem('filigree_tour_done')) setTimeout(startTour, 1500);
 });
 setInterval(function() { if (!document.hidden) fetchData(); }, REFRESH_INTERVAL);
+setInterval(loadProjects, 60000);
 </script>
 </body>
 </html>
