@@ -1949,6 +1949,8 @@ class FiligreeDB:
                 )
 
             case "priority_changed":
+                if row["old_value"] is None:
+                    return {"undone": False, "reason": "Cannot undo: event has no old_value"}
                 self.conn.execute(
                     "UPDATE issues SET priority = ?, updated_at = ? WHERE id = ?",
                     (int(row["old_value"]), now, issue_id),
@@ -1969,6 +1971,8 @@ class FiligreeDB:
 
             case "dependency_added":
                 # Event: issue_id=from_id, new_value="type:depends_on_id"
+                if row["new_value"] is None:
+                    return {"undone": False, "reason": "Cannot undo: event has no new_value"}
                 dep_target = row["new_value"].split(":", 1)[-1] if ":" in row["new_value"] else row["new_value"]
                 self.conn.execute(
                     "DELETE FROM dependencies WHERE issue_id = ? AND depends_on_id = ?",

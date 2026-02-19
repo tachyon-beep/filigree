@@ -1237,11 +1237,14 @@ async def _dispatch(name: str, arguments: dict[str, Any], tracker: FiligreeDB) -
                 return _text({"error": str(e), "code": "invalid"})
 
         case "batch_close":
+            ids = arguments["ids"]
+            if not all(isinstance(i, str) for i in ids):
+                return _text({"error": "All issue IDs must be strings", "code": "validation_error"})
             ready_before = {i.id for i in tracker.get_ready()}
             succeeded: list[str] = []
             failed: list[dict[str, Any]] = []
             warnings: list[str] = []
-            for issue_id in arguments["ids"]:
+            for issue_id in ids:
                 try:
                     issue = tracker.close_issue(
                         issue_id,
@@ -1275,17 +1278,23 @@ async def _dispatch(name: str, arguments: dict[str, Any], tracker: FiligreeDB) -
             return _text(batch_result)
 
         case "batch_update":
+            u_ids = arguments["ids"]
+            if not all(isinstance(i, str) for i in u_ids):
+                return _text({"error": "All issue IDs must be strings", "code": "validation_error"})
+            u_fields = arguments.get("fields")
+            if u_fields is not None and not isinstance(u_fields, dict):
+                return _text({"error": "fields must be a JSON object", "code": "validation_error"})
             update_succeeded: list[str] = []
             update_failed: list[dict[str, Any]] = []
             update_warnings: list[str] = []
-            for issue_id in arguments["ids"]:
+            for issue_id in u_ids:
                 try:
                     issue = tracker.update_issue(
                         issue_id,
                         status=arguments.get("status"),
                         priority=arguments.get("priority"),
                         assignee=arguments.get("assignee"),
-                        fields=arguments.get("fields"),
+                        fields=u_fields,
                         actor=arguments.get("actor", "mcp"),
                     )
                     update_succeeded.append(issue.id)

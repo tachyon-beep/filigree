@@ -182,11 +182,14 @@ def create_app() -> Any:
         if not isinstance(body, dict):
             return JSONResponse({"error": "Request body must be a JSON object"}, status_code=400)
         actor = body.pop("actor", "dashboard")
+        priority = body.get("priority")
+        if priority is not None and not isinstance(priority, int):
+            return JSONResponse({"error": "priority must be an integer"}, status_code=400)
         try:
             issue = db.update_issue(
                 issue_id,
                 status=body.get("status"),
-                priority=body.get("priority"),
+                priority=priority,
                 assignee=body.get("assignee"),
                 title=body.get("title"),
                 description=body.get("description"),
@@ -330,10 +333,13 @@ def create_app() -> Any:
         if not all(isinstance(i, str) for i in issue_ids):
             return JSONResponse({"error": "All issue_ids must be strings"}, status_code=400)
         actor = body.get("actor", "dashboard")
+        priority = body.get("priority")
+        if priority is not None and not isinstance(priority, int):
+            return JSONResponse({"error": "priority must be an integer"}, status_code=400)
         updated, errors = db.batch_update(
             issue_ids,
             status=body.get("status"),
-            priority=body.get("priority"),
+            priority=priority,
             assignee=body.get("assignee"),
             fields=body.get("fields"),
             actor=actor,
@@ -398,11 +404,14 @@ def create_app() -> Any:
         if not isinstance(body, dict):
             return JSONResponse({"error": "Request body must be a JSON object"}, status_code=400)
         title = body.get("title", "")
+        priority = body.get("priority", 2)
+        if not isinstance(priority, int):
+            return JSONResponse({"error": "priority must be an integer"}, status_code=400)
         try:
             issue = db.create_issue(
                 title,
                 type=body.get("type", "task"),
-                priority=body.get("priority", 2),
+                priority=priority,
                 parent_id=body.get("parent_id"),
                 assignee=body.get("assignee", ""),
                 description=body.get("description", ""),
@@ -503,7 +512,7 @@ def create_app() -> Any:
         """Remove a dependency."""
         db = _get_db()
         try:
-            removed = db.remove_dependency(issue_id, dep_id)
+            removed = db.remove_dependency(issue_id, dep_id, actor="dashboard")
         except KeyError as e:
             return JSONResponse({"error": str(e)}, status_code=404)
         return JSONResponse({"removed": removed})
