@@ -62,6 +62,7 @@ def migrate_from_beads(beads_db_path: str | Path, tracker: FiligreeDB) -> int:
 
         # Pass 1: build issue data and insert WITHOUT parent_id to avoid FK ordering
         parent_map: dict[str, str] = {}  # id -> parent_id for pass 2
+        inserted_ids: set[str] = set()  # track actually inserted rows for safe pass 2
         count = 0
         for row in rows:
             # Build fields bag from beads-specific columns
@@ -129,10 +130,13 @@ def migrate_from_beads(beads_db_path: str | Path, tracker: FiligreeDB) -> int:
             tracker.bulk_insert_issue(issue_data, validate=False)
             if tracker.conn.execute("SELECT changes()").fetchone()[0] > 0:
                 count += 1
+                inserted_ids.add(row["id"])
 
-        # Pass 2: set parent_id now that all issues exist
+        # Pass 2: set parent_id only for rows actually inserted in this run
+        # (avoids overwriting hierarchy changes made after a previous migration)
         for issue_id, pid in parent_map.items():
-            tracker.conn.execute("UPDATE issues SET parent_id = ? WHERE id = ?", (pid, issue_id))
+            if issue_id in inserted_ids:
+                tracker.conn.execute("UPDATE issues SET parent_id = ? WHERE id = ?", (pid, issue_id))
 
         # -- Migrate dependencies (only where both sides were migrated)
         deps = beads_conn.execute("SELECT * FROM dependencies").fetchall()
