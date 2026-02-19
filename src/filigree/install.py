@@ -193,7 +193,7 @@ def install_claude_code_mcp(project_root: Path) -> tuple[bool, str]:
             )
             mcp_config = {}
 
-    if "mcpServers" not in mcp_config:
+    if "mcpServers" not in mcp_config or not isinstance(mcp_config["mcpServers"], dict):
         mcp_config["mcpServers"] = {}
 
     mcp_config["mcpServers"]["filigree"] = {
@@ -326,9 +326,22 @@ ENSURE_DASHBOARD_COMMAND = "filigree ensure-dashboard"
 
 def _has_hook_command(settings: dict[str, Any], command: str) -> bool:
     """Check whether *command* already appears in SessionStart hooks."""
-    for matcher in settings.get("hooks", {}).get("SessionStart", []):
-        for hook in matcher.get("hooks", []):
-            if hook.get("command") == command:
+    if not isinstance(settings, dict):
+        return False
+    hooks = settings.get("hooks", {})
+    if not isinstance(hooks, dict):
+        return False
+    session_start = hooks.get("SessionStart", [])
+    if not isinstance(session_start, list):
+        return False
+    for matcher in session_start:
+        if not isinstance(matcher, dict):
+            continue
+        hook_list = matcher.get("hooks", [])
+        if not isinstance(hook_list, list):
+            continue
+        for hook in hook_list:
+            if isinstance(hook, dict) and hook.get("command") == command:
                 return True
     return False
 
@@ -381,21 +394,28 @@ def install_claude_code_hooks(project_root: Path) -> tuple[bool, str]:
     if not commands_to_add:
         return True, "Hooks already registered in .claude/settings.json"
 
-    # Ensure structure exists
-    if "hooks" not in settings:
+    # Ensure structure exists (replace non-dict/non-list values)
+    if "hooks" not in settings or not isinstance(settings.get("hooks"), dict):
         settings["hooks"] = {}
-    if "SessionStart" not in settings["hooks"]:
+    if "SessionStart" not in settings["hooks"] or not isinstance(settings["hooks"].get("SessionStart"), list):
         settings["hooks"]["SessionStart"] = []
 
     # Find or create the matcher block for filigree hooks
     filigree_hooks: list[dict[str, Any]] = []
     matcher_block = None
     for matcher in settings["hooks"]["SessionStart"]:
-        for hook in matcher.get("hooks", []):
+        if not isinstance(matcher, dict):
+            continue
+        hook_list = matcher.get("hooks", [])
+        if not isinstance(hook_list, list):
+            continue
+        for hook in hook_list:
+            if not isinstance(hook, dict):
+                continue
             cmd = hook.get("command", "")
             if "filigree" in cmd:
                 matcher_block = matcher
-                filigree_hooks = matcher.get("hooks", [])
+                filigree_hooks = hook_list
                 break
         if matcher_block is not None:
             break

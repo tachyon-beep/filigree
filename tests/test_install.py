@@ -410,6 +410,26 @@ class TestInstallClaudeCodeMcp:
         data = json.loads((tmp_path / ".mcp.json").read_text())
         assert "filigree" in data["mcpServers"]
 
+    def test_handles_non_dict_mcp_servers(self, tmp_path: Path) -> None:
+        """mcpServers as a list should be replaced with {}, not crash."""
+        (tmp_path / ".mcp.json").write_text(json.dumps({"mcpServers": []}))
+        with patch("filigree.install.shutil.which", return_value=None):
+            ok, _msg = install_claude_code_mcp(tmp_path)
+        assert ok
+        data = json.loads((tmp_path / ".mcp.json").read_text())
+        assert isinstance(data["mcpServers"], dict)
+        assert "filigree" in data["mcpServers"]
+
+    def test_handles_string_mcp_servers(self, tmp_path: Path) -> None:
+        """mcpServers as a string should be replaced with {}, not crash."""
+        (tmp_path / ".mcp.json").write_text(json.dumps({"mcpServers": "bad"}))
+        with patch("filigree.install.shutil.which", return_value=None):
+            ok, _msg = install_claude_code_mcp(tmp_path)
+        assert ok
+        data = json.loads((tmp_path / ".mcp.json").read_text())
+        assert isinstance(data["mcpServers"], dict)
+        assert "filigree" in data["mcpServers"]
+
 
 class TestInstallCodexMcp:
     def test_creates_codex_config(self, tmp_path: Path) -> None:
@@ -499,6 +519,95 @@ class TestInstallClaudeCodeHooks:
             assert "filigree ensure-dashboard" in cmds
         except ImportError:
             assert "filigree ensure-dashboard" not in cmds
+
+
+class TestHasHookCommand:
+    """Tests for _has_hook_command with malformed JSON structures."""
+
+    def test_hooks_as_list(self) -> None:
+        """settings.hooks as a list should return False, not crash."""
+        from filigree.install import _has_hook_command
+
+        assert _has_hook_command({"hooks": []}, "filigree session-context") is False
+
+    def test_hooks_as_string(self) -> None:
+        """settings.hooks as a string should return False, not crash."""
+        from filigree.install import _has_hook_command
+
+        assert _has_hook_command({"hooks": "bad"}, "filigree session-context") is False
+
+    def test_session_start_as_string(self) -> None:
+        """hooks.SessionStart as a string should return False, not crash."""
+        from filigree.install import _has_hook_command
+
+        assert _has_hook_command({"hooks": {"SessionStart": "bad"}}, "filigree session-context") is False
+
+    def test_matcher_as_string(self) -> None:
+        """Non-dict matcher entries should be skipped, not crash."""
+        from filigree.install import _has_hook_command
+
+        assert _has_hook_command({"hooks": {"SessionStart": ["bad"]}}, "filigree session-context") is False
+
+    def test_hook_entry_as_string(self) -> None:
+        """Non-dict hook entries within a matcher should be skipped."""
+        from filigree.install import _has_hook_command
+
+        settings = {"hooks": {"SessionStart": [{"hooks": ["bad"]}]}}
+        assert _has_hook_command(settings, "filigree session-context") is False
+
+    def test_non_dict_settings(self) -> None:
+        """Non-dict settings should return False, not crash."""
+        from filigree.install import _has_hook_command
+
+        assert _has_hook_command([], "filigree session-context") is False  # type: ignore[arg-type]
+
+
+class TestInstallHooksMalformedStructure:
+    """Tests for install_claude_code_hooks with malformed existing settings."""
+
+    def test_hooks_key_is_list(self, tmp_path: Path) -> None:
+        """Existing settings.hooks as a list should be replaced, not crash."""
+        claude_dir = tmp_path / ".claude"
+        claude_dir.mkdir()
+        (claude_dir / "settings.json").write_text(json.dumps({"hooks": []}))
+        ok, _msg = install_claude_code_hooks(tmp_path)
+        assert ok
+        data = json.loads((claude_dir / "settings.json").read_text())
+        assert isinstance(data["hooks"], dict)
+
+    def test_session_start_is_string(self, tmp_path: Path) -> None:
+        """Existing hooks.SessionStart as a string should be replaced, not crash."""
+        claude_dir = tmp_path / ".claude"
+        claude_dir.mkdir()
+        (claude_dir / "settings.json").write_text(json.dumps({"hooks": {"SessionStart": "bad"}}))
+        ok, _msg = install_claude_code_hooks(tmp_path)
+        assert ok
+        data = json.loads((claude_dir / "settings.json").read_text())
+        assert isinstance(data["hooks"]["SessionStart"], list)
+
+
+class TestDoctorMalformedHooks:
+    """Tests for run_doctor with malformed hooks in settings.json."""
+
+    def test_hooks_as_list(self, filigree_project: Path) -> None:
+        """Doctor should not crash when settings.hooks is a list."""
+        claude_dir = filigree_project / ".claude"
+        claude_dir.mkdir(exist_ok=True)
+        (claude_dir / "settings.json").write_text(json.dumps({"hooks": []}))
+        results = run_doctor(filigree_project)
+        hooks_check = next((r for r in results if r.name == "Claude Code hooks"), None)
+        assert hooks_check is not None
+        assert not hooks_check.passed
+
+    def test_non_dict_settings_json(self, filigree_project: Path) -> None:
+        """Doctor should not crash when settings.json is a list."""
+        claude_dir = filigree_project / ".claude"
+        claude_dir.mkdir(exist_ok=True)
+        (claude_dir / "settings.json").write_text("[]")
+        results = run_doctor(filigree_project)
+        hooks_check = next((r for r in results if r.name == "Claude Code hooks"), None)
+        assert hooks_check is not None
+        assert not hooks_check.passed
 
 
 class TestDoctorHooksCheck:
