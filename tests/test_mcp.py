@@ -157,6 +157,16 @@ class TestListPagination:
         assert len(data["issues"]) == _MAX_LIST_RESULTS + 5
         assert data["has_more"] is False
 
+    async def test_list_issues_no_limit_with_explicit_limit_has_more(self, mcp_db: FiligreeDB) -> None:
+        """no_limit=true with explicit limit should compute has_more correctly."""
+        for i in range(10):
+            mcp_db.create_issue(f"Issue {i}")
+        result = await call_tool("list_issues", {"no_limit": True, "limit": 5})
+        data = _parse(result)
+        assert len(data["issues"]) == 5
+        assert data["has_more"] is True
+        assert data["limit"] == 5
+
     async def test_list_issues_offset(self, mcp_db: FiligreeDB) -> None:
         """Offset works with the capped limit."""
         for i in range(_MAX_LIST_RESULTS + 10):
@@ -194,6 +204,15 @@ class TestListPagination:
         data = _parse(result)
         assert len(data["issues"]) == _MAX_LIST_RESULTS + 5
         assert data["has_more"] is False
+
+    async def test_search_issues_no_limit_with_explicit_limit_has_more(self, mcp_db: FiligreeDB) -> None:
+        """search_issues no_limit=true with explicit limit computes has_more correctly."""
+        for i in range(10):
+            mcp_db.create_issue(f"Bug {i}")
+        result = await call_tool("search_issues", {"query": "Bug", "no_limit": True, "limit": 5})
+        data = _parse(result)
+        assert len(data["issues"]) == 5
+        assert data["has_more"] is True
 
 
 class TestUpdateAndClose:

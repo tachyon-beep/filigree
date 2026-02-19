@@ -466,6 +466,28 @@ class TestInstallCodexMcp:
         assert "filigree" in parsed["mcp_servers"]
 
 
+class TestInstallCodexMcpMalformedToml:
+    """Bug filigree-d6bbbf: install_codex_mcp must fail on malformed TOML, not silently append."""
+
+    def test_malformed_toml_returns_false(self, tmp_path: Path) -> None:
+        codex_dir = tmp_path / ".codex"
+        codex_dir.mkdir()
+        (codex_dir / "config.toml").write_text("[broken\nthis is not valid toml")
+        with patch("filigree.install.shutil.which", return_value=None):
+            ok, msg = install_codex_mcp(tmp_path)
+        assert not ok
+        assert "malformed TOML" in msg
+
+    def test_malformed_toml_does_not_modify_file(self, tmp_path: Path) -> None:
+        codex_dir = tmp_path / ".codex"
+        codex_dir.mkdir()
+        original = "[broken\nthis is not valid toml"
+        (codex_dir / "config.toml").write_text(original)
+        with patch("filigree.install.shutil.which", return_value=None):
+            install_codex_mcp(tmp_path)
+        assert (codex_dir / "config.toml").read_text() == original
+
+
 class TestInstallClaudeCodeHooks:
     def test_creates_settings_json(self, tmp_path: Path) -> None:
         ok, _msg = install_claude_code_hooks(tmp_path)

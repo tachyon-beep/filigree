@@ -917,6 +917,17 @@ class TestBuiltInPackData:
         assert "spike_spawns_work" in names
         assert "spike_spawns_mitigation" in names
 
+    def test_spike_spawns_direction_matches_dependency_contract(self) -> None:
+        """Bug filigree-fa979c: spawned items must be from_types (they depend on the spike)."""
+        cross = BUILT_IN_PACKS["spike"]["cross_pack_relationships"]
+        spawns_work = next(r for r in cross if r["name"] == "spike_spawns_work")
+        spawns_mitigation = next(r for r in cross if r["name"] == "spike_spawns_mitigation")
+        # from_id depends on to_id — spawned items (from) depend on spike (to)
+        assert "spike" in spawns_work["to_types"]
+        assert "spike" not in spawns_work["from_types"]
+        assert "spike" in spawns_mitigation["to_types"]
+        assert "spike" not in spawns_mitigation["from_types"]
+
     # -- Requirements pack structural tests --
 
     def test_requirements_pack_exists(self) -> None:

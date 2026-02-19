@@ -927,27 +927,11 @@ async def _dispatch(name: str, arguments: dict[str, Any], tracker: FiligreeDB) -
             offset = arguments.get("offset", 0)
 
             if no_limit:
-                # Bypass cap — return everything the caller asked for
-                issues = tracker.list_issues(
-                    status=status_filter,
-                    type=arguments.get("type"),
-                    priority=arguments.get("priority"),
-                    parent_id=arguments.get("parent_id"),
-                    assignee=arguments.get("assignee"),
-                    label=arguments.get("label"),
-                    limit=requested_limit,
-                    offset=offset,
-                )
-                return _text(
-                    {
-                        "issues": [i.to_dict() for i in issues],
-                        "limit": requested_limit,
-                        "offset": offset,
-                        "has_more": False,
-                    }
-                )
+                # Bypass cap; use caller's limit if explicit, otherwise fetch all
+                effective_limit = requested_limit if "limit" in arguments else 10_000_000
+            else:
+                effective_limit = min(requested_limit, _MAX_LIST_RESULTS)
 
-            effective_limit = min(requested_limit, _MAX_LIST_RESULTS)
             # Overfetch by 1 to detect whether more results exist
             issues = tracker.list_issues(
                 status=status_filter,
@@ -1164,21 +1148,10 @@ async def _dispatch(name: str, arguments: dict[str, Any], tracker: FiligreeDB) -
                 return {"id": i.id, "title": i.title, "status": i.status, "priority": i.priority, "type": i.type}
 
             if no_limit:
-                issues = tracker.search_issues(
-                    arguments["query"],
-                    limit=requested_limit,
-                    offset=offset,
-                )
-                return _text(
-                    {
-                        "issues": [_slim(i) for i in issues],
-                        "limit": requested_limit,
-                        "offset": offset,
-                        "has_more": False,
-                    }
-                )
+                effective_limit = requested_limit if "limit" in arguments else 10_000_000
+            else:
+                effective_limit = min(requested_limit, _MAX_LIST_RESULTS)
 
-            effective_limit = min(requested_limit, _MAX_LIST_RESULTS)
             issues = tracker.search_issues(
                 arguments["query"],
                 limit=effective_limit + 1,

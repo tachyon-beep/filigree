@@ -1463,17 +1463,17 @@ _SPIKE_PACK: dict[str, Any] = {
     "cross_pack_relationships": [
         {
             "name": "spike_spawns_work",
-            "from_types": ["spike"],
-            "to_types": ["task", "bug", "feature"],
+            "from_types": ["task", "bug", "feature"],
+            "to_types": ["spike"],
             "mechanism": "dependency",
-            "description": "Spike results spawn new work items in core pack",
+            "description": "Spawned work items depend on source spike",
         },
         {
             "name": "spike_spawns_mitigation",
-            "from_types": ["spike"],
-            "to_types": ["mitigation"],
+            "from_types": ["mitigation"],
+            "to_types": ["spike"],
             "mechanism": "dependency",
-            "description": "Spike results spawn mitigations in risk pack",
+            "description": "Spawned mitigations depend on source spike",
         },
     ],
     "guide": {

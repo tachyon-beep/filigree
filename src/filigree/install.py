@@ -233,8 +233,7 @@ def install_codex_mcp(project_root: Path) -> tuple[bool, str]:
             if "filigree" in parsed.get("mcp_servers", {}):
                 return True, "Already configured in .codex/config.toml"
         except tomllib.TOMLDecodeError:
-            # Existing config is malformed; we'll append anyway
-            pass
+            return False, f"Existing {config_path} contains malformed TOML; fix or remove it before configuring"
 
     # Escape backslashes and double quotes in paths for TOML double-quoted strings
     safe_command = str(filigree_mcp).replace("\\", "\\\\").replace('"', '\\"')
