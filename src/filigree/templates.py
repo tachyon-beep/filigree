@@ -24,6 +24,7 @@ logger = logging.getLogger(__name__)
 # State/type names must match this pattern to be safe for use in SQL queries
 # and filesystem paths. Validated at parse time (review B1, B5).
 _NAME_PATTERN = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
+_VALID_CATEGORIES: frozenset[str] = frozenset({"open", "wip", "done"})
 
 # ---------------------------------------------------------------------------
 # Type aliases (WFT-NFR-015)
@@ -53,6 +54,10 @@ class StateDefinition:
     def __post_init__(self) -> None:
         if not _NAME_PATTERN.match(self.name):
             msg = f"Invalid state name '{self.name}': must match ^[a-z][a-z0-9_]{{0,63}}$"
+            raise ValueError(msg)
+        if self.category not in _VALID_CATEGORIES:
+            allowed = sorted(_VALID_CATEGORIES)
+            msg = f"Invalid category '{self.category}' for state '{self.name}': must be one of {allowed}"
             raise ValueError(msg)
 
 
@@ -259,8 +264,17 @@ class TemplateRegistry:
 
         logger.debug("Parsing template for type: %s", type_name)
 
-        # StateDefinition.__post_init__ validates each state name format
+        # StateDefinition.__post_init__ validates each state name format + category
         states = tuple(StateDefinition(name=s["name"], category=s["category"]) for s in raw_states)
+
+        # Detect duplicate state names (filigree-eff214)
+        seen_names: set[str] = set()
+        for s in states:
+            if s.name in seen_names:
+                msg = f"Type '{type_name}': duplicate state name '{s.name}'"
+                raise ValueError(msg)
+            seen_names.add(s.name)
+
         transitions = tuple(
             TransitionDefinition(
                 from_state=t["from"],
@@ -303,6 +317,14 @@ class TemplateRegistry:
         """
         errors: list[str] = []
         state_names = {s.name for s in tpl.states}
+
+        # Detect duplicate state names (filigree-eff214)
+        if len(state_names) != len(tpl.states):
+            seen: set[str] = set()
+            for st in tpl.states:
+                if st.name in seen:
+                    errors.append(f"duplicate state name '{st.name}'")
+                seen.add(st.name)
 
         if tpl.initial_state not in state_names:
             errors.append(f"initial_state '{tpl.initial_state}' is not in states list")

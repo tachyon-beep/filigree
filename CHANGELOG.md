@@ -12,6 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Transaction safety: `create_issue()` and `update_issue()` restructured to validate-then-write with rollback on failure, preventing orphaned rows/events via MCP's long-lived connection
 - Transaction safety: `reopen_issue()` wrapped in try/except rollback to prevent orphaned events on failure
 - MCP safety net: `call_tool()` now rolls back any uncommitted transaction after every tool dispatch, catching partial writes from any mutation function
+- Template validation: `StateDefinition.category` now validated at construction time — invalid categories raise `ValueError` immediately
+- Template validation: duplicate state names detected at both parse time and validation time (defense in depth for JSON and programmatic construction paths)
+- Incident workflow: `resolved` state re-categorized from `done` to `wip` — `close_issue()` from resolved now works correctly instead of rejecting with "already closed"
+- Incident workflow guide: stale `resolved(D)` notation corrected to `resolved(W)` in state diagram
 
 ## [1.1.0] - 2026-02-18
 
