@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
 import pytest
 
@@ -92,6 +93,20 @@ class TestCreateAndGet:
         assert data["code"] == "not_found"
 
 
+class TestRefreshSummaryBestEffort:
+    async def test_mutation_succeeds_when_summary_refresh_fails(self, mcp_db: FiligreeDB) -> None:
+        """If _refresh_summary() raises, the mutation result should still be returned."""
+        with patch("filigree.mcp_server.write_summary", side_effect=OSError("disk full")):
+            result = await call_tool("create_issue", {"title": "Should succeed"})
+        data = _parse(result)
+        # Mutation must succeed — the issue was created in the DB
+        assert "id" in data
+        assert data["title"] == "Should succeed"
+        # Verify it's actually in the DB
+        issue = mcp_db.get_issue(data["id"])
+        assert issue.title == "Should succeed"
+
+
 class TestListAndSearch:
     async def test_list_issues(self, mcp_db: FiligreeDB) -> None:
         mcp_db.create_issue("List A")
@@ -142,6 +157,16 @@ class TestListPagination:
         assert len(data["issues"]) == _MAX_LIST_RESULTS + 5
         assert data["has_more"] is False
 
+    async def test_list_issues_no_limit_with_explicit_limit_has_more(self, mcp_db: FiligreeDB) -> None:
+        """no_limit=true with explicit limit should compute has_more correctly."""
+        for i in range(10):
+            mcp_db.create_issue(f"Issue {i}")
+        result = await call_tool("list_issues", {"no_limit": True, "limit": 5})
+        data = _parse(result)
+        assert len(data["issues"]) == 5
+        assert data["has_more"] is True
+        assert data["limit"] == 5
+
     async def test_list_issues_offset(self, mcp_db: FiligreeDB) -> None:
         """Offset works with the capped limit."""
         for i in range(_MAX_LIST_RESULTS + 10):
@@ -179,6 +204,15 @@ class TestListPagination:
         data = _parse(result)
         assert len(data["issues"]) == _MAX_LIST_RESULTS + 5
         assert data["has_more"] is False
+
+    async def test_search_issues_no_limit_with_explicit_limit_has_more(self, mcp_db: FiligreeDB) -> None:
+        """search_issues no_limit=true with explicit limit computes has_more correctly."""
+        for i in range(10):
+            mcp_db.create_issue(f"Bug {i}")
+        result = await call_tool("search_issues", {"query": "Bug", "no_limit": True, "limit": 5})
+        data = _parse(result)
+        assert len(data["issues"]) == 5
+        assert data["has_more"] is True
 
 
 class TestUpdateAndClose:
@@ -964,3 +998,83 @@ class TestExportImportPathTraversal:
         data = _parse(result)
         assert data["status"] == "ok"
         assert data["records"] >= 1
+
+    async def test_export_io_error_returns_structured_error(self, mcp_db: FiligreeDB) -> None:
+        """export_jsonl to a nonexistent directory must return error, not crash."""
+        result = await call_tool("export_jsonl", {"output_path": "nonexistent-dir/out.jsonl"})
+        data = _parse(result)
+        assert "error" in data
+        assert data["code"] == "io_error"
+
+    async def test_import_malformed_jsonl_returns_parse_error_not_invalid_path(self, mcp_db: FiligreeDB) -> None:
+        """import_jsonl with malformed JSONL must not report 'invalid_path'."""
+        project_root = mcp_db.db_path.parent.parent
+        bad_file = project_root / "bad.jsonl"
+        bad_file.write_text("this is not valid json\n")
+        result = await call_tool("import_jsonl", {"input_path": "bad.jsonl"})
+        data = _parse(result)
+        assert "error" in data
+        assert data["code"] != "invalid_path"
+
+
+class TestMCPTransactionSafety:
+    """MCP-level safety net: no dirty transactions survive after failed tool calls."""
+
+    async def test_failed_create_no_dirty_transaction(self, mcp_db: FiligreeDB) -> None:
+        """create_issue with invalid deps returns error AND leaves no dirty txn."""
+        result = await call_tool(
+            "create_issue",
+            {"title": "Should fail", "deps": ["nonexistent-dep-id"]},
+        )
+        data = _parse(result)
+        assert "error" in data
+
+        assert not mcp_db.conn.in_transaction, (
+            "Dirty transaction left after failed create_issue — next successful commit would flush orphaned writes"
+        )
+
+    async def test_failed_update_no_dirty_transaction(self, mcp_db: FiligreeDB) -> None:
+        """update_issue with invalid priority returns error AND leaves no dirty txn."""
+        create_result = await call_tool("create_issue", {"title": "Valid issue"})
+        issue_id = _parse(create_result)["id"]
+
+        result = await call_tool(
+            "update_issue",
+            {"id": issue_id, "title": "New title", "priority": 99},
+        )
+        data = _parse(result)
+        assert "error" in data
+
+        assert not mcp_db.conn.in_transaction, (
+            "Dirty transaction left after failed update_issue — next successful commit would flush orphaned events"
+        )
+
+    async def test_unhandled_error_rolls_back_dirty_transaction(self, mcp_db: FiligreeDB) -> None:
+        """Safety net: unhandled exception from _dispatch rolls back any dirty txn.
+
+        Simulates a core function that writes to the DB then raises without
+        rolling back — the MCP call_tool() safety net must clean up.
+        """
+
+        async def _bad_dispatch(name: str, arguments: dict[str, Any], tracker: FiligreeDB) -> list[Any]:
+            # Simulate a buggy mutation: INSERT a row, then crash
+            tracker.conn.execute(
+                "INSERT INTO issues (id, title, type, status, priority, description, "
+                "notes, assignee, parent_id, fields, created_at, updated_at) "
+                "VALUES ('orphan-1', 'Orphan', 'task', 'open', 2, '', '', '', NULL, "
+                "'{}', '2026-01-01', '2026-01-01')"
+            )
+            msg = "Simulated unprotected crash"
+            raise RuntimeError(msg)
+
+        with patch("filigree.mcp_server._dispatch", _bad_dispatch), pytest.raises(RuntimeError):
+            await call_tool("create_issue", {"title": "Irrelevant"})
+
+        # The safety net in call_tool() should have rolled back the dirty txn
+        assert not mcp_db.conn.in_transaction, (
+            "MCP safety net failed — dirty transaction survived after unhandled exception"
+        )
+
+        # The orphan row should NOT be visible after rollback
+        orphan = mcp_db.conn.execute("SELECT id FROM issues WHERE id = 'orphan-1'").fetchone()
+        assert orphan is None, "Orphan issue row survived — rollback did not happen"

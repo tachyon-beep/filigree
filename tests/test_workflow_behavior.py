@@ -8,6 +8,7 @@ lifecycle operations respect per-type state machines.
 from __future__ import annotations
 
 import json
+from collections.abc import Generator
 from pathlib import Path
 
 import pytest
@@ -32,6 +33,20 @@ def db(tmp_path: Path) -> FiligreeDB:
     db.initialize()
     yield db  # type: ignore[misc]
     db.close()
+
+
+@pytest.fixture
+def incident_db(tmp_path: Path) -> Generator[FiligreeDB, None, None]:
+    """FiligreeDB with incident pack enabled for hard-enforcement tests."""
+    filigree_dir = tmp_path / ".filigree"
+    filigree_dir.mkdir()
+    config = {"prefix": "test", "version": 1, "enabled_packs": ["core", "planning", "incident"]}
+    (filigree_dir / "config.json").write_text(json.dumps(config))
+
+    d = FiligreeDB(filigree_dir / "filigree.db", prefix="test")
+    d.initialize()
+    yield d
+    d.close()
 
 
 # ---------------------------------------------------------------------------
@@ -253,6 +268,85 @@ class TestCloseIssue:
         db.close_issue(issue.id)
         with pytest.raises(ValueError, match="already closed"):
             db.close_issue(issue.id)
+
+
+class TestCloseIssueHardEnforcement:
+    """close_issue() must respect hard-enforcement gates (filigree-87e5e3)."""
+
+    def test_close_incident_from_resolved_requires_root_cause(self, incident_db: FiligreeDB) -> None:
+        """Incident resolved→closed has hard enforcement requiring root_cause."""
+        issue = incident_db.create_issue("Outage", type="incident")
+        # Walk to resolved: reported → triaging → investigating → resolved
+        incident_db.update_issue(issue.id, status="triaging", fields={"severity": "sev2"})
+        incident_db.update_issue(issue.id, status="investigating")
+        incident_db.update_issue(issue.id, status="resolved")
+
+        # Attempting to close without root_cause should fail
+        with pytest.raises(ValueError, match="root_cause"):
+            incident_db.close_issue(issue.id)
+
+    def test_close_incident_with_root_cause_succeeds(self, incident_db: FiligreeDB) -> None:
+        """Providing required fields via fields= allows close through hard gate."""
+        issue = incident_db.create_issue("Outage", type="incident")
+        incident_db.update_issue(issue.id, status="triaging", fields={"severity": "sev2"})
+        incident_db.update_issue(issue.id, status="investigating")
+        incident_db.update_issue(issue.id, status="resolved")
+
+        closed = incident_db.close_issue(
+            issue.id,
+            fields={"root_cause": "Config drift in prod"},
+            reason="Resolved after config rollback",
+        )
+        assert closed.status == "closed"
+        assert closed.fields["root_cause"] == "Config drift in prod"
+        assert closed.fields["close_reason"] == "Resolved after config rollback"
+
+    def test_close_incident_with_pre_populated_field_succeeds(self, incident_db: FiligreeDB) -> None:
+        """If root_cause was set earlier, close_issue succeeds without fields=."""
+        issue = incident_db.create_issue("Outage", type="incident")
+        incident_db.update_issue(issue.id, status="triaging", fields={"severity": "sev2"})
+        incident_db.update_issue(issue.id, status="investigating")
+        incident_db.update_issue(issue.id, status="resolved", fields={"root_cause": "OOM in worker"})
+
+        closed = incident_db.close_issue(issue.id)
+        assert closed.status == "closed"
+        assert closed.fields["root_cause"] == "OOM in worker"
+
+    def test_close_from_non_workflow_state_skips_hard_gate(self, db: FiligreeDB) -> None:
+        """Admin override from a state with no transition to closed still works."""
+        # Bug type: closing from triage (initial state) has no defined transition
+        # to "closed" — this is the admin-override path and should still work
+        issue = db.create_issue("Bug", type="bug")
+        closed = db.close_issue(issue.id, reason="duplicate")
+        assert closed.status == "closed"
+
+    def test_close_bug_from_verifying_requires_fix_verification(self, db: FiligreeDB) -> None:
+        """Bug verifying→closed has hard enforcement requiring fix_verification."""
+        issue = db.create_issue("Bug", type="bug")
+        db.update_issue(
+            issue.id,
+            status="confirmed",
+            fields={"severity": "major"},
+            _skip_transition_check=True,
+        )
+        db.update_issue(issue.id, status="fixing", _skip_transition_check=True)
+        db.update_issue(
+            issue.id,
+            status="verifying",
+            fields={"fix_verification": "manual test"},
+            _skip_transition_check=True,
+        )
+
+        # verifying→closed requires fix_verification (hard gate)
+        # fix_verification is already set, so this should succeed
+        closed = db.close_issue(issue.id)
+        assert closed.status == "closed"
+
+    def test_close_with_non_dict_fields_raises_type_error(self, db: FiligreeDB) -> None:
+        """Passing non-dict fields to close_issue raises TypeError, not 500."""
+        issue = db.create_issue("Bug", type="bug")
+        with pytest.raises(TypeError, match="fields must be a dict"):
+            db.close_issue(issue.id, fields=5)  # type: ignore[arg-type]
 
 
 class TestClaimIssue:

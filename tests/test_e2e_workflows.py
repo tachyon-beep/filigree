@@ -672,12 +672,13 @@ class TestIncidentWorkflowE2E:
 
         inc = incident_db.update_issue(inc.id, status="resolved")
         assert inc.status == "resolved"
-        assert inc.closed_at is not None
+        assert inc.closed_at is None  # resolved is wip, not done yet
 
         inc = incident_db.update_issue(
             inc.id, status="closed", fields={"root_cause": "Database connection pool exhaustion"}
         )
         assert inc.status == "closed"
+        assert inc.closed_at is not None
 
     def test_triage_hard_gate_blocks_without_severity(self, incident_db: FiligreeDB) -> None:
         """Cannot triage without severity."""

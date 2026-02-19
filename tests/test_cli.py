@@ -829,6 +829,27 @@ class TestCreatePlanCli:
         assert result.exit_code == 1
         assert "Invalid JSON" in result.output or "error" in result.output.lower()
 
+    def test_create_plan_validation_error_exits_1(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        """Backend ValueError (e.g. empty title) should exit 1, not crash."""
+        runner, _ = cli_in_project
+        plan_json = json.dumps({"milestone": {"title": ""}, "phases": [{"title": "P1"}]})
+        result = runner.invoke(cli, ["create-plan"], input=plan_json)
+        assert result.exit_code == 1
+        assert "error" in result.output.lower()
+
+    def test_create_plan_bad_dep_ref_exits_1(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        """IndexError from bad dep refs should exit 1, not crash."""
+        runner, _ = cli_in_project
+        plan_json = json.dumps(
+            {
+                "milestone": {"title": "MS"},
+                "phases": [{"title": "P1", "steps": [{"title": "S1", "deps": [99]}]}],
+            }
+        )
+        result = runner.invoke(cli, ["create-plan"], input=plan_json)
+        assert result.exit_code == 1
+        assert "error" in result.output.lower()
+
 
 class TestBatchCli:
     def test_batch_update(self, cli_in_project: tuple[CliRunner, Path]) -> None:
@@ -851,6 +872,15 @@ class TestBatchCli:
         assert isinstance(data, dict)
         assert "updated" in data
         assert "errors" in data
+
+    def test_batch_update_json_malformed_field_returns_json(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        """batch-update --json with bad --field must emit JSON error, not plain text."""
+        runner, _ = cli_in_project
+        r1 = runner.invoke(cli, ["create", "A"])
+        id1 = _extract_id(r1.output)
+        result = runner.invoke(cli, ["batch-update", id1, "--field", "no-equals-sign", "--json"])
+        data = json.loads(result.output)
+        assert "error" in data
 
     def test_batch_close(self, cli_in_project: tuple[CliRunner, Path]) -> None:
         runner, _ = cli_in_project
@@ -1223,6 +1253,19 @@ class TestExportImportCli:
         assert result.exit_code == 0
         assert "Imported" in result.output
 
+    def test_import_conflict_without_merge_shows_clean_error(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        """Import without --merge on duplicate data should show clean error, not traceback."""
+        runner, project_root = cli_in_project
+        runner.invoke(cli, ["create", "Conflict me"])
+        export_path = str(project_root / "export.jsonl")
+        runner.invoke(cli, ["export", export_path])
+        # Import same data again without --merge → should fail cleanly
+        result = runner.invoke(cli, ["import", export_path])
+        assert result.exit_code != 0
+        assert "Import failed" in result.output or "Import failed" in (result.output + (result.output or ""))
+        # Must NOT contain a raw Python traceback
+        assert "Traceback" not in (result.output or "")
+
 
 class TestBlockedJson:
     def test_blocked_json(self, cli_in_project: tuple[CliRunner, Path]) -> None:
@@ -1243,6 +1286,72 @@ class TestCreatePlanMissingKeys:
         runner, _ = cli_in_project
         result = runner.invoke(cli, ["create-plan"], input=json.dumps({"phases": []}))
         assert result.exit_code == 1
+
+
+class TestCreatePlanMalformedInput:
+    """Bug filigree-802ab8: wrong value types should exit 1, not crash with traceback."""
+
+    def test_milestone_as_list(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        """milestone as a list instead of dict should give clean error, not AttributeError."""
+        runner, _ = cli_in_project
+        plan_json = json.dumps({"milestone": ["not", "a", "dict"], "phases": []})
+        result = runner.invoke(cli, ["create-plan"], input=plan_json)
+        assert result.exit_code == 1
+        assert "milestone" in result.output.lower()
+        assert "object" in result.output.lower()
+        assert "Traceback" not in result.output
+
+    def test_phases_as_string(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        """phases as a string instead of list should give clean error, not TypeError."""
+        runner, _ = cli_in_project
+        plan_json = json.dumps({"milestone": {"title": "MS"}, "phases": "not a list"})
+        result = runner.invoke(cli, ["create-plan"], input=plan_json)
+        assert result.exit_code == 1
+        assert "phases" in result.output.lower()
+        assert "list" in result.output.lower()
+        assert "Traceback" not in result.output
+
+    def test_phase_entry_as_string(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        """Non-dict phase entries should give clean error, not AttributeError."""
+        runner, _ = cli_in_project
+        plan_json = json.dumps({"milestone": {"title": "MS"}, "phases": ["not a dict"]})
+        result = runner.invoke(cli, ["create-plan"], input=plan_json)
+        assert result.exit_code == 1
+        assert "phase 1" in result.output.lower()
+        assert "object" in result.output.lower()
+        assert "Traceback" not in result.output
+
+    def test_data_as_list(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        """Top-level JSON as a list should give clean error, not crash."""
+        runner, _ = cli_in_project
+        result = runner.invoke(cli, ["create-plan"], input=json.dumps([1, 2, 3]))
+        assert result.exit_code == 1
+        # Should produce a user-visible error message (not empty from unhandled exception)
+        assert result.output.strip()
+
+
+class TestCreatePlanFileErrors:
+    """Bug filigree-5cc1de: file I/O errors should give clean error, not unhandled traceback."""
+
+    def test_directory_as_file_path(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        """Passing a directory instead of a file should exit cleanly."""
+        runner, project_root = cli_in_project
+        dir_path = project_root / "somedir"
+        dir_path.mkdir()
+        result = runner.invoke(cli, ["create-plan", "--file", str(dir_path)])
+        assert result.exit_code != 0
+        # Exception must be handled (SystemExit from sys.exit), not leaked raw
+        assert result.exception is None or isinstance(result.exception, SystemExit)
+
+    def test_binary_file(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        """Binary file that can't be decoded as UTF-8 should give clean error."""
+        runner, project_root = cli_in_project
+        bin_file = project_root / "plan.bin"
+        bin_file.write_bytes(b"\x80\x81\x82\xff\xfe")
+        result = runner.invoke(cli, ["create-plan", "--file", str(bin_file)])
+        assert result.exit_code != 0
+        # Exception must be handled (SystemExit from sys.exit), not leaked raw
+        assert result.exception is None or isinstance(result.exception, SystemExit)
 
 
 class TestNoFiligreeDir:

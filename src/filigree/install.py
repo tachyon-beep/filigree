@@ -179,9 +179,12 @@ def install_claude_code_mcp(project_root: Path) -> tuple[bool, str]:
     mcp_config: dict[str, Any] = {}
     if mcp_json_path.exists():
         try:
-            mcp_config = json.loads(mcp_json_path.read_text())
-        except json.JSONDecodeError:
-            # Back up the corrupt file and start fresh
+            raw = json.loads(mcp_json_path.read_text())
+            if not isinstance(raw, dict):
+                raise ValueError("not a JSON object")
+            mcp_config = raw
+        except (json.JSONDecodeError, ValueError):
+            # Back up the corrupt/non-object file and start fresh
             backup_path = mcp_json_path.parent / (mcp_json_path.name + ".bak")
             shutil.copy2(mcp_json_path, backup_path)
             logger.warning(
@@ -190,7 +193,7 @@ def install_claude_code_mcp(project_root: Path) -> tuple[bool, str]:
             )
             mcp_config = {}
 
-    if "mcpServers" not in mcp_config:
+    if "mcpServers" not in mcp_config or not isinstance(mcp_config["mcpServers"], dict):
         mcp_config["mcpServers"] = {}
 
     mcp_config["mcpServers"]["filigree"] = {
@@ -230,12 +233,11 @@ def install_codex_mcp(project_root: Path) -> tuple[bool, str]:
             if "filigree" in parsed.get("mcp_servers", {}):
                 return True, "Already configured in .codex/config.toml"
         except tomllib.TOMLDecodeError:
-            # Existing config is malformed; we'll append anyway
-            pass
+            return False, f"Existing {config_path} contains malformed TOML; fix or remove it before configuring"
 
-    # Escape backslashes in paths for TOML double-quoted strings
-    safe_command = str(filigree_mcp).replace("\\", "\\\\")
-    safe_project = str(project_root).replace("\\", "\\\\")
+    # Escape backslashes and double quotes in paths for TOML double-quoted strings
+    safe_command = str(filigree_mcp).replace("\\", "\\\\").replace('"', '\\"')
+    safe_project = str(project_root).replace("\\", "\\\\").replace('"', '\\"')
 
     # Append MCP server config
     toml_block = f"""
@@ -268,8 +270,9 @@ def inject_instructions(file_path: Path) -> tuple[bool, str]:
             # Replace existing block
             start = content.index(FILIGREE_INSTRUCTIONS_MARKER)
             end_marker = "<!-- /filigree:instructions -->"
-            if end_marker in content:
-                end = content.index(end_marker) + len(end_marker)
+            end_pos = content.find(end_marker, start)
+            if end_pos != -1:
+                end = end_pos + len(end_marker)
                 content = content[:start] + FILIGREE_INSTRUCTIONS + content[end:]
             else:
                 # Malformed — just replace from marker to end
@@ -322,9 +325,22 @@ ENSURE_DASHBOARD_COMMAND = "filigree ensure-dashboard"
 
 def _has_hook_command(settings: dict[str, Any], command: str) -> bool:
     """Check whether *command* already appears in SessionStart hooks."""
-    for matcher in settings.get("hooks", {}).get("SessionStart", []):
-        for hook in matcher.get("hooks", []):
-            if hook.get("command") == command:
+    if not isinstance(settings, dict):
+        return False
+    hooks = settings.get("hooks", {})
+    if not isinstance(hooks, dict):
+        return False
+    session_start = hooks.get("SessionStart", [])
+    if not isinstance(session_start, list):
+        return False
+    for matcher in session_start:
+        if not isinstance(matcher, dict):
+            continue
+        hook_list = matcher.get("hooks", [])
+        if not isinstance(hook_list, list):
+            continue
+        for hook in hook_list:
+            if isinstance(hook, dict) and hook.get("command") == command:
                 return True
     return False
 
@@ -377,21 +393,28 @@ def install_claude_code_hooks(project_root: Path) -> tuple[bool, str]:
     if not commands_to_add:
         return True, "Hooks already registered in .claude/settings.json"
 
-    # Ensure structure exists
-    if "hooks" not in settings:
+    # Ensure structure exists (replace non-dict/non-list values)
+    if "hooks" not in settings or not isinstance(settings.get("hooks"), dict):
         settings["hooks"] = {}
-    if "SessionStart" not in settings["hooks"]:
+    if "SessionStart" not in settings["hooks"] or not isinstance(settings["hooks"].get("SessionStart"), list):
         settings["hooks"]["SessionStart"] = []
 
     # Find or create the matcher block for filigree hooks
     filigree_hooks: list[dict[str, Any]] = []
     matcher_block = None
     for matcher in settings["hooks"]["SessionStart"]:
-        for hook in matcher.get("hooks", []):
+        if not isinstance(matcher, dict):
+            continue
+        hook_list = matcher.get("hooks", [])
+        if not isinstance(hook_list, list):
+            continue
+        for hook in hook_list:
+            if not isinstance(hook, dict):
+                continue
             cmd = hook.get("command", "")
             if "filigree" in cmd:
                 matcher_block = matcher
-                filigree_hooks = matcher.get("hooks", [])
+                filigree_hooks = hook_list
                 break
         if matcher_block is not None:
             break
@@ -516,13 +539,13 @@ def run_doctor(project_root: Path | None = None) -> list[CheckResult]:
     # 3. Check filigree.db exists and is accessible
     db_path = filigree_dir / DB_FILENAME
     if db_path.exists():
+        conn: sqlite3.Connection | None = None
         try:
             conn = sqlite3.connect(str(db_path))
             conn.execute("SELECT COUNT(*) FROM issues")
             count = conn.execute("SELECT COUNT(*) FROM issues").fetchone()[0]
             # 3b. Check schema version
             schema_version = conn.execute("PRAGMA user_version").fetchone()[0]
-            conn.close()
             results.append(CheckResult("filigree.db", True, f"{count} issues"))
             if schema_version < CURRENT_SCHEMA_VERSION:
                 results.append(
@@ -544,6 +567,9 @@ def run_doctor(project_root: Path | None = None) -> list[CheckResult]:
                     fix_hint="Database may be corrupted. Restore from backup.",
                 )
             )
+        finally:
+            if conn is not None:
+                conn.close()
     else:
         results.append(
             CheckResult(
@@ -610,6 +636,8 @@ def run_doctor(project_root: Path | None = None) -> list[CheckResult]:
     if mcp_json.exists():
         try:
             mcp = json.loads(mcp_json.read_text())
+            if not isinstance(mcp, dict):
+                raise ValueError("not a JSON object")
             if "filigree" in mcp.get("mcpServers", {}):
                 results.append(CheckResult("Claude Code MCP", True, "Configured in .mcp.json"))
             else:
@@ -621,7 +649,7 @@ def run_doctor(project_root: Path | None = None) -> list[CheckResult]:
                         fix_hint="Run: filigree install --claude-code",
                     )
                 )
-        except json.JSONDecodeError:
+        except (json.JSONDecodeError, ValueError):
             results.append(
                 CheckResult(
                     "Claude Code MCP",

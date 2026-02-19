@@ -24,6 +24,7 @@ logger = logging.getLogger(__name__)
 # State/type names must match this pattern to be safe for use in SQL queries
 # and filesystem paths. Validated at parse time (review B1, B5).
 _NAME_PATTERN = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
+_VALID_CATEGORIES: frozenset[str] = frozenset({"open", "wip", "done"})
 
 # ---------------------------------------------------------------------------
 # Type aliases (WFT-NFR-015)
@@ -54,6 +55,10 @@ class StateDefinition:
         if not _NAME_PATTERN.match(self.name):
             msg = f"Invalid state name '{self.name}': must match ^[a-z][a-z0-9_]{{0,63}}$"
             raise ValueError(msg)
+        if self.category not in _VALID_CATEGORIES:
+            allowed = sorted(_VALID_CATEGORIES)
+            msg = f"Invalid category '{self.category}' for state '{self.name}': must be one of {allowed}"
+            raise ValueError(msg)
 
 
 @dataclass(frozen=True)
@@ -66,6 +71,9 @@ class TransitionDefinition:
     requires_fields: tuple[str, ...] = ()
 
 
+_VALID_FIELD_TYPES: frozenset[str] = frozenset({"text", "enum", "number", "date", "list", "boolean"})
+
+
 @dataclass(frozen=True)
 class FieldSchema:
     """Schema for a custom field on an issue type."""
@@ -76,6 +84,12 @@ class FieldSchema:
     options: tuple[str, ...] = ()
     default: Any = None
     required_at: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        if self.type not in _VALID_FIELD_TYPES:
+            allowed = sorted(_VALID_FIELD_TYPES)
+            msg = f"Invalid field type '{self.type}' for field '{self.name}': must be one of {allowed}"
+            raise ValueError(msg)
 
 
 @dataclass(frozen=True)
@@ -195,7 +209,7 @@ class TemplateRegistry:
     def __init__(self) -> None:
         self._types: dict[str, TypeTemplate] = {}
         self._packs: dict[str, WorkflowPack] = {}
-        self._category_cache: dict[tuple[str, str], StateCategory] = {}
+        self._category_cache: dict[str, dict[str, StateCategory]] = {}
         self._transition_cache: dict[str, dict[tuple[str, str], TransitionDefinition]] = {}
         self._loaded = False
 
@@ -231,9 +245,32 @@ class TemplateRegistry:
                 msg = f"Type '{type_name}': state at index {i} must be a dict with 'name' and 'category'"
                 raise ValueError(msg)
 
+        # Defensive shape checks for transitions and fields_schema
+        raw_transitions = raw.get("transitions", [])
+        if raw_transitions is not None and not isinstance(raw_transitions, list):
+            msg = f"Type '{type_name}': 'transitions' must be a list, got {type(raw_transitions).__name__}"
+            raise ValueError(msg)
+        if raw_transitions is None:
+            raw_transitions = []
+        for i, t in enumerate(raw_transitions):
+            if not isinstance(t, dict):
+                msg = f"Type '{type_name}': transition at index {i} must be a dict, got {type(t).__name__}"
+                raise ValueError(msg)
+
+        raw_fields = raw.get("fields_schema", [])
+        if raw_fields is not None and not isinstance(raw_fields, list):
+            msg = f"Type '{type_name}': 'fields_schema' must be a list, got {type(raw_fields).__name__}"
+            raise ValueError(msg)
+        if raw_fields is None:
+            raw_fields = []
+        for i, f in enumerate(raw_fields):
+            if not isinstance(f, dict):
+                msg = f"Type '{type_name}': field at index {i} must be a dict, got {type(f).__name__}"
+                raise ValueError(msg)
+
         # Enforcement validation
         valid_enforcement = {"hard", "soft", "none"}
-        for t in raw.get("transitions", []):
+        for t in raw_transitions:
             enforcement_val = t.get("enforcement")
             if enforcement_val not in valid_enforcement:
                 allowed = ", ".join(sorted(valid_enforcement))
@@ -249,18 +286,26 @@ class TemplateRegistry:
         if len(raw_states) > TemplateRegistry.MAX_STATES:
             msg = f"Type '{type_name}' has {len(raw_states)} states (max {TemplateRegistry.MAX_STATES})"
             raise ValueError(msg)
-        if len(raw.get("transitions", [])) > TemplateRegistry.MAX_TRANSITIONS:
-            n = len(raw["transitions"])
-            msg = f"Type '{type_name}' has {n} transitions (max {TemplateRegistry.MAX_TRANSITIONS})"
+        if len(raw_transitions) > TemplateRegistry.MAX_TRANSITIONS:
+            msg = f"Type '{type_name}' has {len(raw_transitions)} transitions (max {TemplateRegistry.MAX_TRANSITIONS})"
             raise ValueError(msg)
-        if len(raw.get("fields_schema", [])) > TemplateRegistry.MAX_FIELDS:
-            msg = f"Type '{type_name}' has {len(raw['fields_schema'])} fields (max {TemplateRegistry.MAX_FIELDS})"
+        if len(raw_fields) > TemplateRegistry.MAX_FIELDS:
+            msg = f"Type '{type_name}' has {len(raw_fields)} fields (max {TemplateRegistry.MAX_FIELDS})"
             raise ValueError(msg)
 
         logger.debug("Parsing template for type: %s", type_name)
 
-        # StateDefinition.__post_init__ validates each state name format
+        # StateDefinition.__post_init__ validates each state name format + category
         states = tuple(StateDefinition(name=s["name"], category=s["category"]) for s in raw_states)
+
+        # Detect duplicate state names (filigree-eff214)
+        seen_names: set[str] = set()
+        for s in states:
+            if s.name in seen_names:
+                msg = f"Type '{type_name}': duplicate state name '{s.name}'"
+                raise ValueError(msg)
+            seen_names.add(s.name)
+
         transitions = tuple(
             TransitionDefinition(
                 from_state=t["from"],
@@ -268,7 +313,7 @@ class TemplateRegistry:
                 enforcement=t["enforcement"],
                 requires_fields=tuple(t.get("requires_fields", [])),
             )
-            for t in raw.get("transitions", [])
+            for t in raw_transitions
         )
         fields_schema = tuple(
             FieldSchema(
@@ -279,7 +324,7 @@ class TemplateRegistry:
                 default=f.get("default"),
                 required_at=tuple(f.get("required_at", [])),
             )
-            for f in raw.get("fields_schema", [])
+            for f in raw_fields
         )
         return TypeTemplate(
             type=type_name,
@@ -303,6 +348,14 @@ class TemplateRegistry:
         """
         errors: list[str] = []
         state_names = {s.name for s in tpl.states}
+
+        # Detect duplicate state names (filigree-eff214)
+        if len(state_names) != len(tpl.states):
+            seen: set[str] = set()
+            for st in tpl.states:
+                if st.name in seen:
+                    errors.append(f"duplicate state name '{st.name}'")
+                seen.add(st.name)
 
         if tpl.initial_state not in state_names:
             errors.append(f"initial_state '{tpl.initial_state}' is not in states list")
@@ -362,6 +415,16 @@ class TemplateRegistry:
                 cat = next(st.category for st in tpl.states if st.name == s)
                 warnings.append(f"state '{s}' (category={cat}) has no outgoing transitions (dead end)")
 
+        # Done-states with outgoing transitions: close_issue() treats these as
+        # "already closed", so the outgoing transitions are only reachable via
+        # update_issue(). Flag for design review.
+        for s in sorted(done_states & from_states):
+            targets = [t.to_state for t in tpl.transitions if t.from_state == s]
+            warnings.append(
+                f"done-category state '{s}' has outgoing transitions to {targets} — "
+                f"close_issue() will reject issues in this state as 'already closed'"
+            )
+
         return warnings
 
     # -- Registration (internal) --------------------------------------------
@@ -371,9 +434,8 @@ class TemplateRegistry:
         logger.debug("Registering type: %s (pack=%s, %d states)", tpl.type, tpl.pack, len(tpl.states))
         self._types[tpl.type] = tpl
 
-        # Build category cache -- O(1) lookup (WFT-SR-002)
-        for state in tpl.states:
-            self._category_cache[(tpl.type, state.name)] = state.category
+        # Build category cache -- O(1) lookup, atomic replacement (WFT-SR-002)
+        self._category_cache[tpl.type] = {state.name: state.category for state in tpl.states}
 
         # Build transition cache -- O(1) lookup (WFT-SR-003)
         self._transition_cache[tpl.type] = {(t.from_state, t.to_state): t for t in tpl.transitions}
@@ -411,7 +473,10 @@ class TemplateRegistry:
 
     def get_category(self, type_name: str, state: str) -> StateCategory | None:
         """Map a (type, state) pair to its category via O(1) cache (WFT-SR-002)."""
-        return self._category_cache.get((type_name, state))
+        type_cache = self._category_cache.get(type_name)
+        if type_cache is None:
+            return None
+        return type_cache.get(state)
 
     def get_valid_states(self, type_name: str) -> list[str] | None:
         """Return list of valid state names for a type, or None if type unknown."""
@@ -538,7 +603,7 @@ class TemplateRegistry:
             missing_state = self.validate_fields_for_state(type_name, t.to_state, fields)
             all_missing = list(dict.fromkeys(missing_trans + missing_state))
 
-            target_category = self._category_cache.get((type_name, t.to_state), "open")
+            target_category = self._category_cache.get(type_name, {}).get(t.to_state, "open")
             # ready = True when all required fields are populated
             ready = len(all_missing) == 0
 
@@ -603,18 +668,29 @@ class TemplateRegistry:
 
         from filigree.templates_data import BUILT_IN_PACKS
 
+        _default_packs = ["core", "planning"]
         if enabled_packs is None:
             # Read enabled packs from config
             config_path = filigree_dir / "config.json"
-            enabled_packs = ["core", "planning"]  # default
+            enabled_packs = _default_packs
             if config_path.exists():
                 try:
                     config = _json.loads(config_path.read_text())
-                    enabled_packs = config.get("enabled_packs", ["core", "planning"])
+                    if not isinstance(config, dict):
+                        raise ValueError("config.json must contain a JSON object")
+                    enabled_packs = config.get("enabled_packs", _default_packs)
                 except (ValueError, KeyError):
                     logger.warning("Could not read config.json — using default enabled_packs")
+
+        # Validate enabled_packs is list[str] — strings would be split into chars
+        if isinstance(enabled_packs, str):
+            logger.warning("enabled_packs is a string ('%s'), wrapping in list", enabled_packs)
+            enabled_packs = [enabled_packs]
+        elif not isinstance(enabled_packs, list):
+            logger.warning("enabled_packs has invalid type %s — using defaults", type(enabled_packs).__name__)
+            enabled_packs = _default_packs
         else:
-            enabled_packs = list(enabled_packs)
+            enabled_packs = [p for p in enabled_packs if isinstance(p, str)]
 
         logger.info("Loading templates: enabled_packs=%s", enabled_packs)
 
@@ -651,6 +727,9 @@ class TemplateRegistry:
                     if errors:
                         logger.warning("Skipping invalid template %s: %s", tpl_file.name, errors)
                         continue
+                    quality_warnings = self.check_type_template_quality(tpl)
+                    for qw in quality_warnings:
+                        logger.warning("Quality: %s (local override): %s", tpl.type, qw)
                     self._register_type(tpl)  # Overwrites built-in with same name
                     logger.info("Loaded project-local template override: %s", tpl.type)
                 except (ValueError, KeyError, TypeError, AttributeError) as exc:
@@ -676,6 +755,9 @@ class TemplateRegistry:
                 if errors:
                     logger.warning("Skipping invalid type %s in pack %s: %s", type_name, pack_name, errors)
                     continue
+                quality_warnings = self.check_type_template_quality(tpl)
+                for qw in quality_warnings:
+                    logger.warning("Quality: %s/%s: %s", pack_name, type_name, qw)
                 self._register_type(tpl)
                 types_dict[type_name] = tpl
             except (ValueError, KeyError, TypeError, AttributeError) as exc:

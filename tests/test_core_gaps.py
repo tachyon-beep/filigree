@@ -468,13 +468,65 @@ class TestCreatePlan:
         with pytest.raises(ValueError, match="Milestone 'title' is required"):
             db.create_plan({"title": "   "}, [{"title": "Phase 1"}])
 
+    def test_plan_rejects_negative_dep_index(self, db: FiligreeDB) -> None:
+        """Negative indices silently resolve to wrong step via Python list[-1]."""
+        with pytest.raises((ValueError, IndexError)):
+            db.create_plan(
+                {"title": "MS"},
+                [{"title": "Phase", "steps": [{"title": "S1", "deps": [-1]}]}],
+            )
+
+    def test_plan_rejects_self_dependency(self, db: FiligreeDB) -> None:
+        """Step referencing itself as a dep should raise, not silently insert."""
+        with pytest.raises(ValueError, match="self-dependency"):
+            db.create_plan(
+                {"title": "MS"},
+                [{"title": "Phase", "steps": [{"title": "S1", "deps": [0]}]}],
+            )
+
+    def test_plan_rejects_cycle(self, db: FiligreeDB) -> None:
+        """Mutual deps between steps should raise, not silently insert."""
+        with pytest.raises(ValueError, match="cycle"):
+            db.create_plan(
+                {"title": "MS"},
+                [
+                    {
+                        "title": "Phase",
+                        "steps": [
+                            {"title": "S1", "deps": [1]},
+                            {"title": "S2", "deps": [0]},
+                        ],
+                    },
+                ],
+            )
+
+    def test_plan_records_dependency_events(self, db: FiligreeDB) -> None:
+        """Dependencies created in a plan should have events, like add_dependency()."""
+        plan = db.create_plan(
+            {"title": "MS"},
+            [
+                {
+                    "title": "Phase",
+                    "steps": [
+                        {"title": "S1"},
+                        {"title": "S2", "deps": [0]},
+                    ],
+                },
+            ],
+        )
+        step_2_id = plan["phases"][0]["steps"][1]["id"]
+        events = db.get_issue_events(step_2_id)
+        dep_events = [e for e in events if e["event_type"] == "dependency_added"]
+        assert len(dep_events) == 1
+
 
 class TestBatchOperations:
     def test_batch_close(self, db: FiligreeDB) -> None:
         a = db.create_issue("A")
         b = db.create_issue("B")
-        results = db.batch_close([a.id, b.id], reason="done")
+        results, errors = db.batch_close([a.id, b.id], reason="done")
         assert len(results) == 2
+        assert len(errors) == 0
         assert all(r.status == "closed" for r in results)
 
     def test_batch_update_status(self, db: FiligreeDB) -> None:
@@ -500,8 +552,10 @@ class TestBatchOperations:
         assert errors[0]["id"] == "nonexistent-xyz"
 
     def test_batch_close_not_found(self, db: FiligreeDB) -> None:
-        with pytest.raises(KeyError):
-            db.batch_close(["nonexistent-xyz"])
+        results, errors = db.batch_close(["nonexistent-xyz"])
+        assert len(results) == 0
+        assert len(errors) == 1
+        assert errors[0]["id"] == "nonexistent-xyz"
 
 
 class TestClaimIssue:
@@ -543,6 +597,62 @@ class TestClaimIssue:
         assert claim_event["issue_id"] == issue.id
         assert claim_event["new_value"] == "agent-1"
         assert claim_event["actor"] == "agent-1"
+
+
+class TestClaimEmptyAssignee:
+    """Bug filigree-040ddb: claim_issue/claim_next must reject empty assignee."""
+
+    def test_claim_issue_empty_string_raises(self, db: FiligreeDB) -> None:
+        issue = db.create_issue("Claimable")
+        with pytest.raises(ValueError, match="Assignee cannot be empty"):
+            db.claim_issue(issue.id, assignee="")
+
+    def test_claim_issue_whitespace_only_raises(self, db: FiligreeDB) -> None:
+        issue = db.create_issue("Claimable")
+        with pytest.raises(ValueError, match="Assignee cannot be empty"):
+            db.claim_issue(issue.id, assignee="   ")
+
+    def test_claim_next_empty_string_raises(self, db: FiligreeDB) -> None:
+        db.create_issue("Ready")
+        with pytest.raises(ValueError, match="Assignee cannot be empty"):
+            db.claim_next("")
+
+    def test_claim_next_whitespace_only_raises(self, db: FiligreeDB) -> None:
+        db.create_issue("Ready")
+        with pytest.raises(ValueError, match="Assignee cannot be empty"):
+            db.claim_next("   ")
+
+
+class TestBatchInputValidation:
+    """Bug filigree-c45430: batch_close/batch_update must validate issue_ids type."""
+
+    def test_batch_close_string_raises(self, db: FiligreeDB) -> None:
+        with pytest.raises(TypeError, match="issue_ids must be a list of strings"):
+            db.batch_close("not-a-list")  # type: ignore[arg-type]
+
+    def test_batch_close_list_of_ints_raises(self, db: FiligreeDB) -> None:
+        with pytest.raises(TypeError, match="issue_ids must be a list of strings"):
+            db.batch_close([1, 2, 3])  # type: ignore[list-item]
+
+    def test_batch_update_string_raises(self, db: FiligreeDB) -> None:
+        with pytest.raises(TypeError, match="issue_ids must be a list of strings"):
+            db.batch_update("not-a-list", status="closed")  # type: ignore[arg-type]
+
+    def test_batch_update_list_of_ints_raises(self, db: FiligreeDB) -> None:
+        with pytest.raises(TypeError, match="issue_ids must be a list of strings"):
+            db.batch_update([1, 2, 3], status="closed")  # type: ignore[list-item]
+
+    def test_batch_close_valid_list_passes(self, db: FiligreeDB) -> None:
+        issue = db.create_issue("Closeable")
+        closed, errors = db.batch_close([issue.id])
+        assert len(closed) == 1
+        assert len(errors) == 0
+
+    def test_batch_update_valid_list_passes(self, db: FiligreeDB) -> None:
+        issue = db.create_issue("Updateable")
+        updated, errors = db.batch_update([issue.id], priority=0)
+        assert len(updated) == 1
+        assert len(errors) == 0
 
 
 class TestGetEventsSince:

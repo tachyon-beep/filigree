@@ -7,11 +7,14 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import threading
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any
 
 _LOG_FILENAME = "filigree.log"
+_setup_lock = threading.Lock()
 _MAX_BYTES = 5 * 1024 * 1024  # 5MB
 _BACKUP_COUNT = 3
 
@@ -45,21 +48,20 @@ def setup_logging(filigree_dir: Path) -> logging.Logger:
     """
     logger = logging.getLogger("filigree")
     log_path = filigree_dir / _LOG_FILENAME
-    if logger.handlers:
-        # Check if we already have a handler pointing to the desired log path.
-        # If a handler for a different path is requested, add it rather than
-        # silently ignoring the new filigree_dir.
-        for h in logger.handlers:
-            if isinstance(h, RotatingFileHandler) and h.baseFilename == str(log_path.resolve()):
-                return logger
-        # No handler for this path yet — fall through to add one
+    target_filename = os.path.abspath(str(log_path))
 
-    handler = RotatingFileHandler(
-        str(log_path),
-        maxBytes=_MAX_BYTES,
-        backupCount=_BACKUP_COUNT,
-    )
-    handler.setFormatter(_JsonFormatter())
-    logger.addHandler(handler)
-    logger.setLevel(logging.INFO)
+    with _setup_lock:
+        # Check if we already have a handler pointing to the desired log path.
+        for h in logger.handlers:
+            if isinstance(h, RotatingFileHandler) and h.baseFilename == target_filename:
+                return logger
+
+        handler = RotatingFileHandler(
+            str(log_path),
+            maxBytes=_MAX_BYTES,
+            backupCount=_BACKUP_COUNT,
+        )
+        handler.setFormatter(_JsonFormatter())
+        logger.addHandler(handler)
+        logger.setLevel(logging.INFO)
     return logger

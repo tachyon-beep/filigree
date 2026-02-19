@@ -66,9 +66,13 @@ def _get_db() -> FiligreeDB:
 
 
 def _refresh_summary() -> None:
-    """Regenerate context.md after mutations."""
+    """Regenerate context.md after mutations (best-effort, never fatal)."""
     if _filigree_dir is not None:
-        write_summary(_get_db(), _filigree_dir / SUMMARY_FILENAME)
+        try:
+            write_summary(_get_db(), _filigree_dir / SUMMARY_FILENAME)
+        except Exception:
+            if _logger:
+                _logger.warning("Failed to refresh context.md", exc_info=True)
 
 
 def _safe_path(raw: str) -> Path:
@@ -359,6 +363,7 @@ async def list_tools() -> list[Tool]:
                     "id": {"type": "string", "description": "Issue ID"},
                     "reason": {"type": "string", "description": "Close reason"},
                     "actor": {"type": "string", "description": "Agent/user identity for audit trail"},
+                    "fields": {"type": "object", "description": "Custom fields to set (e.g. root_cause for incidents)"},
                 },
                 "required": ["id"],
             },
@@ -877,6 +882,12 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
         if _logger:
             _logger.info("tool_call", extra={"tool": name, "args_data": arguments, "duration_ms": duration_ms})
         return result
+    finally:
+        # Safety net: roll back any uncommitted transaction left by a failed
+        # mutation.  Successful mutations commit explicitly; only partial
+        # failures leave dirty state that would be flushed by the next commit.
+        if tracker.conn.in_transaction:
+            tracker.conn.rollback()
 
 
 async def _dispatch(name: str, arguments: dict[str, Any], tracker: FiligreeDB) -> list[TextContent]:
@@ -917,27 +928,11 @@ async def _dispatch(name: str, arguments: dict[str, Any], tracker: FiligreeDB) -
             offset = arguments.get("offset", 0)
 
             if no_limit:
-                # Bypass cap — return everything the caller asked for
-                issues = tracker.list_issues(
-                    status=status_filter,
-                    type=arguments.get("type"),
-                    priority=arguments.get("priority"),
-                    parent_id=arguments.get("parent_id"),
-                    assignee=arguments.get("assignee"),
-                    label=arguments.get("label"),
-                    limit=requested_limit,
-                    offset=offset,
-                )
-                return _text(
-                    {
-                        "issues": [i.to_dict() for i in issues],
-                        "limit": requested_limit,
-                        "offset": offset,
-                        "has_more": False,
-                    }
-                )
+                # Bypass cap; use caller's limit if explicit, otherwise fetch all
+                effective_limit = requested_limit if "limit" in arguments else 10_000_000
+            else:
+                effective_limit = min(requested_limit, _MAX_LIST_RESULTS)
 
-            effective_limit = min(requested_limit, _MAX_LIST_RESULTS)
             # Overfetch by 1 to detect whether more results exist
             issues = tracker.list_issues(
                 status=status_filter,
@@ -1038,6 +1033,7 @@ async def _dispatch(name: str, arguments: dict[str, Any], tracker: FiligreeDB) -
                     arguments["id"],
                     reason=arguments.get("reason", ""),
                     actor=arguments.get("actor", "mcp"),
+                    fields=arguments.get("fields"),
                 )
                 _refresh_summary()
                 ready_after = tracker.get_ready()
@@ -1154,21 +1150,10 @@ async def _dispatch(name: str, arguments: dict[str, Any], tracker: FiligreeDB) -
                 return {"id": i.id, "title": i.title, "status": i.status, "priority": i.priority, "type": i.type}
 
             if no_limit:
-                issues = tracker.search_issues(
-                    arguments["query"],
-                    limit=requested_limit,
-                    offset=offset,
-                )
-                return _text(
-                    {
-                        "issues": [_slim(i) for i in issues],
-                        "limit": requested_limit,
-                        "offset": offset,
-                        "has_more": False,
-                    }
-                )
+                effective_limit = requested_limit if "limit" in arguments else 10_000_000
+            else:
+                effective_limit = min(requested_limit, _MAX_LIST_RESULTS)
 
-            effective_limit = min(requested_limit, _MAX_LIST_RESULTS)
             issues = tracker.search_issues(
                 arguments["query"],
                 limit=effective_limit + 1,
@@ -1252,11 +1237,14 @@ async def _dispatch(name: str, arguments: dict[str, Any], tracker: FiligreeDB) -
                 return _text({"error": str(e), "code": "invalid"})
 
         case "batch_close":
+            ids = arguments["ids"]
+            if not all(isinstance(i, str) for i in ids):
+                return _text({"error": "All issue IDs must be strings", "code": "validation_error"})
             ready_before = {i.id for i in tracker.get_ready()}
             succeeded: list[str] = []
             failed: list[dict[str, Any]] = []
             warnings: list[str] = []
-            for issue_id in arguments["ids"]:
+            for issue_id in ids:
                 try:
                     issue = tracker.close_issue(
                         issue_id,
@@ -1290,17 +1278,23 @@ async def _dispatch(name: str, arguments: dict[str, Any], tracker: FiligreeDB) -
             return _text(batch_result)
 
         case "batch_update":
+            u_ids = arguments["ids"]
+            if not all(isinstance(i, str) for i in u_ids):
+                return _text({"error": "All issue IDs must be strings", "code": "validation_error"})
+            u_fields = arguments.get("fields")
+            if u_fields is not None and not isinstance(u_fields, dict):
+                return _text({"error": "fields must be a JSON object", "code": "validation_error"})
             update_succeeded: list[str] = []
             update_failed: list[dict[str, Any]] = []
             update_warnings: list[str] = []
-            for issue_id in arguments["ids"]:
+            for issue_id in u_ids:
                 try:
                     issue = tracker.update_issue(
                         issue_id,
                         status=arguments.get("status"),
                         priority=arguments.get("priority"),
                         assignee=arguments.get("assignee"),
-                        fields=arguments.get("fields"),
+                        fields=u_fields,
                         actor=arguments.get("actor", "mcp"),
                     )
                     update_succeeded.append(issue.id)
@@ -1357,17 +1351,20 @@ async def _dispatch(name: str, arguments: dict[str, Any], tracker: FiligreeDB) -
                 return _text({"status": "ok", "records": count, "path": str(safe)})
             except ValueError as e:
                 return _text({"error": str(e), "code": "invalid_path"})
+            except OSError as e:
+                return _text({"error": str(e), "code": "io_error"})
 
         case "import_jsonl":
             try:
                 safe = _safe_path(arguments["input_path"])
+            except ValueError as e:
+                return _text({"error": str(e), "code": "invalid_path"})
+            try:
                 count = tracker.import_jsonl(safe, merge=arguments.get("merge", False))
                 _refresh_summary()
                 return _text({"status": "ok", "records": count, "path": str(safe)})
-            except ValueError as e:
-                return _text({"error": str(e), "code": "invalid_path"})
             except Exception as e:
-                return _text({"error": str(e), "code": "invalid"})
+                return _text({"error": str(e), "code": "import_error"})
 
         case "archive_closed":
             archived = tracker.archive_closed(

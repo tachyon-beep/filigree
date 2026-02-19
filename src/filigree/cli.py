@@ -25,6 +25,7 @@ Usage:
 from __future__ import annotations
 
 import json as json_mod
+import sqlite3
 import sys
 from pathlib import Path
 from typing import Any
@@ -1005,7 +1006,7 @@ def import_data(input_file: str, merge: bool) -> None:
     with _get_db() as db:
         try:
             count = db.import_jsonl(input_file, merge=merge)
-        except (json_mod.JSONDecodeError, KeyError, ValueError) as e:
+        except (json_mod.JSONDecodeError, KeyError, ValueError, sqlite3.IntegrityError) as e:
             click.echo(f"Import failed: {e}", err=True)
             sys.exit(1)
         _refresh_summary(db)
@@ -1399,7 +1400,11 @@ def create_plan(ctx: click.Context, file_path: str | None, as_json: bool) -> Non
     Reads JSON from --file or stdin. Structure:
     {"milestone": {"title": "..."}, "phases": [{"title": "...", "steps": [...]}]}
     """
-    raw = Path(file_path).read_text() if file_path else click.get_text_stream("stdin").read()
+    try:
+        raw = Path(file_path).read_text() if file_path else click.get_text_stream("stdin").read()
+    except (OSError, UnicodeDecodeError) as e:
+        click.echo(f"Error reading file: {e}", err=True)
+        sys.exit(1)
 
     try:
         data = json_mod.loads(raw)
@@ -1407,12 +1412,36 @@ def create_plan(ctx: click.Context, file_path: str | None, as_json: bool) -> Non
         click.echo(f"Invalid JSON: {e}", err=True)
         sys.exit(1)
 
+    if not isinstance(data, dict):
+        click.echo("JSON must be an object, not a list or scalar", err=True)
+        sys.exit(1)
+
     if "milestone" not in data or "phases" not in data:
         click.echo("JSON must contain 'milestone' and 'phases' keys", err=True)
         sys.exit(1)
 
+    if not isinstance(data["milestone"], dict):
+        click.echo("'milestone' must be an object with at least a 'title' key", err=True)
+        sys.exit(1)
+
+    if not isinstance(data["phases"], list):
+        click.echo("'phases' must be a list of phase objects", err=True)
+        sys.exit(1)
+
+    for i, phase in enumerate(data["phases"]):
+        if not isinstance(phase, dict):
+            click.echo(f"Phase {i + 1} must be an object, got {type(phase).__name__}", err=True)
+            sys.exit(1)
+
     with _get_db() as db:
-        result = db.create_plan(data["milestone"], data["phases"], actor=ctx.obj["actor"])
+        try:
+            result = db.create_plan(data["milestone"], data["phases"], actor=ctx.obj["actor"])
+        except (ValueError, IndexError, TypeError, AttributeError) as e:
+            if as_json:
+                click.echo(json_mod.dumps({"error": str(e)}))
+            else:
+                click.echo(f"Error: {e}", err=True)
+            sys.exit(1)
 
         if as_json:
             click.echo(json_mod.dumps(result, indent=2, default=str))
@@ -1449,7 +1478,10 @@ def batch_update(
         fields = {}
         for f in field:
             if "=" not in f:
-                click.echo(f"Invalid field format: {f}", err=True)
+                if as_json:
+                    click.echo(json_mod.dumps({"error": f"Invalid field format: {f} (expected key=value)"}))
+                else:
+                    click.echo(f"Invalid field format: {f}", err=True)
                 sys.exit(1)
             k, v = f.split("=", 1)
             fields[k] = v
@@ -1490,17 +1522,12 @@ def batch_update(
 @click.pass_context
 def batch_close(ctx: click.Context, issue_ids: tuple[str, ...], reason: str, as_json: bool) -> None:
     """Close multiple issues with per-item error reporting."""
-    closed = []
-    errors = []
     with _get_db() as db:
-        for issue_id in issue_ids:
-            try:
-                issue = db.close_issue(issue_id, reason=reason, actor=ctx.obj["actor"])
-                closed.append(issue)
-            except KeyError:
-                errors.append({"id": issue_id, "error": f"Not found: {issue_id}"})
-            except ValueError as e:
-                errors.append({"id": issue_id, "error": str(e)})
+        closed, errors = db.batch_close(
+            list(issue_ids),
+            reason=reason,
+            actor=ctx.obj["actor"],
+        )
 
         if as_json:
             click.echo(

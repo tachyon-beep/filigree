@@ -411,6 +411,29 @@ class TestRebuildTable:
         assert val == 4
         conn.close()
 
+    def test_rebuild_fk_referenced_table(self, tmp_path: Path) -> None:
+        """rebuild_table must work on tables referenced by FK from other tables."""
+        conn = _make_db(tmp_path)
+        conn.execute("CREATE TABLE parent (id TEXT PRIMARY KEY, name TEXT)")
+        conn.execute("CREATE TABLE child (id TEXT PRIMARY KEY, parent_id TEXT REFERENCES parent(id))")
+        conn.execute("INSERT INTO parent VALUES ('p1', 'Parent 1')")
+        conn.execute("INSERT INTO child VALUES ('c1', 'p1')")
+        conn.commit()
+
+        # Rebuild parent — this should not fail even though child references it
+        rebuild_table(
+            conn,
+            "parent",
+            "CREATE TABLE parent (id TEXT PRIMARY KEY, name TEXT, extra TEXT DEFAULT '')",
+        )
+        conn.commit()
+
+        row = conn.execute("SELECT name FROM parent WHERE id = 'p1'").fetchone()
+        assert row[0] == "Parent 1"
+        cols = _get_table_columns(conn, "parent")
+        assert "extra" in cols
+        conn.close()
+
     def test_cleans_up_leftover_temp_table(self, tmp_path: Path) -> None:
         """If a previous migration failed mid-rebuild, temp table is cleaned up."""
         conn = _make_db(tmp_path)
@@ -424,6 +447,21 @@ class TestRebuildTable:
         tables = _get_table_names(conn)
         assert "_filigree_migrate_t" not in tables
         assert "t" in tables
+        conn.close()
+
+    def test_lowercase_create_table(self, tmp_path: Path) -> None:
+        """rebuild_table must handle lowercase SQL keywords."""
+        conn = _make_db(tmp_path)
+        conn.execute("create table t (id INTEGER PRIMARY KEY, name TEXT)")
+        conn.execute("INSERT INTO t VALUES (1, 'Alice')")
+        conn.commit()
+
+        rebuild_table(conn, "t", "create table t (id INTEGER PRIMARY KEY, name TEXT, age INTEGER DEFAULT 0)")
+        conn.commit()
+
+        rows = conn.execute("SELECT * FROM t ORDER BY id").fetchall()
+        assert len(rows) == 1
+        assert rows[0][1] == "Alice"
         conn.close()
 
 
@@ -485,6 +523,116 @@ class TestMigrationAtomicity:
             migrations.MIGRATIONS.clear()
             migrations.MIGRATIONS.update(original)
             conn.close()
+
+    def test_rebuild_fk_table_failure_version_not_bumped(self, tmp_path: Path) -> None:
+        """Migration that rebuilds FK-referenced table then fails must not bump version.
+
+        SQLite limitation: rebuilding FK-referenced tables requires committing
+        mid-migration (PRAGMA foreign_keys=OFF only works outside transactions).
+        This means the rebuild itself cannot be rolled back.  However, the
+        migration runner must still NOT bump user_version, so the migration
+        will be retried on next startup.
+
+        Also verifies that rebuild_table re-enters a transaction with
+        BEGIN IMMEDIATE after the FK rebuild, so post-rebuild work IS
+        rolled back correctly.
+        """
+        conn = _make_db(tmp_path)
+        conn.execute("CREATE TABLE parent (id TEXT PRIMARY KEY, name TEXT)")
+        conn.execute("CREATE TABLE child (id TEXT PRIMARY KEY, pid TEXT REFERENCES parent(id))")
+        conn.execute("INSERT INTO parent VALUES ('p1', 'Alice')")
+        conn.execute("INSERT INTO child VALUES ('c1', 'p1')")
+        conn.execute("PRAGMA user_version = 1")
+        conn.commit()
+
+        from filigree import migrations
+
+        original = migrations.MIGRATIONS.copy()
+
+        def bad_fk_rebuild_migration(c: sqlite3.Connection) -> None:
+            """Rebuild FK-referenced table then raise."""
+            rebuild_table(
+                c,
+                "parent",
+                "CREATE TABLE parent (id TEXT PRIMARY KEY, name TEXT, extra TEXT DEFAULT '')",
+            )
+            # Post-rebuild DML that should be rolled back
+            c.execute("INSERT INTO parent VALUES ('p2', 'Bob', '')")
+            raise RuntimeError("Intentional post-rebuild failure")
+
+        migrations.MIGRATIONS[1] = bad_fk_rebuild_migration
+        try:
+            with pytest.raises(MigrationError, match="Intentional post-rebuild failure"):
+                apply_pending_migrations(conn, 2)
+
+            # Version must NOT have been bumped
+            assert _get_schema_version(conn) == 1
+
+            # Rebuild itself was committed (inherent SQLite limitation),
+            # so the new schema is visible
+            tables = _get_table_names(conn)
+            assert "parent" in tables
+
+            # Post-rebuild INSERT was rolled back correctly
+            count = conn.execute("SELECT COUNT(*) FROM parent").fetchone()[0]
+            assert count == 1, "post-rebuild DML should have been rolled back"
+            row = conn.execute("SELECT name FROM parent WHERE id = 'p1'").fetchone()
+            assert row[0] == "Alice"
+
+            # Child table and FK data intact
+            assert "child" in tables
+            row = conn.execute("SELECT pid FROM child WHERE id = 'c1'").fetchone()
+            assert row[0] == "p1"
+
+            # FK enforcement still works
+            with pytest.raises(sqlite3.IntegrityError):
+                conn.execute("INSERT INTO child VALUES ('c2', 'nonexistent')")
+        finally:
+            migrations.MIGRATIONS.clear()
+            migrations.MIGRATIONS.update(original)
+            conn.close()
+
+    def test_rebuild_fk_table_validates_fk_check(self, tmp_path: Path) -> None:
+        """rebuild_table must raise on FK violations after rebuilding."""
+        conn = _make_db(tmp_path)
+        conn.execute("CREATE TABLE parent (id TEXT PRIMARY KEY, name TEXT)")
+        conn.execute("CREATE TABLE child (id TEXT PRIMARY KEY, pid TEXT REFERENCES parent(id))")
+        conn.execute("INSERT INTO parent VALUES ('p1', 'Alice')")
+        conn.execute("INSERT INTO child VALUES ('c1', 'p1')")
+        conn.commit()
+
+        # Rebuild parent with column_mapping that changes the PK value,
+        # breaking the FK from child
+        with pytest.raises(sqlite3.IntegrityError, match="Foreign key violations"):
+            rebuild_table(
+                conn,
+                "parent",
+                "CREATE TABLE parent (id TEXT PRIMARY KEY, name TEXT)",
+                column_mapping={"id": "'CHANGED'", "name": "name"},
+            )
+
+    def test_template_new_table_uses_execute_not_executescript(self, tmp_path: Path) -> None:
+        """_template_new_table_migration must use execute(), not executescript().
+
+        executescript() implicitly commits, breaking transaction rollback.
+        """
+        from filigree.migrations import _template_new_table_migration
+
+        conn = _make_db(tmp_path)
+        # Create the issues table that the template references
+        conn.execute("CREATE TABLE issues (id TEXT PRIMARY KEY)")
+        conn.execute("PRAGMA user_version = 3")
+        conn.commit()
+
+        # Run inside a transaction and then rollback
+        conn.execute("BEGIN IMMEDIATE")
+        _template_new_table_migration(conn)
+        conn.rollback()
+
+        # After rollback, the attachments table should NOT exist
+        tables = _get_table_names(conn)
+        assert "attachments" not in tables
+        conn.close()
 
     def test_begin_immediate_is_used(self, tmp_path: Path) -> None:
         """Verify that BEGIN IMMEDIATE is issued before each migration.

@@ -239,9 +239,10 @@ class TestTemplateRegistry:
         assert registry.get_category("bug", "wont_fix") == "done"
 
     def test_get_category_cache_is_o1(self, registry: TemplateRegistry) -> None:
-        """Category cache should be a dict lookup, not iteration."""
+        """Category cache should be a hierarchical dict lookup, not iteration."""
         assert hasattr(registry, "_category_cache")
-        assert ("bug", "triage") in registry._category_cache
+        assert "bug" in registry._category_cache
+        assert "triage" in registry._category_cache["bug"]
 
     def test_get_category_unknown_state(self, registry: TemplateRegistry) -> None:
         """Unknown state for known type returns None."""
@@ -250,6 +251,43 @@ class TestTemplateRegistry:
     def test_get_category_unknown_type(self, registry: TemplateRegistry) -> None:
         """Unknown type returns None."""
         assert registry.get_category("unknown", "open") is None
+
+    def test_override_type_clears_stale_category_cache(self, registry: TemplateRegistry) -> None:
+        """Overriding a type must remove old state entries from _category_cache."""
+        # Pre-condition: old states exist in cache
+        assert registry.get_category("task", "open") == "open"
+        assert registry.get_category("task", "in_progress") == "wip"
+        assert registry.get_category("task", "closed") == "done"
+
+        # Override "task" with completely different states
+        override = TypeTemplate(
+            type="task",
+            display_name="Custom Task",
+            description="Overridden",
+            pack="core",
+            states=(
+                StateDefinition("todo", "open"),
+                StateDefinition("doing", "wip"),
+                StateDefinition("complete", "done"),
+            ),
+            initial_state="todo",
+            transitions=(
+                TransitionDefinition("todo", "doing", "soft"),
+                TransitionDefinition("doing", "complete", "soft"),
+            ),
+            fields_schema=(),
+        )
+        registry._register_type(override)
+
+        # New states should work
+        assert registry.get_category("task", "todo") == "open"
+        assert registry.get_category("task", "doing") == "wip"
+        assert registry.get_category("task", "complete") == "done"
+
+        # Old states must NOT be in cache — they're no longer valid
+        assert registry.get_category("task", "open") is None
+        assert registry.get_category("task", "in_progress") is None
+        assert registry.get_category("task", "closed") is None
 
     def test_get_valid_states(self, registry: TemplateRegistry) -> None:
         states = registry.get_valid_states("bug")
@@ -880,6 +918,17 @@ class TestBuiltInPackData:
         assert "spike_spawns_work" in names
         assert "spike_spawns_mitigation" in names
 
+    def test_spike_spawns_direction_matches_dependency_contract(self) -> None:
+        """Bug filigree-fa979c: spawned items must be from_types (they depend on the spike)."""
+        cross = BUILT_IN_PACKS["spike"]["cross_pack_relationships"]
+        spawns_work = next(r for r in cross if r["name"] == "spike_spawns_work")
+        spawns_mitigation = next(r for r in cross if r["name"] == "spike_spawns_mitigation")
+        # from_id depends on to_id — spawned items (from) depend on spike (to)
+        assert "spike" in spawns_work["to_types"]
+        assert "spike" not in spawns_work["from_types"]
+        assert "spike" in spawns_mitigation["to_types"]
+        assert "spike" not in spawns_mitigation["from_types"]
+
     # -- Requirements pack structural tests --
 
     def test_requirements_pack_exists(self) -> None:
@@ -1242,3 +1291,158 @@ class TestTemplateLoading:
         reg = TemplateRegistry()
         reg.load(filigree_dir)
         assert reg.get_type("extra_type") is None
+
+    def test_load_non_dict_config_json_uses_defaults(self, tmp_path: Path) -> None:
+        """config.json containing non-dict JSON (e.g. []) must not crash load()."""
+        filigree_dir = tmp_path / ".filigree"
+        filigree_dir.mkdir()
+        # Write a valid JSON array — not a dict
+        (filigree_dir / "config.json").write_text("[]")
+
+        reg = TemplateRegistry()
+        reg.load(filigree_dir)  # Should not raise
+        # Should fall back to defaults (core + planning)
+        assert reg.get_type("task") is not None
+        assert reg.get_type("milestone") is not None
+
+    def test_load_logs_quality_warnings(self, filigree_dir: Path, caplog: pytest.LogCaptureFixture) -> None:
+        """Quality warnings should be logged during load (filigree-e71b54)."""
+        import logging
+
+        # Create a template with a dead-end non-done state (quality warning)
+        templates_dir = filigree_dir / "templates"
+        templates_dir.mkdir()
+        dead_end_type = {
+            "type": "deadend_test",
+            "display_name": "Dead End Test",
+            "description": "Type with a dead-end state for quality test",
+            "pack": "core",
+            "states": [
+                {"name": "open", "category": "open"},
+                {"name": "working", "category": "wip"},
+                {"name": "stuck", "category": "wip"},
+                {"name": "done", "category": "done"},
+            ],
+            "initial_state": "open",
+            "transitions": [
+                {"from": "open", "to": "working", "enforcement": "soft"},
+                {"from": "open", "to": "stuck", "enforcement": "soft"},
+                {"from": "working", "to": "done", "enforcement": "soft"},
+                # stuck has no outgoing transition — dead end
+            ],
+            "fields_schema": [],
+        }
+        (templates_dir / "deadend_test.json").write_text(json.dumps(dead_end_type))
+
+        reg = TemplateRegistry()
+        with caplog.at_level(logging.WARNING, logger="filigree.templates"):
+            reg.load(filigree_dir)
+
+        # Type should still be registered (quality warnings are non-blocking)
+        assert reg.get_type("deadend_test") is not None
+        # But warning should be logged
+        quality_warnings = [r for r in caplog.records if "dead end" in r.message]
+        assert len(quality_warnings) > 0, "Expected dead-end quality warning in logs"
+
+    def test_load_logs_done_state_outgoing_transition_warning(
+        self, filigree_dir: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Done-states with outgoing transitions should produce quality warning."""
+        import logging
+
+        templates_dir = filigree_dir / "templates"
+        templates_dir.mkdir()
+        done_outgoing_type = {
+            "type": "done_outgoing_test",
+            "display_name": "Done Outgoing Test",
+            "description": "Type with a done state that has outgoing transitions",
+            "pack": "core",
+            "states": [
+                {"name": "open", "category": "open"},
+                {"name": "finished", "category": "done"},
+                {"name": "reverted", "category": "done"},
+            ],
+            "initial_state": "open",
+            "transitions": [
+                {"from": "open", "to": "finished", "enforcement": "soft"},
+                {"from": "finished", "to": "reverted", "enforcement": "soft"},
+            ],
+            "fields_schema": [],
+        }
+        (templates_dir / "done_outgoing_test.json").write_text(json.dumps(done_outgoing_type))
+
+        reg = TemplateRegistry()
+        with caplog.at_level(logging.WARNING, logger="filigree.templates"):
+            reg.load(filigree_dir)
+
+        # Type should still be registered
+        assert reg.get_type("done_outgoing_test") is not None
+        # Warning about done state with outgoing transition
+        quality_warnings = [r for r in caplog.records if "finished" in r.message and "done" in r.message.lower()]
+        assert len(quality_warnings) > 0, "Expected done-state-with-outgoing-transition warning"
+
+
+class TestQualityCheckDoneOutgoing:
+    """check_type_template_quality() detects done-states with outgoing transitions."""
+
+    def test_done_state_with_outgoing_transition_warned(self) -> None:
+        """A done-category state that has outgoing transitions produces a warning."""
+        tpl = TypeTemplate(
+            type="test_type",
+            display_name="Test",
+            description="",
+            pack="test",
+            states=(
+                StateDefinition(name="open", category="open"),
+                StateDefinition(name="released", category="done"),
+                StateDefinition(name="rolled_back", category="done"),
+            ),
+            initial_state="open",
+            transitions=(
+                TransitionDefinition(from_state="open", to_state="released", enforcement="soft"),
+                TransitionDefinition(from_state="released", to_state="rolled_back", enforcement="soft"),
+            ),
+            fields_schema=(),
+        )
+        warnings = TemplateRegistry.check_type_template_quality(tpl)
+        done_outgoing = [w for w in warnings if "released" in w and "done" in w.lower()]
+        assert len(done_outgoing) == 1
+
+    def test_done_state_without_outgoing_no_warning(self) -> None:
+        """A terminal done state should NOT produce a warning."""
+        tpl = TypeTemplate(
+            type="test_type",
+            display_name="Test",
+            description="",
+            pack="test",
+            states=(
+                StateDefinition(name="open", category="open"),
+                StateDefinition(name="closed", category="done"),
+            ),
+            initial_state="open",
+            transitions=(TransitionDefinition(from_state="open", to_state="closed", enforcement="soft"),),
+            fields_schema=(),
+        )
+        warnings = TemplateRegistry.check_type_template_quality(tpl)
+        done_outgoing = [w for w in warnings if "done" in w.lower() and "outgoing" in w]
+        assert done_outgoing == []
+
+    def test_builtin_spike_concluded_warned(self) -> None:
+        """spike.concluded (done) has outgoing transition to actioned — should warn."""
+        from filigree.templates_data import BUILT_IN_PACKS
+
+        raw = BUILT_IN_PACKS["spike"]["types"]["spike"]
+        tpl = TemplateRegistry.parse_type_template(raw)
+        warnings = TemplateRegistry.check_type_template_quality(tpl)
+        concluded_warnings = [w for w in warnings if "concluded" in w]
+        assert len(concluded_warnings) == 1
+
+    def test_builtin_release_done_states_warned(self) -> None:
+        """release.released and release.rolled_back (done) have outgoing transitions."""
+        from filigree.templates_data import BUILT_IN_PACKS
+
+        raw = BUILT_IN_PACKS["release"]["types"]["release"]
+        tpl = TemplateRegistry.parse_type_template(raw)
+        warnings = TemplateRegistry.check_type_template_quality(tpl)
+        done_outgoing = [w for w in warnings if "outgoing" in w]
+        assert len(done_outgoing) == 2  # released→rolled_back, rolled_back→development

@@ -14,6 +14,7 @@ import os
 import socket
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 from filigree.core import (
@@ -120,6 +121,9 @@ def ensure_dashboard_running(port: int = 8377) -> str:
     sessions don't race.  Returns a human-readable status message.
     """
     try:
+        import fastapi  # noqa: F401
+        import uvicorn  # noqa: F401
+
         import filigree.dashboard  # noqa: F401
     except ImportError:
         return 'Dashboard requires extra dependencies. Install with: pip install "filigree[dashboard]"'
@@ -132,6 +136,7 @@ def ensure_dashboard_running(port: int = 8377) -> str:
     tmpdir = os.environ.get("TMPDIR", "/tmp")  # noqa: S108
     lockfile = os.path.join(tmpdir, "filigree-dashboard.lock")
     pidfile = os.path.join(tmpdir, "filigree-dashboard.pid")
+    logfile = os.path.join(tmpdir, "filigree-dashboard.log")
 
     lock_fd = None
     try:
@@ -145,19 +150,30 @@ def ensure_dashboard_running(port: int = 8377) -> str:
             return f"Filigree dashboard already running on http://localhost:{port}"
 
         # Start the dashboard in a detached process
-        filigree_bin = sys.executable.replace("python", "filigree")
+        filigree_bin = str(Path(sys.executable).parent / "filigree")
         # Prefer the entry-point on PATH
         import shutil
 
         filigree_cmd = shutil.which("filigree") or filigree_bin
 
-        proc = subprocess.Popen(
-            [filigree_cmd, "dashboard", "--no-browser", "--port", str(port)],
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            start_new_session=True,
-        )
+        # Capture stderr to a log file for diagnostics on failure
+        with open(logfile, "w") as log_fd:
+            proc = subprocess.Popen(
+                [filigree_cmd, "dashboard", "--no-browser", "--port", str(port)],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=log_fd,
+                start_new_session=True,
+            )
+        # log_fd closed here; child process retains its own fd copy
+
+        # Brief check: did the process exit immediately?
+        time.sleep(0.5)
+        exit_code = proc.poll()
+        if exit_code is not None:
+            stderr_output = Path(logfile).read_text().strip()
+            detail = f": {stderr_output}" if stderr_output else ""
+            return f"Dashboard process exited immediately (pid {proc.pid}, code {exit_code}){detail}"
 
         Path(pidfile).write_text(str(proc.pid))
         return f"Started Filigree dashboard (pid {proc.pid}) on http://localhost:{port}"

@@ -92,6 +92,75 @@ class TestGenerateSummary:
         summary = generate_summary(db)
         assert "Stale" not in summary
 
+    def test_parent_lookup_not_n_plus_one(self, db: FiligreeDB) -> None:
+        """Parent titles for in-progress issues must not trigger per-issue get_issue calls."""
+        from unittest.mock import patch
+
+        parent = db.create_issue("Parent epic", type="epic")
+        for i in range(5):
+            child = db.create_issue(f"Child {i}", parent_id=parent.id)
+            db.update_issue(child.id, status="in_progress")
+
+        original_get_issue = db.get_issue
+        get_issue_calls: list[str] = []
+
+        def tracking_get_issue(issue_id: str) -> object:
+            get_issue_calls.append(issue_id)
+            return original_get_issue(issue_id)
+
+        with patch.object(db, "get_issue", side_effect=tracking_get_issue):
+            summary = generate_summary(db)
+
+        assert "Parent epic" in summary
+        # With batch lookup, get_issue should NOT be called for parent lookups.
+        # Before the fix, it was called once per in-progress child with a parent.
+        parent_lookups = [c for c in get_issue_calls if c == parent.id]
+        assert len(parent_lookups) <= 1, f"Expected at most 1 parent lookup, got {len(parent_lookups)}"
+
+    def test_title_with_newlines_stays_single_line(self, db: FiligreeDB) -> None:
+        """Issue titles with newlines must not break summary line structure."""
+        db.create_issue("Normal start\n## Injected Header\nmore text")
+        summary = generate_summary(db)
+        # The title should appear sanitized — no raw newlines breaking the markdown
+        for line in summary.split("\n"):
+            if "Injected Header" in line or "Normal start" in line:
+                # The title content should be on a single line, not split
+                assert line.startswith("- "), f"Title broke out of list item: {line!r}"
+
+    def test_title_with_control_chars_sanitized(self, db: FiligreeDB) -> None:
+        """Control characters in titles should be stripped."""
+        db.create_issue("Clean\x00title\x1bwith\x07control")
+        summary = generate_summary(db)
+        assert "\x00" not in summary
+        assert "\x1b" not in summary
+        assert "\x07" not in summary
+
+
+class TestSummaryChunkedParentLookup:
+    """Bug filigree-4ce103: generate_summary must chunk parent_id lookups to avoid SQLite bind limit."""
+
+    def test_many_parent_ids_does_not_crash(self, db: FiligreeDB) -> None:
+        """Create enough issues with parent_ids to exceed a naive IN(...) bind limit."""
+        # Create a parent to reference
+        parent = db.create_issue("Parent issue")
+        # Create 600 child issues — exceeds 500-per-chunk, proving chunking works
+        for i in range(600):
+            db.create_issue(f"Child {i}", parent_id=parent.id)
+        # Should not raise OperationalError: too many SQL variables
+        summary = generate_summary(db)
+        assert "Parent issue" in summary or "Ready" in summary
+
+    def test_parent_titles_resolved_across_chunks(self, db: FiligreeDB) -> None:
+        """Parent titles from different chunks should all be resolved."""
+        parents = [db.create_issue(f"Parent-{i}") for i in range(3)]
+        for i, p in enumerate(parents):
+            # Spread children across different parents
+            for j in range(200):
+                db.create_issue(f"Child-{i}-{j}", parent_id=p.id)
+        summary = generate_summary(db)
+        # All parent titles should be fetchable without error
+        assert "Ready" in summary
+
 
 class TestCategoryAwareSummary:
     """Workflow-aware summary tests (Phase 4 — WFT-FR-060, WFT-FR-061, WFT-NFR-010, WFT-FR-071)."""
@@ -224,3 +293,25 @@ class TestWriteSummary:
         write_summary(db, output)
         tmp_file = output.with_suffix(".tmp")
         assert not tmp_file.exists()
+
+    def test_temp_file_is_unique_per_call(self, db: FiligreeDB, tmp_path: Path) -> None:
+        """Temp filenames must be unique to avoid races between concurrent writers."""
+        import os
+        from unittest.mock import patch
+
+        output = tmp_path / "context.md"
+        temp_paths: list[str] = []
+
+        original_replace = os.replace
+
+        def capture_replace(src: str, dst: str) -> None:
+            temp_paths.append(src)
+            return original_replace(src, dst)
+
+        with patch("filigree.summary.os.replace", side_effect=capture_replace):
+            write_summary(db, output)
+            write_summary(db, output)
+
+        # Two calls must use different temp paths
+        assert len(temp_paths) == 2
+        assert temp_paths[0] != temp_paths[1]

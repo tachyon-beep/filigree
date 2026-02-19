@@ -51,18 +51,31 @@ def cycle_time(db: FiligreeDB, issue_id: str) -> float | None:
     for evt in events:
         if evt["new_value"] in wip_states and start is None:
             start = _parse_iso(evt["created_at"])
-        if evt["new_value"] in done_states:
+        elif evt["new_value"] in done_states and start is not None:
             end = _parse_iso(evt["created_at"])
-            break  # Use first done event, not last (correct for reopen scenarios)
+            if end is not None:
+                break  # Use first parseable done event after WIP start
 
     if start is None or end is None:
         return None
     return (end - start).total_seconds() / 3600
 
 
-def lead_time(db: FiligreeDB, issue_id: str) -> float | None:
-    """Lead time: hours from creation to done (any done-category state)."""
-    issue = db.get_issue(issue_id)
+def lead_time(
+    db: FiligreeDB,
+    issue_id: str | None = None,
+    *,
+    issue: Any | None = None,
+) -> float | None:
+    """Lead time: hours from creation to done (any done-category state).
+
+    Pass ``issue`` directly to avoid a redundant DB fetch when the caller
+    already has the Issue object (e.g. inside get_flow_metrics loops).
+    """
+    if issue is None:
+        if issue_id is None:
+            return None
+        issue = db.get_issue(issue_id)
     if issue.status_category != "done" or issue.closed_at is None:
         return None
     created = _parse_iso(issue.created_at)
@@ -91,14 +104,20 @@ def get_flow_metrics(db: FiligreeDB, *, days: int = 30) -> dict[str, Any]:
 
     cutoff_dt = datetime.now(UTC) - timedelta(days=days)
 
-    done_issues = db.list_issues(status="closed")  # "closed" expands to all done-category states
-    # Filter to issues closed within the lookback window using proper datetime comparison
+    # Paginate through all done issues to avoid silent truncation
+    page_size = 1000
+    offset = 0
     recent_closed = []
-    for i in done_issues:
-        if i.closed_at:
-            closed_dt = _parse_iso(i.closed_at)
-            if closed_dt is not None and closed_dt >= cutoff_dt:
-                recent_closed.append(i)
+    while True:
+        page = db.list_issues(status="closed", limit=page_size, offset=offset)
+        for i in page:
+            if i.closed_at:
+                closed_dt = _parse_iso(i.closed_at)
+                if closed_dt is not None and closed_dt >= cutoff_dt:
+                    recent_closed.append(i)
+        if len(page) < page_size:
+            break
+        offset += page_size
 
     cycle_times: list[float] = []
     lead_times: list[float] = []
@@ -106,7 +125,7 @@ def get_flow_metrics(db: FiligreeDB, *, days: int = 30) -> dict[str, Any]:
 
     for issue in recent_closed:
         ct = cycle_time(db, issue.id)
-        lt = lead_time(db, issue.id)
+        lt = lead_time(db, issue=issue)
         if ct is not None:
             cycle_times.append(ct)
             by_type.setdefault(issue.type, []).append(ct)

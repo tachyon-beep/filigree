@@ -66,15 +66,18 @@ jobs:
           python-version: "3.12"
       - name: Wait for PyPI propagation and verify
         run: |
-          for attempt in 1 2 3 4 5; do
+          MAX_ATTEMPTS=10
+          SLEEP_SECS=30
+          for attempt in $(seq 1 $MAX_ATTEMPTS); do
             if uv pip install --system "filigree==${GITHUB_REF_NAME#v}" 2>/dev/null; then
+              echo "Installed on attempt $attempt"
               filigree --version
               exit 0
             fi
-            echo "Attempt $attempt: package not yet available, waiting 15s..."
-            sleep 15
+            echo "Attempt $attempt/$MAX_ATTEMPTS: package not yet available, waiting ${SLEEP_SECS}s..."
+            sleep $SLEEP_SECS
           done
-          echo "::error::Package filigree==${GITHUB_REF_NAME#v} not available on PyPI after 75s"
+          echo "::error::Package filigree==${GITHUB_REF_NAME#v} not available on PyPI after $((MAX_ATTEMPTS * SLEEP_SECS))s"
           exit 1
 
   github-release:

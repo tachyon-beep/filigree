@@ -1015,7 +1015,7 @@ _INCIDENT_PACK: dict[str, Any] = {
                 {"name": "triaging", "category": "wip"},
                 {"name": "investigating", "category": "wip"},
                 {"name": "mitigating", "category": "wip"},
-                {"name": "resolved", "category": "done"},
+                {"name": "resolved", "category": "wip"},
                 {"name": "closed", "category": "done"},
             ],
             "initial_state": "reported",
@@ -1138,8 +1138,8 @@ _INCIDENT_PACK: dict[str, Any] = {
     "guide": {
         "state_diagram": (
             "incident:   reported(O) --> triaging(W) --> investigating(W) --> mitigating(W) -->\n"
-            "              resolved(D) --> closed(D)\n"
-            "                                                             \\-> resolved(D)\n"
+            "              resolved(W) --> closed(D)\n"
+            "                                                             \\-> resolved(W)\n"
             "            HARD: reported-->triaging requires severity\n"
             "            HARD: resolved-->closed requires root_cause\n"
             "\n"
@@ -1463,17 +1463,17 @@ _SPIKE_PACK: dict[str, Any] = {
     "cross_pack_relationships": [
         {
             "name": "spike_spawns_work",
-            "from_types": ["spike"],
-            "to_types": ["task", "bug", "feature"],
+            "from_types": ["task", "bug", "feature"],
+            "to_types": ["spike"],
             "mechanism": "dependency",
-            "description": "Spike results spawn new work items in core pack",
+            "description": "Spawned work items depend on source spike",
         },
         {
             "name": "spike_spawns_mitigation",
-            "from_types": ["spike"],
-            "to_types": ["mitigation"],
+            "from_types": ["mitigation"],
+            "to_types": ["spike"],
             "mechanism": "dependency",
-            "description": "Spike results spawn mitigations in risk pack",
+            "description": "Spawned mitigations depend on source spike",
         },
     ],
     "guide": {
