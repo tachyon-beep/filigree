@@ -1399,7 +1399,11 @@ def create_plan(ctx: click.Context, file_path: str | None, as_json: bool) -> Non
     Reads JSON from --file or stdin. Structure:
     {"milestone": {"title": "..."}, "phases": [{"title": "...", "steps": [...]}]}
     """
-    raw = Path(file_path).read_text() if file_path else click.get_text_stream("stdin").read()
+    try:
+        raw = Path(file_path).read_text() if file_path else click.get_text_stream("stdin").read()
+    except (OSError, UnicodeDecodeError) as e:
+        click.echo(f"Error reading file: {e}", err=True)
+        sys.exit(1)
 
     try:
         data = json_mod.loads(raw)
@@ -1407,14 +1411,31 @@ def create_plan(ctx: click.Context, file_path: str | None, as_json: bool) -> Non
         click.echo(f"Invalid JSON: {e}", err=True)
         sys.exit(1)
 
+    if not isinstance(data, dict):
+        click.echo("JSON must be an object, not a list or scalar", err=True)
+        sys.exit(1)
+
     if "milestone" not in data or "phases" not in data:
         click.echo("JSON must contain 'milestone' and 'phases' keys", err=True)
         sys.exit(1)
 
+    if not isinstance(data["milestone"], dict):
+        click.echo("'milestone' must be an object with at least a 'title' key", err=True)
+        sys.exit(1)
+
+    if not isinstance(data["phases"], list):
+        click.echo("'phases' must be a list of phase objects", err=True)
+        sys.exit(1)
+
+    for i, phase in enumerate(data["phases"]):
+        if not isinstance(phase, dict):
+            click.echo(f"Phase {i + 1} must be an object, got {type(phase).__name__}", err=True)
+            sys.exit(1)
+
     with _get_db() as db:
         try:
             result = db.create_plan(data["milestone"], data["phases"], actor=ctx.obj["actor"])
-        except (ValueError, IndexError) as e:
+        except (ValueError, IndexError, TypeError, AttributeError) as e:
             if as_json:
                 click.echo(json_mod.dumps({"error": str(e)}))
             else:
