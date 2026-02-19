@@ -415,6 +415,16 @@ class TemplateRegistry:
                 cat = next(st.category for st in tpl.states if st.name == s)
                 warnings.append(f"state '{s}' (category={cat}) has no outgoing transitions (dead end)")
 
+        # Done-states with outgoing transitions: close_issue() treats these as
+        # "already closed", so the outgoing transitions are only reachable via
+        # update_issue(). Flag for design review.
+        for s in sorted(done_states & from_states):
+            targets = [t.to_state for t in tpl.transitions if t.from_state == s]
+            warnings.append(
+                f"done-category state '{s}' has outgoing transitions to {targets} — "
+                f"close_issue() will reject issues in this state as 'already closed'"
+            )
+
         return warnings
 
     # -- Registration (internal) --------------------------------------------
@@ -719,6 +729,9 @@ class TemplateRegistry:
                     if errors:
                         logger.warning("Skipping invalid template %s: %s", tpl_file.name, errors)
                         continue
+                    quality_warnings = self.check_type_template_quality(tpl)
+                    for qw in quality_warnings:
+                        logger.warning("Quality: %s (local override): %s", tpl.type, qw)
                     self._register_type(tpl)  # Overwrites built-in with same name
                     logger.info("Loaded project-local template override: %s", tpl.type)
                 except (ValueError, KeyError, TypeError, AttributeError) as exc:
@@ -744,6 +757,9 @@ class TemplateRegistry:
                 if errors:
                     logger.warning("Skipping invalid type %s in pack %s: %s", type_name, pack_name, errors)
                     continue
+                quality_warnings = self.check_type_template_quality(tpl)
+                for qw in quality_warnings:
+                    logger.warning("Quality: %s/%s: %s", pack_name, type_name, qw)
                 self._register_type(tpl)
                 types_dict[type_name] = tpl
             except (ValueError, KeyError, TypeError, AttributeError) as exc:
