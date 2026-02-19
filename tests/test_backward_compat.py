@@ -204,8 +204,9 @@ class TestBatchWithTemplates:
     def test_batch_close(self, db: FiligreeDB) -> None:
         a = db.create_issue("A", type="task")
         b = db.create_issue("B", type="task")
-        results = db.batch_close([a.id, b.id])
+        results, errors = db.batch_close([a.id, b.id])
         assert all(r.status == "closed" for r in results)
+        assert len(errors) == 0
 
     def test_batch_update_status(self, db: FiligreeDB) -> None:
         a = db.create_issue("A", type="task")

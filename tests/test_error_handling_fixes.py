@@ -228,16 +228,19 @@ class TestMCPLabelErrors:
 
 
 class TestDashboardBatchCloseKeyError:
-    """POST /api/batch/close with nonexistent ID returns error."""
+    """POST /api/batch/close with nonexistent ID returns per-item error."""
 
     async def test_batch_close_nonexistent_id(self, dashboard_client: AsyncClient) -> None:
         resp = await dashboard_client.post(
             "/api/batch/close",
             json={"issue_ids": ["nonexistent-xyz"]},
         )
-        # Should return 404 (KeyError) rather than 500
-        assert resp.status_code in (404, 409), f"Expected 404 or 409, got {resp.status_code}: {resp.text}"
-        assert "error" in resp.json()
+        # Returns 200 with per-item error collection (not fail-fast 404)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data["closed"]) == 0
+        assert len(data["errors"]) == 1
+        assert data["errors"][0]["id"] == "nonexistent-xyz"
 
 
 class TestDashboardMalformedJSON:

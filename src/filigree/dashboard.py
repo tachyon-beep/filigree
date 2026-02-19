@@ -323,7 +323,9 @@ def create_app() -> Any:
             return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
         if not isinstance(body, dict):
             return JSONResponse({"error": "Request body must be a JSON object"}, status_code=400)
-        issue_ids = body.get("issue_ids", [])
+        issue_ids = body.get("issue_ids")
+        if not isinstance(issue_ids, list):
+            return JSONResponse({"error": "issue_ids must be a JSON array"}, status_code=400)
         actor = body.get("actor", "dashboard")
         updated, errors = db.batch_update(
             issue_ids,
@@ -350,16 +352,18 @@ def create_app() -> Any:
             return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
         if not isinstance(body, dict):
             return JSONResponse({"error": "Request body must be a JSON object"}, status_code=400)
-        issue_ids = body.get("issue_ids", [])
+        issue_ids = body.get("issue_ids")
+        if not isinstance(issue_ids, list):
+            return JSONResponse({"error": "issue_ids must be a JSON array"}, status_code=400)
         reason = body.get("reason", "")
         actor = body.get("actor", "dashboard")
-        try:
-            closed = db.batch_close(issue_ids, reason=reason, actor=actor)
-        except KeyError as e:
-            return JSONResponse({"error": f"Not found: {e}"}, status_code=404)
-        except ValueError as e:
-            return JSONResponse({"error": str(e)}, status_code=409)
-        return JSONResponse({"closed": [i.to_dict() for i in closed]})
+        closed, errors = db.batch_close(issue_ids, reason=reason, actor=actor)
+        return JSONResponse(
+            {
+                "closed": [i.to_dict() for i in closed],
+                "errors": errors,
+            }
+        )
 
     @app.get("/api/types")
     async def api_types_list() -> JSONResponse:

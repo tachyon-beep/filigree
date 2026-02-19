@@ -16,6 +16,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Template validation: duplicate state names detected at both parse time and validation time (defense in depth for JSON and programmatic construction paths)
 - Incident workflow: `resolved` state re-categorized from `done` to `wip` — `close_issue()` from resolved now works correctly instead of rejecting with "already closed"
 - Incident workflow guide: stale `resolved(D)` notation corrected to `resolved(W)` in state diagram
+- Dashboard batch API: `issue_ids` field now validated as a JSON array — null, missing, or non-list values return 400 instead of crashing with 500 TypeError
+- Dashboard batch close: refactored from fail-fast to per-item error collection — partial failures now return 200 with `closed` and `errors` lists instead of aborting with 404/409
+- Core `batch_close()` return type changed from `list[Issue]` to `tuple[list[Issue], list[dict[str, str]]]` matching `batch_update()` pattern
 
 ## [1.1.0] - 2026-02-18
 

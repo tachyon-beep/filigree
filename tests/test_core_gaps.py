@@ -524,8 +524,9 @@ class TestBatchOperations:
     def test_batch_close(self, db: FiligreeDB) -> None:
         a = db.create_issue("A")
         b = db.create_issue("B")
-        results = db.batch_close([a.id, b.id], reason="done")
+        results, errors = db.batch_close([a.id, b.id], reason="done")
         assert len(results) == 2
+        assert len(errors) == 0
         assert all(r.status == "closed" for r in results)
 
     def test_batch_update_status(self, db: FiligreeDB) -> None:
@@ -551,8 +552,10 @@ class TestBatchOperations:
         assert errors[0]["id"] == "nonexistent-xyz"
 
     def test_batch_close_not_found(self, db: FiligreeDB) -> None:
-        with pytest.raises(KeyError):
-            db.batch_close(["nonexistent-xyz"])
+        results, errors = db.batch_close(["nonexistent-xyz"])
+        assert len(results) == 0
+        assert len(errors) == 1
+        assert errors[0]["id"] == "nonexistent-xyz"
 
 
 class TestClaimIssue:

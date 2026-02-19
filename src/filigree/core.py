@@ -1101,12 +1101,18 @@ class FiligreeDB:
         *,
         reason: str = "",
         actor: str = "",
-    ) -> list[Issue]:
-        """Close multiple issues sequentially."""
+    ) -> tuple[list[Issue], list[dict[str, str]]]:
+        """Close multiple issues with per-item error handling. Returns (closed, errors)."""
         results: list[Issue] = []
+        errors: list[dict[str, str]] = []
         for issue_id in issue_ids:
-            results.append(self.close_issue(issue_id, reason=reason, actor=actor))
-        return results
+            try:
+                results.append(self.close_issue(issue_id, reason=reason, actor=actor))
+            except KeyError:
+                errors.append({"id": issue_id, "error": f"Not found: {issue_id}"})
+            except ValueError as e:
+                errors.append({"id": issue_id, "error": str(e)})
+        return results, errors
 
     def batch_update(
         self,
