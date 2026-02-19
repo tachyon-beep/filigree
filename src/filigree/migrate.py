@@ -71,7 +71,7 @@ def migrate_from_beads(beads_db_path: str | Path, tracker: FiligreeDB) -> int:
                     val = row[col]
                 except IndexError:
                     val = None
-                if val is not None and val != "" and val != 0:
+                if val is not None and val != "":
                     fields[col] = val
 
             # Also preserve beads metadata if present
@@ -189,7 +189,7 @@ def migrate_from_beads(beads_db_path: str | Path, tracker: FiligreeDB) -> int:
                         "SELECT ?, ?, ?, ? "
                         "WHERE NOT EXISTS ("
                         "  SELECT 1 FROM comments "
-                        "  WHERE issue_id = ? AND text = ? AND author = ?"
+                        "  WHERE issue_id = ? AND text = ? AND author = ? AND created_at = ?"
                         ")",
                         (
                             cmt["issue_id"],
@@ -199,6 +199,7 @@ def migrate_from_beads(beads_db_path: str | Path, tracker: FiligreeDB) -> int:
                             cmt["issue_id"],
                             cmt["text"],
                             cmt["author"] or "",
+                            cmt["created_at"] or "",
                         ),
                     )
         except sqlite3.OperationalError as e:

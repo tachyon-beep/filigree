@@ -1522,17 +1522,12 @@ def batch_update(
 @click.pass_context
 def batch_close(ctx: click.Context, issue_ids: tuple[str, ...], reason: str, as_json: bool) -> None:
     """Close multiple issues with per-item error reporting."""
-    closed = []
-    errors = []
     with _get_db() as db:
-        for issue_id in issue_ids:
-            try:
-                issue = db.close_issue(issue_id, reason=reason, actor=ctx.obj["actor"])
-                closed.append(issue)
-            except KeyError:
-                errors.append({"id": issue_id, "error": f"Not found: {issue_id}"})
-            except ValueError as e:
-                errors.append({"id": issue_id, "error": str(e)})
+        closed, errors = db.batch_close(
+            list(issue_ids),
+            reason=reason,
+            actor=ctx.obj["actor"],
+        )
 
         if as_json:
             click.echo(

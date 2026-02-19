@@ -91,6 +91,108 @@ class TestMigration:
         assert weird.status == "open"  # "review" → "open"
 
 
+class TestCommentDedupPreservesRepeats:
+    """Bug filigree-581584: same-text comments at different times must both survive."""
+
+    def test_repeated_comment_different_times_both_migrate(self, tmp_path: Path, db: FiligreeDB) -> None:
+        db_path = tmp_path / "comments_beads.db"
+        conn = sqlite3.connect(str(db_path))
+        conn.executescript("""
+            CREATE TABLE issues (
+                id TEXT PRIMARY KEY, title TEXT, status TEXT DEFAULT 'open',
+                priority INTEGER DEFAULT 2, issue_type TEXT DEFAULT 'task',
+                parent_id TEXT, parent_epic TEXT, assignee TEXT DEFAULT '',
+                created_at TEXT, updated_at TEXT, closed_at TEXT, deleted_at TEXT,
+                description TEXT DEFAULT '', notes TEXT DEFAULT '',
+                metadata TEXT DEFAULT 'null',
+                design TEXT DEFAULT '', acceptance_criteria TEXT DEFAULT '',
+                estimated_minutes INTEGER DEFAULT 0, close_reason TEXT DEFAULT '',
+                external_ref TEXT DEFAULT '', mol_type TEXT DEFAULT '',
+                work_type TEXT DEFAULT '', quality_score TEXT DEFAULT '',
+                source_system TEXT DEFAULT '', event_kind TEXT DEFAULT '',
+                actor TEXT DEFAULT '', target TEXT DEFAULT '',
+                payload TEXT DEFAULT '', source_repo TEXT DEFAULT '',
+                await_type TEXT DEFAULT '', await_id TEXT DEFAULT '',
+                role_type TEXT DEFAULT '', rig TEXT DEFAULT '',
+                spec_id TEXT DEFAULT '', wisp_type TEXT DEFAULT '',
+                sender TEXT DEFAULT ''
+            );
+            CREATE TABLE dependencies (
+                issue_id TEXT, depends_on_id TEXT, type TEXT DEFAULT 'blocks',
+                PRIMARY KEY (issue_id, depends_on_id)
+            );
+            CREATE TABLE comments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                issue_id TEXT NOT NULL, author TEXT DEFAULT '',
+                text TEXT NOT NULL, created_at TEXT
+            );
+        """)
+        conn.execute(
+            "INSERT INTO issues (id, title, created_at, updated_at) VALUES (?, ?, ?, ?)",
+            ("iss-1", "Test issue", "2026-01-01T00:00:00", "2026-01-01T00:00:00"),
+        )
+        # Two identical-text comments at different times
+        conn.execute(
+            "INSERT INTO comments (issue_id, author, text, created_at) VALUES (?, ?, ?, ?)",
+            ("iss-1", "alice", "LGTM", "2026-01-01T10:00:00"),
+        )
+        conn.execute(
+            "INSERT INTO comments (issue_id, author, text, created_at) VALUES (?, ?, ?, ?)",
+            ("iss-1", "alice", "LGTM", "2026-01-01T14:00:00"),
+        )
+        conn.commit()
+        conn.close()
+
+        migrate_from_beads(db_path, db)
+        comments = db.get_comments("iss-1")
+        assert len(comments) == 2, f"Expected 2 comments, got {len(comments)}"
+
+
+class TestMigrationPreservesZeroValues:
+    """Bug filigree-edbce1: numeric zero values must survive migration."""
+
+    def test_zero_estimated_minutes_preserved(self, tmp_path: Path, db: FiligreeDB) -> None:
+        db_path = tmp_path / "zero_beads.db"
+        conn = sqlite3.connect(str(db_path))
+        conn.executescript("""
+            CREATE TABLE issues (
+                id TEXT PRIMARY KEY, title TEXT, status TEXT DEFAULT 'open',
+                priority INTEGER DEFAULT 2, issue_type TEXT DEFAULT 'task',
+                parent_id TEXT, parent_epic TEXT, assignee TEXT DEFAULT '',
+                created_at TEXT, updated_at TEXT, closed_at TEXT, deleted_at TEXT,
+                description TEXT DEFAULT '', notes TEXT DEFAULT '',
+                metadata TEXT DEFAULT 'null',
+                design TEXT DEFAULT '', acceptance_criteria TEXT DEFAULT '',
+                estimated_minutes INTEGER DEFAULT 0, close_reason TEXT DEFAULT '',
+                external_ref TEXT DEFAULT '', mol_type TEXT DEFAULT '',
+                work_type TEXT DEFAULT '', quality_score TEXT DEFAULT '',
+                source_system TEXT DEFAULT '', event_kind TEXT DEFAULT '',
+                actor TEXT DEFAULT '', target TEXT DEFAULT '',
+                payload TEXT DEFAULT '', source_repo TEXT DEFAULT '',
+                await_type TEXT DEFAULT '', await_id TEXT DEFAULT '',
+                role_type TEXT DEFAULT '', rig TEXT DEFAULT '',
+                spec_id TEXT DEFAULT '', wisp_type TEXT DEFAULT '',
+                sender TEXT DEFAULT ''
+            );
+            CREATE TABLE dependencies (
+                issue_id TEXT, depends_on_id TEXT, type TEXT DEFAULT 'blocks',
+                PRIMARY KEY (issue_id, depends_on_id)
+            );
+        """)
+        conn.execute(
+            "INSERT INTO issues (id, title, estimated_minutes, quality_score, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            ("iss-z", "Zero fields", 0, "0", "2026-01-01T00:00:00", "2026-01-01T00:00:00"),
+        )
+        conn.commit()
+        conn.close()
+
+        migrate_from_beads(db_path, db)
+        issue = db.get_issue("iss-z")
+        assert issue.fields.get("estimated_minutes") == 0, "Zero estimated_minutes was dropped"
+        assert issue.fields.get("quality_score") == "0", "Zero quality_score was dropped"
+
+
 class TestMigrationRerunCount:
     def test_rerun_returns_zero_for_already_migrated(self, beads_db: Path, db: FiligreeDB) -> None:
         """Re-running migration should report 0 (not re-count existing rows)."""
