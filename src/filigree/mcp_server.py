@@ -1633,6 +1633,14 @@ async def _run(project_path: Path | None) -> None:
     db = FiligreeDB(filigree_dir / DB_FILENAME, prefix=config.get("prefix", "filigree"))
     db.initialize()
 
+    # Register with the global project registry (best-effort)
+    try:
+        from filigree.registry import Registry
+
+        Registry().register(filigree_dir)
+    except Exception:
+        pass  # Never fatal — registry is advisory
+
     from filigree.logging import setup_logging
 
     _logger = setup_logging(filigree_dir)

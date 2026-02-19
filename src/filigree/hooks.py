@@ -114,6 +114,24 @@ def _is_port_listening(port: int, host: str = "127.0.0.1") -> bool:
         sock.close()
 
 
+def _try_register_with_server(port: int) -> None:
+    """Best-effort POST to register this project with a running dashboard."""
+    try:
+        import json
+        import urllib.request
+
+        filigree_dir = find_filigree_root()
+        data = json.dumps({"path": str(filigree_dir)}).encode()
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{port}/api/register",
+            data=data,
+            headers={"Content-Type": "application/json"},
+        )
+        urllib.request.urlopen(req, timeout=2)  # noqa: S310
+    except Exception:
+        pass  # Best-effort
+
+
 def ensure_dashboard_running(port: int = 8377) -> str:
     """Ensure the filigree dashboard is running.
 
@@ -133,6 +151,15 @@ def ensure_dashboard_running(port: int = 8377) -> str:
     except FileNotFoundError:
         return ""
 
+    # Register current project with the global registry (best-effort)
+    try:
+        from filigree.registry import Registry
+
+        filigree_dir = find_filigree_root()
+        Registry().register(filigree_dir)
+    except Exception:
+        pass  # Never fatal — registry is advisory
+
     tmpdir = os.environ.get("TMPDIR", "/tmp")  # noqa: S108
     lockfile = os.path.join(tmpdir, "filigree-dashboard.lock")
     pidfile = os.path.join(tmpdir, "filigree-dashboard.pid")
@@ -147,6 +174,7 @@ def ensure_dashboard_running(port: int = 8377) -> str:
             return "Filigree dashboard: another session is starting it, skipping"
 
         if _is_port_listening(port):
+            _try_register_with_server(port)
             return f"Filigree dashboard already running on http://localhost:{port}"
 
         # Start the dashboard in a detached process
