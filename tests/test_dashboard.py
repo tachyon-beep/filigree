@@ -974,6 +974,18 @@ class TestBatchAPIInputValidation:
         resp = await client.post("/api/batch/close", json={"reason": "done"})
         assert resp.status_code == 400
 
+    async def test_batch_update_non_string_ids_returns_400(self, client: AsyncClient) -> None:
+        """Sending issue_ids with non-string elements (e.g. integers) should return 400."""
+        resp = await client.post("/api/batch/update", json={"issue_ids": [123], "priority": 1})
+        assert resp.status_code == 400
+        assert "string" in resp.json()["error"].lower()
+
+    async def test_batch_close_non_string_ids_returns_400(self, client: AsyncClient) -> None:
+        """Sending issue_ids with non-string elements should return 400."""
+        resp = await client.post("/api/batch/close", json={"issue_ids": [123]})
+        assert resp.status_code == 400
+        assert "string" in resp.json()["error"].lower()
+
 
 class TestBatchClosePartialMutation:
     """Bug filigree-2cecbb: batch/close partially mutates then returns error."""

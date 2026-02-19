@@ -342,6 +342,12 @@ class TestCloseIssueHardEnforcement:
         closed = db.close_issue(issue.id)
         assert closed.status == "closed"
 
+    def test_close_with_non_dict_fields_raises_type_error(self, db: FiligreeDB) -> None:
+        """Passing non-dict fields to close_issue raises TypeError, not 500."""
+        issue = db.create_issue("Bug", type="bug")
+        with pytest.raises(TypeError, match="fields must be a dict"):
+            db.close_issue(issue.id, fields=5)  # type: ignore[arg-type]
+
 
 class TestClaimIssue:
     """claim_issue() sets assignee only — does not change status."""

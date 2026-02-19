@@ -327,6 +327,8 @@ def create_app() -> Any:
         issue_ids = body.get("issue_ids")
         if not isinstance(issue_ids, list):
             return JSONResponse({"error": "issue_ids must be a JSON array"}, status_code=400)
+        if not all(isinstance(i, str) for i in issue_ids):
+            return JSONResponse({"error": "All issue_ids must be strings"}, status_code=400)
         actor = body.get("actor", "dashboard")
         updated, errors = db.batch_update(
             issue_ids,
@@ -356,6 +358,8 @@ def create_app() -> Any:
         issue_ids = body.get("issue_ids")
         if not isinstance(issue_ids, list):
             return JSONResponse({"error": "issue_ids must be a JSON array"}, status_code=400)
+        if not all(isinstance(i, str) for i in issue_ids):
+            return JSONResponse({"error": "All issue_ids must be strings"}, status_code=400)
         reason = body.get("reason", "")
         actor = body.get("actor", "dashboard")
         closed, errors = db.batch_close(issue_ids, reason=reason, actor=actor)

@@ -946,6 +946,10 @@ class FiligreeDB:
         status: str | None = None,
         fields: dict[str, Any] | None = None,
     ) -> Issue:
+        if fields is not None and not isinstance(fields, dict):
+            msg = "fields must be a dict"
+            raise TypeError(msg)
+
         current = self.get_issue(issue_id)
 
         # Determine done state via template system
