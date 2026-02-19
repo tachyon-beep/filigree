@@ -363,6 +363,7 @@ async def list_tools() -> list[Tool]:
                     "id": {"type": "string", "description": "Issue ID"},
                     "reason": {"type": "string", "description": "Close reason"},
                     "actor": {"type": "string", "description": "Agent/user identity for audit trail"},
+                    "fields": {"type": "object", "description": "Custom fields to set (e.g. root_cause for incidents)"},
                 },
                 "required": ["id"],
             },
@@ -1032,6 +1033,7 @@ async def _dispatch(name: str, arguments: dict[str, Any], tracker: FiligreeDB) -
                     arguments["id"],
                     reason=arguments.get("reason", ""),
                     actor=arguments.get("actor", "mcp"),
+                    fields=arguments.get("fields"),
                 )
                 _refresh_summary()
                 ready_after = tracker.get_ready()

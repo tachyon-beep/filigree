@@ -212,8 +212,9 @@ def create_app() -> Any:
             return JSONResponse({"error": "Request body must be a JSON object"}, status_code=400)
         actor = body.get("actor", "dashboard")
         reason = body.get("reason", "")
+        fields = body.get("fields")
         try:
-            issue = db.close_issue(issue_id, reason=reason, actor=actor)
+            issue = db.close_issue(issue_id, reason=reason, actor=actor, fields=fields)
         except KeyError:
             return JSONResponse({"error": f"Not found: {issue_id}"}, status_code=404)
         except ValueError as e:

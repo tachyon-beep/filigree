@@ -56,7 +56,8 @@ class TestIncidentResolvedCategory:
         assert states["resolved"] == "wip"
 
     def test_close_issue_from_resolved_works(self, incident_db: FiligreeDB) -> None:
-        """An incident in 'resolved' state should be closeable via close_issue()."""
+        """An incident in 'resolved' state should be closeable via close_issue()
+        when the hard-required root_cause field is supplied."""
         issue = incident_db.create_issue("Outage", type="incident")
 
         # Walk the incident workflow: reported → triaging → investigating → resolved
@@ -68,8 +69,13 @@ class TestIncidentResolvedCategory:
         resolved = incident_db.get_issue(issue.id)
         assert resolved.status == "resolved"
 
-        # close_issue() should NOT raise "already closed"
-        closed = incident_db.close_issue(issue.id, reason="Root cause: config drift")
+        # close_issue() should NOT raise "already closed" — but must satisfy
+        # the hard-enforcement gate by providing root_cause (filigree-87e5e3)
+        closed = incident_db.close_issue(
+            issue.id,
+            fields={"root_cause": "Config drift"},
+            reason="Root cause: config drift",
+        )
         assert closed.status_category == "done"
         assert closed.closed_at is not None
 

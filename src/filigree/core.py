@@ -944,6 +944,7 @@ class FiligreeDB:
         reason: str = "",
         actor: str = "",
         status: str | None = None,
+        fields: dict[str, Any] | None = None,
     ) -> Issue:
         current = self.get_issue(issue_id)
 
@@ -967,10 +968,31 @@ class FiligreeDB:
             _first_done = self.templates.get_first_state_of_category(current.type, "done")
             done_status = _first_done if _first_done is not None else "closed"
 
+        # Enforce hard gates even though close_issue skips transition graph
+        # validation. If a defined transition from current→done has hard
+        # enforcement, the required fields must be satisfied.
+        merged_fields = {**current.fields}
+        if fields:
+            merged_fields.update(fields)
+        if reason:
+            merged_fields["close_reason"] = reason
+        result = self.templates.validate_transition(current.type, current.status, done_status, merged_fields)
+        if not result.allowed and result.enforcement == "hard":
+            missing_str = ", ".join(result.missing_fields)
+            msg = f"Cannot close issue {issue_id}: hard-enforcement gate requires fields: {missing_str}"
+            raise ValueError(msg)
+
+        # Merge close_reason into fields for the update call
+        update_fields: dict[str, Any] = {}
+        if fields:
+            update_fields.update(fields)
+        if reason:
+            update_fields["close_reason"] = reason
+
         return self.update_issue(
             issue_id,
             status=done_status,
-            fields={"close_reason": reason} if reason else None,
+            fields=update_fields or None,
             actor=actor,
             _skip_transition_check=True,
         )
