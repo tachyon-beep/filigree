@@ -57,6 +57,10 @@ def create_app() -> Any:
         html = (STATIC_DIR / "dashboard.html").read_text()
         return HTMLResponse(html)
 
+    @app.get("/api/health")
+    async def api_health() -> JSONResponse:
+        return JSONResponse({"status": "ok"})
+
     @app.get("/api/issues")
     async def api_issues() -> JSONResponse:
         db = _get_db()

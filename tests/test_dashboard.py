@@ -1097,3 +1097,11 @@ class TestDashboardGetDb:
                 dm._get_db()
         finally:
             dm._db = original
+
+
+class TestHealthAPI:
+    async def test_health_returns_ok(self, client: AsyncClient) -> None:
+        resp = await client.get("/api/health")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "ok"
