@@ -239,9 +239,10 @@ class TestTemplateRegistry:
         assert registry.get_category("bug", "wont_fix") == "done"
 
     def test_get_category_cache_is_o1(self, registry: TemplateRegistry) -> None:
-        """Category cache should be a dict lookup, not iteration."""
+        """Category cache should be a hierarchical dict lookup, not iteration."""
         assert hasattr(registry, "_category_cache")
-        assert ("bug", "triage") in registry._category_cache
+        assert "bug" in registry._category_cache
+        assert "triage" in registry._category_cache["bug"]
 
     def test_get_category_unknown_state(self, registry: TemplateRegistry) -> None:
         """Unknown state for known type returns None."""

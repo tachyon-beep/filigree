@@ -209,7 +209,7 @@ class TemplateRegistry:
     def __init__(self) -> None:
         self._types: dict[str, TypeTemplate] = {}
         self._packs: dict[str, WorkflowPack] = {}
-        self._category_cache: dict[tuple[str, str], StateCategory] = {}
+        self._category_cache: dict[str, dict[str, StateCategory]] = {}
         self._transition_cache: dict[str, dict[tuple[str, str], TransitionDefinition]] = {}
         self._loaded = False
 
@@ -434,13 +434,8 @@ class TemplateRegistry:
         logger.debug("Registering type: %s (pack=%s, %d states)", tpl.type, tpl.pack, len(tpl.states))
         self._types[tpl.type] = tpl
 
-        # Build category cache -- O(1) lookup (WFT-SR-002)
-        # Clear stale entries first (type may be overridden with different states)
-        stale = [k for k in self._category_cache if k[0] == tpl.type]
-        for k in stale:
-            del self._category_cache[k]
-        for state in tpl.states:
-            self._category_cache[(tpl.type, state.name)] = state.category
+        # Build category cache -- O(1) lookup, atomic replacement (WFT-SR-002)
+        self._category_cache[tpl.type] = {state.name: state.category for state in tpl.states}
 
         # Build transition cache -- O(1) lookup (WFT-SR-003)
         self._transition_cache[tpl.type] = {(t.from_state, t.to_state): t for t in tpl.transitions}
@@ -478,7 +473,10 @@ class TemplateRegistry:
 
     def get_category(self, type_name: str, state: str) -> StateCategory | None:
         """Map a (type, state) pair to its category via O(1) cache (WFT-SR-002)."""
-        return self._category_cache.get((type_name, state))
+        type_cache = self._category_cache.get(type_name)
+        if type_cache is None:
+            return None
+        return type_cache.get(state)
 
     def get_valid_states(self, type_name: str) -> list[str] | None:
         """Return list of valid state names for a type, or None if type unknown."""
@@ -605,7 +603,7 @@ class TemplateRegistry:
             missing_state = self.validate_fields_for_state(type_name, t.to_state, fields)
             all_missing = list(dict.fromkeys(missing_trans + missing_state))
 
-            target_category = self._category_cache.get((type_name, t.to_state), "open")
+            target_category = self._category_cache.get(type_name, {}).get(t.to_state, "open")
             # ready = True when all required fields are populated
             ready = len(all_missing) == 0
 
