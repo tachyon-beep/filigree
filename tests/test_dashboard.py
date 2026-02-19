@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-# We need to mock the _db module-level variable in dashboard
 import filigree.dashboard as dash_module
-from filigree.core import FiligreeDB
+from filigree.core import FiligreeDB, write_config
 from filigree.dashboard import STATIC_DIR, create_app
+from filigree.registry import ProjectManager, Registry
 
 
 @pytest.fixture
@@ -27,15 +29,22 @@ def dashboard_db(populated_db: FiligreeDB) -> FiligreeDB:
 
 @pytest.fixture
 async def client(dashboard_db: FiligreeDB) -> AsyncClient:
-    """Create a test client for the dashboard FastAPI app."""
-    # Patch module-level globals
-    dash_module._db = dashboard_db
-    dash_module._prefix = "test"
+    """Create a test client backed by a ProjectManager with the test DB injected."""
+    registry = Registry()
+    pm = ProjectManager(registry)
+    # Directly inject the test DB as a cached connection
+    pm._connections["test"] = dashboard_db
+    pm._paths["test"] = Path("/fake/.filigree")
+
+    dash_module._project_manager = pm
+    dash_module._default_project_key = "test"
+
     app = create_app()
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as c:
         yield c
-    dash_module._db = None
+    dash_module._project_manager = None
+    dash_module._default_project_key = ""
 
 
 class TestDashboardIndex:
@@ -1084,19 +1093,19 @@ class TestDashboardConcurrency:
         assert all(r == 200 for r in results), f"Got status codes: {results}"
 
 
-class TestDashboardGetDb:
-    """Cover _get_db when _db is None (lines 29-30)."""
+class TestDashboardGetProjectDb:
+    """Cover _get_project_db when project manager is None."""
 
-    def test_get_db_raises_when_none(self) -> None:
+    def test_get_project_db_raises_when_no_manager(self) -> None:
         import filigree.dashboard as dm
 
-        original = dm._db
-        dm._db = None
+        original = dm._project_manager
+        dm._project_manager = None
         try:
-            with pytest.raises(RuntimeError, match="Database not initialized"):
-                dm._get_db()
+            with pytest.raises(RuntimeError, match="Project manager not initialized"):
+                dm._get_project_db()
         finally:
-            dm._db = original
+            dm._project_manager = original
 
 
 class TestHealthAPI:
@@ -1105,3 +1114,31 @@ class TestHealthAPI:
         assert resp.status_code == 200
         data = resp.json()
         assert data["status"] == "ok"
+
+
+class TestMultiProjectAPI:
+    async def test_scoped_endpoint(self, client: AsyncClient) -> None:
+        """Scoped URL /api/p/test/issues works."""
+        resp = await client.get("/api/p/test/issues")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert isinstance(data, list)
+
+    async def test_unknown_project_404(self, client: AsyncClient) -> None:
+        resp = await client.get("/api/p/nonexistent/issues")
+        assert resp.status_code == 404
+
+    async def test_projects_endpoint(self, client: AsyncClient) -> None:
+        resp = await client.get("/api/projects")
+        assert resp.status_code == 200
+
+    async def test_register_endpoint(self, client: AsyncClient, tmp_path: Path) -> None:
+        fdir = tmp_path / "newproj" / ".filigree"
+        fdir.mkdir(parents=True)
+        write_config(fdir, {"prefix": "newproj", "version": 1, "enabled_packs": ["core"]})
+        db = FiligreeDB(fdir / "filigree.db", prefix="newproj")
+        db.initialize()
+        db.close()
+        resp = await client.post("/api/register", json={"path": str(fdir)})
+        assert resp.status_code == 200
+        assert resp.json()["key"] == "newproj"
