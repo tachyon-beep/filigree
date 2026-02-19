@@ -77,12 +77,18 @@ def generate_summary(db: FiligreeDB) -> str:
             parent_ids.add(issue.parent_id)
     parent_titles: dict[str, str] = {}
     if parent_ids:
-        placeholders = ",".join("?" * len(parent_ids))
-        rows = db.conn.execute(
-            f"SELECT id, title FROM issues WHERE id IN ({placeholders})",  # noqa: S608
-            list(parent_ids),
-        ).fetchall()
-        parent_titles = {r["id"]: _sanitize_title(r["title"]) for r in rows}
+        # Chunk to stay within SQLite's SQLITE_MAX_VARIABLE_NUMBER limit
+        ids_list = list(parent_ids)
+        chunk_size = 500
+        for i in range(0, len(ids_list), chunk_size):
+            chunk = ids_list[i : i + chunk_size]
+            placeholders = ",".join("?" * len(chunk))
+            rows = db.conn.execute(
+                f"SELECT id, title FROM issues WHERE id IN ({placeholders})",  # noqa: S608
+                chunk,
+            ).fetchall()
+            for r in rows:
+                parent_titles[r["id"]] = _sanitize_title(r["title"])
 
     # WFT-FR-060: Vitals use category counts (open/wip/done) instead of literal status names
     by_cat = stats.get("by_category", {})

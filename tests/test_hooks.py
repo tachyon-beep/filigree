@@ -86,6 +86,33 @@ class TestIsPortListening:
         assert _is_port_listening(49999) is False
 
 
+class TestExecutableResolution:
+    """Bug filigree-ae9597: filigree_bin must not mangle directory names containing 'python'."""
+
+    def test_no_directory_mangling(self, tmp_path: Path) -> None:
+        """If sys.executable is in a dir containing 'python', only basename should change."""
+        fake_exe = "/home/python_user/.venv/bin/python3.13"
+        mock_proc = MagicMock()
+        mock_proc.poll.return_value = None  # Still running
+        mock_proc.pid = 11111
+
+        with (
+            patch("filigree.hooks.find_filigree_root", return_value=tmp_path),
+            patch("filigree.hooks._is_port_listening", return_value=False),
+            patch("filigree.hooks.subprocess.Popen", return_value=mock_proc) as mock_popen,
+            patch("filigree.hooks.sys.executable", fake_exe),
+            patch("shutil.which", return_value=None),  # Force fallback path
+            patch("filigree.hooks.time.sleep"),
+            patch.dict(os.environ, {"TMPDIR": str(tmp_path)}),
+        ):
+            ensure_dashboard_running()
+
+        # The command should preserve the directory and only change the basename
+        cmd = mock_popen.call_args[0][0]
+        assert "filigree_user" not in cmd[0], f"Directory was mangled: {cmd[0]}"
+        assert cmd[0] == "/home/python_user/.venv/bin/filigree"
+
+
 class TestEnsureDashboardDependencyCheck:
     """Bug filigree-caa62b: dependency check must detect missing uvicorn/fastapi."""
 

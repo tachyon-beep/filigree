@@ -540,13 +540,13 @@ def run_doctor(project_root: Path | None = None) -> list[CheckResult]:
     # 3. Check filigree.db exists and is accessible
     db_path = filigree_dir / DB_FILENAME
     if db_path.exists():
+        conn: sqlite3.Connection | None = None
         try:
             conn = sqlite3.connect(str(db_path))
             conn.execute("SELECT COUNT(*) FROM issues")
             count = conn.execute("SELECT COUNT(*) FROM issues").fetchone()[0]
             # 3b. Check schema version
             schema_version = conn.execute("PRAGMA user_version").fetchone()[0]
-            conn.close()
             results.append(CheckResult("filigree.db", True, f"{count} issues"))
             if schema_version < CURRENT_SCHEMA_VERSION:
                 results.append(
@@ -568,6 +568,9 @@ def run_doctor(project_root: Path | None = None) -> list[CheckResult]:
                     fix_hint="Database may be corrupted. Restore from backup.",
                 )
             )
+        finally:
+            if conn is not None:
+                conn.close()
     else:
         results.append(
             CheckResult(

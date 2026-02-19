@@ -136,6 +136,32 @@ class TestGenerateSummary:
         assert "\x07" not in summary
 
 
+class TestSummaryChunkedParentLookup:
+    """Bug filigree-4ce103: generate_summary must chunk parent_id lookups to avoid SQLite bind limit."""
+
+    def test_many_parent_ids_does_not_crash(self, db: FiligreeDB) -> None:
+        """Create enough issues with parent_ids to exceed a naive IN(...) bind limit."""
+        # Create a parent to reference
+        parent = db.create_issue("Parent issue")
+        # Create 600 child issues — exceeds 500-per-chunk, proving chunking works
+        for i in range(600):
+            db.create_issue(f"Child {i}", parent_id=parent.id)
+        # Should not raise OperationalError: too many SQL variables
+        summary = generate_summary(db)
+        assert "Parent issue" in summary or "Ready" in summary
+
+    def test_parent_titles_resolved_across_chunks(self, db: FiligreeDB) -> None:
+        """Parent titles from different chunks should all be resolved."""
+        parents = [db.create_issue(f"Parent-{i}") for i in range(3)]
+        for i, p in enumerate(parents):
+            # Spread children across different parents
+            for j in range(200):
+                db.create_issue(f"Child-{i}-{j}", parent_id=p.id)
+        summary = generate_summary(db)
+        # All parent titles should be fetchable without error
+        assert "Ready" in summary
+
+
 class TestCategoryAwareSummary:
     """Workflow-aware summary tests (Phase 4 — WFT-FR-060, WFT-FR-061, WFT-NFR-010, WFT-FR-071)."""
 

@@ -150,7 +150,7 @@ def ensure_dashboard_running(port: int = 8377) -> str:
             return f"Filigree dashboard already running on http://localhost:{port}"
 
         # Start the dashboard in a detached process
-        filigree_bin = sys.executable.replace("python", "filigree")
+        filigree_bin = str(Path(sys.executable).parent / "filigree")
         # Prefer the entry-point on PATH
         import shutil
 

@@ -691,6 +691,31 @@ class TestDoctorSkillsCheck:
         assert "not found" in check.message
 
 
+class TestDoctorConnectionLeak:
+    """Bug filigree-3bbc6f: run_doctor must close SQLite connection even on failure."""
+
+    def test_connection_closed_on_db_error(self, filigree_project: Path) -> None:
+        """If conn.execute() raises, conn.close() should still be called."""
+        import sqlite3
+        from unittest.mock import MagicMock
+
+        mock_conn = MagicMock()
+        mock_conn.execute.side_effect = sqlite3.OperationalError("table issues has no column named x")
+
+        def fake_connect(*args: object, **kwargs: object) -> MagicMock:
+            return mock_conn
+
+        with patch("filigree.install.sqlite3.connect", side_effect=fake_connect):
+            results = run_doctor(filigree_project)
+
+        # Connection should have been closed despite the error
+        mock_conn.close.assert_called_once()
+        # Should report the DB error, not crash
+        db_check = next((r for r in results if r.name == "filigree.db"), None)
+        assert db_check is not None
+        assert not db_check.passed
+
+
 class TestCheckResult:
     def test_passed_icon(self) -> None:
         r = CheckResult("test", True, "ok")
