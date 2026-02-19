@@ -201,6 +201,21 @@ class TestMigrationRerunCount:
         count2 = migrate_from_beads(beads_db, db)
         assert count2 == 0
 
+    def test_rerun_does_not_overwrite_parent_id(self, beads_db: Path, db: FiligreeDB) -> None:
+        """Re-running migration must not overwrite parent_id changes made after initial migration."""
+        migrate_from_beads(beads_db, db)
+        # bd-ccc333 was migrated with parent_id="bd-aaa111"
+        assert db.get_issue("bd-ccc333").parent_id == "bd-aaa111"
+
+        # User manually re-parents the issue after migration
+        db.update_issue("bd-ccc333", parent_id="bd-bbb222")
+        assert db.get_issue("bd-ccc333").parent_id == "bd-bbb222"
+
+        # Re-run migration — parent_id must NOT revert to bd-aaa111
+        count = migrate_from_beads(beads_db, db)
+        assert count == 0
+        assert db.get_issue("bd-ccc333").parent_id == "bd-bbb222"
+
 
 class TestMigrationParentOrdering:
     def test_child_before_parent_does_not_cause_fk_error(self, tmp_path: Path, db: FiligreeDB) -> None:
