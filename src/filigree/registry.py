@@ -19,7 +19,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from filigree.core import read_config
+from filigree.core import DB_FILENAME, FiligreeDB, read_config
 
 logger = logging.getLogger(__name__)
 
@@ -131,3 +131,58 @@ class Registry:
 
         suffix = hashlib.sha256(path_str.encode()).hexdigest()[:6]
         return f"{base}-{suffix}"
+
+
+class ProjectManager:
+    """Manages DB connections for multiple registered projects."""
+
+    def __init__(self, registry: Registry, *, max_connections: int = 20) -> None:
+        self._registry = registry
+        self._connections: dict[str, FiligreeDB] = {}
+        self._paths: dict[str, Path] = {}  # key -> .filigree/ path
+        self._max_connections = max_connections
+
+    def register(self, filigree_dir: Path) -> ProjectEntry:
+        """Register a project and cache its path for later DB opening."""
+        entry = self._registry.register(filigree_dir)
+        self._paths[entry.key] = Path(entry.path)
+        return entry
+
+    def get_db(self, key: str) -> FiligreeDB | None:
+        """Get or lazily open a DB connection for a project key."""
+        if key in self._connections:
+            return self._connections[key]
+
+        path = self._paths.get(key)
+        if path is None:
+            # Check registry for projects registered by other processes
+            data = self._registry.read()
+            for entry_data in data.values():
+                if entry_data.get("key") == key:
+                    path = Path(entry_data["path"])
+                    self._paths[key] = path
+                    break
+
+        if path is None:
+            return None
+
+        config = read_config(path)
+        db = FiligreeDB(
+            path / DB_FILENAME,
+            prefix=config.get("prefix", "filigree"),
+            check_same_thread=False,
+        )
+        db.initialize()
+        self._connections[key] = db
+        return db
+
+    def get_active_projects(self, ttl_hours: float = DEFAULT_TTL_HOURS) -> list[ProjectEntry]:
+        """Return recently-active projects from the registry."""
+        return self._registry.active_projects(ttl_hours=ttl_hours)
+
+    def close_all(self) -> None:
+        """Close all open DB connections."""
+        for db in self._connections.values():
+            db.close()
+        self._connections.clear()
+        self._paths.clear()

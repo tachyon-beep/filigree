@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 from filigree.core import FiligreeDB, write_config
-from filigree.registry import ProjectEntry, Registry
+from filigree.registry import ProjectEntry, ProjectManager, Registry
 
 
 @pytest.fixture
@@ -116,3 +116,45 @@ class TestRegistryCorruptFile:
         reg = Registry()
         entry = reg.register(fake_project)
         assert entry.key == "myproj"
+
+
+class TestProjectManager:
+    def test_register_and_get_db(
+        self, registry_dir: Path, fake_project: Path
+    ) -> None:
+        reg = Registry()
+        pm = ProjectManager(reg)
+        entry = pm.register(fake_project)
+        db = pm.get_db(entry.key)
+        assert db is not None
+        issues = db.list_issues()
+        assert isinstance(issues, list)
+
+    def test_get_db_cached(self, registry_dir: Path, fake_project: Path) -> None:
+        reg = Registry()
+        pm = ProjectManager(reg)
+        entry = pm.register(fake_project)
+        db1 = pm.get_db(entry.key)
+        db2 = pm.get_db(entry.key)
+        assert db1 is db2
+
+    def test_get_db_unknown_returns_none(self, registry_dir: Path) -> None:
+        reg = Registry()
+        pm = ProjectManager(reg)
+        assert pm.get_db("nonexistent") is None
+
+    def test_close_all(self, registry_dir: Path, fake_project: Path) -> None:
+        reg = Registry()
+        pm = ProjectManager(reg)
+        entry = pm.register(fake_project)
+        pm.get_db(entry.key)
+        pm.close_all()
+        assert len(pm._connections) == 0
+
+    def test_active_projects(self, registry_dir: Path, fake_project: Path) -> None:
+        reg = Registry()
+        pm = ProjectManager(reg)
+        pm.register(fake_project)
+        projects = pm.get_active_projects()
+        assert len(projects) == 1
+        assert projects[0].key == "myproj"
