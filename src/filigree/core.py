@@ -1005,6 +1005,9 @@ class FiligreeDB:
         Uses a single atomic UPDATE with WHERE guard to prevent race conditions
         where two agents try to claim the same issue concurrently.
         """
+        if not assignee or not assignee.strip():
+            msg = "Assignee cannot be empty"
+            raise ValueError(msg)
         # Look up the issue type so we know which states are "open"
         row = self.conn.execute("SELECT type FROM issues WHERE id = ?", (issue_id,)).fetchone()
         if row is None:
@@ -1022,27 +1025,31 @@ class FiligreeDB:
 
         # Atomic UPDATE: only succeeds if issue is unassigned OR already owned by this agent
         status_ph = ",".join("?" * len(open_states))
-        cursor = self.conn.execute(
-            f"UPDATE issues SET assignee = ?, updated_at = ? "
-            f"WHERE id = ? AND status IN ({status_ph}) "
-            f"AND (assignee = '' OR assignee IS NULL OR assignee = ?)",
-            [assignee, _now_iso(), issue_id, *open_states, assignee],
-        )
+        try:
+            cursor = self.conn.execute(
+                f"UPDATE issues SET assignee = ?, updated_at = ? "
+                f"WHERE id = ? AND status IN ({status_ph}) "
+                f"AND (assignee = '' OR assignee IS NULL OR assignee = ?)",
+                [assignee, _now_iso(), issue_id, *open_states, assignee],
+            )
 
-        if cursor.rowcount == 0:
-            # Figure out why it failed: wrong status or already claimed?
-            current = self.conn.execute("SELECT status, assignee FROM issues WHERE id = ?", (issue_id,)).fetchone()
-            if current is None:
-                msg = f"Issue not found: {issue_id}"
-                raise KeyError(msg)
-            if current["assignee"] and current["assignee"] != assignee:
-                msg = f"Cannot claim {issue_id}: already assigned to '{current['assignee']}'"
+            if cursor.rowcount == 0:
+                # Figure out why it failed: wrong status or already claimed?
+                current = self.conn.execute("SELECT status, assignee FROM issues WHERE id = ?", (issue_id,)).fetchone()
+                if current is None:
+                    msg = f"Issue not found: {issue_id}"
+                    raise KeyError(msg)
+                if current["assignee"] and current["assignee"] != assignee:
+                    msg = f"Cannot claim {issue_id}: already assigned to '{current['assignee']}'"
+                    raise ValueError(msg)
+                msg = f"Cannot claim {issue_id}: status is '{current['status']}', expected open-category state"
                 raise ValueError(msg)
-            msg = f"Cannot claim {issue_id}: status is '{current['status']}', expected open-category state"
-            raise ValueError(msg)
 
-        self._record_event(issue_id, "claimed", actor=actor, new_value=assignee)
-        self.conn.commit()
+            self._record_event(issue_id, "claimed", actor=actor, new_value=assignee)
+            self.conn.commit()
+        except Exception:
+            self.conn.rollback()
+            raise
         return self.get_issue(issue_id)
 
     def release_claim(self, issue_id: str, *, actor: str = "") -> Issue:
@@ -1056,13 +1063,17 @@ class FiligreeDB:
             msg = f"Cannot release {issue_id}: no assignee set"
             raise ValueError(msg)
 
-        self.conn.execute(
-            "UPDATE issues SET assignee = '', updated_at = ? WHERE id = ?",
-            [_now_iso(), issue_id],
-        )
+        try:
+            self.conn.execute(
+                "UPDATE issues SET assignee = '', updated_at = ? WHERE id = ?",
+                [_now_iso(), issue_id],
+            )
 
-        self._record_event(issue_id, "released", actor=actor, old_value=current.assignee)
-        self.conn.commit()
+            self._record_event(issue_id, "released", actor=actor, old_value=current.assignee)
+            self.conn.commit()
+        except Exception:
+            self.conn.rollback()
+            raise
         return self.get_issue(issue_id)
 
     def claim_next(
@@ -1080,6 +1091,9 @@ class FiligreeDB:
         on each until one succeeds (handles race conditions with retry).
         Returns None if no matching ready issues exist.
         """
+        if not assignee or not assignee.strip():
+            msg = "Assignee cannot be empty"
+            raise ValueError(msg)
         ready = self.get_ready()
 
         for issue in ready:
@@ -1103,6 +1117,9 @@ class FiligreeDB:
         actor: str = "",
     ) -> tuple[list[Issue], list[dict[str, str]]]:
         """Close multiple issues with per-item error handling. Returns (closed, errors)."""
+        if not isinstance(issue_ids, list) or not all(isinstance(i, str) for i in issue_ids):
+            msg = "issue_ids must be a list of strings"
+            raise TypeError(msg)
         results: list[Issue] = []
         errors: list[dict[str, str]] = []
         for issue_id in issue_ids:
@@ -1125,6 +1142,9 @@ class FiligreeDB:
         actor: str = "",
     ) -> tuple[list[Issue], list[dict[str, str]]]:
         """Update multiple issues with the same changes. Returns (updated, errors)."""
+        if not isinstance(issue_ids, list) or not all(isinstance(i, str) for i in issue_ids):
+            msg = "issue_ids must be a list of strings"
+            raise TypeError(msg)
         results: list[Issue] = []
         errors: list[dict[str, str]] = []
         for issue_id in issue_ids:
@@ -1295,14 +1315,18 @@ class FiligreeDB:
             raise ValueError(msg)
 
         now = _now_iso()
-        cursor = self.conn.execute(
-            "INSERT OR IGNORE INTO dependencies (issue_id, depends_on_id, type, created_at) VALUES (?, ?, ?, ?)",
-            (issue_id, depends_on_id, dep_type, now),
-        )
-        if cursor.rowcount == 0:
-            return False  # Already exists — no-op, no event
-        self._record_event(issue_id, "dependency_added", actor=actor, new_value=f"{dep_type}:{depends_on_id}")
-        self.conn.commit()
+        try:
+            cursor = self.conn.execute(
+                "INSERT OR IGNORE INTO dependencies (issue_id, depends_on_id, type, created_at) VALUES (?, ?, ?, ?)",
+                (issue_id, depends_on_id, dep_type, now),
+            )
+            if cursor.rowcount == 0:
+                return False  # Already exists — no-op, no event
+            self._record_event(issue_id, "dependency_added", actor=actor, new_value=f"{dep_type}:{depends_on_id}")
+            self.conn.commit()
+        except Exception:
+            self.conn.rollback()
+            raise
         return True
 
     def _would_create_cycle(self, issue_id: str, depends_on_id: str) -> bool:

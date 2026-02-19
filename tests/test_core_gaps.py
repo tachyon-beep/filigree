@@ -599,6 +599,62 @@ class TestClaimIssue:
         assert claim_event["actor"] == "agent-1"
 
 
+class TestClaimEmptyAssignee:
+    """Bug filigree-040ddb: claim_issue/claim_next must reject empty assignee."""
+
+    def test_claim_issue_empty_string_raises(self, db: FiligreeDB) -> None:
+        issue = db.create_issue("Claimable")
+        with pytest.raises(ValueError, match="Assignee cannot be empty"):
+            db.claim_issue(issue.id, assignee="")
+
+    def test_claim_issue_whitespace_only_raises(self, db: FiligreeDB) -> None:
+        issue = db.create_issue("Claimable")
+        with pytest.raises(ValueError, match="Assignee cannot be empty"):
+            db.claim_issue(issue.id, assignee="   ")
+
+    def test_claim_next_empty_string_raises(self, db: FiligreeDB) -> None:
+        db.create_issue("Ready")
+        with pytest.raises(ValueError, match="Assignee cannot be empty"):
+            db.claim_next("")
+
+    def test_claim_next_whitespace_only_raises(self, db: FiligreeDB) -> None:
+        db.create_issue("Ready")
+        with pytest.raises(ValueError, match="Assignee cannot be empty"):
+            db.claim_next("   ")
+
+
+class TestBatchInputValidation:
+    """Bug filigree-c45430: batch_close/batch_update must validate issue_ids type."""
+
+    def test_batch_close_string_raises(self, db: FiligreeDB) -> None:
+        with pytest.raises(TypeError, match="issue_ids must be a list of strings"):
+            db.batch_close("not-a-list")  # type: ignore[arg-type]
+
+    def test_batch_close_list_of_ints_raises(self, db: FiligreeDB) -> None:
+        with pytest.raises(TypeError, match="issue_ids must be a list of strings"):
+            db.batch_close([1, 2, 3])  # type: ignore[list-item]
+
+    def test_batch_update_string_raises(self, db: FiligreeDB) -> None:
+        with pytest.raises(TypeError, match="issue_ids must be a list of strings"):
+            db.batch_update("not-a-list", status="closed")  # type: ignore[arg-type]
+
+    def test_batch_update_list_of_ints_raises(self, db: FiligreeDB) -> None:
+        with pytest.raises(TypeError, match="issue_ids must be a list of strings"):
+            db.batch_update([1, 2, 3], status="closed")  # type: ignore[list-item]
+
+    def test_batch_close_valid_list_passes(self, db: FiligreeDB) -> None:
+        issue = db.create_issue("Closeable")
+        closed, errors = db.batch_close([issue.id])
+        assert len(closed) == 1
+        assert len(errors) == 0
+
+    def test_batch_update_valid_list_passes(self, db: FiligreeDB) -> None:
+        issue = db.create_issue("Updateable")
+        updated, errors = db.batch_update([issue.id], priority=0)
+        assert len(updated) == 1
+        assert len(errors) == 0
+
+
 class TestGetEventsSince:
     def test_basic(self, db: FiligreeDB) -> None:
         issue = db.create_issue("Event source")

@@ -854,6 +854,32 @@ class TestClaimAPI:
         assert resp.status_code == 404
 
 
+class TestClaimEmptyAssigneeAPI:
+    """Bug filigree-040ddb: dashboard claim endpoints must reject empty assignee."""
+
+    async def test_claim_empty_assignee_returns_400(self, client: AsyncClient, dashboard_db: FiligreeDB) -> None:
+        ids = dashboard_db._test_ids  # type: ignore[attr-defined]
+        resp = await client.post(f"/api/issue/{ids['a']}/claim", json={"assignee": ""})
+        assert resp.status_code == 400
+        assert "assignee" in resp.json()["error"].lower()
+
+    async def test_claim_missing_assignee_returns_400(self, client: AsyncClient, dashboard_db: FiligreeDB) -> None:
+        ids = dashboard_db._test_ids  # type: ignore[attr-defined]
+        resp = await client.post(f"/api/issue/{ids['a']}/claim", json={})
+        assert resp.status_code == 400
+        assert "assignee" in resp.json()["error"].lower()
+
+    async def test_claim_next_empty_assignee_returns_400(self, client: AsyncClient) -> None:
+        resp = await client.post("/api/claim-next", json={"assignee": ""})
+        assert resp.status_code == 400
+        assert "assignee" in resp.json()["error"].lower()
+
+    async def test_claim_next_missing_assignee_returns_400(self, client: AsyncClient) -> None:
+        resp = await client.post("/api/claim-next", json={})
+        assert resp.status_code == 400
+        assert "assignee" in resp.json()["error"].lower()
+
+
 class TestDependencyManagementAPI:
     async def test_add_dependency(self, client: AsyncClient, dashboard_db: FiligreeDB) -> None:
         ids = dashboard_db._test_ids  # type: ignore[attr-defined]

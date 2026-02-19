@@ -421,6 +421,8 @@ def create_app() -> Any:
         if not isinstance(body, dict):
             return JSONResponse({"error": "Request body must be a JSON object"}, status_code=400)
         assignee = body.get("assignee", "")
+        if not assignee or not assignee.strip():
+            return JSONResponse({"error": "assignee is required and cannot be empty"}, status_code=400)
         actor = body.get("actor", "dashboard")
         try:
             issue = db.claim_issue(issue_id, assignee=assignee, actor=actor)
@@ -460,6 +462,8 @@ def create_app() -> Any:
         if not isinstance(body, dict):
             return JSONResponse({"error": "Request body must be a JSON object"}, status_code=400)
         assignee = body.get("assignee", "")
+        if not assignee or not assignee.strip():
+            return JSONResponse({"error": "assignee is required and cannot be empty"}, status_code=400)
         actor = body.get("actor", "dashboard")
         try:
             issue = db.claim_next(assignee, actor=actor)
