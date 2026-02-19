@@ -4,17 +4,22 @@ Covers:
 - incident.resolved category fix (filigree-bf9926)
 - StateDefinition.category validation (filigree-fe2078)
 - Duplicate state name detection (filigree-eff214)
+- enabled_packs config type validation (filigree-d3dd2e)
+- parse_type_template() malformed transitions/fields (filigree-b25e83)
+- FieldSchema.type parse-time validation (filigree-ca5711)
 """
 
 from __future__ import annotations
 
+import json
 from collections.abc import Generator
 from pathlib import Path
+from typing import ClassVar
 
 import pytest
 
 from filigree.core import FiligreeDB
-from filigree.templates import StateDefinition, TemplateRegistry, TypeTemplate
+from filigree.templates import FieldSchema, StateDefinition, TemplateRegistry, TypeTemplate
 from filigree.templates_data import BUILT_IN_PACKS
 
 # -- Fixtures ----------------------------------------------------------------
@@ -166,3 +171,135 @@ class TestDuplicateStateNameDetection:
         errors = TemplateRegistry.validate_type_template(tpl)
         dup_errors = [e for e in errors if "duplicate" in e.lower()]
         assert dup_errors == []
+
+
+# -- Bug: filigree-d3dd2e — enabled_packs config not type-validated ----------
+
+
+class TestEnabledPacksValidation:
+    """Bug fix: filigree-d3dd2e — malformed enabled_packs crash or mis-select."""
+
+    def test_string_enabled_packs_in_config(self, tmp_path: Path) -> None:
+        """A string value for enabled_packs should not silently split into chars."""
+        filigree_dir = tmp_path / ".filigree"
+        filigree_dir.mkdir()
+        config = {"enabled_packs": "core"}  # string, not list
+        (filigree_dir / "config.json").write_text(json.dumps(config))
+        reg = TemplateRegistry()
+        reg.load(filigree_dir)
+        # Should fall back to defaults or use ["core"], not ['c','o','r','e']
+        assert reg.get_type("task") is not None
+
+    def test_integer_enabled_packs_in_config(self, tmp_path: Path) -> None:
+        """A non-iterable value should not crash — should fall back to defaults."""
+        filigree_dir = tmp_path / ".filigree"
+        filigree_dir.mkdir()
+        config = {"enabled_packs": 42}
+        (filigree_dir / "config.json").write_text(json.dumps(config))
+        reg = TemplateRegistry()
+        reg.load(filigree_dir)  # Must not crash
+        assert reg.get_type("task") is not None
+
+    def test_list_with_non_string_elements(self, tmp_path: Path) -> None:
+        """Elements that aren't strings should be handled gracefully."""
+        filigree_dir = tmp_path / ".filigree"
+        filigree_dir.mkdir()
+        config = {"enabled_packs": ["core", 123, None]}
+        (filigree_dir / "config.json").write_text(json.dumps(config))
+        reg = TemplateRegistry()
+        reg.load(filigree_dir)  # Must not crash
+        assert reg.get_type("task") is not None
+
+    def test_string_enabled_packs_override_parameter(self, tmp_path: Path) -> None:
+        """Passing a string as enabled_packs parameter should not split into chars."""
+        filigree_dir = tmp_path / ".filigree"
+        filigree_dir.mkdir()
+        (filigree_dir / "config.json").write_text("{}")
+        reg = TemplateRegistry()
+        reg.load(filigree_dir, enabled_packs="core")  # type: ignore[arg-type]
+        # Should load core pack, not ['c','o','r','e']
+        assert reg.get_type("task") is not None
+
+
+# -- Bug: filigree-b25e83 — parse_type_template() TypeError on malformed data -
+
+
+class TestParseTemplateMalformedTransitionsFields:
+    """Bug fix: filigree-b25e83 — raw TypeError for non-list transitions/fields."""
+
+    _VALID_BASE: ClassVar[dict] = {
+        "type": "test_type",
+        "display_name": "Test",
+        "states": [
+            {"name": "open", "category": "open"},
+            {"name": "closed", "category": "done"},
+        ],
+        "initial_state": "open",
+    }
+
+    def test_transitions_as_string_raises_valueerror(self) -> None:
+        """A string 'transitions' should raise ValueError, not TypeError."""
+        raw = {**self._VALID_BASE, "transitions": "not a list", "fields_schema": []}
+        with pytest.raises(ValueError, match=r"transitions.*must be a list"):
+            TemplateRegistry.parse_type_template(raw)
+
+    def test_transitions_as_dict_raises_valueerror(self) -> None:
+        raw = {**self._VALID_BASE, "transitions": {"from": "open"}, "fields_schema": []}
+        with pytest.raises(ValueError, match=r"transitions.*must be a list"):
+            TemplateRegistry.parse_type_template(raw)
+
+    def test_fields_schema_as_string_raises_valueerror(self) -> None:
+        raw = {**self._VALID_BASE, "transitions": [], "fields_schema": "not a list"}
+        with pytest.raises(ValueError, match=r"fields_schema.*must be a list"):
+            TemplateRegistry.parse_type_template(raw)
+
+    def test_fields_schema_as_int_raises_valueerror(self) -> None:
+        raw = {**self._VALID_BASE, "transitions": [], "fields_schema": 42}
+        with pytest.raises(ValueError, match=r"fields_schema.*must be a list"):
+            TemplateRegistry.parse_type_template(raw)
+
+    def test_transition_element_not_dict_raises_valueerror(self) -> None:
+        raw = {**self._VALID_BASE, "transitions": ["not a dict"], "fields_schema": []}
+        with pytest.raises(ValueError, match=r"transition.*must be a dict"):
+            TemplateRegistry.parse_type_template(raw)
+
+    def test_field_element_not_dict_raises_valueerror(self) -> None:
+        raw = {**self._VALID_BASE, "transitions": [], "fields_schema": ["not a dict"]}
+        with pytest.raises(ValueError, match=r"field.*must be a dict"):
+            TemplateRegistry.parse_type_template(raw)
+
+
+# -- Bug: filigree-ca5711 — FieldSchema.type not validated at parse time ------
+
+
+class TestFieldSchemaTypeValidation:
+    """Bug fix: filigree-ca5711 — invalid FieldSchema.type silently accepted."""
+
+    def test_valid_field_types_accepted(self) -> None:
+        for ft in ("text", "enum", "number", "date", "list", "boolean"):
+            fs = FieldSchema(name="test_field", type=ft)  # type: ignore[arg-type]
+            assert fs.type == ft
+
+    def test_invalid_field_type_raises_valueerror(self) -> None:
+        with pytest.raises(ValueError, match=r"[Ii]nvalid.*field type"):
+            FieldSchema(name="bad_field", type="integer")  # type: ignore[arg-type]
+
+    def test_empty_field_type_raises_valueerror(self) -> None:
+        with pytest.raises(ValueError, match=r"[Ii]nvalid.*field type"):
+            FieldSchema(name="bad_field", type="")  # type: ignore[arg-type]
+
+    def test_parse_template_rejects_invalid_field_type(self) -> None:
+        """parse_type_template should reject fields with invalid type values."""
+        raw = {
+            "type": "test_type",
+            "display_name": "Test",
+            "states": [
+                {"name": "open", "category": "open"},
+                {"name": "closed", "category": "done"},
+            ],
+            "initial_state": "open",
+            "transitions": [],
+            "fields_schema": [{"name": "bad", "type": "integer"}],
+        }
+        with pytest.raises(ValueError, match=r"[Ii]nvalid.*field type"):
+            TemplateRegistry.parse_type_template(raw)

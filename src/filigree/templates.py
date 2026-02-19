@@ -71,6 +71,9 @@ class TransitionDefinition:
     requires_fields: tuple[str, ...] = ()
 
 
+_VALID_FIELD_TYPES: frozenset[str] = frozenset({"text", "enum", "number", "date", "list", "boolean"})
+
+
 @dataclass(frozen=True)
 class FieldSchema:
     """Schema for a custom field on an issue type."""
@@ -81,6 +84,12 @@ class FieldSchema:
     options: tuple[str, ...] = ()
     default: Any = None
     required_at: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        if self.type not in _VALID_FIELD_TYPES:
+            allowed = sorted(_VALID_FIELD_TYPES)
+            msg = f"Invalid field type '{self.type}' for field '{self.name}': must be one of {allowed}"
+            raise ValueError(msg)
 
 
 @dataclass(frozen=True)
@@ -236,9 +245,32 @@ class TemplateRegistry:
                 msg = f"Type '{type_name}': state at index {i} must be a dict with 'name' and 'category'"
                 raise ValueError(msg)
 
+        # Defensive shape checks for transitions and fields_schema
+        raw_transitions = raw.get("transitions", [])
+        if raw_transitions is not None and not isinstance(raw_transitions, list):
+            msg = f"Type '{type_name}': 'transitions' must be a list, got {type(raw_transitions).__name__}"
+            raise ValueError(msg)
+        if raw_transitions is None:
+            raw_transitions = []
+        for i, t in enumerate(raw_transitions):
+            if not isinstance(t, dict):
+                msg = f"Type '{type_name}': transition at index {i} must be a dict, got {type(t).__name__}"
+                raise ValueError(msg)
+
+        raw_fields = raw.get("fields_schema", [])
+        if raw_fields is not None and not isinstance(raw_fields, list):
+            msg = f"Type '{type_name}': 'fields_schema' must be a list, got {type(raw_fields).__name__}"
+            raise ValueError(msg)
+        if raw_fields is None:
+            raw_fields = []
+        for i, f in enumerate(raw_fields):
+            if not isinstance(f, dict):
+                msg = f"Type '{type_name}': field at index {i} must be a dict, got {type(f).__name__}"
+                raise ValueError(msg)
+
         # Enforcement validation
         valid_enforcement = {"hard", "soft", "none"}
-        for t in raw.get("transitions", []):
+        for t in raw_transitions:
             enforcement_val = t.get("enforcement")
             if enforcement_val not in valid_enforcement:
                 allowed = ", ".join(sorted(valid_enforcement))
@@ -254,12 +286,11 @@ class TemplateRegistry:
         if len(raw_states) > TemplateRegistry.MAX_STATES:
             msg = f"Type '{type_name}' has {len(raw_states)} states (max {TemplateRegistry.MAX_STATES})"
             raise ValueError(msg)
-        if len(raw.get("transitions", [])) > TemplateRegistry.MAX_TRANSITIONS:
-            n = len(raw["transitions"])
-            msg = f"Type '{type_name}' has {n} transitions (max {TemplateRegistry.MAX_TRANSITIONS})"
+        if len(raw_transitions) > TemplateRegistry.MAX_TRANSITIONS:
+            msg = f"Type '{type_name}' has {len(raw_transitions)} transitions (max {TemplateRegistry.MAX_TRANSITIONS})"
             raise ValueError(msg)
-        if len(raw.get("fields_schema", [])) > TemplateRegistry.MAX_FIELDS:
-            msg = f"Type '{type_name}' has {len(raw['fields_schema'])} fields (max {TemplateRegistry.MAX_FIELDS})"
+        if len(raw_fields) > TemplateRegistry.MAX_FIELDS:
+            msg = f"Type '{type_name}' has {len(raw_fields)} fields (max {TemplateRegistry.MAX_FIELDS})"
             raise ValueError(msg)
 
         logger.debug("Parsing template for type: %s", type_name)
@@ -282,7 +313,7 @@ class TemplateRegistry:
                 enforcement=t["enforcement"],
                 requires_fields=tuple(t.get("requires_fields", [])),
             )
-            for t in raw.get("transitions", [])
+            for t in raw_transitions
         )
         fields_schema = tuple(
             FieldSchema(
@@ -293,7 +324,7 @@ class TemplateRegistry:
                 default=f.get("default"),
                 required_at=tuple(f.get("required_at", [])),
             )
-            for f in raw.get("fields_schema", [])
+            for f in raw_fields
         )
         return TypeTemplate(
             type=type_name,
@@ -629,20 +660,29 @@ class TemplateRegistry:
 
         from filigree.templates_data import BUILT_IN_PACKS
 
+        _default_packs = ["core", "planning"]
         if enabled_packs is None:
             # Read enabled packs from config
             config_path = filigree_dir / "config.json"
-            enabled_packs = ["core", "planning"]  # default
+            enabled_packs = _default_packs
             if config_path.exists():
                 try:
                     config = _json.loads(config_path.read_text())
                     if not isinstance(config, dict):
                         raise ValueError("config.json must contain a JSON object")
-                    enabled_packs = config.get("enabled_packs", ["core", "planning"])
+                    enabled_packs = config.get("enabled_packs", _default_packs)
                 except (ValueError, KeyError):
                     logger.warning("Could not read config.json — using default enabled_packs")
+
+        # Validate enabled_packs is list[str] — strings would be split into chars
+        if isinstance(enabled_packs, str):
+            logger.warning("enabled_packs is a string ('%s'), wrapping in list", enabled_packs)
+            enabled_packs = [enabled_packs]
+        elif not isinstance(enabled_packs, list):
+            logger.warning("enabled_packs has invalid type %s — using defaults", type(enabled_packs).__name__)
+            enabled_packs = _default_packs
         else:
-            enabled_packs = list(enabled_packs)
+            enabled_packs = [p for p in enabled_packs if isinstance(p, str)]
 
         logger.info("Loading templates: enabled_packs=%s", enabled_packs)
 
