@@ -46,6 +46,12 @@ def create_app() -> Any:
 
     app = FastAPI(title="Filigree Dashboard", docs_url=None, redoc_url=None)
 
+    # NOTE: All handlers are intentionally async despite doing synchronous
+    # SQLite I/O. This serializes DB access on the event loop thread,
+    # avoiding concurrent multi-thread access to the shared _db connection.
+    # Using plain `def` would cause FastAPI to dispatch handlers to a thread
+    # pool, where parallel threads would race on the single SQLite connection.
+
     @app.get("/", response_class=HTMLResponse)
     async def index() -> HTMLResponse:
         html = (STATIC_DIR / "dashboard.html").read_text()
@@ -220,6 +226,8 @@ def create_app() -> Any:
             issue = db.close_issue(issue_id, reason=reason, actor=actor, fields=fields)
         except KeyError:
             return JSONResponse({"error": f"Not found: {issue_id}"}, status_code=404)
+        except TypeError as e:
+            return JSONResponse({"error": str(e)}, status_code=400)
         except ValueError as e:
             return JSONResponse({"error": str(e)}, status_code=409)
         return JSONResponse(issue.to_dict())
