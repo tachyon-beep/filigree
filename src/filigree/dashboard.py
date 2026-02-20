@@ -18,6 +18,7 @@ Usage:
 
 from __future__ import annotations
 
+import logging
 import webbrowser
 from dataclasses import asdict
 from pathlib import Path
@@ -31,6 +32,8 @@ from filigree.registry import ProjectManager, Registry
 
 STATIC_DIR = Path(__file__).parent / "static"
 DEFAULT_PORT = 8377
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Module-level state — set by main() or test fixtures
@@ -618,6 +621,25 @@ def create_app() -> Any:
                 )
         entry = _project_manager.register(p)
         return JSONResponse(asdict(entry))
+
+    @app.post("/api/reload")
+    async def api_reload() -> JSONResponse:
+        if _project_manager is None:
+            return JSONResponse({"error": "Project manager not initialized"}, status_code=500)
+        _project_manager.close_all()
+        projects = _project_manager.get_active_projects()
+        errors: list[str] = []
+        for proj in projects:
+            try:
+                _project_manager.register(Path(proj.path))
+            except Exception:
+                logger.warning("Failed to re-register project %s", proj.key, exc_info=True)
+                errors.append(proj.key)
+        return JSONResponse({
+            "ok": len(errors) == 0,
+            "projects": len(projects) - len(errors),
+            "errors": errors,
+        })
 
     return app
 

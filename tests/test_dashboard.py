@@ -1048,6 +1048,50 @@ class TestBatchClosePartialMutation:
         assert len(errors) == 1
 
 
+class TestReloadAPI:
+    async def test_reload_returns_ok(self, client: AsyncClient) -> None:
+        resp = await client.post("/api/reload")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["ok"] is True
+        assert "projects" in data
+
+    async def test_reload_clears_connections(self, client: AsyncClient) -> None:
+        # Prime the connection cache
+        await client.get("/api/issues")
+        pm = dash_module._project_manager
+        assert pm is not None
+        assert len(pm._connections) > 0
+
+        resp = await client.post("/api/reload")
+        assert resp.status_code == 200
+        # Connections cleared (will reopen lazily on next request)
+        assert len(pm._connections) == 0
+
+    async def test_reload_issues_still_work_after(
+        self, client: AsyncClient, tmp_path: Path
+    ) -> None:
+        # Set up a real project that survives reload (registry-based re-register)
+        fdir = tmp_path / "reloadproj" / ".filigree"
+        fdir.mkdir(parents=True)
+        write_config(fdir, {"prefix": "reloadproj", "version": 1, "enabled_packs": ["core"]})
+        db = FiligreeDB(fdir / "filigree.db", prefix="reloadproj")
+        db.initialize()
+        db.create_issue("Survives reload", type="task")
+        db.close()
+
+        # Register it with the project manager so it appears in the registry
+        pm = dash_module._project_manager
+        assert pm is not None
+        pm.register(fdir)
+        dash_module._default_project_key = "reloadproj"
+
+        await client.post("/api/reload")
+        # Lazy reconnect should make subsequent requests work
+        resp = await client.get("/api/issues")
+        assert resp.status_code == 200
+
+
 class TestDashboardConcurrency:
     """Bug filigree-4b8e41: sync handlers run in thread pool, creating races on shared DB."""
 
