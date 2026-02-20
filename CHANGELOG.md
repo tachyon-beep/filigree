@@ -35,6 +35,8 @@ Multi-project dashboard, UX overhaul, and Deep Teal color theme.
 - Disabled transition buttons show inline `(missing: field)` hints
 - Claim modal shows "Not you?" link when pre-filling from localStorage
 - Header density reduction — removed duplicate stat spans (footer has the full set)
+- Settings gear menu (⚙) in header — replaces standalone theme toggle with a dropdown containing "Reload server" and "Toggle theme"
+- `POST /api/reload` endpoint — soft-reloads server state (closes DB connections, re-reads registry, re-registers projects) without process restart
 
 #### Deep Teal color theme
 
