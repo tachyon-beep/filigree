@@ -21,6 +21,10 @@
   .scrollbar-thin::-webkit-scrollbar-thumb { background: #475569; border-radius: 3px; }
   .detail-panel { transition: transform 0.2s ease; }
   .kanban-col { min-width: 280px; flex: 1 1 0; }
+  .kanban-col.drag-valid { outline: 2px dashed #3B82F6; outline-offset: -2px; background: rgba(59,130,246,0.05); }
+  .kanban-col.drag-invalid { opacity: 0.3; cursor: not-allowed; }
+  .card[draggable="true"] { cursor: grab; }
+  .card[draggable="true"]:active { cursor: grabbing; }
   #refreshIndicator { transition: opacity 0.3s ease; }
   @keyframes stale-pulse { 0%,100% { border-left-color: #EF4444; } 50% { border-left-color: #7F1D1D; } }
   .aging-border { border-left: 4px solid #F59E0B; }
@@ -573,7 +577,7 @@ function renderStandardKanban(columns) {
   ];
   return colDefs.map(function(col) {
     var issues = columns[col.key] || [];
-    return '<div class="kanban-col flex flex-col">' +
+    return '<div class="kanban-col flex flex-col" data-status-category="' + col.key + '">' +
       '<div class="flex items-center gap-2 mb-2 px-1">' +
         '<span class="w-2 h-2 rounded-full" style="background:' + col.color + '"></span>' +
         '<span class="font-medium text-xs text-slate-300">' + col.label + '</span>' +
@@ -608,7 +612,7 @@ function renderClusterKanban(columns) {
     var epicCards = epicIssues.map(function(epic) { return renderClusterCard(epic); }).join('');
     var orphanCards = orphans.map(function(i) { return renderCard(i); }).join('');
 
-    return '<div class="kanban-col flex flex-col">' +
+    return '<div class="kanban-col flex flex-col" data-status-category="' + col.key + '">' +
       '<div class="flex items-center gap-2 mb-2 px-1">' +
         '<span class="w-2 h-2 rounded-full" style="background:' + col.color + '"></span>' +
         '<span class="font-medium text-xs text-slate-300">' + col.label + '</span>' +
@@ -685,8 +689,11 @@ function renderCard(issue) {
       ' onclick="toggleCardSelect(event,\'' + issue.id + '\')" class="accent-blue-500 mr-1">'
     : '';
 
+  var isDraggable = kanbanMode !== 'cluster' && !multiSelectMode;
   return '<div class="card bg-slate-800 rounded border border-slate-700 p-3 cursor-pointer ' +
-    readyClass + ' ' + agingClass + ' ' + changedClass + '" tabindex="0" data-id="' + issue.id + '" onclick="openDetail(\'' + issue.id + '\')">' +
+    readyClass + ' ' + agingClass + ' ' + changedClass + '"' +
+    (isDraggable ? ' draggable="true"' : '') +
+    ' tabindex="0" data-id="' + issue.id + '" onclick="openDetail(\'' + issue.id + '\')">' +
     '<div class="flex items-center gap-2 mb-1">' +
       checkbox +
       '<span>' + typeIcon + '</span>' +
@@ -774,7 +781,7 @@ function renderTypeKanban(stateColumns, template) {
   return template.states.map(function(state) {
     var issues = stateColumns[state.name] || [];
     var catColor = CATEGORY_COLORS[state.category] || '#64748B';
-    return '<div class="kanban-col flex flex-col">' +
+    return '<div class="kanban-col flex flex-col" data-status="' + state.name + '" data-status-category="' + state.category + '">' +
       '<div class="flex items-center gap-2 mb-2 px-1">' +
         '<span class="w-2 h-2 rounded-full" style="background:' + catColor + '"></span>' +
         '<span class="font-medium text-xs text-slate-300">' + state.name + '</span>' +
