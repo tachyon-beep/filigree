@@ -311,6 +311,7 @@ var TYPE_ICONS = { bug: '\u{1F41B}', feature: '\u2728', task: '\u{1F4CB}', epic:
 var typeTemplate = null;  // Cached type template for type-filtered kanban
 var _dragIssueId = null;       // Issue being dragged
 var _dragTransitions = [];     // Valid transitions for dragged issue
+var _transitionsLoaded = false;
 
 // ---------------------------------------------------------------------------
 // Multi-project support
@@ -811,6 +812,7 @@ function initDragAndDrop() {
     card.style.opacity = '0.5';
 
     // Fetch valid transitions, then mark columns
+    _transitionsLoaded = false;
     loadTransitions(_dragIssueId).then(function(transitions) {
       _dragTransitions = transitions;
       var validCategories = new Set();
@@ -834,10 +836,12 @@ function initDragAndDrop() {
         if (isSameCol) return;
         col.classList.add(isValid ? 'drag-valid' : 'drag-invalid');
       });
+      _transitionsLoaded = true;
     });
   });
 
   board.addEventListener('dragover', function(e) {
+    if (!_transitionsLoaded) return;
     var col = e.target.closest('.kanban-col');
     if (!col || col.classList.contains('drag-invalid')) return;
     if (col.classList.contains('drag-valid')) {
@@ -887,6 +891,7 @@ function initDragAndDrop() {
     if (card) card.style.opacity = '';
     _dragIssueId = null;
     _dragTransitions = [];
+    _transitionsLoaded = false;
     board.querySelectorAll('.kanban-col').forEach(function(col) {
       col.classList.remove('drag-valid', 'drag-invalid');
     });
@@ -1354,7 +1359,8 @@ document.addEventListener('keydown', function(e) {
     if (e.key === 'x') { e.preventDefault(); closeIssue(selectedIssue); }
     if (e.key === 'm') {
       e.preventDefault();
-      loadTransitions(selectedIssue).then(function(transitions) {
+      var issueId = selectedIssue;
+      loadTransitions(issueId).then(function(transitions) {
         var ready = transitions.filter(function(t) { return t.ready; });
         if (!ready.length) { showToast('No valid transitions', 'info'); return; }
         var modal = document.createElement('div');
@@ -1365,7 +1371,7 @@ document.addEventListener('keydown', function(e) {
           '<div class="text-sm text-slate-200 mb-3">Move to...</div>' +
           '<div class="flex flex-col gap-2">' +
           ready.map(function(t) {
-            return '<button onclick="moveIssueTo(\'' + selectedIssue + '\',\'' + t.to + '\')" class="text-xs text-left bg-slate-700 px-3 py-2 rounded hover:bg-slate-600 text-slate-200">' + t.to + '</button>';
+            return '<button onclick="moveIssueTo(\'' + issueId + '\',\'' + t.to.replace(/'/g, "\\'") + '\')" class="text-xs text-left bg-slate-700 px-3 py-2 rounded hover:bg-slate-600 text-slate-200">' + escHtml(t.to) + '</button>';
           }).join('') +
           '</div>' +
           '<button onclick="document.getElementById(\'moveModal\').remove()" class="text-xs text-slate-500 mt-3 hover:text-slate-300">Cancel (Esc)</button>' +
@@ -1373,6 +1379,8 @@ document.addEventListener('keydown', function(e) {
         document.body.appendChild(modal);
         modal.querySelector('button').focus();
         modal.addEventListener('keydown', function(ev) { if (ev.key === 'Escape') modal.remove(); });
+      }).catch(function() {
+        showToast('Could not load transitions', 'error');
       });
     }
   }
@@ -1637,7 +1645,11 @@ async function moveIssueTo(issueId, targetStatus) {
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({status: targetStatus}),
   });
-  if (!resp.ok) { var err = await resp.json(); showToast('Error: ' + (err.error || 'Move failed'), 'error'); return; }
+  if (!resp.ok) {
+    try { var err = await resp.json(); showToast('Error: ' + (err.error || 'Move failed'), 'error'); }
+    catch(e) { showToast('Move failed (status ' + resp.status + ')', 'error'); }
+    return;
+  }
   showToast('Moved to ' + targetStatus, 'success');
   await fetchData();
   if (selectedIssue === issueId) openDetail(issueId);
