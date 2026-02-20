@@ -166,13 +166,23 @@ class ProjectManager:
         if path is None:
             return None
 
-        config = read_config(path)
-        db = FiligreeDB(
-            path / DB_FILENAME,
-            prefix=config.get("prefix", "filigree"),
-            check_same_thread=False,
-        )
-        db.initialize()
+        # Guard against stale registry entries pointing to deleted directories
+        if not path.is_dir() or not (path / DB_FILENAME).exists():
+            self._paths.pop(key, None)
+            return None
+
+        try:
+            config = read_config(path)
+            db = FiligreeDB(
+                path / DB_FILENAME,
+                prefix=config.get("prefix", "filigree"),
+                check_same_thread=False,
+            )
+            db.initialize()
+        except Exception:
+            self._paths.pop(key, None)
+            return None
+
         self._connections[key] = db
         return db
 

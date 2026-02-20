@@ -152,3 +152,26 @@ class TestProjectManager:
         projects = pm.get_active_projects()
         assert len(projects) == 1
         assert projects[0].key == "myproj"
+
+    def test_get_db_stale_path_returns_none(self, registry_dir: Path, fake_project: Path) -> None:
+        """Stale registry entry pointing to deleted directory returns None, not 500."""
+        import shutil
+
+        reg = Registry()
+        pm = ProjectManager(reg)
+        entry = pm.register(fake_project)
+        # Delete the project directory
+        shutil.rmtree(fake_project)
+        # Evict from connection cache so get_db re-opens
+        pm._connections.pop(entry.key, None)
+        assert pm.get_db(entry.key) is None
+
+    def test_get_db_missing_db_file_returns_none(self, registry_dir: Path, fake_project: Path) -> None:
+        """Registry entry where .filigree/ exists but DB file was deleted returns None."""
+        reg = Registry()
+        pm = ProjectManager(reg)
+        entry = pm.register(fake_project)
+        # Delete just the database file
+        (fake_project / "filigree.db").unlink()
+        pm._connections.pop(entry.key, None)
+        assert pm.get_db(entry.key) is None

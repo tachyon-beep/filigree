@@ -380,14 +380,14 @@ var API_BASE = '/api';
 var currentProjectKey = '';
 var allProjects = [];
 
-function setProject(key) {
+function setProject(key, opts) {
   currentProjectKey = key;
   API_BASE = key ? '/api/p/' + encodeURIComponent(key) : '/api';
   var sel = document.getElementById('projectSwitcher');
   if (sel) sel.value = key;
   var proj = allProjects.find(function(p) { return p.key === key; });
   document.title = proj ? proj.name + ' \u2014 Filigree' : 'Filigree Dashboard';
-  closeDetail();
+  if (!(opts && opts.keepDetail)) closeDetail();
   updateHash();
   fetchData();
 }
@@ -2610,9 +2610,9 @@ populatePresets();
   var match = hash.match(/project=([^&]+)/);
   if (match) {
     var found = allProjects.find(function(p) { return p.key === match[1]; });
-    if (found) { setProject(found.key); } else if (allProjects.length > 0) { setProject(allProjects[0].key); } else { fetchData(); }
+    if (found) { setProject(found.key, {keepDetail: true}); } else if (allProjects.length > 0) { setProject(allProjects[0].key, {keepDetail: true}); } else { fetchData(); }
   } else if (allProjects.length > 0) {
-    setProject(allProjects[0].key);
+    setProject(allProjects[0].key, {keepDetail: true});
   } else {
     fetchData();  // Fallback: no projects in registry, use default /api/
   }
