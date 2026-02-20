@@ -1062,8 +1062,8 @@ function renderGraph() {
           'text-halign': 'center',
           'text-wrap': 'wrap',
           'text-max-width': '120px',
-          'color': '#F1F5F9',
-          'text-outline-color': '#0F172A',
+          'color': THEME_COLORS.textPrimary,
+          'text-outline-color': THEME_COLORS.graphOutline,
           'text-outline-width': 2,
           'width': 'mapData(priority, 0, 4, 60, 35)',
           'height': 'mapData(priority, 0, 4, 60, 35)',
@@ -1084,8 +1084,8 @@ function renderGraph() {
         selector: 'edge',
         style: {
           'width': 1.5,
-          'line-color': '#475569',
-          'target-arrow-color': '#475569',
+          'line-color': THEME_COLORS.graphEdge,
+          'target-arrow-color': THEME_COLORS.graphEdge,
           'target-arrow-shape': 'triangle',
           'curve-style': 'bezier',
           'arrow-scale': 0.8,
@@ -1093,7 +1093,7 @@ function renderGraph() {
       },
       {
         selector: 'node:selected',
-        style: { 'border-width': 3, 'border-color': '#3B82F6' }
+        style: { 'border-width': 3, 'border-color': THEME_COLORS.accent }
       }
     ],
     minZoom: 0.1,
@@ -2256,15 +2256,15 @@ function renderWorkflowGraph(template, stateCounts) {
     style: [
       { selector: 'node', style: {
         'label': 'data(label)', 'font-size': '12px', 'font-family': 'JetBrains Mono, monospace',
-        'text-valign': 'center', 'text-halign': 'center', 'color': '#F1F5F9',
-        'text-outline-color': '#0F172A', 'text-outline-width': 2,
+        'text-valign': 'center', 'text-halign': 'center', 'color': THEME_COLORS.textPrimary,
+        'text-outline-color': THEME_COLORS.graphOutline, 'text-outline-width': 2,
         'width': 80, 'height': 40, 'shape': 'round-rectangle',
         'background-color': function(ele) { return CATEGORY_COLORS[ele.data('category')] || '#64748B'; },
       }},
       { selector: 'edge', style: {
-        'width': 2, 'line-color': '#475569', 'target-arrow-color': '#475569',
+        'width': 2, 'line-color': THEME_COLORS.graphEdge, 'target-arrow-color': THEME_COLORS.graphEdge,
         'target-arrow-shape': 'triangle', 'curve-style': 'bezier', 'arrow-scale': 0.8,
-        'label': 'data(enforcement)', 'font-size': '9px', 'color': '#94A3B8',
+        'label': 'data(enforcement)', 'font-size': '9px', 'color': THEME_COLORS.textSecondary,
         'text-rotation': 'autorotate', 'text-margin-y': -10,
       }},
     ],
