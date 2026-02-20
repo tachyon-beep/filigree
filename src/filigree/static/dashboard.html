@@ -702,14 +702,15 @@ function renderCard(issue) {
     '<div class="flex items-center gap-2 mb-1">' +
       checkbox +
       '<span>' + typeIcon + '</span>' +
-      '<span class="w-2 h-2 rounded-full shrink-0" style="background:' + prioColor +
-        '" title="Priority ' + issue.priority + ' (' + ['Critical','High','Medium','Low','Backlog'][issue.priority] + ')"></span>' +
+      (issue.priority <= 1
+        ? '<span class="text-xs font-bold shrink-0" style="color:' + prioColor + '" title="Priority ' + issue.priority + ' (' + ['Critical','High','Medium','Low','Backlog'][issue.priority] + ')">P' + issue.priority + '</span>'
+        : '<span class="w-2 h-2 rounded-full shrink-0" style="background:' + prioColor + '" title="Priority ' + issue.priority + ' (' + ['Critical','High','Medium','Low','Backlog'][issue.priority] + ')"></span>') +
       '<span class="font-medium text-slate-200 truncate">' + escHtml(issue.title.slice(0, 50)) + '</span>' +
     '</div>' +
     '<div class="flex items-center gap-2 text-xs text-slate-500">' +
       '<span>' + issue.id + '</span>' +
       '<span class="rounded px-1 bg-slate-700 text-slate-400">' + issue.type.replace(/_/g, ' ') + '</span>' +
-      '<span class="rounded px-1" style="background:' + catColor + ';color:white">' + issue.status + '</span>' +
+      '<span class="rounded px-1" style="background:' + catColor + '33;color:' + catColor + '">' + issue.status + '</span>' +
       (blockedCount > 0 ? '<span class="text-red-400">\u{1F517} blocked by ' + blockedCount + '</span>' : '') +
       (impactScores[issue.id] > 0 ? '<span class="text-amber-400" title="Impact: blocks ' + impactScores[issue.id] + ' downstream issue' + (impactScores[issue.id] !== 1 ? 's' : '') + ' — resolve this to unblock work">\u26A1' + impactScores[issue.id] + '</span>' : '') +
       (issue.assignee ? '<span class="text-slate-400">\u{1F464} ' + escHtml(issue.assignee) + '</span>' : '') +
