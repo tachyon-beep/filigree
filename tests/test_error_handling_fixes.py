@@ -21,6 +21,7 @@ from filigree.cli import cli
 from filigree.core import DB_FILENAME, FILIGREE_DIR_NAME, SUMMARY_FILENAME, FiligreeDB, write_config
 from filigree.dashboard import create_app
 from filigree.mcp_server import call_tool
+from filigree.registry import ProjectManager, Registry
 
 # ---------------------------------------------------------------------------
 # Shared fixtures
@@ -89,13 +90,19 @@ async def dashboard_client(tmp_path: Path) -> AsyncClient:
     d.close_issue(c.id, reason="done")
     d._test_ids = {"a": a.id, "b": b.id, "c": c.id}  # type: ignore[attr-defined]
 
-    dash_module._db = d
-    dash_module._prefix = "test"
+    registry = Registry()
+    pm = ProjectManager(registry)
+    pm._connections["test"] = d
+    pm._paths["test"] = Path("/fake/.filigree")
+
+    dash_module._project_manager = pm
+    dash_module._default_project_key = "test"
     app = create_app()
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         yield client
-    dash_module._db = None
+    dash_module._project_manager = None
+    dash_module._default_project_key = ""
     d.close()
 
 

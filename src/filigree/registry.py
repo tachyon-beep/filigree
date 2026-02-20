@@ -15,7 +15,7 @@ import hashlib
 import json
 import logging
 from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -72,7 +72,7 @@ class Registry:
         path_str = str(filigree_dir)
         config = read_config(filigree_dir)
         prefix = config.get("prefix", "filigree")
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
 
         REGISTRY_DIR.mkdir(parents=True, exist_ok=True)
         lock_fd = None
@@ -106,7 +106,7 @@ class Registry:
     def active_projects(self, ttl_hours: float = DEFAULT_TTL_HOURS) -> list[ProjectEntry]:
         """Return projects seen within the TTL window."""
         data = self.read()
-        cutoff = datetime.now(timezone.utc).timestamp() - (ttl_hours * 3600)
+        cutoff = datetime.now(UTC).timestamp() - (ttl_hours * 3600)
         result = []
         for entry_data in data.values():
             try:

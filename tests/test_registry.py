@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 from filigree.core import FiligreeDB, write_config
-from filigree.registry import ProjectEntry, ProjectManager, Registry
+from filigree.registry import ProjectManager, Registry
 
 
 @pytest.fixture
@@ -55,9 +55,7 @@ class TestRegistryRegister:
         e2 = reg.register(fake_project)
         assert e2.last_seen >= e1.last_seen
 
-    def test_two_projects_distinct_keys(
-        self, registry_dir: Path, fake_project: Path, tmp_path: Path
-    ) -> None:
+    def test_two_projects_distinct_keys(self, registry_dir: Path, fake_project: Path, tmp_path: Path) -> None:
         fdir2 = tmp_path / "other" / ".filigree"
         fdir2.mkdir(parents=True)
         write_config(fdir2, {"prefix": "other", "version": 1, "enabled_packs": ["core"]})
@@ -70,9 +68,7 @@ class TestRegistryRegister:
         e2 = reg.register(fdir2)
         assert e1.key != e2.key
 
-    def test_collision_appends_hash(
-        self, registry_dir: Path, fake_project: Path, tmp_path: Path
-    ) -> None:
+    def test_collision_appends_hash(self, registry_dir: Path, fake_project: Path, tmp_path: Path) -> None:
         """Two projects with the same prefix get disambiguated keys."""
         fdir2 = tmp_path / "other" / ".filigree"
         fdir2.mkdir(parents=True)
@@ -119,9 +115,7 @@ class TestRegistryCorruptFile:
 
 
 class TestProjectManager:
-    def test_register_and_get_db(
-        self, registry_dir: Path, fake_project: Path
-    ) -> None:
+    def test_register_and_get_db(self, registry_dir: Path, fake_project: Path) -> None:
         reg = Registry()
         pm = ProjectManager(reg)
         entry = pm.register(fake_project)
