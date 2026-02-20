@@ -513,7 +513,7 @@ function toggleReady() {
   var btn = document.getElementById('btnReady');
   btn.className = readyFilter
     ? 'px-2 py-1 rounded text-xs font-medium bg-emerald-900/50 text-emerald-400 border border-emerald-700'
-    : 'px-2 py-1 rounded text-xs font-medium bg-slate-700 text-slate-400 border border-slate-600';
+    : 'px-2 py-1 rounded text-xs font-medium bg-overlay text-secondary border border-strong';
   render();
 }
 
@@ -524,7 +524,7 @@ function toggleBlocked() {
   var btn = document.getElementById('btnBlocked');
   btn.className = blockedFilter
     ? 'px-2 py-1 rounded text-xs font-medium bg-red-900/50 text-red-400 border border-red-700'
-    : 'px-2 py-1 rounded text-xs font-medium bg-slate-700 text-slate-400 border border-slate-600';
+    : 'px-2 py-1 rounded text-xs font-medium bg-overlay text-secondary border border-strong';
   render();
 }
 
@@ -533,8 +533,8 @@ function toggleMultiSelect() {
   if (!multiSelectMode) selectedCards.clear();
   var btn = document.getElementById('btnMultiSelect');
   btn.className = multiSelectMode
-    ? 'px-2 py-1 rounded text-xs font-medium bg-blue-600 text-white'
-    : 'px-2 py-1 rounded text-xs font-medium bg-slate-700 text-slate-400 border border-slate-600';
+    ? 'px-2 py-1 rounded text-xs font-medium bg-accent text-primary'
+    : 'px-2 py-1 rounded text-xs font-medium bg-overlay text-secondary border border-strong';
   render();
 }
 
@@ -557,20 +557,20 @@ function switchView(view) {
   document.getElementById('activityView').classList.toggle('hidden', view !== 'activity');
   document.getElementById('workflowView').classList.toggle('hidden', view !== 'workflow');
   document.getElementById('btnGraph').className = view === 'graph'
-    ? 'px-3 py-1 rounded text-xs font-medium bg-blue-600 text-white'
-    : 'px-3 py-1 rounded text-xs font-medium bg-slate-700 text-slate-300 hover:bg-slate-600';
+    ? 'px-3 py-1 rounded text-xs font-medium bg-accent text-primary'
+    : 'px-3 py-1 rounded text-xs font-medium bg-overlay text-secondary bg-overlay-hover';
   document.getElementById('btnKanban').className = view === 'kanban'
-    ? 'px-3 py-1 rounded text-xs font-medium bg-blue-600 text-white'
-    : 'px-3 py-1 rounded text-xs font-medium bg-slate-700 text-slate-300 hover:bg-slate-600';
+    ? 'px-3 py-1 rounded text-xs font-medium bg-accent text-primary'
+    : 'px-3 py-1 rounded text-xs font-medium bg-overlay text-secondary bg-overlay-hover';
   document.getElementById('btnMetrics').className = view === 'metrics'
-    ? 'px-3 py-1 rounded text-xs font-medium bg-blue-600 text-white'
-    : 'px-3 py-1 rounded text-xs font-medium bg-slate-700 text-slate-300 hover:bg-slate-600';
+    ? 'px-3 py-1 rounded text-xs font-medium bg-accent text-primary'
+    : 'px-3 py-1 rounded text-xs font-medium bg-overlay text-secondary bg-overlay-hover';
   document.getElementById('btnActivity').className = view === 'activity'
-    ? 'px-3 py-1 rounded text-xs font-medium bg-blue-600 text-white'
-    : 'px-3 py-1 rounded text-xs font-medium bg-slate-700 text-slate-300 hover:bg-slate-600';
+    ? 'px-3 py-1 rounded text-xs font-medium bg-accent text-primary'
+    : 'px-3 py-1 rounded text-xs font-medium bg-overlay text-secondary bg-overlay-hover';
   document.getElementById('btnWorkflow').className = view === 'workflow'
-    ? 'px-3 py-1 rounded text-xs font-medium bg-blue-600 text-white'
-    : 'px-3 py-1 rounded text-xs font-medium bg-slate-700 text-slate-300 hover:bg-slate-600';
+    ? 'px-3 py-1 rounded text-xs font-medium bg-accent text-primary'
+    : 'px-3 py-1 rounded text-xs font-medium bg-overlay text-secondary bg-overlay-hover';
   updateHash();
   if (view === 'graph') renderGraph();
   else if (view === 'metrics') loadMetrics();
@@ -586,11 +586,11 @@ function switchKanbanMode(mode) {
   updateTypeFilterUI(false);
   kanbanMode = mode;
   document.getElementById('btnStandard').className = mode === 'standard'
-    ? 'px-2 py-0.5 rounded bg-blue-600 text-white'
-    : 'px-2 py-0.5 rounded bg-slate-700 hover:bg-slate-600';
+    ? 'px-2 py-0.5 rounded bg-accent text-primary'
+    : 'px-2 py-0.5 rounded bg-overlay bg-overlay-hover';
   document.getElementById('btnCluster').className = mode === 'cluster'
-    ? 'px-2 py-0.5 rounded bg-blue-600 text-white'
-    : 'px-2 py-0.5 rounded bg-slate-700 hover:bg-slate-600';
+    ? 'px-2 py-0.5 rounded bg-accent text-primary'
+    : 'px-2 py-0.5 rounded bg-overlay bg-overlay-hover';
   updateHash();
   renderKanban();
 }
@@ -610,9 +610,9 @@ function renderKanban() {
 
   // Search no-results state
   if (!items.length && searchResults !== null) {
-    board.innerHTML = '<div class="flex-1 flex items-center justify-center text-slate-500 text-xs">' +
-      '<div class="text-center"><div class="text-slate-300 mb-2">No matches found</div>' +
-      '<div>Try broader search terms or <button onclick="document.getElementById(\'filterSearch\').value=\'\';searchResults=null;render();" class="text-blue-400 hover:underline">clear search</button></div></div></div>';
+    board.innerHTML = '<div class="flex-1 flex items-center justify-center text-xs" style="color:var(--text-muted)">' +
+      '<div class="text-center"><div class="mb-2" style="color:var(--text-primary)">No matches found</div>' +
+      '<div>Try broader search terms or <button onclick="document.getElementById(\'filterSearch\').value=\'\';searchResults=null;render();" style="color:var(--accent)" class="hover:underline">clear search</button></div></div></div>';
     return;
   }
 
@@ -643,23 +643,23 @@ function renderKanban() {
 
 function renderStandardKanban(columns) {
   var colDefs = [
-    { key: 'open', label: 'Open', color: '#64748B' },
-    { key: 'wip', label: 'In Progress', color: '#3B82F6' },
-    { key: 'done', label: 'Done', color: '#9CA3AF' },
+    { key: 'open', label: 'Open', color: CATEGORY_COLORS.open },
+    { key: 'wip', label: 'In Progress', color: CATEGORY_COLORS.wip },
+    { key: 'done', label: 'Done', color: CATEGORY_COLORS.done },
   ];
   return colDefs.map(function(col) {
     var issues = columns[col.key] || [];
     return '<div class="kanban-col flex flex-col" data-status-category="' + col.key + '">' +
       '<div class="flex items-center gap-2 mb-2 px-1">' +
         '<span class="w-2 h-2 rounded-full" style="background:' + col.color + '"></span>' +
-        '<span class="font-medium text-xs text-slate-300">' + col.label + '</span>' +
-        '<span class="text-xs text-slate-500">' + issues.length + '</span>' +
+        '<span class="font-medium text-xs" style="color:var(--text-primary)">' + col.label + '</span>' +
+        '<span class="text-xs" style="color:var(--text-muted)">' + issues.length + '</span>' +
       '</div>' +
       '<div class="flex flex-col gap-2 overflow-y-auto scrollbar-thin pr-1 min-h-[200px]" style="max-height: calc(100vh - 160px);">' +
         (issues.length ? issues.map(function(i) { return renderCard(i); }).join('') :
-          '<div class="text-xs text-slate-500 p-4 text-center">' +
-            (col.key === 'open' ? '<div class="mb-2">No open issues</div><button onclick="showCreateForm()" class="text-blue-400 hover:underline">+ Create an issue</button>'
-             : col.key === 'wip' ? '<div>No work in progress</div><div class="text-slate-600 mt-1">Move an open issue to in-progress to start</div>'
+          '<div class="text-xs p-4 text-center" style="color:var(--text-muted)">' +
+            (col.key === 'open' ? '<div class="mb-2">No open issues</div><button onclick="showCreateForm()" style="color:var(--accent)" class="hover:underline">+ Create an issue</button>'
+             : col.key === 'wip' ? '<div>No work in progress</div><div style="color:var(--text-muted)" class="mt-1">Move an open issue to in-progress to start</div>'
              : '<div>No completed issues yet</div>') + '</div>') +
       '</div></div>';
   }).join('');
@@ -667,9 +667,9 @@ function renderStandardKanban(columns) {
 
 function renderClusterKanban(columns) {
   var colDefs = [
-    { key: 'open', label: 'Open', color: '#64748B' },
-    { key: 'wip', label: 'In Progress', color: '#3B82F6' },
-    { key: 'done', label: 'Done', color: '#9CA3AF' },
+    { key: 'open', label: 'Open', color: CATEGORY_COLORS.open },
+    { key: 'wip', label: 'In Progress', color: CATEGORY_COLORS.wip },
+    { key: 'done', label: 'Done', color: CATEGORY_COLORS.done },
   ];
   return colDefs.map(function(col) {
     var issues = columns[col.key] || [];
@@ -687,11 +687,11 @@ function renderClusterKanban(columns) {
     return '<div class="kanban-col flex flex-col" data-status-category="' + col.key + '">' +
       '<div class="flex items-center gap-2 mb-2 px-1">' +
         '<span class="w-2 h-2 rounded-full" style="background:' + col.color + '"></span>' +
-        '<span class="font-medium text-xs text-slate-300">' + col.label + '</span>' +
-        '<span class="text-xs text-slate-500">' + issues.length + '</span>' +
+        '<span class="font-medium text-xs" style="color:var(--text-primary)">' + col.label + '</span>' +
+        '<span class="text-xs" style="color:var(--text-muted)">' + issues.length + '</span>' +
       '</div>' +
       '<div class="flex flex-col gap-2 overflow-y-auto scrollbar-thin pr-1 min-h-[200px]" style="max-height: calc(100vh - 160px);">' +
-        (issues.length ? epicCards + orphanCards : '<div class="text-xs text-slate-600 italic p-2">No issues</div>') +
+        (issues.length ? epicCards + orphanCards : '<div class="text-xs italic p-2" style="color:var(--text-muted)">No issues</div>') +
       '</div></div>';
   }).join('');
 }
@@ -713,24 +713,24 @@ function renderClusterCard(epic) {
       children.map(function(c) { return renderCard(c); }).join('') + '</div>';
   }
 
-  return '<div class="bg-slate-800 rounded border border-slate-700 p-3 cursor-pointer ' +
+  return '<div class="rounded p-3 cursor-pointer ' +
     (epic.is_ready ? 'ready-border' : '') +
-    '" aria-expanded="' + expanded + '" onclick="toggleEpicExpand(\'' + epic.id + '\')">' +
+    '" style="background:var(--surface-raised);border:1px solid var(--border-default)" aria-expanded="' + expanded + '" onclick="toggleEpicExpand(\'' + epic.id + '\')">' +
     '<div class="flex items-center justify-between mb-1">' +
       '<span class="text-xs">' + (TYPE_ICONS[epic.type] || '') +
-        ' <span class="font-medium text-slate-200">' + escHtml(epic.title.slice(0, 40)) + '</span></span>' +
-      '<span class="text-xs text-slate-500">[' + total + ']</span>' +
+        ' <span class="font-medium" style="color:var(--text-primary)">' + escHtml(epic.title.slice(0, 40)) + '</span></span>' +
+      '<span class="text-xs" style="color:var(--text-muted)">[' + total + ']</span>' +
     '</div>' +
-    '<div class="w-full h-2 rounded-full bg-slate-900 flex overflow-hidden mb-1">' +
-      '<div style="width:' + pctClosed + '%;background:#9CA3AF"></div>' +
-      '<div style="width:' + pctActive + '%;background:#3B82F6"></div>' +
-      '<div style="width:' + pctOpen + '%;background:#64748B"></div>' +
+    '<div class="w-full h-2 rounded-full flex overflow-hidden mb-1" style="background:var(--surface-base)">' +
+      '<div style="width:' + pctClosed + '%;background:' + CATEGORY_COLORS.done + '"></div>' +
+      '<div style="width:' + pctActive + '%;background:' + CATEGORY_COLORS.wip + '"></div>' +
+      '<div style="width:' + pctOpen + '%;background:' + CATEGORY_COLORS.open + '"></div>' +
     '</div>' +
-    '<div class="text-xs text-slate-500">' + counts.open + ' open &middot; ' +
+    '<div class="text-xs" style="color:var(--text-muted)">' + counts.open + ' open &middot; ' +
       counts.wip + ' active &middot; ' + counts.done + ' done</div>' +
     (expanded
-      ? '<div class="text-xs text-blue-400 mt-1">&#9660; expanded</div>'
-      : '<div class="text-xs text-slate-600 mt-1">&#9654; click to expand</div>') +
+      ? '<div class="text-xs mt-1" style="color:var(--accent)">&#9660; expanded</div>'
+      : '<div class="text-xs mt-1" style="color:var(--text-muted)">&#9654; click to expand</div>') +
     childHtml +
   '</div>';
 }
@@ -754,16 +754,17 @@ function renderCard(issue) {
     else if (ageHours > 4) agingClass = 'aging-border';
   }
 
-  var changedClass = changedIds.has(issue.id) ? 'ring-1 ring-blue-500' : '';
+  var changedClass = changedIds.has(issue.id) ? 'ring-1 ring-sky-400' : '';
 
   var checkbox = multiSelectMode
     ? '<input type="checkbox" ' + (selectedCards.has(issue.id) ? 'checked' : '') +
-      ' onclick="toggleCardSelect(event,\'' + issue.id + '\')" class="accent-blue-500 mr-1">'
+      ' onclick="toggleCardSelect(event,\'' + issue.id + '\')" class="mr-1" style="accent-color:var(--accent)">'
     : '';
 
   var isDraggable = kanbanMode !== 'cluster' && !multiSelectMode;
-  return '<div class="card bg-slate-800 rounded border border-slate-700 p-3 cursor-pointer ' +
+  return '<div class="card rounded p-3 cursor-pointer ' +
     readyClass + ' ' + agingClass + ' ' + changedClass + '"' +
+    ' style="background:var(--surface-raised);border:1px solid var(--border-default)"' +
     (isDraggable ? ' draggable="true"' : '') +
     ' tabindex="0" data-id="' + issue.id + '" onclick="openDetail(\'' + issue.id + '\')">' +
     '<div class="flex items-center gap-2 mb-1">' +
@@ -772,21 +773,21 @@ function renderCard(issue) {
       (issue.priority <= 1
         ? '<span class="text-xs font-bold shrink-0" style="color:' + prioColor + '" title="Priority ' + issue.priority + ' (' + ['Critical','High','Medium','Low','Backlog'][issue.priority] + ')">P' + issue.priority + '</span>'
         : '<span class="w-2 h-2 rounded-full shrink-0" style="background:' + prioColor + '" title="Priority ' + issue.priority + ' (' + ['Critical','High','Medium','Low','Backlog'][issue.priority] + ')"></span>') +
-      '<span class="font-medium text-slate-200 truncate">' + escHtml(issue.title.slice(0, 50)) + '</span>' +
+      '<span class="font-medium truncate" style="color:var(--text-primary)">' + escHtml(issue.title.slice(0, 50)) + '</span>' +
     '</div>' +
-    '<div class="flex items-center gap-2 text-xs text-slate-500">' +
+    '<div class="flex items-center gap-2 text-xs" style="color:var(--text-muted)">' +
       '<span>' + issue.id + '</span>' +
-      '<span class="rounded px-1 bg-slate-700 text-slate-400">' + issue.type.replace(/_/g, ' ') + '</span>' +
+      '<span class="rounded px-1" style="background:var(--surface-overlay);color:var(--text-secondary)">' + issue.type.replace(/_/g, ' ') + '</span>' +
       '<span class="rounded px-1" style="background:' + catColor + '33;color:' + catColor + '">' + issue.status + '</span>' +
       (blockedCount > 0 ? '<span class="text-red-400">\u{1F517} blocked by ' + blockedCount + '</span>' : '') +
       (impactScores[issue.id] > 0 ? '<span class="text-amber-400" title="Impact: blocks ' + impactScores[issue.id] + ' downstream issue' + (impactScores[issue.id] !== 1 ? 's' : '') + ' — resolve this to unblock work">\u26A1' + impactScores[issue.id] + '</span>' : '') +
-      (issue.assignee ? '<span class="text-slate-400">\u{1F464} ' + escHtml(issue.assignee) + '</span>' : '') +
+      (issue.assignee ? '<span style="color:var(--text-secondary)">\u{1F464} ' + escHtml(issue.assignee) + '</span>' : '') +
       (cat === 'wip' && issue.updated_at
         ? (function() {
             var mins = Math.floor((Date.now() - new Date(issue.updated_at).getTime()) / 60000);
-            if (mins < 60) return '<span class="text-slate-500">' + mins + 'm</span>';
+            if (mins < 60) return '<span style="color:var(--text-muted)">' + mins + 'm</span>';
             var hrs = Math.floor(mins / 60);
-            if (hrs < 24) return '<span class="' + (hrs > 4 ? 'text-amber-400' : 'text-slate-500') + '">' + hrs + 'h</span>';
+            if (hrs < 24) return '<span class="' + (hrs > 4 ? 'text-amber-400' : '') + '"' + (hrs <= 4 ? ' style="color:var(--text-muted)"' : '') + '>' + hrs + 'h</span>';
             return '<span class="text-red-400">' + Math.floor(hrs / 24) + 'd</span>';
           })()
         : '') +
@@ -883,11 +884,11 @@ function renderTypeKanban(stateColumns, template) {
     return '<div class="kanban-col flex flex-col" data-status="' + state.name + '" data-status-category="' + state.category + '">' +
       '<div class="flex items-center gap-2 mb-2 px-1">' +
         '<span class="w-2 h-2 rounded-full" style="background:' + catColor + '"></span>' +
-        '<span class="font-medium text-xs text-slate-300">' + state.name + '</span>' +
-        '<span class="text-xs text-slate-500">' + issues.length + '</span>' +
+        '<span class="font-medium text-xs" style="color:var(--text-primary)">' + state.name + '</span>' +
+        '<span class="text-xs" style="color:var(--text-muted)">' + issues.length + '</span>' +
       '</div>' +
       '<div class="flex flex-col gap-2 overflow-y-auto scrollbar-thin pr-1 min-h-[200px]" style="max-height: calc(100vh - 160px);">' +
-        (issues.length ? issues.map(function(i) { return renderCard(i); }).join('') : '<div class="text-xs text-slate-600 italic p-2">No issues</div>') +
+        (issues.length ? issues.map(function(i) { return renderCard(i); }).join('') : '<div class="text-xs italic p-2" style="color:var(--text-muted)">No issues</div>') +
       '</div></div>';
   }).join('');
 }
@@ -1154,7 +1155,7 @@ async function openDetail(issueId) {
   var panel = document.getElementById('detailPanel');
   var content = document.getElementById('detailContent');
 
-  content.innerHTML = '<div class="text-slate-500 text-xs">Loading...</div>';
+  content.innerHTML = '<div class="text-xs" style="color:var(--text-muted)">Loading...</div>';
   panel.classList.remove('translate-x-full');
 
   // Fetch full issue detail (includes events, comments, dep_details)
@@ -1187,38 +1188,38 @@ async function openDetail(issueId) {
 
   var blockerHtml = (d.blocked_by || []).map(function(bid) {
     var det = depDetails[bid] || issueMap[bid];
-    if (!det) return '<div class="text-xs text-slate-500">' + bid + '</div>';
+    if (!det) return '<div class="text-xs" style="color:var(--text-muted)">' + bid + '</div>';
     var detCat = (det.status_category) || 'open';
     var sc = CATEGORY_COLORS[detCat] || '#64748B';
     return '<div class="flex items-center gap-2 text-xs">' +
       '<span class="w-2 h-2 rounded-full shrink-0" style="background:' + sc + '"></span>' +
-      '<span class="cursor-pointer hover:text-blue-400 flex-1" onclick="openDetail(\'' + bid + '\')">' + escHtml(det.title.slice(0, 40)) + '</span>' +
-      '<span class="text-slate-600">' + det.status + '</span>' +
+      '<span class="cursor-pointer flex-1" style="color:var(--accent)" onclick="openDetail(\'' + bid + '\')">' + escHtml(det.title.slice(0, 40)) + '</span>' +
+      '<span style="color:var(--text-muted)">' + det.status + '</span>' +
       '<button onclick="event.stopPropagation();removeDependency(\'' + d.id + '\',\'' + bid + '\')" class="text-red-400 hover:text-red-300 ml-1" title="Remove dependency">&times;</button></div>';
   }).join('');
 
   var blocksHtml = (d.blocks || []).map(function(bid) {
     var det = depDetails[bid] || issueMap[bid];
-    if (!det) return '<div class="text-xs text-slate-500">' + bid + '</div>';
+    if (!det) return '<div class="text-xs" style="color:var(--text-muted)">' + bid + '</div>';
     var detCat = (det.status_category) || 'open';
     var sc = CATEGORY_COLORS[detCat] || '#64748B';
-    return '<div class="flex items-center gap-2 text-xs cursor-pointer hover:text-blue-400" onclick="openDetail(\'' + bid + '\')">' +
+    return '<div class="flex items-center gap-2 text-xs cursor-pointer" style="color:var(--accent)" onclick="openDetail(\'' + bid + '\')">' +
       '<span class="w-2 h-2 rounded-full" style="background:' + sc + '"></span>' +
       '<span>' + escHtml(det.title.slice(0, 40)) + '</span>' +
-      '<span class="text-slate-600">' + det.status + '</span></div>';
+      '<span style="color:var(--text-muted)">' + det.status + '</span></div>';
   }).join('');
 
   var eventsHtml = eventsData.slice(0, 15).map(function(e) {
-    return '<div class="text-xs text-slate-500 flex gap-2">' +
-      '<span class="text-slate-600 shrink-0">' + (e.created_at ? e.created_at.slice(5, 16) : '') + '</span>' +
+    return '<div class="text-xs flex gap-2" style="color:var(--text-muted)">' +
+      '<span class="shrink-0" style="color:var(--text-muted)">' + (e.created_at ? e.created_at.slice(5, 16) : '') + '</span>' +
       '<span>' + escHtml(e.event_type) + (e.new_value ? ': ' + escHtml(e.new_value) : '') + '</span></div>';
   }).join('');
 
   var commentsHtml = commentsData.map(function(c) {
-    return '<div class="bg-slate-900 rounded p-2 text-xs mb-1">' +
-      '<div class="text-slate-400 mb-1">' + escHtml(c.author || 'anonymous') +
+    return '<div class="rounded p-2 text-xs mb-1" style="background:var(--surface-base)">' +
+      '<div style="color:var(--text-secondary)" class="mb-1">' + escHtml(c.author || 'anonymous') +
         ' &middot; ' + (c.created_at ? c.created_at.slice(0, 16) : '') + '</div>' +
-      '<div class="text-slate-300">' + escHtml(c.text) + '</div></div>';
+      '<div style="color:var(--text-primary)">' + escHtml(c.text) + '</div></div>';
   }).join('');
 
   var openBlockers = (d.blocked_by || []).filter(function(bid) {
@@ -1233,69 +1234,69 @@ async function openDetail(issueId) {
 
   content.innerHTML =
     '<div class="flex items-center justify-between mb-3">' +
-      '<span class="text-xs text-slate-500">' + d.id + '</span>' +
+      '<span class="text-xs" style="color:var(--text-muted)">' + d.id + '</span>' +
       '<div>' +
       (detailHistory.length
-        ? '<button onclick="detailBack()" class="text-slate-500 hover:text-slate-300 text-xs mr-2">&larr; Back</button>'
+        ? '<button onclick="detailBack()" class="text-muted text-primary-hover text-xs mr-2">&larr; Back</button>'
         : '') +
-      '<button onclick="closeDetail()" class="text-slate-500 hover:text-slate-300 text-lg" aria-label="Close detail panel">&times;</button>' +
+      '<button onclick="closeDetail()" class="text-muted text-primary-hover text-lg" aria-label="Close detail panel">&times;</button>' +
       '</div>' +
     '</div>' +
     '<div class="flex items-center gap-2 mb-1">' +
       '<span class="text-lg">' + typeIcon + '</span>' +
-      '<span class="text-lg font-semibold text-slate-100">' + escHtml(d.title) + '</span>' +
+      '<span class="text-lg font-semibold" style="color:var(--text-primary)">' + escHtml(d.title) + '</span>' +
       ((d.type === 'milestone' || d.type === 'epic')
-        ? '<button onclick="loadPlanView(\'' + d.id + '\')" class="text-xs bg-slate-700 px-2 py-1 rounded hover:bg-slate-600 ml-2">View Plan</button>'
+        ? '<button onclick="loadPlanView(\'' + d.id + '\')" class="text-xs bg-overlay bg-overlay-hover px-2 py-1 rounded ml-2">View Plan</button>'
         : '') +
     '</div>' +
     '<div class="flex items-center gap-2 mb-4 flex-wrap">' +
       '<span class="text-xs px-2 py-0.5 rounded" style="background:' + statusColor + ';color:white">' + statusLabel + '</span>' +
       '<span class="w-2 h-2 rounded-full" style="background:' + prioColor + '" title="P' + d.priority + '"></span>' +
-      '<span class="text-xs text-slate-400">P' + d.priority + '</span>' +
+      '<span class="text-xs" style="color:var(--text-secondary)">P' + d.priority + '</span>' +
       readyBadge +
-      (d.assignee ? '<span class="text-xs text-slate-400">\u{1F464} ' + escHtml(d.assignee) + '</span>' : '') +
+      (d.assignee ? '<span class="text-xs" style="color:var(--text-secondary)">\u{1F464} ' + escHtml(d.assignee) + '</span>' : '') +
     '</div>' +
     (d.labels && d.labels.length
       ? '<div class="flex gap-1 mb-3 flex-wrap">' + d.labels.map(function(l) {
-          return '<span class="text-xs bg-slate-700 text-slate-300 px-2 py-0.5 rounded">' + escHtml(l) + '</span>';
+          return '<span class="text-xs px-2 py-0.5 rounded" style="background:var(--surface-overlay);color:var(--text-primary)">' + escHtml(l) + '</span>';
         }).join('') + '</div>'
       : '') +
     (d.description
-      ? '<div class="mb-4"><div class="text-xs font-medium text-slate-400 mb-1">Description</div>' +
-        '<div class="text-xs text-slate-300 leading-relaxed whitespace-pre-wrap">' + escHtml(d.description) + '</div></div>'
+      ? '<div class="mb-4"><div class="text-xs font-medium mb-1" style="color:var(--text-secondary)">Description</div>' +
+        '<div class="text-xs leading-relaxed whitespace-pre-wrap" style="color:var(--text-primary)">' + escHtml(d.description) + '</div></div>'
       : '') +
     (d.notes
-      ? '<div class="mb-4"><div class="text-xs font-medium text-slate-400 mb-1">Notes</div>' +
-        '<div class="text-xs text-slate-300 leading-relaxed whitespace-pre-wrap">' + escHtml(d.notes) + '</div></div>'
+      ? '<div class="mb-4"><div class="text-xs font-medium mb-1" style="color:var(--text-secondary)">Notes</div>' +
+        '<div class="text-xs leading-relaxed whitespace-pre-wrap" style="color:var(--text-primary)">' + escHtml(d.notes) + '</div></div>'
       : '') +
     ((d.blocked_by || []).length
       ? '<div class="mb-3"><div class="text-xs font-medium text-red-400 mb-1">Blocked by &larr;</div>' + blockerHtml +
-        '<button onclick="showAddBlocker(\'' + d.id + '\')" class="text-xs text-blue-400 hover:underline mt-1">+ Add blocker</button></div>'
-      : '<div class="mb-3"><button onclick="showAddBlocker(\'' + d.id + '\')" class="text-xs text-blue-400 hover:underline">+ Add blocker</button></div>') +
+        '<button onclick="showAddBlocker(\'' + d.id + '\')" class="text-xs hover:underline mt-1" style="color:var(--accent)">+ Add blocker</button></div>'
+      : '<div class="mb-3"><button onclick="showAddBlocker(\'' + d.id + '\')" class="text-xs hover:underline" style="color:var(--accent)">+ Add blocker</button></div>') +
     ((d.blocks || []).length
-      ? '<div class="mb-3"><div class="text-xs font-medium text-blue-400 mb-1">Blocks \u2192</div>' + blocksHtml + '</div>'
+      ? '<div class="mb-3"><div class="text-xs font-medium mb-1" style="color:var(--accent)">Blocks \u2192</div>' + blocksHtml + '</div>'
       : '') +
     (commentsData.length
-      ? '<div class="mb-3"><div class="text-xs font-medium text-slate-400 mb-1">Comments</div>' + commentsHtml + '</div>'
+      ? '<div class="mb-3"><div class="text-xs font-medium mb-1" style="color:var(--text-secondary)">Comments</div>' + commentsHtml + '</div>'
       : '') +
     (eventsData.length
-      ? '<div class="mb-3"><div class="text-xs font-medium text-slate-400 mb-1">Timeline</div>' + eventsHtml + '</div>'
+      ? '<div class="mb-3"><div class="text-xs font-medium mb-1" style="color:var(--text-secondary)">Timeline</div>' + eventsHtml + '</div>'
       : '') +
     // Actions section
-    '<div class="mt-4 border-t border-slate-700 pt-3">' +
-      '<div class="text-xs font-medium text-slate-400 mb-2">Actions</div>' +
+    '<div class="mt-4 pt-3" style="border-top:1px solid var(--border-default)">' +
+      '<div class="text-xs font-medium mb-2" style="color:var(--text-secondary)">Actions</div>' +
       '<div id="transitionBtns" class="flex flex-wrap gap-1 mb-2"></div>' +
       '<div class="flex gap-2 mb-2">' +
-        '<label for="prioSelect" class="text-xs text-slate-400">Priority</label> ' +
-        '<select id="prioSelect" onchange="updateIssue(\'' + d.id + '\', {priority: parseInt(this.value)})" class="bg-slate-700 text-xs rounded px-2 py-1 border border-slate-600">' +
+        '<label for="prioSelect" class="text-xs" style="color:var(--text-secondary)">Priority</label> ' +
+        '<select id="prioSelect" onchange="updateIssue(\'' + d.id + '\', {priority: parseInt(this.value)})" class="text-xs rounded px-2 py-1" style="background:var(--surface-overlay);color:var(--text-primary);border:1px solid var(--border-strong)">' +
           [0,1,2,3,4].map(function(p) {
             return '<option value="' + p + '"' + (d.priority === p ? ' selected' : '') + '>P' + p + '</option>';
           }).join('') +
         '</select>' +
-        '<label for="assigneeInput" class="text-xs text-slate-400">Assignee</label> ' +
+        '<label for="assigneeInput" class="text-xs" style="color:var(--text-secondary)">Assignee</label> ' +
         '<input id="assigneeInput" type="text" placeholder="Assignee" value="' + escHtml(d.assignee || '') + '"' +
           ' onkeydown="if(event.key===\'Enter\')updateIssue(\'' + d.id + '\',{assignee:this.value})"' +
-          ' class="bg-slate-700 text-xs rounded px-2 py-1 border border-slate-600 flex-1">' +
+          ' class="text-xs rounded px-2 py-1 flex-1" style="background:var(--surface-overlay);color:var(--text-primary);border:1px solid var(--border-strong)">' +
       '</div>' +
       (statusCat !== 'done'
         ? '<button onclick="closeIssue(\'' + d.id + '\')" class="text-xs bg-red-900/50 text-red-400 px-3 py-1 rounded border border-red-800 hover:bg-red-900 mb-2">Close</button>'
@@ -1304,31 +1305,32 @@ async function openDetail(issueId) {
         ? '<button onclick="claimIssue(\'' + d.id + '\')" class="text-xs bg-emerald-900/50 text-emerald-400 px-3 py-1 rounded border border-emerald-800 hover:bg-emerald-900 mb-2 ml-1">Claim</button>'
         : '') +
       (d.assignee
-        ? '<button onclick="releaseIssue(\'' + d.id + '\')" class="text-xs bg-slate-700 text-slate-300 px-3 py-1 rounded border border-slate-600 hover:bg-slate-600 mb-2 ml-1">Release</button>'
+        ? '<button onclick="releaseIssue(\'' + d.id + '\')" class="text-xs bg-overlay bg-overlay-hover px-3 py-1 rounded mb-2 ml-1" style="color:var(--text-primary);border:1px solid var(--border-strong)">Release</button>'
         : '') +
     '</div>' +
     // Comment input
-    '<div class="mt-3 border-t border-slate-700 pt-3">' +
-      '<label for="commentInput" class="text-xs font-medium text-slate-400 mb-1">Add Comment</label>' +
+    '<div class="mt-3 pt-3" style="border-top:1px solid var(--border-default)">' +
+      '<label for="commentInput" class="text-xs font-medium mb-1" style="color:var(--text-secondary)">Add Comment</label>' +
       '<div class="flex gap-1">' +
         '<input id="commentInput" type="text" placeholder="Comment..." onkeydown="if(event.key===\'Enter\')addComment(\'' + d.id + '\')"' +
-          ' class="bg-slate-700 text-xs rounded px-2 py-1 border border-slate-600 flex-1 focus:outline-none focus:border-blue-500">' +
-        '<button onclick="addComment(\'' + d.id + '\')" class="text-xs bg-blue-600 text-white px-2 py-1 rounded hover:bg-blue-700">Send</button>' +
+          ' class="text-xs rounded px-2 py-1 flex-1 focus:outline-none" style="background:var(--surface-overlay);color:var(--text-primary);border:1px solid var(--border-strong)">' +
+        '<button onclick="addComment(\'' + d.id + '\')" class="text-xs px-2 py-1 rounded bg-accent-hover" style="background:var(--accent);color:var(--surface-base)">Send</button>' +
       '</div>' +
     '</div>' +
-    '<div class="mt-3 text-xs text-slate-600 select-all" title="Copy this command to view in terminal">filigree show ' + d.id + '</div>';
+    '<div class="mt-3 text-xs select-all" style="color:var(--text-muted)" title="Copy this command to view in terminal">filigree show ' + d.id + '</div>';
 
   // Load transitions async and render buttons
   loadTransitions(issueId).then(function(transitions) {
     var container = document.getElementById('transitionBtns');
     if (!container || !transitions.length) return;
     container.innerHTML = transitions.map(function(t) {
-      var cls = t.ready
-        ? 'bg-blue-600 text-white hover:bg-blue-700'
-        : 'bg-slate-700 text-slate-400 cursor-not-allowed';
-      var missingText = t.missing_fields.length ? ' <span class="text-slate-500">(missing: ' + t.missing_fields.join(', ') + ')</span>' : '';
+      var btnStyle = t.ready
+        ? 'background:var(--accent);color:var(--surface-base)'
+        : 'background:var(--surface-overlay);color:var(--text-muted)';
+      var cls = t.ready ? '' : 'cursor-not-allowed';
+      var missingText = t.missing_fields.length ? ' <span style="color:var(--text-muted)">(missing: ' + t.missing_fields.join(', ') + ')</span>' : '';
       return '<button ' + (t.ready ? 'onclick="updateIssue(\'' + issueId + '\',{status:\'' + t.to + '\'},this)"' : 'disabled') +
-        ' class="text-xs px-2 py-1 rounded ' + cls + '">' +
+        ' class="text-xs px-2 py-1 rounded ' + cls + '" style="' + btnStyle + '">' +
         t.to + missingText + '</button>';
     }).join('');
   });
@@ -1409,23 +1411,23 @@ document.addEventListener('keydown', function(e) {
     modal.id = 'helpModal';
     modal.className = 'fixed inset-0 bg-black/50 flex items-center justify-center z-50';
     modal.onclick = function(ev) { if (ev.target === modal) modal.remove(); };
-    modal.innerHTML = '<div class="bg-slate-800 rounded-lg border border-slate-600 p-5 w-80 shadow-xl">' +
-      '<div class="text-sm font-semibold text-slate-200 mb-3">Keyboard Shortcuts</div>' +
-      '<div class="text-xs text-slate-300 space-y-1">' +
-        '<div><kbd class="bg-slate-700 px-1 rounded">/</kbd> Focus search</div>' +
-        '<div><kbd class="bg-slate-700 px-1 rounded">Esc</kbd> Close panel / clear search</div>' +
-        '<div><kbd class="bg-slate-700 px-1 rounded">j</kbd> / <kbd class="bg-slate-700 px-1 rounded">k</kbd> Navigate cards</div>' +
-        '<div><kbd class="bg-slate-700 px-1 rounded">Enter</kbd> Open issue detail</div>' +
-        '<div><kbd class="bg-slate-700 px-1 rounded">c</kbd> Focus comment input (in detail)</div>' +
-        '<div><kbd class="bg-slate-700 px-1 rounded">x</kbd> Close issue (in detail)</div>' +
-        '<div><kbd class="bg-slate-700 px-1 rounded">m</kbd> Move issue to status (in detail)</div>' +
-        '<div><kbd class="bg-slate-700 px-1 rounded">?</kbd> This help</div>' +
-        '<div><kbd class="bg-slate-700 px-1 rounded">Shift+?</kbd> Replay guided tour</div>' +
+    modal.innerHTML = '<div class="rounded-lg p-5 w-80 shadow-xl" style="background:var(--surface-raised);border:1px solid var(--border-strong)">' +
+      '<div class="text-sm font-semibold mb-3" style="color:var(--text-primary)">Keyboard Shortcuts</div>' +
+      '<div class="text-xs space-y-1" style="color:var(--text-primary)">' +
+        '<div><kbd class="bg-overlay px-1 rounded">/</kbd> Focus search</div>' +
+        '<div><kbd class="bg-overlay px-1 rounded">Esc</kbd> Close panel / clear search</div>' +
+        '<div><kbd class="bg-overlay px-1 rounded">j</kbd> / <kbd class="bg-overlay px-1 rounded">k</kbd> Navigate cards</div>' +
+        '<div><kbd class="bg-overlay px-1 rounded">Enter</kbd> Open issue detail</div>' +
+        '<div><kbd class="bg-overlay px-1 rounded">c</kbd> Focus comment input (in detail)</div>' +
+        '<div><kbd class="bg-overlay px-1 rounded">x</kbd> Close issue (in detail)</div>' +
+        '<div><kbd class="bg-overlay px-1 rounded">m</kbd> Move issue to status (in detail)</div>' +
+        '<div><kbd class="bg-overlay px-1 rounded">?</kbd> This help</div>' +
+        '<div><kbd class="bg-overlay px-1 rounded">Shift+?</kbd> Replay guided tour</div>' +
       '</div>' +
-      '<div class="mt-3 pt-2 border-t border-slate-700">' +
-        '<button onclick="document.getElementById(\'helpModal\').remove();startTour();" class="text-xs text-blue-400 hover:text-blue-300">Take the guided tour &rarr;</button>' +
+      '<div class="mt-3 pt-2" style="border-top:1px solid var(--border-default)">' +
+        '<button onclick="document.getElementById(\'helpModal\').remove();startTour();" class="text-xs" style="color:var(--accent)">Take the guided tour &rarr;</button>' +
       '</div>' +
-      '<button onclick="document.getElementById(\'helpModal\').remove()" class="text-xs text-slate-500 mt-2 hover:text-slate-300">Close</button>' +
+      '<button onclick="document.getElementById(\'helpModal\').remove()" class="text-xs text-muted text-primary-hover mt-2">Close</button>' +
     '</div>';
     document.body.appendChild(modal);
     return;
@@ -1463,14 +1465,14 @@ document.addEventListener('keydown', function(e) {
         modal.id = 'moveModal';
         modal.className = 'fixed inset-0 bg-black/50 flex items-center justify-center z-50';
         modal.onclick = function(ev) { if (ev.target === modal) modal.remove(); };
-        modal.innerHTML = '<div class="bg-slate-800 rounded-lg border border-slate-600 p-4 w-64 shadow-xl">' +
-          '<div class="text-sm text-slate-200 mb-3">Move to...</div>' +
+        modal.innerHTML = '<div class="rounded-lg p-4 w-64 shadow-xl" style="background:var(--surface-raised);border:1px solid var(--border-strong)">' +
+          '<div class="text-sm mb-3" style="color:var(--text-primary)">Move to...</div>' +
           '<div class="flex flex-col gap-2">' +
           ready.map(function(t) {
-            return '<button onclick="moveIssueTo(\'' + issueId + '\',\'' + t.to.replace(/'/g, "\\'") + '\')" class="text-xs text-left bg-slate-700 px-3 py-2 rounded hover:bg-slate-600 text-slate-200">' + escHtml(t.to) + '</button>';
+            return '<button onclick="moveIssueTo(\'' + issueId + '\',\'' + t.to.replace(/'/g, "\\'") + '\')" class="text-xs text-left bg-overlay bg-overlay-hover px-3 py-2 rounded" style="color:var(--text-primary)">' + escHtml(t.to) + '</button>';
           }).join('') +
           '</div>' +
-          '<button onclick="document.getElementById(\'moveModal\').remove()" class="text-xs text-slate-500 mt-3 hover:text-slate-300">Cancel (Esc)</button>' +
+          '<button onclick="document.getElementById(\'moveModal\').remove()" class="text-xs text-muted text-primary-hover mt-3">Cancel (Esc)</button>' +
         '</div>';
         document.body.appendChild(modal);
         modal.querySelector('button').focus();
@@ -1505,9 +1507,10 @@ function showPopover(anchorEl, html) {
   closePopover();
   var pop = document.createElement('div');
   pop.id = 'activePopover';
-  pop.className = 'popover bg-slate-900 border border-slate-600 rounded-lg shadow-xl p-3 text-xs';
+  pop.className = 'popover rounded-lg shadow-xl p-3 text-xs';
+  pop.style.cssText = 'background:var(--surface-base);border:1px solid var(--border-strong)';
   pop.innerHTML = html +
-    '<div class="flex justify-end mt-2"><button onclick="closePopover()" class="text-slate-500 hover:text-slate-300 text-xs">Dismiss</button></div>';
+    '<div class="flex justify-end mt-2"><button onclick="closePopover()" class="text-xs text-muted text-primary-hover">Dismiss</button></div>';
   document.body.appendChild(pop);
   var rect = anchorEl.getBoundingClientRect();
   pop.style.top = (rect.bottom + window.scrollY + 8) + 'px';
@@ -1559,14 +1562,15 @@ function showTourStep(index) {
   overlay.className = 'tour-overlay';
 
   var tooltip = document.createElement('div');
-  tooltip.className = 'tour-tooltip bg-slate-800 border border-blue-500 rounded-lg p-4 shadow-xl';
+  tooltip.className = 'tour-tooltip rounded-lg p-4 shadow-xl';
+  tooltip.style.cssText = 'background:var(--surface-raised);border:1px solid var(--accent)';
   tooltip.innerHTML =
-    '<div class="text-sm text-slate-200 mb-3 leading-relaxed">' + step.text + '</div>' +
+    '<div class="text-sm mb-3 leading-relaxed" style="color:var(--text-primary)">' + step.text + '</div>' +
     '<div class="flex items-center justify-between">' +
-      '<span class="text-xs text-slate-500">' + (index + 1) + ' of ' + TOUR_STEPS.length + '</span>' +
+      '<span class="text-xs" style="color:var(--text-muted)">' + (index + 1) + ' of ' + TOUR_STEPS.length + '</span>' +
       '<div class="flex gap-2">' +
-        '<button onclick="endTour()" class="text-xs text-slate-500 hover:text-slate-300 px-2 py-1">Skip</button>' +
-        '<button onclick="showTourStep(' + (index + 1) + ')" class="text-xs bg-blue-600 text-white px-3 py-1.5 rounded hover:bg-blue-700">' +
+        '<button onclick="endTour()" class="text-xs text-muted text-primary-hover px-2 py-1">Skip</button>' +
+        '<button onclick="showTourStep(' + (index + 1) + ')" class="text-xs px-3 py-1.5 rounded bg-accent-hover" style="background:var(--accent);color:var(--surface-base)">' +
           (index === TOUR_STEPS.length - 1 ? 'Done' : 'Next') +
         '</button>' +
       '</div>' +
@@ -1614,8 +1618,13 @@ function showToast(message, type) {
   var toast = document.createElement('div');
   var bg = type === 'error' ? 'bg-red-900/90 border-red-700 text-red-200'
          : type === 'success' ? 'bg-emerald-900/90 border-emerald-700 text-emerald-200'
-         : 'bg-slate-800/90 border-slate-600 text-slate-200';
+         : 'border text-primary';
   toast.className = 'px-4 py-2 rounded border text-xs shadow-lg ' + bg;
+  if (type !== 'error' && type !== 'success') {
+    toast.style.background = 'var(--surface-raised)';
+    toast.style.borderColor = 'var(--border-strong)';
+    toast.style.opacity = '0.95';
+  }
   toast.textContent = message;
   container.appendChild(toast);
   setTimeout(function() { toast.remove(); }, 4000);
@@ -1650,11 +1659,11 @@ async function closeIssue(issueId) {
   var modal = document.createElement('div');
   modal.id = 'closeReasonModal';
   modal.className = 'fixed inset-0 bg-black/50 flex items-center justify-center z-50';
-  modal.innerHTML = '<div class="bg-slate-800 rounded-lg border border-slate-600 p-4 w-80 shadow-xl">' +
-    '<div class="text-sm text-slate-200 mb-2">Close reason (optional)</div>' +
-    '<input id="closeReasonInput" type="text" class="w-full bg-slate-700 text-slate-200 text-xs rounded px-3 py-2 border border-slate-600 mb-3 focus:outline-none focus:border-blue-500">' +
+  modal.innerHTML = '<div class="rounded-lg p-4 w-80 shadow-xl" style="background:var(--surface-raised);border:1px solid var(--border-strong)">' +
+    '<div class="text-sm mb-2" style="color:var(--text-primary)">Close reason (optional)</div>' +
+    '<input id="closeReasonInput" type="text" class="w-full text-xs rounded px-3 py-2 mb-3 focus:outline-none" style="background:var(--surface-overlay);color:var(--text-primary);border:1px solid var(--border-strong)">' +
     '<div class="flex justify-end gap-2">' +
-      '<button id="closeReasonCancel" class="text-xs bg-slate-700 px-3 py-1.5 rounded hover:bg-slate-600">Cancel</button>' +
+      '<button id="closeReasonCancel" class="text-xs bg-overlay bg-overlay-hover px-3 py-1.5 rounded">Cancel</button>' +
       '<button id="closeReasonConfirm" class="text-xs bg-red-600 text-white px-3 py-1.5 rounded hover:bg-red-700">Close Issue</button>' +
     '</div></div>';
   document.body.appendChild(modal);
@@ -1692,12 +1701,12 @@ async function claimIssue(issueId) {
   var modal = document.createElement('div');
   modal.id = 'claimModal';
   modal.className = 'fixed inset-0 bg-black/50 flex items-center justify-center z-50';
-  modal.innerHTML = '<div class="bg-slate-800 rounded-lg border border-slate-600 p-4 w-72 shadow-xl">' +
-    '<div class="text-sm text-slate-200 mb-2">Claim issue</div>' +
-    '<input id="claimNameInput" type="text" value="' + escHtml(saved) + '" placeholder="Your name..." class="w-full bg-slate-700 text-slate-200 text-xs rounded px-3 py-2 border border-slate-600 mb-1 focus:outline-none focus:border-blue-500">' +
-    (saved ? '<div class="text-xs text-slate-500 mb-2">Remembered as "' + escHtml(saved) + '" \u2014 <button onclick="document.getElementById(\'claimNameInput\').value=\'\';localStorage.removeItem(\'filigree_claim_name\');this.parentElement.remove();" class="text-blue-400 hover:underline">not you?</button></div>' : '<div class="mb-2"></div>') +
+  modal.innerHTML = '<div class="rounded-lg p-4 w-72 shadow-xl" style="background:var(--surface-raised);border:1px solid var(--border-strong)">' +
+    '<div class="text-sm mb-2" style="color:var(--text-primary)">Claim issue</div>' +
+    '<input id="claimNameInput" type="text" value="' + escHtml(saved) + '" placeholder="Your name..." class="w-full text-xs rounded px-3 py-2 mb-1 focus:outline-none" style="background:var(--surface-overlay);color:var(--text-primary);border:1px solid var(--border-strong)">' +
+    (saved ? '<div class="text-xs mb-2" style="color:var(--text-muted)">Remembered as "' + escHtml(saved) + '" \u2014 <button onclick="document.getElementById(\'claimNameInput\').value=\'\';localStorage.removeItem(\'filigree_claim_name\');this.parentElement.remove();" style="color:var(--accent)" class="hover:underline">not you?</button></div>' : '<div class="mb-2"></div>') +
     '<div class="flex justify-end gap-2">' +
-      '<button onclick="document.getElementById(\'claimModal\').remove()" class="text-xs bg-slate-700 px-3 py-1.5 rounded hover:bg-slate-600">Cancel</button>' +
+      '<button onclick="document.getElementById(\'claimModal\').remove()" class="text-xs bg-overlay bg-overlay-hover px-3 py-1.5 rounded">Cancel</button>' +
       '<button onclick="confirmClaim(\'' + issueId + '\')" class="text-xs bg-emerald-600 text-white px-3 py-1.5 rounded hover:bg-emerald-700">Claim</button>' +
     '</div></div>';
   document.body.appendChild(modal);
@@ -1766,12 +1775,12 @@ async function showAddBlocker(issueId) {
   var modal = document.createElement('div');
   modal.id = 'addBlockerModal';
   modal.className = 'fixed inset-0 bg-black/50 flex items-center justify-center z-50';
-  modal.innerHTML = '<div class="bg-slate-800 rounded-lg border border-slate-600 p-4 w-80 shadow-xl">' +
-    '<div class="text-sm text-slate-200 mb-2">Add Blocker</div>' +
+  modal.innerHTML = '<div class="rounded-lg p-4 w-80 shadow-xl" style="background:var(--surface-raised);border:1px solid var(--border-strong)">' +
+    '<div class="text-sm mb-2" style="color:var(--text-primary)">Add Blocker</div>' +
     '<input id="blockerSearchInput" type="text" placeholder="Search issues..." ' +
-      'class="w-full bg-slate-700 text-slate-200 text-xs rounded px-3 py-2 border border-slate-600 mb-2 focus:outline-none focus:border-blue-500">' +
+      'class="w-full text-xs rounded px-3 py-2 mb-2 focus:outline-none" style="background:var(--surface-overlay);color:var(--text-primary);border:1px solid var(--border-strong)">' +
     '<div id="blockerResults" class="max-h-48 overflow-y-auto text-xs"></div>' +
-    '<button onclick="document.getElementById(\'addBlockerModal\').remove()" class="text-xs text-slate-500 mt-2 hover:text-slate-300">Cancel</button>' +
+    '<button onclick="document.getElementById(\'addBlockerModal\').remove()" class="text-xs text-muted text-primary-hover mt-2">Cancel</button>' +
     '</div>';
   document.body.appendChild(modal);
   modal.onclick = function(e) { if (e.target === modal) modal.remove(); };
@@ -1788,10 +1797,10 @@ async function showAddBlocker(issueId) {
         var resp = await fetch(API_BASE + '/search?q=' + encodeURIComponent(q) + '&limit=10');
         var data = await resp.json();
         results.innerHTML = data.results.filter(function(r) { return r.id !== issueId; }).map(function(r) {
-          return '<div class="flex items-center gap-2 py-1 px-1 cursor-pointer hover:bg-slate-700 rounded" onclick="addDependency(\'' + issueId + '\',\'' + r.id + '\')">' +
-            '<span class="text-slate-400">' + r.id + '</span>' +
-            '<span class="text-slate-300 truncate">' + escHtml(r.title.slice(0, 30)) + '</span></div>';
-        }).join('') || '<div class="text-slate-500">No results</div>';
+          return '<div class="flex items-center gap-2 py-1 px-1 cursor-pointer bg-overlay-hover rounded" onclick="addDependency(\'' + issueId + '\',\'' + r.id + '\')">' +
+            '<span style="color:var(--text-secondary)">' + r.id + '</span>' +
+            '<span style="color:var(--text-primary)" class="truncate">' + escHtml(r.title.slice(0, 30)) + '</span></div>';
+        }).join('') || '<div style="color:var(--text-muted)">No results</div>';
       } catch(e) { results.innerHTML = '<div class="text-red-400">Search failed</div>'; }
     }, 200);
   };
@@ -1835,43 +1844,43 @@ async function loadTransitions(issueId) {
 async function loadMetrics() {
   var days = document.getElementById('metricsDays').value;
   var container = document.getElementById('metricsContent');
-  container.innerHTML = '<div class="text-slate-500">Loading...</div>';
+  container.innerHTML = '<div style="color:var(--text-muted)">Loading...</div>';
   try {
     var resp = await fetch(API_BASE + '/metrics?days=' + days);
     var m = await resp.json();
     var byTypeHtml = Object.keys(m.by_type || {}).map(function(t) {
       var d = m.by_type[t];
-      return '<tr><td class="py-1 pr-4 text-slate-300">' + escHtml(t) + '</td>' +
+      return '<tr><td class="py-1 pr-4" style="color:var(--text-primary)">' + escHtml(t) + '</td>' +
         '<td class="py-1 pr-4">' + (d.avg_cycle_time_hours !== null ? d.avg_cycle_time_hours + 'h' : '\u2014') + '</td>' +
         '<td class="py-1">' + d.count + '</td></tr>';
     }).join('');
 
     container.innerHTML =
       '<div class="grid grid-cols-3 gap-4 mb-6">' +
-        '<div class="bg-slate-800 rounded p-4 border border-slate-700">' +
-          '<div class="text-slate-500 text-xs mb-1">Throughput</div>' +
-          '<div class="text-2xl font-bold text-blue-400">' + m.throughput + '</div>' +
-          '<div class="text-xs text-slate-500">issues closed</div></div>' +
-        '<div class="bg-slate-800 rounded p-4 border border-slate-700">' +
-          '<div class="text-slate-500 text-xs mb-1">Avg Cycle Time</div>' +
+        '<div class="rounded p-4" style="background:var(--surface-raised);border:1px solid var(--border-default)">' +
+          '<div class="text-xs mb-1" style="color:var(--text-muted)">Throughput</div>' +
+          '<div class="text-2xl font-bold" style="color:var(--accent)">' + m.throughput + '</div>' +
+          '<div class="text-xs" style="color:var(--text-muted)">issues closed</div></div>' +
+        '<div class="rounded p-4" style="background:var(--surface-raised);border:1px solid var(--border-default)">' +
+          '<div class="text-xs mb-1" style="color:var(--text-muted)">Avg Cycle Time</div>' +
           '<div class="text-2xl font-bold text-emerald-400">' + (m.avg_cycle_time_hours !== null ? m.avg_cycle_time_hours + 'h' : '\u2014') + '</div>' +
-          '<div class="text-xs text-slate-500">first WIP to done</div></div>' +
-        '<div class="bg-slate-800 rounded p-4 border border-slate-700">' +
-          '<div class="text-slate-500 text-xs mb-1">Avg Lead Time</div>' +
+          '<div class="text-xs" style="color:var(--text-muted)">first WIP to done</div></div>' +
+        '<div class="rounded p-4" style="background:var(--surface-raised);border:1px solid var(--border-default)">' +
+          '<div class="text-xs mb-1" style="color:var(--text-muted)">Avg Lead Time</div>' +
           '<div class="text-2xl font-bold text-amber-400">' + (m.avg_lead_time_hours !== null ? m.avg_lead_time_hours + 'h' : '\u2014') + '</div>' +
-          '<div class="text-xs text-slate-500">creation to done</div></div>' +
+          '<div class="text-xs" style="color:var(--text-muted)">creation to done</div></div>' +
       '</div>' +
       (byTypeHtml
-        ? '<div class="bg-slate-800 rounded p-4 border border-slate-700">' +
-          '<div class="text-xs font-medium text-slate-400 mb-2">By Type</div>' +
-          '<table class="text-xs w-full"><thead><tr class="text-slate-500">' +
+        ? '<div class="rounded p-4" style="background:var(--surface-raised);border:1px solid var(--border-default)">' +
+          '<div class="text-xs font-medium mb-2" style="color:var(--text-secondary)">By Type</div>' +
+          '<table class="text-xs w-full"><thead><tr style="color:var(--text-muted)">' +
             '<th class="text-left py-1 pr-4">Type</th><th class="text-left py-1 pr-4">Avg Cycle</th><th class="text-left py-1">Count</th>' +
           '</tr></thead><tbody>' + byTypeHtml + '</tbody></table></div>'
-        : '<div class="text-slate-500 p-6 text-center">' +
-            '<div class="text-slate-300 font-medium mb-2">No completed issues in this period</div>' +
-            '<div class="text-slate-500">Metrics track throughput, cycle time, and lead time.</div>' +
-            '<div class="text-slate-500 mt-1">Close issues to see flow data here.</div>' +
-            '<div class="mt-3"><button onclick="document.getElementById(\'metricsDays\').value=\'90\';loadMetrics()" class="text-blue-400 hover:underline text-xs">Try 90-day window</button></div></div>');
+        : '<div class="p-6 text-center" style="color:var(--text-muted)">' +
+            '<div class="font-medium mb-2" style="color:var(--text-primary)">No completed issues in this period</div>' +
+            '<div style="color:var(--text-muted)">Metrics track throughput, cycle time, and lead time.</div>' +
+            '<div style="color:var(--text-muted)" class="mt-1">Close issues to see flow data here.</div>' +
+            '<div class="mt-3"><button onclick="document.getElementById(\'metricsDays\').value=\'90\';loadMetrics()" style="color:var(--accent)" class="hover:underline text-xs">Try 90-day window</button></div></div>');
 
     // Agent workload
     var agentLoad = {};
@@ -1886,14 +1895,14 @@ async function loadMetrics() {
       var agentHtml = agents.map(function(a) {
         var pct = (agentLoad[a] / maxLoad * 100);
         return '<div class="flex items-center gap-2 mb-1">' +
-          '<span class="text-xs text-slate-300 w-24 truncate">' + escHtml(a) + '</span>' +
-          '<div class="flex-1 h-4 bg-slate-900 rounded overflow-hidden">' +
-            '<div class="h-full bg-blue-600 rounded" style="width:' + pct + '%"></div>' +
+          '<span class="text-xs w-24 truncate" style="color:var(--text-primary)">' + escHtml(a) + '</span>' +
+          '<div class="flex-1 h-4 rounded overflow-hidden" style="background:var(--surface-base)">' +
+            '<div class="h-full rounded" style="width:' + pct + '%;background:var(--accent)"></div>' +
           '</div>' +
-          '<span class="text-xs text-slate-400 w-6 text-right">' + agentLoad[a] + '</span></div>';
+          '<span class="text-xs w-6 text-right" style="color:var(--text-secondary)">' + agentLoad[a] + '</span></div>';
       }).join('');
-      container.innerHTML += '<div class="bg-slate-800 rounded p-4 border border-slate-700 mt-4">' +
-        '<div class="text-xs font-medium text-slate-400 mb-2">Agent Workload (Active WIP)</div>' +
+      container.innerHTML += '<div class="rounded p-4 mt-4" style="background:var(--surface-raised);border:1px solid var(--border-default)">' +
+        '<div class="text-xs font-medium mb-2" style="color:var(--text-secondary)">Agent Workload (Active WIP)</div>' +
         agentHtml + '</div>';
     }
   } catch (e) {
@@ -1906,11 +1915,11 @@ async function loadMetrics() {
 // ---------------------------------------------------------------------------
 async function loadActivity() {
   var container = document.getElementById('activityContent');
-  container.innerHTML = '<div class="text-slate-500">Loading...</div>';
+  container.innerHTML = '<div style="color:var(--text-muted)">Loading...</div>';
   try {
     var resp = await fetch(API_BASE + '/activity?limit=50');
     var events = await resp.json();
-    if (!events.length) { container.innerHTML = '<div class="text-slate-500 p-6 text-center"><div class="text-slate-300 font-medium mb-2">No recent activity</div><div>Events appear here when issues are created, updated, or closed.</div></div>'; return; }
+    if (!events.length) { container.innerHTML = '<div class="p-6 text-center" style="color:var(--text-muted)"><div class="font-medium mb-2" style="color:var(--text-primary)">No recent activity</div><div>Events appear here when issues are created, updated, or closed.</div></div>'; return; }
     var lastDay = '';
     container.innerHTML = events.map(function(e) {
       var time = e.created_at ? e.created_at.slice(5, 16) : '';
@@ -1919,21 +1928,21 @@ async function loadActivity() {
       if (day && day !== lastDay) {
         lastDay = day;
         separator = '<div class="flex items-center gap-2 py-2 mt-2 first:mt-0">' +
-          '<div class="flex-1 border-t border-slate-700"></div>' +
-          '<span class="text-xs text-slate-500 font-medium shrink-0">' + day + '</span>' +
-          '<div class="flex-1 border-t border-slate-700"></div>' +
+          '<div class="flex-1" style="border-top:1px solid var(--border-default)"></div>' +
+          '<span class="text-xs font-medium shrink-0" style="color:var(--text-muted)">' + day + '</span>' +
+          '<div class="flex-1" style="border-top:1px solid var(--border-default)"></div>' +
         '</div>';
       }
       var title = e.issue_title ? escHtml(e.issue_title.slice(0, 50)) : e.issue_id;
       var detail = '';
       if (e.event_type === 'status_changed') detail = e.old_value + ' \u2192 ' + e.new_value;
       else if (e.new_value) detail = e.new_value;
-      return separator + '<div class="flex items-start gap-3 py-2 border-b border-slate-800 cursor-pointer hover:bg-slate-800/50" onclick="openDetail(\'' + e.issue_id + '\')">' +
-        '<span class="text-slate-600 shrink-0 w-24">' + time + '</span>' +
-        '<span class="text-slate-400 shrink-0 w-32">' + escHtml(e.event_type) + '</span>' +
-        '<span class="text-slate-300 truncate">' + title + '</span>' +
-        (detail ? '<span class="text-slate-500 shrink-0">' + escHtml(detail) + '</span>' : '') +
-        (e.actor ? '<span class="text-slate-600 shrink-0">' + escHtml(e.actor) + '</span>' : '') +
+      return separator + '<div class="flex items-start gap-3 py-2 cursor-pointer bg-overlay-hover" style="border-bottom:1px solid var(--surface-raised)" onclick="openDetail(\'' + e.issue_id + '\')">' +
+        '<span class="shrink-0 w-24" style="color:var(--text-muted)">' + time + '</span>' +
+        '<span class="shrink-0 w-32" style="color:var(--text-secondary)">' + escHtml(e.event_type) + '</span>' +
+        '<span class="truncate" style="color:var(--text-primary)">' + title + '</span>' +
+        (detail ? '<span class="shrink-0" style="color:var(--text-muted)">' + escHtml(detail) + '</span>' : '') +
+        (e.actor ? '<span class="shrink-0" style="color:var(--text-muted)">' + escHtml(e.actor) + '</span>' : '') +
       '</div>';
     }).join('');
   } catch (e) {
@@ -1994,8 +2003,8 @@ function toggleGraphLegend() {
   legend.classList.toggle('hidden');
   var btn = document.getElementById('btnGraphLegend');
   btn.className = legend.classList.contains('hidden')
-    ? 'px-2 py-0.5 rounded bg-slate-700 hover:bg-slate-600'
-    : 'px-2 py-0.5 rounded bg-blue-600 text-white';
+    ? 'px-2 py-0.5 rounded bg-overlay bg-overlay-hover'
+    : 'px-2 py-0.5 rounded bg-accent text-primary';
 }
 
 function toggleKanbanLegend() {
@@ -2003,8 +2012,8 @@ function toggleKanbanLegend() {
   legend.classList.toggle('hidden');
   var btn = document.getElementById('btnKanbanLegend');
   btn.className = legend.classList.contains('hidden')
-    ? 'px-2 py-0.5 rounded bg-slate-700 hover:bg-slate-600'
-    : 'px-2 py-0.5 rounded bg-blue-600 text-white';
+    ? 'px-2 py-0.5 rounded bg-overlay bg-overlay-hover'
+    : 'px-2 py-0.5 rounded bg-accent text-primary';
 }
 
 async function toggleCriticalPath() {
@@ -2016,7 +2025,7 @@ async function toggleCriticalPath() {
     var data = await resp.json();
     criticalPathIds = new Set(data.path.map(function(p) { return p.id; }));
   } else {
-    btn.className = 'px-2 py-0.5 rounded bg-slate-700 hover:bg-slate-600';
+    btn.className = 'px-2 py-0.5 rounded bg-overlay bg-overlay-hover';
     criticalPathIds.clear();
   }
   renderGraph();
@@ -2094,18 +2103,18 @@ function showHealthBreakdown() {
   selectedIssue = null;
   panel.innerHTML =
     '<div class="flex items-center justify-between mb-3">' +
-      '<span class="text-base font-semibold text-slate-200">System Health: ' + b.score + '/100</span>' +
-      '<button onclick="closeDetail()" class="text-slate-500 hover:text-slate-300 text-lg">&times;</button></div>' +
+      '<span class="text-base font-semibold" style="color:var(--text-primary)">System Health: ' + b.score + '/100</span>' +
+      '<button onclick="closeDetail()" class="text-muted text-primary-hover text-lg">&times;</button></div>' +
     ['blocked', 'freshness', 'ready', 'balance'].map(function(k) {
       var f = b[k];
       var pct = Math.round(f.score / f.max * 100);
       return '<div class="mb-3"><div class="flex justify-between text-xs mb-1">' +
-        '<span class="text-slate-300 capitalize">' + k + '</span>' +
-        '<span class="text-slate-400">' + f.score + '/' + f.max + '</span></div>' +
-        '<div class="w-full h-2 rounded-full bg-slate-900 overflow-hidden">' +
+        '<span class="capitalize" style="color:var(--text-primary)">' + k + '</span>' +
+        '<span style="color:var(--text-secondary)">' + f.score + '/' + f.max + '</span></div>' +
+        '<div class="w-full h-2 rounded-full overflow-hidden" style="background:var(--surface-base)">' +
           '<div class="h-full rounded-full ' + (pct >= 75 ? 'bg-emerald-500' : pct >= 50 ? 'bg-amber-500' : 'bg-red-500') +
           '" style="width:' + pct + '%"></div></div>' +
-        '<div class="text-xs text-slate-500 mt-0.5">' + f.detail + '</div></div>';
+        '<div class="text-xs mt-0.5" style="color:var(--text-muted)">' + f.detail + '</div></div>';
     }).join('');
 }
 
@@ -2114,21 +2123,21 @@ function showHealthBreakdown() {
 // ---------------------------------------------------------------------------
 function showHealthHelp(btn) {
   showPopover(btn,
-    '<div class="text-slate-200 font-medium mb-2">Health Score (0\u2013100)</div>' +
-    '<div class="text-slate-400 space-y-1">' +
+    '<div class="font-medium mb-2" style="color:var(--text-primary)">Health Score (0\u2013100)</div>' +
+    '<div style="color:var(--text-secondary)" class="space-y-1">' +
       '<div><span class="text-emerald-400 font-medium">Blocked</span> (25 pts) \u2014 Fewer blocked issues = higher score</div>' +
-      '<div><span class="text-blue-400 font-medium">Freshness</span> (25 pts) \u2014 WIP items updated recently, not stale</div>' +
+      '<div><span class="font-medium" style="color:var(--accent)">Freshness</span> (25 pts) \u2014 WIP items updated recently, not stale</div>' +
       '<div><span class="text-amber-400 font-medium">Ready</span> (25 pts) \u2014 Enough unblocked work available</div>' +
-      '<div><span class="text-slate-300 font-medium">Balance</span> (25 pts) \u2014 No agent overloaded with WIP</div>' +
+      '<div><span class="font-medium" style="color:var(--text-primary)">Balance</span> (25 pts) \u2014 No agent overloaded with WIP</div>' +
     '</div>' +
-    '<div class="text-slate-500 mt-2 pt-2 border-t border-slate-700">Click the badge number for a detailed breakdown.</div>'
+    '<div style="color:var(--text-muted);border-top:1px solid var(--border-default)" class="mt-2 pt-2">Click the badge number for a detailed breakdown.</div>'
   );
 }
 
 function showReadyHelp(btn) {
   showPopover(btn,
-    '<div class="text-slate-200 font-medium mb-2">Ready Issues</div>' +
-    '<div class="text-slate-400 space-y-1">' +
+    '<div class="font-medium mb-2" style="color:var(--text-primary)">Ready Issues</div>' +
+    '<div style="color:var(--text-secondary)" class="space-y-1">' +
       '<div>Issues with <span class="text-emerald-400">no open blockers</span> that can be worked on immediately.</div>' +
       '<div class="mt-1"><span class="text-emerald-400">&#9679;</span> Green left border on cards = ready</div>' +
       '<div class="mt-1">Toggle this button to sort ready issues to the top.</div>' +
@@ -2138,8 +2147,8 @@ function showReadyHelp(btn) {
 
 function showBlockedHelp(btn) {
   showPopover(btn,
-    '<div class="text-slate-200 font-medium mb-2">Blocked Issues</div>' +
-    '<div class="text-slate-400 space-y-1">' +
+    '<div class="font-medium mb-2" style="color:var(--text-primary)">Blocked Issues</div>' +
+    '<div style="color:var(--text-secondary)" class="space-y-1">' +
       '<div>Issues that <span class="text-red-400">depend on other incomplete work</span>.</div>' +
       '<div class="mt-1"><span class="text-red-400">&#128279;</span> Shows "blocked by N" on cards</div>' +
       '<div class="mt-1">Toggle to filter to only blocked issues \u2014 useful for identifying bottlenecks.</div>' +
@@ -2152,7 +2161,7 @@ function showBlockedHelp(btn) {
 // ---------------------------------------------------------------------------
 async function loadPlanView(milestoneId) {
   var panel = document.getElementById('detailContent');
-  panel.innerHTML = '<div class="text-slate-500 text-xs">Loading plan...</div>';
+  panel.innerHTML = '<div class="text-xs" style="color:var(--text-muted)">Loading plan...</div>';
   try {
     var resp = await fetch(API_BASE + '/plan/' + milestoneId);
     if (!resp.ok) { panel.innerHTML = '<div class="text-red-400 text-xs">No plan found for this issue.</div>'; return; }
@@ -2164,30 +2173,30 @@ async function loadPlanView(milestoneId) {
     var pct = totalSteps ? Math.round(completedSteps / totalSteps * 100) : 0;
 
     var html = '<div class="flex items-center justify-between mb-3">' +
-      '<span class="text-xs text-slate-500">' + escHtml(m.id || milestoneId) + '</span>' +
-      '<button onclick="openDetail(\'' + milestoneId + '\')" class="text-xs text-blue-400 hover:underline">Back to detail</button></div>' +
-      '<div class="text-lg font-semibold text-slate-100 mb-2">' + escHtml(m.title || 'Plan') + '</div>' +
-      '<div class="w-full h-3 rounded-full bg-slate-900 mb-1 overflow-hidden">' +
+      '<span class="text-xs" style="color:var(--text-muted)">' + escHtml(m.id || milestoneId) + '</span>' +
+      '<button onclick="openDetail(\'' + milestoneId + '\')" class="text-xs hover:underline" style="color:var(--accent)">Back to detail</button></div>' +
+      '<div class="text-lg font-semibold mb-2" style="color:var(--text-primary)">' + escHtml(m.title || 'Plan') + '</div>' +
+      '<div class="w-full h-3 rounded-full mb-1 overflow-hidden" style="background:var(--surface-base)">' +
         '<div class="h-full bg-emerald-500 rounded-full" style="width:' + pct + '%"></div></div>' +
-      '<div class="text-xs text-slate-500 mb-4">' + completedSteps + '/' + totalSteps + ' steps (' + pct + '%)</div>';
+      '<div class="text-xs mb-4" style="color:var(--text-muted)">' + completedSteps + '/' + totalSteps + ' steps (' + pct + '%)</div>';
 
     phases.forEach(function(p) {
       var phase = p.phase || {};
       var steps = p.steps || [];
       var pDone = steps.filter(function(s) { return (s.status_category || 'open') === 'done'; }).length;
       var pPct = steps.length ? Math.round(pDone / steps.length * 100) : 0;
-      html += '<div class="mb-3 bg-slate-800 rounded border border-slate-700 p-3">' +
+      html += '<div class="mb-3 rounded p-3" style="background:var(--surface-raised);border:1px solid var(--border-default)">' +
         '<div class="flex items-center justify-between mb-1">' +
-          '<span class="text-xs font-medium text-slate-300">' + escHtml(phase.title || 'Phase') + '</span>' +
-          '<span class="text-xs text-slate-500">' + pDone + '/' + steps.length + '</span></div>' +
-        '<div class="w-full h-1.5 rounded-full bg-slate-900 mb-2 overflow-hidden">' +
-          '<div class="h-full bg-blue-500 rounded-full" style="width:' + pPct + '%"></div></div>' +
+          '<span class="text-xs font-medium" style="color:var(--text-primary)">' + escHtml(phase.title || 'Phase') + '</span>' +
+          '<span class="text-xs" style="color:var(--text-muted)">' + pDone + '/' + steps.length + '</span></div>' +
+        '<div class="w-full h-1.5 rounded-full mb-2 overflow-hidden" style="background:var(--surface-base)">' +
+          '<div class="h-full rounded-full" style="width:' + pPct + '%;background:var(--accent)"></div></div>' +
         steps.map(function(s) {
           var catColor = CATEGORY_COLORS[s.status_category || 'open'] || '#64748B';
-          return '<div class="flex items-center gap-2 py-1 ml-4 cursor-pointer hover:text-blue-400" onclick="openDetail(\'' + s.id + '\')">' +
+          return '<div class="flex items-center gap-2 py-1 ml-4 cursor-pointer" onclick="openDetail(\'' + s.id + '\')">' +
             '<span class="w-2 h-2 rounded-full shrink-0" style="background:' + catColor + '"></span>' +
-            '<span class="text-xs text-slate-300">' + escHtml(s.title) + '</span>' +
-            '<span class="text-xs text-slate-600">' + s.status + '</span></div>';
+            '<span class="text-xs" style="color:var(--text-primary)">' + escHtml(s.title) + '</span>' +
+            '<span class="text-xs" style="color:var(--text-muted)">' + s.status + '</span></div>';
         }).join('') +
       '</div>';
     });
@@ -2285,15 +2294,15 @@ async function batchSetPriority() {
   var modal = document.createElement('div');
   modal.id = 'batchPrioModal';
   modal.className = 'fixed inset-0 bg-black/50 flex items-center justify-center z-50';
-  modal.innerHTML = '<div class="bg-slate-800 rounded-lg border border-slate-600 p-4 w-72 shadow-xl">' +
-    '<div class="text-sm text-slate-200 mb-2">Set priority for ' + selectedCards.size + ' issues</div>' +
-    '<select id="batchPrioSelect" class="w-full bg-slate-700 text-slate-200 text-xs rounded px-2 py-2 border border-slate-600 mb-3">' +
+  modal.innerHTML = '<div class="rounded-lg p-4 w-72 shadow-xl" style="background:var(--surface-raised);border:1px solid var(--border-strong)">' +
+    '<div class="text-sm mb-2" style="color:var(--text-primary)">Set priority for ' + selectedCards.size + ' issues</div>' +
+    '<select id="batchPrioSelect" class="w-full text-xs rounded px-2 py-2 mb-3" style="background:var(--surface-overlay);color:var(--text-primary);border:1px solid var(--border-strong)">' +
       '<option value="0">P0 — Critical</option><option value="1">P1 — High</option>' +
       '<option value="2" selected>P2 — Medium</option><option value="3">P3 — Low</option><option value="4">P4 — Backlog</option>' +
     '</select>' +
     '<div class="flex justify-end gap-2">' +
-      '<button id="batchPrioCancel" class="text-xs bg-slate-700 px-3 py-1.5 rounded hover:bg-slate-600">Cancel</button>' +
-      '<button id="batchPrioConfirm" class="text-xs bg-blue-600 text-white px-3 py-1.5 rounded hover:bg-blue-700">Apply</button>' +
+      '<button id="batchPrioCancel" class="text-xs bg-overlay bg-overlay-hover px-3 py-1.5 rounded">Cancel</button>' +
+      '<button id="batchPrioConfirm" class="text-xs px-3 py-1.5 rounded bg-accent-hover" style="background:var(--accent);color:var(--surface-base)">Apply</button>' +
     '</div></div>';
   document.body.appendChild(modal);
   document.getElementById('batchPrioCancel').onclick = function() { modal.remove(); };
@@ -2319,10 +2328,10 @@ async function batchCloseSelected() {
   var modal = document.createElement('div');
   modal.id = 'batchCloseModal';
   modal.className = 'fixed inset-0 bg-black/50 flex items-center justify-center z-50';
-  modal.innerHTML = '<div class="bg-slate-800 rounded-lg border border-slate-600 p-4 w-72 shadow-xl">' +
-    '<div class="text-sm text-slate-200 mb-3">Close ' + count + ' issue' + (count !== 1 ? 's' : '') + '?</div>' +
+  modal.innerHTML = '<div class="rounded-lg p-4 w-72 shadow-xl" style="background:var(--surface-raised);border:1px solid var(--border-strong)">' +
+    '<div class="text-sm mb-3" style="color:var(--text-primary)">Close ' + count + ' issue' + (count !== 1 ? 's' : '') + '?</div>' +
     '<div class="flex justify-end gap-2">' +
-      '<button id="batchCloseCancel" class="text-xs bg-slate-700 px-3 py-1.5 rounded hover:bg-slate-600">Cancel</button>' +
+      '<button id="batchCloseCancel" class="text-xs bg-overlay bg-overlay-hover px-3 py-1.5 rounded">Cancel</button>' +
       '<button id="batchCloseConfirm" class="text-xs bg-red-600 text-white px-3 py-1.5 rounded hover:bg-red-700">Close All</button>' +
     '</div></div>';
   document.body.appendChild(modal);
@@ -2352,30 +2361,30 @@ async function showCreateForm() {
   var modal = document.createElement('div');
   modal.id = 'createModal';
   modal.className = 'fixed inset-0 bg-black/50 flex items-center justify-center z-50';
-  modal.innerHTML = '<div class="bg-slate-800 rounded-lg border border-slate-600 p-5 w-96 shadow-xl max-h-[80vh] overflow-y-auto">' +
-    '<div class="text-sm font-semibold text-slate-200 mb-3">Create Issue</div>' +
+  modal.innerHTML = '<div class="rounded-lg p-5 w-96 shadow-xl max-h-[80vh] overflow-y-auto" style="background:var(--surface-raised);border:1px solid var(--border-strong)">' +
+    '<div class="text-sm font-semibold mb-3" style="color:var(--text-primary)">Create Issue</div>' +
     '<div class="flex flex-col gap-3">' +
-      '<div><label for="createTitle" class="text-xs text-slate-400">Title *</label>' +
-        '<input id="createTitle" type="text" class="w-full bg-slate-700 text-slate-200 text-xs rounded px-3 py-2 border border-slate-600 mt-1 focus:outline-none focus:border-blue-500"></div>' +
+      '<div><label for="createTitle" class="text-xs" style="color:var(--text-secondary)">Title *</label>' +
+        '<input id="createTitle" type="text" class="w-full text-xs rounded px-3 py-2 mt-1 focus:outline-none" style="background:var(--surface-overlay);color:var(--text-primary);border:1px solid var(--border-strong)"></div>' +
       '<div class="flex gap-2">' +
-        '<div class="flex-1"><label for="createType" class="text-xs text-slate-400">Type</label>' +
-          '<select id="createType" class="w-full bg-slate-700 text-slate-200 text-xs rounded px-2 py-2 border border-slate-600 mt-1">' + typeOpts + '</select></div>' +
-        '<div class="w-20"><label for="createPriority" class="text-xs text-slate-400">Priority</label>' +
-          '<select id="createPriority" class="w-full bg-slate-700 text-slate-200 text-xs rounded px-2 py-2 border border-slate-600 mt-1">' +
+        '<div class="flex-1"><label for="createType" class="text-xs" style="color:var(--text-secondary)">Type</label>' +
+          '<select id="createType" class="w-full text-xs rounded px-2 py-2 mt-1" style="background:var(--surface-overlay);color:var(--text-primary);border:1px solid var(--border-strong)">' + typeOpts + '</select></div>' +
+        '<div class="w-20"><label for="createPriority" class="text-xs" style="color:var(--text-secondary)">Priority</label>' +
+          '<select id="createPriority" class="w-full text-xs rounded px-2 py-2 mt-1" style="background:var(--surface-overlay);color:var(--text-primary);border:1px solid var(--border-strong)">' +
             '<option value="0">P0 \u2014 Critical</option><option value="1">P1 \u2014 High</option><option value="2" selected>P2 \u2014 Medium</option><option value="3">P3 \u2014 Low</option><option value="4">P4 \u2014 Backlog</option>' +
           '</select></div></div>' +
-      '<div class="text-xs text-slate-500 -mt-1">Type determines workflow states. Use P0\u2013P1 sparingly.</div>' +
-      '<div><label for="createDesc" class="text-xs text-slate-400">Description</label>' +
-        '<textarea id="createDesc" rows="3" class="w-full bg-slate-700 text-slate-200 text-xs rounded px-3 py-2 border border-slate-600 mt-1 focus:outline-none focus:border-blue-500 resize-none"></textarea></div>' +
-      '<div><label for="createAssignee" class="text-xs text-slate-400">Assignee</label>' +
-        '<input id="createAssignee" type="text" class="w-full bg-slate-700 text-slate-200 text-xs rounded px-3 py-2 border border-slate-600 mt-1 focus:outline-none focus:border-blue-500"></div>' +
-      '<div><label for="createLabels" class="text-xs text-slate-400">Labels (comma-separated)</label>' +
-        '<input id="createLabels" type="text" class="w-full bg-slate-700 text-slate-200 text-xs rounded px-3 py-2 border border-slate-600 mt-1 focus:outline-none focus:border-blue-500">' +
-        '<div class="text-xs text-slate-500 mt-0.5">Example: ui, backend, urgent</div></div>' +
+      '<div class="text-xs -mt-1" style="color:var(--text-muted)">Type determines workflow states. Use P0\u2013P1 sparingly.</div>' +
+      '<div><label for="createDesc" class="text-xs" style="color:var(--text-secondary)">Description</label>' +
+        '<textarea id="createDesc" rows="3" class="w-full text-xs rounded px-3 py-2 mt-1 focus:outline-none resize-none" style="background:var(--surface-overlay);color:var(--text-primary);border:1px solid var(--border-strong)"></textarea></div>' +
+      '<div><label for="createAssignee" class="text-xs" style="color:var(--text-secondary)">Assignee</label>' +
+        '<input id="createAssignee" type="text" class="w-full text-xs rounded px-3 py-2 mt-1 focus:outline-none" style="background:var(--surface-overlay);color:var(--text-primary);border:1px solid var(--border-strong)"></div>' +
+      '<div><label for="createLabels" class="text-xs" style="color:var(--text-secondary)">Labels (comma-separated)</label>' +
+        '<input id="createLabels" type="text" class="w-full text-xs rounded px-3 py-2 mt-1 focus:outline-none" style="background:var(--surface-overlay);color:var(--text-primary);border:1px solid var(--border-strong)">' +
+        '<div class="text-xs mt-0.5" style="color:var(--text-muted)">Example: ui, backend, urgent</div></div>' +
     '</div>' +
     '<div class="flex justify-end gap-2 mt-4">' +
-      '<button onclick="document.getElementById(\'createModal\').remove()" class="text-xs bg-slate-700 px-3 py-1.5 rounded hover:bg-slate-600">Cancel</button>' +
-      '<button onclick="submitCreateForm()" class="text-xs bg-blue-600 text-white px-3 py-1.5 rounded hover:bg-blue-700">Create</button>' +
+      '<button onclick="document.getElementById(\'createModal\').remove()" class="text-xs bg-overlay bg-overlay-hover px-3 py-1.5 rounded">Cancel</button>' +
+      '<button onclick="submitCreateForm()" class="text-xs px-3 py-1.5 rounded bg-accent-hover" style="background:var(--accent);color:var(--surface-base)">Create</button>' +
     '</div></div>';
   document.body.appendChild(modal);
   modal.onclick = function(e) { if (e.target === modal) modal.remove(); };
@@ -2442,12 +2451,12 @@ function savePreset() {
   var modal = document.createElement('div');
   modal.id = 'presetNameModal';
   modal.className = 'fixed inset-0 bg-black/50 flex items-center justify-center z-50';
-  modal.innerHTML = '<div class="bg-slate-800 rounded-lg border border-slate-600 p-4 w-72 shadow-xl">' +
-    '<div class="text-sm text-slate-200 mb-2">Save filter preset</div>' +
-    '<input id="presetNameInput" type="text" placeholder="Preset name..." class="w-full bg-slate-700 text-slate-200 text-xs rounded px-3 py-2 border border-slate-600 mb-3 focus:outline-none focus:border-blue-500">' +
+  modal.innerHTML = '<div class="rounded-lg p-4 w-72 shadow-xl" style="background:var(--surface-raised);border:1px solid var(--border-strong)">' +
+    '<div class="text-sm mb-2" style="color:var(--text-primary)">Save filter preset</div>' +
+    '<input id="presetNameInput" type="text" placeholder="Preset name..." class="w-full text-xs rounded px-3 py-2 mb-3 focus:outline-none" style="background:var(--surface-overlay);color:var(--text-primary);border:1px solid var(--border-strong)">' +
     '<div class="flex justify-end gap-2">' +
-      '<button onclick="document.getElementById(\'presetNameModal\').remove()" class="text-xs bg-slate-700 px-3 py-1.5 rounded hover:bg-slate-600">Cancel</button>' +
-      '<button onclick="confirmSavePreset()" class="text-xs bg-blue-600 text-white px-3 py-1.5 rounded hover:bg-blue-700">Save</button>' +
+      '<button onclick="document.getElementById(\'presetNameModal\').remove()" class="text-xs bg-overlay bg-overlay-hover px-3 py-1.5 rounded">Cancel</button>' +
+      '<button onclick="confirmSavePreset()" class="text-xs px-3 py-1.5 rounded bg-accent-hover" style="background:var(--accent);color:var(--surface-base)">Save</button>' +
     '</div></div>';
   document.body.appendChild(modal);
   modal.onclick = function(e) { if (e.target === modal) modal.remove(); };
@@ -2507,7 +2516,7 @@ async function renderSparkline() {
     var w = canvas.width, h = canvas.height;
     ctx.clearRect(0, 0, w, h);
     var max = Math.max.apply(null, data.concat([1]));
-    ctx.strokeStyle = '#3B82F6'; ctx.lineWidth = 1.5; ctx.beginPath();
+    ctx.strokeStyle = THEME_COLORS.accent; ctx.lineWidth = 1.5; ctx.beginPath();
     data.forEach(function(v, i) {
       var x = i / (data.length - 1) * w;
       var y = h - (v / max * (h - 4)) - 2;
@@ -2539,17 +2548,17 @@ function showStaleIssues() {
   modal.id = 'staleModal';
   modal.className = 'fixed inset-0 bg-black/50 flex items-center justify-center z-50';
   modal.onclick = function(ev) { if (ev.target === modal) modal.remove(); };
-  modal.innerHTML = '<div class="bg-slate-800 rounded-lg border border-slate-600 p-4 w-80 shadow-xl max-h-96 overflow-y-auto">' +
-    '<div class="text-sm text-slate-200 mb-3">' + stale.length + ' stale issues</div>' +
+  modal.innerHTML = '<div class="rounded-lg p-4 w-80 shadow-xl max-h-96 overflow-y-auto" style="background:var(--surface-raised);border:1px solid var(--border-strong)">' +
+    '<div class="text-sm mb-3" style="color:var(--text-primary)">' + stale.length + ' stale issues</div>' +
     '<div class="flex flex-col gap-2">' +
     stale.map(function(i) {
       var hrs = Math.floor((Date.now() - new Date(i.updated_at).getTime()) / 3600000);
       return '<button onclick="document.getElementById(\'staleModal\').remove();openDetail(\'' + i.id + '\')" ' +
-        'class="text-xs text-left bg-slate-700 px-3 py-2 rounded hover:bg-slate-600 text-slate-200">' +
+        'class="text-xs text-left bg-overlay bg-overlay-hover px-3 py-2 rounded" style="color:var(--text-primary)">' +
         escHtml(i.title.slice(0, 40)) + ' <span class="text-red-400">(' + hrs + 'h)</span></button>';
     }).join('') +
     '</div>' +
-    '<button onclick="document.getElementById(\'staleModal\').remove()" class="text-xs text-slate-500 mt-3 hover:text-slate-300">Close</button>' +
+    '<button onclick="document.getElementById(\'staleModal\').remove()" class="text-xs text-muted text-primary-hover mt-3">Close</button>' +
   '</div>';
   document.body.appendChild(modal);
 }
