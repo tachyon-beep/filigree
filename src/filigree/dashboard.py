@@ -5,6 +5,11 @@ activity feed, workflow visualization. Supports issue management (create,
 update, close, reopen, claim, dependency management), batch operations,
 and real-time auto-refresh.
 
+Multi-project support: all project-scoped endpoints live on an APIRouter
+mounted at both ``/api/p/{project_key}/`` (explicit project) and ``/api/``
+(default project, backward compatible).  Root-level endpoints like
+``/api/health``, ``/api/projects``, and ``/api/register`` are not scoped.
+
 Usage:
     filigree dashboard                    # Opens browser at localhost:8377
     filigree dashboard --port 9000        # Custom port
@@ -13,60 +18,79 @@ Usage:
 
 from __future__ import annotations
 
+import logging
 import webbrowser
+from dataclasses import asdict
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from starlette.requests import Request
 
-from filigree.core import DB_FILENAME, FiligreeDB, find_filigree_root, read_config
+from filigree.core import FiligreeDB, find_filigree_root
+from filigree.registry import ProjectManager, Registry
 
 STATIC_DIR = Path(__file__).parent / "static"
 DEFAULT_PORT = 8377
 
-_db: FiligreeDB | None = None
-_prefix: str = "filigree"
+logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Module-level state — set by main() or test fixtures
+# ---------------------------------------------------------------------------
+
+_project_manager: ProjectManager | None = None
+_default_project_key: str = ""
 
 
-def _get_db() -> FiligreeDB:
-    if _db is None:
-        msg = "Database not initialized"
+def _get_project_db(project_key: str = "") -> FiligreeDB:
+    """Resolve *project_key* to a DB connection via the ProjectManager.
+
+    When the router is mounted at ``/api/p/{project_key}/``, FastAPI injects
+    the path parameter.  When mounted at ``/api/``, the default ``""`` falls
+    through to ``_default_project_key``.
+    """
+    if _project_manager is None:
+        msg = "Project manager not initialized"
         raise RuntimeError(msg)
-    return _db
+    key = project_key if project_key else _default_project_key
+    db = _project_manager.get_db(key)
+    if db is None:
+        from fastapi import HTTPException
+
+        raise HTTPException(status_code=404, detail=f"Unknown project: {key}")
+    return db
 
 
-def create_app() -> Any:
-    """Create the FastAPI application with all dashboard endpoints."""
-    from fastapi import FastAPI, Request
-    from fastapi.responses import HTMLResponse, JSONResponse
+# ---------------------------------------------------------------------------
+# Project-scoped router — all 32 issue/workflow endpoints
+# ---------------------------------------------------------------------------
+
+
+def _create_project_router() -> Any:
+    """Build the APIRouter containing all project-scoped endpoints."""
+    from fastapi import APIRouter, Depends, Request
+    from fastapi.responses import JSONResponse
 
     # Expose Request in module globals so PEP 563 deferred annotations resolve
     globals()["Request"] = Request
 
-    app = FastAPI(title="Filigree Dashboard", docs_url=None, redoc_url=None)
+    router = APIRouter()
 
     # NOTE: All handlers are intentionally async despite doing synchronous
     # SQLite I/O. This serializes DB access on the event loop thread,
-    # avoiding concurrent multi-thread access to the shared _db connection.
+    # avoiding concurrent multi-thread access to the shared DB connection.
     # Using plain `def` would cause FastAPI to dispatch handlers to a thread
     # pool, where parallel threads would race on the single SQLite connection.
 
-    @app.get("/", response_class=HTMLResponse)
-    async def index() -> HTMLResponse:
-        html = (STATIC_DIR / "dashboard.html").read_text()
-        return HTMLResponse(html)
-
-    @app.get("/api/issues")
-    async def api_issues() -> JSONResponse:
-        db = _get_db()
+    @router.get("/issues")
+    async def api_issues(db: FiligreeDB = Depends(_get_project_db)) -> JSONResponse:
         issues = db.list_issues(limit=10000)
         return JSONResponse([i.to_dict() for i in issues])
 
-    @app.get("/api/graph")
-    async def api_graph() -> JSONResponse:
+    @router.get("/graph")
+    async def api_graph(db: FiligreeDB = Depends(_get_project_db)) -> JSONResponse:
         """Graph data: nodes (issues) + edges (dependencies) for Cytoscape.js."""
-        db = _get_db()
         issues = db.list_issues(limit=10000)
         deps = db.get_all_dependencies()
         nodes = [
@@ -83,17 +107,15 @@ def create_app() -> Any:
         edges = [{"source": d["to"], "target": d["from"]} for d in deps]
         return JSONResponse({"nodes": nodes, "edges": edges})
 
-    @app.get("/api/stats")
-    async def api_stats() -> JSONResponse:
-        db = _get_db()
+    @router.get("/stats")
+    async def api_stats(db: FiligreeDB = Depends(_get_project_db)) -> JSONResponse:
         stats = db.get_stats()
-        stats["prefix"] = _prefix
+        stats["prefix"] = db.prefix
         return JSONResponse(stats)
 
-    @app.get("/api/issue/{issue_id}")
-    async def api_issue_detail(issue_id: str) -> JSONResponse:
+    @router.get("/issue/{issue_id}")
+    async def api_issue_detail(issue_id: str, db: FiligreeDB = Depends(_get_project_db)) -> JSONResponse:
         """Full issue detail with dependency details, events, and comments."""
-        db = _get_db()
         try:
             issue = db.get_issue(issue_id)
         except KeyError:
@@ -114,7 +136,12 @@ def create_app() -> Any:
                     "priority": dep.priority,
                 }
             except KeyError:
-                dep_details[did] = {"title": did, "status": "unknown", "status_category": "open", "priority": 2}
+                dep_details[did] = {
+                    "title": did,
+                    "status": "unknown",
+                    "status_category": "open",
+                    "priority": 2,
+                }
         data["dep_details"] = dep_details
 
         # Events
@@ -130,16 +157,14 @@ def create_app() -> Any:
 
         return JSONResponse(data)
 
-    @app.get("/api/dependencies")
-    async def api_dependencies() -> JSONResponse:
-        db = _get_db()
+    @router.get("/dependencies")
+    async def api_dependencies(db: FiligreeDB = Depends(_get_project_db)) -> JSONResponse:
         deps = db.get_all_dependencies()
         return JSONResponse(deps)
 
-    @app.get("/api/type/{type_name}")
-    async def api_type_template(type_name: str) -> JSONResponse:
+    @router.get("/type/{type_name}")
+    async def api_type_template(type_name: str, db: FiligreeDB = Depends(_get_project_db)) -> JSONResponse:
         """Workflow template for a given issue type (WFT-FR-065)."""
-        db = _get_db()
         tpl = db.templates.get_type(type_name)
         if tpl is None:
             return JSONResponse({"error": f"Unknown type: {type_name}"}, status_code=404)
@@ -155,10 +180,9 @@ def create_app() -> Any:
             }
         )
 
-    @app.get("/api/issue/{issue_id}/transitions")
-    async def api_issue_transitions(issue_id: str) -> JSONResponse:
+    @router.get("/issue/{issue_id}/transitions")
+    async def api_issue_transitions(issue_id: str, db: FiligreeDB = Depends(_get_project_db)) -> JSONResponse:
         """Valid next states for an issue."""
-        db = _get_db()
         try:
             transitions = db.get_valid_transitions(issue_id)
         except KeyError:
@@ -177,10 +201,11 @@ def create_app() -> Any:
             ]
         )
 
-    @app.patch("/api/issue/{issue_id}")
-    async def api_update_issue(issue_id: str, request: Request) -> JSONResponse:
+    @router.patch("/issue/{issue_id}")
+    async def api_update_issue(
+        issue_id: str, request: Request, db: FiligreeDB = Depends(_get_project_db)
+    ) -> JSONResponse:
         """Update issue fields (status, priority, assignee, etc.)."""
-        db = _get_db()
         try:
             body = await request.json()
         except Exception:
@@ -209,10 +234,11 @@ def create_app() -> Any:
             return JSONResponse({"error": str(e)}, status_code=409)
         return JSONResponse(issue.to_dict())
 
-    @app.post("/api/issue/{issue_id}/close")
-    async def api_close_issue(issue_id: str, request: Request) -> JSONResponse:
+    @router.post("/issue/{issue_id}/close")
+    async def api_close_issue(
+        issue_id: str, request: Request, db: FiligreeDB = Depends(_get_project_db)
+    ) -> JSONResponse:
         """Close an issue."""
-        db = _get_db()
         try:
             body = await request.json()
         except Exception:
@@ -232,10 +258,11 @@ def create_app() -> Any:
             return JSONResponse({"error": str(e)}, status_code=409)
         return JSONResponse(issue.to_dict())
 
-    @app.post("/api/issue/{issue_id}/reopen")
-    async def api_reopen_issue(issue_id: str, request: Request) -> JSONResponse:
+    @router.post("/issue/{issue_id}/reopen")
+    async def api_reopen_issue(
+        issue_id: str, request: Request, db: FiligreeDB = Depends(_get_project_db)
+    ) -> JSONResponse:
         """Reopen a closed issue."""
-        db = _get_db()
         try:
             body = await request.json()
         except Exception:
@@ -251,10 +278,11 @@ def create_app() -> Any:
             return JSONResponse({"error": str(e)}, status_code=409)
         return JSONResponse(issue.to_dict())
 
-    @app.post("/api/issue/{issue_id}/comments", status_code=201)
-    async def api_add_comment(issue_id: str, request: Request) -> JSONResponse:
+    @router.post("/issue/{issue_id}/comments", status_code=201)
+    async def api_add_comment(
+        issue_id: str, request: Request, db: FiligreeDB = Depends(_get_project_db)
+    ) -> JSONResponse:
         """Add a comment to an issue."""
-        db = _get_db()
         try:
             db.get_issue(issue_id)
         except KeyError:
@@ -283,52 +311,48 @@ def create_app() -> Any:
             status_code=201,
         )
 
-    @app.get("/api/search")
-    async def api_search(q: str = "", limit: int = 50, offset: int = 0) -> JSONResponse:
+    @router.get("/search")
+    async def api_search(
+        q: str = "", limit: int = 50, offset: int = 0, db: FiligreeDB = Depends(_get_project_db)
+    ) -> JSONResponse:
         """Full-text search across issues."""
         if not q.strip():
             return JSONResponse({"results": [], "total": 0})
-        db = _get_db()
         issues = db.search_issues(q, limit=limit, offset=offset)
         return JSONResponse({"results": [i.to_dict() for i in issues], "total": len(issues)})
 
-    @app.get("/api/metrics")
-    async def api_metrics(days: int = 30) -> JSONResponse:
+    @router.get("/metrics")
+    async def api_metrics(days: int = 30, db: FiligreeDB = Depends(_get_project_db)) -> JSONResponse:
         """Flow metrics: cycle time, lead time, throughput."""
         from filigree.analytics import get_flow_metrics
 
-        db = _get_db()
         metrics = get_flow_metrics(db, days=days)
         return JSONResponse(metrics)
 
-    @app.get("/api/critical-path")
-    async def api_critical_path() -> JSONResponse:
+    @router.get("/critical-path")
+    async def api_critical_path(db: FiligreeDB = Depends(_get_project_db)) -> JSONResponse:
         """Longest dependency chain among open issues."""
-        db = _get_db()
         path = db.get_critical_path()
         return JSONResponse({"path": path, "length": len(path)})
 
-    @app.get("/api/activity")
-    async def api_activity(limit: int = 50, since: str = "") -> JSONResponse:
+    @router.get("/activity")
+    async def api_activity(limit: int = 50, since: str = "", db: FiligreeDB = Depends(_get_project_db)) -> JSONResponse:
         """Recent events across all issues."""
-        db = _get_db()
         events = db.get_events_since(since, limit=limit) if since else db.get_recent_events(limit=limit)
         return JSONResponse(events)
 
-    @app.get("/api/plan/{milestone_id}")
-    async def api_plan(milestone_id: str) -> JSONResponse:
+    @router.get("/plan/{milestone_id}")
+    async def api_plan(milestone_id: str, db: FiligreeDB = Depends(_get_project_db)) -> JSONResponse:
         """Milestone plan tree."""
-        db = _get_db()
         try:
             plan = db.get_plan(milestone_id)
         except KeyError:
             return JSONResponse({"error": f"Not found: {milestone_id}"}, status_code=404)
         return JSONResponse(plan)
 
-    @app.post("/api/batch/update")
-    async def api_batch_update(request: Request) -> JSONResponse:
+    @router.post("/batch/update")
+    async def api_batch_update(request: Request, db: FiligreeDB = Depends(_get_project_db)) -> JSONResponse:
         """Batch update issues."""
-        db = _get_db()
         try:
             body = await request.json()
         except Exception:
@@ -359,10 +383,9 @@ def create_app() -> Any:
             }
         )
 
-    @app.post("/api/batch/close")
-    async def api_batch_close(request: Request) -> JSONResponse:
+    @router.post("/batch/close")
+    async def api_batch_close(request: Request, db: FiligreeDB = Depends(_get_project_db)) -> JSONResponse:
         """Batch close issues."""
-        db = _get_db()
         try:
             body = await request.json()
         except Exception:
@@ -384,10 +407,9 @@ def create_app() -> Any:
             }
         )
 
-    @app.get("/api/types")
-    async def api_types_list() -> JSONResponse:
+    @router.get("/types")
+    async def api_types_list(db: FiligreeDB = Depends(_get_project_db)) -> JSONResponse:
         """List all registered issue types."""
-        db = _get_db()
         types = db.templates.list_types()
         return JSONResponse(
             [
@@ -401,10 +423,9 @@ def create_app() -> Any:
             ]
         )
 
-    @app.post("/api/issues", status_code=201)
-    async def api_create_issue(request: Request) -> JSONResponse:
+    @router.post("/issues", status_code=201)
+    async def api_create_issue(request: Request, db: FiligreeDB = Depends(_get_project_db)) -> JSONResponse:
         """Create a new issue."""
-        db = _get_db()
         try:
             body = await request.json()
         except Exception:
@@ -432,10 +453,11 @@ def create_app() -> Any:
             return JSONResponse({"error": str(e)}, status_code=400)
         return JSONResponse(issue.to_dict(), status_code=201)
 
-    @app.post("/api/issue/{issue_id}/claim")
-    async def api_claim_issue(issue_id: str, request: Request) -> JSONResponse:
+    @router.post("/issue/{issue_id}/claim")
+    async def api_claim_issue(
+        issue_id: str, request: Request, db: FiligreeDB = Depends(_get_project_db)
+    ) -> JSONResponse:
         """Claim an issue."""
-        db = _get_db()
         try:
             body = await request.json()
         except Exception:
@@ -454,10 +476,11 @@ def create_app() -> Any:
             return JSONResponse({"error": str(e)}, status_code=409)
         return JSONResponse(issue.to_dict())
 
-    @app.post("/api/issue/{issue_id}/release")
-    async def api_release_claim(issue_id: str, request: Request) -> JSONResponse:
+    @router.post("/issue/{issue_id}/release")
+    async def api_release_claim(
+        issue_id: str, request: Request, db: FiligreeDB = Depends(_get_project_db)
+    ) -> JSONResponse:
         """Release a claimed issue."""
-        db = _get_db()
         try:
             body = await request.json()
         except Exception:
@@ -473,10 +496,9 @@ def create_app() -> Any:
             return JSONResponse({"error": str(e)}, status_code=409)
         return JSONResponse(issue.to_dict())
 
-    @app.post("/api/claim-next")
-    async def api_claim_next(request: Request) -> JSONResponse:
+    @router.post("/claim-next")
+    async def api_claim_next(request: Request, db: FiligreeDB = Depends(_get_project_db)) -> JSONResponse:
         """Claim the highest-priority ready issue."""
-        db = _get_db()
         try:
             body = await request.json()
         except Exception:
@@ -495,10 +517,11 @@ def create_app() -> Any:
             return JSONResponse({"error": "No ready issues to claim"}, status_code=404)
         return JSONResponse(issue.to_dict())
 
-    @app.post("/api/issue/{issue_id}/dependencies")
-    async def api_add_dependency(issue_id: str, request: Request) -> JSONResponse:
+    @router.post("/issue/{issue_id}/dependencies")
+    async def api_add_dependency(
+        issue_id: str, request: Request, db: FiligreeDB = Depends(_get_project_db)
+    ) -> JSONResponse:
         """Add a dependency: issue_id depends on depends_on."""
-        db = _get_db()
         try:
             body = await request.json()
         except Exception:
@@ -515,15 +538,110 @@ def create_app() -> Any:
             return JSONResponse({"error": str(e)}, status_code=409)
         return JSONResponse({"added": added})
 
-    @app.delete("/api/issue/{issue_id}/dependencies/{dep_id}")
-    async def api_remove_dependency(issue_id: str, dep_id: str) -> JSONResponse:
+    @router.delete("/issue/{issue_id}/dependencies/{dep_id}")
+    async def api_remove_dependency(
+        issue_id: str, dep_id: str, db: FiligreeDB = Depends(_get_project_db)
+    ) -> JSONResponse:
         """Remove a dependency."""
-        db = _get_db()
         try:
             removed = db.remove_dependency(issue_id, dep_id, actor="dashboard")
         except KeyError as e:
             return JSONResponse({"error": str(e)}, status_code=404)
         return JSONResponse({"removed": removed})
+
+    return router
+
+
+# ---------------------------------------------------------------------------
+# Application factory
+# ---------------------------------------------------------------------------
+
+
+def create_app() -> Any:
+    """Create the FastAPI application with all dashboard endpoints."""
+    from fastapi import FastAPI, Request
+    from fastapi.responses import HTMLResponse, JSONResponse
+
+    # Expose Request in module globals so PEP 563 deferred annotations resolve
+    globals()["Request"] = Request
+
+    app = FastAPI(title="Filigree Dashboard", docs_url=None, redoc_url=None)
+
+    router = _create_project_router()
+
+    # Scoped: /api/p/{project_key}/issues, etc.
+    app.include_router(router, prefix="/api/p/{project_key}")
+    # Backward compat: /api/issues (uses default project)
+    app.include_router(router, prefix="/api")
+
+    # Root-level endpoints (not project-scoped)
+
+    @app.get("/", response_class=HTMLResponse)
+    async def index() -> HTMLResponse:
+        html = (STATIC_DIR / "dashboard.html").read_text()
+        return HTMLResponse(html)
+
+    @app.get("/api/health")
+    async def api_health() -> JSONResponse:
+        return JSONResponse({"status": "ok"})
+
+    @app.get("/api/projects")
+    async def api_projects(ttl: float = 6.0) -> JSONResponse:
+        if _project_manager is None:
+            return JSONResponse([])
+        projects = _project_manager.get_active_projects(ttl_hours=ttl)
+        return JSONResponse([asdict(p) for p in projects])
+
+    @app.post("/api/register")
+    async def api_register(request: Request) -> JSONResponse:
+        if _project_manager is None:
+            return JSONResponse({"error": "Project manager not initialized"}, status_code=500)
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
+        if not isinstance(body, dict):
+            return JSONResponse({"error": "Request body must be a JSON object"}, status_code=400)
+        path = body.get("path")
+        if not path or not isinstance(path, str):
+            return JSONResponse({"error": "Invalid path"}, status_code=400)
+        # Canonicalize to prevent path traversal
+        p = Path(path).resolve()
+        if not p.is_dir():
+            return JSONResponse({"error": "Invalid path"}, status_code=400)
+        # Resolve: accept either .filigree/ dir or its parent project root
+        if p.name != ".filigree":
+            candidate = p / ".filigree"
+            if candidate.is_dir():
+                p = candidate
+            else:
+                return JSONResponse(
+                    {"error": "Path must be a .filigree/ directory or a project root containing one"},
+                    status_code=400,
+                )
+        entry = _project_manager.register(p)
+        return JSONResponse(asdict(entry))
+
+    @app.post("/api/reload")
+    async def api_reload() -> JSONResponse:
+        if _project_manager is None:
+            return JSONResponse({"error": "Project manager not initialized"}, status_code=500)
+        _project_manager.close_all()
+        projects = _project_manager.get_active_projects()
+        errors: list[str] = []
+        for proj in projects:
+            try:
+                _project_manager.register(Path(proj.path))
+            except Exception:
+                logger.warning("Failed to re-register project %s", proj.key, exc_info=True)
+                errors.append(proj.key)
+        return JSONResponse(
+            {
+                "ok": len(errors) == 0,
+                "projects": len(projects) - len(errors),
+                "errors": errors,
+            }
+        )
 
     return app
 
@@ -534,13 +652,14 @@ def main(port: int = DEFAULT_PORT, *, no_browser: bool = False) -> None:
 
     import uvicorn
 
-    global _db, _prefix
+    global _project_manager, _default_project_key
+
+    registry = Registry()
+    _project_manager = ProjectManager(registry)
 
     filigree_dir = find_filigree_root()
-    config = read_config(filigree_dir)
-    _prefix = config.get("prefix", "filigree")
-    _db = FiligreeDB(filigree_dir / DB_FILENAME, prefix=_prefix, check_same_thread=False)
-    _db.initialize()
+    entry = _project_manager.register(filigree_dir)
+    _default_project_key = entry.key
 
     app = create_app()
 

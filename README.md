@@ -13,7 +13,7 @@ Filigree is a lightweight, SQLite-backed issue tracker designed for AI coding ag
 
 Traditional issue trackers are human-first — agents have to scrape CLI output or parse API responses. Filigree flips this: agents read a pre-computed `context.md` at session start, claim work with optimistic locking, follow enforced workflow state machines, and resume sessions via event streams. For Claude Code, `filigree install` wires up session hooks and a workflow skill pack so agents get project context automatically.
 
-Filigree is single-project and local-first. No server, no cloud, no accounts. Just a `.filigree/` directory (like `.git/`) containing a SQLite database, configuration, and auto-generated context summary.
+Filigree is local-first. No cloud, no accounts. Each project gets a `.filigree/` directory (like `.git/`) containing a SQLite database, configuration, and auto-generated context summary. The optional web dashboard can serve multiple projects from a single instance via an ephemeral project registry.
 
 ### Key Features
 
@@ -25,7 +25,7 @@ Filigree is single-project and local-first. No server, no cloud, no accounts. Ju
 - **Hierarchical planning** — milestone/phase/step hierarchies with automatic unblocking
 - **Atomic claiming** — optimistic locking prevents double-work in multi-agent scenarios
 - **Pre-computed context** — `context.md` regenerated on every mutation for instant agent orientation
-- **Web dashboard** — real-time project overview with filtering and search (optional extra)
+- **Web dashboard** — real-time project overview with Kanban drag-and-drop, dependency graphs, multi-project switching, and Deep Teal dark/light theme (optional extra)
 - **Minimal dependencies** — just Python + SQLite + click (no framework overhead)
 - **Session resumption** — `get_changes --since <timestamp>` to catch up after downtime
 

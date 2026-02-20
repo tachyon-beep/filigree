@@ -9,34 +9,99 @@
 <script src="https://unpkg.com/dagre@0.8.5/dist/dagre.min.js"></script>
 <script src="https://unpkg.com/cytoscape-dagre@2.5.0/cytoscape-dagre.js"></script>
 <style>
+  :root {
+    --surface-base: #0B1215;
+    --surface-raised: #131E24;
+    --surface-overlay: #1A2B34;
+    --surface-hover: #243A45;
+    --border-default: #1E3340;
+    --border-strong: #2A4454;
+    --text-primary: #E2EEF2;
+    --text-secondary: #8FAAB8;
+    --text-muted: #5A7D8C;
+    --accent: #38BDF8;
+    --accent-hover: #0EA5E9;
+    --accent-subtle: rgba(12,74,110,0.2);
+    --scrollbar-track: #131E24;
+    --scrollbar-thumb: #2A4454;
+    --graph-text: #E2EEF2;
+    --graph-outline: #0B1215;
+    --graph-edge: #2A4454;
+    --status-open: #64748B;
+    --status-wip: #38BDF8;
+    --status-done: #7B919C;
+  }
+  [data-theme="light"] {
+    --surface-base: #F0F6F8;
+    --surface-raised: #FFFFFF;
+    --surface-overlay: #E8F1F4;
+    --surface-hover: #DCE9EE;
+    --border-default: #C5D8E0;
+    --border-strong: #9BBBC8;
+    --text-primary: #0F2027;
+    --text-secondary: #3D6070;
+    --text-muted: #6B8D9C;
+    --accent: #0284C7;
+    --accent-hover: #0369A1;
+    --accent-subtle: rgba(2,132,199,0.2);
+    --scrollbar-track: #E8F1F4;
+    --scrollbar-thumb: #B0C9D2;
+    --graph-text: #0F2027;
+    --graph-outline: #F0F6F8;
+    --graph-edge: #9BBBC8;
+    --status-open: #64748B;
+    --status-wip: #0284C7;
+    --status-done: #7B919C;
+  }
+  .bg-base { background: var(--surface-base); }
+  .bg-raised { background: var(--surface-raised); }
+  .bg-overlay { background: var(--surface-overlay); }
+  .bg-hover { background: var(--surface-hover); }
+  .border-default { border-color: var(--border-default); }
+  .border-strong { border-color: var(--border-strong); }
+  .text-primary { color: var(--text-primary); }
+  .text-secondary { color: var(--text-secondary); }
+  .text-muted { color: var(--text-muted); }
+  .bg-accent { background: var(--accent); }
+  .bg-accent-hover:hover { background: var(--accent-hover); }
+  .text-accent { color: var(--accent); }
+  .bg-overlay-hover:hover { background: var(--surface-hover); }
+  .text-primary-hover:hover { color: var(--text-primary); }
+  .text-secondary-hover:hover { color: var(--text-secondary); }
   @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&display=swap');
-  body { font-family: 'JetBrains Mono', 'Fira Code', monospace; background: #0F172A; color: #F1F5F9; }
+  body { font-family: 'JetBrains Mono', 'Fira Code', monospace; background: var(--surface-base); color: var(--text-primary); }
   #cy { width: 100%; height: 100%; }
+  #cy, #workflowCy { background: var(--surface-base); }
   .card { transition: all 0.15s ease; }
-  .card:hover { background: #334155 !important; }
-  .card:focus { outline: 2px solid #3B82F6; outline-offset: -2px; }
+  .card:hover { background: var(--surface-hover) !important; }
+  .card:focus { outline: 2px solid var(--accent); outline-offset: -2px; }
   .ready-border { border-left: 4px solid #10B981; }
   .scrollbar-thin::-webkit-scrollbar { width: 6px; }
-  .scrollbar-thin::-webkit-scrollbar-track { background: #1E293B; }
-  .scrollbar-thin::-webkit-scrollbar-thumb { background: #475569; border-radius: 3px; }
+  .scrollbar-thin::-webkit-scrollbar-track { background: var(--scrollbar-track); }
+  .scrollbar-thin::-webkit-scrollbar-thumb { background: var(--scrollbar-thumb); border-radius: 3px; }
   .detail-panel { transition: transform 0.2s ease; }
-  .kanban-col { min-width: 320px; }
+  .kanban-col { min-width: 280px; flex: 1 1 0; }
+  .kanban-col.drag-valid { outline: 2px dashed var(--accent); outline-offset: -2px; background: var(--accent-subtle); }
+  .kanban-col.drag-invalid { opacity: 0.3; cursor: not-allowed; }
+  .card[draggable="true"] { cursor: grab; }
+  .card[draggable="true"]:active { cursor: grabbing; }
   #refreshIndicator { transition: opacity 0.3s ease; }
   @keyframes stale-pulse { 0%,100% { border-left-color: #EF4444; } 50% { border-left-color: #7F1D1D; } }
   .aging-border { border-left: 4px solid #F59E0B; }
   .stale-border { border-left: 4px solid #EF4444; animation: stale-pulse 2s infinite; }
   .changed-flash { animation: flash 1s ease-out; }
-  @keyframes flash { 0% { box-shadow: 0 0 8px rgba(59,130,246,0.5); } 100% { box-shadow: none; } }
+  @keyframes flash { 0% { box-shadow: 0 0 8px rgba(56,189,248,0.5); } 100% { box-shadow: none; } }
   .popover { position: absolute; z-index: 60; max-width: 320px; }
   .help-icon { display: inline-flex; align-items: center; justify-content: center;
     width: 16px; height: 16px; border-radius: 50%; font-size: 10px; line-height: 1;
     cursor: pointer; vertical-align: middle; margin-left: 4px; flex-shrink: 0; }
-  .tour-highlight { outline: 3px solid #3B82F6 !important; outline-offset: 4px; position: relative; z-index: 55; }
+  .tour-highlight { outline: 3px solid var(--accent) !important; outline-offset: 4px; position: relative; z-index: 55; }
   .tour-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 50; }
   .tour-tooltip { position: fixed; z-index: 56; max-width: 360px; }
   button, select, input[type="text"], input[type="checkbox"] { min-height: 36px; }
   @media (pointer: coarse) { button, select, input[type="text"] { min-height: 44px; min-width: 44px; } }
-  button:focus-visible, select:focus-visible, input:focus-visible { outline: 2px solid #60A5FA; outline-offset: 2px; }
+  button:focus-visible, select:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .focus-accent:focus { border-color: var(--accent); }
   .btn-loading { opacity: 0.6; pointer-events: none; }
   @media (max-width: 768px) {
     .kanban-col { min-width: 100% !important; }
@@ -47,17 +112,8 @@
   }
   @media (min-width: 769px) and (max-width: 1200px) {
     #detailPanel { width: 450px !important; }
-    .kanban-col { min-width: 280px; }
+    .kanban-col { min-width: 260px; }
   }
-  body.light { background: #F8FAFC; color: #1E293B; }
-  .light .bg-slate-800 { background: #FFFFFF !important; }
-  .light .bg-slate-700 { background: #F1F5F9 !important; }
-  .light .bg-slate-900 { background: #E2E8F0 !important; }
-  .light .text-slate-200, .light .text-slate-100, .light .text-slate-300 { color: #1E293B !important; }
-  .light .text-slate-400 { color: #64748B !important; }
-  .light .border-slate-700, .light .border-slate-600 { border-color: #CBD5E1 !important; }
-  .light .card:hover { background: #F1F5F9 !important; }
-  .light #cy, .light #workflowCy { background: #F8FAFC; }
 </style>
 <script>
 tailwind.config = {
@@ -69,14 +125,20 @@ tailwind.config = {
 }
 </script>
 </head>
-<body class="h-screen flex flex-col overflow-hidden text-sm">
-<a href="#kanbanBoard" class="sr-only focus:not-sr-only focus:absolute focus:top-2 focus:left-2 focus:bg-blue-600 focus:text-white focus:px-3 focus:py-1 focus:rounded focus:z-50">Skip to content</a>
+<body class="bg-base h-screen flex flex-col overflow-hidden text-sm">
+<a href="#kanbanBoard" class="sr-only focus:not-sr-only focus:absolute focus:top-2 focus:left-2 bg-accent focus:text-white focus:px-3 focus:py-1 focus:rounded focus:z-50">Skip to content</a>
 
 <!-- Top Nav -->
-<header class="flex items-center justify-between px-4 py-2 bg-slate-800 border-b border-slate-700 shrink-0">
+<header class="flex items-center justify-between px-4 py-2 bg-raised border-b border-default shrink-0">
   <div class="flex items-center gap-4">
-    <span class="text-base font-semibold text-blue-400">&#9670; Filigree</span>
-    <button onclick="showCreateForm()" class="text-xs bg-blue-600 text-white px-2 py-1 rounded hover:bg-blue-700" title="Create Issue">+ New</button>
+    <span class="text-base font-semibold text-accent">&#9670; Filigree</span>
+    <div id="projectSwitcherWrap" style="display:none">
+      <select id="projectSwitcher" onchange="setProject(this.value)"
+        class="bg-overlay text-primary text-xs rounded px-2 py-1 border border-strong"
+        aria-label="Switch project">
+      </select>
+    </div>
+    <button onclick="showCreateForm()" class="text-xs bg-accent text-white px-2 py-1 rounded bg-accent-hover" title="Create Issue">+ New</button>
     <div class="flex gap-1">
       <button id="btnGraph" onclick="switchView('graph')" class="px-3 py-1 rounded text-xs font-medium" title="Dependency graph visualization">Graph</button>
       <button id="btnKanban" onclick="switchView('kanban')" class="px-3 py-1 rounded text-xs font-medium" title="Kanban board view">Kanban</button>
@@ -91,45 +153,48 @@ tailwind.config = {
     <button id="btnReady" onclick="toggleReady()" class="px-2 py-1 rounded text-xs font-medium bg-emerald-900/50 text-emerald-400 border border-emerald-700" title="Toggle: sort ready (unblocked) issues first">
       &#9679; Ready (<span id="readyCount">0</span>)
     </button>
-    <button onclick="showReadyHelp(this)" class="help-icon bg-slate-700 text-slate-400 hover:text-slate-200" title="What does Ready mean?" aria-label="Explain ready filter">?</button>
-    <button id="btnBlocked" onclick="toggleBlocked()" class="px-2 py-1 rounded text-xs font-medium bg-slate-700 text-slate-400 border border-slate-600" title="Toggle: show only blocked issues">
+    <button onclick="showReadyHelp(this)" class="help-icon bg-overlay text-secondary text-primary-hover" title="What does Ready mean?" aria-label="Explain ready filter">?</button>
+    <button id="btnBlocked" onclick="toggleBlocked()" class="px-2 py-1 rounded text-xs font-medium bg-overlay text-secondary border border-strong" title="Toggle: show only blocked issues">
       &#128279; Blocked (<span id="blockedCount">0</span>)
     </button>
-    <button onclick="showBlockedHelp(this)" class="help-icon bg-slate-700 text-slate-400 hover:text-slate-200" title="What does Blocked mean?" aria-label="Explain blocked filter">?</button>
-    <label for="filterPriority" class="text-xs text-slate-400 sr-only">Priority</label>
-    <select id="filterPriority" onchange="applyFilters()" class="bg-slate-700 text-slate-200 text-xs rounded px-2 py-1 border border-slate-600">
+    <button onclick="showBlockedHelp(this)" class="help-icon bg-overlay text-secondary text-primary-hover" title="What does Blocked mean?" aria-label="Explain blocked filter">?</button>
+    <label for="filterPriority" class="text-xs text-secondary sr-only">Priority</label>
+    <select id="filterPriority" onchange="applyFilters()" class="bg-overlay text-primary text-xs rounded px-2 py-1 border border-strong">
       <option value="all">Priority: All</option>
       <option value="0-1">P0-P1</option>
       <option value="2">P2</option>
       <option value="3-4">P3-P4</option>
     </select>
-    <label for="filterSearch" class="text-xs text-slate-400 sr-only">Search</label>
+    <label for="filterSearch" class="text-xs text-secondary sr-only">Search</label>
     <div class="relative">
       <input id="filterSearch" type="text" placeholder="Search..." oninput="debouncedSearch()"
-             class="bg-slate-700 text-slate-200 text-xs rounded px-3 py-1 pr-6 border border-slate-600 w-56 focus:outline-none focus:border-blue-500">
+             class="bg-overlay text-primary text-xs rounded px-3 py-1 pr-6 border border-strong w-56 focus:outline-none focus-accent">
       <button id="searchClear" onclick="document.getElementById('filterSearch').value='';searchResults=null;this.classList.add('hidden');render();"
-              class="hidden absolute right-1.5 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300 text-xs leading-none" title="Clear search" aria-label="Clear search">&times;</button>
+              class="hidden absolute right-1.5 top-1/2 -translate-y-1/2 text-muted text-primary-hover text-xs leading-none" title="Clear search" aria-label="Clear search">&times;</button>
     </div>
-    <button onclick="toggleMultiSelect()" id="btnMultiSelect" class="px-2 py-1 rounded text-xs font-medium bg-slate-700 text-slate-400 border border-slate-600" title="Toggle multi-select mode for batch operations">Select</button>
+    <button onclick="toggleMultiSelect()" id="btnMultiSelect" class="px-2 py-1 rounded text-xs font-medium bg-overlay text-secondary border border-strong" title="Toggle multi-select mode for batch operations">Select</button>
     <div class="flex gap-1 text-xs">
-      <label class="flex items-center gap-1 text-slate-400"><input type="checkbox" id="filterOpen" checked onchange="applyFilters()" class="accent-blue-500"> Open</label>
-      <label class="flex items-center gap-1 text-slate-400"><input type="checkbox" id="filterInProgress" checked onchange="applyFilters()" class="accent-blue-500"> Active</label>
-      <label class="flex items-center gap-1 text-slate-400"><input type="checkbox" id="filterClosed" onchange="applyFilters()" class="accent-blue-500"> Closed</label>
+      <label class="flex items-center gap-1 text-secondary"><input type="checkbox" id="filterOpen" checked onchange="applyFilters()" style="accent-color:var(--accent)"> Open</label>
+      <label class="flex items-center gap-1 text-secondary"><input type="checkbox" id="filterInProgress" checked onchange="applyFilters()" style="accent-color:var(--accent)"> Active</label>
+      <label class="flex items-center gap-1 text-secondary"><input type="checkbox" id="filterClosed" onchange="applyFilters()" style="accent-color:var(--accent)"> Closed</label>
     </div>
-    <select id="filterPreset" onchange="loadPreset()" class="bg-slate-700 text-slate-200 text-xs rounded px-2 py-1 border border-slate-600">
+    <select id="filterPreset" onchange="loadPreset()" class="bg-overlay text-primary text-xs rounded px-2 py-1 border border-strong">
       <option value="">Presets...</option>
     </select>
-    <button onclick="savePreset()" class="text-xs bg-slate-700 text-slate-400 px-2 py-1 rounded border border-slate-600 hover:bg-slate-600" title="Save current filters as preset">Save</button>
+    <button onclick="savePreset()" class="text-xs bg-overlay text-secondary px-2 py-1 rounded border border-strong bg-overlay-hover" title="Save current filters as preset">Save</button>
   </div>
 
-  <div class="flex items-center gap-3 text-xs text-slate-400">
-    <button onclick="toggleTheme()" id="themeToggle" class="text-xs px-2 py-1 rounded bg-slate-700 hover:bg-slate-600" title="Toggle theme">&#9788;</button>
-    <span id="refreshIndicator" class="opacity-0 text-blue-400">Refreshing...</span>
+  <div class="flex items-center gap-3 text-xs text-secondary">
+    <span id="refreshIndicator" class="opacity-0 text-accent">Refreshing...</span>
     <span id="healthBadge" onclick="showHealthBreakdown()" class="cursor-pointer px-2 py-0.5 rounded text-xs font-bold" title="System Health Score — click for breakdown">--</span>
-    <button onclick="showHealthHelp(this)" class="help-icon bg-slate-700 text-slate-400 hover:text-slate-200" title="What is Health Score?" aria-label="Explain health score">?</button>
-    <span>Open: <b id="statOpen" class="text-slate-200" aria-live="polite">0</b></span>
-    <span>Active: <b id="statActive" class="text-slate-200" aria-live="polite">0</b></span>
-    <span>Ready: <b id="statReady" class="text-emerald-400" aria-live="polite">0</b></span>
+    <button onclick="showHealthHelp(this)" class="help-icon bg-overlay text-secondary text-primary-hover" title="What is Health Score?" aria-label="Explain health score">?</button>
+    <div class="relative">
+      <button onclick="toggleSettingsMenu(event)" id="settingsGear" class="text-xs px-2 py-1 rounded bg-overlay bg-overlay-hover" title="Settings" aria-label="Settings menu">&#9881;</button>
+      <div id="settingsDropdown" class="hidden absolute right-0 top-full mt-1 rounded-lg shadow-xl text-xs z-50" style="background:var(--surface-base);border:1px solid var(--border-strong);min-width:160px">
+        <button onclick="reloadServer()" class="w-full text-left px-3 py-2 bg-overlay-hover text-primary rounded-t-lg">&#8635; Reload server</button>
+        <button onclick="toggleTheme();closeSettingsMenu()" id="themeToggle" class="w-full text-left px-3 py-2 bg-overlay-hover text-primary rounded-b-lg">&#9788; Toggle theme</button>
+      </div>
+    </div>
   </div>
 </header>
 
@@ -137,21 +202,21 @@ tailwind.config = {
 <div class="flex flex-1 overflow-hidden relative">
   <!-- Graph view -->
   <div id="graphView" class="flex-1 hidden flex flex-col">
-    <div class="flex items-center gap-2 px-4 py-1 bg-slate-800/50 text-xs text-slate-400 border-b border-slate-700">
+    <div class="flex items-center gap-2 px-4 py-1 bg-raised text-xs text-secondary border-b border-default">
       <label class="flex items-center gap-1">
-        <input type="checkbox" id="graphEpicsOnly" checked onchange="renderGraph()" class="accent-blue-500"> Epics only
+        <input type="checkbox" id="graphEpicsOnly" checked onchange="renderGraph()" style="accent-color:var(--accent)"> Epics only
       </label>
-      <button onclick="graphFit()" class="px-2 py-0.5 rounded bg-slate-700 hover:bg-slate-600" title="Reset zoom and center the graph">Fit</button>
-      <button id="btnCritPath" onclick="toggleCriticalPath()" class="px-2 py-0.5 rounded bg-slate-700 hover:bg-slate-600" title="Highlight the longest dependency chain">Critical Path</button>
-      <button id="btnGraphLegend" onclick="toggleGraphLegend()" class="px-2 py-0.5 rounded bg-slate-700 hover:bg-slate-600">Legend</button>
+      <button onclick="graphFit()" class="px-2 py-0.5 rounded bg-overlay bg-overlay-hover" title="Reset zoom and center the graph">Fit</button>
+      <button id="btnCritPath" onclick="toggleCriticalPath()" class="px-2 py-0.5 rounded bg-overlay bg-overlay-hover" title="Highlight the longest dependency chain">Critical Path</button>
+      <button id="btnGraphLegend" onclick="toggleGraphLegend()" class="px-2 py-0.5 rounded bg-overlay bg-overlay-hover">Legend</button>
     </div>
     <div class="relative flex-1">
       <div id="cy" class="absolute inset-0"></div>
-      <div id="graphLegend" class="hidden absolute top-2 right-4 bg-slate-900/95 border border-slate-600 rounded-lg p-3 text-xs z-10 max-w-xs shadow-xl">
-        <div class="text-slate-200 font-medium mb-2">Graph Legend</div>
-        <div class="text-slate-400 space-y-2">
+      <div id="graphLegend" class="hidden absolute top-2 right-4 bg-base border border-strong rounded-lg p-3 text-xs z-10 max-w-xs shadow-xl">
+        <div class="text-primary font-medium mb-2">Graph Legend</div>
+        <div class="text-secondary space-y-2">
           <div>
-            <div class="font-medium text-slate-300 mb-1">Node Shapes</div>
+            <div class="font-medium text-primary mb-1">Node Shapes</div>
             <div class="grid grid-cols-2 gap-x-3 gap-y-0.5">
               <div>&#11043; Hexagon = Epic</div>
               <div>&#9670; Diamond = Bug</div>
@@ -160,53 +225,57 @@ tailwind.config = {
             </div>
           </div>
           <div>
-            <div class="font-medium text-slate-300 mb-1">Colors</div>
+            <div class="font-medium text-primary mb-1">Colors</div>
             <div class="flex gap-3">
-              <div><span class="inline-block w-3 h-3 rounded" style="background:#64748B"></span> Open</div>
-              <div><span class="inline-block w-3 h-3 rounded" style="background:#3B82F6"></span> In Progress</div>
-              <div><span class="inline-block w-3 h-3 rounded" style="background:#9CA3AF"></span> Done</div>
+              <div><span class="inline-block w-3 h-3 rounded" style="background:var(--status-open)"></span> Open</div>
+              <div><span class="inline-block w-3 h-3 rounded" style="background:var(--status-wip)"></span> In Progress</div>
+              <div><span class="inline-block w-3 h-3 rounded" style="background:var(--status-done)"></span> Done</div>
             </div>
           </div>
           <div>
-            <div class="font-medium text-slate-300 mb-1">Indicators</div>
+            <div class="font-medium text-primary mb-1">Indicators</div>
             <div>Green border = Ready (no blockers)</div>
             <div>Larger node = Higher priority</div>
             <div>Arrows = blocks &rarr; blocked</div>
           </div>
           <div>
-            <div class="font-medium text-slate-300 mb-1">Interactions</div>
+            <div class="font-medium text-primary mb-1">Interactions</div>
             <div>Click node &rarr; Open detail panel</div>
             <div>Hover node &rarr; Highlight downstream</div>
           </div>
         </div>
-        <button onclick="toggleGraphLegend()" class="text-slate-500 hover:text-slate-300 mt-2">Close</button>
+        <button onclick="toggleGraphLegend()" class="text-muted text-primary-hover mt-2">Close</button>
       </div>
     </div>
   </div>
 
   <!-- Kanban view -->
   <div id="kanbanView" class="flex-1 hidden flex flex-col">
-    <div class="flex items-center gap-2 px-4 py-1 bg-slate-800/50 text-xs text-slate-400 border-b border-slate-700">
+    <div class="flex items-center gap-2 px-4 py-1 bg-raised text-xs text-secondary border-b border-default">
       <button id="btnStandard" onclick="switchKanbanMode('standard')" class="px-2 py-0.5 rounded" title="Three columns: Open, In Progress, Done">Standard</button>
       <button id="btnCluster" onclick="switchKanbanMode('cluster')" class="px-2 py-0.5 rounded" title="Group issues by parent epic with progress bars">Cluster</button>
-      <span class="text-slate-600">|</span>
-      <select id="filterType" onchange="applyTypeFilter()" class="bg-slate-700 text-slate-200 text-xs rounded px-2 py-0.5 border border-slate-600" title="Filter to one issue type and show its workflow states as columns">
+      <span class="text-muted">|</span>
+      <select id="filterType" onchange="applyTypeFilter()" class="bg-overlay text-primary text-xs rounded px-2 py-0.5 border border-strong" title="Filter to one issue type and show its workflow states as columns">
         <option value="">All types</option>
       </select>
-      <span class="text-slate-600">|</span>
-      <button id="btnKanbanLegend" onclick="toggleKanbanLegend()" class="px-2 py-0.5 rounded bg-slate-700 hover:bg-slate-600">Legend</button>
+      <span id="typeFilterPill" class="hidden text-xs px-2 py-0.5 rounded border text-accent" style="background:var(--accent-subtle);border-color:var(--accent)">
+        <span id="typeFilterLabel"></span>
+        <button onclick="clearTypeFilter()" class="ml-1 text-accent hover:text-white" title="Clear type filter" aria-label="Clear type filter">&times;</button>
+      </span>
+      <span class="text-muted">|</span>
+      <button id="btnKanbanLegend" onclick="toggleKanbanLegend()" class="px-2 py-0.5 rounded bg-overlay bg-overlay-hover">Legend</button>
     </div>
-    <div id="kanbanLegend" class="hidden bg-slate-900/95 border-b border-slate-600 px-4 py-2 text-xs">
-      <div class="flex flex-wrap gap-x-6 gap-y-1 text-slate-400">
-        <span class="font-medium text-slate-300">Card Borders:</span>
+    <div id="kanbanLegend" class="hidden bg-base border-b border-strong px-4 py-2 text-xs">
+      <div class="flex flex-wrap gap-x-6 gap-y-1 text-secondary">
+        <span class="font-medium text-primary">Card Borders:</span>
         <span><span class="inline-block w-3 h-0.5 bg-emerald-500 mr-1 align-middle"></span>Ready (no blockers)</span>
         <span><span class="inline-block w-3 h-0.5 bg-amber-500 mr-1 align-middle"></span>Aging (WIP &gt;4h)</span>
         <span><span class="inline-block w-3 h-0.5 bg-red-500 mr-1 align-middle"></span>Stale (WIP &gt;24h)</span>
-        <span class="font-medium text-slate-300 ml-4">Badges:</span>
+        <span class="font-medium text-primary ml-4">Badges:</span>
         <span><span class="text-red-400">&#128279;</span> Blocked by N</span>
         <span><span class="text-amber-400">&#9889;</span>N = Blocks N downstream</span>
         <span>&#128100; = Assignee</span>
-        <span class="font-medium text-slate-300 ml-4">Modes:</span>
+        <span class="font-medium text-primary ml-4">Modes:</span>
         <span>Standard = Open / WIP / Done</span>
         <span>Cluster = Grouped by epic</span>
       </div>
@@ -218,14 +287,14 @@ tailwind.config = {
   <div id="metricsView" class="flex-1 hidden overflow-y-auto p-6">
     <div class="max-w-3xl mx-auto">
       <div class="flex items-center gap-3 mb-6">
-        <span class="text-base font-semibold text-slate-200">Flow Metrics</span>
-        <select id="metricsDays" onchange="loadMetrics()" class="bg-slate-700 text-xs rounded px-2 py-1 border border-slate-600">
+        <span class="text-base font-semibold text-primary">Flow Metrics</span>
+        <select id="metricsDays" onchange="loadMetrics()" class="bg-overlay text-xs rounded px-2 py-1 border border-strong">
           <option value="7">7 days</option>
           <option value="30" selected>30 days</option>
           <option value="90">90 days</option>
         </select>
       </div>
-      <div id="metricsContent" class="text-slate-400 text-xs">Loading...</div>
+      <div id="metricsContent" class="text-secondary text-xs">Loading...</div>
     </div>
   </div>
 
@@ -233,18 +302,18 @@ tailwind.config = {
   <div id="activityView" class="flex-1 hidden overflow-y-auto p-6">
     <div class="max-w-3xl mx-auto">
       <div class="flex items-center gap-3 mb-4">
-        <span class="text-base font-semibold text-slate-200">Recent Activity</span>
-        <button onclick="loadActivity()" class="text-xs bg-slate-700 px-2 py-1 rounded hover:bg-slate-600">Refresh</button>
+        <span class="text-base font-semibold text-primary">Recent Activity</span>
+        <button onclick="loadActivity()" class="text-xs bg-overlay px-2 py-1 rounded bg-overlay-hover">Refresh</button>
       </div>
-      <div id="activityContent" class="text-slate-400 text-xs">Loading...</div>
+      <div id="activityContent" class="text-secondary text-xs">Loading...</div>
     </div>
   </div>
 
   <!-- Workflow view -->
   <div id="workflowView" class="flex-1 hidden flex flex-col">
-    <div class="flex items-center gap-2 px-4 py-1 bg-slate-800/50 text-xs text-slate-400 border-b border-slate-700">
-      <label for="workflowType" class="text-xs text-slate-400">Type:</label>
-      <select id="workflowType" onchange="loadWorkflow()" class="bg-slate-700 text-slate-200 text-xs rounded px-2 py-1 border border-slate-600">
+    <div class="flex items-center gap-2 px-4 py-1 bg-raised text-xs text-secondary border-b border-default">
+      <label for="workflowType" class="text-xs text-secondary">Type:</label>
+      <select id="workflowType" onchange="loadWorkflow()" class="bg-overlay text-primary text-xs rounded px-2 py-1 border border-strong">
         <option value="">Select type...</option>
       </select>
     </div>
@@ -252,27 +321,27 @@ tailwind.config = {
   </div>
 
   <!-- Detail panel (slides in from right) -->
-  <div id="detailPanel" role="complementary" aria-label="Issue Detail" class="detail-panel absolute top-0 right-0 h-full w-[500px] bg-slate-800 border-l border-slate-700 overflow-y-auto scrollbar-thin transform translate-x-full z-10">
+  <div id="detailPanel" role="complementary" aria-label="Issue Detail" class="detail-panel absolute top-0 right-0 h-full w-[500px] bg-raised border-l border-default overflow-y-auto scrollbar-thin transform translate-x-full z-10">
     <div id="detailContent" class="p-5"></div>
   </div>
 </div>
 
 <!-- Stats bar -->
-<footer class="flex items-center gap-4 px-4 py-1 bg-slate-800 border-t border-slate-700 text-xs text-slate-400 shrink-0">
-  <span>Open: <b id="footOpen" class="text-slate-300">0</b></span>
-  <span>In Progress: <b id="footActive" class="text-slate-300">0</b></span>
+<footer class="flex items-center gap-4 px-4 py-1 bg-raised border-t border-default text-xs text-secondary shrink-0">
+  <span>Open: <b id="footOpen" class="text-primary">0</b></span>
+  <span>In Progress: <b id="footActive" class="text-primary">0</b></span>
   <span>Ready: <b id="footReady" class="text-emerald-400">0</b></span>
   <span>Blocked: <b id="footBlocked" class="text-red-400">0</b></span>
-  <span>Deps: <b id="footDeps" class="text-slate-300">0</b></span>
+  <span>Deps: <b id="footDeps" class="text-primary">0</b></span>
   <canvas id="sparkline" width="100" height="20" title="14-day throughput trend" class="opacity-70"></canvas>
   <span id="staleBadge" class="hidden text-xs bg-red-900/50 text-red-400 px-2 py-0.5 rounded border border-red-800 cursor-pointer" onclick="showStaleIssues()" title="WIP issues with no updates for >2 hours. Click to view."></span>
 </footer>
 
-<div id="batchBar" class="fixed bottom-12 left-1/2 -translate-x-1/2 bg-slate-800 border border-slate-600 rounded-lg px-4 py-2 flex items-center gap-3 shadow-xl hidden z-20">
-  <span id="batchCount" class="text-xs text-slate-300">0 selected</span>
-  <button onclick="batchSetPriority()" class="text-xs bg-slate-700 px-2 py-1 rounded hover:bg-slate-600">Set Priority</button>
+<div id="batchBar" class="fixed bottom-12 left-1/2 -translate-x-1/2 bg-raised border border-strong rounded-lg px-4 py-2 flex items-center gap-3 shadow-xl hidden z-20">
+  <span id="batchCount" class="text-xs text-primary">0 selected</span>
+  <button onclick="batchSetPriority()" class="text-xs bg-overlay px-2 py-1 rounded bg-overlay-hover">Set Priority</button>
   <button onclick="batchCloseSelected()" class="text-xs bg-red-900/50 text-red-400 px-2 py-1 rounded border border-red-800 hover:bg-red-900">Close All</button>
-  <button onclick="toggleMultiSelect()" class="text-xs text-slate-500 hover:text-slate-300">Cancel</button>
+  <button onclick="toggleMultiSelect()" class="text-xs text-muted text-primary-hover">Cancel</button>
 </div>
 
 <div id="toastContainer" class="fixed top-4 right-4 z-50 flex flex-col gap-2" aria-live="polite"></div>
@@ -295,10 +364,60 @@ var detailHistory = [];
 var selectedCards = new Set();
 var multiSelectMode = false;
 
-var CATEGORY_COLORS = { open: '#64748B', wip: '#3B82F6', done: '#9CA3AF' };
+var CATEGORY_COLORS = { open: '#64748B', wip: '#38BDF8', done: '#7B919C' };
+var THEME_COLORS = {
+  textPrimary: '#E2EEF2',
+  textSecondary: '#8FAAB8',
+  graphOutline: '#0B1215',
+  graphEdge: '#2A4454',
+  accent: '#38BDF8',
+};
 var PRIORITY_COLORS = { 0: '#EF4444', 1: '#F97316', 2: '#6B7280', 3: '#D1D5DB', 4: '#D1D5DB' };
 var TYPE_ICONS = { bug: '\u{1F41B}', feature: '\u2728', task: '\u{1F4CB}', epic: '\u{1F4CA}', milestone: '\u{1F3AF}', step: '\u25B6' };
 var typeTemplate = null;  // Cached type template for type-filtered kanban
+var _dragIssueId = null;       // Issue being dragged
+var _dragTransitions = [];     // Valid transitions for dragged issue
+var _transitionsLoaded = false;
+
+// ---------------------------------------------------------------------------
+// Multi-project support
+// ---------------------------------------------------------------------------
+var API_BASE = '/api';
+var currentProjectKey = '';
+var allProjects = [];
+
+function setProject(key, opts) {
+  currentProjectKey = key;
+  API_BASE = key ? '/api/p/' + encodeURIComponent(key) : '/api';
+  var sel = document.getElementById('projectSwitcher');
+  if (sel) sel.value = key;
+  var proj = allProjects.find(function(p) { return p.key === key; });
+  document.title = proj ? proj.name + ' \u2014 Filigree' : 'Filigree Dashboard';
+  selectedCards.clear();
+  if (!(opts && opts.keepDetail)) closeDetail();
+  updateHash();
+  fetchData();
+}
+
+async function loadProjects() {
+  try {
+    var resp = await fetch('/api/projects?ttl=6');
+    if (!resp.ok) return;
+    allProjects = await resp.json();
+    var sel = document.getElementById('projectSwitcher');
+    if (!sel) return;
+    sel.innerHTML = '';
+    allProjects.forEach(function(p) {
+      var opt = document.createElement('option');
+      opt.value = p.key;
+      opt.textContent = p.name;
+      if (p.key === currentProjectKey) opt.selected = true;
+      sel.appendChild(opt);
+    });
+    var wrap = document.getElementById('projectSwitcherWrap');
+    if (wrap) wrap.style.display = allProjects.length > 1 ? '' : 'none';
+  } catch(e) { /* best-effort */ }
+}
 
 // ---------------------------------------------------------------------------
 // Data fetching
@@ -307,8 +426,12 @@ async function fetchData() {
   document.getElementById('refreshIndicator').style.opacity = '1';
   try {
     var results = await Promise.all([
-      fetch('/api/issues'), fetch('/api/dependencies'), fetch('/api/stats')
+      fetch(API_BASE + '/issues'), fetch(API_BASE + '/dependencies'), fetch(API_BASE + '/stats')
     ]);
+    if (!results[0].ok || !results[1].ok || !results[2].ok) {
+      console.warn('fetchData: non-OK response', results.map(function(r) { return r.status; }));
+      return;
+    }
     allIssues = await results[0].json();
     allDeps = await results[1].json();
     stats = await results[2].json();
@@ -335,9 +458,6 @@ function updateStats() {
   var byCat = s.by_category || {};
   var open = byCat.open || 0;
   var active = byCat.wip || 0;
-  document.getElementById('statOpen').textContent = open;
-  document.getElementById('statActive').textContent = active;
-  document.getElementById('statReady').textContent = s.ready_count;
   document.getElementById('readyCount').textContent = s.ready_count;
   document.getElementById('footOpen').textContent = open;
   document.getElementById('footActive').textContent = active;
@@ -396,7 +516,7 @@ function toggleReady() {
   var btn = document.getElementById('btnReady');
   btn.className = readyFilter
     ? 'px-2 py-1 rounded text-xs font-medium bg-emerald-900/50 text-emerald-400 border border-emerald-700'
-    : 'px-2 py-1 rounded text-xs font-medium bg-slate-700 text-slate-400 border border-slate-600';
+    : 'px-2 py-1 rounded text-xs font-medium bg-overlay text-secondary border border-strong';
   render();
 }
 
@@ -407,7 +527,7 @@ function toggleBlocked() {
   var btn = document.getElementById('btnBlocked');
   btn.className = blockedFilter
     ? 'px-2 py-1 rounded text-xs font-medium bg-red-900/50 text-red-400 border border-red-700'
-    : 'px-2 py-1 rounded text-xs font-medium bg-slate-700 text-slate-400 border border-slate-600';
+    : 'px-2 py-1 rounded text-xs font-medium bg-overlay text-secondary border border-strong';
   render();
 }
 
@@ -416,8 +536,8 @@ function toggleMultiSelect() {
   if (!multiSelectMode) selectedCards.clear();
   var btn = document.getElementById('btnMultiSelect');
   btn.className = multiSelectMode
-    ? 'px-2 py-1 rounded text-xs font-medium bg-blue-600 text-white'
-    : 'px-2 py-1 rounded text-xs font-medium bg-slate-700 text-slate-400 border border-slate-600';
+    ? 'px-2 py-1 rounded text-xs font-medium bg-accent text-primary'
+    : 'px-2 py-1 rounded text-xs font-medium bg-overlay text-secondary border border-strong';
   render();
 }
 
@@ -440,20 +560,20 @@ function switchView(view) {
   document.getElementById('activityView').classList.toggle('hidden', view !== 'activity');
   document.getElementById('workflowView').classList.toggle('hidden', view !== 'workflow');
   document.getElementById('btnGraph').className = view === 'graph'
-    ? 'px-3 py-1 rounded text-xs font-medium bg-blue-600 text-white'
-    : 'px-3 py-1 rounded text-xs font-medium bg-slate-700 text-slate-300 hover:bg-slate-600';
+    ? 'px-3 py-1 rounded text-xs font-medium bg-accent text-primary'
+    : 'px-3 py-1 rounded text-xs font-medium bg-overlay text-secondary bg-overlay-hover';
   document.getElementById('btnKanban').className = view === 'kanban'
-    ? 'px-3 py-1 rounded text-xs font-medium bg-blue-600 text-white'
-    : 'px-3 py-1 rounded text-xs font-medium bg-slate-700 text-slate-300 hover:bg-slate-600';
+    ? 'px-3 py-1 rounded text-xs font-medium bg-accent text-primary'
+    : 'px-3 py-1 rounded text-xs font-medium bg-overlay text-secondary bg-overlay-hover';
   document.getElementById('btnMetrics').className = view === 'metrics'
-    ? 'px-3 py-1 rounded text-xs font-medium bg-blue-600 text-white'
-    : 'px-3 py-1 rounded text-xs font-medium bg-slate-700 text-slate-300 hover:bg-slate-600';
+    ? 'px-3 py-1 rounded text-xs font-medium bg-accent text-primary'
+    : 'px-3 py-1 rounded text-xs font-medium bg-overlay text-secondary bg-overlay-hover';
   document.getElementById('btnActivity').className = view === 'activity'
-    ? 'px-3 py-1 rounded text-xs font-medium bg-blue-600 text-white'
-    : 'px-3 py-1 rounded text-xs font-medium bg-slate-700 text-slate-300 hover:bg-slate-600';
+    ? 'px-3 py-1 rounded text-xs font-medium bg-accent text-primary'
+    : 'px-3 py-1 rounded text-xs font-medium bg-overlay text-secondary bg-overlay-hover';
   document.getElementById('btnWorkflow').className = view === 'workflow'
-    ? 'px-3 py-1 rounded text-xs font-medium bg-blue-600 text-white'
-    : 'px-3 py-1 rounded text-xs font-medium bg-slate-700 text-slate-300 hover:bg-slate-600';
+    ? 'px-3 py-1 rounded text-xs font-medium bg-accent text-primary'
+    : 'px-3 py-1 rounded text-xs font-medium bg-overlay text-secondary bg-overlay-hover';
   updateHash();
   if (view === 'graph') renderGraph();
   else if (view === 'metrics') loadMetrics();
@@ -463,13 +583,17 @@ function switchView(view) {
 }
 
 function switchKanbanMode(mode) {
+  typeTemplate = null;
+  var typeSelect = document.getElementById('filterType');
+  if (typeSelect) typeSelect.value = '';
+  updateTypeFilterUI(false);
   kanbanMode = mode;
   document.getElementById('btnStandard').className = mode === 'standard'
-    ? 'px-2 py-0.5 rounded bg-blue-600 text-white'
-    : 'px-2 py-0.5 rounded bg-slate-700 hover:bg-slate-600';
+    ? 'px-2 py-0.5 rounded bg-accent text-primary'
+    : 'px-2 py-0.5 rounded bg-overlay bg-overlay-hover';
   document.getElementById('btnCluster').className = mode === 'cluster'
-    ? 'px-2 py-0.5 rounded bg-blue-600 text-white'
-    : 'px-2 py-0.5 rounded bg-slate-700 hover:bg-slate-600';
+    ? 'px-2 py-0.5 rounded bg-accent text-primary'
+    : 'px-2 py-0.5 rounded bg-overlay bg-overlay-hover';
   updateHash();
   renderKanban();
 }
@@ -489,9 +613,9 @@ function renderKanban() {
 
   // Search no-results state
   if (!items.length && searchResults !== null) {
-    board.innerHTML = '<div class="flex-1 flex items-center justify-center text-slate-500 text-xs">' +
-      '<div class="text-center"><div class="text-slate-300 mb-2">No matches found</div>' +
-      '<div>Try broader search terms or <button onclick="document.getElementById(\'filterSearch\').value=\'\';searchResults=null;render();" class="text-blue-400 hover:underline">clear search</button></div></div></div>';
+    board.innerHTML = '<div class="flex-1 flex items-center justify-center text-xs" style="color:var(--text-muted)">' +
+      '<div class="text-center"><div class="mb-2" style="color:var(--text-primary)">No matches found</div>' +
+      '<div>Try broader search terms or <button onclick="document.getElementById(\'filterSearch\').value=\'\';searchResults=null;render();" style="color:var(--accent)" class="hover:underline">clear search</button></div></div></div>';
     return;
   }
 
@@ -522,23 +646,23 @@ function renderKanban() {
 
 function renderStandardKanban(columns) {
   var colDefs = [
-    { key: 'open', label: 'Open', color: '#64748B' },
-    { key: 'wip', label: 'In Progress', color: '#3B82F6' },
-    { key: 'done', label: 'Done', color: '#9CA3AF' },
+    { key: 'open', label: 'Open', color: CATEGORY_COLORS.open },
+    { key: 'wip', label: 'In Progress', color: CATEGORY_COLORS.wip },
+    { key: 'done', label: 'Done', color: CATEGORY_COLORS.done },
   ];
   return colDefs.map(function(col) {
     var issues = columns[col.key] || [];
-    return '<div class="kanban-col flex flex-col shrink-0">' +
+    return '<div class="kanban-col flex flex-col" data-status-category="' + col.key + '">' +
       '<div class="flex items-center gap-2 mb-2 px-1">' +
         '<span class="w-2 h-2 rounded-full" style="background:' + col.color + '"></span>' +
-        '<span class="font-medium text-xs text-slate-300">' + col.label + '</span>' +
-        '<span class="text-xs text-slate-500">' + issues.length + '</span>' +
+        '<span class="font-medium text-xs" style="color:var(--text-primary)">' + col.label + '</span>' +
+        '<span class="text-xs" style="color:var(--text-muted)">' + issues.length + '</span>' +
       '</div>' +
-      '<div class="flex flex-col gap-2 overflow-y-auto scrollbar-thin pr-1" style="max-height: calc(100vh - 160px);">' +
+      '<div class="flex flex-col gap-2 overflow-y-auto scrollbar-thin pr-1 min-h-[200px]" style="max-height: calc(100vh - 160px);">' +
         (issues.length ? issues.map(function(i) { return renderCard(i); }).join('') :
-          '<div class="text-xs text-slate-500 p-4 text-center">' +
-            (col.key === 'open' ? '<div class="mb-2">No open issues</div><button onclick="showCreateForm()" class="text-blue-400 hover:underline">+ Create an issue</button>'
-             : col.key === 'wip' ? '<div>No work in progress</div><div class="text-slate-600 mt-1">Move an open issue to in-progress to start</div>'
+          '<div class="text-xs p-4 text-center" style="color:var(--text-muted)">' +
+            (col.key === 'open' ? '<div class="mb-2">No open issues</div><button onclick="showCreateForm()" style="color:var(--accent)" class="hover:underline">+ Create an issue</button>'
+             : col.key === 'wip' ? '<div>No work in progress</div><div style="color:var(--text-muted)" class="mt-1">Move an open issue to in-progress to start</div>'
              : '<div>No completed issues yet</div>') + '</div>') +
       '</div></div>';
   }).join('');
@@ -546,9 +670,9 @@ function renderStandardKanban(columns) {
 
 function renderClusterKanban(columns) {
   var colDefs = [
-    { key: 'open', label: 'Open', color: '#64748B' },
-    { key: 'wip', label: 'In Progress', color: '#3B82F6' },
-    { key: 'done', label: 'Done', color: '#9CA3AF' },
+    { key: 'open', label: 'Open', color: CATEGORY_COLORS.open },
+    { key: 'wip', label: 'In Progress', color: CATEGORY_COLORS.wip },
+    { key: 'done', label: 'Done', color: CATEGORY_COLORS.done },
   ];
   return colDefs.map(function(col) {
     var issues = columns[col.key] || [];
@@ -563,14 +687,14 @@ function renderClusterKanban(columns) {
     var epicCards = epicIssues.map(function(epic) { return renderClusterCard(epic); }).join('');
     var orphanCards = orphans.map(function(i) { return renderCard(i); }).join('');
 
-    return '<div class="kanban-col flex flex-col shrink-0">' +
+    return '<div class="kanban-col flex flex-col" data-status-category="' + col.key + '">' +
       '<div class="flex items-center gap-2 mb-2 px-1">' +
         '<span class="w-2 h-2 rounded-full" style="background:' + col.color + '"></span>' +
-        '<span class="font-medium text-xs text-slate-300">' + col.label + '</span>' +
-        '<span class="text-xs text-slate-500">' + issues.length + '</span>' +
+        '<span class="font-medium text-xs" style="color:var(--text-primary)">' + col.label + '</span>' +
+        '<span class="text-xs" style="color:var(--text-muted)">' + issues.length + '</span>' +
       '</div>' +
-      '<div class="flex flex-col gap-2 overflow-y-auto scrollbar-thin pr-1" style="max-height: calc(100vh - 160px);">' +
-        (issues.length ? epicCards + orphanCards : '<div class="text-xs text-slate-600 italic p-2">No issues</div>') +
+      '<div class="flex flex-col gap-2 overflow-y-auto scrollbar-thin pr-1 min-h-[200px]" style="max-height: calc(100vh - 160px);">' +
+        (issues.length ? epicCards + orphanCards : '<div class="text-xs italic p-2" style="color:var(--text-muted)">No issues</div>') +
       '</div></div>';
   }).join('');
 }
@@ -592,24 +716,24 @@ function renderClusterCard(epic) {
       children.map(function(c) { return renderCard(c); }).join('') + '</div>';
   }
 
-  return '<div class="bg-slate-800 rounded border border-slate-700 p-3 cursor-pointer ' +
+  return '<div class="rounded p-3 cursor-pointer ' +
     (epic.is_ready ? 'ready-border' : '') +
-    '" aria-expanded="' + expanded + '" onclick="toggleEpicExpand(\'' + epic.id + '\')">' +
+    '" style="background:var(--surface-raised);border:1px solid var(--border-default)" aria-expanded="' + expanded + '" onclick="toggleEpicExpand(\'' + epic.id + '\')">' +
     '<div class="flex items-center justify-between mb-1">' +
       '<span class="text-xs">' + (TYPE_ICONS[epic.type] || '') +
-        ' <span class="font-medium text-slate-200">' + escHtml(epic.title.slice(0, 40)) + '</span></span>' +
-      '<span class="text-xs text-slate-500">[' + total + ']</span>' +
+        ' <span class="font-medium" style="color:var(--text-primary)">' + escHtml(epic.title.slice(0, 40)) + '</span></span>' +
+      '<span class="text-xs" style="color:var(--text-muted)">[' + total + ']</span>' +
     '</div>' +
-    '<div class="w-full h-2 rounded-full bg-slate-900 flex overflow-hidden mb-1">' +
-      '<div style="width:' + pctClosed + '%;background:#9CA3AF"></div>' +
-      '<div style="width:' + pctActive + '%;background:#3B82F6"></div>' +
-      '<div style="width:' + pctOpen + '%;background:#64748B"></div>' +
+    '<div class="w-full h-2 rounded-full flex overflow-hidden mb-1" style="background:var(--surface-base)">' +
+      '<div style="width:' + pctClosed + '%;background:' + CATEGORY_COLORS.done + '"></div>' +
+      '<div style="width:' + pctActive + '%;background:' + CATEGORY_COLORS.wip + '"></div>' +
+      '<div style="width:' + pctOpen + '%;background:' + CATEGORY_COLORS.open + '"></div>' +
     '</div>' +
-    '<div class="text-xs text-slate-500">' + counts.open + ' open &middot; ' +
+    '<div class="text-xs" style="color:var(--text-muted)">' + counts.open + ' open &middot; ' +
       counts.wip + ' active &middot; ' + counts.done + ' done</div>' +
     (expanded
-      ? '<div class="text-xs text-blue-400 mt-1">&#9660; expanded</div>'
-      : '<div class="text-xs text-slate-600 mt-1">&#9654; click to expand</div>') +
+      ? '<div class="text-xs mt-1" style="color:var(--accent)">&#9660; expanded</div>'
+      : '<div class="text-xs mt-1" style="color:var(--text-muted)">&#9654; click to expand</div>') +
     childHtml +
   '</div>';
 }
@@ -633,35 +757,40 @@ function renderCard(issue) {
     else if (ageHours > 4) agingClass = 'aging-border';
   }
 
-  var changedClass = changedIds.has(issue.id) ? 'ring-1 ring-blue-500' : '';
+  var changedClass = changedIds.has(issue.id) ? 'changed-flash' : '';
 
   var checkbox = multiSelectMode
     ? '<input type="checkbox" ' + (selectedCards.has(issue.id) ? 'checked' : '') +
-      ' onclick="toggleCardSelect(event,\'' + issue.id + '\')" class="accent-blue-500 mr-1">'
+      ' onclick="toggleCardSelect(event,\'' + issue.id + '\')" class="mr-1" style="accent-color:var(--accent)">'
     : '';
 
-  return '<div class="card bg-slate-800 rounded border border-slate-700 p-3 cursor-pointer ' +
-    readyClass + ' ' + agingClass + ' ' + changedClass + '" tabindex="0" data-id="' + issue.id + '" onclick="openDetail(\'' + issue.id + '\')">' +
+  var isDraggable = kanbanMode !== 'cluster' && !multiSelectMode;
+  return '<div class="card rounded p-3 cursor-pointer ' +
+    readyClass + ' ' + agingClass + ' ' + changedClass + '"' +
+    ' style="background:var(--surface-raised);border:1px solid var(--border-default)"' +
+    (isDraggable ? ' draggable="true"' : '') +
+    ' tabindex="0" data-id="' + issue.id + '" onclick="openDetail(\'' + issue.id + '\')">' +
     '<div class="flex items-center gap-2 mb-1">' +
       checkbox +
       '<span>' + typeIcon + '</span>' +
-      '<span class="w-2 h-2 rounded-full shrink-0" style="background:' + prioColor +
-        '" title="Priority ' + issue.priority + ' (' + ['Critical','High','Medium','Low','Backlog'][issue.priority] + ')"></span>' +
-      '<span class="font-medium text-slate-200 truncate">' + escHtml(issue.title.slice(0, 50)) + '</span>' +
+      (issue.priority <= 1
+        ? '<span class="text-xs font-bold shrink-0" style="color:' + prioColor + '" title="Priority ' + issue.priority + ' (' + ['Critical','High','Medium','Low','Backlog'][issue.priority] + ')">P' + issue.priority + '</span>'
+        : '<span class="w-2 h-2 rounded-full shrink-0" style="background:' + prioColor + '" title="Priority ' + issue.priority + ' (' + ['Critical','High','Medium','Low','Backlog'][issue.priority] + ')"></span>') +
+      '<span class="font-medium truncate" style="color:var(--text-primary)">' + escHtml(issue.title.slice(0, 50)) + '</span>' +
     '</div>' +
-    '<div class="flex items-center gap-2 text-xs text-slate-500">' +
+    '<div class="flex items-center gap-2 text-xs" style="color:var(--text-muted)">' +
       '<span>' + issue.id + '</span>' +
-      '<span class="rounded px-1 bg-slate-700 text-slate-400">' + issue.type.replace(/_/g, ' ') + '</span>' +
-      '<span class="rounded px-1" style="background:' + catColor + ';color:white">' + issue.status + '</span>' +
+      '<span class="rounded px-1" style="background:var(--surface-overlay);color:var(--text-secondary)">' + issue.type.replace(/_/g, ' ') + '</span>' +
+      '<span class="rounded px-1" style="background:' + catColor + '33;color:' + catColor + '">' + issue.status + '</span>' +
       (blockedCount > 0 ? '<span class="text-red-400">\u{1F517} blocked by ' + blockedCount + '</span>' : '') +
       (impactScores[issue.id] > 0 ? '<span class="text-amber-400" title="Impact: blocks ' + impactScores[issue.id] + ' downstream issue' + (impactScores[issue.id] !== 1 ? 's' : '') + ' — resolve this to unblock work">\u26A1' + impactScores[issue.id] + '</span>' : '') +
-      (issue.assignee ? '<span class="text-slate-400">\u{1F464} ' + escHtml(issue.assignee) + '</span>' : '') +
+      (issue.assignee ? '<span style="color:var(--text-secondary)">\u{1F464} ' + escHtml(issue.assignee) + '</span>' : '') +
       (cat === 'wip' && issue.updated_at
         ? (function() {
             var mins = Math.floor((Date.now() - new Date(issue.updated_at).getTime()) / 60000);
-            if (mins < 60) return '<span class="text-slate-500">' + mins + 'm</span>';
+            if (mins < 60) return '<span style="color:var(--text-muted)">' + mins + 'm</span>';
             var hrs = Math.floor(mins / 60);
-            if (hrs < 24) return '<span class="' + (hrs > 4 ? 'text-amber-400' : 'text-slate-500') + '">' + hrs + 'h</span>';
+            if (hrs < 24) return '<span class="' + (hrs > 4 ? 'text-amber-400' : '') + '"' + (hrs <= 4 ? ' style="color:var(--text-muted)"' : '') + '>' + hrs + 'h</span>';
             return '<span class="text-red-400">' + Math.floor(hrs / 24) + 'd</span>';
           })()
         : '') +
@@ -708,10 +837,11 @@ async function applyTypeFilter() {
   if (!typeName) {
     typeTemplate = null;
     renderKanban();
+    updateTypeFilterUI(false);
     return;
   }
   try {
-    var resp = await fetch('/api/type/' + typeName);
+    var resp = await fetch(API_BASE + '/type/' + typeName);
     if (seq !== _typeFilterSeq) return;  // Superseded by newer selection
     if (resp.ok) {
       typeTemplate = await resp.json();
@@ -723,22 +853,152 @@ async function applyTypeFilter() {
     typeTemplate = null;
   }
   renderKanban();
+  updateTypeFilterUI(!!typeTemplate);
+}
+
+function updateTypeFilterUI(isFiltered) {
+  var btnStd = document.getElementById('btnStandard');
+  var btnClust = document.getElementById('btnCluster');
+  var pill = document.getElementById('typeFilterPill');
+  var label = document.getElementById('typeFilterLabel');
+  if (isFiltered && typeTemplate) {
+    btnStd.classList.add('opacity-50', 'pointer-events-none');
+    btnClust.classList.add('opacity-50', 'pointer-events-none');
+    pill.classList.remove('hidden');
+    label.textContent = typeTemplate.type;
+  } else {
+    btnStd.classList.remove('opacity-50', 'pointer-events-none');
+    btnClust.classList.remove('opacity-50', 'pointer-events-none');
+    pill.classList.add('hidden');
+  }
+}
+
+function clearTypeFilter() {
+  typeTemplate = null;
+  var typeSelect = document.getElementById('filterType');
+  if (typeSelect) typeSelect.value = '';
+  updateTypeFilterUI(false);
+  renderKanban();
 }
 
 function renderTypeKanban(stateColumns, template) {
   return template.states.map(function(state) {
     var issues = stateColumns[state.name] || [];
     var catColor = CATEGORY_COLORS[state.category] || '#64748B';
-    return '<div class="kanban-col flex flex-col shrink-0">' +
+    return '<div class="kanban-col flex flex-col" data-status="' + state.name + '" data-status-category="' + state.category + '">' +
       '<div class="flex items-center gap-2 mb-2 px-1">' +
         '<span class="w-2 h-2 rounded-full" style="background:' + catColor + '"></span>' +
-        '<span class="font-medium text-xs text-slate-300">' + state.name + '</span>' +
-        '<span class="text-xs text-slate-500">' + issues.length + '</span>' +
+        '<span class="font-medium text-xs" style="color:var(--text-primary)">' + state.name + '</span>' +
+        '<span class="text-xs" style="color:var(--text-muted)">' + issues.length + '</span>' +
       '</div>' +
-      '<div class="flex flex-col gap-2 overflow-y-auto scrollbar-thin pr-1" style="max-height: calc(100vh - 160px);">' +
-        (issues.length ? issues.map(function(i) { return renderCard(i); }).join('') : '<div class="text-xs text-slate-600 italic p-2">No issues</div>') +
+      '<div class="flex flex-col gap-2 overflow-y-auto scrollbar-thin pr-1 min-h-[200px]" style="max-height: calc(100vh - 160px);">' +
+        (issues.length ? issues.map(function(i) { return renderCard(i); }).join('') : '<div class="text-xs italic p-2" style="color:var(--text-muted)">No issues</div>') +
       '</div></div>';
   }).join('');
+}
+
+// ---------------------------------------------------------------------------
+// Drag and Drop (Kanban)
+// ---------------------------------------------------------------------------
+function initDragAndDrop() {
+  var board = document.getElementById('kanbanBoard');
+  if (!board) return;
+
+  board.addEventListener('dragstart', function(e) {
+    var card = e.target.closest('.card[draggable="true"]');
+    if (!card) return;
+    _dragIssueId = card.getAttribute('data-id');
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', _dragIssueId);
+    card.style.opacity = '0.5';
+
+    // Fetch valid transitions, then mark columns
+    _transitionsLoaded = false;
+    var dragToken = _dragIssueId;
+    loadTransitions(_dragIssueId).then(function(transitions) {
+      if (_dragIssueId !== dragToken) return; // drag ended before response
+      _dragTransitions = transitions;
+      var validCategories = new Set();
+      var validStatuses = new Set();
+      transitions.forEach(function(t) {
+        if (t.ready) {
+          validStatuses.add(t.to);
+          validCategories.add(t.category);
+        }
+      });
+      var cols = board.querySelectorAll('.kanban-col');
+      cols.forEach(function(col) {
+        var colStatus = col.getAttribute('data-status');
+        var colCat = col.getAttribute('data-status-category');
+        var isValid = colStatus ? validStatuses.has(colStatus) : validCategories.has(colCat);
+        // Don't mark the source column
+        var sourceIssue = issueMap[_dragIssueId];
+        var isSameCol = colStatus
+          ? colStatus === (sourceIssue && sourceIssue.status)
+          : colCat === (sourceIssue && sourceIssue.status_category);
+        if (isSameCol) return;
+        col.classList.add(isValid ? 'drag-valid' : 'drag-invalid');
+      });
+      _transitionsLoaded = true;
+    });
+  });
+
+  board.addEventListener('dragover', function(e) {
+    if (!_transitionsLoaded) return;
+    var col = e.target.closest('.kanban-col');
+    if (!col || col.classList.contains('drag-invalid')) return;
+    if (col.classList.contains('drag-valid')) {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+    }
+  });
+
+  board.addEventListener('drop', function(e) {
+    e.preventDefault();
+    var col = e.target.closest('.kanban-col');
+    if (!col || !col.classList.contains('drag-valid') || !_dragIssueId) return;
+
+    var targetStatus = col.getAttribute('data-status');
+    if (!targetStatus) {
+      // Standard board: find first ready transition matching this category
+      var targetCat = col.getAttribute('data-status-category');
+      var match = _dragTransitions.find(function(t) { return t.ready && t.category === targetCat; });
+      if (match) targetStatus = match.to;
+    }
+    if (!targetStatus) return;
+
+    var issueId = _dragIssueId;
+    showToast('Moving to ' + targetStatus + '...', 'info');
+
+    fetch(API_BASE + '/issue/' + issueId, {
+      method: 'PATCH',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({status: targetStatus}),
+    }).then(function(resp) {
+      if (resp.ok) {
+        showToast('Moved to ' + targetStatus, 'success');
+        fetchData();
+      } else {
+        return resp.json().then(function(err) {
+          showToast('Error: ' + (err.error || 'Move failed'), 'error');
+        });
+      }
+    }).catch(function() {
+      showToast('Network error', 'error');
+    });
+  });
+
+  board.addEventListener('dragend', function(e) {
+    // Clean up all drag visual states
+    var card = e.target.closest('.card');
+    if (card) card.style.opacity = '';
+    _dragIssueId = null;
+    _dragTransitions = [];
+    _transitionsLoaded = false;
+    board.querySelectorAll('.kanban-col').forEach(function(col) {
+      col.classList.remove('drag-valid', 'drag-invalid');
+    });
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -808,8 +1068,8 @@ function renderGraph() {
           'text-halign': 'center',
           'text-wrap': 'wrap',
           'text-max-width': '120px',
-          'color': '#F1F5F9',
-          'text-outline-color': '#0F172A',
+          'color': THEME_COLORS.textPrimary,
+          'text-outline-color': THEME_COLORS.graphOutline,
           'text-outline-width': 2,
           'width': 'mapData(priority, 0, 4, 60, 35)',
           'height': 'mapData(priority, 0, 4, 60, 35)',
@@ -830,8 +1090,8 @@ function renderGraph() {
         selector: 'edge',
         style: {
           'width': 1.5,
-          'line-color': '#475569',
-          'target-arrow-color': '#475569',
+          'line-color': THEME_COLORS.graphEdge,
+          'target-arrow-color': THEME_COLORS.graphEdge,
           'target-arrow-shape': 'triangle',
           'curve-style': 'bezier',
           'arrow-scale': 0.8,
@@ -839,7 +1099,7 @@ function renderGraph() {
       },
       {
         selector: 'node:selected',
-        style: { 'border-width': 3, 'border-color': '#3B82F6' }
+        style: { 'border-width': 3, 'border-color': THEME_COLORS.accent }
       }
     ],
     minZoom: 0.1,
@@ -901,7 +1161,7 @@ async function openDetail(issueId) {
   var panel = document.getElementById('detailPanel');
   var content = document.getElementById('detailContent');
 
-  content.innerHTML = '<div class="text-slate-500 text-xs">Loading...</div>';
+  content.innerHTML = '<div class="text-xs" style="color:var(--text-muted)">Loading...</div>';
   panel.classList.remove('translate-x-full');
 
   // Fetch full issue detail (includes events, comments, dep_details)
@@ -909,7 +1169,7 @@ async function openDetail(issueId) {
   var eventsData = [];
   var commentsData = [];
   try {
-    var resp = await fetch('/api/issue/' + issueId);
+    var resp = await fetch(API_BASE + '/issue/' + issueId);
     if (!resp.ok) throw new Error('Not found');
     d = await resp.json();
     eventsData = d.events || [];
@@ -934,38 +1194,38 @@ async function openDetail(issueId) {
 
   var blockerHtml = (d.blocked_by || []).map(function(bid) {
     var det = depDetails[bid] || issueMap[bid];
-    if (!det) return '<div class="text-xs text-slate-500">' + bid + '</div>';
+    if (!det) return '<div class="text-xs" style="color:var(--text-muted)">' + bid + '</div>';
     var detCat = (det.status_category) || 'open';
     var sc = CATEGORY_COLORS[detCat] || '#64748B';
     return '<div class="flex items-center gap-2 text-xs">' +
       '<span class="w-2 h-2 rounded-full shrink-0" style="background:' + sc + '"></span>' +
-      '<span class="cursor-pointer hover:text-blue-400 flex-1" onclick="openDetail(\'' + bid + '\')">' + escHtml(det.title.slice(0, 40)) + '</span>' +
-      '<span class="text-slate-600">' + det.status + '</span>' +
+      '<span class="cursor-pointer flex-1" style="color:var(--accent)" onclick="openDetail(\'' + bid + '\')">' + escHtml(det.title.slice(0, 40)) + '</span>' +
+      '<span style="color:var(--text-muted)">' + det.status + '</span>' +
       '<button onclick="event.stopPropagation();removeDependency(\'' + d.id + '\',\'' + bid + '\')" class="text-red-400 hover:text-red-300 ml-1" title="Remove dependency">&times;</button></div>';
   }).join('');
 
   var blocksHtml = (d.blocks || []).map(function(bid) {
     var det = depDetails[bid] || issueMap[bid];
-    if (!det) return '<div class="text-xs text-slate-500">' + bid + '</div>';
+    if (!det) return '<div class="text-xs" style="color:var(--text-muted)">' + bid + '</div>';
     var detCat = (det.status_category) || 'open';
     var sc = CATEGORY_COLORS[detCat] || '#64748B';
-    return '<div class="flex items-center gap-2 text-xs cursor-pointer hover:text-blue-400" onclick="openDetail(\'' + bid + '\')">' +
+    return '<div class="flex items-center gap-2 text-xs cursor-pointer" style="color:var(--accent)" onclick="openDetail(\'' + bid + '\')">' +
       '<span class="w-2 h-2 rounded-full" style="background:' + sc + '"></span>' +
       '<span>' + escHtml(det.title.slice(0, 40)) + '</span>' +
-      '<span class="text-slate-600">' + det.status + '</span></div>';
+      '<span style="color:var(--text-muted)">' + det.status + '</span></div>';
   }).join('');
 
   var eventsHtml = eventsData.slice(0, 15).map(function(e) {
-    return '<div class="text-xs text-slate-500 flex gap-2">' +
-      '<span class="text-slate-600 shrink-0">' + (e.created_at ? e.created_at.slice(5, 16) : '') + '</span>' +
+    return '<div class="text-xs flex gap-2" style="color:var(--text-muted)">' +
+      '<span class="shrink-0" style="color:var(--text-muted)">' + (e.created_at ? e.created_at.slice(5, 16) : '') + '</span>' +
       '<span>' + escHtml(e.event_type) + (e.new_value ? ': ' + escHtml(e.new_value) : '') + '</span></div>';
   }).join('');
 
   var commentsHtml = commentsData.map(function(c) {
-    return '<div class="bg-slate-900 rounded p-2 text-xs mb-1">' +
-      '<div class="text-slate-400 mb-1">' + escHtml(c.author || 'anonymous') +
+    return '<div class="rounded p-2 text-xs mb-1" style="background:var(--surface-base)">' +
+      '<div style="color:var(--text-secondary)" class="mb-1">' + escHtml(c.author || 'anonymous') +
         ' &middot; ' + (c.created_at ? c.created_at.slice(0, 16) : '') + '</div>' +
-      '<div class="text-slate-300">' + escHtml(c.text) + '</div></div>';
+      '<div style="color:var(--text-primary)">' + escHtml(c.text) + '</div></div>';
   }).join('');
 
   var openBlockers = (d.blocked_by || []).filter(function(bid) {
@@ -980,69 +1240,69 @@ async function openDetail(issueId) {
 
   content.innerHTML =
     '<div class="flex items-center justify-between mb-3">' +
-      '<span class="text-xs text-slate-500">' + d.id + '</span>' +
+      '<span class="text-xs" style="color:var(--text-muted)">' + d.id + '</span>' +
       '<div>' +
       (detailHistory.length
-        ? '<button onclick="detailBack()" class="text-slate-500 hover:text-slate-300 text-xs mr-2">&larr; Back</button>'
+        ? '<button onclick="detailBack()" class="text-muted text-primary-hover text-xs mr-2">&larr; Back</button>'
         : '') +
-      '<button onclick="closeDetail()" class="text-slate-500 hover:text-slate-300 text-lg" aria-label="Close detail panel">&times;</button>' +
+      '<button onclick="closeDetail()" class="text-muted text-primary-hover text-lg" aria-label="Close detail panel">&times;</button>' +
       '</div>' +
     '</div>' +
     '<div class="flex items-center gap-2 mb-1">' +
       '<span class="text-lg">' + typeIcon + '</span>' +
-      '<span class="text-lg font-semibold text-slate-100">' + escHtml(d.title) + '</span>' +
+      '<span class="text-lg font-semibold" style="color:var(--text-primary)">' + escHtml(d.title) + '</span>' +
       ((d.type === 'milestone' || d.type === 'epic')
-        ? '<button onclick="loadPlanView(\'' + d.id + '\')" class="text-xs bg-slate-700 px-2 py-1 rounded hover:bg-slate-600 ml-2">View Plan</button>'
+        ? '<button onclick="loadPlanView(\'' + d.id + '\')" class="text-xs bg-overlay bg-overlay-hover px-2 py-1 rounded ml-2">View Plan</button>'
         : '') +
     '</div>' +
     '<div class="flex items-center gap-2 mb-4 flex-wrap">' +
       '<span class="text-xs px-2 py-0.5 rounded" style="background:' + statusColor + ';color:white">' + statusLabel + '</span>' +
       '<span class="w-2 h-2 rounded-full" style="background:' + prioColor + '" title="P' + d.priority + '"></span>' +
-      '<span class="text-xs text-slate-400">P' + d.priority + '</span>' +
+      '<span class="text-xs" style="color:var(--text-secondary)">P' + d.priority + '</span>' +
       readyBadge +
-      (d.assignee ? '<span class="text-xs text-slate-400">\u{1F464} ' + escHtml(d.assignee) + '</span>' : '') +
+      (d.assignee ? '<span class="text-xs" style="color:var(--text-secondary)">\u{1F464} ' + escHtml(d.assignee) + '</span>' : '') +
     '</div>' +
     (d.labels && d.labels.length
       ? '<div class="flex gap-1 mb-3 flex-wrap">' + d.labels.map(function(l) {
-          return '<span class="text-xs bg-slate-700 text-slate-300 px-2 py-0.5 rounded">' + escHtml(l) + '</span>';
+          return '<span class="text-xs px-2 py-0.5 rounded" style="background:var(--surface-overlay);color:var(--text-primary)">' + escHtml(l) + '</span>';
         }).join('') + '</div>'
       : '') +
     (d.description
-      ? '<div class="mb-4"><div class="text-xs font-medium text-slate-400 mb-1">Description</div>' +
-        '<div class="text-xs text-slate-300 leading-relaxed whitespace-pre-wrap">' + escHtml(d.description) + '</div></div>'
+      ? '<div class="mb-4"><div class="text-xs font-medium mb-1" style="color:var(--text-secondary)">Description</div>' +
+        '<div class="text-xs leading-relaxed whitespace-pre-wrap" style="color:var(--text-primary)">' + escHtml(d.description) + '</div></div>'
       : '') +
     (d.notes
-      ? '<div class="mb-4"><div class="text-xs font-medium text-slate-400 mb-1">Notes</div>' +
-        '<div class="text-xs text-slate-300 leading-relaxed whitespace-pre-wrap">' + escHtml(d.notes) + '</div></div>'
+      ? '<div class="mb-4"><div class="text-xs font-medium mb-1" style="color:var(--text-secondary)">Notes</div>' +
+        '<div class="text-xs leading-relaxed whitespace-pre-wrap" style="color:var(--text-primary)">' + escHtml(d.notes) + '</div></div>'
       : '') +
     ((d.blocked_by || []).length
       ? '<div class="mb-3"><div class="text-xs font-medium text-red-400 mb-1">Blocked by &larr;</div>' + blockerHtml +
-        '<button onclick="showAddBlocker(\'' + d.id + '\')" class="text-xs text-blue-400 hover:underline mt-1">+ Add blocker</button></div>'
-      : '<div class="mb-3"><button onclick="showAddBlocker(\'' + d.id + '\')" class="text-xs text-blue-400 hover:underline">+ Add blocker</button></div>') +
+        '<button onclick="showAddBlocker(\'' + d.id + '\')" class="text-xs hover:underline mt-1" style="color:var(--accent)">+ Add blocker</button></div>'
+      : '<div class="mb-3"><button onclick="showAddBlocker(\'' + d.id + '\')" class="text-xs hover:underline" style="color:var(--accent)">+ Add blocker</button></div>') +
     ((d.blocks || []).length
-      ? '<div class="mb-3"><div class="text-xs font-medium text-blue-400 mb-1">Blocks \u2192</div>' + blocksHtml + '</div>'
+      ? '<div class="mb-3"><div class="text-xs font-medium mb-1" style="color:var(--accent)">Blocks \u2192</div>' + blocksHtml + '</div>'
       : '') +
     (commentsData.length
-      ? '<div class="mb-3"><div class="text-xs font-medium text-slate-400 mb-1">Comments</div>' + commentsHtml + '</div>'
+      ? '<div class="mb-3"><div class="text-xs font-medium mb-1" style="color:var(--text-secondary)">Comments</div>' + commentsHtml + '</div>'
       : '') +
     (eventsData.length
-      ? '<div class="mb-3"><div class="text-xs font-medium text-slate-400 mb-1">Timeline</div>' + eventsHtml + '</div>'
+      ? '<div class="mb-3"><div class="text-xs font-medium mb-1" style="color:var(--text-secondary)">Timeline</div>' + eventsHtml + '</div>'
       : '') +
     // Actions section
-    '<div class="mt-4 border-t border-slate-700 pt-3">' +
-      '<div class="text-xs font-medium text-slate-400 mb-2">Actions</div>' +
+    '<div class="mt-4 pt-3" style="border-top:1px solid var(--border-default)">' +
+      '<div class="text-xs font-medium mb-2" style="color:var(--text-secondary)">Actions</div>' +
       '<div id="transitionBtns" class="flex flex-wrap gap-1 mb-2"></div>' +
       '<div class="flex gap-2 mb-2">' +
-        '<label for="prioSelect" class="text-xs text-slate-400">Priority</label> ' +
-        '<select id="prioSelect" onchange="updateIssue(\'' + d.id + '\', {priority: parseInt(this.value)})" class="bg-slate-700 text-xs rounded px-2 py-1 border border-slate-600">' +
+        '<label for="prioSelect" class="text-xs" style="color:var(--text-secondary)">Priority</label> ' +
+        '<select id="prioSelect" onchange="updateIssue(\'' + d.id + '\', {priority: parseInt(this.value)})" class="text-xs rounded px-2 py-1" style="background:var(--surface-overlay);color:var(--text-primary);border:1px solid var(--border-strong)">' +
           [0,1,2,3,4].map(function(p) {
             return '<option value="' + p + '"' + (d.priority === p ? ' selected' : '') + '>P' + p + '</option>';
           }).join('') +
         '</select>' +
-        '<label for="assigneeInput" class="text-xs text-slate-400">Assignee</label> ' +
+        '<label for="assigneeInput" class="text-xs" style="color:var(--text-secondary)">Assignee</label> ' +
         '<input id="assigneeInput" type="text" placeholder="Assignee" value="' + escHtml(d.assignee || '') + '"' +
           ' onkeydown="if(event.key===\'Enter\')updateIssue(\'' + d.id + '\',{assignee:this.value})"' +
-          ' class="bg-slate-700 text-xs rounded px-2 py-1 border border-slate-600 flex-1">' +
+          ' class="text-xs rounded px-2 py-1 flex-1" style="background:var(--surface-overlay);color:var(--text-primary);border:1px solid var(--border-strong)">' +
       '</div>' +
       (statusCat !== 'done'
         ? '<button onclick="closeIssue(\'' + d.id + '\')" class="text-xs bg-red-900/50 text-red-400 px-3 py-1 rounded border border-red-800 hover:bg-red-900 mb-2">Close</button>'
@@ -1051,32 +1311,33 @@ async function openDetail(issueId) {
         ? '<button onclick="claimIssue(\'' + d.id + '\')" class="text-xs bg-emerald-900/50 text-emerald-400 px-3 py-1 rounded border border-emerald-800 hover:bg-emerald-900 mb-2 ml-1">Claim</button>'
         : '') +
       (d.assignee
-        ? '<button onclick="releaseIssue(\'' + d.id + '\')" class="text-xs bg-slate-700 text-slate-300 px-3 py-1 rounded border border-slate-600 hover:bg-slate-600 mb-2 ml-1">Release</button>'
+        ? '<button onclick="releaseIssue(\'' + d.id + '\')" class="text-xs bg-overlay bg-overlay-hover px-3 py-1 rounded mb-2 ml-1" style="color:var(--text-primary);border:1px solid var(--border-strong)">Release</button>'
         : '') +
     '</div>' +
     // Comment input
-    '<div class="mt-3 border-t border-slate-700 pt-3">' +
-      '<label for="commentInput" class="text-xs font-medium text-slate-400 mb-1">Add Comment</label>' +
+    '<div class="mt-3 pt-3" style="border-top:1px solid var(--border-default)">' +
+      '<label for="commentInput" class="text-xs font-medium mb-1" style="color:var(--text-secondary)">Add Comment</label>' +
       '<div class="flex gap-1">' +
         '<input id="commentInput" type="text" placeholder="Comment..." onkeydown="if(event.key===\'Enter\')addComment(\'' + d.id + '\')"' +
-          ' class="bg-slate-700 text-xs rounded px-2 py-1 border border-slate-600 flex-1 focus:outline-none focus:border-blue-500">' +
-        '<button onclick="addComment(\'' + d.id + '\')" class="text-xs bg-blue-600 text-white px-2 py-1 rounded hover:bg-blue-700">Send</button>' +
+          ' class="text-xs rounded px-2 py-1 flex-1 focus:outline-none" style="background:var(--surface-overlay);color:var(--text-primary);border:1px solid var(--border-strong)">' +
+        '<button onclick="addComment(\'' + d.id + '\')" class="text-xs px-2 py-1 rounded bg-accent-hover" style="background:var(--accent);color:var(--surface-base)">Send</button>' +
       '</div>' +
     '</div>' +
-    '<div class="mt-3 text-xs text-slate-600 select-all" title="Copy this command to view in terminal">filigree show ' + d.id + '</div>';
+    '<div class="mt-3 text-xs select-all" style="color:var(--text-muted)" title="Copy this command to view in terminal">filigree show ' + d.id + '</div>';
 
   // Load transitions async and render buttons
   loadTransitions(issueId).then(function(transitions) {
     var container = document.getElementById('transitionBtns');
     if (!container || !transitions.length) return;
     container.innerHTML = transitions.map(function(t) {
-      var cls = t.ready
-        ? 'bg-blue-600 text-white hover:bg-blue-700'
-        : 'bg-slate-700 text-slate-400 cursor-not-allowed';
-      var title = t.missing_fields.length ? 'Missing: ' + t.missing_fields.join(', ') : '';
+      var btnStyle = t.ready
+        ? 'background:var(--accent);color:var(--surface-base)'
+        : 'background:var(--surface-overlay);color:var(--text-muted)';
+      var cls = t.ready ? '' : 'cursor-not-allowed';
+      var missingText = t.missing_fields.length ? ' <span style="color:var(--text-muted)">(missing: ' + t.missing_fields.join(', ') + ')</span>' : '';
       return '<button ' + (t.ready ? 'onclick="updateIssue(\'' + issueId + '\',{status:\'' + t.to + '\'},this)"' : 'disabled') +
-        ' class="text-xs px-2 py-1 rounded ' + cls + '" title="' + escHtml(title) + '">' +
-        t.to + '</button>';
+        ' class="text-xs px-2 py-1 rounded ' + cls + '" style="' + btnStyle + '">' +
+        t.to + missingText + '</button>';
     }).join('');
   });
 
@@ -1104,6 +1365,7 @@ function detailBack() {
 function updateHash() {
   var hash = '#' + currentView;
   if (currentView === 'kanban' && kanbanMode === 'cluster') hash = '#kanban-cluster';
+  if (currentProjectKey) hash += '&project=' + encodeURIComponent(currentProjectKey);
   if (selectedIssue) hash += '&issue=' + selectedIssue;
   history.replaceState(null, '', hash);
 }
@@ -1155,22 +1417,23 @@ document.addEventListener('keydown', function(e) {
     modal.id = 'helpModal';
     modal.className = 'fixed inset-0 bg-black/50 flex items-center justify-center z-50';
     modal.onclick = function(ev) { if (ev.target === modal) modal.remove(); };
-    modal.innerHTML = '<div class="bg-slate-800 rounded-lg border border-slate-600 p-5 w-80 shadow-xl">' +
-      '<div class="text-sm font-semibold text-slate-200 mb-3">Keyboard Shortcuts</div>' +
-      '<div class="text-xs text-slate-300 space-y-1">' +
-        '<div><kbd class="bg-slate-700 px-1 rounded">/</kbd> Focus search</div>' +
-        '<div><kbd class="bg-slate-700 px-1 rounded">Esc</kbd> Close panel / clear search</div>' +
-        '<div><kbd class="bg-slate-700 px-1 rounded">j</kbd> / <kbd class="bg-slate-700 px-1 rounded">k</kbd> Navigate cards</div>' +
-        '<div><kbd class="bg-slate-700 px-1 rounded">Enter</kbd> Open issue detail</div>' +
-        '<div><kbd class="bg-slate-700 px-1 rounded">c</kbd> Focus comment input (in detail)</div>' +
-        '<div><kbd class="bg-slate-700 px-1 rounded">x</kbd> Close issue (in detail)</div>' +
-        '<div><kbd class="bg-slate-700 px-1 rounded">?</kbd> This help</div>' +
-        '<div><kbd class="bg-slate-700 px-1 rounded">Shift+?</kbd> Replay guided tour</div>' +
+    modal.innerHTML = '<div class="rounded-lg p-5 w-80 shadow-xl" style="background:var(--surface-raised);border:1px solid var(--border-strong)">' +
+      '<div class="text-sm font-semibold mb-3" style="color:var(--text-primary)">Keyboard Shortcuts</div>' +
+      '<div class="text-xs space-y-1" style="color:var(--text-primary)">' +
+        '<div><kbd class="bg-overlay px-1 rounded">/</kbd> Focus search</div>' +
+        '<div><kbd class="bg-overlay px-1 rounded">Esc</kbd> Close panel / clear search</div>' +
+        '<div><kbd class="bg-overlay px-1 rounded">j</kbd> / <kbd class="bg-overlay px-1 rounded">k</kbd> Navigate cards</div>' +
+        '<div><kbd class="bg-overlay px-1 rounded">Enter</kbd> Open issue detail</div>' +
+        '<div><kbd class="bg-overlay px-1 rounded">c</kbd> Focus comment input (in detail)</div>' +
+        '<div><kbd class="bg-overlay px-1 rounded">x</kbd> Close issue (in detail)</div>' +
+        '<div><kbd class="bg-overlay px-1 rounded">m</kbd> Move issue to status (in detail)</div>' +
+        '<div><kbd class="bg-overlay px-1 rounded">?</kbd> This help</div>' +
+        '<div><kbd class="bg-overlay px-1 rounded">Shift+?</kbd> Replay guided tour</div>' +
       '</div>' +
-      '<div class="mt-3 pt-2 border-t border-slate-700">' +
-        '<button onclick="document.getElementById(\'helpModal\').remove();startTour();" class="text-xs text-blue-400 hover:text-blue-300">Take the guided tour &rarr;</button>' +
+      '<div class="mt-3 pt-2" style="border-top:1px solid var(--border-default)">' +
+        '<button onclick="document.getElementById(\'helpModal\').remove();startTour();" class="text-xs" style="color:var(--accent)">Take the guided tour &rarr;</button>' +
       '</div>' +
-      '<button onclick="document.getElementById(\'helpModal\').remove()" class="text-xs text-slate-500 mt-2 hover:text-slate-300">Close</button>' +
+      '<button onclick="document.getElementById(\'helpModal\').remove()" class="text-xs text-muted text-primary-hover mt-2">Close</button>' +
     '</div>';
     document.body.appendChild(modal);
     return;
@@ -1198,6 +1461,32 @@ document.addEventListener('keydown', function(e) {
   if (selectedIssue) {
     if (e.key === 'c') { var ci = document.getElementById('commentInput'); if (ci) { e.preventDefault(); ci.focus(); } }
     if (e.key === 'x') { e.preventDefault(); closeIssue(selectedIssue); }
+    if (e.key === 'm') {
+      e.preventDefault();
+      var issueId = selectedIssue;
+      loadTransitions(issueId).then(function(transitions) {
+        var ready = transitions.filter(function(t) { return t.ready; });
+        if (!ready.length) { showToast('No valid transitions', 'info'); return; }
+        var modal = document.createElement('div');
+        modal.id = 'moveModal';
+        modal.className = 'fixed inset-0 bg-black/50 flex items-center justify-center z-50';
+        modal.onclick = function(ev) { if (ev.target === modal) modal.remove(); };
+        modal.innerHTML = '<div class="rounded-lg p-4 w-64 shadow-xl" style="background:var(--surface-raised);border:1px solid var(--border-strong)">' +
+          '<div class="text-sm mb-3" style="color:var(--text-primary)">Move to...</div>' +
+          '<div class="flex flex-col gap-2">' +
+          ready.map(function(t) {
+            return '<button onclick="moveIssueTo(\'' + issueId + '\',\'' + t.to.replace(/'/g, "\\'") + '\')" class="text-xs text-left bg-overlay bg-overlay-hover px-3 py-2 rounded" style="color:var(--text-primary)">' + escHtml(t.to) + '</button>';
+          }).join('') +
+          '</div>' +
+          '<button onclick="document.getElementById(\'moveModal\').remove()" class="text-xs text-muted text-primary-hover mt-3">Cancel (Esc)</button>' +
+        '</div>';
+        document.body.appendChild(modal);
+        modal.querySelector('button').focus();
+        modal.addEventListener('keydown', function(ev) { if (ev.key === 'Escape') modal.remove(); });
+      }).catch(function() {
+        showToast('Could not load transitions', 'error');
+      });
+    }
   }
 });
 
@@ -1224,9 +1513,10 @@ function showPopover(anchorEl, html) {
   closePopover();
   var pop = document.createElement('div');
   pop.id = 'activePopover';
-  pop.className = 'popover bg-slate-900 border border-slate-600 rounded-lg shadow-xl p-3 text-xs';
+  pop.className = 'popover rounded-lg shadow-xl p-3 text-xs';
+  pop.style.cssText = 'background:var(--surface-base);border:1px solid var(--border-strong)';
   pop.innerHTML = html +
-    '<div class="flex justify-end mt-2"><button onclick="closePopover()" class="text-slate-500 hover:text-slate-300 text-xs">Dismiss</button></div>';
+    '<div class="flex justify-end mt-2"><button onclick="closePopover()" class="text-xs text-muted text-primary-hover">Dismiss</button></div>';
   document.body.appendChild(pop);
   var rect = anchorEl.getBoundingClientRect();
   pop.style.top = (rect.bottom + window.scrollY + 8) + 'px';
@@ -1278,14 +1568,15 @@ function showTourStep(index) {
   overlay.className = 'tour-overlay';
 
   var tooltip = document.createElement('div');
-  tooltip.className = 'tour-tooltip bg-slate-800 border border-blue-500 rounded-lg p-4 shadow-xl';
+  tooltip.className = 'tour-tooltip rounded-lg p-4 shadow-xl';
+  tooltip.style.cssText = 'background:var(--surface-raised);border:1px solid var(--accent)';
   tooltip.innerHTML =
-    '<div class="text-sm text-slate-200 mb-3 leading-relaxed">' + step.text + '</div>' +
+    '<div class="text-sm mb-3 leading-relaxed" style="color:var(--text-primary)">' + step.text + '</div>' +
     '<div class="flex items-center justify-between">' +
-      '<span class="text-xs text-slate-500">' + (index + 1) + ' of ' + TOUR_STEPS.length + '</span>' +
+      '<span class="text-xs" style="color:var(--text-muted)">' + (index + 1) + ' of ' + TOUR_STEPS.length + '</span>' +
       '<div class="flex gap-2">' +
-        '<button onclick="endTour()" class="text-xs text-slate-500 hover:text-slate-300 px-2 py-1">Skip</button>' +
-        '<button onclick="showTourStep(' + (index + 1) + ')" class="text-xs bg-blue-600 text-white px-3 py-1.5 rounded hover:bg-blue-700">' +
+        '<button onclick="endTour()" class="text-xs text-muted text-primary-hover px-2 py-1">Skip</button>' +
+        '<button onclick="showTourStep(' + (index + 1) + ')" class="text-xs px-3 py-1.5 rounded bg-accent-hover" style="background:var(--accent);color:var(--surface-base)">' +
           (index === TOUR_STEPS.length - 1 ? 'Done' : 'Next') +
         '</button>' +
       '</div>' +
@@ -1333,8 +1624,13 @@ function showToast(message, type) {
   var toast = document.createElement('div');
   var bg = type === 'error' ? 'bg-red-900/90 border-red-700 text-red-200'
          : type === 'success' ? 'bg-emerald-900/90 border-emerald-700 text-emerald-200'
-         : 'bg-slate-800/90 border-slate-600 text-slate-200';
+         : 'border text-primary';
   toast.className = 'px-4 py-2 rounded border text-xs shadow-lg ' + bg;
+  if (type !== 'error' && type !== 'success') {
+    toast.style.background = 'var(--surface-raised)';
+    toast.style.borderColor = 'var(--border-strong)';
+    toast.style.opacity = '0.95';
+  }
   toast.textContent = message;
   container.appendChild(toast);
   setTimeout(function() { toast.remove(); }, 4000);
@@ -1346,7 +1642,7 @@ function showToast(message, type) {
 async function updateIssue(issueId, body, btnEl) {
   if (btnEl) setLoading(btnEl, true);
   try {
-    var resp = await fetch('/api/issue/' + issueId, {
+    var resp = await fetch(API_BASE + '/issue/' + issueId, {
       method: 'PATCH', headers: {'Content-Type': 'application/json'},
       body: JSON.stringify(body),
     });
@@ -1369,11 +1665,11 @@ async function closeIssue(issueId) {
   var modal = document.createElement('div');
   modal.id = 'closeReasonModal';
   modal.className = 'fixed inset-0 bg-black/50 flex items-center justify-center z-50';
-  modal.innerHTML = '<div class="bg-slate-800 rounded-lg border border-slate-600 p-4 w-80 shadow-xl">' +
-    '<div class="text-sm text-slate-200 mb-2">Close reason (optional)</div>' +
-    '<input id="closeReasonInput" type="text" class="w-full bg-slate-700 text-slate-200 text-xs rounded px-3 py-2 border border-slate-600 mb-3 focus:outline-none focus:border-blue-500">' +
+  modal.innerHTML = '<div class="rounded-lg p-4 w-80 shadow-xl" style="background:var(--surface-raised);border:1px solid var(--border-strong)">' +
+    '<div class="text-sm mb-2" style="color:var(--text-primary)">Close reason (optional)</div>' +
+    '<input id="closeReasonInput" type="text" class="w-full text-xs rounded px-3 py-2 mb-3 focus:outline-none" style="background:var(--surface-overlay);color:var(--text-primary);border:1px solid var(--border-strong)">' +
     '<div class="flex justify-end gap-2">' +
-      '<button id="closeReasonCancel" class="text-xs bg-slate-700 px-3 py-1.5 rounded hover:bg-slate-600">Cancel</button>' +
+      '<button id="closeReasonCancel" class="text-xs bg-overlay bg-overlay-hover px-3 py-1.5 rounded">Cancel</button>' +
       '<button id="closeReasonConfirm" class="text-xs bg-red-600 text-white px-3 py-1.5 rounded hover:bg-red-700">Close Issue</button>' +
     '</div></div>';
   document.body.appendChild(modal);
@@ -1383,7 +1679,7 @@ async function closeIssue(issueId) {
   document.getElementById('closeReasonConfirm').onclick = async function() {
     var reason = document.getElementById('closeReasonInput').value || '';
     modal.remove();
-    var resp = await fetch('/api/issue/' + issueId + '/close', {
+    var resp = await fetch(API_BASE + '/issue/' + issueId + '/close', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({reason: reason}),
     });
@@ -1395,7 +1691,7 @@ async function closeIssue(issueId) {
 }
 
 async function reopenIssue(issueId) {
-  var resp = await fetch('/api/issue/' + issueId + '/reopen', {
+  var resp = await fetch(API_BASE + '/issue/' + issueId + '/reopen', {
     method: 'POST', headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({}),
   });
@@ -1411,11 +1707,12 @@ async function claimIssue(issueId) {
   var modal = document.createElement('div');
   modal.id = 'claimModal';
   modal.className = 'fixed inset-0 bg-black/50 flex items-center justify-center z-50';
-  modal.innerHTML = '<div class="bg-slate-800 rounded-lg border border-slate-600 p-4 w-72 shadow-xl">' +
-    '<div class="text-sm text-slate-200 mb-2">Claim issue</div>' +
-    '<input id="claimNameInput" type="text" value="' + escHtml(saved) + '" placeholder="Your name..." class="w-full bg-slate-700 text-slate-200 text-xs rounded px-3 py-2 border border-slate-600 mb-3 focus:outline-none focus:border-blue-500">' +
+  modal.innerHTML = '<div class="rounded-lg p-4 w-72 shadow-xl" style="background:var(--surface-raised);border:1px solid var(--border-strong)">' +
+    '<div class="text-sm mb-2" style="color:var(--text-primary)">Claim issue</div>' +
+    '<input id="claimNameInput" type="text" value="' + escHtml(saved) + '" placeholder="Your name..." class="w-full text-xs rounded px-3 py-2 mb-1 focus:outline-none" style="background:var(--surface-overlay);color:var(--text-primary);border:1px solid var(--border-strong)">' +
+    (saved ? '<div class="text-xs mb-2" style="color:var(--text-muted)">Remembered as "' + escHtml(saved) + '" \u2014 <button onclick="document.getElementById(\'claimNameInput\').value=\'\';localStorage.removeItem(\'filigree_claim_name\');this.parentElement.remove();" style="color:var(--accent)" class="hover:underline">not you?</button></div>' : '<div class="mb-2"></div>') +
     '<div class="flex justify-end gap-2">' +
-      '<button onclick="document.getElementById(\'claimModal\').remove()" class="text-xs bg-slate-700 px-3 py-1.5 rounded hover:bg-slate-600">Cancel</button>' +
+      '<button onclick="document.getElementById(\'claimModal\').remove()" class="text-xs bg-overlay bg-overlay-hover px-3 py-1.5 rounded">Cancel</button>' +
       '<button onclick="confirmClaim(\'' + issueId + '\')" class="text-xs bg-emerald-600 text-white px-3 py-1.5 rounded hover:bg-emerald-700">Claim</button>' +
     '</div></div>';
   document.body.appendChild(modal);
@@ -1431,7 +1728,7 @@ async function confirmClaim(issueId) {
   localStorage.setItem('filigree_claim_name', name);
   var modal = document.getElementById('claimModal');
   if (modal) modal.remove();
-  var resp = await fetch('/api/issue/' + issueId + '/claim', {
+  var resp = await fetch(API_BASE + '/issue/' + issueId + '/claim', {
     method: 'POST', headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({assignee: name}),
   });
@@ -1442,7 +1739,7 @@ async function confirmClaim(issueId) {
 }
 
 async function releaseIssue(issueId) {
-  var resp = await fetch('/api/issue/' + issueId + '/release', {
+  var resp = await fetch(API_BASE + '/issue/' + issueId + '/release', {
     method: 'POST', headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({}),
   });
@@ -1452,8 +1749,26 @@ async function releaseIssue(issueId) {
   if (selectedIssue === issueId) openDetail(issueId);
 }
 
+async function moveIssueTo(issueId, targetStatus) {
+  var modal = document.getElementById('moveModal');
+  if (modal) modal.remove();
+  var resp = await fetch(API_BASE + '/issue/' + issueId, {
+    method: 'PATCH',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({status: targetStatus}),
+  });
+  if (!resp.ok) {
+    try { var err = await resp.json(); showToast('Error: ' + (err.error || 'Move failed'), 'error'); }
+    catch(e) { showToast('Move failed (status ' + resp.status + ')', 'error'); }
+    return;
+  }
+  showToast('Moved to ' + targetStatus, 'success');
+  await fetchData();
+  if (selectedIssue === issueId) openDetail(issueId);
+}
+
 async function removeDependency(issueId, depId) {
-  var resp = await fetch('/api/issue/' + issueId + '/dependencies/' + depId, { method: 'DELETE' });
+  var resp = await fetch(API_BASE + '/issue/' + issueId + '/dependencies/' + depId, { method: 'DELETE' });
   if (!resp.ok) { var err = await resp.json(); showToast('Error: ' + (err.error || 'Remove failed'), 'error'); return; }
   showToast('Dependency removed', 'success');
   await fetchData();
@@ -1466,12 +1781,12 @@ async function showAddBlocker(issueId) {
   var modal = document.createElement('div');
   modal.id = 'addBlockerModal';
   modal.className = 'fixed inset-0 bg-black/50 flex items-center justify-center z-50';
-  modal.innerHTML = '<div class="bg-slate-800 rounded-lg border border-slate-600 p-4 w-80 shadow-xl">' +
-    '<div class="text-sm text-slate-200 mb-2">Add Blocker</div>' +
+  modal.innerHTML = '<div class="rounded-lg p-4 w-80 shadow-xl" style="background:var(--surface-raised);border:1px solid var(--border-strong)">' +
+    '<div class="text-sm mb-2" style="color:var(--text-primary)">Add Blocker</div>' +
     '<input id="blockerSearchInput" type="text" placeholder="Search issues..." ' +
-      'class="w-full bg-slate-700 text-slate-200 text-xs rounded px-3 py-2 border border-slate-600 mb-2 focus:outline-none focus:border-blue-500">' +
+      'class="w-full text-xs rounded px-3 py-2 mb-2 focus:outline-none" style="background:var(--surface-overlay);color:var(--text-primary);border:1px solid var(--border-strong)">' +
     '<div id="blockerResults" class="max-h-48 overflow-y-auto text-xs"></div>' +
-    '<button onclick="document.getElementById(\'addBlockerModal\').remove()" class="text-xs text-slate-500 mt-2 hover:text-slate-300">Cancel</button>' +
+    '<button onclick="document.getElementById(\'addBlockerModal\').remove()" class="text-xs text-muted text-primary-hover mt-2">Cancel</button>' +
     '</div>';
   document.body.appendChild(modal);
   modal.onclick = function(e) { if (e.target === modal) modal.remove(); };
@@ -1485,13 +1800,13 @@ async function showAddBlocker(issueId) {
       var results = document.getElementById('blockerResults');
       if (!q) { results.innerHTML = ''; return; }
       try {
-        var resp = await fetch('/api/search?q=' + encodeURIComponent(q) + '&limit=10');
+        var resp = await fetch(API_BASE + '/search?q=' + encodeURIComponent(q) + '&limit=10');
         var data = await resp.json();
         results.innerHTML = data.results.filter(function(r) { return r.id !== issueId; }).map(function(r) {
-          return '<div class="flex items-center gap-2 py-1 px-1 cursor-pointer hover:bg-slate-700 rounded" onclick="addDependency(\'' + issueId + '\',\'' + r.id + '\')">' +
-            '<span class="text-slate-400">' + r.id + '</span>' +
-            '<span class="text-slate-300 truncate">' + escHtml(r.title.slice(0, 30)) + '</span></div>';
-        }).join('') || '<div class="text-slate-500">No results</div>';
+          return '<div class="flex items-center gap-2 py-1 px-1 cursor-pointer bg-overlay-hover rounded" onclick="addDependency(\'' + issueId + '\',\'' + r.id + '\')">' +
+            '<span style="color:var(--text-secondary)">' + r.id + '</span>' +
+            '<span style="color:var(--text-primary)" class="truncate">' + escHtml(r.title.slice(0, 30)) + '</span></div>';
+        }).join('') || '<div style="color:var(--text-muted)">No results</div>';
       } catch(e) { results.innerHTML = '<div class="text-red-400">Search failed</div>'; }
     }, 200);
   };
@@ -1500,7 +1815,7 @@ async function showAddBlocker(issueId) {
 async function addDependency(issueId, dependsOnId) {
   var modal = document.getElementById('addBlockerModal');
   if (modal) modal.remove();
-  var resp = await fetch('/api/issue/' + issueId + '/dependencies', {
+  var resp = await fetch(API_BASE + '/issue/' + issueId + '/dependencies', {
     method: 'POST', headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({depends_on: dependsOnId}),
   });
@@ -1514,7 +1829,7 @@ async function addComment(issueId) {
   var input = document.getElementById('commentInput');
   var text = input ? input.value.trim() : '';
   if (!text) return;
-  var resp = await fetch('/api/issue/' + issueId + '/comments', {
+  var resp = await fetch(API_BASE + '/issue/' + issueId + '/comments', {
     method: 'POST', headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({text: text}),
   });
@@ -1523,7 +1838,7 @@ async function addComment(issueId) {
 
 async function loadTransitions(issueId) {
   try {
-    var resp = await fetch('/api/issue/' + issueId + '/transitions');
+    var resp = await fetch(API_BASE + '/issue/' + issueId + '/transitions');
     if (resp.ok) return await resp.json();
   } catch (e) {}
   return [];
@@ -1535,43 +1850,43 @@ async function loadTransitions(issueId) {
 async function loadMetrics() {
   var days = document.getElementById('metricsDays').value;
   var container = document.getElementById('metricsContent');
-  container.innerHTML = '<div class="text-slate-500">Loading...</div>';
+  container.innerHTML = '<div style="color:var(--text-muted)">Loading...</div>';
   try {
-    var resp = await fetch('/api/metrics?days=' + days);
+    var resp = await fetch(API_BASE + '/metrics?days=' + days);
     var m = await resp.json();
     var byTypeHtml = Object.keys(m.by_type || {}).map(function(t) {
       var d = m.by_type[t];
-      return '<tr><td class="py-1 pr-4 text-slate-300">' + escHtml(t) + '</td>' +
+      return '<tr><td class="py-1 pr-4" style="color:var(--text-primary)">' + escHtml(t) + '</td>' +
         '<td class="py-1 pr-4">' + (d.avg_cycle_time_hours !== null ? d.avg_cycle_time_hours + 'h' : '\u2014') + '</td>' +
         '<td class="py-1">' + d.count + '</td></tr>';
     }).join('');
 
     container.innerHTML =
       '<div class="grid grid-cols-3 gap-4 mb-6">' +
-        '<div class="bg-slate-800 rounded p-4 border border-slate-700">' +
-          '<div class="text-slate-500 text-xs mb-1">Throughput</div>' +
-          '<div class="text-2xl font-bold text-blue-400">' + m.throughput + '</div>' +
-          '<div class="text-xs text-slate-500">issues closed</div></div>' +
-        '<div class="bg-slate-800 rounded p-4 border border-slate-700">' +
-          '<div class="text-slate-500 text-xs mb-1">Avg Cycle Time</div>' +
+        '<div class="rounded p-4" style="background:var(--surface-raised);border:1px solid var(--border-default)">' +
+          '<div class="text-xs mb-1" style="color:var(--text-muted)">Throughput</div>' +
+          '<div class="text-2xl font-bold" style="color:var(--accent)">' + m.throughput + '</div>' +
+          '<div class="text-xs" style="color:var(--text-muted)">issues closed</div></div>' +
+        '<div class="rounded p-4" style="background:var(--surface-raised);border:1px solid var(--border-default)">' +
+          '<div class="text-xs mb-1" style="color:var(--text-muted)">Avg Cycle Time</div>' +
           '<div class="text-2xl font-bold text-emerald-400">' + (m.avg_cycle_time_hours !== null ? m.avg_cycle_time_hours + 'h' : '\u2014') + '</div>' +
-          '<div class="text-xs text-slate-500">first WIP to done</div></div>' +
-        '<div class="bg-slate-800 rounded p-4 border border-slate-700">' +
-          '<div class="text-slate-500 text-xs mb-1">Avg Lead Time</div>' +
+          '<div class="text-xs" style="color:var(--text-muted)">first WIP to done</div></div>' +
+        '<div class="rounded p-4" style="background:var(--surface-raised);border:1px solid var(--border-default)">' +
+          '<div class="text-xs mb-1" style="color:var(--text-muted)">Avg Lead Time</div>' +
           '<div class="text-2xl font-bold text-amber-400">' + (m.avg_lead_time_hours !== null ? m.avg_lead_time_hours + 'h' : '\u2014') + '</div>' +
-          '<div class="text-xs text-slate-500">creation to done</div></div>' +
+          '<div class="text-xs" style="color:var(--text-muted)">creation to done</div></div>' +
       '</div>' +
       (byTypeHtml
-        ? '<div class="bg-slate-800 rounded p-4 border border-slate-700">' +
-          '<div class="text-xs font-medium text-slate-400 mb-2">By Type</div>' +
-          '<table class="text-xs w-full"><thead><tr class="text-slate-500">' +
+        ? '<div class="rounded p-4" style="background:var(--surface-raised);border:1px solid var(--border-default)">' +
+          '<div class="text-xs font-medium mb-2" style="color:var(--text-secondary)">By Type</div>' +
+          '<table class="text-xs w-full"><thead><tr style="color:var(--text-muted)">' +
             '<th class="text-left py-1 pr-4">Type</th><th class="text-left py-1 pr-4">Avg Cycle</th><th class="text-left py-1">Count</th>' +
           '</tr></thead><tbody>' + byTypeHtml + '</tbody></table></div>'
-        : '<div class="text-slate-500 p-6 text-center">' +
-            '<div class="text-slate-300 font-medium mb-2">No completed issues in this period</div>' +
-            '<div class="text-slate-500">Metrics track throughput, cycle time, and lead time.</div>' +
-            '<div class="text-slate-500 mt-1">Close issues to see flow data here.</div>' +
-            '<div class="mt-3"><button onclick="document.getElementById(\'metricsDays\').value=\'90\';loadMetrics()" class="text-blue-400 hover:underline text-xs">Try 90-day window</button></div></div>');
+        : '<div class="p-6 text-center" style="color:var(--text-muted)">' +
+            '<div class="font-medium mb-2" style="color:var(--text-primary)">No completed issues in this period</div>' +
+            '<div style="color:var(--text-muted)">Metrics track throughput, cycle time, and lead time.</div>' +
+            '<div style="color:var(--text-muted)" class="mt-1">Close issues to see flow data here.</div>' +
+            '<div class="mt-3"><button onclick="document.getElementById(\'metricsDays\').value=\'90\';loadMetrics()" style="color:var(--accent)" class="hover:underline text-xs">Try 90-day window</button></div></div>');
 
     // Agent workload
     var agentLoad = {};
@@ -1586,14 +1901,14 @@ async function loadMetrics() {
       var agentHtml = agents.map(function(a) {
         var pct = (agentLoad[a] / maxLoad * 100);
         return '<div class="flex items-center gap-2 mb-1">' +
-          '<span class="text-xs text-slate-300 w-24 truncate">' + escHtml(a) + '</span>' +
-          '<div class="flex-1 h-4 bg-slate-900 rounded overflow-hidden">' +
-            '<div class="h-full bg-blue-600 rounded" style="width:' + pct + '%"></div>' +
+          '<span class="text-xs w-24 truncate" style="color:var(--text-primary)">' + escHtml(a) + '</span>' +
+          '<div class="flex-1 h-4 rounded overflow-hidden" style="background:var(--surface-base)">' +
+            '<div class="h-full rounded" style="width:' + pct + '%;background:var(--accent)"></div>' +
           '</div>' +
-          '<span class="text-xs text-slate-400 w-6 text-right">' + agentLoad[a] + '</span></div>';
+          '<span class="text-xs w-6 text-right" style="color:var(--text-secondary)">' + agentLoad[a] + '</span></div>';
       }).join('');
-      container.innerHTML += '<div class="bg-slate-800 rounded p-4 border border-slate-700 mt-4">' +
-        '<div class="text-xs font-medium text-slate-400 mb-2">Agent Workload (Active WIP)</div>' +
+      container.innerHTML += '<div class="rounded p-4 mt-4" style="background:var(--surface-raised);border:1px solid var(--border-default)">' +
+        '<div class="text-xs font-medium mb-2" style="color:var(--text-secondary)">Agent Workload (Active WIP)</div>' +
         agentHtml + '</div>';
     }
   } catch (e) {
@@ -1606,11 +1921,11 @@ async function loadMetrics() {
 // ---------------------------------------------------------------------------
 async function loadActivity() {
   var container = document.getElementById('activityContent');
-  container.innerHTML = '<div class="text-slate-500">Loading...</div>';
+  container.innerHTML = '<div style="color:var(--text-muted)">Loading...</div>';
   try {
-    var resp = await fetch('/api/activity?limit=50');
+    var resp = await fetch(API_BASE + '/activity?limit=50');
     var events = await resp.json();
-    if (!events.length) { container.innerHTML = '<div class="text-slate-500 p-6 text-center"><div class="text-slate-300 font-medium mb-2">No recent activity</div><div>Events appear here when issues are created, updated, or closed.</div></div>'; return; }
+    if (!events.length) { container.innerHTML = '<div class="p-6 text-center" style="color:var(--text-muted)"><div class="font-medium mb-2" style="color:var(--text-primary)">No recent activity</div><div>Events appear here when issues are created, updated, or closed.</div></div>'; return; }
     var lastDay = '';
     container.innerHTML = events.map(function(e) {
       var time = e.created_at ? e.created_at.slice(5, 16) : '';
@@ -1619,21 +1934,21 @@ async function loadActivity() {
       if (day && day !== lastDay) {
         lastDay = day;
         separator = '<div class="flex items-center gap-2 py-2 mt-2 first:mt-0">' +
-          '<div class="flex-1 border-t border-slate-700"></div>' +
-          '<span class="text-xs text-slate-500 font-medium shrink-0">' + day + '</span>' +
-          '<div class="flex-1 border-t border-slate-700"></div>' +
+          '<div class="flex-1" style="border-top:1px solid var(--border-default)"></div>' +
+          '<span class="text-xs font-medium shrink-0" style="color:var(--text-muted)">' + day + '</span>' +
+          '<div class="flex-1" style="border-top:1px solid var(--border-default)"></div>' +
         '</div>';
       }
       var title = e.issue_title ? escHtml(e.issue_title.slice(0, 50)) : e.issue_id;
       var detail = '';
       if (e.event_type === 'status_changed') detail = e.old_value + ' \u2192 ' + e.new_value;
       else if (e.new_value) detail = e.new_value;
-      return separator + '<div class="flex items-start gap-3 py-2 border-b border-slate-800 cursor-pointer hover:bg-slate-800/50" onclick="openDetail(\'' + e.issue_id + '\')">' +
-        '<span class="text-slate-600 shrink-0 w-24">' + time + '</span>' +
-        '<span class="text-slate-400 shrink-0 w-32">' + escHtml(e.event_type) + '</span>' +
-        '<span class="text-slate-300 truncate">' + title + '</span>' +
-        (detail ? '<span class="text-slate-500 shrink-0">' + escHtml(detail) + '</span>' : '') +
-        (e.actor ? '<span class="text-slate-600 shrink-0">' + escHtml(e.actor) + '</span>' : '') +
+      return separator + '<div class="flex items-start gap-3 py-2 cursor-pointer bg-overlay-hover" style="border-bottom:1px solid var(--surface-raised)" onclick="openDetail(\'' + e.issue_id + '\')">' +
+        '<span class="shrink-0 w-24" style="color:var(--text-muted)">' + time + '</span>' +
+        '<span class="shrink-0 w-32" style="color:var(--text-secondary)">' + escHtml(e.event_type) + '</span>' +
+        '<span class="truncate" style="color:var(--text-primary)">' + title + '</span>' +
+        (detail ? '<span class="shrink-0" style="color:var(--text-muted)">' + escHtml(detail) + '</span>' : '') +
+        (e.actor ? '<span class="shrink-0" style="color:var(--text-muted)">' + escHtml(e.actor) + '</span>' : '') +
       '</div>';
     }).join('');
   } catch (e) {
@@ -1657,7 +1972,7 @@ async function doSearch() {
   if (clearBtn) clearBtn.classList.toggle('hidden', !q);
   if (!q) { searchResults = null; render(); return; }
   try {
-    var resp = await fetch('/api/search?q=' + encodeURIComponent(q) + '&limit=100');
+    var resp = await fetch(API_BASE + '/search?q=' + encodeURIComponent(q) + '&limit=100');
     var data = await resp.json();
     searchResults = new Set(data.results.map(function(i) { return i.id; }));
   } catch (e) { searchResults = null; }
@@ -1694,8 +2009,8 @@ function toggleGraphLegend() {
   legend.classList.toggle('hidden');
   var btn = document.getElementById('btnGraphLegend');
   btn.className = legend.classList.contains('hidden')
-    ? 'px-2 py-0.5 rounded bg-slate-700 hover:bg-slate-600'
-    : 'px-2 py-0.5 rounded bg-blue-600 text-white';
+    ? 'px-2 py-0.5 rounded bg-overlay bg-overlay-hover'
+    : 'px-2 py-0.5 rounded bg-accent text-primary';
 }
 
 function toggleKanbanLegend() {
@@ -1703,8 +2018,8 @@ function toggleKanbanLegend() {
   legend.classList.toggle('hidden');
   var btn = document.getElementById('btnKanbanLegend');
   btn.className = legend.classList.contains('hidden')
-    ? 'px-2 py-0.5 rounded bg-slate-700 hover:bg-slate-600'
-    : 'px-2 py-0.5 rounded bg-blue-600 text-white';
+    ? 'px-2 py-0.5 rounded bg-overlay bg-overlay-hover'
+    : 'px-2 py-0.5 rounded bg-accent text-primary';
 }
 
 async function toggleCriticalPath() {
@@ -1712,11 +2027,11 @@ async function toggleCriticalPath() {
   var btn = document.getElementById('btnCritPath');
   if (criticalPathActive) {
     btn.className = 'px-2 py-0.5 rounded bg-red-600 text-white';
-    var resp = await fetch('/api/critical-path');
+    var resp = await fetch(API_BASE + '/critical-path');
     var data = await resp.json();
     criticalPathIds = new Set(data.path.map(function(p) { return p.id; }));
   } else {
-    btn.className = 'px-2 py-0.5 rounded bg-slate-700 hover:bg-slate-600';
+    btn.className = 'px-2 py-0.5 rounded bg-overlay bg-overlay-hover';
     criticalPathIds.clear();
   }
   renderGraph();
@@ -1794,18 +2109,18 @@ function showHealthBreakdown() {
   selectedIssue = null;
   panel.innerHTML =
     '<div class="flex items-center justify-between mb-3">' +
-      '<span class="text-base font-semibold text-slate-200">System Health: ' + b.score + '/100</span>' +
-      '<button onclick="closeDetail()" class="text-slate-500 hover:text-slate-300 text-lg">&times;</button></div>' +
+      '<span class="text-base font-semibold" style="color:var(--text-primary)">System Health: ' + b.score + '/100</span>' +
+      '<button onclick="closeDetail()" class="text-muted text-primary-hover text-lg">&times;</button></div>' +
     ['blocked', 'freshness', 'ready', 'balance'].map(function(k) {
       var f = b[k];
       var pct = Math.round(f.score / f.max * 100);
       return '<div class="mb-3"><div class="flex justify-between text-xs mb-1">' +
-        '<span class="text-slate-300 capitalize">' + k + '</span>' +
-        '<span class="text-slate-400">' + f.score + '/' + f.max + '</span></div>' +
-        '<div class="w-full h-2 rounded-full bg-slate-900 overflow-hidden">' +
+        '<span class="capitalize" style="color:var(--text-primary)">' + k + '</span>' +
+        '<span style="color:var(--text-secondary)">' + f.score + '/' + f.max + '</span></div>' +
+        '<div class="w-full h-2 rounded-full overflow-hidden" style="background:var(--surface-base)">' +
           '<div class="h-full rounded-full ' + (pct >= 75 ? 'bg-emerald-500' : pct >= 50 ? 'bg-amber-500' : 'bg-red-500') +
           '" style="width:' + pct + '%"></div></div>' +
-        '<div class="text-xs text-slate-500 mt-0.5">' + f.detail + '</div></div>';
+        '<div class="text-xs mt-0.5" style="color:var(--text-muted)">' + f.detail + '</div></div>';
     }).join('');
 }
 
@@ -1814,21 +2129,21 @@ function showHealthBreakdown() {
 // ---------------------------------------------------------------------------
 function showHealthHelp(btn) {
   showPopover(btn,
-    '<div class="text-slate-200 font-medium mb-2">Health Score (0\u2013100)</div>' +
-    '<div class="text-slate-400 space-y-1">' +
+    '<div class="font-medium mb-2" style="color:var(--text-primary)">Health Score (0\u2013100)</div>' +
+    '<div style="color:var(--text-secondary)" class="space-y-1">' +
       '<div><span class="text-emerald-400 font-medium">Blocked</span> (25 pts) \u2014 Fewer blocked issues = higher score</div>' +
-      '<div><span class="text-blue-400 font-medium">Freshness</span> (25 pts) \u2014 WIP items updated recently, not stale</div>' +
+      '<div><span class="font-medium" style="color:var(--accent)">Freshness</span> (25 pts) \u2014 WIP items updated recently, not stale</div>' +
       '<div><span class="text-amber-400 font-medium">Ready</span> (25 pts) \u2014 Enough unblocked work available</div>' +
-      '<div><span class="text-slate-300 font-medium">Balance</span> (25 pts) \u2014 No agent overloaded with WIP</div>' +
+      '<div><span class="font-medium" style="color:var(--text-primary)">Balance</span> (25 pts) \u2014 No agent overloaded with WIP</div>' +
     '</div>' +
-    '<div class="text-slate-500 mt-2 pt-2 border-t border-slate-700">Click the badge number for a detailed breakdown.</div>'
+    '<div style="color:var(--text-muted);border-top:1px solid var(--border-default)" class="mt-2 pt-2">Click the badge number for a detailed breakdown.</div>'
   );
 }
 
 function showReadyHelp(btn) {
   showPopover(btn,
-    '<div class="text-slate-200 font-medium mb-2">Ready Issues</div>' +
-    '<div class="text-slate-400 space-y-1">' +
+    '<div class="font-medium mb-2" style="color:var(--text-primary)">Ready Issues</div>' +
+    '<div style="color:var(--text-secondary)" class="space-y-1">' +
       '<div>Issues with <span class="text-emerald-400">no open blockers</span> that can be worked on immediately.</div>' +
       '<div class="mt-1"><span class="text-emerald-400">&#9679;</span> Green left border on cards = ready</div>' +
       '<div class="mt-1">Toggle this button to sort ready issues to the top.</div>' +
@@ -1838,8 +2153,8 @@ function showReadyHelp(btn) {
 
 function showBlockedHelp(btn) {
   showPopover(btn,
-    '<div class="text-slate-200 font-medium mb-2">Blocked Issues</div>' +
-    '<div class="text-slate-400 space-y-1">' +
+    '<div class="font-medium mb-2" style="color:var(--text-primary)">Blocked Issues</div>' +
+    '<div style="color:var(--text-secondary)" class="space-y-1">' +
       '<div>Issues that <span class="text-red-400">depend on other incomplete work</span>.</div>' +
       '<div class="mt-1"><span class="text-red-400">&#128279;</span> Shows "blocked by N" on cards</div>' +
       '<div class="mt-1">Toggle to filter to only blocked issues \u2014 useful for identifying bottlenecks.</div>' +
@@ -1852,9 +2167,9 @@ function showBlockedHelp(btn) {
 // ---------------------------------------------------------------------------
 async function loadPlanView(milestoneId) {
   var panel = document.getElementById('detailContent');
-  panel.innerHTML = '<div class="text-slate-500 text-xs">Loading plan...</div>';
+  panel.innerHTML = '<div class="text-xs" style="color:var(--text-muted)">Loading plan...</div>';
   try {
-    var resp = await fetch('/api/plan/' + milestoneId);
+    var resp = await fetch(API_BASE + '/plan/' + milestoneId);
     if (!resp.ok) { panel.innerHTML = '<div class="text-red-400 text-xs">No plan found for this issue.</div>'; return; }
     var plan = await resp.json();
     var m = plan.milestone || {};
@@ -1864,30 +2179,30 @@ async function loadPlanView(milestoneId) {
     var pct = totalSteps ? Math.round(completedSteps / totalSteps * 100) : 0;
 
     var html = '<div class="flex items-center justify-between mb-3">' +
-      '<span class="text-xs text-slate-500">' + escHtml(m.id || milestoneId) + '</span>' +
-      '<button onclick="openDetail(\'' + milestoneId + '\')" class="text-xs text-blue-400 hover:underline">Back to detail</button></div>' +
-      '<div class="text-lg font-semibold text-slate-100 mb-2">' + escHtml(m.title || 'Plan') + '</div>' +
-      '<div class="w-full h-3 rounded-full bg-slate-900 mb-1 overflow-hidden">' +
+      '<span class="text-xs" style="color:var(--text-muted)">' + escHtml(m.id || milestoneId) + '</span>' +
+      '<button onclick="openDetail(\'' + milestoneId + '\')" class="text-xs hover:underline" style="color:var(--accent)">Back to detail</button></div>' +
+      '<div class="text-lg font-semibold mb-2" style="color:var(--text-primary)">' + escHtml(m.title || 'Plan') + '</div>' +
+      '<div class="w-full h-3 rounded-full mb-1 overflow-hidden" style="background:var(--surface-base)">' +
         '<div class="h-full bg-emerald-500 rounded-full" style="width:' + pct + '%"></div></div>' +
-      '<div class="text-xs text-slate-500 mb-4">' + completedSteps + '/' + totalSteps + ' steps (' + pct + '%)</div>';
+      '<div class="text-xs mb-4" style="color:var(--text-muted)">' + completedSteps + '/' + totalSteps + ' steps (' + pct + '%)</div>';
 
     phases.forEach(function(p) {
       var phase = p.phase || {};
       var steps = p.steps || [];
       var pDone = steps.filter(function(s) { return (s.status_category || 'open') === 'done'; }).length;
       var pPct = steps.length ? Math.round(pDone / steps.length * 100) : 0;
-      html += '<div class="mb-3 bg-slate-800 rounded border border-slate-700 p-3">' +
+      html += '<div class="mb-3 rounded p-3" style="background:var(--surface-raised);border:1px solid var(--border-default)">' +
         '<div class="flex items-center justify-between mb-1">' +
-          '<span class="text-xs font-medium text-slate-300">' + escHtml(phase.title || 'Phase') + '</span>' +
-          '<span class="text-xs text-slate-500">' + pDone + '/' + steps.length + '</span></div>' +
-        '<div class="w-full h-1.5 rounded-full bg-slate-900 mb-2 overflow-hidden">' +
-          '<div class="h-full bg-blue-500 rounded-full" style="width:' + pPct + '%"></div></div>' +
+          '<span class="text-xs font-medium" style="color:var(--text-primary)">' + escHtml(phase.title || 'Phase') + '</span>' +
+          '<span class="text-xs" style="color:var(--text-muted)">' + pDone + '/' + steps.length + '</span></div>' +
+        '<div class="w-full h-1.5 rounded-full mb-2 overflow-hidden" style="background:var(--surface-base)">' +
+          '<div class="h-full rounded-full" style="width:' + pPct + '%;background:var(--accent)"></div></div>' +
         steps.map(function(s) {
           var catColor = CATEGORY_COLORS[s.status_category || 'open'] || '#64748B';
-          return '<div class="flex items-center gap-2 py-1 ml-4 cursor-pointer hover:text-blue-400" onclick="openDetail(\'' + s.id + '\')">' +
+          return '<div class="flex items-center gap-2 py-1 ml-4 cursor-pointer" onclick="openDetail(\'' + s.id + '\')">' +
             '<span class="w-2 h-2 rounded-full shrink-0" style="background:' + catColor + '"></span>' +
-            '<span class="text-xs text-slate-300">' + escHtml(s.title) + '</span>' +
-            '<span class="text-xs text-slate-600">' + s.status + '</span></div>';
+            '<span class="text-xs" style="color:var(--text-primary)">' + escHtml(s.title) + '</span>' +
+            '<span class="text-xs" style="color:var(--text-muted)">' + s.status + '</span></div>';
         }).join('') +
       '</div>';
     });
@@ -1905,17 +2220,21 @@ async function loadWorkflow() {
   if (wfSelect && wfSelect.options.length <= 1) {
     var WORKFLOW_HIDDEN = {phase:1, step:1, work_package:1, deliverable:1};
     try {
-      var tr = await fetch('/api/types'); var registered = await tr.json();
+      var tr = await fetch(API_BASE + '/types'); var registered = await tr.json();
       registered.filter(function(t) { return !WORKFLOW_HIDDEN[t.type]; }).forEach(function(t) {
         var opt = document.createElement('option'); opt.value = t.type; opt.textContent = t.display_name || t.type;
         wfSelect.appendChild(opt);
       });
+      // Auto-select first type if none selected
+      if (!wfSelect.value && wfSelect.options.length > 1) {
+        wfSelect.value = wfSelect.options[1].value;
+      }
     } catch(e) {}
   }
   var typeName = wfSelect ? wfSelect.value : '';
   if (!typeName) return;
   try {
-    var resp = await fetch('/api/type/' + typeName);
+    var resp = await fetch(API_BASE + '/type/' + typeName);
     if (!resp.ok) return;
     var tpl = await resp.json();
     var stateCounts = {};
@@ -1943,15 +2262,15 @@ function renderWorkflowGraph(template, stateCounts) {
     style: [
       { selector: 'node', style: {
         'label': 'data(label)', 'font-size': '12px', 'font-family': 'JetBrains Mono, monospace',
-        'text-valign': 'center', 'text-halign': 'center', 'color': '#F1F5F9',
-        'text-outline-color': '#0F172A', 'text-outline-width': 2,
+        'text-valign': 'center', 'text-halign': 'center', 'color': THEME_COLORS.textPrimary,
+        'text-outline-color': THEME_COLORS.graphOutline, 'text-outline-width': 2,
         'width': 80, 'height': 40, 'shape': 'round-rectangle',
         'background-color': function(ele) { return CATEGORY_COLORS[ele.data('category')] || '#64748B'; },
       }},
       { selector: 'edge', style: {
-        'width': 2, 'line-color': '#475569', 'target-arrow-color': '#475569',
+        'width': 2, 'line-color': THEME_COLORS.graphEdge, 'target-arrow-color': THEME_COLORS.graphEdge,
         'target-arrow-shape': 'triangle', 'curve-style': 'bezier', 'arrow-scale': 0.8,
-        'label': 'data(enforcement)', 'font-size': '9px', 'color': '#94A3B8',
+        'label': 'data(enforcement)', 'font-size': '9px', 'color': THEME_COLORS.textSecondary,
         'text-rotation': 'autorotate', 'text-margin-y': -10,
       }},
     ],
@@ -1981,15 +2300,15 @@ async function batchSetPriority() {
   var modal = document.createElement('div');
   modal.id = 'batchPrioModal';
   modal.className = 'fixed inset-0 bg-black/50 flex items-center justify-center z-50';
-  modal.innerHTML = '<div class="bg-slate-800 rounded-lg border border-slate-600 p-4 w-72 shadow-xl">' +
-    '<div class="text-sm text-slate-200 mb-2">Set priority for ' + selectedCards.size + ' issues</div>' +
-    '<select id="batchPrioSelect" class="w-full bg-slate-700 text-slate-200 text-xs rounded px-2 py-2 border border-slate-600 mb-3">' +
+  modal.innerHTML = '<div class="rounded-lg p-4 w-72 shadow-xl" style="background:var(--surface-raised);border:1px solid var(--border-strong)">' +
+    '<div class="text-sm mb-2" style="color:var(--text-primary)">Set priority for ' + selectedCards.size + ' issues</div>' +
+    '<select id="batchPrioSelect" class="w-full text-xs rounded px-2 py-2 mb-3" style="background:var(--surface-overlay);color:var(--text-primary);border:1px solid var(--border-strong)">' +
       '<option value="0">P0 — Critical</option><option value="1">P1 — High</option>' +
       '<option value="2" selected>P2 — Medium</option><option value="3">P3 — Low</option><option value="4">P4 — Backlog</option>' +
     '</select>' +
     '<div class="flex justify-end gap-2">' +
-      '<button id="batchPrioCancel" class="text-xs bg-slate-700 px-3 py-1.5 rounded hover:bg-slate-600">Cancel</button>' +
-      '<button id="batchPrioConfirm" class="text-xs bg-blue-600 text-white px-3 py-1.5 rounded hover:bg-blue-700">Apply</button>' +
+      '<button id="batchPrioCancel" class="text-xs bg-overlay bg-overlay-hover px-3 py-1.5 rounded">Cancel</button>' +
+      '<button id="batchPrioConfirm" class="text-xs px-3 py-1.5 rounded bg-accent-hover" style="background:var(--accent);color:var(--surface-base)">Apply</button>' +
     '</div></div>';
   document.body.appendChild(modal);
   document.getElementById('batchPrioCancel').onclick = function() { modal.remove(); };
@@ -1997,7 +2316,7 @@ async function batchSetPriority() {
   document.getElementById('batchPrioConfirm').onclick = async function() {
     var prio = parseInt(document.getElementById('batchPrioSelect').value);
     modal.remove();
-    await fetch('/api/batch/update', {
+    await fetch(API_BASE + '/batch/update', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({issue_ids: Array.from(selectedCards), priority: prio}),
     });
@@ -2015,10 +2334,10 @@ async function batchCloseSelected() {
   var modal = document.createElement('div');
   modal.id = 'batchCloseModal';
   modal.className = 'fixed inset-0 bg-black/50 flex items-center justify-center z-50';
-  modal.innerHTML = '<div class="bg-slate-800 rounded-lg border border-slate-600 p-4 w-72 shadow-xl">' +
-    '<div class="text-sm text-slate-200 mb-3">Close ' + count + ' issue' + (count !== 1 ? 's' : '') + '?</div>' +
+  modal.innerHTML = '<div class="rounded-lg p-4 w-72 shadow-xl" style="background:var(--surface-raised);border:1px solid var(--border-strong)">' +
+    '<div class="text-sm mb-3" style="color:var(--text-primary)">Close ' + count + ' issue' + (count !== 1 ? 's' : '') + '?</div>' +
     '<div class="flex justify-end gap-2">' +
-      '<button id="batchCloseCancel" class="text-xs bg-slate-700 px-3 py-1.5 rounded hover:bg-slate-600">Cancel</button>' +
+      '<button id="batchCloseCancel" class="text-xs bg-overlay bg-overlay-hover px-3 py-1.5 rounded">Cancel</button>' +
       '<button id="batchCloseConfirm" class="text-xs bg-red-600 text-white px-3 py-1.5 rounded hover:bg-red-700">Close All</button>' +
     '</div></div>';
   document.body.appendChild(modal);
@@ -2026,7 +2345,7 @@ async function batchCloseSelected() {
   modal.onclick = function(e) { if (e.target === modal) modal.remove(); };
   document.getElementById('batchCloseConfirm').onclick = async function() {
     modal.remove();
-    await fetch('/api/batch/close', {
+    await fetch(API_BASE + '/batch/close', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({issue_ids: Array.from(selectedCards)}),
     });
@@ -2041,37 +2360,37 @@ async function showCreateForm() {
   var existing = document.getElementById('createModal');
   if (existing) existing.remove();
   var types = [];
-  try { var tr = await fetch('/api/types'); types = await tr.json(); } catch(e) {}
+  try { var tr = await fetch(API_BASE + '/types'); types = await tr.json(); } catch(e) {}
   var typeOpts = types.map(function(t) {
     return '<option value="' + t.type + '"' + (t.type === 'task' ? ' selected' : '') + '>' + t.display_name + '</option>';
   }).join('');
   var modal = document.createElement('div');
   modal.id = 'createModal';
   modal.className = 'fixed inset-0 bg-black/50 flex items-center justify-center z-50';
-  modal.innerHTML = '<div class="bg-slate-800 rounded-lg border border-slate-600 p-5 w-96 shadow-xl max-h-[80vh] overflow-y-auto">' +
-    '<div class="text-sm font-semibold text-slate-200 mb-3">Create Issue</div>' +
+  modal.innerHTML = '<div class="rounded-lg p-5 w-96 shadow-xl max-h-[80vh] overflow-y-auto" style="background:var(--surface-raised);border:1px solid var(--border-strong)">' +
+    '<div class="text-sm font-semibold mb-3" style="color:var(--text-primary)">Create Issue</div>' +
     '<div class="flex flex-col gap-3">' +
-      '<div><label for="createTitle" class="text-xs text-slate-400">Title *</label>' +
-        '<input id="createTitle" type="text" class="w-full bg-slate-700 text-slate-200 text-xs rounded px-3 py-2 border border-slate-600 mt-1 focus:outline-none focus:border-blue-500"></div>' +
+      '<div><label for="createTitle" class="text-xs" style="color:var(--text-secondary)">Title *</label>' +
+        '<input id="createTitle" type="text" class="w-full text-xs rounded px-3 py-2 mt-1 focus:outline-none" style="background:var(--surface-overlay);color:var(--text-primary);border:1px solid var(--border-strong)"></div>' +
       '<div class="flex gap-2">' +
-        '<div class="flex-1"><label for="createType" class="text-xs text-slate-400">Type</label>' +
-          '<select id="createType" class="w-full bg-slate-700 text-slate-200 text-xs rounded px-2 py-2 border border-slate-600 mt-1">' + typeOpts + '</select></div>' +
-        '<div class="w-20"><label for="createPriority" class="text-xs text-slate-400">Priority</label>' +
-          '<select id="createPriority" class="w-full bg-slate-700 text-slate-200 text-xs rounded px-2 py-2 border border-slate-600 mt-1">' +
+        '<div class="flex-1"><label for="createType" class="text-xs" style="color:var(--text-secondary)">Type</label>' +
+          '<select id="createType" class="w-full text-xs rounded px-2 py-2 mt-1" style="background:var(--surface-overlay);color:var(--text-primary);border:1px solid var(--border-strong)">' + typeOpts + '</select></div>' +
+        '<div class="w-20"><label for="createPriority" class="text-xs" style="color:var(--text-secondary)">Priority</label>' +
+          '<select id="createPriority" class="w-full text-xs rounded px-2 py-2 mt-1" style="background:var(--surface-overlay);color:var(--text-primary);border:1px solid var(--border-strong)">' +
             '<option value="0">P0 \u2014 Critical</option><option value="1">P1 \u2014 High</option><option value="2" selected>P2 \u2014 Medium</option><option value="3">P3 \u2014 Low</option><option value="4">P4 \u2014 Backlog</option>' +
           '</select></div></div>' +
-      '<div class="text-xs text-slate-500 -mt-1">Type determines workflow states. Use P0\u2013P1 sparingly.</div>' +
-      '<div><label for="createDesc" class="text-xs text-slate-400">Description</label>' +
-        '<textarea id="createDesc" rows="3" class="w-full bg-slate-700 text-slate-200 text-xs rounded px-3 py-2 border border-slate-600 mt-1 focus:outline-none focus:border-blue-500 resize-none"></textarea></div>' +
-      '<div><label for="createAssignee" class="text-xs text-slate-400">Assignee</label>' +
-        '<input id="createAssignee" type="text" class="w-full bg-slate-700 text-slate-200 text-xs rounded px-3 py-2 border border-slate-600 mt-1 focus:outline-none focus:border-blue-500"></div>' +
-      '<div><label for="createLabels" class="text-xs text-slate-400">Labels (comma-separated)</label>' +
-        '<input id="createLabels" type="text" class="w-full bg-slate-700 text-slate-200 text-xs rounded px-3 py-2 border border-slate-600 mt-1 focus:outline-none focus:border-blue-500">' +
-        '<div class="text-xs text-slate-500 mt-0.5">Example: ui, backend, urgent</div></div>' +
+      '<div class="text-xs -mt-1" style="color:var(--text-muted)">Type determines workflow states. Use P0\u2013P1 sparingly.</div>' +
+      '<div><label for="createDesc" class="text-xs" style="color:var(--text-secondary)">Description</label>' +
+        '<textarea id="createDesc" rows="3" class="w-full text-xs rounded px-3 py-2 mt-1 focus:outline-none resize-none" style="background:var(--surface-overlay);color:var(--text-primary);border:1px solid var(--border-strong)"></textarea></div>' +
+      '<div><label for="createAssignee" class="text-xs" style="color:var(--text-secondary)">Assignee</label>' +
+        '<input id="createAssignee" type="text" class="w-full text-xs rounded px-3 py-2 mt-1 focus:outline-none" style="background:var(--surface-overlay);color:var(--text-primary);border:1px solid var(--border-strong)"></div>' +
+      '<div><label for="createLabels" class="text-xs" style="color:var(--text-secondary)">Labels (comma-separated)</label>' +
+        '<input id="createLabels" type="text" class="w-full text-xs rounded px-3 py-2 mt-1 focus:outline-none" style="background:var(--surface-overlay);color:var(--text-primary);border:1px solid var(--border-strong)">' +
+        '<div class="text-xs mt-0.5" style="color:var(--text-muted)">Example: ui, backend, urgent</div></div>' +
     '</div>' +
     '<div class="flex justify-end gap-2 mt-4">' +
-      '<button onclick="document.getElementById(\'createModal\').remove()" class="text-xs bg-slate-700 px-3 py-1.5 rounded hover:bg-slate-600">Cancel</button>' +
-      '<button onclick="submitCreateForm()" class="text-xs bg-blue-600 text-white px-3 py-1.5 rounded hover:bg-blue-700">Create</button>' +
+      '<button onclick="document.getElementById(\'createModal\').remove()" class="text-xs bg-overlay bg-overlay-hover px-3 py-1.5 rounded">Cancel</button>' +
+      '<button onclick="submitCreateForm()" class="text-xs px-3 py-1.5 rounded bg-accent-hover" style="background:var(--accent);color:var(--surface-base)">Create</button>' +
     '</div></div>';
   document.body.appendChild(modal);
   modal.onclick = function(e) { if (e.target === modal) modal.remove(); };
@@ -2092,7 +2411,7 @@ async function submitCreateForm() {
   };
   if (labels && labels.length) body.labels = labels;
   try {
-    var resp = await fetch('/api/issues', {
+    var resp = await fetch(API_BASE + '/issues', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
       body: JSON.stringify(body),
     });
@@ -2138,12 +2457,12 @@ function savePreset() {
   var modal = document.createElement('div');
   modal.id = 'presetNameModal';
   modal.className = 'fixed inset-0 bg-black/50 flex items-center justify-center z-50';
-  modal.innerHTML = '<div class="bg-slate-800 rounded-lg border border-slate-600 p-4 w-72 shadow-xl">' +
-    '<div class="text-sm text-slate-200 mb-2">Save filter preset</div>' +
-    '<input id="presetNameInput" type="text" placeholder="Preset name..." class="w-full bg-slate-700 text-slate-200 text-xs rounded px-3 py-2 border border-slate-600 mb-3 focus:outline-none focus:border-blue-500">' +
+  modal.innerHTML = '<div class="rounded-lg p-4 w-72 shadow-xl" style="background:var(--surface-raised);border:1px solid var(--border-strong)">' +
+    '<div class="text-sm mb-2" style="color:var(--text-primary)">Save filter preset</div>' +
+    '<input id="presetNameInput" type="text" placeholder="Preset name..." class="w-full text-xs rounded px-3 py-2 mb-3 focus:outline-none" style="background:var(--surface-overlay);color:var(--text-primary);border:1px solid var(--border-strong)">' +
     '<div class="flex justify-end gap-2">' +
-      '<button onclick="document.getElementById(\'presetNameModal\').remove()" class="text-xs bg-slate-700 px-3 py-1.5 rounded hover:bg-slate-600">Cancel</button>' +
-      '<button onclick="confirmSavePreset()" class="text-xs bg-blue-600 text-white px-3 py-1.5 rounded hover:bg-blue-700">Save</button>' +
+      '<button onclick="document.getElementById(\'presetNameModal\').remove()" class="text-xs bg-overlay bg-overlay-hover px-3 py-1.5 rounded">Cancel</button>' +
+      '<button onclick="confirmSavePreset()" class="text-xs px-3 py-1.5 rounded bg-accent-hover" style="background:var(--accent);color:var(--surface-base)">Save</button>' +
     '</div></div>';
   document.body.appendChild(modal);
   modal.onclick = function(e) { if (e.target === modal) modal.remove(); };
@@ -2186,7 +2505,7 @@ function populatePresets() {
 // ---------------------------------------------------------------------------
 async function renderSparkline() {
   try {
-    var resp = await fetch('/api/activity?limit=500');
+    var resp = await fetch(API_BASE + '/activity?limit=500');
     var events = await resp.json();
     var closedByDay = {};
     var now = Date.now();
@@ -2203,7 +2522,7 @@ async function renderSparkline() {
     var w = canvas.width, h = canvas.height;
     ctx.clearRect(0, 0, w, h);
     var max = Math.max.apply(null, data.concat([1]));
-    ctx.strokeStyle = '#3B82F6'; ctx.lineWidth = 1.5; ctx.beginPath();
+    ctx.strokeStyle = THEME_COLORS.accent; ctx.lineWidth = 1.5; ctx.beginPath();
     data.forEach(function(v, i) {
       var x = i / (data.length - 1) * w;
       var y = h - (v / max * (h - 4)) - 2;
@@ -2230,16 +2549,86 @@ function updateStaleBadge() {
 function showStaleIssues() {
   var stale = window._staleIssues || [];
   if (!stale.length) return;
-  openDetail(stale[0].id);
+  if (stale.length === 1) { openDetail(stale[0].id); return; }
+  var modal = document.createElement('div');
+  modal.id = 'staleModal';
+  modal.className = 'fixed inset-0 bg-black/50 flex items-center justify-center z-50';
+  modal.onclick = function(ev) { if (ev.target === modal) modal.remove(); };
+  modal.innerHTML = '<div class="rounded-lg p-4 w-80 shadow-xl max-h-96 overflow-y-auto" style="background:var(--surface-raised);border:1px solid var(--border-strong)">' +
+    '<div class="text-sm mb-3" style="color:var(--text-primary)">' + stale.length + ' stale issues</div>' +
+    '<div class="flex flex-col gap-2">' +
+    stale.map(function(i) {
+      var hrs = Math.floor((Date.now() - new Date(i.updated_at).getTime()) / 3600000);
+      return '<button onclick="document.getElementById(\'staleModal\').remove();openDetail(\'' + i.id + '\')" ' +
+        'class="text-xs text-left bg-overlay bg-overlay-hover px-3 py-2 rounded" style="color:var(--text-primary)">' +
+        escHtml(i.title.slice(0, 40)) + ' <span class="text-red-400">(' + hrs + 'h)</span></button>';
+    }).join('') +
+    '</div>' +
+    '<button onclick="document.getElementById(\'staleModal\').remove()" class="text-xs text-muted text-primary-hover mt-3">Close</button>' +
+  '</div>';
+  document.body.appendChild(modal);
+}
+
+// ---------------------------------------------------------------------------
+// Settings gear menu
+// ---------------------------------------------------------------------------
+function toggleSettingsMenu(e) {
+  e.stopPropagation();
+  var dd = document.getElementById('settingsDropdown');
+  if (dd.classList.contains('hidden')) {
+    dd.classList.remove('hidden');
+    setTimeout(function() { document.addEventListener('click', _settingsOutsideClick); }, 0);
+  } else {
+    closeSettingsMenu();
+  }
+}
+function _settingsOutsideClick(e) {
+  var dd = document.getElementById('settingsDropdown');
+  if (dd && !dd.contains(e.target) && e.target.id !== 'settingsGear') closeSettingsMenu();
+}
+function closeSettingsMenu() {
+  document.getElementById('settingsDropdown').classList.add('hidden');
+  document.removeEventListener('click', _settingsOutsideClick);
+}
+function reloadServer() {
+  closeSettingsMenu();
+  var ind = document.getElementById('refreshIndicator');
+  ind.textContent = 'Reloading...';
+  ind.style.opacity = '1';
+  fetch('/api/reload', { method: 'POST' })
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      ind.textContent = data.ok ? 'Reloaded (' + data.projects + ' projects)' : 'Reload failed';
+      ind.style.color = data.ok ? '' : '#EF4444';
+      setTimeout(function() { ind.style.opacity = '0'; ind.textContent = 'Refreshing...'; ind.style.color = ''; }, 2000);
+      if (data.ok) fetchData();
+    })
+    .catch(function() {
+      ind.textContent = 'Reload failed';
+      ind.style.color = '#EF4444';
+      setTimeout(function() { ind.style.opacity = '0'; ind.textContent = 'Refreshing...'; ind.style.color = ''; }, 2000);
+    });
 }
 
 // ---------------------------------------------------------------------------
 // Theme toggle (R30)
 // ---------------------------------------------------------------------------
 function toggleTheme() {
-  var isLight = document.body.classList.toggle('light');
-  localStorage.setItem('filigree_theme', isLight ? 'light' : 'dark');
-  document.getElementById('themeToggle').textContent = isLight ? '\u263E' : '\u2606';
+  var current = document.body.dataset.theme;
+  var next = current === 'light' ? 'dark' : 'light';
+  document.body.dataset.theme = next;
+  localStorage.setItem('filigree_theme', next);
+  document.getElementById('themeToggle').innerHTML = (next === 'light' ? '&#9790;' : '&#9788;') + ' Toggle theme';
+  // Update JS color objects for light theme
+  CATEGORY_COLORS.wip = next === 'light' ? '#0284C7' : '#38BDF8';
+  THEME_COLORS.textPrimary = next === 'light' ? '#0F2027' : '#E2EEF2';
+  THEME_COLORS.textSecondary = next === 'light' ? '#3D6070' : '#8FAAB8';
+  THEME_COLORS.graphOutline = next === 'light' ? '#F0F6F8' : '#0B1215';
+  THEME_COLORS.graphEdge = next === 'light' ? '#9BBBC8' : '#2A4454';
+  THEME_COLORS.accent = next === 'light' ? '#0284C7' : '#38BDF8';
+  // Re-render graphs if visible so they pick up new colors
+  if (currentView === 'graph') renderGraph();
+  if (currentView === 'workflow') loadWorkflow();
 }
 
 // ---------------------------------------------------------------------------
@@ -2256,21 +2645,42 @@ function trapFocus(panel) {
 (function() {
   var saved = localStorage.getItem('filigree_theme');
   if (saved === 'light') {
-    document.body.classList.add('light');
+    document.body.dataset.theme = 'light';
     var btn = document.getElementById('themeToggle');
-    if (btn) btn.textContent = '\u263E';
+    if (btn) btn.innerHTML = '&#9790; Toggle theme';
+    CATEGORY_COLORS.wip = '#0284C7';
+    THEME_COLORS.textPrimary = '#0F2027';
+    THEME_COLORS.textSecondary = '#3D6070';
+    THEME_COLORS.graphOutline = '#F0F6F8';
+    THEME_COLORS.graphEdge = '#9BBBC8';
+    THEME_COLORS.accent = '#0284C7';
   }
 })();
 parseHash();
 populatePresets();
-fetchData().then(function() {
+(async function() {
+  await loadProjects();
+  // Check URL hash for project selection
+  var hash = window.location.hash;
+  var match = hash.match(/project=([^&]+)/);
+  if (match) {
+    var found = allProjects.find(function(p) { return p.key === match[1]; });
+    if (found) { setProject(found.key, {keepDetail: true}); } else if (allProjects.length > 0) { setProject(allProjects[0].key, {keepDetail: true}); } else { fetchData(); }
+  } else if (allProjects.length > 0) {
+    setProject(allProjects[0].key, {keepDetail: true});
+  } else {
+    fetchData();  // Fallback: no projects in registry, use default /api/
+  }
+})().then(function() {
   switchView(currentView);
   if (kanbanMode === 'cluster') switchKanbanMode('cluster');
   else switchKanbanMode('standard');
   if (selectedIssue) openDetail(selectedIssue);
   if (!localStorage.getItem('filigree_tour_done')) setTimeout(startTour, 1500);
+  initDragAndDrop();
 });
 setInterval(function() { if (!document.hidden) fetchData(); }, REFRESH_INTERVAL);
+setInterval(loadProjects, 60000);
 </script>
 </body>
 </html>

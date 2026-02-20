@@ -6,6 +6,8 @@ import os
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from filigree.core import FiligreeDB
 from filigree.hooks import (
     READY_CAP,
@@ -14,6 +16,16 @@ from filigree.hooks import (
     ensure_dashboard_running,
     generate_session_context,
 )
+
+
+@pytest.fixture(autouse=True)
+def _isolate_registry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Redirect the global registry to a temp dir so tests never touch ~/.filigree/."""
+    reg_dir = tmp_path / "registry"
+    reg_dir.mkdir()
+    monkeypatch.setattr("filigree.registry.REGISTRY_DIR", reg_dir)
+    monkeypatch.setattr("filigree.registry.REGISTRY_FILE", reg_dir / "registry.json")
+    monkeypatch.setattr("filigree.registry.REGISTRY_LOCK", reg_dir / "registry.lock")
 
 
 class TestBuildContext:
