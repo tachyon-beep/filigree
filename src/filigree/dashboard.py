@@ -111,9 +111,7 @@ def _create_project_router() -> Any:
         return JSONResponse(stats)
 
     @router.get("/issue/{issue_id}")
-    async def api_issue_detail(
-        issue_id: str, db: FiligreeDB = Depends(_get_project_db)
-    ) -> JSONResponse:
+    async def api_issue_detail(issue_id: str, db: FiligreeDB = Depends(_get_project_db)) -> JSONResponse:
         """Full issue detail with dependency details, events, and comments."""
         try:
             issue = db.get_issue(issue_id)
@@ -162,9 +160,7 @@ def _create_project_router() -> Any:
         return JSONResponse(deps)
 
     @router.get("/type/{type_name}")
-    async def api_type_template(
-        type_name: str, db: FiligreeDB = Depends(_get_project_db)
-    ) -> JSONResponse:
+    async def api_type_template(type_name: str, db: FiligreeDB = Depends(_get_project_db)) -> JSONResponse:
         """Workflow template for a given issue type (WFT-FR-065)."""
         tpl = db.templates.get_type(type_name)
         if tpl is None:
@@ -176,16 +172,13 @@ def _create_project_router() -> Any:
                 "states": [{"name": s.name, "category": s.category} for s in tpl.states],
                 "initial_state": tpl.initial_state,
                 "transitions": [
-                    {"from": t.from_state, "to": t.to_state, "enforcement": t.enforcement}
-                    for t in tpl.transitions
+                    {"from": t.from_state, "to": t.to_state, "enforcement": t.enforcement} for t in tpl.transitions
                 ],
             }
         )
 
     @router.get("/issue/{issue_id}/transitions")
-    async def api_issue_transitions(
-        issue_id: str, db: FiligreeDB = Depends(_get_project_db)
-    ) -> JSONResponse:
+    async def api_issue_transitions(issue_id: str, db: FiligreeDB = Depends(_get_project_db)) -> JSONResponse:
         """Valid next states for an issue."""
         try:
             transitions = db.get_valid_transitions(issue_id)
@@ -326,9 +319,7 @@ def _create_project_router() -> Any:
         return JSONResponse({"results": [i.to_dict() for i in issues], "total": len(issues)})
 
     @router.get("/metrics")
-    async def api_metrics(
-        days: int = 30, db: FiligreeDB = Depends(_get_project_db)
-    ) -> JSONResponse:
+    async def api_metrics(days: int = 30, db: FiligreeDB = Depends(_get_project_db)) -> JSONResponse:
         """Flow metrics: cycle time, lead time, throughput."""
         from filigree.analytics import get_flow_metrics
 
@@ -342,17 +333,13 @@ def _create_project_router() -> Any:
         return JSONResponse({"path": path, "length": len(path)})
 
     @router.get("/activity")
-    async def api_activity(
-        limit: int = 50, since: str = "", db: FiligreeDB = Depends(_get_project_db)
-    ) -> JSONResponse:
+    async def api_activity(limit: int = 50, since: str = "", db: FiligreeDB = Depends(_get_project_db)) -> JSONResponse:
         """Recent events across all issues."""
         events = db.get_events_since(since, limit=limit) if since else db.get_recent_events(limit=limit)
         return JSONResponse(events)
 
     @router.get("/plan/{milestone_id}")
-    async def api_plan(
-        milestone_id: str, db: FiligreeDB = Depends(_get_project_db)
-    ) -> JSONResponse:
+    async def api_plan(milestone_id: str, db: FiligreeDB = Depends(_get_project_db)) -> JSONResponse:
         """Milestone plan tree."""
         try:
             plan = db.get_plan(milestone_id)
@@ -361,9 +348,7 @@ def _create_project_router() -> Any:
         return JSONResponse(plan)
 
     @router.post("/batch/update")
-    async def api_batch_update(
-        request: Request, db: FiligreeDB = Depends(_get_project_db)
-    ) -> JSONResponse:
+    async def api_batch_update(request: Request, db: FiligreeDB = Depends(_get_project_db)) -> JSONResponse:
         """Batch update issues."""
         try:
             body = await request.json()
@@ -396,9 +381,7 @@ def _create_project_router() -> Any:
         )
 
     @router.post("/batch/close")
-    async def api_batch_close(
-        request: Request, db: FiligreeDB = Depends(_get_project_db)
-    ) -> JSONResponse:
+    async def api_batch_close(request: Request, db: FiligreeDB = Depends(_get_project_db)) -> JSONResponse:
         """Batch close issues."""
         try:
             body = await request.json()
@@ -438,9 +421,7 @@ def _create_project_router() -> Any:
         )
 
     @router.post("/issues", status_code=201)
-    async def api_create_issue(
-        request: Request, db: FiligreeDB = Depends(_get_project_db)
-    ) -> JSONResponse:
+    async def api_create_issue(request: Request, db: FiligreeDB = Depends(_get_project_db)) -> JSONResponse:
         """Create a new issue."""
         try:
             body = await request.json()
@@ -482,9 +463,7 @@ def _create_project_router() -> Any:
             return JSONResponse({"error": "Request body must be a JSON object"}, status_code=400)
         assignee = body.get("assignee", "")
         if not assignee or not assignee.strip():
-            return JSONResponse(
-                {"error": "assignee is required and cannot be empty"}, status_code=400
-            )
+            return JSONResponse({"error": "assignee is required and cannot be empty"}, status_code=400)
         actor = body.get("actor", "dashboard")
         try:
             issue = db.claim_issue(issue_id, assignee=assignee, actor=actor)
@@ -515,9 +494,7 @@ def _create_project_router() -> Any:
         return JSONResponse(issue.to_dict())
 
     @router.post("/claim-next")
-    async def api_claim_next(
-        request: Request, db: FiligreeDB = Depends(_get_project_db)
-    ) -> JSONResponse:
+    async def api_claim_next(request: Request, db: FiligreeDB = Depends(_get_project_db)) -> JSONResponse:
         """Claim the highest-priority ready issue."""
         try:
             body = await request.json()
@@ -527,9 +504,7 @@ def _create_project_router() -> Any:
             return JSONResponse({"error": "Request body must be a JSON object"}, status_code=400)
         assignee = body.get("assignee", "")
         if not assignee or not assignee.strip():
-            return JSONResponse(
-                {"error": "assignee is required and cannot be empty"}, status_code=400
-            )
+            return JSONResponse({"error": "assignee is required and cannot be empty"}, status_code=400)
         actor = body.get("actor", "dashboard")
         try:
             issue = db.claim_next(assignee, actor=actor)
