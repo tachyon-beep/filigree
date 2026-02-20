@@ -366,7 +366,14 @@ var detailHistory = [];
 var selectedCards = new Set();
 var multiSelectMode = false;
 
-var CATEGORY_COLORS = { open: '#64748B', wip: '#3B82F6', done: '#9CA3AF' };
+var CATEGORY_COLORS = { open: '#64748B', wip: '#38BDF8', done: '#7B919C' };
+var THEME_COLORS = {
+  textPrimary: '#E2EEF2',
+  textSecondary: '#8FAAB8',
+  graphOutline: '#0B1215',
+  graphEdge: '#2A4454',
+  accent: '#38BDF8',
+};
 var PRIORITY_COLORS = { 0: '#EF4444', 1: '#F97316', 2: '#6B7280', 3: '#D1D5DB', 4: '#D1D5DB' };
 var TYPE_ICONS = { bug: '\u{1F41B}', feature: '\u2728', task: '\u{1F4CB}', epic: '\u{1F4CA}', milestone: '\u{1F3AF}', step: '\u25B6' };
 var typeTemplate = null;  // Cached type template for type-filtered kanban
@@ -2551,9 +2558,21 @@ function showStaleIssues() {
 // Theme toggle (R30)
 // ---------------------------------------------------------------------------
 function toggleTheme() {
-  var isLight = document.body.classList.toggle('light');
-  localStorage.setItem('filigree_theme', isLight ? 'light' : 'dark');
-  document.getElementById('themeToggle').textContent = isLight ? '\u263E' : '\u2606';
+  var current = document.body.dataset.theme;
+  var next = current === 'light' ? 'dark' : 'light';
+  document.body.dataset.theme = next;
+  localStorage.setItem('filigree_theme', next);
+  document.getElementById('themeToggle').textContent = next === 'light' ? '\u263E' : '\u2606';
+  // Update JS color objects for light theme
+  CATEGORY_COLORS.wip = next === 'light' ? '#0284C7' : '#38BDF8';
+  THEME_COLORS.textPrimary = next === 'light' ? '#0F2027' : '#E2EEF2';
+  THEME_COLORS.textSecondary = next === 'light' ? '#3D6070' : '#8FAAB8';
+  THEME_COLORS.graphOutline = next === 'light' ? '#F0F6F8' : '#0B1215';
+  THEME_COLORS.graphEdge = next === 'light' ? '#9BBBC8' : '#2A4454';
+  THEME_COLORS.accent = next === 'light' ? '#0284C7' : '#38BDF8';
+  // Re-render graphs if visible so they pick up new colors
+  if (currentView === 'graph') renderGraph();
+  if (currentView === 'workflow') loadWorkflow();
 }
 
 // ---------------------------------------------------------------------------
@@ -2570,9 +2589,15 @@ function trapFocus(panel) {
 (function() {
   var saved = localStorage.getItem('filigree_theme');
   if (saved === 'light') {
-    document.body.classList.add('light');
+    document.body.dataset.theme = 'light';
     var btn = document.getElementById('themeToggle');
     if (btn) btn.textContent = '\u263E';
+    CATEGORY_COLORS.wip = '#0284C7';
+    THEME_COLORS.textPrimary = '#0F2027';
+    THEME_COLORS.textSecondary = '#3D6070';
+    THEME_COLORS.graphOutline = '#F0F6F8';
+    THEME_COLORS.graphEdge = '#9BBBC8';
+    THEME_COLORS.accent = '#0284C7';
   }
 })();
 parseHash();
