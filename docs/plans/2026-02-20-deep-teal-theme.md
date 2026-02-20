@@ -104,14 +104,20 @@ scrollbar-thumb:   #475569  → var(--scrollbar-thumb)
 .drag-valid:       #3B82F6  → var(--accent), rgba → var(--accent-subtle)
 focus-visible:     #60A5FA  → var(--accent)
 .tour-highlight:   #3B82F6  → var(--accent)
-@keyframes flash:  rgba(59,130,246,0.5) → keep (animation, semantic)
+@keyframes flash:  rgba(59,130,246,0.5)  → rgba(56,189,248,0.5)  (accent-derived, sky-400 at 50%)
 ```
 
 Semantic colors stay hardcoded: `#10B981` (ready), `#EF4444` (stale/critical), `#F59E0B` (aging), `#7F1D1D` (stale-pulse dark).
 
-**Step 4: Remove the old `.light` theme overrides**
+**Step 4: Add graph container background rule**
 
-Delete lines 56-64 entirely (the `body.light`, `.light .bg-slate-800`, etc. block). These are replaced by the `[data-theme="light"]` custom property block.
+Add to the `<style>` block:
+
+```css
+#cy, #workflowCy { background: var(--surface-base); }
+```
+
+**IMPORTANT: Do NOT remove the old `.light` theme overrides (lines 56-64) yet.** The static HTML still uses `bg-slate-800`, `text-slate-200`, etc. classes, and `toggleTheme()` still uses `classList.toggle('light')`. Removing these now would break light theme until Tasks 2-3 are complete. The `.light` block will be removed in Task 6 Step 5 after all migration is done.
 
 **Step 5: Commit**
 
@@ -172,15 +178,9 @@ to:
 
 (The body background was previously set via the CSS `body {}` rule which now uses `var(--surface-base)`, but adding the class makes it explicit.)
 
-**Step 2: Migrate skip-to-content link (line 77)**
+**Step 2: Skip-to-content link (line 77)**
 
-Change `focus:bg-blue-600 focus:text-white` to use accent styling. Since this is a focus-only element, we can use inline style:
-
-```html
-<a href="#kanbanBoard" class="sr-only focus:not-sr-only focus:absolute focus:top-2 focus:left-2 focus:px-3 focus:py-1 focus:rounded focus:z-50" style="--skip-bg:var(--accent);--skip-fg:var(--text-primary)" onfocus="this.style.background='var(--accent)';this.style.color='var(--surface-base)'" onblur="this.style.background='';this.style.color=''">Skip to content</a>
-```
-
-Actually, simpler: just keep `focus:bg-blue-600 focus:text-white` for the skip link — it's an accessibility element that's almost never seen. Don't over-engineer this one.
+Keep `focus:bg-blue-600 focus:text-white` as-is — it's an accessibility element that's almost never visible. Not worth over-engineering.
 
 **Step 3: Migrate header (lines 80-141)**
 
@@ -196,7 +196,7 @@ Apply the mapping rules to every element in the header. Work through each line:
 - Line 110 priority select: same pattern as project switcher
 - Lines 118-119 search input: same pattern, `focus:border-blue-500` → add inline `style` for focus border
 - Line 123 multi-select button: same pattern as blocked button
-- Lines 125-127 checkboxes: `text-slate-400` → `text-secondary`, `accent-blue-500` → keep or add `style="accent-color:var(--accent)"`
+- Lines 125-127 checkboxes: `text-slate-400` → `text-secondary`, remove `accent-blue-500` class and add `style="accent-color:var(--accent)"` (also applies to checkbox on line 149 in graph view)
 - Lines 129-132 presets: same pattern
 - Lines 135-139 theme/health area: `text-slate-400` → `text-secondary`, `bg-slate-700` → `bg-overlay`, `text-blue-400` → `text-accent`
 
@@ -216,9 +216,18 @@ Apply same mapping. `bg-slate-800/50` → `bg-raised`, buttons → `bg-overlay b
 
 `bg-slate-900/95` → `bg-base` with `opacity: 0.95` or just `bg-base`. Text classes follow the mapping.
 
-**Step 6: Migrate kanban view sub-header (lines 196-225)**
+**Also update the hardcoded color dots in the legend (lines 172-174):**
+```html
+<span style="background:#64748B"></span> Open       →  style="background:var(--status-open)"
+<span style="background:#3B82F6"></span> In Progress →  style="background:var(--status-wip)"
+<span style="background:#9CA3AF"></span> Done        →  style="background:var(--status-done)"
+```
 
-Same mapping. The type filter pill (`bg-blue-900/50`, `text-blue-400`, `border-blue-800`) should use accent-based custom properties: `style="background:var(--accent-subtle);color:var(--accent);border-color:var(--accent)"`.
+**Step 6: Migrate kanban view sub-header and legend (lines 196-225)**
+
+Same mapping for the sub-header. The type filter pill (`bg-blue-900/50`, `text-blue-400`, `border-blue-800`) should use accent-based custom properties: `style="background:var(--accent-subtle);color:var(--accent);border-color:var(--accent)"`.
+
+**Also migrate the kanban legend (lines 210-223):** `bg-slate-900/95` → `bg-base`, all `text-slate-300` → `text-primary`, `text-slate-400` → `text-secondary`.
 
 **Step 7: Migrate metrics, activity, workflow views (lines 228-263)**
 
@@ -267,9 +276,23 @@ Note: `wip` changes from `#3B82F6` (blue-500) to `#38BDF8` (sky-400, matches new
 
 `PRIORITY_COLORS` stays unchanged — those are semantic colors.
 
-**Step 2: Update `toggleTheme()`**
+**Step 2: Add `THEME_COLORS` global object**
 
-Change from `classList.toggle('light')` to `dataset.theme`:
+Add after `CATEGORY_COLORS` (~line 310). This is used by Cytoscape graphs which can't read CSS custom properties:
+
+```js
+var THEME_COLORS = {
+  textPrimary: '#E2EEF2',
+  textSecondary: '#8FAAB8',
+  graphOutline: '#0B1215',
+  graphEdge: '#2A4454',
+  accent: '#38BDF8',
+};
+```
+
+**Step 3: Update `toggleTheme()`**
+
+Change from `classList.toggle('light')` to `dataset.theme`. Also update `CATEGORY_COLORS` and `THEME_COLORS` for the target theme, and re-render any visible graph:
 
 ```js
 function toggleTheme() {
@@ -278,14 +301,22 @@ function toggleTheme() {
   document.body.dataset.theme = next;
   localStorage.setItem('filigree_theme', next);
   document.getElementById('themeToggle').textContent = next === 'light' ? '\u263E' : '\u2606';
-  // Update CATEGORY_COLORS for light theme (wip uses darker accent)
+  // Update JS color objects for light theme
   CATEGORY_COLORS.wip = next === 'light' ? '#0284C7' : '#38BDF8';
+  THEME_COLORS.textPrimary = next === 'light' ? '#0F2027' : '#E2EEF2';
+  THEME_COLORS.textSecondary = next === 'light' ? '#3D6070' : '#8FAAB8';
+  THEME_COLORS.graphOutline = next === 'light' ? '#F0F6F8' : '#0B1215';
+  THEME_COLORS.graphEdge = next === 'light' ? '#9BBBC8' : '#2A4454';
+  THEME_COLORS.accent = next === 'light' ? '#0284C7' : '#38BDF8';
+  // Re-render graphs if visible so they pick up new colors
+  if (currentView === 'graph') renderGraph();
+  if (currentView === 'workflow') loadWorkflow();
 }
 ```
 
-**Step 3: Update theme initialization on page load**
+**Step 4: Update theme initialization on page load**
 
-Find where the saved theme is restored from localStorage (search for `filigree_theme` in the init section near the bottom). It currently does `document.body.classList.add('light')`. Change to:
+Find where the saved theme is restored from localStorage (search for `filigree_theme` in the init section, ~line 2510). It currently does `document.body.classList.add('light')`. Change to:
 
 ```js
 var savedTheme = localStorage.getItem('filigree_theme');
@@ -293,10 +324,15 @@ if (savedTheme === 'light') {
   document.body.dataset.theme = 'light';
   document.getElementById('themeToggle').textContent = '\u263E';
   CATEGORY_COLORS.wip = '#0284C7';
+  THEME_COLORS.textPrimary = '#0F2027';
+  THEME_COLORS.textSecondary = '#3D6070';
+  THEME_COLORS.graphOutline = '#F0F6F8';
+  THEME_COLORS.graphEdge = '#9BBBC8';
+  THEME_COLORS.accent = '#0284C7';
 }
 ```
 
-**Step 4: Commit**
+**Step 5: Commit**
 
 ```bash
 git add src/filigree/static/dashboard.html
@@ -347,6 +383,10 @@ The card's inner text spans: replace `text-slate-200` with inline `color:var(--t
 
 The type badge: `bg-slate-700 text-slate-400` → `background:var(--surface-overlay);color:var(--text-secondary)`.
 
+The "recently changed" ring (line 690): `ring-1 ring-blue-500` → `ring-1 ring-sky-400` (matches accent). Or use inline style: `box-shadow:0 0 0 1px var(--accent)`.
+
+The multi-select checkbox (line 694): `accent-blue-500` → add `style="accent-color:var(--accent)"`.
+
 Status badge: already uses `catColor` from `CATEGORY_COLORS` — no change needed (constants updated in Task 3).
 
 Keep semantic colors: `text-red-400` (blocked), `text-amber-400` (impact), etc.
@@ -364,13 +404,25 @@ Text classes: same mapping as renderCard.
 
 **Step 3: Migrate `renderStandardKanban()` and `renderClusterKanban()` (~lines 577, 601)**
 
-Column header text: `text-slate-300` → `var(--text-primary)`, `text-slate-500` → `var(--text-muted)`.
+**`colDefs` hardcoded colors (lines 579-581, 602-605):** The column header dot colors are hardcoded as `'#3B82F6'` (wip) and `'#9CA3AF'` (done) instead of referencing `CATEGORY_COLORS`. Change to use `CATEGORY_COLORS`:
+```js
+var colDefs = [
+  { key: 'open', label: 'Open', color: CATEGORY_COLORS.open },
+  { key: 'wip', label: 'In Progress', color: CATEGORY_COLORS.wip },
+  { key: 'done', label: 'Done', color: CATEGORY_COLORS.done },
+];
+```
+Apply this change in **both** `renderStandardKanban()` and `renderClusterKanban()`.
 
-Empty column text: `text-slate-500` / `text-slate-600` → `var(--text-muted)`, `text-blue-400` → `var(--accent)`.
+Column header text: `text-slate-300` → inline `color:var(--text-primary)`, `text-slate-500` → inline `color:var(--text-muted)`.
+
+Empty column text: `text-slate-500` / `text-slate-600` → `color:var(--text-muted)`, `text-blue-400` → `color:var(--accent)`.
+
+**Also migrate `renderKanban()` no-results state (~lines 546-549):** The empty search results message uses `text-slate-500`, `text-slate-300`, `text-blue-400` — update to `var(--text-muted)`, `var(--text-primary)`, `var(--accent)`.
 
 **Step 4: Migrate `renderTypeKanban()` (~line 812)**
 
-Same as standard kanban. `text-slate-600` → `var(--text-muted)`.
+Same column text pattern: `text-slate-300` → `color:var(--text-primary)`, `text-slate-500` → `color:var(--text-muted)`, `text-slate-600` → `color:var(--text-muted)`.
 
 **Step 5: Migrate `openDetail()` (~line 1083)**
 
@@ -436,13 +488,15 @@ For each modal, apply the same mapping:
 - Cancel button: `bg-slate-700` → use utility classes `bg-overlay bg-overlay-hover`
 - Cancel text: `text-slate-500 hover:text-slate-300` → `color:var(--text-muted)`
 
-**Step 8: Migrate `switchView()` active/inactive button styling**
+**Step 8: Migrate `switchView()` and `switchKanbanMode()` button styling**
 
-Search for where `switchView` sets button classes (active tab = blue, inactive = slate). Update:
-- Active: `bg-blue-600 text-white` → use `bg-accent text-primary` or inline accent colors
-- Inactive: `bg-slate-700 text-slate-400` → use `bg-overlay text-secondary`
+`switchView()` (~line 485) sets className for 5 view buttons (lines 492-506). Each has active/inactive states:
+- Active: `'px-3 py-1 rounded text-xs font-medium bg-blue-600 text-white'` → `'px-3 py-1 rounded text-xs font-medium bg-accent text-primary'`
+- Inactive: `'px-3 py-1 rounded text-xs font-medium bg-slate-700 text-slate-300 hover:bg-slate-600'` → `'px-3 py-1 rounded text-xs font-medium bg-overlay text-secondary bg-overlay-hover'`
 
-Also check `switchKanbanMode()` for the same pattern.
+`switchKanbanMode()` (~line 515) has the same pattern for Standard/Cluster buttons (lines 521-526):
+- Active: `'px-2 py-0.5 rounded bg-blue-600 text-white'` → `'px-2 py-0.5 rounded bg-accent text-primary'`
+- Inactive: `'px-2 py-0.5 rounded bg-slate-700 hover:bg-slate-600'` → `'px-2 py-0.5 rounded bg-overlay bg-overlay-hover'`
 
 **Step 9: Migrate `computeHealthScore()` / health badge**
 
@@ -478,61 +532,32 @@ Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>"
 
 **Step 1: Update dependency graph node styles**
 
-In `renderGraph()`, find the Cytoscape style block. It has node styles with hardcoded colors:
+In `renderGraph()`, find the Cytoscape style block (~line 986). It has node/edge styles with hardcoded colors. Cytoscape can't read CSS custom properties, so use the `THEME_COLORS` global object (created in Task 3) for all graph colors:
 
-```js
-'color': '#F1F5F9'           → read CSS var: getComputedStyle(document.documentElement).getPropertyValue('--text-primary').trim() — BUT this is complex. Simpler: just use the new hex values directly.
-'text-outline-color': '#0F172A'  → '#0B1215'
-'background-color': uses CATEGORY_COLORS → already updated in Task 3
-'border-color': '#10B981'        → keep (semantic: ready)
-'line-color': '#475569'          → '#2A4454'
-'target-arrow-color': '#475569'  → '#2A4454'
-'border-color': '#3B82F6' (selected) → '#38BDF8'
+```
+'color': '#F1F5F9'                   → THEME_COLORS.textPrimary
+'text-outline-color': '#0F172A'      → THEME_COLORS.graphOutline
+'background-color': CATEGORY_COLORS  → already updated in Task 3, no change
+'border-color': '#10B981'            → keep (semantic: ready)
+'line-color': '#475569'              → THEME_COLORS.graphEdge
+'target-arrow-color': '#475569'      → THEME_COLORS.graphEdge
+'border-color': '#3B82F6' (selected) → THEME_COLORS.accent
 ```
 
 For the critical path edges (red), keep unchanged.
 
-Since Cytoscape doesn't support CSS custom properties, use the hardcoded new hex values. Create a helper object at the top of the function or near `CATEGORY_COLORS`:
-
-```js
-var THEME_COLORS = {
-  textPrimary: '#E2EEF2',
-  graphOutline: '#0B1215',
-  graphEdge: '#2A4454',
-  accent: '#38BDF8',
-};
-```
-
-Then use `THEME_COLORS.textPrimary` etc. in the Cytoscape style blocks.
-
-**Note on theme switching:** When the user toggles to light theme, the Cytoscape graph should also update. To handle this, `toggleTheme()` should update `THEME_COLORS` and re-render the graph if it's visible. Add to `toggleTheme()`:
-
-```js
-THEME_COLORS.textPrimary = next === 'light' ? '#0F2027' : '#E2EEF2';
-THEME_COLORS.graphOutline = next === 'light' ? '#F0F6F8' : '#0B1215';
-THEME_COLORS.graphEdge = next === 'light' ? '#9BBBC8' : '#2A4454';
-THEME_COLORS.accent = next === 'light' ? '#0284C7' : '#38BDF8';
-if (currentView === 'graph') renderGraph();
-if (currentView === 'workflow') loadWorkflow();
-```
+**Note:** `THEME_COLORS` is already updated by `toggleTheme()` (Task 3) and the graph is re-rendered when visible, so theme switching works automatically.
 
 **Step 2: Update workflow graph styles**
 
-Same pattern as dependency graph. Find `renderWorkflowGraph()` and update:
-- Node text color → `THEME_COLORS.textPrimary`
-- Text outline → `THEME_COLORS.graphOutline`
-- Edge colors → `THEME_COLORS.graphEdge`
-- Label color: `#94A3B8` → `THEME_COLORS.textPrimary` (or a slightly muted version)
+Same pattern in `renderWorkflowGraph()` (~line 2166). Update:
+- Node text `'color': '#F1F5F9'` → `THEME_COLORS.textPrimary`
+- `'text-outline-color': '#0F172A'` → `THEME_COLORS.graphOutline`
+- Edge `'line-color': '#475569'` → `THEME_COLORS.graphEdge`
+- Edge `'target-arrow-color': '#475569'` → `THEME_COLORS.graphEdge`
+- Edge label `'color': '#94A3B8'` → `THEME_COLORS.textSecondary`
 
-**Step 3: Update graph background**
-
-The `#cy` and `#workflowCy` divs need their background to match the theme. Since these are static HTML elements, they inherit from the body `var(--surface-base)`. The old `.light #cy` rule was removed in Task 1. Add to the `<style>` block:
-
-```css
-#cy, #workflowCy { background: var(--surface-base); }
-```
-
-**Step 4: Commit**
+**Step 3: Commit**
 
 ```bash
 git add src/filigree/static/dashboard.html
@@ -567,7 +592,7 @@ In `loadPlanView()`, update:
 - `bg-slate-800` → inline `background:var(--surface-raised)`
 - Text colors: standard mapping
 
-**Step 4: Final sweep**
+**Step 4: Final sweep — remaining slate/old-hex references**
 
 Do a search for any remaining `slate` references in the file:
 ```
@@ -579,9 +604,26 @@ Also search for any remaining old hex colors:
 grep -n '#0F172A\|#1E293B\|#334155\|#475569\|#3B82F6\|#F1F5F9\|#9CA3AF' src/filigree/static/dashboard.html
 ```
 
-Fix any remaining references found. The only `slate` references that should remain are semantic Tailwind classes on elements that don't change between themes (none should remain after this migration).
+Fix any remaining references found. The only `slate` references that should remain are the skip-to-content link (kept intentionally).
 
-**Step 5: Commit**
+**Step 5: Remove old `.light` theme CSS overrides**
+
+Now that all HTML and JS have been migrated away from Tailwind color classes, and `toggleTheme()` uses `dataset.theme` instead of `classList.toggle('light')`, the old `.light` override block is dead code. Delete lines 56-64:
+
+```css
+/* DELETE ALL OF THIS: */
+body.light { background: #F8FAFC; color: #1E293B; }
+.light .bg-slate-800 { background: #FFFFFF !important; }
+.light .bg-slate-700 { background: #F1F5F9 !important; }
+.light .bg-slate-900 { background: #E2E8F0 !important; }
+.light .text-slate-200, .light .text-slate-100, .light .text-slate-300 { color: #1E293B !important; }
+.light .text-slate-400 { color: #64748B !important; }
+.light .border-slate-700, .light .border-slate-600 { border-color: #CBD5E1 !important; }
+.light .card:hover { background: #F1F5F9 !important; }
+.light #cy, .light #workflowCy { background: #F8FAFC; }
+```
+
+**Step 6: Commit**
 
 ```bash
 git add src/filigree/static/dashboard.html
