@@ -387,6 +387,7 @@ function setProject(key, opts) {
   if (sel) sel.value = key;
   var proj = allProjects.find(function(p) { return p.key === key; });
   document.title = proj ? proj.name + ' \u2014 Filigree' : 'Filigree Dashboard';
+  selectedCards.clear();
   if (!(opts && opts.keepDetail)) closeDetail();
   updateHash();
   fetchData();
@@ -902,7 +903,9 @@ function initDragAndDrop() {
 
     // Fetch valid transitions, then mark columns
     _transitionsLoaded = false;
+    var dragToken = _dragIssueId;
     loadTransitions(_dragIssueId).then(function(transitions) {
+      if (_dragIssueId !== dragToken) return; // drag ended before response
       _dragTransitions = transitions;
       var validCategories = new Set();
       var validStatuses = new Set();
