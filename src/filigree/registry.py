@@ -93,7 +93,7 @@ class Registry:
         return entry
 
     def active_projects(self, ttl_hours: float = DEFAULT_TTL_HOURS) -> list[ProjectEntry]:
-        """Return projects seen within the TTL window."""
+        """Return projects seen within the TTL window whose directories still exist."""
         data = self.read()
         cutoff = datetime.now(UTC).timestamp() - (ttl_hours * 3600)
         result = []
@@ -101,6 +101,10 @@ class Registry:
             try:
                 seen = datetime.fromisoformat(entry_data["last_seen"]).timestamp()
                 if seen >= cutoff:
+                    # Skip entries whose .filigree/ directory no longer exists
+                    if not Path(entry_data["path"]).is_dir():
+                        logger.debug("Skipping stale registry entry (dir gone): %s", entry_data.get("path"))
+                        continue
                     result.append(ProjectEntry(**entry_data))
             except (KeyError, ValueError, TypeError) as exc:
                 logger.debug("Skipping malformed registry entry: %s", exc)

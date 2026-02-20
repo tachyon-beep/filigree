@@ -428,6 +428,10 @@ async function fetchData() {
     var results = await Promise.all([
       fetch(API_BASE + '/issues'), fetch(API_BASE + '/dependencies'), fetch(API_BASE + '/stats')
     ]);
+    if (!results[0].ok || !results[1].ok || !results[2].ok) {
+      console.warn('fetchData: non-OK response', results.map(function(r) { return r.status; }));
+      return;
+    }
     allIssues = await results[0].json();
     allDeps = await results[1].json();
     stats = await results[2].json();
@@ -833,6 +837,7 @@ async function applyTypeFilter() {
   if (!typeName) {
     typeTemplate = null;
     renderKanban();
+    updateTypeFilterUI(false);
     return;
   }
   try {
