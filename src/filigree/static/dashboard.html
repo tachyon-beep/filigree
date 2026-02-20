@@ -133,20 +133,20 @@ tailwind.config = {
 }
 </script>
 </head>
-<body class="h-screen flex flex-col overflow-hidden text-sm">
+<body class="bg-base h-screen flex flex-col overflow-hidden text-sm">
 <a href="#kanbanBoard" class="sr-only focus:not-sr-only focus:absolute focus:top-2 focus:left-2 focus:bg-blue-600 focus:text-white focus:px-3 focus:py-1 focus:rounded focus:z-50">Skip to content</a>
 
 <!-- Top Nav -->
-<header class="flex items-center justify-between px-4 py-2 bg-slate-800 border-b border-slate-700 shrink-0">
+<header class="flex items-center justify-between px-4 py-2 bg-raised border-b border-default shrink-0">
   <div class="flex items-center gap-4">
-    <span class="text-base font-semibold text-blue-400">&#9670; Filigree</span>
+    <span class="text-base font-semibold text-accent">&#9670; Filigree</span>
     <div id="projectSwitcherWrap" style="display:none">
       <select id="projectSwitcher" onchange="setProject(this.value)"
-        class="bg-slate-700 text-slate-200 text-xs rounded px-2 py-1 border border-slate-600"
+        class="bg-overlay text-primary text-xs rounded px-2 py-1 border border-strong"
         aria-label="Switch project">
       </select>
     </div>
-    <button onclick="showCreateForm()" class="text-xs bg-blue-600 text-white px-2 py-1 rounded hover:bg-blue-700" title="Create Issue">+ New</button>
+    <button onclick="showCreateForm()" class="text-xs bg-accent text-white px-2 py-1 rounded bg-accent-hover" title="Create Issue">+ New</button>
     <div class="flex gap-1">
       <button id="btnGraph" onclick="switchView('graph')" class="px-3 py-1 rounded text-xs font-medium" title="Dependency graph visualization">Graph</button>
       <button id="btnKanban" onclick="switchView('kanban')" class="px-3 py-1 rounded text-xs font-medium" title="Kanban board view">Kanban</button>
@@ -161,42 +161,42 @@ tailwind.config = {
     <button id="btnReady" onclick="toggleReady()" class="px-2 py-1 rounded text-xs font-medium bg-emerald-900/50 text-emerald-400 border border-emerald-700" title="Toggle: sort ready (unblocked) issues first">
       &#9679; Ready (<span id="readyCount">0</span>)
     </button>
-    <button onclick="showReadyHelp(this)" class="help-icon bg-slate-700 text-slate-400 hover:text-slate-200" title="What does Ready mean?" aria-label="Explain ready filter">?</button>
-    <button id="btnBlocked" onclick="toggleBlocked()" class="px-2 py-1 rounded text-xs font-medium bg-slate-700 text-slate-400 border border-slate-600" title="Toggle: show only blocked issues">
+    <button onclick="showReadyHelp(this)" class="help-icon bg-overlay text-secondary text-primary-hover" title="What does Ready mean?" aria-label="Explain ready filter">?</button>
+    <button id="btnBlocked" onclick="toggleBlocked()" class="px-2 py-1 rounded text-xs font-medium bg-overlay text-secondary border border-strong" title="Toggle: show only blocked issues">
       &#128279; Blocked (<span id="blockedCount">0</span>)
     </button>
-    <button onclick="showBlockedHelp(this)" class="help-icon bg-slate-700 text-slate-400 hover:text-slate-200" title="What does Blocked mean?" aria-label="Explain blocked filter">?</button>
-    <label for="filterPriority" class="text-xs text-slate-400 sr-only">Priority</label>
-    <select id="filterPriority" onchange="applyFilters()" class="bg-slate-700 text-slate-200 text-xs rounded px-2 py-1 border border-slate-600">
+    <button onclick="showBlockedHelp(this)" class="help-icon bg-overlay text-secondary text-primary-hover" title="What does Blocked mean?" aria-label="Explain blocked filter">?</button>
+    <label for="filterPriority" class="text-xs text-secondary sr-only">Priority</label>
+    <select id="filterPriority" onchange="applyFilters()" class="bg-overlay text-primary text-xs rounded px-2 py-1 border border-strong">
       <option value="all">Priority: All</option>
       <option value="0-1">P0-P1</option>
       <option value="2">P2</option>
       <option value="3-4">P3-P4</option>
     </select>
-    <label for="filterSearch" class="text-xs text-slate-400 sr-only">Search</label>
+    <label for="filterSearch" class="text-xs text-secondary sr-only">Search</label>
     <div class="relative">
       <input id="filterSearch" type="text" placeholder="Search..." oninput="debouncedSearch()"
-             class="bg-slate-700 text-slate-200 text-xs rounded px-3 py-1 pr-6 border border-slate-600 w-56 focus:outline-none focus:border-blue-500">
+             class="bg-overlay text-primary text-xs rounded px-3 py-1 pr-6 border border-strong w-56 focus:outline-none focus:border-blue-500">
       <button id="searchClear" onclick="document.getElementById('filterSearch').value='';searchResults=null;this.classList.add('hidden');render();"
-              class="hidden absolute right-1.5 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300 text-xs leading-none" title="Clear search" aria-label="Clear search">&times;</button>
+              class="hidden absolute right-1.5 top-1/2 -translate-y-1/2 text-muted text-primary-hover text-xs leading-none" title="Clear search" aria-label="Clear search">&times;</button>
     </div>
-    <button onclick="toggleMultiSelect()" id="btnMultiSelect" class="px-2 py-1 rounded text-xs font-medium bg-slate-700 text-slate-400 border border-slate-600" title="Toggle multi-select mode for batch operations">Select</button>
+    <button onclick="toggleMultiSelect()" id="btnMultiSelect" class="px-2 py-1 rounded text-xs font-medium bg-overlay text-secondary border border-strong" title="Toggle multi-select mode for batch operations">Select</button>
     <div class="flex gap-1 text-xs">
-      <label class="flex items-center gap-1 text-slate-400"><input type="checkbox" id="filterOpen" checked onchange="applyFilters()" class="accent-blue-500"> Open</label>
-      <label class="flex items-center gap-1 text-slate-400"><input type="checkbox" id="filterInProgress" checked onchange="applyFilters()" class="accent-blue-500"> Active</label>
-      <label class="flex items-center gap-1 text-slate-400"><input type="checkbox" id="filterClosed" onchange="applyFilters()" class="accent-blue-500"> Closed</label>
+      <label class="flex items-center gap-1 text-secondary"><input type="checkbox" id="filterOpen" checked onchange="applyFilters()" style="accent-color:var(--accent)"> Open</label>
+      <label class="flex items-center gap-1 text-secondary"><input type="checkbox" id="filterInProgress" checked onchange="applyFilters()" style="accent-color:var(--accent)"> Active</label>
+      <label class="flex items-center gap-1 text-secondary"><input type="checkbox" id="filterClosed" onchange="applyFilters()" style="accent-color:var(--accent)"> Closed</label>
     </div>
-    <select id="filterPreset" onchange="loadPreset()" class="bg-slate-700 text-slate-200 text-xs rounded px-2 py-1 border border-slate-600">
+    <select id="filterPreset" onchange="loadPreset()" class="bg-overlay text-primary text-xs rounded px-2 py-1 border border-strong">
       <option value="">Presets...</option>
     </select>
-    <button onclick="savePreset()" class="text-xs bg-slate-700 text-slate-400 px-2 py-1 rounded border border-slate-600 hover:bg-slate-600" title="Save current filters as preset">Save</button>
+    <button onclick="savePreset()" class="text-xs bg-overlay text-secondary px-2 py-1 rounded border border-strong bg-overlay-hover" title="Save current filters as preset">Save</button>
   </div>
 
-  <div class="flex items-center gap-3 text-xs text-slate-400">
-    <button onclick="toggleTheme()" id="themeToggle" class="text-xs px-2 py-1 rounded bg-slate-700 hover:bg-slate-600" title="Toggle theme">&#9788;</button>
-    <span id="refreshIndicator" class="opacity-0 text-blue-400">Refreshing...</span>
+  <div class="flex items-center gap-3 text-xs text-secondary">
+    <button onclick="toggleTheme()" id="themeToggle" class="text-xs px-2 py-1 rounded bg-overlay bg-overlay-hover" title="Toggle theme">&#9788;</button>
+    <span id="refreshIndicator" class="opacity-0 text-accent">Refreshing...</span>
     <span id="healthBadge" onclick="showHealthBreakdown()" class="cursor-pointer px-2 py-0.5 rounded text-xs font-bold" title="System Health Score — click for breakdown">--</span>
-    <button onclick="showHealthHelp(this)" class="help-icon bg-slate-700 text-slate-400 hover:text-slate-200" title="What is Health Score?" aria-label="Explain health score">?</button>
+    <button onclick="showHealthHelp(this)" class="help-icon bg-overlay text-secondary text-primary-hover" title="What is Health Score?" aria-label="Explain health score">?</button>
   </div>
 </header>
 
@@ -204,21 +204,21 @@ tailwind.config = {
 <div class="flex flex-1 overflow-hidden relative">
   <!-- Graph view -->
   <div id="graphView" class="flex-1 hidden flex flex-col">
-    <div class="flex items-center gap-2 px-4 py-1 bg-slate-800/50 text-xs text-slate-400 border-b border-slate-700">
+    <div class="flex items-center gap-2 px-4 py-1 bg-raised text-xs text-secondary border-b border-default">
       <label class="flex items-center gap-1">
-        <input type="checkbox" id="graphEpicsOnly" checked onchange="renderGraph()" class="accent-blue-500"> Epics only
+        <input type="checkbox" id="graphEpicsOnly" checked onchange="renderGraph()" style="accent-color:var(--accent)"> Epics only
       </label>
-      <button onclick="graphFit()" class="px-2 py-0.5 rounded bg-slate-700 hover:bg-slate-600" title="Reset zoom and center the graph">Fit</button>
-      <button id="btnCritPath" onclick="toggleCriticalPath()" class="px-2 py-0.5 rounded bg-slate-700 hover:bg-slate-600" title="Highlight the longest dependency chain">Critical Path</button>
-      <button id="btnGraphLegend" onclick="toggleGraphLegend()" class="px-2 py-0.5 rounded bg-slate-700 hover:bg-slate-600">Legend</button>
+      <button onclick="graphFit()" class="px-2 py-0.5 rounded bg-overlay bg-overlay-hover" title="Reset zoom and center the graph">Fit</button>
+      <button id="btnCritPath" onclick="toggleCriticalPath()" class="px-2 py-0.5 rounded bg-overlay bg-overlay-hover" title="Highlight the longest dependency chain">Critical Path</button>
+      <button id="btnGraphLegend" onclick="toggleGraphLegend()" class="px-2 py-0.5 rounded bg-overlay bg-overlay-hover">Legend</button>
     </div>
     <div class="relative flex-1">
       <div id="cy" class="absolute inset-0"></div>
-      <div id="graphLegend" class="hidden absolute top-2 right-4 bg-slate-900/95 border border-slate-600 rounded-lg p-3 text-xs z-10 max-w-xs shadow-xl">
-        <div class="text-slate-200 font-medium mb-2">Graph Legend</div>
-        <div class="text-slate-400 space-y-2">
+      <div id="graphLegend" class="hidden absolute top-2 right-4 bg-base border border-strong rounded-lg p-3 text-xs z-10 max-w-xs shadow-xl">
+        <div class="text-primary font-medium mb-2">Graph Legend</div>
+        <div class="text-secondary space-y-2">
           <div>
-            <div class="font-medium text-slate-300 mb-1">Node Shapes</div>
+            <div class="font-medium text-primary mb-1">Node Shapes</div>
             <div class="grid grid-cols-2 gap-x-3 gap-y-0.5">
               <div>&#11043; Hexagon = Epic</div>
               <div>&#9670; Diamond = Bug</div>
@@ -227,57 +227,57 @@ tailwind.config = {
             </div>
           </div>
           <div>
-            <div class="font-medium text-slate-300 mb-1">Colors</div>
+            <div class="font-medium text-primary mb-1">Colors</div>
             <div class="flex gap-3">
-              <div><span class="inline-block w-3 h-3 rounded" style="background:#64748B"></span> Open</div>
-              <div><span class="inline-block w-3 h-3 rounded" style="background:#3B82F6"></span> In Progress</div>
-              <div><span class="inline-block w-3 h-3 rounded" style="background:#9CA3AF"></span> Done</div>
+              <div><span class="inline-block w-3 h-3 rounded" style="background:var(--status-open)"></span> Open</div>
+              <div><span class="inline-block w-3 h-3 rounded" style="background:var(--status-wip)"></span> In Progress</div>
+              <div><span class="inline-block w-3 h-3 rounded" style="background:var(--status-done)"></span> Done</div>
             </div>
           </div>
           <div>
-            <div class="font-medium text-slate-300 mb-1">Indicators</div>
+            <div class="font-medium text-primary mb-1">Indicators</div>
             <div>Green border = Ready (no blockers)</div>
             <div>Larger node = Higher priority</div>
             <div>Arrows = blocks &rarr; blocked</div>
           </div>
           <div>
-            <div class="font-medium text-slate-300 mb-1">Interactions</div>
+            <div class="font-medium text-primary mb-1">Interactions</div>
             <div>Click node &rarr; Open detail panel</div>
             <div>Hover node &rarr; Highlight downstream</div>
           </div>
         </div>
-        <button onclick="toggleGraphLegend()" class="text-slate-500 hover:text-slate-300 mt-2">Close</button>
+        <button onclick="toggleGraphLegend()" class="text-muted text-primary-hover mt-2">Close</button>
       </div>
     </div>
   </div>
 
   <!-- Kanban view -->
   <div id="kanbanView" class="flex-1 hidden flex flex-col">
-    <div class="flex items-center gap-2 px-4 py-1 bg-slate-800/50 text-xs text-slate-400 border-b border-slate-700">
+    <div class="flex items-center gap-2 px-4 py-1 bg-raised text-xs text-secondary border-b border-default">
       <button id="btnStandard" onclick="switchKanbanMode('standard')" class="px-2 py-0.5 rounded" title="Three columns: Open, In Progress, Done">Standard</button>
       <button id="btnCluster" onclick="switchKanbanMode('cluster')" class="px-2 py-0.5 rounded" title="Group issues by parent epic with progress bars">Cluster</button>
-      <span class="text-slate-600">|</span>
-      <select id="filterType" onchange="applyTypeFilter()" class="bg-slate-700 text-slate-200 text-xs rounded px-2 py-0.5 border border-slate-600" title="Filter to one issue type and show its workflow states as columns">
+      <span class="text-muted">|</span>
+      <select id="filterType" onchange="applyTypeFilter()" class="bg-overlay text-primary text-xs rounded px-2 py-0.5 border border-strong" title="Filter to one issue type and show its workflow states as columns">
         <option value="">All types</option>
       </select>
-      <span id="typeFilterPill" class="hidden text-xs bg-blue-900/50 text-blue-400 px-2 py-0.5 rounded border border-blue-800">
+      <span id="typeFilterPill" class="hidden text-xs px-2 py-0.5 rounded border text-accent" style="background:var(--accent-subtle);border-color:var(--accent)">
         <span id="typeFilterLabel"></span>
-        <button onclick="clearTypeFilter()" class="ml-1 text-blue-300 hover:text-white" title="Clear type filter" aria-label="Clear type filter">&times;</button>
+        <button onclick="clearTypeFilter()" class="ml-1 text-accent hover:text-white" title="Clear type filter" aria-label="Clear type filter">&times;</button>
       </span>
-      <span class="text-slate-600">|</span>
-      <button id="btnKanbanLegend" onclick="toggleKanbanLegend()" class="px-2 py-0.5 rounded bg-slate-700 hover:bg-slate-600">Legend</button>
+      <span class="text-muted">|</span>
+      <button id="btnKanbanLegend" onclick="toggleKanbanLegend()" class="px-2 py-0.5 rounded bg-overlay bg-overlay-hover">Legend</button>
     </div>
-    <div id="kanbanLegend" class="hidden bg-slate-900/95 border-b border-slate-600 px-4 py-2 text-xs">
-      <div class="flex flex-wrap gap-x-6 gap-y-1 text-slate-400">
-        <span class="font-medium text-slate-300">Card Borders:</span>
+    <div id="kanbanLegend" class="hidden bg-base border-b border-strong px-4 py-2 text-xs">
+      <div class="flex flex-wrap gap-x-6 gap-y-1 text-secondary">
+        <span class="font-medium text-primary">Card Borders:</span>
         <span><span class="inline-block w-3 h-0.5 bg-emerald-500 mr-1 align-middle"></span>Ready (no blockers)</span>
         <span><span class="inline-block w-3 h-0.5 bg-amber-500 mr-1 align-middle"></span>Aging (WIP &gt;4h)</span>
         <span><span class="inline-block w-3 h-0.5 bg-red-500 mr-1 align-middle"></span>Stale (WIP &gt;24h)</span>
-        <span class="font-medium text-slate-300 ml-4">Badges:</span>
+        <span class="font-medium text-primary ml-4">Badges:</span>
         <span><span class="text-red-400">&#128279;</span> Blocked by N</span>
         <span><span class="text-amber-400">&#9889;</span>N = Blocks N downstream</span>
         <span>&#128100; = Assignee</span>
-        <span class="font-medium text-slate-300 ml-4">Modes:</span>
+        <span class="font-medium text-primary ml-4">Modes:</span>
         <span>Standard = Open / WIP / Done</span>
         <span>Cluster = Grouped by epic</span>
       </div>
@@ -289,14 +289,14 @@ tailwind.config = {
   <div id="metricsView" class="flex-1 hidden overflow-y-auto p-6">
     <div class="max-w-3xl mx-auto">
       <div class="flex items-center gap-3 mb-6">
-        <span class="text-base font-semibold text-slate-200">Flow Metrics</span>
-        <select id="metricsDays" onchange="loadMetrics()" class="bg-slate-700 text-xs rounded px-2 py-1 border border-slate-600">
+        <span class="text-base font-semibold text-primary">Flow Metrics</span>
+        <select id="metricsDays" onchange="loadMetrics()" class="bg-overlay text-xs rounded px-2 py-1 border border-strong">
           <option value="7">7 days</option>
           <option value="30" selected>30 days</option>
           <option value="90">90 days</option>
         </select>
       </div>
-      <div id="metricsContent" class="text-slate-400 text-xs">Loading...</div>
+      <div id="metricsContent" class="text-secondary text-xs">Loading...</div>
     </div>
   </div>
 
@@ -304,18 +304,18 @@ tailwind.config = {
   <div id="activityView" class="flex-1 hidden overflow-y-auto p-6">
     <div class="max-w-3xl mx-auto">
       <div class="flex items-center gap-3 mb-4">
-        <span class="text-base font-semibold text-slate-200">Recent Activity</span>
-        <button onclick="loadActivity()" class="text-xs bg-slate-700 px-2 py-1 rounded hover:bg-slate-600">Refresh</button>
+        <span class="text-base font-semibold text-primary">Recent Activity</span>
+        <button onclick="loadActivity()" class="text-xs bg-overlay px-2 py-1 rounded bg-overlay-hover">Refresh</button>
       </div>
-      <div id="activityContent" class="text-slate-400 text-xs">Loading...</div>
+      <div id="activityContent" class="text-secondary text-xs">Loading...</div>
     </div>
   </div>
 
   <!-- Workflow view -->
   <div id="workflowView" class="flex-1 hidden flex flex-col">
-    <div class="flex items-center gap-2 px-4 py-1 bg-slate-800/50 text-xs text-slate-400 border-b border-slate-700">
-      <label for="workflowType" class="text-xs text-slate-400">Type:</label>
-      <select id="workflowType" onchange="loadWorkflow()" class="bg-slate-700 text-slate-200 text-xs rounded px-2 py-1 border border-slate-600">
+    <div class="flex items-center gap-2 px-4 py-1 bg-raised text-xs text-secondary border-b border-default">
+      <label for="workflowType" class="text-xs text-secondary">Type:</label>
+      <select id="workflowType" onchange="loadWorkflow()" class="bg-overlay text-primary text-xs rounded px-2 py-1 border border-strong">
         <option value="">Select type...</option>
       </select>
     </div>
@@ -323,27 +323,27 @@ tailwind.config = {
   </div>
 
   <!-- Detail panel (slides in from right) -->
-  <div id="detailPanel" role="complementary" aria-label="Issue Detail" class="detail-panel absolute top-0 right-0 h-full w-[500px] bg-slate-800 border-l border-slate-700 overflow-y-auto scrollbar-thin transform translate-x-full z-10">
+  <div id="detailPanel" role="complementary" aria-label="Issue Detail" class="detail-panel absolute top-0 right-0 h-full w-[500px] bg-raised border-l border-default overflow-y-auto scrollbar-thin transform translate-x-full z-10">
     <div id="detailContent" class="p-5"></div>
   </div>
 </div>
 
 <!-- Stats bar -->
-<footer class="flex items-center gap-4 px-4 py-1 bg-slate-800 border-t border-slate-700 text-xs text-slate-400 shrink-0">
-  <span>Open: <b id="footOpen" class="text-slate-300">0</b></span>
-  <span>In Progress: <b id="footActive" class="text-slate-300">0</b></span>
+<footer class="flex items-center gap-4 px-4 py-1 bg-raised border-t border-default text-xs text-secondary shrink-0">
+  <span>Open: <b id="footOpen" class="text-primary">0</b></span>
+  <span>In Progress: <b id="footActive" class="text-primary">0</b></span>
   <span>Ready: <b id="footReady" class="text-emerald-400">0</b></span>
   <span>Blocked: <b id="footBlocked" class="text-red-400">0</b></span>
-  <span>Deps: <b id="footDeps" class="text-slate-300">0</b></span>
+  <span>Deps: <b id="footDeps" class="text-primary">0</b></span>
   <canvas id="sparkline" width="100" height="20" title="14-day throughput trend" class="opacity-70"></canvas>
   <span id="staleBadge" class="hidden text-xs bg-red-900/50 text-red-400 px-2 py-0.5 rounded border border-red-800 cursor-pointer" onclick="showStaleIssues()" title="WIP issues with no updates for >2 hours. Click to view."></span>
 </footer>
 
-<div id="batchBar" class="fixed bottom-12 left-1/2 -translate-x-1/2 bg-slate-800 border border-slate-600 rounded-lg px-4 py-2 flex items-center gap-3 shadow-xl hidden z-20">
-  <span id="batchCount" class="text-xs text-slate-300">0 selected</span>
-  <button onclick="batchSetPriority()" class="text-xs bg-slate-700 px-2 py-1 rounded hover:bg-slate-600">Set Priority</button>
+<div id="batchBar" class="fixed bottom-12 left-1/2 -translate-x-1/2 bg-raised border border-strong rounded-lg px-4 py-2 flex items-center gap-3 shadow-xl hidden z-20">
+  <span id="batchCount" class="text-xs text-primary">0 selected</span>
+  <button onclick="batchSetPriority()" class="text-xs bg-overlay px-2 py-1 rounded bg-overlay-hover">Set Priority</button>
   <button onclick="batchCloseSelected()" class="text-xs bg-red-900/50 text-red-400 px-2 py-1 rounded border border-red-800 hover:bg-red-900">Close All</button>
-  <button onclick="toggleMultiSelect()" class="text-xs text-slate-500 hover:text-slate-300">Cancel</button>
+  <button onclick="toggleMultiSelect()" class="text-xs text-muted text-primary-hover">Cancel</button>
 </div>
 
 <div id="toastContainer" class="fixed top-4 right-4 z-50 flex flex-col gap-2" aria-live="polite"></div>
