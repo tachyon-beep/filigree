@@ -643,6 +643,11 @@ def create_app() -> Any:
             }
         )
 
+    # Serve static JS modules (ES modules for dashboard components)
+    from starlette.staticfiles import StaticFiles
+
+    app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
     return app
 
 
