@@ -1259,10 +1259,10 @@ async function openDetail(issueId) {
       var cls = t.ready
         ? 'bg-blue-600 text-white hover:bg-blue-700'
         : 'bg-slate-700 text-slate-400 cursor-not-allowed';
-      var title = t.missing_fields.length ? 'Missing: ' + t.missing_fields.join(', ') : '';
+      var missingText = t.missing_fields.length ? ' <span class="text-slate-500">(missing: ' + t.missing_fields.join(', ') + ')</span>' : '';
       return '<button ' + (t.ready ? 'onclick="updateIssue(\'' + issueId + '\',{status:\'' + t.to + '\'},this)"' : 'disabled') +
-        ' class="text-xs px-2 py-1 rounded ' + cls + '" title="' + escHtml(title) + '">' +
-        t.to + '</button>';
+        ' class="text-xs px-2 py-1 rounded ' + cls + '">' +
+        t.to + missingText + '</button>';
     }).join('');
   });
 
@@ -1627,7 +1627,8 @@ async function claimIssue(issueId) {
   modal.className = 'fixed inset-0 bg-black/50 flex items-center justify-center z-50';
   modal.innerHTML = '<div class="bg-slate-800 rounded-lg border border-slate-600 p-4 w-72 shadow-xl">' +
     '<div class="text-sm text-slate-200 mb-2">Claim issue</div>' +
-    '<input id="claimNameInput" type="text" value="' + escHtml(saved) + '" placeholder="Your name..." class="w-full bg-slate-700 text-slate-200 text-xs rounded px-3 py-2 border border-slate-600 mb-3 focus:outline-none focus:border-blue-500">' +
+    '<input id="claimNameInput" type="text" value="' + escHtml(saved) + '" placeholder="Your name..." class="w-full bg-slate-700 text-slate-200 text-xs rounded px-3 py-2 border border-slate-600 mb-1 focus:outline-none focus:border-blue-500">' +
+    (saved ? '<div class="text-xs text-slate-500 mb-2">Remembered as "' + escHtml(saved) + '" \u2014 <button onclick="document.getElementById(\'claimNameInput\').value=\'\';localStorage.removeItem(\'filigree_claim_name\');this.parentElement.remove();" class="text-blue-400 hover:underline">not you?</button></div>' : '<div class="mb-2"></div>') +
     '<div class="flex justify-end gap-2">' +
       '<button onclick="document.getElementById(\'claimModal\').remove()" class="text-xs bg-slate-700 px-3 py-1.5 rounded hover:bg-slate-600">Cancel</button>' +
       '<button onclick="confirmClaim(\'' + issueId + '\')" class="text-xs bg-emerald-600 text-white px-3 py-1.5 rounded hover:bg-emerald-700">Claim</button>' +
@@ -2142,6 +2143,10 @@ async function loadWorkflow() {
         var opt = document.createElement('option'); opt.value = t.type; opt.textContent = t.display_name || t.type;
         wfSelect.appendChild(opt);
       });
+      // Auto-select first type if none selected
+      if (!wfSelect.value && wfSelect.options.length > 1) {
+        wfSelect.value = wfSelect.options[1].value;
+      }
     } catch(e) {}
   }
   var typeName = wfSelect ? wfSelect.value : '';
@@ -2462,7 +2467,24 @@ function updateStaleBadge() {
 function showStaleIssues() {
   var stale = window._staleIssues || [];
   if (!stale.length) return;
-  openDetail(stale[0].id);
+  if (stale.length === 1) { openDetail(stale[0].id); return; }
+  var modal = document.createElement('div');
+  modal.id = 'staleModal';
+  modal.className = 'fixed inset-0 bg-black/50 flex items-center justify-center z-50';
+  modal.onclick = function(ev) { if (ev.target === modal) modal.remove(); };
+  modal.innerHTML = '<div class="bg-slate-800 rounded-lg border border-slate-600 p-4 w-80 shadow-xl max-h-96 overflow-y-auto">' +
+    '<div class="text-sm text-slate-200 mb-3">' + stale.length + ' stale issues</div>' +
+    '<div class="flex flex-col gap-2">' +
+    stale.map(function(i) {
+      var hrs = Math.floor((Date.now() - new Date(i.updated_at).getTime()) / 3600000);
+      return '<button onclick="document.getElementById(\'staleModal\').remove();openDetail(\'' + i.id + '\')" ' +
+        'class="text-xs text-left bg-slate-700 px-3 py-2 rounded hover:bg-slate-600 text-slate-200">' +
+        escHtml(i.title.slice(0, 40)) + ' <span class="text-red-400">(' + hrs + 'h)</span></button>';
+    }).join('') +
+    '</div>' +
+    '<button onclick="document.getElementById(\'staleModal\').remove()" class="text-xs text-slate-500 mt-3 hover:text-slate-300">Close</button>' +
+  '</div>';
+  document.body.appendChild(modal);
 }
 
 // ---------------------------------------------------------------------------
