@@ -309,6 +309,8 @@ var CATEGORY_COLORS = { open: '#64748B', wip: '#3B82F6', done: '#9CA3AF' };
 var PRIORITY_COLORS = { 0: '#EF4444', 1: '#F97316', 2: '#6B7280', 3: '#D1D5DB', 4: '#D1D5DB' };
 var TYPE_ICONS = { bug: '\u{1F41B}', feature: '\u2728', task: '\u{1F4CB}', epic: '\u{1F4CA}', milestone: '\u{1F3AF}', step: '\u25B6' };
 var typeTemplate = null;  // Cached type template for type-filtered kanban
+var _dragIssueId = null;       // Issue being dragged
+var _dragTransitions = [];     // Valid transitions for dragged issue
 
 // ---------------------------------------------------------------------------
 // Multi-project support
@@ -794,6 +796,104 @@ function renderTypeKanban(stateColumns, template) {
 }
 
 // ---------------------------------------------------------------------------
+// Drag and Drop (Kanban)
+// ---------------------------------------------------------------------------
+function initDragAndDrop() {
+  var board = document.getElementById('kanbanBoard');
+  if (!board) return;
+
+  board.addEventListener('dragstart', function(e) {
+    var card = e.target.closest('.card[draggable="true"]');
+    if (!card) return;
+    _dragIssueId = card.getAttribute('data-id');
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', _dragIssueId);
+    card.style.opacity = '0.5';
+
+    // Fetch valid transitions, then mark columns
+    loadTransitions(_dragIssueId).then(function(transitions) {
+      _dragTransitions = transitions;
+      var validCategories = new Set();
+      var validStatuses = new Set();
+      transitions.forEach(function(t) {
+        if (t.ready) {
+          validStatuses.add(t.to);
+          validCategories.add(t.category);
+        }
+      });
+      var cols = board.querySelectorAll('.kanban-col');
+      cols.forEach(function(col) {
+        var colStatus = col.getAttribute('data-status');
+        var colCat = col.getAttribute('data-status-category');
+        var isValid = colStatus ? validStatuses.has(colStatus) : validCategories.has(colCat);
+        // Don't mark the source column
+        var sourceIssue = issueMap[_dragIssueId];
+        var isSameCol = colStatus
+          ? colStatus === (sourceIssue && sourceIssue.status)
+          : colCat === (sourceIssue && sourceIssue.status_category);
+        if (isSameCol) return;
+        col.classList.add(isValid ? 'drag-valid' : 'drag-invalid');
+      });
+    });
+  });
+
+  board.addEventListener('dragover', function(e) {
+    var col = e.target.closest('.kanban-col');
+    if (!col || col.classList.contains('drag-invalid')) return;
+    if (col.classList.contains('drag-valid')) {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+    }
+  });
+
+  board.addEventListener('drop', function(e) {
+    e.preventDefault();
+    var col = e.target.closest('.kanban-col');
+    if (!col || !col.classList.contains('drag-valid') || !_dragIssueId) return;
+
+    var targetStatus = col.getAttribute('data-status');
+    if (!targetStatus) {
+      // Standard board: find first ready transition matching this category
+      var targetCat = col.getAttribute('data-status-category');
+      var match = _dragTransitions.find(function(t) { return t.ready && t.category === targetCat; });
+      if (match) targetStatus = match.to;
+    }
+    if (!targetStatus) return;
+
+    var issueId = _dragIssueId;
+    showToast('Moving to ' + targetStatus + '...', 'info');
+
+    fetch(API_BASE + '/issue/' + issueId, {
+      method: 'PATCH',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({status: targetStatus}),
+    }).then(function(resp) {
+      if (resp.ok) {
+        showToast('Moved to ' + targetStatus, 'success');
+        fetchData();
+      } else {
+        return resp.json().then(function(err) {
+          showToast('Error: ' + (err.error || 'Move failed'), 'error');
+        });
+      }
+    }).catch(function() {
+      showToast('Network error', 'error');
+    });
+  });
+
+  board.addEventListener('dragend', function(e) {
+    // Clean up all drag visual states
+    var card = e.target.closest('.card');
+    if (card) card.style.opacity = '';
+    _dragIssueId = null;
+    _dragTransitions = [];
+    board.querySelectorAll('.kanban-col').forEach(function(col) {
+      col.classList.remove('drag-valid', 'drag-invalid');
+    });
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Graph
 // ---------------------------------------------------------------------------
 function renderGraph() {
@@ -1217,6 +1317,7 @@ document.addEventListener('keydown', function(e) {
         '<div><kbd class="bg-slate-700 px-1 rounded">Enter</kbd> Open issue detail</div>' +
         '<div><kbd class="bg-slate-700 px-1 rounded">c</kbd> Focus comment input (in detail)</div>' +
         '<div><kbd class="bg-slate-700 px-1 rounded">x</kbd> Close issue (in detail)</div>' +
+        '<div><kbd class="bg-slate-700 px-1 rounded">m</kbd> Move issue to status (in detail)</div>' +
         '<div><kbd class="bg-slate-700 px-1 rounded">?</kbd> This help</div>' +
         '<div><kbd class="bg-slate-700 px-1 rounded">Shift+?</kbd> Replay guided tour</div>' +
       '</div>' +
@@ -1251,6 +1352,29 @@ document.addEventListener('keydown', function(e) {
   if (selectedIssue) {
     if (e.key === 'c') { var ci = document.getElementById('commentInput'); if (ci) { e.preventDefault(); ci.focus(); } }
     if (e.key === 'x') { e.preventDefault(); closeIssue(selectedIssue); }
+    if (e.key === 'm') {
+      e.preventDefault();
+      loadTransitions(selectedIssue).then(function(transitions) {
+        var ready = transitions.filter(function(t) { return t.ready; });
+        if (!ready.length) { showToast('No valid transitions', 'info'); return; }
+        var modal = document.createElement('div');
+        modal.id = 'moveModal';
+        modal.className = 'fixed inset-0 bg-black/50 flex items-center justify-center z-50';
+        modal.onclick = function(ev) { if (ev.target === modal) modal.remove(); };
+        modal.innerHTML = '<div class="bg-slate-800 rounded-lg border border-slate-600 p-4 w-64 shadow-xl">' +
+          '<div class="text-sm text-slate-200 mb-3">Move to...</div>' +
+          '<div class="flex flex-col gap-2">' +
+          ready.map(function(t) {
+            return '<button onclick="moveIssueTo(\'' + selectedIssue + '\',\'' + t.to + '\')" class="text-xs text-left bg-slate-700 px-3 py-2 rounded hover:bg-slate-600 text-slate-200">' + t.to + '</button>';
+          }).join('') +
+          '</div>' +
+          '<button onclick="document.getElementById(\'moveModal\').remove()" class="text-xs text-slate-500 mt-3 hover:text-slate-300">Cancel (Esc)</button>' +
+        '</div>';
+        document.body.appendChild(modal);
+        modal.querySelector('button').focus();
+        modal.addEventListener('keydown', function(ev) { if (ev.key === 'Escape') modal.remove(); });
+      });
+    }
   }
 });
 
@@ -1501,6 +1625,20 @@ async function releaseIssue(issueId) {
   });
   if (!resp.ok) { var err = await resp.json(); showToast('Error: ' + (err.error || 'Release failed'), 'error'); return; }
   showToast('Issue released', 'success');
+  await fetchData();
+  if (selectedIssue === issueId) openDetail(issueId);
+}
+
+async function moveIssueTo(issueId, targetStatus) {
+  var modal = document.getElementById('moveModal');
+  if (modal) modal.remove();
+  var resp = await fetch(API_BASE + '/issue/' + issueId, {
+    method: 'PATCH',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({status: targetStatus}),
+  });
+  if (!resp.ok) { var err = await resp.json(); showToast('Error: ' + (err.error || 'Move failed'), 'error'); return; }
+  showToast('Moved to ' + targetStatus, 'success');
   await fetchData();
   if (selectedIssue === issueId) openDetail(issueId);
 }
@@ -2335,6 +2473,7 @@ populatePresets();
   else switchKanbanMode('standard');
   if (selectedIssue) openDetail(selectedIssue);
   if (!localStorage.getItem('filigree_tour_done')) setTimeout(startTour, 1500);
+  initDragAndDrop();
 });
 setInterval(function() { if (!document.hidden) fetchData(); }, REFRESH_INTERVAL);
 setInterval(loadProjects, 60000);
