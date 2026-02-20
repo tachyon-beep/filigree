@@ -29,7 +29,7 @@ REGISTRY_LOCK = REGISTRY_DIR / "registry.lock"
 DEFAULT_TTL_HOURS = 6.0
 
 
-@dataclass
+@dataclass(frozen=True)
 class ProjectEntry:
     path: str
     name: str
@@ -126,11 +126,10 @@ class Registry:
 class ProjectManager:
     """Manages DB connections for multiple registered projects."""
 
-    def __init__(self, registry: Registry, *, max_connections: int = 20) -> None:
+    def __init__(self, registry: Registry) -> None:
         self._registry = registry
         self._connections: dict[str, FiligreeDB] = {}
         self._paths: dict[str, Path] = {}  # key -> .filigree/ path
-        self._max_connections = max_connections
 
     def register(self, filigree_dir: Path) -> ProjectEntry:
         """Register a project and cache its path for later DB opening."""
