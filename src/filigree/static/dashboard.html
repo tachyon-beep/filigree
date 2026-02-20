@@ -746,7 +746,7 @@ function renderCard(issue) {
     else if (ageHours > 4) agingClass = 'aging-border';
   }
 
-  var changedClass = changedIds.has(issue.id) ? 'ring-1 ring-sky-400' : '';
+  var changedClass = changedIds.has(issue.id) ? 'changed-flash' : '';
 
   var checkbox = multiSelectMode
     ? '<input type="checkbox" ' + (selectedCards.has(issue.id) ? 'checked' : '') +
