@@ -618,11 +618,27 @@ def create_app() -> Any:
     async def api_register(request: Request) -> JSONResponse:
         if _project_manager is None:
             return JSONResponse({"error": "Project manager not initialized"}, status_code=500)
-        body = await request.json()
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
+        if not isinstance(body, dict):
+            return JSONResponse({"error": "Request body must be a JSON object"}, status_code=400)
         path = body.get("path")
         if not path or not Path(path).is_dir():
             return JSONResponse({"error": "Invalid path"}, status_code=400)
-        entry = _project_manager.register(Path(path))
+        # Resolve: accept either .filigree/ dir or its parent project root
+        p = Path(path)
+        if p.name != ".filigree":
+            candidate = p / ".filigree"
+            if candidate.is_dir():
+                p = candidate
+            else:
+                return JSONResponse(
+                    {"error": "Path must be a .filigree/ directory or a project root containing one"},
+                    status_code=400,
+                )
+        entry = _project_manager.register(p)
         return JSONResponse(asdict(entry))
 
     return app

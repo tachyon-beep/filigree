@@ -1150,3 +1150,33 @@ class TestMultiProjectAPI:
         resp = await client.post("/api/register", json={"path": str(fdir)})
         assert resp.status_code == 200
         assert resp.json()["key"] == "newproj"
+
+    async def test_register_with_project_root(self, client: AsyncClient, tmp_path: Path) -> None:
+        """Registering with a project root (parent of .filigree/) should resolve."""
+        proj_root = tmp_path / "rootproj"
+        fdir = proj_root / ".filigree"
+        fdir.mkdir(parents=True)
+        write_config(fdir, {"prefix": "rootproj", "version": 1, "enabled_packs": ["core"]})
+        db = FiligreeDB(fdir / "filigree.db", prefix="rootproj")
+        db.initialize()
+        db.close()
+        resp = await client.post("/api/register", json={"path": str(proj_root)})
+        assert resp.status_code == 200
+        assert resp.json()["key"] == "rootproj"
+
+    async def test_register_rejects_non_filigree_dir(self, client: AsyncClient, tmp_path: Path) -> None:
+        """A directory without .filigree/ should be rejected."""
+        bare_dir = tmp_path / "bare"
+        bare_dir.mkdir()
+        resp = await client.post("/api/register", json={"path": str(bare_dir)})
+        assert resp.status_code == 400
+        assert ".filigree" in resp.json()["error"]
+
+    async def test_register_rejects_invalid_json(self, client: AsyncClient) -> None:
+        resp = await client.post("/api/register", content="NOT JSON{{{")
+        assert resp.status_code == 400
+        assert "Invalid JSON" in resp.json()["error"]
+
+    async def test_register_rejects_non_object_body(self, client: AsyncClient) -> None:
+        resp = await client.post("/api/register", content="[]")
+        assert resp.status_code == 400

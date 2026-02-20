@@ -318,10 +318,10 @@ function setProject(key) {
   API_BASE = key ? '/api/p/' + encodeURIComponent(key) : '/api';
   var sel = document.getElementById('projectSwitcher');
   if (sel) sel.value = key;
-  if (key) history.replaceState(null, '', '#project=' + key);
   var proj = allProjects.find(function(p) { return p.key === key; });
   document.title = proj ? proj.name + ' \u2014 Filigree' : 'Filigree Dashboard';
   closeDetail();
+  updateHash();
   fetchData();
 }
 
@@ -1149,6 +1149,7 @@ function detailBack() {
 function updateHash() {
   var hash = '#' + currentView;
   if (currentView === 'kanban' && kanbanMode === 'cluster') hash = '#kanban-cluster';
+  if (currentProjectKey) hash += '&project=' + encodeURIComponent(currentProjectKey);
   if (selectedIssue) hash += '&issue=' + selectedIssue;
   history.replaceState(null, '', hash);
 }
