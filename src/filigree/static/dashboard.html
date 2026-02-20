@@ -185,10 +185,16 @@ tailwind.config = {
   </div>
 
   <div class="flex items-center gap-3 text-xs text-secondary">
-    <button onclick="toggleTheme()" id="themeToggle" class="text-xs px-2 py-1 rounded bg-overlay bg-overlay-hover" title="Toggle theme">&#9788;</button>
     <span id="refreshIndicator" class="opacity-0 text-accent">Refreshing...</span>
     <span id="healthBadge" onclick="showHealthBreakdown()" class="cursor-pointer px-2 py-0.5 rounded text-xs font-bold" title="System Health Score — click for breakdown">--</span>
     <button onclick="showHealthHelp(this)" class="help-icon bg-overlay text-secondary text-primary-hover" title="What is Health Score?" aria-label="Explain health score">?</button>
+    <div class="relative">
+      <button onclick="toggleSettingsMenu(event)" id="settingsGear" class="text-xs px-2 py-1 rounded bg-overlay bg-overlay-hover" title="Settings" aria-label="Settings menu">&#9881;</button>
+      <div id="settingsDropdown" class="hidden absolute right-0 top-full mt-1 rounded-lg shadow-xl text-xs z-50" style="background:var(--surface-base);border:1px solid var(--border-strong);min-width:160px">
+        <button onclick="reloadServer()" class="w-full text-left px-3 py-2 bg-overlay-hover text-primary rounded-t-lg">&#8635; Reload server</button>
+        <button onclick="toggleTheme();closeSettingsMenu()" id="themeToggle" class="w-full text-left px-3 py-2 bg-overlay-hover text-primary rounded-b-lg">&#9788; Toggle theme</button>
+      </div>
+    </div>
   </div>
 </header>
 
@@ -2559,6 +2565,47 @@ function showStaleIssues() {
 }
 
 // ---------------------------------------------------------------------------
+// Settings gear menu
+// ---------------------------------------------------------------------------
+function toggleSettingsMenu(e) {
+  e.stopPropagation();
+  var dd = document.getElementById('settingsDropdown');
+  if (dd.classList.contains('hidden')) {
+    dd.classList.remove('hidden');
+    setTimeout(function() { document.addEventListener('click', _settingsOutsideClick); }, 0);
+  } else {
+    closeSettingsMenu();
+  }
+}
+function _settingsOutsideClick(e) {
+  var dd = document.getElementById('settingsDropdown');
+  if (dd && !dd.contains(e.target) && e.target.id !== 'settingsGear') closeSettingsMenu();
+}
+function closeSettingsMenu() {
+  document.getElementById('settingsDropdown').classList.add('hidden');
+  document.removeEventListener('click', _settingsOutsideClick);
+}
+function reloadServer() {
+  closeSettingsMenu();
+  var ind = document.getElementById('refreshIndicator');
+  ind.textContent = 'Reloading...';
+  ind.style.opacity = '1';
+  fetch('/api/reload', { method: 'POST' })
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      ind.textContent = data.ok ? 'Reloaded (' + data.projects + ' projects)' : 'Reload failed';
+      ind.style.color = data.ok ? '' : '#EF4444';
+      setTimeout(function() { ind.style.opacity = '0'; ind.textContent = 'Refreshing...'; ind.style.color = ''; }, 2000);
+      if (data.ok) fetchData();
+    })
+    .catch(function() {
+      ind.textContent = 'Reload failed';
+      ind.style.color = '#EF4444';
+      setTimeout(function() { ind.style.opacity = '0'; ind.textContent = 'Refreshing...'; ind.style.color = ''; }, 2000);
+    });
+}
+
+// ---------------------------------------------------------------------------
 // Theme toggle (R30)
 // ---------------------------------------------------------------------------
 function toggleTheme() {
@@ -2566,7 +2613,7 @@ function toggleTheme() {
   var next = current === 'light' ? 'dark' : 'light';
   document.body.dataset.theme = next;
   localStorage.setItem('filigree_theme', next);
-  document.getElementById('themeToggle').textContent = next === 'light' ? '\u263E' : '\u2606';
+  document.getElementById('themeToggle').innerHTML = (next === 'light' ? '&#9790;' : '&#9788;') + ' Toggle theme';
   // Update JS color objects for light theme
   CATEGORY_COLORS.wip = next === 'light' ? '#0284C7' : '#38BDF8';
   THEME_COLORS.textPrimary = next === 'light' ? '#0F2027' : '#E2EEF2';
@@ -2595,7 +2642,7 @@ function trapFocus(panel) {
   if (saved === 'light') {
     document.body.dataset.theme = 'light';
     var btn = document.getElementById('themeToggle');
-    if (btn) btn.textContent = '\u263E';
+    if (btn) btn.innerHTML = '&#9790; Toggle theme';
     CATEGORY_COLORS.wip = '#0284C7';
     THEME_COLORS.textPrimary = '#0F2027';
     THEME_COLORS.textSecondary = '#3D6070';

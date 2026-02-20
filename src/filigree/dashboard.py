@@ -635,11 +635,13 @@ def create_app() -> Any:
             except Exception:
                 logger.warning("Failed to re-register project %s", proj.key, exc_info=True)
                 errors.append(proj.key)
-        return JSONResponse({
-            "ok": len(errors) == 0,
-            "projects": len(projects) - len(errors),
-            "errors": errors,
-        })
+        return JSONResponse(
+            {
+                "ok": len(errors) == 0,
+                "projects": len(projects) - len(errors),
+                "errors": errors,
+            }
+        )
 
     return app
 

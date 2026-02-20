@@ -1068,9 +1068,7 @@ class TestReloadAPI:
         # Connections cleared (will reopen lazily on next request)
         assert len(pm._connections) == 0
 
-    async def test_reload_issues_still_work_after(
-        self, client: AsyncClient, tmp_path: Path
-    ) -> None:
+    async def test_reload_issues_still_work_after(self, client: AsyncClient, tmp_path: Path) -> None:
         # Set up a real project that survives reload (registry-based re-register)
         fdir = tmp_path / "reloadproj" / ".filigree"
         fdir.mkdir(parents=True)
