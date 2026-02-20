@@ -200,6 +200,10 @@ tailwind.config = {
       <select id="filterType" onchange="applyTypeFilter()" class="bg-slate-700 text-slate-200 text-xs rounded px-2 py-0.5 border border-slate-600" title="Filter to one issue type and show its workflow states as columns">
         <option value="">All types</option>
       </select>
+      <span id="typeFilterPill" class="hidden text-xs bg-blue-900/50 text-blue-400 px-2 py-0.5 rounded border border-blue-800">
+        <span id="typeFilterLabel"></span>
+        <button onclick="clearTypeFilter()" class="ml-1 text-blue-300 hover:text-white" title="Clear type filter" aria-label="Clear type filter">&times;</button>
+      </span>
       <span class="text-slate-600">|</span>
       <button id="btnKanbanLegend" onclick="toggleKanbanLegend()" class="px-2 py-0.5 rounded bg-slate-700 hover:bg-slate-600">Legend</button>
     </div>
@@ -509,6 +513,10 @@ function switchView(view) {
 }
 
 function switchKanbanMode(mode) {
+  typeTemplate = null;
+  var typeSelect = document.getElementById('filterType');
+  if (typeSelect) typeSelect.value = '';
+  updateTypeFilterUI(false);
   kanbanMode = mode;
   document.getElementById('btnStandard').className = mode === 'standard'
     ? 'px-2 py-0.5 rounded bg-blue-600 text-white'
@@ -771,6 +779,32 @@ async function applyTypeFilter() {
     if (seq !== _typeFilterSeq) return;
     typeTemplate = null;
   }
+  renderKanban();
+  updateTypeFilterUI(!!typeTemplate);
+}
+
+function updateTypeFilterUI(isFiltered) {
+  var btnStd = document.getElementById('btnStandard');
+  var btnClust = document.getElementById('btnCluster');
+  var pill = document.getElementById('typeFilterPill');
+  var label = document.getElementById('typeFilterLabel');
+  if (isFiltered && typeTemplate) {
+    btnStd.classList.add('opacity-50', 'pointer-events-none');
+    btnClust.classList.add('opacity-50', 'pointer-events-none');
+    pill.classList.remove('hidden');
+    label.textContent = typeTemplate.type;
+  } else {
+    btnStd.classList.remove('opacity-50', 'pointer-events-none');
+    btnClust.classList.remove('opacity-50', 'pointer-events-none');
+    pill.classList.add('hidden');
+  }
+}
+
+function clearTypeFilter() {
+  typeTemplate = null;
+  var typeSelect = document.getElementById('filterType');
+  if (typeSelect) typeSelect.value = '';
+  updateTypeFilterUI(false);
   renderKanban();
 }
 
