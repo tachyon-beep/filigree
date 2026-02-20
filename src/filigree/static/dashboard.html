@@ -20,7 +20,7 @@
   .scrollbar-thin::-webkit-scrollbar-track { background: #1E293B; }
   .scrollbar-thin::-webkit-scrollbar-thumb { background: #475569; border-radius: 3px; }
   .detail-panel { transition: transform 0.2s ease; }
-  .kanban-col { min-width: 320px; }
+  .kanban-col { min-width: 280px; flex: 1 1 0; }
   #refreshIndicator { transition: opacity 0.3s ease; }
   @keyframes stale-pulse { 0%,100% { border-left-color: #EF4444; } 50% { border-left-color: #7F1D1D; } }
   .aging-border { border-left: 4px solid #F59E0B; }
@@ -47,7 +47,7 @@
   }
   @media (min-width: 769px) and (max-width: 1200px) {
     #detailPanel { width: 450px !important; }
-    .kanban-col { min-width: 280px; }
+    .kanban-col { min-width: 260px; }
   }
   body.light { background: #F8FAFC; color: #1E293B; }
   .light .bg-slate-800 { background: #FFFFFF !important; }
@@ -573,13 +573,13 @@ function renderStandardKanban(columns) {
   ];
   return colDefs.map(function(col) {
     var issues = columns[col.key] || [];
-    return '<div class="kanban-col flex flex-col shrink-0">' +
+    return '<div class="kanban-col flex flex-col">' +
       '<div class="flex items-center gap-2 mb-2 px-1">' +
         '<span class="w-2 h-2 rounded-full" style="background:' + col.color + '"></span>' +
         '<span class="font-medium text-xs text-slate-300">' + col.label + '</span>' +
         '<span class="text-xs text-slate-500">' + issues.length + '</span>' +
       '</div>' +
-      '<div class="flex flex-col gap-2 overflow-y-auto scrollbar-thin pr-1" style="max-height: calc(100vh - 160px);">' +
+      '<div class="flex flex-col gap-2 overflow-y-auto scrollbar-thin pr-1 min-h-[200px]" style="max-height: calc(100vh - 160px);">' +
         (issues.length ? issues.map(function(i) { return renderCard(i); }).join('') :
           '<div class="text-xs text-slate-500 p-4 text-center">' +
             (col.key === 'open' ? '<div class="mb-2">No open issues</div><button onclick="showCreateForm()" class="text-blue-400 hover:underline">+ Create an issue</button>'
@@ -608,13 +608,13 @@ function renderClusterKanban(columns) {
     var epicCards = epicIssues.map(function(epic) { return renderClusterCard(epic); }).join('');
     var orphanCards = orphans.map(function(i) { return renderCard(i); }).join('');
 
-    return '<div class="kanban-col flex flex-col shrink-0">' +
+    return '<div class="kanban-col flex flex-col">' +
       '<div class="flex items-center gap-2 mb-2 px-1">' +
         '<span class="w-2 h-2 rounded-full" style="background:' + col.color + '"></span>' +
         '<span class="font-medium text-xs text-slate-300">' + col.label + '</span>' +
         '<span class="text-xs text-slate-500">' + issues.length + '</span>' +
       '</div>' +
-      '<div class="flex flex-col gap-2 overflow-y-auto scrollbar-thin pr-1" style="max-height: calc(100vh - 160px);">' +
+      '<div class="flex flex-col gap-2 overflow-y-auto scrollbar-thin pr-1 min-h-[200px]" style="max-height: calc(100vh - 160px);">' +
         (issues.length ? epicCards + orphanCards : '<div class="text-xs text-slate-600 italic p-2">No issues</div>') +
       '</div></div>';
   }).join('');
@@ -774,13 +774,13 @@ function renderTypeKanban(stateColumns, template) {
   return template.states.map(function(state) {
     var issues = stateColumns[state.name] || [];
     var catColor = CATEGORY_COLORS[state.category] || '#64748B';
-    return '<div class="kanban-col flex flex-col shrink-0">' +
+    return '<div class="kanban-col flex flex-col">' +
       '<div class="flex items-center gap-2 mb-2 px-1">' +
         '<span class="w-2 h-2 rounded-full" style="background:' + catColor + '"></span>' +
         '<span class="font-medium text-xs text-slate-300">' + state.name + '</span>' +
         '<span class="text-xs text-slate-500">' + issues.length + '</span>' +
       '</div>' +
-      '<div class="flex flex-col gap-2 overflow-y-auto scrollbar-thin pr-1" style="max-height: calc(100vh - 160px);">' +
+      '<div class="flex flex-col gap-2 overflow-y-auto scrollbar-thin pr-1 min-h-[200px]" style="max-height: calc(100vh - 160px);">' +
         (issues.length ? issues.map(function(i) { return renderCard(i); }).join('') : '<div class="text-xs text-slate-600 italic p-2">No issues</div>') +
       '</div></div>';
   }).join('');
