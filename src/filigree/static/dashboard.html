@@ -137,9 +137,6 @@ tailwind.config = {
     <span id="refreshIndicator" class="opacity-0 text-blue-400">Refreshing...</span>
     <span id="healthBadge" onclick="showHealthBreakdown()" class="cursor-pointer px-2 py-0.5 rounded text-xs font-bold" title="System Health Score — click for breakdown">--</span>
     <button onclick="showHealthHelp(this)" class="help-icon bg-slate-700 text-slate-400 hover:text-slate-200" title="What is Health Score?" aria-label="Explain health score">?</button>
-    <span>Open: <b id="statOpen" class="text-slate-200" aria-live="polite">0</b></span>
-    <span>Active: <b id="statActive" class="text-slate-200" aria-live="polite">0</b></span>
-    <span>Ready: <b id="statReady" class="text-emerald-400" aria-live="polite">0</b></span>
   </div>
 </header>
 
@@ -387,9 +384,6 @@ function updateStats() {
   var byCat = s.by_category || {};
   var open = byCat.open || 0;
   var active = byCat.wip || 0;
-  document.getElementById('statOpen').textContent = open;
-  document.getElementById('statActive').textContent = active;
-  document.getElementById('statReady').textContent = s.ready_count;
   document.getElementById('readyCount').textContent = s.ready_count;
   document.getElementById('footOpen').textContent = open;
   document.getElementById('footActive').textContent = active;
