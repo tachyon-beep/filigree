@@ -1,8 +1,8 @@
 # Roadmap
 
-Filigree is an issue tracker designed for AI coding agents. Version 1.0 has shipped with a full feature set for local-first, MCP-native issue tracking. This roadmap outlines directions, not commitments.
+Filigree is an issue tracker designed for AI coding agents. This roadmap outlines directions, not commitments.
 
-## Shipped (v1.0)
+## Shipped (v1.0–v1.1)
 
 - **MCP server** with 43 tools for agent-native interaction
 - **Full CLI** with `--json` output and `--actor` audit trails
@@ -20,18 +20,22 @@ Filigree is an issue tracker designed for AI coding agents. Version 1.0 has ship
 - **One-stop install** -- `filigree install` wires up MCP, hooks, skills, CLAUDE.md, and .gitignore; `filigree doctor` validates everything
 - **MCP pagination** -- list endpoints cap at 50 results with `has_more` indicator and `no_limit` override
 
+## Shipped (v1.2)
+
+- **Multi-project dashboard** -- ephemeral project registry, `ProjectManager` connection pool, project switcher dropdown, per-project API routing; MCP servers self-register on startup
+- **Dashboard UX overhaul** -- equal-width Kanban columns, drag-and-drop status changes with transition validation, header density reduction, type-filter/mode toggle conflict resolution, WCAG-compliant status badges, P0/P1 text priority labels, stale issue list, workflow auto-select, transition hints, claim modal improvements
+- **Deep Teal color theme** -- full migration from hardcoded Tailwind colors to 20 CSS custom properties on `:root`/`[data-theme="light"]`, 15 utility classes, JS `THEME_COLORS` object for Cytoscape; dark and light themes with consistent palette
+
 ## Near-term (1.x releases)
 
 - **Event-driven plugin system** -- extensible pre/post hooks on state transitions for custom automation
 - **GitHub integration** -- sync issues bidirectionally with GitHub Issues
 - **`filigree watch`** -- file-system triggered actions (auto-close on commit, etc.)
-- **Dashboard enhancements** -- dependency graph visualization, drag-and-drop prioritization
 - **Additional import formats** -- CSV, GitHub Issues JSON, Linear export
 
 ## Future
 
-- **Multi-project support** -- cross-project dependencies and shared dashboards
-- **Plugin system** -- custom integrations via Python entry points
+- **Multi-project federation** -- cross-project dependencies and shared dashboards
 - **Notification hooks** -- webhooks, Slack, and email on state changes
 - **Hardening** -- performance optimization for large databases (10k+ issues), fuzz testing
 - **Team coordination** -- enhanced multi-agent features (work queues, capacity tracking)

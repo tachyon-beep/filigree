@@ -7,6 +7,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-02-21
+
+Multi-project dashboard, UX overhaul, and Deep Teal color theme.
+
+### Added
+
+#### Multi-project support
+
+- Ephemeral project registry (`src/filigree/registry.py`) for discovering local filigree projects
+- `ProjectManager` connection pool for serving multiple SQLite databases from a single dashboard instance
+- Project switcher dropdown in the dashboard header
+- Per-project API routing via FastAPI `APIRouter` — all endpoints scoped to the selected project
+- MCP servers self-register with the global registry on startup (best-effort, never fatal)
+- `/api/health` endpoint for dashboard process detection
+
+#### Dashboard UX improvements
+
+- Equal-width Kanban columns (`flex: 1 1 0` with `min-width: 280px`) — empty columns no longer shrink
+- Drag-and-drop between Kanban columns with transition validation — pre-fetches valid transitions on dragstart, dims invalid targets, optimistic card move with toast confirmation
+- Keyboard shortcut `m` opens "Move to..." dropdown as accessible alternative to drag-and-drop
+- Type-filter / mode toggle conflict resolved — Standard/Cluster buttons dim when type filter is active, active filter shown as dismissible pill
+- WCAG-compliant status badges — open badges use tinted background with higher-contrast text
+- P0/P1 text priority labels — critical and high priorities show text badges instead of color-only dots
+- Stale badge click shows all stale issues (not just the first)
+- Workflow view auto-selects first type on initial load
+- Disabled transition buttons show inline `(missing: field)` hints
+- Claim modal shows "Not you?" link when pre-filling from localStorage
+- Header density reduction — removed duplicate stat spans (footer has the full set)
+
+#### Deep Teal color theme
+
+- 20 CSS custom properties on `:root` (dark default) and `[data-theme="light"]` for all surface, border, text, accent, scrollbar, graph, and status colors
+- 15 utility classes (`.bg-raised`, `.text-primary`, `.bg-accent`, etc.) for static HTML elements
+- `THEME_COLORS` global JS object for Cytoscape graphs (which cannot read CSS custom properties), synced in `toggleTheme()` and theme init
+- Dark palette: deep teal surfaces (#0B1215 → #243A45), sky-blue accent (#38BDF8)
+- Light palette: teal-tinted whites (#F0F6F8 → #DCE9EE), darker sky accent (#0284C7)
+- Theme toggle mechanism changed from `classList.toggle('light')` to `dataset.theme` with CSS `[data-theme="light"]` selector
+- All `bg-slate-*`, `text-slate-*`, `border-slate-*` Tailwind classes eliminated from dashboard
+- Old `.light` CSS override block (9 lines with `!important`) removed
+
+### Changed
+
+- Dashboard API restructured from flat routes to `APIRouter` with project-scoped prefix
+- `CATEGORY_COLORS.wip` updated from `#3B82F6` (blue-500) to `#38BDF8` (sky-400)
+- `CATEGORY_COLORS.done` updated from `#9CA3AF` (gray) to `#7B919C` (teal-tinted gray)
+- `@keyframes flash` color updated to match accent (`rgba(56,189,248,0.5)`)
+- Sparkline stroke color uses `THEME_COLORS.accent` instead of hardcoded blue
+
+### Fixed
+
+- Cytoscape graph and workflow graph colors now update on theme toggle (re-render triggered)
+- Graph legend status dots use CSS custom properties instead of hardcoded hex
+- Kanban column header dots use `CATEGORY_COLORS` instead of hardcoded hex
+- Progress bars in cluster cards and plan view use `CATEGORY_COLORS` instead of hardcoded hex
+
 ## [1.1.1] - 2026-02-20
 
 Comprehensive bug-fix and hardening release. 31 bugs resolved across 13 source files,
@@ -177,7 +232,8 @@ identified through systematic static analysis and verified against HEAD.
 - Issue validation against workflow templates (`validate`)
 - PEP 561 `py.typed` marker for downstream type checking
 
-[Unreleased]: https://github.com/tachyon-beep/filigree/compare/v1.1.1...HEAD
+[Unreleased]: https://github.com/tachyon-beep/filigree/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/tachyon-beep/filigree/compare/v1.1.1...v1.2.0
 [1.1.1]: https://github.com/tachyon-beep/filigree/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/tachyon-beep/filigree/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/tachyon-beep/filigree/compare/v0.1.0...v1.0.0
