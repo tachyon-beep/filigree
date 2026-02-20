@@ -600,10 +600,13 @@ def create_app() -> Any:
         if not isinstance(body, dict):
             return JSONResponse({"error": "Request body must be a JSON object"}, status_code=400)
         path = body.get("path")
-        if not path or not Path(path).is_dir():
+        if not path or not isinstance(path, str):
+            return JSONResponse({"error": "Invalid path"}, status_code=400)
+        # Canonicalize to prevent path traversal
+        p = Path(path).resolve()
+        if not p.is_dir():
             return JSONResponse({"error": "Invalid path"}, status_code=400)
         # Resolve: accept either .filigree/ dir or its parent project root
-        p = Path(path)
         if p.name != ".filigree":
             candidate = p / ".filigree"
             if candidate.is_dir():
