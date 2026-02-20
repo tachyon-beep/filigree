@@ -1639,7 +1639,7 @@ async def _run(project_path: Path | None) -> None:
 
         Registry().register(filigree_dir)
     except Exception:
-        pass  # Never fatal — registry is advisory
+        logging.getLogger(__name__).debug("Best-effort registry registration failed", exc_info=True)
 
     from filigree.logging import setup_logging
 

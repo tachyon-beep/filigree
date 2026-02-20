@@ -48,23 +48,12 @@ class Registry:
         try:
             data = json.loads(REGISTRY_FILE.read_text())
             if not isinstance(data, dict):
+                logger.warning("Registry file %s contains non-dict JSON, ignoring", REGISTRY_FILE)
                 return {}
             return data
-        except (json.JSONDecodeError, OSError):
-            logger.warning("Corrupt registry file, resetting")
+        except (json.JSONDecodeError, OSError) as exc:
+            logger.warning("Corrupt registry file %s, returning empty: %s", REGISTRY_FILE, exc)
             return {}
-
-    def _write(self, data: dict[str, Any]) -> None:
-        """Write registry.json with flock for atomicity."""
-        REGISTRY_DIR.mkdir(parents=True, exist_ok=True)
-        lock_fd = None
-        try:
-            lock_fd = open(REGISTRY_LOCK, "w")  # noqa: SIM115
-            fcntl.flock(lock_fd, fcntl.LOCK_EX)
-            REGISTRY_FILE.write_text(json.dumps(data, indent=2) + "\n")
-        finally:
-            if lock_fd is not None:
-                lock_fd.close()
 
     def register(self, filigree_dir: Path) -> ProjectEntry:
         """Register or touch a project. Returns its ProjectEntry."""
@@ -113,7 +102,8 @@ class Registry:
                 seen = datetime.fromisoformat(entry_data["last_seen"]).timestamp()
                 if seen >= cutoff:
                     result.append(ProjectEntry(**entry_data))
-            except (KeyError, ValueError):
+            except (KeyError, ValueError, TypeError) as exc:
+                logger.debug("Skipping malformed registry entry: %s", exc)
                 continue
         result.sort(key=lambda e: e.last_seen, reverse=True)
         return result
@@ -180,6 +170,7 @@ class ProjectManager:
             )
             db.initialize()
         except Exception:
+            logger.warning("Failed to open DB for project key=%s path=%s", key, path, exc_info=True)
             self._paths.pop(key, None)
             return None
 

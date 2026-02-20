@@ -129,7 +129,7 @@ def _try_register_with_server(port: int) -> None:
         )
         urllib.request.urlopen(req, timeout=2)  # noqa: S310
     except Exception:
-        pass  # Best-effort
+        logging.getLogger(__name__).debug("Best-effort dashboard registration failed", exc_info=True)
 
 
 def ensure_dashboard_running(port: int = 8377) -> str:
@@ -158,7 +158,7 @@ def ensure_dashboard_running(port: int = 8377) -> str:
         filigree_dir = find_filigree_root()
         Registry().register(filigree_dir)
     except Exception:
-        pass  # Never fatal — registry is advisory
+        logging.getLogger(__name__).debug("Best-effort registry registration failed", exc_info=True)
 
     tmpdir = os.environ.get("TMPDIR", "/tmp")  # noqa: S108
     lockfile = os.path.join(tmpdir, "filigree-dashboard.lock")
