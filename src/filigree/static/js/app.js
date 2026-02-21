@@ -105,13 +105,16 @@ import {
 import { loadPlanView, loadWorkflow } from "./views/workflow.js";
 import {
   closeFileDetail,
+  createIssueFromFinding,
   filesPageNext,
   filesPagePrev,
+  filterFindings,
   filterTimeline,
   loadFiles,
   loadMoreFindings,
   loadMoreTimeline,
   openFileDetail,
+  selectFinding,
   showLinkIssueModal,
   sortFiles,
   submitLinkIssue,
@@ -566,6 +569,9 @@ window.switchFileTab = switchFileTab;
 window.loadMoreFindings = loadMoreFindings;
 window.loadMoreTimeline = loadMoreTimeline;
 window.filterTimeline = filterTimeline;
+window.filterFindings = filterFindings;
+window.selectFinding = selectFinding;
+window.createIssueFromFinding = createIssueFromFinding;
 window.showLinkIssueModal = showLinkIssueModal;
 window.submitLinkIssue = submitLinkIssue;
 
