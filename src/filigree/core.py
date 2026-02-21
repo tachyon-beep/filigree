@@ -9,6 +9,7 @@ Convention-based discovery: each project has a `.filigree/` directory containing
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import re as _re
@@ -2485,12 +2486,15 @@ class FiligreeDB:
         offset: int = 0,
         language: str | None = None,
         path_prefix: str | None = None,
+        min_findings: int | None = None,
         sort: str = "updated_at",
     ) -> dict[str, Any]:
         """List file records with pagination metadata.
 
         Returns ``{results, total, limit, offset, has_more}``.
-        Uses two separate queries (COUNT + data) for efficiency.
+
+        When *min_findings* is provided, only files with at least that many
+        open findings are returned (uses a correlated subquery).
         """
         clauses: list[str] = []
         params: list[Any] = []
@@ -2501,6 +2505,11 @@ class FiligreeDB:
         if path_prefix is not None:
             clauses.append("path LIKE ?")
             params.append(f"{path_prefix}%")
+        if min_findings is not None and min_findings > 0:
+            clauses.append(
+                "(SELECT COUNT(*) FROM scan_findings sf WHERE sf.file_id = file_records.id AND sf.status = 'open') >= ?"
+            )
+            params.append(min_findings)
 
         where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
 
@@ -2533,16 +2542,31 @@ class FiligreeDB:
         scan_source: str,
         findings: list[dict[str, Any]],
         scan_run_id: str = "",
+        mark_unseen: bool = False,
     ) -> dict[str, Any]:
         """Ingest scan results: create/update file records and findings.
 
         Each finding dict must have at minimum: path, rule_id, severity, message.
         Optional: language, line_start, line_end, metadata.
 
-        Returns summary stats: files_created, files_updated, findings_created, findings_updated.
+        When *mark_unseen* is ``True``, findings in the same (file, scan_source)
+        that are NOT in this batch are set to ``unseen_in_latest`` status.
+        Only findings with a non-terminal status are affected (``fixed`` and
+        ``false_positive`` are left alone).
+
+        Returns summary stats including ``new_finding_ids``.
         """
         now = _now_iso()
-        stats = {"files_created": 0, "files_updated": 0, "findings_created": 0, "findings_updated": 0}
+        stats: dict[str, Any] = {
+            "files_created": 0,
+            "files_updated": 0,
+            "findings_created": 0,
+            "findings_updated": 0,
+            "new_finding_ids": [],
+        }
+
+        # Track which finding IDs were seen, keyed by file_id, for mark_unseen
+        seen_finding_ids: dict[str, list[str]] = {}
 
         for i, f in enumerate(findings):
             if not isinstance(f, dict):
@@ -2599,6 +2623,7 @@ class FiligreeDB:
                     (f.get("message", ""), severity, f.get("line_end"), now, now, existing_finding["id"]),
                 )
                 stats["findings_updated"] += 1
+                seen_finding_ids.setdefault(file_id, []).append(existing_finding["id"])
             else:
                 finding_id = self._generate_finding_id()
                 self.conn.execute(
@@ -2621,9 +2646,65 @@ class FiligreeDB:
                     ),
                 )
                 stats["findings_created"] += 1
+                stats["new_finding_ids"].append(finding_id)
+                seen_finding_ids.setdefault(file_id, []).append(finding_id)
+
+        # Mark unseen findings as unseen_in_latest (atomic per file+source)
+        if mark_unseen:
+            terminal = ("fixed", "false_positive")
+            for fid, fids in seen_finding_ids.items():
+                placeholders = ",".join("?" * len(fids))
+                self.conn.execute(
+                    f"UPDATE scan_findings SET status = 'unseen_in_latest', updated_at = ? "
+                    f"WHERE file_id = ? AND scan_source = ? "
+                    f"AND status NOT IN (?, ?) "
+                    f"AND id NOT IN ({placeholders})",
+                    [now, fid, scan_source, *terminal, *fids],
+                )
 
         self.conn.commit()
         return stats
+
+    def clean_stale_findings(
+        self,
+        *,
+        days: int = 30,
+        scan_source: str | None = None,
+    ) -> dict[str, Any]:
+        """Move ``unseen_in_latest`` findings older than *days* to ``fixed``.
+
+        Only affects findings whose ``last_seen_at`` (or ``updated_at`` as
+        fallback) is older than the cutoff.  Returns stats about what changed.
+        """
+        from datetime import timedelta
+
+        cutoff = (datetime.now(UTC) - timedelta(days=days)).isoformat()
+
+        clauses = [
+            "status = 'unseen_in_latest'",
+            "coalesce(last_seen_at, updated_at) < ?",
+        ]
+        params: list[Any] = [cutoff]
+
+        if scan_source is not None:
+            clauses.append("scan_source = ?")
+            params.append(scan_source)
+
+        now = _now_iso()
+        where = " AND ".join(clauses)
+        cursor = self.conn.execute(
+            f"UPDATE scan_findings SET status = 'fixed', updated_at = ? WHERE {where}",
+            [now, *params],
+        )
+        self.conn.commit()
+        return {"findings_fixed": cursor.rowcount}
+
+    # Severity ordering for SQL sort: lower number = more severe.
+    _SEVERITY_ORDER_SQL = (
+        "CASE severity "
+        "WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 "
+        "WHEN 'low' THEN 3 WHEN 'info' THEN 4 ELSE 5 END"
+    )
 
     def get_findings(
         self,
@@ -2631,6 +2712,7 @@ class FiligreeDB:
         *,
         severity: str | None = None,
         status: str | None = None,
+        sort: str = "updated_at",
         limit: int = 100,
         offset: int = 0,
     ) -> list[ScanFinding]:
@@ -2646,8 +2728,10 @@ class FiligreeDB:
             params.append(status)
 
         where = " AND ".join(clauses)
+        order_clause = f"{self._SEVERITY_ORDER_SQL} ASC, updated_at DESC" if sort == "severity" else "updated_at DESC"
+
         rows = self.conn.execute(
-            f"SELECT * FROM scan_findings WHERE {where} ORDER BY updated_at DESC LIMIT ? OFFSET ?",
+            f"SELECT * FROM scan_findings WHERE {where} ORDER BY {order_clause} LIMIT ? OFFSET ?",
             [*params, limit, offset],
         ).fetchall()
         return [self._build_scan_finding(r) for r in rows]
@@ -2658,6 +2742,7 @@ class FiligreeDB:
         *,
         severity: str | None = None,
         status: str | None = None,
+        sort: str = "updated_at",
         limit: int = 100,
         offset: int = 0,
     ) -> dict[str, Any]:
@@ -2682,8 +2767,10 @@ class FiligreeDB:
             params,
         ).fetchone()[0]
 
+        order_clause = f"{self._SEVERITY_ORDER_SQL} ASC, updated_at DESC" if sort == "severity" else "updated_at DESC"
+
         rows = self.conn.execute(
-            f"SELECT * FROM scan_findings WHERE {where} ORDER BY updated_at DESC LIMIT ? OFFSET ?",
+            f"SELECT * FROM scan_findings WHERE {where} ORDER BY {order_clause} LIMIT ? OFFSET ?",
             [*params, limit, offset],
         ).fetchall()
 
@@ -2883,6 +2970,104 @@ class FiligreeDB:
             }
             for r in rows
         ]
+
+    # -- File Timeline --------------------------------------------------------
+
+    def get_file_timeline(
+        self,
+        file_id: str,
+        *,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        """Build a merged timeline of events for a file.
+
+        Assembles entries from scan findings and file associations, sorted
+        newest-first.  Each entry carries a deterministic ``id`` derived from
+        ``sha256(type + timestamp + source_id)[:12]`` so clients can
+        cache/deduplicate without server coordination.
+
+        Raises ``KeyError`` if the file does not exist.
+        """
+        self.get_file(file_id)  # validate existence
+
+        entries: list[dict[str, Any]] = []
+
+        # 1. Finding events (created + status changes inferred from updated_at)
+        findings = self.conn.execute(
+            "SELECT id, scan_source, rule_id, severity, status, message, "
+            "first_seen, updated_at FROM scan_findings WHERE file_id = ? "
+            "ORDER BY first_seen DESC",
+            (file_id,),
+        ).fetchall()
+        for f in findings:
+            entries.append(
+                {
+                    "type": "finding_created",
+                    "timestamp": f["first_seen"],
+                    "source_id": f["id"],
+                    "data": {
+                        "scan_source": f["scan_source"],
+                        "rule_id": f["rule_id"],
+                        "severity": f["severity"],
+                        "message": f["message"],
+                    },
+                }
+            )
+            if f["updated_at"] != f["first_seen"]:
+                entries.append(
+                    {
+                        "type": "finding_updated",
+                        "timestamp": f["updated_at"],
+                        "source_id": f["id"],
+                        "data": {
+                            "scan_source": f["scan_source"],
+                            "rule_id": f["rule_id"],
+                            "severity": f["severity"],
+                            "status": f["status"],
+                        },
+                    }
+                )
+
+        # 2. Association events
+        assocs = self.conn.execute(
+            "SELECT fa.id, fa.issue_id, fa.assoc_type, fa.created_at, "
+            "i.title as issue_title "
+            "FROM file_associations fa "
+            "LEFT JOIN issues i ON fa.issue_id = i.id "
+            "WHERE fa.file_id = ? ORDER BY fa.created_at DESC",
+            (file_id,),
+        ).fetchall()
+        for a in assocs:
+            entries.append(
+                {
+                    "type": "association_created",
+                    "timestamp": a["created_at"],
+                    "source_id": str(a["id"]),
+                    "data": {
+                        "issue_id": a["issue_id"],
+                        "issue_title": a["issue_title"],
+                        "assoc_type": a["assoc_type"],
+                    },
+                }
+            )
+
+        # Add deterministic IDs and sort newest-first
+        for entry in entries:
+            raw = f"{entry['type']}:{entry['timestamp']}:{entry['source_id']}"
+            entry["id"] = hashlib.sha256(raw.encode()).hexdigest()[:12]
+
+        entries.sort(key=lambda e: e["timestamp"], reverse=True)
+
+        total = len(entries)
+        page = entries[offset : offset + limit]
+        return {
+            "results": page,
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+            "has_more": offset + limit < total,
+        }
 
     # -- Archival / Compaction ------------------------------------------------
 

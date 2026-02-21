@@ -622,14 +622,18 @@ def _create_project_router() -> Any:
         offset = _safe_int(params.get("offset", "0"), "offset", 0)
         if isinstance(offset, JSONResponse):
             return offset
+        min_findings = _safe_int(params.get("min_findings", "0"), "min_findings", 0)
+        if isinstance(min_findings, JSONResponse):
+            return min_findings
         result = db.list_files_paginated(
             limit=limit,
             offset=offset,
             language=params.get("language"),
             path_prefix=params.get("path_prefix"),
+            min_findings=min_findings if min_findings > 0 else None,
             sort=params.get("sort", "updated_at"),
         )
-        return JSONResponse(result)
+        return JSONResponse(result, headers={"Cache-Control": "no-cache"})
 
     @router.get("/files/hotspots")
     async def api_file_hotspots(request: Request, db: FiligreeDB = Depends(_get_project_db)) -> JSONResponse:
@@ -648,7 +652,7 @@ def _create_project_router() -> Any:
             "valid_severities": sorted(VALID_SEVERITIES),
             "valid_finding_statuses": sorted(VALID_FINDING_STATUSES),
             "valid_association_types": sorted(VALID_ASSOC_TYPES),
-            "valid_sort_fields": ["updated_at", "first_seen", "path", "language"],
+            "valid_sort_fields": ["updated_at", "first_seen", "path", "language", "severity"],
             "endpoints": [
                 {
                     "method": "POST",
@@ -661,6 +665,12 @@ def _create_project_router() -> Any:
                     "method": "GET",
                     "path": "/api/files/{file_id}",
                     "description": "Get file details",
+                    "status": "live",
+                },
+                {
+                    "method": "GET",
+                    "path": "/api/files/{file_id}/timeline",
+                    "description": "Merged event timeline for a file",
                     "status": "live",
                 },
                 {
@@ -680,7 +690,7 @@ def _create_project_router() -> Any:
             data = db.get_file_detail(file_id)
         except KeyError:
             return _error_response(f"File not found: {file_id}", "FILE_NOT_FOUND", 404)
-        return JSONResponse(data)
+        return JSONResponse(data, headers={"Cache-Control": "no-cache"})
 
     @router.get("/files/{file_id}/findings")
     async def api_get_file_findings(
@@ -702,9 +712,29 @@ def _create_project_router() -> Any:
             file_id,
             severity=params.get("severity"),
             status=params.get("status"),
+            sort=params.get("sort", "updated_at"),
             limit=limit,
             offset=offset,
         )
+        return JSONResponse(result, headers={"Cache-Control": "max-age=30"})
+
+    @router.get("/files/{file_id}/timeline")
+    async def api_get_file_timeline(
+        file_id: str, request: Request, db: FiligreeDB = Depends(_get_project_db)
+    ) -> JSONResponse:
+        """Get merged timeline of events for a file."""
+        try:
+            db.get_file(file_id)
+        except KeyError:
+            return _error_response(f"File not found: {file_id}", "FILE_NOT_FOUND", 404)
+        params = request.query_params
+        limit = _safe_int(params.get("limit", "50"), "limit", 50)
+        if isinstance(limit, JSONResponse):
+            return limit
+        offset = _safe_int(params.get("offset", "0"), "offset", 0)
+        if isinstance(offset, JSONResponse):
+            return offset
+        result = db.get_file_timeline(file_id, limit=limit, offset=offset)
         return JSONResponse(result)
 
     @router.post("/files/{file_id}/associations")
@@ -745,11 +775,23 @@ def _create_project_router() -> Any:
         if not scan_source:
             return _error_response("scan_source is required", "VALIDATION_ERROR", 400)
         findings = body.get("findings", [])
+        if not findings:
+            return JSONResponse(
+                {
+                    "files_created": 0,
+                    "files_updated": 0,
+                    "findings_created": 0,
+                    "findings_updated": 0,
+                    "new_finding_ids": [],
+                },
+                status_code=202,
+            )
         try:
             result = db.process_scan_results(
                 scan_source=scan_source,
                 findings=findings,
                 scan_run_id=body.get("scan_run_id", ""),
+                mark_unseen=bool(body.get("mark_unseen", False)),
             )
         except ValueError as e:
             return _error_response(str(e), "VALIDATION_ERROR", 400)

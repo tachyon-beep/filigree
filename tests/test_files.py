@@ -215,6 +215,7 @@ class TestProcessScanResults:
         result = db.process_scan_results(scan_source="ruff", findings=[])
         assert result["files_created"] == 0
         assert result["findings_created"] == 0
+        assert result["new_finding_ids"] == []
 
     def test_ingest_finding_missing_path(self, db: FiligreeDB) -> None:
         with pytest.raises(ValueError, match="path"):
@@ -230,6 +231,231 @@ class TestProcessScanResults:
     def test_ingest_finding_is_number(self, db: FiligreeDB) -> None:
         with pytest.raises(ValueError, match="dict"):
             db.process_scan_results(scan_source="ruff", findings=[42])
+
+
+class TestNewFindingIds:
+    """Tests for new_finding_ids in process_scan_results return."""
+
+    def test_new_finding_ids_on_create(self, db: FiligreeDB) -> None:
+        result = db.process_scan_results(
+            scan_source="ruff",
+            findings=[
+                {"path": "a.py", "rule_id": "E501", "severity": "low", "message": "msg1"},
+                {"path": "a.py", "rule_id": "E502", "severity": "low", "message": "msg2"},
+            ],
+        )
+        assert len(result["new_finding_ids"]) == 2
+        assert result["findings_created"] == 2
+
+    def test_new_finding_ids_empty_on_update(self, db: FiligreeDB) -> None:
+        finding = {"path": "a.py", "rule_id": "E501", "severity": "low", "message": "msg"}
+        db.process_scan_results(scan_source="ruff", findings=[finding])
+        result = db.process_scan_results(scan_source="ruff", findings=[finding])
+        assert result["new_finding_ids"] == []
+        assert result["findings_updated"] == 1
+
+    def test_new_finding_ids_mixed(self, db: FiligreeDB) -> None:
+        db.process_scan_results(
+            scan_source="ruff",
+            findings=[{"path": "a.py", "rule_id": "E501", "severity": "low", "message": "old"}],
+        )
+        result = db.process_scan_results(
+            scan_source="ruff",
+            findings=[
+                {"path": "a.py", "rule_id": "E501", "severity": "low", "message": "old"},  # update
+                {"path": "a.py", "rule_id": "E502", "severity": "low", "message": "new"},  # create
+            ],
+        )
+        assert len(result["new_finding_ids"]) == 1
+        assert result["findings_created"] == 1
+        assert result["findings_updated"] == 1
+
+
+class TestMarkUnseen:
+    """Tests for mark_unseen soft status behavior."""
+
+    def test_mark_unseen_flags_missing_findings(self, db: FiligreeDB) -> None:
+        db.process_scan_results(
+            scan_source="ruff",
+            findings=[
+                {"path": "a.py", "rule_id": "E501", "severity": "low", "message": "m1"},
+                {"path": "a.py", "rule_id": "E502", "severity": "low", "message": "m2"},
+            ],
+        )
+        # Second scan only includes E501 — E502 should become unseen_in_latest
+        db.process_scan_results(
+            scan_source="ruff",
+            findings=[{"path": "a.py", "rule_id": "E501", "severity": "low", "message": "m1"}],
+            mark_unseen=True,
+        )
+        f = db.get_file_by_path("a.py")
+        findings = db.get_findings(f.id)
+        statuses = {finding.rule_id: finding.status for finding in findings}
+        assert statuses["E501"] == "open"
+        assert statuses["E502"] == "unseen_in_latest"
+
+    def test_mark_unseen_does_not_affect_other_files(self, db: FiligreeDB) -> None:
+        db.process_scan_results(
+            scan_source="ruff",
+            findings=[
+                {"path": "a.py", "rule_id": "E501", "severity": "low", "message": "m1"},
+                {"path": "b.py", "rule_id": "E501", "severity": "low", "message": "m1"},
+            ],
+        )
+        # Scan only a.py — b.py findings should NOT be affected
+        db.process_scan_results(
+            scan_source="ruff",
+            findings=[{"path": "a.py", "rule_id": "E501", "severity": "low", "message": "m1"}],
+            mark_unseen=True,
+        )
+        fb = db.get_file_by_path("b.py")
+        findings_b = db.get_findings(fb.id)
+        assert all(f.status == "open" for f in findings_b)
+
+    def test_mark_unseen_does_not_affect_other_sources(self, db: FiligreeDB) -> None:
+        db.process_scan_results(
+            scan_source="ruff",
+            findings=[{"path": "a.py", "rule_id": "E501", "severity": "low", "message": "m"}],
+        )
+        db.process_scan_results(
+            scan_source="eslint",
+            findings=[{"path": "a.py", "rule_id": "no-unused-vars", "severity": "high", "message": "m"}],
+        )
+        # Scan ruff only — eslint findings should NOT be affected
+        db.process_scan_results(
+            scan_source="ruff",
+            findings=[{"path": "a.py", "rule_id": "E501", "severity": "low", "message": "m"}],
+            mark_unseen=True,
+        )
+        fa = db.get_file_by_path("a.py")
+        findings = db.get_findings(fa.id)
+        eslint_finding = next(f for f in findings if f.scan_source == "eslint")
+        assert eslint_finding.status == "open"
+
+    def test_mark_unseen_preserves_fixed(self, db: FiligreeDB) -> None:
+        db.process_scan_results(
+            scan_source="ruff",
+            findings=[
+                {"path": "a.py", "rule_id": "E501", "severity": "low", "message": "m1"},
+                {"path": "a.py", "rule_id": "E502", "severity": "low", "message": "m2"},
+            ],
+        )
+        f = db.get_file_by_path("a.py")
+        findings = db.get_findings(f.id)
+        # Manually mark E502 as fixed
+        e502 = next(fi for fi in findings if fi.rule_id == "E502")
+        db.conn.execute("UPDATE scan_findings SET status = 'fixed' WHERE id = ?", (e502.id,))
+        db.conn.commit()
+
+        # Scan only E501 — E502 should stay fixed, not become unseen_in_latest
+        db.process_scan_results(
+            scan_source="ruff",
+            findings=[{"path": "a.py", "rule_id": "E501", "severity": "low", "message": "m1"}],
+            mark_unseen=True,
+        )
+        findings = db.get_findings(f.id)
+        statuses = {fi.rule_id: fi.status for fi in findings}
+        assert statuses["E502"] == "fixed"
+
+    def test_mark_unseen_false_does_nothing(self, db: FiligreeDB) -> None:
+        db.process_scan_results(
+            scan_source="ruff",
+            findings=[
+                {"path": "a.py", "rule_id": "E501", "severity": "low", "message": "m1"},
+                {"path": "a.py", "rule_id": "E502", "severity": "low", "message": "m2"},
+            ],
+        )
+        db.process_scan_results(
+            scan_source="ruff",
+            findings=[{"path": "a.py", "rule_id": "E501", "severity": "low", "message": "m1"}],
+            mark_unseen=False,
+        )
+        f = db.get_file_by_path("a.py")
+        findings = db.get_findings(f.id)
+        assert all(fi.status == "open" for fi in findings)
+
+    def test_last_seen_at_updated_on_rescan(self, db: FiligreeDB) -> None:
+        db.process_scan_results(
+            scan_source="ruff",
+            findings=[{"path": "a.py", "rule_id": "E501", "severity": "low", "message": "m"}],
+        )
+        f = db.get_file_by_path("a.py")
+        first_last_seen = db.get_findings(f.id)[0].last_seen_at
+
+        db.process_scan_results(
+            scan_source="ruff",
+            findings=[{"path": "a.py", "rule_id": "E501", "severity": "low", "message": "m"}],
+        )
+        second_last_seen = db.get_findings(f.id)[0].last_seen_at
+        assert second_last_seen is not None
+        assert second_last_seen >= (first_last_seen or "")
+
+
+class TestCleanStaleFindings:
+    """Tests for the clean_stale_findings command."""
+
+    def test_cleans_old_unseen_findings(self, db: FiligreeDB) -> None:
+        db.process_scan_results(
+            scan_source="ruff",
+            findings=[{"path": "a.py", "rule_id": "E501", "severity": "low", "message": "m"}],
+        )
+        f = db.get_file_by_path("a.py")
+        finding = db.get_findings(f.id)[0]
+        # Mark as unseen with an old last_seen_at
+        db.conn.execute(
+            "UPDATE scan_findings SET status = 'unseen_in_latest', "
+            "last_seen_at = '2020-01-01T00:00:00+00:00' WHERE id = ?",
+            (finding.id,),
+        )
+        db.conn.commit()
+
+        result = db.clean_stale_findings(days=30)
+        assert result["findings_fixed"] == 1
+        updated = db.get_findings(f.id)[0]
+        assert updated.status == "fixed"
+
+    def test_does_not_clean_recent_unseen(self, db: FiligreeDB) -> None:
+        db.process_scan_results(
+            scan_source="ruff",
+            findings=[{"path": "a.py", "rule_id": "E501", "severity": "low", "message": "m"}],
+        )
+        f = db.get_file_by_path("a.py")
+        finding = db.get_findings(f.id)[0]
+        # Mark as unseen but with recent last_seen_at
+        db.conn.execute(
+            "UPDATE scan_findings SET status = 'unseen_in_latest' WHERE id = ?",
+            (finding.id,),
+        )
+        db.conn.commit()
+
+        result = db.clean_stale_findings(days=30)
+        assert result["findings_fixed"] == 0
+
+    def test_filters_by_scan_source(self, db: FiligreeDB) -> None:
+        db.process_scan_results(
+            scan_source="ruff",
+            findings=[{"path": "a.py", "rule_id": "E501", "severity": "low", "message": "m"}],
+        )
+        db.process_scan_results(
+            scan_source="eslint",
+            findings=[{"path": "a.py", "rule_id": "no-unused-vars", "severity": "high", "message": "m"}],
+        )
+        f = db.get_file_by_path("a.py")
+        findings = db.get_findings(f.id)
+        for fi in findings:
+            db.conn.execute(
+                "UPDATE scan_findings SET status = 'unseen_in_latest', "
+                "last_seen_at = '2020-01-01T00:00:00+00:00' WHERE id = ?",
+                (fi.id,),
+            )
+        db.conn.commit()
+
+        result = db.clean_stale_findings(days=30, scan_source="ruff")
+        assert result["findings_fixed"] == 1
+        # eslint finding should still be unseen
+        findings = db.get_findings(f.id)
+        eslint = next(fi for fi in findings if fi.scan_source == "eslint")
+        assert eslint.status == "unseen_in_latest"
 
 
 class TestGetFindings:
@@ -761,6 +987,194 @@ class TestHotspots:
         assert result == []
 
 
+class TestSortBySeverity:
+    """Tests for sort=severity on findings."""
+
+    def test_sort_findings_by_severity(self, db: FiligreeDB) -> None:
+        db.process_scan_results(
+            scan_source="ruff",
+            findings=[
+                {"path": "a.py", "rule_id": "E001", "severity": "low", "message": "Low"},
+                {"path": "a.py", "rule_id": "S001", "severity": "critical", "message": "Critical"},
+                {"path": "a.py", "rule_id": "E501", "severity": "medium", "message": "Medium"},
+                {"path": "a.py", "rule_id": "H001", "severity": "high", "message": "High"},
+            ],
+        )
+        f = db.get_file_by_path("a.py")
+        results = db.get_findings(f.id, sort="severity")
+        severities = [r.severity for r in results]
+        assert severities == ["critical", "high", "medium", "low"]
+
+    def test_sort_findings_by_severity_paginated(self, db: FiligreeDB) -> None:
+        db.process_scan_results(
+            scan_source="ruff",
+            findings=[
+                {"path": "a.py", "rule_id": "E001", "severity": "info", "message": "Info"},
+                {"path": "a.py", "rule_id": "S001", "severity": "critical", "message": "Critical"},
+                {"path": "a.py", "rule_id": "H001", "severity": "high", "message": "High"},
+            ],
+        )
+        f = db.get_file_by_path("a.py")
+        result = db.get_findings_paginated(f.id, sort="severity")
+        severities = [r["severity"] for r in result["results"]]
+        assert severities == ["critical", "high", "info"]
+
+    def test_sort_findings_default_is_updated_at(self, db: FiligreeDB) -> None:
+        db.process_scan_results(
+            scan_source="ruff",
+            findings=[
+                {"path": "a.py", "rule_id": "E001", "severity": "low", "message": "Low"},
+                {"path": "a.py", "rule_id": "S001", "severity": "critical", "message": "Critical"},
+            ],
+        )
+        f = db.get_file_by_path("a.py")
+        # Default sort should not be by severity
+        results = db.get_findings(f.id)
+        # Should not crash, just returns in updated_at order
+        assert len(results) == 2
+
+
+class TestMinFindingsFilter:
+    """Tests for min_findings filter on list_files."""
+
+    def test_min_findings_filters_files(self, db: FiligreeDB) -> None:
+        db.process_scan_results(
+            scan_source="ruff",
+            findings=[
+                {"path": "many.py", "rule_id": f"E{i}", "severity": "low", "message": f"msg{i}"} for i in range(5)
+            ],
+        )
+        db.register_file("empty.py")
+        result = db.list_files_paginated(min_findings=3)
+        assert result["total"] == 1
+        assert result["results"][0]["path"] == "many.py"
+
+    def test_min_findings_only_counts_open(self, db: FiligreeDB) -> None:
+        db.process_scan_results(
+            scan_source="ruff",
+            findings=[
+                {"path": "a.py", "rule_id": "E1", "severity": "low", "message": "m1"},
+                {"path": "a.py", "rule_id": "E2", "severity": "low", "message": "m2"},
+                {"path": "a.py", "rule_id": "E3", "severity": "low", "message": "m3"},
+            ],
+        )
+        f = db.get_file_by_path("a.py")
+        findings = db.get_findings(f.id)
+        # Mark 2 as fixed, leaving only 1 open
+        db.conn.execute("UPDATE scan_findings SET status = 'fixed' WHERE id = ?", (findings[0].id,))
+        db.conn.execute("UPDATE scan_findings SET status = 'fixed' WHERE id = ?", (findings[1].id,))
+        db.conn.commit()
+        result = db.list_files_paginated(min_findings=2)
+        assert result["total"] == 0
+
+    def test_min_findings_zero_returns_all(self, db: FiligreeDB) -> None:
+        db.register_file("a.py")
+        db.register_file("b.py")
+        result = db.list_files_paginated(min_findings=0)
+        assert result["total"] == 2
+
+
+class TestFileTimeline:
+    """Tests for get_file_timeline() in core."""
+
+    def test_timeline_empty_file(self, db: FiligreeDB) -> None:
+        f = db.register_file("empty.py")
+        result = db.get_file_timeline(f.id)
+        assert result["results"] == []
+        assert result["total"] == 0
+        assert result["has_more"] is False
+
+    def test_timeline_includes_finding_created(self, db: FiligreeDB) -> None:
+        db.process_scan_results(
+            scan_source="ruff",
+            findings=[{"path": "a.py", "rule_id": "E501", "severity": "high", "message": "Long"}],
+        )
+        f = db.get_file_by_path("a.py")
+        result = db.get_file_timeline(f.id)
+        assert result["total"] >= 1
+        types = [e["type"] for e in result["results"]]
+        assert "finding_created" in types
+
+    def test_timeline_includes_finding_updated(self, db: FiligreeDB) -> None:
+        db.process_scan_results(
+            scan_source="ruff",
+            findings=[{"path": "a.py", "rule_id": "E501", "severity": "high", "message": "Long"}],
+        )
+        f = db.get_file_by_path("a.py")
+        # Trigger an update by changing status
+        findings = db.get_findings(f.id)
+        db.conn.execute(
+            "UPDATE scan_findings SET status = 'acknowledged', updated_at = '2099-01-01T00:00:00+00:00' WHERE id = ?",
+            (findings[0].id,),
+        )
+        db.conn.commit()
+        result = db.get_file_timeline(f.id)
+        types = [e["type"] for e in result["results"]]
+        assert "finding_updated" in types
+
+    def test_timeline_includes_association(self, db: FiligreeDB) -> None:
+        f = db.register_file("a.py")
+        issue = db.create_issue("Fix bug")
+        db.add_file_association(f.id, issue.id, "bug_in")
+        result = db.get_file_timeline(f.id)
+        types = [e["type"] for e in result["results"]]
+        assert "association_created" in types
+        assoc_entry = next(e for e in result["results"] if e["type"] == "association_created")
+        assert assoc_entry["data"]["issue_title"] == "Fix bug"
+
+    def test_timeline_entries_have_deterministic_ids(self, db: FiligreeDB) -> None:
+        db.process_scan_results(
+            scan_source="ruff",
+            findings=[{"path": "a.py", "rule_id": "E501", "severity": "low", "message": "msg"}],
+        )
+        f = db.get_file_by_path("a.py")
+        r1 = db.get_file_timeline(f.id)
+        r2 = db.get_file_timeline(f.id)
+        ids1 = [e["id"] for e in r1["results"]]
+        ids2 = [e["id"] for e in r2["results"]]
+        assert ids1 == ids2
+        # IDs should be 12-char hex strings
+        for eid in ids1:
+            assert len(eid) == 12
+            int(eid, 16)  # must be valid hex
+
+    def test_timeline_sorted_newest_first(self, db: FiligreeDB) -> None:
+        f = db.register_file("a.py")
+        issue = db.create_issue("First")
+        db.add_file_association(f.id, issue.id, "bug_in")
+        db.process_scan_results(
+            scan_source="ruff",
+            findings=[{"path": "a.py", "rule_id": "E501", "severity": "low", "message": "msg"}],
+        )
+        result = db.get_file_timeline(f.id)
+        timestamps = [e["timestamp"] for e in result["results"]]
+        assert timestamps == sorted(timestamps, reverse=True)
+
+    def test_timeline_pagination(self, db: FiligreeDB) -> None:
+        db.process_scan_results(
+            scan_source="ruff",
+            findings=[
+                {"path": "a.py", "rule_id": f"E{i:03d}", "severity": "low", "message": f"msg{i}"} for i in range(10)
+            ],
+        )
+        f = db.get_file_by_path("a.py")
+        result = db.get_file_timeline(f.id, limit=3)
+        assert len(result["results"]) == 3
+        assert result["total"] == 10
+        assert result["has_more"] is True
+
+        page2 = db.get_file_timeline(f.id, limit=3, offset=3)
+        assert len(page2["results"]) == 3
+        # No duplicate IDs across pages
+        ids1 = {e["id"] for e in result["results"]}
+        ids2 = {e["id"] for e in page2["results"]}
+        assert ids1.isdisjoint(ids2)
+
+    def test_timeline_raises_for_missing_file(self, db: FiligreeDB) -> None:
+        with pytest.raises(KeyError):
+            db.get_file_timeline("nonexistent")
+
+
 class TestPaginationMetadata:
     """Tests for paginated response format."""
 
@@ -895,6 +1309,169 @@ class TestPaginatedEndpoints:
         assert data["total"] == 5
         assert data["has_more"] is True
         assert len(data["results"]) == 3
+
+
+class TestScanResultsEndpointEnhancements:
+    """Tests for enhanced scan results endpoint (202, mark_unseen, new_finding_ids)."""
+
+    async def test_empty_findings_returns_202(self, client: AsyncClient) -> None:
+        resp = await client.post(
+            "/api/v1/scan-results",
+            json={"scan_source": "ruff", "findings": []},
+        )
+        assert resp.status_code == 202
+        data = resp.json()
+        assert data["new_finding_ids"] == []
+
+    async def test_non_empty_findings_returns_200(self, client: AsyncClient) -> None:
+        resp = await client.post(
+            "/api/v1/scan-results",
+            json={
+                "scan_source": "ruff",
+                "findings": [{"path": "a.py", "rule_id": "E501", "severity": "low", "message": "msg"}],
+            },
+        )
+        assert resp.status_code == 200
+
+    async def test_new_finding_ids_in_response(self, client: AsyncClient) -> None:
+        resp = await client.post(
+            "/api/v1/scan-results",
+            json={
+                "scan_source": "ruff",
+                "findings": [{"path": "a.py", "rule_id": "E501", "severity": "low", "message": "msg"}],
+            },
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "new_finding_ids" in data
+        assert len(data["new_finding_ids"]) == 1
+
+    async def test_mark_unseen_via_api(self, client: AsyncClient, api_db: FiligreeDB) -> None:
+        # First scan: 2 findings
+        await client.post(
+            "/api/v1/scan-results",
+            json={
+                "scan_source": "ruff",
+                "findings": [
+                    {"path": "a.py", "rule_id": "E501", "severity": "low", "message": "m1"},
+                    {"path": "a.py", "rule_id": "E502", "severity": "low", "message": "m2"},
+                ],
+            },
+        )
+        # Second scan: only E501, with mark_unseen
+        await client.post(
+            "/api/v1/scan-results",
+            json={
+                "scan_source": "ruff",
+                "mark_unseen": True,
+                "findings": [{"path": "a.py", "rule_id": "E501", "severity": "low", "message": "m1"}],
+            },
+        )
+        f = api_db.get_file_by_path("a.py")
+        findings = api_db.get_findings(f.id)
+        statuses = {fi.rule_id: fi.status for fi in findings}
+        assert statuses["E501"] == "open"
+        assert statuses["E502"] == "unseen_in_latest"
+
+
+class TestSortBySeverityEndpoint:
+    """Tests for sort=severity on findings endpoint."""
+
+    async def test_sort_findings_by_severity(self, client: AsyncClient, api_db: FiligreeDB) -> None:
+        api_db.process_scan_results(
+            scan_source="ruff",
+            findings=[
+                {"path": "a.py", "rule_id": "E001", "severity": "low", "message": "Low"},
+                {"path": "a.py", "rule_id": "S001", "severity": "critical", "message": "Critical"},
+                {"path": "a.py", "rule_id": "H001", "severity": "high", "message": "High"},
+            ],
+        )
+        f = api_db.get_file_by_path("a.py")
+        resp = await client.get(f"/api/files/{f.id}/findings?sort=severity")
+        assert resp.status_code == 200
+        severities = [r["severity"] for r in resp.json()["results"]]
+        assert severities == ["critical", "high", "low"]
+
+
+class TestMinFindingsEndpoint:
+    """Tests for min_findings filter on files endpoint."""
+
+    async def test_min_findings_filters(self, client: AsyncClient, api_db: FiligreeDB) -> None:
+        api_db.process_scan_results(
+            scan_source="ruff",
+            findings=[
+                {"path": "many.py", "rule_id": f"E{i}", "severity": "low", "message": f"msg{i}"} for i in range(5)
+            ],
+        )
+        api_db.register_file("empty.py")
+        resp = await client.get("/api/files?min_findings=3")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["total"] == 1
+        assert data["results"][0]["path"] == "many.py"
+
+    async def test_min_findings_invalid(self, client: AsyncClient) -> None:
+        resp = await client.get("/api/files?min_findings=abc")
+        assert resp.status_code == 400
+
+
+class TestTimelineEndpoint:
+    """Tests for GET /api/files/{file_id}/timeline."""
+
+    async def test_timeline_endpoint(self, client: AsyncClient, api_db: FiligreeDB) -> None:
+        api_db.process_scan_results(
+            scan_source="ruff",
+            findings=[{"path": "a.py", "rule_id": "E501", "severity": "low", "message": "msg"}],
+        )
+        f = api_db.get_file_by_path("a.py")
+        resp = await client.get(f"/api/files/{f.id}/timeline")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "results" in data
+        assert "total" in data
+        assert len(data["results"]) >= 1
+        assert "id" in data["results"][0]
+
+    async def test_timeline_not_found(self, client: AsyncClient) -> None:
+        resp = await client.get("/api/files/test-f-nope/timeline")
+        assert resp.status_code == 404
+        assert resp.json()["error"]["code"] == "FILE_NOT_FOUND"
+
+    async def test_timeline_pagination(self, client: AsyncClient, api_db: FiligreeDB) -> None:
+        api_db.process_scan_results(
+            scan_source="ruff",
+            findings=[
+                {"path": "a.py", "rule_id": f"E{i:03d}", "severity": "low", "message": f"msg{i}"} for i in range(10)
+            ],
+        )
+        f = api_db.get_file_by_path("a.py")
+        resp = await client.get(f"/api/files/{f.id}/timeline?limit=3")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data["results"]) == 3
+        assert data["has_more"] is True
+
+
+class TestCacheControlHeaders:
+    """Verify Cache-Control headers on file GET endpoints."""
+
+    async def test_list_files_no_cache(self, client: AsyncClient) -> None:
+        resp = await client.get("/api/files")
+        assert resp.headers.get("cache-control") == "no-cache"
+
+    async def test_file_detail_no_cache(self, client: AsyncClient, api_db: FiligreeDB) -> None:
+        f = api_db.register_file("src/main.py")
+        resp = await client.get(f"/api/files/{f.id}")
+        assert resp.headers.get("cache-control") == "no-cache"
+
+    async def test_file_findings_max_age_30(self, client: AsyncClient, api_db: FiligreeDB) -> None:
+        f = api_db.register_file("src/main.py")
+        resp = await client.get(f"/api/files/{f.id}/findings")
+        assert resp.headers.get("cache-control") == "max-age=30"
+
+    async def test_schema_max_age_3600(self, client: AsyncClient) -> None:
+        resp = await client.get("/api/files/_schema")
+        assert resp.headers.get("cache-control") == "max-age=3600"
 
 
 class TestInputValidation400s:

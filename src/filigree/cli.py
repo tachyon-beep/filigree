@@ -1033,6 +1033,22 @@ def archive(ctx: click.Context, days: int, as_json: bool) -> None:
         _refresh_summary(db)
 
 
+@cli.command("clean-stale-findings")
+@click.option("--days", default=30, type=int, help="Mark as fixed if unseen for more than N days (default: 30)")
+@click.option("--scan-source", default=None, type=str, help="Only clean findings from this scan source")
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+def clean_stale_findings(days: int, scan_source: str | None, as_json: bool) -> None:
+    """Move stale unseen_in_latest findings to fixed status."""
+    with _get_db() as db:
+        result = db.clean_stale_findings(days=days, scan_source=scan_source)
+        if as_json:
+            click.echo(json_mod.dumps(result))
+        elif result["findings_fixed"] > 0:
+            click.echo(f"Fixed {result['findings_fixed']} stale findings (unseen > {days} days)")
+        else:
+            click.echo("No stale findings to clean")
+
+
 @cli.command("compact")
 @click.option("--keep", default=50, type=int, help="Keep N most recent events per archived issue (default: 50)")
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON")
