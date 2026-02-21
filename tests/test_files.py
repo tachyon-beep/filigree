@@ -1698,6 +1698,69 @@ class TestFileTimeline:
         assert findings_only["total"] < all_events["total"]
 
 
+class TestFileMetadataEvents:
+    """register_file should emit file_metadata_update events on field changes."""
+
+    def test_metadata_event_on_language_change(self, db: FiligreeDB) -> None:
+        f = db.register_file("a.py", language="python")
+        db.register_file("a.py", language="python3")
+        tl = db.get_file_timeline(f.id)
+        meta_events = [e for e in tl["results"] if e["type"] == "file_metadata_update"]
+        assert len(meta_events) == 1
+        assert meta_events[0]["data"]["field"] == "language"
+        assert meta_events[0]["data"]["old_value"] == "python"
+        assert meta_events[0]["data"]["new_value"] == "python3"
+
+    def test_metadata_event_on_metadata_change(self, db: FiligreeDB) -> None:
+        f = db.register_file("a.py", metadata={"k": "v1"})
+        db.register_file("a.py", metadata={"k": "v2"})
+        tl = db.get_file_timeline(f.id)
+        meta_events = [e for e in tl["results"] if e["type"] == "file_metadata_update"]
+        assert len(meta_events) == 1
+        assert meta_events[0]["data"]["field"] == "metadata"
+
+    def test_no_event_when_no_change(self, db: FiligreeDB) -> None:
+        f = db.register_file("a.py", language="python")
+        db.register_file("a.py", language="python")
+        tl = db.get_file_timeline(f.id)
+        meta_events = [e for e in tl["results"] if e["type"] == "file_metadata_update"]
+        assert len(meta_events) == 0
+
+    def test_no_event_on_first_registration(self, db: FiligreeDB) -> None:
+        f = db.register_file("a.py", language="python")
+        tl = db.get_file_timeline(f.id)
+        meta_events = [e for e in tl["results"] if e["type"] == "file_metadata_update"]
+        assert len(meta_events) == 0
+
+    def test_timeline_filter_file_metadata_update(self, db: FiligreeDB) -> None:
+        f = db.register_file("a.py", language="python")
+        db.register_file("a.py", language="python3")
+        issue = db.create_issue("Fix it")
+        db.add_file_association(f.id, issue.id, "bug_in")
+        db.process_scan_results(
+            scan_source="ruff",
+            findings=[{"path": "a.py", "rule_id": "E1", "severity": "low", "message": "m"}],
+        )
+        # All events
+        all_tl = db.get_file_timeline(f.id)
+        assert all_tl["total"] >= 3  # finding + association + metadata
+
+        # Filter to metadata only
+        meta_tl = db.get_file_timeline(f.id, event_type="file_metadata_update")
+        assert meta_tl["total"] == 1
+        assert all(e["type"] == "file_metadata_update" for e in meta_tl["results"])
+
+    def test_unknown_event_type_returns_empty(self, db: FiligreeDB) -> None:
+        f = db.register_file("a.py")
+        db.process_scan_results(
+            scan_source="ruff",
+            findings=[{"path": "a.py", "rule_id": "E1", "severity": "low", "message": "m"}],
+        )
+        result = db.get_file_timeline(f.id, event_type="bogus_type")
+        assert result["total"] == 0
+        assert result["results"] == []
+
+
 class TestGlobalFindingsStats:
     """Tests for get_global_findings_stats()."""
 

@@ -249,6 +249,18 @@ CREATE TABLE IF NOT EXISTS file_associations (
 
 CREATE INDEX IF NOT EXISTS idx_file_assoc_file ON file_associations(file_id);
 CREATE INDEX IF NOT EXISTS idx_file_assoc_issue ON file_associations(issue_id);
+
+CREATE TABLE IF NOT EXISTS file_events (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    file_id     TEXT NOT NULL REFERENCES file_records(id),
+    event_type  TEXT NOT NULL DEFAULT 'file_metadata_update',
+    field       TEXT NOT NULL,
+    old_value   TEXT DEFAULT '',
+    new_value   TEXT DEFAULT '',
+    created_at  TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_file_events_file ON file_events(file_id);
 """
 
 # V1 schema (without file tables) — kept for migration tests
@@ -2379,15 +2391,23 @@ class FiligreeDB:
         if existing is not None:
             updates: list[str] = []
             params: list[Any] = []
-            if language:
+            # Detect field changes and emit events
+            changes: list[tuple[str, str, str]] = []  # (field, old, new)
+            if language and language != (existing["language"] or ""):
                 updates.append("language = ?")
                 params.append(language)
-            if file_type:
+                changes.append(("language", existing["language"] or "", language))
+            if file_type and file_type != (existing["file_type"] or ""):
                 updates.append("file_type = ?")
                 params.append(file_type)
+                changes.append(("file_type", existing["file_type"] or "", file_type))
             if metadata:
-                updates.append("metadata = ?")
-                params.append(json.dumps(metadata))
+                old_meta = existing["metadata"] or "{}"
+                new_meta = json.dumps(metadata)
+                if old_meta != new_meta:
+                    updates.append("metadata = ?")
+                    params.append(new_meta)
+                    changes.append(("metadata", old_meta, new_meta))
             updates.append("updated_at = ?")
             params.append(now)
             params.append(existing["id"])
@@ -2395,6 +2415,13 @@ class FiligreeDB:
                 f"UPDATE file_records SET {', '.join(updates)} WHERE id = ?",
                 params,
             )
+            for field, old_val, new_val in changes:
+                self.conn.execute(
+                    "INSERT INTO file_events "
+                    "(file_id, event_type, field, old_value, new_value, created_at) "
+                    "VALUES (?, 'file_metadata_update', ?, ?, ?, ?)",
+                    (existing["id"], field, old_val, new_val, now),
+                )
             self.conn.commit()
             return self.get_file(existing["id"])
 
@@ -3211,11 +3238,35 @@ class FiligreeDB:
                 }
             )
 
+        # 3. File metadata events
+        meta_events = self.conn.execute(
+            "SELECT id, field, old_value, new_value, created_at "
+            "FROM file_events WHERE file_id = ? ORDER BY created_at DESC",
+            (file_id,),
+        ).fetchall()
+        for m in meta_events:
+            entries.append(
+                {
+                    "type": "file_metadata_update",
+                    "timestamp": m["created_at"],
+                    "source_id": str(m["id"]),
+                    "data": {
+                        "field": m["field"],
+                        "old_value": m["old_value"],
+                        "new_value": m["new_value"],
+                    },
+                }
+            )
+
         # Filter by event type before sorting/paginating
         if event_type == "finding":
             entries = [e for e in entries if e["type"].startswith("finding_")]
         elif event_type == "association":
             entries = [e for e in entries if e["type"].startswith("association_")]
+        elif event_type == "file_metadata_update":
+            entries = [e for e in entries if e["type"] == "file_metadata_update"]
+        elif event_type is not None:
+            entries = []  # Unknown filter type -> empty results
 
         # Add deterministic IDs and sort newest-first
         for entry in entries:
