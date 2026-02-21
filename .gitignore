@@ -14,3 +14,4 @@ build/
 htmlcov/
 .filigree/
 node_modules/
+.mcp.json
