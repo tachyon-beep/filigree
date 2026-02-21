@@ -25,6 +25,7 @@ Usage:
 from __future__ import annotations
 
 import json as json_mod
+import logging
 import sqlite3
 import sys
 from pathlib import Path
@@ -928,22 +929,28 @@ def dashboard(port: int, no_browser: bool) -> None:
 @cli.command("session-context")
 def session_context() -> None:
     """Output project snapshot for Claude Code session context."""
-    from filigree.hooks import generate_session_context
+    try:
+        from filigree.hooks import generate_session_context
 
-    context = generate_session_context()
-    if context:
-        click.echo(context)
+        context = generate_session_context()
+        if context:
+            click.echo(context)
+    except Exception:
+        logging.getLogger(__name__).debug("session-context hook failed", exc_info=True)
 
 
 @cli.command("ensure-dashboard")
 @click.option("--port", default=8377, type=int, help="Dashboard port (default 8377)")
 def ensure_dashboard_cmd(port: int) -> None:
     """Ensure the filigree dashboard is running."""
-    from filigree.hooks import ensure_dashboard_running
+    try:
+        from filigree.hooks import ensure_dashboard_running
 
-    message = ensure_dashboard_running(port=port)
-    if message:
-        click.echo(message)
+        message = ensure_dashboard_running(port=port)
+        if message:
+            click.echo(message)
+    except Exception:
+        logging.getLogger(__name__).debug("ensure-dashboard hook failed", exc_info=True)
 
 
 @cli.command("critical-path")

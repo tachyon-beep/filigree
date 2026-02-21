@@ -104,6 +104,7 @@ import {
 } from "./views/metrics.js";
 import { loadPlanView, loadWorkflow } from "./views/workflow.js";
 import {
+  clearScanSourceFilter,
   closeFileDetail,
   createIssueFromFinding,
   filesPageNext,
@@ -120,7 +121,7 @@ import {
   submitLinkIssue,
   switchFileTab,
 } from "./views/files.js";
-import { loadHealth } from "./views/health.js";
+import { filterFilesByScanSource, loadHealth } from "./views/health.js";
 
 // ---------------------------------------------------------------------------
 // Core data fetching (lives here because it touches every module)
@@ -562,6 +563,7 @@ window.loadPlanView = loadPlanView;
 window.loadFiles = loadFiles;
 window.openFileDetail = openFileDetail;
 window.closeFileDetail = closeFileDetail;
+window.clearScanSourceFilter = clearScanSourceFilter;
 window.sortFiles = sortFiles;
 window.filesPagePrev = filesPagePrev;
 window.filesPageNext = filesPageNext;
@@ -577,3 +579,4 @@ window.submitLinkIssue = submitLinkIssue;
 
 // Health
 window.loadHealth = loadHealth;
+window.filterFilesByScanSource = filterFilesByScanSource;

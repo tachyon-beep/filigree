@@ -1344,6 +1344,38 @@ class TestScanRunsAPI:
         assert "/api/scan-runs" in paths
 
 
+class TestFilesScanSourceFilterAPI:
+    """GET /api/files?scan_source=... — filter files by scan source."""
+
+    async def test_scan_source_filters_files(self, client: AsyncClient, dashboard_db: FiligreeDB) -> None:
+        dashboard_db.process_scan_results(
+            scan_source="codex",
+            findings=[{"path": "a.py", "rule_id": "R1", "severity": "low", "message": "m"}],
+        )
+        dashboard_db.process_scan_results(
+            scan_source="ruff",
+            findings=[{"path": "b.py", "rule_id": "R2", "severity": "low", "message": "m"}],
+        )
+        resp = await client.get("/api/files?scan_source=codex")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["total"] == 1
+        assert data["results"][0]["path"] == "a.py"
+
+    async def test_no_scan_source_returns_all(self, client: AsyncClient, dashboard_db: FiligreeDB) -> None:
+        dashboard_db.process_scan_results(
+            scan_source="codex",
+            findings=[{"path": "a.py", "rule_id": "R1", "severity": "low", "message": "m"}],
+        )
+        dashboard_db.process_scan_results(
+            scan_source="ruff",
+            findings=[{"path": "b.py", "rule_id": "R2", "severity": "low", "message": "m"}],
+        )
+        resp = await client.get("/api/files")
+        assert resp.status_code == 200
+        assert resp.json()["total"] == 2
+
+
 class TestErrorMessagesIncludeValidOptions:
     """Error messages must include valid values to be self-documenting."""
 

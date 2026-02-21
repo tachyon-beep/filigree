@@ -611,6 +611,7 @@ def _create_project_router() -> Any:
             path_prefix=params.get("path_prefix"),
             min_findings=min_findings if min_findings > 0 else None,
             has_severity=params.get("has_severity"),
+            scan_source=params.get("scan_source"),
             sort=params.get("sort", "updated_at"),
             direction=params.get("direction"),
         )
