@@ -145,6 +145,8 @@ tailwind.config = {
       <button id="btnMetrics" onclick="switchView('metrics')" class="px-3 py-1 rounded text-xs font-medium" title="Flow metrics — throughput, cycle time, lead time">Metrics</button>
       <button id="btnActivity" onclick="switchView('activity')" class="px-3 py-1 rounded text-xs font-medium" title="Recent events across all issues">Activity</button>
       <button id="btnWorkflow" onclick="switchView('workflow')" class="px-3 py-1 rounded text-xs font-medium" title="Workflow state machine diagram">Workflow</button>
+      <button id="btnFiles" onclick="switchView('files')" class="px-3 py-1 rounded text-xs font-medium" title="File records and scan findings">Files</button>
+      <button id="btnHealth" onclick="switchView('health')" class="px-3 py-1 rounded text-xs font-medium" title="Code health — hotspots, severity breakdown, scan coverage">Health</button>
     </div>
   </div>
 
@@ -318,6 +320,33 @@ tailwind.config = {
       </select>
     </div>
     <div id="workflowCy" class="flex-1"></div>
+  </div>
+
+  <!-- Files view -->
+  <div id="filesView" class="flex-1 hidden overflow-y-auto p-6">
+    <div class="max-w-6xl mx-auto">
+      <div class="flex items-center gap-3 mb-4">
+        <span class="text-base font-semibold text-primary">Files</span>
+        <div class="flex items-center gap-2">
+          <input id="filesSearch" type="text" placeholder="Filter by path..."
+                 class="bg-overlay text-primary text-xs rounded px-3 py-1 border border-strong w-64 focus:outline-none focus-accent">
+          <label class="flex items-center gap-1 text-xs text-secondary">
+            <input type="checkbox" id="filesCriticalOnly" style="accent-color:var(--accent)"> Critical only
+          </label>
+        </div>
+      </div>
+      <div id="filesContent" class="text-secondary text-xs">Loading...</div>
+    </div>
+  </div>
+
+  <!-- Code Health view -->
+  <div id="healthView" class="flex-1 hidden overflow-y-auto p-6">
+    <div class="max-w-5xl mx-auto">
+      <div class="flex items-center gap-3 mb-4">
+        <span class="text-base font-semibold text-primary">Code Health</span>
+      </div>
+      <div id="healthContent" class="text-secondary text-xs">Loading...</div>
+    </div>
   </div>
 
   <!-- Detail panel (slides in from right) -->
