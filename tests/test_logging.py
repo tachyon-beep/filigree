@@ -79,8 +79,7 @@ class TestSetupLogging:
         file_handlers = [
             h
             for h in logger.handlers
-            if isinstance(h, logging.handlers.RotatingFileHandler)
-            and h.baseFilename == os.path.abspath(str(tmp_path / "filigree.log"))
+            if isinstance(h, logging.handlers.RotatingFileHandler) and h.baseFilename == os.path.abspath(str(tmp_path / "filigree.log"))
         ]
         assert len(file_handlers) == 1, f"Expected 1 handler, got {len(file_handlers)}"
 

@@ -40,9 +40,7 @@ def cycle_time(db: FiligreeDB, issue_id: str) -> float | None:
     done_states = set(db._get_states_for_category("done")) or {"closed"}
 
     events = db.conn.execute(
-        "SELECT event_type, new_value, created_at FROM events "
-        "WHERE issue_id = ? AND event_type = 'status_changed' "
-        "ORDER BY created_at ASC",
+        "SELECT event_type, new_value, created_at FROM events WHERE issue_id = ? AND event_type = 'status_changed' ORDER BY created_at ASC",
         (issue_id,),
     ).fetchall()
 

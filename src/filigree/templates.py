@@ -370,9 +370,7 @@ class TemplateRegistry:
         for t in tpl.transitions:
             for rf in t.requires_fields:
                 if rf not in field_names:
-                    errors.append(
-                        f"transition {t.from_state}->{t.to_state} requires_fields '{rf}' not in fields_schema"
-                    )
+                    errors.append(f"transition {t.from_state}->{t.to_state} requires_fields '{rf}' not in fields_schema")
 
         for f in tpl.fields_schema:
             for ra in f.required_at:

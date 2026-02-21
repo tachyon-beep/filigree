@@ -99,10 +99,7 @@ def generate_summary(db: FiligreeDB) -> str:
     blocked_count = stats["blocked_count"]
 
     lines.append("## Vitals")
-    lines.append(
-        f"Open: {open_count} | In Progress: {wip_count} | Done: {done_count}"
-        f" | Ready: {ready_count} | Blocked: {blocked_count}"
-    )
+    lines.append(f"Open: {open_count} | In Progress: {wip_count} | Done: {done_count} | Ready: {ready_count} | Blocked: {blocked_count}")
     lines.append("")
 
     # -- Active Plans (milestones)

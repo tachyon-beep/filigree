@@ -566,9 +566,7 @@ class TestGetReadyCategory:
         """get_ready() should work when enabled templates define zero done-category states."""
         filigree_dir = tmp_path / ".filigree"
         filigree_dir.mkdir()
-        (filigree_dir / "config.json").write_text(
-            json.dumps({"prefix": "test", "version": 1, "enabled_packs": ["custom_only"]})
-        )
+        (filigree_dir / "config.json").write_text(json.dumps({"prefix": "test", "version": 1, "enabled_packs": ["custom_only"]}))
 
         packs_dir = filigree_dir / "packs"
         packs_dir.mkdir()

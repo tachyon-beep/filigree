@@ -195,14 +195,12 @@ def beads_db(tmp_path: Path) -> Path:
     )
     # Deleted issue (should NOT be migrated)
     conn.execute(
-        "INSERT INTO issues (id, title, status, priority, issue_type, deleted_at, created_at, updated_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO issues (id, title, status, priority, issue_type, deleted_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         ("bd-del999", "Deleted issue", "open", 2, "task", now, now, now),
     )
     # Issue with unknown status
     conn.execute(
-        "INSERT INTO issues (id, title, status, priority, issue_type, created_at, updated_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO issues (id, title, status, priority, issue_type, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
         ("bd-ddd444", "Weird status", "review", 2, "task", now, now),
     )
 

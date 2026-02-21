@@ -1034,9 +1034,7 @@ class TestBatchClosePartialMutation:
         assert len(data["errors"]) == 1
         assert data["errors"][0]["id"] == "nonexistent"
 
-    async def test_batch_close_all_fail_returns_200_with_errors(
-        self, client: AsyncClient, dashboard_db: FiligreeDB
-    ) -> None:
+    async def test_batch_close_all_fail_returns_200_with_errors(self, client: AsyncClient, dashboard_db: FiligreeDB) -> None:
         """Even if all items fail, batch/close should return 200 with errors list."""
         resp = await client.post(
             "/api/batch/close",
@@ -1256,8 +1254,8 @@ class TestFilesSchemaAPI:
     async def test_schema_returns_valid_sort_fields(self, client: AsyncClient) -> None:
         resp = await client.get("/api/files/_schema")
         data = resp.json()
-        assert "updated_at" in data["valid_sort_fields"]
-        assert "path" in data["valid_sort_fields"]
+        assert set(data["valid_file_sort_fields"]) == {"updated_at", "first_seen", "path", "language"}
+        assert set(data["valid_finding_sort_fields"]) == {"updated_at", "severity"}
 
     async def test_schema_returns_endpoints_catalog(self, client: AsyncClient) -> None:
         resp = await client.get("/api/files/_schema")

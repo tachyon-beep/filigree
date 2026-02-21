@@ -184,8 +184,7 @@ def _create_project_router() -> Any:
 
         # Events
         events = db.conn.execute(
-            "SELECT event_type, actor, old_value, new_value, created_at "
-            "FROM events WHERE issue_id = ? ORDER BY created_at DESC LIMIT 20",
+            "SELECT event_type, actor, old_value, new_value, created_at FROM events WHERE issue_id = ? ORDER BY created_at DESC LIMIT 20",
             (issue_id,),
         ).fetchall()
         data["events"] = [dict(e) for e in events]
@@ -217,9 +216,7 @@ def _create_project_router() -> Any:
                 "display_name": tpl.display_name,
                 "states": [{"name": s.name, "category": s.category} for s in tpl.states],
                 "initial_state": tpl.initial_state,
-                "transitions": [
-                    {"from": t.from_state, "to": t.to_state, "enforcement": t.enforcement} for t in tpl.transitions
-                ],
+                "transitions": [{"from": t.from_state, "to": t.to_state, "enforcement": t.enforcement} for t in tpl.transitions],
             }
         )
 
@@ -265,9 +262,7 @@ def _create_project_router() -> Any:
         return JSONResponse([f.to_dict() for f in findings])
 
     @router.patch("/issue/{issue_id}")
-    async def api_update_issue(
-        issue_id: str, request: Request, db: FiligreeDB = Depends(_get_project_db)
-    ) -> JSONResponse:
+    async def api_update_issue(issue_id: str, request: Request, db: FiligreeDB = Depends(_get_project_db)) -> JSONResponse:
         """Update issue fields (status, priority, assignee, etc.)."""
         try:
             body = await request.json()
@@ -298,9 +293,7 @@ def _create_project_router() -> Any:
         return JSONResponse(issue.to_dict())
 
     @router.post("/issue/{issue_id}/close")
-    async def api_close_issue(
-        issue_id: str, request: Request, db: FiligreeDB = Depends(_get_project_db)
-    ) -> JSONResponse:
+    async def api_close_issue(issue_id: str, request: Request, db: FiligreeDB = Depends(_get_project_db)) -> JSONResponse:
         """Close an issue."""
         try:
             body = await request.json()
@@ -322,9 +315,7 @@ def _create_project_router() -> Any:
         return JSONResponse(issue.to_dict())
 
     @router.post("/issue/{issue_id}/reopen")
-    async def api_reopen_issue(
-        issue_id: str, request: Request, db: FiligreeDB = Depends(_get_project_db)
-    ) -> JSONResponse:
+    async def api_reopen_issue(issue_id: str, request: Request, db: FiligreeDB = Depends(_get_project_db)) -> JSONResponse:
         """Reopen a closed issue."""
         try:
             body = await request.json()
@@ -342,9 +333,7 @@ def _create_project_router() -> Any:
         return JSONResponse(issue.to_dict())
 
     @router.post("/issue/{issue_id}/comments", status_code=201)
-    async def api_add_comment(
-        issue_id: str, request: Request, db: FiligreeDB = Depends(_get_project_db)
-    ) -> JSONResponse:
+    async def api_add_comment(issue_id: str, request: Request, db: FiligreeDB = Depends(_get_project_db)) -> JSONResponse:
         """Add a comment to an issue."""
         try:
             db.get_issue(issue_id)
@@ -375,9 +364,7 @@ def _create_project_router() -> Any:
         )
 
     @router.get("/search")
-    async def api_search(
-        q: str = "", limit: int = 50, offset: int = 0, db: FiligreeDB = Depends(_get_project_db)
-    ) -> JSONResponse:
+    async def api_search(q: str = "", limit: int = 50, offset: int = 0, db: FiligreeDB = Depends(_get_project_db)) -> JSONResponse:
         """Full-text search across issues."""
         if not q.strip():
             return JSONResponse({"results": [], "total": 0})
@@ -517,9 +504,7 @@ def _create_project_router() -> Any:
         return JSONResponse(issue.to_dict(), status_code=201)
 
     @router.post("/issue/{issue_id}/claim")
-    async def api_claim_issue(
-        issue_id: str, request: Request, db: FiligreeDB = Depends(_get_project_db)
-    ) -> JSONResponse:
+    async def api_claim_issue(issue_id: str, request: Request, db: FiligreeDB = Depends(_get_project_db)) -> JSONResponse:
         """Claim an issue."""
         try:
             body = await request.json()
@@ -540,9 +525,7 @@ def _create_project_router() -> Any:
         return JSONResponse(issue.to_dict())
 
     @router.post("/issue/{issue_id}/release")
-    async def api_release_claim(
-        issue_id: str, request: Request, db: FiligreeDB = Depends(_get_project_db)
-    ) -> JSONResponse:
+    async def api_release_claim(issue_id: str, request: Request, db: FiligreeDB = Depends(_get_project_db)) -> JSONResponse:
         """Release a claimed issue."""
         try:
             body = await request.json()
@@ -581,9 +564,7 @@ def _create_project_router() -> Any:
         return JSONResponse(issue.to_dict())
 
     @router.post("/issue/{issue_id}/dependencies")
-    async def api_add_dependency(
-        issue_id: str, request: Request, db: FiligreeDB = Depends(_get_project_db)
-    ) -> JSONResponse:
+    async def api_add_dependency(issue_id: str, request: Request, db: FiligreeDB = Depends(_get_project_db)) -> JSONResponse:
         """Add a dependency: issue_id depends on depends_on."""
         try:
             body = await request.json()
@@ -602,9 +583,7 @@ def _create_project_router() -> Any:
         return JSONResponse({"added": added})
 
     @router.delete("/issue/{issue_id}/dependencies/{dep_id}")
-    async def api_remove_dependency(
-        issue_id: str, dep_id: str, db: FiligreeDB = Depends(_get_project_db)
-    ) -> JSONResponse:
+    async def api_remove_dependency(issue_id: str, dep_id: str, db: FiligreeDB = Depends(_get_project_db)) -> JSONResponse:
         """Remove a dependency."""
         try:
             removed = db.remove_dependency(issue_id, dep_id, actor="dashboard")
@@ -631,6 +610,7 @@ def _create_project_router() -> Any:
             language=params.get("language"),
             path_prefix=params.get("path_prefix"),
             min_findings=min_findings if min_findings > 0 else None,
+            has_severity=params.get("has_severity"),
             sort=params.get("sort", "updated_at"),
         )
         return JSONResponse(result, headers={"Cache-Control": "no-cache"})
@@ -645,6 +625,11 @@ def _create_project_router() -> Any:
         result = db.get_file_hotspots(limit=limit)
         return JSONResponse(result)
 
+    @router.get("/files/stats")
+    async def api_file_stats(db: FiligreeDB = Depends(_get_project_db)) -> JSONResponse:
+        """Global findings severity stats across all files."""
+        return JSONResponse(db.get_global_findings_stats())
+
     @router.get("/files/_schema")
     async def api_files_schema() -> JSONResponse:
         """API discovery: valid enum values and endpoint catalog for file/scan features."""
@@ -652,7 +637,8 @@ def _create_project_router() -> Any:
             "valid_severities": sorted(VALID_SEVERITIES),
             "valid_finding_statuses": sorted(VALID_FINDING_STATUSES),
             "valid_association_types": sorted(VALID_ASSOC_TYPES),
-            "valid_sort_fields": ["updated_at", "first_seen", "path", "language", "severity"],
+            "valid_file_sort_fields": ["first_seen", "language", "path", "updated_at"],
+            "valid_finding_sort_fields": ["severity", "updated_at"],
             "endpoints": [
                 {
                     "method": "POST",
@@ -669,8 +655,26 @@ def _create_project_router() -> Any:
                 },
                 {
                     "method": "GET",
+                    "path": "/api/files/{file_id}/findings",
+                    "description": "Findings for a specific file",
+                    "status": "live",
+                },
+                {
+                    "method": "GET",
                     "path": "/api/files/{file_id}/timeline",
                     "description": "Merged event timeline for a file",
+                    "status": "live",
+                },
+                {
+                    "method": "GET",
+                    "path": "/api/files/hotspots",
+                    "description": "Files ranked by weighted finding severity",
+                    "status": "live",
+                },
+                {
+                    "method": "POST",
+                    "path": "/api/files/{file_id}/associations",
+                    "description": "Link a file to an issue",
                     "status": "live",
                 },
                 {
@@ -693,9 +697,7 @@ def _create_project_router() -> Any:
         return JSONResponse(data, headers={"Cache-Control": "no-cache"})
 
     @router.get("/files/{file_id}/findings")
-    async def api_get_file_findings(
-        file_id: str, request: Request, db: FiligreeDB = Depends(_get_project_db)
-    ) -> JSONResponse:
+    async def api_get_file_findings(file_id: str, request: Request, db: FiligreeDB = Depends(_get_project_db)) -> JSONResponse:
         """Get scan findings for a file with pagination."""
         try:
             db.get_file(file_id)
@@ -708,25 +710,22 @@ def _create_project_router() -> Any:
         offset = _safe_int(params.get("offset", "0"), "offset", 0)
         if isinstance(offset, JSONResponse):
             return offset
-        result = db.get_findings_paginated(
-            file_id,
-            severity=params.get("severity"),
-            status=params.get("status"),
-            sort=params.get("sort", "updated_at"),
-            limit=limit,
-            offset=offset,
-        )
+        try:
+            result = db.get_findings_paginated(
+                file_id,
+                severity=params.get("severity"),
+                status=params.get("status"),
+                sort=params.get("sort", "updated_at"),
+                limit=limit,
+                offset=offset,
+            )
+        except ValueError as e:
+            return _error_response(str(e), "VALIDATION_ERROR", 400)
         return JSONResponse(result, headers={"Cache-Control": "max-age=30"})
 
     @router.get("/files/{file_id}/timeline")
-    async def api_get_file_timeline(
-        file_id: str, request: Request, db: FiligreeDB = Depends(_get_project_db)
-    ) -> JSONResponse:
+    async def api_get_file_timeline(file_id: str, request: Request, db: FiligreeDB = Depends(_get_project_db)) -> JSONResponse:
         """Get merged timeline of events for a file."""
-        try:
-            db.get_file(file_id)
-        except KeyError:
-            return _error_response(f"File not found: {file_id}", "FILE_NOT_FOUND", 404)
         params = request.query_params
         limit = _safe_int(params.get("limit", "50"), "limit", 50)
         if isinstance(limit, JSONResponse):
@@ -734,13 +733,15 @@ def _create_project_router() -> Any:
         offset = _safe_int(params.get("offset", "0"), "offset", 0)
         if isinstance(offset, JSONResponse):
             return offset
-        result = db.get_file_timeline(file_id, limit=limit, offset=offset)
+        event_type = params.get("event_type")
+        try:
+            result = db.get_file_timeline(file_id, limit=limit, offset=offset, event_type=event_type)
+        except KeyError:
+            return _error_response(f"File not found: {file_id}", "FILE_NOT_FOUND", 404)
         return JSONResponse(result)
 
     @router.post("/files/{file_id}/associations")
-    async def api_add_file_association(
-        file_id: str, request: Request, db: FiligreeDB = Depends(_get_project_db)
-    ) -> JSONResponse:
+    async def api_add_file_association(file_id: str, request: Request, db: FiligreeDB = Depends(_get_project_db)) -> JSONResponse:
         """Link a file to an issue."""
         try:
             db.get_file(file_id)
@@ -760,7 +761,7 @@ def _create_project_router() -> Any:
             db.add_file_association(file_id, issue_id, assoc_type)
         except ValueError as e:
             return _error_response(str(e), "VALIDATION_ERROR", 400)
-        return JSONResponse({"status": "created"})
+        return JSONResponse({"status": "created"}, status_code=201)
 
     @router.post("/v1/scan-results")
     async def api_scan_results(request: Request, db: FiligreeDB = Depends(_get_project_db)) -> JSONResponse:
@@ -775,17 +776,7 @@ def _create_project_router() -> Any:
         if not scan_source:
             return _error_response("scan_source is required", "VALIDATION_ERROR", 400)
         findings = body.get("findings", [])
-        if not findings:
-            return JSONResponse(
-                {
-                    "files_created": 0,
-                    "files_updated": 0,
-                    "findings_created": 0,
-                    "findings_updated": 0,
-                    "new_finding_ids": [],
-                },
-                status_code=202,
-            )
+        status_code = 202 if not findings else 200
         try:
             result = db.process_scan_results(
                 scan_source=scan_source,
@@ -795,7 +786,7 @@ def _create_project_router() -> Any:
             )
         except ValueError as e:
             return _error_response(str(e), "VALIDATION_ERROR", 400)
-        return JSONResponse(result)
+        return JSONResponse(result, status_code=status_code)
 
     return router
 

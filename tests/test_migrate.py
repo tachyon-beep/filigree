@@ -180,8 +180,7 @@ class TestMigrationPreservesZeroValues:
             );
         """)
         conn.execute(
-            "INSERT INTO issues (id, title, estimated_minutes, quality_score, created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT INTO issues (id, title, estimated_minutes, quality_score, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
             ("iss-z", "Zero fields", 0, "0", "2026-01-01T00:00:00", "2026-01-01T00:00:00"),
         )
         conn.commit()

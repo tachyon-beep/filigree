@@ -12,6 +12,10 @@ import {
 import { SEVERITY_COLORS, state } from "../state.js";
 import { escHtml, showToast } from "../ui.js";
 
+// --- Accumulated page state for "load more" ---
+let _findingsAccum = [];
+let _timelineAccum = [];
+
 // --- Severity helpers ---
 
 function severityBadge(severity, count) {
@@ -70,7 +74,7 @@ export async function loadFiles() {
       sort: state.filesSort,
     };
     if (state.filesSearch) params.path_prefix = state.filesSearch;
-    if (state.filesCriticalOnly) params.min_findings = 1;
+    if (state.filesCriticalOnly) params.has_severity = "critical";
 
     const data = await fetchFiles(params);
     if (!data) {
@@ -310,11 +314,38 @@ function renderFileDetail(data) {
 
 // --- Findings Tab ---
 
+function renderFindingItem(f) {
+  const c = SEVERITY_COLORS[f.severity] || SEVERITY_COLORS.info;
+  const lines = f.line_start
+    ? f.line_end && f.line_end !== f.line_start
+      ? `L${f.line_start}-${f.line_end}`
+      : `L${f.line_start}`
+    : "";
+  return (
+    '<details class="rounded mb-1" style="background:var(--surface-overlay);border:1px solid var(--border-default)">' +
+    '<summary class="flex items-center gap-2 px-3 py-2 cursor-pointer text-xs bg-overlay-hover">' +
+    `<span class="px-1.5 py-0.5 rounded ${c.bg} ${c.text}" style="border:1px solid;${c.border}">${escHtml(f.severity)}</span>` +
+    `<span style="color:var(--text-primary)" class="truncate flex-1">${escHtml(f.rule_id)}</span>` +
+    (lines ? `<span style="color:var(--text-muted)">${lines}</span>` : "") +
+    `<span style="color:var(--text-muted)">seen:${f.seen_count || 1}</span>` +
+    "</summary>" +
+    '<div class="px-3 py-2 text-xs" style="color:var(--text-secondary)">' +
+    `<div class="mb-1">${escHtml(f.message)}</div>` +
+    `<div style="color:var(--text-muted)">Source: ${escHtml(f.scan_source || "\u2014")} | Status: ${escHtml(f.status)}</div>` +
+    (f.first_seen ? `<div style="color:var(--text-muted)">First seen: ${new Date(f.first_seen).toLocaleDateString()}</div>` : "") +
+    "</div></details>"
+  );
+}
+
 async function loadFindingsTab(fileId, offset) {
   const container = document.getElementById("fileTabContent");
   if (!container) return;
-  container.innerHTML =
-    '<div style="color:var(--text-muted)">Loading findings...</div>';
+
+  const isFirstPage = !offset;
+  if (isFirstPage) {
+    _findingsAccum = [];
+    container.innerHTML = '<div style="color:var(--text-muted)">Loading findings...</div>';
+  }
 
   try {
     const data = await fetchFileFindings(fileId, {
@@ -323,43 +354,19 @@ async function loadFindingsTab(fileId, offset) {
       sort: "severity",
     });
     if (!data) {
-      container.innerHTML =
-        '<div class="text-red-400">Failed to load findings.</div>';
+      container.innerHTML = '<div class="text-red-400">Failed to load findings.</div>';
       return;
     }
 
-    if (!data.results.length) {
-      container.innerHTML =
-        '<div style="color:var(--text-muted)">No findings for this file.</div>';
+    _findingsAccum = _findingsAccum.concat(data.results);
+
+    if (!_findingsAccum.length) {
+      container.innerHTML = '<div style="color:var(--text-muted)">No findings for this file.</div>';
       return;
     }
 
-    let html = "";
-    for (const f of data.results) {
-      const c = SEVERITY_COLORS[f.severity] || SEVERITY_COLORS.info;
-      const lines = f.line_start
-        ? f.line_end && f.line_end !== f.line_start
-          ? `L${f.line_start}-${f.line_end}`
-          : `L${f.line_start}`
-        : "";
-      html +=
-        '<details class="rounded mb-1" style="background:var(--surface-overlay);border:1px solid var(--border-default)">' +
-        '<summary class="flex items-center gap-2 px-3 py-2 cursor-pointer text-xs bg-overlay-hover">' +
-        `<span class="px-1.5 py-0.5 rounded ${c.bg} ${c.text}" style="border:1px solid;${c.border}">${escHtml(f.severity)}</span>` +
-        `<span style="color:var(--text-primary)" class="truncate flex-1">${escHtml(f.rule_id)}</span>` +
-        (lines ? `<span style="color:var(--text-muted)">${lines}</span>` : "") +
-        `<span style="color:var(--text-muted)">seen:${f.seen_count || 1}</span>` +
-        "</summary>" +
-        '<div class="px-3 py-2 text-xs" style="color:var(--text-secondary)">' +
-        `<div class="mb-1">${escHtml(f.message)}</div>` +
-        `<div style="color:var(--text-muted)">Source: ${escHtml(f.scan_source || "\u2014")} | Status: ${escHtml(f.status)}</div>` +
-        (f.first_seen
-          ? `<div style="color:var(--text-muted)">First seen: ${new Date(f.first_seen).toLocaleDateString()}</div>`
-          : "") +
-        "</div></details>";
-    }
+    let html = _findingsAccum.map(renderFindingItem).join("");
 
-    // Pagination for findings
     if (data.has_more) {
       const nextOffset = (offset || 0) + 20;
       html += `<button onclick="loadMoreFindings('${escHtml(fileId)}', ${nextOffset})" class="text-xs mt-2 px-3 py-1 rounded bg-overlay bg-overlay-hover" style="color:var(--accent)">Load more...</button>`;
@@ -367,8 +374,7 @@ async function loadFindingsTab(fileId, offset) {
 
     container.innerHTML = html;
   } catch (_e) {
-    container.innerHTML =
-      '<div class="text-red-400">Failed to load findings.</div>';
+    container.innerHTML = '<div class="text-red-400">Failed to load findings.</div>';
   }
 }
 
@@ -381,23 +387,26 @@ export function loadMoreFindings(fileId, offset) {
 async function loadTimelineTab(fileId, offset) {
   const container = document.getElementById("fileTabContent");
   if (!container) return;
-  container.innerHTML =
-    '<div style="color:var(--text-muted)">Loading timeline...</div>';
+
+  const isFirstPage = !offset;
+  if (isFirstPage) {
+    _timelineAccum = [];
+    container.innerHTML = '<div style="color:var(--text-muted)">Loading timeline...</div>';
+  }
 
   try {
-    const data = await fetchFileTimeline(fileId, {
-      limit: 20,
-      offset: offset || 0,
-    });
+    const params = { limit: 20, offset: offset || 0 };
+    if (state.timelineFilter) params.event_type = state.timelineFilter;
+    const data = await fetchFileTimeline(fileId, params);
     if (!data) {
-      container.innerHTML =
-        '<div class="text-red-400">Failed to load timeline.</div>';
+      container.innerHTML = '<div class="text-red-400">Failed to load timeline.</div>';
       return;
     }
 
-    if (!data.results.length) {
-      container.innerHTML =
-        '<div style="color:var(--text-muted)">No events for this file yet.</div>';
+    _timelineAccum = _timelineAccum.concat(data.results);
+
+    if (!_timelineAccum.length) {
+      container.innerHTML = '<div style="color:var(--text-muted)">No events for this file yet.</div>';
       return;
     }
 
@@ -410,7 +419,7 @@ async function loadTimelineTab(fileId, offset) {
       "</div>";
 
     html += '<div id="timelineEvents">';
-    html += renderTimelineEvents(data.results);
+    html += renderTimelineEvents(_timelineAccum);
     html += "</div>";
 
     if (data.has_more) {
@@ -419,11 +428,8 @@ async function loadTimelineTab(fileId, offset) {
     }
 
     container.innerHTML = html;
-    // Store events for client-side filtering
-    window._timelineEvents = data.results;
   } catch (_e) {
-    container.innerHTML =
-      '<div class="text-red-400">Failed to load timeline.</div>';
+    container.innerHTML = '<div class="text-red-400">Failed to load timeline.</div>';
   }
 }
 
@@ -471,15 +477,7 @@ function renderTimelineEvents(events) {
 }
 
 export function filterTimeline(type) {
-  const events = window._timelineEvents || [];
-  const filtered =
-    type === "all"
-      ? events
-      : events.filter((e) => e.type.startsWith(type));
-  const container = document.getElementById("timelineEvents");
-  if (container) container.innerHTML = renderTimelineEvents(filtered);
-
-  // Update active pill
+  // Update active pill immediately for responsiveness
   const pills = ["tlFilterAll", "tlFilterFinding", "tlFilterAssoc"];
   const activeMap = {
     all: "tlFilterAll",
@@ -494,6 +492,12 @@ export function filterTimeline(type) {
           ? "text-xs px-2 py-1 rounded bg-accent text-primary"
           : "text-xs px-2 py-1 rounded bg-overlay text-secondary bg-overlay-hover";
     }
+  }
+
+  // Store active filter and re-fetch from server with event_type param
+  state.timelineFilter = type === "all" ? null : type;
+  if (state.selectedFile) {
+    loadTimelineTab(state.selectedFile, 0);
   }
 }
 

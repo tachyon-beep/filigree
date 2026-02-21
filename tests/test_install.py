@@ -88,9 +88,7 @@ class TestInjectInstructions:
         end_marker = "<!-- /filigree:instructions -->"
         target = tmp_path / "CLAUDE.md"
         # Craft content where end marker appears before start marker
-        target.write_text(
-            f"Preamble\n{end_marker}\nMiddle\n{FILIGREE_INSTRUCTIONS_MARKER}\nold content\n{end_marker}\nAfter\n"
-        )
+        target.write_text(f"Preamble\n{end_marker}\nMiddle\n{FILIGREE_INSTRUCTIONS_MARKER}\nold content\n{end_marker}\nAfter\n")
         ok, _msg = inject_instructions(target)
         assert ok
         content = target.read_text()

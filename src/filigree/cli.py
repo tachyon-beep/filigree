@@ -390,11 +390,7 @@ def close(ctx: click.Context, issue_ids: tuple[str, ...], reason: str, as_json: 
             # Include newly-unblocked issues (minimal fields to save tokens)
             closed_ids = {d["id"] for d in closed}
             ready = db.get_ready()
-            unblocked = [
-                {"id": i.id, "title": i.title, "priority": i.priority, "type": i.type}
-                for i in ready
-                if i.id not in closed_ids
-            ]
+            unblocked = [{"id": i.id, "title": i.title, "priority": i.priority, "type": i.type} for i in ready if i.id not in closed_ids]
             click.echo(json_mod.dumps({"closed": closed, "unblocked": unblocked}, indent=2, default=str))
         _refresh_summary(db)
 
@@ -1037,10 +1033,11 @@ def archive(ctx: click.Context, days: int, as_json: bool) -> None:
 @click.option("--days", default=30, type=int, help="Mark as fixed if unseen for more than N days (default: 30)")
 @click.option("--scan-source", default=None, type=str, help="Only clean findings from this scan source")
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON")
-def clean_stale_findings(days: int, scan_source: str | None, as_json: bool) -> None:
+@click.pass_context
+def clean_stale_findings(ctx: click.Context, days: int, scan_source: str | None, as_json: bool) -> None:
     """Move stale unseen_in_latest findings to fixed status."""
     with _get_db() as db:
-        result = db.clean_stale_findings(days=days, scan_source=scan_source)
+        result = db.clean_stale_findings(days=days, scan_source=scan_source, actor=ctx.obj["actor"])
         if as_json:
             click.echo(json_mod.dumps(result))
         elif result["findings_fixed"] > 0:
@@ -1165,9 +1162,7 @@ def type_info(type_name: str, as_json: bool) -> None:
                     }
                     for t in tpl.transitions
                 ],
-                "fields_schema": [
-                    {"name": f.name, "type": f.type, "description": f.description} for f in tpl.fields_schema
-                ],
+                "fields_schema": [{"name": f.name, "type": f.type, "description": f.description} for f in tpl.fields_schema],
             }
             click.echo(json_mod.dumps(data, indent=2))
             return
@@ -1549,9 +1544,7 @@ def batch_close(ctx: click.Context, issue_ids: tuple[str, ...], reason: str, as_
             click.echo(
                 json_mod.dumps(
                     {
-                        "closed": [
-                            {"id": i.id, "title": i.title, "priority": i.priority, "type": i.type} for i in closed
-                        ],
+                        "closed": [{"id": i.id, "title": i.title, "priority": i.priority, "type": i.type} for i in closed],
                         "errors": errors,
                     },
                     indent=2,
@@ -1644,9 +1637,7 @@ def explain_state(type_name: str, state_name: str, as_json: bool) -> None:
             click.echo(f"Unknown state '{state_name}' for type '{type_name}'", err=True)
             sys.exit(1)
 
-        inbound = [
-            {"from": t.from_state, "enforcement": t.enforcement} for t in tpl.transitions if t.to_state == state_name
-        ]
+        inbound = [{"from": t.from_state, "enforcement": t.enforcement} for t in tpl.transitions if t.to_state == state_name]
         outbound: list[dict[str, Any]] = [
             {"to": t.to_state, "enforcement": t.enforcement, "requires_fields": list(t.requires_fields)}
             for t in tpl.transitions

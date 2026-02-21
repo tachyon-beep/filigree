@@ -1018,9 +1018,7 @@ async def _dispatch(name: str, arguments: dict[str, Any], tracker: FiligreeDB) -
                 error_data: dict[str, Any] = {"error": str(e), "code": "invalid_transition"}
                 try:
                     transitions = tracker.get_valid_transitions(arguments["id"])
-                    error_data["valid_transitions"] = [
-                        {"to": t.to, "category": t.category, "ready": t.ready} for t in transitions
-                    ]
+                    error_data["valid_transitions"] = [{"to": t.to, "category": t.category, "ready": t.ready} for t in transitions]
                     error_data["hint"] = "Use get_valid_transitions to see allowed state changes"
                 except KeyError:
                     pass
@@ -1050,9 +1048,7 @@ async def _dispatch(name: str, arguments: dict[str, Any], tracker: FiligreeDB) -
                 error_data = {"error": str(e), "code": "invalid_transition"}
                 try:
                     transitions = tracker.get_valid_transitions(arguments["id"])
-                    error_data["valid_transitions"] = [
-                        {"to": t.to, "category": t.category, "ready": t.ready} for t in transitions
-                    ]
+                    error_data["valid_transitions"] = [{"to": t.to, "category": t.category, "ready": t.ready} for t in transitions]
                     error_data["hint"] = "Use get_valid_transitions to see allowed state changes"
                 except KeyError:
                     pass
@@ -1101,10 +1097,7 @@ async def _dispatch(name: str, arguments: dict[str, Any], tracker: FiligreeDB) -
         case "get_blocked":
             issues = tracker.get_blocked()
             return _text(
-                [
-                    {"id": i.id, "title": i.title, "priority": i.priority, "type": i.type, "blocked_by": i.blocked_by}
-                    for i in issues
-                ]
+                [{"id": i.id, "title": i.title, "priority": i.priority, "type": i.type, "blocked_by": i.blocked_by} for i in issues]
             )
 
         case "get_plan":
@@ -1525,9 +1518,7 @@ async def _dispatch(name: str, arguments: dict[str, Any], tracker: FiligreeDB) -
                     wf_pack = tracker.templates.get_pack(type_tpl.pack)
                     if wf_pack is not None:
                         if wf_pack.guide is None:
-                            return _text(
-                                {"pack": wf_pack.pack, "guide": None, "message": "No guide available for this pack"}
-                            )
+                            return _text({"pack": wf_pack.pack, "guide": None, "message": "No guide available for this pack"})
                         return _text(
                             {
                                 "pack": wf_pack.pack,
@@ -1556,14 +1547,8 @@ async def _dispatch(name: str, arguments: dict[str, Any], tracker: FiligreeDB) -
                     state_def = s
                     break
             if state_def is None:
-                return _text(
-                    {"error": f"Unknown state '{state_name}' for type '{arguments['type']}'", "code": "not_found"}
-                )
-            inbound = [
-                {"from": td.from_state, "enforcement": td.enforcement}
-                for td in state_tpl.transitions
-                if td.to_state == state_name
-            ]
+                return _text({"error": f"Unknown state '{state_name}' for type '{arguments['type']}'", "code": "not_found"})
+            inbound = [{"from": td.from_state, "enforcement": td.enforcement} for td in state_tpl.transitions if td.to_state == state_name]
             outbound = [
                 {"to": td.to_state, "enforcement": td.enforcement, "requires_fields": list(td.requires_fields)}
                 for td in state_tpl.transitions
@@ -1654,9 +1639,7 @@ def main() -> None:
     import asyncio
 
     parser = argparse.ArgumentParser(description="Filigree MCP server")
-    parser.add_argument(
-        "--project", type=Path, default=None, help="Project root (auto-discovers .filigree/ if omitted)"
-    )
+    parser.add_argument("--project", type=Path, default=None, help="Project root (auto-discovers .filigree/ if omitted)")
     args = parser.parse_args()
 
     asyncio.run(_run(args.project))

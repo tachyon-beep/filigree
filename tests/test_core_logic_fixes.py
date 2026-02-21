@@ -111,8 +111,7 @@ class TestCreateIssuePartialWriteRollback:
 
         issues_after = len(db.list_issues())
         assert issues_after == issues_before, (
-            f"Expected {issues_before} issues, got {issues_after} — "
-            "orphaned issue was committed after failed create_issue"
+            f"Expected {issues_before} issues, got {issues_after} — orphaned issue was committed after failed create_issue"
         )
 
     def test_invalid_deps_no_orphan_events(self, db: FiligreeDB) -> None:
@@ -127,8 +126,7 @@ class TestCreateIssuePartialWriteRollback:
 
         events_after = db.conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]
         assert events_after == events_before, (
-            f"Expected {events_before} events, got {events_after} — "
-            "orphaned 'created' event was committed after failed create_issue"
+            f"Expected {events_before} events, got {events_after} — orphaned 'created' event was committed after failed create_issue"
         )
 
     def test_invalid_deps_no_orphan_labels(self, db: FiligreeDB) -> None:
@@ -142,8 +140,7 @@ class TestCreateIssuePartialWriteRollback:
 
         labels_after = db.conn.execute("SELECT COUNT(*) FROM labels").fetchone()[0]
         assert labels_after == labels_before, (
-            f"Expected {labels_before} labels, got {labels_after} — "
-            "orphaned labels were committed after failed create_issue"
+            f"Expected {labels_before} labels, got {labels_after} — orphaned labels were committed after failed create_issue"
         )
 
 
@@ -163,8 +160,7 @@ class TestUpdateIssuePartialEventRollback:
 
         events_after = db.conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]
         assert events_after == events_before, (
-            f"Expected {events_before} events, got {events_after} — "
-            "orphaned title_changed event was committed after failed update_issue"
+            f"Expected {events_before} events, got {events_after} — orphaned title_changed event was committed after failed update_issue"
         )
 
         # Title should remain unchanged

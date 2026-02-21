@@ -2,7 +2,7 @@
 // Code Health view — hotspots, severity donut, scan coverage, recent scans.
 // ---------------------------------------------------------------------------
 
-import { fetchFiles, fetchHotspots } from "../api.js";
+import { fetchFiles, fetchFileStats, fetchHotspots } from "../api.js";
 import { SEVERITY_COLORS, state } from "../state.js";
 import { escHtml } from "../ui.js";
 
@@ -17,13 +17,14 @@ export async function loadHealth() {
   container.innerHTML = '<div style="color:var(--text-muted)">Loading...</div>';
 
   try {
-    // Fetch hotspots and file list in parallel
-    const [hotspots, fileData] = await Promise.all([
+    // Fetch hotspots, file count, and global findings stats in parallel
+    const [hotspots, fileData, stats] = await Promise.all([
       fetchHotspots(10),
       fetchFiles({ limit: 1, offset: 0 }),
+      fetchFileStats(),
     ]);
 
-    if (!hotspots && !fileData) {
+    if (!hotspots && !fileData && !stats) {
       container.innerHTML =
         '<div class="p-6 text-center" style="color:var(--text-muted)">' +
         '<div class="font-medium mb-2" style="color:var(--text-primary)">No file data yet</div>' +
@@ -33,21 +34,17 @@ export async function loadHealth() {
 
     state.hotspots = hotspots;
 
-    // Compute aggregate severity counts from hotspots
-    const agg = { critical: 0, high: 0, medium: 0, low: 0, info: 0 };
-    if (hotspots) {
-      for (const h of hotspots) {
-        const b = h.findings_breakdown || {};
-        agg.critical += b.critical || 0;
-        agg.high += b.high || 0;
-        agg.medium += b.medium || 0;
-        agg.low += b.low || 0;
-        agg.info += b.info || 0;
-      }
-    }
+    // Use global stats for accurate severity counts across all files
+    const agg = {
+      critical: stats?.critical || 0,
+      high: stats?.high || 0,
+      medium: stats?.medium || 0,
+      low: stats?.low || 0,
+      info: stats?.info || 0,
+    };
 
     const totalFiles = fileData?.total || 0;
-    const filesWithFindings = hotspots?.length || 0;
+    const filesWithFindings = stats?.files_with_findings || 0;
 
     // Build 2x2 grid
     container.innerHTML =

@@ -161,10 +161,7 @@ def apply_pending_migrations(conn: sqlite3.Connection, target_version: int) -> i
         return 0
 
     if current > target_version:
-        msg = (
-            f"Database schema v{current} is newer than this version of filigree "
-            f"(expects v{target_version}). Downgrade is not supported."
-        )
+        msg = f"Database schema v{current} is newer than this version of filigree (expects v{target_version}). Downgrade is not supported."
         raise ValueError(msg)
 
     applied = 0

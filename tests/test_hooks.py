@@ -245,10 +245,7 @@ class TestCheckInstructionsFreshness:
         claude_md = tmp_path / "CLAUDE.md"
         # Write instructions with a fake (stale) hash
         claude_md.write_text(
-            "# My Project\n\n"
-            "<!-- filigree:instructions:v0.0.0:00000000 -->\n"
-            "old instructions\n"
-            "<!-- /filigree:instructions -->\n"
+            "# My Project\n\n<!-- filigree:instructions:v0.0.0:00000000 -->\nold instructions\n<!-- /filigree:instructions -->\n"
         )
         messages = _check_instructions_freshness(tmp_path)
         assert any("CLAUDE.md" in m for m in messages)

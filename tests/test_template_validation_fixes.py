@@ -50,8 +50,7 @@ class TestIncidentResolvedCategory:
         raw = BUILT_IN_PACKS["incident"]["types"]["incident"]
         states = {s["name"]: s["category"] for s in raw["states"]}
         assert states["resolved"] != "done", (
-            "incident.resolved should not be 'done' — it has an outgoing "
-            "transition to 'closed' that requires root_cause"
+            "incident.resolved should not be 'done' — it has an outgoing transition to 'closed' that requires root_cause"
         )
         assert states["resolved"] == "wip"
 
@@ -137,9 +136,7 @@ class TestDuplicateStateNameDetection:
             fields_schema=(),
         )
         errors = TemplateRegistry.validate_type_template(tpl)
-        assert any("duplicate" in e.lower() or "open" in e for e in errors), (
-            f"Expected duplicate state name error, got: {errors}"
-        )
+        assert any("duplicate" in e.lower() or "open" in e for e in errors), f"Expected duplicate state name error, got: {errors}"
 
     def test_parse_duplicate_state_names_raises(self) -> None:
         """parse_type_template should reject duplicate state names."""

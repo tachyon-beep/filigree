@@ -366,6 +366,12 @@ export async function fetchHotspots(limit) {
   return resp.json();
 }
 
+export async function fetchFileStats() {
+  const resp = await fetch(apiUrl("/files/stats"));
+  if (!resp.ok) return null;
+  return resp.json();
+}
+
 export async function fetchFileSchema() {
   const resp = await fetch(apiUrl("/files/_schema"));
   if (!resp.ok) return null;

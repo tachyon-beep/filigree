@@ -437,9 +437,7 @@ class FiligreeDB:
         self.db_path = Path(db_path)
         self.prefix = prefix
         self._enabled_packs_override = list(enabled_packs) if enabled_packs is not None else None
-        self.enabled_packs = (
-            self._enabled_packs_override if self._enabled_packs_override is not None else ["core", "planning"]
-        )
+        self.enabled_packs = self._enabled_packs_override if self._enabled_packs_override is not None else ["core", "planning"]
         self._conn: sqlite3.Connection | None = None
         self._check_same_thread = check_same_thread
         self._template_registry: TemplateRegistry | None = template_registry
@@ -578,9 +576,7 @@ class FiligreeDB:
                     "type": tpl.type,
                     "display_name": tpl.display_name,
                     "description": tpl.description,
-                    "fields_schema": [
-                        {"name": f.name, "type": f.type, "description": f.description} for f in tpl.fields_schema
-                    ],
+                    "fields_schema": [{"name": f.name, "type": f.type, "description": f.description} for f in tpl.fields_schema],
                 }
             )
         return sorted(result, key=lambda t: t["type"])
@@ -683,9 +679,7 @@ class FiligreeDB:
         # Validate deps BEFORE any writes to prevent partial commits
         if deps:
             dep_ph = ",".join("?" * len(deps))
-            found = {
-                r["id"] for r in self.conn.execute(f"SELECT id FROM issues WHERE id IN ({dep_ph})", deps).fetchall()
-            }
+            found = {r["id"] for r in self.conn.execute(f"SELECT id FROM issues WHERE id IN ({dep_ph})", deps).fetchall()}
             missing = [d for d in deps if d not in found]
             if missing:
                 msg = f"Invalid dependency IDs (not found): {', '.join(missing)}"
@@ -731,8 +725,7 @@ class FiligreeDB:
             if deps:
                 for dep_id in deps:
                     self.conn.execute(
-                        "INSERT OR IGNORE INTO dependencies (issue_id, depends_on_id, type, created_at) "
-                        "VALUES (?, ?, 'blocks', ?)",
+                        "INSERT OR IGNORE INTO dependencies (issue_id, depends_on_id, type, created_at) VALUES (?, ?, 'blocks', ?)",
                         (issue_id, dep_id, now),
                     )
 
@@ -772,9 +765,7 @@ class FiligreeDB:
 
         # 2. Batch fetch labels
         labels_by_id: dict[str, list[str]] = {iid: [] for iid in issue_ids}
-        for r in self.conn.execute(
-            f"SELECT issue_id, label FROM labels WHERE issue_id IN ({placeholders})", issue_ids
-        ).fetchall():
+        for r in self.conn.execute(f"SELECT issue_id, label FROM labels WHERE issue_id IN ({placeholders})", issue_ids).fetchall():
             labels_by_id[r["issue_id"]].append(r["label"])
 
         # 3. Batch fetch "blocks" (issues that this one blocks — where depends_on_id = this)
@@ -799,9 +790,7 @@ class FiligreeDB:
 
         # 5. Batch fetch children
         children_by_id: dict[str, list[str]] = {iid: [] for iid in issue_ids}
-        for r in self.conn.execute(
-            f"SELECT id, parent_id FROM issues WHERE parent_id IN ({placeholders})", issue_ids
-        ).fetchall():
+        for r in self.conn.execute(f"SELECT id, parent_id FROM issues WHERE parent_id IN ({placeholders})", issue_ids).fetchall():
             children_by_id[r["parent_id"]].append(r["id"])
 
         # 6. Batch compute open blocker counts (category-aware)
@@ -820,9 +809,7 @@ class FiligreeDB:
         else:
             # No done-category states: every dependency is an active blocker
             for r in self.conn.execute(
-                f"SELECT d.issue_id, COUNT(*) as cnt FROM dependencies d "
-                f"WHERE d.issue_id IN ({placeholders}) "
-                f"GROUP BY d.issue_id",
+                f"SELECT d.issue_id, COUNT(*) as cnt FROM dependencies d WHERE d.issue_id IN ({placeholders}) GROUP BY d.issue_id",
                 issue_ids,
             ).fetchall():
                 open_blockers_by_id[r["issue_id"]] = r["cnt"]
@@ -913,9 +900,7 @@ class FiligreeDB:
 
                 tpl = self.templates.get_type(current.type)
                 if tpl is not None:
-                    _transition_result = self.templates.validate_transition(
-                        current.type, current.status, status, merged_fields
-                    )
+                    _transition_result = self.templates.validate_transition(current.type, current.status, status, merged_fields)
                     if not _transition_result.allowed:
                         if _transition_result.missing_fields:
                             missing_str = ", ".join(_transition_result.missing_fields)
@@ -992,9 +977,7 @@ class FiligreeDB:
                 params.append(priority)
 
             if assignee is not None and assignee != current.assignee:
-                self._record_event(
-                    issue_id, "assignee_changed", actor=actor, old_value=current.assignee, new_value=assignee
-                )
+                self._record_event(issue_id, "assignee_changed", actor=actor, old_value=current.assignee, new_value=assignee)
                 updates.append("assignee = ?")
                 params.append(assignee)
 
@@ -1436,10 +1419,7 @@ class FiligreeDB:
         # Check required_at fields for current state
         missing = self.templates.validate_fields_for_state(issue.type, issue.status, issue.fields)
         for field_name in missing:
-            warnings.append(
-                f"Field '{field_name}' is recommended at state '{issue.status}' "
-                f"for type '{issue.type}' but is not populated."
-            )
+            warnings.append(f"Field '{field_name}' is recommended at state '{issue.status}' for type '{issue.type}' but is not populated.")
 
         # Check upcoming requirements: fields needed for next transitions
         transitions = self.templates.get_valid_transitions(issue.type, issue.status, issue.fields)
@@ -1497,9 +1477,7 @@ class FiligreeDB:
                 continue
             visited.add(current)
             # Follow existing dependencies: current depends_on X means current -> X
-            for r in self.conn.execute(
-                "SELECT depends_on_id FROM dependencies WHERE issue_id = ?", (current,)
-            ).fetchall():
+            for r in self.conn.execute("SELECT depends_on_id FROM dependencies WHERE issue_id = ?", (current,)).fetchall():
                 queue.append(r["depends_on_id"])
         return False
 
@@ -1604,10 +1582,7 @@ class FiligreeDB:
             done_states if done_states else [],
         ).fetchall()
         open_ids = {r["id"] for r in open_rows}
-        info = {
-            r["id"]: {"id": r["id"], "title": r["title"], "priority": r["priority"], "type": r["type"]}
-            for r in open_rows
-        }
+        info = {r["id"]: {"id": r["id"], "title": r["title"], "priority": r["priority"], "type": r["type"]} for r in open_rows}
 
         # edges: blocker -> list of issues it blocks (forward edges)
         forward: dict[str, list[str]] = {nid: [] for nid in open_ids}
@@ -1835,13 +1810,10 @@ class FiligreeDB:
                             raise ValueError(msg)
 
                         self.conn.execute(
-                            "INSERT OR IGNORE INTO dependencies (issue_id, depends_on_id, type, created_at) "
-                            "VALUES (?, ?, 'blocks', ?)",
+                            "INSERT OR IGNORE INTO dependencies (issue_id, depends_on_id, type, created_at) VALUES (?, ?, 'blocks', ?)",
                             (issue_id, dep_issue_id, now),
                         )
-                        self._record_event(
-                            issue_id, "dependency_added", actor=actor, new_value=f"blocks:{dep_issue_id}"
-                        )
+                        self._record_event(issue_id, "dependency_added", actor=actor, new_value=f"blocks:{dep_issue_id}")
 
             self.conn.commit()
         except Exception:
@@ -1948,9 +1920,7 @@ class FiligreeDB:
 
         # Category-level counts (open/wip/done) via template-aware resolution
         by_category: dict[str, int] = {"open": 0, "wip": 0, "done": 0}
-        for row in self.conn.execute(
-            "SELECT type, status, COUNT(*) as cnt FROM issues GROUP BY type, status"
-        ).fetchall():
+        for row in self.conn.execute("SELECT type, status, COUNT(*) as cnt FROM issues GROUP BY type, status").fetchall():
             cat = self._resolve_status_category(row["type"], row["status"])
             by_category[cat] = by_category.get(cat, 0) + row["cnt"]
 
@@ -1983,9 +1953,7 @@ class FiligreeDB:
 
     def get_recent_events(self, limit: int = 20) -> list[dict[str, Any]]:
         rows = self.conn.execute(
-            "SELECT e.*, i.title as issue_title FROM events e "
-            "JOIN issues i ON e.issue_id = i.id "
-            "ORDER BY e.created_at DESC LIMIT ?",
+            "SELECT e.*, i.title as issue_title FROM events e JOIN issues i ON e.issue_id = i.id ORDER BY e.created_at DESC LIMIT ?",
             (limit,),
         ).fetchall()
         return [dict(r) for r in rows]
@@ -2024,8 +1992,7 @@ class FiligreeDB:
         # like 'created', 'released', 'archived' so undo can reach earlier reversible ones)
         rev_ph = ",".join("?" * len(_REVERSIBLE_EVENTS))
         row = self.conn.execute(
-            f"SELECT * FROM events WHERE issue_id = ? AND event_type IN ({rev_ph}) "
-            "ORDER BY created_at DESC, id DESC LIMIT 1",
+            f"SELECT * FROM events WHERE issue_id = ? AND event_type IN ({rev_ph}) ORDER BY created_at DESC, id DESC LIMIT 1",
             (issue_id, *_REVERSIBLE_EVENTS),
         ).fetchone()
 
@@ -2037,8 +2004,7 @@ class FiligreeDB:
 
         # Check if this event was already undone (a newer 'undone' event exists)
         already_undone = self.conn.execute(
-            "SELECT 1 FROM events WHERE issue_id = ? AND event_type = 'undone' "
-            "AND (created_at > ? OR (created_at = ? AND id > ?))",
+            "SELECT 1 FROM events WHERE issue_id = ? AND event_type = 'undone' AND (created_at > ? OR (created_at = ? AND id > ?))",
             (issue_id, row["created_at"], row["created_at"], event_id),
         ).fetchone()
         if already_undone:
@@ -2108,8 +2074,7 @@ class FiligreeDB:
             case "dependency_removed":
                 # Event: issue_id=from_id, old_value=depends_on_id
                 self.conn.execute(
-                    "INSERT OR IGNORE INTO dependencies (issue_id, depends_on_id, type, created_at) "
-                    "VALUES (?, ?, 'blocks', ?)",
+                    "INSERT OR IGNORE INTO dependencies (issue_id, depends_on_id, type, created_at) VALUES (?, ?, 'blocks', ?)",
                     (issue_id, row["old_value"], now),
                 )
 
@@ -2285,8 +2250,7 @@ class FiligreeDB:
                     )
                 elif record_type == "dependency":
                     self.conn.execute(
-                        f"INSERT {conflict} INTO dependencies (issue_id, depends_on_id, type, created_at) "
-                        "VALUES (?, ?, ?, ?)",
+                        f"INSERT {conflict} INTO dependencies (issue_id, depends_on_id, type, created_at) VALUES (?, ?, ?, ?)",
                         (
                             record["issue_id"],
                             record["depends_on_id"],
@@ -2427,8 +2391,7 @@ class FiligreeDB:
 
         file_id = self._generate_file_id()
         self.conn.execute(
-            "INSERT INTO file_records (id, path, language, file_type, first_seen, updated_at, metadata) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO file_records (id, path, language, file_type, first_seen, updated_at, metadata) VALUES (?, ?, ?, ?, ?, ?, ?)",
             (file_id, path, language, file_type, now, now, json.dumps(metadata or {})),
         )
         self.conn.commit()
@@ -2479,6 +2442,8 @@ class FiligreeDB:
         ).fetchall()
         return [self._build_file_record(r) for r in rows]
 
+    _VALID_SEVERITIES = frozenset({"critical", "high", "medium", "low", "info"})
+
     def list_files_paginated(
         self,
         *,
@@ -2487,6 +2452,7 @@ class FiligreeDB:
         language: str | None = None,
         path_prefix: str | None = None,
         min_findings: int | None = None,
+        has_severity: str | None = None,
         sort: str = "updated_at",
     ) -> dict[str, Any]:
         """List file records with pagination metadata.
@@ -2495,6 +2461,9 @@ class FiligreeDB:
 
         When *min_findings* is provided, only files with at least that many
         open findings are returned (uses a correlated subquery).
+
+        When *has_severity* is provided (e.g. ``"critical"``), only files
+        with at least one open finding of that severity are returned.
         """
         clauses: list[str] = []
         params: list[Any] = []
@@ -2506,10 +2475,16 @@ class FiligreeDB:
             clauses.append("path LIKE ?")
             params.append(f"{path_prefix}%")
         if min_findings is not None and min_findings > 0:
-            clauses.append(
-                "(SELECT COUNT(*) FROM scan_findings sf WHERE sf.file_id = file_records.id AND sf.status = 'open') >= ?"
-            )
+            clauses.append("(SELECT COUNT(*) FROM scan_findings sf WHERE sf.file_id = file_records.id AND sf.status = 'open') >= ?")
             params.append(min_findings)
+        if has_severity and has_severity in self._VALID_SEVERITIES:
+            clauses.append(
+                "(SELECT COUNT(*) FROM scan_findings sf"
+                " WHERE sf.file_id = file_records.id"
+                " AND sf.status NOT IN ('fixed', 'false_positive')"
+                " AND sf.severity = ?) > 0"
+            )
+            params.append(has_severity)
 
         where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
 
@@ -2522,12 +2497,44 @@ class FiligreeDB:
         sort_col = sort if sort in valid_sorts else "updated_at"
         order = "ASC" if sort_col == "path" else "DESC"
 
-        rows = self.conn.execute(
-            f"SELECT * FROM file_records{where} ORDER BY {sort_col} {order} LIMIT ? OFFSET ?",
-            [*params, limit, offset],
-        ).fetchall()
+        _open = "sf.status NOT IN ('fixed', 'false_positive')"
+        _sev_cols = " ".join(
+            f"(SELECT COUNT(*) FROM scan_findings sf WHERE sf.file_id = fr.id AND {_open} AND sf.severity='{s}') AS cnt_{s},"
+            for s in ("critical", "high", "medium", "low", "info")
+        )
+        fr_where = where.replace("file_records.id", "fr.id")
+        enriched_sql = (
+            f"SELECT fr.*, "
+            f"(SELECT COUNT(*) FROM scan_findings sf"
+            f" WHERE sf.file_id = fr.id AND {_open}"
+            f") AS open_findings, "
+            f"(SELECT COUNT(*) FROM scan_findings sf"
+            f" WHERE sf.file_id = fr.id"
+            f") AS total_findings, "
+            f"{_sev_cols} "
+            f"(SELECT COUNT(*) FROM file_associations fa"
+            f" WHERE fa.file_id = fr.id"
+            f") AS associations_count"
+            f" FROM file_records fr{fr_where}"
+            f" ORDER BY {sort_col} {order}"
+            f" LIMIT ? OFFSET ?"
+        )
+        rows = self.conn.execute(enriched_sql, [*params, limit, offset]).fetchall()
 
-        results = [self._build_file_record(r).to_dict() for r in rows]
+        results = []
+        for r in rows:
+            d = self._build_file_record(r).to_dict()
+            d["summary"] = {
+                "total_findings": r["total_findings"],
+                "open_findings": r["open_findings"],
+                "critical": r["cnt_critical"],
+                "high": r["cnt_high"],
+                "medium": r["cnt_medium"],
+                "low": r["cnt_low"],
+                "info": r["cnt_info"],
+            }
+            d["associations_count"] = r["associations_count"]
+            results.append(d)
         return {
             "results": results,
             "total": total,
@@ -2556,6 +2563,18 @@ class FiligreeDB:
 
         Returns summary stats including ``new_finding_ids``.
         """
+        # Validate all findings upfront before any writes, so a bad entry
+        # at index N cannot leave writes from 0..N-1 pending.
+        for i, f in enumerate(findings):
+            if not isinstance(f, dict):
+                raise ValueError(f"findings[{i}] must be a dict, got {type(f).__name__}")
+            if "path" not in f:
+                raise ValueError(f"findings[{i}] is missing required key 'path'")
+            severity = f.get("severity", "info")
+            if severity not in VALID_SEVERITIES:
+                msg = f'Invalid severity "{severity}". Must be one of: {", ".join(sorted(VALID_SEVERITIES))}'
+                raise ValueError(msg)
+
         now = _now_iso()
         stats: dict[str, Any] = {
             "files_created": 0,
@@ -2568,17 +2587,8 @@ class FiligreeDB:
         # Track which finding IDs were seen, keyed by file_id, for mark_unseen
         seen_finding_ids: dict[str, list[str]] = {}
 
-        for i, f in enumerate(findings):
-            if not isinstance(f, dict):
-                raise ValueError(f"findings[{i}] must be a dict, got {type(f).__name__}")
-            if "path" not in f:
-                raise ValueError(f"findings[{i}] is missing required key 'path'")
-
+        for f in findings:
             severity = f.get("severity", "info")
-            if severity not in VALID_SEVERITIES:
-                msg = f'Invalid severity "{severity}". Must be one of: {", ".join(sorted(VALID_SEVERITIES))}'
-                raise ValueError(msg)
-
             path = f["path"]
             language = f.get("language", "")
 
@@ -2619,7 +2629,9 @@ class FiligreeDB:
             if existing_finding is not None:
                 self.conn.execute(
                     "UPDATE scan_findings SET message = ?, severity = ?, line_end = ?, "
-                    "seen_count = seen_count + 1, updated_at = ?, last_seen_at = ? WHERE id = ?",
+                    "seen_count = seen_count + 1, updated_at = ?, last_seen_at = ?, "
+                    "status = CASE WHEN status IN ('fixed', 'unseen_in_latest') THEN 'open' ELSE status END "
+                    "WHERE id = ?",
                     (f.get("message", ""), severity, f.get("line_end"), now, now, existing_finding["id"]),
                 )
                 stats["findings_updated"] += 1
@@ -2670,6 +2682,7 @@ class FiligreeDB:
         *,
         days: int = 30,
         scan_source: str | None = None,
+        actor: str = "",
     ) -> dict[str, Any]:
         """Move ``unseen_in_latest`` findings older than *days* to ``fixed``.
 
@@ -2701,10 +2714,10 @@ class FiligreeDB:
 
     # Severity ordering for SQL sort: lower number = more severe.
     _SEVERITY_ORDER_SQL = (
-        "CASE severity "
-        "WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 "
-        "WHEN 'low' THEN 3 WHEN 'info' THEN 4 ELSE 5 END"
+        "CASE severity WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 WHEN 'info' THEN 4 ELSE 5 END"
     )
+
+    _VALID_FINDING_SORTS = frozenset({"updated_at", "severity"})
 
     def get_findings(
         self,
@@ -2717,6 +2730,10 @@ class FiligreeDB:
         offset: int = 0,
     ) -> list[ScanFinding]:
         """Get scan findings for a file with optional filters."""
+        if sort not in self._VALID_FINDING_SORTS:
+            valid = ", ".join(sorted(self._VALID_FINDING_SORTS))
+            raise ValueError(f'Invalid sort field "{sort}". Must be one of: {valid}')
+
         clauses = ["file_id = ?"]
         params: list[Any] = [file_id]
 
@@ -2750,6 +2767,10 @@ class FiligreeDB:
 
         Returns ``{results, total, limit, offset, has_more}``.
         """
+        if sort not in self._VALID_FINDING_SORTS:
+            valid = ", ".join(sorted(self._VALID_FINDING_SORTS))
+            raise ValueError(f'Invalid sort field "{sort}". Must be one of: {valid}')
+
         clauses = ["file_id = ?"]
         params: list[Any] = [file_id]
 
@@ -2797,8 +2818,7 @@ class FiligreeDB:
         # "open" = not fixed/false_positive; build SUM(CASE …) per severity
         _open = "status NOT IN ('fixed', 'false_positive')"
         _sev = " ".join(
-            f"SUM(CASE WHEN severity='{s}' AND {_open} THEN 1 ELSE 0 END) AS {s},"
-            for s in ("critical", "high", "medium", "low")
+            f"SUM(CASE WHEN severity='{s}' AND {_open} THEN 1 ELSE 0 END) AS {s}," for s in ("critical", "high", "medium", "low")
         )
         row = self.conn.execute(
             f"SELECT COUNT(*) AS total_findings, "
@@ -2811,6 +2831,38 @@ class FiligreeDB:
         return {
             "total_findings": row["total_findings"],
             "open_findings": row["open_findings"] or 0,
+            "critical": row["critical"] or 0,
+            "high": row["high"] or 0,
+            "medium": row["medium"] or 0,
+            "low": row["low"] or 0,
+            "info": row["info"] or 0,
+        }
+
+    def get_global_findings_stats(self) -> dict[str, Any]:
+        """Get project-wide severity-bucketed findings stats.
+
+        Returns::
+
+            {"total_findings": 20, "open_findings": 15,
+             "files_with_findings": 8,
+             "critical": 2, "high": 3, "medium": 5, "low": 4, "info": 1}
+        """
+        _open = "status NOT IN ('fixed', 'false_positive')"
+        _sev = " ".join(
+            f"SUM(CASE WHEN severity='{s}' AND {_open} THEN 1 ELSE 0 END) AS {s}," for s in ("critical", "high", "medium", "low")
+        )
+        row = self.conn.execute(
+            f"SELECT COUNT(*) AS total_findings, "
+            f"SUM(CASE WHEN {_open} THEN 1 ELSE 0 END) AS open_findings, "
+            f"COUNT(DISTINCT CASE WHEN {_open} THEN file_id END) AS files_with_findings, "
+            f"{_sev} "
+            f"SUM(CASE WHEN severity='info' AND {_open} THEN 1 ELSE 0 END) AS info "
+            f"FROM scan_findings",
+        ).fetchone()
+        return {
+            "total_findings": row["total_findings"],
+            "open_findings": row["open_findings"] or 0,
+            "files_with_findings": row["files_with_findings"],
             "critical": row["critical"] or 0,
             "high": row["high"] or 0,
             "medium": row["medium"] or 0,
@@ -2854,11 +2906,15 @@ class FiligreeDB:
             msg = f'Invalid assoc_type "{assoc_type}". Must be one of: {", ".join(sorted(VALID_ASSOC_TYPES))}'
             raise ValueError(msg)
         now = _now_iso()
-        self.conn.execute(
-            "INSERT OR IGNORE INTO file_associations (file_id, issue_id, assoc_type, created_at) VALUES (?, ?, ?, ?)",
-            (file_id, issue_id, assoc_type, now),
-        )
-        self.conn.commit()
+        try:
+            self.conn.execute(
+                "INSERT OR IGNORE INTO file_associations (file_id, issue_id, assoc_type, created_at) VALUES (?, ?, ?, ?)",
+                (file_id, issue_id, assoc_type, now),
+            )
+            self.conn.commit()
+        except sqlite3.IntegrityError:
+            self.conn.rollback()
+            raise ValueError(f'Issue not found: "{issue_id}". Verify the issue exists before creating an association.') from None
 
     def get_file_associations(self, file_id: str) -> list[dict[str, Any]]:
         """Get all issue associations for a file."""
@@ -2979,6 +3035,7 @@ class FiligreeDB:
         *,
         limit: int = 50,
         offset: int = 0,
+        event_type: str | None = None,
     ) -> dict[str, Any]:
         """Build a merged timeline of events for a file.
 
@@ -2986,6 +3043,9 @@ class FiligreeDB:
         newest-first.  Each entry carries a deterministic ``id`` derived from
         ``sha256(type + timestamp + source_id)[:12]`` so clients can
         cache/deduplicate without server coordination.
+
+        When *event_type* is ``"finding"`` only finding events are returned;
+        when ``"association"`` only association events.
 
         Raises ``KeyError`` if the file does not exist.
         """
@@ -3052,6 +3112,12 @@ class FiligreeDB:
                 }
             )
 
+        # Filter by event type before sorting/paginating
+        if event_type == "finding":
+            entries = [e for e in entries if e["type"].startswith("finding_")]
+        elif event_type == "association":
+            entries = [e for e in entries if e["type"].startswith("association_")]
+
         # Add deterministic IDs and sort newest-first
         for entry in entries:
             raw = f"{entry['type']}:{entry['timestamp']}:{entry['source_id']}"
@@ -3116,17 +3182,13 @@ class FiligreeDB:
         total_deleted = 0
         for row in archived:
             issue_id = row["id"]
-            event_count = self.conn.execute(
-                "SELECT COUNT(*) as cnt FROM events WHERE issue_id = ?", (issue_id,)
-            ).fetchone()["cnt"]
+            event_count = self.conn.execute("SELECT COUNT(*) as cnt FROM events WHERE issue_id = ?", (issue_id,)).fetchone()["cnt"]
 
             if event_count <= keep_recent:
                 continue
 
             self.conn.execute(
-                "DELETE FROM events WHERE id IN ("
-                "  SELECT id FROM events WHERE issue_id = ? ORDER BY created_at ASC LIMIT ?"
-                ")",
+                "DELETE FROM events WHERE id IN (  SELECT id FROM events WHERE issue_id = ? ORDER BY created_at ASC LIMIT ?)",
                 (issue_id, event_count - keep_recent),
             )
             total_deleted += event_count - keep_recent

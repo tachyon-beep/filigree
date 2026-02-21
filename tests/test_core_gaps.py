@@ -255,9 +255,7 @@ class TestTemplates:
         filigree_dir = tmp_path / ".filigree"
         filigree_dir.mkdir()
         (filigree_dir / "templates").mkdir()
-        (filigree_dir / "config.json").write_text(
-            json.dumps({"prefix": "test", "version": 1, "enabled_packs": ["core", "planning"]})
-        )
+        (filigree_dir / "config.json").write_text(json.dumps({"prefix": "test", "version": 1, "enabled_packs": ["core", "planning"]}))
         (filigree_dir / "templates" / "bug.json").write_text(
             json.dumps(
                 {

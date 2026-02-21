@@ -43,9 +43,7 @@ class TestFileSchema:
         assert row is not None
 
     def test_file_associations_table_exists(self, db: FiligreeDB) -> None:
-        row = db.conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='file_associations'"
-        ).fetchone()
+        row = db.conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='file_associations'").fetchone()
         assert row is not None
 
 
@@ -232,6 +230,20 @@ class TestProcessScanResults:
         with pytest.raises(ValueError, match="dict"):
             db.process_scan_results(scan_source="ruff", findings=[42])
 
+    def test_bad_finding_at_end_does_not_persist_earlier_writes(self, db: FiligreeDB) -> None:
+        """A bad finding later in the list must not leave earlier writes pending."""
+        with pytest.raises(ValueError, match="Invalid severity"):
+            db.process_scan_results(
+                scan_source="ruff",
+                findings=[
+                    {"path": "good.py", "rule_id": "E501", "severity": "low", "message": "ok"},
+                    {"path": "bad.py", "rule_id": "E999", "severity": "BOGUS", "message": "bad"},
+                ],
+            )
+        # Neither file nor finding should have been persisted
+        assert db.conn.execute("SELECT COUNT(*) FROM file_records").fetchone()[0] == 0
+        assert db.conn.execute("SELECT COUNT(*) FROM scan_findings").fetchone()[0] == 0
+
 
 class TestNewFindingIds:
     """Tests for new_finding_ids in process_scan_results return."""
@@ -269,6 +281,71 @@ class TestNewFindingIds:
         assert len(result["new_finding_ids"]) == 1
         assert result["findings_created"] == 1
         assert result["findings_updated"] == 1
+
+
+class TestFindingReopenOnRescan:
+    """Reappearing findings must reopen if previously fixed or unseen."""
+
+    def test_fixed_finding_reopens_on_rescan(self, db: FiligreeDB) -> None:
+        db.process_scan_results(
+            scan_source="ruff",
+            findings=[{"path": "a.py", "rule_id": "E501", "severity": "low", "message": "m"}],
+        )
+        f = db.get_file_by_path("a.py")
+        db.conn.execute("UPDATE scan_findings SET status = 'fixed' WHERE file_id = ?", (f.id,))
+        db.conn.commit()
+        # Re-scan with the same finding
+        db.process_scan_results(
+            scan_source="ruff",
+            findings=[{"path": "a.py", "rule_id": "E501", "severity": "low", "message": "m"}],
+        )
+        finding = db.get_findings(f.id)[0]
+        assert finding.status == "open"
+
+    def test_unseen_in_latest_reopens_on_rescan(self, db: FiligreeDB) -> None:
+        db.process_scan_results(
+            scan_source="ruff",
+            findings=[{"path": "a.py", "rule_id": "E501", "severity": "low", "message": "m"}],
+        )
+        f = db.get_file_by_path("a.py")
+        db.conn.execute("UPDATE scan_findings SET status = 'unseen_in_latest' WHERE file_id = ?", (f.id,))
+        db.conn.commit()
+        db.process_scan_results(
+            scan_source="ruff",
+            findings=[{"path": "a.py", "rule_id": "E501", "severity": "low", "message": "m"}],
+        )
+        finding = db.get_findings(f.id)[0]
+        assert finding.status == "open"
+
+    def test_acknowledged_stays_acknowledged_on_rescan(self, db: FiligreeDB) -> None:
+        db.process_scan_results(
+            scan_source="ruff",
+            findings=[{"path": "a.py", "rule_id": "E501", "severity": "low", "message": "m"}],
+        )
+        f = db.get_file_by_path("a.py")
+        db.conn.execute("UPDATE scan_findings SET status = 'acknowledged' WHERE file_id = ?", (f.id,))
+        db.conn.commit()
+        db.process_scan_results(
+            scan_source="ruff",
+            findings=[{"path": "a.py", "rule_id": "E501", "severity": "low", "message": "m"}],
+        )
+        finding = db.get_findings(f.id)[0]
+        assert finding.status == "acknowledged"
+
+    def test_false_positive_stays_false_positive_on_rescan(self, db: FiligreeDB) -> None:
+        db.process_scan_results(
+            scan_source="ruff",
+            findings=[{"path": "a.py", "rule_id": "E501", "severity": "low", "message": "m"}],
+        )
+        f = db.get_file_by_path("a.py")
+        db.conn.execute("UPDATE scan_findings SET status = 'false_positive' WHERE file_id = ?", (f.id,))
+        db.conn.commit()
+        db.process_scan_results(
+            scan_source="ruff",
+            findings=[{"path": "a.py", "rule_id": "E501", "severity": "low", "message": "m"}],
+        )
+        finding = db.get_findings(f.id)[0]
+        assert finding.status == "false_positive"
 
 
 class TestMarkUnseen:
@@ -403,8 +480,7 @@ class TestCleanStaleFindings:
         finding = db.get_findings(f.id)[0]
         # Mark as unseen with an old last_seen_at
         db.conn.execute(
-            "UPDATE scan_findings SET status = 'unseen_in_latest', "
-            "last_seen_at = '2020-01-01T00:00:00+00:00' WHERE id = ?",
+            "UPDATE scan_findings SET status = 'unseen_in_latest', last_seen_at = '2020-01-01T00:00:00+00:00' WHERE id = ?",
             (finding.id,),
         )
         db.conn.commit()
@@ -444,8 +520,7 @@ class TestCleanStaleFindings:
         findings = db.get_findings(f.id)
         for fi in findings:
             db.conn.execute(
-                "UPDATE scan_findings SET status = 'unseen_in_latest', "
-                "last_seen_at = '2020-01-01T00:00:00+00:00' WHERE id = ?",
+                "UPDATE scan_findings SET status = 'unseen_in_latest', last_seen_at = '2020-01-01T00:00:00+00:00' WHERE id = ?",
                 (fi.id,),
             )
         db.conn.commit()
@@ -549,6 +624,11 @@ class TestFileAssociations:
         db.add_file_association(f.id, issue.id, "task_for")
         assocs = db.get_file_associations(f.id)
         assert len(assocs) == 2
+
+    def test_nonexistent_issue_id_raises_valueerror(self, db: FiligreeDB) -> None:
+        f = db.register_file("src/main.py")
+        with pytest.raises(ValueError, match="Issue not found"):
+            db.add_file_association(f.id, "nonexistent-issue-id", "bug_in")
 
 
 # ---------------------------------------------------------------------------
@@ -693,9 +773,7 @@ class TestFileDetailCore:
             db.get_file_detail("nonexistent")
 
     def test_recent_findings_capped_at_10(self, db: FiligreeDB) -> None:
-        findings = [
-            {"path": "big.py", "rule_id": f"E{i:03d}", "severity": "low", "message": f"Finding {i}"} for i in range(15)
-        ]
+        findings = [{"path": "big.py", "rule_id": f"E{i:03d}", "severity": "low", "message": f"Finding {i}"} for i in range(15)]
         db.process_scan_results(scan_source="ruff", findings=findings)
         f = db.get_file_by_path("big.py")
         detail = db.get_file_detail(f.id)
@@ -904,7 +982,7 @@ class TestFileEndpoints:
             f"/api/files/{f.id}/associations",
             json={"issue_id": issue.id, "assoc_type": "bug_in"},
         )
-        assert resp.status_code == 200
+        assert resp.status_code == 201
         assert resp.json()["status"] == "created"
 
     async def test_post_file_association_invalid_type(self, client: AsyncClient, api_db: FiligreeDB) -> None:
@@ -915,6 +993,17 @@ class TestFileEndpoints:
             json={"issue_id": issue.id, "assoc_type": "invalid"},
         )
         assert resp.status_code == 400
+
+    async def test_post_file_association_nonexistent_issue(self, client: AsyncClient, api_db: FiligreeDB) -> None:
+        f = api_db.register_file("src/main.py")
+        resp = await client.post(
+            f"/api/files/{f.id}/associations",
+            json={"issue_id": "nonexistent-id", "assoc_type": "bug_in"},
+        )
+        assert resp.status_code == 400
+        err = resp.json()["error"]
+        assert err["code"] == "VALIDATION_ERROR"
+        assert "Issue not found" in err["message"]
 
     async def test_schema_endpoint_statuses_updated(self, client: AsyncClient) -> None:
         resp = await client.get("/api/files/_schema")
@@ -1019,6 +1108,17 @@ class TestSortBySeverity:
         severities = [r["severity"] for r in result["results"]]
         assert severities == ["critical", "high", "info"]
 
+    def test_sort_findings_invalid_raises(self, db: FiligreeDB) -> None:
+        db.process_scan_results(
+            scan_source="ruff",
+            findings=[{"path": "a.py", "rule_id": "E001", "severity": "low", "message": "m"}],
+        )
+        f = db.get_file_by_path("a.py")
+        with pytest.raises(ValueError, match="Invalid sort field"):
+            db.get_findings(f.id, sort="bogus")
+        with pytest.raises(ValueError, match="Invalid sort field"):
+            db.get_findings_paginated(f.id, sort="bogus")
+
     def test_sort_findings_default_is_updated_at(self, db: FiligreeDB) -> None:
         db.process_scan_results(
             scan_source="ruff",
@@ -1040,9 +1140,7 @@ class TestMinFindingsFilter:
     def test_min_findings_filters_files(self, db: FiligreeDB) -> None:
         db.process_scan_results(
             scan_source="ruff",
-            findings=[
-                {"path": "many.py", "rule_id": f"E{i}", "severity": "low", "message": f"msg{i}"} for i in range(5)
-            ],
+            findings=[{"path": "many.py", "rule_id": f"E{i}", "severity": "low", "message": f"msg{i}"} for i in range(5)],
         )
         db.register_file("empty.py")
         result = db.list_files_paginated(min_findings=3)
@@ -1072,6 +1170,131 @@ class TestMinFindingsFilter:
         db.register_file("b.py")
         result = db.list_files_paginated(min_findings=0)
         assert result["total"] == 2
+
+
+class TestHasSeverityFilter:
+    """Tests for has_severity filter on list_files."""
+
+    def test_has_severity_critical_only_returns_critical_files(self, db: FiligreeDB) -> None:
+        db.process_scan_results(
+            scan_source="ruff",
+            findings=[
+                {"path": "critical.py", "rule_id": "S1", "severity": "critical", "message": "bad"},
+                {"path": "lowonly.py", "rule_id": "E1", "severity": "low", "message": "minor"},
+                {"path": "highonly.py", "rule_id": "H1", "severity": "high", "message": "warn"},
+            ],
+        )
+        result = db.list_files_paginated(has_severity="critical")
+        assert result["total"] == 1
+        assert result["results"][0]["path"] == "critical.py"
+
+    def test_has_severity_high_returns_high_and_not_low(self, db: FiligreeDB) -> None:
+        db.process_scan_results(
+            scan_source="ruff",
+            findings=[
+                {"path": "a.py", "rule_id": "H1", "severity": "high", "message": "warn"},
+                {"path": "b.py", "rule_id": "E1", "severity": "low", "message": "minor"},
+            ],
+        )
+        result = db.list_files_paginated(has_severity="high")
+        assert result["total"] == 1
+        assert result["results"][0]["path"] == "a.py"
+
+    def test_has_severity_ignores_fixed_findings(self, db: FiligreeDB) -> None:
+        db.process_scan_results(
+            scan_source="ruff",
+            findings=[
+                {"path": "a.py", "rule_id": "S1", "severity": "critical", "message": "bad"},
+            ],
+        )
+        f = db.get_file_by_path("a.py")
+        findings = db.get_findings(f.id)
+        db.conn.execute("UPDATE scan_findings SET status = 'fixed' WHERE id = ?", (findings[0].id,))
+        db.conn.commit()
+        result = db.list_files_paginated(has_severity="critical")
+        assert result["total"] == 0
+
+    def test_has_severity_none_returns_all(self, db: FiligreeDB) -> None:
+        db.process_scan_results(
+            scan_source="ruff",
+            findings=[
+                {"path": "a.py", "rule_id": "S1", "severity": "critical", "message": "bad"},
+                {"path": "b.py", "rule_id": "E1", "severity": "low", "message": "minor"},
+            ],
+        )
+        db.register_file("empty.py")
+        result = db.list_files_paginated(has_severity=None)
+        assert result["total"] == 3
+
+    def test_has_severity_invalid_is_ignored(self, db: FiligreeDB) -> None:
+        db.register_file("a.py")
+        result = db.list_files_paginated(has_severity="bogus")
+        assert result["total"] == 1
+
+
+class TestListFilesEnrichment:
+    """list_files_paginated should return summary + associations_count per file."""
+
+    def test_list_includes_summary_with_severity_counts(self, db: FiligreeDB) -> None:
+        db.process_scan_results(
+            scan_source="ruff",
+            findings=[
+                {"path": "a.py", "rule_id": "E1", "severity": "critical", "message": "m1"},
+                {"path": "a.py", "rule_id": "E2", "severity": "high", "message": "m2"},
+                {"path": "a.py", "rule_id": "E3", "severity": "medium", "message": "m3"},
+                {"path": "b.py", "rule_id": "E4", "severity": "low", "message": "m4"},
+            ],
+        )
+        result = db.list_files_paginated()
+        by_path = {r["path"]: r for r in result["results"]}
+        a = by_path["a.py"]
+        assert "summary" in a
+        assert a["summary"]["critical"] == 1
+        assert a["summary"]["high"] == 1
+        assert a["summary"]["medium"] == 1
+        assert a["summary"]["low"] == 0
+        assert a["summary"]["open_findings"] == 3
+        b = by_path["b.py"]
+        assert b["summary"]["low"] == 1
+        assert b["summary"]["critical"] == 0
+
+    def test_list_includes_associations_count(self, db: FiligreeDB) -> None:
+        db.process_scan_results(
+            scan_source="ruff",
+            findings=[{"path": "a.py", "rule_id": "E1", "severity": "low", "message": "m"}],
+        )
+        f = db.get_file_by_path("a.py")
+        issue = db.create_issue("Bug in a.py")
+        db.add_file_association(f.id, issue.id, "bug_in")
+        result = db.list_files_paginated()
+        assert result["results"][0]["associations_count"] == 1
+
+    def test_list_summary_excludes_fixed_findings(self, db: FiligreeDB) -> None:
+        db.process_scan_results(
+            scan_source="ruff",
+            findings=[
+                {"path": "a.py", "rule_id": "E1", "severity": "critical", "message": "m1"},
+                {"path": "a.py", "rule_id": "E2", "severity": "high", "message": "m2"},
+            ],
+        )
+        f = db.get_file_by_path("a.py")
+        findings = db.get_findings(f.id)
+        db.conn.execute("UPDATE scan_findings SET status = 'fixed' WHERE id = ?", (findings[0].id,))
+        db.conn.commit()
+        result = db.list_files_paginated()
+        s = result["results"][0]["summary"]
+        assert s["open_findings"] == 1
+        # The fixed finding should not be counted in severity buckets
+        assert s["critical"] == 0
+        assert s["high"] == 1
+
+    def test_list_summary_empty_file(self, db: FiligreeDB) -> None:
+        db.register_file("empty.py")
+        result = db.list_files_paginated()
+        s = result["results"][0]["summary"]
+        assert s["open_findings"] == 0
+        assert s["critical"] == 0
+        assert result["results"][0]["associations_count"] == 0
 
 
 class TestFileTimeline:
@@ -1153,9 +1376,7 @@ class TestFileTimeline:
     def test_timeline_pagination(self, db: FiligreeDB) -> None:
         db.process_scan_results(
             scan_source="ruff",
-            findings=[
-                {"path": "a.py", "rule_id": f"E{i:03d}", "severity": "low", "message": f"msg{i}"} for i in range(10)
-            ],
+            findings=[{"path": "a.py", "rule_id": f"E{i:03d}", "severity": "low", "message": f"msg{i}"} for i in range(10)],
         )
         f = db.get_file_by_path("a.py")
         result = db.get_file_timeline(f.id, limit=3)
@@ -1173,6 +1394,90 @@ class TestFileTimeline:
     def test_timeline_raises_for_missing_file(self, db: FiligreeDB) -> None:
         with pytest.raises(KeyError):
             db.get_file_timeline("nonexistent")
+
+    def test_timeline_event_type_filter(self, db: FiligreeDB) -> None:
+        f = db.register_file("a.py")
+        issue = db.create_issue("Fix it")
+        db.add_file_association(f.id, issue.id, "bug_in")
+        db.process_scan_results(
+            scan_source="ruff",
+            findings=[{"path": "a.py", "rule_id": "E1", "severity": "low", "message": "m"}],
+        )
+        # Unfiltered should have both types
+        all_events = db.get_file_timeline(f.id)
+        types = {e["type"] for e in all_events["results"]}
+        assert "finding_created" in types
+        assert "association_created" in types
+
+        # Filter to associations only
+        assoc_only = db.get_file_timeline(f.id, event_type="association")
+        for e in assoc_only["results"]:
+            assert e["type"] == "association_created"
+        assert assoc_only["total"] < all_events["total"]
+
+        # Filter to findings only
+        findings_only = db.get_file_timeline(f.id, event_type="finding")
+        for e in findings_only["results"]:
+            assert e["type"].startswith("finding_")
+        assert findings_only["total"] < all_events["total"]
+
+
+class TestGlobalFindingsStats:
+    """Tests for get_global_findings_stats()."""
+
+    def test_global_stats_empty(self, db: FiligreeDB) -> None:
+        stats = db.get_global_findings_stats()
+        assert stats["total_findings"] == 0
+        assert stats["open_findings"] == 0
+        assert stats["files_with_findings"] == 0
+        assert stats["critical"] == 0
+
+    def test_global_stats_counts_all_files(self, db: FiligreeDB) -> None:
+        # Create 15 files with findings — more than hotspot limit of 10
+        for i in range(15):
+            db.process_scan_results(
+                scan_source="ruff",
+                findings=[{"path": f"file{i}.py", "rule_id": "E1", "severity": "low", "message": "m"}],
+            )
+        stats = db.get_global_findings_stats()
+        assert stats["files_with_findings"] == 15
+        assert stats["total_findings"] == 15
+        assert stats["open_findings"] == 15
+        assert stats["low"] == 15
+
+    def test_global_stats_severity_breakdown(self, db: FiligreeDB) -> None:
+        db.process_scan_results(
+            scan_source="ruff",
+            findings=[
+                {"path": "a.py", "rule_id": "S1", "severity": "critical", "message": "m"},
+                {"path": "a.py", "rule_id": "S2", "severity": "high", "message": "m"},
+                {"path": "b.py", "rule_id": "E1", "severity": "medium", "message": "m"},
+                {"path": "c.py", "rule_id": "E2", "severity": "low", "message": "m"},
+            ],
+        )
+        stats = db.get_global_findings_stats()
+        assert stats["critical"] == 1
+        assert stats["high"] == 1
+        assert stats["medium"] == 1
+        assert stats["low"] == 1
+        assert stats["files_with_findings"] == 3
+
+    def test_global_stats_excludes_fixed(self, db: FiligreeDB) -> None:
+        db.process_scan_results(
+            scan_source="ruff",
+            findings=[
+                {"path": "a.py", "rule_id": "S1", "severity": "critical", "message": "m"},
+                {"path": "a.py", "rule_id": "E1", "severity": "low", "message": "m"},
+            ],
+        )
+        f = db.get_file_by_path("a.py")
+        findings = db.get_findings(f.id)
+        db.conn.execute("UPDATE scan_findings SET status = 'fixed' WHERE id = ?", (findings[0].id,))
+        db.conn.commit()
+        stats = db.get_global_findings_stats()
+        assert stats["open_findings"] == 1
+        assert stats["critical"] == 0
+        assert stats["low"] == 1
 
 
 class TestPaginationMetadata:
@@ -1392,6 +1697,16 @@ class TestSortBySeverityEndpoint:
         severities = [r["severity"] for r in resp.json()["results"]]
         assert severities == ["critical", "high", "low"]
 
+    async def test_sort_findings_invalid_returns_400(self, client: AsyncClient, api_db: FiligreeDB) -> None:
+        f = api_db.register_file("a.py")
+        resp = await client.get(f"/api/files/{f.id}/findings?sort=bogus")
+        assert resp.status_code == 400
+        err = resp.json()["error"]
+        assert err["code"] == "VALIDATION_ERROR"
+        assert "Invalid sort field" in err["message"]
+        assert "severity" in err["message"]
+        assert "updated_at" in err["message"]
+
 
 class TestMinFindingsEndpoint:
     """Tests for min_findings filter on files endpoint."""
@@ -1399,9 +1714,7 @@ class TestMinFindingsEndpoint:
     async def test_min_findings_filters(self, client: AsyncClient, api_db: FiligreeDB) -> None:
         api_db.process_scan_results(
             scan_source="ruff",
-            findings=[
-                {"path": "many.py", "rule_id": f"E{i}", "severity": "low", "message": f"msg{i}"} for i in range(5)
-            ],
+            findings=[{"path": "many.py", "rule_id": f"E{i}", "severity": "low", "message": f"msg{i}"} for i in range(5)],
         )
         api_db.register_file("empty.py")
         resp = await client.get("/api/files?min_findings=3")
@@ -1413,6 +1726,30 @@ class TestMinFindingsEndpoint:
     async def test_min_findings_invalid(self, client: AsyncClient) -> None:
         resp = await client.get("/api/files?min_findings=abc")
         assert resp.status_code == 400
+
+
+class TestHasSeverityEndpoint:
+    """Tests for has_severity filter on files endpoint."""
+
+    async def test_has_severity_filters_via_api(self, client: AsyncClient, api_db: FiligreeDB) -> None:
+        api_db.process_scan_results(
+            scan_source="ruff",
+            findings=[
+                {"path": "critical.py", "rule_id": "S1", "severity": "critical", "message": "bad"},
+                {"path": "lowonly.py", "rule_id": "E1", "severity": "low", "message": "minor"},
+            ],
+        )
+        resp = await client.get("/api/files?has_severity=critical")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["total"] == 1
+        assert data["results"][0]["path"] == "critical.py"
+
+    async def test_has_severity_invalid_ignored(self, client: AsyncClient, api_db: FiligreeDB) -> None:
+        api_db.register_file("a.py")
+        resp = await client.get("/api/files?has_severity=bogus")
+        assert resp.status_code == 200
+        assert resp.json()["total"] == 1  # invalid severity = no filter applied
 
 
 class TestTimelineEndpoint:
@@ -1440,9 +1777,7 @@ class TestTimelineEndpoint:
     async def test_timeline_pagination(self, client: AsyncClient, api_db: FiligreeDB) -> None:
         api_db.process_scan_results(
             scan_source="ruff",
-            findings=[
-                {"path": "a.py", "rule_id": f"E{i:03d}", "severity": "low", "message": f"msg{i}"} for i in range(10)
-            ],
+            findings=[{"path": "a.py", "rule_id": f"E{i:03d}", "severity": "low", "message": f"msg{i}"} for i in range(10)],
         )
         f = api_db.get_file_by_path("a.py")
         resp = await client.get(f"/api/files/{f.id}/timeline?limit=3")
@@ -1450,6 +1785,38 @@ class TestTimelineEndpoint:
         data = resp.json()
         assert len(data["results"]) == 3
         assert data["has_more"] is True
+
+    async def test_timeline_event_type_filter_finding(self, client: AsyncClient, api_db: FiligreeDB) -> None:
+        api_db.process_scan_results(
+            scan_source="ruff",
+            findings=[{"path": "a.py", "rule_id": "E501", "severity": "low", "message": "msg"}],
+        )
+        f = api_db.get_file_by_path("a.py")
+        issue = api_db.create_issue("Fix it")
+        api_db.add_file_association(f.id, issue.id, "bug_in")
+
+        resp = await client.get(f"/api/files/{f.id}/timeline?event_type=finding")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["total"] > 0
+        for e in data["results"]:
+            assert e["type"].startswith("finding_")
+
+    async def test_timeline_event_type_filter_association(self, client: AsyncClient, api_db: FiligreeDB) -> None:
+        api_db.process_scan_results(
+            scan_source="ruff",
+            findings=[{"path": "a.py", "rule_id": "E501", "severity": "low", "message": "msg"}],
+        )
+        f = api_db.get_file_by_path("a.py")
+        issue = api_db.create_issue("Fix it")
+        api_db.add_file_association(f.id, issue.id, "bug_in")
+
+        resp = await client.get(f"/api/files/{f.id}/timeline?event_type=association")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["total"] > 0
+        for e in data["results"]:
+            assert e["type"] == "association_created"
 
 
 class TestCacheControlHeaders:

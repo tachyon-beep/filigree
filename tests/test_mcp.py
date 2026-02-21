@@ -1071,9 +1071,7 @@ class TestMCPTransactionSafety:
             await call_tool("create_issue", {"title": "Irrelevant"})
 
         # The safety net in call_tool() should have rolled back the dirty txn
-        assert not mcp_db.conn.in_transaction, (
-            "MCP safety net failed — dirty transaction survived after unhandled exception"
-        )
+        assert not mcp_db.conn.in_transaction, "MCP safety net failed — dirty transaction survived after unhandled exception"
 
         # The orphan row should NOT be visible after rollback
         orphan = mcp_db.conn.execute("SELECT id FROM issues WHERE id = 'orphan-1'").fetchone()
