@@ -8,6 +8,9 @@ Handles:
 
 from __future__ import annotations
 
+import hashlib
+import importlib.metadata
+import importlib.resources
 import json
 import logging
 import shutil
@@ -33,89 +36,39 @@ logger = logging.getLogger(__name__)
 # Workflow instructions (injected into CLAUDE.md / AGENTS.md)
 # ---------------------------------------------------------------------------
 
-FILIGREE_INSTRUCTIONS_MARKER = "<!-- filigree:instructions -->"
+# Detection prefix — matches both old "<!-- filigree:instructions -->" and
+# new "<!-- filigree:instructions:v1.2.0:abc12345 -->" formats.
+FILIGREE_INSTRUCTIONS_MARKER = "<!-- filigree:instructions"
 
-FILIGREE_INSTRUCTIONS = """\
-<!-- filigree:instructions -->
-## Filigree Issue Tracker
+_END_MARKER = "<!-- /filigree:instructions -->"
 
-Use `filigree` for all task tracking in this project. Data lives in `.filigree/`.
 
-### Quick Reference
+def _instructions_text() -> str:
+    """Read the instructions template from the shipped data file."""
+    ref = importlib.resources.files("filigree.data").joinpath("instructions.md")
+    return ref.read_text(encoding="utf-8")
 
-```bash
-# Finding work
-filigree ready                              # Show issues ready to work (no blockers)
-filigree list --status=open                 # All open issues
-filigree list --status=in_progress          # Active work
-filigree show <id>                          # Detailed issue view
 
-# Creating & updating
-filigree create "Title" --type=task --priority=2          # New issue
-filigree update <id> --status=in_progress                # Claim work
-filigree close <id>                                      # Mark complete
-filigree close <id> --reason="explanation"               # Close with reason
+def _instructions_hash() -> str:
+    """Return first 8 chars of SHA256 of the instructions content."""
+    return hashlib.sha256(_instructions_text().encode()).hexdigest()[:8]
 
-# Dependencies
-filigree add-dep <issue> <depends-on>       # Add dependency
-filigree remove-dep <issue> <depends-on>    # Remove dependency
-filigree blocked                            # Show blocked issues
 
-# Comments & labels
-filigree add-comment <id> "text"            # Add comment
-filigree get-comments <id>                  # List comments
-filigree add-label <id> <label>             # Add label
-filigree remove-label <id> <label>          # Remove label
+def _instructions_version() -> str:
+    """Return the installed filigree package version."""
+    return importlib.metadata.version("filigree")
 
-# Workflow templates
-filigree types                              # List registered types with state flows
-filigree type-info <type>                   # Full workflow definition for a type
-filigree transitions <id>                   # Valid next states for an issue
-filigree packs                              # List enabled workflow packs
-filigree validate <id>                      # Validate issue against template
-filigree guide <pack>                       # Display workflow guide for a pack
 
-# Atomic claiming
-filigree claim <id> --assignee <name>            # Claim issue (optimistic lock)
-filigree claim-next --assignee <name>            # Claim highest-priority ready issue
+def _build_instructions_block() -> str:
+    """Build the full instructions block with versioned markers."""
+    text = _instructions_text()
+    version = _instructions_version()
+    h = _instructions_hash()
+    opening = f"<!-- filigree:instructions:v{version}:{h} -->"
+    return f"{opening}\n{text}{_END_MARKER}"
 
-# Batch operations
-filigree batch-update <ids...> --priority=0      # Update multiple issues
-filigree batch-close <ids...>                    # Close multiple with error reporting
 
-# Planning
-filigree create-plan --file plan.json            # Create milestone/phase/step hierarchy
-
-# Event history
-filigree changes --since 2026-01-01T00:00:00    # Events since timestamp
-filigree events <id>                             # Event history for issue
-filigree explain-state <type> <state>            # Explain a workflow state
-
-# All commands support --json and --actor flags
-filigree --actor bot-1 create "Title"            # Specify actor identity
-filigree list --json                             # Machine-readable output
-
-# Project health
-filigree stats                              # Project statistics
-filigree search "query"                     # Search issues
-filigree doctor                             # Health check
-```
-
-### Workflow
-1. `filigree ready` to find available work
-2. `filigree show <id>` to review details
-3. `filigree transitions <id>` to see valid state changes
-4. `filigree update <id> --status=in_progress` to claim it
-5. Do the work, commit code
-6. `filigree close <id>` when done
-
-### Priority Scale
-- P0: Critical (drop everything)
-- P1: High (do next)
-- P2: Medium (default)
-- P3: Low
-- P4: Backlog
-<!-- /filigree:instructions -->"""
+FILIGREE_INSTRUCTIONS = _build_instructions_block()
 
 
 # ---------------------------------------------------------------------------
@@ -269,10 +222,9 @@ def inject_instructions(file_path: Path) -> tuple[bool, str]:
         if FILIGREE_INSTRUCTIONS_MARKER in content:
             # Replace existing block
             start = content.index(FILIGREE_INSTRUCTIONS_MARKER)
-            end_marker = "<!-- /filigree:instructions -->"
-            end_pos = content.find(end_marker, start)
+            end_pos = content.find(_END_MARKER, start)
             if end_pos != -1:
-                end = end_pos + len(end_marker)
+                end = end_pos + len(_END_MARKER)
                 content = content[:start] + FILIGREE_INSTRUCTIONS + content[end:]
             else:
                 # Malformed — just replace from marker to end

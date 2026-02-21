@@ -876,23 +876,23 @@ class TestClaimEmptyAssigneeAPI:
         ids = dashboard_db._test_ids  # type: ignore[attr-defined]
         resp = await client.post(f"/api/issue/{ids['a']}/claim", json={"assignee": ""})
         assert resp.status_code == 400
-        assert "assignee" in resp.json()["error"].lower()
+        assert "assignee" in resp.json()["error"]["message"].lower()
 
     async def test_claim_missing_assignee_returns_400(self, client: AsyncClient, dashboard_db: FiligreeDB) -> None:
         ids = dashboard_db._test_ids  # type: ignore[attr-defined]
         resp = await client.post(f"/api/issue/{ids['a']}/claim", json={})
         assert resp.status_code == 400
-        assert "assignee" in resp.json()["error"].lower()
+        assert "assignee" in resp.json()["error"]["message"].lower()
 
     async def test_claim_next_empty_assignee_returns_400(self, client: AsyncClient) -> None:
         resp = await client.post("/api/claim-next", json={"assignee": ""})
         assert resp.status_code == 400
-        assert "assignee" in resp.json()["error"].lower()
+        assert "assignee" in resp.json()["error"]["message"].lower()
 
     async def test_claim_next_missing_assignee_returns_400(self, client: AsyncClient) -> None:
         resp = await client.post("/api/claim-next", json={})
         assert resp.status_code == 400
-        assert "assignee" in resp.json()["error"].lower()
+        assert "assignee" in resp.json()["error"]["message"].lower()
 
 
 class TestDependencyManagementAPI:
@@ -961,13 +961,13 @@ class TestBatchAPIInputValidation:
         """Sending issue_ids: null should return 400, not crash with 500."""
         resp = await client.post("/api/batch/update", json={"issue_ids": None, "priority": 1})
         assert resp.status_code == 400
-        assert "issue_ids" in resp.json()["error"].lower()
+        assert "issue_ids" in resp.json()["error"]["message"].lower()
 
     async def test_batch_close_null_issue_ids_returns_400(self, client: AsyncClient) -> None:
         """Sending issue_ids: null should return 400, not crash with 500."""
         resp = await client.post("/api/batch/close", json={"issue_ids": None})
         assert resp.status_code == 400
-        assert "issue_ids" in resp.json()["error"].lower()
+        assert "issue_ids" in resp.json()["error"]["message"].lower()
 
     async def test_batch_update_string_issue_ids_returns_400(self, client: AsyncClient) -> None:
         """Sending issue_ids as a string should return 400."""
@@ -993,13 +993,13 @@ class TestBatchAPIInputValidation:
         """Sending issue_ids with non-string elements (e.g. integers) should return 400."""
         resp = await client.post("/api/batch/update", json={"issue_ids": [123], "priority": 1})
         assert resp.status_code == 400
-        assert "string" in resp.json()["error"].lower()
+        assert "string" in resp.json()["error"]["message"].lower()
 
     async def test_batch_close_non_string_ids_returns_400(self, client: AsyncClient) -> None:
         """Sending issue_ids with non-string elements should return 400."""
         resp = await client.post("/api/batch/close", json={"issue_ids": [123]})
         assert resp.status_code == 400
-        assert "string" in resp.json()["error"].lower()
+        assert "string" in resp.json()["error"]["message"].lower()
 
 
 class TestBatchClosePartialMutation:
@@ -1210,13 +1210,54 @@ class TestMultiProjectAPI:
         bare_dir.mkdir()
         resp = await client.post("/api/register", json={"path": str(bare_dir)})
         assert resp.status_code == 400
-        assert ".filigree" in resp.json()["error"]
+        assert ".filigree" in resp.json()["error"]["message"]
 
     async def test_register_rejects_invalid_json(self, client: AsyncClient) -> None:
         resp = await client.post("/api/register", content="NOT JSON{{{")
         assert resp.status_code == 400
-        assert "Invalid JSON" in resp.json()["error"]
+        assert "Invalid JSON" in resp.json()["error"]["message"]
 
     async def test_register_rejects_non_object_body(self, client: AsyncClient) -> None:
         resp = await client.post("/api/register", content="[]")
         assert resp.status_code == 400
+
+
+class TestFilesSchemaAPI:
+    """GET /api/files/_schema — API discovery for file/scan features."""
+
+    async def test_schema_returns_valid_severities(self, client: AsyncClient) -> None:
+        resp = await client.get("/api/files/_schema")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["valid_severities"] == ["critical", "high", "medium", "low", "info"]
+
+    async def test_schema_returns_valid_finding_statuses(self, client: AsyncClient) -> None:
+        resp = await client.get("/api/files/_schema")
+        data = resp.json()
+        assert "unseen_in_latest" in data["valid_finding_statuses"]
+
+    async def test_schema_returns_valid_association_types(self, client: AsyncClient) -> None:
+        resp = await client.get("/api/files/_schema")
+        data = resp.json()
+        assert "bug_in" in data["valid_association_types"]
+        assert "scan_finding" in data["valid_association_types"]
+
+    async def test_schema_returns_valid_sort_fields(self, client: AsyncClient) -> None:
+        resp = await client.get("/api/files/_schema")
+        data = resp.json()
+        assert "updated_at" in data["valid_sort_fields"]
+        assert "path" in data["valid_sort_fields"]
+
+    async def test_schema_returns_endpoints_catalog(self, client: AsyncClient) -> None:
+        resp = await client.get("/api/files/_schema")
+        data = resp.json()
+        assert isinstance(data["endpoints"], list)
+        assert len(data["endpoints"]) >= 1
+        ep = data["endpoints"][0]
+        assert "method" in ep
+        assert "path" in ep
+        assert "description" in ep
+
+    async def test_schema_has_cache_control(self, client: AsyncClient) -> None:
+        resp = await client.get("/api/files/_schema")
+        assert resp.headers.get("cache-control") == "max-age=3600"

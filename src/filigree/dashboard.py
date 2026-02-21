@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from fastapi.responses import JSONResponse
     from starlette.requests import Request
 
 from filigree.core import FiligreeDB, find_filigree_root
@@ -41,6 +42,22 @@ logger = logging.getLogger(__name__)
 
 _project_manager: ProjectManager | None = None
 _default_project_key: str = ""
+
+
+def _error_response(
+    message: str,
+    code: str,
+    status_code: int,
+    details: dict[str, Any] | None = None,
+) -> JSONResponse:
+    """Return a structured error response and log the error."""
+    from fastapi.responses import JSONResponse
+
+    logger.warning("API error [%s] %s: %s", status_code, code, message)
+    return JSONResponse(
+        {"error": {"message": message, "code": code, "details": details or {}}},
+        status_code=status_code,
+    )
 
 
 def _get_project_db(project_key: str = "") -> FiligreeDB:
@@ -119,7 +136,7 @@ def _create_project_router() -> Any:
         try:
             issue = db.get_issue(issue_id)
         except KeyError:
-            return JSONResponse({"error": f"Not found: {issue_id}"}, status_code=404)
+            return _error_response(f"Not found: {issue_id}", "ISSUE_NOT_FOUND", 404)
 
         data = issue.to_dict()
 
@@ -167,7 +184,7 @@ def _create_project_router() -> Any:
         """Workflow template for a given issue type (WFT-FR-065)."""
         tpl = db.templates.get_type(type_name)
         if tpl is None:
-            return JSONResponse({"error": f"Unknown type: {type_name}"}, status_code=404)
+            return _error_response(f"Unknown type: {type_name}", "INVALID_TYPE", 404)
         return JSONResponse(
             {
                 "type": tpl.type,
@@ -186,7 +203,7 @@ def _create_project_router() -> Any:
         try:
             transitions = db.get_valid_transitions(issue_id)
         except KeyError:
-            return JSONResponse({"error": f"Not found: {issue_id}"}, status_code=404)
+            return _error_response(f"Not found: {issue_id}", "ISSUE_NOT_FOUND", 404)
         return JSONResponse(
             [
                 {
@@ -209,13 +226,13 @@ def _create_project_router() -> Any:
         try:
             body = await request.json()
         except Exception:
-            return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
+            return _error_response("Invalid JSON body", "VALIDATION_ERROR", 400)
         if not isinstance(body, dict):
-            return JSONResponse({"error": "Request body must be a JSON object"}, status_code=400)
+            return _error_response("Request body must be a JSON object", "VALIDATION_ERROR", 400)
         actor = body.pop("actor", "dashboard")
         priority = body.get("priority")
         if priority is not None and not isinstance(priority, int):
-            return JSONResponse({"error": "priority must be an integer"}, status_code=400)
+            return _error_response("priority must be an integer", "INVALID_PRIORITY", 400)
         try:
             issue = db.update_issue(
                 issue_id,
@@ -229,9 +246,9 @@ def _create_project_router() -> Any:
                 actor=actor,
             )
         except KeyError:
-            return JSONResponse({"error": f"Not found: {issue_id}"}, status_code=404)
+            return _error_response(f"Not found: {issue_id}", "ISSUE_NOT_FOUND", 404)
         except ValueError as e:
-            return JSONResponse({"error": str(e)}, status_code=409)
+            return _error_response(str(e), "TRANSITION_ERROR", 409)
         return JSONResponse(issue.to_dict())
 
     @router.post("/issue/{issue_id}/close")
@@ -242,20 +259,20 @@ def _create_project_router() -> Any:
         try:
             body = await request.json()
         except Exception:
-            return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
+            return _error_response("Invalid JSON body", "VALIDATION_ERROR", 400)
         if not isinstance(body, dict):
-            return JSONResponse({"error": "Request body must be a JSON object"}, status_code=400)
+            return _error_response("Request body must be a JSON object", "VALIDATION_ERROR", 400)
         actor = body.get("actor", "dashboard")
         reason = body.get("reason", "")
         fields = body.get("fields")
         try:
             issue = db.close_issue(issue_id, reason=reason, actor=actor, fields=fields)
         except KeyError:
-            return JSONResponse({"error": f"Not found: {issue_id}"}, status_code=404)
+            return _error_response(f"Not found: {issue_id}", "ISSUE_NOT_FOUND", 404)
         except TypeError as e:
-            return JSONResponse({"error": str(e)}, status_code=400)
+            return _error_response(str(e), "VALIDATION_ERROR", 400)
         except ValueError as e:
-            return JSONResponse({"error": str(e)}, status_code=409)
+            return _error_response(str(e), "TRANSITION_ERROR", 409)
         return JSONResponse(issue.to_dict())
 
     @router.post("/issue/{issue_id}/reopen")
@@ -266,16 +283,16 @@ def _create_project_router() -> Any:
         try:
             body = await request.json()
         except Exception:
-            return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
+            return _error_response("Invalid JSON body", "VALIDATION_ERROR", 400)
         if not isinstance(body, dict):
-            return JSONResponse({"error": "Request body must be a JSON object"}, status_code=400)
+            return _error_response("Request body must be a JSON object", "VALIDATION_ERROR", 400)
         actor = body.get("actor", "dashboard")
         try:
             issue = db.reopen_issue(issue_id, actor=actor)
         except KeyError:
-            return JSONResponse({"error": f"Not found: {issue_id}"}, status_code=404)
+            return _error_response(f"Not found: {issue_id}", "ISSUE_NOT_FOUND", 404)
         except ValueError as e:
-            return JSONResponse({"error": str(e)}, status_code=409)
+            return _error_response(str(e), "TRANSITION_ERROR", 409)
         return JSONResponse(issue.to_dict())
 
     @router.post("/issue/{issue_id}/comments", status_code=201)
@@ -286,19 +303,19 @@ def _create_project_router() -> Any:
         try:
             db.get_issue(issue_id)
         except KeyError:
-            return JSONResponse({"error": f"Not found: {issue_id}"}, status_code=404)
+            return _error_response(f"Not found: {issue_id}", "ISSUE_NOT_FOUND", 404)
         try:
             body = await request.json()
         except Exception:
-            return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
+            return _error_response("Invalid JSON body", "VALIDATION_ERROR", 400)
         if not isinstance(body, dict):
-            return JSONResponse({"error": "Request body must be a JSON object"}, status_code=400)
+            return _error_response("Request body must be a JSON object", "VALIDATION_ERROR", 400)
         text = body.get("text", "")
         author = body.get("author", "")
         try:
             comment_id = db.add_comment(issue_id, text, author=author)
         except ValueError as e:
-            return JSONResponse({"error": str(e)}, status_code=400)
+            return _error_response(str(e), "VALIDATION_ERROR", 400)
         # Fetch the comment from DB to get the real created_at timestamp
         comments = db.get_comments(issue_id)
         created_at = ""
@@ -347,7 +364,7 @@ def _create_project_router() -> Any:
         try:
             plan = db.get_plan(milestone_id)
         except KeyError:
-            return JSONResponse({"error": f"Not found: {milestone_id}"}, status_code=404)
+            return _error_response(f"Not found: {milestone_id}", "ISSUE_NOT_FOUND", 404)
         return JSONResponse(plan)
 
     @router.post("/batch/update")
@@ -356,18 +373,18 @@ def _create_project_router() -> Any:
         try:
             body = await request.json()
         except Exception:
-            return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
+            return _error_response("Invalid JSON body", "VALIDATION_ERROR", 400)
         if not isinstance(body, dict):
-            return JSONResponse({"error": "Request body must be a JSON object"}, status_code=400)
+            return _error_response("Request body must be a JSON object", "VALIDATION_ERROR", 400)
         issue_ids = body.get("issue_ids")
         if not isinstance(issue_ids, list):
-            return JSONResponse({"error": "issue_ids must be a JSON array"}, status_code=400)
+            return _error_response("issue_ids must be a JSON array", "VALIDATION_ERROR", 400)
         if not all(isinstance(i, str) for i in issue_ids):
-            return JSONResponse({"error": "All issue_ids must be strings"}, status_code=400)
+            return _error_response("All issue_ids must be strings", "VALIDATION_ERROR", 400)
         actor = body.get("actor", "dashboard")
         priority = body.get("priority")
         if priority is not None and not isinstance(priority, int):
-            return JSONResponse({"error": "priority must be an integer"}, status_code=400)
+            return _error_response("priority must be an integer", "INVALID_PRIORITY", 400)
         updated, errors = db.batch_update(
             issue_ids,
             status=body.get("status"),
@@ -389,14 +406,14 @@ def _create_project_router() -> Any:
         try:
             body = await request.json()
         except Exception:
-            return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
+            return _error_response("Invalid JSON body", "VALIDATION_ERROR", 400)
         if not isinstance(body, dict):
-            return JSONResponse({"error": "Request body must be a JSON object"}, status_code=400)
+            return _error_response("Request body must be a JSON object", "VALIDATION_ERROR", 400)
         issue_ids = body.get("issue_ids")
         if not isinstance(issue_ids, list):
-            return JSONResponse({"error": "issue_ids must be a JSON array"}, status_code=400)
+            return _error_response("issue_ids must be a JSON array", "VALIDATION_ERROR", 400)
         if not all(isinstance(i, str) for i in issue_ids):
-            return JSONResponse({"error": "All issue_ids must be strings"}, status_code=400)
+            return _error_response("All issue_ids must be strings", "VALIDATION_ERROR", 400)
         reason = body.get("reason", "")
         actor = body.get("actor", "dashboard")
         closed, errors = db.batch_close(issue_ids, reason=reason, actor=actor)
@@ -429,13 +446,13 @@ def _create_project_router() -> Any:
         try:
             body = await request.json()
         except Exception:
-            return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
+            return _error_response("Invalid JSON body", "VALIDATION_ERROR", 400)
         if not isinstance(body, dict):
-            return JSONResponse({"error": "Request body must be a JSON object"}, status_code=400)
+            return _error_response("Request body must be a JSON object", "VALIDATION_ERROR", 400)
         title = body.get("title", "")
         priority = body.get("priority", 2)
         if not isinstance(priority, int):
-            return JSONResponse({"error": "priority must be an integer"}, status_code=400)
+            return _error_response("priority must be an integer", "INVALID_PRIORITY", 400)
         try:
             issue = db.create_issue(
                 title,
@@ -450,7 +467,7 @@ def _create_project_router() -> Any:
                 actor=body.get("actor", ""),
             )
         except ValueError as e:
-            return JSONResponse({"error": str(e)}, status_code=400)
+            return _error_response(str(e), "VALIDATION_ERROR", 400)
         return JSONResponse(issue.to_dict(), status_code=201)
 
     @router.post("/issue/{issue_id}/claim")
@@ -461,19 +478,19 @@ def _create_project_router() -> Any:
         try:
             body = await request.json()
         except Exception:
-            return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
+            return _error_response("Invalid JSON body", "VALIDATION_ERROR", 400)
         if not isinstance(body, dict):
-            return JSONResponse({"error": "Request body must be a JSON object"}, status_code=400)
+            return _error_response("Request body must be a JSON object", "VALIDATION_ERROR", 400)
         assignee = body.get("assignee", "")
         if not assignee or not assignee.strip():
-            return JSONResponse({"error": "assignee is required and cannot be empty"}, status_code=400)
+            return _error_response("assignee is required and cannot be empty", "VALIDATION_ERROR", 400)
         actor = body.get("actor", "dashboard")
         try:
             issue = db.claim_issue(issue_id, assignee=assignee, actor=actor)
         except KeyError:
-            return JSONResponse({"error": f"Not found: {issue_id}"}, status_code=404)
+            return _error_response(f"Not found: {issue_id}", "ISSUE_NOT_FOUND", 404)
         except ValueError as e:
-            return JSONResponse({"error": str(e)}, status_code=409)
+            return _error_response(str(e), "CLAIM_CONFLICT", 409)
         return JSONResponse(issue.to_dict())
 
     @router.post("/issue/{issue_id}/release")
@@ -484,16 +501,16 @@ def _create_project_router() -> Any:
         try:
             body = await request.json()
         except Exception:
-            return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
+            return _error_response("Invalid JSON body", "VALIDATION_ERROR", 400)
         if not isinstance(body, dict):
-            return JSONResponse({"error": "Request body must be a JSON object"}, status_code=400)
+            return _error_response("Request body must be a JSON object", "VALIDATION_ERROR", 400)
         actor = body.get("actor", "dashboard")
         try:
             issue = db.release_claim(issue_id, actor=actor)
         except KeyError:
-            return JSONResponse({"error": f"Not found: {issue_id}"}, status_code=404)
+            return _error_response(f"Not found: {issue_id}", "ISSUE_NOT_FOUND", 404)
         except ValueError as e:
-            return JSONResponse({"error": str(e)}, status_code=409)
+            return _error_response(str(e), "CLAIM_CONFLICT", 409)
         return JSONResponse(issue.to_dict())
 
     @router.post("/claim-next")
@@ -502,19 +519,19 @@ def _create_project_router() -> Any:
         try:
             body = await request.json()
         except Exception:
-            return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
+            return _error_response("Invalid JSON body", "VALIDATION_ERROR", 400)
         if not isinstance(body, dict):
-            return JSONResponse({"error": "Request body must be a JSON object"}, status_code=400)
+            return _error_response("Request body must be a JSON object", "VALIDATION_ERROR", 400)
         assignee = body.get("assignee", "")
         if not assignee or not assignee.strip():
-            return JSONResponse({"error": "assignee is required and cannot be empty"}, status_code=400)
+            return _error_response("assignee is required and cannot be empty", "VALIDATION_ERROR", 400)
         actor = body.get("actor", "dashboard")
         try:
             issue = db.claim_next(assignee, actor=actor)
         except ValueError as e:
-            return JSONResponse({"error": str(e)}, status_code=409)
+            return _error_response(str(e), "CLAIM_CONFLICT", 409)
         if issue is None:
-            return JSONResponse({"error": "No ready issues to claim"}, status_code=404)
+            return _error_response("No ready issues to claim", "ISSUE_NOT_FOUND", 404)
         return JSONResponse(issue.to_dict())
 
     @router.post("/issue/{issue_id}/dependencies")
@@ -525,17 +542,17 @@ def _create_project_router() -> Any:
         try:
             body = await request.json()
         except Exception:
-            return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
+            return _error_response("Invalid JSON body", "VALIDATION_ERROR", 400)
         if not isinstance(body, dict):
-            return JSONResponse({"error": "Request body must be a JSON object"}, status_code=400)
+            return _error_response("Request body must be a JSON object", "VALIDATION_ERROR", 400)
         depends_on = body.get("depends_on", "")
         actor = body.get("actor", "dashboard")
         try:
             added = db.add_dependency(issue_id, depends_on, actor=actor)
         except KeyError as e:
-            return JSONResponse({"error": str(e)}, status_code=404)
+            return _error_response(str(e), "ISSUE_NOT_FOUND", 404)
         except ValueError as e:
-            return JSONResponse({"error": str(e)}, status_code=409)
+            return _error_response(str(e), "DEPENDENCY_ERROR", 409)
         return JSONResponse({"added": added})
 
     @router.delete("/issue/{issue_id}/dependencies/{dep_id}")
@@ -546,8 +563,31 @@ def _create_project_router() -> Any:
         try:
             removed = db.remove_dependency(issue_id, dep_id, actor="dashboard")
         except KeyError as e:
-            return JSONResponse({"error": str(e)}, status_code=404)
+            return _error_response(str(e), "ISSUE_NOT_FOUND", 404)
         return JSONResponse({"removed": removed})
+
+    @router.get("/files/_schema")
+    async def api_files_schema() -> JSONResponse:
+        """API discovery: valid enum values and endpoint catalog for file/scan features."""
+        schema = {
+            "valid_severities": ["critical", "high", "medium", "low", "info"],
+            "valid_finding_statuses": [
+                "open",
+                "acknowledged",
+                "fixed",
+                "false_positive",
+                "unseen_in_latest",
+            ],
+            "valid_association_types": ["bug_in", "task_for", "scan_finding", "mentioned_in"],
+            "valid_sort_fields": ["updated_at", "created_at", "path", "language"],
+            "endpoints": [
+                {"method": "POST", "path": "/api/v1/scan-results", "description": "Ingest scan results", "status": "planned"},
+                {"method": "GET", "path": "/api/files", "description": "List tracked files", "status": "planned"},
+                {"method": "GET", "path": "/api/files/{file_id}", "description": "Get file details", "status": "planned"},
+                {"method": "GET", "path": "/api/files/_schema", "description": "API discovery (this endpoint)", "status": "live"},
+            ],
+        }
+        return JSONResponse(schema, headers={"Cache-Control": "max-age=3600"})
 
     return router
 
@@ -566,6 +606,13 @@ def create_app() -> Any:
     globals()["Request"] = Request
 
     app = FastAPI(title="Filigree Dashboard", docs_url=None, redoc_url=None)
+
+    from fastapi.exceptions import HTTPException as FastAPIHTTPException
+
+    @app.exception_handler(FastAPIHTTPException)
+    async def http_exception_handler(request: Request, exc: FastAPIHTTPException) -> JSONResponse:
+        code = "PROJECT_NOT_FOUND" if exc.status_code == 404 else "INTERNAL_ERROR"
+        return _error_response(str(exc.detail), code, exc.status_code)
 
     router = _create_project_router()
 
@@ -595,29 +642,30 @@ def create_app() -> Any:
     @app.post("/api/register")
     async def api_register(request: Request) -> JSONResponse:
         if _project_manager is None:
-            return JSONResponse({"error": "Project manager not initialized"}, status_code=500)
+            return _error_response("Project manager not initialized", "INTERNAL_ERROR", 500)
         try:
             body = await request.json()
         except Exception:
-            return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
+            return _error_response("Invalid JSON body", "VALIDATION_ERROR", 400)
         if not isinstance(body, dict):
-            return JSONResponse({"error": "Request body must be a JSON object"}, status_code=400)
+            return _error_response("Request body must be a JSON object", "VALIDATION_ERROR", 400)
         path = body.get("path")
         if not path or not isinstance(path, str):
-            return JSONResponse({"error": "Invalid path"}, status_code=400)
+            return _error_response("Invalid path", "VALIDATION_ERROR", 400)
         # Canonicalize to prevent path traversal
         p = Path(path).resolve()
         if not p.is_dir():
-            return JSONResponse({"error": "Invalid path"}, status_code=400)
+            return _error_response("Invalid path", "VALIDATION_ERROR", 400)
         # Resolve: accept either .filigree/ dir or its parent project root
         if p.name != ".filigree":
             candidate = p / ".filigree"
             if candidate.is_dir():
                 p = candidate
             else:
-                return JSONResponse(
-                    {"error": "Path must be a .filigree/ directory or a project root containing one"},
-                    status_code=400,
+                return _error_response(
+                    "Path must be a .filigree/ directory or a project root containing one",
+                    "VALIDATION_ERROR",
+                    400,
                 )
         entry = _project_manager.register(p)
         return JSONResponse(asdict(entry))
@@ -625,7 +673,7 @@ def create_app() -> Any:
     @app.post("/api/reload")
     async def api_reload() -> JSONResponse:
         if _project_manager is None:
-            return JSONResponse({"error": "Project manager not initialized"}, status_code=500)
+            return _error_response("Project manager not initialized", "INTERNAL_ERROR", 500)
         _project_manager.close_all()
         projects = _project_manager.get_active_projects()
         errors: list[str] = []

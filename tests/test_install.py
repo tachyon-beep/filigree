@@ -20,6 +20,8 @@ from filigree.install import (
     SKILL_NAME,
     CheckResult,
     _find_filigree_mcp_command,
+    _instructions_hash,
+    _instructions_version,
     ensure_gitignore,
     inject_instructions,
     install_claude_code_hooks,
@@ -58,7 +60,17 @@ class TestInjectInstructions:
         assert ok
         assert "Updated" in msg
         content = target.read_text()
+        # The marker prefix appears once in the opening tag
         assert content.count(FILIGREE_INSTRUCTIONS_MARKER) == 1
+
+    def test_versioned_marker_format(self, tmp_path: Path) -> None:
+        target = tmp_path / "CLAUDE.md"
+        inject_instructions(target)
+        content = target.read_text()
+        version = _instructions_version()
+        h = _instructions_hash()
+        assert f"<!-- filigree:instructions:v{version}:{h} -->" in content
+        assert "<!-- /filigree:instructions -->" in content
 
     def test_replace_malformed_block(self, tmp_path: Path) -> None:
         target = tmp_path / "CLAUDE.md"

@@ -11,6 +11,13 @@ function apiUrl(path) {
 
 const JSON_HEADERS = { "Content-Type": "application/json" };
 
+/** Extract a human-readable message from structured or legacy error bodies. */
+function extractError(body, fallback) {
+  const e = body?.error;
+  if (e && typeof e === "object") return e.message || fallback;
+  return e || fallback;
+}
+
 // --- Read operations (return data or null) ---
 
 export async function fetchIssues() {
@@ -135,7 +142,7 @@ export async function patchIssue(issueId, body) {
     });
     if (!resp.ok) {
       const err = await resp.json().catch(() => ({}));
-      return { ok: false, error: err.error || "Update failed" };
+      return { ok: false, error: extractError(err, "Update failed") };
     }
     return { ok: true, data: await resp.json() };
   } catch (_e) {
@@ -152,7 +159,7 @@ export async function postCloseIssue(issueId, reason) {
     });
     if (!resp.ok) {
       const err = await resp.json().catch(() => ({}));
-      return { ok: false, error: err.error || "Close failed" };
+      return { ok: false, error: extractError(err, "Close failed") };
     }
     return { ok: true, data: await resp.json() };
   } catch (_e) {
@@ -169,7 +176,7 @@ export async function postReopenIssue(issueId) {
     });
     if (!resp.ok) {
       const err = await resp.json().catch(() => ({}));
-      return { ok: false, error: err.error || "Reopen failed" };
+      return { ok: false, error: extractError(err, "Reopen failed") };
     }
     return { ok: true, data: await resp.json() };
   } catch (_e) {
@@ -186,7 +193,7 @@ export async function postClaimIssue(issueId, assignee) {
     });
     if (!resp.ok) {
       const err = await resp.json().catch(() => ({}));
-      return { ok: false, error: err.error || "Claim failed" };
+      return { ok: false, error: extractError(err, "Claim failed") };
     }
     return { ok: true, data: await resp.json() };
   } catch (_e) {
@@ -203,7 +210,7 @@ export async function postReleaseIssue(issueId) {
     });
     if (!resp.ok) {
       const err = await resp.json().catch(() => ({}));
-      return { ok: false, error: err.error || "Release failed" };
+      return { ok: false, error: extractError(err, "Release failed") };
     }
     return { ok: true, data: await resp.json() };
   } catch (_e) {
@@ -220,7 +227,7 @@ export async function postAddDependency(issueId, dependsOnId) {
     });
     if (!resp.ok) {
       const err = await resp.json().catch(() => ({}));
-      return { ok: false, error: err.error || "Add failed" };
+      return { ok: false, error: extractError(err, "Add failed") };
     }
     return { ok: true, data: await resp.json() };
   } catch (_e) {
@@ -235,7 +242,7 @@ export async function deleteIssueDep(issueId, depId) {
     });
     if (!resp.ok) {
       const err = await resp.json().catch(() => ({}));
-      return { ok: false, error: err.error || "Remove failed" };
+      return { ok: false, error: extractError(err, "Remove failed") };
     }
     return { ok: true, data: await resp.json() };
   } catch (_e) {
@@ -252,7 +259,7 @@ export async function postComment(issueId, text) {
     });
     if (!resp.ok) {
       const err = await resp.json().catch(() => ({}));
-      return { ok: false, error: err.error || "Comment failed" };
+      return { ok: false, error: extractError(err, "Comment failed") };
     }
     return { ok: true, data: await resp.json() };
   } catch (_e) {
@@ -269,7 +276,7 @@ export async function postCreateIssue(body) {
     });
     if (!resp.ok) {
       const err = await resp.json().catch(() => ({}));
-      return { ok: false, error: err.error || "Create failed" };
+      return { ok: false, error: extractError(err, "Create failed") };
     }
     return { ok: true, data: await resp.json() };
   } catch (_e) {
@@ -286,7 +293,7 @@ export async function postBatchUpdate(issueIds, fields) {
     });
     if (!resp.ok) {
       const err = await resp.json().catch(() => ({}));
-      return { ok: false, error: err.error || "Batch update failed" };
+      return { ok: false, error: extractError(err, "Batch update failed") };
     }
     return { ok: true, data: await resp.json() };
   } catch (_e) {
@@ -306,7 +313,7 @@ export async function postBatchClose(issueIds, reason, actor) {
     });
     if (!resp.ok) {
       const err = await resp.json().catch(() => ({}));
-      return { ok: false, error: err.error || "Batch close failed" };
+      return { ok: false, error: extractError(err, "Batch close failed") };
     }
     return { ok: true, data: await resp.json() };
   } catch (_e) {
