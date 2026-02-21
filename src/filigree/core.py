@@ -190,9 +190,69 @@ CREATE TRIGGER IF NOT EXISTS issues_fts_delete AFTER DELETE ON issues BEGIN
     INSERT INTO issues_fts(issues_fts, rowid, title, description)
         VALUES('delete', old.rowid, old.title, old.description);
 END;
+
+-- ---- File records & scan findings (v2) -----------------------------------
+
+CREATE TABLE IF NOT EXISTS file_records (
+    id          TEXT PRIMARY KEY,
+    path        TEXT NOT NULL UNIQUE,
+    language    TEXT DEFAULT '',
+    file_type   TEXT DEFAULT '',
+    first_seen  TEXT NOT NULL,
+    updated_at  TEXT NOT NULL,
+    metadata    TEXT DEFAULT '{}'
+);
+
+CREATE INDEX IF NOT EXISTS idx_file_records_path ON file_records(path);
+CREATE INDEX IF NOT EXISTS idx_file_records_language ON file_records(language);
+
+CREATE TABLE IF NOT EXISTS scan_findings (
+    id            TEXT PRIMARY KEY,
+    file_id       TEXT NOT NULL REFERENCES file_records(id),
+    issue_id      TEXT REFERENCES issues(id) ON DELETE SET NULL,
+    scan_source   TEXT NOT NULL DEFAULT '',
+    rule_id       TEXT DEFAULT '',
+    severity      TEXT NOT NULL DEFAULT 'info',
+    status        TEXT NOT NULL DEFAULT 'open',
+    message       TEXT DEFAULT '',
+    line_start    INTEGER,
+    line_end      INTEGER,
+    seen_count    INTEGER DEFAULT 1,
+    first_seen    TEXT NOT NULL,
+    updated_at    TEXT NOT NULL,
+    last_seen_at  TEXT,
+    metadata      TEXT DEFAULT '{}',
+    CHECK (severity IN ('critical', 'high', 'medium', 'low', 'info')),
+    CHECK (status IN ('open', 'acknowledged', 'fixed', 'false_positive', 'unseen_in_latest'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_scan_findings_file ON scan_findings(file_id);
+CREATE INDEX IF NOT EXISTS idx_scan_findings_issue ON scan_findings(issue_id);
+CREATE INDEX IF NOT EXISTS idx_scan_findings_severity ON scan_findings(severity);
+CREATE INDEX IF NOT EXISTS idx_scan_findings_status ON scan_findings(status);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_scan_findings_dedup
+  ON scan_findings(file_id, scan_source, rule_id, coalesce(line_start, -1));
+
+CREATE TABLE IF NOT EXISTS file_associations (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    file_id     TEXT NOT NULL REFERENCES file_records(id),
+    issue_id    TEXT NOT NULL REFERENCES issues(id),
+    assoc_type  TEXT NOT NULL,
+    created_at  TEXT NOT NULL,
+    UNIQUE(file_id, issue_id, assoc_type),
+    CHECK (assoc_type IN ('bug_in', 'task_for', 'scan_finding', 'mentioned_in'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_file_assoc_file ON file_associations(file_id);
+CREATE INDEX IF NOT EXISTS idx_file_assoc_issue ON file_associations(issue_id);
 """
 
-CURRENT_SCHEMA_VERSION = 1
+# V1 schema (without file tables) — kept for migration tests
+SCHEMA_V1_SQL = SCHEMA_SQL.split("-- ---- File records & scan findings (v2)")[0]
+if SCHEMA_V1_SQL == SCHEMA_SQL:
+    raise RuntimeError("SCHEMA_V1_SQL split marker not found — check comment text in SCHEMA_SQL")
+
+CURRENT_SCHEMA_VERSION = 2
 
 
 def _seed_builtin_packs(conn: sqlite3.Connection, now: str) -> int:
@@ -275,6 +335,71 @@ class Issue:
             "is_ready": self.is_ready,
             "children": self.children,
         }
+
+
+@dataclass
+class FileRecord:
+    id: str
+    path: str
+    language: str = ""
+    file_type: str = ""
+    first_seen: str = ""
+    updated_at: str = ""
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "path": self.path,
+            "language": self.language,
+            "file_type": self.file_type,
+            "first_seen": self.first_seen,
+            "updated_at": self.updated_at,
+            "metadata": self.metadata,
+        }
+
+
+@dataclass
+class ScanFinding:
+    id: str
+    file_id: str
+    severity: str = "info"
+    status: str = "open"
+    scan_source: str = ""
+    rule_id: str = ""
+    message: str = ""
+    line_start: int | None = None
+    line_end: int | None = None
+    issue_id: str | None = None
+    seen_count: int = 1
+    first_seen: str = ""
+    updated_at: str = ""
+    last_seen_at: str | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "file_id": self.file_id,
+            "severity": self.severity,
+            "status": self.status,
+            "scan_source": self.scan_source,
+            "rule_id": self.rule_id,
+            "message": self.message,
+            "line_start": self.line_start,
+            "line_end": self.line_end,
+            "issue_id": self.issue_id,
+            "seen_count": self.seen_count,
+            "first_seen": self.first_seen,
+            "updated_at": self.updated_at,
+            "last_seen_at": self.last_seen_at,
+            "metadata": self.metadata,
+        }
+
+
+VALID_SEVERITIES = frozenset({"critical", "high", "medium", "low", "info"})
+VALID_FINDING_STATUSES = frozenset({"open", "acknowledged", "fixed", "false_positive", "unseen_in_latest"})
+VALID_ASSOC_TYPES = frozenset({"bug_in", "task_for", "scan_finding", "mentioned_in"})
 
 
 # ---------------------------------------------------------------------------
@@ -2205,6 +2330,494 @@ class FiligreeDB:
 
         self.conn.commit()
         return count
+
+    # -- File records & scan findings ----------------------------------------
+
+    def _generate_file_id(self) -> str:
+        """Generate a unique file record ID like 'prefix-f-abc123'."""
+        for _ in range(10):
+            candidate = f"{self.prefix}-f-{uuid.uuid4().hex[:6]}"
+            exists = self.conn.execute("SELECT 1 FROM file_records WHERE id = ?", (candidate,)).fetchone()
+            if exists is None:
+                return candidate
+        return f"{self.prefix}-f-{uuid.uuid4().hex[:10]}"
+
+    def _generate_finding_id(self) -> str:
+        """Generate a unique scan finding ID like 'prefix-sf-abc123'."""
+        for _ in range(10):
+            candidate = f"{self.prefix}-sf-{uuid.uuid4().hex[:6]}"
+            exists = self.conn.execute("SELECT 1 FROM scan_findings WHERE id = ?", (candidate,)).fetchone()
+            if exists is None:
+                return candidate
+        return f"{self.prefix}-sf-{uuid.uuid4().hex[:10]}"
+
+    def _build_file_record(self, row: sqlite3.Row) -> FileRecord:
+        """Build a FileRecord from a database row."""
+        meta_raw = row["metadata"]
+        meta = json.loads(meta_raw) if meta_raw else {}
+        return FileRecord(
+            id=row["id"],
+            path=row["path"],
+            language=row["language"] or "",
+            file_type=row["file_type"] or "",
+            first_seen=row["first_seen"],
+            updated_at=row["updated_at"],
+            metadata=meta,
+        )
+
+    def _build_scan_finding(self, row: sqlite3.Row) -> ScanFinding:
+        """Build a ScanFinding from a database row."""
+        meta_raw = row["metadata"]
+        meta = json.loads(meta_raw) if meta_raw else {}
+        return ScanFinding(
+            id=row["id"],
+            file_id=row["file_id"],
+            severity=row["severity"],
+            status=row["status"],
+            scan_source=row["scan_source"] or "",
+            rule_id=row["rule_id"] or "",
+            message=row["message"] or "",
+            line_start=row["line_start"],
+            line_end=row["line_end"],
+            issue_id=row["issue_id"],
+            seen_count=row["seen_count"] or 1,
+            first_seen=row["first_seen"],
+            updated_at=row["updated_at"],
+            last_seen_at=row["last_seen_at"],
+            metadata=meta,
+        )
+
+    def register_file(
+        self,
+        path: str,
+        *,
+        language: str = "",
+        file_type: str = "",
+        metadata: dict[str, Any] | None = None,
+    ) -> FileRecord:
+        """Register a file or update it if already registered (upsert by path).
+
+        Returns the FileRecord (created or updated).
+        """
+        now = _now_iso()
+        existing = self.conn.execute("SELECT * FROM file_records WHERE path = ?", (path,)).fetchone()
+
+        if existing is not None:
+            updates: list[str] = []
+            params: list[Any] = []
+            if language:
+                updates.append("language = ?")
+                params.append(language)
+            if file_type:
+                updates.append("file_type = ?")
+                params.append(file_type)
+            if metadata:
+                updates.append("metadata = ?")
+                params.append(json.dumps(metadata))
+            updates.append("updated_at = ?")
+            params.append(now)
+            params.append(existing["id"])
+            self.conn.execute(
+                f"UPDATE file_records SET {', '.join(updates)} WHERE id = ?",
+                params,
+            )
+            self.conn.commit()
+            return self.get_file(existing["id"])
+
+        file_id = self._generate_file_id()
+        self.conn.execute(
+            "INSERT INTO file_records (id, path, language, file_type, first_seen, updated_at, metadata) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (file_id, path, language, file_type, now, now, json.dumps(metadata or {})),
+        )
+        self.conn.commit()
+        return self.get_file(file_id)
+
+    def get_file(self, file_id: str) -> FileRecord:
+        """Get a file record by ID. Raises KeyError if not found."""
+        row = self.conn.execute("SELECT * FROM file_records WHERE id = ?", (file_id,)).fetchone()
+        if row is None:
+            raise KeyError(file_id)
+        return self._build_file_record(row)
+
+    def get_file_by_path(self, path: str) -> FileRecord | None:
+        """Get a file record by path. Returns None if not found."""
+        row = self.conn.execute("SELECT * FROM file_records WHERE path = ?", (path,)).fetchone()
+        if row is None:
+            return None
+        return self._build_file_record(row)
+
+    def list_files(
+        self,
+        *,
+        limit: int = 100,
+        offset: int = 0,
+        language: str | None = None,
+        path_prefix: str | None = None,
+        sort: str = "updated_at",
+    ) -> list[FileRecord]:
+        """List file records with optional filtering and sorting."""
+        clauses: list[str] = []
+        params: list[Any] = []
+
+        if language is not None:
+            clauses.append("language = ?")
+            params.append(language)
+        if path_prefix is not None:
+            clauses.append("path LIKE ?")
+            params.append(f"{path_prefix}%")
+
+        where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+        valid_sorts = {"updated_at", "first_seen", "path", "language"}
+        sort_col = sort if sort in valid_sorts else "updated_at"
+        order = "ASC" if sort_col == "path" else "DESC"
+
+        rows = self.conn.execute(
+            f"SELECT * FROM file_records{where} ORDER BY {sort_col} {order} LIMIT ? OFFSET ?",
+            [*params, limit, offset],
+        ).fetchall()
+        return [self._build_file_record(r) for r in rows]
+
+    def list_files_paginated(
+        self,
+        *,
+        limit: int = 100,
+        offset: int = 0,
+        language: str | None = None,
+        path_prefix: str | None = None,
+        sort: str = "updated_at",
+    ) -> dict[str, Any]:
+        """List file records with pagination metadata.
+
+        Returns ``{results, total, limit, offset, has_more}``.
+        Uses two separate queries (COUNT + data) for efficiency.
+        """
+        clauses: list[str] = []
+        params: list[Any] = []
+
+        if language is not None:
+            clauses.append("language = ?")
+            params.append(language)
+        if path_prefix is not None:
+            clauses.append("path LIKE ?")
+            params.append(f"{path_prefix}%")
+
+        where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+
+        total: int = self.conn.execute(
+            f"SELECT COUNT(*) FROM file_records{where}",
+            params,
+        ).fetchone()[0]
+
+        valid_sorts = {"updated_at", "first_seen", "path", "language"}
+        sort_col = sort if sort in valid_sorts else "updated_at"
+        order = "ASC" if sort_col == "path" else "DESC"
+
+        rows = self.conn.execute(
+            f"SELECT * FROM file_records{where} ORDER BY {sort_col} {order} LIMIT ? OFFSET ?",
+            [*params, limit, offset],
+        ).fetchall()
+
+        results = [self._build_file_record(r).to_dict() for r in rows]
+        return {
+            "results": results,
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+            "has_more": (offset + limit) < total,
+        }
+
+    def process_scan_results(
+        self,
+        *,
+        scan_source: str,
+        findings: list[dict[str, Any]],
+        scan_run_id: str = "",
+    ) -> dict[str, Any]:
+        """Ingest scan results: create/update file records and findings.
+
+        Each finding dict must have at minimum: path, rule_id, severity, message.
+        Optional: language, line_start, line_end, metadata.
+
+        Returns summary stats: files_created, files_updated, findings_created, findings_updated.
+        """
+        now = _now_iso()
+        stats = {"files_created": 0, "files_updated": 0, "findings_created": 0, "findings_updated": 0}
+
+        for f in findings:
+            severity = f.get("severity", "info")
+            if severity not in VALID_SEVERITIES:
+                msg = f'Invalid severity "{severity}". Must be one of: {", ".join(sorted(VALID_SEVERITIES))}'
+                raise ValueError(msg)
+
+            path = f["path"]
+            language = f.get("language", "")
+
+            # Upsert file record
+            existing_file = self.conn.execute("SELECT id FROM file_records WHERE path = ?", (path,)).fetchone()
+            if existing_file is not None:
+                file_id = existing_file["id"]
+                update_parts = ["updated_at = ?"]
+                update_params: list[Any] = [now]
+                if language:
+                    update_parts.append("language = ?")
+                    update_params.append(language)
+                update_params.append(file_id)
+                self.conn.execute(
+                    f"UPDATE file_records SET {', '.join(update_parts)} WHERE id = ?",
+                    update_params,
+                )
+                stats["files_updated"] += 1
+            else:
+                file_id = self._generate_file_id()
+                self.conn.execute(
+                    "INSERT INTO file_records (id, path, language, first_seen, updated_at) VALUES (?, ?, ?, ?, ?)",
+                    (file_id, path, language, now, now),
+                )
+                stats["files_created"] += 1
+
+            # Upsert finding (dedup on file_id + scan_source + rule_id + line_start)
+            rule_id = f.get("rule_id", "")
+            line_start = f.get("line_start")
+            dedup_line = line_start if line_start is not None else -1
+
+            existing_finding = self.conn.execute(
+                "SELECT id, seen_count FROM scan_findings "
+                "WHERE file_id = ? AND scan_source = ? AND rule_id = ? AND coalesce(line_start, -1) = ?",
+                (file_id, scan_source, rule_id, dedup_line),
+            ).fetchone()
+
+            if existing_finding is not None:
+                self.conn.execute(
+                    "UPDATE scan_findings SET message = ?, severity = ?, line_end = ?, "
+                    "seen_count = seen_count + 1, updated_at = ?, last_seen_at = ? WHERE id = ?",
+                    (f.get("message", ""), severity, f.get("line_end"), now, now, existing_finding["id"]),
+                )
+                stats["findings_updated"] += 1
+            else:
+                finding_id = self._generate_finding_id()
+                self.conn.execute(
+                    "INSERT INTO scan_findings "
+                    "(id, file_id, scan_source, rule_id, severity, status, message, "
+                    "line_start, line_end, first_seen, updated_at, last_seen_at) "
+                    "VALUES (?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?)",
+                    (
+                        finding_id,
+                        file_id,
+                        scan_source,
+                        rule_id,
+                        severity,
+                        f.get("message", ""),
+                        line_start,
+                        f.get("line_end"),
+                        now,
+                        now,
+                        now,
+                    ),
+                )
+                stats["findings_created"] += 1
+
+        self.conn.commit()
+        return stats
+
+    def get_findings(
+        self,
+        file_id: str,
+        *,
+        severity: str | None = None,
+        status: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[ScanFinding]:
+        """Get scan findings for a file with optional filters."""
+        clauses = ["file_id = ?"]
+        params: list[Any] = [file_id]
+
+        if severity is not None:
+            clauses.append("severity = ?")
+            params.append(severity)
+        if status is not None:
+            clauses.append("status = ?")
+            params.append(status)
+
+        where = " AND ".join(clauses)
+        rows = self.conn.execute(
+            f"SELECT * FROM scan_findings WHERE {where} ORDER BY updated_at DESC LIMIT ? OFFSET ?",
+            [*params, limit, offset],
+        ).fetchall()
+        return [self._build_scan_finding(r) for r in rows]
+
+    def get_findings_paginated(
+        self,
+        file_id: str,
+        *,
+        severity: str | None = None,
+        status: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        """Get scan findings with pagination metadata.
+
+        Returns ``{results, total, limit, offset, has_more}``.
+        """
+        clauses = ["file_id = ?"]
+        params: list[Any] = [file_id]
+
+        if severity is not None:
+            clauses.append("severity = ?")
+            params.append(severity)
+        if status is not None:
+            clauses.append("status = ?")
+            params.append(status)
+
+        where = " AND ".join(clauses)
+
+        total: int = self.conn.execute(
+            f"SELECT COUNT(*) FROM scan_findings WHERE {where}",
+            params,
+        ).fetchone()[0]
+
+        rows = self.conn.execute(
+            f"SELECT * FROM scan_findings WHERE {where} ORDER BY updated_at DESC LIMIT ? OFFSET ?",
+            [*params, limit, offset],
+        ).fetchall()
+
+        results = [self._build_scan_finding(r).to_dict() for r in rows]
+        return {
+            "results": results,
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+            "has_more": (offset + limit) < total,
+        }
+
+    def add_file_association(
+        self,
+        file_id: str,
+        issue_id: str,
+        assoc_type: str,
+    ) -> None:
+        """Link a file to an issue. Idempotent (duplicates ignored)."""
+        if assoc_type not in VALID_ASSOC_TYPES:
+            msg = f'Invalid assoc_type "{assoc_type}". Must be one of: {", ".join(sorted(VALID_ASSOC_TYPES))}'
+            raise ValueError(msg)
+        now = _now_iso()
+        self.conn.execute(
+            "INSERT OR IGNORE INTO file_associations (file_id, issue_id, assoc_type, created_at) VALUES (?, ?, ?, ?)",
+            (file_id, issue_id, assoc_type, now),
+        )
+        self.conn.commit()
+
+    def get_file_associations(self, file_id: str) -> list[dict[str, Any]]:
+        """Get all issue associations for a file."""
+        rows = self.conn.execute(
+            "SELECT fa.*, i.title as issue_title, i.status as issue_status "
+            "FROM file_associations fa "
+            "LEFT JOIN issues i ON fa.issue_id = i.id "
+            "WHERE fa.file_id = ? ORDER BY fa.created_at DESC",
+            (file_id,),
+        ).fetchall()
+        return [
+            {
+                "id": r["id"],
+                "file_id": r["file_id"],
+                "issue_id": r["issue_id"],
+                "assoc_type": r["assoc_type"],
+                "created_at": r["created_at"],
+                "issue_title": r["issue_title"],
+                "issue_status": r["issue_status"],
+            }
+            for r in rows
+        ]
+
+    def get_issue_files(self, issue_id: str) -> list[dict[str, Any]]:
+        """Get all files associated with an issue (issue → files direction)."""
+        rows = self.conn.execute(
+            "SELECT fa.*, fr.path as file_path, fr.language as file_language "
+            "FROM file_associations fa "
+            "JOIN file_records fr ON fa.file_id = fr.id "
+            "WHERE fa.issue_id = ? ORDER BY fa.created_at DESC",
+            (issue_id,),
+        ).fetchall()
+        return [
+            {
+                "id": r["id"],
+                "file_id": r["file_id"],
+                "issue_id": r["issue_id"],
+                "assoc_type": r["assoc_type"],
+                "created_at": r["created_at"],
+                "file_path": r["file_path"],
+                "file_language": r["file_language"],
+            }
+            for r in rows
+        ]
+
+    def get_issue_findings(self, issue_id: str) -> list[ScanFinding]:
+        """Get all scan findings related to an issue.
+
+        Finds findings via two paths:
+        1. scan_findings.issue_id FK (directly linked)
+        2. file_associations with assoc_type='scan_finding' (linked via file)
+        """
+        rows = self.conn.execute(
+            "SELECT sf.* FROM scan_findings sf WHERE sf.issue_id = ? "
+            "UNION "
+            "SELECT sf.* FROM scan_findings sf "
+            "JOIN file_associations fa ON sf.file_id = fa.file_id "
+            "WHERE fa.issue_id = ? AND fa.assoc_type = 'scan_finding'",
+            (issue_id, issue_id),
+        ).fetchall()
+        return [self._build_scan_finding(r) for r in rows]
+
+    def get_file_hotspots(self, *, limit: int = 10) -> list[dict[str, Any]]:
+        """Get files ranked by weighted finding severity score.
+
+        Only counts open findings. Severity weights:
+        critical=10, high=5, medium=2, low=1, info=0.
+        """
+        rows = self.conn.execute(
+            """
+            SELECT
+                fr.id, fr.path, fr.language,
+                SUM(CASE WHEN sf.severity = 'critical' THEN 1 ELSE 0 END) as cnt_critical,
+                SUM(CASE WHEN sf.severity = 'high' THEN 1 ELSE 0 END) as cnt_high,
+                SUM(CASE WHEN sf.severity = 'medium' THEN 1 ELSE 0 END) as cnt_medium,
+                SUM(CASE WHEN sf.severity = 'low' THEN 1 ELSE 0 END) as cnt_low,
+                SUM(CASE WHEN sf.severity = 'info' THEN 1 ELSE 0 END) as cnt_info,
+                SUM(
+                    CASE sf.severity
+                        WHEN 'critical' THEN 10
+                        WHEN 'high' THEN 5
+                        WHEN 'medium' THEN 2
+                        WHEN 'low' THEN 1
+                        ELSE 0
+                    END
+                ) as score
+            FROM file_records fr
+            JOIN scan_findings sf ON sf.file_id = fr.id
+            WHERE sf.status = 'open'
+            GROUP BY fr.id
+            HAVING score > 0
+            ORDER BY score DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+
+        return [
+            {
+                "file": {"id": r["id"], "path": r["path"], "language": r["language"]},
+                "score": r["score"],
+                "findings_breakdown": {
+                    "critical": r["cnt_critical"],
+                    "high": r["cnt_high"],
+                    "medium": r["cnt_medium"],
+                    "low": r["cnt_low"],
+                    "info": r["cnt_info"],
+                },
+            }
+            for r in rows
+        ]
 
     # -- Archival / Compaction ------------------------------------------------
 

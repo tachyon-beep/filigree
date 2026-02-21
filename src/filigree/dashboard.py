@@ -28,7 +28,13 @@ if TYPE_CHECKING:
     from fastapi.responses import JSONResponse
     from starlette.requests import Request
 
-from filigree.core import FiligreeDB, find_filigree_root
+from filigree.core import (
+    VALID_ASSOC_TYPES,
+    VALID_FINDING_STATUSES,
+    VALID_SEVERITIES,
+    FiligreeDB,
+    find_filigree_root,
+)
 from filigree.registry import ProjectManager, Registry
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -75,7 +81,10 @@ def _get_project_db(project_key: str = "") -> FiligreeDB:
     if db is None:
         from fastapi import HTTPException
 
-        raise HTTPException(status_code=404, detail=f"Unknown project: {key}")
+        projects = _project_manager.get_active_projects()
+        available = [p.key for p in projects]
+        hint = f" Available projects: {', '.join(available)}" if available else ""
+        raise HTTPException(status_code=404, detail=f"Unknown project: {key}.{hint}")
     return db
 
 
@@ -136,7 +145,7 @@ def _create_project_router() -> Any:
         try:
             issue = db.get_issue(issue_id)
         except KeyError:
-            return _error_response(f"Not found: {issue_id}", "ISSUE_NOT_FOUND", 404)
+            return _error_response(f"Issue not found: {issue_id}", "ISSUE_NOT_FOUND", 404)
 
         data = issue.to_dict()
 
@@ -184,7 +193,12 @@ def _create_project_router() -> Any:
         """Workflow template for a given issue type (WFT-FR-065)."""
         tpl = db.templates.get_type(type_name)
         if tpl is None:
-            return _error_response(f"Unknown type: {type_name}", "INVALID_TYPE", 404)
+            valid_types = [t.type for t in db.templates.list_types()]
+            return _error_response(
+                f'Unknown type "{type_name}". Valid types: {", ".join(valid_types)}',
+                "INVALID_TYPE",
+                404,
+            )
         return JSONResponse(
             {
                 "type": tpl.type,
@@ -203,7 +217,7 @@ def _create_project_router() -> Any:
         try:
             transitions = db.get_valid_transitions(issue_id)
         except KeyError:
-            return _error_response(f"Not found: {issue_id}", "ISSUE_NOT_FOUND", 404)
+            return _error_response(f"Issue not found: {issue_id}", "ISSUE_NOT_FOUND", 404)
         return JSONResponse(
             [
                 {
@@ -217,6 +231,26 @@ def _create_project_router() -> Any:
                 for t in transitions
             ]
         )
+
+    @router.get("/issue/{issue_id}/files")
+    async def api_issue_files(issue_id: str, db: FiligreeDB = Depends(_get_project_db)) -> JSONResponse:
+        """Files associated with an issue."""
+        try:
+            db.get_issue(issue_id)
+        except KeyError:
+            return _error_response(f"Issue not found: {issue_id}", "ISSUE_NOT_FOUND", 404)
+        files = db.get_issue_files(issue_id)
+        return JSONResponse(files)
+
+    @router.get("/issue/{issue_id}/findings")
+    async def api_issue_findings(issue_id: str, db: FiligreeDB = Depends(_get_project_db)) -> JSONResponse:
+        """Scan findings related to an issue."""
+        try:
+            db.get_issue(issue_id)
+        except KeyError:
+            return _error_response(f"Issue not found: {issue_id}", "ISSUE_NOT_FOUND", 404)
+        findings = db.get_issue_findings(issue_id)
+        return JSONResponse([f.to_dict() for f in findings])
 
     @router.patch("/issue/{issue_id}")
     async def api_update_issue(
@@ -232,7 +266,7 @@ def _create_project_router() -> Any:
         actor = body.pop("actor", "dashboard")
         priority = body.get("priority")
         if priority is not None and not isinstance(priority, int):
-            return _error_response("priority must be an integer", "INVALID_PRIORITY", 400)
+            return _error_response("priority must be an integer between 0 and 4", "INVALID_PRIORITY", 400)
         try:
             issue = db.update_issue(
                 issue_id,
@@ -246,7 +280,7 @@ def _create_project_router() -> Any:
                 actor=actor,
             )
         except KeyError:
-            return _error_response(f"Not found: {issue_id}", "ISSUE_NOT_FOUND", 404)
+            return _error_response(f"Issue not found: {issue_id}", "ISSUE_NOT_FOUND", 404)
         except ValueError as e:
             return _error_response(str(e), "TRANSITION_ERROR", 409)
         return JSONResponse(issue.to_dict())
@@ -268,7 +302,7 @@ def _create_project_router() -> Any:
         try:
             issue = db.close_issue(issue_id, reason=reason, actor=actor, fields=fields)
         except KeyError:
-            return _error_response(f"Not found: {issue_id}", "ISSUE_NOT_FOUND", 404)
+            return _error_response(f"Issue not found: {issue_id}", "ISSUE_NOT_FOUND", 404)
         except TypeError as e:
             return _error_response(str(e), "VALIDATION_ERROR", 400)
         except ValueError as e:
@@ -290,7 +324,7 @@ def _create_project_router() -> Any:
         try:
             issue = db.reopen_issue(issue_id, actor=actor)
         except KeyError:
-            return _error_response(f"Not found: {issue_id}", "ISSUE_NOT_FOUND", 404)
+            return _error_response(f"Issue not found: {issue_id}", "ISSUE_NOT_FOUND", 404)
         except ValueError as e:
             return _error_response(str(e), "TRANSITION_ERROR", 409)
         return JSONResponse(issue.to_dict())
@@ -303,7 +337,7 @@ def _create_project_router() -> Any:
         try:
             db.get_issue(issue_id)
         except KeyError:
-            return _error_response(f"Not found: {issue_id}", "ISSUE_NOT_FOUND", 404)
+            return _error_response(f"Issue not found: {issue_id}", "ISSUE_NOT_FOUND", 404)
         try:
             body = await request.json()
         except Exception:
@@ -364,7 +398,7 @@ def _create_project_router() -> Any:
         try:
             plan = db.get_plan(milestone_id)
         except KeyError:
-            return _error_response(f"Not found: {milestone_id}", "ISSUE_NOT_FOUND", 404)
+            return _error_response(f"Issue not found: {milestone_id}", "ISSUE_NOT_FOUND", 404)
         return JSONResponse(plan)
 
     @router.post("/batch/update")
@@ -384,7 +418,7 @@ def _create_project_router() -> Any:
         actor = body.get("actor", "dashboard")
         priority = body.get("priority")
         if priority is not None and not isinstance(priority, int):
-            return _error_response("priority must be an integer", "INVALID_PRIORITY", 400)
+            return _error_response("priority must be an integer between 0 and 4", "INVALID_PRIORITY", 400)
         updated, errors = db.batch_update(
             issue_ids,
             status=body.get("status"),
@@ -452,7 +486,7 @@ def _create_project_router() -> Any:
         title = body.get("title", "")
         priority = body.get("priority", 2)
         if not isinstance(priority, int):
-            return _error_response("priority must be an integer", "INVALID_PRIORITY", 400)
+            return _error_response("priority must be an integer between 0 and 4", "INVALID_PRIORITY", 400)
         try:
             issue = db.create_issue(
                 title,
@@ -488,7 +522,7 @@ def _create_project_router() -> Any:
         try:
             issue = db.claim_issue(issue_id, assignee=assignee, actor=actor)
         except KeyError:
-            return _error_response(f"Not found: {issue_id}", "ISSUE_NOT_FOUND", 404)
+            return _error_response(f"Issue not found: {issue_id}", "ISSUE_NOT_FOUND", 404)
         except ValueError as e:
             return _error_response(str(e), "CLAIM_CONFLICT", 409)
         return JSONResponse(issue.to_dict())
@@ -508,7 +542,7 @@ def _create_project_router() -> Any:
         try:
             issue = db.release_claim(issue_id, actor=actor)
         except KeyError:
-            return _error_response(f"Not found: {issue_id}", "ISSUE_NOT_FOUND", 404)
+            return _error_response(f"Issue not found: {issue_id}", "ISSUE_NOT_FOUND", 404)
         except ValueError as e:
             return _error_response(str(e), "CLAIM_CONFLICT", 409)
         return JSONResponse(issue.to_dict())
@@ -566,28 +600,132 @@ def _create_project_router() -> Any:
             return _error_response(str(e), "ISSUE_NOT_FOUND", 404)
         return JSONResponse({"removed": removed})
 
+    @router.get("/files")
+    async def api_list_files(request: Request, db: FiligreeDB = Depends(_get_project_db)) -> JSONResponse:
+        """List tracked file records with optional filtering and pagination."""
+        params = request.query_params
+        result = db.list_files_paginated(
+            limit=int(params.get("limit", 100)),
+            offset=int(params.get("offset", 0)),
+            language=params.get("language"),
+            path_prefix=params.get("path_prefix"),
+            sort=params.get("sort", "updated_at"),
+        )
+        return JSONResponse(result)
+
+    @router.get("/files/hotspots")
+    async def api_file_hotspots(request: Request, db: FiligreeDB = Depends(_get_project_db)) -> JSONResponse:
+        """Files ranked by weighted finding severity score."""
+        params = request.query_params
+        limit = int(params.get("limit", 10))
+        result = db.get_file_hotspots(limit=limit)
+        return JSONResponse(result)
+
     @router.get("/files/_schema")
     async def api_files_schema() -> JSONResponse:
         """API discovery: valid enum values and endpoint catalog for file/scan features."""
         schema = {
-            "valid_severities": ["critical", "high", "medium", "low", "info"],
-            "valid_finding_statuses": [
-                "open",
-                "acknowledged",
-                "fixed",
-                "false_positive",
-                "unseen_in_latest",
-            ],
-            "valid_association_types": ["bug_in", "task_for", "scan_finding", "mentioned_in"],
-            "valid_sort_fields": ["updated_at", "created_at", "path", "language"],
+            "valid_severities": sorted(VALID_SEVERITIES),
+            "valid_finding_statuses": sorted(VALID_FINDING_STATUSES),
+            "valid_association_types": sorted(VALID_ASSOC_TYPES),
+            "valid_sort_fields": ["updated_at", "first_seen", "path", "language"],
             "endpoints": [
-                {"method": "POST", "path": "/api/v1/scan-results", "description": "Ingest scan results", "status": "planned"},
-                {"method": "GET", "path": "/api/files", "description": "List tracked files", "status": "planned"},
-                {"method": "GET", "path": "/api/files/{file_id}", "description": "Get file details", "status": "planned"},
-                {"method": "GET", "path": "/api/files/_schema", "description": "API discovery (this endpoint)", "status": "live"},
+                {
+                    "method": "POST",
+                    "path": "/api/v1/scan-results",
+                    "description": "Ingest scan results",
+                    "status": "live",
+                },
+                {"method": "GET", "path": "/api/files", "description": "List tracked files", "status": "live"},
+                {
+                    "method": "GET",
+                    "path": "/api/files/{file_id}",
+                    "description": "Get file details",
+                    "status": "live",
+                },
+                {
+                    "method": "GET",
+                    "path": "/api/files/_schema",
+                    "description": "API discovery (this endpoint)",
+                    "status": "live",
+                },
             ],
         }
         return JSONResponse(schema, headers={"Cache-Control": "max-age=3600"})
+
+    @router.get("/files/{file_id}")
+    async def api_get_file(file_id: str, db: FiligreeDB = Depends(_get_project_db)) -> JSONResponse:
+        """Get file record details."""
+        try:
+            f = db.get_file(file_id)
+        except KeyError:
+            return _error_response(f"File not found: {file_id}", "FILE_NOT_FOUND", 404)
+        data = f.to_dict()
+        data["associations"] = db.get_file_associations(file_id)
+        return JSONResponse(data)
+
+    @router.get("/files/{file_id}/findings")
+    async def api_get_file_findings(
+        file_id: str, request: Request, db: FiligreeDB = Depends(_get_project_db)
+    ) -> JSONResponse:
+        """Get scan findings for a file with pagination."""
+        try:
+            db.get_file(file_id)
+        except KeyError:
+            return _error_response(f"File not found: {file_id}", "FILE_NOT_FOUND", 404)
+        params = request.query_params
+        result = db.get_findings_paginated(
+            file_id,
+            severity=params.get("severity"),
+            status=params.get("status"),
+            limit=int(params.get("limit", 100)),
+            offset=int(params.get("offset", 0)),
+        )
+        return JSONResponse(result)
+
+    @router.post("/files/{file_id}/associations")
+    async def api_add_file_association(
+        file_id: str, request: Request, db: FiligreeDB = Depends(_get_project_db)
+    ) -> JSONResponse:
+        """Link a file to an issue."""
+        try:
+            db.get_file(file_id)
+        except KeyError:
+            return _error_response(f"File not found: {file_id}", "FILE_NOT_FOUND", 404)
+        try:
+            body = await request.json()
+        except Exception:
+            return _error_response("Invalid JSON body", "VALIDATION_ERROR", 400)
+        issue_id = body.get("issue_id", "")
+        assoc_type = body.get("assoc_type", "")
+        if not issue_id or not assoc_type:
+            return _error_response("issue_id and assoc_type are required", "VALIDATION_ERROR", 400)
+        try:
+            db.add_file_association(file_id, issue_id, assoc_type)
+        except ValueError as e:
+            return _error_response(str(e), "VALIDATION_ERROR", 400)
+        return JSONResponse({"status": "created"})
+
+    @router.post("/v1/scan-results")
+    async def api_scan_results(request: Request, db: FiligreeDB = Depends(_get_project_db)) -> JSONResponse:
+        """Ingest scan results."""
+        try:
+            body = await request.json()
+        except Exception:
+            return _error_response("Invalid JSON body", "VALIDATION_ERROR", 400)
+        scan_source = body.get("scan_source", "")
+        if not scan_source:
+            return _error_response("scan_source is required", "VALIDATION_ERROR", 400)
+        findings = body.get("findings", [])
+        try:
+            result = db.process_scan_results(
+                scan_source=scan_source,
+                findings=findings,
+                scan_run_id=body.get("scan_run_id", ""),
+            )
+        except ValueError as e:
+            return _error_response(str(e), "VALIDATION_ERROR", 400)
+        return JSONResponse(result)
 
     return router
 
@@ -651,11 +789,11 @@ def create_app() -> Any:
             return _error_response("Request body must be a JSON object", "VALIDATION_ERROR", 400)
         path = body.get("path")
         if not path or not isinstance(path, str):
-            return _error_response("Invalid path", "VALIDATION_ERROR", 400)
+            return _error_response("path is required and must be a non-empty string", "VALIDATION_ERROR", 400)
         # Canonicalize to prevent path traversal
         p = Path(path).resolve()
         if not p.is_dir():
-            return _error_response("Invalid path", "VALIDATION_ERROR", 400)
+            return _error_response(f"Directory not found: {path}", "VALIDATION_ERROR", 400)
         # Resolve: accept either .filigree/ dir or its parent project root
         if p.name != ".filigree":
             candidate = p / ".filigree"

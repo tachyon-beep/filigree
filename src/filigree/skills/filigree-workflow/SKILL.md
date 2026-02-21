@@ -132,6 +132,25 @@ For detailed patterns, consult these reference files:
 
 Load these when facing a specific workflow challenge rather than reading upfront.
 
+## File Records & Scan Findings
+
+The dashboard API tracks files and scan findings across the project. Use the
+schema discovery endpoint to find valid values and available endpoints:
+
+```
+GET /api/files/_schema
+```
+
+This returns valid severities, finding statuses, association types, sort fields,
+and a full endpoint catalog. When linking issues to files, use file associations:
+
+| Association Type | Meaning |
+|-----------------|---------|
+| `bug_in` | Bug reported in this file |
+| `task_for` | Task related to this file |
+| `scan_finding` | Automated scan finding |
+| `mentioned_in` | File referenced in issue |
+
 ## Health and Diagnostics
 
 ```bash

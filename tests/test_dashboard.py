@@ -164,6 +164,9 @@ class TestIssueDetailAPI:
     async def test_issue_detail_not_found(self, client: AsyncClient) -> None:
         resp = await client.get("/api/issue/nonexistent")
         assert resp.status_code == 404
+        err = resp.json()["error"]
+        assert err["code"] == "ISSUE_NOT_FOUND"
+        assert "nonexistent" in err["message"]
 
     async def test_issue_with_comments(self, client: AsyncClient, dashboard_db: FiligreeDB) -> None:
         ids = dashboard_db._test_ids  # type: ignore[attr-defined]
@@ -207,7 +210,12 @@ class TestTypeTemplateAPI:
     async def test_type_template_not_found(self, client: AsyncClient) -> None:
         resp = await client.get("/api/type/nonexistent")
         assert resp.status_code == 404
-        assert "error" in resp.json()
+        err = resp.json()["error"]
+        assert err["code"] == "INVALID_TYPE"
+        # Error message must include the invalid value and valid types
+        assert "nonexistent" in err["message"]
+        assert "task" in err["message"]
+        assert "bug" in err["message"]
 
 
 class TestWorkflowAwareAPI:
@@ -807,7 +815,10 @@ class TestCreateIssueAPI:
             json={"title": "Bad type", "type": "nonexistent_type"},
         )
         assert resp.status_code == 400
-        assert "error" in resp.json()
+        err = resp.json()["error"]
+        # Error from core.py includes valid types
+        assert "nonexistent_type" in err["message"]
+        assert "task" in err["message"]
 
     async def test_create_with_parent(self, client: AsyncClient, dashboard_db: FiligreeDB) -> None:
         ids = dashboard_db._test_ids  # type: ignore[attr-defined]
@@ -1229,7 +1240,7 @@ class TestFilesSchemaAPI:
         resp = await client.get("/api/files/_schema")
         assert resp.status_code == 200
         data = resp.json()
-        assert data["valid_severities"] == ["critical", "high", "medium", "low", "info"]
+        assert set(data["valid_severities"]) == {"critical", "high", "medium", "low", "info"}
 
     async def test_schema_returns_valid_finding_statuses(self, client: AsyncClient) -> None:
         resp = await client.get("/api/files/_schema")
@@ -1261,3 +1272,40 @@ class TestFilesSchemaAPI:
     async def test_schema_has_cache_control(self, client: AsyncClient) -> None:
         resp = await client.get("/api/files/_schema")
         assert resp.headers.get("cache-control") == "max-age=3600"
+
+
+class TestErrorMessagesIncludeValidOptions:
+    """Error messages must include valid values to be self-documenting."""
+
+    async def test_unknown_type_lists_valid_types(self, client: AsyncClient) -> None:
+        resp = await client.get("/api/type/bogus_type")
+        assert resp.status_code == 404
+        err = resp.json()["error"]
+        assert err["code"] == "INVALID_TYPE"
+        assert '"bogus_type"' in err["message"]
+        # Must include at least some known types
+        for expected in ("task", "bug", "feature"):
+            assert expected in err["message"], f"Missing valid type '{expected}' in error"
+
+    async def test_create_issue_unknown_type_lists_valid_types(self, client: AsyncClient) -> None:
+        resp = await client.post("/api/issues", json={"title": "Bad", "type": "widgets"})
+        assert resp.status_code == 400
+        err = resp.json()["error"]
+        assert "widgets" in err["message"]
+        assert "task" in err["message"]
+
+    async def test_priority_error_includes_valid_range(self, client: AsyncClient, dashboard_db: FiligreeDB) -> None:
+        ids = dashboard_db._test_ids  # type: ignore[attr-defined]
+        resp = await client.patch(f"/api/issue/{ids['a']}", json={"priority": "high"})
+        assert resp.status_code == 400
+        err = resp.json()["error"]
+        assert err["code"] == "INVALID_PRIORITY"
+        assert "0" in err["message"]
+        assert "4" in err["message"]
+
+    async def test_issue_not_found_includes_id(self, client: AsyncClient) -> None:
+        resp = await client.get("/api/issue/nonexistent-id-xyz")
+        assert resp.status_code == 404
+        err = resp.json()["error"]
+        assert err["code"] == "ISSUE_NOT_FOUND"
+        assert "nonexistent-id-xyz" in err["message"]

@@ -54,8 +54,73 @@ class MigrationFn(Protocol):
 # Example: {1: migrate_v1_to_v2} means "if user_version == 1, run this to get to 2"
 # ---------------------------------------------------------------------------
 
+
+def migrate_v1_to_v2(conn: sqlite3.Connection) -> None:
+    """v1 → v2: Add file records, scan findings, and file associations tables.
+
+    Changes:
+      - new table 'file_records' for tracking source code files
+      - new table 'scan_findings' for security/code quality scan results
+      - new table 'file_associations' for linking files to issues
+      - indexes for efficient querying
+    """
+    conn.execute("""\
+        CREATE TABLE IF NOT EXISTS file_records (
+            id          TEXT PRIMARY KEY,
+            path        TEXT NOT NULL UNIQUE,
+            language    TEXT DEFAULT '',
+            file_type   TEXT DEFAULT '',
+            first_seen  TEXT NOT NULL,
+            updated_at  TEXT NOT NULL,
+            metadata    TEXT DEFAULT '{}'
+        )""")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_file_records_path ON file_records(path)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_file_records_language ON file_records(language)")
+
+    conn.execute("""\
+        CREATE TABLE IF NOT EXISTS scan_findings (
+            id            TEXT PRIMARY KEY,
+            file_id       TEXT NOT NULL REFERENCES file_records(id),
+            issue_id      TEXT REFERENCES issues(id) ON DELETE SET NULL,
+            scan_source   TEXT NOT NULL DEFAULT '',
+            rule_id       TEXT DEFAULT '',
+            severity      TEXT NOT NULL DEFAULT 'info',
+            status        TEXT NOT NULL DEFAULT 'open',
+            message       TEXT DEFAULT '',
+            line_start    INTEGER,
+            line_end      INTEGER,
+            seen_count    INTEGER DEFAULT 1,
+            first_seen    TEXT NOT NULL,
+            updated_at    TEXT NOT NULL,
+            last_seen_at  TEXT,
+            metadata      TEXT DEFAULT '{}',
+            CHECK (severity IN ('critical', 'high', 'medium', 'low', 'info')),
+            CHECK (status IN ('open', 'acknowledged', 'fixed', 'false_positive', 'unseen_in_latest'))
+        )""")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_scan_findings_file ON scan_findings(file_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_scan_findings_issue ON scan_findings(issue_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_scan_findings_severity ON scan_findings(severity)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_scan_findings_status ON scan_findings(status)")
+    conn.execute("""\
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_scan_findings_dedup
+          ON scan_findings(file_id, scan_source, rule_id, coalesce(line_start, -1))""")
+
+    conn.execute("""\
+        CREATE TABLE IF NOT EXISTS file_associations (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            file_id     TEXT NOT NULL REFERENCES file_records(id),
+            issue_id    TEXT NOT NULL REFERENCES issues(id),
+            assoc_type  TEXT NOT NULL,
+            created_at  TEXT NOT NULL,
+            UNIQUE(file_id, issue_id, assoc_type),
+            CHECK (assoc_type IN ('bug_in', 'task_for', 'scan_finding', 'mentioned_in'))
+        )""")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_file_assoc_file ON file_associations(file_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_file_assoc_issue ON file_associations(issue_id)")
+
+
 MIGRATIONS: dict[int, MigrationFn] = {
-    # 1: migrate_v1_to_v2,
+    1: migrate_v1_to_v2,
     # 2: migrate_v2_to_v3,
 }
 

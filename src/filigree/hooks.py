@@ -23,6 +23,12 @@ from filigree.core import (
     find_filigree_root,
     read_config,
 )
+from filigree.install import (
+    FILIGREE_INSTRUCTIONS_MARKER,
+    _instructions_hash,
+    inject_instructions,
+    install_skills,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -77,8 +83,67 @@ def _build_context(db: FiligreeDB) -> str:
     return "\n".join(lines)
 
 
+def _extract_marker_hash(content: str) -> str | None:
+    """Extract the hash from a filigree instructions marker comment.
+
+    Looks for ``<!-- filigree:instructions:v{VER}:{HASH} -->`` and returns
+    the HASH portion, or ``None`` if the marker is missing or uses the old
+    format without a hash.
+    """
+    import re
+
+    m = re.search(r"<!-- filigree:instructions:v[^:]+:([0-9a-f]+) -->", content)
+    return m.group(1) if m else None
+
+
+def _check_instructions_freshness(project_root: Path) -> list[str]:
+    """Check whether CLAUDE.md/AGENTS.md instructions and skills are current.
+
+    Compares the hash embedded in the marker comment against the hash of
+    the currently installed instructions template.  Updates stale files
+    in-place and returns a list of human-readable status messages.
+    """
+    messages: list[str] = []
+    current_hash = _instructions_hash()
+
+    # Check CLAUDE.md and AGENTS.md
+    for filename in ("CLAUDE.md", "AGENTS.md"):
+        md_path = project_root / filename
+        if not md_path.exists():
+            continue
+        content = md_path.read_text()
+        if FILIGREE_INSTRUCTIONS_MARKER not in content:
+            continue
+        embedded_hash = _extract_marker_hash(content)
+        if embedded_hash == current_hash:
+            continue
+        # Stale or old-format marker — update
+        inject_instructions(md_path)
+        messages.append(f"Updated filigree instructions in {filename}")
+
+    # Check skill pack
+    skill_target = project_root / ".claude" / "skills" / "filigree-workflow" / "SKILL.md"
+    if skill_target.exists():
+        from filigree.install import _get_skills_source_dir
+
+        source_skill = _get_skills_source_dir() / "filigree-workflow" / "SKILL.md"
+        if source_skill.exists():
+            import hashlib
+
+            target_hash = hashlib.sha256(skill_target.read_bytes()).hexdigest()[:8]
+            source_hash = hashlib.sha256(source_skill.read_bytes()).hexdigest()[:8]
+            if target_hash != source_hash:
+                install_skills(project_root)
+                messages.append("Updated filigree skill pack")
+
+    return messages
+
+
 def generate_session_context() -> str | None:
     """Generate a project snapshot for Claude Code session context.
+
+    Also checks whether filigree instructions in CLAUDE.md/AGENTS.md
+    and the skill pack are up-to-date with the installed package version.
 
     Returns ``None`` when there is no filigree project (silent exit).
     """
@@ -87,6 +152,15 @@ def generate_session_context() -> str | None:
     except FileNotFoundError:
         return None
 
+    project_root = filigree_dir.parent
+
+    # Check instruction freshness (best-effort — don't let failures block context)
+    freshness_messages: list[str] = []
+    try:
+        freshness_messages = _check_instructions_freshness(project_root)
+    except Exception:
+        logger.debug("Instructions freshness check failed", exc_info=True)
+
     config = read_config(filigree_dir)
     db = FiligreeDB(
         filigree_dir / DB_FILENAME,
@@ -94,9 +168,15 @@ def generate_session_context() -> str | None:
     )
     try:
         db.initialize()
-        return _build_context(db)
+        context = _build_context(db)
     finally:
         db.close()
+
+    # Append freshness messages so they appear in hook output
+    if freshness_messages:
+        context += "\n\n" + "\n".join(freshness_messages)
+
+    return context
 
 
 # ---------------------------------------------------------------------------

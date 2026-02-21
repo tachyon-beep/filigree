@@ -42,7 +42,9 @@ class TestMigrationV3:
         assert issue.status == "review"
 
     def test_schema_version_is_current(self, db: FiligreeDB) -> None:
-        assert db.get_schema_version() == 1
+        from filigree.core import CURRENT_SCHEMA_VERSION
+
+        assert db.get_schema_version() == CURRENT_SCHEMA_VERSION
 
 
 # ---------------------------------------------------------------------------

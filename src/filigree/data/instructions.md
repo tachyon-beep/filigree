@@ -62,6 +62,18 @@ filigree search "query"                     # Search issues
 filigree doctor                             # Health check
 ```
 
+### File Records & Scan Findings (API)
+
+The dashboard exposes REST endpoints for file tracking and scan result ingestion.
+Use `GET /api/files/_schema` for available endpoints and valid field values.
+
+Key endpoints:
+- `GET /api/files/_schema` — Discovery: valid enums, endpoint catalog
+- `POST /api/v1/scan-results` — Ingest scan results (SARIF-lite format)
+- `GET /api/files` — List tracked files with filtering and sorting
+- `GET /api/files/{file_id}` — File detail with associations and findings summary
+- `GET /api/files/{file_id}/findings` — Findings for a specific file
+
 ### Workflow
 1. `filigree ready` to find available work
 2. `filigree show <id>` to review details
