@@ -2462,6 +2462,7 @@ class FiligreeDB:
         path_prefix: str | None = None,
         min_findings: int | None = None,
         has_severity: str | None = None,
+        scan_source: str | None = None,
         sort: str = "updated_at",
         direction: str | None = None,
     ) -> dict[str, Any]:
@@ -2495,6 +2496,9 @@ class FiligreeDB:
                 " AND sf.severity = ?) > 0"
             )
             params.append(has_severity)
+        if scan_source:
+            clauses.append("EXISTS (SELECT 1 FROM scan_findings sf WHERE sf.file_id = file_records.id AND sf.scan_source = ?)")
+            params.append(scan_source)
 
         where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
 
@@ -2677,11 +2681,21 @@ class FiligreeDB:
 
                 self.conn.execute(
                     "UPDATE scan_findings SET message = ?, severity = ?, line_end = ?, "
-                    "suggestion = ?, scan_run_id = ?, "
+                    "suggestion = ?, scan_run_id = ?, metadata = ?, "
                     "seen_count = seen_count + 1, updated_at = ?, last_seen_at = ?, "
                     "status = CASE WHEN status IN ('fixed', 'unseen_in_latest') THEN 'open' ELSE status END "
                     "WHERE id = ?",
-                    (f.get("message", ""), severity, f.get("line_end"), suggestion, run_id_update, now, now, existing_finding["id"]),
+                    (
+                        f.get("message", ""),
+                        severity,
+                        f.get("line_end"),
+                        suggestion,
+                        run_id_update,
+                        json.dumps(f.get("metadata") or {}),
+                        now,
+                        now,
+                        existing_finding["id"],
+                    ),
                 )
                 stats["findings_updated"] += 1
                 seen_finding_ids.setdefault(file_id, []).append(existing_finding["id"])
@@ -2691,8 +2705,8 @@ class FiligreeDB:
                     "INSERT INTO scan_findings "
                     "(id, file_id, scan_source, rule_id, severity, status, message, "
                     "suggestion, scan_run_id, "
-                    "line_start, line_end, first_seen, updated_at, last_seen_at) "
-                    "VALUES (?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "line_start, line_end, first_seen, updated_at, last_seen_at, metadata) "
+                    "VALUES (?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         finding_id,
                         file_id,
@@ -2707,6 +2721,7 @@ class FiligreeDB:
                         now,
                         now,
                         now,
+                        json.dumps(f.get("metadata") or {}),
                     ),
                 )
                 stats["findings_created"] += 1

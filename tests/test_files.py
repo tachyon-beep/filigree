@@ -248,6 +248,51 @@ class TestProcessScanResults:
         assert db.conn.execute("SELECT COUNT(*) FROM file_records").fetchone()[0] == 0
         assert db.conn.execute("SELECT COUNT(*) FROM scan_findings").fetchone()[0] == 0
 
+    def test_scan_metadata_persisted_on_create(self, db: FiligreeDB) -> None:
+        db.process_scan_results(
+            scan_source="ruff",
+            findings=[
+                {
+                    "path": "a.py",
+                    "rule_id": "E1",
+                    "severity": "low",
+                    "message": "m",
+                    "metadata": {"url": "https://example.com", "tags": ["style"]},
+                },
+            ],
+        )
+        f = db.get_file_by_path("a.py")
+        findings = db.get_findings(f.id)
+        assert findings[0].metadata == {"url": "https://example.com", "tags": ["style"]}
+
+    def test_scan_metadata_persisted_on_update(self, db: FiligreeDB) -> None:
+        db.process_scan_results(
+            scan_source="ruff",
+            findings=[
+                {"path": "a.py", "rule_id": "E1", "severity": "low", "message": "m",
+                 "metadata": {"v": 1}},
+            ],
+        )
+        db.process_scan_results(
+            scan_source="ruff",
+            findings=[
+                {"path": "a.py", "rule_id": "E1", "severity": "low", "message": "m2",
+                 "metadata": {"v": 2}},
+            ],
+        )
+        f = db.get_file_by_path("a.py")
+        findings = db.get_findings(f.id)
+        assert findings[0].metadata == {"v": 2}
+
+    def test_scan_metadata_defaults_empty_dict(self, db: FiligreeDB) -> None:
+        db.process_scan_results(
+            scan_source="ruff",
+            findings=[{"path": "a.py", "rule_id": "E1", "severity": "low", "message": "m"}],
+        )
+        f = db.get_file_by_path("a.py")
+        findings = db.get_findings(f.id)
+        assert findings[0].metadata == {}
+
 
 class TestSeverityFallback:
     """Tests for severity normalization and fallback behavior."""
