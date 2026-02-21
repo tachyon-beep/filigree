@@ -37,6 +37,10 @@ export function switchView(view) {
   document.getElementById("metricsView").classList.toggle("hidden", view !== "metrics");
   document.getElementById("activityView").classList.toggle("hidden", view !== "activity");
   document.getElementById("workflowView").classList.toggle("hidden", view !== "workflow");
+  const filesEl = document.getElementById("filesView");
+  if (filesEl) filesEl.classList.toggle("hidden", view !== "files");
+  const healthEl = document.getElementById("healthView");
+  if (healthEl) healthEl.classList.toggle("hidden", view !== "health");
 
   document.getElementById("btnGraph").className = view === "graph" ? ACTIVE_CLASS : INACTIVE_CLASS;
   document.getElementById("btnKanban").className =
@@ -47,6 +51,10 @@ export function switchView(view) {
     view === "activity" ? ACTIVE_CLASS : INACTIVE_CLASS;
   document.getElementById("btnWorkflow").className =
     view === "workflow" ? ACTIVE_CLASS : INACTIVE_CLASS;
+  const btnFiles = document.getElementById("btnFiles");
+  if (btnFiles) btnFiles.className = view === "files" ? ACTIVE_CLASS : INACTIVE_CLASS;
+  const btnHealth = document.getElementById("btnHealth");
+  if (btnHealth) btnHealth.className = view === "health" ? ACTIVE_CLASS : INACTIVE_CLASS;
 
   updateHash();
 
@@ -124,6 +132,10 @@ export function parseHash() {
     state.currentView = "activity";
   } else if (view === "workflow") {
     state.currentView = "workflow";
+  } else if (view === "files") {
+    state.currentView = "files";
+  } else if (view === "health") {
+    state.currentView = "health";
   } else if (view === "kanban-cluster") {
     state.currentView = "kanban";
     state.kanbanMode = "cluster";
