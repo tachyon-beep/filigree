@@ -105,7 +105,6 @@ import {
 import { loadPlanView, loadWorkflow } from "./views/workflow.js";
 import {
   closeFileDetail,
-  callbacks as filesCallbacks,
   filesPageNext,
   filesPagePrev,
   filterTimeline,
@@ -253,10 +252,6 @@ graphCallbacks.fetchData = fetchData;
 // detail.js callbacks
 detailCallbacks.fetchData = fetchData;
 detailCallbacks.render = render;
-
-// files.js callbacks
-filesCallbacks.openDetail = openDetail;
-filesCallbacks.fetchData = fetchData;
 
 // ---------------------------------------------------------------------------
 // Register views with the router
