@@ -32,6 +32,14 @@ export const TYPE_ICONS = {
   step: "\u25B6",
 };
 
+export const SEVERITY_COLORS = {
+  critical: { bg: "bg-red-900/50", text: "text-red-400", border: "border-red-800", hex: "#EF4444" },
+  high: { bg: "bg-orange-900/50", text: "text-orange-400", border: "border-orange-800", hex: "#F97316" },
+  medium: { bg: "bg-yellow-900/50", text: "text-yellow-400", border: "border-yellow-800", hex: "#EAB308" },
+  low: { bg: "bg-blue-900/50", text: "text-blue-400", border: "border-blue-800", hex: "#3B82F6" },
+  info: { bg: "bg-slate-800/50", text: "text-slate-400", border: "border-slate-700", hex: "#64748B" },
+};
+
 export const TOUR_STEPS = [
   {
     el: "#btnKanban",
@@ -121,4 +129,15 @@ export const state = {
 
   // Popover
   _activePopover: null,
+
+  // File views
+  filesData: null,
+  filesPage: { offset: 0, limit: 25 },
+  filesSort: "updated_at",
+  filesSearch: "",
+  filesCriticalOnly: false,
+  selectedFile: null,
+  fileDetailData: null,
+  fileDetailTab: "findings",
+  hotspots: null,
 };
