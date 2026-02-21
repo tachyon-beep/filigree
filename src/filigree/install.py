@@ -16,6 +16,7 @@ import logging
 import shutil
 import sqlite3
 import subprocess
+import sys
 import tomllib
 from datetime import UTC, datetime
 from pathlib import Path
@@ -90,6 +91,23 @@ def _find_filigree_mcp_command() -> str:
         if candidate.exists():
             return str(candidate)
     return "filigree-mcp"
+
+
+def _find_filigree_command() -> str:
+    """Find the filigree executable path.
+
+    Resolution order:
+    1. ``shutil.which("filigree")`` — absolute path if on PATH
+    2. Sibling of the running Python interpreter (covers venv case)
+    3. Bare ``"filigree"`` fallback
+    """
+    which = shutil.which("filigree")
+    if which:
+        return which
+    candidate = Path(sys.executable).parent / "filigree"
+    if candidate.exists():
+        return str(candidate)
+    return "filigree"
 
 
 def install_claude_code_mcp(project_root: Path) -> tuple[bool, str]:
@@ -275,6 +293,25 @@ SESSION_CONTEXT_COMMAND = "filigree session-context"
 ENSURE_DASHBOARD_COMMAND = "filigree ensure-dashboard"
 
 
+def _hook_cmd_matches(hook_command: str, bare_command: str) -> bool:
+    """Check whether *hook_command* is a bare or absolute-path form of *bare_command*.
+
+    Matches:
+    - Exact: ``"filigree session-context"`` == ``"filigree session-context"``
+    - Path:  ``"/path/to/filigree session-context"`` ends with the bare form
+              and the preceding character is a path separator.
+    """
+    if hook_command == bare_command:
+        return True
+    if hook_command.endswith(bare_command):
+        # Ensure the preceding character is a path separator, not part of
+        # another word (e.g. reject "not-filigree session-context").
+        idx = len(hook_command) - len(bare_command) - 1
+        if idx >= 0 and hook_command[idx] in ("/", "\\"):
+            return True
+    return False
+
+
 def _has_hook_command(settings: dict[str, Any], command: str) -> bool:
     """Check whether *command* already appears in SessionStart hooks."""
     if not isinstance(settings, dict):
@@ -292,16 +329,77 @@ def _has_hook_command(settings: dict[str, Any], command: str) -> bool:
         if not isinstance(hook_list, list):
             continue
         for hook in hook_list:
-            if isinstance(hook, dict) and hook.get("command") == command:
+            if isinstance(hook, dict) and _hook_cmd_matches(hook.get("command", ""), command):
                 return True
     return False
+
+
+def _upgrade_hook_commands(settings: dict[str, Any], bare_command: str, new_command: str) -> bool:
+    """Replace hook commands matching *bare_command* with *new_command*.
+
+    Walks the settings structure and replaces hook commands that match
+    the bare form (either bare or stale absolute path) with the current
+    absolute-path command.  Returns ``True`` if anything was changed.
+    """
+    changed = False
+    hooks = settings.get("hooks", {})
+    if not isinstance(hooks, dict):
+        return False
+    session_start = hooks.get("SessionStart", [])
+    if not isinstance(session_start, list):
+        return False
+    for matcher in session_start:
+        if not isinstance(matcher, dict):
+            continue
+        hook_list = matcher.get("hooks", [])
+        if not isinstance(hook_list, list):
+            continue
+        for hook in hook_list:
+            if not isinstance(hook, dict):
+                continue
+            cmd = hook.get("command", "")
+            if _hook_cmd_matches(cmd, bare_command) and cmd != new_command:
+                hook["command"] = new_command
+                changed = True
+    return changed
+
+
+def _extract_hook_binary(settings: dict[str, Any], bare_command: str) -> str | None:
+    """Extract the binary path from the first hook matching *bare_command*.
+
+    Returns the first space-delimited token of the hook command string,
+    or ``None`` if no matching hook is found.
+    """
+    hooks = settings.get("hooks", {})
+    if not isinstance(hooks, dict):
+        return None
+    session_start = hooks.get("SessionStart", [])
+    if not isinstance(session_start, list):
+        return None
+    for matcher in session_start:
+        if not isinstance(matcher, dict):
+            continue
+        hook_list = matcher.get("hooks", [])
+        if not isinstance(hook_list, list):
+            continue
+        for hook in hook_list:
+            if not isinstance(hook, dict):
+                continue
+            cmd = hook.get("command", "")
+            if _hook_cmd_matches(cmd, bare_command):
+                return cmd.split()[0] if cmd else None
+    return None
 
 
 def install_claude_code_hooks(project_root: Path) -> tuple[bool, str]:
     """Register ``filigree session-context`` and ``filigree ensure-dashboard``
     as Claude Code SessionStart hooks in ``.claude/settings.json``.
 
-    Idempotent — won't duplicate existing entries.
+    Uses absolute paths for the filigree binary so hooks work even when
+    filigree is installed in a project-local venv that isn't on PATH.
+
+    Idempotent — won't duplicate existing entries.  Re-running upgrades
+    bare or stale absolute-path commands to the current binary location.
     """
     claude_dir = project_root / ".claude"
     claude_dir.mkdir(exist_ok=True)
@@ -328,22 +426,44 @@ def install_claude_code_hooks(project_root: Path) -> tuple[bool, str]:
             _shutil.copy2(settings_path, backup)
             logger.warning("Corrupt settings.json; backed up to %s", backup)
 
-    # Build list of commands to add
+    # Resolve the filigree binary to an absolute path
+    filigree_bin = _find_filigree_command()
+    session_context_cmd = f"{filigree_bin} session-context"
+    ensure_dashboard_cmd = f"{filigree_bin} ensure-dashboard"
+
+    # Upgrade existing bare/stale commands to current absolute paths
+    upgraded: list[str] = []
+    if _upgrade_hook_commands(settings, SESSION_CONTEXT_COMMAND, session_context_cmd):
+        upgraded.append(SESSION_CONTEXT_COMMAND)
+    try:
+        import filigree.dashboard
+
+        if _upgrade_hook_commands(settings, ENSURE_DASHBOARD_COMMAND, ensure_dashboard_cmd):
+            upgraded.append(ENSURE_DASHBOARD_COMMAND)
+    except ImportError:
+        pass
+
+    # Build list of commands to add (those not already present)
     commands_to_add: list[str] = []
     if not _has_hook_command(settings, SESSION_CONTEXT_COMMAND):
-        commands_to_add.append(SESSION_CONTEXT_COMMAND)
+        commands_to_add.append(session_context_cmd)
 
     # Only add dashboard hook if the [dashboard] extra is available
     try:
         import filigree.dashboard  # noqa: F401
 
         if not _has_hook_command(settings, ENSURE_DASHBOARD_COMMAND):
-            commands_to_add.append(ENSURE_DASHBOARD_COMMAND)
+            commands_to_add.append(ensure_dashboard_cmd)
     except ImportError:
         pass
 
-    if not commands_to_add:
+    if not commands_to_add and not upgraded:
         return True, "Hooks already registered in .claude/settings.json"
+
+    if not commands_to_add and upgraded:
+        # Only upgrades, no new hooks needed
+        settings_path.write_text(json.dumps(settings, indent=2) + "\n")
+        return True, f"Upgraded hook commands in .claude/settings.json to use {filigree_bin}"
 
     # Ensure structure exists (replace non-dict/non-list values)
     if "hooks" not in settings or not isinstance(settings.get("hooks"), dict):
@@ -590,8 +710,21 @@ def run_doctor(project_root: Path | None = None) -> list[CheckResult]:
             mcp = json.loads(mcp_json.read_text())
             if not isinstance(mcp, dict):
                 raise ValueError("not a JSON object")
-            if "filigree" in mcp.get("mcpServers", {}):
-                results.append(CheckResult("Claude Code MCP", True, "Configured in .mcp.json"))
+            filigree_mcp_entry = mcp.get("mcpServers", {}).get("filigree")
+            if filigree_mcp_entry:
+                # Validate binary path if it's an absolute path
+                mcp_command = filigree_mcp_entry.get("command", "") if isinstance(filigree_mcp_entry, dict) else ""
+                if "/" in mcp_command and not Path(mcp_command).exists():
+                    results.append(
+                        CheckResult(
+                            "Claude Code MCP",
+                            False,
+                            f"Binary not found at {mcp_command}",
+                            fix_hint="Run: filigree install --claude-code",
+                        )
+                    )
+                else:
+                    results.append(CheckResult("Claude Code MCP", True, "Configured in .mcp.json"))
             else:
                 results.append(
                     CheckResult(
@@ -651,7 +784,19 @@ def run_doctor(project_root: Path | None = None) -> list[CheckResult]:
         try:
             s = json.loads(settings_json.read_text())
             if _has_hook_command(s, SESSION_CONTEXT_COMMAND):
-                results.append(CheckResult("Claude Code hooks", True, "session-context hook registered"))
+                # Validate binary path if it's an absolute path
+                hook_binary = _extract_hook_binary(s, SESSION_CONTEXT_COMMAND)
+                if hook_binary and "/" in hook_binary and not Path(hook_binary).exists():
+                    results.append(
+                        CheckResult(
+                            "Claude Code hooks",
+                            False,
+                            f"Binary not found at {hook_binary}",
+                            fix_hint="Run: filigree install --hooks",
+                        )
+                    )
+                else:
+                    results.append(CheckResult("Claude Code hooks", True, "session-context hook registered"))
             else:
                 results.append(
                     CheckResult(

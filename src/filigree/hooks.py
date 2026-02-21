@@ -13,7 +13,6 @@ import logging
 import os
 import socket
 import subprocess
-import sys
 import time
 from pathlib import Path
 
@@ -25,6 +24,7 @@ from filigree.core import (
 )
 from filigree.install import (
     FILIGREE_INSTRUCTIONS_MARKER,
+    _find_filigree_command,
     _instructions_hash,
     inject_instructions,
     install_skills,
@@ -258,11 +258,7 @@ def ensure_dashboard_running(port: int = 8377) -> str:
             return f"Filigree dashboard already running on http://localhost:{port}"
 
         # Start the dashboard in a detached process
-        filigree_bin = str(Path(sys.executable).parent / "filigree")
-        # Prefer the entry-point on PATH
-        import shutil
-
-        filigree_cmd = shutil.which("filigree") or filigree_bin
+        filigree_cmd = _find_filigree_command()
 
         # Capture stderr to a log file for diagnostics on failure
         with open(logfile, "w") as log_fd:

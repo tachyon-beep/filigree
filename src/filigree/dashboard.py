@@ -66,6 +66,18 @@ def _error_response(
     )
 
 
+def _safe_int(value: str, name: str, default: int) -> int | JSONResponse:
+    """Parse a query-param string to int, returning a 400 error response on failure."""
+    try:
+        return int(value)
+    except (ValueError, TypeError):
+        return _error_response(
+            f'Invalid value for {name}: "{value}". Must be an integer.',
+            "VALIDATION_ERROR",
+            400,
+        )
+
+
 def _get_project_db(project_key: str = "") -> FiligreeDB:
     """Resolve *project_key* to a DB connection via the ProjectManager.
 
@@ -604,9 +616,15 @@ def _create_project_router() -> Any:
     async def api_list_files(request: Request, db: FiligreeDB = Depends(_get_project_db)) -> JSONResponse:
         """List tracked file records with optional filtering and pagination."""
         params = request.query_params
+        limit = _safe_int(params.get("limit", "100"), "limit", 100)
+        if isinstance(limit, JSONResponse):
+            return limit
+        offset = _safe_int(params.get("offset", "0"), "offset", 0)
+        if isinstance(offset, JSONResponse):
+            return offset
         result = db.list_files_paginated(
-            limit=int(params.get("limit", 100)),
-            offset=int(params.get("offset", 0)),
+            limit=limit,
+            offset=offset,
             language=params.get("language"),
             path_prefix=params.get("path_prefix"),
             sort=params.get("sort", "updated_at"),
@@ -617,7 +635,9 @@ def _create_project_router() -> Any:
     async def api_file_hotspots(request: Request, db: FiligreeDB = Depends(_get_project_db)) -> JSONResponse:
         """Files ranked by weighted finding severity score."""
         params = request.query_params
-        limit = int(params.get("limit", 10))
+        limit = _safe_int(params.get("limit", "10"), "limit", 10)
+        if isinstance(limit, JSONResponse):
+            return limit
         result = db.get_file_hotspots(limit=limit)
         return JSONResponse(result)
 
@@ -655,13 +675,11 @@ def _create_project_router() -> Any:
 
     @router.get("/files/{file_id}")
     async def api_get_file(file_id: str, db: FiligreeDB = Depends(_get_project_db)) -> JSONResponse:
-        """Get file record details."""
+        """Get file record with associations, recent findings, and summary."""
         try:
-            f = db.get_file(file_id)
+            data = db.get_file_detail(file_id)
         except KeyError:
             return _error_response(f"File not found: {file_id}", "FILE_NOT_FOUND", 404)
-        data = f.to_dict()
-        data["associations"] = db.get_file_associations(file_id)
         return JSONResponse(data)
 
     @router.get("/files/{file_id}/findings")
@@ -674,12 +692,18 @@ def _create_project_router() -> Any:
         except KeyError:
             return _error_response(f"File not found: {file_id}", "FILE_NOT_FOUND", 404)
         params = request.query_params
+        limit = _safe_int(params.get("limit", "100"), "limit", 100)
+        if isinstance(limit, JSONResponse):
+            return limit
+        offset = _safe_int(params.get("offset", "0"), "offset", 0)
+        if isinstance(offset, JSONResponse):
+            return offset
         result = db.get_findings_paginated(
             file_id,
             severity=params.get("severity"),
             status=params.get("status"),
-            limit=int(params.get("limit", 100)),
-            offset=int(params.get("offset", 0)),
+            limit=limit,
+            offset=offset,
         )
         return JSONResponse(result)
 
@@ -696,6 +720,8 @@ def _create_project_router() -> Any:
             body = await request.json()
         except Exception:
             return _error_response("Invalid JSON body", "VALIDATION_ERROR", 400)
+        if not isinstance(body, dict):
+            return _error_response("Request body must be a JSON object", "VALIDATION_ERROR", 400)
         issue_id = body.get("issue_id", "")
         assoc_type = body.get("assoc_type", "")
         if not issue_id or not assoc_type:
@@ -713,6 +739,8 @@ def _create_project_router() -> Any:
             body = await request.json()
         except Exception:
             return _error_response("Invalid JSON body", "VALIDATION_ERROR", 400)
+        if not isinstance(body, dict):
+            return _error_response("Request body must be a JSON object", "VALIDATION_ERROR", 400)
         scan_source = body.get("scan_source", "")
         if not scan_source:
             return _error_response("scan_source is required", "VALIDATION_ERROR", 400)

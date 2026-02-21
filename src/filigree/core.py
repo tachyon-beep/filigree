@@ -2544,7 +2544,12 @@ class FiligreeDB:
         now = _now_iso()
         stats = {"files_created": 0, "files_updated": 0, "findings_created": 0, "findings_updated": 0}
 
-        for f in findings:
+        for i, f in enumerate(findings):
+            if not isinstance(f, dict):
+                raise ValueError(f"findings[{i}] must be a dict, got {type(f).__name__}")
+            if "path" not in f:
+                raise ValueError(f"findings[{i}] is missing required key 'path'")
+
             severity = f.get("severity", "info")
             if severity not in VALID_SEVERITIES:
                 msg = f'Invalid severity "{severity}". Must be one of: {", ".join(sorted(VALID_SEVERITIES))}'
@@ -2689,6 +2694,66 @@ class FiligreeDB:
             "limit": limit,
             "offset": offset,
             "has_more": (offset + limit) < total,
+        }
+
+    def get_file_findings_summary(self, file_id: str) -> dict[str, Any]:
+        """Get a severity-bucketed summary of findings for a file.
+
+        Returns a dict like::
+
+            {"total_findings": 5, "open_findings": 3,
+             "critical": 0, "high": 2, "medium": 1, "low": 0, "info": 0}
+
+        Only findings with ``status`` not in ('fixed', 'false_positive') are
+        counted towards ``open_findings`` and severity buckets.
+        """
+        # "open" = not fixed/false_positive; build SUM(CASE …) per severity
+        _open = "status NOT IN ('fixed', 'false_positive')"
+        _sev = " ".join(
+            f"SUM(CASE WHEN severity='{s}' AND {_open} THEN 1 ELSE 0 END) AS {s},"
+            for s in ("critical", "high", "medium", "low")
+        )
+        row = self.conn.execute(
+            f"SELECT COUNT(*) AS total_findings, "
+            f"SUM(CASE WHEN {_open} THEN 1 ELSE 0 END) AS open_findings, "
+            f"{_sev} "
+            f"SUM(CASE WHEN severity='info' AND {_open} THEN 1 ELSE 0 END) AS info "
+            f"FROM scan_findings WHERE file_id = ?",
+            (file_id,),
+        ).fetchone()
+        return {
+            "total_findings": row["total_findings"],
+            "open_findings": row["open_findings"] or 0,
+            "critical": row["critical"] or 0,
+            "high": row["high"] or 0,
+            "medium": row["medium"] or 0,
+            "low": row["low"] or 0,
+            "info": row["info"] or 0,
+        }
+
+    def get_file_detail(self, file_id: str) -> dict[str, Any]:
+        """Get a structured file detail response with separated data layers.
+
+        Returns::
+
+            {
+              "file": { ...file fields... },
+              "associations": [ ...linked issues... ],
+              "recent_findings": [ ...latest findings... ],
+              "summary": { ...severity bucketed counts... }
+            }
+
+        Raises ``KeyError`` if the file does not exist.
+        """
+        f = self.get_file(file_id)
+        associations = self.get_file_associations(file_id)
+        recent = self.get_findings(file_id, limit=10)
+        summary = self.get_file_findings_summary(file_id)
+        return {
+            "file": f.to_dict(),
+            "associations": associations,
+            "recent_findings": [r.to_dict() for r in recent],
+            "summary": summary,
         }
 
     def add_file_association(

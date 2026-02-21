@@ -110,7 +110,7 @@ class TestExecutableResolution:
 
     def test_no_directory_mangling(self, tmp_path: Path) -> None:
         """If sys.executable is in a dir containing 'python', only basename should change."""
-        fake_exe = "/home/python_user/.venv/bin/python3.13"
+        expected_bin = "/home/python_user/.venv/bin/filigree"
         mock_proc = MagicMock()
         mock_proc.poll.return_value = None  # Still running
         mock_proc.pid = 11111
@@ -119,8 +119,7 @@ class TestExecutableResolution:
             patch("filigree.hooks.find_filigree_root", return_value=tmp_path),
             patch("filigree.hooks._is_port_listening", return_value=False),
             patch("filigree.hooks.subprocess.Popen", return_value=mock_proc) as mock_popen,
-            patch("filigree.hooks.sys.executable", fake_exe),
-            patch("shutil.which", return_value=None),  # Force fallback path
+            patch("filigree.hooks._find_filigree_command", return_value=expected_bin),
             patch("filigree.hooks.time.sleep"),
             patch.dict(os.environ, {"TMPDIR": str(tmp_path)}),
         ):
@@ -129,7 +128,7 @@ class TestExecutableResolution:
         # The command should preserve the directory and only change the basename
         cmd = mock_popen.call_args[0][0]
         assert "filigree_user" not in cmd[0], f"Directory was mangled: {cmd[0]}"
-        assert cmd[0] == "/home/python_user/.venv/bin/filigree"
+        assert cmd[0] == expected_bin
 
 
 class TestEnsureDashboardDependencyCheck:
@@ -164,7 +163,7 @@ class TestEnsureDashboardSubprocessVerification:
             patch("filigree.hooks.find_filigree_root", return_value=tmp_path),
             patch("filigree.hooks._is_port_listening", return_value=False),
             patch("filigree.hooks.subprocess.Popen", return_value=mock_proc),
-            patch("shutil.which", return_value="/usr/bin/filigree"),
+            patch("filigree.hooks._find_filigree_command", return_value="/usr/bin/filigree"),
             patch("filigree.hooks.time.sleep"),
             patch.dict(os.environ, {"TMPDIR": str(tmp_path)}),
         ):
@@ -183,7 +182,7 @@ class TestEnsureDashboardSubprocessVerification:
             patch("filigree.hooks.find_filigree_root", return_value=tmp_path),
             patch("filigree.hooks._is_port_listening", return_value=False),
             patch("filigree.hooks.subprocess.Popen", return_value=mock_proc),
-            patch("shutil.which", return_value="/usr/bin/filigree"),
+            patch("filigree.hooks._find_filigree_command", return_value="/usr/bin/filigree"),
             patch("filigree.hooks.time.sleep"),
             patch.dict(os.environ, {"TMPDIR": str(tmp_path)}),
         ):
@@ -205,7 +204,7 @@ class TestEnsureDashboardSubprocessVerification:
             patch("filigree.hooks.find_filigree_root", return_value=tmp_path),
             patch("filigree.hooks._is_port_listening", return_value=False),
             patch("filigree.hooks.subprocess.Popen", return_value=mock_proc),
-            patch("shutil.which", return_value="/usr/bin/filigree"),
+            patch("filigree.hooks._find_filigree_command", return_value="/usr/bin/filigree"),
             patch("filigree.hooks.time.sleep"),
             patch.dict(os.environ, {"TMPDIR": str(tmp_path)}),
         ):

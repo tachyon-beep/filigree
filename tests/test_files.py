@@ -216,6 +216,21 @@ class TestProcessScanResults:
         assert result["files_created"] == 0
         assert result["findings_created"] == 0
 
+    def test_ingest_finding_missing_path(self, db: FiligreeDB) -> None:
+        with pytest.raises(ValueError, match="path"):
+            db.process_scan_results(
+                scan_source="ruff",
+                findings=[{"severity": "low", "message": "No path key"}],
+            )
+
+    def test_ingest_finding_is_string(self, db: FiligreeDB) -> None:
+        with pytest.raises(ValueError, match="dict"):
+            db.process_scan_results(scan_source="ruff", findings=["not-a-dict"])
+
+    def test_ingest_finding_is_number(self, db: FiligreeDB) -> None:
+        with pytest.raises(ValueError, match="dict"):
+            db.process_scan_results(scan_source="ruff", findings=[42])
+
 
 class TestGetFindings:
     """Tests for retrieving findings for a file."""
@@ -375,6 +390,93 @@ class TestIssueFindings:
         assert findings == []
 
 
+class TestFileDetailCore:
+    """Tests for get_file_findings_summary() and get_file_detail()."""
+
+    def test_summary_empty_file(self, db: FiligreeDB) -> None:
+        f = db.register_file("empty.py")
+        summary = db.get_file_findings_summary(f.id)
+        assert summary["total_findings"] == 0
+        assert summary["open_findings"] == 0
+        for sev in ("critical", "high", "medium", "low", "info"):
+            assert summary[sev] == 0
+
+    def test_summary_counts_by_severity(self, db: FiligreeDB) -> None:
+        db.process_scan_results(
+            scan_source="ruff",
+            findings=[
+                {"path": "a.py", "rule_id": "S101", "severity": "critical", "message": "Assert"},
+                {"path": "a.py", "rule_id": "E501", "severity": "high", "message": "Long"},
+                {"path": "a.py", "rule_id": "E302", "severity": "high", "message": "Space"},
+                {"path": "a.py", "rule_id": "W291", "severity": "low", "message": "Trail"},
+            ],
+        )
+        f = db.get_file_by_path("a.py")
+        summary = db.get_file_findings_summary(f.id)
+        assert summary["total_findings"] == 4
+        assert summary["open_findings"] == 4
+        assert summary["critical"] == 1
+        assert summary["high"] == 2
+        assert summary["low"] == 1
+
+    def test_summary_excludes_fixed_and_false_positive(self, db: FiligreeDB) -> None:
+        db.process_scan_results(
+            scan_source="ruff",
+            findings=[
+                {"path": "a.py", "rule_id": "E501", "severity": "high", "message": "Long"},
+                {"path": "a.py", "rule_id": "E302", "severity": "medium", "message": "Space"},
+            ],
+        )
+        f = db.get_file_by_path("a.py")
+        # Mark one as fixed
+        findings = db.get_findings(f.id)
+        db.conn.execute("UPDATE scan_findings SET status = 'fixed' WHERE id = ?", (findings[0].id,))
+        db.conn.commit()
+        summary = db.get_file_findings_summary(f.id)
+        assert summary["total_findings"] == 2  # total includes all
+        assert summary["open_findings"] == 1  # open excludes fixed
+
+    def test_get_file_detail_structure(self, db: FiligreeDB) -> None:
+        f = db.register_file("src/main.py", language="python")
+        detail = db.get_file_detail(f.id)
+        assert set(detail.keys()) == {"file", "associations", "recent_findings", "summary"}
+        assert detail["file"]["path"] == "src/main.py"
+        assert detail["associations"] == []
+        assert detail["recent_findings"] == []
+        assert detail["summary"]["total_findings"] == 0
+
+    def test_get_file_detail_with_data(self, db: FiligreeDB) -> None:
+        issue = db.create_issue("Fix bug")
+        db.process_scan_results(
+            scan_source="ruff",
+            findings=[
+                {"path": "src/main.py", "rule_id": "E501", "severity": "high", "message": "Long"},
+            ],
+        )
+        f = db.get_file_by_path("src/main.py")
+        db.add_file_association(f.id, issue.id, "bug_in")
+        detail = db.get_file_detail(f.id)
+        assert len(detail["associations"]) == 1
+        assert detail["associations"][0]["issue_title"] == "Fix bug"
+        assert len(detail["recent_findings"]) == 1
+        assert detail["recent_findings"][0]["severity"] == "high"
+        assert detail["summary"]["high"] == 1
+
+    def test_get_file_detail_raises_for_missing(self, db: FiligreeDB) -> None:
+        with pytest.raises(KeyError):
+            db.get_file_detail("nonexistent")
+
+    def test_recent_findings_capped_at_10(self, db: FiligreeDB) -> None:
+        findings = [
+            {"path": "big.py", "rule_id": f"E{i:03d}", "severity": "low", "message": f"Finding {i}"} for i in range(15)
+        ]
+        db.process_scan_results(scan_source="ruff", findings=findings)
+        f = db.get_file_by_path("big.py")
+        detail = db.get_file_detail(f.id)
+        assert len(detail["recent_findings"]) == 10
+        assert detail["summary"]["total_findings"] == 15
+
+
 # ---------------------------------------------------------------------------
 # Migration tests
 # ---------------------------------------------------------------------------
@@ -480,12 +582,48 @@ class TestFileEndpoints:
         assert len(data["results"]) == 1
         assert data["results"][0]["language"] == "python"
 
-    async def test_get_file_detail(self, client: AsyncClient, api_db: FiligreeDB) -> None:
+    async def test_get_file_detail_structure(self, client: AsyncClient, api_db: FiligreeDB) -> None:
         f = api_db.register_file("src/main.py", language="python")
         resp = await client.get(f"/api/files/{f.id}")
         assert resp.status_code == 200
         data = resp.json()
-        assert data["path"] == "src/main.py"
+        # Top-level keys are separated data layers
+        assert set(data.keys()) == {"file", "associations", "recent_findings", "summary"}
+        assert data["file"]["path"] == "src/main.py"
+        assert data["file"]["language"] == "python"
+        assert data["associations"] == []
+        assert data["recent_findings"] == []
+        assert data["summary"]["total_findings"] == 0
+        assert data["summary"]["open_findings"] == 0
+
+    async def test_get_file_detail_with_findings(self, client: AsyncClient, api_db: FiligreeDB) -> None:
+        api_db.process_scan_results(
+            scan_source="ruff",
+            findings=[
+                {"path": "x.py", "rule_id": "E501", "severity": "high", "message": "Line too long"},
+                {"path": "x.py", "rule_id": "E302", "severity": "low", "message": "Spacing"},
+            ],
+        )
+        f = api_db.get_file_by_path("x.py")
+        resp = await client.get(f"/api/files/{f.id}")
+        data = resp.json()
+        assert data["summary"]["total_findings"] == 2
+        assert data["summary"]["open_findings"] == 2
+        assert data["summary"]["high"] == 1
+        assert data["summary"]["low"] == 1
+        assert data["summary"]["critical"] == 0
+        assert len(data["recent_findings"]) == 2
+
+    async def test_get_file_detail_with_associations(self, client: AsyncClient, api_db: FiligreeDB) -> None:
+        f = api_db.register_file("src/main.py")
+        issue = api_db.create_issue("Fix the bug")
+        api_db.add_file_association(f.id, issue.id, "bug_in")
+        resp = await client.get(f"/api/files/{f.id}")
+        data = resp.json()
+        assert len(data["associations"]) == 1
+        assert data["associations"][0]["issue_id"] == issue.id
+        assert data["associations"][0]["assoc_type"] == "bug_in"
+        assert data["associations"][0]["issue_title"] == "Fix the bug"
 
     async def test_get_file_not_found(self, client: AsyncClient) -> None:
         resp = await client.get("/api/files/test-f-nope")
@@ -757,3 +895,87 @@ class TestPaginatedEndpoints:
         assert data["total"] == 5
         assert data["has_more"] is True
         assert len(data["results"]) == 3
+
+
+class TestInputValidation400s:
+    """Malformed client input must return 400 with structured error, never 500."""
+
+    # -- P2a: scan body must be a JSON object --------------------------------
+
+    async def test_scan_body_is_list(self, client: AsyncClient) -> None:
+        resp = await client.post(
+            "/api/v1/scan-results",
+            content="[]",
+            headers={"content-type": "application/json"},
+        )
+        assert resp.status_code == 400
+        assert resp.json()["error"]["code"] == "VALIDATION_ERROR"
+
+    async def test_scan_body_is_string(self, client: AsyncClient) -> None:
+        resp = await client.post(
+            "/api/v1/scan-results",
+            content='"hello"',
+            headers={"content-type": "application/json"},
+        )
+        assert resp.status_code == 400
+        assert resp.json()["error"]["code"] == "VALIDATION_ERROR"
+
+    async def test_association_body_is_list(self, client: AsyncClient, api_db: FiligreeDB) -> None:
+        f = api_db.register_file("x.py")
+        resp = await client.post(
+            f"/api/files/{f.id}/associations",
+            content="[]",
+            headers={"content-type": "application/json"},
+        )
+        assert resp.status_code == 400
+        assert resp.json()["error"]["code"] == "VALIDATION_ERROR"
+
+    # -- P2b: malformed finding entries --------------------------------------
+
+    async def test_scan_finding_missing_path(self, client: AsyncClient) -> None:
+        resp = await client.post(
+            "/api/v1/scan-results",
+            json={"scan_source": "ruff", "findings": [{"severity": "low"}]},
+        )
+        assert resp.status_code == 400
+        assert resp.json()["error"]["code"] == "VALIDATION_ERROR"
+        assert "path" in resp.json()["error"]["message"].lower()
+
+    async def test_scan_finding_is_string(self, client: AsyncClient) -> None:
+        resp = await client.post(
+            "/api/v1/scan-results",
+            json={"scan_source": "ruff", "findings": ["not-a-dict"]},
+        )
+        assert resp.status_code == 400
+        assert resp.json()["error"]["code"] == "VALIDATION_ERROR"
+
+    async def test_scan_finding_is_number(self, client: AsyncClient) -> None:
+        resp = await client.post(
+            "/api/v1/scan-results",
+            json={"scan_source": "ruff", "findings": [42]},
+        )
+        assert resp.status_code == 400
+        assert resp.json()["error"]["code"] == "VALIDATION_ERROR"
+
+    # -- P2c: pagination query params ----------------------------------------
+
+    async def test_files_limit_not_int(self, client: AsyncClient) -> None:
+        resp = await client.get("/api/files?limit=abc")
+        assert resp.status_code == 400
+        assert resp.json()["error"]["code"] == "VALIDATION_ERROR"
+
+    async def test_files_offset_not_int(self, client: AsyncClient) -> None:
+        resp = await client.get("/api/files?offset=xyz")
+        assert resp.status_code == 400
+        assert resp.json()["error"]["code"] == "VALIDATION_ERROR"
+
+    async def test_findings_limit_not_int(self, client: AsyncClient, api_db: FiligreeDB) -> None:
+        f = api_db.register_file("x.py")
+        resp = await client.get(f"/api/files/{f.id}/findings?limit=nope")
+        assert resp.status_code == 400
+        assert resp.json()["error"]["code"] == "VALIDATION_ERROR"
+
+    async def test_hotspots_limit_not_int(self, client: AsyncClient) -> None:
+        resp = await client.get("/api/files/hotspots?limit=bad")
+        assert resp.status_code == 400
+        assert resp.json()["error"]["code"] == "VALIDATION_ERROR"
