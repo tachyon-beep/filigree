@@ -2454,6 +2454,7 @@ class FiligreeDB:
         min_findings: int | None = None,
         has_severity: str | None = None,
         sort: str = "updated_at",
+        direction: str | None = None,
     ) -> dict[str, Any]:
         """List file records with pagination metadata.
 
@@ -2495,7 +2496,8 @@ class FiligreeDB:
 
         valid_sorts = {"updated_at", "first_seen", "path", "language"}
         sort_col = sort if sort in valid_sorts else "updated_at"
-        order = "ASC" if sort_col == "path" else "DESC"
+        default_order = "ASC" if sort_col == "path" else "DESC"
+        order = direction.upper() if direction and direction.upper() in ("ASC", "DESC") else default_order
 
         _open = "sf.status NOT IN ('fixed', 'false_positive')"
         _sev_cols = " ".join(

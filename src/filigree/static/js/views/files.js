@@ -79,6 +79,7 @@ export async function loadFiles() {
       limit: state.filesPage.limit,
       offset: state.filesPage.offset,
       sort: state.filesSort,
+      direction: _filesSortDir,
     };
     if (state.filesSearch) params.path_prefix = state.filesSearch;
     if (state.filesCriticalOnly) params.has_severity = "critical";
@@ -211,6 +212,7 @@ export function filesPageNext() {
 // --- File Detail (in detail panel) ---
 
 export async function openFileDetail(fileId) {
+  state.selectedIssue = null;
   state.selectedFile = fileId;
   state.fileDetailTab = "findings";
   _findingsFilters = { severity: null, status: null };

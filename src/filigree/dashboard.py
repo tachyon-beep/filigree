@@ -612,6 +612,7 @@ def _create_project_router() -> Any:
             min_findings=min_findings if min_findings > 0 else None,
             has_severity=params.get("has_severity"),
             sort=params.get("sort", "updated_at"),
+            direction=params.get("direction"),
         )
         return JSONResponse(result, headers={"Cache-Control": "no-cache"})
 
