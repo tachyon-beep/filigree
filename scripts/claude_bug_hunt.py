@@ -1,21 +1,21 @@
 #!/usr/bin/env python3
-"""Per-file bug hunt using Codex — example scanner for filigree.
+"""Per-file bug hunt using Claude CLI — example scanner for filigree.
 
-Scans source files, runs `codex exec` on each with a static-analysis prompt,
+Scans source files, runs `claude --print` on each with a static-analysis prompt,
 writes markdown reports, and optionally POSTs findings to filigree's scan API.
 
 This is a reference implementation (documentation-by-code) showing how external
 tools integrate with filigree. The API is the first-class product.
 
-No external dependencies beyond Python 3.11+ and `codex` on PATH.
+No external dependencies beyond Python 3.11+ and `claude` on PATH.
 
 Usage:
-    python scripts/codex_bug_hunt.py                      # scan src/filigree/
-    python scripts/codex_bug_hunt.py --root src/           # scan all of src/
-    python scripts/codex_bug_hunt.py --dry-run             # list files + token estimate
-    python scripts/codex_bug_hunt.py --no-ingest           # markdown only, skip API
-    python scripts/codex_bug_hunt.py --max-files 20        # limit file count
-    python scripts/codex_bug_hunt.py --api-url http://..   # custom dashboard URL
+    python scripts/claude_bug_hunt.py                      # scan src/filigree/
+    python scripts/claude_bug_hunt.py --root src/           # scan all of src/
+    python scripts/claude_bug_hunt.py --dry-run             # list files + token estimate
+    python scripts/claude_bug_hunt.py --no-ingest           # markdown only, skip API
+    python scripts/claude_bug_hunt.py --max-files 20        # limit file count
+    python scripts/claude_bug_hunt.py --model opus          # override model
 """
 
 from __future__ import annotations
@@ -49,9 +49,9 @@ logger = logging.getLogger(__name__)
 # ── Config ──────────────────────────────────────────────────────────────
 
 MAX_RETRIES = 3
-RETRY_BASE_S = 2  # exponential backoff: 2s, 4s, 8s
+RETRY_BASE_S = 2
 STDERR_TRUNCATE = 500
-DEFAULT_TIMEOUT_S = 300  # 5 minutes per codex invocation
+DEFAULT_TIMEOUT_S = 300
 
 PROMPT_TEMPLATE = """\
 You are a static analysis agent doing a deep bug audit.
@@ -103,40 +103,34 @@ For each bug found, use this format:
 
 
 def _display_path(path: Path, base: Path) -> Path:
-    """Best-effort relative path for display; falls back to absolute."""
     try:
         return path.relative_to(base)
     except ValueError:
         return path
 
 
-# ── Codex execution with retry ──────────────────────────────────────────
+# ── Claude CLI execution ────────────────────────────────────────────────
 
 
-async def run_codex(
+async def run_claude(
     *,
     prompt: str,
     output_path: Path,
-    model: str | None,
+    model: str,
     repo_root: Path,
     timeout: int,
 ) -> None:
-    """Run `codex exec` once. Raises RuntimeError on failure."""
+    """Run `claude --print` once. Raises RuntimeError on failure."""
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     cmd: list[str] = [
-        "codex",
-        "exec",
-        "--sandbox",
-        "read-only",
-        "-c",
-        'approval_policy="never"',
-        "--output-last-message",
-        str(output_path),
+        "claude",
+        "--print",
+        "--model",
+        model,
+        "-p",
+        prompt,
     ]
-    if model:
-        cmd.extend(["--model", model])
-    cmd.append(prompt)
 
     proc = await asyncio.create_subprocess_exec(
         *cmd,
@@ -145,11 +139,11 @@ async def run_codex(
         stderr=asyncio.subprocess.PIPE,
     )
     try:
-        _, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
     except TimeoutError:
         proc.kill()
         await proc.wait()
-        raise TimeoutError(f"codex exec timed out after {timeout}s") from None
+        raise TimeoutError(f"claude timed out after {timeout}s") from None
     finally:
         if proc.returncode is None:
             proc.terminate()
@@ -157,22 +151,25 @@ async def run_codex(
 
     if proc.returncode != 0:
         err = stderr.decode("utf-8", errors="replace")[:STDERR_TRUNCATE]
-        raise RuntimeError(f"codex exec failed (rc={proc.returncode}): {err}")
+        raise RuntimeError(f"claude failed (rc={proc.returncode}): {err}")
+
+    # Write stdout to output file
+    output_path.write_bytes(stdout)
 
 
-async def run_codex_with_retry(
+async def run_claude_with_retry(
     *,
     prompt: str,
     output_path: Path,
-    model: str | None,
+    model: str,
     repo_root: Path,
     timeout: int,
 ) -> None:
-    """Run codex exec with exponential backoff retries."""
+    """Run claude with exponential backoff retries."""
     last_exc: Exception | None = None
     for attempt in range(1, MAX_RETRIES + 1):
         try:
-            await run_codex(
+            await run_claude(
                 prompt=prompt,
                 output_path=output_path,
                 model=model,
@@ -198,7 +195,7 @@ async def analyse_files(
     output_dir: Path,
     root_dir: Path,
     repo_root: Path,
-    model: str | None,
+    model: str,
     batch_size: int,
     context: str,
     skip_existing: bool,
@@ -231,7 +228,7 @@ async def analyse_files(
 
             prompt = PROMPT_TEMPLATE.format(file_path=fpath, context=context)
             task = asyncio.create_task(
-                run_codex_with_retry(
+                run_claude_with_retry(
                     prompt=prompt,
                     output_path=out,
                     model=model,
@@ -259,7 +256,7 @@ async def analyse_files(
                     if findings:
                         ok = post_to_api(
                             api_url=api_url,
-                            scan_source="codex",
+                            scan_source="claude",
                             scan_run_id=scan_run_id,
                             findings=findings,
                         )
@@ -268,7 +265,7 @@ async def analyse_files(
                         else:
                             api_failures += len(findings)
 
-    # ── Summary stats (scoped to this run's reports only) ────────
+    # ── Summary stats ────────
     stats: Counter[str] = Counter()
     for md in report_paths:
         if not md.exists():
@@ -290,39 +287,17 @@ async def analyse_files(
     return dict(stats)
 
 
-# ── Organise by priority (optional) ────────────────────────────────────
-
-
-def organise_by_priority(output_dir: Path) -> None:
-    """Copy reports into by-priority/ dirs using the highest severity found."""
-    pri_order = {"P0": 0, "P1": 1, "P2": 2, "P3": 3}
-    by_pri = output_dir / "by-priority"
-    for md in output_dir.rglob("*.md"):
-        if "by-priority" in md.parts:
-            continue
-        text = md.read_text(encoding="utf-8")
-        if "No concrete bug found" in text:
-            continue
-        priorities = re.findall(r"Priority:\s*(P\d)", text, re.IGNORECASE)
-        pri = min((p.upper() for p in priorities), key=lambda p: pri_order.get(p, 99)) if priorities else "unknown"
-        rel_path = md.relative_to(output_dir)
-        dest_path = by_pri / pri / rel_path
-        dest_path.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(md, dest_path)
-
-
 # ── CLI ─────────────────────────────────────────────────────────────────
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Per-file bug hunt via Codex.")
+    parser = argparse.ArgumentParser(description="Per-file bug hunt via Claude CLI.")
     parser.add_argument("--root", default="src/filigree", help="Directory to scan (default: src/filigree)")
     parser.add_argument("--output-dir", default="docs/bugs/generated", help="Report output dir")
-    parser.add_argument("--batch-size", type=int, default=10, help="Concurrent codex runs (default: 10)")
-    parser.add_argument("--model", default=None, help="Override codex model")
+    parser.add_argument("--batch-size", type=int, default=5, help="Concurrent claude runs (default: 5)")
+    parser.add_argument("--model", default="sonnet", help="Claude model (default: sonnet)")
     parser.add_argument("--file-type", choices=["python", "all"], default="python", help="File filter")
     parser.add_argument("--skip-existing", action="store_true", help="Skip files with existing reports")
-    parser.add_argument("--organise-by-priority", action="store_true", help="Copy reports into by-priority/ dirs")
     parser.add_argument(
         "--timeout",
         type=int,
@@ -365,14 +340,14 @@ def main() -> int:
             print(f"  {_display_path(f, repo_root)}")
         return 0
 
-    if shutil.which("codex") is None:
-        print("Error: `codex` not found on PATH", file=sys.stderr)
+    if shutil.which("claude") is None:
+        print("Error: `claude` not found on PATH", file=sys.stderr)
         return 1
 
     context = load_context(repo_root)
-    scan_run_id = f"codex-{datetime.now(datetime.UTC).isoformat()}"
+    scan_run_id = f"claude-{datetime.now(datetime.UTC).isoformat()}"
 
-    print(f"Analysing {len(files)} files (batch={args.batch_size}) ...", file=sys.stderr)
+    print(f"Analysing {len(files)} files (batch={args.batch_size}, model={args.model}) ...", file=sys.stderr)
     if not args.no_ingest:
         print(f"  API: {args.api_url}  run_id: {scan_run_id}", file=sys.stderr)
 
@@ -393,12 +368,9 @@ def main() -> int:
         )
     )
 
-    if args.organise_by_priority:
-        organise_by_priority(output_dir)
-
     # ── Print summary ───────────────────────────────────────────────
     print("\n" + "=" * 50)
-    print("Bug Hunt Summary (codex)")
+    print(f"Bug Hunt Summary (claude/{args.model})")
     print("=" * 50)
     defects = sum(v for k, v in stats.items() if k not in ("clean", "failed", "unknown", "api_posted", "api_failed"))
     print(f"  Defects found:  {defects}")
@@ -415,7 +387,7 @@ def main() -> int:
             print(f"  API failures:   {stats['api_failed']}")
     print("=" * 50)
 
-    # Exit non-zero if all API posts failed (CI can detect a down dashboard)
+    # Exit non-zero if all API posts failed
     if not args.no_ingest and stats.get("api_posted", 0) == 0 and stats.get("api_failed", 0) > 0:
         return 1
 
