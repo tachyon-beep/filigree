@@ -2486,7 +2486,7 @@ class FiligreeDB:
             clauses.append("path LIKE ?")
             params.append(f"%{path_prefix}%")
         if min_findings is not None and min_findings > 0:
-            clauses.append("(SELECT COUNT(*) FROM scan_findings sf WHERE sf.file_id = file_records.id AND sf.status = 'open') >= ?")
+            clauses.append("(SELECT COUNT(*) FROM scan_findings sf WHERE sf.file_id = file_records.id AND sf.status NOT IN ('fixed', 'false_positive')) >= ?")
             params.append(min_findings)
         if has_severity and has_severity in self._VALID_SEVERITIES:
             clauses.append(

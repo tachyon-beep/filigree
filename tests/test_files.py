@@ -1388,6 +1388,22 @@ class TestMinFindingsFilter:
         result = db.list_files_paginated(min_findings=2)
         assert result["total"] == 0
 
+    def test_min_findings_counts_acknowledged(self, db: FiligreeDB) -> None:
+        db.process_scan_results(
+            scan_source="ruff",
+            findings=[
+                {"path": "a.py", "rule_id": "E1", "severity": "low", "message": "m1"},
+                {"path": "a.py", "rule_id": "E2", "severity": "low", "message": "m2"},
+            ],
+        )
+        f = db.get_file_by_path("a.py")
+        findings = db.get_findings(f.id)
+        # Mark one as acknowledged — should still count as active
+        db.conn.execute("UPDATE scan_findings SET status = 'acknowledged' WHERE id = ?", (findings[0].id,))
+        db.conn.commit()
+        result = db.list_files_paginated(min_findings=2)
+        assert result["total"] == 1  # Both findings are non-terminal
+
     def test_min_findings_zero_returns_all(self, db: FiligreeDB) -> None:
         db.register_file("a.py")
         db.register_file("b.py")
@@ -1453,6 +1469,43 @@ class TestHasSeverityFilter:
         db.register_file("a.py")
         result = db.list_files_paginated(has_severity="bogus")
         assert result["total"] == 1
+
+
+class TestListFilesScanSourceFilter:
+    """list_files_paginated scan_source filter shows only files with findings from that source."""
+
+    def test_scan_source_filters_to_matching_files(self, db: FiligreeDB) -> None:
+        db.process_scan_results(
+            scan_source="codex",
+            findings=[{"path": "a.py", "rule_id": "R1", "severity": "low", "message": "m"}],
+        )
+        db.process_scan_results(
+            scan_source="ruff",
+            findings=[{"path": "b.py", "rule_id": "R2", "severity": "low", "message": "m"}],
+        )
+        result = db.list_files_paginated(scan_source="codex")
+        assert result["total"] == 1
+        assert result["results"][0]["path"] == "a.py"
+
+    def test_scan_source_none_returns_all(self, db: FiligreeDB) -> None:
+        db.process_scan_results(
+            scan_source="codex",
+            findings=[{"path": "a.py", "rule_id": "R1", "severity": "low", "message": "m"}],
+        )
+        db.process_scan_results(
+            scan_source="ruff",
+            findings=[{"path": "b.py", "rule_id": "R2", "severity": "low", "message": "m"}],
+        )
+        result = db.list_files_paginated(scan_source=None)
+        assert result["total"] == 2
+
+    def test_scan_source_no_match_returns_empty(self, db: FiligreeDB) -> None:
+        db.process_scan_results(
+            scan_source="ruff",
+            findings=[{"path": "a.py", "rule_id": "R1", "severity": "low", "message": "m"}],
+        )
+        result = db.list_files_paginated(scan_source="codex")
+        assert result["total"] == 0
 
 
 class TestListFilesEnrichment:
