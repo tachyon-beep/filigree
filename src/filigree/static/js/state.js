@@ -136,8 +136,10 @@ export const state = {
   filesSort: "updated_at",
   filesSearch: "",
   filesCriticalOnly: false,
+  filesScanSource: "",
   selectedFile: null,
   fileDetailData: null,
   fileDetailTab: "findings",
+  timelineFilter: null,
   hotspots: null,
 };

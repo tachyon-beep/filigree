@@ -268,7 +268,7 @@ SCHEMA_V1_SQL = SCHEMA_SQL.split("-- ---- File records & scan findings (v2)")[0]
 if SCHEMA_V1_SQL == SCHEMA_SQL:
     raise RuntimeError("SCHEMA_V1_SQL split marker not found — check comment text in SCHEMA_SQL")
 
-CURRENT_SCHEMA_VERSION = 3
+CURRENT_SCHEMA_VERSION = 4
 
 
 def _seed_builtin_packs(conn: sqlite3.Connection, now: str) -> int:
@@ -2352,7 +2352,11 @@ class FiligreeDB:
     def _build_scan_finding(self, row: sqlite3.Row) -> ScanFinding:
         """Build a ScanFinding from a database row."""
         meta_raw = row["metadata"]
-        meta = json.loads(meta_raw) if meta_raw else {}
+        try:
+            parsed_meta = json.loads(meta_raw) if meta_raw else {}
+        except (json.JSONDecodeError, TypeError):
+            parsed_meta = {}
+        meta = parsed_meta if isinstance(parsed_meta, dict) else {}
         return ScanFinding(
             id=row["id"],
             file_id=row["file_id"],
@@ -2513,7 +2517,11 @@ class FiligreeDB:
             clauses.append("path LIKE ?")
             params.append(f"%{path_prefix}%")
         if min_findings is not None and min_findings > 0:
-            clauses.append("(SELECT COUNT(*) FROM scan_findings sf WHERE sf.file_id = file_records.id AND sf.status NOT IN ('fixed', 'false_positive')) >= ?")
+            clauses.append(
+                "(SELECT COUNT(*) FROM scan_findings sf"
+                " WHERE sf.file_id = file_records.id"
+                " AND sf.status NOT IN ('fixed', 'false_positive')) >= ?"
+            )
             params.append(min_findings)
         if has_severity and has_severity in self._VALID_SEVERITIES:
             clauses.append(
@@ -3240,8 +3248,7 @@ class FiligreeDB:
 
         # 3. File metadata events
         meta_events = self.conn.execute(
-            "SELECT id, field, old_value, new_value, created_at "
-            "FROM file_events WHERE file_id = ? ORDER BY created_at DESC",
+            "SELECT id, field, old_value, new_value, created_at FROM file_events WHERE file_id = ? ORDER BY created_at DESC",
             (file_id,),
         ).fetchall()
         for m in meta_events:

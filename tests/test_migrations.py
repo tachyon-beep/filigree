@@ -791,6 +791,59 @@ class TestMigrateV2ToV3:
 
 
 # ---------------------------------------------------------------------------
+# v3 → v4 migration tests
+# ---------------------------------------------------------------------------
+
+
+class TestMigrateV3ToV4:
+    """Tests for migration v3 → v4: file_events table + index."""
+
+    @pytest.fixture
+    def v3_db(self, tmp_path: Path) -> sqlite3.Connection:
+        """Create a v3 database (file tables present, no file_events)."""
+        from filigree.core import SCHEMA_V1_SQL
+        from filigree.migrations import migrate_v1_to_v2, migrate_v2_to_v3
+
+        conn = _make_db(tmp_path)
+        conn.executescript(SCHEMA_V1_SQL)
+        conn.execute("PRAGMA user_version = 1")
+        conn.commit()
+
+        conn.execute("BEGIN IMMEDIATE")
+        migrate_v1_to_v2(conn)
+        conn.execute("PRAGMA user_version = 2")
+        conn.commit()
+
+        conn.execute("BEGIN IMMEDIATE")
+        migrate_v2_to_v3(conn)
+        conn.execute("PRAGMA user_version = 3")
+        conn.commit()
+        return conn
+
+    def test_migration_runs(self, v3_db: sqlite3.Connection) -> None:
+        applied = apply_pending_migrations(v3_db, 4)
+        assert applied == 1
+        assert _get_schema_version(v3_db) == 4
+
+    def test_table_created(self, v3_db: sqlite3.Connection) -> None:
+        apply_pending_migrations(v3_db, 4)
+        cols = _get_table_columns(v3_db, "file_events")
+        assert "file_id" in cols
+        assert "event_type" in cols
+        assert "field" in cols
+
+    def test_index_created(self, v3_db: sqlite3.Connection) -> None:
+        apply_pending_migrations(v3_db, 4)
+        indexes = _get_index_names(v3_db)
+        assert "idx_file_events_file" in indexes
+
+    def test_idempotent(self, v3_db: sqlite3.Connection) -> None:
+        apply_pending_migrations(v3_db, 4)
+        applied = apply_pending_migrations(v3_db, 4)
+        assert applied == 0
+
+
+# ---------------------------------------------------------------------------
 # Schema equivalence test
 # ---------------------------------------------------------------------------
 

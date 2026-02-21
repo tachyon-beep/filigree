@@ -132,9 +132,30 @@ def migrate_v2_to_v3(conn: sqlite3.Connection) -> None:
     add_index(conn, "idx_scan_findings_run", "scan_findings", ["scan_run_id"])
 
 
+def migrate_v3_to_v4(conn: sqlite3.Connection) -> None:
+    """v3 → v4: Add file_events table for file metadata timeline events.
+
+    Changes:
+      - new table 'file_events' for tracking file metadata field changes
+      - new index idx_file_events_file on file_events(file_id)
+    """
+    conn.execute("""\
+        CREATE TABLE IF NOT EXISTS file_events (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            file_id     TEXT NOT NULL REFERENCES file_records(id),
+            event_type  TEXT NOT NULL DEFAULT 'file_metadata_update',
+            field       TEXT NOT NULL,
+            old_value   TEXT DEFAULT '',
+            new_value   TEXT DEFAULT '',
+            created_at  TEXT NOT NULL
+        )""")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_file_events_file ON file_events(file_id)")
+
+
 MIGRATIONS: dict[int, MigrationFn] = {
     1: migrate_v1_to_v2,
     2: migrate_v2_to_v3,
+    3: migrate_v3_to_v4,
 }
 
 

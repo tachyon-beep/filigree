@@ -83,6 +83,7 @@ export async function loadFiles() {
     };
     if (state.filesSearch) params.path_prefix = state.filesSearch;
     if (state.filesCriticalOnly) params.has_severity = "critical";
+    if (state.filesScanSource) params.scan_source = state.filesScanSource;
 
     const data = await fetchFiles(params);
     if (!data) {
@@ -92,11 +93,20 @@ export async function loadFiles() {
 
     state.filesData = data;
 
+    // Active scan_source filter chip
+    const scanChip = state.filesScanSource
+      ? '<div class="flex items-center gap-2 mb-3 px-3 py-1.5 rounded text-xs" style="background:var(--surface-overlay);border:1px solid var(--border-default)">' +
+        '<span style="color:var(--text-secondary)">Filtered by source:</span>' +
+        '<span class="font-medium" style="color:var(--text-primary)">' + escHtml(state.filesScanSource) + "</span>" +
+        '<button onclick="clearScanSourceFilter()" class="ml-1 rounded-full px-1.5" style="color:var(--text-muted)" title="Clear filter">&times;</button>' +
+        "</div>"
+      : "";
+
     if (!data.results.length) {
-      container.innerHTML =
+      container.innerHTML = scanChip +
         '<div class="p-6 text-center" style="color:var(--text-muted)">' +
-        '<div class="font-medium mb-2" style="color:var(--text-primary)">No files tracked yet</div>' +
-        "<div>Ingest scan results via POST /api/v1/scan-results to start tracking files.</div></div>";
+        '<div class="font-medium mb-2" style="color:var(--text-primary)">No files found</div>' +
+        "<div>No files match the current filters.</div></div>";
       return;
     }
 
@@ -150,7 +160,7 @@ export async function loadFiles() {
 
     const paginationHtml = buildPagination(data);
 
-    container.innerHTML =
+    container.innerHTML = scanChip +
       '<div class="rounded overflow-hidden" style="background:var(--surface-raised);border:1px solid var(--border-default)">' +
       '<table class="text-xs w-full">' +
       "<thead><tr>" +
@@ -533,19 +543,25 @@ async function loadTimelineTab(fileId, offset) {
 
     _timelineAccum = _timelineAccum.concat(data.results);
 
-    if (!_timelineAccum.length) {
-      container.innerHTML = '<div style="color:var(--text-muted)">No events for this file yet.</div>';
-      return;
-    }
+    // Filter pills: derive active state from stored filter so refreshes stay in sync.
+    const activeFilter = state.timelineFilter || "all";
+    const pillClass = (type) =>
+      type === activeFilter
+        ? "text-xs px-2 py-1 rounded bg-accent text-primary"
+        : "text-xs px-2 py-1 rounded bg-overlay text-secondary bg-overlay-hover";
 
-    // Filter pills
     let html =
       '<div class="flex gap-1 mb-3">' +
-      '<button onclick="filterTimeline(\'all\')" class="text-xs px-2 py-1 rounded bg-accent text-primary" id="tlFilterAll">All</button>' +
-      '<button onclick="filterTimeline(\'finding\')" class="text-xs px-2 py-1 rounded bg-overlay text-secondary bg-overlay-hover" id="tlFilterFinding">Findings</button>' +
-      '<button onclick="filterTimeline(\'association\')" class="text-xs px-2 py-1 rounded bg-overlay text-secondary bg-overlay-hover" id="tlFilterAssoc">Associations</button>' +
-      '<button onclick="filterTimeline(\'file_metadata_update\')" class="text-xs px-2 py-1 rounded bg-overlay text-secondary bg-overlay-hover" id="tlFilterMeta">Metadata</button>' +
+      `<button onclick="filterTimeline('all')" class="${pillClass("all")}" id="tlFilterAll">All</button>` +
+      `<button onclick="filterTimeline('finding')" class="${pillClass("finding")}" id="tlFilterFinding">Findings</button>` +
+      `<button onclick="filterTimeline('association')" class="${pillClass("association")}" id="tlFilterAssoc">Associations</button>` +
+      `<button onclick="filterTimeline('file_metadata_update')" class="${pillClass("file_metadata_update")}" id="tlFilterMeta">Metadata</button>` +
       "</div>";
+
+    if (!_timelineAccum.length) {
+      container.innerHTML = html + '<div style="color:var(--text-muted)">No events for this filter yet.</div>';
+      return;
+    }
 
     html += '<div id="timelineEvents">';
     html += renderTimelineEvents(_timelineAccum);
@@ -672,6 +688,12 @@ export function closeFileDetail() {
   state.fileDetailData = null;
   const panel = document.getElementById("detailPanel");
   if (panel) panel.classList.add("translate-x-full");
+}
+
+export function clearScanSourceFilter() {
+  state.filesScanSource = "";
+  state.filesPage.offset = 0;
+  loadFiles();
 }
 
 // --- Link to Issue modal ---

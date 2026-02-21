@@ -269,15 +269,13 @@ class TestProcessScanResults:
         db.process_scan_results(
             scan_source="ruff",
             findings=[
-                {"path": "a.py", "rule_id": "E1", "severity": "low", "message": "m",
-                 "metadata": {"v": 1}},
+                {"path": "a.py", "rule_id": "E1", "severity": "low", "message": "m", "metadata": {"v": 1}},
             ],
         )
         db.process_scan_results(
             scan_source="ruff",
             findings=[
-                {"path": "a.py", "rule_id": "E1", "severity": "low", "message": "m2",
-                 "metadata": {"v": 2}},
+                {"path": "a.py", "rule_id": "E1", "severity": "low", "message": "m2", "metadata": {"v": 2}},
             ],
         )
         f = db.get_file_by_path("a.py")
