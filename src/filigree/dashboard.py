@@ -679,6 +679,12 @@ def _create_project_router() -> Any:
                 },
                 {
                     "method": "GET",
+                    "path": "/api/files/stats",
+                    "description": "Global findings severity stats",
+                    "status": "live",
+                },
+                {
+                    "method": "GET",
                     "path": "/api/files/_schema",
                     "description": "API discovery (this endpoint)",
                     "status": "live",

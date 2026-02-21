@@ -6,9 +6,6 @@ import { fetchFiles, fetchFileStats, fetchHotspots } from "../api.js";
 import { SEVERITY_COLORS, state } from "../state.js";
 import { escHtml } from "../ui.js";
 
-// --- Callbacks ---
-export const callbacks = {};
-
 // --- Main loader ---
 
 export async function loadHealth() {

@@ -2429,7 +2429,7 @@ class FiligreeDB:
             params.append(language)
         if path_prefix is not None:
             clauses.append("path LIKE ?")
-            params.append(f"{path_prefix}%")
+            params.append(f"%{path_prefix}%")
 
         where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
         valid_sorts = {"updated_at", "first_seen", "path", "language"}
@@ -2473,7 +2473,7 @@ class FiligreeDB:
             params.append(language)
         if path_prefix is not None:
             clauses.append("path LIKE ?")
-            params.append(f"{path_prefix}%")
+            params.append(f"%{path_prefix}%")
         if min_findings is not None and min_findings > 0:
             clauses.append("(SELECT COUNT(*) FROM scan_findings sf WHERE sf.file_id = file_records.id AND sf.status = 'open') >= ?")
             params.append(min_findings)
@@ -2905,16 +2905,17 @@ class FiligreeDB:
         if assoc_type not in VALID_ASSOC_TYPES:
             msg = f'Invalid assoc_type "{assoc_type}". Must be one of: {", ".join(sorted(VALID_ASSOC_TYPES))}'
             raise ValueError(msg)
+        # Validate issue exists before creating the association
+        row = self.conn.execute("SELECT 1 FROM issues WHERE id = ?", (issue_id,)).fetchone()
+        if row is None:
+            msg = f'Issue not found: "{issue_id}". Verify the issue exists before creating an association.'
+            raise ValueError(msg)
         now = _now_iso()
-        try:
-            self.conn.execute(
-                "INSERT OR IGNORE INTO file_associations (file_id, issue_id, assoc_type, created_at) VALUES (?, ?, ?, ?)",
-                (file_id, issue_id, assoc_type, now),
-            )
-            self.conn.commit()
-        except sqlite3.IntegrityError:
-            self.conn.rollback()
-            raise ValueError(f'Issue not found: "{issue_id}". Verify the issue exists before creating an association.') from None
+        self.conn.execute(
+            "INSERT OR IGNORE INTO file_associations (file_id, issue_id, assoc_type, created_at) VALUES (?, ?, ?, ?)",
+            (file_id, issue_id, assoc_type, now),
+        )
+        self.conn.commit()
 
     def get_file_associations(self, file_id: str) -> list[dict[str, Any]]:
         """Get all issue associations for a file."""

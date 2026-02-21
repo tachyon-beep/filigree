@@ -10,11 +10,18 @@ import {
   postFileAssociation,
 } from "../api.js";
 import { SEVERITY_COLORS, state } from "../state.js";
-import { escHtml, showToast } from "../ui.js";
+import { escHtml, showCreateForm, showToast } from "../ui.js";
 
 // --- Accumulated page state for "load more" ---
 let _findingsAccum = [];
 let _timelineAccum = [];
+
+// --- Findings filter + selection state (module-local, resets on file change) ---
+let _findingsFilters = { severity: null, status: null };
+let _selectedFinding = null;
+
+// --- Sort direction state ---
+let _filesSortDir = "DESC";
 
 // --- Severity helpers ---
 
@@ -94,7 +101,7 @@ export async function loadFiles() {
 
     const sortArrow = (col) =>
       state.filesSort === col
-        ? ' <span style="color:var(--accent)">&#9660;</span>'
+        ? ` <span style="color:var(--accent)">${_filesSortDir === "ASC" ? "&#9650;" : "&#9660;"}</span>`
         : "";
 
     const headerCols = [
@@ -176,6 +183,11 @@ function buildPagination(data) {
 }
 
 export function sortFiles(column) {
+  if (state.filesSort === column) {
+    _filesSortDir = _filesSortDir === "DESC" ? "ASC" : "DESC";
+  } else {
+    _filesSortDir = column === "path" ? "ASC" : "DESC";
+  }
   state.filesSort = column;
   state.filesPage.offset = 0;
   loadFiles();
@@ -201,6 +213,7 @@ export function filesPageNext() {
 export async function openFileDetail(fileId) {
   state.selectedFile = fileId;
   state.fileDetailTab = "findings";
+  _findingsFilters = { severity: null, status: null };
 
   const panel = document.getElementById("detailPanel");
   const content = document.getElementById("detailContent");
@@ -312,28 +325,76 @@ function renderFileDetail(data) {
   else loadTimelineTab(f.id);
 }
 
-// --- Findings Tab ---
+// --- Findings Tab (split-pane: left list + right detail) ---
 
-function renderFindingItem(f) {
+function renderFindingListItem(f) {
   const c = SEVERITY_COLORS[f.severity] || SEVERITY_COLORS.info;
   const lines = f.line_start
     ? f.line_end && f.line_end !== f.line_start
       ? `L${f.line_start}-${f.line_end}`
       : `L${f.line_start}`
     : "";
+  const selected = _selectedFinding && _selectedFinding.id === f.id;
+  const selClass = selected ? "border-l-2 border-l-sky-400" : "";
   return (
-    '<details class="rounded mb-1" style="background:var(--surface-overlay);border:1px solid var(--border-default)">' +
-    '<summary class="flex items-center gap-2 px-3 py-2 cursor-pointer text-xs bg-overlay-hover">' +
-    `<span class="px-1.5 py-0.5 rounded ${c.bg} ${c.text}" style="border:1px solid;${c.border}">${escHtml(f.severity)}</span>` +
+    `<div class="flex items-center gap-2 px-3 py-2 cursor-pointer text-xs bg-overlay-hover rounded mb-1 ${selClass}" style="background:var(--surface-overlay);border:1px solid var(--border-default)" onclick="selectFinding('${escHtml(f.id)}')" role="button" tabindex="0">` +
+    `<span class="px-1.5 py-0.5 rounded shrink-0 ${c.bg} ${c.text}" style="border:1px solid;${c.border}">${escHtml(f.severity)}</span>` +
     `<span style="color:var(--text-primary)" class="truncate flex-1">${escHtml(f.rule_id)}</span>` +
-    (lines ? `<span style="color:var(--text-muted)">${lines}</span>` : "") +
-    `<span style="color:var(--text-muted)">seen:${f.seen_count || 1}</span>` +
-    "</summary>" +
-    '<div class="px-3 py-2 text-xs" style="color:var(--text-secondary)">' +
-    `<div class="mb-1">${escHtml(f.message)}</div>` +
-    `<div style="color:var(--text-muted)">Source: ${escHtml(f.scan_source || "\u2014")} | Status: ${escHtml(f.status)}</div>` +
+    (lines ? `<span class="shrink-0" style="color:var(--text-muted)">${lines}</span>` : "") +
+    "</div>"
+  );
+}
+
+function renderFindingDetail(f) {
+  if (!f) {
+    return '<div class="flex items-center justify-center h-full text-xs" style="color:var(--text-muted)">Select a finding to view details</div>';
+  }
+  const c = SEVERITY_COLORS[f.severity] || SEVERITY_COLORS.info;
+  const lines = f.line_start
+    ? f.line_end && f.line_end !== f.line_start
+      ? `Lines ${f.line_start}\u2013${f.line_end}`
+      : `Line ${f.line_start}`
+    : "";
+  return (
+    '<div class="text-xs space-y-2">' +
+    `<div class="flex items-center gap-2"><span class="px-1.5 py-0.5 rounded ${c.bg} ${c.text}" style="border:1px solid;${c.border}">${escHtml(f.severity)}</span>` +
+    `<span class="font-medium" style="color:var(--text-primary)">${escHtml(f.rule_id)}</span></div>` +
+    `<div style="color:var(--text-secondary)">${escHtml(f.message)}</div>` +
+    '<div class="flex flex-wrap gap-3" style="color:var(--text-muted)">' +
+    `<span>Source: ${escHtml(f.scan_source || "\u2014")}</span>` +
+    `<span>Status: ${escHtml(f.status)}</span>` +
+    (lines ? `<span>${lines}</span>` : "") +
+    `<span>Seen: ${f.seen_count || 1}×</span>` +
+    "</div>" +
     (f.first_seen ? `<div style="color:var(--text-muted)">First seen: ${new Date(f.first_seen).toLocaleDateString()}</div>` : "") +
-    "</div></details>"
+    '<div class="pt-2" style="border-top:1px solid var(--border-default)">' +
+    `<button onclick="createIssueFromFinding()" class="text-xs px-3 py-1 rounded bg-accent-hover" style="background:var(--accent);color:var(--surface-base)">Create Issue</button>` +
+    "</div></div>"
+  );
+}
+
+function renderFindingsFilterBar() {
+  const sevs = ["all", "critical", "high", "medium", "low"];
+  const sevPills = sevs
+    .map((s) => {
+      const active = s === "all" ? !_findingsFilters.severity : _findingsFilters.severity === s;
+      const cls = active
+        ? "text-xs px-2 py-1 rounded bg-accent text-primary"
+        : "text-xs px-2 py-1 rounded bg-overlay text-secondary bg-overlay-hover";
+      return `<button onclick="filterFindings('severity','${s}')" class="${cls}">${s === "all" ? "All" : s.charAt(0).toUpperCase() + s.slice(1)}</button>`;
+    })
+    .join("");
+  const statusOpts = ["all", "open", "acknowledged", "fixed", "false_positive", "unseen_in_latest"]
+    .map((s) => {
+      const selected = s === "all" ? !_findingsFilters.status : _findingsFilters.status === s;
+      return `<option value="${s}"${selected ? " selected" : ""}>${s === "all" ? "All statuses" : s}</option>`;
+    })
+    .join("");
+  return (
+    '<div class="flex items-center gap-2 mb-2 flex-wrap">' +
+    sevPills +
+    `<select onchange="filterFindings('status',this.value)" class="text-xs rounded px-2 py-1" style="background:var(--surface-overlay);color:var(--text-primary);border:1px solid var(--border-default)">${statusOpts}</select>` +
+    "</div>"
   );
 }
 
@@ -344,15 +405,16 @@ async function loadFindingsTab(fileId, offset) {
   const isFirstPage = !offset;
   if (isFirstPage) {
     _findingsAccum = [];
+    _selectedFinding = null;
     container.innerHTML = '<div style="color:var(--text-muted)">Loading findings...</div>';
   }
 
   try {
-    const data = await fetchFileFindings(fileId, {
-      limit: 20,
-      offset: offset || 0,
-      sort: "severity",
-    });
+    const params = { limit: 20, offset: offset || 0, sort: "severity" };
+    if (_findingsFilters.severity) params.severity = _findingsFilters.severity;
+    if (_findingsFilters.status) params.status = _findingsFilters.status;
+
+    const data = await fetchFileFindings(fileId, params);
     if (!data) {
       container.innerHTML = '<div class="text-red-400">Failed to load findings.</div>';
       return;
@@ -361,18 +423,22 @@ async function loadFindingsTab(fileId, offset) {
     _findingsAccum = _findingsAccum.concat(data.results);
 
     if (!_findingsAccum.length) {
-      container.innerHTML = '<div style="color:var(--text-muted)">No findings for this file.</div>';
+      container.innerHTML = renderFindingsFilterBar() + '<div style="color:var(--text-muted)">No findings match the current filters.</div>';
       return;
     }
 
-    let html = _findingsAccum.map(renderFindingItem).join("");
-
+    let listHtml = _findingsAccum.map(renderFindingListItem).join("");
     if (data.has_more) {
       const nextOffset = (offset || 0) + 20;
-      html += `<button onclick="loadMoreFindings('${escHtml(fileId)}', ${nextOffset})" class="text-xs mt-2 px-3 py-1 rounded bg-overlay bg-overlay-hover" style="color:var(--accent)">Load more...</button>`;
+      listHtml += `<button onclick="loadMoreFindings('${escHtml(fileId)}', ${nextOffset})" class="text-xs mt-2 px-3 py-1 rounded bg-overlay bg-overlay-hover w-full text-center" style="color:var(--accent)">Load more...</button>`;
     }
 
-    container.innerHTML = html;
+    container.innerHTML =
+      renderFindingsFilterBar() +
+      '<div class="flex gap-3" style="min-height:180px">' +
+      `<div class="w-1/2 overflow-y-auto pr-1" style="max-height:400px">${listHtml}</div>` +
+      `<div id="findingDetailPane" class="flex-1 rounded p-3" style="background:var(--surface-overlay);border:1px solid var(--border-default)">${renderFindingDetail(_selectedFinding)}</div>` +
+      "</div>";
   } catch (_e) {
     container.innerHTML = '<div class="text-red-400">Failed to load findings.</div>';
   }
@@ -380,6 +446,65 @@ async function loadFindingsTab(fileId, offset) {
 
 export function loadMoreFindings(fileId, offset) {
   loadFindingsTab(fileId, offset);
+}
+
+export function selectFinding(findingId) {
+  _selectedFinding = _findingsAccum.find((f) => f.id === findingId) || null;
+  // Re-render the detail pane only
+  const pane = document.getElementById("findingDetailPane");
+  if (pane) pane.innerHTML = renderFindingDetail(_selectedFinding);
+  // Update left-panel selection highlight
+  const container = document.getElementById("fileTabContent");
+  if (container) {
+    container.querySelectorAll("[onclick^=\"selectFinding\"]").forEach((el) => {
+      el.classList.toggle("border-l-2", el.getAttribute("onclick").includes(findingId));
+      el.classList.toggle("border-l-sky-400", el.getAttribute("onclick").includes(findingId));
+    });
+  }
+}
+
+export function filterFindings(type, value) {
+  if (type === "severity") {
+    _findingsFilters.severity = value === "all" ? null : value;
+  } else if (type === "status") {
+    _findingsFilters.status = value === "all" ? null : value;
+  }
+  if (state.selectedFile) loadFindingsTab(state.selectedFile, 0);
+}
+
+const SEVERITY_PRIORITY_MAP = { critical: 0, high: 1, medium: 2, low: 3, info: 4 };
+
+export async function createIssueFromFinding() {
+  if (!_selectedFinding) return;
+  const f = _selectedFinding;
+  // Open the Create Issue modal, then pre-fill fields
+  await showCreateForm();
+  const titleEl = document.getElementById("createTitle");
+  const descEl = document.getElementById("createDesc");
+  const typeEl = document.getElementById("createType");
+  const prioEl = document.getElementById("createPriority");
+  if (titleEl) titleEl.value = `[${f.severity}] ${f.rule_id}`;
+  if (descEl) {
+    const lines = f.line_start
+      ? f.line_end && f.line_end !== f.line_start
+        ? `Lines ${f.line_start}\u2013${f.line_end}`
+        : `Line ${f.line_start}`
+      : "";
+    const filePath = state.fileDetailData?.file?.path || "";
+    descEl.value = [
+      f.message,
+      "",
+      `File: ${filePath}`,
+      lines ? `Location: ${lines}` : "",
+      `Source: ${f.scan_source || "unknown"}`,
+      `Status: ${f.status}`,
+      `Seen: ${f.seen_count || 1} time(s)`,
+    ]
+      .filter(Boolean)
+      .join("\n");
+  }
+  if (typeEl) typeEl.value = "bug";
+  if (prioEl) prioEl.value = String(SEVERITY_PRIORITY_MAP[f.severity] ?? 2);
 }
 
 // --- Timeline Tab ---
@@ -416,6 +541,7 @@ async function loadTimelineTab(fileId, offset) {
       '<button onclick="filterTimeline(\'all\')" class="text-xs px-2 py-1 rounded bg-accent text-primary" id="tlFilterAll">All</button>' +
       '<button onclick="filterTimeline(\'finding\')" class="text-xs px-2 py-1 rounded bg-overlay text-secondary bg-overlay-hover" id="tlFilterFinding">Findings</button>' +
       '<button onclick="filterTimeline(\'association\')" class="text-xs px-2 py-1 rounded bg-overlay text-secondary bg-overlay-hover" id="tlFilterAssoc">Associations</button>' +
+      '<button onclick="filterTimeline(\'file_metadata_update\')" class="text-xs px-2 py-1 rounded bg-overlay text-secondary bg-overlay-hover" id="tlFilterMeta">Metadata</button>' +
       "</div>";
 
     html += '<div id="timelineEvents">';
@@ -433,6 +559,13 @@ async function loadTimelineTab(fileId, offset) {
   }
 }
 
+const EVENT_TYPE_LABELS = {
+  finding_created: "Finding Created",
+  finding_updated: "Finding Updated",
+  association_created: "Association",
+  file_metadata_update: "Metadata",
+};
+
 function renderTimelineEvents(events) {
   let html = "";
   for (const ev of events) {
@@ -441,11 +574,14 @@ function renderTimelineEvents(events) {
         ? "#EF4444"
         : ev.type === "finding_updated"
           ? "#3B82F6"
-          : "#10B981";
+          : ev.type === "file_metadata_update"
+            ? "#A855F7"
+            : "#10B981";
     const time = ev.timestamp
       ? new Date(ev.timestamp).toLocaleString()
       : "";
     const evData = ev.data || {};
+    const label = EVENT_TYPE_LABELS[ev.type] || ev.type;
 
     let detail = "";
     if (ev.type === "finding_created") {
@@ -453,9 +589,16 @@ function renderTimelineEvents(events) {
       const c = SEVERITY_COLORS[sev] || SEVERITY_COLORS.info;
       detail = `<span class="px-1 py-0.5 rounded ${c.bg} ${c.text}" style="border:1px solid;${c.border}">${escHtml(sev)}</span> ${escHtml(evData.rule_id || "")} \u2014 ${escHtml(evData.message || "New finding")}`;
     } else if (ev.type === "finding_updated") {
-      detail = `${escHtml(evData.rule_id || "Finding")} status: ${escHtml(evData.old_status || "?")} \u2192 ${escHtml(evData.new_status || evData.status || "?")}`;
+      const ruleLabel = escHtml(evData.rule_id || "Finding");
+      if (evData.old_status) {
+        detail = `${ruleLabel} status: ${escHtml(evData.old_status)} \u2192 ${escHtml(evData.new_status || evData.status || "?")}`;
+      } else {
+        detail = `${ruleLabel} \u2014 Status: ${escHtml(evData.new_status || evData.status || "?")}`;
+      }
     } else if (ev.type === "association_created") {
       detail = `Linked to issue ${escHtml(evData.issue_id || "")} (${escHtml(evData.assoc_type || "")})`;
+    } else if (ev.type === "file_metadata_update") {
+      detail = `${escHtml(evData.field || "metadata")} changed: ${escHtml(evData.old_value || "?")} \u2192 ${escHtml(evData.new_value || "?")}`;
     } else {
       detail = escHtml(ev.type);
     }
@@ -469,8 +612,14 @@ function renderTimelineEvents(events) {
       '<div class="w-px flex-1" style="background:var(--border-default)"></div>' +
       "</div>" +
       '<div class="flex-1 pb-3">' +
-      `<div class="text-xs" style="color:var(--text-muted)">${time}</div>` +
-      `<div class="text-xs mt-0.5" style="color:var(--text-primary)">${detail}</div>` +
+      '<details class="group">' +
+      `<summary class="text-xs cursor-pointer bg-overlay-hover rounded px-1 -mx-1 flex items-center gap-2" style="list-style:none">` +
+      `<span style="color:var(--text-muted)">${time}</span>` +
+      `<span class="font-medium" style="color:var(--text-primary)">${escHtml(label)}</span>` +
+      `<span class="text-xs" style="color:var(--text-muted)">&#9662;</span>` +
+      "</summary>" +
+      `<div class="text-xs mt-1 pl-1" style="color:var(--text-primary)">${detail}</div>` +
+      "</details>" +
       "</div></div>";
   }
   return html;
@@ -478,11 +627,12 @@ function renderTimelineEvents(events) {
 
 export function filterTimeline(type) {
   // Update active pill immediately for responsiveness
-  const pills = ["tlFilterAll", "tlFilterFinding", "tlFilterAssoc"];
+  const pills = ["tlFilterAll", "tlFilterFinding", "tlFilterAssoc", "tlFilterMeta"];
   const activeMap = {
     all: "tlFilterAll",
     finding: "tlFilterFinding",
     association: "tlFilterAssoc",
+    file_metadata_update: "tlFilterMeta",
   };
   for (const id of pills) {
     const el = document.getElementById(id);
