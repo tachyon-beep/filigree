@@ -378,6 +378,17 @@ export async function fetchFileSchema() {
   return resp.json();
 }
 
+export async function fetchScanRuns(limit) {
+  try {
+    const qs = limit ? `?limit=${limit}` : "";
+    const resp = await fetch(apiUrl("/scan-runs" + qs));
+    if (!resp.ok) return { scan_runs: [] };
+    return resp.json();
+  } catch (_e) {
+    return { scan_runs: [] };
+  }
+}
+
 export async function postFileAssociation(fileId, body) {
   try {
     const resp = await fetch(apiUrl(`/files/${encodeURIComponent(fileId)}/associations`), {

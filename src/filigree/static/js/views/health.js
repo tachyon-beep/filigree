@@ -2,7 +2,7 @@
 // Code Health view — hotspots, severity donut, scan coverage, recent scans.
 // ---------------------------------------------------------------------------
 
-import { fetchFiles, fetchFileStats, fetchHotspots } from "../api.js";
+import { fetchFiles, fetchFileStats, fetchHotspots, fetchScanRuns } from "../api.js";
 import { SEVERITY_COLORS, state } from "../state.js";
 import { escHtml } from "../ui.js";
 
@@ -14,11 +14,12 @@ export async function loadHealth() {
   container.innerHTML = '<div style="color:var(--text-muted)">Loading...</div>';
 
   try {
-    // Fetch hotspots, file count, and global findings stats in parallel
-    const [hotspots, fileData, stats] = await Promise.all([
+    // Fetch hotspots, file count, global findings stats, and scan runs in parallel
+    const [hotspots, fileData, stats, scanRunData] = await Promise.all([
       fetchHotspots(10),
       fetchFiles({ limit: 1, offset: 0 }),
       fetchFileStats(),
+      fetchScanRuns(10),
     ]);
 
     if (!hotspots && !fileData && !stats) {
@@ -42,6 +43,7 @@ export async function loadHealth() {
 
     const totalFiles = fileData?.total || 0;
     const filesWithFindings = stats?.files_with_findings || 0;
+    const scanRuns = scanRunData?.scan_runs || [];
 
     // Build 2x2 grid
     container.innerHTML =
@@ -49,7 +51,7 @@ export async function loadHealth() {
       renderHotspotsWidget(hotspots) +
       renderDonutWidget(agg) +
       renderCoverageWidget(filesWithFindings, totalFiles) +
-      renderRecentScansWidget() +
+      renderRecentScansWidget(scanRuns) +
       "</div>";
   } catch (_e) {
     container.innerHTML = '<div class="text-red-400">Failed to load health data.</div>';
@@ -181,15 +183,70 @@ function renderCoverageWidget(withFindings, total) {
 
 // --- Widget 4: Recent Scan Activity ---
 
-function renderRecentScansWidget() {
-  return (
-    '<div class="rounded p-4" style="background:var(--surface-raised);border:1px solid var(--border-default)">' +
-    '<div class="text-xs font-medium mb-3" style="color:var(--text-secondary)">Recent Scan Activity</div>' +
-    '<div class="text-xs" style="color:var(--text-muted)">' +
-    "<div class=\"mb-2\">Scan ingestion stats appear here after posting results.</div>" +
-    '<div class="mb-1">Ingest scans via:</div>' +
-    '<code class="block rounded px-2 py-1 text-xs" style="background:var(--surface-base);color:var(--text-secondary)">POST /api/v1/scan-results</code>' +
-    '<div class="mt-2">Returns: files_created, files_updated, findings_created, findings_updated</div>' +
-    "</div></div>"
-  );
+/** Format an ISO timestamp as a relative time string (e.g. "2h ago"). */
+function _relativeTime(isoStr) {
+  if (!isoStr) return "";
+  const diff = Date.now() - new Date(isoStr).getTime();
+  const mins = Math.floor(diff / 60000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  const days = Math.floor(hrs / 24);
+  return `${days}d ago`;
+}
+
+/** Return a Tailwind-ish badge color class per scan_source. */
+function _sourceBadge(source) {
+  const s = (source || "").toLowerCase();
+  const colors = {
+    codex: "background:#3b82f6;color:#fff",
+    claude: "background:#8b5cf6;color:#fff",
+    ruff: "background:#f59e0b;color:#000",
+  };
+  return colors[s] || "background:var(--surface-overlay);color:var(--text-secondary)";
+}
+
+function renderRecentScansWidget(scanRuns) {
+  const header =
+    '<div class="text-xs font-medium mb-3" style="color:var(--text-secondary)">Recent Scan Activity</div>';
+  const wrapper =
+    '<div class="rounded p-4" style="background:var(--surface-raised);border:1px solid var(--border-default)">';
+
+  // Empty state — show API guidance
+  if (!scanRuns || !scanRuns.length) {
+    return (
+      wrapper +
+      header +
+      '<div class="text-xs" style="color:var(--text-muted)">' +
+      '<div class="mb-2">No scan runs recorded yet.</div>' +
+      '<div class="mb-1">Ingest scan results via the API:</div>' +
+      '<code class="block rounded px-2 py-1 text-xs mb-2" style="background:var(--surface-base);color:var(--text-secondary)">POST /api/v1/scan-results</code>' +
+      '<div>Example scanners available in <code>scripts/</code></div>' +
+      "</div></div>"
+    );
+  }
+
+  // Scan history rows
+  const rows = scanRuns
+    .map((run) => {
+      const source = escHtml(run.scan_source || "unknown");
+      const runId = escHtml(run.scan_run_id || "");
+      const time = _relativeTime(run.started_at);
+      const files = run.files_scanned || 0;
+      const findings = run.total_findings || 0;
+
+      return (
+        `<div class="flex items-center gap-2 mb-2 rounded px-2 py-1.5 cursor-pointer bg-overlay-hover" onclick="switchView('files')" role="button" tabindex="0">` +
+        `<span class="text-xs font-medium rounded px-1.5 py-0.5 shrink-0" style="${_sourceBadge(run.scan_source)}">${source}</span>` +
+        `<span class="text-xs truncate flex-1" style="color:var(--text-primary)" title="${runId}">${runId}</span>` +
+        `<span class="text-xs shrink-0" style="color:var(--text-muted)">${escHtml(String(files))} files</span>` +
+        `<span class="text-xs shrink-0" style="color:var(--text-muted)">${escHtml(String(findings))} findings</span>` +
+        `<span class="text-xs shrink-0" style="color:var(--text-muted)">${escHtml(time)}</span>` +
+        "</div>"
+      );
+    })
+    .join("");
+
+  return wrapper + header + rows + "</div>";
 }
