@@ -103,6 +103,22 @@ import {
   updateStaleBadge,
 } from "./views/metrics.js";
 import { loadPlanView, loadWorkflow } from "./views/workflow.js";
+import {
+  closeFileDetail,
+  callbacks as filesCallbacks,
+  filesPageNext,
+  filesPagePrev,
+  filterTimeline,
+  loadFiles,
+  loadMoreFindings,
+  loadMoreTimeline,
+  openFileDetail,
+  showLinkIssueModal,
+  sortFiles,
+  submitLinkIssue,
+  switchFileTab,
+} from "./views/files.js";
+import { loadHealth } from "./views/health.js";
 
 // ---------------------------------------------------------------------------
 // Core data fetching (lives here because it touches every module)
@@ -238,6 +254,10 @@ graphCallbacks.fetchData = fetchData;
 detailCallbacks.fetchData = fetchData;
 detailCallbacks.render = render;
 
+// files.js callbacks
+filesCallbacks.openDetail = openDetail;
+filesCallbacks.fetchData = fetchData;
+
 // ---------------------------------------------------------------------------
 // Register views with the router
 // ---------------------------------------------------------------------------
@@ -247,6 +267,8 @@ registerView("graph", renderGraph);
 registerView("metrics", loadMetrics);
 registerView("activity", loadActivity);
 registerView("workflow", loadWorkflow);
+registerView("files", loadFiles);
+registerView("health", loadHealth);
 
 // ---------------------------------------------------------------------------
 // Keyboard shortcuts
@@ -537,3 +559,20 @@ window.loadActivity = loadActivity;
 // Workflow
 window.loadWorkflow = loadWorkflow;
 window.loadPlanView = loadPlanView;
+
+// Files
+window.loadFiles = loadFiles;
+window.openFileDetail = openFileDetail;
+window.closeFileDetail = closeFileDetail;
+window.sortFiles = sortFiles;
+window.filesPagePrev = filesPagePrev;
+window.filesPageNext = filesPageNext;
+window.switchFileTab = switchFileTab;
+window.loadMoreFindings = loadMoreFindings;
+window.loadMoreTimeline = loadMoreTimeline;
+window.filterTimeline = filterTimeline;
+window.showLinkIssueModal = showLinkIssueModal;
+window.submitLinkIssue = submitLinkIssue;
+
+// Health
+window.loadHealth = loadHealth;
