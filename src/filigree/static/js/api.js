@@ -329,3 +329,62 @@ export async function postReload() {
     return { ok: false };
   }
 }
+
+// --- File & Findings API ---
+
+export async function fetchFiles(params) {
+  const qs = params ? "?" + new URLSearchParams(params) : "";
+  const resp = await fetch(apiUrl("/files" + qs));
+  if (!resp.ok) return null;
+  return resp.json();
+}
+
+export async function fetchFileDetail(fileId) {
+  const resp = await fetch(apiUrl(`/files/${encodeURIComponent(fileId)}`));
+  if (!resp.ok) return null;
+  return resp.json();
+}
+
+export async function fetchFileFindings(fileId, params) {
+  const qs = params ? "?" + new URLSearchParams(params) : "";
+  const resp = await fetch(apiUrl(`/files/${encodeURIComponent(fileId)}/findings` + qs));
+  if (!resp.ok) return null;
+  return resp.json();
+}
+
+export async function fetchFileTimeline(fileId, params) {
+  const qs = params ? "?" + new URLSearchParams(params) : "";
+  const resp = await fetch(apiUrl(`/files/${encodeURIComponent(fileId)}/timeline` + qs));
+  if (!resp.ok) return null;
+  return resp.json();
+}
+
+export async function fetchHotspots(limit) {
+  const qs = limit ? `?limit=${limit}` : "";
+  const resp = await fetch(apiUrl("/files/hotspots" + qs));
+  if (!resp.ok) return null;
+  return resp.json();
+}
+
+export async function fetchFileSchema() {
+  const resp = await fetch(apiUrl("/files/_schema"));
+  if (!resp.ok) return null;
+  return resp.json();
+}
+
+export async function postFileAssociation(fileId, body) {
+  try {
+    const resp = await fetch(apiUrl(`/files/${encodeURIComponent(fileId)}/associations`), {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body: JSON.stringify(body),
+    });
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({}));
+      return { ok: false, error: extractError(err, "Association failed") };
+    }
+    return { ok: true, data: await resp.json() };
+  } catch (_e) {
+    return { ok: false, error: "Network error" };
+  }
+}
