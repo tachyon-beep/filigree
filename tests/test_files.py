@@ -8,7 +8,7 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 import filigree.dashboard as dash_module
-from filigree.core import FiligreeDB
+from filigree.core import CURRENT_SCHEMA_VERSION, FiligreeDB
 from filigree.dashboard import create_app
 from filigree.registry import ProjectManager, Registry
 
@@ -195,19 +195,23 @@ class TestProcessScanResults:
         assert f is not None
         assert f.language == "python"
 
-    def test_ingest_validates_severity(self, db: FiligreeDB) -> None:
-        with pytest.raises(ValueError, match="severity"):
-            db.process_scan_results(
-                scan_source="ruff",
-                findings=[
-                    {
-                        "path": "src/main.py",
-                        "rule_id": "E501",
-                        "severity": "extreme",
-                        "message": "Bad",
-                    },
-                ],
-            )
+    def test_ingest_unknown_severity_maps_to_info(self, db: FiligreeDB) -> None:
+        """Unknown severity strings are mapped to 'info' with a warning."""
+        result = db.process_scan_results(
+            scan_source="ruff",
+            findings=[
+                {
+                    "path": "src/main.py",
+                    "rule_id": "E501",
+                    "severity": "extreme",
+                    "message": "Bad",
+                },
+            ],
+        )
+        assert result["findings_created"] == 1
+        assert any("extreme" in w for w in result["warnings"])
+        finding = db.conn.execute("SELECT severity FROM scan_findings").fetchone()
+        assert finding["severity"] == "info"
 
     def test_ingest_empty_findings(self, db: FiligreeDB) -> None:
         result = db.process_scan_results(scan_source="ruff", findings=[])
@@ -232,17 +236,175 @@ class TestProcessScanResults:
 
     def test_bad_finding_at_end_does_not_persist_earlier_writes(self, db: FiligreeDB) -> None:
         """A bad finding later in the list must not leave earlier writes pending."""
-        with pytest.raises(ValueError, match="Invalid severity"):
+        with pytest.raises(ValueError, match="severity must be a string"):
             db.process_scan_results(
                 scan_source="ruff",
                 findings=[
                     {"path": "good.py", "rule_id": "E501", "severity": "low", "message": "ok"},
-                    {"path": "bad.py", "rule_id": "E999", "severity": "BOGUS", "message": "bad"},
+                    {"path": "bad.py", "rule_id": "E999", "severity": 42, "message": "bad"},
                 ],
             )
         # Neither file nor finding should have been persisted
         assert db.conn.execute("SELECT COUNT(*) FROM file_records").fetchone()[0] == 0
         assert db.conn.execute("SELECT COUNT(*) FROM scan_findings").fetchone()[0] == 0
+
+
+class TestSeverityFallback:
+    """Tests for severity normalization and fallback behavior."""
+
+    def test_severity_fallback_maps_unknown_to_info(self, db: FiligreeDB) -> None:
+        result = db.process_scan_results(
+            scan_source="ai",
+            findings=[{"path": "a.py", "rule_id": "R1", "severity": "major", "message": "m"}],
+        )
+        assert result["findings_created"] == 1
+        assert any("major" in w for w in result["warnings"])
+        row = db.conn.execute("SELECT severity FROM scan_findings").fetchone()
+        assert row["severity"] == "info"
+
+    def test_severity_fallback_normalizes_case(self, db: FiligreeDB) -> None:
+        result = db.process_scan_results(
+            scan_source="ai",
+            findings=[{"path": "a.py", "rule_id": "R1", "severity": "High", "message": "m"}],
+        )
+        assert result["findings_created"] == 1
+        assert result["warnings"] == []
+        row = db.conn.execute("SELECT severity FROM scan_findings").fetchone()
+        assert row["severity"] == "high"
+
+    def test_severity_fallback_strips_whitespace(self, db: FiligreeDB) -> None:
+        result = db.process_scan_results(
+            scan_source="ai",
+            findings=[{"path": "a.py", "rule_id": "R1", "severity": " low ", "message": "m"}],
+        )
+        assert result["findings_created"] == 1
+        assert result["warnings"] == []
+        row = db.conn.execute("SELECT severity FROM scan_findings").fetchone()
+        assert row["severity"] == "low"
+
+    def test_severity_fallback_empty_string(self, db: FiligreeDB) -> None:
+        result = db.process_scan_results(
+            scan_source="ai",
+            findings=[{"path": "a.py", "rule_id": "R1", "severity": "", "message": "m"}],
+        )
+        assert result["findings_created"] == 1
+        assert any("''" in w for w in result["warnings"])
+        row = db.conn.execute("SELECT severity FROM scan_findings").fetchone()
+        assert row["severity"] == "info"
+
+    def test_severity_fallback_none_raises(self, db: FiligreeDB) -> None:
+        with pytest.raises(ValueError, match="severity must be a string"):
+            db.process_scan_results(
+                scan_source="ai",
+                findings=[{"path": "a.py", "rule_id": "R1", "severity": None, "message": "m"}],
+            )
+
+    def test_severity_fallback_numeric_raises(self, db: FiligreeDB) -> None:
+        with pytest.raises(ValueError, match="severity must be a string"):
+            db.process_scan_results(
+                scan_source="ai",
+                findings=[{"path": "a.py", "rule_id": "R1", "severity": 42, "message": "m"}],
+            )
+
+
+class TestScanRunId:
+    """Tests for scan_run_id storage and attribution semantics."""
+
+    def test_scan_run_id_stored_on_insert(self, db: FiligreeDB) -> None:
+        db.process_scan_results(
+            scan_source="codex",
+            scan_run_id="run-001",
+            findings=[{"path": "a.py", "rule_id": "R1", "severity": "low", "message": "m"}],
+        )
+        row = db.conn.execute("SELECT scan_run_id FROM scan_findings").fetchone()
+        assert row["scan_run_id"] == "run-001"
+
+    def test_scan_run_id_preserved_on_update(self, db: FiligreeDB) -> None:
+        """Existing non-empty scan_run_id is kept when re-ingested with a different run."""
+        db.process_scan_results(
+            scan_source="codex",
+            scan_run_id="run-001",
+            findings=[{"path": "a.py", "rule_id": "R1", "severity": "low", "message": "m"}],
+        )
+        db.process_scan_results(
+            scan_source="codex",
+            scan_run_id="run-002",
+            findings=[{"path": "a.py", "rule_id": "R1", "severity": "low", "message": "m2"}],
+        )
+        row = db.conn.execute("SELECT scan_run_id FROM scan_findings").fetchone()
+        assert row["scan_run_id"] == "run-001"
+
+    def test_scan_run_id_late_attribution(self, db: FiligreeDB) -> None:
+        """Empty scan_run_id can be updated to non-empty on re-ingest."""
+        db.process_scan_results(
+            scan_source="codex",
+            scan_run_id="",
+            findings=[{"path": "a.py", "rule_id": "R1", "severity": "low", "message": "m"}],
+        )
+        db.process_scan_results(
+            scan_source="codex",
+            scan_run_id="run-001",
+            findings=[{"path": "a.py", "rule_id": "R1", "severity": "low", "message": "m2"}],
+        )
+        row = db.conn.execute("SELECT scan_run_id FROM scan_findings").fetchone()
+        assert row["scan_run_id"] == "run-001"
+
+    def test_scan_run_id_empty_does_not_overwrite(self, db: FiligreeDB) -> None:
+        """Re-ingesting with empty scan_run_id never clears existing attribution."""
+        db.process_scan_results(
+            scan_source="codex",
+            scan_run_id="run-001",
+            findings=[{"path": "a.py", "rule_id": "R1", "severity": "low", "message": "m"}],
+        )
+        db.process_scan_results(
+            scan_source="codex",
+            scan_run_id="",
+            findings=[{"path": "a.py", "rule_id": "R1", "severity": "low", "message": "m2"}],
+        )
+        row = db.conn.execute("SELECT scan_run_id FROM scan_findings").fetchone()
+        assert row["scan_run_id"] == "run-001"
+
+
+class TestSuggestionField:
+    """Tests for suggestion storage and size cap."""
+
+    def test_suggestion_stored(self, db: FiligreeDB) -> None:
+        db.process_scan_results(
+            scan_source="ai",
+            findings=[{"path": "a.py", "rule_id": "R1", "severity": "low", "message": "m", "suggestion": "Fix it"}],
+        )
+        row = db.conn.execute("SELECT suggestion FROM scan_findings").fetchone()
+        assert row["suggestion"] == "Fix it"
+
+    def test_suggestion_defaults_to_empty(self, db: FiligreeDB) -> None:
+        db.process_scan_results(
+            scan_source="ai",
+            findings=[{"path": "a.py", "rule_id": "R1", "severity": "low", "message": "m"}],
+        )
+        row = db.conn.execute("SELECT suggestion FROM scan_findings").fetchone()
+        assert row["suggestion"] == ""
+
+    def test_suggestion_truncated_at_10000(self, db: FiligreeDB) -> None:
+        long_suggestion = "x" * 15_000
+        db.process_scan_results(
+            scan_source="ai",
+            findings=[{"path": "a.py", "rule_id": "R1", "severity": "low", "message": "m", "suggestion": long_suggestion}],
+        )
+        row = db.conn.execute("SELECT suggestion FROM scan_findings").fetchone()
+        assert len(row["suggestion"]) == 10_000 + len("\n[truncated]")
+        assert row["suggestion"].endswith("\n[truncated]")
+
+    def test_suggestion_updated_on_re_ingest(self, db: FiligreeDB) -> None:
+        db.process_scan_results(
+            scan_source="ai",
+            findings=[{"path": "a.py", "rule_id": "R1", "severity": "low", "message": "m", "suggestion": "Fix v1"}],
+        )
+        db.process_scan_results(
+            scan_source="ai",
+            findings=[{"path": "a.py", "rule_id": "R1", "severity": "low", "message": "m", "suggestion": "Fix v2"}],
+        )
+        row = db.conn.execute("SELECT suggestion FROM scan_findings").fetchone()
+        assert row["suggestion"] == "Fix v2"
 
 
 class TestNewFindingIds:
@@ -790,11 +952,11 @@ class TestFileMigration:
     """Verify v1→v2 migration adds file tables to existing databases."""
 
     def test_migration_creates_tables(self, tmp_path: Path) -> None:
-        # Create a v1 database
+        # Create a fresh database
         d = FiligreeDB(tmp_path / "filigree.db", prefix="test")
         d.initialize()
-        # Should be at v2 now (fresh DB gets latest schema)
-        assert d.get_schema_version() == 2
+        # Should be at current version (fresh DB gets latest schema)
+        assert d.get_schema_version() == CURRENT_SCHEMA_VERSION
         d.close()
 
     def test_migration_from_v1(self, tmp_path: Path) -> None:
@@ -814,7 +976,7 @@ class TestFileMigration:
         # Opening with FiligreeDB should run migration
         d = FiligreeDB(db_path, prefix="test")
         d.initialize()
-        assert d.get_schema_version() == 2
+        assert d.get_schema_version() == CURRENT_SCHEMA_VERSION
         # File tables should now exist
         row = d.conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='file_records'").fetchone()
         assert row is not None
@@ -962,13 +1124,29 @@ class TestFileEndpoints:
         data = resp.json()
         assert data["findings_created"] == 1
 
-    async def test_post_scan_results_invalid_severity(self, client: AsyncClient) -> None:
+    async def test_post_scan_results_unknown_severity_maps_to_info(self, client: AsyncClient) -> None:
+        """Unknown severity strings are accepted and mapped to 'info' with warnings."""
         resp = await client.post(
             "/api/v1/scan-results",
             json={
                 "scan_source": "ruff",
                 "findings": [
                     {"path": "a.py", "rule_id": "E501", "severity": "extreme", "message": "Bad"},
+                ],
+            },
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["findings_created"] == 1
+        assert any("extreme" in w for w in data["warnings"])
+
+    async def test_post_scan_results_non_string_severity_rejected(self, client: AsyncClient) -> None:
+        resp = await client.post(
+            "/api/v1/scan-results",
+            json={
+                "scan_source": "ruff",
+                "findings": [
+                    {"path": "a.py", "rule_id": "E501", "severity": 42, "message": "Bad"},
                 ],
             },
         )

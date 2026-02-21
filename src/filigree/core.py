@@ -216,6 +216,8 @@ CREATE TABLE IF NOT EXISTS scan_findings (
     severity      TEXT NOT NULL DEFAULT 'info',
     status        TEXT NOT NULL DEFAULT 'open',
     message       TEXT DEFAULT '',
+    suggestion    TEXT DEFAULT '',
+    scan_run_id   TEXT DEFAULT '',
     line_start    INTEGER,
     line_end      INTEGER,
     seen_count    INTEGER DEFAULT 1,
@@ -231,6 +233,7 @@ CREATE INDEX IF NOT EXISTS idx_scan_findings_file ON scan_findings(file_id);
 CREATE INDEX IF NOT EXISTS idx_scan_findings_issue ON scan_findings(issue_id);
 CREATE INDEX IF NOT EXISTS idx_scan_findings_severity ON scan_findings(severity);
 CREATE INDEX IF NOT EXISTS idx_scan_findings_status ON scan_findings(status);
+CREATE INDEX IF NOT EXISTS idx_scan_findings_run ON scan_findings(scan_run_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_scan_findings_dedup
   ON scan_findings(file_id, scan_source, rule_id, coalesce(line_start, -1));
 
@@ -253,7 +256,7 @@ SCHEMA_V1_SQL = SCHEMA_SQL.split("-- ---- File records & scan findings (v2)")[0]
 if SCHEMA_V1_SQL == SCHEMA_SQL:
     raise RuntimeError("SCHEMA_V1_SQL split marker not found — check comment text in SCHEMA_SQL")
 
-CURRENT_SCHEMA_VERSION = 2
+CURRENT_SCHEMA_VERSION = 3
 
 
 def _seed_builtin_packs(conn: sqlite3.Connection, now: str) -> int:
@@ -369,6 +372,8 @@ class ScanFinding:
     scan_source: str = ""
     rule_id: str = ""
     message: str = ""
+    suggestion: str = ""
+    scan_run_id: str = ""
     line_start: int | None = None
     line_end: int | None = None
     issue_id: str | None = None
@@ -387,6 +392,8 @@ class ScanFinding:
             "scan_source": self.scan_source,
             "rule_id": self.rule_id,
             "message": self.message,
+            "suggestion": self.suggestion,
+            "scan_run_id": self.scan_run_id,
             "line_start": self.line_start,
             "line_end": self.line_end,
             "issue_id": self.issue_id,
@@ -2342,6 +2349,8 @@ class FiligreeDB:
             scan_source=row["scan_source"] or "",
             rule_id=row["rule_id"] or "",
             message=row["message"] or "",
+            suggestion=row["suggestion"] or "",
+            scan_run_id=row["scan_run_id"] or "",
             line_start=row["line_start"],
             line_end=row["line_end"],
             issue_id=row["issue_id"],
@@ -2567,15 +2576,33 @@ class FiligreeDB:
         """
         # Validate all findings upfront before any writes, so a bad entry
         # at index N cannot leave writes from 0..N-1 pending.
+        warnings: list[str] = []
         for i, f in enumerate(findings):
             if not isinstance(f, dict):
                 raise ValueError(f"findings[{i}] must be a dict, got {type(f).__name__}")
             if "path" not in f:
                 raise ValueError(f"findings[{i}] is missing required key 'path'")
             severity = f.get("severity", "info")
-            if severity not in VALID_SEVERITIES:
-                msg = f'Invalid severity "{severity}". Must be one of: {", ".join(sorted(VALID_SEVERITIES))}'
+            if not isinstance(severity, str):
+                msg = f"findings[{i}] severity must be a string, got {type(severity).__name__}"
                 raise ValueError(msg)
+            # Normalize: strip whitespace and lowercase
+            normalized = severity.strip().lower()
+            if normalized in VALID_SEVERITIES:
+                f["severity"] = normalized
+            else:
+                path = f["path"]
+                rule_id = f.get("rule_id", "")
+                warn_msg = f"Unknown severity {severity!r} for finding at {path} (rule_id={rule_id!r}), mapped to 'info'"
+                warnings.append(warn_msg)
+                logger.warning(
+                    "Severity fallback: %r → 'info' for %s (rule_id=%s, scan_source=%s)",
+                    severity,
+                    path,
+                    rule_id,
+                    scan_source,
+                )
+                f["severity"] = "info"
 
         now = _now_iso()
         stats: dict[str, Any] = {
@@ -2584,6 +2611,7 @@ class FiligreeDB:
             "findings_created": 0,
             "findings_updated": 0,
             "new_finding_ids": [],
+            "warnings": warnings,
         }
 
         # Track which finding IDs were seen, keyed by file_id, for mark_unseen
@@ -2622,19 +2650,38 @@ class FiligreeDB:
             line_start = f.get("line_start")
             dedup_line = line_start if line_start is not None else -1
 
+            # Suggestion size cap (10,000 chars)
+            suggestion = f.get("suggestion", "")
+            if len(suggestion) > 10_000:
+                logger.warning(
+                    "Suggestion truncated for %s (rule_id=%s): %d chars → 10000",
+                    path,
+                    rule_id,
+                    len(suggestion),
+                )
+                suggestion = suggestion[:10_000] + "\n[truncated]"
+
             existing_finding = self.conn.execute(
-                "SELECT id, seen_count FROM scan_findings "
+                "SELECT id, seen_count, scan_run_id FROM scan_findings "
                 "WHERE file_id = ? AND scan_source = ? AND rule_id = ? AND coalesce(line_start, -1) = ?",
                 (file_id, scan_source, rule_id, dedup_line),
             ).fetchone()
 
             if existing_finding is not None:
+                # scan_run_id attribution: keep original if non-empty, allow
+                # late attribution for previously-unattributed findings
+                existing_run_id = existing_finding["scan_run_id"] or ""
+                run_id_update = existing_run_id
+                if scan_run_id and not existing_run_id:
+                    run_id_update = scan_run_id
+
                 self.conn.execute(
                     "UPDATE scan_findings SET message = ?, severity = ?, line_end = ?, "
+                    "suggestion = ?, scan_run_id = ?, "
                     "seen_count = seen_count + 1, updated_at = ?, last_seen_at = ?, "
                     "status = CASE WHEN status IN ('fixed', 'unseen_in_latest') THEN 'open' ELSE status END "
                     "WHERE id = ?",
-                    (f.get("message", ""), severity, f.get("line_end"), now, now, existing_finding["id"]),
+                    (f.get("message", ""), severity, f.get("line_end"), suggestion, run_id_update, now, now, existing_finding["id"]),
                 )
                 stats["findings_updated"] += 1
                 seen_finding_ids.setdefault(file_id, []).append(existing_finding["id"])
@@ -2643,8 +2690,9 @@ class FiligreeDB:
                 self.conn.execute(
                     "INSERT INTO scan_findings "
                     "(id, file_id, scan_source, rule_id, severity, status, message, "
+                    "suggestion, scan_run_id, "
                     "line_start, line_end, first_seen, updated_at, last_seen_at) "
-                    "VALUES (?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?)",
+                    "VALUES (?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         finding_id,
                         file_id,
@@ -2652,6 +2700,8 @@ class FiligreeDB:
                         rule_id,
                         severity,
                         f.get("message", ""),
+                        suggestion,
+                        scan_run_id,
                         line_start,
                         f.get("line_end"),
                         now,
@@ -2678,6 +2728,37 @@ class FiligreeDB:
 
         self.conn.commit()
         return stats
+
+    def get_scan_runs(self, *, limit: int = 10) -> list[dict[str, Any]]:
+        """Query scan run history from scan_findings grouped by scan_run_id.
+
+        Returns a list of scan run summaries, ordered by most recent activity.
+        Findings with empty scan_run_id are excluded.
+        """
+        rows = self.conn.execute(
+            "SELECT scan_run_id, scan_source, "
+            "MIN(first_seen) AS started_at, "
+            "MAX(updated_at) AS completed_at, "
+            "COUNT(*) AS total_findings, "
+            "COUNT(DISTINCT file_id) AS files_scanned "
+            "FROM scan_findings "
+            "WHERE scan_run_id != '' "
+            "GROUP BY scan_run_id, scan_source "
+            "ORDER BY MAX(updated_at) DESC "
+            "LIMIT ?",
+            (limit,),
+        ).fetchall()
+        return [
+            {
+                "scan_run_id": row["scan_run_id"],
+                "scan_source": row["scan_source"],
+                "started_at": row["started_at"],
+                "completed_at": row["completed_at"],
+                "total_findings": row["total_findings"],
+                "files_scanned": row["files_scanned"],
+            }
+            for row in rows
+        ]
 
     def clean_stale_findings(
         self,

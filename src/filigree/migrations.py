@@ -119,9 +119,22 @@ def migrate_v1_to_v2(conn: sqlite3.Connection) -> None:
     conn.execute("CREATE INDEX IF NOT EXISTS idx_file_assoc_issue ON file_associations(issue_id)")
 
 
+def migrate_v2_to_v3(conn: sqlite3.Connection) -> None:
+    """v2 → v3: Add scan_run_id, suggestion columns and scan_run_id index to scan_findings.
+
+    Changes:
+      - scan_findings: add 'suggestion' column (TEXT, default '')
+      - scan_findings: add 'scan_run_id' column (TEXT, default '')
+      - new index idx_scan_findings_run on scan_findings(scan_run_id)
+    """
+    add_column(conn, "scan_findings", "suggestion", "TEXT", "''")
+    add_column(conn, "scan_findings", "scan_run_id", "TEXT", "''")
+    add_index(conn, "idx_scan_findings_run", "scan_findings", ["scan_run_id"])
+
+
 MIGRATIONS: dict[int, MigrationFn] = {
     1: migrate_v1_to_v2,
-    # 2: migrate_v2_to_v3,
+    2: migrate_v2_to_v3,
 }
 
 

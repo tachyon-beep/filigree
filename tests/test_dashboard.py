@@ -1272,6 +1272,78 @@ class TestFilesSchemaAPI:
         assert resp.headers.get("cache-control") == "max-age=3600"
 
 
+class TestScanRunsAPI:
+    """GET /api/scan-runs — scan run history."""
+
+    async def test_empty_table(self, client: AsyncClient) -> None:
+        resp = await client.get("/api/scan-runs")
+        assert resp.status_code == 200
+        assert resp.json() == {"scan_runs": []}
+
+    async def test_single_scan_run(self, client: AsyncClient, dashboard_db: FiligreeDB) -> None:
+        dashboard_db.process_scan_results(
+            scan_source="codex",
+            scan_run_id="run-001",
+            findings=[{"path": "a.py", "rule_id": "R1", "severity": "low", "message": "m"}],
+        )
+        resp = await client.get("/api/scan-runs")
+        assert resp.status_code == 200
+        runs = resp.json()["scan_runs"]
+        assert len(runs) == 1
+        assert runs[0]["scan_run_id"] == "run-001"
+        assert runs[0]["scan_source"] == "codex"
+        assert runs[0]["total_findings"] == 1
+        assert runs[0]["files_scanned"] == 1
+
+    async def test_multiple_runs_ordered_by_recent(self, client: AsyncClient, dashboard_db: FiligreeDB) -> None:
+        dashboard_db.process_scan_results(
+            scan_source="codex",
+            scan_run_id="run-old",
+            findings=[{"path": "a.py", "rule_id": "R1", "severity": "low", "message": "m"}],
+        )
+        dashboard_db.process_scan_results(
+            scan_source="claude",
+            scan_run_id="run-new",
+            findings=[{"path": "b.py", "rule_id": "R2", "severity": "high", "message": "m"}],
+        )
+        resp = await client.get("/api/scan-runs")
+        runs = resp.json()["scan_runs"]
+        assert len(runs) == 2
+        # Most recent first
+        assert runs[0]["scan_run_id"] == "run-new"
+        assert runs[1]["scan_run_id"] == "run-old"
+
+    async def test_limit_param(self, client: AsyncClient, dashboard_db: FiligreeDB) -> None:
+        for i in range(5):
+            dashboard_db.process_scan_results(
+                scan_source="ruff",
+                scan_run_id=f"run-{i:03d}",
+                findings=[{"path": f"f{i}.py", "rule_id": "R1", "severity": "low", "message": "m"}],
+            )
+        resp = await client.get("/api/scan-runs?limit=2")
+        runs = resp.json()["scan_runs"]
+        assert len(runs) == 2
+
+    async def test_empty_run_id_excluded(self, client: AsyncClient, dashboard_db: FiligreeDB) -> None:
+        dashboard_db.process_scan_results(
+            scan_source="ruff",
+            scan_run_id="",
+            findings=[{"path": "a.py", "rule_id": "R1", "severity": "low", "message": "m"}],
+        )
+        resp = await client.get("/api/scan-runs")
+        assert resp.json() == {"scan_runs": []}
+
+    async def test_no_cache_header(self, client: AsyncClient) -> None:
+        resp = await client.get("/api/scan-runs")
+        assert resp.headers.get("cache-control") == "no-cache"
+
+    async def test_schema_includes_scan_runs_endpoint(self, client: AsyncClient) -> None:
+        resp = await client.get("/api/files/_schema")
+        data = resp.json()
+        paths = [ep["path"] for ep in data["endpoints"]]
+        assert "/api/scan-runs" in paths
+
+
 class TestErrorMessagesIncludeValidOptions:
     """Error messages must include valid values to be self-documenting."""
 

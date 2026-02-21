@@ -686,6 +686,12 @@ def _create_project_router() -> Any:
                 },
                 {
                     "method": "GET",
+                    "path": "/api/scan-runs",
+                    "description": "Scan run history (grouped by scan_run_id)",
+                    "status": "live",
+                },
+                {
+                    "method": "GET",
                     "path": "/api/files/_schema",
                     "description": "API discovery (this endpoint)",
                     "status": "live",
@@ -794,6 +800,20 @@ def _create_project_router() -> Any:
         except ValueError as e:
             return _error_response(str(e), "VALIDATION_ERROR", 400)
         return JSONResponse(result, status_code=status_code)
+
+    @router.get("/scan-runs")
+    async def api_scan_runs(request: Request, db: FiligreeDB = Depends(_get_project_db)) -> JSONResponse:
+        """Get scan run history from scan_findings grouped by scan_run_id."""
+        params = request.query_params
+        limit = _safe_int(params.get("limit", "10"), "limit", 10)
+        if isinstance(limit, JSONResponse):
+            return limit
+        try:
+            runs = db.get_scan_runs(limit=limit)
+        except Exception:
+            logger.exception("Failed to query scan runs")
+            return _error_response("Failed to query scan runs", "INTERNAL_ERROR", 500)
+        return JSONResponse({"scan_runs": runs}, headers={"Cache-Control": "no-cache"})
 
     return router
 

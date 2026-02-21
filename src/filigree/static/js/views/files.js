@@ -369,6 +369,7 @@ function renderFindingDetail(f) {
     `<span>Seen: ${f.seen_count || 1}×</span>` +
     "</div>" +
     (f.first_seen ? `<div style="color:var(--text-muted)">First seen: ${new Date(f.first_seen).toLocaleDateString()}</div>` : "") +
+    (f.suggestion ? '<div class="mt-2 rounded p-2" style="background:var(--surface-base);border:1px solid var(--border-default)"><div class="font-medium mb-1" style="color:var(--text-secondary)">Suggestion</div><div style="color:var(--text-primary);white-space:pre-wrap">' + escHtml(f.suggestion) + "</div></div>" : "") +
     '<div class="pt-2" style="border-top:1px solid var(--border-default)">' +
     `<button onclick="createIssueFromFinding()" class="text-xs px-3 py-1 rounded bg-accent-hover" style="background:var(--accent);color:var(--surface-base)">Create Issue</button>` +
     "</div></div>"

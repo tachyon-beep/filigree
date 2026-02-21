@@ -705,6 +705,92 @@ class TestMigrationAtomicity:
 
 
 # ---------------------------------------------------------------------------
+# v2 → v3 migration tests
+# ---------------------------------------------------------------------------
+
+
+class TestMigrateV2ToV3:
+    """Tests for migration v2 → v3: scan_run_id + suggestion columns + index."""
+
+    @pytest.fixture
+    def v2_db(self, tmp_path: Path) -> sqlite3.Connection:
+        """Create a v2 database with scan_findings table (no suggestion/scan_run_id)."""
+        from filigree.core import SCHEMA_V1_SQL
+        from filigree.migrations import migrate_v1_to_v2
+
+        conn = _make_db(tmp_path)
+        conn.executescript(SCHEMA_V1_SQL)
+        conn.execute("PRAGMA user_version = 1")
+        conn.commit()
+
+        # Apply v1→v2 to get the scan_findings table
+        conn.execute("BEGIN IMMEDIATE")
+        migrate_v1_to_v2(conn)
+        conn.execute("PRAGMA user_version = 2")
+        conn.commit()
+
+        # Insert a representative finding
+        conn.execute("INSERT INTO file_records (id, path, first_seen, updated_at) VALUES ('f1', 'src/main.py', '2026-01-01', '2026-01-01')")
+        conn.execute(
+            "INSERT INTO scan_findings (id, file_id, scan_source, rule_id, severity, "
+            "status, message, first_seen, updated_at) "
+            "VALUES ('sf1', 'f1', 'ruff', 'E501', 'low', 'open', 'line too long', "
+            "'2026-01-01', '2026-01-01')"
+        )
+        conn.commit()
+        return conn
+
+    def test_migration_runs(self, v2_db: sqlite3.Connection) -> None:
+        applied = apply_pending_migrations(v2_db, 3)
+        assert applied == 1
+        assert _get_schema_version(v2_db) == 3
+
+    def test_columns_added(self, v2_db: sqlite3.Connection) -> None:
+        apply_pending_migrations(v2_db, 3)
+        cols = _get_table_columns(v2_db, "scan_findings")
+        assert "suggestion" in cols
+        assert "scan_run_id" in cols
+
+    def test_index_created(self, v2_db: sqlite3.Connection) -> None:
+        apply_pending_migrations(v2_db, 3)
+        indexes = _get_index_names(v2_db)
+        assert "idx_scan_findings_run" in indexes
+
+    def test_data_preserved(self, v2_db: sqlite3.Connection) -> None:
+        apply_pending_migrations(v2_db, 3)
+        row = v2_db.execute("SELECT message FROM scan_findings WHERE id = 'sf1'").fetchone()
+        assert row[0] == "line too long"
+
+    def test_new_columns_have_defaults(self, v2_db: sqlite3.Connection) -> None:
+        apply_pending_migrations(v2_db, 3)
+        row = v2_db.execute("SELECT suggestion, scan_run_id FROM scan_findings WHERE id = 'sf1'").fetchone()
+        assert row[0] == ""
+        assert row[1] == ""
+
+    def test_schema_matches_fresh(self, v2_db: sqlite3.Connection, tmp_path: Path) -> None:
+        """Migrated schema matches fresh SCHEMA_SQL for scan_findings table."""
+        apply_pending_migrations(v2_db, 3)
+
+        fresh = _make_db(tmp_path, "fresh.db")
+        from filigree.core import SCHEMA_SQL
+
+        fresh.executescript(SCHEMA_SQL)
+        fresh.commit()
+
+        migrated_cols = _get_table_columns(v2_db, "scan_findings")
+        fresh_cols = _get_table_columns(fresh, "scan_findings")
+        assert migrated_cols == fresh_cols, f"Column mismatch: {migrated_cols} != {fresh_cols}"
+
+        # Check that the new index exists in both
+        fresh_indexes = _get_index_names(fresh)
+        migrated_indexes = _get_index_names(v2_db)
+        assert "idx_scan_findings_run" in fresh_indexes
+        assert "idx_scan_findings_run" in migrated_indexes
+
+        fresh.close()
+
+
+# ---------------------------------------------------------------------------
 # Schema equivalence test
 # ---------------------------------------------------------------------------
 
