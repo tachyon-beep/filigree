@@ -40,6 +40,7 @@ from filigree.core import (
     SUMMARY_FILENAME,
     FiligreeDB,
     find_filigree_root,
+    get_mode,
     read_config,
     write_config,
 )
@@ -834,13 +835,16 @@ def install(
         config["mode"] = mode
         write_config(filigree_dir, config)
 
+    # Resolve effective mode (explicit flag > config > default)
+    mode = mode or get_mode(filigree_dir)
+
     project_root = filigree_dir.parent
     install_all = not any([claude_code, codex, claude_md, agents_md, gitignore, hooks_only, skills_only])
 
     results: list[tuple[str, bool, str]] = []
 
     if install_all or claude_code:
-        ok, msg = install_claude_code_mcp(project_root)
+        ok, msg = install_claude_code_mcp(project_root, mode=mode)
         results.append(("Claude Code MCP", ok, msg))
 
     if install_all or codex:
@@ -866,6 +870,19 @@ def install(
     if install_all or claude_code or skills_only:
         ok, msg = install_skills(project_root)
         results.append(("Claude Code skills", ok, msg))
+
+    # Server mode: register project in server.json
+    if mode == "server":
+        try:
+            from filigree.server import daemon_status, register_project
+
+            register_project(filigree_dir)
+            results.append(("Server registration", True, "Registered in server.json"))
+            status = daemon_status()
+            if not status.running:
+                click.echo('\nNote: start the daemon with "filigree server start"')
+        except Exception as e:
+            results.append(("Server registration", False, str(e)))
 
     for name, ok, msg in results:
         icon = "OK" if ok else "!!"

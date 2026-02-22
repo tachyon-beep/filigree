@@ -1430,6 +1430,55 @@ class TestInstallMode:
         assert config["mode"] == "server"
 
 
+class TestInstallModeIntegration:
+    def test_install_server_mode_registers_project(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cli_runner: CliRunner) -> None:
+        monkeypatch.chdir(tmp_path)
+        cli_runner.invoke(cli, ["init"])
+
+        config_dir = tmp_path / ".server-config"
+        monkeypatch.setattr("filigree.server.SERVER_CONFIG_DIR", config_dir)
+        monkeypatch.setattr("filigree.server.SERVER_CONFIG_FILE", config_dir / "server.json")
+        monkeypatch.setattr("filigree.server.SERVER_PID_FILE", config_dir / "server.pid")
+
+        result = cli_runner.invoke(cli, ["install", "--mode", "server"])
+        assert result.exit_code == 0
+
+        from filigree.server import read_server_config
+
+        sc = read_server_config()
+        assert len(sc.projects) == 1
+
+    def test_install_ethereal_mode_does_not_register(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cli_runner: CliRunner) -> None:
+        monkeypatch.chdir(tmp_path)
+        cli_runner.invoke(cli, ["init"])
+
+        config_dir = tmp_path / ".server-config"
+        monkeypatch.setattr("filigree.server.SERVER_CONFIG_DIR", config_dir)
+        monkeypatch.setattr("filigree.server.SERVER_CONFIG_FILE", config_dir / "server.json")
+        monkeypatch.setattr("filigree.server.SERVER_PID_FILE", config_dir / "server.pid")
+
+        result = cli_runner.invoke(cli, ["install", "--mode", "ethereal"])
+        assert result.exit_code == 0
+
+        from filigree.server import read_server_config
+
+        sc = read_server_config()
+        assert len(sc.projects) == 0
+
+    def test_install_server_mode_passes_mode_to_mcp(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cli_runner: CliRunner) -> None:
+        monkeypatch.chdir(tmp_path)
+        cli_runner.invoke(cli, ["init"])
+
+        config_dir = tmp_path / ".server-config"
+        monkeypatch.setattr("filigree.server.SERVER_CONFIG_DIR", config_dir)
+        monkeypatch.setattr("filigree.server.SERVER_CONFIG_FILE", config_dir / "server.json")
+        monkeypatch.setattr("filigree.server.SERVER_PID_FILE", config_dir / "server.pid")
+
+        result = cli_runner.invoke(cli, ["install", "--mode", "server"])
+        assert result.exit_code == 0
+        assert "Server registration" in result.output
+
+
 class TestNoFiligreeDir:
     def test_commands_fail_without_init(self, tmp_path: Path, cli_runner: CliRunner) -> None:
         original = os.getcwd()
