@@ -196,3 +196,26 @@ class TestProjectManager:
         entry = pm.register_local(fake_project)
         assert entry.key == "myproj"
         assert not registry_dir.exists(), "register_local should not create the registry dir"
+
+    def test_register_local_collision_gets_unique_key(
+        self, registry_dir: Path, fake_project: Path, tmp_path: Path
+    ) -> None:
+        """Two local-only projects with the same prefix get distinct keys."""
+        fdir2 = tmp_path / "other" / ".filigree"
+        fdir2.mkdir(parents=True)
+        write_config(fdir2, {"prefix": "myproj", "version": 1, "enabled_packs": ["core"]})
+        db = FiligreeDB(fdir2 / "filigree.db", prefix="myproj")
+        db.initialize()
+        db.close()
+
+        reg = Registry()
+        pm = ProjectManager(reg)
+        e1 = pm.register_local(fake_project)
+        e2 = pm.register_local(fdir2)
+
+        assert e1.key != e2.key, "Same-prefix projects must get distinct keys"
+        assert e1.key == "myproj"
+        assert e2.key.startswith("myproj-")
+        # Both projects must remain accessible
+        assert pm.get_db(e1.key) is not None
+        assert pm.get_db(e2.key) is not None

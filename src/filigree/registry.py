@@ -151,7 +151,8 @@ class ProjectManager:
         filigree_dir = filigree_dir.resolve()
         config = read_config(filigree_dir)
         prefix = config.get("prefix", "filigree")
-        key = Registry._derive_key(prefix, str(filigree_dir), {})
+        existing = {k: {"key": k} for k in self._paths}
+        key = Registry._derive_key(prefix, str(filigree_dir), existing)
         entry = ProjectEntry(
             path=str(filigree_dir),
             name=prefix,
