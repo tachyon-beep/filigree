@@ -7,9 +7,12 @@ for the ethereal installation mode.
 from __future__ import annotations
 
 import hashlib
+import json as _json
 import logging
+import os
 import socket
 from pathlib import Path
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -62,3 +65,91 @@ def find_available_port(filigree_dir: Path) -> int:
     port: int = sock.getsockname()[1]
     sock.close()
     return port
+
+
+# ---------------------------------------------------------------------------
+# PID lifecycle
+# ---------------------------------------------------------------------------
+
+
+def write_pid_file(pid_file: Path, pid: int, *, cmd: str = "filigree") -> None:
+    """Write PID + process identity to file (JSON format, atomic)."""
+    from filigree.core import write_atomic
+
+    content = _json.dumps({"pid": pid, "cmd": cmd})
+    write_atomic(pid_file, content)
+
+
+def read_pid_file(pid_file: Path) -> dict[str, Any] | None:
+    """Read PID info from file. Returns None if missing or corrupt.
+
+    Supports both JSON format (new) and plain integer (legacy).
+    """
+    if not pid_file.exists():
+        return None
+    try:
+        text = pid_file.read_text().strip()
+        # Try JSON first (new format)
+        try:
+            data = _json.loads(text)
+            if isinstance(data, dict) and "pid" in data:
+                return {"pid": int(data["pid"]), "cmd": data.get("cmd", "unknown")}
+        except (_json.JSONDecodeError, TypeError):
+            pass
+        # Fall back to plain integer (legacy format)
+        return {"pid": int(text), "cmd": "unknown"}
+    except (ValueError, OSError):
+        return None
+
+
+def is_pid_alive(pid: int) -> bool:
+    """Check if a process is running (via kill signal 0)."""
+    try:
+        os.kill(pid, 0)
+        return True
+    except (OSError, ProcessLookupError):
+        return False
+
+
+def verify_pid_ownership(pid_file: Path, *, expected_cmd: str = "filigree") -> bool:
+    """Verify PID file refers to a live process with expected identity."""
+    info = read_pid_file(pid_file)
+    if info is None:
+        return False
+    if not is_pid_alive(info["pid"]):
+        return False
+    return bool(info["cmd"] == expected_cmd)
+
+
+def cleanup_stale_pid(pid_file: Path) -> bool:
+    """Remove PID file if the process is dead. Returns True if cleaned."""
+    info = read_pid_file(pid_file)
+    if info is None:
+        return False
+    if not is_pid_alive(info["pid"]):
+        pid_file.unlink(missing_ok=True)
+        logger.info("Cleaned stale PID file %s (pid %d)", pid_file, info["pid"])
+        return True
+    return False
+
+
+# ---------------------------------------------------------------------------
+# Port file helpers
+# ---------------------------------------------------------------------------
+
+
+def write_port_file(port_file: Path, port: int) -> None:
+    """Write the active dashboard port to file (atomic)."""
+    from filigree.core import write_atomic
+
+    write_atomic(port_file, str(port))
+
+
+def read_port_file(port_file: Path) -> int | None:
+    """Read the dashboard port from file. Returns None if missing/corrupt."""
+    if not port_file.exists():
+        return None
+    try:
+        return int(port_file.read_text().strip())
+    except (ValueError, OSError):
+        return None
