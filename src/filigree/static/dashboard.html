@@ -264,7 +264,7 @@ tailwind.config = {
               <option value="4">4</option>
             </select>
           </label>
-          <button onclick="clearGraphFocus()" class="px-2 py-0.5 rounded bg-overlay bg-overlay-hover" title="Clear graph focus root/radius">Clear Focus</button>
+          <button id="graphClearFocusBtn" onclick="clearGraphFocus()" class="px-2 py-0.5 rounded bg-overlay bg-overlay-hover" title="Clear graph focus root/radius">Clear Focus</button>
           <span class="text-muted">|</span>
           <label class="flex items-center gap-1">
             Trace path:
@@ -276,7 +276,7 @@ tailwind.config = {
             <input id="graphPathTarget" type="text" placeholder="issue ID" aria-label="Path target issue ID" oninput="onGraphPathInput()" class="bg-overlay text-primary text-xs rounded px-2 py-0.5 border border-strong w-24 focus:outline-none focus-accent">
           </label>
           <button id="graphTraceBtn" onclick="traceGraphPath()" disabled class="px-2 py-0.5 rounded bg-overlay bg-overlay-hover opacity-50 cursor-not-allowed" title="Trace dependency path between source and target">Trace</button>
-          <button onclick="clearGraphPath()" class="px-2 py-0.5 rounded bg-overlay bg-overlay-hover" title="Clear active path trace">Clear Path</button>
+          <button id="graphClearPathBtn" onclick="clearGraphPath()" class="px-2 py-0.5 rounded bg-overlay bg-overlay-hover" title="Clear active path trace">Clear Path</button>
           <span class="text-muted">|</span>
           <label class="flex items-center gap-1">
             Node cap:

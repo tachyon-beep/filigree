@@ -70,6 +70,8 @@ class TestDashboardIndex:
         assert 'id="graphFocusMode"' in html
         assert 'id="graphFocusRoot"' in html
         assert 'id="graphFocusRadius"' in html
+        assert 'id="graphClearFocusBtn"' in html
+        assert 'id="graphClearPathBtn"' in html
         assert 'onchange="onGraphFocusModeChange()"' in html
         assert 'oninput="onGraphFocusRootInput()"' in html
         assert 'id="graphPathSource"' in html
@@ -185,6 +187,19 @@ class TestGraphFrontendContracts:
         assert ".graph-toolbar label { min-height: 44px;" in html
         assert ".graph-toolbar button, .graph-toolbar select, .graph-toolbar input[type=\"text\"], .graph-toolbar summary {" in html
         assert 'class="graph-toolbar' in html
+
+    def test_graph_clear_buttons_disable_when_inactive(self) -> None:
+        graph_js = (STATIC_DIR / "js" / "views" / "graph.js").read_text()
+        html = (STATIC_DIR / "dashboard.html").read_text()
+        assert "function setToolbarButtonEnabled(id, enabled)" in graph_js
+        assert "function updateGraphClearButtons()" in graph_js
+        assert 'setToolbarButtonEnabled("graphClearFocusBtn", focusActive);' in graph_js
+        assert 'setToolbarButtonEnabled("graphClearPathBtn", state.graphPathNodes.size > 0);' in graph_js
+        assert 'if (document.getElementById("graphClearFocusBtn")?.disabled) return;' in graph_js
+        assert 'if (document.getElementById("graphClearPathBtn")?.disabled) return;' in graph_js
+        assert graph_js.count("updateGraphClearButtons();") >= 6
+        assert 'id="graphClearFocusBtn"' in html
+        assert 'id="graphClearPathBtn"' in html
 
     def test_graph_caps_are_within_advanced_disclosure_group(self) -> None:
         html = (STATIC_DIR / "dashboard.html").read_text()

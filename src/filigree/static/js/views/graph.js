@@ -122,6 +122,22 @@ function setGraphSearchButtonsEnabled(enabled) {
   });
 }
 
+function setToolbarButtonEnabled(id, enabled) {
+  const btn = document.getElementById(id);
+  if (!btn) return;
+  btn.disabled = !enabled;
+  btn.classList.toggle("opacity-50", !enabled);
+  btn.classList.toggle("cursor-not-allowed", !enabled);
+}
+
+function updateGraphClearButtons() {
+  const focusMode = document.getElementById("graphFocusMode");
+  const focusRoot = document.getElementById("graphFocusRoot");
+  const focusActive = Boolean(focusMode?.checked || focusRoot?.value.trim());
+  setToolbarButtonEnabled("graphClearFocusBtn", focusActive);
+  setToolbarButtonEnabled("graphClearPathBtn", state.graphPathNodes.size > 0);
+}
+
 function updateGraphPerfState() {
   const el = document.getElementById("graphPerfState");
   if (!el) return;
@@ -219,6 +235,7 @@ export function onGraphEpicsOnlyChange() {
 }
 
 export function clearGraphFocus() {
+  if (document.getElementById("graphClearFocusBtn")?.disabled) return;
   const mode = document.getElementById("graphFocusMode");
   const root = document.getElementById("graphFocusRoot");
   const radius = document.getElementById("graphFocusRadius");
@@ -226,6 +243,7 @@ export function clearGraphFocus() {
   if (root) root.value = "";
   if (radius) radius.value = "2";
   setGraphNotice(state.graphFallbackNotice || "");
+  updateGraphClearButtons();
   refreshGraphData(true).then(() => {
     if (state.currentView === "graph") renderGraph();
   });
@@ -242,6 +260,7 @@ export function onGraphFocusModeChange() {
   } else if (!rootValue && !state.graphPathNodes.size) {
     setGraphNotice(FOCUS_ROOT_NOTICE);
   }
+  updateGraphClearButtons();
   renderGraph();
 }
 
@@ -252,6 +271,7 @@ export function onGraphFocusRootInput() {
   const rootValue = root.value.trim();
   mode.checked = rootValue.length > 0;
   if (!rootValue && !state.graphPathNodes.size) setGraphNotice(state.graphFallbackNotice || "");
+  updateGraphClearButtons();
   scheduleDebouncedGraphRender("focusRoot");
 }
 
@@ -283,9 +303,11 @@ export function graphSearchPrev() {
 }
 
 export function clearGraphPath() {
+  if (document.getElementById("graphClearPathBtn")?.disabled) return;
   state.graphPathNodes.clear();
   state.graphPathEdges.clear();
   setGraphNotice(state.graphFallbackNotice || "");
+  updateGraphClearButtons();
   renderGraph();
 }
 
@@ -329,6 +351,7 @@ export function traceGraphPath() {
     state.graphPathNodes.clear();
     state.graphPathEdges.clear();
     setGraphNotice(`No dependency path found from ${source} to ${target}.`);
+    updateGraphClearButtons();
     renderGraph();
     return;
   }
@@ -352,6 +375,7 @@ export function traceGraphPath() {
   }
 
   setGraphNotice(`Path traced (${direction}): ${pathNodes.length} nodes from ${source} to ${target}.`);
+  updateGraphClearButtons();
   renderGraph();
 }
 
@@ -582,7 +606,10 @@ function bindGraphEvents() {
 
 export function renderGraph() {
   const renderStarted = performance.now();
-  if (!state.allIssues.length && !(state.graphData && state.graphData.nodes)) return;
+  if (!state.allIssues.length && !(state.graphData && state.graphData.nodes)) {
+    updateGraphClearButtons();
+    return;
+  }
   if (shouldUseGraphV2()) {
     const desiredKey = JSON.stringify(buildGraphQuery());
     if (state.graphQueryKey !== desiredKey) {
@@ -857,6 +884,7 @@ export function renderGraph() {
   }
   state.graphTelemetry = { ...(state.graphTelemetry || {}), render_ms: renderMs };
   updateGraphPerfState();
+  updateGraphClearButtons();
 }
 
 // ---------------------------------------------------------------------------
