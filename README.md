@@ -7,6 +7,8 @@ Agent-native issue tracker with convention-based project discovery.
 [![Python 3.11+](https://img.shields.io/pypi/pyversions/filigree)](https://pypi.org/project/filigree/)
 [![License: MIT](https://img.shields.io/pypi/l/filigree)](https://github.com/tachyon-beep/filigree/blob/main/LICENSE)
 
+![Filigree Dashboard](docs/images/dashboard-screenshot.png)
+
 ## What Is Filigree?
 
 Filigree is a lightweight, SQLite-backed issue tracker designed for AI coding agents (Claude Code, Codex, etc.) to use as first-class citizens. It exposes 43 MCP tools so agents interact natively, plus a full CLI for humans and background subagents.
