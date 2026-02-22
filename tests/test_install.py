@@ -31,6 +31,7 @@ from filigree.install import (
     install_claude_code_hooks,
     install_claude_code_mcp,
     install_codex_mcp,
+    install_codex_skills,
     install_skills,
     run_doctor,
 )
@@ -1049,6 +1050,45 @@ class TestInstallSkills:
         assert (examples / "sprint-plan.json").exists()
 
 
+class TestInstallCodexSkills:
+    def test_installs_skill_pack(self, tmp_path: Path) -> None:
+        ok, _msg = install_codex_skills(tmp_path)
+        assert ok
+        skill_md = tmp_path / ".agents" / "skills" / SKILL_NAME / "SKILL.md"
+        assert skill_md.exists()
+        content = skill_md.read_text()
+        assert "filigree-workflow" in content
+
+    def test_overwrites_on_reinstall(self, tmp_path: Path) -> None:
+        """Re-install should overwrite existing skill (picks up upgrades)."""
+        install_codex_skills(tmp_path)
+        skill_md = tmp_path / ".agents" / "skills" / SKILL_NAME / "SKILL.md"
+        skill_md.write_text("stale content")
+        install_codex_skills(tmp_path)
+        assert "filigree-workflow" in skill_md.read_text()
+
+    def test_preserves_other_skills(self, tmp_path: Path) -> None:
+        """Installing filigree skill should not touch other skills."""
+        other_skill = tmp_path / ".agents" / "skills" / "other-skill"
+        other_skill.mkdir(parents=True)
+        (other_skill / "SKILL.md").write_text("other")
+        install_codex_skills(tmp_path)
+        assert (other_skill / "SKILL.md").read_text() == "other"
+
+    def test_includes_references(self, tmp_path: Path) -> None:
+        install_codex_skills(tmp_path)
+        refs = tmp_path / ".agents" / "skills" / SKILL_NAME / "references"
+        assert refs.is_dir()
+        assert (refs / "workflow-patterns.md").exists()
+        assert (refs / "team-coordination.md").exists()
+
+    def test_includes_examples(self, tmp_path: Path) -> None:
+        install_codex_skills(tmp_path)
+        examples = tmp_path / ".agents" / "skills" / SKILL_NAME / "examples"
+        assert examples.is_dir()
+        assert (examples / "sprint-plan.json").exists()
+
+
 class TestDoctorSkillsCheck:
     def test_passes_when_skill_installed(self, filigree_project: Path) -> None:
         install_skills(filigree_project)
@@ -1171,3 +1211,11 @@ class TestDoctorModeChecks:
         assert "Server daemon" in names
         daemon_result = next(r for r in results if r.name == "Server daemon")
         assert not daemon_result.passed  # not running
+
+
+class TestInstructionsSessionHint:
+    def test_instructions_contain_session_context_hint(self) -> None:
+        from filigree.install import _instructions_text
+
+        text = _instructions_text()
+        assert "filigree session-context" in text

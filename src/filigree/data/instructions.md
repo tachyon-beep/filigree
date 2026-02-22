@@ -82,6 +82,11 @@ Key endpoints:
 5. Do the work, commit code
 6. `filigree close <id>` when done
 
+### Session Start
+When beginning a new session, run `filigree session-context` to load the project
+snapshot (ready work, in-progress items, critical path). This provides the
+context needed to pick up where the previous session left off.
+
 ### Priority Scale
 - P0: Critical (drop everything)
 - P1: High (do next)
