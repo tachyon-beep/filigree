@@ -415,3 +415,64 @@ class TestEnsureDashboardEthereal:
         monkeypatch.setattr("filigree.hooks._is_port_listening", lambda *a: False)
         result = ensure_dashboard_running()
         assert "not running" in result.lower()
+
+    def test_server_mode_registration_failure_is_reported(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        filigree_dir = tmp_path / ".filigree"
+        filigree_dir.mkdir()
+        (filigree_dir / "config.json").write_text(json.dumps({"prefix": "test", "version": 1, "mode": "server"}))
+        db = FiligreeDB(filigree_dir / DB_FILENAME, prefix="test")
+        db.initialize()
+        db.close()
+
+        def _raise_registration(_path: Path) -> None:
+            raise ValueError("bad schema")
+
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr("filigree.server.register_project", _raise_registration)
+        monkeypatch.setattr("filigree.hooks._is_port_listening", lambda *a: True)
+
+        result = ensure_dashboard_running()
+        assert "registration failed" in result.lower()
+        assert "bad schema" in result.lower()
+
+    def test_server_mode_posts_reload_using_configured_port(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from filigree.server import ServerConfig
+
+        filigree_dir = tmp_path / ".filigree"
+        filigree_dir.mkdir()
+        (filigree_dir / "config.json").write_text(json.dumps({"prefix": "test", "version": 1, "mode": "server"}))
+        db = FiligreeDB(filigree_dir / DB_FILENAME, prefix="test")
+        db.initialize()
+        db.close()
+
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr("filigree.server.register_project", lambda _p: None)
+        monkeypatch.setattr("filigree.server.read_server_config", lambda: ServerConfig(port=9911))
+        monkeypatch.setattr("filigree.hooks._is_port_listening", lambda *a: True)
+
+        observed: dict[str, object] = {}
+
+        class _Resp:
+            status = 200
+
+            def __enter__(self) -> _Resp:
+                return self
+
+            def __exit__(self, *_args: object) -> bool:
+                return False
+
+        def _fake_urlopen(req: object, timeout: int = 0) -> _Resp:
+            observed["url"] = getattr(req, "full_url", "")
+            observed["timeout"] = timeout
+            return _Resp()
+
+        monkeypatch.setattr("urllib.request.urlopen", _fake_urlopen)
+        result = ensure_dashboard_running()
+
+        assert "http://localhost:9911" in result
+        assert observed["url"] == "http://127.0.0.1:9911/api/reload"
+        assert observed["timeout"] == 2

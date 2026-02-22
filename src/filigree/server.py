@@ -126,6 +126,10 @@ def start_daemon(port: int | None = None) -> DaemonResult:
 
     config = read_server_config()
     daemon_port = port or config.port
+    # Persist the effective daemon port so status/hooks/install agree.
+    if config.port != daemon_port:
+        config.port = daemon_port
+        write_server_config(config)
 
     SERVER_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     filigree_cmd = find_filigree_command()

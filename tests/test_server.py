@@ -179,6 +179,26 @@ class TestDaemonLifecycle:
         assert len(spawned) == 1
         assert "--server-mode" in spawned[0]
 
+    def test_start_daemon_persists_port_override(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        config_dir = tmp_path / ".config" / "filigree"
+        monkeypatch.setattr("filigree.server.SERVER_CONFIG_DIR", config_dir)
+        monkeypatch.setattr("filigree.server.SERVER_CONFIG_FILE", config_dir / "server.json")
+        monkeypatch.setattr("filigree.server.SERVER_PID_FILE", config_dir / "server.pid")
+
+        def mock_popen(cmd: list[str], **kwargs: object) -> MagicMock:
+            mock = MagicMock()
+            mock.pid = 88888
+            mock.poll.return_value = None
+            return mock
+
+        monkeypatch.setattr("filigree.server.subprocess.Popen", mock_popen)
+        from filigree.server import start_daemon
+
+        result = start_daemon(port=9911)
+        assert result.success
+        cfg = read_server_config()
+        assert cfg.port == 9911
+
     def test_status_reports_not_running(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         config_dir = tmp_path / ".config" / "filigree"
         monkeypatch.setattr("filigree.server.SERVER_PID_FILE", config_dir / "server.pid")

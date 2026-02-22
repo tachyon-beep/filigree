@@ -206,7 +206,7 @@ def _is_port_listening(port: int, host: str = "127.0.0.1") -> bool:
         sock.close()
 
 
-def ensure_dashboard_running(port: int = 8377) -> str:
+def ensure_dashboard_running(port: int | None = None) -> str:
     """Ensure the filigree dashboard is running.
 
     In ethereal mode (default): spawns a single-project dashboard on a
@@ -311,7 +311,7 @@ def _ensure_dashboard_ethereal_mode(filigree_dir: Path) -> str:
             lock_fd.close()
 
 
-def _ensure_dashboard_server_mode(filigree_dir: Path, port: int) -> str:
+def _ensure_dashboard_server_mode(filigree_dir: Path, port: int | None) -> str:
     """Server mode: register this project, then notify the daemon to reload.
 
     1. ``register_project()`` is idempotent and lock-protected.
@@ -319,28 +319,34 @@ def _ensure_dashboard_server_mode(filigree_dir: Path, port: int) -> str:
        the (possibly new) registration.  Uses a 2-second timeout so
        session startup isn't blocked by a slow daemon.
     """
-    from filigree.server import register_project
+    from filigree.server import read_server_config, register_project
+
+    daemon_port = port if port is not None else read_server_config().port
 
     try:
         register_project(filigree_dir)
-    except Exception:
+    except Exception as exc:
         logger.warning("Failed to register project in server.json", exc_info=True)
+        return f"Filigree server registration failed: {exc}"
 
-    if not _is_port_listening(port):
-        return f"Filigree server not running on port {port}. Start it with: filigree server start"
+    if not _is_port_listening(daemon_port):
+        return f"Filigree server not running on port {daemon_port}. Start it with: filigree server start"
 
     # Notify daemon to reload project list
+    reload_warning = ""
     try:
         import urllib.request
 
         req = urllib.request.Request(
-            f"http://127.0.0.1:{port}/api/reload",
+            f"http://127.0.0.1:{daemon_port}/api/reload",
             method="POST",
             data=b"",
             headers={"Content-Type": "application/json"},
         )
-        urllib.request.urlopen(req, timeout=2)  # noqa: S310
+        with urllib.request.urlopen(req, timeout=2):  # noqa: S310
+            pass
     except Exception:
         logger.debug("Failed to POST /api/reload to daemon", exc_info=True)
+        reload_warning = " (reload failed)"
 
-    return f"Filigree server running on http://localhost:{port}"
+    return f"Filigree server running on http://localhost:{daemon_port}{reload_warning}"

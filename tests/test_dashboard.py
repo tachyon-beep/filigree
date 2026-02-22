@@ -1459,6 +1459,31 @@ class TestProjectStore:
         assert "bravo" in diff["removed"]
         assert len(project_store.list_projects()) == 1
 
+    def test_reload_corrupt_file_retains_state(self, project_store: ProjectStore, tmp_path: Path) -> None:
+        config_dir = tmp_path / ".config" / "filigree"
+        before_keys = {p["key"] for p in project_store.list_projects()}
+
+        (config_dir / "server.json").write_text("{bad json")
+        diff = project_store.reload()
+
+        assert diff == {"added": [], "removed": []}
+        after_keys = {p["key"] for p in project_store.list_projects()}
+        assert after_keys == before_keys
+
+    def test_get_db_logs_and_reraises_open_failure(
+        self,
+        project_store: ProjectStore,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        def _boom(_self: FiligreeDB) -> None:
+            raise RuntimeError("boom")
+
+        monkeypatch.setattr(FiligreeDB, "initialize", _boom)
+        with caplog.at_level("ERROR"), pytest.raises(RuntimeError, match="boom"):
+            project_store.get_db("alpha")
+        assert "Failed to open project DB" in caplog.text
+
     def test_load_skips_missing_dir(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         import json
 
@@ -1570,6 +1595,14 @@ class TestMultiProjectManagement:
         assert "status" in data
         assert "added" in data
         assert "removed" in data
+
+    async def test_health_in_server_mode(self, multi_client: AsyncClient) -> None:
+        resp = await multi_client.get("/api/health")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "ok"
+        assert data["mode"] == "server"
+        assert data["projects"] == 2
 
 
 class TestEtherealProjectsEndpoint:

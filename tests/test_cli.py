@@ -1478,6 +1478,27 @@ class TestInstallModeIntegration:
         assert result.exit_code == 0
         assert "Server registration" in result.output
 
+    def test_install_server_mode_uses_configured_server_port(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cli_runner: CliRunner
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        cli_runner.invoke(cli, ["init"])
+
+        config_dir = tmp_path / ".server-config"
+        monkeypatch.setattr("filigree.server.SERVER_CONFIG_DIR", config_dir)
+        monkeypatch.setattr("filigree.server.SERVER_CONFIG_FILE", config_dir / "server.json")
+        monkeypatch.setattr("filigree.server.SERVER_PID_FILE", config_dir / "server.pid")
+
+        from filigree.server import ServerConfig, write_server_config
+
+        write_server_config(ServerConfig(port=9911))
+        result = cli_runner.invoke(cli, ["install", "--mode", "server"])
+        assert result.exit_code == 0
+
+        mcp = json.loads((tmp_path / ".mcp.json").read_text())
+        assert mcp["mcpServers"]["filigree"]["type"] == "streamable-http"
+        assert mcp["mcpServers"]["filigree"]["url"] == "http://localhost:9911/mcp/"
+
 
 class TestNoFiligreeDir:
     def test_commands_fail_without_init(self, tmp_path: Path, cli_runner: CliRunner) -> None:

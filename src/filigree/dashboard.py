@@ -21,6 +21,7 @@ Usage:
 
 from __future__ import annotations
 
+import json
 import logging
 import webbrowser
 from contextvars import ContextVar
@@ -75,7 +76,20 @@ class ProjectStore:
         Skips directories that don't exist (logs warning).
         Raises ``ValueError`` on prefix collision.
         """
-        from filigree.server import read_server_config
+        from filigree.server import SERVER_CONFIG_FILE, read_server_config
+
+        # Fail fast on corrupt JSON so reload() can retain current state.
+        if SERVER_CONFIG_FILE.exists():
+            try:
+                raw = SERVER_CONFIG_FILE.read_text()
+                parsed = json.loads(raw)
+            except (OSError, json.JSONDecodeError) as exc:
+                raise ValueError(f"Corrupt server config {SERVER_CONFIG_FILE}: {exc}") from exc
+            if not isinstance(parsed, dict):
+                raise ValueError(f"Corrupt server config {SERVER_CONFIG_FILE}: expected JSON object")
+            projects_node = parsed.get("projects", {})
+            if not isinstance(projects_node, dict):
+                raise ValueError(f"Corrupt server config {SERVER_CONFIG_FILE}: 'projects' must be an object")
 
         config = read_server_config()
         projects: dict[str, dict[str, str]] = {}
@@ -98,14 +112,18 @@ class ProjectStore:
         if key not in self._dbs:
             info = self._projects[key]
             filigree_path = Path(info["path"])
-            config = read_config(filigree_path)
-            db = FiligreeDB(
-                filigree_path / DB_FILENAME,
-                prefix=config.get("prefix", key),
-                check_same_thread=False,
-            )
-            db.initialize()
-            self._dbs[key] = db
+            try:
+                config = read_config(filigree_path)
+                db = FiligreeDB(
+                    filigree_path / DB_FILENAME,
+                    prefix=config.get("prefix", key),
+                    check_same_thread=False,
+                )
+                db.initialize()
+                self._dbs[key] = db
+            except Exception:
+                logger.error("Failed to open project DB for key=%r path=%s", key, filigree_path, exc_info=True)
+                raise
         return self._dbs[key]
 
     def list_projects(self) -> list[dict[str, str]]:

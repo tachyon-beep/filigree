@@ -842,9 +842,17 @@ def install(
     install_all = not any([claude_code, codex, claude_md, agents_md, gitignore, hooks_only, skills_only])
 
     results: list[tuple[str, bool, str]] = []
+    server_port = 8377
+    if mode == "server":
+        try:
+            from filigree.server import read_server_config
+
+            server_port = read_server_config().port
+        except Exception:
+            logging.getLogger(__name__).debug("Failed to read server config port; defaulting to 8377", exc_info=True)
 
     if install_all or claude_code:
-        ok, msg = install_claude_code_mcp(project_root, mode=mode)
+        ok, msg = install_claude_code_mcp(project_root, mode=mode, server_port=server_port)
         results.append(("Claude Code MCP", ok, msg))
 
     if install_all or codex:
@@ -987,8 +995,8 @@ def session_context() -> None:
 
 
 @cli.command("ensure-dashboard")
-@click.option("--port", default=8377, type=int, help="Dashboard port (default 8377)")
-def ensure_dashboard_cmd(port: int) -> None:
+@click.option("--port", default=None, type=int, help="Dashboard port override (server mode)")
+def ensure_dashboard_cmd(port: int | None) -> None:
     """Ensure the filigree dashboard is running."""
     try:
         from filigree.hooks import ensure_dashboard_running
