@@ -83,6 +83,19 @@ def write_config(filigree_dir: Path, config: dict[str, Any]) -> None:
     config_path.write_text(json.dumps(config, indent=2) + "\n")
 
 
+VALID_MODES: frozenset[str] = frozenset({"ethereal", "server"})
+
+
+def get_mode(filigree_dir: Path) -> str:
+    """Return the installation mode for a project. Defaults to 'ethereal'."""
+    config = read_config(filigree_dir)
+    mode: str = config.get("mode", "ethereal")
+    if mode not in VALID_MODES:
+        logger.warning("Unknown mode '%s' in config, falling back to 'ethereal'", mode)
+        return "ethereal"
+    return mode
+
+
 # ---------------------------------------------------------------------------
 # Schema
 # ---------------------------------------------------------------------------

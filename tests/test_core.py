@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import json
+import logging
+from pathlib import Path
+
 import pytest
 
-from filigree.core import FiligreeDB
+from filigree.core import FiligreeDB, get_mode
 
 
 class TestCreateAndGet:
@@ -265,3 +269,45 @@ class TestDescriptionNotesAuditTrail:
             (issue.id,),
         ).fetchall()
         assert len(events) == 0
+
+
+class TestGetMode:
+    def test_default_mode_is_ethereal(self, tmp_path: Path) -> None:
+        """Projects without a mode field default to ethereal."""
+        filigree_dir = tmp_path / ".filigree"
+        filigree_dir.mkdir()
+        config = {"prefix": "test", "version": 1}
+        (filigree_dir / "config.json").write_text(json.dumps(config))
+        assert get_mode(filigree_dir) == "ethereal"
+
+    def test_explicit_ethereal(self, tmp_path: Path) -> None:
+        filigree_dir = tmp_path / ".filigree"
+        filigree_dir.mkdir()
+        config = {"prefix": "test", "version": 1, "mode": "ethereal"}
+        (filigree_dir / "config.json").write_text(json.dumps(config))
+        assert get_mode(filigree_dir) == "ethereal"
+
+    def test_explicit_server(self, tmp_path: Path) -> None:
+        filigree_dir = tmp_path / ".filigree"
+        filigree_dir.mkdir()
+        config = {"prefix": "test", "version": 1, "mode": "server"}
+        (filigree_dir / "config.json").write_text(json.dumps(config))
+        assert get_mode(filigree_dir) == "server"
+
+    def test_missing_config_defaults_to_ethereal(self, tmp_path: Path) -> None:
+        filigree_dir = tmp_path / ".filigree"
+        filigree_dir.mkdir()
+        assert get_mode(filigree_dir) == "ethereal"
+
+    def test_unknown_mode_falls_back_to_ethereal(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Unknown mode values fall back to ethereal with a warning."""
+        filigree_dir = tmp_path / ".filigree"
+        filigree_dir.mkdir()
+        config = {"prefix": "test", "version": 1, "mode": "bogus"}
+        (filigree_dir / "config.json").write_text(json.dumps(config))
+        with caplog.at_level(logging.WARNING, logger="filigree.core"):
+            result = get_mode(filigree_dir)
+        assert result == "ethereal"
+        assert "bogus" in caplog.text
