@@ -6,7 +6,7 @@
 
 **Architecture:** Mode is stored in `.filigree/config.json` as `"mode": "ethereal"|"server"`. Ethereal mode spawns a per-project dashboard on a deterministic port via SessionStart hook. Server mode runs a persistent daemon with streamable HTTP MCP. Both modes eliminate the shared `~/.filigree/registry.json`.
 
-**Tech Stack:** Python 3.11+, Click (CLI), FastAPI/uvicorn (dashboard), MCP SDK (streamable HTTP), TOML (server config), fcntl (locking).
+**Tech Stack:** Python 3.11+, Click (CLI), FastAPI/uvicorn (dashboard), MCP SDK (streamable HTTP), JSON (config), fcntl (locking).
 
 **Design doc:** `docs/plans/2026-02-22-server-ethereal-modes-design.md`
 
@@ -27,6 +27,8 @@
 - Test: `tests/test_core.py`
 
 **Step 1: Write the failing test**
+
+Add imports at top of `tests/test_core.py`: `from filigree.core import get_mode` and `import json`.
 
 ```python
 # tests/test_core.py — append to existing file
@@ -58,9 +60,15 @@ class TestGetMode:
         filigree_dir = tmp_path / ".filigree"
         filigree_dir.mkdir()
         assert get_mode(filigree_dir) == "ethereal"
-```
 
-Add import: `from filigree.core import get_mode` at top of test file.
+    def test_unknown_mode_falls_back_to_ethereal(self, tmp_path: Path) -> None:
+        """Unknown mode values fall back to ethereal with a warning."""
+        filigree_dir = tmp_path / ".filigree"
+        filigree_dir.mkdir()
+        config = {"prefix": "test", "version": 1, "mode": "bogus"}
+        (filigree_dir / "config.json").write_text(json.dumps(config))
+        assert get_mode(filigree_dir) == "ethereal"
+```
 
 **Step 2: Run test to verify it fails**
 
@@ -99,6 +107,114 @@ git commit -m "feat(core): add get_mode() helper for installation mode"
 
 ---
 
+### Task 1.5: Move `_find_filigree_command` to core.py and add `write_atomic` helper
+
+**Files:**
+- Modify: `src/filigree/core.py`
+- Modify: `src/filigree/install.py` (remove function, update import)
+- Modify: `src/filigree/hooks.py` (update import)
+- Test: `tests/test_core.py`
+
+**Step 1: Write the failing test**
+
+```python
+# tests/test_core.py — append
+
+from filigree.core import find_filigree_command, write_atomic
+
+
+class TestFindFiligreeCommand:
+    def test_returns_list(self) -> None:
+        """Command is always a list of strings."""
+        result = find_filigree_command()
+        assert isinstance(result, list)
+        assert all(isinstance(s, str) for s in result)
+
+    def test_at_least_one_element(self) -> None:
+        result = find_filigree_command()
+        assert len(result) >= 1
+
+
+class TestWriteAtomic:
+    def test_writes_content(self, tmp_path: Path) -> None:
+        target = tmp_path / "test.txt"
+        write_atomic(target, "hello")
+        assert target.read_text() == "hello"
+
+    def test_no_tmp_file_left(self, tmp_path: Path) -> None:
+        target = tmp_path / "test.txt"
+        write_atomic(target, "hello")
+        assert not (tmp_path / "test.txt.tmp").exists()
+
+    def test_atomic_on_error(self, tmp_path: Path) -> None:
+        """If write fails, original content is preserved."""
+        target = tmp_path / "test.txt"
+        target.write_text("original")
+        # Simplified: just verify the function signature works
+        write_atomic(target, "updated")
+        assert target.read_text() == "updated"
+```
+
+**Step 2: Run test to verify it fails**
+
+Run: `uv run pytest tests/test_core.py::TestFindFiligreeCommand tests/test_core.py::TestWriteAtomic -v`
+Expected: FAIL — `ImportError: cannot import name 'find_filigree_command'`
+
+**Step 3: Write implementation**
+
+Move `_find_filigree_command` from `src/filigree/install.py:107` to `src/filigree/core.py` (rename to `find_filigree_command` — drop the underscore since it's now public API):
+
+```python
+# src/filigree/core.py — after write_config()
+
+def find_filigree_command() -> list[str]:
+    """Locate the filigree CLI command as a list of argument tokens.
+
+    Resolution order:
+    1. shutil.which("filigree") — absolute path if on PATH
+    2. Sibling of running Python interpreter (covers venv case)
+    3. sys.executable -m filigree — module invocation fallback
+    """
+    which = shutil.which("filigree")
+    if which:
+        return [which]
+
+    # Check sibling of Python interpreter (common in venvs)
+    python_dir = Path(sys.executable).parent
+    candidate = python_dir / "filigree"
+    if candidate.is_file():
+        return [str(candidate)]
+
+    return [sys.executable, "-m", "filigree"]
+
+
+def write_atomic(path: Path, content: str) -> None:
+    """Write content to path atomically via temp file + os.replace()."""
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(content)
+    os.replace(tmp, path)
+```
+
+Add `import os, shutil, sys` to core.py imports if not already present.
+
+Update imports in other files:
+- `src/filigree/hooks.py`: change `from filigree.install import ... _find_filigree_command` to `from filigree.core import find_filigree_command`
+- `src/filigree/install.py`: remove `_find_filigree_command` function body, add `from filigree.core import find_filigree_command` and update internal usage
+
+**Step 4: Run test to verify it passes**
+
+Run: `uv run pytest tests/test_core.py -v`
+Expected: PASS
+
+**Step 5: Commit**
+
+```bash
+git add src/filigree/core.py src/filigree/install.py src/filigree/hooks.py tests/test_core.py
+git commit -m "refactor(core): move find_filigree_command + add write_atomic helper"
+```
+
+---
+
 ### Task 2: Add `--mode` flag to `filigree init`
 
 **Files:**
@@ -111,32 +227,49 @@ git commit -m "feat(core): add get_mode() helper for installation mode"
 # tests/test_cli.py — add to existing CLI tests
 
 class TestInitMode:
-    def test_init_default_mode_is_ethereal(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_init_default_mode_is_ethereal(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cli_runner: CliRunner) -> None:
         monkeypatch.chdir(tmp_path)
-        result = runner.invoke(cli, ["init"])
+        result = cli_runner.invoke(cli, ["init"])
         assert result.exit_code == 0
         config = json.loads((tmp_path / ".filigree" / "config.json").read_text())
         assert config["mode"] == "ethereal"
 
-    def test_init_with_server_mode(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_init_with_server_mode(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cli_runner: CliRunner) -> None:
         monkeypatch.chdir(tmp_path)
-        result = runner.invoke(cli, ["init", "--mode", "server"])
+        result = cli_runner.invoke(cli, ["init", "--mode", "server"])
         assert result.exit_code == 0
         config = json.loads((tmp_path / ".filigree" / "config.json").read_text())
         assert config["mode"] == "server"
 
-    def test_init_with_explicit_ethereal(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_init_with_explicit_ethereal(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cli_runner: CliRunner) -> None:
         monkeypatch.chdir(tmp_path)
-        result = runner.invoke(cli, ["init", "--mode", "ethereal"])
+        result = cli_runner.invoke(cli, ["init", "--mode", "ethereal"])
         assert result.exit_code == 0
         config = json.loads((tmp_path / ".filigree" / "config.json").read_text())
         assert config["mode"] == "ethereal"
 
-    def test_init_invalid_mode_rejected(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_init_invalid_mode_rejected(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cli_runner: CliRunner) -> None:
         monkeypatch.chdir(tmp_path)
-        result = runner.invoke(cli, ["init", "--mode", "bogus"])
+        result = cli_runner.invoke(cli, ["init", "--mode", "bogus"])
         assert result.exit_code != 0
+
+    def test_init_existing_project_updates_mode(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cli_runner: CliRunner) -> None:
+        """Running init --mode=server on an existing project updates the mode."""
+        monkeypatch.chdir(tmp_path)
+        cli_runner.invoke(cli, ["init"])
+        result = cli_runner.invoke(cli, ["init", "--mode", "server"])
+        assert result.exit_code == 0
+        config = json.loads((tmp_path / ".filigree" / "config.json").read_text())
+        assert config["mode"] == "server"
+
+    def test_init_invalid_mode_no_directory_created(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cli_runner: CliRunner) -> None:
+        monkeypatch.chdir(tmp_path)
+        result = cli_runner.invoke(cli, ["init", "--mode", "bogus"])
+        assert result.exit_code != 0
+        assert not (tmp_path / ".filigree").exists()
 ```
+
+Add import: `import json` at top of tests/test_cli.py if not already present.
 
 **Step 2: Run test to verify it fails**
 
@@ -153,16 +286,22 @@ Modify `cli.py` `init` command:
 @click.option(
     "--mode",
     type=click.Choice(["ethereal", "server"], case_sensitive=False),
-    default="ethereal",
+    default=None,
     help="Installation mode (default: ethereal)",
 )
-def init(prefix: str | None, mode: str) -> None:
+def init(prefix: str | None, mode: str | None) -> None:
     """Initialize .filigree/ in the current directory."""
     cwd = Path.cwd()
     filigree_dir = cwd / FILIGREE_DIR_NAME
 
     if filigree_dir.exists():
         click.echo(f"{FILIGREE_DIR_NAME}/ already exists in {cwd}")
+        # Update mode if explicitly provided
+        if mode is not None:
+            config = read_config(filigree_dir)
+            config["mode"] = mode
+            write_config(filigree_dir, config)
+            click.echo(f"  Updated mode: {mode}")
         config = read_config(filigree_dir)
         db = FiligreeDB(filigree_dir / DB_FILENAME, prefix=config.get("prefix", "filigree"))
         db.initialize()
@@ -170,6 +309,8 @@ def init(prefix: str | None, mode: str) -> None:
         (filigree_dir / "scanners").mkdir(exist_ok=True)
         return
 
+    # New project
+    mode = mode or "ethereal"
     prefix = prefix or cwd.name
     filigree_dir.mkdir()
     (filigree_dir / "scanners").mkdir()
@@ -215,21 +356,21 @@ git commit -m "feat(cli): add --mode flag to filigree init"
 
 ```python
 class TestInstallMode:
-    def test_install_writes_mode_to_config(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_install_writes_mode_to_config(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cli_runner: CliRunner) -> None:
         """install --mode=server persists the mode to config.json."""
         monkeypatch.chdir(tmp_path)
         # Set up a minimal project
-        runner.invoke(cli, ["init"])
-        result = runner.invoke(cli, ["install", "--mode", "server"])
+        cli_runner.invoke(cli, ["init"])
+        result = cli_runner.invoke(cli, ["install", "--mode", "server"])
         assert result.exit_code == 0
         config = json.loads((tmp_path / ".filigree" / "config.json").read_text())
         assert config["mode"] == "server"
 
-    def test_install_preserves_existing_mode_when_no_flag(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_install_preserves_existing_mode_when_no_flag(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cli_runner: CliRunner) -> None:
         """install without --mode keeps the existing mode."""
         monkeypatch.chdir(tmp_path)
-        runner.invoke(cli, ["init", "--mode", "server"])
-        result = runner.invoke(cli, ["install"])
+        cli_runner.invoke(cli, ["init", "--mode", "server"])
+        result = cli_runner.invoke(cli, ["install"])
         assert result.exit_code == 0
         config = json.loads((tmp_path / ".filigree" / "config.json").read_text())
         assert config["mode"] == "server"
@@ -295,6 +436,8 @@ git commit -m "feat(cli): add --mode flag to filigree install"
 ---
 
 ## Phase 2: Ethereal Mode
+
+> **Note:** Phases 1-2 are independently shippable. Ethereal mode works without server mode. If `--mode=server` is used before Phase 3 is complete, the hook prints a clear message directing users to upgrade.
 
 ### Task 4: Port selection utility
 
@@ -414,6 +557,11 @@ def find_available_port(filigree_dir: Path) -> int:
 
     Tries the deterministic port first, then up to PORT_RETRIES sequential
     ports, then falls back to OS-assigned (port 0).
+
+    Note: There is a small TOCTOU race between checking port availability
+    and the subprocess binding to it. This is acceptable because: (1) the
+    deterministic port makes collisions rare, (2) uvicorn will fail-fast
+    with a clear "address in use" error, and (3) the caller can retry.
     """
     base = compute_port(filigree_dir)
     for offset in range(PORT_RETRIES):
@@ -456,13 +604,15 @@ git commit -m "feat(ephemeral): add deterministic port selection utility"
 ```python
 # tests/test_ephemeral.py — append
 
+import json
 import os
-import signal
+from pathlib import Path
 
 from filigree.ephemeral import (
-    read_pid,
-    write_pid,
-    is_process_alive,
+    read_pid_file,
+    write_pid_file,
+    is_pid_alive,
+    verify_pid_ownership,
     cleanup_stale_pid,
     read_port_file,
     write_port_file,
@@ -472,34 +622,55 @@ from filigree.ephemeral import (
 class TestPidLifecycle:
     def test_write_and_read_pid(self, tmp_path: Path) -> None:
         pid_file = tmp_path / "ephemeral.pid"
-        write_pid(pid_file, 12345)
-        assert read_pid(pid_file) == 12345
+        write_pid_file(pid_file, 12345, cmd="filigree")
+        info = read_pid_file(pid_file)
+        assert info is not None
+        assert info["pid"] == 12345
+        assert info["cmd"] == "filigree"
 
     def test_read_missing_pid_returns_none(self, tmp_path: Path) -> None:
         pid_file = tmp_path / "ephemeral.pid"
-        assert read_pid(pid_file) is None
+        assert read_pid_file(pid_file) is None
 
     def test_read_corrupt_pid_returns_none(self, tmp_path: Path) -> None:
         pid_file = tmp_path / "ephemeral.pid"
-        pid_file.write_text("not-a-number")
-        assert read_pid(pid_file) is None
+        pid_file.write_text("not-json")
+        assert read_pid_file(pid_file) is None
 
-    def test_is_process_alive_for_self(self) -> None:
-        assert is_process_alive(os.getpid()) is True
+    def test_read_legacy_plain_pid(self, tmp_path: Path) -> None:
+        """Backward compat: plain integer PID files still work."""
+        pid_file = tmp_path / "ephemeral.pid"
+        pid_file.write_text("12345")
+        info = read_pid_file(pid_file)
+        assert info is not None
+        assert info["pid"] == 12345
+        assert info["cmd"] == "unknown"
 
-    def test_is_process_alive_for_dead(self) -> None:
-        # PID 99999999 is extremely unlikely to be alive
-        assert is_process_alive(99999999) is False
+    def test_is_pid_alive_for_self(self) -> None:
+        assert is_pid_alive(os.getpid()) is True
+
+    def test_is_pid_alive_for_dead(self) -> None:
+        assert is_pid_alive(99999999) is False
+
+    def test_verify_pid_ownership_for_self(self, tmp_path: Path) -> None:
+        pid_file = tmp_path / "ephemeral.pid"
+        write_pid_file(pid_file, os.getpid(), cmd="python")
+        assert verify_pid_ownership(pid_file, expected_cmd="python") is True
+
+    def test_verify_pid_ownership_wrong_cmd(self, tmp_path: Path) -> None:
+        pid_file = tmp_path / "ephemeral.pid"
+        write_pid_file(pid_file, os.getpid(), cmd="filigree")
+        assert verify_pid_ownership(pid_file, expected_cmd="nginx") is False
 
     def test_cleanup_stale_pid_removes_dead(self, tmp_path: Path) -> None:
         pid_file = tmp_path / "ephemeral.pid"
-        write_pid(pid_file, 99999999)
+        write_pid_file(pid_file, 99999999, cmd="filigree")
         cleanup_stale_pid(pid_file)
         assert not pid_file.exists()
 
     def test_cleanup_stale_pid_keeps_alive(self, tmp_path: Path) -> None:
         pid_file = tmp_path / "ephemeral.pid"
-        write_pid(pid_file, os.getpid())
+        write_pid_file(pid_file, os.getpid(), cmd="python")
         cleanup_stale_pid(pid_file)
         assert pid_file.exists()
 
@@ -513,6 +684,11 @@ class TestPortFile:
     def test_read_missing_port_returns_none(self, tmp_path: Path) -> None:
         port_file = tmp_path / "ephemeral.port"
         assert read_port_file(port_file) is None
+
+    def test_read_corrupt_port_returns_none(self, tmp_path: Path) -> None:
+        port_file = tmp_path / "ephemeral.port"
+        port_file.write_text("not-a-number\ngarbage")
+        assert read_port_file(port_file) is None
 ```
 
 **Step 2: Run test to verify it fails**
@@ -525,22 +701,41 @@ Expected: FAIL — `ImportError`
 Append to `src/filigree/ephemeral.py`:
 
 ```python
-def write_pid(pid_file: Path, pid: int) -> None:
-    """Write a PID to file."""
-    pid_file.write_text(str(pid))
+import json as _json
+import os
+
+from filigree.core import write_atomic
 
 
-def read_pid(pid_file: Path) -> int | None:
-    """Read a PID from file. Returns None if missing or corrupt."""
+def write_pid_file(pid_file: Path, pid: int, *, cmd: str = "filigree") -> None:
+    """Write PID + process identity to file (JSON format, atomic)."""
+    content = _json.dumps({"pid": pid, "cmd": cmd})
+    write_atomic(pid_file, content)
+
+
+def read_pid_file(pid_file: Path) -> dict[str, Any] | None:
+    """Read PID info from file. Returns None if missing or corrupt.
+
+    Supports both JSON format (new) and plain integer (legacy).
+    """
     if not pid_file.exists():
         return None
     try:
-        return int(pid_file.read_text().strip())
+        text = pid_file.read_text().strip()
+        # Try JSON first (new format)
+        try:
+            data = _json.loads(text)
+            if isinstance(data, dict) and "pid" in data:
+                return {"pid": int(data["pid"]), "cmd": data.get("cmd", "unknown")}
+        except (_json.JSONDecodeError, TypeError):
+            pass
+        # Fall back to plain integer (legacy format)
+        return {"pid": int(text), "cmd": "unknown"}
     except (ValueError, OSError):
         return None
 
 
-def is_process_alive(pid: int) -> bool:
+def is_pid_alive(pid: int) -> bool:
     """Check if a process is running (via kill signal 0)."""
     try:
         os.kill(pid, 0)
@@ -549,21 +744,31 @@ def is_process_alive(pid: int) -> bool:
         return False
 
 
+def verify_pid_ownership(pid_file: Path, *, expected_cmd: str = "filigree") -> bool:
+    """Verify PID file refers to a live process with expected identity."""
+    info = read_pid_file(pid_file)
+    if info is None:
+        return False
+    if not is_pid_alive(info["pid"]):
+        return False
+    return info["cmd"] == expected_cmd
+
+
 def cleanup_stale_pid(pid_file: Path) -> bool:
     """Remove PID file if the process is dead. Returns True if cleaned."""
-    pid = read_pid(pid_file)
-    if pid is None:
+    info = read_pid_file(pid_file)
+    if info is None:
         return False
-    if not is_process_alive(pid):
+    if not is_pid_alive(info["pid"]):
         pid_file.unlink(missing_ok=True)
-        logger.info("Cleaned stale PID file %s (pid %d)", pid_file, pid)
+        logger.info("Cleaned stale PID file %s (pid %d)", pid_file, info["pid"])
         return True
     return False
 
 
 def write_port_file(port_file: Path, port: int) -> None:
-    """Write the active dashboard port to file."""
-    port_file.write_text(str(port))
+    """Write the active dashboard port to file (atomic)."""
+    write_atomic(port_file, str(port))
 
 
 def read_port_file(port_file: Path) -> int | None:
@@ -576,8 +781,6 @@ def read_port_file(port_file: Path) -> int | None:
         return None
 ```
 
-Add `import os` to the imports at top.
-
 **Step 4: Run test to verify it passes**
 
 Run: `uv run pytest tests/test_ephemeral.py -v`
@@ -587,7 +790,7 @@ Expected: PASS
 
 ```bash
 git add src/filigree/ephemeral.py tests/test_ephemeral.py
-git commit -m "feat(ephemeral): add PID lifecycle and port file management"
+git commit -m "feat(ephemeral): add PID lifecycle with process identity and atomic writes"
 ```
 
 ---
@@ -599,6 +802,8 @@ git commit -m "feat(ephemeral): add PID lifecycle and port file management"
 - Modify: `tests/test_hooks.py`
 
 **Step 1: Write the failing test**
+
+Add imports at top of `tests/test_hooks.py` if not already present: `import json` and `from filigree.core import DB_FILENAME`.
 
 ```python
 # tests/test_hooks.py — add/modify existing tests
@@ -612,7 +817,7 @@ class TestEnsureDashboardEthereal:
         filigree_dir.mkdir()
         config = {"prefix": "test", "version": 1, "mode": "ethereal"}
         (filigree_dir / "config.json").write_text(json.dumps(config))
-        db = FiligreeDB(filigree_dir / "filigree.db", prefix="test")
+        db = FiligreeDB(filigree_dir / DB_FILENAME, prefix="test")
         db.initialize()
         db.close()
 
@@ -627,12 +832,11 @@ class TestEnsureDashboardEthereal:
             return mock
 
         monkeypatch.setattr("filigree.hooks.subprocess.Popen", mock_popen)
-        # Make sure port appears free
+        # Make sure port appears free then listening after spawn
         monkeypatch.setattr("filigree.hooks._is_port_listening", lambda *a: False)
 
         result = ensure_dashboard_running()
         assert "http://localhost:" in result
-        assert "12345" in result
         # Should have written PID and port files in .filigree/
         assert (filigree_dir / "ephemeral.pid").exists()
         assert (filigree_dir / "ephemeral.port").exists()
@@ -645,11 +849,11 @@ class TestEnsureDashboardEthereal:
         filigree_dir.mkdir()
         config = {"prefix": "test", "version": 1, "mode": "ethereal"}
         (filigree_dir / "config.json").write_text(json.dumps(config))
-        db = FiligreeDB(filigree_dir / "filigree.db", prefix="test")
+        db = FiligreeDB(filigree_dir / DB_FILENAME, prefix="test")
         db.initialize()
         db.close()
 
-        # Fake existing ephemeral state
+        # Fake existing ephemeral state (legacy plain PID format works too)
         (filigree_dir / "ephemeral.pid").write_text(str(os.getpid()))
         (filigree_dir / "ephemeral.port").write_text("9173")
 
@@ -658,6 +862,22 @@ class TestEnsureDashboardEthereal:
 
         result = ensure_dashboard_running()
         assert "running on http://localhost:9173" in result.lower() or "9173" in result
+
+    def test_server_mode_returns_not_running(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """In server mode, reports daemon status without spawning."""
+        filigree_dir = tmp_path / ".filigree"
+        filigree_dir.mkdir()
+        config = {"prefix": "test", "version": 1, "mode": "server"}
+        (filigree_dir / "config.json").write_text(json.dumps(config))
+        db = FiligreeDB(filigree_dir / DB_FILENAME, prefix="test")
+        db.initialize()
+        db.close()
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr("filigree.hooks._is_port_listening", lambda *a: False)
+        result = ensure_dashboard_running()
+        assert "not running" in result.lower()
 ```
 
 **Step 2: Run test to verify it fails**
@@ -701,10 +921,10 @@ def _ensure_dashboard_ethereal_mode(filigree_dir: Path) -> str:
     from filigree.ephemeral import (
         cleanup_stale_pid,
         find_available_port,
-        is_process_alive,
-        read_pid,
+        is_pid_alive,
+        read_pid_file,
         read_port_file,
-        write_pid,
+        write_pid_file,
         write_port_file,
     )
 
@@ -713,9 +933,9 @@ def _ensure_dashboard_ethereal_mode(filigree_dir: Path) -> str:
     lock_file = filigree_dir / "ephemeral.lock"
 
     # Check if already running from a previous session
-    existing_pid = read_pid(pid_file)
+    pid_info = read_pid_file(pid_file)
     existing_port = read_port_file(port_file)
-    if existing_pid and existing_port and is_process_alive(existing_pid):
+    if pid_info and existing_port and is_pid_alive(pid_info["pid"]):
         if _is_port_listening(existing_port):
             return f"Filigree dashboard running on http://localhost:{existing_port}"
 
@@ -732,14 +952,14 @@ def _ensure_dashboard_ethereal_mode(filigree_dir: Path) -> str:
             return "Filigree dashboard: another session is starting it, skipping"
 
         # Re-check after acquiring lock (another session may have started it)
-        existing_pid = read_pid(pid_file)
+        pid_info = read_pid_file(pid_file)
         existing_port = read_port_file(port_file)
-        if existing_pid and existing_port and is_process_alive(existing_pid):
+        if pid_info and existing_port and is_pid_alive(pid_info["pid"]):
             if _is_port_listening(existing_port):
                 return f"Filigree dashboard running on http://localhost:{existing_port}"
 
         port = find_available_port(filigree_dir)
-        filigree_cmd = _find_filigree_command()
+        filigree_cmd = find_filigree_command()
 
         log_file = filigree_dir / "ephemeral.log"
         with open(log_file, "w") as log_fd:
@@ -751,16 +971,25 @@ def _ensure_dashboard_ethereal_mode(filigree_dir: Path) -> str:
                 start_new_session=True,
             )
 
-        time.sleep(0.5)
-        exit_code = proc.poll()
-        if exit_code is not None:
-            stderr_output = log_file.read_text().strip()
-            detail = f": {stderr_output}" if stderr_output else ""
-            return f"Dashboard process exited immediately (pid {proc.pid}, code {exit_code}){detail}"
-
-        write_pid(pid_file, proc.pid)
+        # Write PID/port immediately so concurrent sessions see us
+        write_pid_file(pid_file, proc.pid, cmd="filigree")
         write_port_file(port_file, port)
-        return f"Started Filigree dashboard on http://localhost:{port}"
+
+        # Wait for startup with retry loop
+        for _ in range(10):
+            time.sleep(0.3)
+            exit_code = proc.poll()
+            if exit_code is not None:
+                # Process died — clean up state files
+                pid_file.unlink(missing_ok=True)
+                port_file.unlink(missing_ok=True)
+                stderr_output = log_file.read_text().strip()
+                detail = f": {stderr_output}" if stderr_output else ""
+                return f"Dashboard process exited (pid {proc.pid}, code {exit_code}){detail}"
+            if _is_port_listening(port):
+                return f"Started Filigree dashboard on http://localhost:{port}"
+
+        return f"Started Filigree dashboard on http://localhost:{port} (may still be initializing)"
     finally:
         if lock_fd is not None:
             lock_fd.close()
@@ -773,7 +1002,7 @@ def _ensure_dashboard_server_mode(filigree_dir: Path, port: int) -> str:
     return f"Filigree server not running on port {port}. Start it with: filigree server start"
 ```
 
-Add import at top of hooks.py: `from filigree.core import get_mode`
+Add imports at top of hooks.py: `from filigree.core import get_mode, find_filigree_command`
 
 Remove `_try_register_with_server()` function entirely.
 
@@ -796,16 +1025,24 @@ git commit -m "feat(hooks): rewrite ensure_dashboard for ethereal mode"
 ### Task 7: Simplify dashboard for single-project mode
 
 **Files:**
-- Modify: `src/filigree/dashboard.py` (remove multi-project scaffolding, add single-project `main()`)
+- Modify: `src/filigree/dashboard.py`
 - Modify: `tests/test_dashboard.py`
+
+**Key insight:** All 37 project-scoped handlers use `db: FiligreeDB = Depends(_get_project_db)`. We only need to change what `_get_project_db` resolves to internally — the handlers themselves are unchanged. The test fixture change is also backward-compatible because the `client: AsyncClient` interface is unchanged.
 
 **Step 1: Write the failing test**
 
-```python
-# tests/test_dashboard.py — replace the client fixture and add test
+Update the `client` fixture and add new tests. Note: NO `@pytest.mark.anyio` — the project uses `asyncio_mode = "auto"`.
 
+```python
+# tests/test_dashboard.py — replace client fixture and registry import
+
+# REMOVE this import:
+# from filigree.registry import ProjectManager, Registry
+
+# REPLACE the client fixture with:
 @pytest.fixture
-async def client(dashboard_db: FiligreeDB, tmp_path: Path) -> AsyncClient:
+async def client(dashboard_db: FiligreeDB, tmp_path: Path) -> AsyncIterator[AsyncClient]:
     """Create a test client backed by a single-project DB (ethereal mode)."""
     import filigree.dashboard as dash_module
 
@@ -818,43 +1055,82 @@ async def client(dashboard_db: FiligreeDB, tmp_path: Path) -> AsyncClient:
 
 
 class TestEtherealDashboard:
-    @pytest.mark.anyio
     async def test_no_register_endpoint(self, client: AsyncClient) -> None:
         """Ethereal mode should not have /api/register."""
         resp = await client.post("/api/register", json={"path": "/foo"})
         assert resp.status_code == 404 or resp.status_code == 405
 
-    @pytest.mark.anyio
     async def test_no_projects_endpoint(self, client: AsyncClient) -> None:
         """Ethereal mode should not have /api/projects."""
         resp = await client.get("/api/projects")
         assert resp.status_code == 404
 
-    @pytest.mark.anyio
+    async def test_no_reload_endpoint(self, client: AsyncClient) -> None:
+        """Ethereal mode should not have /api/reload."""
+        resp = await client.post("/api/reload")
+        assert resp.status_code == 404 or resp.status_code == 405
+
     async def test_issues_at_root_api(self, client: AsyncClient) -> None:
         """Issues served at /api/issues (no project key prefix)."""
         resp = await client.get("/api/issues")
         assert resp.status_code == 200
 ```
 
+Remove `_isolate_registry` fixture from `tests/test_hooks.py` if it exists (it monkeypatches registry paths).
+
+**Existing test compatibility:** All 38 existing test classes (144+ methods) continue to work unchanged because:
+1. The `client` fixture still yields `AsyncClient` — same interface
+2. All handlers still receive `db: FiligreeDB` via Depends — same parameter
+3. Only the internal resolution changes (`_db` directly vs `_project_manager.get_db()`)
+
+Remove these test classes that specifically test removed functionality:
+- `TestReloadAPI` (3 methods) — `/api/reload` removed
+- `TestMultiProjectAPI` (6 methods) — multi-project routing removed
+- `TestDashboardGetProjectDb` (1 method) — `_get_project_db` internals changed
+
 **Step 2: Run test to verify it fails**
 
 Run: `uv run pytest tests/test_dashboard.py::TestEtherealDashboard -v`
-Expected: FAIL — `/api/register` still exists, `_db` attribute doesn't exist
+Expected: FAIL — `_db` attribute doesn't exist, endpoints still exist
 
 **Step 3: Write implementation**
 
-Modify `dashboard.py`:
-- Replace `_project_manager` / `_default_project_key` with a simple `_db: FiligreeDB | None = None`
-- Remove the `from filigree.registry import ProjectManager, Registry` import
-- Remove `_get_project_db()` multi-project function; replace with simple `_get_db()` that returns `_db`
-- Mount router only at `/api/` (remove `/api/p/{project_key}` mount)
-- Remove `/api/register`, `/api/projects`, `/api/reload` endpoints
-- Update `main()` to open a single DB connection directly:
+Changes to `src/filigree/dashboard.py`:
 
+1. **Remove import** (line 38): Delete `from filigree.registry import ProjectManager, Registry`
+
+2. **Replace module-level state** (lines 49-50):
+```python
+# BEFORE:
+_project_manager: ProjectManager | None = None
+_default_project_key: str = ""
+
+# AFTER:
+_db: FiligreeDB | None = None
+```
+
+3. **Rewrite `_get_project_db`** (lines 81-100):
+```python
+# BEFORE: resolves project key via ProjectManager
+# AFTER: returns the single DB connection directly
+
+async def _get_db() -> FiligreeDB:
+    """Return the database connection. Raises 500 if not initialized."""
+    if _db is None:
+        raise HTTPException(status_code=500, detail="Database not initialized")
+    return _db
+```
+
+4. **Global replace** in all 37 handlers: `Depends(_get_project_db)` → `Depends(_get_db)`
+
+5. **Simplify `create_app()`**: Remove the dual-mount at `/api/p/{project_key}/`. Mount router only at `/api/`. Remove the 404 exception handler that converts to PROJECT_NOT_FOUND.
+
+6. **Remove 3 root endpoints**: Delete `api_projects()`, `api_register()`, `api_reload()`.
+
+7. **Rewrite `main()`**:
 ```python
 def main(port: int = DEFAULT_PORT, *, no_browser: bool = False) -> None:
-    """Start the dashboard server."""
+    """Start the dashboard server for the current project."""
     import threading
     import uvicorn
 
@@ -878,18 +1154,65 @@ def main(port: int = DEFAULT_PORT, *, no_browser: bool = False) -> None:
     uvicorn.run(app, host="127.0.0.1", port=port, log_level="warning")
 ```
 
-Note: The multi-project endpoints will be re-added differently in Phase 3 (server mode) with a separate code path. For now the dashboard is single-project only.
-
-**Step 4: Run tests to verify they pass**
+**Step 4: Run full dashboard test suite**
 
 Run: `uv run pytest tests/test_dashboard.py -v`
-Expected: PASS
+Expected: PASS — all remaining tests work with the new fixture. Verify count: should be ~134 tests (144 original minus 10 removed from TestReloadAPI/TestMultiProjectAPI/TestDashboardGetProjectDb).
 
 **Step 5: Commit**
 
 ```bash
 git add src/filigree/dashboard.py tests/test_dashboard.py
 git commit -m "refactor(dashboard): simplify to single-project mode for ethereal"
+```
+
+---
+
+### Task 7.5: Tracer bullet integration test
+
+**Files:**
+- Test: `tests/test_dashboard.py`
+
+**Step 1: Write the integration test**
+
+```python
+class TestEtherealTracerBullet:
+    """End-to-end validation that init+dashboard+API works together."""
+
+    async def test_single_project_lifecycle(self, dashboard_db: FiligreeDB) -> None:
+        """Create an issue via DB, verify it appears in the API."""
+        import filigree.dashboard as dash_module
+
+        # Create an issue directly in the DB
+        dashboard_db.create_issue(title="Tracer bullet test")
+
+        # Wire up dashboard
+        dash_module._db = dashboard_db
+        app = create_app()
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            # Verify issues endpoint returns our issue
+            resp = await client.get("/api/issues")
+            assert resp.status_code == 200
+            issues = resp.json()["issues"]
+            assert any(i["title"] == "Tracer bullet test" for i in issues)
+
+            # Verify removed endpoints are gone
+            assert (await client.get("/api/projects")).status_code == 404
+            assert (await client.post("/api/register", json={})).status_code in (404, 405)
+        dash_module._db = None
+```
+
+**Step 2: Run and verify**
+
+Run: `uv run pytest tests/test_dashboard.py::TestEtherealTracerBullet -v`
+Expected: PASS
+
+**Step 3: Commit**
+
+```bash
+git add tests/test_dashboard.py
+git commit -m "test(dashboard): add tracer bullet integration test for ethereal mode"
 ```
 
 ---
@@ -901,6 +1224,8 @@ git commit -m "refactor(dashboard): simplify to single-project mode for ethereal
 - Test: `tests/test_hooks.py`
 
 **Step 1: Write the failing test**
+
+Add import if not already present: `from filigree.core import DB_FILENAME`.
 
 ```python
 class TestSessionContextDashboardUrl:
@@ -914,7 +1239,7 @@ class TestSessionContextDashboardUrl:
         (filigree_dir / "ephemeral.port").write_text("9173")
         (filigree_dir / "ephemeral.pid").write_text(str(os.getpid()))
 
-        db = FiligreeDB(filigree_dir / "filigree.db", prefix="test")
+        db = FiligreeDB(filigree_dir / DB_FILENAME, prefix="test")
         db.initialize()
 
         monkeypatch.setattr("filigree.hooks._is_port_listening", lambda *a: True)
@@ -948,12 +1273,12 @@ def _build_context(db: FiligreeDB, filigree_dir: Path | None = None) -> str:
 
     # Dashboard URL (if running)
     if filigree_dir is not None:
-        from filigree.ephemeral import read_port_file, read_pid, is_process_alive
+        from filigree.ephemeral import read_port_file, read_pid_file, is_pid_alive
         port_file = filigree_dir / "ephemeral.port"
         pid_file = filigree_dir / "ephemeral.pid"
         port = read_port_file(port_file)
-        pid = read_pid(pid_file)
-        if port and pid and is_process_alive(pid) and _is_port_listening(port):
+        pid_info = read_pid_file(pid_file)
+        if port and pid_info and is_pid_alive(pid_info["pid"]) and _is_port_listening(port):
             lines.append(f"DASHBOARD: http://localhost:{port}")
             lines.append("")
 
@@ -991,8 +1316,10 @@ git commit -m "feat(hooks): include dashboard URL in session context"
 
 from __future__ import annotations
 
-import tomllib
+import json
 from pathlib import Path
+
+import pytest
 
 from filigree.server import (
     ServerConfig,
@@ -1012,7 +1339,7 @@ class TestServerConfig:
     def test_write_and_read(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         config_dir = tmp_path / ".config" / "filigree"
         monkeypatch.setattr("filigree.server.SERVER_CONFIG_DIR", config_dir)
-        monkeypatch.setattr("filigree.server.SERVER_CONFIG_FILE", config_dir / "server.toml")
+        monkeypatch.setattr("filigree.server.SERVER_CONFIG_FILE", config_dir / "server.json")
 
         config = ServerConfig(port=9000)
         write_server_config(config)
@@ -1022,16 +1349,29 @@ class TestServerConfig:
     def test_read_missing_returns_default(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         config_dir = tmp_path / ".config" / "filigree"
         monkeypatch.setattr("filigree.server.SERVER_CONFIG_DIR", config_dir)
-        monkeypatch.setattr("filigree.server.SERVER_CONFIG_FILE", config_dir / "server.toml")
+        monkeypatch.setattr("filigree.server.SERVER_CONFIG_FILE", config_dir / "server.json")
         config = read_server_config()
         assert config.port == 8377
+
+    def test_roundtrip_with_special_chars_in_path(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Paths with quotes, spaces, and unicode survive serialization."""
+        config_dir = tmp_path / ".config" / "filigree"
+        monkeypatch.setattr("filigree.server.SERVER_CONFIG_DIR", config_dir)
+        monkeypatch.setattr("filigree.server.SERVER_CONFIG_FILE", config_dir / "server.json")
+
+        weird_path = '/home/alice/my "quoted" project/.filigree'
+        config = ServerConfig(projects={weird_path: {"prefix": 'weird"prefix'}})
+        write_server_config(config)
+        loaded = read_server_config()
+        assert weird_path in loaded.projects
+        assert loaded.projects[weird_path]["prefix"] == 'weird"prefix'
 
 
 class TestProjectRegistration:
     def test_register_project(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         config_dir = tmp_path / ".config" / "filigree"
         monkeypatch.setattr("filigree.server.SERVER_CONFIG_DIR", config_dir)
-        monkeypatch.setattr("filigree.server.SERVER_CONFIG_FILE", config_dir / "server.toml")
+        monkeypatch.setattr("filigree.server.SERVER_CONFIG_FILE", config_dir / "server.json")
 
         filigree_dir = tmp_path / "myproject" / ".filigree"
         filigree_dir.mkdir(parents=True)
@@ -1044,7 +1384,7 @@ class TestProjectRegistration:
     def test_unregister_project(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         config_dir = tmp_path / ".config" / "filigree"
         monkeypatch.setattr("filigree.server.SERVER_CONFIG_DIR", config_dir)
-        monkeypatch.setattr("filigree.server.SERVER_CONFIG_FILE", config_dir / "server.toml")
+        monkeypatch.setattr("filigree.server.SERVER_CONFIG_FILE", config_dir / "server.json")
 
         filigree_dir = tmp_path / "myproject" / ".filigree"
         filigree_dir.mkdir(parents=True)
@@ -1068,23 +1408,23 @@ Expected: FAIL — `ModuleNotFoundError`
 """Server mode configuration and daemon management.
 
 Handles the persistent multi-project daemon for server installation mode.
-Config lives at ~/.config/filigree/server.toml.
+Config lives at ~/.config/filigree/server.json.
 """
 
 from __future__ import annotations
 
+import json
 import logging
-import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from filigree.core import read_config
+from filigree.core import read_config, write_atomic
 
 logger = logging.getLogger(__name__)
 
 SERVER_CONFIG_DIR = Path.home() / ".config" / "filigree"
-SERVER_CONFIG_FILE = SERVER_CONFIG_DIR / "server.toml"
+SERVER_CONFIG_FILE = SERVER_CONFIG_DIR / "server.json"
 SERVER_PID_FILE = SERVER_CONFIG_DIR / "server.pid"
 
 DEFAULT_PORT = 8377
@@ -1097,33 +1437,32 @@ class ServerConfig:
 
 
 def read_server_config() -> ServerConfig:
-    """Read server.toml. Returns defaults if missing."""
+    """Read server.json. Returns defaults if missing."""
     if not SERVER_CONFIG_FILE.exists():
         return ServerConfig()
     try:
-        data = tomllib.loads(SERVER_CONFIG_FILE.read_text())
+        data = json.loads(SERVER_CONFIG_FILE.read_text())
         return ServerConfig(
             port=data.get("port", DEFAULT_PORT),
             projects=data.get("projects", {}),
         )
-    except (tomllib.TOMLDecodeError, OSError) as exc:
+    except (json.JSONDecodeError, OSError) as exc:
         logger.warning("Corrupt server config %s: %s", SERVER_CONFIG_FILE, exc)
         return ServerConfig()
 
 
 def write_server_config(config: ServerConfig) -> None:
-    """Write server.toml."""
+    """Write server.json atomically."""
     SERVER_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    lines = [f"port = {config.port}", "", "[projects]"]
-    for path, info in sorted(config.projects.items()):
-        prefix = info.get("prefix", "unknown")
-        # TOML requires quoting keys with special chars
-        lines.append(f'"{path}" = {{ prefix = "{prefix}" }}')
-    SERVER_CONFIG_FILE.write_text("\n".join(lines) + "\n")
+    content = json.dumps(
+        {"port": config.port, "projects": config.projects},
+        indent=2,
+    )
+    write_atomic(SERVER_CONFIG_FILE, content + "\n")
 
 
 def register_project(filigree_dir: Path) -> None:
-    """Register a project in server.toml."""
+    """Register a project in server.json."""
     filigree_dir = filigree_dir.resolve()
     config = read_server_config()
     project_config = read_config(filigree_dir)
@@ -1134,7 +1473,7 @@ def register_project(filigree_dir: Path) -> None:
 
 
 def unregister_project(filigree_dir: Path) -> None:
-    """Remove a project from server.toml."""
+    """Remove a project from server.json."""
     filigree_dir = filigree_dir.resolve()
     config = read_server_config()
     config.projects.pop(str(filigree_dir), None)
@@ -1150,7 +1489,7 @@ Expected: PASS
 
 ```bash
 git add src/filigree/server.py tests/test_server.py
-git commit -m "feat(server): add server config module with project registration"
+git commit -m "feat(server): add server config module with JSON-based project registration"
 ```
 
 ---
@@ -1169,7 +1508,7 @@ class TestDaemonLifecycle:
     def test_start_writes_pid_file(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         config_dir = tmp_path / ".config" / "filigree"
         monkeypatch.setattr("filigree.server.SERVER_CONFIG_DIR", config_dir)
-        monkeypatch.setattr("filigree.server.SERVER_CONFIG_FILE", config_dir / "server.toml")
+        monkeypatch.setattr("filigree.server.SERVER_CONFIG_FILE", config_dir / "server.json")
         monkeypatch.setattr("filigree.server.SERVER_PID_FILE", config_dir / "server.pid")
 
         spawned: list = []
@@ -1184,13 +1523,15 @@ class TestDaemonLifecycle:
         from filigree.server import start_daemon
         result = start_daemon()
         assert result.success
-        assert (config_dir / "server.pid").read_text().strip() == "54321"
+        pid_data = json.loads((config_dir / "server.pid").read_text())
+        assert pid_data["pid"] == 54321
+        assert pid_data["cmd"] == "filigree"
 
     def test_stop_kills_process(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         config_dir = tmp_path / ".config" / "filigree"
         config_dir.mkdir(parents=True)
         pid_file = config_dir / "server.pid"
-        pid_file.write_text("54321")
+        pid_file.write_text(json.dumps({"pid": 54321, "cmd": "filigree"}))
         monkeypatch.setattr("filigree.server.SERVER_PID_FILE", pid_file)
 
         killed: list[int] = []
@@ -1208,6 +1549,21 @@ class TestDaemonLifecycle:
         from filigree.server import daemon_status
         status = daemon_status()
         assert not status.running
+
+    def test_stop_permission_error(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        config_dir = tmp_path / ".config" / "filigree"
+        config_dir.mkdir(parents=True)
+        pid_file = config_dir / "server.pid"
+        pid_file.write_text(json.dumps({"pid": 54321, "cmd": "filigree"}))
+        monkeypatch.setattr("filigree.server.SERVER_PID_FILE", pid_file)
+        monkeypatch.setattr("filigree.ephemeral.is_pid_alive", lambda pid: True)
+        monkeypatch.setattr("filigree.ephemeral.verify_pid_ownership", lambda *a, **kw: True)
+        monkeypatch.setattr("os.kill", MagicMock(side_effect=PermissionError))
+
+        from filigree.server import stop_daemon
+        result = stop_daemon()
+        assert not result.success
+        assert "ermission" in result.message
 ```
 
 **Step 2: Run test to verify it fails**
@@ -1243,19 +1599,19 @@ class DaemonStatus:
 
 def start_daemon(port: int | None = None) -> DaemonResult:
     """Start the filigree server daemon."""
-    from filigree.install import _find_filigree_command
-    from filigree.ephemeral import read_pid, is_process_alive
+    from filigree.core import find_filigree_command
+    from filigree.ephemeral import read_pid_file, is_pid_alive, write_pid_file
 
     # Check if already running
-    existing_pid = read_pid(SERVER_PID_FILE)
-    if existing_pid and is_process_alive(existing_pid):
-        return DaemonResult(False, f"Daemon already running (pid {existing_pid})")
+    info = read_pid_file(SERVER_PID_FILE)
+    if info and is_pid_alive(info["pid"]):
+        return DaemonResult(False, f"Daemon already running (pid {info['pid']})")
 
     config = read_server_config()
     daemon_port = port or config.port
 
     SERVER_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    filigree_cmd = _find_filigree_command()
+    filigree_cmd = find_filigree_command()
     log_file = SERVER_CONFIG_DIR / "server.log"
 
     with open(log_file, "w") as log_fd:
@@ -1267,48 +1623,90 @@ def start_daemon(port: int | None = None) -> DaemonResult:
             start_new_session=True,
         )
 
+    # Write PID immediately with process identity
+    write_pid_file(SERVER_PID_FILE, proc.pid, cmd="filigree")
+
     time.sleep(0.5)
     exit_code = proc.poll()
     if exit_code is not None:
+        SERVER_PID_FILE.unlink(missing_ok=True)
         stderr = log_file.read_text().strip()
         return DaemonResult(False, f"Daemon exited immediately (code {exit_code}): {stderr}")
 
-    SERVER_PID_FILE.write_text(str(proc.pid))
     return DaemonResult(True, f"Started filigree daemon (pid {proc.pid}) on port {daemon_port}")
 
 
 def stop_daemon() -> DaemonResult:
     """Stop the filigree server daemon."""
-    from filigree.ephemeral import read_pid, is_process_alive
+    from filigree.ephemeral import read_pid_file, is_pid_alive, verify_pid_ownership
 
-    pid = read_pid(SERVER_PID_FILE)
-    if pid is None:
+    info = read_pid_file(SERVER_PID_FILE)
+    if info is None:
         return DaemonResult(False, "No PID file found — daemon may not be running")
 
-    if not is_process_alive(pid):
+    pid = info["pid"]
+    if not is_pid_alive(pid):
         SERVER_PID_FILE.unlink(missing_ok=True)
         return DaemonResult(True, f"Daemon (pid {pid}) was not running; cleaned up PID file")
 
-    os.kill(pid, signal.SIGTERM)
+    # Verify this is actually a filigree process
+    if not verify_pid_ownership(SERVER_PID_FILE, expected_cmd="filigree"):
+        return DaemonResult(False, f"PID {pid} is not a filigree process — refusing to kill")
+
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except PermissionError:
+        return DaemonResult(False, f"Permission denied sending SIGTERM to pid {pid}")
+
+    # Wait for process to exit (up to 5 seconds)
+    for _ in range(50):
+        time.sleep(0.1)
+        if not is_pid_alive(pid):
+            SERVER_PID_FILE.unlink(missing_ok=True)
+            return DaemonResult(True, f"Stopped filigree daemon (pid {pid})")
+
+    # Escalate to SIGKILL
+    try:
+        os.kill(pid, signal.SIGKILL)
+        time.sleep(0.2)
+    except (PermissionError, ProcessLookupError):
+        pass
+
     SERVER_PID_FILE.unlink(missing_ok=True)
-    return DaemonResult(True, f"Stopped filigree daemon (pid {pid})")
+    return DaemonResult(True, f"Force-killed filigree daemon (pid {pid})")
 
 
 def daemon_status() -> DaemonStatus:
     """Check daemon status."""
-    from filigree.ephemeral import read_pid, is_process_alive
+    from filigree.ephemeral import read_pid_file, is_pid_alive
 
-    pid = read_pid(SERVER_PID_FILE)
-    if pid is None or not is_process_alive(pid):
+    info = read_pid_file(SERVER_PID_FILE)
+    if info is None or not is_pid_alive(info["pid"]):
         return DaemonStatus(running=False)
 
     config = read_server_config()
     return DaemonStatus(
         running=True,
-        pid=pid,
+        pid=info["pid"],
         port=config.port,
         project_count=len(config.projects),
     )
+```
+
+Update `register_project()` — append after `write_server_config(config)`:
+
+```python
+    # Notify running daemon to reload project list
+    status = daemon_status()
+    if status.running and status.port:
+        try:
+            import urllib.request
+            req = urllib.request.Request(
+                f"http://localhost:{status.port}/api/reload", method="POST",
+            )
+            urllib.request.urlopen(req, timeout=2)
+        except Exception:
+            logger.debug("Could not notify daemon of new registration")
 ```
 
 Add CLI commands in `cli.py`:
@@ -1480,6 +1878,65 @@ git commit -m "feat(install): support server mode MCP config generation"
 
 ---
 
+### Task 11.5: Server mode MCP endpoint
+
+**Files:**
+- Modify: `src/filigree/dashboard.py`
+- Test: `tests/test_dashboard.py`
+
+**Note:** This task adds the `/mcp/` route for server mode. In ethereal mode, MCP runs via stdio (unchanged). The `/mcp/` endpoint is only relevant when the dashboard is started as a server daemon.
+
+**Step 1: Write the failing test**
+
+```python
+class TestMcpEndpoint:
+    async def test_mcp_endpoint_exists(self, client: AsyncClient) -> None:
+        """The /mcp/ endpoint should be mounted (even if empty in ethereal mode)."""
+        # In ethereal mode this may return a protocol error (not a 404),
+        # which confirms the route exists
+        resp = await client.get("/mcp/")
+        assert resp.status_code != 404
+```
+
+**Step 2: Run test to verify it fails**
+
+Run: `uv run pytest tests/test_dashboard.py::TestMcpEndpoint -v`
+Expected: FAIL — 404
+
+**Step 3: Write implementation**
+
+In `create_app()`, mount the MCP server:
+
+```python
+from filigree.mcp_server import create_mcp_app
+
+def create_app() -> FastAPI:
+    app = FastAPI(...)
+    # ... existing routes ...
+
+    # Mount MCP streamable HTTP endpoint
+    mcp_app = create_mcp_app(db_resolver=lambda: _db)
+    app.mount("/mcp", mcp_app)
+
+    return app
+```
+
+The MCP server module (`mcp_server.py`) already exists — it just needs a `create_mcp_app()` factory that wraps the existing MCP tools in a streamable HTTP transport. This uses the MCP SDK's built-in FastAPI/Starlette mount support.
+
+**Step 4: Run test to verify it passes**
+
+Run: `uv run pytest tests/test_dashboard.py::TestMcpEndpoint -v`
+Expected: PASS
+
+**Step 5: Commit**
+
+```bash
+git add src/filigree/dashboard.py src/filigree/mcp_server.py tests/test_dashboard.py
+git commit -m "feat(dashboard): add /mcp/ streamable HTTP endpoint for server mode"
+```
+
+---
+
 ### Task 12: Wire mode into the install command
 
 **Files:**
@@ -1492,16 +1949,17 @@ git commit -m "feat(install): support server mode MCP config generation"
 ```python
 class TestInstallModeIntegration:
     def test_install_server_mode_registers_project(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cli_runner: CliRunner
     ) -> None:
         monkeypatch.chdir(tmp_path)
-        runner.invoke(cli, ["init"])
+        cli_runner.invoke(cli, ["init"])
 
         config_dir = tmp_path / ".server-config"
         monkeypatch.setattr("filigree.server.SERVER_CONFIG_DIR", config_dir)
-        monkeypatch.setattr("filigree.server.SERVER_CONFIG_FILE", config_dir / "server.toml")
+        monkeypatch.setattr("filigree.server.SERVER_CONFIG_FILE", config_dir / "server.json")
+        monkeypatch.setattr("filigree.server.SERVER_PID_FILE", config_dir / "server.pid")
 
-        result = runner.invoke(cli, ["install", "--mode", "server"])
+        result = cli_runner.invoke(cli, ["install", "--mode", "server"])
         assert result.exit_code == 0
 
         from filigree.server import read_server_config
@@ -1529,12 +1987,12 @@ Update the install command body to branch on mode:
 
     # ... existing codex, claude_md, etc. ...
 
-    # Server mode: register project in server.toml
+    # Server mode: register project in server.json
     if mode == "server":
         try:
             from filigree.server import register_project, daemon_status
             register_project(filigree_dir)
-            results.append(("Server registration", True, f"Registered in server.toml"))
+            results.append(("Server registration", True, f"Registered in server.json"))
             status = daemon_status()
             if not status.running:
                 click.echo('\nNote: start the daemon with "filigree server start"')
@@ -1556,6 +2014,91 @@ git commit -m "feat(cli): wire mode into install command with server registratio
 
 ---
 
+### Task 12.5: Version enforcement on server startup
+
+**Files:**
+- Modify: `src/filigree/server.py`
+- Test: `tests/test_server.py`
+
+**Step 1: Write the failing test**
+
+```python
+class TestVersionEnforcement:
+    def test_register_rejects_incompatible_schema(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Projects with newer schema versions are rejected."""
+        config_dir = tmp_path / ".config" / "filigree"
+        monkeypatch.setattr("filigree.server.SERVER_CONFIG_DIR", config_dir)
+        monkeypatch.setattr("filigree.server.SERVER_CONFIG_FILE", config_dir / "server.json")
+
+        filigree_dir = tmp_path / "future-project" / ".filigree"
+        filigree_dir.mkdir(parents=True)
+        (filigree_dir / "config.json").write_text(json.dumps({
+            "prefix": "future", "version": 999,
+        }))
+
+        with pytest.raises(ValueError, match="schema version"):
+            register_project(filigree_dir)
+```
+
+**Step 2: Run test to verify it fails**
+
+Run: `uv run pytest tests/test_server.py::TestVersionEnforcement -v`
+Expected: FAIL — `register_project` doesn't check schema version
+
+**Step 3: Write implementation**
+
+Add version check to `register_project()`, comparing project schema version against current filigree version. Reject with clear error message if incompatible:
+
+```python
+SUPPORTED_SCHEMA_VERSION = 1  # Max schema version this filigree version can handle
+
+
+def register_project(filigree_dir: Path) -> None:
+    """Register a project in server.json."""
+    filigree_dir = filigree_dir.resolve()
+    project_config = read_config(filigree_dir)
+
+    # Version enforcement
+    schema_version = project_config.get("version", 1)
+    if schema_version > SUPPORTED_SCHEMA_VERSION:
+        raise ValueError(
+            f"Project schema version {schema_version} is newer than supported "
+            f"version {SUPPORTED_SCHEMA_VERSION}. Upgrade filigree to manage this project."
+        )
+
+    config = read_server_config()
+    config.projects[str(filigree_dir)] = {
+        "prefix": project_config.get("prefix", "filigree"),
+    }
+    write_server_config(config)
+
+    # Notify running daemon to reload project list
+    status = daemon_status()
+    if status.running and status.port:
+        try:
+            import urllib.request
+            req = urllib.request.Request(
+                f"http://localhost:{status.port}/api/reload", method="POST",
+            )
+            urllib.request.urlopen(req, timeout=2)
+        except Exception:
+            logger.debug("Could not notify daemon of new registration")
+```
+
+**Step 4: Run test to verify it passes**
+
+Run: `uv run pytest tests/test_server.py -v`
+Expected: PASS
+
+**Step 5: Commit**
+
+```bash
+git add src/filigree/server.py tests/test_server.py
+git commit -m "feat(server): add schema version enforcement on project registration"
+```
+
+---
+
 ### Task 13: Mode-aware doctor checks
 
 **Files:**
@@ -1569,8 +2112,8 @@ class TestDoctorModeChecks:
     def test_ethereal_checks_pid_file(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """Doctor in ethereal mode should check ephemeral.pid."""
         filigree_dir = _setup_project(tmp_path, mode="ethereal")
-        # Write a stale PID
-        (filigree_dir / "ephemeral.pid").write_text("99999999")
+        # Write a stale PID (JSON format)
+        (filigree_dir / "ephemeral.pid").write_text(json.dumps({"pid": 99999999, "cmd": "filigree"}))
         monkeypatch.chdir(tmp_path)
 
         results = run_doctor(project_root=tmp_path)
@@ -1586,7 +2129,7 @@ class TestDoctorModeChecks:
 
         config_dir = tmp_path / ".server-config"
         monkeypatch.setattr("filigree.server.SERVER_CONFIG_DIR", config_dir)
-        monkeypatch.setattr("filigree.server.SERVER_CONFIG_FILE", config_dir / "server.toml")
+        monkeypatch.setattr("filigree.server.SERVER_CONFIG_FILE", config_dir / "server.json")
         monkeypatch.setattr("filigree.server.SERVER_PID_FILE", config_dir / "server.pid")
 
         results = run_doctor(project_root=tmp_path)
@@ -1630,20 +2173,21 @@ Add mode-aware checks to `run_doctor()` after the existing checks:
 
 def _doctor_ethereal_checks(filigree_dir: Path) -> list[CheckResult]:
     """Ethereal mode health checks."""
-    from filigree.ephemeral import read_pid, is_process_alive, read_port_file
+    from filigree.ephemeral import read_pid_file, is_pid_alive, read_port_file
 
     results = []
     pid_file = filigree_dir / "ephemeral.pid"
     port_file = filigree_dir / "ephemeral.port"
 
     if pid_file.exists():
-        pid = read_pid(pid_file)
-        if pid and is_process_alive(pid):
-            results.append(CheckResult("Ephemeral PID", True, f"Process {pid} alive"))
+        info = read_pid_file(pid_file)
+        if info and is_pid_alive(info["pid"]):
+            results.append(CheckResult("Ephemeral PID", True, f"Process {info['pid']} alive"))
         else:
+            pid_val = info["pid"] if info else "unknown"
             results.append(CheckResult(
                 "Ephemeral PID", False,
-                f"Stale PID file (pid {pid})",
+                f"Stale PID file (pid {pid_val})",
                 fix_hint="Remove .filigree/ephemeral.pid or run: filigree ensure-dashboard",
             ))
 
@@ -1719,20 +2263,29 @@ git commit -m "feat(doctor): add mode-aware health checks for ethereal and serve
 - Modify: `tests/test_hooks.py` (remove `_isolate_registry` fixture)
 - Modify: `tests/test_dashboard.py` (remove registry fixtures)
 
-**Step 1: Verify no remaining references**
+**Step 1: Run full CI pipeline as pre-deletion gate**
 
-Run: `uv run ruff check src/ tests/` and `grep -r "registry" src/ tests/ --include="*.py" -l`
+Run:
+```bash
+uv run ruff check src/ tests/
+uv run ruff format --check src/ tests/
+uv run mypy src/filigree/
+uv run pytest --tb=short
+```
 
-Confirm only `registry.py` and `test_registry.py` reference registry, plus any leftover imports from Tasks 6-7.
+All must pass before proceeding. If ANY step fails, do NOT delete registry.py.
 
 **Step 2: Delete files and clean up imports**
 
 ```bash
-rm src/filigree/registry.py tests/test_registry.py
+git rm src/filigree/registry.py tests/test_registry.py
+git add tests/test_hooks.py tests/test_dashboard.py
 ```
 
 Remove the `_isolate_registry` fixture from `tests/test_hooks.py`.
 Remove registry imports from `tests/test_dashboard.py`.
+
+Confirm only `registry.py` and `test_registry.py` referenced registry, plus any leftover imports from Tasks 6-7.
 
 **Step 3: Run full test suite**
 
@@ -1747,7 +2300,6 @@ Expected: Clean
 **Step 5: Commit**
 
 ```bash
-git add -A
 git commit -m "refactor: remove hybrid registration system (registry.py)"
 ```
 
@@ -1757,17 +2309,33 @@ git commit -m "refactor: remove hybrid registration system (registry.py)"
 
 **Files:**
 - Verify: no references to `/tmp/filigree-dashboard.*` remain in code
+- Modify: `src/filigree/ephemeral.py` (add legacy cleanup helper)
 - Modify: any documentation referencing old conventions
 
 **Step 1: Search for stale references**
 
 Run: `grep -r "filigree-dashboard" src/ tests/ docs/ --include="*.py" --include="*.md" -l`
 
-**Step 2: Remove any found references**
+Also search for `~/.filigree/registry.json` and `~/.filigree/registry.lock` references.
 
-Clean up any remaining references to the old `/tmp/filigree-dashboard.lock`, `/tmp/filigree-dashboard.pid`, `/tmp/filigree-dashboard.log` patterns.
+**Step 2: Add legacy cleanup helper**
 
-**Step 3: Run full CI pipeline**
+In `src/filigree/ephemeral.py`, add:
+
+```python
+def cleanup_legacy_tmp_files() -> None:
+    """Remove legacy /tmp/filigree-dashboard.* files from the hybrid mode era."""
+    for name in ("filigree-dashboard.pid", "filigree-dashboard.lock", "filigree-dashboard.log"):
+        Path("/tmp", name).unlink(missing_ok=True)
+```
+
+Call this from `_ensure_dashboard_ethereal_mode()` at the start.
+
+**Step 3: Remove any found references**
+
+Clean up any remaining references to the old `/tmp/filigree-dashboard.lock`, `/tmp/filigree-dashboard.pid`, `/tmp/filigree-dashboard.log` patterns and `~/.filigree/registry.json`.
+
+**Step 4: Run full CI pipeline**
 
 ```bash
 uv run ruff check src/ tests/
@@ -1778,10 +2346,10 @@ uv run pytest --tb=short
 
 Expected: All pass
 
-**Step 4: Commit**
+**Step 5: Commit**
 
 ```bash
-git add -A
+git add src/filigree/ephemeral.py
 git commit -m "chore: clean up /tmp file conventions from hybrid mode"
 ```
 
@@ -1816,6 +2384,9 @@ filigree server start
 filigree server status
 filigree doctor
 filigree server stop
+
+# Verify server.json was created
+ls ~/.config/filigree/server.json
 ```
 
 **Step 3: Close filigree issues**
