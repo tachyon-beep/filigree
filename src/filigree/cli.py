@@ -792,6 +792,12 @@ def migrate(from_beads: bool, beads_db: str | None) -> None:
 @click.option("--gitignore", is_flag=True, help="Add .filigree/ to .gitignore only")
 @click.option("--hooks", "hooks_only", is_flag=True, help="Install Claude Code hooks only")
 @click.option("--skills", "skills_only", is_flag=True, help="Install Claude Code skills only")
+@click.option(
+    "--mode",
+    type=click.Choice(["ethereal", "server"], case_sensitive=False),
+    default=None,
+    help="Installation mode (default: preserve existing or ethereal)",
+)
 def install(
     claude_code: bool,
     codex: bool,
@@ -800,6 +806,7 @@ def install(
     gitignore: bool,
     hooks_only: bool,
     skills_only: bool,
+    mode: str | None,
 ) -> None:
     """Install filigree into the current project.
 
@@ -820,6 +827,12 @@ def install(
     except FileNotFoundError:
         click.echo(f"No {FILIGREE_DIR_NAME}/ found. Run 'filigree init' first.", err=True)
         sys.exit(1)
+
+    # Update mode in config if explicitly provided
+    if mode is not None:
+        config = read_config(filigree_dir)
+        config["mode"] = mode
+        write_config(filigree_dir, config)
 
     project_root = filigree_dir.parent
     install_all = not any([claude_code, codex, claude_md, agents_md, gitignore, hooks_only, skills_only])

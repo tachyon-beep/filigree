@@ -1407,6 +1407,29 @@ class TestInitMode:
         assert not (tmp_path / ".filigree").exists()
 
 
+class TestInstallMode:
+    def test_install_writes_mode_to_config(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cli_runner: CliRunner) -> None:
+        """install --mode=server persists the mode to config.json."""
+        monkeypatch.chdir(tmp_path)
+        # Set up a minimal project
+        cli_runner.invoke(cli, ["init"])
+        result = cli_runner.invoke(cli, ["install", "--mode", "server"])
+        assert result.exit_code == 0
+        config = json.loads((tmp_path / ".filigree" / "config.json").read_text())
+        assert config["mode"] == "server"
+
+    def test_install_preserves_existing_mode_when_no_flag(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cli_runner: CliRunner
+    ) -> None:
+        """install without --mode keeps the existing mode."""
+        monkeypatch.chdir(tmp_path)
+        cli_runner.invoke(cli, ["init", "--mode", "server"])
+        result = cli_runner.invoke(cli, ["install"])
+        assert result.exit_code == 0
+        config = json.loads((tmp_path / ".filigree" / "config.json").read_text())
+        assert config["mode"] == "server"
+
+
 class TestNoFiligreeDir:
     def test_commands_fail_without_init(self, tmp_path: Path, cli_runner: CliRunner) -> None:
         original = os.getcwd()
