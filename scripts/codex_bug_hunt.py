@@ -333,6 +333,7 @@ def main() -> int:
     parser.add_argument("--max-files", type=int, default=50, help="Maximum files to scan (default: 50)")
     parser.add_argument("--api-url", default="http://localhost:8377", help="Filigree dashboard URL")
     parser.add_argument("--no-ingest", action="store_true", help="Skip API POST (markdown-only mode)")
+    parser.add_argument("--scan-run-id", default=None, help="External scan run ID (from MCP trigger)")
 
     args = parser.parse_args()
 
@@ -370,7 +371,7 @@ def main() -> int:
         return 1
 
     context = load_context(repo_root)
-    scan_run_id = f"codex-{datetime.now(datetime.UTC).isoformat()}"
+    scan_run_id = args.scan_run_id or f"codex-{datetime.now(datetime.UTC).isoformat()}"
 
     print(f"Analysing {len(files)} files (batch={args.batch_size}) ...", file=sys.stderr)
     if not args.no_ingest:
