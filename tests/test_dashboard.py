@@ -55,6 +55,7 @@ class TestDashboardIndex:
         assert "overflow-x-auto" in html
         assert 'id="graphPreset"' in html
         assert 'value="execution" selected' in html
+        assert 'onchange="onGraphEpicsOnlyChange()"' in html
         assert 'id="graphReadyOnly"' in html
         assert 'id="graphBlockedOnly"' in html
         assert 'id="graphAssignee"' in html
@@ -131,6 +132,16 @@ class TestGraphFrontendContracts:
         assert 'placeholder="issue ID"' in html
         assert 'id="graphTraceBtn"' in html
         assert "disabled" in html
+
+    def test_preset_and_epics_toggle_stay_in_sync(self) -> None:
+        graph_js = (STATIC_DIR / "js" / "views" / "graph.js").read_text()
+        app_js = (STATIC_DIR / "js" / "app.js").read_text()
+        html = (STATIC_DIR / "dashboard.html").read_text()
+        assert "export function onGraphEpicsOnlyChange()" in graph_js
+        assert 'preset.value === "roadmap" && !epicsOnly.checked' in graph_js
+        assert 'preset.value = "execution"' in graph_js
+        assert "window.onGraphEpicsOnlyChange = onGraphEpicsOnlyChange;" in app_js
+        assert 'onchange="onGraphEpicsOnlyChange()"' in html
 
     def test_hover_traversal_uses_outgoers_not_full_edge_scan(self) -> None:
         graph_js = (STATIC_DIR / "js" / "views" / "graph.js").read_text()

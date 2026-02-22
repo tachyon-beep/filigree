@@ -182,6 +182,17 @@ export function setGraphPreset(value) {
   });
 }
 
+export function onGraphEpicsOnlyChange() {
+  const preset = document.getElementById("graphPreset");
+  const epicsOnly = document.getElementById("graphEpicsOnly");
+  if (preset && epicsOnly && preset.value === "roadmap" && !epicsOnly.checked) {
+    preset.value = "execution";
+  }
+  refreshGraphData(true).then(() => {
+    if (state.currentView === "graph") renderGraph();
+  });
+}
+
 export function clearGraphFocus() {
   const mode = document.getElementById("graphFocusMode");
   const root = document.getElementById("graphFocusRoot");

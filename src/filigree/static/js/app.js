@@ -86,6 +86,7 @@ import {
   callbacks as graphCallbacks,
   onGraphFocusModeChange,
   onGraphFocusRootInput,
+  onGraphEpicsOnlyChange,
   onGraphPathInput,
   graphSearchNext,
   graphSearchPrev,
@@ -570,6 +571,7 @@ window.setGraphPreset = setGraphPreset;
 window.clearGraphFocus = clearGraphFocus;
 window.onGraphFocusModeChange = onGraphFocusModeChange;
 window.onGraphFocusRootInput = onGraphFocusRootInput;
+window.onGraphEpicsOnlyChange = onGraphEpicsOnlyChange;
 window.onGraphPathInput = onGraphPathInput;
 window.graphSearchNext = graphSearchNext;
 window.graphSearchPrev = graphSearchPrev;
