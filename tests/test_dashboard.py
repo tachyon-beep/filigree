@@ -55,6 +55,10 @@ class TestDashboardIndex:
         assert "overflow-x-auto" in html
         assert 'id="graphPreset"' in html
         assert 'value="execution" selected' in html
+        assert 'id="graphFiltersGroup"' in html
+        assert 'id="graphAdvancedGroup"' in html
+        assert "Filters" in html
+        assert "Advanced" in html
         assert 'onchange="onGraphEpicsOnlyChange()"' in html
         assert 'id="graphReadyOnly"' in html
         assert 'id="graphBlockedOnly"' in html
@@ -142,6 +146,14 @@ class TestGraphFrontendContracts:
         assert 'preset.value = "execution"' in graph_js
         assert "window.onGraphEpicsOnlyChange = onGraphEpicsOnlyChange;" in app_js
         assert 'onchange="onGraphEpicsOnlyChange()"' in html
+
+    def test_graph_toolbar_progressive_disclosure_groups_present(self) -> None:
+        html = (STATIC_DIR / "dashboard.html").read_text()
+        assert 'id="graphFiltersGroup"' in html
+        assert 'id="graphAdvancedGroup"' in html
+        assert "Trace path:" in html
+        assert "Node cap:" in html
+        assert "Edge cap:" in html
 
     def test_hover_traversal_uses_outgoers_not_full_edge_scan(self) -> None:
         graph_js = (STATIC_DIR / "js" / "views" / "graph.js").read_text()
