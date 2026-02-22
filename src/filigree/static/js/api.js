@@ -38,6 +38,12 @@ export async function fetchStats() {
   return resp.json();
 }
 
+export async function fetchDashboardConfig() {
+  const resp = await fetch(apiUrl("/config"));
+  if (!resp.ok) return null;
+  return resp.json();
+}
+
 export async function fetchAllData() {
   const results = await Promise.all([
     fetch(apiUrl("/issues")),
@@ -70,8 +76,19 @@ export async function fetchTransitions(issueId) {
   return [];
 }
 
-export async function fetchGraph() {
-  const resp = await fetch(apiUrl("/graph"));
+export async function fetchGraph(options = {}) {
+  const params = new URLSearchParams();
+  Object.entries(options).forEach(([key, value]) => {
+    if (value === undefined || value === null || value === "") return;
+    if (Array.isArray(value)) {
+      if (!value.length) return;
+      params.set(key, value.join(","));
+      return;
+    }
+    params.set(key, String(value));
+  });
+  const suffix = params.toString() ? `?${params.toString()}` : "";
+  const resp = await fetch(apiUrl(`/graph${suffix}`));
   if (!resp.ok) return null;
   return resp.json();
 }

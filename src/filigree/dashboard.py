@@ -23,9 +23,12 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import webbrowser
+from collections import deque
 from contextvars import ContextVar
 from pathlib import Path
+from time import perf_counter
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -192,6 +195,98 @@ def _safe_int(value: str, name: str, default: int) -> int | JSONResponse:
         )
 
 
+_GRAPH_MODE_VALUES = frozenset({"legacy", "v2"})
+_GRAPH_STATUS_CATEGORIES = frozenset({"open", "wip", "done"})
+_BOOL_TRUE_VALUES = frozenset({"1", "true", "yes", "on"})
+_BOOL_FALSE_VALUES = frozenset({"0", "false", "no", "off"})
+
+
+def _parse_bool_value(raw: str, name: str) -> bool | JSONResponse:
+    value = raw.strip().lower()
+    if value in _BOOL_TRUE_VALUES:
+        return True
+    if value in _BOOL_FALSE_VALUES:
+        return False
+    return _error_response(
+        f'Invalid value for {name}: "{raw}". Must be one of true/false, 1/0, yes/no, on/off.',
+        "GRAPH_INVALID_PARAM",
+        400,
+        {"param": name, "value": raw},
+    )
+
+
+def _read_graph_runtime_config(db: FiligreeDB) -> dict[str, Any]:
+    """Read graph runtime settings from project config, if available."""
+    try:
+        return read_config(db.db_path.parent)
+    except Exception:
+        logger.debug("Failed to read graph runtime config", exc_info=True)
+        return {}
+
+
+def _resolve_graph_runtime(db: FiligreeDB) -> dict[str, Any]:
+    """Resolve graph feature controls from env + project config."""
+    config = _read_graph_runtime_config(db)
+
+    enabled_raw = os.getenv("FILIGREE_GRAPH_V2_ENABLED")
+    enabled: bool
+    if enabled_raw is not None:
+        enabled_value = _parse_bool_value(enabled_raw, "FILIGREE_GRAPH_V2_ENABLED")
+        enabled = bool(enabled_value) if isinstance(enabled_value, bool) else False
+    else:
+        enabled = bool(config.get("graph_v2_enabled", False))
+
+    configured_mode_raw = os.getenv("FILIGREE_GRAPH_API_MODE") or str(config.get("graph_api_mode", "")).strip()
+    configured_mode = configured_mode_raw.lower() if configured_mode_raw else ""
+    if configured_mode not in _GRAPH_MODE_VALUES:
+        configured_mode = ""
+
+    compatibility_mode = configured_mode or ("v2" if enabled else "legacy")
+    return {
+        "v2_enabled": enabled,
+        "configured_mode": configured_mode or None,
+        "compatibility_mode": compatibility_mode,
+    }
+
+
+def _parse_csv_param(raw: str) -> list[str]:
+    return [part.strip() for part in raw.split(",") if part.strip()]
+
+
+def _safe_bounded_int(raw: str, *, name: str, min_value: int, max_value: int) -> int | JSONResponse:
+    value = _safe_int(raw, name, 0)
+    if not isinstance(value, int):
+        return _error_response(
+            f'Invalid value for {name}: "{raw}". Must be an integer between {min_value} and {max_value}.',
+            "GRAPH_INVALID_PARAM",
+            400,
+            {"param": name, "value": raw},
+        )
+    if value < min_value or value > max_value:
+        return _error_response(
+            f'Invalid value for {name}: "{raw}". Must be between {min_value} and {max_value}.',
+            "GRAPH_INVALID_PARAM",
+            400,
+            {"param": name, "value": raw},
+        )
+    return value
+
+
+def _coerce_graph_mode(raw: str | None, db: FiligreeDB) -> str | JSONResponse:
+    runtime = _resolve_graph_runtime(db)
+    if raw is None:
+        return str(runtime["compatibility_mode"])
+    mode = raw.strip().lower()
+    if mode not in _GRAPH_MODE_VALUES:
+        return _error_response(
+            f'Invalid value for mode: "{raw}". Must be one of: legacy, v2.',
+            "GRAPH_INVALID_PARAM",
+            400,
+            {"param": "mode", "value": raw},
+        )
+    return mode
+
+
 def _get_db() -> FiligreeDB:
     """Return the active database connection.
 
@@ -242,24 +337,292 @@ def _create_project_router() -> Any:
         issues = db.list_issues(limit=10000)
         return JSONResponse([i.to_dict() for i in issues])
 
+    @router.get("/config")
+    async def api_config(db: FiligreeDB = Depends(_get_db)) -> JSONResponse:
+        """Dashboard runtime config exposed to frontend consumers."""
+        runtime = _resolve_graph_runtime(db)
+        return JSONResponse(
+            {
+                "graph_v2_enabled": runtime["v2_enabled"],
+                "graph_api_mode": runtime["compatibility_mode"],
+                "graph_mode_configured": runtime["configured_mode"],
+            }
+        )
+
     @router.get("/graph")
-    async def api_graph(db: FiligreeDB = Depends(_get_db)) -> JSONResponse:
-        """Graph data: nodes (issues) + edges (dependencies) for Cytoscape.js."""
+    async def api_graph(request: Request, db: FiligreeDB = Depends(_get_db)) -> JSONResponse:
+        """Graph data API with legacy and v2 compatibility modes."""
+        mode = _coerce_graph_mode(request.query_params.get("mode"), db)
+        if isinstance(mode, JSONResponse):
+            return mode
+
         issues = db.list_issues(limit=10000)
         deps = db.get_all_dependencies()
-        nodes = [
+
+        # Legacy behavior remains the default compatibility path.
+        if mode == "legacy":
+            nodes = [
+                {
+                    "id": i.id,
+                    "title": i.title,
+                    "status": i.status,
+                    "status_category": i.status_category,
+                    "priority": i.priority,
+                    "type": i.type,
+                }
+                for i in issues
+            ]
+            edges = [{"source": d["to"], "target": d["from"]} for d in deps]
+            return JSONResponse({"nodes": nodes, "edges": edges})
+
+        # Graph v2 query model
+        started = perf_counter()
+        params = request.query_params
+        issue_map = {i.id: i for i in issues}
+
+        include_done = True
+        include_done_raw = params.get("include_done")
+        if include_done_raw is not None:
+            include_done_value = _parse_bool_value(include_done_raw, "include_done")
+            if isinstance(include_done_value, JSONResponse):
+                return include_done_value
+            include_done = include_done_value
+
+        blocked_only = False
+        blocked_only_raw = params.get("blocked_only")
+        if blocked_only_raw is not None:
+            blocked_only_value = _parse_bool_value(blocked_only_raw, "blocked_only")
+            if isinstance(blocked_only_value, JSONResponse):
+                return blocked_only_value
+            blocked_only = blocked_only_value
+
+        ready_only = False
+        ready_only_raw = params.get("ready_only")
+        if ready_only_raw is not None:
+            ready_only_value = _parse_bool_value(ready_only_raw, "ready_only")
+            if isinstance(ready_only_value, JSONResponse):
+                return ready_only_value
+            ready_only = ready_only_value
+
+        critical_path_only = False
+        critical_path_only_raw = params.get("critical_path_only")
+        if critical_path_only_raw is not None:
+            critical_only_value = _parse_bool_value(critical_path_only_raw, "critical_path_only")
+            if isinstance(critical_only_value, JSONResponse):
+                return critical_only_value
+            critical_path_only = critical_only_value
+
+        if ready_only and blocked_only:
+            return _error_response(
+                "ready_only and blocked_only cannot both be true.",
+                "GRAPH_INVALID_PARAM",
+                422,
+                {"param": "ready_only,blocked_only"},
+            )
+
+        node_limit = 600
+        node_limit_raw = params.get("node_limit")
+        if node_limit_raw is not None:
+            node_limit_value = _safe_bounded_int(node_limit_raw, name="node_limit", min_value=50, max_value=2000)
+            if isinstance(node_limit_value, JSONResponse):
+                return node_limit_value
+            node_limit = node_limit_value
+
+        edge_limit = 2000
+        edge_limit_raw = params.get("edge_limit")
+        if edge_limit_raw is not None:
+            edge_limit_value = _safe_bounded_int(edge_limit_raw, name="edge_limit", min_value=50, max_value=5000)
+            if isinstance(edge_limit_value, JSONResponse):
+                return edge_limit_value
+            edge_limit = edge_limit_value
+
+        scope_root = params.get("scope_root") or None
+        if scope_root and scope_root not in issue_map:
+            return _error_response(
+                f"Unknown scope_root issue id: {scope_root}",
+                "GRAPH_INVALID_PARAM",
+                404,
+                {"param": "scope_root", "value": scope_root},
+            )
+
+        scope_radius = 2 if scope_root else 0
+        scope_radius_raw = params.get("scope_radius")
+        if scope_radius_raw is not None:
+            scope_radius_value = _safe_bounded_int(scope_radius_raw, name="scope_radius", min_value=0, max_value=6)
+            if isinstance(scope_radius_value, JSONResponse):
+                return scope_radius_value
+            scope_radius = scope_radius_value
+            if not scope_root:
+                return _error_response(
+                    "scope_radius requires scope_root.",
+                    "GRAPH_INVALID_PARAM",
+                    422,
+                    {"param": "scope_radius", "value": scope_radius_raw},
+                )
+
+        type_filter_raw = params.get("types")
+        type_filter = set(_parse_csv_param(type_filter_raw)) if type_filter_raw else set()
+        if type_filter:
+            known_types = {i.type for i in issues}
+            unknown_types = sorted(type_filter - known_types)
+            if unknown_types:
+                return _error_response(
+                    f'Unknown types: {", ".join(unknown_types)}',
+                    "GRAPH_INVALID_PARAM",
+                    400,
+                    {"param": "types", "value": type_filter_raw},
+                )
+
+        status_filter_raw = params.get("status_categories")
+        status_filter = set(_parse_csv_param(status_filter_raw)) if status_filter_raw else set()
+        if status_filter:
+            unknown_cats = sorted(status_filter - _GRAPH_STATUS_CATEGORIES)
+            if unknown_cats:
+                return _error_response(
+                    f'Unknown status_categories: {", ".join(unknown_cats)}',
+                    "GRAPH_INVALID_PARAM",
+                    400,
+                    {"param": "status_categories", "value": status_filter_raw},
+                )
+
+        assignee_filter = params.get("assignee")
+
+        critical_path_ids: set[str] = set()
+        if critical_path_only:
+            critical_path_ids = {node["id"] for node in db.get_critical_path()}
+
+        # Scope neighborhood (undirected BFS around scope_root)
+        scoped_ids: set[str] | None = None
+        if scope_root:
+            neighbors: dict[str, set[str]] = {}
+            for dep in deps:
+                blocker = dep["to"]
+                blocked = dep["from"]
+                neighbors.setdefault(blocker, set()).add(blocked)
+                neighbors.setdefault(blocked, set()).add(blocker)
+
+            scoped_ids = {scope_root}
+            queue: deque[tuple[str, int]] = deque([(scope_root, 0)])
+            while queue:
+                current, dist = queue.popleft()
+                if dist >= scope_radius:
+                    continue
+                for nxt in neighbors.get(current, set()):
+                    if nxt in scoped_ids:
+                        continue
+                    scoped_ids.add(nxt)
+                    queue.append((nxt, dist + 1))
+
+        def _open_blocker_count(issue_id: str) -> int:
+            issue = issue_map[issue_id]
+            total = 0
+            for blocker_id in issue.blocked_by:
+                blocker = issue_map.get(blocker_id)
+                if blocker and blocker.status_category != "done":
+                    total += 1
+            return total
+
+        def _open_blocks_count(issue_id: str) -> int:
+            issue = issue_map[issue_id]
+            total = 0
+            for blocked_id in issue.blocks:
+                blocked_issue = issue_map.get(blocked_id)
+                if blocked_issue and blocked_issue.status_category != "done":
+                    total += 1
+            return total
+
+        filtered_nodes: list[dict[str, Any]] = []
+        for issue in issues:
+            if scoped_ids is not None and issue.id not in scoped_ids:
+                continue
+            if not include_done and issue.status_category == "done":
+                continue
+            if type_filter and issue.type not in type_filter:
+                continue
+            if status_filter and issue.status_category not in status_filter:
+                continue
+            if assignee_filter is not None and issue.assignee != assignee_filter:
+                continue
+
+            blocker_count = _open_blocker_count(issue.id)
+            blocks_count = _open_blocks_count(issue.id)
+            if blocked_only and blocker_count == 0:
+                continue
+            if ready_only and not issue.is_ready:
+                continue
+            if critical_path_only and issue.id not in critical_path_ids:
+                continue
+
+            filtered_nodes.append(
+                {
+                    "id": issue.id,
+                    "title": issue.title,
+                    "status": issue.status,
+                    "status_category": issue.status_category,
+                    "priority": issue.priority,
+                    "type": issue.type,
+                    "assignee": issue.assignee,
+                    "is_ready": issue.is_ready,
+                    "blocked_by_open_count": blocker_count,
+                    "blocks_open_count": blocks_count,
+                }
+            )
+
+        total_nodes_before_limit = len(filtered_nodes)
+        truncated = False
+        if len(filtered_nodes) > node_limit:
+            filtered_nodes = filtered_nodes[:node_limit]
+            truncated = True
+
+        visible_ids = {node["id"] for node in filtered_nodes}
+        filtered_edges = [
             {
-                "id": i.id,
-                "title": i.title,
-                "status": i.status,
-                "status_category": i.status_category,
-                "priority": i.priority,
-                "type": i.type,
+                "id": f'{dep["to"]}->{dep["from"]}',
+                "source": dep["to"],
+                "target": dep["from"],
+                "kind": dep["type"],
+                "is_critical_path": dep["to"] in critical_path_ids and dep["from"] in critical_path_ids,
             }
-            for i in issues
+            for dep in deps
+            if dep["to"] in visible_ids and dep["from"] in visible_ids
         ]
-        edges = [{"source": d["to"], "target": d["from"]} for d in deps]
-        return JSONResponse({"nodes": nodes, "edges": edges})
+
+        total_edges_before_limit = len(filtered_edges)
+        if len(filtered_edges) > edge_limit:
+            filtered_edges = filtered_edges[:edge_limit]
+            truncated = True
+
+        query_ms = int((perf_counter() - started) * 1000)
+        runtime = _resolve_graph_runtime(db)
+        return JSONResponse(
+            {
+                "mode": "v2",
+                "compatibility_mode": runtime["compatibility_mode"],
+                "query": {
+                    "scope_root": scope_root,
+                    "scope_radius": scope_radius if scope_root else None,
+                    "include_done": include_done,
+                    "types": sorted(type_filter) if type_filter else [],
+                    "status_categories": sorted(status_filter) if status_filter else [],
+                    "assignee": assignee_filter,
+                    "blocked_only": blocked_only,
+                    "ready_only": ready_only,
+                    "critical_path_only": critical_path_only,
+                },
+                "limits": {
+                    "node_limit": node_limit,
+                    "edge_limit": edge_limit,
+                    "truncated": truncated,
+                },
+                "telemetry": {
+                    "query_ms": query_ms,
+                    "total_nodes_before_limit": total_nodes_before_limit,
+                    "total_edges_before_limit": total_edges_before_limit,
+                },
+                "nodes": filtered_nodes,
+                "edges": filtered_edges,
+            }
+        )
 
     @router.get("/stats")
     async def api_stats(db: FiligreeDB = Depends(_get_db)) -> JSONResponse:

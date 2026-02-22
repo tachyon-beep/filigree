@@ -11,7 +11,7 @@
 
 // --- Module imports ---
 
-import { fetchAllData, fetchProjects } from "./api.js";
+import { fetchAllData, fetchDashboardConfig, fetchProjects } from "./api.js";
 import {
   applyFilters,
   applyTypeFilter,
@@ -80,11 +80,20 @@ import {
   updateIssue,
 } from "./views/detail.js";
 import {
+  clearGraphFocus,
   computeHealthScore,
   computeImpactScores,
   callbacks as graphCallbacks,
+  onGraphFocusModeChange,
+  onGraphFocusRootInput,
+  onGraphPathInput,
+  graphSearchNext,
+  graphSearchPrev,
   graphFit,
   renderGraph,
+  setGraphPreset,
+  traceGraphPath,
+  clearGraphPath,
   showBlockedHelp,
   showHealthBreakdown,
   showHealthHelp,
@@ -131,6 +140,9 @@ import { filterFilesByScanSource, loadHealth } from "./views/health.js";
 async function fetchData() {
   document.getElementById("refreshIndicator").style.opacity = "1";
   try {
+    if (!state.graphConfigLoaded) {
+      await loadDashboardConfig();
+    }
     const data = await fetchAllData();
     if (!data) {
       console.warn("fetchData: non-OK response");
@@ -159,6 +171,25 @@ async function fetchData() {
   }
 }
 
+async function loadDashboardConfig() {
+  try {
+    const config = await fetchDashboardConfig();
+    if (config) {
+      state.graphConfig = config;
+      state.graphConfigLoaded = true;
+      return;
+    }
+  } catch (_e) {
+    // best effort fallback to legacy
+  }
+  state.graphConfig = {
+    graph_v2_enabled: false,
+    graph_api_mode: "legacy",
+    graph_mode_configured: null,
+  };
+  state.graphConfigLoaded = true;
+}
+
 function updateStats() {
   if (!state.stats) return;
   const s = state.stats;
@@ -180,6 +211,11 @@ function updateStats() {
 function setProject(key, opts) {
   state.currentProjectKey = key;
   state.API_BASE = key ? `/api/p/${encodeURIComponent(key)}` : "/api";
+  state.graphConfigLoaded = false;
+  state.graphData = null;
+  state.graphQuery = {};
+  state.graphQueryKey = "";
+  state.graphFallbackNotice = "";
   loadProjectFilterSettings();
   const sel = document.getElementById("projectSwitcher");
   if (sel) sel.value = key;
@@ -188,7 +224,7 @@ function setProject(key, opts) {
   state.selectedCards.clear();
   if (!opts?.keepDetail) closeDetail();
   updateHash();
-  fetchData();
+  loadDashboardConfig().finally(fetchData);
 }
 
 async function loadProjects() {
@@ -462,6 +498,7 @@ loadProjectFilterSettings();
   } else if (state.allProjects.length > 0) {
     setProject(state.allProjects[0].key, { keepDetail: true });
   } else {
+    await loadDashboardConfig();
     fetchData();
   }
 })().then(() => {
@@ -529,6 +566,15 @@ window.toggleEpicExpand = toggleEpicExpand;
 // Graph
 window.renderGraph = renderGraph;
 window.graphFit = graphFit;
+window.setGraphPreset = setGraphPreset;
+window.clearGraphFocus = clearGraphFocus;
+window.onGraphFocusModeChange = onGraphFocusModeChange;
+window.onGraphFocusRootInput = onGraphFocusRootInput;
+window.onGraphPathInput = onGraphPathInput;
+window.graphSearchNext = graphSearchNext;
+window.graphSearchPrev = graphSearchPrev;
+window.traceGraphPath = traceGraphPath;
+window.clearGraphPath = clearGraphPath;
 window.toggleCriticalPath = toggleCriticalPath;
 window.showHealthBreakdown = showHealthBreakdown;
 window.showHealthHelp = showHealthHelp;

@@ -96,6 +96,22 @@ export const state = {
   // Graph instances
   cy: null,
   workflowCy: null,
+  graphConfig: {
+    graph_v2_enabled: false,
+    graph_api_mode: "legacy",
+    graph_mode_configured: null,
+  },
+  graphConfigLoaded: false,
+  graphData: null,
+  graphMode: "legacy",
+  graphQuery: {},
+  graphQueryKey: "",
+  graphTelemetry: null,
+  graphFallbackNotice: "",
+  graphSearchQuery: "",
+  graphSearchIndex: 0,
+  graphPathNodes: new Set(),
+  graphPathEdges: new Set(),
 
   // Filters
   readyFilter: true,

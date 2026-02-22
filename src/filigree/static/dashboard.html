@@ -205,12 +205,76 @@ tailwind.config = {
   <!-- Graph view -->
   <div id="graphView" class="flex-1 hidden flex flex-col">
     <div class="flex items-center gap-2 px-4 py-1 bg-raised text-xs text-secondary border-b border-default">
+      <label for="graphPreset" class="text-xs text-secondary">Preset:</label>
+      <select id="graphPreset" onchange="setGraphPreset(this.value)" class="bg-overlay text-primary text-xs rounded px-2 py-0.5 border border-strong">
+        <option value="execution" selected>Execution</option>
+        <option value="roadmap">Roadmap</option>
+      </select>
       <label class="flex items-center gap-1">
-        <input type="checkbox" id="graphEpicsOnly" checked onchange="renderGraph()" style="accent-color:var(--accent)"> Epics only
+        <input type="checkbox" id="graphEpicsOnly" onchange="renderGraph()" style="accent-color:var(--accent)"> Epics only
+      </label>
+      <label class="flex items-center gap-1">
+        <input type="checkbox" id="graphReadyOnly" onchange="renderGraph()" style="accent-color:var(--accent)"> Ready only
+      </label>
+      <label class="flex items-center gap-1">
+        <input type="checkbox" id="graphBlockedOnly" onchange="renderGraph()" style="accent-color:var(--accent)"> Blocked only
+      </label>
+      <label class="flex items-center gap-1">
+        Assignee:
+        <input id="graphAssignee" type="text" placeholder="all" oninput="renderGraph()"
+               class="bg-overlay text-primary text-xs rounded px-2 py-0.5 border border-strong w-28 focus:outline-none focus-accent">
+      </label>
+      <label class="flex items-center gap-1">
+        <input type="checkbox" id="graphFocusMode" onchange="onGraphFocusModeChange()" style="accent-color:var(--accent)"> Focus
+      </label>
+      <label class="flex items-center gap-1">
+        Root issue:
+        <input id="graphFocusRoot" type="text" placeholder="issue id (auto-enables focus)" oninput="onGraphFocusRootInput()"
+               class="bg-overlay text-primary text-xs rounded px-2 py-0.5 border border-strong w-32 focus:outline-none focus-accent">
+      </label>
+      <label class="flex items-center gap-1">
+        Radius:
+        <select id="graphFocusRadius" onchange="renderGraph()" class="bg-overlay text-primary text-xs rounded px-1 py-0.5 border border-strong">
+          <option value="1">1</option>
+          <option value="2" selected>2</option>
+          <option value="3">3</option>
+          <option value="4">4</option>
+        </select>
+      </label>
+      <button onclick="clearGraphFocus()" class="px-2 py-0.5 rounded bg-overlay bg-overlay-hover" title="Clear graph focus root/radius">Clear Focus</button>
+      <label class="flex items-center gap-1">
+        Path:
+        <input id="graphPathSource" type="text" placeholder="issue ID" oninput="onGraphPathInput()" class="bg-overlay text-primary text-xs rounded px-2 py-0.5 border border-strong w-24 focus:outline-none focus-accent">
+        <span>&rarr;</span>
+        <input id="graphPathTarget" type="text" placeholder="issue ID" oninput="onGraphPathInput()" class="bg-overlay text-primary text-xs rounded px-2 py-0.5 border border-strong w-24 focus:outline-none focus-accent">
+      </label>
+      <button id="graphTraceBtn" onclick="traceGraphPath()" disabled class="px-2 py-0.5 rounded bg-overlay bg-overlay-hover opacity-50 cursor-not-allowed" title="Trace dependency path between source and target">Trace</button>
+      <button onclick="clearGraphPath()" class="px-2 py-0.5 rounded bg-overlay bg-overlay-hover" title="Clear active path trace">Clear Path</button>
+      <label class="flex items-center gap-1">
+        Node cap:
+        <select id="graphNodeLimit" onchange="renderGraph()" class="bg-overlay text-primary text-xs rounded px-1 py-0.5 border border-strong">
+          <option value="300">300</option>
+          <option value="600" selected>600</option>
+          <option value="1200">1200</option>
+        </select>
+      </label>
+      <label class="flex items-center gap-1">
+        Edge cap:
+        <select id="graphEdgeLimit" onchange="renderGraph()" class="bg-overlay text-primary text-xs rounded px-1 py-0.5 border border-strong">
+          <option value="1000">1000</option>
+          <option value="2000" selected>2000</option>
+          <option value="4000">4000</option>
+        </select>
       </label>
       <button onclick="graphFit()" class="px-2 py-0.5 rounded bg-overlay bg-overlay-hover" title="Reset zoom and center the graph">Fit</button>
+      <button onclick="graphSearchPrev()" class="px-2 py-0.5 rounded bg-overlay bg-overlay-hover" title="Previous graph search match">Prev</button>
+      <button onclick="graphSearchNext()" class="px-2 py-0.5 rounded bg-overlay bg-overlay-hover" title="Next graph search match">Next</button>
+      <span id="graphSearchState" class="text-[11px] text-secondary">Search: n/a</span>
       <button id="btnCritPath" onclick="toggleCriticalPath()" class="px-2 py-0.5 rounded bg-overlay bg-overlay-hover" title="Highlight the longest dependency chain">Critical Path</button>
       <button id="btnGraphLegend" onclick="toggleGraphLegend()" class="px-2 py-0.5 rounded bg-overlay bg-overlay-hover">Legend</button>
+      <div id="graphNotice" class="hidden ml-2 px-2 py-0.5 rounded border border-amber-700 text-amber-300 bg-amber-900/30"></div>
+      <div id="graphFilterState" class="ml-2 text-[11px] text-secondary"></div>
+      <div id="graphPerfState" class="ml-2 text-[11px] text-secondary"></div>
     </div>
     <div class="relative flex-1">
       <div id="cy" class="absolute inset-0"></div>

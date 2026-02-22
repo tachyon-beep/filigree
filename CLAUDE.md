@@ -1,4 +1,4 @@
-<!-- filigree:instructions:v1.2.0:0eee59ca -->
+<!-- filigree:instructions:v1.2.0:6bd811c8 -->
 ## Filigree Issue Tracker
 
 Use `filigree` for all task tracking in this project. Data lives in `.filigree/`.
@@ -75,15 +75,6 @@ Key endpoints:
 - `GET /api/files/{file_id}` — File detail with associations and findings summary
 - `GET /api/files/{file_id}/findings` — Findings for a specific file
 
-### Scanner Integration (MCP)
-
-Register scanners in `.filigree/scanners/*.toml` (see `scripts/scanners/*.toml.example`).
-
-MCP workflow:
-- `list_scanners` — discover registered scanners
-- `trigger_scan scanner=<name> file_path=<path>` — trigger async scan, returns `file_id` + `scan_run_id`
-- Check `GET /api/files/{file_id}/findings` for results
-
 ### Workflow
 1. `filigree ready` to find available work
 2. `filigree show <id>` to review details
@@ -91,6 +82,11 @@ MCP workflow:
 4. `filigree update <id> --status=in_progress` to claim it
 5. Do the work, commit code
 6. `filigree close <id>` when done
+
+### Session Start
+When beginning a new session, run `filigree session-context` to load the project
+snapshot (ready work, in-progress items, critical path). This provides the
+context needed to pick up where the previous session left off.
 
 ### Priority Scale
 - P0: Critical (drop everything)

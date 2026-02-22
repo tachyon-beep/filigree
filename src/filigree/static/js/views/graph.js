@@ -2,7 +2,7 @@
 // Graph view — Cytoscape dependency graph, critical path, health scoring.
 // ---------------------------------------------------------------------------
 
-import { fetchCriticalPath } from "../api.js";
+import { fetchCriticalPath, fetchGraph } from "../api.js";
 import { CATEGORY_COLORS, state, THEME_COLORS } from "../state.js";
 import { showPopover } from "../ui.js";
 
@@ -10,132 +10,367 @@ import { showPopover } from "../ui.js";
 
 export const callbacks = { openDetail: null, fetchData: null };
 
-// ---------------------------------------------------------------------------
-// renderGraph — build Cytoscape graph from issues/deps
-// ---------------------------------------------------------------------------
+let _graphFetchSeq = 0;
+const FOCUS_ROOT_NOTICE = "Focus is enabled. Enter a root issue ID to apply scoped view.";
 
-export function renderGraph() {
-  if (!state.allIssues.length) return;
-  const container = document.getElementById("cy");
+function shouldUseGraphV2() {
+  const cfg = state.graphConfig || {};
+  return cfg.graph_v2_enabled || cfg.graph_api_mode === "v2";
+}
+
+function buildGraphQuery() {
+  const preset = document.getElementById("graphPreset")?.value || "execution";
   const epicsOnly = document.getElementById("graphEpicsOnly").checked;
-
+  const readyOnly = document.getElementById("graphReadyOnly").checked;
+  const blockedOnlyControl = document.getElementById("graphBlockedOnly").checked;
+  const assignee = document.getElementById("graphAssignee").value.trim();
+  const focusMode = document.getElementById("graphFocusMode").checked;
+  const focusRoot = document.getElementById("graphFocusRoot").value.trim();
+  const focusRadiusRaw = document.getElementById("graphFocusRadius").value;
+  const focusRadius = Number.parseInt(focusRadiusRaw || "2", 10);
+  const nodeLimitRaw = document.getElementById("graphNodeLimit").value;
+  const edgeLimitRaw = document.getElementById("graphEdgeLimit").value;
+  const nodeLimit = Number.parseInt(nodeLimitRaw || "600", 10);
+  const edgeLimit = Number.parseInt(edgeLimitRaw || "2000", 10);
   const showOpen = document.getElementById("filterOpen").checked;
   const showActive = document.getElementById("filterInProgress").checked;
   const showClosed = document.getElementById("filterClosed").checked;
-  const search = document.getElementById("filterSearch").value.toLowerCase().trim();
 
-  const visibleIds = new Set();
-  for (const n of state.allIssues) {
-    let show = true;
-    const cat = n.status_category || "open";
-    if (cat === "open" && !showOpen) show = false;
-    if (cat === "wip" && !showActive) show = false;
-    if (cat === "done" && !showClosed) show = false;
-    if (epicsOnly && n.type !== "epic" && n.type !== "milestone") show = false;
-    if (show) visibleIds.add(n.id);
+  const statusCategories = [];
+  if (showOpen) statusCategories.push("open");
+  if (showActive) statusCategories.push("wip");
+  if (showClosed) statusCategories.push("done");
+
+  const query = {
+    mode: "v2",
+    status_categories: statusCategories,
+    include_done: showClosed,
+    ready_only: readyOnly,
+    blocked_only: blockedOnlyControl || state.blockedFilter,
+    node_limit: Number.isNaN(nodeLimit) ? 600 : nodeLimit,
+    edge_limit: Number.isNaN(edgeLimit) ? 2000 : edgeLimit,
+  };
+  if (preset === "roadmap" || epicsOnly) query.types = ["epic", "milestone"];
+  if (assignee) query.assignee = assignee;
+  if (focusMode && focusRoot) {
+    query.scope_root = focusRoot;
+    query.scope_radius = Number.isNaN(focusRadius) ? 2 : Math.max(0, Math.min(6, focusRadius));
+  }
+  return query;
+}
+
+function setGraphNotice(text) {
+  const el = document.getElementById("graphNotice");
+  if (!el) return;
+  if (text) {
+    el.textContent = text;
+    el.classList.remove("hidden");
+    return;
+  }
+  el.textContent = "";
+  el.classList.add("hidden");
+}
+
+function updateGraphFilterStateLabel(parts) {
+  const el = document.getElementById("graphFilterState");
+  if (!el) return;
+  if (!parts.length) {
+    el.textContent = "Filters: none";
+    return;
+  }
+  el.textContent = `Filters: ${parts.join(" | ")}`;
+}
+
+function updateGraphSearchState(text) {
+  const el = document.getElementById("graphSearchState");
+  if (el) el.textContent = text;
+}
+
+function updateGraphPerfState() {
+  const el = document.getElementById("graphPerfState");
+  if (!el) return;
+  const t = state.graphTelemetry || {};
+  const queryMs = t.query_ms ?? "-";
+  const renderMs = t.render_ms ?? "-";
+  const nodeCount = state.cy ? state.cy.nodes().length : 0;
+  const edgeCount = state.cy ? state.cy.edges().length : 0;
+  el.textContent = `Perf q:${queryMs}ms r:${renderMs}ms n:${nodeCount} e:${edgeCount}`;
+}
+
+function applySearchFocus(search) {
+  if (!state.cy || !search || state.criticalPathActive || state.graphPathNodes.size) {
+    if (!search) {
+      state.graphSearchQuery = "";
+      state.graphSearchIndex = 0;
+      if (state.cy && !state.criticalPathActive) {
+        state.cy.nodes().forEach((n) => {
+          n.style("opacity", n.data("opacity"));
+          n.style("border-width", n.data("isReady") ? 3 : 0);
+          n.style("border-color", "#10B981");
+        });
+      }
+      updateGraphSearchState("Search: n/a");
+    }
+    return;
   }
 
-  const cyNodes = state.allIssues
-    .filter((n) => visibleIds.has(n.id))
-    .map((n) => {
-      const matchesSearch =
-        !search ||
-        n.title.toLowerCase().indexOf(search) >= 0 ||
-        n.id.toLowerCase().indexOf(search) >= 0;
-      return {
-        data: {
-          id: n.id,
-          label: n.title.length > 30 ? `${n.title.slice(0, 28)}..` : n.title,
-          status: n.status,
-          statusCategory: n.status_category || "open",
-          priority: n.priority,
-          type: n.type,
-          isReady: n.is_ready,
-          childCount: n.children ? n.children.length : 0,
-          opacity: matchesSearch ? 1 : 0.2,
-        },
-      };
+  if (state.graphSearchQuery !== search) {
+    state.graphSearchQuery = search;
+    state.graphSearchIndex = 0;
+  }
+
+  const matches = state.cy
+    .nodes()
+    .filter((n) => n.data("opacity") >= 1)
+    .toArray();
+  if (!matches.length) {
+    updateGraphSearchState("Search: 0 results");
+    return;
+  }
+
+  state.graphSearchIndex =
+    ((state.graphSearchIndex % matches.length) + matches.length) % matches.length;
+  const active = matches[state.graphSearchIndex];
+  const neighborhood = active.closedNeighborhood().nodes();
+  const contextIds = new Set(neighborhood.map((n) => n.id()));
+
+  state.cy.nodes().forEach((n) => {
+    if (n.id() === active.id()) {
+      n.style("opacity", 1);
+      n.style("border-width", 4);
+      n.style("border-color", THEME_COLORS.accent);
+      return;
+    }
+    if (contextIds.has(n.id())) {
+      n.style("opacity", 0.45);
+    } else {
+      n.style("opacity", 0.1);
+    }
+  });
+
+  state.cy.center(active);
+  updateGraphSearchState(`Search: ${state.graphSearchIndex + 1}/${matches.length}`);
+}
+
+export function setGraphPreset(value) {
+  const preset = value || "execution";
+  const epicsOnly = document.getElementById("graphEpicsOnly");
+  if (epicsOnly) epicsOnly.checked = preset === "roadmap";
+  refreshGraphData(true).then(() => {
+    if (state.currentView === "graph") renderGraph();
+  });
+}
+
+export function clearGraphFocus() {
+  const mode = document.getElementById("graphFocusMode");
+  const root = document.getElementById("graphFocusRoot");
+  const radius = document.getElementById("graphFocusRadius");
+  if (mode) mode.checked = false;
+  if (root) root.value = "";
+  if (radius) radius.value = "2";
+  setGraphNotice(state.graphFallbackNotice || "");
+  refreshGraphData(true).then(() => {
+    if (state.currentView === "graph") renderGraph();
+  });
+}
+
+export function onGraphFocusModeChange() {
+  const mode = document.getElementById("graphFocusMode");
+  const root = document.getElementById("graphFocusRoot");
+  if (!mode || !root) return;
+  const rootValue = root.value.trim();
+  if (!mode.checked) {
+    root.value = "";
+    if (!state.graphPathNodes.size) setGraphNotice(state.graphFallbackNotice || "");
+  } else if (!rootValue && !state.graphPathNodes.size) {
+    setGraphNotice(FOCUS_ROOT_NOTICE);
+  }
+  renderGraph();
+}
+
+export function onGraphFocusRootInput() {
+  const mode = document.getElementById("graphFocusMode");
+  const root = document.getElementById("graphFocusRoot");
+  if (!mode || !root) return;
+  const rootValue = root.value.trim();
+  mode.checked = rootValue.length > 0;
+  if (!rootValue && !state.graphPathNodes.size) setGraphNotice(state.graphFallbackNotice || "");
+  renderGraph();
+}
+
+export function onGraphPathInput() {
+  const source = document.getElementById("graphPathSource");
+  const target = document.getElementById("graphPathTarget");
+  const traceBtn = document.getElementById("graphTraceBtn");
+  if (!source || !target || !traceBtn) return;
+  const ready = source.value.trim().length > 0 && target.value.trim().length > 0;
+  traceBtn.disabled = !ready;
+  traceBtn.classList.toggle("opacity-50", !ready);
+  traceBtn.classList.toggle("cursor-not-allowed", !ready);
+}
+
+export function graphSearchNext() {
+  state.graphSearchIndex += 1;
+  renderGraph();
+}
+
+export function graphSearchPrev() {
+  state.graphSearchIndex -= 1;
+  renderGraph();
+}
+
+export function clearGraphPath() {
+  state.graphPathNodes.clear();
+  state.graphPathEdges.clear();
+  setGraphNotice(state.graphFallbackNotice || "");
+  renderGraph();
+}
+
+export function traceGraphPath() {
+  if (!state.cy) return;
+  const source = document.getElementById("graphPathSource").value.trim();
+  const target = document.getElementById("graphPathTarget").value.trim();
+  if (!source || !target) {
+    setGraphNotice("Enter both source and target issue ids for path tracing.");
+    return;
+  }
+  if (!state.cy.$id(source).length || !state.cy.$id(target).length) {
+    setGraphNotice("Source or target is not visible in current graph scope.");
+    return;
+  }
+
+  const prevByNode = new Map();
+  const queue = [source];
+  prevByNode.set(source, null);
+
+  while (queue.length) {
+    const cur = queue.shift();
+    if (cur === target) break;
+    state.cy.edges().forEach((e) => {
+      if (e.source().id() !== cur) return;
+      const nxt = e.target().id();
+      if (prevByNode.has(nxt)) return;
+      prevByNode.set(nxt, cur);
+      queue.push(nxt);
     });
-
-  // allDeps: [{from: blocker_id, to: blocked_id, type}]
-  // edge direction: from (blocker) -> to (blocked) i.e. source blocks target
-  const cyEdges = state.allDeps
-    .filter((e) => visibleIds.has(e.from) && visibleIds.has(e.to))
-    .map((e, i) => ({
-      data: { id: `e${i}`, source: e.from, target: e.to },
-    }));
-
-  if (state.cy) state.cy.destroy();
-
-  /* global cytoscape */
-  state.cy = cytoscape({
-    container,
-    elements: cyNodes.concat(cyEdges),
-    layout: {
-      name: "dagre",
-      rankDir: "TB",
-      rankSep: 80,
-      nodeSep: 40,
-      padding: 20,
-    },
-    style: [
-      {
-        selector: "node",
-        style: {
-          label: "data(label)",
-          "font-size": "11px",
-          "font-family": "JetBrains Mono, monospace",
-          "text-valign": "center",
-          "text-halign": "center",
-          "text-wrap": "wrap",
-          "text-max-width": "120px",
-          color: THEME_COLORS.textPrimary,
-          "text-outline-color": THEME_COLORS.graphOutline,
-          "text-outline-width": 2,
-          width: "mapData(priority, 0, 4, 60, 35)",
-          height: "mapData(priority, 0, 4, 60, 35)",
-          opacity: "data(opacity)",
-          "background-color": (ele) => CATEGORY_COLORS[ele.data("statusCategory")] || "#64748B",
-          "border-width": (ele) => (ele.data("isReady") ? 3 : 0),
-          "border-color": "#10B981",
-          shape: (ele) => {
-            const t = ele.data("type");
-            if (t === "epic" || t === "milestone") return "hexagon";
-            if (t === "bug") return "diamond";
-            if (t === "feature") return "star";
-            return "round-rectangle";
-          },
-        },
-      },
-      {
-        selector: "edge",
-        style: {
-          width: 1.5,
-          "line-color": THEME_COLORS.graphEdge,
-          "target-arrow-color": THEME_COLORS.graphEdge,
-          "target-arrow-shape": "triangle",
-          "curve-style": "bezier",
-          "arrow-scale": 0.8,
-        },
-      },
-      {
-        selector: "node:selected",
-        style: { "border-width": 3, "border-color": THEME_COLORS.accent },
-      },
-    ],
-    minZoom: 0.1,
-    maxZoom: 4,
-  });
-
-  state.cy.on("tap", "node", (evt) => {
-    if (callbacks.openDetail) callbacks.openDetail(evt.target.id());
-  });
-  state.cy.fit(undefined, 30);
-  if (state.cy.zoom() > 1.5) {
-    state.cy.zoom(1.5);
-    state.cy.center();
   }
 
+  if (!prevByNode.has(target)) {
+    state.graphPathNodes.clear();
+    state.graphPathEdges.clear();
+    setGraphNotice(`No dependency path found from ${source} to ${target}.`);
+    renderGraph();
+    return;
+  }
+
+  const pathNodes = [];
+  let cur = target;
+  while (cur !== null) {
+    pathNodes.push(cur);
+    cur = prevByNode.get(cur) ?? null;
+  }
+  pathNodes.reverse();
+
+  state.graphPathNodes = new Set(pathNodes);
+  state.graphPathEdges = new Set();
+  for (let i = 0; i + 1 < pathNodes.length; i += 1) {
+    state.graphPathEdges.add(`${pathNodes[i]}->${pathNodes[i + 1]}`);
+  }
+
+  setGraphNotice(`Path traced: ${pathNodes.length} nodes from ${source} to ${target}.`);
+  renderGraph();
+}
+
+export async function refreshGraphData(force = false) {
+  if (!shouldUseGraphV2()) {
+    state.graphMode = "legacy";
+    state.graphData = null;
+    state.graphQueryKey = "";
+    state.graphFallbackNotice = "";
+    setGraphNotice("");
+    return;
+  }
+
+  const query = buildGraphQuery();
+  const key = JSON.stringify(query);
+  if (!force && state.graphQueryKey === key && state.graphData) return;
+
+  const seq = ++_graphFetchSeq;
+  const data = await fetchGraph(query);
+  if (seq !== _graphFetchSeq) return;
+
+  if (data && data.mode === "v2" && Array.isArray(data.nodes) && Array.isArray(data.edges)) {
+    state.graphMode = "v2";
+    state.graphData = data;
+    state.graphQuery = query;
+    state.graphQueryKey = key;
+    state.graphTelemetry = data.telemetry || null;
+    state.graphFallbackNotice = data.limits?.truncated
+      ? `Graph limited for performance (${data.nodes.length} nodes/${data.edges.length} edges shown). Narrow scope or filters for more detail.`
+      : "";
+    setGraphNotice(state.graphFallbackNotice);
+    return;
+  }
+
+  // Safety fallback: if v2 fetch fails or returns unexpected payload, use legacy graph.
+  state.graphMode = "legacy";
+  state.graphData = null;
+  state.graphQuery = {};
+  state.graphQueryKey = "";
+  state.graphFallbackNotice = "Graph v2 unavailable; showing legacy graph.";
+  setGraphNotice(state.graphFallbackNotice);
+}
+
+function graphStyles() {
+  return [
+    {
+      selector: "node",
+      style: {
+        label: "data(label)",
+        "font-size": "11px",
+        "font-family": "JetBrains Mono, monospace",
+        "text-valign": "center",
+        "text-halign": "center",
+        "text-wrap": "wrap",
+        "text-max-width": "120px",
+        color: THEME_COLORS.textPrimary,
+        "text-outline-color": THEME_COLORS.graphOutline,
+        "text-outline-width": 2,
+        width: "mapData(priority, 0, 4, 60, 35)",
+        height: "mapData(priority, 0, 4, 60, 35)",
+        opacity: "data(opacity)",
+        "background-color": (ele) => CATEGORY_COLORS[ele.data("statusCategory")] || "#64748B",
+        "border-width": (ele) => (ele.data("isReady") ? 3 : 0),
+        "border-color": "#10B981",
+        shape: (ele) => {
+          const t = ele.data("type");
+          if (t === "epic" || t === "milestone") return "hexagon";
+          if (t === "bug") return "diamond";
+          if (t === "feature") return "star";
+          return "round-rectangle";
+        },
+      },
+    },
+    {
+      selector: "edge",
+      style: {
+        width: 1.5,
+        "line-color": THEME_COLORS.graphEdge,
+        "target-arrow-color": THEME_COLORS.graphEdge,
+        "target-arrow-shape": "triangle",
+        "curve-style": "bezier",
+        "arrow-scale": 0.8,
+      },
+    },
+    {
+      selector: "node:selected",
+      style: { "border-width": 3, "border-color": THEME_COLORS.accent },
+    },
+  ];
+}
+
+function applyCriticalPathStyles() {
+  if (!state.cy) return;
   if (state.criticalPathActive && state.criticalPathIds.size) {
     state.cy.nodes().forEach((n) => {
       if (!state.criticalPathIds.has(n.id())) n.style("opacity", 0.2);
@@ -154,8 +389,51 @@ export function renderGraph() {
         e.style("opacity", 0.1);
       }
     });
+  } else {
+    state.cy.nodes().forEach((n) => n.style("opacity", n.data("opacity")));
+    state.cy.edges().forEach((e) => {
+      e.style({
+        width: 1.5,
+        "line-color": THEME_COLORS.graphEdge,
+        "target-arrow-color": THEME_COLORS.graphEdge,
+        opacity: 1,
+      });
+    });
   }
+}
 
+function applyPathTraceStyles() {
+  if (!state.cy || !state.graphPathNodes.size) return;
+  state.cy.nodes().forEach((n) => {
+    if (state.graphPathNodes.has(n.id())) {
+      n.style("opacity", 1);
+      n.style("border-width", 4);
+      n.style("border-color", "#F97316");
+    } else {
+      n.style("opacity", 0.12);
+    }
+  });
+  state.cy.edges().forEach((e) => {
+    const key = `${e.source().id()}->${e.target().id()}`;
+    if (state.graphPathEdges.has(key)) {
+      e.style({
+        width: 4,
+        "line-color": "#F97316",
+        "target-arrow-color": "#F97316",
+        opacity: 1,
+      });
+    } else {
+      e.style("opacity", 0.08);
+    }
+  });
+}
+
+function bindGraphEvents() {
+  if (!state.cy) return;
+  state.cy.on("tap", "node", (evt) => {
+    const nodeId = evt.target.id();
+    if (callbacks.openDetail) callbacks.openDetail(nodeId);
+  });
   state.cy.on("mouseover", "node", (evt) => {
     if (state.criticalPathActive) return;
     const nodeId = evt.target.id();
@@ -182,6 +460,289 @@ export function renderGraph() {
       n.style("opacity", n.data("opacity"));
     });
   });
+}
+
+// ---------------------------------------------------------------------------
+// renderGraph — build Cytoscape graph from issues/deps
+// ---------------------------------------------------------------------------
+
+export function renderGraph() {
+  const renderStarted = performance.now();
+  if (!state.allIssues.length && !(state.graphData && state.graphData.nodes)) return;
+  if (shouldUseGraphV2()) {
+    const desiredKey = JSON.stringify(buildGraphQuery());
+    if (state.graphQueryKey !== desiredKey) {
+      refreshGraphData().then(() => {
+        if (state.currentView === "graph") renderGraph();
+      });
+    }
+  } else {
+    state.graphMode = "legacy";
+    setGraphNotice("");
+  }
+
+  const container = document.getElementById("cy");
+  const epicsOnly = document.getElementById("graphEpicsOnly").checked;
+  const graphPreset = document.getElementById("graphPreset")?.value || "execution";
+  const graphReadyOnly = document.getElementById("graphReadyOnly").checked;
+  const graphBlockedOnly = document.getElementById("graphBlockedOnly").checked;
+  const graphAssignee = document.getElementById("graphAssignee").value.trim();
+  const graphFocusMode = document.getElementById("graphFocusMode").checked;
+  const graphFocusRoot = document.getElementById("graphFocusRoot").value.trim();
+  const graphFocusRadius = Number.parseInt(document.getElementById("graphFocusRadius").value || "2", 10);
+  const graphNodeLimit = Number.parseInt(document.getElementById("graphNodeLimit").value || "600", 10);
+  const graphEdgeLimit = Number.parseInt(document.getElementById("graphEdgeLimit").value || "2000", 10);
+
+  const showOpen = document.getElementById("filterOpen").checked;
+  const showActive = document.getElementById("filterInProgress").checked;
+  const showClosed = document.getElementById("filterClosed").checked;
+  const search = document.getElementById("filterSearch").value.toLowerCase().trim();
+
+  let cyNodes = [];
+  let cyEdges = [];
+  const filterParts = [];
+  if (graphPreset === "roadmap") filterParts.push("preset=roadmap");
+  if (epicsOnly && graphPreset !== "roadmap") filterParts.push("types=epics,milestones");
+  if (graphReadyOnly) filterParts.push("ready_only");
+  if (graphBlockedOnly || state.blockedFilter) filterParts.push("blocked_only");
+  if (graphAssignee) filterParts.push(`assignee=${graphAssignee}`);
+  if (graphFocusMode && graphFocusRoot) filterParts.push(`focus=${graphFocusRoot}:${Number.isNaN(graphFocusRadius) ? 2 : graphFocusRadius}`);
+  updateGraphFilterStateLabel(filterParts);
+
+  if (state.graphMode === "v2" && state.graphData && Array.isArray(state.graphData.nodes)) {
+    const nodes = state.graphData.nodes;
+    const edges = Array.isArray(state.graphData.edges) ? state.graphData.edges : [];
+    cyNodes = nodes.map((n) => {
+      const title = n.title || n.id;
+      const matchesSearch =
+        !search ||
+        title.toLowerCase().indexOf(search) >= 0 ||
+        String(n.id).toLowerCase().indexOf(search) >= 0;
+      return {
+        data: {
+          id: n.id,
+          label: title.length > 30 ? `${title.slice(0, 28)}..` : title,
+          status: n.status,
+          statusCategory: n.status_category || "open",
+          priority: n.priority,
+          type: n.type,
+          isReady: !!n.is_ready,
+          childCount: n.child_count || 0,
+          opacity: matchesSearch ? 1 : 0.2,
+        },
+      };
+    });
+    cyEdges = edges.map((e, i) => ({
+      data: { id: e.id || `e${i}`, source: e.source, target: e.target },
+    }));
+  } else {
+    const visibleIds = new Set();
+    for (const n of state.allIssues) {
+      let show = true;
+      const cat = n.status_category || "open";
+      const blockedByOpen = (n.blocked_by || []).some((bid) => {
+        const blocker = state.issueMap[bid];
+        return blocker && (blocker.status_category || "open") !== "done";
+      });
+      if (cat === "open" && !showOpen) show = false;
+      if (cat === "wip" && !showActive) show = false;
+      if (cat === "done" && !showClosed) show = false;
+      if ((graphPreset === "roadmap" || epicsOnly) && n.type !== "epic" && n.type !== "milestone") show = false;
+      if (graphReadyOnly && !n.is_ready) show = false;
+      if ((graphBlockedOnly || state.blockedFilter) && !blockedByOpen) show = false;
+      if (graphAssignee && n.assignee !== graphAssignee) show = false;
+      if (show) visibleIds.add(n.id);
+    }
+
+    if (graphFocusMode && graphFocusRoot && visibleIds.has(graphFocusRoot)) {
+      const radius = Number.isNaN(graphFocusRadius) ? 2 : Math.max(0, Math.min(6, graphFocusRadius));
+      const neighbors = {};
+      for (const dep of state.allDeps) {
+        const blocked = dep.from;
+        const blocker = dep.to;
+        if (!neighbors[blocked]) neighbors[blocked] = new Set();
+        if (!neighbors[blocker]) neighbors[blocker] = new Set();
+        neighbors[blocked].add(blocker);
+        neighbors[blocker].add(blocked);
+      }
+      const scoped = new Set([graphFocusRoot]);
+      const queue = [{ id: graphFocusRoot, depth: 0 }];
+      while (queue.length) {
+        const cur = queue.shift();
+        if (!cur || cur.depth >= radius) continue;
+        for (const nxt of neighbors[cur.id] || []) {
+          if (scoped.has(nxt) || !visibleIds.has(nxt)) continue;
+          scoped.add(nxt);
+          queue.push({ id: nxt, depth: cur.depth + 1 });
+        }
+      }
+      Array.from(visibleIds).forEach((id) => {
+        if (!scoped.has(id)) visibleIds.delete(id);
+      });
+    }
+
+    cyNodes = state.allIssues
+      .filter((n) => visibleIds.has(n.id))
+      .map((n) => {
+        const matchesSearch =
+          !search ||
+          n.title.toLowerCase().indexOf(search) >= 0 ||
+          n.id.toLowerCase().indexOf(search) >= 0;
+        return {
+          data: {
+            id: n.id,
+            label: n.title.length > 30 ? `${n.title.slice(0, 28)}..` : n.title,
+            status: n.status,
+            statusCategory: n.status_category || "open",
+            priority: n.priority,
+            type: n.type,
+            isReady: n.is_ready,
+            childCount: n.children ? n.children.length : 0,
+            opacity: matchesSearch ? 1 : 0.2,
+          },
+        };
+      });
+
+    // allDeps: [{from: blocker_id, to: blocked_id, type}]
+    // edge direction: from (blocker) -> to (blocked) i.e. source blocks target
+    cyEdges = state.allDeps
+      .filter((e) => visibleIds.has(e.from) && visibleIds.has(e.to))
+      .map((e, i) => ({
+        data: { id: `e${i}`, source: e.from, target: e.to },
+      }));
+
+    let truncated = false;
+    if (cyNodes.length > graphNodeLimit) {
+      cyNodes = cyNodes.slice(0, graphNodeLimit);
+      const keep = new Set(cyNodes.map((n) => n.data.id));
+      cyEdges = cyEdges.filter((e) => keep.has(e.data.source) && keep.has(e.data.target));
+      truncated = true;
+    }
+    if (cyEdges.length > graphEdgeLimit) {
+      cyEdges = cyEdges.slice(0, graphEdgeLimit);
+      truncated = true;
+    }
+    if (truncated && !state.graphPathNodes.size) {
+      setGraphNotice(
+        `Legacy graph limited for performance (${cyNodes.length} nodes/${cyEdges.length} edges shown).`,
+      );
+    } else if (!state.graphFallbackNotice && !state.graphPathNodes.size) {
+      setGraphNotice("");
+    }
+  }
+
+  const nextNodesById = new Map(cyNodes.map((n) => [n.data.id, n]));
+  const nextEdgesById = new Map(cyEdges.map((e) => [e.data.id, e]));
+  let created = false;
+
+  if (!state.cy) {
+    /* global cytoscape */
+    state.cy = cytoscape({
+      container,
+      elements: cyNodes.concat(cyEdges),
+      layout: {
+        name: "dagre",
+        rankDir: "TB",
+        rankSep: 80,
+        nodeSep: 40,
+        padding: 20,
+      },
+      style: graphStyles(),
+      minZoom: 0.1,
+      maxZoom: 4,
+    });
+    created = true;
+    state.cy.fit(undefined, 30);
+    if (state.cy.zoom() > 1.5) {
+      state.cy.zoom(1.5);
+      state.cy.center();
+    }
+  } else {
+    const currentNodeIds = new Set(state.cy.nodes().map((n) => n.id()));
+    const currentEdgeIds = new Set(state.cy.edges().map((e) => e.id()));
+    const topologyChanged =
+      currentNodeIds.size !== nextNodesById.size ||
+      currentEdgeIds.size !== nextEdgesById.size ||
+      Array.from(nextNodesById.keys()).some((id) => !currentNodeIds.has(id)) ||
+      Array.from(nextEdgesById.keys()).some((id) => !currentEdgeIds.has(id));
+
+    if (!topologyChanged) {
+      state.cy.batch(() => {
+        state.cy.nodes().forEach((n) => {
+          const next = nextNodesById.get(n.id());
+          if (next) n.data(next.data);
+        });
+        state.cy.edges().forEach((e) => {
+          const next = nextEdgesById.get(e.id());
+          if (next) e.data(next.data);
+        });
+      });
+    } else {
+      const previousPositions = {};
+      const selectedNodeId = state.cy.$("node:selected").id();
+      const previousZoom = state.cy.zoom();
+      const previousPan = state.cy.pan();
+      state.cy.nodes().forEach((n) => {
+        previousPositions[n.id()] = n.position();
+      });
+      state.cy.destroy();
+
+      const hasPreviousPositions = Object.keys(previousPositions).length > 0;
+      state.cy = cytoscape({
+        container,
+        elements: cyNodes.concat(cyEdges),
+        layout: hasPreviousPositions
+          ? {
+              name: "preset",
+              fit: false,
+              padding: 20,
+              positions: (node) => previousPositions[node.id()] || { x: 0, y: 0 },
+            }
+          : {
+              name: "dagre",
+              rankDir: "TB",
+              rankSep: 80,
+              nodeSep: 40,
+              padding: 20,
+            },
+        style: graphStyles(),
+        minZoom: 0.1,
+        maxZoom: 4,
+      });
+      created = true;
+      if (selectedNodeId && state.cy.$id(selectedNodeId).length) {
+        state.cy.$id(selectedNodeId).select();
+      }
+      if (hasPreviousPositions) {
+        state.cy.zoom(previousZoom);
+        state.cy.pan(previousPan);
+      } else {
+        state.cy.fit(undefined, 30);
+        if (state.cy.zoom() > 1.5) {
+          state.cy.zoom(1.5);
+          state.cy.center();
+        }
+      }
+    }
+  }
+
+  if (created) bindGraphEvents();
+  applyCriticalPathStyles();
+  applyPathTraceStyles();
+  applySearchFocus(search);
+
+  const renderMs = Math.round(performance.now() - renderStarted);
+  onGraphPathInput();
+  if (!state.graphPathNodes.size) {
+    if (graphFocusMode && !graphFocusRoot) {
+      setGraphNotice(FOCUS_ROOT_NOTICE);
+    } else {
+      const notice = document.getElementById("graphNotice")?.textContent || "";
+      if (notice === FOCUS_ROOT_NOTICE) setGraphNotice(state.graphFallbackNotice || "");
+    }
+  }
+  state.graphTelemetry = { ...(state.graphTelemetry || {}), render_ms: renderMs };
+  updateGraphPerfState();
 }
 
 // ---------------------------------------------------------------------------

@@ -48,6 +48,129 @@ class TestDashboardIndex:
     async def test_html_file_exists(self) -> None:
         assert (STATIC_DIR / "dashboard.html").exists()
 
+    async def test_graph_v2_controls_present(self, client: AsyncClient) -> None:
+        resp = await client.get("/")
+        assert resp.status_code == 200
+        html = resp.text
+        assert 'id="graphPreset"' in html
+        assert 'value="execution" selected' in html
+        assert 'id="graphReadyOnly"' in html
+        assert 'id="graphBlockedOnly"' in html
+        assert 'id="graphAssignee"' in html
+        assert 'id="graphNotice"' in html
+        assert 'id="graphFocusMode"' in html
+        assert 'id="graphFocusRoot"' in html
+        assert 'id="graphFocusRadius"' in html
+        assert 'onchange="onGraphFocusModeChange()"' in html
+        assert 'oninput="onGraphFocusRootInput()"' in html
+        assert 'id="graphPathSource"' in html
+        assert 'id="graphPathTarget"' in html
+        assert 'oninput="onGraphPathInput()"' in html
+        assert 'id="graphTraceBtn"' in html
+        assert "graphTraceBtn\" onclick=\"traceGraphPath()\" disabled" in html
+        assert 'id="graphNodeLimit"' in html
+        assert 'id="graphEdgeLimit"' in html
+
+    async def test_graph_default_not_epics_only(self, client: AsyncClient) -> None:
+        resp = await client.get("/")
+        assert resp.status_code == 200
+        html = resp.text
+        assert 'id="graphEpicsOnly" checked' not in html
+        assert 'value="execution" selected' in html
+
+
+class TestGraphFrontendContracts:
+    def test_graph_query_builder_includes_v2_filters(self) -> None:
+        graph_js = (STATIC_DIR / "js" / "views" / "graph.js").read_text()
+        assert 'mode: "v2"' in graph_js
+        assert "graphReadyOnly" in graph_js
+        assert "graphBlockedOnly" in graph_js
+        assert "graphAssignee" in graph_js
+        assert "scope_root" in graph_js
+        assert "scope_radius" in graph_js
+        assert "node_limit" in graph_js
+        assert "edge_limit" in graph_js
+        assert "refreshGraphData" in graph_js
+
+    def test_graph_legacy_fallback_notice_present(self) -> None:
+        graph_js = (STATIC_DIR / "js" / "views" / "graph.js").read_text()
+        assert "Graph v2 unavailable; showing legacy graph." in graph_js
+        assert "traceGraphPath" in graph_js
+        assert "clearGraphPath" in graph_js
+
+    def test_graph_overlay_hierarchy_contract(self) -> None:
+        graph_js = (STATIC_DIR / "js" / "views" / "graph.js").read_text()
+        assert "applyCriticalPathStyles();" in graph_js
+        assert "applyPathTraceStyles();" in graph_js
+        assert "applySearchFocus(search);" in graph_js
+
+    def test_focus_controls_coupled_and_tap_no_longer_mutates_root(self) -> None:
+        graph_js = (STATIC_DIR / "js" / "views" / "graph.js").read_text()
+        html = (STATIC_DIR / "dashboard.html").read_text()
+        assert "export function onGraphFocusModeChange()" in graph_js
+        assert "export function onGraphFocusRootInput()" in graph_js
+        assert "focusRoot.value = nodeId" not in graph_js
+        assert 'onchange="onGraphFocusModeChange()"' in html
+        assert 'oninput="onGraphFocusRootInput()"' in html
+
+    def test_trace_button_disabled_until_both_path_inputs_present(self) -> None:
+        graph_js = (STATIC_DIR / "js" / "views" / "graph.js").read_text()
+        app_js = (STATIC_DIR / "js" / "app.js").read_text()
+        html = (STATIC_DIR / "dashboard.html").read_text()
+        assert "export function onGraphPathInput()" in graph_js
+        assert "traceBtn.disabled = !ready;" in graph_js
+        assert "window.onGraphPathInput = onGraphPathInput;" in app_js
+        assert 'id="graphPathSource"' in html
+        assert 'id="graphPathTarget"' in html
+        assert 'placeholder="issue ID"' in html
+        assert 'id="graphTraceBtn"' in html
+        assert "disabled" in html
+
+
+class TestGraphAdvancedAPI:
+    async def test_graph_combined_filters(self, client: AsyncClient) -> None:
+        resp = await client.get(
+            "/api/graph?mode=v2&include_done=false&status_categories=open,wip&types=task&ready_only=false&blocked_only=false",
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        for node in data["nodes"]:
+            assert node["status_category"] in {"open", "wip"}
+            assert node["type"] == "task"
+
+    async def test_graph_v2_and_legacy_edge_direction_consistency(
+        self,
+        client: AsyncClient,
+        dashboard_db: FiligreeDB,
+    ) -> None:
+        ids = dashboard_db._test_ids  # type: ignore[attr-defined]
+        legacy = (await client.get("/api/graph?mode=legacy")).json()
+        v2 = (await client.get("/api/graph?mode=v2")).json()
+        expected_source = ids["b"]  # blocker
+        expected_target = ids["a"]  # blocked
+        assert any(e["source"] == expected_source and e["target"] == expected_target for e in legacy["edges"])
+        assert any(e["source"] == expected_source and e["target"] == expected_target for e in v2["edges"])
+
+    async def test_graph_critical_path_only_subset(self, client: AsyncClient) -> None:
+        full = await client.get("/api/graph?mode=v2")
+        crit = await client.get("/api/graph?mode=v2&critical_path_only=true")
+        assert full.status_code == 200
+        assert crit.status_code == 200
+        full_nodes = full.json()["nodes"]
+        crit_nodes = crit.json()["nodes"]
+        assert len(crit_nodes) <= len(full_nodes)
+        assert all(n["id"] for n in crit_nodes)
+
+    async def test_graph_truncation_semantics_metadata(self, client: AsyncClient, dashboard_db: FiligreeDB) -> None:
+        for i in range(80):
+            dashboard_db.create_issue(title=f"Graph cap issue {i}", type="task", priority=2)
+        resp = await client.get("/api/graph?mode=v2&node_limit=50")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["limits"]["truncated"] is True
+        assert data["telemetry"]["total_nodes_before_limit"] >= len(data["nodes"])
+        assert data["telemetry"]["total_nodes_before_limit"] > 50
+
 
 class TestIssuesAPI:
     async def test_list_all_issues(self, client: AsyncClient, dashboard_db: FiligreeDB) -> None:
@@ -91,6 +214,139 @@ class TestGraphAPI:
         data = resp.json()
         # populated_db has A depends on B, so there should be an edge
         assert len(data["edges"]) >= 1
+
+    async def test_graph_v2_mode_shape(self, client: AsyncClient) -> None:
+        resp = await client.get("/api/graph?mode=v2")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["mode"] == "v2"
+        assert "query" in data
+        assert "limits" in data
+        assert "telemetry" in data
+        assert isinstance(data["nodes"], list)
+        assert isinstance(data["edges"], list)
+        if data["nodes"]:
+            node = data["nodes"][0]
+            assert "blocked_by_open_count" in node
+            assert "blocks_open_count" in node
+            assert "is_ready" in node
+
+    async def test_graph_invalid_mode(self, client: AsyncClient) -> None:
+        resp = await client.get("/api/graph?mode=nope")
+        assert resp.status_code == 400
+        err = resp.json()["error"]
+        assert err["code"] == "GRAPH_INVALID_PARAM"
+
+    async def test_graph_invalid_ready_blocked_combo(self, client: AsyncClient) -> None:
+        resp = await client.get("/api/graph?mode=v2&ready_only=true&blocked_only=true")
+        assert resp.status_code == 422
+        err = resp.json()["error"]
+        assert err["code"] == "GRAPH_INVALID_PARAM"
+
+    async def test_graph_scope_root_not_found(self, client: AsyncClient) -> None:
+        resp = await client.get("/api/graph?mode=v2&scope_root=missing")
+        assert resp.status_code == 404
+        err = resp.json()["error"]
+        assert err["code"] == "GRAPH_INVALID_PARAM"
+
+    async def test_graph_include_done_false_excludes_done_nodes(self, client: AsyncClient) -> None:
+        resp = await client.get("/api/graph?mode=v2&include_done=false")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert all(node["status_category"] != "done" for node in data["nodes"])
+
+    async def test_graph_mode_defaults_to_v2_when_enabled(self, client: AsyncClient, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("FILIGREE_GRAPH_V2_ENABLED", "1")
+        resp = await client.get("/api/graph")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["mode"] == "v2"
+
+    async def test_graph_mode_legacy_shape_when_requested(self, client: AsyncClient) -> None:
+        resp = await client.get("/api/graph?mode=legacy")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "nodes" in data and "edges" in data
+        assert "mode" not in data
+
+    async def test_graph_invalid_boolean_param(self, client: AsyncClient) -> None:
+        resp = await client.get("/api/graph?mode=v2&include_done=maybe")
+        assert resp.status_code == 400
+        err = resp.json()["error"]
+        assert err["code"] == "GRAPH_INVALID_PARAM"
+        assert err["details"]["param"] == "include_done"
+
+    async def test_graph_invalid_status_category(self, client: AsyncClient) -> None:
+        resp = await client.get("/api/graph?mode=v2&status_categories=open,wat")
+        assert resp.status_code == 400
+        err = resp.json()["error"]
+        assert err["code"] == "GRAPH_INVALID_PARAM"
+        assert err["details"]["param"] == "status_categories"
+
+    async def test_graph_invalid_type_filter(self, client: AsyncClient) -> None:
+        resp = await client.get("/api/graph?mode=v2&types=task,notatype")
+        assert resp.status_code == 400
+        err = resp.json()["error"]
+        assert err["code"] == "GRAPH_INVALID_PARAM"
+        assert err["details"]["param"] == "types"
+
+    async def test_graph_scope_radius_requires_scope_root(self, client: AsyncClient) -> None:
+        resp = await client.get("/api/graph?mode=v2&scope_radius=2")
+        assert resp.status_code == 422
+        err = resp.json()["error"]
+        assert err["code"] == "GRAPH_INVALID_PARAM"
+        assert err["details"]["param"] == "scope_radius"
+
+    async def test_graph_limit_validation(self, client: AsyncClient) -> None:
+        resp = await client.get("/api/graph?mode=v2&node_limit=10")
+        assert resp.status_code == 400
+        err = resp.json()["error"]
+        assert err["code"] == "GRAPH_INVALID_PARAM"
+        assert err["details"]["param"] == "node_limit"
+
+    async def test_graph_mode_query_override_beats_compat_mode(self, client: AsyncClient, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("FILIGREE_GRAPH_API_MODE", "legacy")
+        resp = await client.get("/api/graph?mode=v2")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["mode"] == "v2"
+
+    async def test_graph_compat_mode_env_legacy_default(self, client: AsyncClient, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("FILIGREE_GRAPH_V2_ENABLED", "1")
+        monkeypatch.setenv("FILIGREE_GRAPH_API_MODE", "legacy")
+        resp = await client.get("/api/graph")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "mode" not in data
+
+    async def test_graph_v2_node_limit_truncation(self, client: AsyncClient, dashboard_db: FiligreeDB) -> None:
+        for i in range(60):
+            dashboard_db.create_issue(title=f"Graph load issue {i}", type="task", priority=2)
+        resp = await client.get("/api/graph?mode=v2&node_limit=50")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["limits"]["truncated"] is True
+        assert len(data["nodes"]) == 50
+        assert "query_ms" in data["telemetry"]
+
+
+class TestDashboardConfigAPI:
+    async def test_config_defaults(self, client: AsyncClient) -> None:
+        resp = await client.get("/api/config")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["graph_v2_enabled"] is False
+        assert data["graph_api_mode"] == "legacy"
+        assert "graph_mode_configured" in data
+
+    async def test_config_reads_env_overrides(self, client: AsyncClient, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("FILIGREE_GRAPH_V2_ENABLED", "1")
+        monkeypatch.setenv("FILIGREE_GRAPH_API_MODE", "v2")
+        resp = await client.get("/api/config")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["graph_v2_enabled"] is True
+        assert data["graph_api_mode"] == "v2"
 
 
 class TestStatsAPI:
