@@ -815,13 +815,36 @@ def _create_project_router() -> Any:
 
 def create_app() -> Any:
     """Create the FastAPI application with all dashboard endpoints."""
+    import contextlib
+    from collections.abc import AsyncIterator
+
     from fastapi import FastAPI, Request
     from fastapi.responses import HTMLResponse, JSONResponse
 
     # Expose Request in module globals so PEP 563 deferred annotations resolve
     globals()["Request"] = Request
 
-    app = FastAPI(title="Filigree Dashboard", docs_url=None, redoc_url=None)
+    # --- MCP streamable-HTTP setup (optional) ---
+    # Resolve the ASGI handler and lifespan factory before building the app
+    # so we can wire the MCP session-manager lifecycle into FastAPI's lifespan.
+    _mcp_handler: Any = None
+    _mcp_lifespan_factory: Any = None
+    try:
+        from filigree.mcp_server import create_mcp_app
+
+        _mcp_handler, _mcp_lifespan_factory = create_mcp_app(db_resolver=lambda: _db)
+    except ImportError:
+        pass  # MCP SDK not installed
+
+    @contextlib.asynccontextmanager
+    async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
+        if _mcp_lifespan_factory is not None:
+            async with _mcp_lifespan_factory():
+                yield
+        else:
+            yield
+
+    app = FastAPI(title="Filigree Dashboard", docs_url=None, redoc_url=None, lifespan=_lifespan)
 
     router = _create_project_router()
 
@@ -843,6 +866,14 @@ def create_app() -> Any:
     from starlette.staticfiles import StaticFiles
 
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+    # Mount MCP streamable-HTTP endpoint for server mode.
+    # In ethereal mode this still works (the route exists) but agents
+    # connect via stdio instead.
+    if _mcp_handler is not None:
+        from starlette.routing import Mount
+
+        app.routes.append(Mount("/mcp", app=_mcp_handler))
 
     return app
 

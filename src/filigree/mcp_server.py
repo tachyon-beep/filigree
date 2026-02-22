@@ -1809,6 +1809,58 @@ async def _dispatch(name: str, arguments: dict[str, Any], tracker: FiligreeDB) -
 
 
 # ---------------------------------------------------------------------------
+# HTTP transport factory (for server-mode dashboard)
+# ---------------------------------------------------------------------------
+
+
+def create_mcp_app(db_resolver: Any = None) -> Any:
+    """Create an ASGI app + lifespan hook for MCP streamable-HTTP.
+
+    Returns ``(asgi_app, lifespan_context_manager)`` where:
+
+    * **asgi_app** is an ASGI callable to mount at ``/mcp`` in the
+      dashboard.
+    * **lifespan_context_manager** is an async-context-manager that
+      must be entered during the parent application's lifespan so the
+      underlying ``StreamableHTTPSessionManager`` task-group is
+      running before the first request arrives.
+
+    ``db_resolver`` — optional callable returning the active
+    :class:`FiligreeDB`.  When provided the module-level ``db`` is
+    synced before each request so existing tool handlers work unchanged.
+    """
+    from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
+
+    session_manager = StreamableHTTPSessionManager(
+        app=server,
+        json_response=False,
+        stateless=True,
+    )
+
+    async def _handle_mcp(scope: Any, receive: Any, send: Any) -> None:
+        global db
+        if db_resolver is not None:
+            resolved = db_resolver()
+            if resolved is not None:
+                db = resolved
+        try:
+            await session_manager.handle_request(scope, receive, send)
+        except RuntimeError:
+            # Session manager not started (e.g. lifespan not triggered in
+            # test or ethereal mode).  Return 503 so the route is visible
+            # but clearly not ready.
+            from starlette.responses import JSONResponse
+
+            resp = JSONResponse(
+                {"error": "MCP session manager not initialized"},
+                status_code=503,
+            )
+            await resp(scope, receive, send)
+
+    return _handle_mcp, session_manager.run
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
