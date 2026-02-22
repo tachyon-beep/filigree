@@ -156,7 +156,14 @@ def verify_pid_ownership(pid_file: Path, *, expected_cmd: str = "filigree") -> b
     # PID file metadata is advisory; trust the OS process identity.
     tokens = _read_os_command_line(info["pid"])
     if not tokens:
-        return False
+        # Constrained environments may not expose process command lines.
+        # Fall back to PID-file identity as a best-effort portability path.
+        pid_cmd = str(info.get("cmd", "")).strip().lower()
+        if not pid_cmd or pid_cmd == "unknown":
+            return False
+        expected = expected_cmd.lower()
+        pid_cmd_name = Path(pid_cmd).name.lower()
+        return pid_cmd_name == expected or pid_cmd_name.startswith(expected)
 
     expected = expected_cmd.lower()
     executable = Path(tokens[0]).name.lower()

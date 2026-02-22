@@ -139,6 +139,22 @@ class TestPidLifecycle:
         )
         assert verify_pid_ownership(pid_file, expected_cmd="filigree") is False
 
+    def test_verify_pid_ownership_falls_back_to_pid_file_cmd_when_os_lookup_unavailable(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        pid_file = tmp_path / "ephemeral.pid"
+        write_pid_file(pid_file, os.getpid(), cmd="filigree")
+        monkeypatch.setattr("filigree.ephemeral._read_os_command_line", lambda _pid: None)
+        assert verify_pid_ownership(pid_file, expected_cmd="filigree") is True
+
+    def test_verify_pid_ownership_fallback_rejects_mismatched_pid_file_cmd(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        pid_file = tmp_path / "ephemeral.pid"
+        write_pid_file(pid_file, os.getpid(), cmd="not-filigree")
+        monkeypatch.setattr("filigree.ephemeral._read_os_command_line", lambda _pid: None)
+        assert verify_pid_ownership(pid_file, expected_cmd="filigree") is False
+
     def test_cleanup_stale_pid_removes_dead(self, tmp_path: Path) -> None:
         pid_file = tmp_path / "ephemeral.pid"
         write_pid_file(pid_file, 99999999, cmd="filigree")
