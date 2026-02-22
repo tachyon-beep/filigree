@@ -117,6 +117,28 @@ class TestPidLifecycle:
         monkeypatch.setattr("filigree.ephemeral._read_os_command_line", lambda _pid: ["python", "worker.py"])
         assert verify_pid_ownership(pid_file, expected_cmd="filigree") is False
 
+    def test_verify_pid_ownership_accepts_python_module_invocation(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        pid_file = tmp_path / "ephemeral.pid"
+        write_pid_file(pid_file, os.getpid(), cmd="filigree")
+        monkeypatch.setattr(
+            "filigree.ephemeral._read_os_command_line",
+            lambda _pid: [sys.executable, "-m", "filigree", "dashboard", "--server-mode"],
+        )
+        assert verify_pid_ownership(pid_file, expected_cmd="filigree") is True
+
+    def test_verify_pid_ownership_rejects_unrelated_python_module(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        pid_file = tmp_path / "ephemeral.pid"
+        write_pid_file(pid_file, os.getpid(), cmd="filigree")
+        monkeypatch.setattr(
+            "filigree.ephemeral._read_os_command_line",
+            lambda _pid: [sys.executable, "-m", "othermodule", "serve"],
+        )
+        assert verify_pid_ownership(pid_file, expected_cmd="filigree") is False
+
     def test_cleanup_stale_pid_removes_dead(self, tmp_path: Path) -> None:
         pid_file = tmp_path / "ephemeral.pid"
         write_pid_file(pid_file, 99999999, cmd="filigree")

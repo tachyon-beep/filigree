@@ -165,9 +165,16 @@ def verify_pid_ownership(pid_file: Path, *, expected_cmd: str = "filigree") -> b
 
     # Some launchers wrap the binary and pass the real command as argv[1].
     if len(tokens) > 1:
-        first_arg = Path(tokens[1]).name.lower()
-        if first_arg == expected:
-            return True
+        if tokens[1] == "-m" and len(tokens) > 2:
+            # Module invocation fallback: `python -m filigree ...`
+            module_name = tokens[2].strip().lower()
+            module_root = module_name.split(".", 1)[0]
+            if module_name == expected or module_root == expected:
+                return True
+        else:
+            first_arg = Path(tokens[1]).name.lower()
+            if first_arg == expected:
+                return True
 
     return False
 
