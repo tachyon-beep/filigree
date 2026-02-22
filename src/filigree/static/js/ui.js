@@ -30,6 +30,17 @@ export function escHtml(str) {
     .replace(/"/g, "&quot;");
 }
 
+export function escJsSingle(str) {
+  if (str === null || str === undefined) return "";
+  return String(str)
+    .replace(/\\/g, "\\\\")
+    .replace(/'/g, "\\'")
+    .replace(/\r/g, "\\r")
+    .replace(/\n/g, "\\n")
+    .replace(/</g, "\\x3C")
+    .replace(/>/g, "\\x3E");
+}
+
 // ---------------------------------------------------------------------------
 // Contextual popovers
 // ---------------------------------------------------------------------------

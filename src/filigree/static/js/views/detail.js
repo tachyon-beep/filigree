@@ -17,7 +17,7 @@ import {
 } from "../api.js";
 import { updateHash } from "../router.js";
 import { CATEGORY_COLORS, PRIORITY_COLORS, state, TYPE_ICONS } from "../state.js";
-import { escHtml, setLoading, showToast, trapFocus } from "../ui.js";
+import { escHtml, escJsSingle, setLoading, showToast, trapFocus } from "../ui.js";
 
 // --- Callbacks for functions not yet available at import time ---
 
@@ -70,15 +70,17 @@ export async function openDetail(issueId) {
   const blockerHtml = (d.blocked_by || [])
     .map((bid) => {
       const det = depDetails[bid] || state.issueMap[bid];
-      if (!det) return `<div class="text-xs" style="color:var(--text-muted)">${bid}</div>`;
+      if (!det) return `<div class="text-xs" style="color:var(--text-muted)">${escHtml(bid)}</div>`;
       const detCat = det.status_category || "open";
       const sc = CATEGORY_COLORS[detCat] || "#64748B";
+      const safeBid = escJsSingle(bid);
+      const safeIssueId = escJsSingle(d.id);
       return (
         '<div class="flex items-center gap-2 text-xs">' +
         `<span class="w-2 h-2 rounded-full shrink-0" style="background:${sc}"></span>` +
-        `<span class="cursor-pointer flex-1" style="color:var(--accent)" onclick="openDetail('${bid}')">${escHtml(det.title.slice(0, 40))}</span>` +
-        `<span style="color:var(--text-muted)">${det.status}</span>` +
-        `<button onclick="event.stopPropagation();removeDependency('${d.id}','${bid}')" class="text-red-400 hover:text-red-300 ml-1" title="Remove dependency">&times;</button></div>`
+        `<span class="cursor-pointer flex-1" style="color:var(--accent)" onclick="openDetail('${safeBid}')">${escHtml(det.title.slice(0, 40))}</span>` +
+        `<span style="color:var(--text-muted)">${escHtml(det.status || "")}</span>` +
+        `<button onclick="event.stopPropagation();removeDependency('${safeIssueId}','${safeBid}')" class="text-red-400 hover:text-red-300 ml-1" title="Remove dependency">&times;</button></div>`
       );
     })
     .join("");
@@ -86,14 +88,15 @@ export async function openDetail(issueId) {
   const blocksHtml = (d.blocks || [])
     .map((bid) => {
       const det = depDetails[bid] || state.issueMap[bid];
-      if (!det) return `<div class="text-xs" style="color:var(--text-muted)">${bid}</div>`;
+      if (!det) return `<div class="text-xs" style="color:var(--text-muted)">${escHtml(bid)}</div>`;
       const detCat = det.status_category || "open";
       const sc = CATEGORY_COLORS[detCat] || "#64748B";
+      const safeBid = escJsSingle(bid);
       return (
-        `<div class="flex items-center gap-2 text-xs cursor-pointer" style="color:var(--accent)" onclick="openDetail('${bid}')">` +
+        `<div class="flex items-center gap-2 text-xs cursor-pointer" style="color:var(--accent)" onclick="openDetail('${safeBid}')">` +
         `<span class="w-2 h-2 rounded-full" style="background:${sc}"></span>` +
         `<span>${escHtml(det.title.slice(0, 40))}</span>` +
-        `<span style="color:var(--text-muted)">${det.status}</span></div>`
+        `<span style="color:var(--text-muted)">${escHtml(det.status || "")}</span></div>`
       );
     })
     .join("");
@@ -146,7 +149,7 @@ export async function openDetail(issueId) {
       : "") +
     "</div>" +
     '<div class="flex items-center gap-2 mb-4 flex-wrap">' +
-    `<span class="text-xs px-2 py-0.5 rounded" style="background:${statusColor};color:white">${statusLabel}</span>` +
+    `<span class="text-xs px-2 py-0.5 rounded" style="background:${statusColor};color:white">${escHtml(statusLabel)}</span>` +
     `<span class="w-2 h-2 rounded-full" style="background:${prioColor}" title="P${d.priority}"></span>` +
     `<span class="text-xs" style="color:var(--text-secondary)">P${d.priority}</span>` +
     readyBadge +

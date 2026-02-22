@@ -46,6 +46,8 @@ import {
   batchSetPriority,
   closePopover,
   closeSettingsMenu,
+  escHtml,
+  escJsSingle,
   endTour,
   reloadServer,
   showCreateForm,
@@ -430,7 +432,7 @@ document.addEventListener("keydown", (e) => {
             ready
               .map(
                 (t) =>
-                  `<button onclick="moveIssueTo('${issueId}','${t.to.replace(/'/g, "\\'")}')" class="text-xs text-left bg-overlay bg-overlay-hover px-3 py-2 rounded" style="color:var(--text-primary)">${t.to}</button>`,
+                  `<button onclick="moveIssueTo('${escJsSingle(issueId)}','${escJsSingle(t.to)}')" class="text-xs text-left bg-overlay bg-overlay-hover px-3 py-2 rounded" style="color:var(--text-primary)">${escHtml(t.to)}</button>`,
               )
               .join("") +
             "</div>" +

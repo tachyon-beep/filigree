@@ -5,7 +5,7 @@
 import { fetchTransitions, patchIssue } from "../api.js";
 import { getFilteredIssues } from "../filters.js";
 import { CATEGORY_COLORS, PRIORITY_COLORS, state, TYPE_ICONS } from "../state.js";
-import { escHtml, showToast } from "../ui.js";
+import { escHtml, escJsSingle, showToast } from "../ui.js";
 
 // --- Callbacks for functions not yet available at import time ---
 
@@ -213,9 +213,10 @@ export function renderCard(issue) {
   }
 
   const changedClass = state.changedIds.has(issue.id) ? "changed-flash" : "";
+  const safeIssueId = escJsSingle(issue.id);
 
   const checkbox = state.multiSelectMode
-    ? `<input type="checkbox" ${state.selectedCards.has(issue.id) ? "checked" : ""} onclick="toggleCardSelect(event,'${issue.id}')" class="mr-1" style="accent-color:var(--accent)">`
+    ? `<input type="checkbox" ${state.selectedCards.has(issue.id) ? "checked" : ""} onclick="toggleCardSelect(event,'${safeIssueId}')" class="mr-1" style="accent-color:var(--accent)">`
     : "";
 
   const isDraggable = state.kanbanMode !== "cluster" && !state.multiSelectMode;
@@ -242,7 +243,7 @@ export function renderCard(issue) {
     `<div class="card rounded p-3 cursor-pointer ${readyClass} ${agingClass} ${changedClass}"` +
     ' style="background:var(--surface-raised);border:1px solid var(--border-default)"' +
     (isDraggable ? ' draggable="true"' : "") +
-    ` tabindex="0" data-id="${issue.id}" onclick="openDetail('${issue.id}')">` +
+    ` tabindex="0" data-id="${escHtml(issue.id)}" onclick="openDetail('${safeIssueId}')">` +
     '<div class="flex items-center gap-2 mb-1">' +
     checkbox +
     `<span>${typeIcon}</span>` +
@@ -252,9 +253,9 @@ export function renderCard(issue) {
     `<span class="font-medium truncate" style="color:var(--text-primary)">${escHtml(issue.title.slice(0, 50))}</span>` +
     "</div>" +
     '<div class="flex items-center gap-2 text-xs" style="color:var(--text-muted)">' +
-    `<span>${issue.id}</span>` +
-    `<span class="rounded px-1" style="background:var(--surface-overlay);color:var(--text-secondary)">${issue.type.replace(/_/g, " ")}</span>` +
-    `<span class="rounded px-1" style="background:${catColor}33;color:${catColor}">${issue.status}</span>` +
+    `<span>${escHtml(issue.id)}</span>` +
+    `<span class="rounded px-1" style="background:var(--surface-overlay);color:var(--text-secondary)">${escHtml(issue.type.replace(/_/g, " "))}</span>` +
+    `<span class="rounded px-1" style="background:${catColor}33;color:${catColor}">${escHtml(issue.status || "")}</span>` +
     (blockedCount > 0
       ? `<span class="text-red-400">\u{1F517} blocked by ${blockedCount}</span>`
       : "") +
