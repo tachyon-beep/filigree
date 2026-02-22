@@ -34,3 +34,11 @@ def test_move_status_modal_escapes_transition_button_text() -> None:
     text = _read("src/filigree/static/js/app.js")
     assert "${escHtml(t.to)}</button>" in text
     assert "${t.to}</button>" not in text
+
+
+def test_files_view_uses_js_string_escaping_for_inline_ids() -> None:
+    text = _read("src/filigree/static/js/views/files.js")
+    assert "onclick=\"openFileDetail('${safeFileId}')\"" in text
+    assert "onclick=\"openFileDetail('${escHtml(f.id)}')\"" not in text
+    assert "onclick=\"showLinkIssueModal('${safeFileId}')\"" in text
+    assert "onclick=\"submitLinkIssue('${escJsSingle(fileId)}')\"" in text

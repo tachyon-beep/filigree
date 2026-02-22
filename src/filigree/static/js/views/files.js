@@ -11,7 +11,7 @@ import {
 } from "../api.js";
 import { updateHash } from "../router.js";
 import { SEVERITY_COLORS, state } from "../state.js";
-import { escHtml, showCreateForm, showToast } from "../ui.js";
+import { escHtml, escJsSingle, showCreateForm, showToast } from "../ui.js";
 
 // --- Accumulated page state for "load more" ---
 let _findingsAccum = [];
@@ -141,11 +141,12 @@ export async function loadFiles() {
         const s = f.summary || {};
         const border = healthBorderClass(s);
         const assocCount = f.associations_count || 0;
+        const safeFileId = escJsSingle(f.id);
         const updated = f.updated_at
           ? new Date(f.updated_at).toLocaleDateString()
           : "\u2014";
         return (
-          `<tr class="bg-overlay-hover cursor-pointer ${border}" onclick="openFileDetail('${escHtml(f.id)}')" role="button" tabindex="0">` +
+          `<tr class="bg-overlay-hover cursor-pointer ${border}" onclick="openFileDetail('${safeFileId}')" role="button" tabindex="0">` +
           `<td class="py-2 px-3 text-accent truncate max-w-xs" title="${escHtml(f.path)}">${escHtml(f.path)}</td>` +
           `<td class="py-2 px-3">${escHtml(f.language || "\u2014")}</td>` +
           `<td class="py-2 px-3 text-center">${severityBadge("critical", s.critical)}</td>` +
@@ -316,8 +317,9 @@ function renderFileDetail(data) {
         a.issue_status === "closed" || a.issue_status === "done"
           ? "var(--status-done)"
           : "var(--status-wip)";
+      const safeIssueId = escJsSingle(a.issue_id);
       html +=
-        `<div class="flex items-center gap-2 py-1 cursor-pointer bg-overlay-hover rounded px-2" onclick="openDetail('${escHtml(a.issue_id)}')" role="button" tabindex="0">` +
+        `<div class="flex items-center gap-2 py-1 cursor-pointer bg-overlay-hover rounded px-2" onclick="openDetail('${safeIssueId}')" role="button" tabindex="0">` +
         `<span class="w-2 h-2 rounded-full" style="background:${statusColor}"></span>` +
         `<span class="text-xs truncate" style="color:var(--text-primary)">${escHtml(a.issue_title || a.issue_id)}</span>` +
         `<span class="text-xs" style="color:var(--text-muted)">${escHtml(a.assoc_type)}</span>` +
@@ -327,9 +329,10 @@ function renderFileDetail(data) {
   }
 
   // Link to Issue button
+  const safeFileId = escJsSingle(f.id);
   html +=
     '<div class="mt-4 pt-3" style="border-top:1px solid var(--border-default)">' +
-    `<button onclick="showLinkIssueModal('${escHtml(f.id)}')" class="text-xs bg-overlay px-3 py-1 rounded bg-overlay-hover" style="color:var(--text-primary)">Link to Issue</button>` +
+    `<button onclick="showLinkIssueModal('${safeFileId}')" class="text-xs bg-overlay px-3 py-1 rounded bg-overlay-hover" style="color:var(--text-primary)">Link to Issue</button>` +
     "</div>";
 
   content.innerHTML = html;
@@ -350,8 +353,9 @@ function renderFindingListItem(f) {
     : "";
   const selected = _selectedFinding && _selectedFinding.id === f.id;
   const selClass = selected ? "border-l-2 border-l-sky-400" : "";
+  const safeFindingId = escJsSingle(f.id);
   return (
-    `<div class="flex items-center gap-2 px-3 py-2 cursor-pointer text-xs bg-overlay-hover rounded mb-1 ${selClass}" style="background:var(--surface-overlay);border:1px solid var(--border-default)" onclick="selectFinding('${escHtml(f.id)}')" role="button" tabindex="0">` +
+    `<div class="flex items-center gap-2 px-3 py-2 cursor-pointer text-xs bg-overlay-hover rounded mb-1 ${selClass}" style="background:var(--surface-overlay);border:1px solid var(--border-default)" onclick="selectFinding('${safeFindingId}')" role="button" tabindex="0">` +
     `<span class="px-1.5 py-0.5 rounded shrink-0 ${c.bg} ${c.text}" style="border:1px solid;${c.border}">${escHtml(f.severity)}</span>` +
     `<span style="color:var(--text-primary)" class="truncate flex-1">${escHtml(f.rule_id)}</span>` +
     (lines ? `<span class="shrink-0" style="color:var(--text-muted)">${lines}</span>` : "") +
@@ -445,7 +449,7 @@ async function loadFindingsTab(fileId, offset) {
     let listHtml = _findingsAccum.map(renderFindingListItem).join("");
     if (data.has_more) {
       const nextOffset = (offset || 0) + 20;
-      listHtml += `<button onclick="loadMoreFindings('${escHtml(fileId)}', ${nextOffset})" class="text-xs mt-2 px-3 py-1 rounded bg-overlay bg-overlay-hover w-full text-center" style="color:var(--accent)">Load more...</button>`;
+      listHtml += `<button onclick="loadMoreFindings('${escJsSingle(fileId)}', ${nextOffset})" class="text-xs mt-2 px-3 py-1 rounded bg-overlay bg-overlay-hover w-full text-center" style="color:var(--accent)">Load more...</button>`;
     }
 
     container.innerHTML =
@@ -571,7 +575,7 @@ async function loadTimelineTab(fileId, offset) {
 
     if (data.has_more) {
       const nextOffset = (offset || 0) + 20;
-      html += `<button onclick="loadMoreTimeline('${escHtml(fileId)}', ${nextOffset})" class="text-xs mt-2 px-3 py-1 rounded bg-overlay bg-overlay-hover" style="color:var(--accent)">Load more...</button>`;
+      html += `<button onclick="loadMoreTimeline('${escJsSingle(fileId)}', ${nextOffset})" class="text-xs mt-2 px-3 py-1 rounded bg-overlay bg-overlay-hover" style="color:var(--accent)">Load more...</button>`;
     }
 
     container.innerHTML = html;
@@ -720,7 +724,7 @@ export function showLinkIssueModal(fileId) {
     '<option value="task_for">task_for</option>' +
     '<option value="mentioned_in">mentioned_in</option>' +
     "</select></div>" +
-    `<button onclick="submitLinkIssue('${escHtml(fileId)}')" class="text-xs bg-accent text-white px-3 py-1 rounded bg-accent-hover">Link</button>` +
+    `<button onclick="submitLinkIssue('${escJsSingle(fileId)}')" class="text-xs bg-accent text-white px-3 py-1 rounded bg-accent-hover">Link</button>` +
     ' <button onclick="document.getElementById(\'linkIssueModal\').remove()" class="text-xs text-muted text-primary-hover">Cancel</button>' +
     "</div>";
   document.body.appendChild(modal);
