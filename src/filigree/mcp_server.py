@@ -13,8 +13,11 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import secrets
+import subprocess
 import sys
 import time
+from datetime import UTC
 from pathlib import Path
 from typing import Any
 
@@ -38,6 +41,8 @@ from filigree.core import (
     find_filigree_root,
     read_config,
 )
+from filigree.scanners import list_scanners as _list_scanners
+from filigree.scanners import load_scanner, validate_scanner_command
 from filigree.summary import generate_summary, write_summary
 
 # ---------------------------------------------------------------------------
@@ -56,6 +61,11 @@ server = Server("filigree")
 db: FiligreeDB | None = None
 _filigree_dir: Path | None = None
 _logger: logging.Logger | None = None
+
+# Per-(scanner, file) cooldown to prevent unbounded process spawning.
+# Maps (scanner_name, file_path) -> timestamp of last trigger.
+_scan_cooldowns: dict[tuple[str, str], float] = {}
+_SCAN_COOLDOWN_SECONDS = 30
 
 
 def _get_db() -> FiligreeDB:
@@ -858,6 +868,36 @@ async def list_tools() -> list[Tool]:
                 "required": ["assignee"],
             },
         ),
+        Tool(
+            name="list_scanners",
+            description="List registered scanners from .filigree/scanners/*.toml. Returns available scanner names, descriptions, and supported file types.",
+            inputSchema={
+                "type": "object",
+                "properties": {},
+            },
+        ),
+        Tool(
+            name="trigger_scan",
+            description=(
+                "Trigger an async bug scan on a file. Registers the file, spawns a detached scanner process, "
+                "and returns immediately with a scan_run_id for correlation. Check file findings later for results. "
+                "Note: results are POSTed to the dashboard API — ensure the dashboard is running at the target api_url. "
+                "Repeated triggers for the same scanner+file are rate-limited (30s cooldown)."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "scanner": {"type": "string", "description": "Scanner name (from list_scanners)"},
+                    "file_path": {"type": "string", "description": "File path to scan (relative to project root)"},
+                    "api_url": {
+                        "type": "string",
+                        "default": "http://localhost:8377",
+                        "description": "Dashboard URL where scanner POSTs results (localhost only by default)",
+                    },
+                },
+                "required": ["scanner", "file_path"],
+            },
+        ),
     ]
 
 
@@ -1588,6 +1628,167 @@ async def _dispatch(name: str, arguments: dict[str, Any], tracker: FiligreeDB) -
             parts.append("ready issue (no blockers)")
             result["selection_reason"] = f"Highest-priority {', '.join(parts)}"
             return _text(result)
+
+        case "list_scanners":
+            scanners_dir = _filigree_dir / "scanners" if _filigree_dir else None
+            if scanners_dir is None:
+                return _text({"scanners": [], "hint": "Project directory not initialized"})
+            scanners = _list_scanners(scanners_dir)
+            result_data: dict[str, Any] = {"scanners": [s.to_dict() for s in scanners]}
+            if not scanners:
+                result_data["hint"] = "No scanners registered. Add TOML files to .filigree/scanners/"
+            return _text(result_data)
+
+        case "trigger_scan":
+            from datetime import datetime
+            from urllib.parse import urlparse
+
+            if _filigree_dir is None:
+                return _text({"error": "Project directory not initialized", "code": "not_initialized"})
+
+            scanner_name = arguments["scanner"]
+            file_path = arguments["file_path"]
+            api_url = arguments.get("api_url", "http://localhost:8377")
+
+            # Validate api_url — warn on non-localhost targets
+            parsed_url = urlparse(api_url)
+            url_host = parsed_url.hostname or ""
+            if url_host not in ("localhost", "127.0.0.1", "::1", ""):
+                return _text(
+                    {
+                        "error": f"Non-localhost api_url not allowed: {url_host!r}. Scanner results would be sent to an external host.",
+                        "code": "invalid_api_url",
+                    }
+                )
+
+            # Validate file path — prevent path traversal
+            try:
+                target = _safe_path(file_path)
+            except ValueError as e:
+                return _text({"error": str(e), "code": "invalid_path"})
+
+            # Load scanner config (name is validated inside load_scanner)
+            scanners_dir = _filigree_dir / "scanners"
+            cfg = load_scanner(scanners_dir, scanner_name)
+            if cfg is None:
+                available = [s.name for s in _list_scanners(scanners_dir)]
+                return _text(
+                    {
+                        "error": f"Scanner {scanner_name!r} not found",
+                        "code": "scanner_not_found",
+                        "available_scanners": available,
+                    }
+                )
+
+            # Validate file exists
+            if not target.is_file():
+                return _text(
+                    {
+                        "error": f"File not found: {file_path}",
+                        "code": "file_not_found",
+                    }
+                )
+
+            # Per-(scanner, file) cooldown
+            cooldown_key = (scanner_name, file_path)
+            now_mono = time.monotonic()
+            last_trigger = _scan_cooldowns.get(cooldown_key, 0.0)
+            if now_mono - last_trigger < _SCAN_COOLDOWN_SECONDS:
+                remaining = _SCAN_COOLDOWN_SECONDS - (now_mono - last_trigger)
+                return _text(
+                    {
+                        "error": f"Scanner {scanner_name!r} was already triggered for {file_path!r} recently. Wait {remaining:.0f}s.",
+                        "code": "rate_limited",
+                        "retry_after_seconds": round(remaining),
+                    }
+                )
+
+            # Validate command is available
+            cmd_err = validate_scanner_command(cfg.command)
+            if cmd_err is not None:
+                return _text({"error": cmd_err, "code": "command_not_found"})
+
+            # Register file in file_records
+            file_record = tracker.register_file(file_path)
+
+            # Generate scan_run_id with random suffix to avoid collisions
+            ts = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S")
+            scan_run_id = f"{scanner_name}-{ts}-{secrets.token_hex(3)}"
+
+            # Build command — catches ValueError for malformed command strings
+            project_root = _filigree_dir.parent
+            try:
+                cmd = cfg.build_command(
+                    file_path=file_path,
+                    api_url=api_url,
+                    project_root=str(project_root),
+                    scan_run_id=scan_run_id,
+                )
+            except ValueError as e:
+                return _text({"error": str(e), "code": "invalid_command"})
+
+            # Spawn detached process
+            # Scanner TOML files are project-local config editable only by
+            # users with filesystem access (not via MCP). S603 is acceptable.
+            try:
+                proc = subprocess.Popen(
+                    cmd,
+                    cwd=str(project_root),
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    start_new_session=True,
+                )
+            except OSError as e:
+                return _text(
+                    {
+                        "error": f"Failed to spawn scanner process: {e}",
+                        "code": "spawn_failed",
+                        "scanner": scanner_name,
+                        "file_id": file_record.id,
+                    }
+                )
+
+            # Brief post-spawn check to detect immediate crashes
+            time.sleep(0.2)
+            exit_code = proc.poll()
+            if exit_code is not None and exit_code != 0:
+                return _text(
+                    {
+                        "error": f"Scanner process exited immediately with code {exit_code}",
+                        "code": "spawn_failed",
+                        "scanner": scanner_name,
+                        "file_id": file_record.id,
+                        "exit_code": exit_code,
+                    }
+                )
+
+            # Record cooldown timestamp
+            _scan_cooldowns[cooldown_key] = now_mono
+
+            if _logger:
+                _logger.info(
+                    "Spawned scanner %s for %s (pid=%d, run_id=%s)",
+                    scanner_name,
+                    file_path,
+                    proc.pid,
+                    scan_run_id,
+                )
+
+            return _text(
+                {
+                    "status": "triggered",
+                    "scanner": scanner_name,
+                    "file_path": file_path,
+                    "file_id": file_record.id,
+                    "scan_run_id": scan_run_id,
+                    "pid": proc.pid,
+                    "message": (
+                        f"Scan triggered with run_id={scan_run_id!r}. "
+                        f"Results will be POSTed to {api_url}. "
+                        f"Poll findings via file_id={file_record.id!r}."
+                    ),
+                }
+            )
 
         case _:
             return _text({"error": f"Unknown tool: {name}", "code": "unknown_tool"})

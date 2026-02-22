@@ -1076,3 +1076,171 @@ class TestMCPTransactionSafety:
         # The orphan row should NOT be visible after rollback
         orphan = mcp_db.conn.execute("SELECT id FROM issues WHERE id = 'orphan-1'").fetchone()
         assert orphan is None, "Orphan issue row survived — rollback did not happen"
+
+
+class TestScannerTools:
+    """Tests for list_scanners and trigger_scan MCP tools."""
+
+    def _write_scanner_toml(self, mcp_db: FiligreeDB, name: str = "test-scanner") -> None:
+        """Helper: write a scanner TOML into the test .filigree/scanners/ dir."""
+        import filigree.mcp_server as mcp_mod
+
+        scanners_dir = mcp_mod._filigree_dir / "scanners"
+        scanners_dir.mkdir(exist_ok=True)
+        (scanners_dir / f"{name}.toml").write_text(
+            f'[scanner]\nname = "{name}"\ndescription = "Test scanner"\n'
+            # Use 'echo' as the command — exists on all systems, exits immediately
+            f'command = "echo"\nargs = ["scan", "{{file}}", "--scan-run-id", "{{scan_run_id}}"]\nfile_types = ["py"]\n'
+        )
+
+    async def test_list_scanners_empty(self, mcp_db: FiligreeDB) -> None:
+        result = _parse(await call_tool("list_scanners", {}))
+        assert result["scanners"] == []
+
+    async def test_list_scanners_with_registry(self, mcp_db: FiligreeDB) -> None:
+        self._write_scanner_toml(mcp_db)
+        result = _parse(await call_tool("list_scanners", {}))
+        assert len(result["scanners"]) == 1
+        assert result["scanners"][0]["name"] == "test-scanner"
+
+    async def test_trigger_scan_scanner_not_found(self, mcp_db: FiligreeDB) -> None:
+        result = _parse(
+            await call_tool(
+                "trigger_scan",
+                {
+                    "scanner": "nonexistent",
+                    "file_path": "src/foo.py",
+                },
+            )
+        )
+        assert "error" in result
+        assert "not found" in result["error"].lower()
+
+    async def test_trigger_scan_path_traversal_rejected(self, mcp_db: FiligreeDB) -> None:
+        self._write_scanner_toml(mcp_db)
+        result = _parse(
+            await call_tool(
+                "trigger_scan",
+                {
+                    "scanner": "test-scanner",
+                    "file_path": "../../etc/passwd",
+                },
+            )
+        )
+        assert "error" in result
+        assert result["code"] == "invalid_path"
+
+    async def test_trigger_scan_scanner_name_traversal_rejected(self, mcp_db: FiligreeDB) -> None:
+        result = _parse(
+            await call_tool(
+                "trigger_scan",
+                {
+                    "scanner": "../../../etc/crontab",
+                    "file_path": "src/foo.py",
+                },
+            )
+        )
+        assert "error" in result
+        assert "not found" in result["error"].lower()
+
+    async def test_trigger_scan_file_not_found(self, mcp_db: FiligreeDB) -> None:
+        self._write_scanner_toml(mcp_db)
+        result = _parse(
+            await call_tool(
+                "trigger_scan",
+                {
+                    "scanner": "test-scanner",
+                    "file_path": "nonexistent/file.py",
+                },
+            )
+        )
+        assert "error" in result
+        assert "not found" in result["error"].lower() or "not exist" in result["error"].lower()
+
+    async def test_trigger_scan_success(self, mcp_db: FiligreeDB) -> None:
+        import filigree.mcp_server as mcp_mod
+
+        project_root = mcp_mod._filigree_dir.parent
+        target = project_root / "test_target.py"
+        try:
+            target.write_text("x = 1\n")
+            self._write_scanner_toml(mcp_db)
+            result = _parse(
+                await call_tool(
+                    "trigger_scan",
+                    {
+                        "scanner": "test-scanner",
+                        "file_path": "test_target.py",
+                    },
+                )
+            )
+            assert "error" not in result
+            assert result["scanner"] == "test-scanner"
+            assert result["file_path"] == "test_target.py"
+            assert "file_id" in result
+            assert "scan_run_id" in result
+            assert result["file_id"] != ""
+
+            # Verify the file was registered in file_records
+            f = mcp_db.get_file_by_path("test_target.py")
+            assert f is not None
+        finally:
+            target.unlink(missing_ok=True)
+
+    async def test_trigger_scan_registers_file_idempotent(self, mcp_db: FiligreeDB) -> None:
+        import filigree.mcp_server as mcp_mod
+
+        project_root = mcp_mod._filigree_dir.parent
+        target = project_root / "existing.py"
+        try:
+            target.write_text("y = 2\n")
+            existing = mcp_db.register_file("existing.py", language="python")
+            self._write_scanner_toml(mcp_db)
+            result = _parse(
+                await call_tool(
+                    "trigger_scan",
+                    {
+                        "scanner": "test-scanner",
+                        "file_path": "existing.py",
+                    },
+                )
+            )
+            assert result["file_id"] == existing.id
+        finally:
+            target.unlink(missing_ok=True)
+
+    async def test_trigger_scan_rate_limited(self, mcp_db: FiligreeDB) -> None:
+        import filigree.mcp_server as mcp_mod
+
+        project_root = mcp_mod._filigree_dir.parent
+        target = project_root / "rate_test.py"
+        try:
+            target.write_text("z = 3\n")
+            self._write_scanner_toml(mcp_db)
+            # First call succeeds
+            result1 = _parse(
+                await call_tool(
+                    "trigger_scan",
+                    {
+                        "scanner": "test-scanner",
+                        "file_path": "rate_test.py",
+                    },
+                )
+            )
+            assert result1.get("status") == "triggered"
+
+            # Immediate second call should be rate-limited
+            result2 = _parse(
+                await call_tool(
+                    "trigger_scan",
+                    {
+                        "scanner": "test-scanner",
+                        "file_path": "rate_test.py",
+                    },
+                )
+            )
+            assert result2["code"] == "rate_limited"
+        finally:
+            target.unlink(missing_ok=True)
+            # Clear cooldown state for test isolation
+            mcp_mod._scan_cooldowns.clear()
