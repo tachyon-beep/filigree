@@ -43,7 +43,11 @@ def cycle_time(db: FiligreeDB, issue_id: str) -> float | None:
         "SELECT event_type, new_value, created_at FROM events WHERE issue_id = ? AND event_type = 'status_changed' ORDER BY created_at ASC",
         (issue_id,),
     ).fetchall()
+    return _cycle_time_from_events(events, wip_states, done_states)
 
+
+def _cycle_time_from_events(events: list[Any], wip_states: set[str], done_states: set[str]) -> float | None:
+    """Compute cycle time from ordered status-change event rows."""
     start: datetime | None = None
     end: datetime | None = None
     for evt in events:
@@ -57,6 +61,33 @@ def cycle_time(db: FiligreeDB, issue_id: str) -> float | None:
     if start is None or end is None:
         return None
     return (end - start).total_seconds() / 3600
+
+
+def _fetch_status_events_by_issue(db: FiligreeDB, issue_ids: list[str]) -> dict[str, list[Any]]:
+    """Batch-fetch ordered status_changed events for issues."""
+    if not issue_ids:
+        return {}
+
+    by_issue: dict[str, list[Any]] = {}
+    chunk_size = 500  # stay well below SQLite variable limits
+
+    for i in range(0, len(issue_ids), chunk_size):
+        chunk = issue_ids[i : i + chunk_size]
+        placeholders = ",".join("?" for _ in chunk)
+        rows = db.conn.execute(
+            (
+                "SELECT issue_id, new_value, created_at "
+                "FROM events "
+                "WHERE event_type = 'status_changed' "
+                f"AND issue_id IN ({placeholders}) "
+                "ORDER BY issue_id ASC, created_at ASC"
+            ),
+            tuple(chunk),
+        ).fetchall()
+        for row in rows:
+            by_issue.setdefault(row["issue_id"], []).append(row)
+
+    return by_issue
 
 
 def lead_time(
@@ -120,9 +151,12 @@ def get_flow_metrics(db: FiligreeDB, *, days: int = 30) -> dict[str, Any]:
     cycle_times: list[float] = []
     lead_times: list[float] = []
     by_type: dict[str, list[float]] = {}
+    wip_states = set(db._get_states_for_category("wip")) or {"in_progress"}
+    done_states = set(db._get_states_for_category("done")) or {"closed"}
+    status_events = _fetch_status_events_by_issue(db, [issue.id for issue in recent_closed])
 
     for issue in recent_closed:
-        ct = cycle_time(db, issue.id)
+        ct = _cycle_time_from_events(status_events.get(issue.id, []), wip_states, done_states)
         lt = lead_time(db, issue=issue)
         if ct is not None:
             cycle_times.append(ct)

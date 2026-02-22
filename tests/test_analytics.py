@@ -214,3 +214,29 @@ class TestFlowMetrics:
             data = get_flow_metrics(db)
 
         assert data["throughput"] >= 3
+
+    def test_flow_metrics_batch_fetches_status_events(self, db: FiligreeDB) -> None:
+        """Regression: avoid N+1 events queries while computing cycle time."""
+        for i in range(4):
+            issue = db.create_issue(f"Batch metric {i}")
+            db.update_issue(issue.id, status="in_progress")
+            db.close_issue(issue.id)
+
+        seen_sql: list[str] = []
+
+        def _trace(sql: str) -> None:
+            seen_sql.append(sql.lower())
+
+        db.conn.set_trace_callback(_trace)
+        try:
+            data = get_flow_metrics(db)
+        finally:
+            db.conn.set_trace_callback(None)
+
+        assert data["throughput"] >= 4
+        event_queries = [
+            sql
+            for sql in seen_sql
+            if "from events" in sql and "event_type = 'status_changed'" in sql
+        ]
+        assert len(event_queries) == 1, f"expected 1 batched status-events query, got {len(event_queries)}"
