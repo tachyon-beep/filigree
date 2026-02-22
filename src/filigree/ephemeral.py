@@ -153,3 +153,14 @@ def read_port_file(port_file: Path) -> int | None:
         return int(port_file.read_text().strip())
     except (ValueError, OSError):
         return None
+
+
+# ---------------------------------------------------------------------------
+# Legacy cleanup
+# ---------------------------------------------------------------------------
+
+
+def cleanup_legacy_tmp_files() -> None:
+    """Remove legacy /tmp/filigree-dashboard.* files from the hybrid mode era."""
+    for name in ("filigree-dashboard.pid", "filigree-dashboard.lock", "filigree-dashboard.log"):
+        Path("/tmp", name).unlink(missing_ok=True)  # noqa: S108

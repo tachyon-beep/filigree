@@ -236,6 +236,7 @@ def ensure_dashboard_running(port: int = 8377) -> str:
 def _ensure_dashboard_ethereal_mode(filigree_dir: Path) -> str:
     """Ethereal mode: session-scoped dashboard on a deterministic port."""
     from filigree.ephemeral import (
+        cleanup_legacy_tmp_files,
         cleanup_stale_pid,
         find_available_port,
         is_pid_alive,
@@ -244,6 +245,8 @@ def _ensure_dashboard_ethereal_mode(filigree_dir: Path) -> str:
         write_pid_file,
         write_port_file,
     )
+
+    cleanup_legacy_tmp_files()
 
     pid_file = filigree_dir / "ephemeral.pid"
     port_file = filigree_dir / "ephemeral.port"

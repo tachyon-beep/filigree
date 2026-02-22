@@ -189,7 +189,7 @@ class TestEnsureDashboardSubprocessVerification:
         mock_proc.returncode = 1
         mock_proc.pid = 12345
 
-        logfile = tmp_path / "filigree-dashboard.log"
+        logfile = tmp_path / "ephemeral.log"
 
         with (
             patch("filigree.hooks.find_filigree_root", return_value=tmp_path),
