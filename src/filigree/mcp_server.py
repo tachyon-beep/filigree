@@ -1885,14 +1885,6 @@ async def _run(project_path: Path | None) -> None:
     db = FiligreeDB(filigree_dir / DB_FILENAME, prefix=config.get("prefix", "filigree"))
     db.initialize()
 
-    # Register with the global project registry (best-effort)
-    try:
-        from filigree.registry import Registry
-
-        Registry().register(filigree_dir)
-    except Exception:
-        logging.getLogger(__name__).debug("Best-effort registry registration failed", exc_info=True)
-
     from filigree.logging import setup_logging
 
     _logger = setup_logging(filigree_dir)

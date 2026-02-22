@@ -26,16 +26,6 @@ from filigree.install import (
 )
 
 
-@pytest.fixture(autouse=True)
-def _isolate_registry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Redirect the global registry to a temp dir so tests never touch ~/.filigree/."""
-    reg_dir = tmp_path / "registry"
-    reg_dir.mkdir()
-    monkeypatch.setattr("filigree.registry.REGISTRY_DIR", reg_dir)
-    monkeypatch.setattr("filigree.registry.REGISTRY_FILE", reg_dir / "registry.json")
-    monkeypatch.setattr("filigree.registry.REGISTRY_LOCK", reg_dir / "registry.lock")
-
-
 class TestBuildContext:
     def test_empty_project(self, db: FiligreeDB) -> None:
         result = _build_context(db)
