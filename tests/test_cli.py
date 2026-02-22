@@ -1364,6 +1364,49 @@ class TestCreatePlanFileErrors:
         assert result.exception is None or isinstance(result.exception, SystemExit)
 
 
+class TestInitMode:
+    def test_init_default_mode_is_ethereal(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cli_runner: CliRunner) -> None:
+        monkeypatch.chdir(tmp_path)
+        result = cli_runner.invoke(cli, ["init"])
+        assert result.exit_code == 0
+        config = json.loads((tmp_path / ".filigree" / "config.json").read_text())
+        assert config["mode"] == "ethereal"
+
+    def test_init_with_server_mode(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cli_runner: CliRunner) -> None:
+        monkeypatch.chdir(tmp_path)
+        result = cli_runner.invoke(cli, ["init", "--mode", "server"])
+        assert result.exit_code == 0
+        config = json.loads((tmp_path / ".filigree" / "config.json").read_text())
+        assert config["mode"] == "server"
+
+    def test_init_with_explicit_ethereal(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cli_runner: CliRunner) -> None:
+        monkeypatch.chdir(tmp_path)
+        result = cli_runner.invoke(cli, ["init", "--mode", "ethereal"])
+        assert result.exit_code == 0
+        config = json.loads((tmp_path / ".filigree" / "config.json").read_text())
+        assert config["mode"] == "ethereal"
+
+    def test_init_invalid_mode_rejected(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cli_runner: CliRunner) -> None:
+        monkeypatch.chdir(tmp_path)
+        result = cli_runner.invoke(cli, ["init", "--mode", "bogus"])
+        assert result.exit_code != 0
+
+    def test_init_existing_project_updates_mode(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cli_runner: CliRunner) -> None:
+        """Running init --mode=server on an existing project updates the mode."""
+        monkeypatch.chdir(tmp_path)
+        cli_runner.invoke(cli, ["init"])
+        result = cli_runner.invoke(cli, ["init", "--mode", "server"])
+        assert result.exit_code == 0
+        config = json.loads((tmp_path / ".filigree" / "config.json").read_text())
+        assert config["mode"] == "server"
+
+    def test_init_invalid_mode_no_directory_created(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cli_runner: CliRunner) -> None:
+        monkeypatch.chdir(tmp_path)
+        result = cli_runner.invoke(cli, ["init", "--mode", "bogus"])
+        assert result.exit_code != 0
+        assert not (tmp_path / ".filigree").exists()
+
+
 class TestNoFiligreeDir:
     def test_commands_fail_without_init(self, tmp_path: Path, cli_runner: CliRunner) -> None:
         original = os.getcwd()

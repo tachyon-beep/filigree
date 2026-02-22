@@ -85,7 +85,13 @@ def cli(ctx: click.Context, actor: str) -> None:
 
 @cli.command()
 @click.option("--prefix", default=None, help="ID prefix for issues (default: directory name)")
-def init(prefix: str | None) -> None:
+@click.option(
+    "--mode",
+    type=click.Choice(["ethereal", "server"], case_sensitive=False),
+    default=None,
+    help="Installation mode (default: ethereal)",
+)
+def init(prefix: str | None, mode: str | None) -> None:
     """Initialize .filigree/ in the current directory."""
     cwd = Path.cwd()
     filigree_dir = cwd / FILIGREE_DIR_NAME
@@ -98,13 +104,19 @@ def init(prefix: str | None) -> None:
         db.initialize()
         db.close()
         (filigree_dir / "scanners").mkdir(exist_ok=True)
+        # Update mode if explicitly provided
+        if mode is not None:
+            config["mode"] = mode
+            write_config(filigree_dir, config)
+            click.echo(f"  Mode: {mode}")
         return
 
     prefix = prefix or cwd.name
+    mode = mode or "ethereal"
     filigree_dir.mkdir()
     (filigree_dir / "scanners").mkdir()
 
-    config = {"prefix": prefix, "version": 1}
+    config = {"prefix": prefix, "version": 1, "mode": mode}
     write_config(filigree_dir, config)
 
     db = FiligreeDB(filigree_dir / DB_FILENAME, prefix=prefix)
@@ -114,6 +126,7 @@ def init(prefix: str | None) -> None:
 
     click.echo(f"Initialized {FILIGREE_DIR_NAME}/ in {cwd}")
     click.echo(f"  Prefix: {prefix}")
+    click.echo(f"  Mode: {mode}")
     click.echo(f"  Database: {filigree_dir / DB_FILENAME}")
     click.echo(f"  Scanners: {filigree_dir / 'scanners'}/ (add .toml files to register scanners)")
     click.echo("\nNext: filigree install")
