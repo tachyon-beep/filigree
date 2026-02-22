@@ -1303,3 +1303,30 @@ class TestErrorMessagesIncludeValidOptions:
         err = resp.json()["error"]
         assert err["code"] == "ISSUE_NOT_FOUND"
         assert "nonexistent-id-xyz" in err["message"]
+
+
+class TestEtherealTracerBullet:
+    """End-to-end validation that init+dashboard+API works together."""
+
+    async def test_single_project_lifecycle(self, dashboard_db: FiligreeDB) -> None:
+        """Create an issue via DB, verify it appears in the API."""
+        import filigree.dashboard as dash_module
+
+        # Create an issue directly in the DB
+        dashboard_db.create_issue(title="Tracer bullet test")
+
+        # Wire up dashboard
+        dash_module._db = dashboard_db
+        app = create_app()
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            # Verify issues endpoint returns our issue
+            resp = await client.get("/api/issues")
+            assert resp.status_code == 200
+            issues = resp.json()
+            assert any(i["title"] == "Tracer bullet test" for i in issues)
+
+            # Verify removed endpoints are gone
+            assert (await client.get("/api/projects")).status_code == 404
+            assert (await client.post("/api/register", json={})).status_code in (404, 405)
+        dash_module._db = None
