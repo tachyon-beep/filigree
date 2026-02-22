@@ -1004,6 +1004,20 @@ def run_doctor(project_root: Path | None = None) -> list[CheckResult]:
             )
         )
 
+    # 9b. Check Codex skills
+    codex_skill_md = (filigree_dir.parent) / ".agents" / "skills" / SKILL_NAME / SKILL_MARKER
+    if codex_skill_md.exists():
+        results.append(CheckResult("Codex skills", True, f"{SKILL_NAME} skill installed"))
+    else:
+        results.append(
+            CheckResult(
+                "Codex skills",
+                False,
+                f"{SKILL_NAME} skill not found in .agents/skills/",
+                fix_hint="Run: filigree install --codex-skills",
+            )
+        )
+
     # 10. Check CLAUDE.md has instructions
     claude_md = (filigree_dir.parent) / "CLAUDE.md"
     if claude_md.exists():

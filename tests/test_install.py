@@ -1105,6 +1105,22 @@ class TestDoctorSkillsCheck:
         assert "not found" in check.message
 
 
+class TestDoctorCodexSkillsCheck:
+    def test_passes_when_skill_installed(self, filigree_project: Path) -> None:
+        install_codex_skills(filigree_project)
+        results = run_doctor(filigree_project)
+        check = next((r for r in results if r.name == "Codex skills"), None)
+        assert check is not None
+        assert check.passed
+
+    def test_fails_when_skill_missing(self, filigree_project: Path) -> None:
+        results = run_doctor(filigree_project)
+        check = next((r for r in results if r.name == "Codex skills"), None)
+        assert check is not None
+        assert not check.passed
+        assert "not found" in check.message
+
+
 class TestDoctorConnectionLeak:
     """Bug filigree-3bbc6f: run_doctor must close SQLite connection even on failure."""
 
