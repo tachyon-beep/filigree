@@ -169,7 +169,7 @@ class TestGraphFrontendContracts:
         html = (STATIC_DIR / "dashboard.html").read_text()
         assert 'id="graphFiltersGroup"' in html
         assert 'id="graphAdvancedGroup"' in html
-        assert "Trace path:" in html
+        assert "Trace path between issues:" in html
         assert "Node cap:" in html
         assert "Edge cap:" in html
 
