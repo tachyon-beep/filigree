@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from filigree.core import FiligreeDB
+from filigree.core import DB_FILENAME, FiligreeDB
 from filigree.hooks import (
     READY_CAP,
     _build_context,
@@ -189,7 +190,7 @@ class TestEnsureDashboardSubprocessVerification:
             result = ensure_dashboard_running()
 
         assert "started" in result.lower()
-        assert "99999" in result
+        assert "http://localhost:" in result
 
     def test_stderr_captured_on_failure(self, tmp_path: Path) -> None:
         """When process exits immediately, stderr content should be in the message."""
@@ -334,3 +335,68 @@ class TestGenerateSessionContextFreshness:
             result = generate_session_context()
         assert result is not None
         assert "Updated" not in result
+
+
+class TestEnsureDashboardEthereal:
+    def test_starts_dashboard_on_deterministic_port(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """In ethereal mode, dashboard starts on project-specific port."""
+        filigree_dir = tmp_path / ".filigree"
+        filigree_dir.mkdir()
+        config = {"prefix": "test", "version": 1, "mode": "ethereal"}
+        (filigree_dir / "config.json").write_text(json.dumps(config))
+        db = FiligreeDB(filigree_dir / DB_FILENAME, prefix="test")
+        db.initialize()
+        db.close()
+
+        monkeypatch.chdir(tmp_path)
+
+        spawned_cmds: list[list[str]] = []
+
+        def mock_popen(cmd, **kwargs):
+            spawned_cmds.append(cmd)
+            mock = MagicMock()
+            mock.pid = 12345
+            mock.poll.return_value = None
+            return mock
+
+        monkeypatch.setattr("filigree.hooks.subprocess.Popen", mock_popen)
+        monkeypatch.setattr("filigree.hooks._is_port_listening", lambda *a: False)
+        monkeypatch.setattr("filigree.hooks.time.sleep", lambda *a: None)
+
+        result = ensure_dashboard_running()
+        assert "http://localhost:" in result
+        assert (filigree_dir / "ephemeral.pid").exists()
+        assert (filigree_dir / "ephemeral.port").exists()
+
+    def test_reuses_running_dashboard(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """If PID is alive and port is listening, reuse it."""
+        filigree_dir = tmp_path / ".filigree"
+        filigree_dir.mkdir()
+        config = {"prefix": "test", "version": 1, "mode": "ethereal"}
+        (filigree_dir / "config.json").write_text(json.dumps(config))
+        db = FiligreeDB(filigree_dir / DB_FILENAME, prefix="test")
+        db.initialize()
+        db.close()
+
+        (filigree_dir / "ephemeral.pid").write_text(str(os.getpid()))
+        (filigree_dir / "ephemeral.port").write_text("9173")
+
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr("filigree.hooks._is_port_listening", lambda *a: True)
+
+        result = ensure_dashboard_running()
+        assert "running on http://localhost:9173" in result.lower() or "9173" in result
+
+    def test_server_mode_returns_not_running(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """In server mode, reports daemon status without spawning."""
+        filigree_dir = tmp_path / ".filigree"
+        filigree_dir.mkdir()
+        config = {"prefix": "test", "version": 1, "mode": "server"}
+        (filigree_dir / "config.json").write_text(json.dumps(config))
+        db = FiligreeDB(filigree_dir / DB_FILENAME, prefix="test")
+        db.initialize()
+        db.close()
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr("filigree.hooks._is_port_listening", lambda *a: False)
+        result = ensure_dashboard_running()
+        assert "not running" in result.lower()

@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import fcntl
 import logging
-import os
 import socket
 import subprocess
 import time
@@ -21,6 +20,7 @@ from filigree.core import (
     FiligreeDB,
     find_filigree_command,
     find_filigree_root,
+    get_mode,
     read_config,
 )
 from filigree.install import (
@@ -194,29 +194,12 @@ def _is_port_listening(port: int, host: str = "127.0.0.1") -> bool:
         sock.close()
 
 
-def _try_register_with_server(port: int) -> None:
-    """Best-effort POST to register this project with a running dashboard."""
-    try:
-        import json
-        import urllib.request
-
-        filigree_dir = find_filigree_root()
-        data = json.dumps({"path": str(filigree_dir)}).encode()
-        req = urllib.request.Request(
-            f"http://127.0.0.1:{port}/api/register",
-            data=data,
-            headers={"Content-Type": "application/json"},
-        )
-        urllib.request.urlopen(req, timeout=2)  # noqa: S310
-    except Exception:
-        logging.getLogger(__name__).debug("Best-effort dashboard registration failed", exc_info=True)
-
-
 def ensure_dashboard_running(port: int = 8377) -> str:
     """Ensure the filigree dashboard is running.
 
-    Uses ``fcntl.flock`` for atomic check-and-start so concurrent
-    sessions don't race.  Returns a human-readable status message.
+    In ethereal mode (default): spawns a single-project dashboard on a
+    deterministic port, with PID/port files in .filigree/.
+    In server mode: just verifies the daemon is reachable.
     """
     try:
         import fastapi  # noqa: F401
@@ -227,41 +210,62 @@ def ensure_dashboard_running(port: int = 8377) -> str:
         return 'Dashboard requires extra dependencies. Install with: pip install "filigree[dashboard]"'
 
     try:
-        find_filigree_root()
+        filigree_dir = find_filigree_root()
     except FileNotFoundError:
         return ""
 
-    # Register current project with the global registry (best-effort)
-    try:
-        from filigree.registry import Registry
+    mode = get_mode(filigree_dir)
 
-        filigree_dir = find_filigree_root()
-        Registry().register(filigree_dir)
-    except Exception:
-        logging.getLogger(__name__).debug("Best-effort registry registration failed", exc_info=True)
+    if mode == "server":
+        return _ensure_dashboard_server_mode(filigree_dir, port)
+    return _ensure_dashboard_ethereal_mode(filigree_dir)
 
-    tmpdir = os.environ.get("TMPDIR", "/tmp")  # noqa: S108
-    lockfile = os.path.join(tmpdir, "filigree-dashboard.lock")
-    pidfile = os.path.join(tmpdir, "filigree-dashboard.pid")
-    logfile = os.path.join(tmpdir, "filigree-dashboard.log")
 
+def _ensure_dashboard_ethereal_mode(filigree_dir: Path) -> str:
+    """Ethereal mode: session-scoped dashboard on a deterministic port."""
+    from filigree.ephemeral import (
+        cleanup_stale_pid,
+        find_available_port,
+        is_pid_alive,
+        read_pid_file,
+        read_port_file,
+        write_pid_file,
+        write_port_file,
+    )
+
+    pid_file = filigree_dir / "ephemeral.pid"
+    port_file = filigree_dir / "ephemeral.port"
+    lock_file = filigree_dir / "ephemeral.lock"
+
+    # Check if already running from a previous session
+    pid_info = read_pid_file(pid_file)
+    existing_port = read_port_file(port_file)
+    if pid_info and existing_port and is_pid_alive(pid_info["pid"]) and _is_port_listening(existing_port):
+        return f"Filigree dashboard running on http://localhost:{existing_port}"
+
+    # Clean up stale state
+    cleanup_stale_pid(pid_file)
+
+    # Atomic start with lock
     lock_fd = None
     try:
-        lock_fd = open(lockfile, "w")  # noqa: SIM115
+        lock_fd = open(lock_file, "w")  # noqa: SIM115
         try:
             fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError:
             return "Filigree dashboard: another session is starting it, skipping"
 
-        if _is_port_listening(port):
-            _try_register_with_server(port)
-            return f"Filigree dashboard already running on http://localhost:{port}"
+        # Re-check after acquiring lock
+        pid_info = read_pid_file(pid_file)
+        existing_port = read_port_file(port_file)
+        if pid_info and existing_port and is_pid_alive(pid_info["pid"]) and _is_port_listening(existing_port):
+            return f"Filigree dashboard running on http://localhost:{existing_port}"
 
-        # Start the dashboard in a detached process
+        port = find_available_port(filigree_dir)
         filigree_cmd = find_filigree_command()
 
-        # Capture stderr to a log file for diagnostics on failure
-        with open(logfile, "w") as log_fd:
+        log_file = filigree_dir / "ephemeral.log"
+        with open(log_file, "w") as log_fd:
             proc = subprocess.Popen(
                 [*filigree_cmd, "dashboard", "--no-browser", "--port", str(port)],
                 stdin=subprocess.DEVNULL,
@@ -269,18 +273,31 @@ def ensure_dashboard_running(port: int = 8377) -> str:
                 stderr=log_fd,
                 start_new_session=True,
             )
-        # log_fd closed here; child process retains its own fd copy
 
-        # Brief check: did the process exit immediately?
-        time.sleep(0.5)
-        exit_code = proc.poll()
-        if exit_code is not None:
-            stderr_output = Path(logfile).read_text().strip()
-            detail = f": {stderr_output}" if stderr_output else ""
-            return f"Dashboard process exited immediately (pid {proc.pid}, code {exit_code}){detail}"
+        write_pid_file(pid_file, proc.pid, cmd="filigree")
+        write_port_file(port_file, port)
 
-        Path(pidfile).write_text(str(proc.pid))
-        return f"Started Filigree dashboard (pid {proc.pid}) on http://localhost:{port}"
+        # Wait for startup
+        for _ in range(10):
+            time.sleep(0.3)
+            exit_code = proc.poll()
+            if exit_code is not None:
+                pid_file.unlink(missing_ok=True)
+                port_file.unlink(missing_ok=True)
+                stderr_output = log_file.read_text().strip()
+                detail = f": {stderr_output}" if stderr_output else ""
+                return f"Dashboard process exited (pid {proc.pid}, code {exit_code}){detail}"
+            if _is_port_listening(port):
+                return f"Started Filigree dashboard on http://localhost:{port}"
+
+        return f"Started Filigree dashboard on http://localhost:{port} (may still be initializing)"
     finally:
         if lock_fd is not None:
             lock_fd.close()
+
+
+def _ensure_dashboard_server_mode(filigree_dir: Path, port: int) -> str:
+    """Server mode: just verify the daemon is reachable."""
+    if _is_port_listening(port):
+        return f"Filigree server running on http://localhost:{port}"
+    return f"Filigree server not running on port {port}. Start it with: filigree server start"
