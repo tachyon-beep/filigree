@@ -2406,12 +2406,16 @@ class FiligreeDB:
                 params.append(file_type)
                 changes.append(("file_type", existing["file_type"] or "", file_type))
             if metadata:
-                old_meta = existing["metadata"] or "{}"
-                new_meta = json.dumps(metadata)
-                if old_meta != new_meta:
+                old_meta_raw = existing["metadata"] or "{}"
+                try:
+                    old_meta_parsed = json.loads(old_meta_raw)
+                except (json.JSONDecodeError, TypeError):
+                    old_meta_parsed = {}
+                if old_meta_parsed != metadata:
+                    new_meta = json.dumps(metadata)
                     updates.append("metadata = ?")
                     params.append(new_meta)
-                    changes.append(("metadata", old_meta, new_meta))
+                    changes.append(("metadata", old_meta_raw, new_meta))
             updates.append("updated_at = ?")
             params.append(now)
             params.append(existing["id"])

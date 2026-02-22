@@ -1724,6 +1724,14 @@ class TestFileMetadataEvents:
         meta_events = [e for e in tl["results"] if e["type"] == "file_metadata_update"]
         assert len(meta_events) == 0
 
+    def test_no_event_when_metadata_key_order_differs(self, db: FiligreeDB) -> None:
+        """JSON key ordering should not cause spurious metadata events."""
+        f = db.register_file("a.py", metadata={"a": 1, "b": 2})
+        db.register_file("a.py", metadata={"b": 2, "a": 1})
+        tl = db.get_file_timeline(f.id)
+        meta_events = [e for e in tl["results"] if e["type"] == "file_metadata_update"]
+        assert len(meta_events) == 0
+
     def test_no_event_on_first_registration(self, db: FiligreeDB) -> None:
         f = db.register_file("a.py", language="python")
         tl = db.get_file_timeline(f.id)
