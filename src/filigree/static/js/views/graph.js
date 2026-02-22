@@ -852,16 +852,18 @@ export function renderGraph() {
       });
       state.cy.destroy();
 
-      const hasPreviousPositions = Object.keys(previousPositions).length > 0;
+      const canReusePositions =
+        cyNodes.length > 0 &&
+        cyNodes.every((n) => Object.prototype.hasOwnProperty.call(previousPositions, n.data.id));
       state.cy = cytoscape({
         container,
         elements: cyNodes.concat(cyEdges),
-        layout: hasPreviousPositions
+        layout: canReusePositions
           ? {
               name: "preset",
               fit: false,
               padding: 20,
-              positions: (node) => previousPositions[node.id()] || { x: 0, y: 0 },
+              positions: (node) => previousPositions[node.id()],
             }
           : {
               name: "dagre",
@@ -878,7 +880,7 @@ export function renderGraph() {
       if (selectedNodeId && state.cy.$id(selectedNodeId).length) {
         state.cy.$id(selectedNodeId).select();
       }
-      if (hasPreviousPositions) {
+      if (canReusePositions) {
         state.cy.zoom(previousZoom);
         state.cy.pan(previousPan);
       } else {
