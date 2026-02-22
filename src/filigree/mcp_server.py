@@ -11,6 +11,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import logging
 import secrets
@@ -1689,9 +1690,21 @@ async def _dispatch(name: str, arguments: dict[str, Any], tracker: FiligreeDB) -
                     }
                 )
 
-            # Per-(scanner, file) cooldown
+            # Warn if file type doesn't match scanner's declared types
+            file_type_warning = ""
+            if cfg.file_types:
+                ext = Path(file_path).suffix.lstrip(".")
+                if ext and ext not in cfg.file_types:
+                    file_type_warning = (
+                        f"Warning: file extension {ext!r} not in scanner's declared file_types {cfg.file_types}. Proceeding anyway."
+                    )
+
+            # Per-(scanner, file) cooldown — evict stale entries first
             cooldown_key = (scanner_name, file_path)
             now_mono = time.monotonic()
+            stale = [k for k, v in _scan_cooldowns.items() if now_mono - v >= _SCAN_COOLDOWN_SECONDS]
+            for k in stale:
+                del _scan_cooldowns[k]
             last_trigger = _scan_cooldowns.get(cooldown_key, 0.0)
             if now_mono - last_trigger < _SCAN_COOLDOWN_SECONDS:
                 remaining = _SCAN_COOLDOWN_SECONDS - (now_mono - last_trigger)
@@ -1749,7 +1762,7 @@ async def _dispatch(name: str, arguments: dict[str, Any], tracker: FiligreeDB) -
                 )
 
             # Brief post-spawn check to detect immediate crashes
-            time.sleep(0.2)
+            await asyncio.sleep(0.2)
             exit_code = proc.poll()
             if exit_code is not None and exit_code != 0:
                 return _text(
@@ -1774,21 +1787,22 @@ async def _dispatch(name: str, arguments: dict[str, Any], tracker: FiligreeDB) -
                     scan_run_id,
                 )
 
-            return _text(
-                {
-                    "status": "triggered",
-                    "scanner": scanner_name,
-                    "file_path": file_path,
-                    "file_id": file_record.id,
-                    "scan_run_id": scan_run_id,
-                    "pid": proc.pid,
-                    "message": (
-                        f"Scan triggered with run_id={scan_run_id!r}. "
-                        f"Results will be POSTed to {api_url}. "
-                        f"Poll findings via file_id={file_record.id!r}."
-                    ),
-                }
-            )
+            scan_result: dict[str, Any] = {
+                "status": "triggered",
+                "scanner": scanner_name,
+                "file_path": file_path,
+                "file_id": file_record.id,
+                "scan_run_id": scan_run_id,
+                "pid": proc.pid,
+                "message": (
+                    f"Scan triggered with run_id={scan_run_id!r}. "
+                    f"Results will be POSTed to {api_url}. "
+                    f"Poll findings via file_id={file_record.id!r}."
+                ),
+            }
+            if file_type_warning:
+                scan_result["warning"] = file_type_warning
+            return _text(scan_result)
 
         case _:
             return _text({"error": f"Unknown tool: {name}", "code": "unknown_tool"})

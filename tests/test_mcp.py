@@ -1244,3 +1244,28 @@ class TestScannerTools:
             target.unlink(missing_ok=True)
             # Clear cooldown state for test isolation
             mcp_mod._scan_cooldowns.clear()
+
+    async def test_trigger_scan_file_type_mismatch_warning(self, mcp_db: FiligreeDB) -> None:
+        """Scanning a .txt file with a py-only scanner should succeed with a warning."""
+        import filigree.mcp_server as mcp_mod
+
+        project_root = mcp_mod._filigree_dir.parent
+        target = project_root / "readme.txt"
+        try:
+            target.write_text("hello\n")
+            self._write_scanner_toml(mcp_db)  # file_types = ["py"]
+            result = _parse(
+                await call_tool(
+                    "trigger_scan",
+                    {
+                        "scanner": "test-scanner",
+                        "file_path": "readme.txt",
+                    },
+                )
+            )
+            assert result.get("status") == "triggered"
+            assert "warning" in result
+            assert "txt" in result["warning"]
+        finally:
+            target.unlink(missing_ok=True)
+            mcp_mod._scan_cooldowns.clear()

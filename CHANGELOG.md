@@ -167,7 +167,6 @@ identified through systematic static analysis and verified against HEAD.
 
 ### Known Issues
 
-- `rebuild_table()` FK fallback path still calls `conn.commit()` mid-migration, breaking strict atomicity for FK-referenced table rebuilds (tracked as filigree-938818)
 - `cycle_time()` still executes per-issue events query inside `get_flow_metrics()` loop — lead_time N+1 fixed but cycle_time N+1 remains (tracked as filigree-f34f66)
 
 ## [1.1.0] - 2026-02-18

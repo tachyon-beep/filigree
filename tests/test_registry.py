@@ -175,3 +175,24 @@ class TestProjectManager:
         (fake_project / "filigree.db").unlink()
         pm._connections.pop(entry.key, None)
         assert pm.get_db(entry.key) is None
+
+    def test_register_local_fallback(self, registry_dir: Path, fake_project: Path) -> None:
+        """register_local derives a ProjectEntry without writing to the registry."""
+        reg = Registry()
+        pm = ProjectManager(reg)
+        entry = pm.register_local(fake_project)
+        assert entry.key == "myproj"
+        assert entry.name == "myproj"
+        assert entry.path == str(fake_project.resolve())
+        # Path is cached — get_db should work
+        db = pm.get_db(entry.key)
+        assert db is not None
+
+    def test_register_local_when_registry_unwritable(self, registry_dir: Path, fake_project: Path) -> None:
+        """register_local works even when the registry directory doesn't exist."""
+        reg = Registry()
+        pm = ProjectManager(reg)
+        # Don't create the registry dir — register_local shouldn't need it
+        entry = pm.register_local(fake_project)
+        assert entry.key == "myproj"
+        assert not registry_dir.exists(), "register_local should not create the registry dir"

@@ -938,7 +938,11 @@ def main(port: int = DEFAULT_PORT, *, no_browser: bool = False) -> None:
     _project_manager = ProjectManager(registry)
 
     filigree_dir = find_filigree_root()
-    entry = _project_manager.register(filigree_dir)
+    try:
+        entry = _project_manager.register(filigree_dir)
+    except OSError:
+        logger.warning("Registry unavailable, using local-only mode", exc_info=True)
+        entry = _project_manager.register_local(filigree_dir)
     _default_project_key = entry.key
 
     app = create_app()

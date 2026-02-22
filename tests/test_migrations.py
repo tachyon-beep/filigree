@@ -412,7 +412,11 @@ class TestRebuildTable:
         conn.close()
 
     def test_rebuild_fk_referenced_table(self, tmp_path: Path) -> None:
-        """rebuild_table must work on tables referenced by FK from other tables."""
+        """rebuild_table works on FK-referenced tables when FK enforcement is off.
+
+        The migration runner disables FK enforcement before each migration
+        and validates integrity before commit. This test mirrors that pattern.
+        """
         conn = _make_db(tmp_path)
         conn.execute("CREATE TABLE parent (id TEXT PRIMARY KEY, name TEXT)")
         conn.execute("CREATE TABLE child (id TEXT PRIMARY KEY, parent_id TEXT REFERENCES parent(id))")
@@ -420,13 +424,18 @@ class TestRebuildTable:
         conn.execute("INSERT INTO child VALUES ('c1', 'p1')")
         conn.commit()
 
-        # Rebuild parent — this should not fail even though child references it
+        # Migration runner disables FKs before the transaction
+        conn.execute("PRAGMA foreign_keys=OFF")
+        conn.execute("BEGIN IMMEDIATE")
         rebuild_table(
             conn,
             "parent",
             "CREATE TABLE parent (id TEXT PRIMARY KEY, name TEXT, extra TEXT DEFAULT '')",
         )
+        violations = conn.execute("PRAGMA foreign_key_check").fetchall()
+        assert not violations
         conn.commit()
+        conn.execute("PRAGMA foreign_keys=ON")
 
         row = conn.execute("SELECT name FROM parent WHERE id = 'p1'").fetchone()
         assert row[0] == "Parent 1"
@@ -525,17 +534,11 @@ class TestMigrationAtomicity:
             conn.close()
 
     def test_rebuild_fk_table_failure_version_not_bumped(self, tmp_path: Path) -> None:
-        """Migration that rebuilds FK-referenced table then fails must not bump version.
+        """Migration that rebuilds FK-referenced table then fails rolls back completely.
 
-        SQLite limitation: rebuilding FK-referenced tables requires committing
-        mid-migration (PRAGMA foreign_keys=OFF only works outside transactions).
-        This means the rebuild itself cannot be rolled back.  However, the
-        migration runner must still NOT bump user_version, so the migration
-        will be retried on next startup.
-
-        Also verifies that rebuild_table re-enters a transaction with
-        BEGIN IMMEDIATE after the FK rebuild, so post-rebuild work IS
-        rolled back correctly.
+        With defer_foreign_keys, the rebuild stays within the caller's
+        transaction and can be fully rolled back on failure — including
+        the schema change itself.
         """
         conn = _make_db(tmp_path)
         conn.execute("CREATE TABLE parent (id TEXT PRIMARY KEY, name TEXT)")
@@ -568,12 +571,16 @@ class TestMigrationAtomicity:
             # Version must NOT have been bumped
             assert _get_schema_version(conn) == 1
 
-            # Rebuild itself was committed (inherent SQLite limitation),
-            # so the new schema is visible
+            # Entire rebuild was rolled back (defer_foreign_keys keeps
+            # the rebuild inside the caller's transaction)
             tables = _get_table_names(conn)
             assert "parent" in tables
 
-            # Post-rebuild INSERT was rolled back correctly
+            # Original schema restored — no 'extra' column
+            cols = _get_table_columns(conn, "parent")
+            assert "extra" not in cols, "rebuild should have been rolled back"
+
+            # Original data intact
             count = conn.execute("SELECT COUNT(*) FROM parent").fetchone()[0]
             assert count == 1, "post-rebuild DML should have been rolled back"
             row = conn.execute("SELECT name FROM parent WHERE id = 'p1'").fetchone()
@@ -592,8 +599,60 @@ class TestMigrationAtomicity:
             migrations.MIGRATIONS.update(original)
             conn.close()
 
+    def test_rebuild_fk_table_pre_rebuild_ops_rolled_back(self, tmp_path: Path) -> None:
+        """Pre-rebuild DML in the same migration is rolled back on failure.
+
+        This is the key atomicity test: operations BEFORE the rebuild are
+        also rolled back when a post-rebuild failure occurs.
+        """
+        conn = _make_db(tmp_path)
+        conn.execute("CREATE TABLE parent (id TEXT PRIMARY KEY, name TEXT)")
+        conn.execute("CREATE TABLE child (id TEXT PRIMARY KEY, pid TEXT REFERENCES parent(id))")
+        conn.execute("INSERT INTO parent VALUES ('p1', 'Alice')")
+        conn.execute("INSERT INTO child VALUES ('c1', 'p1')")
+        conn.execute("PRAGMA user_version = 1")
+        conn.commit()
+
+        from filigree import migrations
+
+        original = migrations.MIGRATIONS.copy()
+
+        def migration_with_pre_rebuild_dml(c: sqlite3.Connection) -> None:
+            """DML before rebuild, then rebuild FK table, then fail."""
+            c.execute("UPDATE parent SET name = 'MODIFIED' WHERE id = 'p1'")
+            rebuild_table(
+                c,
+                "parent",
+                "CREATE TABLE parent (id TEXT PRIMARY KEY, name TEXT, extra TEXT DEFAULT '')",
+            )
+            raise RuntimeError("Post-rebuild failure")
+
+        migrations.MIGRATIONS[1] = migration_with_pre_rebuild_dml
+        try:
+            with pytest.raises(MigrationError, match="Post-rebuild failure"):
+                apply_pending_migrations(conn, 2)
+
+            # Version not bumped
+            assert _get_schema_version(conn) == 1
+
+            # Pre-rebuild UPDATE was rolled back
+            row = conn.execute("SELECT name FROM parent WHERE id = 'p1'").fetchone()
+            assert row[0] == "Alice", "pre-rebuild DML should have been rolled back"
+
+            # Rebuild itself was rolled back
+            cols = _get_table_columns(conn, "parent")
+            assert "extra" not in cols, "rebuild should have been rolled back"
+        finally:
+            migrations.MIGRATIONS.clear()
+            migrations.MIGRATIONS.update(original)
+            conn.close()
+
     def test_rebuild_fk_table_validates_fk_check(self, tmp_path: Path) -> None:
-        """rebuild_table must raise on FK violations after rebuilding."""
+        """FK violations after rebuild are caught by foreign_key_check before commit.
+
+        The migration runner checks PRAGMA foreign_key_check after each
+        migration. This test verifies that pattern catches violations.
+        """
         conn = _make_db(tmp_path)
         conn.execute("CREATE TABLE parent (id TEXT PRIMARY KEY, name TEXT)")
         conn.execute("CREATE TABLE child (id TEXT PRIMARY KEY, pid TEXT REFERENCES parent(id))")
@@ -603,13 +662,18 @@ class TestMigrationAtomicity:
 
         # Rebuild parent with column_mapping that changes the PK value,
         # breaking the FK from child
-        with pytest.raises(sqlite3.IntegrityError, match="Foreign key violations"):
-            rebuild_table(
-                conn,
-                "parent",
-                "CREATE TABLE parent (id TEXT PRIMARY KEY, name TEXT)",
-                column_mapping={"id": "'CHANGED'", "name": "name"},
-            )
+        conn.execute("PRAGMA foreign_keys=OFF")
+        conn.execute("BEGIN IMMEDIATE")
+        rebuild_table(
+            conn,
+            "parent",
+            "CREATE TABLE parent (id TEXT PRIMARY KEY, name TEXT)",
+            column_mapping={"id": "'CHANGED'", "name": "name"},
+        )
+        violations = conn.execute("PRAGMA foreign_key_check").fetchall()
+        assert violations, "Should detect FK violations when PK values change"
+        conn.rollback()
+        conn.execute("PRAGMA foreign_keys=ON")
 
     def test_template_new_table_uses_execute_not_executescript(self, tmp_path: Path) -> None:
         """_template_new_table_migration must use execute(), not executescript().

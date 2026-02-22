@@ -141,6 +141,27 @@ class ProjectManager:
         self._paths[entry.key] = Path(entry.path)
         return entry
 
+    def register_local(self, filigree_dir: Path) -> ProjectEntry:
+        """Register a project locally without writing to the registry.
+
+        Fallback for when the registry filesystem is unavailable
+        (read-only home, permission errors). Derives a ProjectEntry
+        from the project config and caches the path in memory.
+        """
+        filigree_dir = filigree_dir.resolve()
+        config = read_config(filigree_dir)
+        prefix = config.get("prefix", "filigree")
+        key = Registry._derive_key(prefix, str(filigree_dir), {})
+        entry = ProjectEntry(
+            path=str(filigree_dir),
+            name=prefix,
+            key=key,
+            prefix=prefix,
+            last_seen=datetime.now(UTC).isoformat(),
+        )
+        self._paths[entry.key] = filigree_dir
+        return entry
+
     def get_db(self, key: str) -> FiligreeDB | None:
         """Get or lazily open a DB connection for a project key."""
         if key in self._connections:
