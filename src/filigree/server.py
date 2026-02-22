@@ -8,10 +8,15 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import signal
+import subprocess
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from filigree.core import read_config, write_atomic
+from filigree.ephemeral import is_pid_alive, read_pid_file, verify_pid_ownership, write_pid_file
 
 logger = logging.getLogger(__name__)
 
@@ -70,3 +75,111 @@ def unregister_project(filigree_dir: Path) -> None:
     config = read_server_config()
     config.projects.pop(str(filigree_dir), None)
     write_server_config(config)
+
+
+# ---------------------------------------------------------------------------
+# Daemon lifecycle
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class DaemonResult:
+    success: bool
+    message: str
+
+
+@dataclass
+class DaemonStatus:
+    running: bool
+    pid: int | None = None
+    port: int | None = None
+    project_count: int = 0
+
+
+def start_daemon(port: int | None = None) -> DaemonResult:
+    """Start the filigree server daemon."""
+    from filigree.core import find_filigree_command
+
+    # Check if already running
+    info = read_pid_file(SERVER_PID_FILE)
+    if info and is_pid_alive(info["pid"]):
+        return DaemonResult(False, f"Daemon already running (pid {info['pid']})")
+
+    config = read_server_config()
+    daemon_port = port or config.port
+
+    SERVER_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    filigree_cmd = find_filigree_command()
+    log_file = SERVER_CONFIG_DIR / "server.log"
+
+    with open(log_file, "w") as log_fd:
+        proc = subprocess.Popen(
+            [*filigree_cmd, "dashboard", "--no-browser", "--port", str(daemon_port)],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=log_fd,
+            start_new_session=True,
+        )
+
+    write_pid_file(SERVER_PID_FILE, proc.pid, cmd="filigree")
+
+    time.sleep(0.5)
+    exit_code = proc.poll()
+    if exit_code is not None:
+        SERVER_PID_FILE.unlink(missing_ok=True)
+        stderr = log_file.read_text().strip()
+        return DaemonResult(False, f"Daemon exited immediately (code {exit_code}): {stderr}")
+
+    return DaemonResult(True, f"Started filigree daemon (pid {proc.pid}) on port {daemon_port}")
+
+
+def stop_daemon() -> DaemonResult:
+    """Stop the filigree server daemon."""
+    info = read_pid_file(SERVER_PID_FILE)
+    if info is None:
+        return DaemonResult(False, "No PID file found — daemon may not be running")
+
+    pid = info["pid"]
+    if not is_pid_alive(pid):
+        SERVER_PID_FILE.unlink(missing_ok=True)
+        return DaemonResult(True, f"Daemon (pid {pid}) was not running; cleaned up PID file")
+
+    if not verify_pid_ownership(SERVER_PID_FILE, expected_cmd="filigree"):
+        return DaemonResult(False, f"PID {pid} is not a filigree process — refusing to kill")
+
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except PermissionError:
+        return DaemonResult(False, f"Permission denied sending SIGTERM to pid {pid}")
+
+    # Wait for process to exit
+    for _ in range(50):
+        time.sleep(0.1)
+        if not is_pid_alive(pid):
+            SERVER_PID_FILE.unlink(missing_ok=True)
+            return DaemonResult(True, f"Stopped filigree daemon (pid {pid})")
+
+    # Escalate to SIGKILL
+    try:
+        os.kill(pid, signal.SIGKILL)
+        time.sleep(0.2)
+    except (PermissionError, ProcessLookupError):
+        pass
+
+    SERVER_PID_FILE.unlink(missing_ok=True)
+    return DaemonResult(True, f"Force-killed filigree daemon (pid {pid})")
+
+
+def daemon_status() -> DaemonStatus:
+    """Check daemon status."""
+    info = read_pid_file(SERVER_PID_FILE)
+    if info is None or not is_pid_alive(info["pid"]):
+        return DaemonStatus(running=False)
+
+    config = read_server_config()
+    return DaemonStatus(
+        running=True,
+        pid=info["pid"],
+        port=config.port,
+        project_count=len(config.projects),
+    )

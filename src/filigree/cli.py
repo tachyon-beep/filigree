@@ -1716,5 +1716,78 @@ def explain_state(type_name: str, state_name: str, as_json: bool) -> None:
             click.echo(f"\nRequired fields at this state: {', '.join(required_fields)}")
 
 
+# ---------------------------------------------------------------------------
+# Server daemon commands
+# ---------------------------------------------------------------------------
+
+
+@cli.group()
+def server() -> None:
+    """Manage the filigree server daemon."""
+
+
+@server.command("start")
+@click.option("--port", default=None, type=int, help="Override port")
+def server_start(port: int | None) -> None:
+    """Start the filigree daemon."""
+    from filigree.server import start_daemon
+
+    result = start_daemon(port=port)
+    click.echo(result.message)
+    if not result.success:
+        sys.exit(1)
+
+
+@server.command("stop")
+def server_stop() -> None:
+    """Stop the filigree daemon."""
+    from filigree.server import stop_daemon
+
+    result = stop_daemon()
+    click.echo(result.message)
+    if not result.success:
+        sys.exit(1)
+
+
+@server.command("status")
+def server_status_cmd() -> None:
+    """Show daemon status."""
+    from filigree.server import daemon_status
+
+    status = daemon_status()
+    if status.running:
+        click.echo(f"Filigree daemon running (pid {status.pid}) on port {status.port}")
+        click.echo(f"  Projects: {status.project_count}")
+    else:
+        click.echo("Filigree daemon is not running")
+
+
+@server.command("register")
+@click.argument("path", default=".", type=click.Path(exists=True))
+def server_register(path: str) -> None:
+    """Register a project with the server."""
+    from filigree.server import register_project
+
+    project_path = Path(path).resolve()
+    filigree_dir = project_path / ".filigree" if project_path.name != ".filigree" else project_path
+    if not filigree_dir.is_dir():
+        click.echo(f"No .filigree/ found at {project_path}", err=True)
+        sys.exit(1)
+    register_project(filigree_dir)
+    click.echo(f"Registered {filigree_dir}")
+
+
+@server.command("unregister")
+@click.argument("path", default=".", type=click.Path())
+def server_unregister(path: str) -> None:
+    """Unregister a project from the server."""
+    from filigree.server import unregister_project
+
+    project_path = Path(path).resolve()
+    filigree_dir = project_path / ".filigree" if project_path.name != ".filigree" else project_path
+    unregister_project(filigree_dir)
+    click.echo(f"Unregistered {filigree_dir}")
+
+
 if __name__ == "__main__":
     cli()
