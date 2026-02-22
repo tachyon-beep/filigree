@@ -8,6 +8,8 @@ import time
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 from filigree.core import (
     CONFIG_FILENAME,
     DB_FILENAME,
@@ -1124,3 +1126,48 @@ class TestCheckResult:
     def test_fix_hint(self) -> None:
         r = CheckResult("test", False, "bad", fix_hint="Run: filigree init")
         assert r.fix_hint == "Run: filigree init"
+
+
+def _setup_project(tmp_path: Path, mode: str = "ethereal") -> Path:
+    """Helper to create a minimal filigree project."""
+    filigree_dir = tmp_path / ".filigree"
+    filigree_dir.mkdir()
+    config = {"prefix": "test", "version": 1, "mode": mode}
+    (filigree_dir / "config.json").write_text(json.dumps(config))
+    from filigree.core import DB_FILENAME, FiligreeDB
+
+    db = FiligreeDB(filigree_dir / DB_FILENAME, prefix="test")
+    db.initialize()
+    db.close()
+    return filigree_dir
+
+
+class TestDoctorModeChecks:
+    def test_ethereal_checks_pid_file(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Doctor in ethereal mode should check ephemeral.pid."""
+        filigree_dir = _setup_project(tmp_path, mode="ethereal")
+        # Write a stale PID (JSON format)
+        (filigree_dir / "ephemeral.pid").write_text(json.dumps({"pid": 99999999, "cmd": "filigree"}))
+        monkeypatch.chdir(tmp_path)
+
+        results = run_doctor(project_root=tmp_path)
+        names = [r.name for r in results]
+        assert "Ephemeral PID" in names
+        pid_result = next(r for r in results if r.name == "Ephemeral PID")
+        assert not pid_result.passed  # stale PID
+
+    def test_server_checks_daemon(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Doctor in server mode should check daemon health."""
+        _setup_project(tmp_path, mode="server")
+        monkeypatch.chdir(tmp_path)
+
+        config_dir = tmp_path / ".server-config"
+        monkeypatch.setattr("filigree.server.SERVER_CONFIG_DIR", config_dir)
+        monkeypatch.setattr("filigree.server.SERVER_CONFIG_FILE", config_dir / "server.json")
+        monkeypatch.setattr("filigree.server.SERVER_PID_FILE", config_dir / "server.pid")
+
+        results = run_doctor(project_root=tmp_path)
+        names = [r.name for r in results]
+        assert "Server daemon" in names
+        daemon_result = next(r for r in results if r.name == "Server daemon")
+        assert not daemon_result.passed  # not running

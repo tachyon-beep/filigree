@@ -617,6 +617,89 @@ class CheckResult:
         return "OK" if self.passed else "!!"
 
 
+def _doctor_ethereal_checks(filigree_dir: Path) -> list[CheckResult]:
+    """Ethereal mode health checks."""
+    from filigree.ephemeral import is_pid_alive, read_pid_file, read_port_file
+
+    results: list[CheckResult] = []
+    pid_file = filigree_dir / "ephemeral.pid"
+    port_file = filigree_dir / "ephemeral.port"
+
+    if pid_file.exists():
+        info = read_pid_file(pid_file)
+        if info and is_pid_alive(info["pid"]):
+            results.append(CheckResult("Ephemeral PID", True, f"Process {info['pid']} alive"))
+        else:
+            pid_val = info["pid"] if info else "unknown"
+            results.append(
+                CheckResult(
+                    "Ephemeral PID",
+                    False,
+                    f"Stale PID file (pid {pid_val})",
+                    fix_hint="Remove .filigree/ephemeral.pid or run: filigree ensure-dashboard",
+                )
+            )
+
+    if port_file.exists():
+        from filigree.hooks import _is_port_listening
+
+        port = read_port_file(port_file)
+        if port and _is_port_listening(port):
+            results.append(CheckResult("Ephemeral port", True, f"Port {port} listening"))
+        else:
+            results.append(
+                CheckResult(
+                    "Ephemeral port",
+                    False,
+                    f"Port {port} not listening",
+                    fix_hint="Dashboard may have crashed. Run: filigree ensure-dashboard",
+                )
+            )
+
+    return results
+
+
+def _doctor_server_checks(filigree_dir: Path) -> list[CheckResult]:
+    """Server mode health checks."""
+    from filigree.server import daemon_status, read_server_config
+
+    results: list[CheckResult] = []
+    status = daemon_status()
+    if status.running:
+        results.append(
+            CheckResult(
+                "Server daemon",
+                True,
+                f"Running (pid {status.pid}, port {status.port}, {status.project_count} projects)",
+            )
+        )
+    else:
+        results.append(
+            CheckResult(
+                "Server daemon",
+                False,
+                "Not running",
+                fix_hint="Run: filigree server start",
+            )
+        )
+
+    # Check registered projects health
+    config = read_server_config()
+    for path_str, info in config.projects.items():
+        p = Path(path_str)
+        if not p.is_dir():
+            results.append(
+                CheckResult(
+                    f'Project "{info.get("prefix", "?")}"',
+                    False,
+                    f"Directory gone: {path_str}",
+                    fix_hint=f"Run: filigree server unregister {p.parent}",
+                )
+            )
+
+    return results
+
+
 def run_doctor(project_root: Path | None = None) -> list[CheckResult]:
     """Run all health checks. Returns list of CheckResult."""
     results: list[CheckResult] = []
@@ -939,7 +1022,20 @@ def run_doctor(project_root: Path | None = None) -> list[CheckResult]:
             )
     # AGENTS.md is optional — don't warn if it doesn't exist
 
-    # 12. Check git working tree status
+    # 12. Mode-specific checks
+    from filigree.core import get_mode
+
+    try:
+        mode = get_mode(filigree_dir)
+    except (json.JSONDecodeError, OSError):
+        mode = "ethereal"  # Fall back to default if config is unreadable
+
+    if mode == "ethereal":
+        results.extend(_doctor_ethereal_checks(filigree_dir))
+    elif mode == "server":
+        results.extend(_doctor_server_checks(filigree_dir))
+
+    # 13. Check git working tree status
     try:
         result = subprocess.run(
             ["git", "-C", str(filigree_dir.parent), "status", "--porcelain"],
