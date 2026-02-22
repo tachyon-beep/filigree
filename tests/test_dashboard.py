@@ -63,7 +63,10 @@ class TestDashboardIndex:
         assert 'id="graphReadyOnly"' in html
         assert 'id="graphBlockedOnly"' in html
         assert 'id="graphAssignee"' in html
+        assert 'oninput="onGraphAssigneeInput()"' in html
         assert 'id="graphNotice"' in html
+        assert 'role="status"' in html
+        assert 'aria-live="polite"' in html
         assert 'id="graphFocusMode"' in html
         assert 'id="graphFocusRoot"' in html
         assert 'id="graphFocusRadius"' in html
@@ -97,6 +100,7 @@ class TestGraphFrontendContracts:
         assert "graphReadyOnly" in graph_js
         assert "graphBlockedOnly" in graph_js
         assert "graphAssignee" in graph_js
+        assert "onGraphAssigneeInput" in graph_js
         assert "scope_root" in graph_js
         assert "scope_radius" in graph_js
         assert "node_limit" in graph_js
@@ -117,12 +121,24 @@ class TestGraphFrontendContracts:
 
     def test_focus_controls_coupled_and_tap_no_longer_mutates_root(self) -> None:
         graph_js = (STATIC_DIR / "js" / "views" / "graph.js").read_text()
+        app_js = (STATIC_DIR / "js" / "app.js").read_text()
         html = (STATIC_DIR / "dashboard.html").read_text()
         assert "export function onGraphFocusModeChange()" in graph_js
         assert "export function onGraphFocusRootInput()" in graph_js
+        assert "scheduleDebouncedGraphRender(\"focusRoot\")" in graph_js
+        assert "window.onGraphAssigneeInput = onGraphAssigneeInput;" in app_js
         assert "focusRoot.value = nodeId" not in graph_js
         assert 'onchange="onGraphFocusModeChange()"' in html
         assert 'oninput="onGraphFocusRootInput()"' in html
+        assert 'oninput="onGraphAssigneeInput()"' in html
+
+    def test_graph_inputs_use_debounced_render(self) -> None:
+        graph_js = (STATIC_DIR / "js" / "views" / "graph.js").read_text()
+        assert "const INPUT_DEBOUNCE_MS = 300;" in graph_js
+        assert "function scheduleDebouncedGraphRender(inputType)" in graph_js
+        assert "setTimeout(() => {" in graph_js
+        assert "scheduleDebouncedGraphRender(\"focusRoot\")" in graph_js
+        assert "scheduleDebouncedGraphRender(\"assignee\")" in graph_js
 
     def test_trace_button_disabled_until_both_path_inputs_present(self) -> None:
         graph_js = (STATIC_DIR / "js" / "views" / "graph.js").read_text()
@@ -154,6 +170,21 @@ class TestGraphFrontendContracts:
         assert "Trace path:" in html
         assert "Node cap:" in html
         assert "Edge cap:" in html
+
+    def test_graph_notice_uses_icon_not_color_only(self) -> None:
+        graph_js = (STATIC_DIR / "js" / "views" / "graph.js").read_text()
+        html = (STATIC_DIR / "dashboard.html").read_text()
+        assert 'id="graphNotice"' in html
+        assert 'role="status"' in html
+        assert 'aria-live="polite"' in html
+        assert 'icon.textContent = "⚠ "' in graph_js
+        assert 'icon.setAttribute("aria-hidden", "true")' in graph_js
+
+    def test_graph_toolbar_touch_target_contract(self) -> None:
+        html = (STATIC_DIR / "dashboard.html").read_text()
+        assert ".graph-toolbar label { min-height: 44px;" in html
+        assert ".graph-toolbar button, .graph-toolbar select, .graph-toolbar input[type=\"text\"], .graph-toolbar summary {" in html
+        assert 'class="graph-toolbar' in html
 
     def test_graph_caps_are_within_advanced_disclosure_group(self) -> None:
         html = (STATIC_DIR / "dashboard.html").read_text()
@@ -191,6 +222,10 @@ class TestGraphFrontendContracts:
         assert 'id="graphSearchNextBtn"' in html
         assert 'aria-label="Previous search match"' in html
         assert 'aria-label="Next search match"' in html
+        assert 'aria-label="Filter graph by assignee"' in html
+        assert 'aria-label="Focus root issue ID"' in html
+        assert 'aria-label="Path source issue ID"' in html
+        assert 'aria-label="Path target issue ID"' in html
 
     def test_graph_perf_state_user_facing_text_and_tooltip_timings(self) -> None:
         graph_js = (STATIC_DIR / "js" / "views" / "graph.js").read_text()

@@ -11,8 +11,11 @@ import { showPopover } from "../ui.js";
 export const callbacks = { openDetail: null, fetchData: null };
 
 let _graphFetchSeq = 0;
+const INPUT_DEBOUNCE_MS = 300;
 const FOCUS_ROOT_NOTICE = "Focus is enabled. Enter a root issue ID to apply scoped view.";
 const EMPTY_STATUS_NOTICE = "No status categories selected. Enable at least one status filter.";
+let _focusInputDebounceId = null;
+let _assigneeInputDebounceId = null;
 
 function shouldUseGraphV2() {
   const cfg = state.graphConfig || {};
@@ -64,12 +67,34 @@ function setGraphNotice(text) {
   const el = document.getElementById("graphNotice");
   if (!el) return;
   if (text) {
-    el.textContent = text;
+    el.textContent = "";
+    const icon = document.createElement("span");
+    icon.textContent = "⚠ ";
+    icon.setAttribute("aria-hidden", "true");
+    const message = document.createElement("span");
+    message.textContent = text;
+    el.append(icon, message);
     el.classList.remove("hidden");
     return;
   }
   el.textContent = "";
   el.classList.add("hidden");
+}
+
+function scheduleDebouncedGraphRender(inputType) {
+  if (inputType === "focusRoot") {
+    if (_focusInputDebounceId) clearTimeout(_focusInputDebounceId);
+    _focusInputDebounceId = setTimeout(() => {
+      _focusInputDebounceId = null;
+      renderGraph();
+    }, INPUT_DEBOUNCE_MS);
+    return;
+  }
+  if (_assigneeInputDebounceId) clearTimeout(_assigneeInputDebounceId);
+  _assigneeInputDebounceId = setTimeout(() => {
+    _assigneeInputDebounceId = null;
+    renderGraph();
+  }, INPUT_DEBOUNCE_MS);
 }
 
 function updateGraphFilterStateLabel(parts) {
@@ -227,7 +252,11 @@ export function onGraphFocusRootInput() {
   const rootValue = root.value.trim();
   mode.checked = rootValue.length > 0;
   if (!rootValue && !state.graphPathNodes.size) setGraphNotice(state.graphFallbackNotice || "");
-  renderGraph();
+  scheduleDebouncedGraphRender("focusRoot");
+}
+
+export function onGraphAssigneeInput() {
+  scheduleDebouncedGraphRender("assignee");
 }
 
 export function onGraphPathInput() {

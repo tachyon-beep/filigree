@@ -84,6 +84,7 @@ import {
   computeHealthScore,
   computeImpactScores,
   callbacks as graphCallbacks,
+  onGraphAssigneeInput,
   onGraphFocusModeChange,
   onGraphFocusRootInput,
   onGraphEpicsOnlyChange,
@@ -569,6 +570,7 @@ window.renderGraph = renderGraph;
 window.graphFit = graphFit;
 window.setGraphPreset = setGraphPreset;
 window.clearGraphFocus = clearGraphFocus;
+window.onGraphAssigneeInput = onGraphAssigneeInput;
 window.onGraphFocusModeChange = onGraphFocusModeChange;
 window.onGraphFocusRootInput = onGraphFocusRootInput;
 window.onGraphEpicsOnlyChange = onGraphEpicsOnlyChange;
