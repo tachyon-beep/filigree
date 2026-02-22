@@ -1,6 +1,6 @@
 # MCP Server Reference
 
-Filigree exposes an MCP (Model Context Protocol) server so AI agents interact natively without parsing CLI output. The server provides 43 tools, 1 resource, and 1 prompt.
+Filigree exposes an MCP (Model Context Protocol) server so AI agents interact natively without parsing CLI output. The server provides 45 tools, 1 resource, and 1 prompt.
 
 ## Contents
 
@@ -19,6 +19,7 @@ Filigree exposes an MCP (Model Context Protocol) server so AI agents interact na
   - [Templates and Workflow](#templates-and-workflow)
   - [Analytics](#analytics)
   - [Data Management](#data-management)
+  - [Scanning](#scanning)
 
 ## Setup
 
@@ -420,3 +421,37 @@ Step deps within a phase use integer indices. Cross-phase deps use `"phase_idx.s
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `keep_recent` | integer | no | Keep N most recent events per archived issue (default 50) |
+
+### Scanning
+
+| Tool | Description |
+|------|-------------|
+| `list_scanners` | List registered scanners |
+| `trigger_scan` | Trigger async file scan |
+
+#### `list_scanners`
+
+No parameters. Returns scanners registered in `.filigree/scanners/*.toml`.
+
+Response: `{scanners: [{name, description, file_types}]}`
+
+#### `trigger_scan`
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `scanner` | string | yes | Scanner name (from list_scanners) |
+| `file_path` | string | yes | File path to scan (relative to project root) |
+| `api_url` | string | no | Dashboard URL (default http://localhost:8377, localhost only) |
+
+Response: `{status, scanner, file_path, file_id, scan_run_id, pid, message}`
+
+**Workflow:**
+1. `list_scanners` — discover available scanners
+2. `trigger_scan` — fire-and-forget scan, get `file_id` and `scan_run_id`
+3. Check results later via `GET /api/files/{file_id}/findings`
+
+**Rate limiting:** Repeated triggers for the same scanner+file are rejected within a 30s cooldown window.
+
+**Important:** Results are POSTed to the dashboard API. Ensure the dashboard is running at the target `api_url` before triggering scans — if unreachable, results are silently lost.
+
+**Scanner registration:** Add TOML files to `.filigree/scanners/`. See `scripts/scanners/*.toml.example` for templates.

@@ -75,6 +75,15 @@ Key endpoints:
 - `GET /api/files/{file_id}` — File detail with associations and findings summary
 - `GET /api/files/{file_id}/findings` — Findings for a specific file
 
+### Scanner Integration (MCP)
+
+Register scanners in `.filigree/scanners/*.toml` (see `scripts/scanners/*.toml.example`).
+
+MCP workflow:
+- `list_scanners` — discover registered scanners
+- `trigger_scan scanner=<name> file_path=<path>` — trigger async scan, returns `file_id` + `scan_run_id`
+- Check `GET /api/files/{file_id}/findings` for results
+
 ### Workflow
 1. `filigree ready` to find available work
 2. `filigree show <id>` to review details
