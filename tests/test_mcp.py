@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
+from contextlib import asynccontextmanager
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Any
 from unittest.mock import patch
@@ -15,6 +18,7 @@ from filigree.mcp_server import (
     _safe_path,
     _text,
     call_tool,
+    create_mcp_app,
     get_workflow_prompt,
     list_resources,
     read_context,
@@ -1363,5 +1367,119 @@ class TestScannerTools:
             mcp_mod.db = original_db
             mcp_mod._filigree_dir = original_dir
             mcp_mod._scan_cooldowns.clear()
+            db_a.close()
+            db_b.close()
+
+
+class TestHttpMcpRequestContext:
+    """Regression tests for per-request DB and project directory isolation."""
+
+    @staticmethod
+    def _make_project(tmp_path: Path, name: str, prefix: str) -> tuple[FiligreeDB, Path]:
+        project_root = tmp_path / name
+        filigree_dir = project_root / FILIGREE_DIR_NAME
+        filigree_dir.mkdir(parents=True)
+        write_config(filigree_dir, {"prefix": prefix, "version": 1})
+        (filigree_dir / SUMMARY_FILENAME).write_text("# test\n")
+        db = FiligreeDB(filigree_dir / DB_FILENAME, prefix=prefix)
+        db.initialize()
+        return db, filigree_dir
+
+    async def test_create_mcp_app_uses_request_scoped_db_and_dir(self, tmp_path: Path) -> None:
+        import filigree.mcp_server as mcp_mod
+
+        db_global, dir_global = self._make_project(tmp_path, "global", "global")
+        db_a, dir_a = self._make_project(tmp_path, "proj-a", "alpha")
+        db_b, dir_b = self._make_project(tmp_path, "proj-b", "bravo")
+
+        original_db = mcp_mod.db
+        original_dir = mcp_mod._filigree_dir
+        mcp_mod.db = db_global
+        mcp_mod._filigree_dir = dir_global
+
+        selected_key: ContextVar[str] = ContextVar("selected_key", default="a")
+        mapping = {"a": db_a, "b": db_b}
+
+        started_a = asyncio.Event()
+        started_b = asyncio.Event()
+        observed: dict[str, Any] = {}
+
+        class FakeSessionManager:
+            def __init__(self, app: Any, json_response: bool, stateless: bool) -> None:
+                self.app = app
+                self.json_response = json_response
+                self.stateless = stateless
+
+            @asynccontextmanager
+            async def run(self) -> Any:
+                yield
+
+            async def handle_request(self, scope: dict[str, Any], receive: Any, send: Any) -> None:
+                key = selected_key.get()
+                current_db = mcp_mod._get_db()
+                current_dir = mcp_mod._get_filigree_dir()
+                safe_parent = mcp_mod._safe_path("nested/file.py").parent
+
+                observed[f"{key}_before"] = (current_db, current_dir, safe_parent)
+                if key == "a":
+                    started_a.set()
+                    await started_b.wait()
+                else:
+                    await started_a.wait()
+                    started_b.set()
+
+                await asyncio.sleep(0)
+                observed[f"{key}_after"] = (
+                    mcp_mod._get_db(),
+                    mcp_mod._get_filigree_dir(),
+                    mcp_mod._safe_path("nested/file.py").parent,
+                )
+
+        def _resolver() -> FiligreeDB:
+            return mapping[selected_key.get()]
+
+        async def _receive() -> dict[str, Any]:
+            return {"type": "http.request", "body": b"", "more_body": False}
+
+        async def _send(_message: dict[str, Any]) -> None:
+            return None
+
+        try:
+            with patch("mcp.server.streamable_http_manager.StreamableHTTPSessionManager", FakeSessionManager):
+                handler, _lifespan = create_mcp_app(db_resolver=_resolver)
+
+                async def _request(key: str) -> None:
+                    token = selected_key.set(key)
+                    try:
+                        await handler({"type": "http", "path": f"/{key}"}, _receive, _send)
+                    finally:
+                        selected_key.reset(token)
+
+                await asyncio.gather(_request("a"), _request("b"))
+
+            assert observed["a_before"][0] is db_a
+            assert observed["a_after"][0] is db_a
+            assert observed["b_before"][0] is db_b
+            assert observed["b_after"][0] is db_b
+
+            assert observed["a_before"][1] == dir_a
+            assert observed["a_after"][1] == dir_a
+            assert observed["b_before"][1] == dir_b
+            assert observed["b_after"][1] == dir_b
+
+            assert observed["a_before"][2] == dir_a.parent / "nested"
+            assert observed["a_after"][2] == dir_a.parent / "nested"
+            assert observed["b_before"][2] == dir_b.parent / "nested"
+            assert observed["b_after"][2] == dir_b.parent / "nested"
+
+            # HTTP request handling must not overwrite shared module globals.
+            assert mcp_mod.db is db_global
+            assert mcp_mod._filigree_dir == dir_global
+            assert mcp_mod._get_db() is db_global
+            assert mcp_mod._get_filigree_dir() == dir_global
+        finally:
+            mcp_mod.db = original_db
+            mcp_mod._filigree_dir = original_dir
+            db_global.close()
             db_a.close()
             db_b.close()

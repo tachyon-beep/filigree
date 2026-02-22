@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+from contextvars import ContextVar
 import json
 import logging
 import secrets
@@ -62,6 +63,8 @@ server = Server("filigree")
 db: FiligreeDB | None = None
 _filigree_dir: Path | None = None
 _logger: logging.Logger | None = None
+_request_db: ContextVar[FiligreeDB | None] = ContextVar("filigree_request_db", default=None)
+_request_filigree_dir: ContextVar[Path | None] = ContextVar("filigree_request_dir", default=None)
 
 # Per-(project, scanner, file) cooldown to prevent unbounded process spawning.
 # Maps (project_scope, scanner_name, file_path) -> timestamp of last trigger.
@@ -70,17 +73,23 @@ _SCAN_COOLDOWN_SECONDS = 30
 
 
 def _get_db() -> FiligreeDB:
-    if db is None:
+    active_db = _request_db.get() or db
+    if active_db is None:
         msg = "Database not initialized"
         raise RuntimeError(msg)
-    return db
+    return active_db
+
+
+def _get_filigree_dir() -> Path | None:
+    return _request_filigree_dir.get() or _filigree_dir
 
 
 def _refresh_summary() -> None:
     """Regenerate context.md after mutations (best-effort, never fatal)."""
-    if _filigree_dir is not None:
+    filigree_dir = _get_filigree_dir()
+    if filigree_dir is not None:
         try:
-            write_summary(_get_db(), _filigree_dir / SUMMARY_FILENAME)
+            write_summary(_get_db(), filigree_dir / SUMMARY_FILENAME)
         except Exception:
             if _logger:
                 _logger.warning("Failed to refresh context.md", exc_info=True)
@@ -95,12 +104,13 @@ def _safe_path(raw: str) -> Path:
         msg = f"Absolute paths not allowed: {raw}"
         raise ValueError(msg)
 
-    if _filigree_dir is None:
+    filigree_dir = _get_filigree_dir()
+    if filigree_dir is None:
         msg = "Project directory not initialized"
         raise ValueError(msg)
 
     # Resolve relative to project root (parent of .filigree/)
-    base = _filigree_dir.resolve().parent
+    base = filigree_dir.resolve().parent
     resolved = (base / raw).resolve()
 
     # Ensure resolved path is under the project root
@@ -191,7 +201,7 @@ Filigree data lives in `.filigree/` and is accessed via these MCP tools.
 
 def _build_workflow_text() -> str:
     """Build dynamic workflow prompt from template registry if available."""
-    if db is None:
+    if (_request_db.get() or db) is None:
         return _WORKFLOW_TEXT_STATIC
 
     try:
@@ -1631,7 +1641,8 @@ async def _dispatch(name: str, arguments: dict[str, Any], tracker: FiligreeDB) -
             return _text(result)
 
         case "list_scanners":
-            scanners_dir = _filigree_dir / "scanners" if _filigree_dir else None
+            filigree_dir = _get_filigree_dir()
+            scanners_dir = filigree_dir / "scanners" if filigree_dir else None
             if scanners_dir is None:
                 return _text({"scanners": [], "hint": "Project directory not initialized"})
             scanners = _list_scanners(scanners_dir)
@@ -1644,7 +1655,8 @@ async def _dispatch(name: str, arguments: dict[str, Any], tracker: FiligreeDB) -
             from datetime import datetime
             from urllib.parse import urlparse
 
-            if _filigree_dir is None:
+            filigree_dir = _get_filigree_dir()
+            if filigree_dir is None:
                 return _text({"error": "Project directory not initialized", "code": "not_initialized"})
 
             scanner_name = arguments["scanner"]
@@ -1669,7 +1681,7 @@ async def _dispatch(name: str, arguments: dict[str, Any], tracker: FiligreeDB) -
                 return _text({"error": str(e), "code": "invalid_path"})
 
             # Load scanner config (name is validated inside load_scanner)
-            scanners_dir = _filigree_dir / "scanners"
+            scanners_dir = filigree_dir / "scanners"
             cfg = load_scanner(scanners_dir, scanner_name)
             if cfg is None:
                 available = [s.name for s in _list_scanners(scanners_dir)]
@@ -1700,7 +1712,7 @@ async def _dispatch(name: str, arguments: dict[str, Any], tracker: FiligreeDB) -
                     )
 
             # Per-(project, scanner, file) cooldown — evict stale entries first
-            canonical_path = str(target.relative_to(_filigree_dir.resolve().parent))
+            canonical_path = str(target.relative_to(filigree_dir.resolve().parent))
             project_scope = str(tracker.db_path.parent.resolve())
             cooldown_key = (project_scope, scanner_name, canonical_path)
             now_mono = time.monotonic()
@@ -1719,7 +1731,7 @@ async def _dispatch(name: str, arguments: dict[str, Any], tracker: FiligreeDB) -
                 )
 
             # Build command — catches ValueError for malformed command strings
-            project_root = _filigree_dir.parent
+            project_root = filigree_dir.parent
             ts = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S")
             scan_run_id = f"{scanner_name}-{ts}-{secrets.token_hex(3)}"
             try:
@@ -1826,8 +1838,8 @@ def create_mcp_app(db_resolver: Any = None) -> Any:
       running before the first request arrives.
 
     ``db_resolver`` — optional callable returning the active
-    :class:`FiligreeDB`.  When provided the module-level ``db`` is
-    synced before each request so existing tool handlers work unchanged.
+    :class:`FiligreeDB`. When provided, each request gets an isolated
+    request-local DB + project directory context.
     """
     from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 
@@ -1838,15 +1850,14 @@ def create_mcp_app(db_resolver: Any = None) -> Any:
     )
 
     async def _handle_mcp(scope: Any, receive: Any, send: Any) -> None:
-        global db, _filigree_dir
+        db_token: Any = None
+        dir_token: Any = None
         if db_resolver is not None:
             from starlette.responses import JSONResponse
 
             try:
                 resolved = db_resolver()
             except KeyError as exc:
-                db = None
-                _filigree_dir = None
                 project_key = str(exc.args[0]) if exc.args else ""
                 resp = JSONResponse(
                     {
@@ -1860,8 +1871,6 @@ def create_mcp_app(db_resolver: Any = None) -> Any:
                 return
 
             if resolved is None:
-                db = None
-                _filigree_dir = None
                 resp = JSONResponse(
                     {
                         "error": "Unable to resolve project database",
@@ -1871,8 +1880,8 @@ def create_mcp_app(db_resolver: Any = None) -> Any:
                 )
                 await resp(scope, receive, send)
                 return
-            db = resolved
-            _filigree_dir = resolved.db_path.parent
+            db_token = _request_db.set(resolved)
+            dir_token = _request_filigree_dir.set(resolved.db_path.parent)
         try:
             await session_manager.handle_request(scope, receive, send)
         except RuntimeError:
@@ -1886,6 +1895,11 @@ def create_mcp_app(db_resolver: Any = None) -> Any:
                 status_code=503,
             )
             await resp(scope, receive, send)
+        finally:
+            if dir_token is not None:
+                _request_filigree_dir.reset(dir_token)
+            if db_token is not None:
+                _request_db.reset(db_token)
 
     return _handle_mcp, session_manager.run
 
