@@ -6,6 +6,7 @@ Config lives at ~/.config/filigree/server.json.
 
 from __future__ import annotations
 
+import fcntl
 import json
 import logging
 import os
@@ -60,7 +61,11 @@ def write_server_config(config: ServerConfig) -> None:
 
 
 def register_project(filigree_dir: Path) -> None:
-    """Register a project in server.json."""
+    """Register a project in server.json.
+
+    Uses ``fcntl.flock`` around the read-modify-write to prevent
+    concurrent sessions from losing each other's registrations.
+    """
     filigree_dir = filigree_dir.resolve()
     project_config = read_config(filigree_dir)
 
@@ -72,11 +77,15 @@ def register_project(filigree_dir: Path) -> None:
             f"version {SUPPORTED_SCHEMA_VERSION}. Upgrade filigree to manage this project."
         )
 
-    config = read_server_config()
-    config.projects[str(filigree_dir)] = {
-        "prefix": project_config.get("prefix", "filigree"),
-    }
-    write_server_config(config)
+    SERVER_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    lock_path = SERVER_CONFIG_DIR / "server.lock"
+    with open(lock_path, "w") as lock_fd:
+        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+        config = read_server_config()
+        config.projects[str(filigree_dir)] = {
+            "prefix": project_config.get("prefix", "filigree"),
+        }
+        write_server_config(config)
 
 
 def unregister_project(filigree_dir: Path) -> None:
@@ -124,7 +133,7 @@ def start_daemon(port: int | None = None) -> DaemonResult:
 
     with open(log_file, "w") as log_fd:
         proc = subprocess.Popen(
-            [*filigree_cmd, "dashboard", "--no-browser", "--port", str(daemon_port)],
+            [*filigree_cmd, "dashboard", "--no-browser", "--server-mode", "--port", str(daemon_port)],
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=log_fd,

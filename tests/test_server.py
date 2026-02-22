@@ -155,6 +155,30 @@ class TestDaemonLifecycle:
         assert result.success
         assert 54321 in killed
 
+    def test_start_daemon_passes_server_mode(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """start_daemon() must include --server-mode in the spawned command."""
+        config_dir = tmp_path / ".config" / "filigree"
+        monkeypatch.setattr("filigree.server.SERVER_CONFIG_DIR", config_dir)
+        monkeypatch.setattr("filigree.server.SERVER_CONFIG_FILE", config_dir / "server.json")
+        monkeypatch.setattr("filigree.server.SERVER_PID_FILE", config_dir / "server.pid")
+
+        spawned: list[list[str]] = []
+
+        def mock_popen(cmd: list[str], **kwargs: object) -> MagicMock:
+            mock = MagicMock()
+            mock.pid = 99999
+            mock.poll.return_value = None
+            spawned.append(cmd)
+            return mock
+
+        monkeypatch.setattr("filigree.server.subprocess.Popen", mock_popen)
+        from filigree.server import start_daemon
+
+        result = start_daemon()
+        assert result.success
+        assert len(spawned) == 1
+        assert "--server-mode" in spawned[0]
+
     def test_status_reports_not_running(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         config_dir = tmp_path / ".config" / "filigree"
         monkeypatch.setattr("filigree.server.SERVER_PID_FILE", config_dir / "server.pid")

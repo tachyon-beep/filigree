@@ -962,14 +962,15 @@ def metrics(as_json: bool, days: int) -> None:
 @cli.command()
 @click.option("--port", default=8377, type=int, help="Server port (default 8377)")
 @click.option("--no-browser", is_flag=True, help="Don't auto-open browser")
-def dashboard(port: int, no_browser: bool) -> None:
+@click.option("--server-mode", is_flag=True, help="Multi-project server mode (reads server.json)")
+def dashboard(port: int, no_browser: bool, server_mode: bool) -> None:
     """Launch the web dashboard (requires filigree[dashboard])."""
     try:
         from filigree.dashboard import main as dashboard_main
     except ImportError:
         click.echo('Dashboard requires extra dependencies. Install with: pip install "filigree[dashboard]"', err=True)
         sys.exit(1)
-    dashboard_main(port=port, no_browser=no_browser)
+    dashboard_main(port=port, no_browser=no_browser, server_mode=server_mode)
 
 
 @cli.command("session-context")

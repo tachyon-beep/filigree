@@ -312,7 +312,35 @@ def _ensure_dashboard_ethereal_mode(filigree_dir: Path) -> str:
 
 
 def _ensure_dashboard_server_mode(filigree_dir: Path, port: int) -> str:
-    """Server mode: just verify the daemon is reachable."""
-    if _is_port_listening(port):
-        return f"Filigree server running on http://localhost:{port}"
-    return f"Filigree server not running on port {port}. Start it with: filigree server start"
+    """Server mode: register this project, then notify the daemon to reload.
+
+    1. ``register_project()`` is idempotent and lock-protected.
+    2. If the daemon is reachable, POST ``/api/reload`` so it picks up
+       the (possibly new) registration.  Uses a 2-second timeout so
+       session startup isn't blocked by a slow daemon.
+    """
+    from filigree.server import register_project
+
+    try:
+        register_project(filigree_dir)
+    except Exception:
+        logger.warning("Failed to register project in server.json", exc_info=True)
+
+    if not _is_port_listening(port):
+        return f"Filigree server not running on port {port}. Start it with: filigree server start"
+
+    # Notify daemon to reload project list
+    try:
+        import urllib.request
+
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{port}/api/reload",
+            method="POST",
+            data=b"",
+            headers={"Content-Type": "application/json"},
+        )
+        urllib.request.urlopen(req, timeout=2)  # noqa: S310
+    except Exception:
+        logger.debug("Failed to POST /api/reload to daemon", exc_info=True)
+
+    return f"Filigree server running on http://localhost:{port}"
