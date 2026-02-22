@@ -18,6 +18,8 @@ const GRAPH_DEFAULT_NOTICE_KEY = "filigree.graph.execution_default_notice.v1";
 const GRAPH_TIME_WINDOW_STORAGE_KEY = "filigree.graph.time_window_days.v1";
 const DEFAULT_GRAPH_TIME_WINDOW_DAYS = 7;
 const VALID_GRAPH_TIME_WINDOW_DAYS = new Set([0, 1, 7, 14, 30, 90, 180, 365]);
+const GRAPH_MAX_ZOOM = 4;
+const GRAPH_FIT_ZOOM_CAP = 1.5;
 let _focusInputDebounceId = null;
 let _assigneeInputDebounceId = null;
 let _graphDefaultPresetNoticeShown = false;
@@ -91,6 +93,34 @@ function issueWithinWindow(issue, windowDays) {
   const parsed = new Date(raw);
   if (Number.isNaN(parsed.getTime())) return false;
   return parsed.getTime() >= Date.now() - windowDays * 24 * 60 * 60 * 1000;
+}
+
+function computeGraphMinZoom(nodeCount) {
+  if (nodeCount >= 1000) return 0.45;
+  if (nodeCount >= 600) return 0.4;
+  if (nodeCount >= 300) return 0.35;
+  if (nodeCount >= 150) return 0.3;
+  return 0.25;
+}
+
+function enforceReadableZoomBounds(nodeCount) {
+  if (!state.cy) return;
+  const floor = computeGraphMinZoom(nodeCount);
+  state.cy.minZoom(floor);
+  state.cy.maxZoom(GRAPH_MAX_ZOOM);
+  if (state.cy.zoom() < floor) {
+    state.cy.zoom(floor);
+  }
+}
+
+function fitGraphWithCaps() {
+  if (!state.cy) return;
+  state.cy.fit(undefined, 30);
+  enforceReadableZoomBounds(state.cy.nodes().length);
+  if (state.cy.zoom() > GRAPH_FIT_ZOOM_CAP) {
+    state.cy.zoom(GRAPH_FIT_ZOOM_CAP);
+    state.cy.center();
+  }
 }
 
 function buildGraphQuery() {
@@ -886,6 +916,7 @@ export function renderGraph() {
   let created = false;
 
   if (!state.cy) {
+    const graphMinZoom = computeGraphMinZoom(cyNodes.length);
     /* global cytoscape */
     state.cy = cytoscape({
       container,
@@ -898,15 +929,11 @@ export function renderGraph() {
         padding: 20,
       },
       style: graphStyles(),
-      minZoom: 0.1,
-      maxZoom: 4,
+      minZoom: graphMinZoom,
+      maxZoom: GRAPH_MAX_ZOOM,
     });
     created = true;
-    state.cy.fit(undefined, 30);
-    if (state.cy.zoom() > 1.5) {
-      state.cy.zoom(1.5);
-      state.cy.center();
-    }
+    fitGraphWithCaps();
   } else {
     const currentNodeIds = new Set(state.cy.nodes().map((n) => n.id()));
     const currentEdgeIds = new Set(state.cy.edges().map((e) => e.id()));
@@ -927,6 +954,7 @@ export function renderGraph() {
           if (next) e.data(next.data);
         });
       });
+      enforceReadableZoomBounds(cyNodes.length);
     } else {
       const previousPositions = {};
       const selectedNodeId = state.cy.$("node:selected").id();
@@ -940,6 +968,7 @@ export function renderGraph() {
       const canReusePositions =
         cyNodes.length > 0 &&
         cyNodes.every((n) => Object.prototype.hasOwnProperty.call(previousPositions, n.data.id));
+      const graphMinZoom = computeGraphMinZoom(cyNodes.length);
       state.cy = cytoscape({
         container,
         elements: cyNodes.concat(cyEdges),
@@ -958,8 +987,8 @@ export function renderGraph() {
               padding: 20,
             },
         style: graphStyles(),
-        minZoom: 0.1,
-        maxZoom: 4,
+        minZoom: graphMinZoom,
+        maxZoom: GRAPH_MAX_ZOOM,
       });
       created = true;
       if (selectedNodeId && state.cy.$id(selectedNodeId).length) {
@@ -968,12 +997,9 @@ export function renderGraph() {
       if (canReusePositions) {
         state.cy.zoom(previousZoom);
         state.cy.pan(previousPan);
+        enforceReadableZoomBounds(cyNodes.length);
       } else {
-        state.cy.fit(undefined, 30);
-        if (state.cy.zoom() > 1.5) {
-          state.cy.zoom(1.5);
-          state.cy.center();
-        }
+        fitGraphWithCaps();
       }
     }
   }
@@ -1004,11 +1030,7 @@ export function renderGraph() {
 
 export function graphFit() {
   if (state.cy) {
-    state.cy.fit(undefined, 30);
-    if (state.cy.zoom() > 1.5) {
-      state.cy.zoom(1.5);
-      state.cy.center();
-    }
+    fitGraphWithCaps();
   }
 }
 

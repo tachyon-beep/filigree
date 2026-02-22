@@ -115,6 +115,17 @@ class TestGraphFrontendContracts:
         assert "edge_limit" in graph_js
         assert "refreshGraphData" in graph_js
 
+    def test_graph_zoom_floor_contract(self) -> None:
+        graph_js = (STATIC_DIR / "js" / "views" / "graph.js").read_text()
+        assert "function computeGraphMinZoom(nodeCount)" in graph_js
+        assert "function enforceReadableZoomBounds(nodeCount)" in graph_js
+        assert "state.cy.minZoom(floor);" in graph_js
+        assert "state.cy.maxZoom(GRAPH_MAX_ZOOM);" in graph_js
+        assert "minZoom: graphMinZoom" in graph_js
+        assert "minZoom: 0.1" not in graph_js
+        assert "fitGraphWithCaps()" in graph_js
+        assert "GRAPH_FIT_ZOOM_CAP = 1.5" in graph_js
+
     def test_graph_time_window_preference_contract(self) -> None:
         graph_js = (STATIC_DIR / "js" / "views" / "graph.js").read_text()
         app_js = (STATIC_DIR / "js" / "app.js").read_text()
