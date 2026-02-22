@@ -245,7 +245,10 @@ tailwind.config = {
       <label class="flex items-center gap-1">
         Path:
         <input id="graphPathSource" type="text" placeholder="issue ID" oninput="onGraphPathInput()" class="bg-overlay text-primary text-xs rounded px-2 py-0.5 border border-strong w-24 focus:outline-none focus-accent">
-        <span>&rarr;</span>
+        <select id="graphPathDirection" class="bg-overlay text-primary text-xs rounded px-1 py-0.5 border border-strong" title="Path direction">
+          <option value="upstream" selected>upstream</option>
+          <option value="downstream">downstream</option>
+        </select>
         <input id="graphPathTarget" type="text" placeholder="issue ID" oninput="onGraphPathInput()" class="bg-overlay text-primary text-xs rounded px-2 py-0.5 border border-strong w-24 focus:outline-none focus-accent">
       </label>
       <button id="graphTraceBtn" onclick="traceGraphPath()" disabled class="px-2 py-0.5 rounded bg-overlay bg-overlay-hover opacity-50 cursor-not-allowed" title="Trace dependency path between source and target">Trace</button>
@@ -267,8 +270,8 @@ tailwind.config = {
         </select>
       </label>
       <button onclick="graphFit()" class="px-2 py-0.5 rounded bg-overlay bg-overlay-hover" title="Reset zoom and center the graph">Fit</button>
-      <button onclick="graphSearchPrev()" class="px-2 py-0.5 rounded bg-overlay bg-overlay-hover" title="Previous graph search match">Prev</button>
-      <button onclick="graphSearchNext()" class="px-2 py-0.5 rounded bg-overlay bg-overlay-hover" title="Next graph search match">Next</button>
+      <button id="graphSearchPrevBtn" onclick="graphSearchPrev()" disabled aria-label="Previous search match" class="px-2 py-0.5 rounded bg-overlay bg-overlay-hover opacity-50 cursor-not-allowed" title="Previous graph search match">Prev match</button>
+      <button id="graphSearchNextBtn" onclick="graphSearchNext()" disabled aria-label="Next search match" class="px-2 py-0.5 rounded bg-overlay bg-overlay-hover opacity-50 cursor-not-allowed" title="Next graph search match">Next match</button>
       <span id="graphSearchState" class="text-[11px] text-secondary">Search: n/a</span>
       <button id="btnCritPath" onclick="toggleCriticalPath()" class="px-2 py-0.5 rounded bg-overlay bg-overlay-hover" title="Highlight the longest dependency chain">Critical Path</button>
       <button id="btnGraphLegend" onclick="toggleGraphLegend()" class="px-2 py-0.5 rounded bg-overlay bg-overlay-hover">Legend</button>

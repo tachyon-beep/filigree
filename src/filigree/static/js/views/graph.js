@@ -12,6 +12,7 @@ export const callbacks = { openDetail: null, fetchData: null };
 
 let _graphFetchSeq = 0;
 const FOCUS_ROOT_NOTICE = "Focus is enabled. Enter a root issue ID to apply scoped view.";
+const EMPTY_STATUS_NOTICE = "No status categories selected. Enable at least one status filter.";
 
 function shouldUseGraphV2() {
   const cfg = state.graphConfig || {};
@@ -86,6 +87,16 @@ function updateGraphSearchState(text) {
   if (el) el.textContent = text;
 }
 
+function setGraphSearchButtonsEnabled(enabled) {
+  ["graphSearchPrevBtn", "graphSearchNextBtn"].forEach((id) => {
+    const btn = document.getElementById(id);
+    if (!btn) return;
+    btn.disabled = !enabled;
+    btn.classList.toggle("opacity-50", !enabled);
+    btn.classList.toggle("cursor-not-allowed", !enabled);
+  });
+}
+
 function updateGraphPerfState() {
   const el = document.getElementById("graphPerfState");
   if (!el) return;
@@ -94,23 +105,31 @@ function updateGraphPerfState() {
   const renderMs = t.render_ms ?? "-";
   const nodeCount = state.cy ? state.cy.nodes().length : 0;
   const edgeCount = state.cy ? state.cy.edges().length : 0;
-  el.textContent = `Perf q:${queryMs}ms r:${renderMs}ms n:${nodeCount} e:${edgeCount}`;
+  el.textContent = `${nodeCount} nodes, ${edgeCount} edges`;
+  if (queryMs === "-" && renderMs === "-") {
+    el.title = "";
+    return;
+  }
+  el.title = `Query ${queryMs}ms | Render ${renderMs}ms`;
 }
 
 function applySearchFocus(search) {
-  if (!state.cy || !search || state.criticalPathActive || state.graphPathNodes.size) {
-    if (!search) {
-      state.graphSearchQuery = "";
-      state.graphSearchIndex = 0;
-      if (state.cy && !state.criticalPathActive) {
-        state.cy.nodes().forEach((n) => {
-          n.style("opacity", n.data("opacity"));
-          n.style("border-width", n.data("isReady") ? 3 : 0);
-          n.style("border-color", "#10B981");
-        });
-      }
-      updateGraphSearchState("Search: n/a");
-    }
+  if (!state.cy || state.criticalPathActive || state.graphPathNodes.size) {
+    setGraphSearchButtonsEnabled(false);
+    if (!search) updateGraphSearchState("Search: n/a");
+    return;
+  }
+
+  if (!search) {
+    state.graphSearchQuery = "";
+    state.graphSearchIndex = 0;
+    state.cy.nodes().forEach((n) => {
+      n.style("opacity", n.data("opacity"));
+      n.style("border-width", n.data("isReady") ? 3 : 0);
+      n.style("border-color", "#10B981");
+    });
+    setGraphSearchButtonsEnabled(false);
+    updateGraphSearchState("Search: n/a");
     return;
   }
 
@@ -124,9 +143,11 @@ function applySearchFocus(search) {
     .filter((n) => n.data("opacity") >= 1)
     .toArray();
   if (!matches.length) {
+    setGraphSearchButtonsEnabled(false);
     updateGraphSearchState("Search: 0 results");
     return;
   }
+  setGraphSearchButtonsEnabled(matches.length > 1);
 
   state.graphSearchIndex =
     ((state.graphSearchIndex % matches.length) + matches.length) % matches.length;
@@ -210,11 +231,13 @@ export function onGraphPathInput() {
 }
 
 export function graphSearchNext() {
+  if (document.getElementById("graphSearchNextBtn")?.disabled) return;
   state.graphSearchIndex += 1;
   renderGraph();
 }
 
 export function graphSearchPrev() {
+  if (document.getElementById("graphSearchPrevBtn")?.disabled) return;
   state.graphSearchIndex -= 1;
   renderGraph();
 }
@@ -229,6 +252,8 @@ export function clearGraphPath() {
 export function traceGraphPath() {
   if (!state.cy) return;
   const source = document.getElementById("graphPathSource").value.trim();
+  const directionEl = document.getElementById("graphPathDirection");
+  const direction = directionEl?.value === "downstream" ? "downstream" : "upstream";
   const target = document.getElementById("graphPathTarget").value.trim();
   if (!source || !target) {
     setGraphNotice("Enter both source and target issue ids for path tracing.");
@@ -239,19 +264,24 @@ export function traceGraphPath() {
     return;
   }
 
-  const prevByNode = new Map();
-  const queue = [source];
-  prevByNode.set(source, null);
+  const prevByNode = new Map([[source, null]]);
+  const visited = new Set([source]);
+  const queue = [state.cy.$id(source)[0]];
 
-  while (queue.length) {
-    const cur = queue.shift();
-    if (cur === target) break;
-    state.cy.edges().forEach((e) => {
-      if (e.source().id() !== cur) return;
-      const nxt = e.target().id();
-      if (prevByNode.has(nxt)) return;
-      prevByNode.set(nxt, cur);
-      queue.push(nxt);
+  for (let i = 0; i < queue.length; i += 1) {
+    const curNode = queue[i];
+    const curId = curNode.id();
+    if (curId === target) break;
+    const neighboringEdges =
+      direction === "upstream" ? curNode.incomers("edge") : curNode.outgoers("edge");
+    neighboringEdges.forEach((edge) => {
+      const nextNode =
+        direction === "upstream" ? edge.source() : edge.target();
+      const nextId = nextNode.id();
+      if (visited.has(nextId)) return;
+      visited.add(nextId);
+      prevByNode.set(nextId, curId);
+      queue.push(nextNode);
     });
   }
 
@@ -274,10 +304,14 @@ export function traceGraphPath() {
   state.graphPathNodes = new Set(pathNodes);
   state.graphPathEdges = new Set();
   for (let i = 0; i + 1 < pathNodes.length; i += 1) {
-    state.graphPathEdges.add(`${pathNodes[i]}->${pathNodes[i + 1]}`);
+    if (direction === "upstream") {
+      state.graphPathEdges.add(`${pathNodes[i + 1]}->${pathNodes[i]}`);
+    } else {
+      state.graphPathEdges.add(`${pathNodes[i]}->${pathNodes[i + 1]}`);
+    }
   }
 
-  setGraphNotice(`Path traced: ${pathNodes.length} nodes from ${source} to ${target}.`);
+  setGraphNotice(`Path traced (${direction}): ${pathNodes.length} nodes from ${source} to ${target}.`);
   renderGraph();
 }
 
@@ -294,6 +328,42 @@ export async function refreshGraphData(force = false) {
   const query = buildGraphQuery();
   const key = JSON.stringify(query);
   if (!force && state.graphQueryKey === key && state.graphData) return;
+
+  if (Array.isArray(query.status_categories) && query.status_categories.length === 0) {
+    state.graphMode = "v2";
+    state.graphData = {
+      mode: "v2",
+      query: {
+        scope_root: query.scope_root || null,
+        scope_radius: query.scope_root ? query.scope_radius : null,
+        include_done: query.include_done,
+        types: query.types || [],
+        status_categories: [],
+        assignee: query.assignee || null,
+        blocked_only: query.blocked_only,
+        ready_only: query.ready_only,
+        critical_path_only: false,
+      },
+      limits: {
+        node_limit: query.node_limit,
+        edge_limit: query.edge_limit,
+        truncated: false,
+      },
+      telemetry: {
+        query_ms: 0,
+        total_nodes_before_limit: 0,
+        total_edges_before_limit: 0,
+      },
+      nodes: [],
+      edges: [],
+    };
+    state.graphQuery = query;
+    state.graphQueryKey = key;
+    state.graphTelemetry = state.graphData.telemetry;
+    state.graphFallbackNotice = EMPTY_STATUS_NOTICE;
+    setGraphNotice(state.graphFallbackNotice);
+    return;
+  }
 
   const seq = ++_graphFetchSeq;
   const data = await fetchGraph(query);
@@ -436,16 +506,20 @@ function bindGraphEvents() {
   });
   state.cy.on("mouseover", "node", (evt) => {
     if (state.criticalPathActive) return;
-    const nodeId = evt.target.id();
+    const hoverNode = evt.target;
+    const nodeId = hoverNode.id();
     const downstream = new Set();
-    const queue = [nodeId];
-    while (queue.length) {
-      const cur = queue.shift();
-      state.cy.edges().forEach((e) => {
-        if (e.source().id() === cur && !downstream.has(e.target().id())) {
-          downstream.add(e.target().id());
-          queue.push(e.target().id());
-        }
+    const visited = new Set([nodeId]);
+    const queue = [hoverNode];
+    for (let i = 0; i < queue.length; i += 1) {
+      const curNode = queue[i];
+      curNode.outgoers("edge").forEach((edge) => {
+        const nextNode = edge.target();
+        const nextId = nextNode.id();
+        if (visited.has(nextId)) return;
+        visited.add(nextId);
+        downstream.add(nextId);
+        queue.push(nextNode);
       });
     }
     if (downstream.size) {

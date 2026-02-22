@@ -64,10 +64,15 @@ class TestDashboardIndex:
         assert 'onchange="onGraphFocusModeChange()"' in html
         assert 'oninput="onGraphFocusRootInput()"' in html
         assert 'id="graphPathSource"' in html
+        assert 'id="graphPathDirection"' in html
         assert 'id="graphPathTarget"' in html
         assert 'oninput="onGraphPathInput()"' in html
         assert 'id="graphTraceBtn"' in html
         assert "graphTraceBtn\" onclick=\"traceGraphPath()\" disabled" in html
+        assert 'id="graphSearchPrevBtn"' in html
+        assert 'id="graphSearchNextBtn"' in html
+        assert 'aria-label="Previous search match"' in html
+        assert 'aria-label="Next search match"' in html
         assert 'id="graphNodeLimit"' in html
         assert 'id="graphEdgeLimit"' in html
 
@@ -125,6 +130,47 @@ class TestGraphFrontendContracts:
         assert 'placeholder="issue ID"' in html
         assert 'id="graphTraceBtn"' in html
         assert "disabled" in html
+
+    def test_hover_traversal_uses_outgoers_not_full_edge_scan(self) -> None:
+        graph_js = (STATIC_DIR / "js" / "views" / "graph.js").read_text()
+        start = graph_js.index('state.cy.on("mouseover", "node"')
+        end = graph_js.index('state.cy.on("mouseout", "node"', start)
+        hover_block = graph_js[start:end]
+        assert 'curNode.outgoers("edge")' in hover_block
+        assert "state.cy.edges().forEach" not in hover_block
+
+    def test_path_tracing_uses_outgoers_not_full_edge_scan(self) -> None:
+        graph_js = (STATIC_DIR / "js" / "views" / "graph.js").read_text()
+        start = graph_js.index("export function traceGraphPath()")
+        end = graph_js.index("export async function refreshGraphData", start)
+        path_block = graph_js[start:end]
+        assert 'curNode.outgoers("edge")' in path_block
+        assert 'curNode.incomers("edge")' in path_block
+        assert "direction === \"upstream\"" in path_block
+        assert "state.cy.edges().forEach" not in path_block
+
+    def test_search_nav_buttons_have_disabled_state_logic(self) -> None:
+        graph_js = (STATIC_DIR / "js" / "views" / "graph.js").read_text()
+        html = (STATIC_DIR / "dashboard.html").read_text()
+        assert "function setGraphSearchButtonsEnabled(enabled)" in graph_js
+        assert '["graphSearchPrevBtn", "graphSearchNextBtn"]' in graph_js
+        assert "btn.disabled = !enabled;" in graph_js
+        assert 'id="graphSearchPrevBtn"' in html
+        assert 'id="graphSearchNextBtn"' in html
+        assert 'aria-label="Previous search match"' in html
+        assert 'aria-label="Next search match"' in html
+
+    def test_graph_perf_state_user_facing_text_and_tooltip_timings(self) -> None:
+        graph_js = (STATIC_DIR / "js" / "views" / "graph.js").read_text()
+        assert "el.textContent = `${nodeCount} nodes, ${edgeCount} edges`;" in graph_js
+        assert "el.title = `Query ${queryMs}ms | Render ${renderMs}ms`;" in graph_js
+        assert "Perf q:" not in graph_js
+
+    def test_v2_empty_status_categories_guard_returns_empty_graph(self) -> None:
+        graph_js = (STATIC_DIR / "js" / "views" / "graph.js").read_text()
+        assert "query.status_categories.length === 0" in graph_js
+        assert "No status categories selected. Enable at least one status filter." in graph_js
+        assert "status_categories: []" in graph_js
 
 
 class TestGraphAdvancedAPI:
