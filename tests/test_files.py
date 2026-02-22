@@ -10,7 +10,6 @@ from httpx import ASGITransport, AsyncClient
 import filigree.dashboard as dash_module
 from filigree.core import CURRENT_SCHEMA_VERSION, FiligreeDB
 from filigree.dashboard import create_app
-from filigree.registry import ProjectManager, Registry
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -1041,27 +1040,14 @@ def api_db(tmp_path: Path) -> FiligreeDB:
 
 
 @pytest.fixture
-async def client(api_db: FiligreeDB, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> AsyncClient:
-    """Test client wired to the api_db fixture."""
-    reg_dir = tmp_path / ".filigree-registry"
-    monkeypatch.setattr("filigree.registry.REGISTRY_DIR", reg_dir)
-    monkeypatch.setattr("filigree.registry.REGISTRY_FILE", reg_dir / "registry.json")
-    monkeypatch.setattr("filigree.registry.REGISTRY_LOCK", reg_dir / "registry.lock")
-
-    registry = Registry()
-    pm = ProjectManager(registry)
-    pm._connections["test"] = api_db
-    pm._paths["test"] = Path("/fake/.filigree")
-
-    dash_module._project_manager = pm
-    dash_module._default_project_key = "test"
-
+async def client(api_db: FiligreeDB) -> AsyncClient:
+    """Test client wired to the api_db fixture (single-project mode)."""
+    dash_module._db = api_db
     app = create_app()
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as c:
         yield c
-    dash_module._project_manager = None
-    dash_module._default_project_key = ""
+    dash_module._db = None
 
 
 class TestFileEndpoints:

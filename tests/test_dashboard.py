@@ -2,15 +2,15 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from pathlib import Path
 
 import pytest
 from httpx import ASGITransport, AsyncClient
 
 import filigree.dashboard as dash_module
-from filigree.core import FiligreeDB, write_config
+from filigree.core import FiligreeDB
 from filigree.dashboard import STATIC_DIR, create_app
-from filigree.registry import ProjectManager, Registry
 
 
 @pytest.fixture
@@ -28,29 +28,14 @@ def dashboard_db(populated_db: FiligreeDB) -> FiligreeDB:
 
 
 @pytest.fixture
-async def client(dashboard_db: FiligreeDB, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> AsyncClient:
-    """Create a test client backed by a ProjectManager with the test DB injected."""
-    # Isolate registry to temp dir so tests don't collide with real ~/.filigree/
-    reg_dir = tmp_path / ".filigree-registry"
-    monkeypatch.setattr("filigree.registry.REGISTRY_DIR", reg_dir)
-    monkeypatch.setattr("filigree.registry.REGISTRY_FILE", reg_dir / "registry.json")
-    monkeypatch.setattr("filigree.registry.REGISTRY_LOCK", reg_dir / "registry.lock")
-
-    registry = Registry()
-    pm = ProjectManager(registry)
-    # Directly inject the test DB as a cached connection
-    pm._connections["test"] = dashboard_db
-    pm._paths["test"] = Path("/fake/.filigree")
-
-    dash_module._project_manager = pm
-    dash_module._default_project_key = "test"
-
+async def client(dashboard_db: FiligreeDB, tmp_path: Path) -> AsyncIterator[AsyncClient]:
+    """Create a test client backed by a single-project DB (ethereal mode)."""
+    dash_module._db = dashboard_db
     app = create_app()
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as c:
         yield c
-    dash_module._project_manager = None
-    dash_module._default_project_key = ""
+    dash_module._db = None
 
 
 class TestDashboardIndex:
@@ -1057,48 +1042,6 @@ class TestBatchClosePartialMutation:
         assert len(errors) == 1
 
 
-class TestReloadAPI:
-    async def test_reload_returns_ok(self, client: AsyncClient) -> None:
-        resp = await client.post("/api/reload")
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["ok"] is True
-        assert "projects" in data
-
-    async def test_reload_clears_connections(self, client: AsyncClient) -> None:
-        # Prime the connection cache
-        await client.get("/api/issues")
-        pm = dash_module._project_manager
-        assert pm is not None
-        assert len(pm._connections) > 0
-
-        resp = await client.post("/api/reload")
-        assert resp.status_code == 200
-        # Connections cleared (will reopen lazily on next request)
-        assert len(pm._connections) == 0
-
-    async def test_reload_issues_still_work_after(self, client: AsyncClient, tmp_path: Path) -> None:
-        # Set up a real project that survives reload (registry-based re-register)
-        fdir = tmp_path / "reloadproj" / ".filigree"
-        fdir.mkdir(parents=True)
-        write_config(fdir, {"prefix": "reloadproj", "version": 1, "enabled_packs": ["core"]})
-        db = FiligreeDB(fdir / "filigree.db", prefix="reloadproj")
-        db.initialize()
-        db.create_issue("Survives reload", type="task")
-        db.close()
-
-        # Register it with the project manager so it appears in the registry
-        pm = dash_module._project_manager
-        assert pm is not None
-        pm.register(fdir)
-        dash_module._default_project_key = "reloadproj"
-
-        await client.post("/api/reload")
-        # Lazy reconnect should make subsequent requests work
-        resp = await client.get("/api/issues")
-        assert resp.status_code == 200
-
-
 class TestDashboardConcurrency:
     """Bug filigree-4b8e41: sync handlers run in thread pool, creating races on shared DB."""
 
@@ -1150,19 +1093,26 @@ class TestDashboardConcurrency:
         assert all(r == 200 for r in results), f"Got status codes: {results}"
 
 
-class TestDashboardGetProjectDb:
-    """Cover _get_project_db when project manager is None."""
+class TestEtherealDashboard:
+    async def test_no_register_endpoint(self, client: AsyncClient) -> None:
+        """Ethereal mode should not have /api/register."""
+        resp = await client.post("/api/register", json={"path": "/foo"})
+        assert resp.status_code == 404 or resp.status_code == 405
 
-    def test_get_project_db_raises_when_no_manager(self) -> None:
-        import filigree.dashboard as dm
+    async def test_no_projects_endpoint(self, client: AsyncClient) -> None:
+        """Ethereal mode should not have /api/projects."""
+        resp = await client.get("/api/projects")
+        assert resp.status_code == 404
 
-        original = dm._project_manager
-        dm._project_manager = None
-        try:
-            with pytest.raises(RuntimeError, match="Project manager not initialized"):
-                dm._get_project_db()
-        finally:
-            dm._project_manager = original
+    async def test_no_reload_endpoint(self, client: AsyncClient) -> None:
+        """Ethereal mode should not have /api/reload."""
+        resp = await client.post("/api/reload")
+        assert resp.status_code == 404 or resp.status_code == 405
+
+    async def test_issues_at_root_api(self, client: AsyncClient) -> None:
+        """Issues served at /api/issues (no project key prefix)."""
+        resp = await client.get("/api/issues")
+        assert resp.status_code == 200
 
 
 class TestHealthAPI:
@@ -1171,64 +1121,6 @@ class TestHealthAPI:
         assert resp.status_code == 200
         data = resp.json()
         assert data["status"] == "ok"
-
-
-class TestMultiProjectAPI:
-    async def test_scoped_endpoint(self, client: AsyncClient) -> None:
-        """Scoped URL /api/p/test/issues works."""
-        resp = await client.get("/api/p/test/issues")
-        assert resp.status_code == 200
-        data = resp.json()
-        assert isinstance(data, list)
-
-    async def test_unknown_project_404(self, client: AsyncClient) -> None:
-        resp = await client.get("/api/p/nonexistent/issues")
-        assert resp.status_code == 404
-
-    async def test_projects_endpoint(self, client: AsyncClient) -> None:
-        resp = await client.get("/api/projects")
-        assert resp.status_code == 200
-
-    async def test_register_endpoint(self, client: AsyncClient, tmp_path: Path) -> None:
-        fdir = tmp_path / "newproj" / ".filigree"
-        fdir.mkdir(parents=True)
-        write_config(fdir, {"prefix": "newproj", "version": 1, "enabled_packs": ["core"]})
-        db = FiligreeDB(fdir / "filigree.db", prefix="newproj")
-        db.initialize()
-        db.close()
-        resp = await client.post("/api/register", json={"path": str(fdir)})
-        assert resp.status_code == 200
-        assert resp.json()["key"] == "newproj"
-
-    async def test_register_with_project_root(self, client: AsyncClient, tmp_path: Path) -> None:
-        """Registering with a project root (parent of .filigree/) should resolve."""
-        proj_root = tmp_path / "rootproj"
-        fdir = proj_root / ".filigree"
-        fdir.mkdir(parents=True)
-        write_config(fdir, {"prefix": "rootproj", "version": 1, "enabled_packs": ["core"]})
-        db = FiligreeDB(fdir / "filigree.db", prefix="rootproj")
-        db.initialize()
-        db.close()
-        resp = await client.post("/api/register", json={"path": str(proj_root)})
-        assert resp.status_code == 200
-        assert resp.json()["key"] == "rootproj"
-
-    async def test_register_rejects_non_filigree_dir(self, client: AsyncClient, tmp_path: Path) -> None:
-        """A directory without .filigree/ should be rejected."""
-        bare_dir = tmp_path / "bare"
-        bare_dir.mkdir()
-        resp = await client.post("/api/register", json={"path": str(bare_dir)})
-        assert resp.status_code == 400
-        assert ".filigree" in resp.json()["error"]["message"]
-
-    async def test_register_rejects_invalid_json(self, client: AsyncClient) -> None:
-        resp = await client.post("/api/register", content="NOT JSON{{{")
-        assert resp.status_code == 400
-        assert "Invalid JSON" in resp.json()["error"]["message"]
-
-    async def test_register_rejects_non_object_body(self, client: AsyncClient) -> None:
-        resp = await client.post("/api/register", content="[]")
-        assert resp.status_code == 400
 
 
 class TestFilesSchemaAPI:

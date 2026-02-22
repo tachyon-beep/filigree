@@ -197,9 +197,7 @@ class TestProjectManager:
         assert entry.key == "myproj"
         assert not registry_dir.exists(), "register_local should not create the registry dir"
 
-    def test_register_local_collision_gets_unique_key(
-        self, registry_dir: Path, fake_project: Path, tmp_path: Path
-    ) -> None:
+    def test_register_local_collision_gets_unique_key(self, registry_dir: Path, fake_project: Path, tmp_path: Path) -> None:
         """Two local-only projects with the same prefix get distinct keys."""
         fdir2 = tmp_path / "other" / ".filigree"
         fdir2.mkdir(parents=True)

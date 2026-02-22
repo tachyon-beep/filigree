@@ -5,10 +5,9 @@ activity feed, workflow visualization. Supports issue management (create,
 update, close, reopen, claim, dependency management), batch operations,
 and real-time auto-refresh.
 
-Multi-project support: all project-scoped endpoints live on an APIRouter
-mounted at both ``/api/p/{project_key}/`` (explicit project) and ``/api/``
-(default project, backward compatible).  Root-level endpoints like
-``/api/health``, ``/api/projects``, and ``/api/register`` are not scoped.
+Single-project mode: all project-scoped endpoints live on an APIRouter
+mounted at ``/api/``.  A module-level ``_db`` is set at startup (by
+``main()`` or by test fixtures) and injected via ``Depends(_get_db)``.
 
 Usage:
     filigree dashboard                    # Opens browser at localhost:8377
@@ -20,7 +19,6 @@ from __future__ import annotations
 
 import logging
 import webbrowser
-from dataclasses import asdict
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -29,13 +27,14 @@ if TYPE_CHECKING:
     from starlette.requests import Request
 
 from filigree.core import (
+    DB_FILENAME,
     VALID_ASSOC_TYPES,
     VALID_FINDING_STATUSES,
     VALID_SEVERITIES,
     FiligreeDB,
     find_filigree_root,
+    read_config,
 )
-from filigree.registry import ProjectManager, Registry
 
 STATIC_DIR = Path(__file__).parent / "static"
 DEFAULT_PORT = 8377
@@ -46,8 +45,7 @@ logger = logging.getLogger(__name__)
 # Module-level state — set by main() or test fixtures
 # ---------------------------------------------------------------------------
 
-_project_manager: ProjectManager | None = None
-_default_project_key: str = ""
+_db: FiligreeDB | None = None
 
 
 def _error_response(
@@ -78,26 +76,17 @@ def _safe_int(value: str, name: str, default: int) -> int | JSONResponse:
         )
 
 
-def _get_project_db(project_key: str = "") -> FiligreeDB:
-    """Resolve *project_key* to a DB connection via the ProjectManager.
+def _get_db() -> FiligreeDB:
+    """Return the single-project database connection.
 
-    When the router is mounted at ``/api/p/{project_key}/``, FastAPI injects
-    the path parameter.  When mounted at ``/api/``, the default ``""`` falls
-    through to ``_default_project_key``.
+    Raises 500 if the module-level ``_db`` has not been initialised
+    (should be set by ``main()`` or by test fixtures).
     """
-    if _project_manager is None:
-        msg = "Project manager not initialized"
-        raise RuntimeError(msg)
-    key = project_key if project_key else _default_project_key
-    db = _project_manager.get_db(key)
-    if db is None:
-        from fastapi import HTTPException
+    from fastapi import HTTPException
 
-        projects = _project_manager.get_active_projects()
-        available = [p.key for p in projects]
-        hint = f" Available projects: {', '.join(available)}" if available else ""
-        raise HTTPException(status_code=404, detail=f"Unknown project: {key}.{hint}")
-    return db
+    if _db is None:
+        raise HTTPException(status_code=500, detail="Database not initialized")
+    return _db
 
 
 # ---------------------------------------------------------------------------
@@ -122,12 +111,12 @@ def _create_project_router() -> Any:
     # pool, where parallel threads would race on the single SQLite connection.
 
     @router.get("/issues")
-    async def api_issues(db: FiligreeDB = Depends(_get_project_db)) -> JSONResponse:
+    async def api_issues(db: FiligreeDB = Depends(_get_db)) -> JSONResponse:
         issues = db.list_issues(limit=10000)
         return JSONResponse([i.to_dict() for i in issues])
 
     @router.get("/graph")
-    async def api_graph(db: FiligreeDB = Depends(_get_project_db)) -> JSONResponse:
+    async def api_graph(db: FiligreeDB = Depends(_get_db)) -> JSONResponse:
         """Graph data: nodes (issues) + edges (dependencies) for Cytoscape.js."""
         issues = db.list_issues(limit=10000)
         deps = db.get_all_dependencies()
@@ -146,13 +135,13 @@ def _create_project_router() -> Any:
         return JSONResponse({"nodes": nodes, "edges": edges})
 
     @router.get("/stats")
-    async def api_stats(db: FiligreeDB = Depends(_get_project_db)) -> JSONResponse:
+    async def api_stats(db: FiligreeDB = Depends(_get_db)) -> JSONResponse:
         stats = db.get_stats()
         stats["prefix"] = db.prefix
         return JSONResponse(stats)
 
     @router.get("/issue/{issue_id}")
-    async def api_issue_detail(issue_id: str, db: FiligreeDB = Depends(_get_project_db)) -> JSONResponse:
+    async def api_issue_detail(issue_id: str, db: FiligreeDB = Depends(_get_db)) -> JSONResponse:
         """Full issue detail with dependency details, events, and comments."""
         try:
             issue = db.get_issue(issue_id)
@@ -195,12 +184,12 @@ def _create_project_router() -> Any:
         return JSONResponse(data)
 
     @router.get("/dependencies")
-    async def api_dependencies(db: FiligreeDB = Depends(_get_project_db)) -> JSONResponse:
+    async def api_dependencies(db: FiligreeDB = Depends(_get_db)) -> JSONResponse:
         deps = db.get_all_dependencies()
         return JSONResponse(deps)
 
     @router.get("/type/{type_name}")
-    async def api_type_template(type_name: str, db: FiligreeDB = Depends(_get_project_db)) -> JSONResponse:
+    async def api_type_template(type_name: str, db: FiligreeDB = Depends(_get_db)) -> JSONResponse:
         """Workflow template for a given issue type (WFT-FR-065)."""
         tpl = db.templates.get_type(type_name)
         if tpl is None:
@@ -221,7 +210,7 @@ def _create_project_router() -> Any:
         )
 
     @router.get("/issue/{issue_id}/transitions")
-    async def api_issue_transitions(issue_id: str, db: FiligreeDB = Depends(_get_project_db)) -> JSONResponse:
+    async def api_issue_transitions(issue_id: str, db: FiligreeDB = Depends(_get_db)) -> JSONResponse:
         """Valid next states for an issue."""
         try:
             transitions = db.get_valid_transitions(issue_id)
@@ -242,7 +231,7 @@ def _create_project_router() -> Any:
         )
 
     @router.get("/issue/{issue_id}/files")
-    async def api_issue_files(issue_id: str, db: FiligreeDB = Depends(_get_project_db)) -> JSONResponse:
+    async def api_issue_files(issue_id: str, db: FiligreeDB = Depends(_get_db)) -> JSONResponse:
         """Files associated with an issue."""
         try:
             db.get_issue(issue_id)
@@ -252,7 +241,7 @@ def _create_project_router() -> Any:
         return JSONResponse(files)
 
     @router.get("/issue/{issue_id}/findings")
-    async def api_issue_findings(issue_id: str, db: FiligreeDB = Depends(_get_project_db)) -> JSONResponse:
+    async def api_issue_findings(issue_id: str, db: FiligreeDB = Depends(_get_db)) -> JSONResponse:
         """Scan findings related to an issue."""
         try:
             db.get_issue(issue_id)
@@ -262,7 +251,7 @@ def _create_project_router() -> Any:
         return JSONResponse([f.to_dict() for f in findings])
 
     @router.patch("/issue/{issue_id}")
-    async def api_update_issue(issue_id: str, request: Request, db: FiligreeDB = Depends(_get_project_db)) -> JSONResponse:
+    async def api_update_issue(issue_id: str, request: Request, db: FiligreeDB = Depends(_get_db)) -> JSONResponse:
         """Update issue fields (status, priority, assignee, etc.)."""
         try:
             body = await request.json()
@@ -293,7 +282,7 @@ def _create_project_router() -> Any:
         return JSONResponse(issue.to_dict())
 
     @router.post("/issue/{issue_id}/close")
-    async def api_close_issue(issue_id: str, request: Request, db: FiligreeDB = Depends(_get_project_db)) -> JSONResponse:
+    async def api_close_issue(issue_id: str, request: Request, db: FiligreeDB = Depends(_get_db)) -> JSONResponse:
         """Close an issue."""
         try:
             body = await request.json()
@@ -315,7 +304,7 @@ def _create_project_router() -> Any:
         return JSONResponse(issue.to_dict())
 
     @router.post("/issue/{issue_id}/reopen")
-    async def api_reopen_issue(issue_id: str, request: Request, db: FiligreeDB = Depends(_get_project_db)) -> JSONResponse:
+    async def api_reopen_issue(issue_id: str, request: Request, db: FiligreeDB = Depends(_get_db)) -> JSONResponse:
         """Reopen a closed issue."""
         try:
             body = await request.json()
@@ -333,7 +322,7 @@ def _create_project_router() -> Any:
         return JSONResponse(issue.to_dict())
 
     @router.post("/issue/{issue_id}/comments", status_code=201)
-    async def api_add_comment(issue_id: str, request: Request, db: FiligreeDB = Depends(_get_project_db)) -> JSONResponse:
+    async def api_add_comment(issue_id: str, request: Request, db: FiligreeDB = Depends(_get_db)) -> JSONResponse:
         """Add a comment to an issue."""
         try:
             db.get_issue(issue_id)
@@ -364,7 +353,7 @@ def _create_project_router() -> Any:
         )
 
     @router.get("/search")
-    async def api_search(q: str = "", limit: int = 50, offset: int = 0, db: FiligreeDB = Depends(_get_project_db)) -> JSONResponse:
+    async def api_search(q: str = "", limit: int = 50, offset: int = 0, db: FiligreeDB = Depends(_get_db)) -> JSONResponse:
         """Full-text search across issues."""
         if not q.strip():
             return JSONResponse({"results": [], "total": 0})
@@ -372,7 +361,7 @@ def _create_project_router() -> Any:
         return JSONResponse({"results": [i.to_dict() for i in issues], "total": len(issues)})
 
     @router.get("/metrics")
-    async def api_metrics(days: int = 30, db: FiligreeDB = Depends(_get_project_db)) -> JSONResponse:
+    async def api_metrics(days: int = 30, db: FiligreeDB = Depends(_get_db)) -> JSONResponse:
         """Flow metrics: cycle time, lead time, throughput."""
         from filigree.analytics import get_flow_metrics
 
@@ -380,19 +369,19 @@ def _create_project_router() -> Any:
         return JSONResponse(metrics)
 
     @router.get("/critical-path")
-    async def api_critical_path(db: FiligreeDB = Depends(_get_project_db)) -> JSONResponse:
+    async def api_critical_path(db: FiligreeDB = Depends(_get_db)) -> JSONResponse:
         """Longest dependency chain among open issues."""
         path = db.get_critical_path()
         return JSONResponse({"path": path, "length": len(path)})
 
     @router.get("/activity")
-    async def api_activity(limit: int = 50, since: str = "", db: FiligreeDB = Depends(_get_project_db)) -> JSONResponse:
+    async def api_activity(limit: int = 50, since: str = "", db: FiligreeDB = Depends(_get_db)) -> JSONResponse:
         """Recent events across all issues."""
         events = db.get_events_since(since, limit=limit) if since else db.get_recent_events(limit=limit)
         return JSONResponse(events)
 
     @router.get("/plan/{milestone_id}")
-    async def api_plan(milestone_id: str, db: FiligreeDB = Depends(_get_project_db)) -> JSONResponse:
+    async def api_plan(milestone_id: str, db: FiligreeDB = Depends(_get_db)) -> JSONResponse:
         """Milestone plan tree."""
         try:
             plan = db.get_plan(milestone_id)
@@ -401,7 +390,7 @@ def _create_project_router() -> Any:
         return JSONResponse(plan)
 
     @router.post("/batch/update")
-    async def api_batch_update(request: Request, db: FiligreeDB = Depends(_get_project_db)) -> JSONResponse:
+    async def api_batch_update(request: Request, db: FiligreeDB = Depends(_get_db)) -> JSONResponse:
         """Batch update issues."""
         try:
             body = await request.json()
@@ -434,7 +423,7 @@ def _create_project_router() -> Any:
         )
 
     @router.post("/batch/close")
-    async def api_batch_close(request: Request, db: FiligreeDB = Depends(_get_project_db)) -> JSONResponse:
+    async def api_batch_close(request: Request, db: FiligreeDB = Depends(_get_db)) -> JSONResponse:
         """Batch close issues."""
         try:
             body = await request.json()
@@ -458,7 +447,7 @@ def _create_project_router() -> Any:
         )
 
     @router.get("/types")
-    async def api_types_list(db: FiligreeDB = Depends(_get_project_db)) -> JSONResponse:
+    async def api_types_list(db: FiligreeDB = Depends(_get_db)) -> JSONResponse:
         """List all registered issue types."""
         types = db.templates.list_types()
         return JSONResponse(
@@ -474,7 +463,7 @@ def _create_project_router() -> Any:
         )
 
     @router.post("/issues", status_code=201)
-    async def api_create_issue(request: Request, db: FiligreeDB = Depends(_get_project_db)) -> JSONResponse:
+    async def api_create_issue(request: Request, db: FiligreeDB = Depends(_get_db)) -> JSONResponse:
         """Create a new issue."""
         try:
             body = await request.json()
@@ -504,7 +493,7 @@ def _create_project_router() -> Any:
         return JSONResponse(issue.to_dict(), status_code=201)
 
     @router.post("/issue/{issue_id}/claim")
-    async def api_claim_issue(issue_id: str, request: Request, db: FiligreeDB = Depends(_get_project_db)) -> JSONResponse:
+    async def api_claim_issue(issue_id: str, request: Request, db: FiligreeDB = Depends(_get_db)) -> JSONResponse:
         """Claim an issue."""
         try:
             body = await request.json()
@@ -525,7 +514,7 @@ def _create_project_router() -> Any:
         return JSONResponse(issue.to_dict())
 
     @router.post("/issue/{issue_id}/release")
-    async def api_release_claim(issue_id: str, request: Request, db: FiligreeDB = Depends(_get_project_db)) -> JSONResponse:
+    async def api_release_claim(issue_id: str, request: Request, db: FiligreeDB = Depends(_get_db)) -> JSONResponse:
         """Release a claimed issue."""
         try:
             body = await request.json()
@@ -543,7 +532,7 @@ def _create_project_router() -> Any:
         return JSONResponse(issue.to_dict())
 
     @router.post("/claim-next")
-    async def api_claim_next(request: Request, db: FiligreeDB = Depends(_get_project_db)) -> JSONResponse:
+    async def api_claim_next(request: Request, db: FiligreeDB = Depends(_get_db)) -> JSONResponse:
         """Claim the highest-priority ready issue."""
         try:
             body = await request.json()
@@ -564,7 +553,7 @@ def _create_project_router() -> Any:
         return JSONResponse(issue.to_dict())
 
     @router.post("/issue/{issue_id}/dependencies")
-    async def api_add_dependency(issue_id: str, request: Request, db: FiligreeDB = Depends(_get_project_db)) -> JSONResponse:
+    async def api_add_dependency(issue_id: str, request: Request, db: FiligreeDB = Depends(_get_db)) -> JSONResponse:
         """Add a dependency: issue_id depends on depends_on."""
         try:
             body = await request.json()
@@ -583,7 +572,7 @@ def _create_project_router() -> Any:
         return JSONResponse({"added": added})
 
     @router.delete("/issue/{issue_id}/dependencies/{dep_id}")
-    async def api_remove_dependency(issue_id: str, dep_id: str, db: FiligreeDB = Depends(_get_project_db)) -> JSONResponse:
+    async def api_remove_dependency(issue_id: str, dep_id: str, db: FiligreeDB = Depends(_get_db)) -> JSONResponse:
         """Remove a dependency."""
         try:
             removed = db.remove_dependency(issue_id, dep_id, actor="dashboard")
@@ -592,7 +581,7 @@ def _create_project_router() -> Any:
         return JSONResponse({"removed": removed})
 
     @router.get("/files")
-    async def api_list_files(request: Request, db: FiligreeDB = Depends(_get_project_db)) -> JSONResponse:
+    async def api_list_files(request: Request, db: FiligreeDB = Depends(_get_db)) -> JSONResponse:
         """List tracked file records with optional filtering and pagination."""
         params = request.query_params
         limit = _safe_int(params.get("limit", "100"), "limit", 100)
@@ -618,7 +607,7 @@ def _create_project_router() -> Any:
         return JSONResponse(result, headers={"Cache-Control": "no-cache"})
 
     @router.get("/files/hotspots")
-    async def api_file_hotspots(request: Request, db: FiligreeDB = Depends(_get_project_db)) -> JSONResponse:
+    async def api_file_hotspots(request: Request, db: FiligreeDB = Depends(_get_db)) -> JSONResponse:
         """Files ranked by weighted finding severity score."""
         params = request.query_params
         limit = _safe_int(params.get("limit", "10"), "limit", 10)
@@ -628,7 +617,7 @@ def _create_project_router() -> Any:
         return JSONResponse(result)
 
     @router.get("/files/stats")
-    async def api_file_stats(db: FiligreeDB = Depends(_get_project_db)) -> JSONResponse:
+    async def api_file_stats(db: FiligreeDB = Depends(_get_db)) -> JSONResponse:
         """Global findings severity stats across all files."""
         return JSONResponse(db.get_global_findings_stats())
 
@@ -702,7 +691,7 @@ def _create_project_router() -> Any:
         return JSONResponse(schema, headers={"Cache-Control": "max-age=3600"})
 
     @router.get("/files/{file_id}")
-    async def api_get_file(file_id: str, db: FiligreeDB = Depends(_get_project_db)) -> JSONResponse:
+    async def api_get_file(file_id: str, db: FiligreeDB = Depends(_get_db)) -> JSONResponse:
         """Get file record with associations, recent findings, and summary."""
         try:
             data = db.get_file_detail(file_id)
@@ -711,7 +700,7 @@ def _create_project_router() -> Any:
         return JSONResponse(data, headers={"Cache-Control": "no-cache"})
 
     @router.get("/files/{file_id}/findings")
-    async def api_get_file_findings(file_id: str, request: Request, db: FiligreeDB = Depends(_get_project_db)) -> JSONResponse:
+    async def api_get_file_findings(file_id: str, request: Request, db: FiligreeDB = Depends(_get_db)) -> JSONResponse:
         """Get scan findings for a file with pagination."""
         try:
             db.get_file(file_id)
@@ -738,7 +727,7 @@ def _create_project_router() -> Any:
         return JSONResponse(result, headers={"Cache-Control": "max-age=30"})
 
     @router.get("/files/{file_id}/timeline")
-    async def api_get_file_timeline(file_id: str, request: Request, db: FiligreeDB = Depends(_get_project_db)) -> JSONResponse:
+    async def api_get_file_timeline(file_id: str, request: Request, db: FiligreeDB = Depends(_get_db)) -> JSONResponse:
         """Get merged timeline of events for a file."""
         params = request.query_params
         limit = _safe_int(params.get("limit", "50"), "limit", 50)
@@ -755,7 +744,7 @@ def _create_project_router() -> Any:
         return JSONResponse(result)
 
     @router.post("/files/{file_id}/associations")
-    async def api_add_file_association(file_id: str, request: Request, db: FiligreeDB = Depends(_get_project_db)) -> JSONResponse:
+    async def api_add_file_association(file_id: str, request: Request, db: FiligreeDB = Depends(_get_db)) -> JSONResponse:
         """Link a file to an issue."""
         try:
             db.get_file(file_id)
@@ -778,7 +767,7 @@ def _create_project_router() -> Any:
         return JSONResponse({"status": "created"}, status_code=201)
 
     @router.post("/v1/scan-results")
-    async def api_scan_results(request: Request, db: FiligreeDB = Depends(_get_project_db)) -> JSONResponse:
+    async def api_scan_results(request: Request, db: FiligreeDB = Depends(_get_db)) -> JSONResponse:
         """Ingest scan results."""
         try:
             body = await request.json()
@@ -803,7 +792,7 @@ def _create_project_router() -> Any:
         return JSONResponse(result, status_code=status_code)
 
     @router.get("/scan-runs")
-    async def api_scan_runs(request: Request, db: FiligreeDB = Depends(_get_project_db)) -> JSONResponse:
+    async def api_scan_runs(request: Request, db: FiligreeDB = Depends(_get_db)) -> JSONResponse:
         """Get scan run history from scan_findings grouped by scan_run_id."""
         params = request.query_params
         limit = _safe_int(params.get("limit", "10"), "limit", 10)
@@ -834,18 +823,9 @@ def create_app() -> Any:
 
     app = FastAPI(title="Filigree Dashboard", docs_url=None, redoc_url=None)
 
-    from fastapi.exceptions import HTTPException as FastAPIHTTPException
-
-    @app.exception_handler(FastAPIHTTPException)
-    async def http_exception_handler(request: Request, exc: FastAPIHTTPException) -> JSONResponse:
-        code = "PROJECT_NOT_FOUND" if exc.status_code == 404 else "INTERNAL_ERROR"
-        return _error_response(str(exc.detail), code, exc.status_code)
-
     router = _create_project_router()
 
-    # Scoped: /api/p/{project_key}/issues, etc.
-    app.include_router(router, prefix="/api/p/{project_key}")
-    # Backward compat: /api/issues (uses default project)
+    # Single-project: all endpoints at /api/
     app.include_router(router, prefix="/api")
 
     # Root-level endpoints (not project-scoped)
@@ -859,65 +839,6 @@ def create_app() -> Any:
     async def api_health() -> JSONResponse:
         return JSONResponse({"status": "ok"})
 
-    @app.get("/api/projects")
-    async def api_projects(ttl: float = 6.0) -> JSONResponse:
-        if _project_manager is None:
-            return JSONResponse([])
-        projects = _project_manager.get_active_projects(ttl_hours=ttl)
-        return JSONResponse([asdict(p) for p in projects])
-
-    @app.post("/api/register")
-    async def api_register(request: Request) -> JSONResponse:
-        if _project_manager is None:
-            return _error_response("Project manager not initialized", "INTERNAL_ERROR", 500)
-        try:
-            body = await request.json()
-        except Exception:
-            return _error_response("Invalid JSON body", "VALIDATION_ERROR", 400)
-        if not isinstance(body, dict):
-            return _error_response("Request body must be a JSON object", "VALIDATION_ERROR", 400)
-        path = body.get("path")
-        if not path or not isinstance(path, str):
-            return _error_response("path is required and must be a non-empty string", "VALIDATION_ERROR", 400)
-        # Canonicalize to prevent path traversal
-        p = Path(path).resolve()
-        if not p.is_dir():
-            return _error_response(f"Directory not found: {path}", "VALIDATION_ERROR", 400)
-        # Resolve: accept either .filigree/ dir or its parent project root
-        if p.name != ".filigree":
-            candidate = p / ".filigree"
-            if candidate.is_dir():
-                p = candidate
-            else:
-                return _error_response(
-                    "Path must be a .filigree/ directory or a project root containing one",
-                    "VALIDATION_ERROR",
-                    400,
-                )
-        entry = _project_manager.register(p)
-        return JSONResponse(asdict(entry))
-
-    @app.post("/api/reload")
-    async def api_reload() -> JSONResponse:
-        if _project_manager is None:
-            return _error_response("Project manager not initialized", "INTERNAL_ERROR", 500)
-        _project_manager.close_all()
-        projects = _project_manager.get_active_projects()
-        errors: list[str] = []
-        for proj in projects:
-            try:
-                _project_manager.register(Path(proj.path))
-            except Exception:
-                logger.warning("Failed to re-register project %s", proj.key, exc_info=True)
-                errors.append(proj.key)
-        return JSONResponse(
-            {
-                "ok": len(errors) == 0,
-                "projects": len(projects) - len(errors),
-                "errors": errors,
-            }
-        )
-
     # Serve static JS modules (ES modules for dashboard components)
     from starlette.staticfiles import StaticFiles
 
@@ -927,23 +848,21 @@ def create_app() -> Any:
 
 
 def main(port: int = DEFAULT_PORT, *, no_browser: bool = False) -> None:
-    """Start the dashboard server."""
+    """Start the dashboard server for the current project."""
     import threading
 
     import uvicorn
 
-    global _project_manager, _default_project_key
-
-    registry = Registry()
-    _project_manager = ProjectManager(registry)
+    global _db
 
     filigree_dir = find_filigree_root()
-    try:
-        entry = _project_manager.register(filigree_dir)
-    except OSError:
-        logger.warning("Registry unavailable, using local-only mode", exc_info=True)
-        entry = _project_manager.register_local(filigree_dir)
-    _default_project_key = entry.key
+    config = read_config(filigree_dir)
+    _db = FiligreeDB(
+        filigree_dir / DB_FILENAME,
+        prefix=config.get("prefix", "filigree"),
+        check_same_thread=False,
+    )
+    _db.initialize()
 
     app = create_app()
 
