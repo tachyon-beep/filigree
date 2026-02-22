@@ -33,8 +33,10 @@ export async function openDetail(issueId) {
   state.selectedIssue = issueId;
   updateHash();
   const panel = document.getElementById("detailPanel");
+  const header = document.getElementById("detailHeader");
   const content = document.getElementById("detailContent");
 
+  header.innerHTML = "";
   content.innerHTML = '<div class="text-xs" style="color:var(--text-muted)">Loading...</div>';
   panel.classList.remove("translate-x-full");
 
@@ -126,16 +128,16 @@ export async function openDetail(issueId) {
         ? `<span class="text-xs bg-red-900/50 text-red-400 px-2 py-0.5 rounded">Blocked by ${openBlockers.length}</span>`
         : "";
 
-  content.innerHTML =
-    '<div class="flex items-center justify-between mb-3">' +
+  header.innerHTML =
     `<span class="text-xs" style="color:var(--text-muted)">${d.id}</span>` +
     "<div>" +
     (state.detailHistory.length
       ? '<button onclick="detailBack()" class="text-muted text-primary-hover text-xs mr-2">&larr; Back</button>'
       : "") +
     '<button onclick="closeDetail()" class="text-muted text-primary-hover text-lg" aria-label="Close detail panel">&times;</button>' +
-    "</div>" +
-    "</div>" +
+    "</div>";
+
+  content.innerHTML =
     '<div class="flex items-center gap-2 mb-1">' +
     `<span class="text-lg">${typeIcon}</span>` +
     `<span class="text-lg font-semibold" style="color:var(--text-primary)">${escHtml(d.title)}</span>` +
@@ -259,6 +261,7 @@ export async function openDetail(issueId) {
 export function closeDetail() {
   state.selectedIssue = null;
   state.detailHistory = [];
+  document.getElementById("detailHeader").innerHTML = "";
   document.getElementById("detailPanel").classList.add("translate-x-full");
   updateHash();
 }

@@ -350,8 +350,9 @@ tailwind.config = {
   </div>
 
   <!-- Detail panel (slides in from right) -->
-  <div id="detailPanel" role="complementary" aria-label="Issue Detail" class="detail-panel absolute top-0 right-0 h-full w-[500px] bg-raised border-l border-default overflow-y-auto scrollbar-thin transform translate-x-full z-10">
-    <div id="detailContent" class="p-5"></div>
+  <div id="detailPanel" role="complementary" aria-label="Issue Detail" class="detail-panel absolute top-0 right-0 h-full w-[500px] bg-raised border-l border-default flex flex-col transform translate-x-full z-10">
+    <div id="detailHeader" class="flex items-center justify-between px-5 pt-4 pb-2 shrink-0"></div>
+    <div id="detailContent" class="p-5 pt-0 overflow-y-auto scrollbar-thin flex-1"></div>
   </div>
 </div>
 

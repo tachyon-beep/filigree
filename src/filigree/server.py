@@ -65,6 +65,8 @@ def register_project(filigree_dir: Path) -> None:
 
     Uses ``fcntl.flock`` around the read-modify-write to prevent
     concurrent sessions from losing each other's registrations.
+    Raises ``ValueError`` if another registered project already uses
+    the same prefix.
     """
     filigree_dir = filigree_dir.resolve()
     project_config = read_config(filigree_dir)
@@ -82,9 +84,20 @@ def register_project(filigree_dir: Path) -> None:
     with open(lock_path, "w") as lock_fd:
         fcntl.flock(lock_fd, fcntl.LOCK_EX)
         config = read_server_config()
-        config.projects[str(filigree_dir)] = {
-            "prefix": project_config.get("prefix", "filigree"),
-        }
+        project_key = str(filigree_dir)
+        prefix = str(project_config.get("prefix", "filigree"))
+
+        for existing_path, meta in config.projects.items():
+            if existing_path == project_key:
+                continue  # idempotent re-register
+            existing_prefix = str(meta.get("prefix", "filigree")) if isinstance(meta, dict) else "filigree"
+            if existing_prefix == prefix:
+                raise ValueError(
+                    f"Prefix collision: {prefix!r} already registered by {existing_path}. "
+                    "Choose a unique prefix in .filigree/config.json."
+                )
+
+        config.projects[project_key] = {"prefix": prefix}
         write_server_config(config)
 
 

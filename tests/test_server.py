@@ -80,6 +80,38 @@ class TestProjectRegistration:
         config = read_server_config()
         assert str(filigree_dir.resolve()) not in config.projects
 
+    def test_register_project_rejects_prefix_collision(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        config_dir = tmp_path / ".config" / "filigree"
+        monkeypatch.setattr("filigree.server.SERVER_CONFIG_DIR", config_dir)
+        monkeypatch.setattr("filigree.server.SERVER_CONFIG_FILE", config_dir / "server.json")
+
+        first = tmp_path / "project-a" / ".filigree"
+        second = tmp_path / "project-b" / ".filigree"
+        first.mkdir(parents=True)
+        second.mkdir(parents=True)
+        (first / "config.json").write_text('{"prefix": "filigree"}')
+        (second / "config.json").write_text('{"prefix": "filigree"}')
+
+        register_project(first)
+        with pytest.raises(ValueError, match="Prefix collision"):
+            register_project(second)
+
+    def test_register_project_is_idempotent_for_same_path(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        config_dir = tmp_path / ".config" / "filigree"
+        monkeypatch.setattr("filigree.server.SERVER_CONFIG_DIR", config_dir)
+        monkeypatch.setattr("filigree.server.SERVER_CONFIG_FILE", config_dir / "server.json")
+
+        filigree_dir = tmp_path / "myproject" / ".filigree"
+        filigree_dir.mkdir(parents=True)
+        (filigree_dir / "config.json").write_text('{"prefix": "myproject"}')
+
+        register_project(filigree_dir)
+        register_project(filigree_dir)
+        config = read_server_config()
+        assert list(config.projects.keys()) == [str(filigree_dir.resolve())]
+
 
 class TestVersionEnforcement:
     def test_register_rejects_incompatible_schema(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

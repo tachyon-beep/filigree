@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -137,3 +138,33 @@ class TestValidateScannerCommand:
         err = validate_scanner_command("nonexistent_cmd_xyz arg1")
         assert err is not None
         assert "not found" in err
+
+
+class TestScannerExamples:
+    @staticmethod
+    def _read_example(example_name: str) -> dict[str, object]:
+        repo_root = Path(__file__).resolve().parents[1]
+        example_path = repo_root / "scripts" / "scanners" / example_name
+        return tomllib.loads(example_path.read_text(encoding="utf-8"))
+
+    def test_claude_example_uses_directory_root(self) -> None:
+        data = self._read_example("claude.toml.example")
+        scanner = data["scanner"]
+        assert isinstance(scanner, dict)
+        args = scanner["args"]
+        assert isinstance(args, list)
+        assert "--root" in args
+        i = args.index("--root")
+        assert i + 1 < len(args)
+        assert args[i + 1] == "{project_root}"
+
+    def test_codex_example_uses_directory_root(self) -> None:
+        data = self._read_example("codex.toml.example")
+        scanner = data["scanner"]
+        assert isinstance(scanner, dict)
+        args = scanner["args"]
+        assert isinstance(args, list)
+        assert "--root" in args
+        i = args.index("--root")
+        assert i + 1 < len(args)
+        assert args[i + 1] == "{project_root}"
