@@ -1402,6 +1402,25 @@ class TestMinFindingsFilter:
         result = db.list_files_paginated(min_findings=2)
         assert result["total"] == 1  # Both findings are non-terminal
 
+    def test_min_findings_counts_unseen_in_latest(self, db: FiligreeDB) -> None:
+        db.process_scan_results(
+            scan_source="ruff",
+            findings=[
+                {"path": "a.py", "rule_id": "E1", "severity": "low", "message": "m1"},
+                {"path": "a.py", "rule_id": "E2", "severity": "low", "message": "m2"},
+            ],
+        )
+        f = db.get_file_by_path("a.py")
+        findings = db.get_findings(f.id)
+        # Mark one as unseen_in_latest — should still count as active
+        db.conn.execute(
+            "UPDATE scan_findings SET status = 'unseen_in_latest' WHERE id = ?",
+            (findings[0].id,),
+        )
+        db.conn.commit()
+        result = db.list_files_paginated(min_findings=2)
+        assert result["total"] == 1  # Both findings are non-terminal
+
     def test_min_findings_zero_returns_all(self, db: FiligreeDB) -> None:
         db.register_file("a.py")
         db.register_file("b.py")
