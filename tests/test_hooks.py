@@ -337,6 +337,31 @@ class TestGenerateSessionContextFreshness:
         assert "Updated" not in result
 
 
+class TestSessionContextDashboardUrl:
+    def test_includes_dashboard_url_when_running(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        filigree_dir = tmp_path / ".filigree"
+        filigree_dir.mkdir()
+        config = {"prefix": "test", "version": 1, "mode": "ethereal"}
+        (filigree_dir / "config.json").write_text(json.dumps(config))
+        (filigree_dir / "ephemeral.port").write_text("9173")
+        (filigree_dir / "ephemeral.pid").write_text(str(os.getpid()))
+
+        db = FiligreeDB(filigree_dir / DB_FILENAME, prefix="test")
+        db.initialize()
+
+        monkeypatch.setattr("filigree.hooks._is_port_listening", lambda *a: True)
+        context = _build_context(db, filigree_dir)
+        db.close()
+
+        assert "http://localhost:9173" in context
+
+    def test_no_url_when_no_port_file(self, db: FiligreeDB, tmp_path: Path) -> None:
+        filigree_dir = tmp_path / ".filigree"
+        filigree_dir.mkdir()
+        context = _build_context(db, filigree_dir)
+        assert "localhost" not in context
+
+
 class TestEnsureDashboardEthereal:
     def test_starts_dashboard_on_deterministic_port(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """In ethereal mode, dashboard starts on project-specific port."""
