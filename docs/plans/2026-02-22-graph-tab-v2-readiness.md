@@ -61,8 +61,11 @@ Automated verification completed:
 2. Baseline and advanced Graph API regressions in `tests/test_dashboard.py` cover:
    - mode compatibility semantics
    - filter combinations and scoped queries
+   - `blocked_only=true` behavior
+   - assignee filter behavior
+   - scope radius behavior (`scope_root` + `scope_radius`)
    - error matrix cases
-   - truncation semantics and telemetry
+   - node and edge truncation semantics and telemetry
    - critical-path-only subset behavior
 3. Frontend contract/regression checks cover:
    - graph controls/defaults
@@ -70,6 +73,9 @@ Automated verification completed:
    - overlay layering contract and advanced interaction hooks
 
 Known residual risk:
-1. Frontend interaction testing is contract/static + API-backed and not full browser E2E automation.
-2. Recommend adding dedicated E2E graph interaction tests in a follow-up automation task.
-
+1. Frontend interaction testing remains contract/static + API-backed and not full browser E2E automation.
+2. Unautomated browser interaction paths still include:
+   - disclosure/toggle UX flows (`Filters`/`Advanced`) across viewport sizes
+   - keyboard-only interaction parity for advanced graph toolbar controls
+   - end-to-end visual layering behavior under combined overlays (critical path + path trace + search focus)
+3. Recommend adding dedicated E2E graph interaction tests in follow-up automation work.

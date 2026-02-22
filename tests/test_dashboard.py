@@ -315,6 +315,66 @@ class TestGraphAdvancedAPI:
         assert data["telemetry"]["total_nodes_before_limit"] >= len(data["nodes"])
         assert data["telemetry"]["total_nodes_before_limit"] > 50
 
+    async def test_graph_blocked_only_returns_only_currently_blocked_nodes(
+        self,
+        client: AsyncClient,
+        dashboard_db: FiligreeDB,
+    ) -> None:
+        ids = dashboard_db._test_ids  # type: ignore[attr-defined]
+        resp = await client.get("/api/graph?mode=v2&blocked_only=true")
+        assert resp.status_code == 200
+        data = resp.json()
+        node_ids = {n["id"] for n in data["nodes"]}
+        assert ids["a"] in node_ids
+        assert all(n["blocked_by_open_count"] > 0 for n in data["nodes"])
+        assert data["query"]["blocked_only"] is True
+
+    async def test_graph_assignee_filter_behavior(self, client: AsyncClient, dashboard_db: FiligreeDB) -> None:
+        ids = dashboard_db._test_ids  # type: ignore[attr-defined]
+        dashboard_db.update_issue(ids["a"], assignee="alice")
+        resp = await client.get("/api/graph?mode=v2&assignee=alice")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["query"]["assignee"] == "alice"
+        assert len(data["nodes"]) >= 1
+        assert all(n["assignee"] == "alice" for n in data["nodes"])
+        assert ids["a"] in {n["id"] for n in data["nodes"]}
+
+    async def test_graph_scope_radius_behavior(self, client: AsyncClient, dashboard_db: FiligreeDB) -> None:
+        ids = dashboard_db._test_ids  # type: ignore[attr-defined]
+        root = ids["a"]
+        near = ids["b"]
+
+        r0 = await client.get(f"/api/graph?mode=v2&scope_root={root}&scope_radius=0")
+        r1 = await client.get(f"/api/graph?mode=v2&scope_root={root}&scope_radius=1")
+        assert r0.status_code == 200
+        assert r1.status_code == 200
+
+        r0_data = r0.json()
+        r1_data = r1.json()
+        r0_nodes = {n["id"] for n in r0_data["nodes"]}
+        r1_nodes = {n["id"] for n in r1_data["nodes"]}
+        assert r0_nodes == {root}
+        assert root in r1_nodes
+        assert near in r1_nodes
+        assert len(r1_nodes) >= len(r0_nodes)
+
+    async def test_graph_edge_limit_trimming_behavior(self, client: AsyncClient, dashboard_db: FiligreeDB) -> None:
+        target = dashboard_db.create_issue("Edge fan-in target", type="task", priority=2)
+        blockers: list[str] = []
+        for i in range(60):
+            blocker = dashboard_db.create_issue(f"Edge blocker {i}", type="task", priority=2)
+            blockers.append(blocker.id)
+            dashboard_db.add_dependency(target.id, blocker.id)
+
+        resp = await client.get("/api/graph?mode=v2&edge_limit=50")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["limits"]["edge_limit"] == 50
+        assert data["limits"]["truncated"] is True
+        assert len(data["edges"]) == 50
+        assert data["telemetry"]["total_edges_before_limit"] > 50
+
 
 class TestIssuesAPI:
     async def test_list_all_issues(self, client: AsyncClient, dashboard_db: FiligreeDB) -> None:
