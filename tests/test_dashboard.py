@@ -67,6 +67,8 @@ class TestDashboardIndex:
         assert 'id="graphNotice"' in html
         assert 'role="status"' in html
         assert 'aria-live="polite"' in html
+        assert 'id="graphDiagnosticsBar"' in html
+        assert 'id="graphPerfState"' in html
         assert 'id="graphFocusMode"' in html
         assert 'id="graphFocusRoot"' in html
         assert 'id="graphFocusRadius"' in html
@@ -195,7 +197,9 @@ class TestGraphFrontendContracts:
         html = (STATIC_DIR / "dashboard.html").read_text()
         assert ".graph-toolbar label { min-height: 44px;" in html
         assert ".graph-toolbar button, .graph-toolbar select, .graph-toolbar input[type=\"text\"], .graph-toolbar summary {" in html
+        assert ".graph-toolbar summary { display: inline-flex; align-items: center; line-height: 1; }" in html
         assert 'class="graph-toolbar' in html
+        assert "items-center leading-none" in html
 
     def test_graph_clear_buttons_disable_when_inactive(self) -> None:
         graph_js = (STATIC_DIR / "js" / "views" / "graph.js").read_text()
@@ -209,6 +213,15 @@ class TestGraphFrontendContracts:
         assert graph_js.count("updateGraphClearButtons();") >= 6
         assert 'id="graphClearFocusBtn"' in html
         assert 'id="graphClearPathBtn"' in html
+
+    def test_graph_perf_state_is_in_bottom_diagnostics_bar(self) -> None:
+        html = (STATIC_DIR / "dashboard.html").read_text()
+        assert 'id="graphDiagnosticsBar"' in html
+        diagnostics_idx = html.index('id="graphDiagnosticsBar"')
+        perf_idx = html.index('id="graphPerfState"')
+        cy_idx = html.index('id="cy"')
+        assert cy_idx < diagnostics_idx
+        assert diagnostics_idx < perf_idx
 
     def test_graph_caps_are_within_advanced_disclosure_group(self) -> None:
         html = (STATIC_DIR / "dashboard.html").read_text()
