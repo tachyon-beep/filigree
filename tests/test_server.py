@@ -81,6 +81,28 @@ class TestProjectRegistration:
         assert str(filigree_dir.resolve()) not in config.projects
 
 
+class TestVersionEnforcement:
+    def test_register_rejects_incompatible_schema(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Projects with newer schema versions are rejected."""
+        config_dir = tmp_path / ".config" / "filigree"
+        monkeypatch.setattr("filigree.server.SERVER_CONFIG_DIR", config_dir)
+        monkeypatch.setattr("filigree.server.SERVER_CONFIG_FILE", config_dir / "server.json")
+
+        filigree_dir = tmp_path / "future-project" / ".filigree"
+        filigree_dir.mkdir(parents=True)
+        (filigree_dir / "config.json").write_text(
+            json.dumps(
+                {
+                    "prefix": "future",
+                    "version": 999,
+                }
+            )
+        )
+
+        with pytest.raises(ValueError, match="schema version"):
+            register_project(filigree_dir)
+
+
 class TestDaemonLifecycle:
     def test_start_writes_pid_file(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         config_dir = tmp_path / ".config" / "filigree"

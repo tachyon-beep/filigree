@@ -25,6 +25,7 @@ SERVER_CONFIG_FILE = SERVER_CONFIG_DIR / "server.json"
 SERVER_PID_FILE = SERVER_CONFIG_DIR / "server.pid"
 
 DEFAULT_PORT = 8377
+SUPPORTED_SCHEMA_VERSION = 1  # Max schema version this filigree version can handle
 
 
 @dataclass
@@ -61,8 +62,17 @@ def write_server_config(config: ServerConfig) -> None:
 def register_project(filigree_dir: Path) -> None:
     """Register a project in server.json."""
     filigree_dir = filigree_dir.resolve()
-    config = read_server_config()
     project_config = read_config(filigree_dir)
+
+    # Version enforcement
+    schema_version = project_config.get("version", 1)
+    if schema_version > SUPPORTED_SCHEMA_VERSION:
+        raise ValueError(
+            f"Project schema version {schema_version} is newer than supported "
+            f"version {SUPPORTED_SCHEMA_VERSION}. Upgrade filigree to manage this project."
+        )
+
+    config = read_server_config()
     config.projects[str(filigree_dir)] = {
         "prefix": project_config.get("prefix", "filigree"),
     }
