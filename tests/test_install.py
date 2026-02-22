@@ -105,6 +105,46 @@ class TestInjectInstructions:
         assert content.count("Middle") == 1
 
 
+class TestInstructionsVersionFallback:
+    def test_instructions_version_falls_back_to_package_version(self) -> None:
+        """_instructions_version should fall back to filigree.__version__ when metadata is missing."""
+        from importlib.metadata import PackageNotFoundError
+
+        import filigree
+
+        with (
+            patch("filigree.install.importlib.metadata.version", side_effect=PackageNotFoundError("filigree")),
+            patch.object(filigree, "__version__", "9.9.9-test"),
+        ):
+            assert _instructions_version() == "9.9.9-test"
+
+    def test_import_install_module_without_metadata_does_not_raise(self) -> None:
+        """Import/reload of filigree.install should not fail when package metadata is unavailable."""
+        import importlib
+        from importlib import metadata
+        from importlib.metadata import PackageNotFoundError
+
+        import filigree
+        import filigree.install as install_mod
+
+        real_version = metadata.version
+
+        def _fake_version(dist_name: str) -> str:
+            if dist_name == "filigree":
+                raise PackageNotFoundError(dist_name)
+            return real_version(dist_name)
+
+        with (
+            patch("importlib.metadata.version", side_effect=_fake_version),
+            patch.object(filigree, "__version__", "9.9.9-test"),
+        ):
+            reloaded = importlib.reload(install_mod)
+            assert "<!-- filigree:instructions:v9.9.9-test:" in reloaded.FILIGREE_INSTRUCTIONS
+
+        # Avoid leaking patched module-level constants to later tests.
+        importlib.reload(install_mod)
+
+
 class TestEnsureGitignore:
     def test_create_gitignore(self, tmp_path: Path) -> None:
         ok, _msg = ensure_gitignore(tmp_path)

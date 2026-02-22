@@ -60,8 +60,17 @@ def _instructions_hash() -> str:
 
 
 def _instructions_version() -> str:
-    """Return the installed filigree package version."""
-    return importlib.metadata.version("filigree")
+    """Return a sensible filigree version for instructions markers.
+
+    Falls back to the package ``__version__`` (which itself handles
+    source-checkout cases) when distribution metadata is unavailable.
+    """
+    try:
+        return importlib.metadata.version("filigree")
+    except importlib.metadata.PackageNotFoundError:
+        from filigree import __version__
+
+        return __version__ or "0.0.0-dev"
 
 
 def _build_instructions_block() -> str:
