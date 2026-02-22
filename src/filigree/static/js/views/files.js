@@ -9,6 +9,7 @@ import {
   fetchFileTimeline,
   postFileAssociation,
 } from "../api.js";
+import { updateHash } from "../router.js";
 import { SEVERITY_COLORS, state } from "../state.js";
 import { escHtml, showCreateForm, showToast } from "../ui.js";
 
@@ -224,6 +225,7 @@ export function filesPageNext() {
 export async function openFileDetail(fileId) {
   state.selectedIssue = null;
   state.selectedFile = fileId;
+  updateHash();
   state.fileDetailTab = "findings";
   _findingsFilters = { severity: null, status: null };
 

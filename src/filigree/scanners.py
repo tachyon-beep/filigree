@@ -55,12 +55,17 @@ class ScannerConfig:
         except ValueError as e:
             msg = f"Malformed command string in scanner {self.name!r}: {e}"
             raise ValueError(msg) from e
+        expanded_base = []
+        for token in base:
+            for key, val in subs.items():
+                token = token.replace(key, val)
+            expanded_base.append(token)
         expanded_args = []
         for arg in self.args:
             for key, val in subs.items():
                 arg = arg.replace(key, val)
             expanded_args.append(arg)
-        return base + expanded_args
+        return expanded_base + expanded_args
 
     def to_dict(self) -> dict[str, object]:
         return {

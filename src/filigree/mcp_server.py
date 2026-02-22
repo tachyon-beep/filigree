@@ -1700,7 +1700,8 @@ async def _dispatch(name: str, arguments: dict[str, Any], tracker: FiligreeDB) -
                     )
 
             # Per-(scanner, file) cooldown — evict stale entries first
-            cooldown_key = (scanner_name, file_path)
+            canonical_path = str(target.relative_to(_filigree_dir.resolve().parent))
+            cooldown_key = (scanner_name, canonical_path)
             now_mono = time.monotonic()
             stale = [k for k, v in _scan_cooldowns.items() if now_mono - v >= _SCAN_COOLDOWN_SECONDS]
             for k in stale:
@@ -1722,7 +1723,7 @@ async def _dispatch(name: str, arguments: dict[str, Any], tracker: FiligreeDB) -
                 return _text({"error": cmd_err, "code": "command_not_found"})
 
             # Register file in file_records
-            file_record = tracker.register_file(file_path)
+            file_record = tracker.register_file(canonical_path)
 
             # Generate scan_run_id with random suffix to avoid collisions
             ts = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S")

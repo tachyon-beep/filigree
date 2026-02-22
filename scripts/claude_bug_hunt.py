@@ -27,7 +27,7 @@ import re
 import shutil
 import sys
 from collections import Counter
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 # Import shared utilities from scripts/scan_utils.py
@@ -346,7 +346,7 @@ def main() -> int:
         return 1
 
     context = load_context(repo_root)
-    scan_run_id = args.scan_run_id or f"claude-{datetime.now(datetime.UTC).isoformat()}"
+    scan_run_id = args.scan_run_id or f"claude-{datetime.now(UTC).isoformat()}"
 
     print(f"Analysing {len(files)} files (batch={args.batch_size}, model={args.model}) ...", file=sys.stderr)
     if not args.no_ingest:
