@@ -29,6 +29,7 @@ from filigree.core import (
     DB_FILENAME,
     FILIGREE_DIR_NAME,
     SUMMARY_FILENAME,
+    find_filigree_command,
     find_filigree_root,
 )
 
@@ -102,24 +103,6 @@ def _find_filigree_mcp_command() -> str:
         if candidate.exists():
             return str(candidate)
     return "filigree-mcp"
-
-
-def _find_filigree_command() -> list[str]:
-    """Find the filigree command as a list of argument tokens.
-
-    Resolution order:
-    1. ``shutil.which("filigree")`` — absolute path if on PATH
-    2. Sibling of the running Python interpreter (covers venv case)
-    3. ``[sys.executable, "-m", "filigree"]`` — module invocation fallback,
-       guaranteed to work when filigree is installed for the running interpreter
-    """
-    which = shutil.which("filigree")
-    if which:
-        return [which]
-    candidate = Path(sys.executable).parent / "filigree"
-    if candidate.exists():
-        return [str(candidate)]
-    return [sys.executable, "-m", "filigree"]
 
 
 def install_claude_code_mcp(project_root: Path) -> tuple[bool, str]:
@@ -463,7 +446,7 @@ def install_claude_code_hooks(project_root: Path) -> tuple[bool, str]:
     # Resolve the filigree command tokens to build hook command strings.
     # shlex.join properly quotes tokens containing spaces so the resulting
     # shell command is safe on all platforms (e.g. Windows paths with spaces).
-    filigree_tokens = _find_filigree_command()
+    filigree_tokens = find_filigree_command()
     filigree_prefix = shlex.join(filigree_tokens)
     session_context_cmd = f"{filigree_prefix} session-context"
     ensure_dashboard_cmd = f"{filigree_prefix} ensure-dashboard"

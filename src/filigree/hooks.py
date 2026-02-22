@@ -19,12 +19,12 @@ from pathlib import Path
 from filigree.core import (
     DB_FILENAME,
     FiligreeDB,
+    find_filigree_command,
     find_filigree_root,
     read_config,
 )
 from filigree.install import (
     FILIGREE_INSTRUCTIONS_MARKER,
-    _find_filigree_command,
     _instructions_hash,
     inject_instructions,
     install_skills,
@@ -258,7 +258,7 @@ def ensure_dashboard_running(port: int = 8377) -> str:
             return f"Filigree dashboard already running on http://localhost:{port}"
 
         # Start the dashboard in a detached process
-        filigree_cmd = _find_filigree_command()
+        filigree_cmd = find_filigree_command()
 
         # Capture stderr to a log file for diagnostics on failure
         with open(logfile, "w") as log_fd:

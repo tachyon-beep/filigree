@@ -14,12 +14,12 @@ from filigree.core import (
     FILIGREE_DIR_NAME,
     SUMMARY_FILENAME,
     FiligreeDB,
+    find_filigree_command,
 )
 from filigree.install import (
     FILIGREE_INSTRUCTIONS_MARKER,
     SKILL_NAME,
     CheckResult,
-    _find_filigree_command,
     _find_filigree_mcp_command,
     _has_hook_command,
     _instructions_hash,
@@ -414,8 +414,8 @@ class TestFindFiligreeMcpCommand:
 class TestFindFiligreeCommand:
     def test_found_on_path(self) -> None:
         """When filigree is on PATH, return single-element list."""
-        with patch("filigree.install.shutil.which", return_value="/usr/local/bin/filigree"):
-            result = _find_filigree_command()
+        with patch("filigree.core.shutil.which", return_value="/usr/local/bin/filigree"):
+            result = find_filigree_command()
             assert result == ["/usr/local/bin/filigree"]
 
     def test_fallback_to_sys_executable_sibling(self, tmp_path: Path) -> None:
@@ -426,19 +426,19 @@ class TestFindFiligreeCommand:
         sibling.touch()
 
         with (
-            patch("filigree.install.shutil.which", return_value=None),
-            patch("filigree.install.sys.executable", str(fake_python)),
+            patch("filigree.core.shutil.which", return_value=None),
+            patch("filigree.core.sys.executable", str(fake_python)),
         ):
-            result = _find_filigree_command()
+            result = find_filigree_command()
             assert result == [str(sibling)]
 
     def test_default_fallback(self) -> None:
         """When nothing found, return python -m filigree tokens."""
         with (
-            patch("filigree.install.shutil.which", return_value=None),
-            patch("filigree.install.sys.executable", "/nonexistent/python3"),
+            patch("filigree.core.shutil.which", return_value=None),
+            patch("filigree.core.sys.executable", "/nonexistent/python3"),
         ):
-            result = _find_filigree_command()
+            result = find_filigree_command()
             assert result == ["/nonexistent/python3", "-m", "filigree"]
 
 
@@ -556,7 +556,7 @@ class TestInstallClaudeCodeHooks:
     MOCK_BIN = "/mock/venv/bin/filigree"
 
     def test_creates_settings_json(self, tmp_path: Path) -> None:
-        with patch("filigree.install._find_filigree_command", return_value=self.MOCK_TOKENS):
+        with patch("filigree.install.find_filigree_command", return_value=self.MOCK_TOKENS):
             ok, _msg = install_claude_code_hooks(tmp_path)
         assert ok
         settings_path = tmp_path / ".claude" / "settings.json"
@@ -571,7 +571,7 @@ class TestInstallClaudeCodeHooks:
         claude_dir.mkdir()
         existing = {"someOtherKey": True}
         (claude_dir / "settings.json").write_text(json.dumps(existing))
-        with patch("filigree.install._find_filigree_command", return_value=self.MOCK_TOKENS):
+        with patch("filigree.install.find_filigree_command", return_value=self.MOCK_TOKENS):
             ok, _msg = install_claude_code_hooks(tmp_path)
         assert ok
         data = json.loads((claude_dir / "settings.json").read_text())
@@ -579,7 +579,7 @@ class TestInstallClaudeCodeHooks:
         assert "hooks" in data
 
     def test_idempotent(self, tmp_path: Path) -> None:
-        with patch("filigree.install._find_filigree_command", return_value=self.MOCK_TOKENS):
+        with patch("filigree.install.find_filigree_command", return_value=self.MOCK_TOKENS):
             install_claude_code_hooks(tmp_path)
             install_claude_code_hooks(tmp_path)
         data = json.loads((tmp_path / ".claude" / "settings.json").read_text())
@@ -592,7 +592,7 @@ class TestInstallClaudeCodeHooks:
         claude_dir = tmp_path / ".claude"
         claude_dir.mkdir()
         (claude_dir / "settings.json").write_text("{corrupt json!!!")
-        with patch("filigree.install._find_filigree_command", return_value=self.MOCK_TOKENS):
+        with patch("filigree.install.find_filigree_command", return_value=self.MOCK_TOKENS):
             ok, _msg = install_claude_code_hooks(tmp_path)
         assert ok
         # Backup should exist
@@ -600,7 +600,7 @@ class TestInstallClaudeCodeHooks:
 
     def test_dashboard_hook_conditional(self, tmp_path: Path) -> None:
         """Dashboard hook is added only when dashboard extra is importable."""
-        with patch("filigree.install._find_filigree_command", return_value=self.MOCK_TOKENS):
+        with patch("filigree.install.find_filigree_command", return_value=self.MOCK_TOKENS):
             ok, _msg = install_claude_code_hooks(tmp_path)
         assert ok
         data = json.loads((tmp_path / ".claude" / "settings.json").read_text())
@@ -630,7 +630,7 @@ class TestInstallClaudeCodeHooks:
             }
         }
         (claude_dir / "settings.json").write_text(json.dumps(settings))
-        with patch("filigree.install._find_filigree_command", return_value=self.MOCK_TOKENS):
+        with patch("filigree.install.find_filigree_command", return_value=self.MOCK_TOKENS):
             ok, msg = install_claude_code_hooks(tmp_path)
         assert ok
         assert "Upgraded" in msg or "Registered" in msg
@@ -665,7 +665,7 @@ class TestInstallClaudeCodeHooks:
             pass
         settings = {"hooks": {"SessionStart": [{"hooks": hooks_list}]}}
         (claude_dir / "settings.json").write_text(json.dumps(settings))
-        with patch("filigree.install._find_filigree_command", return_value=self.MOCK_TOKENS):
+        with patch("filigree.install.find_filigree_command", return_value=self.MOCK_TOKENS):
             ok, msg = install_claude_code_hooks(tmp_path)
         assert ok
         assert "Upgraded" in msg
@@ -694,7 +694,7 @@ class TestInstallClaudeCodeHooks:
             }
         }
         (claude_dir / "settings.json").write_text(json.dumps(settings))
-        with patch("filigree.install._find_filigree_command", return_value=self.MOCK_TOKENS):
+        with patch("filigree.install.find_filigree_command", return_value=self.MOCK_TOKENS):
             ok, _msg = install_claude_code_hooks(tmp_path)
         assert ok
         data = json.loads((claude_dir / "settings.json").read_text())
@@ -707,7 +707,7 @@ class TestInstallClaudeCodeHooks:
         import shlex
 
         spaced_tokens = ["/path with spaces/python", "-m", "filigree"]
-        with patch("filigree.install._find_filigree_command", return_value=spaced_tokens):
+        with patch("filigree.install.find_filigree_command", return_value=spaced_tokens):
             ok, _msg = install_claude_code_hooks(tmp_path)
         assert ok
         data = json.loads((tmp_path / ".claude" / "settings.json").read_text())
@@ -799,7 +799,7 @@ class TestInstallHooksMalformedStructure:
         claude_dir = tmp_path / ".claude"
         claude_dir.mkdir()
         (claude_dir / "settings.json").write_text(json.dumps({"hooks": []}))
-        with patch("filigree.install._find_filigree_command", return_value=self.MOCK_TOKENS):
+        with patch("filigree.install.find_filigree_command", return_value=self.MOCK_TOKENS):
             ok, _msg = install_claude_code_hooks(tmp_path)
         assert ok
         data = json.loads((claude_dir / "settings.json").read_text())
@@ -810,7 +810,7 @@ class TestInstallHooksMalformedStructure:
         claude_dir = tmp_path / ".claude"
         claude_dir.mkdir()
         (claude_dir / "settings.json").write_text(json.dumps({"hooks": {"SessionStart": "bad"}}))
-        with patch("filigree.install._find_filigree_command", return_value=self.MOCK_TOKENS):
+        with patch("filigree.install.find_filigree_command", return_value=self.MOCK_TOKENS):
             ok, _msg = install_claude_code_hooks(tmp_path)
         assert ok
         data = json.loads((claude_dir / "settings.json").read_text())
@@ -846,7 +846,7 @@ class TestDoctorHooksCheck:
         # Use a real path that exists so the binary path check passes
         mock_bin = str(filigree_project / "filigree")
         (filigree_project / "filigree").touch()
-        with patch("filigree.install._find_filigree_command", return_value=[mock_bin]):
+        with patch("filigree.install.find_filigree_command", return_value=[mock_bin]):
             install_claude_code_hooks(filigree_project)
         results = run_doctor(filigree_project)
         hooks_check = next((r for r in results if r.name == "Claude Code hooks"), None)

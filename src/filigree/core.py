@@ -9,11 +9,15 @@ Convention-based discovery: each project has a `.filigree/` directory containing
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import logging
+import os
 import re as _re
+import shutil
 import sqlite3
+import sys
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -94,6 +98,44 @@ def get_mode(filigree_dir: Path) -> str:
         logger.warning("Unknown mode '%s' in config, falling back to 'ethereal'", mode)
         return "ethereal"
     return mode
+
+
+# ---------------------------------------------------------------------------
+# Shared CLI / file helpers
+# ---------------------------------------------------------------------------
+
+
+def find_filigree_command() -> list[str]:
+    """Locate the filigree CLI command as a list of argument tokens.
+
+    Resolution order:
+    1. shutil.which("filigree") -- absolute path if on PATH
+    2. Sibling of running Python interpreter (covers venv case)
+    3. sys.executable -m filigree -- module invocation fallback
+    """
+    which = shutil.which("filigree")
+    if which:
+        return [which]
+
+    # Check sibling of Python interpreter (common in venvs)
+    python_dir = Path(sys.executable).parent
+    candidate = python_dir / "filigree"
+    if candidate.is_file():
+        return [str(candidate)]
+
+    return [sys.executable, "-m", "filigree"]
+
+
+def write_atomic(path: Path, content: str) -> None:
+    """Write content to path atomically via temp file + os.replace()."""
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    try:
+        tmp.write_text(content, encoding="utf-8")
+        os.replace(tmp, path)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            tmp.unlink()
+        raise
 
 
 # ---------------------------------------------------------------------------

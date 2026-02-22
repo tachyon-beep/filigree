@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from filigree.core import FiligreeDB, get_mode
+from filigree.core import FiligreeDB, find_filigree_command, get_mode, write_atomic
 
 
 class TestCreateAndGet:
@@ -299,9 +299,7 @@ class TestGetMode:
         filigree_dir.mkdir()
         assert get_mode(filigree_dir) == "ethereal"
 
-    def test_unknown_mode_falls_back_to_ethereal(
-        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    def test_unknown_mode_falls_back_to_ethereal(self, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
         """Unknown mode values fall back to ethereal with a warning."""
         filigree_dir = tmp_path / ".filigree"
         filigree_dir.mkdir()
@@ -311,3 +309,34 @@ class TestGetMode:
             result = get_mode(filigree_dir)
         assert result == "ethereal"
         assert "bogus" in caplog.text
+
+
+class TestFindFiligreeCommand:
+    def test_returns_list(self) -> None:
+        """Command is always a list of strings."""
+        result = find_filigree_command()
+        assert isinstance(result, list)
+        assert all(isinstance(s, str) for s in result)
+
+    def test_at_least_one_element(self) -> None:
+        result = find_filigree_command()
+        assert len(result) >= 1
+
+
+class TestWriteAtomic:
+    def test_writes_content(self, tmp_path: Path) -> None:
+        target = tmp_path / "test.txt"
+        write_atomic(target, "hello")
+        assert target.read_text() == "hello"
+
+    def test_no_tmp_file_left(self, tmp_path: Path) -> None:
+        target = tmp_path / "test.txt"
+        write_atomic(target, "hello")
+        assert not (tmp_path / "test.txt.tmp").exists()
+
+    def test_overwrites_existing_file(self, tmp_path: Path) -> None:
+        """Overwriting an existing file works correctly."""
+        target = tmp_path / "test.txt"
+        target.write_text("original")
+        write_atomic(target, "updated")
+        assert target.read_text() == "updated"
