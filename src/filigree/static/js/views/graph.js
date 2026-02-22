@@ -180,7 +180,7 @@ function maybeShowGraphDefaultPresetNotice(preset) {
 function applySearchFocus(search) {
   if (!state.cy || state.criticalPathActive || state.graphPathNodes.size) {
     setGraphSearchButtonsEnabled(false);
-    if (!search) updateGraphSearchState("Search: n/a");
+    if (!search) updateGraphSearchState("No active search.");
     return;
   }
 
@@ -193,7 +193,7 @@ function applySearchFocus(search) {
       n.style("border-color", "#10B981");
     });
     setGraphSearchButtonsEnabled(false);
-    updateGraphSearchState("Search: n/a");
+    updateGraphSearchState("No active search.");
     return;
   }
 

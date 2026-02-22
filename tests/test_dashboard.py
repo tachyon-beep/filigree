@@ -251,6 +251,13 @@ class TestGraphFrontendContracts:
         assert 'aria-label="Path source issue ID"' in html
         assert 'aria-label="Path target issue ID"' in html
 
+    def test_graph_search_idle_state_uses_plain_language(self) -> None:
+        graph_js = (STATIC_DIR / "js" / "views" / "graph.js").read_text()
+        html = (STATIC_DIR / "dashboard.html").read_text()
+        assert "No active search." in graph_js
+        assert "Search: n/a" not in graph_js
+        assert "No active search." in html
+
     def test_graph_perf_state_user_facing_text_and_tooltip_timings(self) -> None:
         graph_js = (STATIC_DIR / "js" / "views" / "graph.js").read_text()
         assert "el.textContent = `${nodeCount} nodes, ${edgeCount} edges`;" in graph_js
