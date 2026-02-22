@@ -793,6 +793,7 @@ def migrate(from_beads: bool, beads_db: str | None) -> None:
 @click.option("--gitignore", is_flag=True, help="Add .filigree/ to .gitignore only")
 @click.option("--hooks", "hooks_only", is_flag=True, help="Install Claude Code hooks only")
 @click.option("--skills", "skills_only", is_flag=True, help="Install Claude Code skills only")
+@click.option("--codex-skills", "codex_skills_only", is_flag=True, help="Install Codex skills only")
 @click.option(
     "--mode",
     type=click.Choice(["ethereal", "server"], case_sensitive=False),
@@ -807,6 +808,7 @@ def install(
     gitignore: bool,
     hooks_only: bool,
     skills_only: bool,
+    codex_skills_only: bool,
     mode: str | None,
 ) -> None:
     """Install filigree into the current project.
@@ -820,6 +822,7 @@ def install(
         install_claude_code_hooks,
         install_claude_code_mcp,
         install_codex_mcp,
+        install_codex_skills,
         install_skills,
     )
 
@@ -839,7 +842,7 @@ def install(
     mode = mode or get_mode(filigree_dir)
 
     project_root = filigree_dir.parent
-    install_all = not any([claude_code, codex, claude_md, agents_md, gitignore, hooks_only, skills_only])
+    install_all = not any([claude_code, codex, claude_md, agents_md, gitignore, hooks_only, skills_only, codex_skills_only])
 
     results: list[tuple[str, bool, str]] = []
     server_port = 8377
@@ -878,6 +881,10 @@ def install(
     if install_all or claude_code or skills_only:
         ok, msg = install_skills(project_root)
         results.append(("Claude Code skills", ok, msg))
+
+    if install_all or codex or codex_skills_only:
+        ok, msg = install_codex_skills(project_root)
+        results.append(("Codex skills", ok, msg))
 
     # Server mode: register project in server.json
     if mode == "server":

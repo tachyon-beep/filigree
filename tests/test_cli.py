@@ -1157,6 +1157,14 @@ class TestInstallCli:
         assert result.exit_code == 0
         assert "CLAUDE.md" in result.output
 
+    def test_install_codex_skills_flag(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        runner, project = cli_in_project
+        result = runner.invoke(cli, ["install", "--codex-skills"])
+        assert result.exit_code == 0, result.output
+        assert "Codex skills" in result.output
+        skill_md = project / ".agents" / "skills" / "filigree-workflow" / "SKILL.md"
+        assert skill_md.exists()
+
 
 class TestDoctorCli:
     def test_doctor_basic(self, cli_in_project: tuple[CliRunner, Path]) -> None:
