@@ -13,6 +13,7 @@ build/
 .coverage
 htmlcov/
 .filigree/
+.claude/
 node_modules/
 .mcp.json
-.codex/config.toml
+.codex/

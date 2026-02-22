@@ -263,7 +263,7 @@ def ensure_dashboard_running(port: int = 8377) -> str:
         # Capture stderr to a log file for diagnostics on failure
         with open(logfile, "w") as log_fd:
             proc = subprocess.Popen(
-                [filigree_cmd, "dashboard", "--no-browser", "--port", str(port)],
+                [*filigree_cmd, "dashboard", "--no-browser", "--port", str(port)],
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,
                 stderr=log_fd,

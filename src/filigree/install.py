@@ -13,6 +13,7 @@ import importlib.metadata
 import importlib.resources
 import json
 import logging
+import shlex
 import shutil
 import sqlite3
 import subprocess
@@ -78,12 +79,22 @@ FILIGREE_INSTRUCTIONS = _build_instructions_block()
 
 
 def _find_filigree_mcp_command() -> str:
-    """Find the filigree-mcp executable path."""
-    # Check if filigree-mcp is on PATH
+    """Find the filigree-mcp executable path.
+
+    Resolution order:
+    1. ``shutil.which("filigree-mcp")`` — absolute path if on PATH
+    2. Sibling of the running Python interpreter (covers venv case)
+    3. Sibling of the filigree binary if on PATH
+    4. Bare ``"filigree-mcp"`` fallback
+    """
     which = shutil.which("filigree-mcp")
     if which:
         return which
-    # Fall back to looking in the same venv as filigree
+    # Check next to the running Python (works in venv even when not on PATH)
+    candidate = Path(sys.executable).parent / "filigree-mcp"
+    if candidate.exists():
+        return str(candidate)
+    # Fall back to looking in the same dir as filigree
     filigree_path = shutil.which("filigree")
     if filigree_path:
         filigree_dir = Path(filigree_path).parent
@@ -93,21 +104,22 @@ def _find_filigree_mcp_command() -> str:
     return "filigree-mcp"
 
 
-def _find_filigree_command() -> str:
-    """Find the filigree executable path.
+def _find_filigree_command() -> list[str]:
+    """Find the filigree command as a list of argument tokens.
 
     Resolution order:
     1. ``shutil.which("filigree")`` — absolute path if on PATH
     2. Sibling of the running Python interpreter (covers venv case)
-    3. Bare ``"filigree"`` fallback
+    3. ``[sys.executable, "-m", "filigree"]`` — module invocation fallback,
+       guaranteed to work when filigree is installed for the running interpreter
     """
     which = shutil.which("filigree")
     if which:
-        return which
+        return [which]
     candidate = Path(sys.executable).parent / "filigree"
     if candidate.exists():
-        return str(candidate)
-    return "filigree"
+        return [str(candidate)]
+    return [sys.executable, "-m", "filigree"]
 
 
 def install_claude_code_mcp(project_root: Path) -> tuple[bool, str]:
@@ -294,22 +306,38 @@ ENSURE_DASHBOARD_COMMAND = "filigree ensure-dashboard"
 
 
 def _hook_cmd_matches(hook_command: str, bare_command: str) -> bool:
-    """Check whether *hook_command* is a bare or absolute-path form of *bare_command*.
+    """Check whether *hook_command* is a bare, absolute-path, or module form of *bare_command*.
+
+    Uses ``shlex.split`` so paths containing spaces (common on Windows)
+    are handled correctly.
 
     Matches:
-    - Exact: ``"filigree session-context"`` == ``"filigree session-context"``
-    - Path:  ``"/path/to/filigree session-context"`` ends with the bare form
-              and the preceding character is a path separator.
+    - Exact: ``"filigree session-context"``
+    - Path:  ``"/path/to/filigree session-context"``
+    - Quoted path: ``"'/path with spaces/filigree' session-context"``
+    - Module: ``"/path/to/python -m filigree session-context"``
     """
     if hook_command == bare_command:
         return True
-    if hook_command.endswith(bare_command):
-        # Ensure the preceding character is a path separator, not part of
-        # another word (e.g. reject "not-filigree session-context").
-        idx = len(hook_command) - len(bare_command) - 1
-        if idx >= 0 and hook_command[idx] in ("/", "\\"):
-            return True
-    return False
+    try:
+        hook_tokens = shlex.split(hook_command)
+        bare_tokens = shlex.split(bare_command)
+    except ValueError:
+        return False
+    if not hook_tokens or not bare_tokens:
+        return False
+    n = len(bare_tokens)
+    if len(hook_tokens) < n:
+        return False
+    # Subcommand tokens (everything after the binary) must match exactly
+    if n > 1 and hook_tokens[-(n - 1) :] != bare_tokens[1:]:
+        return False
+    # Binary token: allow exact match or path-qualified match
+    bare_bin = bare_tokens[0]  # e.g. "filigree"
+    hook_bin = hook_tokens[-n]  # token in the matching position
+    if hook_bin == bare_bin:
+        return True
+    return hook_bin.endswith(("/" + bare_bin, "\\" + bare_bin))
 
 
 def _has_hook_command(settings: dict[str, Any], command: str) -> bool:
@@ -367,8 +395,8 @@ def _upgrade_hook_commands(settings: dict[str, Any], bare_command: str, new_comm
 def _extract_hook_binary(settings: dict[str, Any], bare_command: str) -> str | None:
     """Extract the binary path from the first hook matching *bare_command*.
 
-    Returns the first space-delimited token of the hook command string,
-    or ``None`` if no matching hook is found.
+    Uses ``shlex.split`` to correctly handle quoted paths that contain
+    spaces.  Returns ``None`` if no matching hook is found.
     """
     hooks = settings.get("hooks", {})
     if not isinstance(hooks, dict):
@@ -387,7 +415,13 @@ def _extract_hook_binary(settings: dict[str, Any], bare_command: str) -> str | N
                 continue
             cmd = hook.get("command", "")
             if _hook_cmd_matches(cmd, bare_command):
-                return cmd.split()[0] if cmd else None
+                if not cmd:
+                    return None
+                try:
+                    tokens = shlex.split(cmd)
+                except ValueError:
+                    tokens = cmd.split()
+                return tokens[0] if tokens else None
     return None
 
 
@@ -426,10 +460,13 @@ def install_claude_code_hooks(project_root: Path) -> tuple[bool, str]:
             _shutil.copy2(settings_path, backup)
             logger.warning("Corrupt settings.json; backed up to %s", backup)
 
-    # Resolve the filigree binary to an absolute path
-    filigree_bin = _find_filigree_command()
-    session_context_cmd = f"{filigree_bin} session-context"
-    ensure_dashboard_cmd = f"{filigree_bin} ensure-dashboard"
+    # Resolve the filigree command tokens to build hook command strings.
+    # shlex.join properly quotes tokens containing spaces so the resulting
+    # shell command is safe on all platforms (e.g. Windows paths with spaces).
+    filigree_tokens = _find_filigree_command()
+    filigree_prefix = shlex.join(filigree_tokens)
+    session_context_cmd = f"{filigree_prefix} session-context"
+    ensure_dashboard_cmd = f"{filigree_prefix} ensure-dashboard"
 
     # Upgrade existing bare/stale commands to current absolute paths
     upgraded: list[str] = []
@@ -463,7 +500,7 @@ def install_claude_code_hooks(project_root: Path) -> tuple[bool, str]:
     if not commands_to_add and upgraded:
         # Only upgrades, no new hooks needed
         settings_path.write_text(json.dumps(settings, indent=2) + "\n")
-        return True, f"Upgraded hook commands in .claude/settings.json to use {filigree_bin}"
+        return True, f"Upgraded hook commands in .claude/settings.json to use {filigree_prefix}"
 
     # Ensure structure exists (replace non-dict/non-list values)
     if "hooks" not in settings or not isinstance(settings.get("hooks"), dict):

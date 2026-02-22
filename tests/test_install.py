@@ -368,8 +368,22 @@ class TestFindFiligreeMcpCommand:
             result = _find_filigree_mcp_command()
             assert result == "/usr/bin/filigree-mcp"
 
-    def test_fallback_to_venv(self, tmp_path: Path) -> None:
-        """When filigree-mcp not on PATH, look in same dir as filigree."""
+    def test_fallback_to_sys_executable_sibling(self, tmp_path: Path) -> None:
+        """When filigree-mcp not on PATH, look next to sys.executable."""
+        fake_python = tmp_path / "python3"
+        fake_python.touch()
+        mcp_bin = tmp_path / "filigree-mcp"
+        mcp_bin.touch()
+
+        with (
+            patch("filigree.install.shutil.which", return_value=None),
+            patch("filigree.install.sys.executable", str(fake_python)),
+        ):
+            result = _find_filigree_mcp_command()
+            assert result == str(mcp_bin)
+
+    def test_fallback_to_filigree_sibling(self, tmp_path: Path) -> None:
+        """When filigree-mcp not on PATH or next to python, look next to filigree."""
         filigree_bin = tmp_path / "filigree"
         filigree_bin.touch()
         mcp_bin = tmp_path / "filigree-mcp"
@@ -380,23 +394,29 @@ class TestFindFiligreeMcpCommand:
                 return str(filigree_bin)
             return None
 
-        with patch("filigree.install.shutil.which", side_effect=fake_which):
+        with (
+            patch("filigree.install.shutil.which", side_effect=fake_which),
+            patch("filigree.install.sys.executable", "/nonexistent/python3"),
+        ):
             result = _find_filigree_mcp_command()
             assert result == str(mcp_bin)
 
     def test_default_fallback(self) -> None:
         """When nothing found, return 'filigree-mcp'."""
-        with patch("filigree.install.shutil.which", return_value=None):
+        with (
+            patch("filigree.install.shutil.which", return_value=None),
+            patch("filigree.install.sys.executable", "/nonexistent/python3"),
+        ):
             result = _find_filigree_mcp_command()
             assert result == "filigree-mcp"
 
 
 class TestFindFiligreeCommand:
     def test_found_on_path(self) -> None:
-        """When filigree is on PATH, return its absolute path."""
+        """When filigree is on PATH, return single-element list."""
         with patch("filigree.install.shutil.which", return_value="/usr/local/bin/filigree"):
             result = _find_filigree_command()
-            assert result == "/usr/local/bin/filigree"
+            assert result == ["/usr/local/bin/filigree"]
 
     def test_fallback_to_sys_executable_sibling(self, tmp_path: Path) -> None:
         """When filigree not on PATH, look next to sys.executable."""
@@ -410,16 +430,16 @@ class TestFindFiligreeCommand:
             patch("filigree.install.sys.executable", str(fake_python)),
         ):
             result = _find_filigree_command()
-            assert result == str(sibling)
+            assert result == [str(sibling)]
 
     def test_default_fallback(self) -> None:
-        """When nothing found, return bare 'filigree'."""
+        """When nothing found, return python -m filigree tokens."""
         with (
             patch("filigree.install.shutil.which", return_value=None),
             patch("filigree.install.sys.executable", "/nonexistent/python3"),
         ):
             result = _find_filigree_command()
-            assert result == "filigree"
+            assert result == ["/nonexistent/python3", "-m", "filigree"]
 
 
 class TestInstallClaudeCodeMcp:
@@ -532,10 +552,11 @@ class TestInstallCodexMcpMalformedToml:
 
 
 class TestInstallClaudeCodeHooks:
+    MOCK_TOKENS = ["/mock/venv/bin/filigree"]  # noqa: RUF012
     MOCK_BIN = "/mock/venv/bin/filigree"
 
     def test_creates_settings_json(self, tmp_path: Path) -> None:
-        with patch("filigree.install._find_filigree_command", return_value=self.MOCK_BIN):
+        with patch("filigree.install._find_filigree_command", return_value=self.MOCK_TOKENS):
             ok, _msg = install_claude_code_hooks(tmp_path)
         assert ok
         settings_path = tmp_path / ".claude" / "settings.json"
@@ -550,7 +571,7 @@ class TestInstallClaudeCodeHooks:
         claude_dir.mkdir()
         existing = {"someOtherKey": True}
         (claude_dir / "settings.json").write_text(json.dumps(existing))
-        with patch("filigree.install._find_filigree_command", return_value=self.MOCK_BIN):
+        with patch("filigree.install._find_filigree_command", return_value=self.MOCK_TOKENS):
             ok, _msg = install_claude_code_hooks(tmp_path)
         assert ok
         data = json.loads((claude_dir / "settings.json").read_text())
@@ -558,7 +579,7 @@ class TestInstallClaudeCodeHooks:
         assert "hooks" in data
 
     def test_idempotent(self, tmp_path: Path) -> None:
-        with patch("filigree.install._find_filigree_command", return_value=self.MOCK_BIN):
+        with patch("filigree.install._find_filigree_command", return_value=self.MOCK_TOKENS):
             install_claude_code_hooks(tmp_path)
             install_claude_code_hooks(tmp_path)
         data = json.loads((tmp_path / ".claude" / "settings.json").read_text())
@@ -571,7 +592,7 @@ class TestInstallClaudeCodeHooks:
         claude_dir = tmp_path / ".claude"
         claude_dir.mkdir()
         (claude_dir / "settings.json").write_text("{corrupt json!!!")
-        with patch("filigree.install._find_filigree_command", return_value=self.MOCK_BIN):
+        with patch("filigree.install._find_filigree_command", return_value=self.MOCK_TOKENS):
             ok, _msg = install_claude_code_hooks(tmp_path)
         assert ok
         # Backup should exist
@@ -579,7 +600,7 @@ class TestInstallClaudeCodeHooks:
 
     def test_dashboard_hook_conditional(self, tmp_path: Path) -> None:
         """Dashboard hook is added only when dashboard extra is importable."""
-        with patch("filigree.install._find_filigree_command", return_value=self.MOCK_BIN):
+        with patch("filigree.install._find_filigree_command", return_value=self.MOCK_TOKENS):
             ok, _msg = install_claude_code_hooks(tmp_path)
         assert ok
         data = json.loads((tmp_path / ".claude" / "settings.json").read_text())
@@ -594,7 +615,7 @@ class TestInstallClaudeCodeHooks:
             assert not any("ensure-dashboard" in c for c in cmds)
 
     def test_upgrades_bare_to_absolute(self, tmp_path: Path) -> None:
-        """Bare hook commands should be upgraded to absolute-path versions."""
+        """Bare hook commands should be upgraded to resolved versions."""
         claude_dir = tmp_path / ".claude"
         claude_dir.mkdir()
         settings = {
@@ -609,7 +630,7 @@ class TestInstallClaudeCodeHooks:
             }
         }
         (claude_dir / "settings.json").write_text(json.dumps(settings))
-        with patch("filigree.install._find_filigree_command", return_value=self.MOCK_BIN):
+        with patch("filigree.install._find_filigree_command", return_value=self.MOCK_TOKENS):
             ok, msg = install_claude_code_hooks(tmp_path)
         assert ok
         assert "Upgraded" in msg or "Registered" in msg
@@ -644,7 +665,7 @@ class TestInstallClaudeCodeHooks:
             pass
         settings = {"hooks": {"SessionStart": [{"hooks": hooks_list}]}}
         (claude_dir / "settings.json").write_text(json.dumps(settings))
-        with patch("filigree.install._find_filigree_command", return_value=self.MOCK_BIN):
+        with patch("filigree.install._find_filigree_command", return_value=self.MOCK_TOKENS):
             ok, msg = install_claude_code_hooks(tmp_path)
         assert ok
         assert "Upgraded" in msg
@@ -652,6 +673,50 @@ class TestInstallClaudeCodeHooks:
         cmds = [h["command"] for m in data["hooks"]["SessionStart"] for h in m["hooks"]]
         assert f"{self.MOCK_BIN} session-context" in cmds
         assert f"{old_bin} session-context" not in cmds
+
+    def test_upgrades_module_form_to_current(self, tmp_path: Path) -> None:
+        """python -m filigree commands should be recognized and upgraded."""
+        claude_dir = tmp_path / ".claude"
+        claude_dir.mkdir()
+        settings = {
+            "hooks": {
+                "SessionStart": [
+                    {
+                        "hooks": [
+                            {
+                                "type": "command",
+                                "command": "/old/python -m filigree session-context",
+                                "timeout": 5000,
+                            },
+                        ]
+                    }
+                ]
+            }
+        }
+        (claude_dir / "settings.json").write_text(json.dumps(settings))
+        with patch("filigree.install._find_filigree_command", return_value=self.MOCK_TOKENS):
+            ok, _msg = install_claude_code_hooks(tmp_path)
+        assert ok
+        data = json.loads((claude_dir / "settings.json").read_text())
+        cmds = [h["command"] for m in data["hooks"]["SessionStart"] for h in m["hooks"]]
+        assert f"{self.MOCK_BIN} session-context" in cmds
+        assert "/old/python -m filigree session-context" not in cmds
+
+    def test_spaces_in_path_properly_quoted(self, tmp_path: Path) -> None:
+        """Paths with spaces must be shell-quoted so they round-trip correctly."""
+        import shlex
+
+        spaced_tokens = ["/path with spaces/python", "-m", "filigree"]
+        with patch("filigree.install._find_filigree_command", return_value=spaced_tokens):
+            ok, _msg = install_claude_code_hooks(tmp_path)
+        assert ok
+        data = json.loads((tmp_path / ".claude" / "settings.json").read_text())
+        cmds = [h["command"] for m in data["hooks"]["SessionStart"] for h in m["hooks"]]
+        session_cmd = next(c for c in cmds if "session-context" in c)
+        # shlex.split must recover the original tokens
+        parsed = shlex.split(session_cmd)
+        assert parsed[0] == "/path with spaces/python"
+        assert parsed[1:] == ["-m", "filigree", "session-context"]
 
 
 class TestHasHookCommand:
@@ -702,18 +767,39 @@ class TestHasHookCommand:
         settings = {"hooks": {"SessionStart": [{"hooks": [{"command": "not-filigree session-context"}]}]}}
         assert _has_hook_command(settings, "filigree session-context") is False
 
+    def test_matches_module_form(self) -> None:
+        """Should detect 'python -m filigree session-context' as a match."""
+        settings = {"hooks": {"SessionStart": [{"hooks": [{"command": "/usr/bin/python3 -m filigree session-context"}]}]}}
+        assert _has_hook_command(settings, "filigree session-context") is True
+
+    def test_matches_quoted_path_with_spaces(self) -> None:
+        """Should detect quoted paths containing spaces."""
+        import shlex
+
+        cmd = shlex.join(["/path with spaces/filigree"]) + " session-context"
+        settings = {"hooks": {"SessionStart": [{"hooks": [{"command": cmd}]}]}}
+        assert _has_hook_command(settings, "filigree session-context") is True
+
+    def test_matches_module_form_with_spaces(self) -> None:
+        """Should detect quoted python -m form with spaces in python path."""
+        import shlex
+
+        cmd = shlex.join(["/Program Files/python", "-m", "filigree"]) + " session-context"
+        settings = {"hooks": {"SessionStart": [{"hooks": [{"command": cmd}]}]}}
+        assert _has_hook_command(settings, "filigree session-context") is True
+
 
 class TestInstallHooksMalformedStructure:
     """Tests for install_claude_code_hooks with malformed existing settings."""
 
-    MOCK_BIN = "/mock/venv/bin/filigree"
+    MOCK_TOKENS = ["/mock/venv/bin/filigree"]  # noqa: RUF012
 
     def test_hooks_key_is_list(self, tmp_path: Path) -> None:
         """Existing settings.hooks as a list should be replaced, not crash."""
         claude_dir = tmp_path / ".claude"
         claude_dir.mkdir()
         (claude_dir / "settings.json").write_text(json.dumps({"hooks": []}))
-        with patch("filigree.install._find_filigree_command", return_value=self.MOCK_BIN):
+        with patch("filigree.install._find_filigree_command", return_value=self.MOCK_TOKENS):
             ok, _msg = install_claude_code_hooks(tmp_path)
         assert ok
         data = json.loads((claude_dir / "settings.json").read_text())
@@ -724,7 +810,7 @@ class TestInstallHooksMalformedStructure:
         claude_dir = tmp_path / ".claude"
         claude_dir.mkdir()
         (claude_dir / "settings.json").write_text(json.dumps({"hooks": {"SessionStart": "bad"}}))
-        with patch("filigree.install._find_filigree_command", return_value=self.MOCK_BIN):
+        with patch("filigree.install._find_filigree_command", return_value=self.MOCK_TOKENS):
             ok, _msg = install_claude_code_hooks(tmp_path)
         assert ok
         data = json.loads((claude_dir / "settings.json").read_text())
@@ -760,7 +846,7 @@ class TestDoctorHooksCheck:
         # Use a real path that exists so the binary path check passes
         mock_bin = str(filigree_project / "filigree")
         (filigree_project / "filigree").touch()
-        with patch("filigree.install._find_filigree_command", return_value=mock_bin):
+        with patch("filigree.install._find_filigree_command", return_value=[mock_bin]):
             install_claude_code_hooks(filigree_project)
         results = run_doctor(filigree_project)
         hooks_check = next((r for r in results if r.name == "Claude Code hooks"), None)
@@ -872,6 +958,24 @@ class TestDoctorHookPathValidation:
                 ]
             }
         }
+        (claude_dir / "settings.json").write_text(json.dumps(settings))
+        results = run_doctor(filigree_project)
+        hooks_check = next((r for r in results if r.name == "Claude Code hooks"), None)
+        assert hooks_check is not None
+        assert hooks_check.passed
+
+    def test_quoted_path_with_spaces_passes(self, filigree_project: Path) -> None:
+        """Doctor should extract binary correctly from quoted paths with spaces."""
+        import shlex
+
+        spaced_dir = filigree_project / "path with spaces"
+        spaced_dir.mkdir()
+        fake_bin = spaced_dir / "filigree"
+        fake_bin.touch()
+        cmd = shlex.join([str(fake_bin)]) + " session-context"
+        claude_dir = filigree_project / ".claude"
+        claude_dir.mkdir(exist_ok=True)
+        settings = {"hooks": {"SessionStart": [{"hooks": [{"type": "command", "command": cmd, "timeout": 5000}]}]}}
         (claude_dir / "settings.json").write_text(json.dumps(settings))
         results = run_doctor(filigree_project)
         hooks_check = next((r for r in results if r.name == "Claude Code hooks"), None)

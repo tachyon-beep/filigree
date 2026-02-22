@@ -119,7 +119,7 @@ class TestExecutableResolution:
             patch("filigree.hooks.find_filigree_root", return_value=tmp_path),
             patch("filigree.hooks._is_port_listening", return_value=False),
             patch("filigree.hooks.subprocess.Popen", return_value=mock_proc) as mock_popen,
-            patch("filigree.hooks._find_filigree_command", return_value=expected_bin),
+            patch("filigree.hooks._find_filigree_command", return_value=[expected_bin]),
             patch("filigree.hooks.time.sleep"),
             patch.dict(os.environ, {"TMPDIR": str(tmp_path)}),
         ):
@@ -163,7 +163,7 @@ class TestEnsureDashboardSubprocessVerification:
             patch("filigree.hooks.find_filigree_root", return_value=tmp_path),
             patch("filigree.hooks._is_port_listening", return_value=False),
             patch("filigree.hooks.subprocess.Popen", return_value=mock_proc),
-            patch("filigree.hooks._find_filigree_command", return_value="/usr/bin/filigree"),
+            patch("filigree.hooks._find_filigree_command", return_value=["/usr/bin/filigree"]),
             patch("filigree.hooks.time.sleep"),
             patch.dict(os.environ, {"TMPDIR": str(tmp_path)}),
         ):
@@ -182,7 +182,7 @@ class TestEnsureDashboardSubprocessVerification:
             patch("filigree.hooks.find_filigree_root", return_value=tmp_path),
             patch("filigree.hooks._is_port_listening", return_value=False),
             patch("filigree.hooks.subprocess.Popen", return_value=mock_proc),
-            patch("filigree.hooks._find_filigree_command", return_value="/usr/bin/filigree"),
+            patch("filigree.hooks._find_filigree_command", return_value=["/usr/bin/filigree"]),
             patch("filigree.hooks.time.sleep"),
             patch.dict(os.environ, {"TMPDIR": str(tmp_path)}),
         ):
@@ -204,7 +204,7 @@ class TestEnsureDashboardSubprocessVerification:
             patch("filigree.hooks.find_filigree_root", return_value=tmp_path),
             patch("filigree.hooks._is_port_listening", return_value=False),
             patch("filigree.hooks.subprocess.Popen", return_value=mock_proc),
-            patch("filigree.hooks._find_filigree_command", return_value="/usr/bin/filigree"),
+            patch("filigree.hooks._find_filigree_command", return_value=["/usr/bin/filigree"]),
             patch("filigree.hooks.time.sleep"),
             patch.dict(os.environ, {"TMPDIR": str(tmp_path)}),
         ):
