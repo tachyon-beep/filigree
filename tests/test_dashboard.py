@@ -52,6 +52,7 @@ class TestDashboardIndex:
         resp = await client.get("/")
         assert resp.status_code == 200
         html = resp.text
+        assert "overflow-x-auto" in html
         assert 'id="graphPreset"' in html
         assert 'value="execution" selected' in html
         assert 'id="graphReadyOnly"' in html

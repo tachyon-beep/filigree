@@ -204,7 +204,7 @@ tailwind.config = {
 <div class="flex flex-1 overflow-hidden relative">
   <!-- Graph view -->
   <div id="graphView" class="flex-1 hidden flex flex-col">
-    <div class="flex items-center gap-2 px-4 py-1 bg-raised text-xs text-secondary border-b border-default">
+    <div class="flex items-center gap-2 px-4 py-1 bg-raised text-xs text-secondary border-b border-default overflow-x-auto">
       <label for="graphPreset" class="text-xs text-secondary">Preset:</label>
       <select id="graphPreset" onchange="setGraphPreset(this.value)" class="bg-overlay text-primary text-xs rounded px-2 py-0.5 border border-strong">
         <option value="execution" selected>Execution</option>
