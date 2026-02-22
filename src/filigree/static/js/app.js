@@ -20,6 +20,7 @@ import {
   debouncedSearch,
   callbacks as filtersCallbacks,
   loadPreset,
+  loadProjectFilterSettings,
   populatePresets,
   populateTypeFilter,
   savePreset,
@@ -179,6 +180,7 @@ function updateStats() {
 function setProject(key, opts) {
   state.currentProjectKey = key;
   state.API_BASE = key ? `/api/p/${encodeURIComponent(key)}` : "/api";
+  loadProjectFilterSettings();
   const sel = document.getElementById("projectSwitcher");
   if (sel) sel.value = key;
   const proj = state.allProjects.find((p) => p.key === key);
@@ -442,6 +444,7 @@ document.addEventListener("visibilitychange", () => {
 
 parseHash();
 populatePresets();
+loadProjectFilterSettings();
 
 (async function init() {
   await loadProjects();

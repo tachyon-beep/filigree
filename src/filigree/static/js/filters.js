@@ -13,6 +13,91 @@ export const callbacks = {
   renderKanban: null,
 };
 
+const PROJECT_FILTERS_STORAGE_KEY = "filigree_project_filter_settings";
+const DEFAULT_PROJECT_FILTERS = Object.freeze({
+  open: true,
+  active: true,
+  closed: true,
+  priority: "all",
+  ready: true,
+  blocked: false,
+});
+const VALID_PRIORITY_FILTERS = new Set(["all", "0-1", "2", "3-4"]);
+
+function getProjectStorageKey() {
+  return state.currentProjectKey || "__default__";
+}
+
+function normalizeProjectFilters(raw) {
+  const src = raw && typeof raw === "object" ? raw : {};
+  const priority = VALID_PRIORITY_FILTERS.has(src.priority)
+    ? src.priority
+    : DEFAULT_PROJECT_FILTERS.priority;
+  return {
+    open: src.open === undefined ? DEFAULT_PROJECT_FILTERS.open : !!src.open,
+    active: src.active === undefined ? DEFAULT_PROJECT_FILTERS.active : !!src.active,
+    closed: src.closed === undefined ? DEFAULT_PROJECT_FILTERS.closed : !!src.closed,
+    priority,
+    ready: src.ready === undefined ? DEFAULT_PROJECT_FILTERS.ready : !!src.ready,
+    blocked: src.blocked === undefined ? DEFAULT_PROJECT_FILTERS.blocked : !!src.blocked,
+  };
+}
+
+function normalizeFilterState(raw) {
+  const normalizedProject = normalizeProjectFilters(raw);
+  return {
+    ...normalizedProject,
+    search: typeof raw?.search === "string" ? raw.search : "",
+  };
+}
+
+function readProjectFilterSettings() {
+  try {
+    const raw = localStorage.getItem(PROJECT_FILTERS_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch (_e) {
+    return {};
+  }
+}
+
+function writeProjectFilterSettings(settings) {
+  try {
+    localStorage.setItem(PROJECT_FILTERS_STORAGE_KEY, JSON.stringify(settings));
+  } catch (_e) {
+    // best effort
+  }
+}
+
+function updateToggleButtons() {
+  const readyBtn = document.getElementById("btnReady");
+  if (readyBtn) {
+    readyBtn.className = state.readyFilter
+      ? "px-2 py-1 rounded text-xs font-medium bg-emerald-900/50 text-emerald-400 border border-emerald-700"
+      : "px-2 py-1 rounded text-xs font-medium bg-overlay text-secondary border border-strong";
+  }
+  const blockedBtn = document.getElementById("btnBlocked");
+  if (blockedBtn) {
+    blockedBtn.className = state.blockedFilter
+      ? "px-2 py-1 rounded text-xs font-medium bg-red-900/50 text-red-400 border border-red-700"
+      : "px-2 py-1 rounded text-xs font-medium bg-overlay text-secondary border border-strong";
+  }
+}
+
+export function saveProjectFilterSettings() {
+  const settings = readProjectFilterSettings();
+  settings[getProjectStorageKey()] = normalizeProjectFilters(getFilterState());
+  writeProjectFilterSettings(settings);
+}
+
+export function loadProjectFilterSettings() {
+  const settings = readProjectFilterSettings();
+  const saved = settings[getProjectStorageKey()];
+  const filterState = saved ? normalizeFilterState(saved) : normalizeFilterState(DEFAULT_PROJECT_FILTERS);
+  applyFilterState(filterState, { skipPersist: true });
+}
+
 // --- Filtered issue list ---
 
 export function getFilteredIssues() {
@@ -58,6 +143,7 @@ export function getFilteredIssues() {
 // --- Filter application ---
 
 export function applyFilters() {
+  saveProjectFilterSettings();
   render();
 }
 
@@ -65,20 +151,16 @@ export function applyFilters() {
 
 export function toggleReady() {
   state.readyFilter = !state.readyFilter;
-  const btn = document.getElementById("btnReady");
-  btn.className = state.readyFilter
-    ? "px-2 py-1 rounded text-xs font-medium bg-emerald-900/50 text-emerald-400 border border-emerald-700"
-    : "px-2 py-1 rounded text-xs font-medium bg-overlay text-secondary border border-strong";
+  updateToggleButtons();
+  saveProjectFilterSettings();
   render();
 }
 
 export function toggleBlocked() {
   state.blockedFilter = !state.blockedFilter;
   if (state.blockedFilter) state.readyFilter = false;
-  const btn = document.getElementById("btnBlocked");
-  btn.className = state.blockedFilter
-    ? "px-2 py-1 rounded text-xs font-medium bg-red-900/50 text-red-400 border border-red-700"
-    : "px-2 py-1 rounded text-xs font-medium bg-overlay text-secondary border border-strong";
+  updateToggleButtons();
+  saveProjectFilterSettings();
   render();
 }
 
@@ -139,21 +221,24 @@ export function getFilterState() {
   };
 }
 
-export function applyFilterState(filterState) {
-  document.getElementById("filterOpen").checked = filterState.open;
-  document.getElementById("filterInProgress").checked = filterState.active;
-  document.getElementById("filterClosed").checked = filterState.closed;
-  document.getElementById("filterPriority").value = filterState.priority;
-  state.readyFilter = filterState.ready;
-  state.blockedFilter = filterState.blocked;
-  if (filterState.search) {
-    document.getElementById("filterSearch").value = filterState.search;
+export function applyFilterState(filterState, opts = {}) {
+  const normalized = normalizeFilterState(filterState);
+  document.getElementById("filterOpen").checked = normalized.open;
+  document.getElementById("filterInProgress").checked = normalized.active;
+  document.getElementById("filterClosed").checked = normalized.closed;
+  document.getElementById("filterPriority").value = normalized.priority;
+  state.readyFilter = normalized.ready;
+  state.blockedFilter = normalized.blocked;
+  updateToggleButtons();
+  if (!opts.skipPersist) saveProjectFilterSettings();
+  if (normalized.search) {
+    document.getElementById("filterSearch").value = normalized.search;
     doSearch();
   } else {
     document.getElementById("filterSearch").value = "";
     state.searchResults = null;
+    render();
   }
-  render();
 }
 
 export function savePreset() {
