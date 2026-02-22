@@ -205,7 +205,7 @@ class TestMCPLabelErrors:
         issue = mcp_db.create_issue("Labelable")
         result = await call_tool(
             "add_label",
-            {"issue_id": issue.id, "label": "bug"},
+            {"issue_id": issue.id, "label": "urgent"},
         )
         data = _parse(result)
         assert data["status"] == "added"

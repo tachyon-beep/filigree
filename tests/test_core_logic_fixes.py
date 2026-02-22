@@ -134,7 +134,7 @@ class TestCreateIssuePartialWriteRollback:
         labels_before = db.conn.execute("SELECT COUNT(*) FROM labels").fetchone()[0]
 
         with pytest.raises(ValueError, match="Invalid dependency IDs"):
-            db.create_issue("Label orphan", labels=["bug", "urgent"], deps=["missing-id"])
+            db.create_issue("Label orphan", labels=["defect", "urgent"], deps=["missing-id"])
 
         db.conn.commit()
 

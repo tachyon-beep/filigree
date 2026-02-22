@@ -714,6 +714,27 @@ class FiligreeDB:
         # 10 collisions in a row is astronomically unlikely; use longer suffix
         return f"{self.prefix}-{uuid.uuid4().hex[:10]}"
 
+    def _reserved_label_names(self) -> set[str]:
+        """Issue type names are reserved and cannot be used as free-form labels."""
+        return {tpl.type.casefold() for tpl in self.templates.list_types()}
+
+    def _validate_label_name(self, label: str) -> str:
+        """Normalize and validate a label before writing it."""
+        if not isinstance(label, str):
+            msg = "Label must be a string"
+            raise ValueError(msg)
+        normalized = label.strip()
+        if not normalized:
+            msg = "Label cannot be empty"
+            raise ValueError(msg)
+        if normalized.casefold() in self._reserved_label_names():
+            msg = (
+                f"Label '{normalized}' is reserved as an issue type name; "
+                "set the issue type explicitly instead."
+            )
+            raise ValueError(msg)
+        return normalized
+
     # -- Issue CRUD ----------------------------------------------------------
 
     def create_issue(
@@ -742,6 +763,8 @@ class FiligreeDB:
                 if not k or not k.strip():
                     msg = "Field key cannot be empty"
                     raise ValueError(msg)
+        if labels:
+            labels = [self._validate_label_name(label) for label in labels]
         # Reject unknown types — don't silently fall back
         if self.templates.get_type(type) is None:
             valid_types = [t.type for t in self.templates.list_types()]
@@ -1920,9 +1943,10 @@ class FiligreeDB:
     # -- Labels --------------------------------------------------------------
 
     def add_label(self, issue_id: str, label: str) -> bool:
+        normalized = self._validate_label_name(label)
         cursor = self.conn.execute(
             "INSERT OR IGNORE INTO labels (issue_id, label) VALUES (?, ?)",
-            (issue_id, label),
+            (issue_id, normalized),
         )
         self.conn.commit()
         return cursor.rowcount > 0

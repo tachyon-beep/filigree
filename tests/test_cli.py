@@ -279,17 +279,25 @@ class TestLabelCli:
         runner, _ = cli_in_project
         r = runner.invoke(cli, ["create", "Label me"])
         issue_id = _extract_id(r.output)
-        result = runner.invoke(cli, ["add-label", issue_id, "bug"])
+        result = runner.invoke(cli, ["add-label", issue_id, "urgent"])
         assert result.exit_code == 0
         assert "Added label" in result.output
 
     def test_label_remove(self, cli_in_project: tuple[CliRunner, Path]) -> None:
         runner, _ = cli_in_project
-        r = runner.invoke(cli, ["create", "Label me", "-l", "bug"])
+        r = runner.invoke(cli, ["create", "Label me", "-l", "urgent"])
         issue_id = _extract_id(r.output)
-        result = runner.invoke(cli, ["remove-label", issue_id, "bug"])
+        result = runner.invoke(cli, ["remove-label", issue_id, "urgent"])
         assert result.exit_code == 0
         assert "Removed label" in result.output
+
+    def test_label_add_rejects_reserved_type_name(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        runner, _ = cli_in_project
+        r = runner.invoke(cli, ["create", "Label me"])
+        issue_id = _extract_id(r.output)
+        result = runner.invoke(cli, ["add-label", issue_id, "bug"])
+        assert result.exit_code == 1
+        assert "reserved as an issue type" in result.output
 
     def test_label_add_not_found(self, cli_in_project: tuple[CliRunner, Path]) -> None:
         runner, _ = cli_in_project

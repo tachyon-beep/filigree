@@ -35,12 +35,12 @@ def populated_db(db: FiligreeDB) -> FiligreeDB:
     Creates:
     - 3 issues (A=open P1, B=open P2, C=closed P3)
     - Dependency: A depends on B
-    - Labels on A: ["bug", "urgent"]
+    - Labels on A: ["defect", "urgent"]
     - Comment on B
     - Epic E with child A
     """
     epic = db.create_issue("Epic E", type="epic", priority=1)
-    a = db.create_issue("Issue A", priority=1, labels=["bug", "urgent"], parent_id=epic.id)
+    a = db.create_issue("Issue A", priority=1, labels=["defect", "urgent"], parent_id=epic.id)
     b = db.create_issue("Issue B", priority=2)
     c = db.create_issue("Issue C", priority=3)
     db.close_issue(c.id, reason="done")

@@ -351,21 +351,28 @@ class TestTemplateAndSummary:
 class TestLabels:
     async def test_add_label(self, mcp_db: FiligreeDB) -> None:
         issue = mcp_db.create_issue("Labelable")
-        result = await call_tool("add_label", {"issue_id": issue.id, "label": "bug"})
+        result = await call_tool("add_label", {"issue_id": issue.id, "label": "urgent"})
         data = _parse(result)
         assert data["status"] == "added"
-        assert data["label"] == "bug"
+        assert data["label"] == "urgent"
         # Verify it was actually added
         updated = mcp_db.get_issue(issue.id)
-        assert "bug" in updated.labels
+        assert "urgent" in updated.labels
+
+    async def test_add_label_rejects_reserved_type_name(self, mcp_db: FiligreeDB) -> None:
+        issue = mcp_db.create_issue("Labelable")
+        result = await call_tool("add_label", {"issue_id": issue.id, "label": "bug"})
+        data = _parse(result)
+        assert data["code"] == "validation_error"
+        assert "reserved as an issue type" in data["error"]
 
     async def test_remove_label(self, mcp_db: FiligreeDB) -> None:
-        issue = mcp_db.create_issue("Labelable", labels=["bug", "urgent"])
-        result = await call_tool("remove_label", {"issue_id": issue.id, "label": "bug"})
+        issue = mcp_db.create_issue("Labelable", labels=["defect", "urgent"])
+        result = await call_tool("remove_label", {"issue_id": issue.id, "label": "defect"})
         data = _parse(result)
         assert data["status"] == "removed"
         updated = mcp_db.get_issue(issue.id)
-        assert "bug" not in updated.labels
+        assert "defect" not in updated.labels
         assert "urgent" in updated.labels
 
 

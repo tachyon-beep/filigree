@@ -111,8 +111,8 @@ class TestDependencies:
 
 class TestLabelsAndComments:
     def test_labels_on_create(self, db: FiligreeDB) -> None:
-        issue = db.create_issue("Labeled", labels=["bug", "urgent"])
-        assert set(issue.labels) == {"bug", "urgent"}
+        issue = db.create_issue("Labeled", labels=["defect", "urgent"])
+        assert set(issue.labels) == {"defect", "urgent"}
 
     def test_add_remove_label(self, db: FiligreeDB) -> None:
         issue = db.create_issue("Label test")
@@ -122,6 +122,15 @@ class TestLabelsAndComments:
         db.remove_label(issue.id, "backend")
         refreshed = db.get_issue(issue.id)
         assert "backend" not in refreshed.labels
+
+    def test_create_rejects_reserved_type_label(self, db: FiligreeDB) -> None:
+        with pytest.raises(ValueError, match="reserved as an issue type"):
+            db.create_issue("Bad labels", labels=["bug", "urgent"])
+
+    def test_add_label_rejects_reserved_type_label_case_insensitive(self, db: FiligreeDB) -> None:
+        issue = db.create_issue("Label test")
+        with pytest.raises(ValueError, match="reserved as an issue type"):
+            db.add_label(issue.id, "BuG")
 
     def test_add_comment(self, db: FiligreeDB) -> None:
         issue = db.create_issue("Commentable")

@@ -651,7 +651,14 @@ def add_label(issue_id: str, label_name: str, as_json: bool) -> None:
             else:
                 click.echo(f"Not found: {issue_id}", err=True)
             sys.exit(1)
-        added = db.add_label(issue_id, label_name)
+        try:
+            added = db.add_label(issue_id, label_name)
+        except ValueError as e:
+            if as_json:
+                click.echo(json_mod.dumps({"error": str(e)}))
+            else:
+                click.echo(f"Error: {e}", err=True)
+            sys.exit(1)
         status = "added" if added else "already_exists"
         if as_json:
             click.echo(json_mod.dumps({"issue_id": issue_id, "label": label_name, "status": status}))
