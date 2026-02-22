@@ -104,9 +104,13 @@ def register_project(filigree_dir: Path) -> None:
 def unregister_project(filigree_dir: Path) -> None:
     """Remove a project from server.json."""
     filigree_dir = filigree_dir.resolve()
-    config = read_server_config()
-    config.projects.pop(str(filigree_dir), None)
-    write_server_config(config)
+    SERVER_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    lock_path = SERVER_CONFIG_DIR / "server.lock"
+    with open(lock_path, "w") as lock_fd:
+        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+        config = read_server_config()
+        config.projects.pop(str(filigree_dir), None)
+        write_server_config(config)
 
 
 # ---------------------------------------------------------------------------

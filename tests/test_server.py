@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import fcntl
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -79,6 +80,27 @@ class TestProjectRegistration:
         unregister_project(filigree_dir)
         config = read_server_config()
         assert str(filigree_dir.resolve()) not in config.projects
+
+    def test_unregister_project_uses_exclusive_lock(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        config_dir = tmp_path / ".config" / "filigree"
+        monkeypatch.setattr("filigree.server.SERVER_CONFIG_DIR", config_dir)
+        monkeypatch.setattr("filigree.server.SERVER_CONFIG_FILE", config_dir / "server.json")
+
+        filigree_dir = tmp_path / "myproject" / ".filigree"
+        filigree_dir.mkdir(parents=True)
+        (filigree_dir / "config.json").write_text('{"prefix": "myproject"}')
+        register_project(filigree_dir)
+
+        lock_ops: list[int] = []
+
+        def _fake_flock(_fd: object, op: int) -> None:
+            lock_ops.append(op)
+
+        monkeypatch.setattr("filigree.server.fcntl.flock", _fake_flock)
+        unregister_project(filigree_dir)
+
+        assert lock_ops
+        assert lock_ops[0] == fcntl.LOCK_EX
 
     def test_register_project_rejects_prefix_collision(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         config_dir = tmp_path / ".config" / "filigree"
