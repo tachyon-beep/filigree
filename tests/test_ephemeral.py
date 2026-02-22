@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import os
 import socket
+import sys
 from pathlib import Path
+
+import pytest
 
 from filigree.ephemeral import (
     cleanup_stale_pid,
@@ -98,12 +101,21 @@ class TestPidLifecycle:
     def test_verify_pid_ownership_for_self(self, tmp_path: Path) -> None:
         pid_file = tmp_path / "ephemeral.pid"
         write_pid_file(pid_file, os.getpid(), cmd="python")
-        assert verify_pid_ownership(pid_file, expected_cmd="python") is True
+        expected = Path(sys.executable).name
+        assert verify_pid_ownership(pid_file, expected_cmd=expected) is True
 
     def test_verify_pid_ownership_wrong_cmd(self, tmp_path: Path) -> None:
         pid_file = tmp_path / "ephemeral.pid"
         write_pid_file(pid_file, os.getpid(), cmd="filigree")
-        assert verify_pid_ownership(pid_file, expected_cmd="nginx") is False
+        assert verify_pid_ownership(pid_file, expected_cmd="definitely-not-real") is False
+
+    def test_verify_pid_ownership_ignores_stale_pid_file_cmd(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        pid_file = tmp_path / "ephemeral.pid"
+        write_pid_file(pid_file, os.getpid(), cmd="filigree")
+        monkeypatch.setattr("filigree.ephemeral._read_os_command_line", lambda _pid: ["python", "worker.py"])
+        assert verify_pid_ownership(pid_file, expected_cmd="filigree") is False
 
     def test_cleanup_stale_pid_removes_dead(self, tmp_path: Path) -> None:
         pid_file = tmp_path / "ephemeral.pid"

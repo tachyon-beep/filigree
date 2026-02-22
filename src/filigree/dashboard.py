@@ -1334,10 +1334,7 @@ def create_app(*, server_mode: bool = False) -> Any:
                 key = _current_project_key.get() or _project_store.default_key
                 if not key:
                     return None
-                try:
-                    return _project_store.get_db(key)
-                except KeyError:
-                    return None
+                return _project_store.get_db(key)
 
             _mcp_handler, _mcp_lifespan_factory = create_mcp_app(db_resolver=_server_db_resolver)
         else:

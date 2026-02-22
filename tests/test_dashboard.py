@@ -2027,6 +2027,13 @@ class TestMultiProjectRouting:
         resp = await multi_client.get("/api/p/nonexistent/issues")
         assert resp.status_code == 404
 
+    async def test_mcp_unknown_project_returns_404(self, multi_client: AsyncClient) -> None:
+        """MCP should reject unknown project keys and never reuse a stale DB."""
+        resp = await multi_client.get("/mcp/?project=nonexistent")
+        assert resp.status_code == 404
+        data = resp.json()
+        assert data["code"] == "project_not_found"
+
     async def test_stats_per_project(self, multi_client: AsyncClient) -> None:
         """Stats endpoint returns different prefixes per project."""
         alpha_resp = await multi_client.get("/api/p/alpha/stats")

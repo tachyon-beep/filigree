@@ -1159,7 +1159,7 @@ class TestInstallMcpServerMode:
         mcp = json.loads((project_root / ".mcp.json").read_text())
         server_config = mcp["mcpServers"]["filigree"]
         assert server_config["type"] == "streamable-http"
-        assert "8377" in server_config["url"]
+        assert server_config["url"] == "http://localhost:8377/mcp/?project=test"
 
     def test_ethereal_mode_writes_stdio(self, tmp_path: Path) -> None:
         project_root = tmp_path

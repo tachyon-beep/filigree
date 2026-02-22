@@ -18,6 +18,7 @@ import shlex
 import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Sequence
 
 logger = logging.getLogger(__name__)
 
@@ -130,15 +131,23 @@ def load_scanner(scanners_dir: Path, name: str) -> ScannerConfig | None:
     return _parse_toml(toml_path)
 
 
-def validate_scanner_command(command: str) -> str | None:
+def validate_scanner_command(command: str | Sequence[str]) -> str | None:
     """Check that the first token of a command is available on PATH.
 
+    Accepts either a raw shell command string or a pre-tokenized command list.
     Returns None if valid, or an error message string if not found.
     """
-    try:
-        tokens = shlex.split(command)
-    except ValueError:
-        return f"Malformed command string: {command!r}"
+    tokens: list[str]
+    if isinstance(command, str):
+        try:
+            tokens = shlex.split(command)
+        except ValueError:
+            return f"Malformed command string: {command!r}"
+    else:
+        try:
+            tokens = [str(t) for t in command]
+        except Exception:
+            return "Malformed command token list"
     if not tokens:
         return "Empty command"
     binary = tokens[0]

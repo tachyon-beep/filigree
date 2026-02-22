@@ -63,9 +63,9 @@ db: FiligreeDB | None = None
 _filigree_dir: Path | None = None
 _logger: logging.Logger | None = None
 
-# Per-(scanner, file) cooldown to prevent unbounded process spawning.
-# Maps (scanner_name, file_path) -> timestamp of last trigger.
-_scan_cooldowns: dict[tuple[str, str], float] = {}
+# Per-(project, scanner, file) cooldown to prevent unbounded process spawning.
+# Maps (project_scope, scanner_name, file_path) -> timestamp of last trigger.
+_scan_cooldowns: dict[tuple[str, str, str], float] = {}
 _SCAN_COOLDOWN_SECONDS = 30
 
 
@@ -1699,9 +1699,10 @@ async def _dispatch(name: str, arguments: dict[str, Any], tracker: FiligreeDB) -
                         f"Warning: file extension {ext!r} not in scanner's declared file_types {cfg.file_types}. Proceeding anyway."
                     )
 
-            # Per-(scanner, file) cooldown — evict stale entries first
+            # Per-(project, scanner, file) cooldown — evict stale entries first
             canonical_path = str(target.relative_to(_filigree_dir.resolve().parent))
-            cooldown_key = (scanner_name, canonical_path)
+            project_scope = str(tracker.db_path.parent.resolve())
+            cooldown_key = (project_scope, scanner_name, canonical_path)
             now_mono = time.monotonic()
             stale = [k for k, v in _scan_cooldowns.items() if now_mono - v >= _SCAN_COOLDOWN_SECONDS]
             for k in stale:
@@ -1717,20 +1718,10 @@ async def _dispatch(name: str, arguments: dict[str, Any], tracker: FiligreeDB) -
                     }
                 )
 
-            # Validate command is available
-            cmd_err = validate_scanner_command(cfg.command)
-            if cmd_err is not None:
-                return _text({"error": cmd_err, "code": "command_not_found"})
-
-            # Register file in file_records
-            file_record = tracker.register_file(canonical_path)
-
-            # Generate scan_run_id with random suffix to avoid collisions
-            ts = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S")
-            scan_run_id = f"{scanner_name}-{ts}-{secrets.token_hex(3)}"
-
             # Build command — catches ValueError for malformed command strings
             project_root = _filigree_dir.parent
+            ts = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S")
+            scan_run_id = f"{scanner_name}-{ts}-{secrets.token_hex(3)}"
             try:
                 cmd = cfg.build_command(
                     file_path=file_path,
@@ -1740,6 +1731,14 @@ async def _dispatch(name: str, arguments: dict[str, Any], tracker: FiligreeDB) -
                 )
             except ValueError as e:
                 return _text({"error": str(e), "code": "invalid_command"})
+
+            # Validate command is available after template substitution.
+            cmd_err = validate_scanner_command(cmd)
+            if cmd_err is not None:
+                return _text({"error": cmd_err, "code": "command_not_found"})
+
+            # Register file in file_records
+            file_record = tracker.register_file(canonical_path)
 
             # Spawn detached process
             # Scanner TOML files are project-local config editable only by
@@ -1839,11 +1838,41 @@ def create_mcp_app(db_resolver: Any = None) -> Any:
     )
 
     async def _handle_mcp(scope: Any, receive: Any, send: Any) -> None:
-        global db
+        global db, _filigree_dir
         if db_resolver is not None:
-            resolved = db_resolver()
-            if resolved is not None:
-                db = resolved
+            from starlette.responses import JSONResponse
+
+            try:
+                resolved = db_resolver()
+            except KeyError as exc:
+                db = None
+                _filigree_dir = None
+                project_key = str(exc.args[0]) if exc.args else ""
+                resp = JSONResponse(
+                    {
+                        "error": "Unknown project",
+                        "code": "project_not_found",
+                        "project": project_key,
+                    },
+                    status_code=404,
+                )
+                await resp(scope, receive, send)
+                return
+
+            if resolved is None:
+                db = None
+                _filigree_dir = None
+                resp = JSONResponse(
+                    {
+                        "error": "Unable to resolve project database",
+                        "code": "project_unavailable",
+                    },
+                    status_code=503,
+                )
+                await resp(scope, receive, send)
+                return
+            db = resolved
+            _filigree_dir = resolved.db_path.parent
         try:
             await session_manager.handle_request(scope, receive, send)
         except RuntimeError:

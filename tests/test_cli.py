@@ -1504,8 +1504,9 @@ class TestInstallModeIntegration:
         assert result.exit_code == 0
 
         mcp = json.loads((tmp_path / ".mcp.json").read_text())
+        prefix = json.loads((tmp_path / ".filigree" / "config.json").read_text())["prefix"]
         assert mcp["mcpServers"]["filigree"]["type"] == "streamable-http"
-        assert mcp["mcpServers"]["filigree"]["url"] == "http://localhost:9911/mcp/"
+        assert mcp["mcpServers"]["filigree"]["url"] == f"http://localhost:9911/mcp/?project={prefix}"
 
 
 class TestNoFiligreeDir:

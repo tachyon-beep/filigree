@@ -10,7 +10,9 @@ import hashlib
 import json as _json
 import logging
 import os
+import shlex
 import socket
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -111,6 +113,38 @@ def is_pid_alive(pid: int) -> bool:
         return False
 
 
+def _read_os_command_line(pid: int) -> list[str] | None:
+    """Best-effort read of OS process command line tokens."""
+    proc_cmdline = Path("/proc") / str(pid) / "cmdline"
+    try:
+        if proc_cmdline.exists():
+            raw = proc_cmdline.read_bytes()
+            tokens = [tok.decode(errors="ignore") for tok in raw.split(b"\x00") if tok]
+            if tokens:
+                return tokens
+    except OSError:
+        pass
+
+    # Fallback for environments without /proc.
+    try:
+        result = subprocess.run(
+            ["ps", "-p", str(pid), "-o", "command="],
+            capture_output=True,
+            text=True,
+            timeout=1.0,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    cmdline = result.stdout.strip()
+    if not cmdline:
+        return None
+    try:
+        return shlex.split(cmdline)
+    except ValueError:
+        return [cmdline]
+
+
 def verify_pid_ownership(pid_file: Path, *, expected_cmd: str = "filigree") -> bool:
     """Verify PID file refers to a live process with expected identity."""
     info = read_pid_file(pid_file)
@@ -118,7 +152,24 @@ def verify_pid_ownership(pid_file: Path, *, expected_cmd: str = "filigree") -> b
         return False
     if not is_pid_alive(info["pid"]):
         return False
-    return bool(info["cmd"] == expected_cmd)
+
+    # PID file metadata is advisory; trust the OS process identity.
+    tokens = _read_os_command_line(info["pid"])
+    if not tokens:
+        return False
+
+    expected = expected_cmd.lower()
+    executable = Path(tokens[0]).name.lower()
+    if executable == expected or executable.startswith(expected):
+        return True
+
+    # Some launchers wrap the binary and pass the real command as argv[1].
+    if len(tokens) > 1:
+        first_arg = Path(tokens[1]).name.lower()
+        if first_arg == expected:
+            return True
+
+    return False
 
 
 def cleanup_stale_pid(pid_file: Path) -> bool:

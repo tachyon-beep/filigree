@@ -1269,3 +1269,99 @@ class TestScannerTools:
         finally:
             target.unlink(missing_ok=True)
             mcp_mod._scan_cooldowns.clear()
+
+    async def test_trigger_scan_allows_templated_executable_path(self, mcp_db: FiligreeDB) -> None:
+        import filigree.mcp_server as mcp_mod
+
+        project_root = mcp_mod._filigree_dir.parent
+        target = project_root / "templated_exec_target.py"
+        scanner_exec = project_root / "scanner_exec.sh"
+        scanners_dir = mcp_mod._filigree_dir / "scanners"
+        scanners_dir.mkdir(exist_ok=True)
+
+        try:
+            target.write_text("x = 1\n")
+            scanner_exec.write_text("#!/usr/bin/env bash\nexit 0\n")
+            scanner_exec.chmod(0o755)
+            (scanners_dir / "templated-scanner.toml").write_text(
+                '[scanner]\nname = "templated-scanner"\ndescription = "Templated executable"\n'
+                'command = "{project_root}/scanner_exec.sh"\n'
+                'args = ["{file}", "--scan-run-id", "{scan_run_id}"]\nfile_types = ["py"]\n'
+            )
+
+            result = _parse(
+                await call_tool(
+                    "trigger_scan",
+                    {
+                        "scanner": "templated-scanner",
+                        "file_path": "templated_exec_target.py",
+                    },
+                )
+            )
+            assert result.get("status") == "triggered"
+        finally:
+            target.unlink(missing_ok=True)
+            scanner_exec.unlink(missing_ok=True)
+            (scanners_dir / "templated-scanner.toml").unlink(missing_ok=True)
+            mcp_mod._scan_cooldowns.clear()
+
+    async def test_trigger_scan_cooldown_is_scoped_per_project(self, tmp_path: Path) -> None:
+        import filigree.mcp_server as mcp_mod
+
+        original_db = mcp_mod.db
+        original_dir = mcp_mod._filigree_dir
+        mcp_mod._scan_cooldowns.clear()
+
+        def _make_project(name: str, prefix: str) -> tuple[FiligreeDB, Path]:
+            project_root = tmp_path / name
+            filigree_dir = project_root / FILIGREE_DIR_NAME
+            filigree_dir.mkdir(parents=True)
+            write_config(filigree_dir, {"prefix": prefix, "version": 1})
+            (filigree_dir / SUMMARY_FILENAME).write_text("# test\n")
+            db = FiligreeDB(filigree_dir / DB_FILENAME, prefix=prefix)
+            db.initialize()
+
+            scanners_dir = filigree_dir / "scanners"
+            scanners_dir.mkdir(exist_ok=True)
+            (scanners_dir / "test-scanner.toml").write_text(
+                '[scanner]\nname = "test-scanner"\ndescription = "Test scanner"\n'
+                'command = "echo"\nargs = ["scan", "{file}", "--scan-run-id", "{scan_run_id}"]\nfile_types = ["py"]\n'
+            )
+            (project_root / "shared.py").write_text("x = 1\n")
+            return db, filigree_dir
+
+        db_a, dir_a = _make_project("proj-a", "alpha")
+        db_b, dir_b = _make_project("proj-b", "bravo")
+
+        try:
+            mcp_mod.db = db_a
+            mcp_mod._filigree_dir = dir_a
+            result_a = _parse(
+                await call_tool(
+                    "trigger_scan",
+                    {
+                        "scanner": "test-scanner",
+                        "file_path": "shared.py",
+                    },
+                )
+            )
+            assert result_a.get("status") == "triggered"
+
+            mcp_mod.db = db_b
+            mcp_mod._filigree_dir = dir_b
+            result_b = _parse(
+                await call_tool(
+                    "trigger_scan",
+                    {
+                        "scanner": "test-scanner",
+                        "file_path": "shared.py",
+                    },
+                )
+            )
+            assert result_b.get("status") == "triggered"
+        finally:
+            mcp_mod.db = original_db
+            mcp_mod._filigree_dir = original_dir
+            mcp_mod._scan_cooldowns.clear()
+            db_a.close()
+            db_b.close()

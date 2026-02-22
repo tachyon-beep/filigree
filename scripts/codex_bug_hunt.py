@@ -110,6 +110,27 @@ def _display_path(path: Path, base: Path) -> Path:
         return path
 
 
+def _resolve_target_file(*, repo_root: Path, root_dir: Path, file_arg: str) -> Path:
+    """Resolve a target file for single-file scan mode.
+
+    Accepts relative paths (resolved against repo_root) or absolute paths.
+    The resolved file must exist and stay within the configured scan root.
+    """
+    raw = Path(file_arg)
+    target = raw.resolve() if raw.is_absolute() else (repo_root / raw).resolve()
+    if not target.is_file():
+        msg = f"target file does not exist: {target}"
+        raise ValueError(msg)
+
+    try:
+        target.relative_to(root_dir)
+    except ValueError:
+        msg = f"target file is outside scan root: {target} (root: {root_dir})"
+        raise ValueError(msg) from None
+
+    return target
+
+
 # ── Codex execution with retry ──────────────────────────────────────────
 
 
@@ -317,6 +338,7 @@ def organise_by_priority(output_dir: Path) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Per-file bug hunt via Codex.")
     parser.add_argument("--root", default="src/filigree", help="Directory to scan (default: src/filigree)")
+    parser.add_argument("--file", default=None, help="Scan exactly one file (relative to repo root or absolute path)")
     parser.add_argument("--output-dir", default="docs/bugs/generated", help="Report output dir")
     parser.add_argument("--batch-size", type=int, default=10, help="Concurrent codex runs (default: 10)")
     parser.add_argument("--model", default=None, help="Override codex model")
@@ -349,12 +371,19 @@ def main() -> int:
         print(f"Error: scan root is not a directory: {root_dir}", file=sys.stderr)
         return 1
 
-    files = find_files(
-        root_dir,
-        file_type=args.file_type,
-        exclude_dirs={output_dir},
-        max_files=args.max_files,
-    )
+    if args.file:
+        try:
+            files = [_resolve_target_file(repo_root=repo_root, root_dir=root_dir, file_arg=args.file)]
+        except ValueError as e:
+            print(f"Error: {e}", file=sys.stderr)
+            return 1
+    else:
+        files = find_files(
+            root_dir,
+            file_type=args.file_type,
+            exclude_dirs={output_dir},
+            max_files=args.max_files,
+        )
     if not files:
         print(f"No files found under {root_dir}", file=sys.stderr)
         return 1

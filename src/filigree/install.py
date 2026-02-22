@@ -19,6 +19,7 @@ import sqlite3
 import subprocess
 import sys
 import tomllib
+from urllib.parse import quote
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -31,6 +32,7 @@ from filigree.core import (
     SUMMARY_FILENAME,
     find_filigree_command,
     find_filigree_root,
+    read_config,
 )
 
 logger = logging.getLogger(__name__)
@@ -184,10 +186,22 @@ def _install_mcp_server_mode(project_root: Path, port: int) -> tuple[bool, str]:
     """Write streamable-http MCP config pointing to the daemon."""
     mcp_json_path = project_root / ".mcp.json"
     mcp_config = _read_mcp_json(mcp_json_path)
+    project_key = "filigree"
+
+    # Scope server-mode MCP requests to this project's configured key.
+    try:
+        config = read_config(project_root / FILIGREE_DIR_NAME)
+        prefix = config.get("prefix")
+        if isinstance(prefix, str) and prefix.strip():
+            project_key = prefix.strip()
+    except Exception:
+        logger.debug("Unable to read project prefix for server-mode MCP install", exc_info=True)
+
+    encoded_key = quote(project_key, safe="")
 
     mcp_config["mcpServers"]["filigree"] = {
         "type": "streamable-http",
-        "url": f"http://localhost:{port}/mcp/",
+        "url": f"http://localhost:{port}/mcp/?project={encoded_key}",
     }
 
     mcp_json_path.write_text(json.dumps(mcp_config, indent=2) + "\n")

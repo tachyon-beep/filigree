@@ -139,6 +139,12 @@ class TestValidateScannerCommand:
         assert err is not None
         assert "not found" in err
 
+    def test_tokenized_command_list(self) -> None:
+        assert validate_scanner_command(["python", "--version"]) is None
+
+    def test_empty_tokenized_command_list(self) -> None:
+        assert validate_scanner_command([]) == "Empty command"
+
 
 class TestScannerExamples:
     @staticmethod
@@ -158,7 +164,7 @@ class TestScannerExamples:
         assert i + 1 < len(args)
         assert args[i + 1] == "{project_root}"
 
-    def test_codex_example_uses_directory_root(self) -> None:
+    def test_codex_example_uses_directory_root_and_file_target(self) -> None:
         data = self._read_example("codex.toml.example")
         scanner = data["scanner"]
         assert isinstance(scanner, dict)
@@ -168,3 +174,7 @@ class TestScannerExamples:
         i = args.index("--root")
         assert i + 1 < len(args)
         assert args[i + 1] == "{project_root}"
+        assert "--file" in args
+        j = args.index("--file")
+        assert j + 1 < len(args)
+        assert args[j + 1] == "{file}"
