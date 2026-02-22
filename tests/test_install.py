@@ -1088,6 +1088,30 @@ class TestDoctorConnectionLeak:
         assert not db_check.passed
 
 
+class TestInstallMcpServerMode:
+    def test_server_mode_writes_streamable_http(self, tmp_path: Path) -> None:
+        project_root = tmp_path
+        filigree_dir = project_root / ".filigree"
+        filigree_dir.mkdir()
+        config = {"prefix": "test", "mode": "server"}
+        (filigree_dir / "config.json").write_text(json.dumps(config))
+
+        ok, _msg = install_claude_code_mcp(project_root, mode="server", server_port=8377)
+        assert ok
+        mcp = json.loads((project_root / ".mcp.json").read_text())
+        server_config = mcp["mcpServers"]["filigree"]
+        assert server_config["type"] == "streamable-http"
+        assert "8377" in server_config["url"]
+
+    def test_ethereal_mode_writes_stdio(self, tmp_path: Path) -> None:
+        project_root = tmp_path
+        ok, _msg = install_claude_code_mcp(project_root, mode="ethereal")
+        assert ok
+        mcp = json.loads((project_root / ".mcp.json").read_text())
+        server_config = mcp["mcpServers"]["filigree"]
+        assert server_config.get("type") == "stdio" or "command" in server_config
+
+
 class TestCheckResult:
     def test_passed_icon(self) -> None:
         r = CheckResult("test", True, "ok")

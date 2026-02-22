@@ -105,8 +105,34 @@ def _find_filigree_mcp_command() -> str:
     return "filigree-mcp"
 
 
-def install_claude_code_mcp(project_root: Path) -> tuple[bool, str]:
-    """Install filigree-mcp into Claude Code's MCP config.
+def _read_mcp_json(mcp_json_path: Path) -> dict[str, Any]:
+    """Read existing .mcp.json or return a default structure."""
+    if mcp_json_path.exists():
+        try:
+            raw = json.loads(mcp_json_path.read_text())
+            if not isinstance(raw, dict):
+                raise ValueError("not a JSON object")
+            mcp_config = raw
+        except (json.JSONDecodeError, ValueError):
+            # Back up the corrupt/non-object file and start fresh
+            backup_path = mcp_json_path.parent / (mcp_json_path.name + ".bak")
+            shutil.copy2(mcp_json_path, backup_path)
+            logger.warning(
+                "Malformed .mcp.json detected; backed up to %s and creating fresh config",
+                backup_path,
+            )
+            mcp_config = {}
+    else:
+        mcp_config = {}
+
+    if "mcpServers" not in mcp_config or not isinstance(mcp_config["mcpServers"], dict):
+        mcp_config["mcpServers"] = {}
+
+    return mcp_config
+
+
+def _install_mcp_ethereal_mode(project_root: Path) -> tuple[bool, str]:
+    """Existing stdio-based MCP install (current behavior).
 
     Uses `claude mcp add` if available, otherwise writes .mcp.json directly.
     """
@@ -142,25 +168,7 @@ def install_claude_code_mcp(project_root: Path) -> tuple[bool, str]:
 
     # Fall back to writing .mcp.json directly
     mcp_json_path = project_root / ".mcp.json"
-    mcp_config: dict[str, Any] = {}
-    if mcp_json_path.exists():
-        try:
-            raw = json.loads(mcp_json_path.read_text())
-            if not isinstance(raw, dict):
-                raise ValueError("not a JSON object")
-            mcp_config = raw
-        except (json.JSONDecodeError, ValueError):
-            # Back up the corrupt/non-object file and start fresh
-            backup_path = mcp_json_path.parent / (mcp_json_path.name + ".bak")
-            shutil.copy2(mcp_json_path, backup_path)
-            logger.warning(
-                "Malformed .mcp.json detected; backed up to %s and creating fresh config",
-                backup_path,
-            )
-            mcp_config = {}
-
-    if "mcpServers" not in mcp_config or not isinstance(mcp_config["mcpServers"], dict):
-        mcp_config["mcpServers"] = {}
+    mcp_config = _read_mcp_json(mcp_json_path)
 
     mcp_config["mcpServers"]["filigree"] = {
         "type": "stdio",
@@ -170,6 +178,36 @@ def install_claude_code_mcp(project_root: Path) -> tuple[bool, str]:
 
     mcp_json_path.write_text(json.dumps(mcp_config, indent=2) + "\n")
     return True, f"Wrote {mcp_json_path}"
+
+
+def _install_mcp_server_mode(project_root: Path, port: int) -> tuple[bool, str]:
+    """Write streamable-http MCP config pointing to the daemon."""
+    mcp_json_path = project_root / ".mcp.json"
+    mcp_config = _read_mcp_json(mcp_json_path)
+
+    mcp_config["mcpServers"]["filigree"] = {
+        "type": "streamable-http",
+        "url": f"http://localhost:{port}/mcp/",
+    }
+
+    mcp_json_path.write_text(json.dumps(mcp_config, indent=2) + "\n")
+    return True, f"Wrote {mcp_json_path} (streamable-http, port {port})"
+
+
+def install_claude_code_mcp(
+    project_root: Path,
+    *,
+    mode: str = "ethereal",
+    server_port: int = 8377,
+) -> tuple[bool, str]:
+    """Install filigree MCP into Claude Code's config.
+
+    In ethereal mode: stdio transport (per-session process).
+    In server mode: streamable-http transport pointing to daemon.
+    """
+    if mode == "server":
+        return _install_mcp_server_mode(project_root, server_port)
+    return _install_mcp_ethereal_mode(project_root)
 
 
 def install_codex_mcp(project_root: Path) -> tuple[bool, str]:
