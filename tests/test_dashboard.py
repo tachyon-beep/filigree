@@ -155,6 +155,14 @@ class TestGraphFrontendContracts:
         assert "Node cap:" in html
         assert "Edge cap:" in html
 
+    def test_graph_caps_are_within_advanced_disclosure_group(self) -> None:
+        html = (STATIC_DIR / "dashboard.html").read_text()
+        start = html.index('id="graphAdvancedGroup"')
+        end = html.index("</details>", start)
+        advanced_block = html[start:end]
+        assert 'id="graphNodeLimit"' in advanced_block
+        assert 'id="graphEdgeLimit"' in advanced_block
+
     def test_hover_traversal_uses_outgoers_not_full_edge_scan(self) -> None:
         graph_js = (STATIC_DIR / "js" / "views" / "graph.js").read_text()
         start = graph_js.index('state.cy.on("mouseover", "node"')
