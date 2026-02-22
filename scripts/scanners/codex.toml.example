@@ -1,0 +1,14 @@
+# Codex bug scanner for filigree.
+#
+# To activate: copy this file to .filigree/scanners/codex.toml
+#   cp scripts/scanners/codex.toml.example .filigree/scanners/codex.toml
+#
+# Requires: `codex` CLI on PATH
+# See: scripts/codex_bug_hunt.py for the scanner implementation
+
+[scanner]
+name = "codex"
+description = "Per-file bug hunt using Codex CLI"
+command = "python scripts/codex_bug_hunt.py"
+args = ["--root", "{file}", "--max-files", "1", "--api-url", "{api_url}", "--scan-run-id", "{scan_run_id}"]
+file_types = ["py"]

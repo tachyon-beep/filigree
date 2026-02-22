@@ -1,0 +1,14 @@
+# Claude CLI bug scanner for filigree.
+#
+# To activate: copy this file to .filigree/scanners/claude.toml
+#   cp scripts/scanners/claude.toml.example .filigree/scanners/claude.toml
+#
+# Requires: `claude` CLI on PATH
+# See: scripts/claude_bug_hunt.py for the scanner implementation
+
+[scanner]
+name = "claude"
+description = "Per-file bug hunt using Claude CLI"
+command = "python scripts/claude_bug_hunt.py"
+args = ["--root", "{file}", "--max-files", "1", "--api-url", "{api_url}", "--scan-run-id", "{scan_run_id}"]
+file_types = ["py"]
