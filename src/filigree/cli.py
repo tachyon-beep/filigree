@@ -97,10 +97,12 @@ def init(prefix: str | None) -> None:
         db = FiligreeDB(filigree_dir / DB_FILENAME, prefix=config.get("prefix", "filigree"))
         db.initialize()
         db.close()
+        (filigree_dir / "scanners").mkdir(exist_ok=True)
         return
 
     prefix = prefix or cwd.name
     filigree_dir.mkdir()
+    (filigree_dir / "scanners").mkdir()
 
     config = {"prefix": prefix, "version": 1}
     write_config(filigree_dir, config)
@@ -113,6 +115,7 @@ def init(prefix: str | None) -> None:
     click.echo(f"Initialized {FILIGREE_DIR_NAME}/ in {cwd}")
     click.echo(f"  Prefix: {prefix}")
     click.echo(f"  Database: {filigree_dir / DB_FILENAME}")
+    click.echo(f"  Scanners: {filigree_dir / 'scanners'}/ (add .toml files to register scanners)")
     click.echo("\nNext: filigree install")
 
 

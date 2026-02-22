@@ -351,6 +351,16 @@ class TestOnboardingBreadcrumbs:
         finally:
             os.chdir(original)
 
+    def test_init_creates_scanners_dir(self, tmp_path: Path, cli_runner: CliRunner) -> None:
+        original = os.getcwd()
+        os.chdir(str(tmp_path))
+        try:
+            result = cli_runner.invoke(cli, ["init"])
+            assert result.exit_code == 0
+            assert (tmp_path / ".filigree" / "scanners").is_dir()
+        finally:
+            os.chdir(original)
+
     def test_create_shows_next(self, cli_in_project: tuple[CliRunner, Path]) -> None:
         runner, _ = cli_in_project
         result = runner.invoke(cli, ["create", "Test"])
