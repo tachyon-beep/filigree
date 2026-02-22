@@ -4,7 +4,7 @@
 
 import { fetchCriticalPath, fetchGraph } from "../api.js";
 import { CATEGORY_COLORS, state, THEME_COLORS } from "../state.js";
-import { showPopover } from "../ui.js";
+import { showPopover, showToast } from "../ui.js";
 
 // --- Callbacks for functions not yet available at import time ---
 
@@ -14,8 +14,10 @@ let _graphFetchSeq = 0;
 const INPUT_DEBOUNCE_MS = 300;
 const FOCUS_ROOT_NOTICE = "Focus is enabled. Enter a root issue ID to apply scoped view.";
 const EMPTY_STATUS_NOTICE = "No status categories selected. Enable at least one status filter.";
+const GRAPH_DEFAULT_NOTICE_KEY = "filigree.graph.execution_default_notice.v1";
 let _focusInputDebounceId = null;
 let _assigneeInputDebounceId = null;
+let _graphDefaultPresetNoticeShown = false;
 
 function shouldUseGraphV2() {
   const cfg = state.graphConfig || {};
@@ -152,6 +154,27 @@ function updateGraphPerfState() {
     return;
   }
   el.title = `Query ${queryMs}ms | Render ${renderMs}ms`;
+}
+
+function maybeShowGraphDefaultPresetNotice(preset) {
+  if (preset !== "execution" || _graphDefaultPresetNoticeShown) return;
+  let seen = false;
+  try {
+    seen = window.localStorage?.getItem(GRAPH_DEFAULT_NOTICE_KEY) === "1";
+  } catch (_e) {
+    seen = false;
+  }
+  if (seen) {
+    _graphDefaultPresetNoticeShown = true;
+    return;
+  }
+  showToast("Graph now defaults to Execution (all issue types). Use Roadmap or Epics only for epic-focused views.");
+  _graphDefaultPresetNoticeShown = true;
+  try {
+    window.localStorage?.setItem(GRAPH_DEFAULT_NOTICE_KEY, "1");
+  } catch (_e) {
+    // noop: localStorage might be unavailable in hardened contexts.
+  }
 }
 
 function applySearchFocus(search) {
@@ -625,6 +648,7 @@ export function renderGraph() {
   const container = document.getElementById("cy");
   const epicsOnly = document.getElementById("graphEpicsOnly").checked;
   const graphPreset = document.getElementById("graphPreset")?.value || "execution";
+  maybeShowGraphDefaultPresetNotice(graphPreset);
   const graphReadyOnly = document.getElementById("graphReadyOnly").checked;
   const graphBlockedOnly = document.getElementById("graphBlockedOnly").checked;
   const graphAssignee = document.getElementById("graphAssignee").value.trim();

@@ -109,6 +109,15 @@ class TestGraphFrontendContracts:
         assert "edge_limit" in graph_js
         assert "refreshGraphData" in graph_js
 
+    def test_graph_default_change_has_one_time_callout_contract(self) -> None:
+        graph_js = (STATIC_DIR / "js" / "views" / "graph.js").read_text()
+        assert "function maybeShowGraphDefaultPresetNotice(preset)" in graph_js
+        assert 'GRAPH_DEFAULT_NOTICE_KEY = "filigree.graph.execution_default_notice.v1"' in graph_js
+        assert "window.localStorage?.getItem(GRAPH_DEFAULT_NOTICE_KEY)" in graph_js
+        assert "window.localStorage?.setItem(GRAPH_DEFAULT_NOTICE_KEY, \"1\")" in graph_js
+        assert "Graph now defaults to Execution (all issue types)." in graph_js
+        assert "maybeShowGraphDefaultPresetNotice(graphPreset);" in graph_js
+
     def test_graph_legacy_fallback_notice_present(self) -> None:
         graph_js = (STATIC_DIR / "js" / "views" / "graph.js").read_text()
         assert "Graph v2 unavailable; showing legacy graph." in graph_js
