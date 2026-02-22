@@ -87,6 +87,7 @@ import {
   computeImpactScores,
   callbacks as graphCallbacks,
   onGraphAssigneeInput,
+  onGraphTimeWindowChange,
   onGraphFocusModeChange,
   onGraphFocusRootInput,
   onGraphEpicsOnlyChange,
@@ -573,6 +574,7 @@ window.graphFit = graphFit;
 window.setGraphPreset = setGraphPreset;
 window.clearGraphFocus = clearGraphFocus;
 window.onGraphAssigneeInput = onGraphAssigneeInput;
+window.onGraphTimeWindowChange = onGraphTimeWindowChange;
 window.onGraphFocusModeChange = onGraphFocusModeChange;
 window.onGraphFocusRootInput = onGraphFocusRootInput;
 window.onGraphEpicsOnlyChange = onGraphEpicsOnlyChange;

@@ -62,6 +62,9 @@ class TestDashboardIndex:
         assert 'onchange="onGraphEpicsOnlyChange()"' in html
         assert 'id="graphReadyOnly"' in html
         assert 'id="graphBlockedOnly"' in html
+        assert 'id="graphTimeWindow"' in html
+        assert 'onchange="onGraphTimeWindowChange()"' in html
+        assert 'aria-label="Filter graph by time window"' in html
         assert 'id="graphAssignee"' in html
         assert 'oninput="onGraphAssigneeInput()"' in html
         assert 'id="graphNotice"' in html
@@ -105,11 +108,25 @@ class TestGraphFrontendContracts:
         assert "graphBlockedOnly" in graph_js
         assert "graphAssignee" in graph_js
         assert "onGraphAssigneeInput" in graph_js
+        assert "window_days" in graph_js
         assert "scope_root" in graph_js
         assert "scope_radius" in graph_js
         assert "node_limit" in graph_js
         assert "edge_limit" in graph_js
         assert "refreshGraphData" in graph_js
+
+    def test_graph_time_window_preference_contract(self) -> None:
+        graph_js = (STATIC_DIR / "js" / "views" / "graph.js").read_text()
+        app_js = (STATIC_DIR / "js" / "app.js").read_text()
+        html = (STATIC_DIR / "dashboard.html").read_text()
+        assert 'GRAPH_TIME_WINDOW_STORAGE_KEY = "filigree.graph.time_window_days.v1"' in graph_js
+        assert "function ensureGraphTimeWindowControl()" in graph_js
+        assert "persistGraphTimeWindowDays" in graph_js
+        assert "export function onGraphTimeWindowChange()" in graph_js
+        assert "window.onGraphTimeWindowChange = onGraphTimeWindowChange;" in app_js
+        assert 'id="graphTimeWindow"' in html
+        assert 'onchange="onGraphTimeWindowChange()"' in html
+        assert 'value="7" selected' in html
 
     def test_graph_default_change_has_one_time_callout_contract(self) -> None:
         graph_js = (STATIC_DIR / "js" / "views" / "graph.js").read_text()
@@ -140,10 +157,12 @@ class TestGraphFrontendContracts:
         assert "export function onGraphFocusRootInput()" in graph_js
         assert "scheduleDebouncedGraphRender(\"focusRoot\")" in graph_js
         assert "window.onGraphAssigneeInput = onGraphAssigneeInput;" in app_js
+        assert "window.onGraphTimeWindowChange = onGraphTimeWindowChange;" in app_js
         assert "focusRoot.value = nodeId" not in graph_js
         assert 'onchange="onGraphFocusModeChange()"' in html
         assert 'oninput="onGraphFocusRootInput()"' in html
         assert 'oninput="onGraphAssigneeInput()"' in html
+        assert 'onchange="onGraphTimeWindowChange()"' in html
 
     def test_graph_inputs_use_debounced_render(self) -> None:
         graph_js = (STATIC_DIR / "js" / "views" / "graph.js").read_text()
@@ -395,6 +414,23 @@ class TestGraphAdvancedAPI:
         assert len(data["edges"]) == 50
         assert data["telemetry"]["total_edges_before_limit"] > 50
 
+    async def test_graph_window_days_filters_stale_nodes(self, client: AsyncClient, dashboard_db: FiligreeDB) -> None:
+        stale = dashboard_db.create_issue("Old graph issue", type="task", priority=2)
+        fresh = dashboard_db.create_issue("Fresh graph issue", type="task", priority=2)
+        dashboard_db.conn.execute(
+            "UPDATE issues SET updated_at = ? WHERE id = ?",
+            ("2000-01-01T00:00:00+00:00", stale.id),
+        )
+        dashboard_db.conn.commit()
+
+        resp = await client.get("/api/graph?mode=v2&types=task&window_days=7")
+        assert resp.status_code == 200
+        data = resp.json()
+        node_ids = {n["id"] for n in data["nodes"]}
+        assert stale.id not in node_ids
+        assert fresh.id in node_ids
+        assert data["query"]["window_days"] == 7
+
 
 class TestIssuesAPI:
     async def test_list_all_issues(self, client: AsyncClient, dashboard_db: FiligreeDB) -> None:
@@ -527,6 +563,13 @@ class TestGraphAPI:
         err = resp.json()["error"]
         assert err["code"] == "GRAPH_INVALID_PARAM"
         assert err["details"]["param"] == "node_limit"
+
+    async def test_graph_window_days_validation(self, client: AsyncClient) -> None:
+        resp = await client.get("/api/graph?mode=v2&window_days=-1")
+        assert resp.status_code == 400
+        err = resp.json()["error"]
+        assert err["code"] == "GRAPH_INVALID_PARAM"
+        assert err["details"]["param"] == "window_days"
 
     async def test_graph_mode_query_override_beats_compat_mode(self, client: AsyncClient, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("FILIGREE_GRAPH_API_MODE", "legacy")

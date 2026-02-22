@@ -15,6 +15,9 @@ const INPUT_DEBOUNCE_MS = 300;
 const FOCUS_ROOT_NOTICE = "Focus is enabled. Enter a root issue ID to apply scoped view.";
 const EMPTY_STATUS_NOTICE = "No status categories selected. Enable at least one status filter.";
 const GRAPH_DEFAULT_NOTICE_KEY = "filigree.graph.execution_default_notice.v1";
+const GRAPH_TIME_WINDOW_STORAGE_KEY = "filigree.graph.time_window_days.v1";
+const DEFAULT_GRAPH_TIME_WINDOW_DAYS = 7;
+const VALID_GRAPH_TIME_WINDOW_DAYS = new Set([0, 1, 7, 14, 30, 90, 180, 365]);
 let _focusInputDebounceId = null;
 let _assigneeInputDebounceId = null;
 let _graphDefaultPresetNoticeShown = false;
@@ -22,6 +25,72 @@ let _graphDefaultPresetNoticeShown = false;
 function shouldUseGraphV2() {
   const cfg = state.graphConfig || {};
   return cfg.graph_v2_enabled || cfg.graph_api_mode === "v2";
+}
+
+function getGraphProjectStorageKey() {
+  return state.currentProjectKey || "__default__";
+}
+
+function normalizeGraphTimeWindowDays(raw) {
+  const value = Number.parseInt(String(raw ?? DEFAULT_GRAPH_TIME_WINDOW_DAYS), 10);
+  if (Number.isNaN(value)) return DEFAULT_GRAPH_TIME_WINDOW_DAYS;
+  if (!VALID_GRAPH_TIME_WINDOW_DAYS.has(value)) return DEFAULT_GRAPH_TIME_WINDOW_DAYS;
+  return value;
+}
+
+function readGraphTimeWindowPrefs() {
+  try {
+    const raw = window.localStorage?.getItem(GRAPH_TIME_WINDOW_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch (_e) {
+    return {};
+  }
+}
+
+function writeGraphTimeWindowPrefs(settings) {
+  try {
+    window.localStorage?.setItem(GRAPH_TIME_WINDOW_STORAGE_KEY, JSON.stringify(settings));
+  } catch (_e) {
+    // noop: localStorage might be unavailable in hardened contexts.
+  }
+}
+
+function getSavedGraphTimeWindowDays(projectKey) {
+  const prefs = readGraphTimeWindowPrefs();
+  return normalizeGraphTimeWindowDays(prefs[projectKey]);
+}
+
+function ensureGraphTimeWindowControl() {
+  const select = document.getElementById("graphTimeWindow");
+  if (!select) return DEFAULT_GRAPH_TIME_WINDOW_DAYS;
+  const projectKey = getGraphProjectStorageKey();
+  if (select.dataset.projectKey !== projectKey) {
+    select.value = String(getSavedGraphTimeWindowDays(projectKey));
+    select.dataset.projectKey = projectKey;
+  }
+  const days = normalizeGraphTimeWindowDays(select.value);
+  if (String(days) !== select.value) {
+    select.value = String(days);
+  }
+  return days;
+}
+
+function persistGraphTimeWindowDays(days) {
+  const projectKey = getGraphProjectStorageKey();
+  const prefs = readGraphTimeWindowPrefs();
+  prefs[projectKey] = normalizeGraphTimeWindowDays(days);
+  writeGraphTimeWindowPrefs(prefs);
+}
+
+function issueWithinWindow(issue, windowDays) {
+  if (windowDays <= 0) return true;
+  const raw = issue?.updated_at || issue?.created_at;
+  if (!raw) return false;
+  const parsed = new Date(raw);
+  if (Number.isNaN(parsed.getTime())) return false;
+  return parsed.getTime() >= Date.now() - windowDays * 24 * 60 * 60 * 1000;
 }
 
 function buildGraphQuery() {
@@ -41,6 +110,7 @@ function buildGraphQuery() {
   const showOpen = document.getElementById("filterOpen").checked;
   const showActive = document.getElementById("filterInProgress").checked;
   const showClosed = document.getElementById("filterClosed").checked;
+  const timeWindowDays = ensureGraphTimeWindowControl();
 
   const statusCategories = [];
   if (showOpen) statusCategories.push("open");
@@ -55,6 +125,7 @@ function buildGraphQuery() {
     blocked_only: blockedOnlyControl || state.blockedFilter,
     node_limit: Number.isNaN(nodeLimit) ? 600 : nodeLimit,
     edge_limit: Number.isNaN(edgeLimit) ? 2000 : edgeLimit,
+    window_days: timeWindowDays,
   };
   if (preset === "roadmap" || epicsOnly) query.types = ["epic", "milestone"];
   if (assignee) query.assignee = assignee;
@@ -302,6 +373,14 @@ export function onGraphAssigneeInput() {
   scheduleDebouncedGraphRender("assignee");
 }
 
+export function onGraphTimeWindowChange() {
+  const days = ensureGraphTimeWindowControl();
+  persistGraphTimeWindowDays(days);
+  refreshGraphData(true).then(() => {
+    if (state.currentView === "graph") renderGraph();
+  });
+}
+
 export function onGraphPathInput() {
   const source = document.getElementById("graphPathSource");
   const target = document.getElementById("graphPathTarget");
@@ -430,6 +509,7 @@ export async function refreshGraphData(force = false) {
         blocked_only: query.blocked_only,
         ready_only: query.ready_only,
         critical_path_only: false,
+        window_days: query.window_days,
       },
       limits: {
         node_limit: query.node_limit,
@@ -657,6 +737,8 @@ export function renderGraph() {
   const graphFocusRadius = Number.parseInt(document.getElementById("graphFocusRadius").value || "2", 10);
   const graphNodeLimit = Number.parseInt(document.getElementById("graphNodeLimit").value || "600", 10);
   const graphEdgeLimit = Number.parseInt(document.getElementById("graphEdgeLimit").value || "2000", 10);
+  const graphWindowDays = ensureGraphTimeWindowControl();
+  persistGraphTimeWindowDays(graphWindowDays);
 
   const showOpen = document.getElementById("filterOpen").checked;
   const showActive = document.getElementById("filterInProgress").checked;
@@ -671,6 +753,8 @@ export function renderGraph() {
   if (graphReadyOnly) filterParts.push("ready_only");
   if (graphBlockedOnly || state.blockedFilter) filterParts.push("blocked_only");
   if (graphAssignee) filterParts.push(`assignee=${graphAssignee}`);
+  if (graphWindowDays > 0) filterParts.push(`window=${graphWindowDays}d`);
+  else filterParts.push("window=all");
   if (graphFocusMode && graphFocusRoot) filterParts.push(`focus=${graphFocusRoot}:${Number.isNaN(graphFocusRadius) ? 2 : graphFocusRadius}`);
   updateGraphFilterStateLabel(filterParts);
 
@@ -716,6 +800,7 @@ export function renderGraph() {
       if (graphReadyOnly && !n.is_ready) show = false;
       if ((graphBlockedOnly || state.blockedFilter) && !blockedByOpen) show = false;
       if (graphAssignee && n.assignee !== graphAssignee) show = false;
+      if (!issueWithinWindow(n, graphWindowDays)) show = false;
       if (show) visibleIds.add(n.id);
     }
 

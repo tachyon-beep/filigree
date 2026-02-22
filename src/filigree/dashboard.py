@@ -27,6 +27,7 @@ import os
 import webbrowser
 from collections import deque
 from contextvars import ContextVar
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from time import perf_counter
 from typing import TYPE_CHECKING, Any
@@ -487,6 +488,15 @@ def _create_project_router() -> Any:
 
         assignee_filter = params.get("assignee")
 
+        window_days: int | None = None
+        window_days_raw = params.get("window_days")
+        if window_days_raw is not None:
+            window_days_value = _safe_bounded_int(window_days_raw, name="window_days", min_value=0, max_value=3650)
+            if isinstance(window_days_value, JSONResponse):
+                return window_days_value
+            window_days = window_days_value
+        window_cutoff = datetime.now(UTC) - timedelta(days=window_days) if window_days and window_days > 0 else None
+
         critical_path_ids: set[str] = set()
         if critical_path_only:
             critical_path_ids = {node["id"] for node in db.get_critical_path()}
@@ -531,6 +541,18 @@ def _create_project_router() -> Any:
                     total += 1
             return total
 
+        def _issue_updated_at(issue: Any) -> datetime | None:
+            raw = issue.updated_at or issue.created_at
+            if not raw or not isinstance(raw, str):
+                return None
+            try:
+                parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+            except ValueError:
+                return None
+            if parsed.tzinfo is None:
+                return parsed.replace(tzinfo=UTC)
+            return parsed.astimezone(UTC)
+
         filtered_nodes: list[dict[str, Any]] = []
         for issue in issues:
             if scoped_ids is not None and issue.id not in scoped_ids:
@@ -543,6 +565,10 @@ def _create_project_router() -> Any:
                 continue
             if assignee_filter is not None and issue.assignee != assignee_filter:
                 continue
+            if window_cutoff is not None:
+                issue_updated_at = _issue_updated_at(issue)
+                if issue_updated_at is None or issue_updated_at < window_cutoff:
+                    continue
 
             blocker_count = _open_blocker_count(issue.id)
             blocks_count = _open_blocks_count(issue.id)
@@ -608,6 +634,7 @@ def _create_project_router() -> Any:
                     "blocked_only": blocked_only,
                     "ready_only": ready_only,
                     "critical_path_only": critical_path_only,
+                    "window_days": window_days,
                 },
                 "limits": {
                     "node_limit": node_limit,
