@@ -42,7 +42,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 # Detection prefix — matches both old "<!-- filigree:instructions -->" and
-# new "<!-- filigree:instructions:v1.2.0:abc12345 -->" formats.
+# new "<!-- filigree:instructions:v1.3.0:abc12345 -->" formats.
 FILIGREE_INSTRUCTIONS_MARKER = "<!-- filigree:instructions"
 
 _END_MARKER = "<!-- /filigree:instructions -->"
