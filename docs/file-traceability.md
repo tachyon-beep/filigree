@@ -22,7 +22,7 @@ Use this when an agent or automation is driving the work.
 curl -s http://localhost:8377/api/files/_schema
 ```
 
-For multi-project dashboard mode, prefix with project key:
+For server-mode multi-project dashboards, prefix with project key:
 
 ```bash
 curl -s http://localhost:8377/api/p/<project-key>/files/_schema
@@ -148,7 +148,7 @@ Checklist:
 
 1. Confirm associations exist via `get_issue_files` or `GET /api/issue/{issue_id}/files`.
 2. Ensure the issue ID is correct for the current project.
-3. If using multi-project mode, verify you are in the correct project selector context.
+3. If using server mode, verify you are in the correct project selector context.
 
 ### Symptom: scan run accepted but no findings visible
 

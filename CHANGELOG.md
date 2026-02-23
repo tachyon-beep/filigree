@@ -7,6 +7,94 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-02-23
+
+Server/ethereal operating modes, file intelligence + scanner workflows, Graph v2, and broad safety hardening across 105 commits (98 files changed).
+
+### Added
+
+#### Operating modes and server lifecycle
+
+- `filigree init --mode` and `filigree install --mode` for explicit ethereal/server setup
+- Server-mode config and registration system with schema-version enforcement
+- Server daemon lifecycle commands and process tracking helpers
+- Deterministic port selection and PID lifecycle tracking with atomic writes
+- Streamable HTTP MCP endpoint (`/mcp/`) for server mode
+- Session context now includes dashboard URL
+- Mode-aware doctor checks for ethereal/server installations
+
+#### Files, findings, and scanner platform
+
+- File records and scan findings workflow with metadata timeline events
+- Files and Code Health dashboard views (file list/detail/timeline, hotspots, health donut/coverage)
+- Split-pane findings workflow and live scan history in dashboard
+- Scanner registry loaded from TOML configs in `.filigree/scanners/`
+- New MCP tools: `list_scanners` and `trigger_scan`
+- Scanner trigger support for `scan_run_id` correlation
+- CLI init support for scanner directory creation
+- Shared scanner utilities and Claude scanner integration
+
+#### Dashboard graph v2
+
+- Graph v2 shipped with improved focus/path workflows and traversal behavior
+- Time-window filter with persisted default
+- Progressive-disclosure toolbar with grouped advanced controls
+- Improved interaction diagnostics and plain-language status messaging
+
+#### Installation and Codex integration
+
+- `filigree install --codex-skills` to install Codex skills into `.agents/skills/`
+- Doctor health check for Codex skills installation state
+
+### Changed
+
+- Dashboard frontend restructured from monolithic HTML script to ES-module architecture
+- Dashboard behavior split by mode: ethereal uses simplified single-project flow; server mode uses `ProjectStore` multi-project routing
+- API errors standardized, schema discovery surfaced, and instruction generation extracted for reuse
+- Install instruction marker parsing improved to tolerate missing metadata/version fields
+- README/docs expanded with architecture plans, mode guidance, and dashboard visuals
+
+### Fixed
+
+#### Security and correctness
+
+- Dashboard XSS sinks fixed across detail, workflow, kanban, and move-modal surfaces
+- File view click-handler escaping fixed for issue IDs containing apostrophes
+- HTTP MCP request context isolation fixed for per-request DB/project directory selection
+- Issue type names now reserved from label taxonomy to prevent collisions
+
+#### Server/daemon reliability
+
+- Multi-project reload and port consistency hardened in server mode
+- `unregister_project` updates locked to prevent concurrent config races
+- Daemon ownership checks fixed for `python -m filigree` launch mode
+- Portable PID ownership fallback added when command-line process inspection is unavailable
+- Registry fallback key-collision handling corrected
+- Hook command resolution hardened across installation methods
+
+#### Files/findings and scanner robustness
+
+- Scanner paths canonicalized; datetime crash fixed; command templates expanded
+- Scan API hardened (`scan_run_id` persistence, suggestion support, severity fallback)
+- Findings metadata persistence corrected for create/update ingest paths
+- Metadata change detection fixed to compare parsed dictionary values
+- `min_findings` now counts all non-terminal finding statuses
+- `list_files` filter validation and project-fallback detail-state behavior corrected
+
+#### Dashboard and analytics quality
+
+- Flow metrics now batch status-event loading to remove N+1 event-query behavior
+- Graph toolbar overflow/stacking/disclosure behavior corrected across Graph v2 iterations
+- Graph controls hardened for inactive focus/path states and large-graph zoom readability
+- Files API sort-direction wiring and stale detail-selection clearing fixed
+- Missing split-pane window bindings restored; async loader error handling tightened
+- Migration atomicity restored for FK-referenced table rebuilds; dashboard startup guard added
+
+### Removed
+
+- Hybrid registration system (`registry.py`) removed in favor of explicit mode-based registration paths
+- Checked-in `.mcp.json` removed from version control
+
 ## [1.2.0] - 2026-02-21
 
 Multi-project dashboard, UX overhaul, and Deep Teal color theme.
@@ -233,7 +321,8 @@ identified through systematic static analysis and verified against HEAD.
 - Issue validation against workflow templates (`validate`)
 - PEP 561 `py.typed` marker for downstream type checking
 
-[Unreleased]: https://github.com/tachyon-beep/filigree/compare/v1.2.0...HEAD
+[Unreleased]: https://github.com/tachyon-beep/filigree/compare/v1.3.0...HEAD
+[1.3.0]: https://github.com/tachyon-beep/filigree/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/tachyon-beep/filigree/compare/v1.1.1...v1.2.0
 [1.1.1]: https://github.com/tachyon-beep/filigree/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/tachyon-beep/filigree/compare/v1.0.0...v1.1.0

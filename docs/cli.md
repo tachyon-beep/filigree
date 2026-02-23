@@ -5,6 +5,7 @@ All commands support `--json` for machine-readable output. The global `--actor` 
 ## Contents
 
 - [Setup](#setup)
+- [Automation and Server](#automation-and-server)
 - [Creating and Updating](#creating-and-updating)
 - [Listing and Search](#listing-and-search)
 - [Dependencies](#dependencies)
@@ -27,12 +28,17 @@ filigree --version                      # Show version
 ```bash
 filigree init                              # Create .filigree/ in current directory
 filigree init --prefix=myproject           # Custom ID prefix
+filigree init --mode=server                # Initialize in persistent server mode
 filigree install                           # Install everything: MCP, instructions, .gitignore
 filigree install --claude-code             # Claude Code MCP server only
 filigree install --codex                   # OpenAI Codex MCP server only
 filigree install --claude-md               # Inject instructions into CLAUDE.md only
 filigree install --agents-md               # Inject instructions into AGENTS.md only
 filigree install --gitignore               # Add .filigree/ to .gitignore only
+filigree install --hooks                   # Install Claude Code hooks only
+filigree install --skills                  # Install Claude Code skills only
+filigree install --codex-skills            # Install Codex skills only
+filigree install --mode=server             # Switch MCP/hook configuration to server mode
 filigree doctor                            # Health check
 filigree doctor --fix                      # Auto-fix what's possible
 filigree doctor --verbose                  # Show all checks including passed
@@ -45,10 +51,11 @@ Initialize `.filigree/` in the current directory.
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `--prefix` | string | directory name | ID prefix for issues |
+| `--mode` | `ethereal`/`server` | `ethereal` | Installation mode |
 
 ### `install`
 
-Install filigree into the current project. With no flags, installs everything: MCP servers, instructions, and gitignore. With specific flags, installs only the selected components.
+Install filigree into the current project. With no flags, installs everything: MCP servers, instructions, gitignore, hooks, and skills. With specific flags, installs only the selected components.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
@@ -57,6 +64,10 @@ Install filigree into the current project. With no flags, installs everything: M
 | `--claude-md` | flag | Inject instructions into CLAUDE.md only |
 | `--agents-md` | flag | Inject instructions into AGENTS.md only |
 | `--gitignore` | flag | Add `.filigree/` to .gitignore only |
+| `--hooks` | flag | Install Claude Code hooks only |
+| `--skills` | flag | Install Claude Code skills only |
+| `--codex-skills` | flag | Install Codex skills only |
+| `--mode` | `ethereal`/`server` | Installation mode (`preserve existing`, else `ethereal`) |
 
 ### `doctor`
 
@@ -66,6 +77,53 @@ Run health checks on the filigree installation.
 |-----------|------|-------------|
 | `--fix` | flag | Auto-fix what's possible |
 | `--verbose` | flag | Show all checks including passed |
+
+## Automation and Server
+
+```bash
+filigree session-context                    # Print project snapshot for session bootstrap
+filigree ensure-dashboard                   # Ensure dashboard process is running/reachable
+filigree ensure-dashboard --port 8378       # Override server-mode dashboard port
+filigree clean-stale-findings --days 30     # Mark stale unseen findings as fixed
+filigree clean-stale-findings --scan-source claude
+filigree server start                       # Start daemon
+filigree server status                      # Check daemon status
+filigree server register .                  # Register current project with daemon
+filigree server unregister .                # Unregister project from daemon
+filigree server stop                        # Stop daemon
+```
+
+### `session-context`
+
+Output a session bootstrap snapshot (ready work, in-progress work, critical path, stats).
+
+### `ensure-dashboard`
+
+Ensure the dashboard is running. In `ethereal` mode this starts/attaches to the project-local process; in `server` mode it checks daemon connectivity.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `--port` | integer | Optional dashboard port override (server mode) |
+
+### `clean-stale-findings`
+
+Move stale `unseen_in_latest` findings to `fixed`.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `--days` | integer | Mark as fixed if unseen for more than N days (default 30) |
+| `--scan-source` | string | Restrict to one scan source |
+
+### `server`
+
+Manage the persistent filigree daemon.
+
+Subcommands:
+- `filigree server start [--port N]`
+- `filigree server stop`
+- `filigree server status`
+- `filigree server register [PATH]`
+- `filigree server unregister [PATH]`
 
 ## Creating and Updating
 
@@ -250,7 +308,14 @@ filigree remove-label <id> backend
 |-----------|------|-------------|
 | `id` | string | Issue ID (positional) |
 
-### `add-label` / `remove-label`
+### `add-label`
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `id` | string | Issue ID (positional) |
+| `label` | string | Label name (positional) |
+
+### `remove-label`
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
@@ -505,8 +570,10 @@ filigree import backup.jsonl --merge        # Import (skip existing)
 filigree archive --days=30                  # Archive old closed issues
 filigree compact --keep=50                  # Compact event history
 filigree migrate --from-beads              # Migrate from beads tracker
+filigree clean-stale-findings --days=30     # Move stale unseen findings to fixed
 filigree dashboard --port=8377              # Launch web UI
 filigree dashboard --no-browser            # Launch without opening browser
+filigree dashboard --server-mode            # Launch in multi-project daemon mode
 ```
 
 ### `export`
@@ -559,6 +626,7 @@ Launch the web dashboard. Requires `filigree[dashboard]` extra.
 |-----------|------|---------|-------------|
 | `--port` | integer | 8377 | Port to listen on |
 | `--no-browser` | flag | — | Don't auto-open browser |
+| `--server-mode` | flag | — | Multi-project server mode (reads server config) |
 
 ## Dashboard
 
@@ -566,6 +634,7 @@ Launch the web dashboard. Requires `filigree[dashboard]` extra.
 filigree dashboard                    # Opens browser at localhost:8377
 filigree dashboard --port 9000        # Custom port
 filigree dashboard --no-browser       # Skip auto-open
+filigree dashboard --server-mode      # Multi-project server mode
 ```
 
 ### `dashboard`
@@ -575,7 +644,9 @@ Launch an interactive web dashboard at `http://localhost:8377`. Features:
 | View | Description |
 |------|-------------|
 | **Kanban** | Three-column board (open/wip/done) with cluster mode grouping by epic |
-| **Graph** | Cytoscape.js dependency graph with critical path overlay |
+| **Graph** | Graph v2 dependency map with focus/path exploration and time windows |
+| **Files** | File inventory with findings, associations, and timeline drilldown |
+| **Health** | Code Health overview (hotspots, severity mix, scan summaries) |
 | **Metrics** | Throughput, cycle time, lead time with agent workload chart |
 | **Activity** | Chronological event feed across all issues |
 | **Workflow** | State machine visualization for any issue type |
@@ -586,5 +657,6 @@ Launch an interactive web dashboard at `http://localhost:8377`. Features:
 |-----------|------|---------|-------------|
 | `--port` | int | 8377 | Port to serve on |
 | `--no-browser` | flag | false | Don't auto-open browser |
+| `--server-mode` | flag | false | Start dashboard in multi-project daemon mode |
 
-The dashboard connects to `.filigree/` in the current directory. All write operations record `"dashboard"` as the actor for audit trail.
+Default dashboard mode connects to `.filigree/` in the current directory (`ethereal` mode). In `--server-mode`, the dashboard serves registered projects through the daemon. All write operations record `"dashboard"` as the actor for audit trail.

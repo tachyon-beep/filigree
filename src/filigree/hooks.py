@@ -214,14 +214,6 @@ def ensure_dashboard_running(port: int | None = None) -> str:
     In server mode: just verifies the daemon is reachable.
     """
     try:
-        import fastapi  # noqa: F401
-        import uvicorn  # noqa: F401
-
-        import filigree.dashboard  # noqa: F401
-    except ImportError:
-        return 'Dashboard requires extra dependencies. Install with: pip install "filigree[dashboard]"'
-
-    try:
         filigree_dir = find_filigree_root()
     except FileNotFoundError:
         return ""
@@ -230,6 +222,15 @@ def ensure_dashboard_running(port: int | None = None) -> str:
 
     if mode == "server":
         return _ensure_dashboard_server_mode(filigree_dir, port)
+
+    try:
+        import fastapi  # noqa: F401
+        import uvicorn  # noqa: F401
+
+        import filigree.dashboard  # noqa: F401
+    except ImportError:
+        return 'Dashboard requires extra dependencies. Install with: pip install "filigree[dashboard]"'
+
     return _ensure_dashboard_ethereal_mode(filigree_dir)
 
 

@@ -11,15 +11,15 @@ Local-first issue tracker designed for AI coding agents — SQLite, MCP tools, n
 
 ## What Is Filigree?
 
-Filigree is a lightweight, SQLite-backed issue tracker designed for AI coding agents (Claude Code, Codex, etc.) to use as first-class citizens. It exposes 43 MCP tools so agents interact natively, plus a full CLI for humans and background subagents.
+Filigree is a lightweight, SQLite-backed issue tracker designed for AI coding agents (Claude Code, Codex, etc.) to use as first-class citizens. It exposes 53 MCP tools so agents interact natively, plus a full CLI for humans and background subagents.
 
 Traditional issue trackers are human-first — agents scrape CLI output or parse API responses. Filigree flips this: agents get a pre-computed `context.md` at session start, claim work with optimistic locking, and resume sessions via event streams without re-reading history. For Claude Code, `filigree install` wires up session hooks and a workflow skill pack so agents get project context automatically.
 
-Filigree is local-first. No cloud, no accounts. Each project gets a `.filigree/` directory (like `.git/`) containing a SQLite database, configuration, and auto-generated context summary. The optional web dashboard can serve multiple projects from a single instance via an ephemeral project registry.
+Filigree is local-first. No cloud, no accounts. Each project gets a `.filigree/` directory (like `.git/`) containing a SQLite database, configuration, and auto-generated context summary. Installations support two modes: `ethereal` (default, per-project) and `server` (persistent multi-project daemon).
 
 ### Key Features
 
-- **MCP server** with 43 tools — agents interact natively without parsing text
+- **MCP server** with 53 tools — agents interact natively without parsing text
 - **Full CLI** with `--json` output for background subagents and `--actor` for audit trails
 - **Claude Code integration** — session hooks inject project snapshots at startup; bundled skill pack teaches agents workflow patterns
 - **Workflow templates** — 24 issue types across 9 packs with enforced state machines
@@ -27,7 +27,7 @@ Filigree is local-first. No cloud, no accounts. Each project gets a `.filigree/`
 - **Hierarchical planning** — milestone/phase/step hierarchies with automatic unblocking
 - **Atomic claiming** — optimistic locking prevents double-work in multi-agent scenarios
 - **Pre-computed context** — `context.md` regenerated on every mutation for instant agent orientation
-- **Web dashboard** — real-time project overview with Kanban drag-and-drop, dependency graphs, and multi-project switching (optional extra)
+- **Web dashboard** — real-time project overview with Kanban drag-and-drop, Graph v2 dependency exploration, Files/Health views, and optional multi-project server mode
 - **Minimal dependencies** — just Python + SQLite + click (no framework overhead)
 - **Session resumption** — `get_changes --since <timestamp>` to catch up after downtime
 
@@ -122,7 +122,7 @@ The dashboard runs on localhost. If stakeholders need to read or file issues fro
 |----------|-------------|
 | [Getting Started](docs/getting-started.md) | 5-minute tutorial: install, init, first issue |
 | [CLI Reference](docs/cli.md) | All CLI commands with full parameter docs |
-| [MCP Server Reference](docs/mcp.md) | 43 MCP tools for agent-native interaction |
+| [MCP Server Reference](docs/mcp.md) | 53 MCP tools for agent-native interaction |
 | [Workflow Templates](docs/workflows.md) | State machines, packs, field schemas, enforcement |
 | [Agent Integration](docs/agent-integration.md) | Multi-agent patterns, claiming, session resumption |
 | [Python API Reference](docs/api-reference.md) | FiligreeDB, Issue, TemplateRegistry for programmatic use |

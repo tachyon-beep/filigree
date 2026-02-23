@@ -138,6 +138,12 @@ def write_atomic(path: Path, content: str) -> None:
         raise
 
 
+def _normalize_scan_path(path: str) -> str:
+    """Normalize scanner-provided paths for stable file identity."""
+    normalized = os.path.normpath(path.replace("\\", "/"))
+    return "" if normalized == "." else normalized
+
+
 # ---------------------------------------------------------------------------
 # Schema
 # ---------------------------------------------------------------------------
@@ -2780,6 +2786,8 @@ class FiligreeDB:
             if not isinstance(severity, str):
                 msg = f"findings[{i}] severity must be a string, got {type(severity).__name__}"
                 raise ValueError(msg)
+            if isinstance(f["path"], str):
+                f["path"] = _normalize_scan_path(f["path"])
             # Normalize: strip whitespace and lowercase
             normalized = severity.strip().lower()
             if normalized in VALID_SEVERITIES:

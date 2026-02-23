@@ -1,6 +1,6 @@
 # MCP Server Reference
 
-Filigree exposes an MCP (Model Context Protocol) server so AI agents interact natively without parsing CLI output. The server provides 45 tools, 1 resource, and 1 prompt.
+Filigree exposes an MCP (Model Context Protocol) server so AI agents interact natively without parsing CLI output. The server provides 53 tools, 1 resource, and 1 prompt.
 
 ## Contents
 
@@ -19,6 +19,7 @@ Filigree exposes an MCP (Model Context Protocol) server so AI agents interact na
   - [Templates and Workflow](#templates-and-workflow)
   - [Analytics](#analytics)
   - [Data Management](#data-management)
+  - [Files and Traceability](#files-and-traceability)
   - [Scanning](#scanning)
 
 ## Setup
@@ -28,6 +29,7 @@ The simplest path:
 ```bash
 filigree install --claude-code    # Writes .mcp.json (or uses `claude mcp add`)
 filigree install --codex          # Writes .codex/config.toml
+filigree install --mode=server    # Configure streamable HTTP MCP for daemon mode
 ```
 
 Or manually add to `.mcp.json`:
@@ -138,6 +140,7 @@ Workflow guide with optional live project context. Agents use this to understand
 |-----------|------|----------|-------------|
 | `id` | string | yes | Issue ID |
 | `reason` | string | no | Close reason |
+| `fields` | object | no | Extra fields to set while closing (for enforced workflows) |
 | `actor` | string | no | Agent identity for audit trail |
 
 #### `reopen_issue`
@@ -439,6 +442,71 @@ Step deps within a phase use integer indices. Cross-phase deps use `"phase_idx.s
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `keep_recent` | integer | no | Keep N most recent events per archived issue (default 50) |
+
+### Files and Traceability
+
+| Tool | Description |
+|------|-------------|
+| `list_files` | List tracked files with filtering, sorting, and pagination |
+| `get_file` | Get file detail + associations + findings summary |
+| `get_file_timeline` | Get merged file timeline events |
+| `get_issue_files` | List files associated with an issue |
+| `add_file_association` | Associate file and issue (`bug_in`, `task_for`, `scan_finding`, `mentioned_in`) |
+| `register_file` | Register/get file record by project-relative path |
+
+#### `list_files`
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `limit` | integer | no | Max results (default 100, max 10000) |
+| `offset` | integer | no | Skip first N results |
+| `language` | string | no | Filter by language |
+| `path_prefix` | string | no | Filter by path substring |
+| `min_findings` | integer | no | Minimum open findings count |
+| `has_severity` | enum | no | Require at least one open finding at severity |
+| `scan_source` | string | no | Filter by finding source |
+| `sort` | enum | no | `updated_at`, `first_seen`, `path`, `language` |
+| `direction` | enum | no | `asc`/`desc` |
+
+#### `get_file`
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `file_id` | string | yes | File ID |
+
+Response includes: `file`, `associations`, `recent_findings`, `summary`.
+
+#### `get_file_timeline`
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `file_id` | string | yes | File ID |
+| `limit` | integer | no | Max events (default 50) |
+| `offset` | integer | no | Skip first N events |
+| `event_type` | enum | no | `finding`, `association`, `file_metadata_update` |
+
+#### `get_issue_files`
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `issue_id` | string | yes | Issue ID |
+
+#### `add_file_association`
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `file_id` | string | yes | File ID |
+| `issue_id` | string | yes | Issue ID |
+| `assoc_type` | enum | yes | `bug_in`, `task_for`, `scan_finding`, `mentioned_in` |
+
+#### `register_file`
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `path` | string | yes | Project-relative file path |
+| `language` | string | no | Optional language hint |
+| `file_type` | string | no | Optional file type tag |
+| `metadata` | object | no | Optional metadata map |
 
 ### Scanning
 

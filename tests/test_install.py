@@ -831,6 +831,11 @@ class TestHasHookCommand:
         settings = {"hooks": {"SessionStart": [{"hooks": [{"command": cmd}]}]}}
         assert _has_hook_command(settings, "filigree session-context") is True
 
+    def test_matches_windows_exe_form(self) -> None:
+        """Should detect absolute filigree.exe paths as matches."""
+        settings = {"hooks": {"SessionStart": [{"hooks": [{"command": "C:/tools/filigree.exe session-context"}]}]}}
+        assert _has_hook_command(settings, "filigree session-context") is True
+
 
 class TestInstallHooksMalformedStructure:
     """Tests for install_claude_code_hooks with malformed existing settings."""

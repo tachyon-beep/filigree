@@ -46,7 +46,7 @@ Created .filigree/filigree.db
 This creates a `.filigree/` directory containing:
 
 - `filigree.db` — SQLite database (WAL mode)
-- `config.json` — project prefix, enabled packs
+- `config.json` — project prefix, install mode, enabled packs
 - `context.md` — auto-generated project summary
 
 Issue IDs use the format `{prefix}-{6hex}` (e.g., `myproj-a3f9b2`). The prefix defaults to your directory name.
@@ -68,6 +68,16 @@ For specific integrations:
 ```bash
 filigree install --claude-code    # Claude Code only
 filigree install --codex          # OpenAI Codex only
+filigree install --hooks          # Claude Code hooks only
+filigree install --skills         # Claude Code skills only
+filigree install --codex-skills   # Codex skills only
+```
+
+To configure operating mode explicitly:
+
+```bash
+filigree init --mode=ethereal     # Default mode (single-project local process)
+filigree install --mode=server    # Persistent daemon / multi-project mode
 ```
 
 ## Create Your First Issue
@@ -120,7 +130,7 @@ Install the MCP extra for native agent integration:
 pip install "filigree[mcp]"
 ```
 
-The MCP server exposes 43 tools so agents interact with filigree without parsing CLI output. See [MCP Server Reference](mcp.md).
+The MCP server exposes 53 tools so agents interact with filigree without parsing CLI output. See [MCP Server Reference](mcp.md).
 
 ### Web Dashboard
 
@@ -146,7 +156,7 @@ pip install "filigree[all]"
 ## What Next?
 
 - [CLI Reference](cli.md) — full command reference with parameter docs
-- [MCP Server Reference](mcp.md) — 43 tools for agent-native interaction
+- [MCP Server Reference](mcp.md) — 53 tools for agent-native interaction
 - [Workflow Templates](workflows.md) — state machines, packs, and field schemas
 - [Agent Integration](agent-integration.md) — multi-agent patterns and session resumption
 - [Architecture](architecture.md) — source layout, DB schema, design decisions

@@ -202,10 +202,11 @@ def close_issue(
     reason: str = "",
     actor: str = "",
     status: str | None = None,
+    fields: dict[str, Any] | None = None,
 ) -> Issue
 ```
 
-Closes an issue by moving it to a done-category state. Skips transition validation (direct close is always allowed). Sets `closed_at` automatically.
+Closes an issue by moving it to a done-category state. Direct close bypasses transition graph traversal, but hard-enforcement field gates still apply. Sets `closed_at` automatically.
 
 | Parameter | Type | Default | Description |
 |---|---|---|---|
@@ -213,6 +214,7 @@ Closes an issue by moving it to a done-category state. Skips transition validati
 | `reason` | `str` | `""` | Stored in `fields.close_reason` |
 | `actor` | `str` | `""` | Identity for the audit trail |
 | `status` | `str \| None` | `None` | Specific done-category state. `None` uses the first done state from the template |
+| `fields` | `dict[str, Any] \| None` | `None` | Additional fields to merge while closing |
 
 **Raises:** `ValueError` if the issue is already closed or the specified status is not a done-category state.
 
@@ -324,12 +326,12 @@ def batch_close(
     *,
     reason: str = "",
     actor: str = "",
-) -> list[Issue]
+) -> tuple[list[Issue], list[dict[str, str]]]
 ```
 
-Closes multiple issues sequentially. Each issue is closed via `close_issue()`.
+Closes multiple issues with per-item error handling. Each issue is closed via `close_issue()`.
 
-**Returns:** List of closed `Issue` objects.
+**Returns:** A 2-tuple of `(closed_issues, errors)` where each error is `{"id": str, "error": str}`.
 
 #### `batch_update`
 
@@ -349,6 +351,85 @@ def batch_update(
 Applies the same changes to multiple issues. Errors on individual issues do not abort the batch.
 
 **Returns:** A 2-tuple of `(updated_issues, errors)` where each error is `{"id": str, "error": str}`.
+
+---
+
+### File Traceability Methods
+
+#### `register_file`
+
+```python
+def register_file(
+    self,
+    path: str,
+    *,
+    language: str = "",
+    file_type: str = "",
+    metadata: dict[str, Any] | None = None,
+) -> FileRecord
+```
+
+Upserts a file record by project-relative path and returns the resulting `FileRecord`.
+
+#### `list_files`
+
+```python
+def list_files(
+    self,
+    *,
+    limit: int = 100,
+    offset: int = 0,
+    language: str | None = None,
+    path_prefix: str | None = None,
+    sort: str = "updated_at",
+) -> list[FileRecord]
+```
+
+Lists tracked files with optional filtering and sorting.
+
+#### `get_file`
+
+```python
+def get_file(self, file_id: str) -> FileRecord
+```
+
+Returns one file record by ID.
+
+#### `get_file_timeline`
+
+```python
+def get_file_timeline(
+    self,
+    file_id: str,
+    *,
+    limit: int = 50,
+    offset: int = 0,
+    event_type: str | None = None,
+) -> dict[str, Any]
+```
+
+Returns merged finding/association/metadata events for a file with pagination metadata.
+
+#### `get_issue_files`
+
+```python
+def get_issue_files(self, issue_id: str) -> list[dict[str, Any]]
+```
+
+Lists files associated with an issue.
+
+#### `add_file_association`
+
+```python
+def add_file_association(
+    self,
+    file_id: str,
+    issue_id: str,
+    assoc_type: str,
+) -> None
+```
+
+Creates an idempotent file<->issue association.
 
 ---
 

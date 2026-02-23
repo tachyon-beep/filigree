@@ -177,6 +177,31 @@ class TestProcessScanResults:
         assert result["findings_created"] == 0
         assert result["findings_updated"] >= 1
 
+    def test_ingest_normalizes_scan_path_separators(self, db: FiligreeDB) -> None:
+        """Equivalent Windows/POSIX path forms should map to one file record."""
+        first = {
+            "path": r".\src\main.py",
+            "rule_id": "E501",
+            "severity": "low",
+            "message": "Line too long",
+            "line_start": 10,
+        }
+        second = {
+            "path": "src/main.py",
+            "rule_id": "E501",
+            "severity": "low",
+            "message": "Line too long",
+            "line_start": 10,
+        }
+        db.process_scan_results(scan_source="ruff", findings=[first])
+        result = db.process_scan_results(scan_source="ruff", findings=[second])
+
+        assert result["files_created"] == 0
+        assert result["files_updated"] == 1
+        row = db.conn.execute("SELECT path FROM file_records").fetchall()
+        assert len(row) == 1
+        assert row[0]["path"] == "src/main.py"
+
     def test_ingest_with_language(self, db: FiligreeDB) -> None:
         db.process_scan_results(
             scan_source="ruff",

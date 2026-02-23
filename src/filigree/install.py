@@ -381,7 +381,10 @@ def _hook_cmd_matches(hook_command: str, bare_command: str) -> bool:
     hook_bin = hook_tokens[-n]  # token in the matching position
     if hook_bin == bare_bin:
         return True
-    return hook_bin.endswith(("/" + bare_bin, "\\" + bare_bin))
+    hook_base = hook_bin.rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
+    hook_base_lower = hook_base.lower()
+    bare_bin_lower = bare_bin.lower()
+    return hook_base_lower in {bare_bin_lower, f"{bare_bin_lower}.exe"}
 
 
 def _has_hook_command(settings: dict[str, Any], command: str) -> bool:
