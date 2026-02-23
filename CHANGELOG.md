@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.3.0] - 2026-02-23
 
-Server/ethereal operating modes, file intelligence + scanner workflows, Graph v2, and broad safety hardening across 105 commits (98 files changed).
+Server/ethereal operating modes, file intelligence + scanner workflows, Graph v2, and broad safety hardening.
 
 ### Added
 
@@ -31,6 +31,8 @@ Server/ethereal operating modes, file intelligence + scanner workflows, Graph v2
 - Scanner registry loaded from TOML configs in `.filigree/scanners/`
 - New MCP tools: `list_scanners` and `trigger_scan`
 - Scanner trigger support for `scan_run_id` correlation
+- Optional `create_issues` flow for scan ingest to promote findings into candidate `bug` issues and create `bug_in` file associations
+- Scan ingest stats extended with `issues_created` and `issue_ids`
 - CLI init support for scanner directory creation
 - Shared scanner utilities and Claude scanner integration
 
@@ -51,6 +53,8 @@ Server/ethereal operating modes, file intelligence + scanner workflows, Graph v2
 - Dashboard frontend restructured from monolithic HTML script to ES-module architecture
 - Dashboard behavior split by mode: ethereal uses simplified single-project flow; server mode uses `ProjectStore` multi-project routing
 - API errors standardized, schema discovery surfaced, and instruction generation extracted for reuse
+- `filigree server register` and `filigree server unregister` now trigger daemon reload when server mode is already running
+- Scanner command validation now resolves project-relative executables (for example `./scanner_exec.sh`) during trigger checks
 - Install instruction marker parsing improved to tolerate missing metadata/version fields
 - README/docs expanded with architecture plans, mode guidance, and dashboard visuals
 
@@ -66,6 +70,7 @@ Server/ethereal operating modes, file intelligence + scanner workflows, Graph v2
 #### Server/daemon reliability
 
 - Multi-project reload and port consistency hardened in server mode
+- Reload failures now surface as `RELOAD_FAILED` instead of reporting a false-success response
 - `unregister_project` updates locked to prevent concurrent config races
 - Daemon ownership checks fixed for `python -m filigree` launch mode
 - Portable PID ownership fallback added when command-line process inspection is unavailable
@@ -80,6 +85,7 @@ Server/ethereal operating modes, file intelligence + scanner workflows, Graph v2
 - Metadata change detection fixed to compare parsed dictionary values
 - `min_findings` now counts all non-terminal finding statuses
 - `list_files` filter validation and project-fallback detail-state behavior corrected
+- `/api/v1/scan-results` now enforces boolean validation for `create_issues`
 
 #### Dashboard and analytics quality
 
