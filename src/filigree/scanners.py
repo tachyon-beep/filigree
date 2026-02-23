@@ -17,9 +17,9 @@ import os
 import re
 import shlex
 import shutil
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Sequence
 
 logger = logging.getLogger(__name__)
 

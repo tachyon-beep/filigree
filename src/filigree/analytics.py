@@ -6,8 +6,8 @@ Separate module from core, operates on FiligreeDB read-only.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
 from collections.abc import Callable
+from datetime import UTC, datetime
 from typing import Any
 
 from filigree.core import FiligreeDB
@@ -165,10 +165,13 @@ def get_flow_metrics(db: FiligreeDB, *, days: int = 30) -> dict[str, Any]:
     by_type: dict[str, list[float]] = {}
     status_events = _fetch_status_events_by_issue(db, [issue.id for issue in recent_closed])
 
+    def _make_resolver(issue_type: str) -> Callable[[str], str]:
+        return lambda state: db._resolve_status_category(issue_type, state)
+
     for issue in recent_closed:
         ct = _cycle_time_from_events(
             status_events.get(issue.id, []),
-            lambda state, issue_type=issue.type: db._resolve_status_category(issue_type, state),
+            _make_resolver(issue.type),
         )
         lt = lead_time(db, issue=issue)
         if ct is not None:

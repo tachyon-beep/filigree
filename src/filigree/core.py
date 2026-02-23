@@ -734,10 +734,7 @@ class FiligreeDB:
             msg = "Label cannot be empty"
             raise ValueError(msg)
         if normalized.casefold() in self._reserved_label_names():
-            msg = (
-                f"Label '{normalized}' is reserved as an issue type name; "
-                "set the issue type explicitly instead."
-            )
+            msg = f"Label '{normalized}' is reserved as an issue type name; set the issue type explicitly instead."
             raise ValueError(msg)
         return normalized
 
@@ -2799,14 +2796,10 @@ class FiligreeDB:
             for ln_field in ("line_start", "line_end"):
                 ln_val = f.get(ln_field)
                 if ln_val is not None and not isinstance(ln_val, int):
-                    raise ValueError(
-                        f"findings[{i}] {ln_field} must be an integer or null, got {type(ln_val).__name__}"
-                    )
+                    raise ValueError(f"findings[{i}] {ln_field} must be an integer or null, got {type(ln_val).__name__}")
             suggestion = f.get("suggestion")
             if suggestion is not None and not isinstance(suggestion, str):
-                raise ValueError(
-                    f"findings[{i}] suggestion must be a string, got {type(suggestion).__name__}"
-                )
+                raise ValueError(f"findings[{i}] suggestion must be a string, got {type(suggestion).__name__}")
             # Normalize: strip whitespace and lowercase
             normalized = severity.strip().lower()
             if normalized in VALID_SEVERITIES:
@@ -3016,7 +3009,9 @@ class FiligreeDB:
                         )
                     elif create_issues and existing_issue_id:
                         self.conn.execute(
-                            "INSERT OR IGNORE INTO file_associations (file_id, issue_id, assoc_type, created_at) VALUES (?, ?, 'bug_in', ?)",
+                            "INSERT OR IGNORE INTO file_associations"
+                            " (file_id, issue_id, assoc_type, created_at)"
+                            " VALUES (?, ?, 'bug_in', ?)",
                             (file_id, existing_issue_id, now),
                         )
                 else:

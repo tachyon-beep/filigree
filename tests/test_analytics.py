@@ -312,11 +312,7 @@ class TestFlowMetrics:
             db.conn.set_trace_callback(None)
 
         assert data["throughput"] >= 4
-        event_queries = [
-            sql
-            for sql in seen_sql
-            if "from events" in sql and "event_type = 'status_changed'" in sql
-        ]
+        event_queries = [sql for sql in seen_sql if "from events" in sql and "event_type = 'status_changed'" in sql]
         assert len(event_queries) == 1, f"expected 1 batched status-events query, got {len(event_queries)}"
 
     def test_flow_metrics_includes_archived_issues(self, db: FiligreeDB) -> None:

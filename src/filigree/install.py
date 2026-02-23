@@ -19,10 +19,10 @@ import sqlite3
 import subprocess
 import sys
 import tomllib
-from urllib.parse import quote
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 from filigree.core import (
     CONFIG_FILENAME,

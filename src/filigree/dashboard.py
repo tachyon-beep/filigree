@@ -145,11 +145,7 @@ class ProjectStore:
             return {"added": [], "removed": [], "error": str(exc)}
         new_keys = set(self._projects)
         removed = sorted(old_keys - new_keys)
-        path_changed = sorted(
-            key
-            for key in (old_keys & new_keys)
-            if old_projects[key].get("path") != self._projects[key].get("path")
-        )
+        path_changed = sorted(key for key in (old_keys & new_keys) if old_projects[key].get("path") != self._projects[key].get("path"))
 
         # Close and evict stale DB handles for removed projects and projects
         # whose path changed under the same key.
@@ -219,7 +215,7 @@ def _safe_int(value: str, name: str, default: int, *, min_value: int | None = No
         )
     if min_value is not None and result < min_value:
         return _error_response(
-            f'Invalid value for {name}: {result}. Must be >= {min_value}.',
+            f"Invalid value for {name}: {result}. Must be >= {min_value}.",
             "VALIDATION_ERROR",
             400,
         )
@@ -498,7 +494,7 @@ def _create_project_router() -> Any:
             unknown_types = sorted(type_filter - known_types)
             if unknown_types:
                 return _error_response(
-                    f'Unknown types: {", ".join(unknown_types)}',
+                    f"Unknown types: {', '.join(unknown_types)}",
                     "GRAPH_INVALID_PARAM",
                     400,
                     {"param": "types", "value": type_filter_raw},
@@ -510,7 +506,7 @@ def _create_project_router() -> Any:
             unknown_cats = sorted(status_filter - _GRAPH_STATUS_CATEGORIES)
             if unknown_cats:
                 return _error_response(
-                    f'Unknown status_categories: {", ".join(unknown_cats)}',
+                    f"Unknown status_categories: {', '.join(unknown_cats)}",
                     "GRAPH_INVALID_PARAM",
                     400,
                     {"param": "status_categories", "value": status_filter_raw},
@@ -633,7 +629,7 @@ def _create_project_router() -> Any:
         visible_ids = {node["id"] for node in filtered_nodes}
         filtered_edges = [
             {
-                "id": f'{dep["to"]}->{dep["from"]}',
+                "id": f"{dep['to']}->{dep['from']}",
                 "source": dep["to"],
                 "target": dep["from"],
                 "kind": dep["type"],

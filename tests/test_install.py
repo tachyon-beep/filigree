@@ -1139,7 +1139,7 @@ class TestDoctorHookPathValidation:
                         "hooks": [
                             {
                                 "type": "command",
-                                "command": "\"C:\\stale\\venv\\Scripts\\filigree.exe\" session-context",
+                                "command": '"C:\\stale\\venv\\Scripts\\filigree.exe" session-context',
                                 "timeout": 5000,
                             }
                         ]

@@ -16,7 +16,15 @@ from pathlib import Path
 from filigree.core import FiligreeDB, Issue
 
 STALE_THRESHOLD_DAYS = 3
-_MALFORMED_TIMESTAMP = object()
+
+
+class _MalformedTimestamp:
+    """Sentinel for unparseable timestamps (typed alternative to bare object())."""
+
+    __slots__ = ()
+
+
+_MALFORMED_TIMESTAMP = _MalformedTimestamp()
 
 # Matches C0/C1 control characters except tab/newline (which we handle separately)
 _CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]")
@@ -38,7 +46,7 @@ def _sanitize_title(text: str) -> str:
     return text
 
 
-def _parse_iso(ts: str) -> datetime | object:
+def _parse_iso(ts: str) -> datetime | _MalformedTimestamp:
     """Parse an ISO timestamp, handling timezone-aware and naive formats.
 
     Returns a UTC-aware datetime on success. Naive datetimes get UTC attached;
@@ -188,20 +196,17 @@ def generate_summary(db: FiligreeDB) -> str:
 
     # -- Stale (wip-category >3 days with no activity)
     stale_cutoff = now - timedelta(days=STALE_THRESHOLD_DAYS)
-    stale: list[tuple[Issue, datetime | object]] = []
+    stale: list[tuple[Issue, datetime | _MalformedTimestamp]] = []
     for issue in in_progress:
         parsed_updated = _parse_iso(issue.updated_at)
-        if parsed_updated is _MALFORMED_TIMESTAMP or parsed_updated < stale_cutoff:
+        if isinstance(parsed_updated, _MalformedTimestamp) or parsed_updated < stale_cutoff:
             stale.append((issue, parsed_updated))
     if stale:
         lines.append("## Stale (in_progress >3 days, no activity)")
         for issue, parsed_updated in stale:
-            if parsed_updated is _MALFORMED_TIMESTAMP:
+            if isinstance(parsed_updated, _MalformedTimestamp):
                 marker = _sanitize_title(str(issue.updated_at))
-                line = (
-                    f'- P{issue.priority} {issue.id} [{issue.type}] "{_sanitize_title(issue.title)}" '
-                    f'(malformed updated_at: {marker})'
-                )
+                line = f'- P{issue.priority} {issue.id} [{issue.type}] "{_sanitize_title(issue.title)}" (malformed updated_at: {marker})'
             else:
                 days_ago = (now - parsed_updated).days
                 line = f'- P{issue.priority} {issue.id} [{issue.type}] "{_sanitize_title(issue.title)}" ({days_ago}d stale)'

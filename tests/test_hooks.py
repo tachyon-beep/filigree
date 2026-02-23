@@ -448,9 +448,7 @@ class TestEnsureDashboardEthereal:
         result = ensure_dashboard_running()
         assert "running on http://localhost:9173" in result.lower() or "9173" in result
 
-    def test_stale_identity_files_do_not_block_fresh_start(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_stale_identity_files_do_not_block_fresh_start(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """If PID ownership check fails, stale files are ignored and a new start proceeds."""
         filigree_dir = tmp_path / ".filigree"
         filigree_dir.mkdir()
@@ -496,9 +494,7 @@ class TestEnsureDashboardEthereal:
         result = ensure_dashboard_running()
         assert "not running" in result.lower()
 
-    def test_server_mode_registration_failure_is_reported(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_server_mode_registration_failure_is_reported(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         filigree_dir = tmp_path / ".filigree"
         filigree_dir.mkdir()
         (filigree_dir / "config.json").write_text(json.dumps({"prefix": "test", "version": 1, "mode": "server"}))
@@ -517,9 +513,7 @@ class TestEnsureDashboardEthereal:
         assert "registration failed" in result.lower()
         assert "bad schema" in result.lower()
 
-    def test_server_mode_posts_reload_using_configured_port(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_server_mode_posts_reload_using_configured_port(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         from filigree.server import ServerConfig
 
         filigree_dir = tmp_path / ".filigree"

@@ -84,7 +84,7 @@ class TestDashboardIndex:
         assert 'id="graphPathTarget"' in html
         assert 'oninput="onGraphPathInput()"' in html
         assert 'id="graphTraceBtn"' in html
-        assert "graphTraceBtn\" onclick=\"traceGraphPath()\" disabled" in html
+        assert 'graphTraceBtn" onclick="traceGraphPath()" disabled' in html
         assert 'id="graphSearchPrevBtn"' in html
         assert 'id="graphSearchNextBtn"' in html
         assert 'aria-label="Previous search match"' in html
@@ -164,7 +164,7 @@ class TestGraphFrontendContracts:
         assert "function maybeShowGraphDefaultPresetNotice(preset)" in graph_js
         assert 'GRAPH_DEFAULT_NOTICE_KEY = "filigree.graph.execution_default_notice.v1"' in graph_js
         assert "window.localStorage?.getItem(GRAPH_DEFAULT_NOTICE_KEY)" in graph_js
-        assert "window.localStorage?.setItem(GRAPH_DEFAULT_NOTICE_KEY, \"1\")" in graph_js
+        assert 'window.localStorage?.setItem(GRAPH_DEFAULT_NOTICE_KEY, "1")' in graph_js
         assert "Graph now defaults to Execution (all issue types)." in graph_js
         assert "maybeShowGraphDefaultPresetNotice(graphPreset);" in graph_js
 
@@ -197,7 +197,7 @@ class TestGraphFrontendContracts:
         html = (STATIC_DIR / "dashboard.html").read_text()
         assert "export function onGraphFocusModeChange()" in graph_js
         assert "export function onGraphFocusRootInput()" in graph_js
-        assert "scheduleDebouncedGraphRender(\"focusRoot\")" in graph_js
+        assert 'scheduleDebouncedGraphRender("focusRoot")' in graph_js
         assert "window.onGraphAssigneeInput = onGraphAssigneeInput;" in app_js
         assert "window.onGraphTimeWindowChange = onGraphTimeWindowChange;" in app_js
         assert "focusRoot.value = nodeId" not in graph_js
@@ -211,8 +211,8 @@ class TestGraphFrontendContracts:
         assert "const INPUT_DEBOUNCE_MS = 300;" in graph_js
         assert "function scheduleDebouncedGraphRender(inputType)" in graph_js
         assert "setTimeout(() => {" in graph_js
-        assert "scheduleDebouncedGraphRender(\"focusRoot\")" in graph_js
-        assert "scheduleDebouncedGraphRender(\"assignee\")" in graph_js
+        assert 'scheduleDebouncedGraphRender("focusRoot")' in graph_js
+        assert 'scheduleDebouncedGraphRender("assignee")' in graph_js
 
     def test_trace_button_disabled_until_both_path_inputs_present(self) -> None:
         graph_js = (STATIC_DIR / "js" / "views" / "graph.js").read_text()
@@ -257,7 +257,7 @@ class TestGraphFrontendContracts:
     def test_graph_toolbar_touch_target_contract(self) -> None:
         html = (STATIC_DIR / "dashboard.html").read_text()
         assert ".graph-toolbar label { min-height: 44px;" in html
-        assert ".graph-toolbar button, .graph-toolbar select, .graph-toolbar input[type=\"text\"], .graph-toolbar summary {" in html
+        assert '.graph-toolbar button, .graph-toolbar select, .graph-toolbar input[type="text"], .graph-toolbar summary {' in html
         assert ".graph-toolbar summary { display: inline-flex; align-items: center; line-height: 1; }" in html
         assert ".graph-toolbar .graph-disclosure[open] { flex: 1 0 100%; }" in html
         assert ".graph-toolbar .graph-disclosure[open] > .graph-disclosure-panel { width: 100%; min-width: 0; }" in html
@@ -313,7 +313,7 @@ class TestGraphFrontendContracts:
         path_block = graph_js[start:end]
         assert 'curNode.outgoers("edge")' in path_block
         assert 'curNode.incomers("edge")' in path_block
-        assert "direction === \"upstream\"" in path_block
+        assert 'direction === "upstream"' in path_block
         assert "state.cy.edges().forEach" not in path_block
 
     def test_topology_change_reuses_positions_only_when_all_nodes_have_positions(self) -> None:
@@ -574,7 +574,8 @@ class TestGraphAPI:
         resp = await client.get("/api/graph?mode=legacy")
         assert resp.status_code == 200
         data = resp.json()
-        assert "nodes" in data and "edges" in data
+        assert "nodes" in data
+        assert "edges" in data
         assert "mode" not in data
 
     async def test_graph_invalid_boolean_param(self, client: AsyncClient) -> None:

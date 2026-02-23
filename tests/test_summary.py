@@ -304,8 +304,7 @@ class TestCategoryAwareSummary:
         issue = db.create_issue("Old value event source")
         created_at = (datetime.now(UTC) + timedelta(seconds=5)).isoformat()
         db.conn.execute(
-            "INSERT INTO events (issue_id, event_type, actor, old_value, new_value, comment, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO events (issue_id, event_type, actor, old_value, new_value, comment, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
             (issue.id, "field_cleared", "tester", "legacy-value", None, "", created_at),
         )
         db.conn.commit()
@@ -372,11 +371,12 @@ class TestWriteSummary:
             closed_fds.append(fd)
             original_close(fd)
 
-        with patch("filigree.summary.os.fdopen", side_effect=OSError("fdopen failed")), patch(
-            "filigree.summary.os.close", side_effect=tracking_close
+        with (
+            patch("filigree.summary.os.fdopen", side_effect=OSError("fdopen failed")),
+            patch("filigree.summary.os.close", side_effect=tracking_close),
+            pytest.raises(OSError, match="fdopen failed"),
         ):
-            with pytest.raises(OSError, match="fdopen failed"):
-                write_summary(db, output)
+            write_summary(db, output)
 
         assert closed_fds, "Expected os.close to be called for leaked fd cleanup"
         leftovers = list(tmp_path.glob(".context_*.tmp"))

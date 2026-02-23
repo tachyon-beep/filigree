@@ -135,17 +135,13 @@ class TestPidLifecycle:
         write_pid_file(pid_file, os.getpid(), cmd="filigree")
         assert verify_pid_ownership(pid_file, expected_cmd="definitely-not-real") is False
 
-    def test_verify_pid_ownership_ignores_stale_pid_file_cmd(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_verify_pid_ownership_ignores_stale_pid_file_cmd(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         pid_file = tmp_path / "ephemeral.pid"
         write_pid_file(pid_file, os.getpid(), cmd="filigree")
         monkeypatch.setattr("filigree.ephemeral._read_os_command_line", lambda _pid: ["python", "worker.py"])
         assert verify_pid_ownership(pid_file, expected_cmd="filigree") is False
 
-    def test_verify_pid_ownership_accepts_python_module_invocation(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_verify_pid_ownership_accepts_python_module_invocation(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         pid_file = tmp_path / "ephemeral.pid"
         write_pid_file(pid_file, os.getpid(), cmd="filigree")
         monkeypatch.setattr(
@@ -154,9 +150,7 @@ class TestPidLifecycle:
         )
         assert verify_pid_ownership(pid_file, expected_cmd="filigree") is True
 
-    def test_verify_pid_ownership_rejects_unrelated_python_module(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_verify_pid_ownership_rejects_unrelated_python_module(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         pid_file = tmp_path / "ephemeral.pid"
         write_pid_file(pid_file, os.getpid(), cmd="filigree")
         monkeypatch.setattr(
@@ -173,9 +167,7 @@ class TestPidLifecycle:
         monkeypatch.setattr("filigree.ephemeral._read_os_command_line", lambda _pid: None)
         assert verify_pid_ownership(pid_file, expected_cmd="filigree") is True
 
-    def test_verify_pid_ownership_fallback_rejects_mismatched_pid_file_cmd(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_verify_pid_ownership_fallback_rejects_mismatched_pid_file_cmd(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         pid_file = tmp_path / "ephemeral.pid"
         write_pid_file(pid_file, os.getpid(), cmd="not-filigree")
         monkeypatch.setattr("filigree.ephemeral._read_os_command_line", lambda _pid: None)
@@ -214,7 +206,7 @@ class TestLegacyCleanup:
     def test_cleanup_legacy_tmp_files_ignores_permission_errors(self, monkeypatch: pytest.MonkeyPatch) -> None:
         calls: list[str] = []
 
-        def fake_unlink(self: Path, *, missing_ok: bool = False) -> None:  # noqa: ARG001
+        def fake_unlink(self: Path, *, missing_ok: bool = False) -> None:
             calls.append(self.name)
             if self.name == "filigree-dashboard.pid":
                 raise PermissionError("denied")
