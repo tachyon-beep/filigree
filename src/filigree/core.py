@@ -3097,6 +3097,77 @@ class FiligreeDB:
             for row in rows
         ]
 
+    def update_finding(
+        self,
+        file_id: str,
+        finding_id: str,
+        *,
+        status: str | None = None,
+        issue_id: str | None = None,
+    ) -> ScanFinding:
+        """Update finding status and/or linked issue for a specific file finding."""
+        row = self.conn.execute(
+            "SELECT id FROM scan_findings WHERE id = ? AND file_id = ?",
+            (finding_id, file_id),
+        ).fetchone()
+        if row is None:
+            msg = f"Finding not found: {finding_id}"
+            raise KeyError(msg)
+
+        updates: list[str] = []
+        params: list[Any] = []
+
+        if status is not None:
+            if status not in VALID_FINDING_STATUSES:
+                valid = ", ".join(sorted(VALID_FINDING_STATUSES))
+                msg = f'Invalid finding status "{status}". Must be one of: {valid}'
+                raise ValueError(msg)
+            updates.append("status = ?")
+            params.append(status)
+
+        normalized_issue_id: str | None = None
+        if issue_id is not None:
+            if not isinstance(issue_id, str):
+                msg = "issue_id must be a string when provided"
+                raise ValueError(msg)
+            normalized_issue_id = issue_id.strip()
+            if not normalized_issue_id:
+                msg = "issue_id cannot be empty when provided"
+                raise ValueError(msg)
+            issue = self.conn.execute("SELECT id FROM issues WHERE id = ?", (normalized_issue_id,)).fetchone()
+            if issue is None:
+                msg = f'Issue not found: "{normalized_issue_id}". Verify the issue exists before linking.'
+                raise ValueError(msg)
+            updates.append("issue_id = ?")
+            params.append(normalized_issue_id)
+
+        if not updates:
+            msg = "At least one of status or issue_id must be provided"
+            raise ValueError(msg)
+
+        now = _now_iso()
+        updates.append("updated_at = ?")
+        params.append(now)
+        params.extend([finding_id, file_id])
+
+        self.conn.execute(
+            f"UPDATE scan_findings SET {', '.join(updates)} WHERE id = ? AND file_id = ?",
+            params,
+        )
+
+        if normalized_issue_id:
+            self.conn.execute(
+                "INSERT OR IGNORE INTO file_associations (file_id, issue_id, assoc_type, created_at) VALUES (?, ?, 'bug_in', ?)",
+                (file_id, normalized_issue_id, now),
+            )
+
+        self.conn.commit()
+        updated = self.conn.execute("SELECT * FROM scan_findings WHERE id = ?", (finding_id,)).fetchone()
+        if updated is None:
+            msg = f"Finding not found after update: {finding_id}"
+            raise KeyError(msg)
+        return self._build_scan_finding(updated)
+
     def clean_stale_findings(
         self,
         *,

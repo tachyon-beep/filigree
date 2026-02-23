@@ -7,6 +7,7 @@ import {
   fetchFileFindings,
   fetchFiles,
   fetchFileTimeline,
+  patchFileFinding,
   postFileAssociation,
 } from "../api.js";
 import { updateHash } from "../router.js";
@@ -387,7 +388,10 @@ function renderFindingDetail(f) {
     (f.first_seen ? `<div style="color:var(--text-muted)">First seen: ${new Date(f.first_seen).toLocaleDateString()}</div>` : "") +
     (f.suggestion ? '<div class="mt-2 rounded p-2" style="background:var(--surface-base);border:1px solid var(--border-default)"><div class="font-medium mb-1" style="color:var(--text-secondary)">Suggestion</div><div style="color:var(--text-primary);white-space:pre-wrap">' + escHtml(f.suggestion) + "</div></div>" : "") +
     '<div class="pt-2" style="border-top:1px solid var(--border-default)">' +
-    `<button onclick="createIssueFromFinding()" class="text-xs px-3 py-1 rounded bg-accent-hover" style="background:var(--accent);color:var(--surface-base)">Create Issue</button>` +
+    '<div class="flex gap-2">' +
+    `<button onclick="createIssueFromFinding()" class="text-xs px-3 py-1 rounded bg-accent-hover" style="background:var(--accent);color:var(--surface-base)">Create Ticket</button>` +
+    `<button onclick="closeFinding()" class="text-xs px-3 py-1 rounded bg-overlay bg-overlay-hover" style="color:var(--text-primary);border:1px solid var(--border-strong)">Close Finding</button>` +
+    "</div>" +
     "</div></div>"
   );
 }
@@ -498,6 +502,11 @@ export async function createIssueFromFinding() {
   const f = _selectedFinding;
   // Open the Create Issue modal, then pre-fill fields
   await showCreateForm();
+  const modalEl = document.getElementById("createModal");
+  if (modalEl) {
+    modalEl.dataset.findingFileId = String(state.fileDetailData?.file?.id || state.selectedFile || "");
+    modalEl.dataset.findingId = String(f.id);
+  }
   const titleEl = document.getElementById("createTitle");
   const descEl = document.getElementById("createDesc");
   const typeEl = document.getElementById("createType");
@@ -524,6 +533,19 @@ export async function createIssueFromFinding() {
   }
   if (typeEl) typeEl.value = "bug";
   if (prioEl) prioEl.value = String(SEVERITY_PRIORITY_MAP[f.severity] ?? 2);
+}
+
+export async function closeFinding() {
+  if (!_selectedFinding || !state.selectedFile) return;
+  const result = await patchFileFinding(state.selectedFile, _selectedFinding.id, {
+    status: "fixed",
+  });
+  if (!result.ok) {
+    showToast(result.error || "Failed to close finding", "error");
+    return;
+  }
+  showToast("Finding closed", "success");
+  await loadFindingsTab(state.selectedFile, 0);
 }
 
 // --- Timeline Tab ---

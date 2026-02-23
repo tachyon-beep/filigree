@@ -168,6 +168,17 @@ class TestGraphFrontendContracts:
         assert "Graph now defaults to Execution (all issue types)." in graph_js
         assert "maybeShowGraphDefaultPresetNotice(graphPreset);" in graph_js
 
+    def test_files_finding_actions_contract(self) -> None:
+        files_js = (STATIC_DIR / "js" / "views" / "files.js").read_text()
+        ui_js = (STATIC_DIR / "js" / "ui.js").read_text()
+        assert "Create Ticket" in files_js
+        assert "Close Finding" in files_js
+        assert "function closeFinding()" in files_js
+        assert "dataset.findingFileId" in files_js
+        assert "dataset.findingId" in files_js
+        assert "patchFileFinding(" in files_js
+        assert "patchFileFinding(" in ui_js
+
     def test_graph_legacy_fallback_notice_present(self) -> None:
         graph_js = (STATIC_DIR / "js" / "views" / "graph.js").read_text()
         assert "Graph v2 unavailable; showing legacy graph." in graph_js

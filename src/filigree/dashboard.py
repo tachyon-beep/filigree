@@ -1171,7 +1171,6 @@ def _create_project_router() -> Any:
                         "findings": "array (required)",
                         "scan_run_id": "string (optional)",
                         "mark_unseen": "boolean (optional)",
-                        "create_issues": "boolean (optional, default false)",
                     },
                 },
                 {"method": "GET", "path": "/api/files", "description": "List tracked files", "status": "live"},
@@ -1185,6 +1184,12 @@ def _create_project_router() -> Any:
                     "method": "GET",
                     "path": "/api/files/{file_id}/findings",
                     "description": "Findings for a specific file",
+                    "status": "live",
+                },
+                {
+                    "method": "PATCH",
+                    "path": "/api/files/{file_id}/findings/{finding_id}",
+                    "description": "Update finding status/linkage",
                     "status": "live",
                 },
                 {
@@ -1263,6 +1268,41 @@ def _create_project_router() -> Any:
             return _error_response(str(e), "VALIDATION_ERROR", 400)
         return JSONResponse(result, headers={"Cache-Control": "max-age=30"})
 
+    @router.patch("/files/{file_id}/findings/{finding_id}")
+    async def api_update_file_finding(
+        file_id: str,
+        finding_id: str,
+        request: Request,
+        db: FiligreeDB = Depends(_get_db),
+    ) -> JSONResponse:
+        """Update finding status and/or linked issue."""
+        try:
+            body = await request.json()
+        except Exception:
+            return _error_response("Invalid JSON body", "VALIDATION_ERROR", 400)
+        if not isinstance(body, dict):
+            return _error_response("Request body must be a JSON object", "VALIDATION_ERROR", 400)
+        status = body.get("status")
+        issue_id = body.get("issue_id")
+        if status is None and issue_id is None:
+            return _error_response("At least one of status or issue_id is required", "VALIDATION_ERROR", 400)
+        if status is not None and not isinstance(status, str):
+            return _error_response("status must be a string", "VALIDATION_ERROR", 400)
+        if issue_id is not None and not isinstance(issue_id, str):
+            return _error_response("issue_id must be a string", "VALIDATION_ERROR", 400)
+        try:
+            finding = db.update_finding(
+                file_id,
+                finding_id,
+                status=status,
+                issue_id=issue_id,
+            )
+        except KeyError:
+            return _error_response(f"Finding not found: {finding_id}", "FINDING_NOT_FOUND", 404)
+        except ValueError as e:
+            return _error_response(str(e), "VALIDATION_ERROR", 400)
+        return JSONResponse(finding.to_dict())
+
     @router.get("/files/{file_id}/timeline")
     async def api_get_file_timeline(file_id: str, request: Request, db: FiligreeDB = Depends(_get_db)) -> JSONResponse:
         """Get merged timeline of events for a file."""
@@ -1316,9 +1356,12 @@ def _create_project_router() -> Any:
         if not scan_source:
             return _error_response("scan_source is required", "VALIDATION_ERROR", 400)
         findings = body.get("findings", [])
-        create_issues = body.get("create_issues", False)
-        if not isinstance(create_issues, bool):
-            return _error_response("create_issues must be a boolean", "VALIDATION_ERROR", 400)
+        if "create_issues" in body:
+            return _error_response(
+                "create_issues is not supported on scan ingest; create tickets via UI or MCP",
+                "VALIDATION_ERROR",
+                400,
+            )
         status_code = 202 if not findings else 200
         try:
             result = db.process_scan_results(
@@ -1326,7 +1369,6 @@ def _create_project_router() -> Any:
                 findings=findings,
                 scan_run_id=body.get("scan_run_id", ""),
                 mark_unseen=bool(body.get("mark_unseen", False)),
-                create_issues=create_issues,
             )
         except ValueError as e:
             return _error_response(str(e), "VALIDATION_ERROR", 400)

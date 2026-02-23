@@ -3,7 +3,7 @@
 // Extracted from dashboard.html into an ES module.
 // ---------------------------------------------------------------------------
 
-import { fetchTypes, postBatchClose, postBatchUpdate, postCreateIssue, postReload } from "./api.js";
+import { fetchTypes, patchFileFinding, postBatchClose, postBatchUpdate, postCreateIssue, postReload } from "./api.js";
 import { CATEGORY_COLORS, state, THEME_COLORS, TOUR_STEPS } from "./state.js";
 
 // ---------------------------------------------------------------------------
@@ -439,6 +439,7 @@ export async function showCreateForm() {
 }
 
 export async function submitCreateForm() {
+  const modalEl = document.getElementById("createModal");
   const title = document.getElementById("createTitle").value.trim();
   if (!title) {
     showToast("Title is required", "error");
@@ -465,7 +466,18 @@ export async function submitCreateForm() {
     return;
   }
   const created = result.data;
-  document.getElementById("createModal").remove();
+  const findingFileId = modalEl?.dataset?.findingFileId || "";
+  const findingId = modalEl?.dataset?.findingId || "";
+  if (findingFileId && findingId) {
+    const findingResult = await patchFileFinding(findingFileId, findingId, {
+      status: "fixed",
+      issue_id: created.id,
+    });
+    if (!findingResult.ok) {
+      showToast(`Created ${created.id}, but failed to close finding: ${findingResult.error || "Unknown error"}`, "warning");
+    }
+  }
+  if (modalEl) modalEl.remove();
   showToast(`Created ${created.id}`, "success");
   if (callbacks.fetchData) await callbacks.fetchData();
   if (callbacks.openDetail) callbacks.openDetail(created.id);

@@ -428,3 +428,23 @@ export async function postFileAssociation(fileId, body) {
     return { ok: false, error: "Network error" };
   }
 }
+
+export async function patchFileFinding(fileId, findingId, body) {
+  try {
+    const resp = await fetch(
+      apiUrl(`/files/${encodeURIComponent(fileId)}/findings/${encodeURIComponent(findingId)}`),
+      {
+        method: "PATCH",
+        headers: JSON_HEADERS,
+        body: JSON.stringify(body),
+      },
+    );
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({}));
+      return { ok: false, error: extractError(err, "Finding update failed") };
+    }
+    return { ok: true, data: await resp.json() };
+  } catch (_e) {
+    return { ok: false, error: "Network error" };
+  }
+}

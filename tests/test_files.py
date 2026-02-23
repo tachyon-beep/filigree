@@ -294,6 +294,36 @@ class TestProcessScanResults:
         updated_finding = db.get_findings(file_record.id)[0]
         assert updated_finding.issue_id == issue_id
 
+    def test_update_finding_marks_it_fixed(self, db: FiligreeDB) -> None:
+        db.process_scan_results(
+            scan_source="ruff",
+            findings=[{"path": "a.py", "rule_id": "E501", "severity": "low", "message": "m"}],
+        )
+        file_record = db.get_file_by_path("a.py")
+        assert file_record is not None
+        finding = db.get_findings(file_record.id)[0]
+
+        updated = db.update_finding(file_record.id, finding.id, status="fixed")
+        assert updated.status == "fixed"
+        summary = db.get_file_findings_summary(file_record.id)
+        assert summary["open_findings"] == 0
+
+    def test_update_finding_links_issue_and_creates_association(self, db: FiligreeDB) -> None:
+        db.process_scan_results(
+            scan_source="ruff",
+            findings=[{"path": "a.py", "rule_id": "E501", "severity": "low", "message": "m"}],
+        )
+        issue = db.create_issue("Fix lint finding", type="bug")
+        file_record = db.get_file_by_path("a.py")
+        assert file_record is not None
+        finding = db.get_findings(file_record.id)[0]
+
+        updated = db.update_finding(file_record.id, finding.id, status="fixed", issue_id=issue.id)
+        assert updated.status == "fixed"
+        assert updated.issue_id == issue.id
+        associations = db.get_file_associations(file_record.id)
+        assert any(a["issue_id"] == issue.id and a["assoc_type"] == "bug_in" for a in associations)
+
     def test_ingest_finding_missing_path(self, db: FiligreeDB) -> None:
         with pytest.raises(ValueError, match="path"):
             db.process_scan_results(
@@ -2036,6 +2066,43 @@ class TestBidirectionalEndpoints:
         assert resp.status_code == 404
 
 
+class TestFileFindingUpdateEndpoint:
+    async def test_patch_file_finding_closes_and_links_issue(self, client: AsyncClient, api_db: FiligreeDB) -> None:
+        api_db.process_scan_results(
+            scan_source="ruff",
+            findings=[{"path": "a.py", "rule_id": "E501", "severity": "low", "message": "Too long"}],
+        )
+        file_record = api_db.get_file_by_path("a.py")
+        assert file_record is not None
+        finding = api_db.get_findings(file_record.id)[0]
+        issue = api_db.create_issue("Fix lint finding", type="bug")
+
+        resp = await client.patch(
+            f"/api/files/{file_record.id}/findings/{finding.id}",
+            json={"status": "fixed", "issue_id": issue.id},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "fixed"
+        assert data["issue_id"] == issue.id
+
+        associations = api_db.get_file_associations(file_record.id)
+        assert any(a["issue_id"] == issue.id and a["assoc_type"] == "bug_in" for a in associations)
+
+    async def test_patch_file_finding_requires_status_or_issue_id(self, client: AsyncClient, api_db: FiligreeDB) -> None:
+        api_db.process_scan_results(
+            scan_source="ruff",
+            findings=[{"path": "a.py", "rule_id": "E501", "severity": "low", "message": "Too long"}],
+        )
+        file_record = api_db.get_file_by_path("a.py")
+        assert file_record is not None
+        finding = api_db.get_findings(file_record.id)[0]
+
+        resp = await client.patch(f"/api/files/{file_record.id}/findings/{finding.id}", json={})
+        assert resp.status_code == 400
+        assert resp.json()["error"]["code"] == "VALIDATION_ERROR"
+
+
 class TestHotspotsEndpoint:
     """Tests for the hotspots API endpoint."""
 
@@ -2155,7 +2222,7 @@ class TestScanResultsEndpointEnhancements:
         assert statuses["E501"] == "open"
         assert statuses["E502"] == "unseen_in_latest"
 
-    async def test_create_issues_via_api(self, client: AsyncClient, api_db: FiligreeDB) -> None:
+    async def test_create_issues_via_api_is_rejected(self, client: AsyncClient) -> None:
         resp = await client.post(
             "/api/v1/scan-results",
             json={
@@ -2172,20 +2239,10 @@ class TestScanResultsEndpointEnhancements:
                 ],
             },
         )
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["issues_created"] == 1
-        issue_id = data["issue_ids"][0]
-
-        issue = api_db.get_issue(issue_id)
-        assert issue.type == "bug"
-
-        file_record = api_db.get_file_by_path("src/main.py")
-        assert file_record is not None
-        finding = api_db.get_findings(file_record.id)[0]
-        assert finding.issue_id == issue_id
-        associations = api_db.get_file_associations(file_record.id)
-        assert any(a["issue_id"] == issue_id and a["assoc_type"] == "bug_in" for a in associations)
+        assert resp.status_code == 400
+        payload = resp.json()
+        assert payload["error"]["code"] == "VALIDATION_ERROR"
+        assert "not supported" in payload["error"]["message"].lower()
 
 
 class TestSortBySeverityEndpoint:
@@ -2428,13 +2485,14 @@ class TestInputValidation400s:
         assert resp.status_code == 400
         assert resp.json()["error"]["code"] == "VALIDATION_ERROR"
 
-    async def test_scan_create_issues_must_be_boolean(self, client: AsyncClient) -> None:
+    async def test_scan_create_issues_field_is_rejected(self, client: AsyncClient) -> None:
         resp = await client.post(
             "/api/v1/scan-results",
             json={"scan_source": "ruff", "create_issues": "yes", "findings": []},
         )
         assert resp.status_code == 400
         assert resp.json()["error"]["code"] == "VALIDATION_ERROR"
+        assert "not supported" in resp.json()["error"]["message"].lower()
 
     # -- P2c: pagination query params ----------------------------------------
 

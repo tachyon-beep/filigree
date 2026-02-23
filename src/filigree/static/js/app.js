@@ -119,6 +119,7 @@ import {
 } from "./views/metrics.js";
 import { loadPlanView, loadWorkflow } from "./views/workflow.js";
 import {
+  closeFinding,
   clearScanSourceFilter,
   closeFileDetail,
   createIssueFromFinding,
@@ -639,6 +640,7 @@ window.filterTimeline = filterTimeline;
 window.filterFindings = filterFindings;
 window.selectFinding = selectFinding;
 window.createIssueFromFinding = createIssueFromFinding;
+window.closeFinding = closeFinding;
 window.showLinkIssueModal = showLinkIssueModal;
 window.submitLinkIssue = submitLinkIssue;
 
