@@ -196,6 +196,12 @@ class TestConfigValidation:
         config = read_server_config()
         assert config.port == 8377
 
+    def test_port_zero_returns_default(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        config_dir = self._setup(tmp_path, monkeypatch)
+        (config_dir / "server.json").write_text('{"port": 0}')
+        config = read_server_config()
+        assert config.port == 8377
+
     def test_non_dict_projects_ignored(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         config_dir = self._setup(tmp_path, monkeypatch)
         (config_dir / "server.json").write_text('{"projects": "not-a-dict"}')
@@ -391,13 +397,32 @@ class TestDaemonLifecycle:
         assert pid_data["cmd"] == "filigree"
         assert read_server_config().port == 9911
 
-    def test_claim_current_process_as_daemon_refuses_live_foreign_pid(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_claim_succeeds_when_tracked_pid_is_foreign_process(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """PID file exists, PID alive, but NOT filigree → should claim successfully."""
+        config_dir = tmp_path / ".config" / "filigree"
+        config_dir.mkdir(parents=True)
+        pid_file = config_dir / "server.pid"
+        pid_file.write_text(json.dumps({"pid": 54321, "cmd": "filigree"}))
+        monkeypatch.setattr("filigree.server.SERVER_CONFIG_DIR", config_dir)
+        monkeypatch.setattr("filigree.server.SERVER_CONFIG_FILE", config_dir / "server.json")
+        monkeypatch.setattr("filigree.server.SERVER_PID_FILE", pid_file)
+
+        # PID alive but NOT a filigree process
+        monkeypatch.setattr("filigree.server.is_pid_alive", lambda pid: pid == 54321)
+        monkeypatch.setattr("filigree.server.verify_pid_ownership", lambda *a, **kw: False)
+
+        from filigree.server import claim_current_process_as_daemon
+
+        assert claim_current_process_as_daemon(port=9911)
+
+    def test_claim_current_process_as_daemon_refuses_live_filigree_pid(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         config_dir = tmp_path / ".config" / "filigree"
         config_dir.mkdir(parents=True)
         pid_file = config_dir / "server.pid"
         pid_file.write_text(json.dumps({"pid": 54321, "cmd": "filigree"}))
         monkeypatch.setattr("filigree.server.SERVER_PID_FILE", pid_file)
         monkeypatch.setattr("filigree.server.is_pid_alive", lambda pid: pid == 54321)
+        monkeypatch.setattr("filigree.server.verify_pid_ownership", lambda *a, **kw: True)
 
         from filigree.server import claim_current_process_as_daemon
 
@@ -477,6 +502,28 @@ class TestStartDaemonPopenFailure:
 
 class TestStopDaemonSigkill:
     """Bug filigree-186813: stop_daemon must verify kill succeeded after SIGKILL."""
+
+    def test_stop_succeeds_when_process_dies_before_sigterm(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """os.kill raises ProcessLookupError on SIGTERM → success + PID cleanup."""
+        config_dir = tmp_path / ".config" / "filigree"
+        config_dir.mkdir(parents=True)
+        pid_file = config_dir / "server.pid"
+        pid_file.write_text(json.dumps({"pid": 54321, "cmd": "filigree"}))
+        monkeypatch.setattr("filigree.server.SERVER_PID_FILE", pid_file)
+
+        monkeypatch.setattr("filigree.server.is_pid_alive", lambda pid: True)
+        monkeypatch.setattr("filigree.server.verify_pid_ownership", lambda *a, **kw: True)
+
+        def mock_kill(pid: int, sig: int) -> None:
+            raise ProcessLookupError("No such process")
+
+        monkeypatch.setattr("os.kill", mock_kill)
+
+        from filigree.server import stop_daemon
+
+        result = stop_daemon()
+        assert result.success
+        assert not pid_file.exists()
 
     def test_stop_returns_failure_when_sigkill_fails(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         config_dir = tmp_path / ".config" / "filigree"

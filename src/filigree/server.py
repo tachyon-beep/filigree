@@ -219,6 +219,9 @@ def stop_daemon() -> DaemonResult:
 
     try:
         os.kill(pid, signal.SIGTERM)
+    except ProcessLookupError:
+        SERVER_PID_FILE.unlink(missing_ok=True)
+        return DaemonResult(True, f"Daemon (pid {pid}) exited before SIGTERM; cleaned up PID file")
     except PermissionError:
         return DaemonResult(False, f"Permission denied sending SIGTERM to pid {pid}")
 
@@ -291,7 +294,10 @@ def claim_current_process_as_daemon(*, port: int | None = None) -> bool:
                     write_server_config(config)
             return True
         if is_pid_alive(tracked_pid):
-            return False
+            if verify_pid_ownership(SERVER_PID_FILE, expected_cmd="filigree"):
+                return False
+            # Stale PID from a reused process — clean up and proceed
+            logger.warning("Stale PID file (pid %d is not filigree); cleaning up", tracked_pid)
         SERVER_PID_FILE.unlink(missing_ok=True)
 
     write_pid_file(SERVER_PID_FILE, current_pid, cmd="filigree")
