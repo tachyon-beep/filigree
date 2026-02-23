@@ -20,6 +20,7 @@ from filigree.mcp_server import (
     call_tool,
     create_mcp_app,
     get_workflow_prompt,
+    list_tools,
     list_resources,
     read_context,
 )
@@ -481,6 +482,64 @@ class TestBatchUpdate:
         assert data["count"] == 0
         assert len(data["failed"]) == 1
         assert data["failed"][0]["code"] == "not_found"
+
+
+class TestBatchAddLabel:
+    async def test_batch_add_label(self, mcp_db: FiligreeDB) -> None:
+        a = mcp_db.create_issue("Label A")
+        b = mcp_db.create_issue("Label B")
+        result = await call_tool("batch_add_label", {"ids": [a.id, b.id], "label": "security"})
+        data = _parse(result)
+        assert data["count"] == 2
+        assert a.id in data["succeeded"]
+        assert b.id in data["succeeded"]
+        assert data["failed"] == []
+
+    async def test_batch_add_label_partial_failure(self, mcp_db: FiligreeDB) -> None:
+        a = mcp_db.create_issue("Label A")
+        result = await call_tool("batch_add_label", {"ids": [a.id, "nonexistent-xyz"], "label": "security"})
+        data = _parse(result)
+        assert data["count"] == 1
+        assert a.id in data["succeeded"]
+        assert len(data["failed"]) == 1
+        assert data["failed"][0]["code"] == "not_found"
+
+    async def test_batch_add_label_validation_error(self, mcp_db: FiligreeDB) -> None:
+        a = mcp_db.create_issue("Label A")
+        result = await call_tool("batch_add_label", {"ids": [a.id], "label": "bug"})
+        data = _parse(result)
+        assert data["count"] == 0
+        assert len(data["failed"]) == 1
+        assert data["failed"][0]["code"] == "validation_error"
+
+
+class TestBatchAddComment:
+    async def test_batch_add_comment(self, mcp_db: FiligreeDB) -> None:
+        a = mcp_db.create_issue("Comment A")
+        b = mcp_db.create_issue("Comment B")
+        result = await call_tool("batch_add_comment", {"ids": [a.id, b.id], "text": "triage complete"})
+        data = _parse(result)
+        assert data["count"] == 2
+        assert a.id in data["succeeded"]
+        assert b.id in data["succeeded"]
+        assert data["failed"] == []
+
+    async def test_batch_add_comment_partial_failure(self, mcp_db: FiligreeDB) -> None:
+        a = mcp_db.create_issue("Comment A")
+        result = await call_tool("batch_add_comment", {"ids": [a.id, "nonexistent-xyz"], "text": "triage complete"})
+        data = _parse(result)
+        assert data["count"] == 1
+        assert a.id in data["succeeded"]
+        assert len(data["failed"]) == 1
+        assert data["failed"][0]["code"] == "not_found"
+
+    async def test_batch_add_comment_validation_error(self, mcp_db: FiligreeDB) -> None:
+        a = mcp_db.create_issue("Comment A")
+        result = await call_tool("batch_add_comment", {"ids": [a.id], "text": "   "})
+        data = _parse(result)
+        assert data["count"] == 0
+        assert len(data["failed"]) == 1
+        assert data["failed"][0]["code"] == "validation_error"
 
 
 class TestClaimIssue:
@@ -1089,6 +1148,139 @@ class TestMCPTransactionSafety:
         assert orphan is None, "Orphan issue row survived — rollback did not happen"
 
 
+class TestFileTools:
+    """Tests for MCP file registration, association, and retrieval tools."""
+
+    async def test_list_tools_includes_file_tools(self, mcp_db: FiligreeDB) -> None:
+        tools = await list_tools()
+        names = {t.name for t in tools}
+        assert {
+            "list_files",
+            "get_file",
+            "get_file_timeline",
+            "get_issue_files",
+            "add_file_association",
+            "register_file",
+        }.issubset(names)
+
+    async def test_register_file_and_get_file_round_trip(self, mcp_db: FiligreeDB) -> None:
+        created = _parse(await call_tool("register_file", {"path": "src/example.py", "language": "python"}))
+        assert "error" not in created
+        assert created["path"] == "src/example.py"
+        assert created["id"]
+
+        detail = _parse(await call_tool("get_file", {"file_id": created["id"]}))
+        assert detail["file"]["id"] == created["id"]
+        assert detail["file"]["path"] == "src/example.py"
+
+    async def test_register_file_is_idempotent_by_path(self, mcp_db: FiligreeDB) -> None:
+        first = _parse(await call_tool("register_file", {"path": "src/idempotent.py"}))
+        second = _parse(await call_tool("register_file", {"path": "./src/idempotent.py"}))
+        assert first["id"] == second["id"]
+        assert second["path"] == "src/idempotent.py"
+
+    async def test_register_file_path_traversal_rejected(self, mcp_db: FiligreeDB) -> None:
+        result = _parse(await call_tool("register_file", {"path": "../../etc/passwd"}))
+        assert result["code"] == "invalid_path"
+
+    async def test_list_files_with_filters(self, mcp_db: FiligreeDB) -> None:
+        await call_tool("register_file", {"path": "src/a.py", "language": "python"})
+        await call_tool("register_file", {"path": "docs/readme.md", "language": "markdown"})
+        result = _parse(await call_tool("list_files", {"path_prefix": "src/", "limit": 10}))
+        assert result["total"] == 1
+        assert result["results"][0]["path"] == "src/a.py"
+
+    async def test_list_files_invalid_sort_rejected(self, mcp_db: FiligreeDB) -> None:
+        result = _parse(await call_tool("list_files", {"sort": "bad_sort"}))
+        assert result["code"] == "validation_error"
+
+    async def test_add_file_association_and_get_issue_files(self, mcp_db: FiligreeDB) -> None:
+        issue = mcp_db.create_issue("Issue for file association")
+        file_data = _parse(await call_tool("register_file", {"path": "src/assoc.py"}))
+
+        created = _parse(
+            await call_tool(
+                "add_file_association",
+                {
+                    "file_id": file_data["id"],
+                    "issue_id": issue.id,
+                    "assoc_type": "task_for",
+                },
+            )
+        )
+        assert created["status"] == "created"
+
+        files = _parse(await call_tool("get_issue_files", {"issue_id": issue.id}))
+        assert len(files) == 1
+        assert files[0]["file_id"] == file_data["id"]
+        assert files[0]["assoc_type"] == "task_for"
+
+    async def test_add_file_association_invalid_assoc_type(self, mcp_db: FiligreeDB) -> None:
+        issue = mcp_db.create_issue("Issue for invalid assoc")
+        file_data = _parse(await call_tool("register_file", {"path": "src/invalid_assoc.py"}))
+        result = _parse(
+            await call_tool(
+                "add_file_association",
+                {
+                    "file_id": file_data["id"],
+                    "issue_id": issue.id,
+                    "assoc_type": "invalid_assoc",
+                },
+            )
+        )
+        assert result["code"] == "validation_error"
+
+    async def test_add_file_association_file_not_found(self, mcp_db: FiligreeDB) -> None:
+        issue = mcp_db.create_issue("Issue for missing file")
+        result = _parse(
+            await call_tool(
+                "add_file_association",
+                {
+                    "file_id": "missing-file-id",
+                    "issue_id": issue.id,
+                    "assoc_type": "task_for",
+                },
+            )
+        )
+        assert result["code"] == "not_found"
+
+    async def test_get_issue_files_not_found(self, mcp_db: FiligreeDB) -> None:
+        result = _parse(await call_tool("get_issue_files", {"issue_id": "nonexistent-xyz"}))
+        assert result["code"] == "not_found"
+
+    async def test_get_file_timeline_for_association_event(self, mcp_db: FiligreeDB) -> None:
+        issue = mcp_db.create_issue("Issue for timeline")
+        file_data = _parse(await call_tool("register_file", {"path": "src/timeline.py"}))
+        _parse(
+            await call_tool(
+                "add_file_association",
+                {
+                    "file_id": file_data["id"],
+                    "issue_id": issue.id,
+                    "assoc_type": "mentioned_in",
+                },
+            )
+        )
+
+        timeline = _parse(
+            await call_tool(
+                "get_file_timeline",
+                {"file_id": file_data["id"], "event_type": "association"},
+            )
+        )
+        assert timeline["total"] >= 1
+        assert any(e["type"] == "association_created" for e in timeline["results"])
+
+    async def test_get_file_timeline_invalid_event_type(self, mcp_db: FiligreeDB) -> None:
+        file_data = _parse(await call_tool("register_file", {"path": "src/timeline_invalid.py"}))
+        result = _parse(
+            await call_tool(
+                "get_file_timeline",
+                {"file_id": file_data["id"], "event_type": "bogus"},
+            )
+        )
+        assert result["code"] == "validation_error"
+
 class TestScannerTools:
     """Tests for list_scanners and trigger_scan MCP tools."""
 
@@ -1197,6 +1389,39 @@ class TestScannerTools:
             assert f is not None
         finally:
             target.unlink(missing_ok=True)
+
+    async def test_trigger_scan_uses_canonical_path_in_scanner_command(self, mcp_db: FiligreeDB) -> None:
+        import filigree.mcp_server as mcp_mod
+
+        class _Proc:
+            pid = 12345
+
+            @staticmethod
+            def poll() -> None:
+                return None
+
+        project_root = mcp_mod._filigree_dir.parent
+        target = project_root / "canonical_target.py"
+        try:
+            target.write_text("x = 1\n")
+            self._write_scanner_toml(mcp_db)
+            with patch("filigree.mcp_server.subprocess.Popen", return_value=_Proc()) as popen:
+                result = _parse(
+                    await call_tool(
+                        "trigger_scan",
+                        {
+                            "scanner": "test-scanner",
+                            "file_path": "./canonical_target.py",
+                        },
+                    )
+                )
+            assert result.get("status") == "triggered"
+            cmd = popen.call_args.args[0]
+            assert "canonical_target.py" in cmd
+            assert "./canonical_target.py" not in cmd
+        finally:
+            target.unlink(missing_ok=True)
+            mcp_mod._scan_cooldowns.clear()
 
     async def test_trigger_scan_registers_file_idempotent(self, mcp_db: FiligreeDB) -> None:
         import filigree.mcp_server as mcp_mod

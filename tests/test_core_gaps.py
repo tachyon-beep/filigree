@@ -555,6 +555,48 @@ class TestBatchOperations:
         assert len(errors) == 1
         assert errors[0]["id"] == "nonexistent-xyz"
 
+    def test_batch_add_label(self, db: FiligreeDB) -> None:
+        a = db.create_issue("A")
+        b = db.create_issue("B")
+        labeled, errors = db.batch_add_label([a.id, b.id], label="security")
+        assert len(labeled) == 2
+        assert len(errors) == 0
+        assert all(row["status"] == "added" for row in labeled)
+
+    def test_batch_add_label_not_found(self, db: FiligreeDB) -> None:
+        labeled, errors = db.batch_add_label(["nonexistent-xyz"], label="security")
+        assert labeled == []
+        assert len(errors) == 1
+        assert errors[0]["code"] == "not_found"
+
+    def test_batch_add_label_validation_error(self, db: FiligreeDB) -> None:
+        issue = db.create_issue("A")
+        labeled, errors = db.batch_add_label([issue.id], label="bug")
+        assert labeled == []
+        assert len(errors) == 1
+        assert errors[0]["code"] == "validation_error"
+
+    def test_batch_add_comment(self, db: FiligreeDB) -> None:
+        a = db.create_issue("A")
+        b = db.create_issue("B")
+        commented, errors = db.batch_add_comment([a.id, b.id], text="triage complete", author="agent-1")
+        assert len(commented) == 2
+        assert len(errors) == 0
+        assert all(isinstance(row["comment_id"], int) for row in commented)
+
+    def test_batch_add_comment_not_found(self, db: FiligreeDB) -> None:
+        commented, errors = db.batch_add_comment(["nonexistent-xyz"], text="triage complete")
+        assert commented == []
+        assert len(errors) == 1
+        assert errors[0]["code"] == "not_found"
+
+    def test_batch_add_comment_validation_error(self, db: FiligreeDB) -> None:
+        issue = db.create_issue("A")
+        commented, errors = db.batch_add_comment([issue.id], text="   ")
+        assert commented == []
+        assert len(errors) == 1
+        assert errors[0]["code"] == "validation_error"
+
 
 class TestClaimIssue:
     def test_claim_success(self, db: FiligreeDB) -> None:
@@ -640,6 +682,14 @@ class TestBatchInputValidation:
         with pytest.raises(TypeError, match="issue_ids must be a list of strings"):
             db.batch_update([1, 2, 3], status="closed")  # type: ignore[list-item]
 
+    def test_batch_add_label_string_raises(self, db: FiligreeDB) -> None:
+        with pytest.raises(TypeError, match="issue_ids must be a list of strings"):
+            db.batch_add_label("not-a-list", label="security")  # type: ignore[arg-type]
+
+    def test_batch_add_comment_string_raises(self, db: FiligreeDB) -> None:
+        with pytest.raises(TypeError, match="issue_ids must be a list of strings"):
+            db.batch_add_comment("not-a-list", text="note")  # type: ignore[arg-type]
+
     def test_batch_close_valid_list_passes(self, db: FiligreeDB) -> None:
         issue = db.create_issue("Closeable")
         closed, errors = db.batch_close([issue.id])
@@ -650,6 +700,18 @@ class TestBatchInputValidation:
         issue = db.create_issue("Updateable")
         updated, errors = db.batch_update([issue.id], priority=0)
         assert len(updated) == 1
+        assert len(errors) == 0
+
+    def test_batch_add_label_valid_list_passes(self, db: FiligreeDB) -> None:
+        issue = db.create_issue("Labelable")
+        labeled, errors = db.batch_add_label([issue.id], label="security")
+        assert len(labeled) == 1
+        assert len(errors) == 0
+
+    def test_batch_add_comment_valid_list_passes(self, db: FiligreeDB) -> None:
+        issue = db.create_issue("Commentable")
+        commented, errors = db.batch_add_comment([issue.id], text="done")
+        assert len(commented) == 1
         assert len(errors) == 0
 
 

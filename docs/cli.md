@@ -301,6 +301,8 @@ Release a claimed issue back to open.
 ```bash
 filigree batch-update <id1> <id2> --priority=0     # Update multiple issues
 filigree batch-close <id1> <id2> --reason="Sprint complete"
+filigree batch-add-label security <id1> <id2>      # Add same label to many issues
+filigree batch-add-comment "triage complete" <id1> <id2>
 ```
 
 ### `batch-update`
@@ -323,6 +325,24 @@ Close multiple issues.
 |-----------|------|-------------|
 | `ids` | string... | Issue IDs (positional, multiple) |
 | `--reason` | string | Close reason |
+
+### `batch-add-label`
+
+Add the same label to multiple issues.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `label` | string | Label name (positional) |
+| `ids` | string... | Issue IDs (positional, multiple) |
+
+### `batch-add-comment`
+
+Add the same comment to multiple issues.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `text` | string | Comment text (positional) |
+| `ids` | string... | Issue IDs (positional, multiple) |
 
 ## Planning
 
@@ -568,4 +588,3 @@ Launch an interactive web dashboard at `http://localhost:8377`. Features:
 | `--no-browser` | flag | false | Don't auto-open browser |
 
 The dashboard connects to `.filigree/` in the current directory. All write operations record `"dashboard"` as the actor for audit trail.
-

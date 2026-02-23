@@ -23,9 +23,10 @@ How to use filigree in practice:
 
 6. **[Agent Integration](agent-integration.md)** — Multi-agent coordination patterns, atomic claiming, session resumption, and audit trails.
 7. **[Examples](examples/)** — Runnable scripts for multi-agent coordination, workflow walkthroughs, CLI scripting, and hierarchical planning.
+8. **[File Traceability Playbook](file-traceability.md)** — End-to-end MCP + dashboard workflow for linking issues, files, and scan findings.
 
 ## Internals
 
 For contributors and those interested in how filigree works:
 
-8. **[Architecture](architecture.md)** — Source layout, SQLite schema, and key design decisions.
+9. **[Architecture](architecture.md)** — Source layout, SQLite schema, and key design decisions.

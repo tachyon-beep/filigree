@@ -287,6 +287,8 @@ Step deps within a phase use integer indices. Cross-phase deps use `"phase_idx.s
 |------|-------------|
 | `batch_update` | Update multiple issues with the same changes |
 | `batch_close` | Close multiple with per-item error reporting |
+| `batch_add_label` | Add the same label to multiple issues |
+| `batch_add_comment` | Add the same comment to multiple issues |
 
 #### `batch_update`
 
@@ -305,6 +307,22 @@ Step deps within a phase use integer indices. Cross-phase deps use `"phase_idx.s
 |-----------|------|----------|-------------|
 | `ids` | string[] | yes | Issue IDs |
 | `reason` | string | no | Close reason |
+| `actor` | string | no | Agent identity for audit trail |
+
+#### `batch_add_label`
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `ids` | string[] | yes | Issue IDs |
+| `label` | string | yes | Label to add |
+| `actor` | string | no | Agent identity for audit trail |
+
+#### `batch_add_comment`
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `ids` | string[] | yes | Issue IDs |
+| `text` | string | yes | Comment text |
 | `actor` | string | no | Agent identity for audit trail |
 
 ### Templates and Workflow
@@ -455,3 +473,5 @@ Response: `{status, scanner, file_path, file_id, scan_run_id, pid, message}`
 **Important:** Results are POSTed to the dashboard API. Ensure the dashboard is running at the target `api_url` before triggering scans — if unreachable, results are silently lost.
 
 **Scanner registration:** Add TOML files to `.filigree/scanners/`. See `scripts/scanners/*.toml.example` for templates.
+
+For end-to-end issue/file/finding workflows (including dashboard UI and troubleshooting), see [File Traceability Playbook](file-traceability.md).

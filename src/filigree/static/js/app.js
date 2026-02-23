@@ -236,6 +236,8 @@ async function loadProjects() {
   try {
     const projects = await fetchProjects(6);
     state.allProjects = projects;
+    const currentMissing =
+      !!state.currentProjectKey && !state.allProjects.some((p) => p.key === state.currentProjectKey);
     const sel = document.getElementById("projectSwitcher");
     if (!sel) return;
     sel.innerHTML = "";
@@ -248,6 +250,12 @@ async function loadProjects() {
     });
     const wrap = document.getElementById("projectSwitcherWrap");
     if (wrap) wrap.style.display = state.allProjects.length > 1 ? "" : "none";
+
+    if (currentMissing) {
+      const fallbackKey = state.allProjects.length > 0 ? state.allProjects[0].key : "";
+      setProject(fallbackKey, { keepDetail: true });
+      showToast("Selected project was removed. Switched to an available project.", "warning");
+    }
   } catch (_e) {
     /* best-effort */
   }

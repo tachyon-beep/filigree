@@ -66,6 +66,12 @@ export async function fetchIssueDetail(issueId) {
   return resp.json();
 }
 
+export async function fetchIssueFiles(issueId) {
+  const resp = await fetch(apiUrl(`/issue/${issueId}/files`));
+  if (!resp.ok) return null;
+  return resp.json();
+}
+
 export async function fetchTransitions(issueId) {
   try {
     const resp = await fetch(apiUrl(`/issue/${issueId}/transitions`));

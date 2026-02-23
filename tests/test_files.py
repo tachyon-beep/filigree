@@ -225,6 +225,34 @@ class TestProcessScanResults:
                 findings=[{"severity": "low", "message": "No path key"}],
             )
 
+    def test_ingest_finding_missing_rule_id(self, db: FiligreeDB) -> None:
+        with pytest.raises(ValueError, match="rule_id"):
+            db.process_scan_results(
+                scan_source="ruff",
+                findings=[{"path": "a.py", "severity": "low", "message": "No rule_id key"}],
+            )
+
+    def test_ingest_finding_missing_message(self, db: FiligreeDB) -> None:
+        with pytest.raises(ValueError, match="message"):
+            db.process_scan_results(
+                scan_source="ruff",
+                findings=[{"path": "a.py", "rule_id": "E1", "severity": "low"}],
+            )
+
+    def test_ingest_finding_blank_rule_id_rejected(self, db: FiligreeDB) -> None:
+        with pytest.raises(ValueError, match="non-empty"):
+            db.process_scan_results(
+                scan_source="ruff",
+                findings=[{"path": "a.py", "rule_id": "  ", "severity": "low", "message": "m"}],
+            )
+
+    def test_ingest_finding_blank_message_rejected(self, db: FiligreeDB) -> None:
+        with pytest.raises(ValueError, match="non-empty"):
+            db.process_scan_results(
+                scan_source="ruff",
+                findings=[{"path": "a.py", "rule_id": "E1", "severity": "low", "message": "  "}],
+            )
+
     def test_ingest_finding_is_string(self, db: FiligreeDB) -> None:
         with pytest.raises(ValueError, match="dict"):
             db.process_scan_results(scan_source="ruff", findings=["not-a-dict"])
@@ -2234,6 +2262,24 @@ class TestInputValidation400s:
         assert resp.status_code == 400
         assert resp.json()["error"]["code"] == "VALIDATION_ERROR"
         assert "path" in resp.json()["error"]["message"].lower()
+
+    async def test_scan_finding_missing_rule_id(self, client: AsyncClient) -> None:
+        resp = await client.post(
+            "/api/v1/scan-results",
+            json={"scan_source": "ruff", "findings": [{"path": "a.py", "severity": "low", "message": "m"}]},
+        )
+        assert resp.status_code == 400
+        assert resp.json()["error"]["code"] == "VALIDATION_ERROR"
+        assert "rule_id" in resp.json()["error"]["message"].lower()
+
+    async def test_scan_finding_missing_message(self, client: AsyncClient) -> None:
+        resp = await client.post(
+            "/api/v1/scan-results",
+            json={"scan_source": "ruff", "findings": [{"path": "a.py", "rule_id": "E1", "severity": "low"}]},
+        )
+        assert resp.status_code == 400
+        assert resp.json()["error"]["code"] == "VALIDATION_ERROR"
+        assert "message" in resp.json()["error"]["message"].lower()
 
     async def test_scan_finding_is_string(self, client: AsyncClient) -> None:
         resp = await client.post(

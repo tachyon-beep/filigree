@@ -143,9 +143,21 @@ class ProjectStore:
             logger.error("Failed to reload server.json — retaining existing state", exc_info=True)
             return {"added": [], "removed": []}
         new_keys = set(self._projects)
+        removed = sorted(old_keys - new_keys)
+
+        # Close and evict stale DB handles for projects removed from server.json.
+        for key in removed:
+            db = self._dbs.pop(key, None)
+            if db is None:
+                continue
+            try:
+                db.close()
+            except Exception:
+                logger.debug("Error closing removed project DB for key=%r", key, exc_info=True)
+
         return {
             "added": sorted(new_keys - old_keys),
-            "removed": sorted(old_keys - new_keys),
+            "removed": removed,
         }
 
     def close_all(self) -> None:

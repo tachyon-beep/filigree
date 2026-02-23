@@ -1636,6 +1636,72 @@ def batch_close(ctx: click.Context, issue_ids: tuple[str, ...], reason: str, as_
         _refresh_summary(db)
 
 
+@cli.command("batch-add-label")
+@click.argument("label_name")
+@click.argument("issue_ids", nargs=-1, required=True)
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+def batch_add_label(label_name: str, issue_ids: tuple[str, ...], as_json: bool) -> None:
+    """Add the same label to multiple issues."""
+    with _get_db() as db:
+        labeled, errors = db.batch_add_label(list(issue_ids), label=label_name)
+
+        if as_json:
+            click.echo(
+                json_mod.dumps(
+                    {
+                        "labeled": labeled,
+                        "errors": errors,
+                    },
+                    indent=2,
+                    default=str,
+                )
+            )
+        else:
+            for row in labeled:
+                if row["status"] == "added":
+                    click.echo(f"  Added label '{label_name}' to {row['id']}")
+                else:
+                    click.echo(f"  Label '{label_name}' already on {row['id']}")
+            for err in errors:
+                click.echo(f"  Error {err['id']}: {err['error']}", err=True)
+            click.echo(f"Labeled {len(labeled)}/{len(issue_ids)} issues")
+        _refresh_summary(db)
+
+
+@cli.command("batch-add-comment")
+@click.argument("text")
+@click.argument("issue_ids", nargs=-1, required=True)
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+@click.pass_context
+def batch_add_comment(ctx: click.Context, text: str, issue_ids: tuple[str, ...], as_json: bool) -> None:
+    """Add the same comment to multiple issues."""
+    with _get_db() as db:
+        commented, errors = db.batch_add_comment(
+            list(issue_ids),
+            text=text,
+            author=ctx.obj["actor"],
+        )
+
+        if as_json:
+            click.echo(
+                json_mod.dumps(
+                    {
+                        "commented": commented,
+                        "errors": errors,
+                    },
+                    indent=2,
+                    default=str,
+                )
+            )
+        else:
+            for row in commented:
+                click.echo(f"  Added comment {row['comment_id']} to {row['id']}")
+            for err in errors:
+                click.echo(f"  Error {err['id']}: {err['error']}", err=True)
+            click.echo(f"Commented on {len(commented)}/{len(issue_ids)} issues")
+        _refresh_summary(db)
+
+
 @cli.command("changes")
 @click.option("--since", required=True, help="ISO timestamp to get events after")
 @click.option("--limit", default=100, type=int, help="Max events (default 100)")

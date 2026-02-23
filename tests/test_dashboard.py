@@ -101,6 +101,25 @@ class TestDashboardIndex:
 
 
 class TestGraphFrontendContracts:
+    def test_issue_detail_fetches_issue_files_contract(self) -> None:
+        detail_js = (STATIC_DIR / "js" / "views" / "detail.js").read_text()
+        api_js = (STATIC_DIR / "js" / "api.js").read_text()
+        assert "fetchIssueFiles" in api_js
+        assert "fetchIssueFiles" in detail_js
+        assert "Promise.all([" in detail_js
+
+    def test_issue_detail_renders_associated_files_section(self) -> None:
+        detail_js = (STATIC_DIR / "js" / "views" / "detail.js").read_text()
+        assert "Associated Files" in detail_js
+        assert "switchView('files');setTimeout(()=>openFileDetail(" in detail_js
+        assert "issueFilesData.length" in detail_js
+
+    def test_project_refresh_falls_back_when_selected_project_is_removed(self) -> None:
+        app_js = (STATIC_DIR / "js" / "app.js").read_text()
+        assert "const currentMissing =" in app_js
+        assert "setProject(fallbackKey, { keepDetail: true });" in app_js
+        assert "Selected project was removed. Switched to an available project." in app_js
+
     def test_graph_query_builder_includes_v2_filters(self) -> None:
         graph_js = (STATIC_DIR / "js" / "views" / "graph.js").read_text()
         assert 'mode: "v2"' in graph_js
@@ -1992,6 +2011,25 @@ class TestProjectStore:
         diff = project_store.reload()
         assert "bravo" in diff["removed"]
         assert len(project_store.list_projects()) == 1
+
+    def test_reload_closes_removed_project_db_handles(self, project_store: ProjectStore, tmp_path: Path) -> None:
+        import json
+
+        bravo_db = project_store.get_db("bravo")
+        assert "bravo" in project_store._dbs
+
+        config_dir = tmp_path / ".config" / "filigree"
+        existing = json.loads((config_dir / "server.json").read_text())
+        to_remove = [k for k, v in existing["projects"].items() if v["prefix"] == "bravo"]
+        for k in to_remove:
+            del existing["projects"][k]
+        (config_dir / "server.json").write_text(json.dumps(existing))
+
+        diff = project_store.reload()
+
+        assert "bravo" in diff["removed"]
+        assert "bravo" not in project_store._dbs
+        assert bravo_db._conn is None
 
     def test_reload_corrupt_file_retains_state(self, project_store: ProjectStore, tmp_path: Path) -> None:
         config_dir = tmp_path / ".config" / "filigree"

@@ -5,6 +5,7 @@
 import {
   deleteIssueDep,
   fetchIssueDetail,
+  fetchIssueFiles,
   fetchSearch,
   fetchTransitions,
   patchIssue,
@@ -44,11 +45,17 @@ export async function openDetail(issueId) {
   let d = null;
   let eventsData = [];
   let commentsData = [];
+  let issueFilesData = [];
   try {
-    d = await fetchIssueDetail(issueId);
+    const [detailData, filesData] = await Promise.all([
+      fetchIssueDetail(issueId),
+      fetchIssueFiles(issueId),
+    ]);
+    d = detailData;
     if (!d) throw new Error("Not found");
     eventsData = d.events || [];
     commentsData = d.comments || [];
+    issueFilesData = Array.isArray(filesData) ? filesData : [];
   } catch (_e) {
     // Fall back to local data if detail endpoint fails
     d = state.issueMap[issueId];
@@ -119,6 +126,23 @@ export async function openDetail(issueId) {
         `<div style="color:var(--text-primary)">${escHtml(c.text)}</div></div>`,
     )
     .join("");
+  const issueFilesHtml = issueFilesData
+    .map((f) => {
+      const safeFileId = escJsSingle(f.file_id);
+      const assoc = f.assoc_type ? ` <span style="color:var(--text-muted)">(${escHtml(f.assoc_type)})</span>` : "";
+      const lang = f.file_language
+        ? `<span class="ml-2 text-[11px]" style="color:var(--text-muted)">${escHtml(f.file_language)}</span>`
+        : "";
+      return (
+        '<div class="flex items-center gap-2 text-xs rounded px-2 py-1 cursor-pointer bg-overlay-hover mb-1" ' +
+        `onclick="switchView('files');setTimeout(()=>openFileDetail('${safeFileId}'),100)" role="button" tabindex="0">` +
+        `<span class="truncate flex-1" style="color:var(--accent)">${escHtml(f.file_path || f.file_id)}</span>` +
+        assoc +
+        lang +
+        "</div>"
+      );
+    })
+    .join("");
 
   const openBlockers = (d.blocked_by || []).filter((bid) => {
     const b = state.issueMap[bid];
@@ -183,6 +207,11 @@ export async function openDetail(issueId) {
     ((d.blocks || []).length
       ? '<div class="mb-3"><div class="text-xs font-medium mb-1" style="color:var(--accent)">Blocks \u2192</div>' +
         blocksHtml +
+        "</div>"
+      : "") +
+    (issueFilesData.length
+      ? '<div class="mb-3"><div class="text-xs font-medium mb-1" style="color:var(--text-secondary)">Associated Files</div>' +
+        issueFilesHtml +
         "</div>"
       : "") +
     (commentsData.length

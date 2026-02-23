@@ -1397,6 +1397,64 @@ class FiligreeDB:
                 errors.append({"id": issue_id, "error": str(e)})
         return results, errors
 
+    def batch_add_label(
+        self,
+        issue_ids: list[str],
+        *,
+        label: str,
+    ) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
+        """Add the same label to multiple issues. Returns (labeled, errors)."""
+        if not isinstance(issue_ids, list) or not all(isinstance(i, str) for i in issue_ids):
+            msg = "issue_ids must be a list of strings"
+            raise TypeError(msg)
+        if not isinstance(label, str):
+            msg = "label must be a string"
+            raise TypeError(msg)
+
+        results: list[dict[str, str]] = []
+        errors: list[dict[str, str]] = []
+        for issue_id in issue_ids:
+            try:
+                self.get_issue(issue_id)
+                added = self.add_label(issue_id, label)
+                results.append({"id": issue_id, "status": "added" if added else "already_exists"})
+            except KeyError:
+                errors.append({"id": issue_id, "error": f"Not found: {issue_id}", "code": "not_found"})
+            except ValueError as e:
+                errors.append({"id": issue_id, "error": str(e), "code": "validation_error"})
+        return results, errors
+
+    def batch_add_comment(
+        self,
+        issue_ids: list[str],
+        *,
+        text: str,
+        author: str = "",
+    ) -> tuple[list[dict[str, str | int]], list[dict[str, str]]]:
+        """Add the same comment to multiple issues. Returns (commented, errors)."""
+        if not isinstance(issue_ids, list) or not all(isinstance(i, str) for i in issue_ids):
+            msg = "issue_ids must be a list of strings"
+            raise TypeError(msg)
+        if not isinstance(text, str):
+            msg = "text must be a string"
+            raise TypeError(msg)
+        if not isinstance(author, str):
+            msg = "author must be a string"
+            raise TypeError(msg)
+
+        results: list[dict[str, str | int]] = []
+        errors: list[dict[str, str]] = []
+        for issue_id in issue_ids:
+            try:
+                self.get_issue(issue_id)
+                comment_id = self.add_comment(issue_id, text, author=author)
+                results.append({"id": issue_id, "comment_id": comment_id})
+            except KeyError:
+                errors.append({"id": issue_id, "error": f"Not found: {issue_id}", "code": "not_found"})
+            except ValueError as e:
+                errors.append({"id": issue_id, "error": str(e), "code": "validation_error"})
+        return results, errors
+
     def list_issues(
         self,
         *,
@@ -2704,6 +2762,20 @@ class FiligreeDB:
                 raise ValueError(f"findings[{i}] must be a dict, got {type(f).__name__}")
             if "path" not in f:
                 raise ValueError(f"findings[{i}] is missing required key 'path'")
+            if "rule_id" not in f:
+                raise ValueError(f"findings[{i}] is missing required key 'rule_id'")
+            if "message" not in f:
+                raise ValueError(f"findings[{i}] is missing required key 'message'")
+            rule_id = f["rule_id"]
+            if not isinstance(rule_id, str):
+                raise ValueError(f"findings[{i}] rule_id must be a string, got {type(rule_id).__name__}")
+            if not rule_id.strip():
+                raise ValueError(f"findings[{i}] rule_id must be a non-empty string")
+            message = f["message"]
+            if not isinstance(message, str):
+                raise ValueError(f"findings[{i}] message must be a string, got {type(message).__name__}")
+            if not message.strip():
+                raise ValueError(f"findings[{i}] message must be a non-empty string")
             severity = f.get("severity", "info")
             if not isinstance(severity, str):
                 msg = f"findings[{i}] severity must be a string, got {type(severity).__name__}"

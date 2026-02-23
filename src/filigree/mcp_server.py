@@ -39,6 +39,8 @@ from filigree.core import (
     DB_FILENAME,
     FILIGREE_DIR_NAME,
     SUMMARY_FILENAME,
+    VALID_ASSOC_TYPES,
+    VALID_SEVERITIES,
     FiligreeDB,
     find_filigree_root,
     read_config,
@@ -673,6 +675,40 @@ async def list_tools() -> list[Tool]:
             },
         ),
         Tool(
+            name="batch_add_label",
+            description="Add the same label to multiple issues in one call.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Issue IDs to update",
+                    },
+                    "label": {"type": "string", "description": "Label to add"},
+                    "actor": {"type": "string", "description": "Agent/user identity for audit trail"},
+                },
+                "required": ["ids", "label"],
+            },
+        ),
+        Tool(
+            name="batch_add_comment",
+            description="Add the same comment to multiple issues in one call.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Issue IDs to update",
+                    },
+                    "text": {"type": "string", "description": "Comment text"},
+                    "actor": {"type": "string", "description": "Agent/user identity for audit trail"},
+                },
+                "required": ["ids", "text"],
+            },
+        ),
+        Tool(
             name="get_metrics",
             description="Flow metrics: cycle time, lead time, throughput. Useful for retrospectives and velocity tracking.",
             inputSchema={
@@ -877,6 +913,103 @@ async def list_tools() -> list[Tool]:
                     },
                 },
                 "required": ["assignee"],
+            },
+        ),
+        Tool(
+            name="list_files",
+            description="List tracked files with filtering, sorting, and pagination.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "limit": {"type": "integer", "default": 100, "minimum": 1, "maximum": 10000},
+                    "offset": {"type": "integer", "default": 0, "minimum": 0},
+                    "language": {"type": "string", "description": "Filter by language"},
+                    "path_prefix": {"type": "string", "description": "Filter by substring in file path"},
+                    "min_findings": {"type": "integer", "minimum": 0, "description": "Minimum open findings count"},
+                    "has_severity": {
+                        "type": "string",
+                        "enum": sorted(VALID_SEVERITIES),
+                        "description": "Require at least one open finding at this severity",
+                    },
+                    "scan_source": {"type": "string", "description": "Filter files by finding source"},
+                    "sort": {
+                        "type": "string",
+                        "enum": ["updated_at", "first_seen", "path", "language"],
+                        "default": "updated_at",
+                    },
+                    "direction": {"type": "string", "enum": ["asc", "desc", "ASC", "DESC"]},
+                },
+            },
+        ),
+        Tool(
+            name="get_file",
+            description="Get file details, linked issues, recent findings, and summary by file ID.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "file_id": {"type": "string", "description": "File ID"},
+                },
+                "required": ["file_id"],
+            },
+        ),
+        Tool(
+            name="get_file_timeline",
+            description="Get merged timeline events for a file (finding, association, metadata updates).",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "file_id": {"type": "string", "description": "File ID"},
+                    "limit": {"type": "integer", "default": 50, "minimum": 1, "maximum": 10000},
+                    "offset": {"type": "integer", "default": 0, "minimum": 0},
+                    "event_type": {
+                        "type": "string",
+                        "enum": ["finding", "association", "file_metadata_update"],
+                        "description": "Optional event type filter",
+                    },
+                },
+                "required": ["file_id"],
+            },
+        ),
+        Tool(
+            name="get_issue_files",
+            description="List files associated with an issue.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "issue_id": {"type": "string", "description": "Issue ID"},
+                },
+                "required": ["issue_id"],
+            },
+        ),
+        Tool(
+            name="add_file_association",
+            description="Create a file<->issue association. Idempotent for duplicate tuples.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "file_id": {"type": "string", "description": "File ID"},
+                    "issue_id": {"type": "string", "description": "Issue ID"},
+                    "assoc_type": {
+                        "type": "string",
+                        "enum": sorted(VALID_ASSOC_TYPES),
+                        "description": "Association type",
+                    },
+                },
+                "required": ["file_id", "issue_id", "assoc_type"],
+            },
+        ),
+        Tool(
+            name="register_file",
+            description="Register or fetch a file record by project-relative path without running a scanner.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "File path (relative to project root)"},
+                    "language": {"type": "string", "description": "Optional language hint"},
+                    "file_type": {"type": "string", "description": "Optional file type tag"},
+                    "metadata": {"type": "object", "description": "Optional metadata map"},
+                },
+                "required": ["path"],
             },
         ),
         Tool(
@@ -1362,6 +1495,44 @@ async def _dispatch(name: str, arguments: dict[str, Any], tracker: FiligreeDB) -
                 }
             )
 
+        case "batch_add_label":
+            label_ids = arguments["ids"]
+            if not all(isinstance(i, str) for i in label_ids):
+                return _text({"error": "All issue IDs must be strings", "code": "validation_error"})
+            if not isinstance(arguments["label"], str):
+                return _text({"error": "label must be a string", "code": "validation_error"})
+            label_succeeded, label_failed = tracker.batch_add_label(label_ids, label=arguments["label"])
+            _refresh_summary()
+            return _text(
+                {
+                    "succeeded": [row["id"] for row in label_succeeded],
+                    "results": label_succeeded,
+                    "failed": label_failed,
+                    "count": len(label_succeeded),
+                }
+            )
+
+        case "batch_add_comment":
+            comment_ids = arguments["ids"]
+            if not all(isinstance(i, str) for i in comment_ids):
+                return _text({"error": "All issue IDs must be strings", "code": "validation_error"})
+            if not isinstance(arguments["text"], str):
+                return _text({"error": "text must be a string", "code": "validation_error"})
+            comment_succeeded, comment_failed = tracker.batch_add_comment(
+                comment_ids,
+                text=arguments["text"],
+                author=arguments.get("actor", "mcp"),
+            )
+            _refresh_summary()
+            return _text(
+                {
+                    "succeeded": [str(row["id"]) for row in comment_succeeded],
+                    "results": comment_succeeded,
+                    "failed": comment_failed,
+                    "count": len(comment_succeeded),
+                }
+            )
+
         case "get_summary":
             summary = generate_summary(tracker)
             return _text(summary)
@@ -1640,6 +1811,150 @@ async def _dispatch(name: str, arguments: dict[str, Any], tracker: FiligreeDB) -
             result["selection_reason"] = f"Highest-priority {', '.join(parts)}"
             return _text(result)
 
+        case "list_files":
+            limit = arguments.get("limit", 100)
+            offset = arguments.get("offset", 0)
+            min_findings = arguments.get("min_findings")
+            has_severity = arguments.get("has_severity")
+            sort = arguments.get("sort", "updated_at")
+            direction = arguments.get("direction")
+            valid_sorts = {"updated_at", "first_seen", "path", "language"}
+
+            if not isinstance(limit, int) or limit < 1 or limit > 10000:
+                return _text({"error": "limit must be an integer in [1, 10000]", "code": "validation_error"})
+            if not isinstance(offset, int) or offset < 0:
+                return _text({"error": "offset must be a non-negative integer", "code": "validation_error"})
+            if min_findings is not None and (not isinstance(min_findings, int) or min_findings < 0):
+                return _text({"error": "min_findings must be a non-negative integer", "code": "validation_error"})
+            if has_severity is not None and (
+                not isinstance(has_severity, str) or has_severity not in VALID_SEVERITIES
+            ):
+                return _text(
+                    {"error": f"has_severity must be one of {sorted(VALID_SEVERITIES)}", "code": "validation_error"}
+                )
+            if not isinstance(sort, str) or sort not in valid_sorts:
+                return _text({"error": f"sort must be one of {sorted(valid_sorts)}", "code": "validation_error"})
+            if direction is not None and (not isinstance(direction, str) or direction.upper() not in {"ASC", "DESC"}):
+                return _text({"error": "direction must be 'asc' or 'desc'", "code": "validation_error"})
+
+            result = tracker.list_files_paginated(
+                limit=limit,
+                offset=offset,
+                language=arguments.get("language"),
+                path_prefix=arguments.get("path_prefix"),
+                min_findings=min_findings,
+                has_severity=has_severity,
+                scan_source=arguments.get("scan_source"),
+                sort=sort,
+                direction=direction,
+            )
+            return _text(result)
+
+        case "get_file":
+            file_id = arguments.get("file_id", "")
+            if not isinstance(file_id, str) or not file_id.strip():
+                return _text({"error": "file_id is required", "code": "validation_error"})
+            try:
+                data = tracker.get_file_detail(file_id)
+            except KeyError:
+                return _text({"error": f"File not found: {file_id}", "code": "not_found"})
+            return _text(data)
+
+        case "get_file_timeline":
+            file_id = arguments.get("file_id", "")
+            limit = arguments.get("limit", 50)
+            offset = arguments.get("offset", 0)
+            event_type = arguments.get("event_type")
+            valid_event_types = {"finding", "association", "file_metadata_update"}
+
+            if not isinstance(file_id, str) or not file_id.strip():
+                return _text({"error": "file_id is required", "code": "validation_error"})
+            if not isinstance(limit, int) or limit < 1 or limit > 10000:
+                return _text({"error": "limit must be an integer in [1, 10000]", "code": "validation_error"})
+            if not isinstance(offset, int) or offset < 0:
+                return _text({"error": "offset must be a non-negative integer", "code": "validation_error"})
+            if event_type is not None and (
+                not isinstance(event_type, str) or event_type not in valid_event_types
+            ):
+                return _text(
+                    {
+                        "error": f"event_type must be one of {sorted(valid_event_types)}",
+                        "code": "validation_error",
+                    }
+                )
+
+            try:
+                result = tracker.get_file_timeline(file_id, limit=limit, offset=offset, event_type=event_type)
+            except KeyError:
+                return _text({"error": f"File not found: {file_id}", "code": "not_found"})
+            return _text(result)
+
+        case "get_issue_files":
+            issue_id = arguments.get("issue_id", "")
+            if not isinstance(issue_id, str) or not issue_id.strip():
+                return _text({"error": "issue_id is required", "code": "validation_error"})
+            try:
+                tracker.get_issue(issue_id)
+            except KeyError:
+                return _text({"error": f"Issue not found: {issue_id}", "code": "not_found"})
+            return _text(tracker.get_issue_files(issue_id))
+
+        case "add_file_association":
+            file_id = arguments.get("file_id", "")
+            issue_id = arguments.get("issue_id", "")
+            assoc_type = arguments.get("assoc_type", "")
+
+            if not isinstance(file_id, str) or not file_id.strip():
+                return _text({"error": "file_id is required", "code": "validation_error"})
+            if not isinstance(issue_id, str) or not issue_id.strip():
+                return _text({"error": "issue_id is required", "code": "validation_error"})
+            if not isinstance(assoc_type, str) or not assoc_type.strip():
+                return _text({"error": "assoc_type is required", "code": "validation_error"})
+
+            try:
+                tracker.get_file(file_id)
+            except KeyError:
+                return _text({"error": f"File not found: {file_id}", "code": "not_found"})
+
+            try:
+                tracker.add_file_association(file_id, issue_id, assoc_type)
+            except ValueError as e:
+                return _text({"error": str(e), "code": "validation_error"})
+            return _text({"status": "created"})
+
+        case "register_file":
+            raw_path = arguments.get("path", "")
+            language = arguments.get("language", "")
+            file_type = arguments.get("file_type", "")
+            metadata = arguments.get("metadata")
+
+            if not isinstance(raw_path, str) or not raw_path.strip():
+                return _text({"error": "path is required", "code": "validation_error"})
+            if language is not None and not isinstance(language, str):
+                return _text({"error": "language must be a string", "code": "validation_error"})
+            if file_type is not None and not isinstance(file_type, str):
+                return _text({"error": "file_type must be a string", "code": "validation_error"})
+            if metadata is not None and not isinstance(metadata, dict):
+                return _text({"error": "metadata must be an object", "code": "validation_error"})
+
+            try:
+                target = _safe_path(raw_path)
+            except ValueError as e:
+                return _text({"error": str(e), "code": "invalid_path"})
+
+            filigree_dir = _get_filigree_dir()
+            if filigree_dir is None:
+                return _text({"error": "Project directory not initialized", "code": "not_initialized"})
+
+            canonical_path = str(target.relative_to(filigree_dir.resolve().parent))
+            file_record = tracker.register_file(
+                canonical_path,
+                language=language or "",
+                file_type=file_type or "",
+                metadata=metadata,
+            )
+            return _text(file_record.to_dict())
+
         case "list_scanners":
             filigree_dir = _get_filigree_dir()
             scanners_dir = filigree_dir / "scanners" if filigree_dir else None
@@ -1730,13 +2045,15 @@ async def _dispatch(name: str, arguments: dict[str, Any], tracker: FiligreeDB) -
                     }
                 )
 
-            # Build command — catches ValueError for malformed command strings
+            # Build command — catches ValueError for malformed command strings.
+            # Use canonical project-relative path so scanner output can correlate
+            # with file_records/path keys from register_file().
             project_root = filigree_dir.parent
             ts = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S")
             scan_run_id = f"{scanner_name}-{ts}-{secrets.token_hex(3)}"
             try:
                 cmd = cfg.build_command(
-                    file_path=file_path,
+                    file_path=canonical_path,
                     api_url=api_url,
                     project_root=str(project_root),
                     scan_run_id=scan_run_id,

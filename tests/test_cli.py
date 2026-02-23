@@ -930,6 +930,64 @@ class TestBatchCli:
         assert len(data["closed"]) == 1
         assert len(data["errors"]) == 1
 
+    def test_batch_add_label_json(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        runner, _ = cli_in_project
+        r1 = runner.invoke(cli, ["create", "A"])
+        id1 = _extract_id(r1.output)
+        r2 = runner.invoke(cli, ["create", "B"])
+        id2 = _extract_id(r2.output)
+
+        result = runner.invoke(cli, ["batch-add-label", "security", id1, id2, "--json"])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert len(data["labeled"]) == 2
+        assert data["errors"] == []
+
+        listed = runner.invoke(cli, ["list", "--label", "security", "--json"])
+        listed_data = json.loads(listed.output)
+        listed_ids = {row["id"] for row in listed_data}
+        assert id1 in listed_ids
+        assert id2 in listed_ids
+
+    def test_batch_add_label_partial_failure(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        runner, _ = cli_in_project
+        r1 = runner.invoke(cli, ["create", "A"])
+        id1 = _extract_id(r1.output)
+        result = runner.invoke(cli, ["batch-add-label", "security", id1, "nonexistent-abc", "--json"])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert len(data["labeled"]) == 1
+        assert len(data["errors"]) == 1
+        assert data["errors"][0]["id"] == "nonexistent-abc"
+
+    def test_batch_add_comment_json(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        runner, _ = cli_in_project
+        r1 = runner.invoke(cli, ["create", "A"])
+        id1 = _extract_id(r1.output)
+        r2 = runner.invoke(cli, ["create", "B"])
+        id2 = _extract_id(r2.output)
+
+        result = runner.invoke(cli, ["batch-add-comment", "triage-complete", id1, id2, "--json"])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert len(data["commented"]) == 2
+        assert data["errors"] == []
+
+        comments = runner.invoke(cli, ["get-comments", id1, "--json"])
+        comments_data = json.loads(comments.output)
+        assert any(c["text"] == "triage-complete" for c in comments_data)
+
+    def test_batch_add_comment_partial_failure(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        runner, _ = cli_in_project
+        r1 = runner.invoke(cli, ["create", "A"])
+        id1 = _extract_id(r1.output)
+        result = runner.invoke(cli, ["batch-add-comment", "triage-complete", id1, "nonexistent-abc", "--json"])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert len(data["commented"]) == 1
+        assert len(data["errors"]) == 1
+        assert data["errors"][0]["id"] == "nonexistent-abc"
+
 
 class TestEventsCli:
     def test_changes_since(self, cli_in_project: tuple[CliRunner, Path]) -> None:
