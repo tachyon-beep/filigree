@@ -105,6 +105,10 @@
     min-height: 44px;
   }
   .graph-toolbar summary { display: inline-flex; align-items: center; line-height: 1; }
+  .graph-toolbar .graph-disclosure { min-width: 0; }
+  .graph-toolbar .graph-disclosure[open] { flex: 1 0 100%; }
+  .graph-toolbar .graph-disclosure[open] > .graph-disclosure-panel { width: 100%; min-width: 0; }
+  .graph-toolbar .graph-inline-controls { display: inline-flex; align-items: center; gap: 0.25rem; flex-wrap: wrap; min-width: 0; }
   button:focus-visible, select:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   .focus-accent:focus { border-color: var(--accent); }
   .btn-loading { opacity: 0.6; pointer-events: none; }
@@ -209,7 +213,7 @@ tailwind.config = {
 <div class="flex flex-1 overflow-hidden relative">
   <!-- Graph view -->
   <div id="graphView" class="flex-1 hidden flex flex-col">
-    <div class="graph-toolbar flex flex-wrap items-center gap-2 px-4 py-1 bg-raised text-xs text-secondary border-b border-default overflow-x-auto">
+    <div class="graph-toolbar flex flex-wrap items-center gap-2 px-4 py-1 bg-raised text-xs text-secondary border-b border-default">
       <div class="flex items-center gap-2 shrink-0">
         <label for="graphPreset" class="text-xs text-secondary">Preset:</label>
         <select id="graphPreset" onchange="setGraphPreset(this.value)" class="bg-overlay text-primary text-xs rounded px-2 py-0.5 border border-strong">
@@ -221,11 +225,11 @@ tailwind.config = {
         <button id="btnGraphLegend" onclick="toggleGraphLegend()" class="px-2 py-0.5 rounded bg-overlay bg-overlay-hover">Legend</button>
       </div>
 
-      <details id="graphFiltersGroup" class="shrink-0">
+      <details id="graphFiltersGroup" class="shrink-0 graph-disclosure">
         <summary class="cursor-pointer select-none px-2 py-0.5 rounded bg-overlay bg-overlay-hover border border-strong items-center leading-none">
           Filters
         </summary>
-        <div class="mt-1 flex flex-wrap items-center gap-2 rounded border border-strong bg-overlay/40 px-2 py-1">
+        <div class="graph-disclosure-panel mt-1 flex flex-wrap items-center gap-2 rounded border border-strong bg-overlay/40 px-2 py-1">
           <label class="flex items-center gap-1">
             <input type="checkbox" id="graphEpicsOnly" onchange="onGraphEpicsOnlyChange()" style="accent-color:var(--accent)"> Epics only
           </label>
@@ -257,11 +261,11 @@ tailwind.config = {
         </div>
       </details>
 
-      <details id="graphAdvancedGroup" class="shrink-0">
+      <details id="graphAdvancedGroup" class="shrink-0 graph-disclosure">
         <summary class="cursor-pointer select-none px-2 py-0.5 rounded bg-overlay bg-overlay-hover border border-strong items-center leading-none">
           Advanced
         </summary>
-        <div class="mt-1 flex flex-wrap items-center gap-2 rounded border border-strong bg-overlay/40 px-2 py-1">
+        <div class="graph-disclosure-panel mt-1 flex flex-wrap items-center gap-2 rounded border border-strong bg-overlay/40 px-2 py-1">
           <label class="flex items-center gap-1">
             <input type="checkbox" id="graphFocusMode" onchange="onGraphFocusModeChange()" style="accent-color:var(--accent)"> Focus
           </label>
@@ -281,7 +285,7 @@ tailwind.config = {
           </label>
           <button id="graphClearFocusBtn" onclick="clearGraphFocus()" class="px-2 py-0.5 rounded bg-overlay bg-overlay-hover" title="Clear graph focus root/radius">Clear Focus</button>
           <span class="text-muted">|</span>
-          <label class="flex items-center gap-1">
+          <label class="graph-inline-controls">
             Trace path between issues:
             <input id="graphPathSource" type="text" placeholder="issue ID" aria-label="Path source issue ID" oninput="onGraphPathInput()" class="bg-overlay text-primary text-xs rounded px-2 py-0.5 border border-strong w-24 focus:outline-none focus-accent">
             <select id="graphPathDirection" aria-label="Path traversal direction" class="bg-overlay text-primary text-xs rounded px-1 py-0.5 border border-strong" title="Path direction">

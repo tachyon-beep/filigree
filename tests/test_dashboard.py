@@ -52,7 +52,7 @@ class TestDashboardIndex:
         resp = await client.get("/")
         assert resp.status_code == 200
         html = resp.text
-        assert "overflow-x-auto" in html
+        assert 'class="graph-toolbar flex flex-wrap items-center' in html
         assert 'id="graphPreset"' in html
         assert 'value="execution" selected' in html
         assert 'id="graphFiltersGroup"' in html
@@ -247,8 +247,14 @@ class TestGraphFrontendContracts:
         assert ".graph-toolbar label { min-height: 44px;" in html
         assert ".graph-toolbar button, .graph-toolbar select, .graph-toolbar input[type=\"text\"], .graph-toolbar summary {" in html
         assert ".graph-toolbar summary { display: inline-flex; align-items: center; line-height: 1; }" in html
+        assert ".graph-toolbar .graph-disclosure[open] { flex: 1 0 100%; }" in html
+        assert ".graph-toolbar .graph-disclosure[open] > .graph-disclosure-panel { width: 100%; min-width: 0; }" in html
+        assert ".graph-toolbar .graph-inline-controls { display: inline-flex;" in html
         assert 'class="graph-toolbar' in html
         assert "items-center leading-none" in html
+        assert "graph-disclosure" in html
+        assert "graph-disclosure-panel" in html
+        assert "graph-inline-controls" in html
 
     def test_graph_clear_buttons_disable_when_inactive(self) -> None:
         graph_js = (STATIC_DIR / "js" / "views" / "graph.js").read_text()
