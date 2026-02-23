@@ -351,6 +351,29 @@ class TestProcessScanResults:
         assert db.conn.execute("SELECT COUNT(*) FROM file_records").fetchone()[0] == 0
         assert db.conn.execute("SELECT COUNT(*) FROM scan_findings").fetchone()[0] == 0
 
+    def test_runtime_exception_rolls_back_pending_scan_writes(self, db: FiligreeDB) -> None:
+        """Mid-batch runtime exceptions must rollback partial writes."""
+        with pytest.raises(TypeError):
+            db.process_scan_results(
+                scan_source="ruff",
+                findings=[
+                    {"path": "good.py", "rule_id": "E501", "severity": "low", "message": "ok"},
+                    {
+                        "path": "bad.py",
+                        "rule_id": "E999",
+                        "severity": "low",
+                        "message": "bad",
+                        "suggestion": 123,  # len(int) triggers runtime TypeError
+                    },
+                ],
+            )
+
+        # Force a separate successful write+commit and confirm dirty scan writes
+        # were not accidentally committed.
+        db.create_issue("post-error commit probe")
+        assert db.conn.execute("SELECT COUNT(*) FROM file_records").fetchone()[0] == 0
+        assert db.conn.execute("SELECT COUNT(*) FROM scan_findings").fetchone()[0] == 0
+
     def test_scan_metadata_persisted_on_create(self, db: FiligreeDB) -> None:
         db.process_scan_results(
             scan_source="ruff",
