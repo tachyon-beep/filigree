@@ -268,8 +268,8 @@ class TemplateRegistry:
                 msg = f"Type '{type_name}': field at index {i} must be a dict, got {type(f).__name__}"
                 raise ValueError(msg)
 
-        # Enforcement validation
-        valid_enforcement = {"hard", "soft", "none"}
+        # Enforcement validation (filigree-9b9e45: only "hard"/"soft" are valid)
+        valid_enforcement = {"hard", "soft"}
         for t in raw_transitions:
             enforcement_val = t.get("enforcement")
             if enforcement_val not in valid_enforcement:
@@ -315,6 +315,15 @@ class TemplateRegistry:
             )
             for t in raw_transitions
         )
+
+        # Detect duplicate (from_state, to_state) pairs (filigree-ab91b3, filigree-3e3f12)
+        seen_transitions: set[tuple[str, str]] = set()
+        for t in transitions:
+            key = (t.from_state, t.to_state)
+            if key in seen_transitions:
+                msg = f"Type '{type_name}': duplicate transition '{t.from_state}' -> '{t.to_state}'"
+                raise ValueError(msg)
+            seen_transitions.add(key)
         fields_schema = tuple(
             FieldSchema(
                 name=f["name"],
@@ -359,6 +368,14 @@ class TemplateRegistry:
 
         if tpl.initial_state not in state_names:
             errors.append(f"initial_state '{tpl.initial_state}' is not in states list")
+
+        # Detect duplicate (from_state, to_state) pairs (filigree-ab91b3, filigree-3e3f12)
+        seen_trans: set[tuple[str, str]] = set()
+        for t in tpl.transitions:
+            key = (t.from_state, t.to_state)
+            if key in seen_trans:
+                errors.append(f"duplicate transition '{t.from_state}' -> '{t.to_state}'")
+            seen_trans.add(key)
 
         for t in tpl.transitions:
             if t.from_state not in state_names:

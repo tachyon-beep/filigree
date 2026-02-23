@@ -1539,7 +1539,7 @@ _RELEASE_PACK: dict[str, Any] = {
                 {"name": "testing", "category": "wip"},
                 {"name": "staged", "category": "wip"},
                 {"name": "released", "category": "done"},
-                {"name": "rolled_back", "category": "done"},
+                {"name": "rolled_back", "category": "wip"},
                 {"name": "cancelled", "category": "done"},
             ],
             "initial_state": "planning",
@@ -1641,7 +1641,7 @@ _RELEASE_PACK: dict[str, Any] = {
         "state_diagram": (
             "release:      planning(O) --> development(W) --> frozen(W) --> testing(W) --> staged(W) --> released(D)\n"
             "                          \\-> cancelled(D) \\-> cancelled(D)\n"
-            "                             \\-> development(W) [unfreeze]       \\-> rolled_back(D)\n"
+            "                             \\-> development(W) [unfreeze]       \\-> rolled_back(W)\n"
             "                                  \\-> development(W) [fix]\n"
             "                                       \\-> development(W) [fix]\n"
             "              HARD: development-->frozen requires version\n"
