@@ -1,0 +1,212 @@
+{
+  "verdict": "CHANGES_REQUESTED",
+  "summary": "Plan has 2 blocking issues from Systems reviewer: (1) PID file left behind on SIGKILL failure creates an unrecoverable stuck state, and (2) Popen raising OSError inside the lock scope breaks the DaemonResult return-type contract. Reality, Architecture, and Quality reviewers found no blockers. 7 warnings should be addressed.",
+  "plan_file": "docs/plans/2026-02-24-server-lifecycle-bugs.md",
+  "reviewed_at": "2026-02-24T12:00:00Z",
+  "reviewers": ["reality", "architecture", "quality", "systems"],
+  "blocking_issues": [
+    {
+      "id": "B1",
+      "source": "systems",
+      "issue": "PID file not cleaned up when SIGKILL fails to kill the process",
+      "evidence": "In Task 8 (plan lines 552-568), when is_pid_alive(pid) returns True after SIGKILL, the plan returns DaemonResult(False, 'Failed to kill daemon...') WITHOUT unlinking SERVER_PID_FILE. This creates a permanent stuck state: start_daemon refuses with 'already running', stop_daemon fails again with the same SIGKILL failure, and there is no programmatic recovery path. The user must manually delete ~/.config/filigree/server.pid.",
+      "priority_score": 36,
+      "priority_breakdown": {
+        "severity": "Critical (4) - creates unrecoverable state requiring manual intervention",
+        "likelihood": "Likely (3) - SIGKILL failure is uncommon but the stuck state is permanent once triggered",
+        "reversibility": "Irreversible (3) - no automated recovery; manual file deletion required"
+      },
+      "resolution": "Add SERVER_PID_FILE.unlink(missing_ok=True) before the failure return in the SIGKILL-failed branch. Even though the process survived, the PID file should be removed so that start_daemon can attempt a fresh startup on the next invocation. The corrected code block should be:\n\n    # Verify the process is actually dead\n    if is_pid_alive(pid):\n        SERVER_PID_FILE.unlink(missing_ok=True)\n        return DaemonResult(False, f\"Failed to kill daemon (pid {pid}) even with SIGKILL\")\n\nAlternatively, add a test that explicitly asserts the PID file is removed even on SIGKILL failure."
+    },
+    {
+      "id": "B2",
+      "source": "systems",
+      "issue": "subprocess.Popen raising OSError inside lock scope breaks DaemonResult contract",
+      "evidence": "In Task 6 (plan lines 363-409), subprocess.Popen is called at line 392 with no try/except. If the filigree command binary is missing, not executable, or the system is out of file descriptors, Popen raises OSError (or a subclass like FileNotFoundError, PermissionError). This propagates as a raw exception to callers who expect DaemonResult. Current code at server.py:156 has the same bug, but the plan adds the lock wrapper without fixing it. The lock is released automatically by context manager exit, so there is no lock leak, but the return-type violation is the issue.",
+      "priority_score": 18,
+      "priority_breakdown": {
+        "severity": "High (3) - breaks function contract, callers get unhandled exception",
+        "likelihood": "Likely (2) - happens when filigree is not on PATH or binary is corrupt",
+        "reversibility": "Difficult (3) - caller crash may leave partial state"
+      },
+      "resolution": "Wrap the Popen call and its surrounding I/O in a try/except block:\n\n    try:\n        with open(log_file, \"w\") as log_fd:\n            proc = subprocess.Popen(\n                [...],\n                ...\n            )\n    except OSError as exc:\n        return DaemonResult(False, f\"Failed to start daemon: {exc}\")\n\nAdd a corresponding test: monkeypatch Popen to raise FileNotFoundError, assert DaemonResult(success=False)."
+    }
+  ],
+  "warnings": [
+    {
+      "id": "W1",
+      "source": "architecture+systems",
+      "issue": "server.lock held for 500ms+ during startup sleep",
+      "priority_score": 6,
+      "priority_breakdown": {
+        "severity": "Medium (2) - blocks concurrent register_project calls",
+        "likelihood": "Likely (3) - happens on every successful start_daemon call",
+        "reversibility": "Easy (1) - simple code restructure"
+      },
+      "recommendation": "Move time.sleep(0.5) + proc.poll() OUTSIDE the lock scope. The PID file is already written before the sleep, so the critical section (check-then-start atomicity) is complete. The post-start health check does not need serialization. Both Architecture and Systems reviewers independently flagged this."
+    },
+    {
+      "id": "W2",
+      "source": "systems",
+      "issue": "verify_pid_ownership spawns 'ps' subprocess on macOS hot path",
+      "priority_score": 6,
+      "priority_breakdown": {
+        "severity": "Medium (2) - performance degradation on macOS",
+        "likelihood": "Likely (3) - called on every daemon_status check",
+        "reversibility": "Easy (1) - can add timeout or cache later"
+      },
+      "recommendation": "This is a pre-existing design issue in ephemeral.py, not introduced by this plan. Document it as a known limitation. Consider adding a timeout parameter to verify_pid_ownership or caching the result for short periods."
+    },
+    {
+      "id": "W3",
+      "source": "systems",
+      "issue": "Write-after-write race between parent start_daemon and child daemon on server.json",
+      "priority_score": 4,
+      "priority_breakdown": {
+        "severity": "Medium (2) - config could be transiently inconsistent",
+        "likelihood": "Possible (1) - narrow window, both writes are atomic via write_atomic",
+        "reversibility": "Difficult (2) - silent data loss of port config"
+      },
+      "recommendation": "The parent writes server.json (port override) and then spawns the child, which may also write server.json via claim_current_process_as_daemon. Since both use write_atomic, the last writer wins. The plan's port persistence in Task 6 Step 15 makes this less likely (port is written before spawn), but document the ordering assumption."
+    },
+    {
+      "id": "W4",
+      "source": "quality",
+      "issue": "Eight test gaps identified",
+      "priority_score": 4,
+      "priority_breakdown": {
+        "severity": "Medium (2) - reduced confidence in edge cases",
+        "likelihood": "Certain (2) - gaps exist by definition",
+        "reversibility": "Easy (1) - tests can be added incrementally"
+      },
+      "recommendation": "Prioritize adding tests for: (a) empty config file (0 bytes) -- JSONDecodeError path, (b) Popen raising OSError (ties into B2 fix), (c) ProcessLookupError during SIGTERM (pre-existing but should be covered). The remaining 5 gaps (port 0, verify_pid_ownership exception, lock release verification, lock file creation failure, coverage flag) are lower priority and can be deferred."
+    },
+    {
+      "id": "W5",
+      "source": "quality",
+      "issue": "Three observability gaps in error paths",
+      "priority_score": 3,
+      "priority_breakdown": {
+        "severity": "Low (1) - operators have less visibility into failures",
+        "likelihood": "Certain (3) - error paths exist with no logging",
+        "reversibility": "Easy (1) - add logger.warning calls"
+      },
+      "recommendation": "Add logger.warning() calls in: (a) SIGKILL failure branch (the DaemonResult message is returned to caller but not logged), (b) lock file open failure (currently unhandled OSError), (c) verify_pid_ownership exception path (if ps subprocess fails). These are one-line additions."
+    },
+    {
+      "id": "W6",
+      "source": "quality",
+      "issue": "test_stop_handles_sigkill_permission_error does not assert on message content",
+      "priority_score": 2,
+      "priority_breakdown": {
+        "severity": "Low (1) - test exists but is weak",
+        "likelihood": "Certain (2) - assertion gap is definite",
+        "reversibility": "Easy (1) - one-line fix"
+      },
+      "recommendation": "Add assertion: assert 'Permission denied' in result.message or assert 'SIGKILL' in result.message. Both Reality and Quality reviewers noted this independently."
+    },
+    {
+      "id": "W7",
+      "source": "reality",
+      "issue": "Insertion point line number hint is off by 2 lines",
+      "priority_score": 1,
+      "priority_breakdown": {
+        "severity": "Low (1) - cosmetic, plan says ~line 158, actual is line 157",
+        "likelihood": "Certain (1) - off-by-one exists",
+        "reversibility": "Easy (1) - does not affect implementation"
+      },
+      "recommendation": "No action needed. The implementing agent should use class/function names, not line numbers, to locate insertion points. This is a cosmetic issue in the plan document."
+    }
+  ],
+  "recommendations": [
+    {
+      "type": "MUST_FIX",
+      "source": "systems",
+      "suggestion": "Fix B1: Add PID file cleanup on SIGKILL failure path in Task 8, and add a test asserting PID file removal"
+    },
+    {
+      "type": "MUST_FIX",
+      "source": "systems",
+      "suggestion": "Fix B2: Wrap Popen in try/except OSError in Task 6, return DaemonResult(False, ...), and add a test"
+    },
+    {
+      "type": "SHOULD_FIX",
+      "source": "architecture+systems",
+      "suggestion": "Move sleep+poll outside lock scope in Task 6 to reduce lock hold time from 500ms+ to ~1ms"
+    },
+    {
+      "type": "SHOULD_FIX",
+      "source": "quality",
+      "suggestion": "Add tests for empty config file and Popen OSError (the latter ties directly into B2)"
+    },
+    {
+      "type": "SHOULD_FIX",
+      "source": "quality",
+      "suggestion": "Add logger.warning() to SIGKILL failure path and lock file open failure"
+    },
+    {
+      "type": "CONSIDER",
+      "source": "quality",
+      "suggestion": "Strengthen test_stop_handles_sigkill_permission_error with message content assertion"
+    },
+    {
+      "type": "CONSIDER",
+      "source": "systems",
+      "suggestion": "Document verify_pid_ownership macOS performance characteristics as known limitation"
+    },
+    {
+      "type": "OUT_OF_SCOPE",
+      "source": "quality",
+      "suggestion": "ProcessLookupError during SIGTERM is a pre-existing bug not introduced by this plan -- track separately"
+    },
+    {
+      "type": "OUT_OF_SCOPE",
+      "source": "systems",
+      "suggestion": "verify_pid_ownership timeout/caching is an ephemeral.py concern, not server lifecycle"
+    }
+  ],
+  "conflicts_resolved": [
+    {
+      "issue": "Lock hold time during startup sleep",
+      "architecture_view": "Recommendation to move sleep outside lock scope",
+      "systems_view": "Warning: server.lock held 500ms+ during startup",
+      "quality_view": "Not mentioned",
+      "reality_view": "Not mentioned",
+      "resolution": "Consolidated as W1 (warning). Both reviewers agree on the problem and solution. Classified as warning rather than blocker because: (a) the lock is exclusive but short-lived, (b) concurrent register_project calls are rare during startup, and (c) the fix is a simple code restructure with no correctness risk."
+    },
+    {
+      "issue": "test_stop_handles_sigkill_permission_error assertion strength",
+      "reality_view": "Minor: test doesn't assert on message content",
+      "quality_view": "Test gap: PermissionError test doesn't assert message content",
+      "architecture_view": "Not mentioned",
+      "systems_view": "Not mentioned",
+      "resolution": "Consolidated as W6 (warning). Both Reality and Quality independently flagged the same weak assertion. This validates the finding but its low severity keeps it as a recommendation."
+    }
+  ],
+  "reviewer_summaries": {
+    "reality": {
+      "status": "PASS",
+      "blocking": 0,
+      "warnings": 2,
+      "notes": "All symbols, imports, paths, test class names, and issue IDs verified correct. Minor line number offset and weak assertion noted."
+    },
+    "architecture": {
+      "status": "PASS",
+      "blocking": 0,
+      "warnings": 1,
+      "notes": "Low blast radius (2 files). No one-way doors. Excellent pattern alignment with existing fcntl.flock and verify_pid_ownership usage. Recommended lock scope reduction."
+    },
+    "quality": {
+      "status": "PASS",
+      "blocking": 0,
+      "warnings": 3,
+      "notes": "8 test gaps, 3 observability gaps, 4 edge cases identified. No security issues. POSIX-only scope is correctly documented."
+    },
+    "systems": {
+      "status": "ISSUES_FOUND",
+      "blocking": 2,
+      "warnings": 3,
+      "notes": "Two blocking issues: stuck state from PID file retention on SIGKILL failure, and DaemonResult contract violation from uncaught Popen OSError. Three warnings on lock contention, macOS performance, and config write race."
+    }
+  }
+}

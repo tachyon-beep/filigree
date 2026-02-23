@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [1.3.0] - 2026-02-23
+## [1.3.0] - 2026-02-24
 
 Server/ethereal operating modes, file intelligence + scanner workflows, Graph v2, and broad safety hardening.
 
@@ -76,6 +76,11 @@ Server/ethereal operating modes, file intelligence + scanner workflows, Graph v2
 - Portable PID ownership fallback added when command-line process inspection is unavailable
 - Registry fallback key-collision handling corrected
 - Hook command resolution hardened across installation methods
+- `read_server_config()` now validates JSON shape and types: non-dict top-level returns defaults, port coerced to int and clamped to 1–65535, non-dict project entries dropped
+- `start_daemon()` serialized with `fcntl.flock` on `server.lock` to prevent concurrent start races
+- `start_daemon()` and `daemon_status()` verify PID ownership via `verify_pid_ownership()` — stale PIDs from reused processes no longer cause false "already running" or false status
+- `start_daemon()` wraps `subprocess.Popen` in `try/except OSError` to return a clean `DaemonResult` instead of propagating raw exceptions while holding the lock
+- `stop_daemon()` verifies process death after SIGKILL and reports failure when the process survives; PID file cleaned up in all terminal paths to prevent permanent stuck state
 
 #### Files/findings and scanner robustness
 
