@@ -808,6 +808,13 @@ class TestClaimNextCli:
         data = json.loads(result.output)
         assert data["status"] == "empty"
 
+    def test_claim_next_whitespace_assignee_shows_clean_error(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        runner, _ = cli_in_project
+        runner.invoke(cli, ["create", "A task"])
+        result = runner.invoke(cli, ["claim-next", "--assignee", "   "])
+        assert result.exit_code == 1
+        assert "Traceback" not in (result.output or "")
+
 
 class TestCreatePlanCli:
     def test_create_plan_from_stdin(self, cli_in_project: tuple[CliRunner, Path]) -> None:
@@ -1366,6 +1373,23 @@ class TestExportImportCli:
         assert result.exit_code != 0
         assert "Import failed" in result.output or "Import failed" in (result.output + (result.output or ""))
         # Must NOT contain a raw Python traceback
+        assert "Traceback" not in (result.output or "")
+
+    def test_import_oserror_shows_clean_error(
+        self, cli_in_project: tuple[CliRunner, Path], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """OSError during import should show clean error, not traceback."""
+        runner, project_root = cli_in_project
+        bad_file = project_root / "data.jsonl"
+        bad_file.write_text("{}\n")
+
+        def _raise_oserror(*a: object, **kw: object) -> None:
+            raise OSError("disk read error")
+
+        monkeypatch.setattr("filigree.core.FiligreeDB.import_jsonl", _raise_oserror)
+        result = runner.invoke(cli, ["import", str(bad_file)])
+        assert result.exit_code != 0
+        assert "Import failed" in (result.output or "")
         assert "Traceback" not in (result.output or "")
 
 

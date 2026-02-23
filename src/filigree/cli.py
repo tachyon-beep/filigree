@@ -1092,7 +1092,7 @@ def import_data(input_file: str, merge: bool) -> None:
     with _get_db() as db:
         try:
             count = db.import_jsonl(input_file, merge=merge)
-        except (json_mod.JSONDecodeError, KeyError, ValueError, sqlite3.IntegrityError) as e:
+        except (json_mod.JSONDecodeError, KeyError, ValueError, sqlite3.IntegrityError, OSError) as e:
             click.echo(f"Import failed: {e}", err=True)
             sys.exit(1)
         _refresh_summary(db)
@@ -1471,13 +1471,20 @@ def claim_next(
 ) -> None:
     """Claim the highest-priority ready issue matching filters."""
     with _get_db() as db:
-        issue = db.claim_next(
-            assignee,
-            type_filter=type_filter,
-            priority_min=priority_min,
-            priority_max=priority_max,
-            actor=ctx.obj["actor"],
-        )
+        try:
+            issue = db.claim_next(
+                assignee,
+                type_filter=type_filter,
+                priority_min=priority_min,
+                priority_max=priority_max,
+                actor=ctx.obj["actor"],
+            )
+        except ValueError as e:
+            if as_json:
+                click.echo(json_mod.dumps({"error": str(e)}))
+            else:
+                click.echo(f"Error: {e}", err=True)
+            sys.exit(1)
         if issue is None:
             if as_json:
                 click.echo(json_mod.dumps({"status": "empty"}))
