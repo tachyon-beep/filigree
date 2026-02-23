@@ -189,6 +189,13 @@ def apply_pending_migrations(conn: sqlite3.Connection, target_version: int) -> i
             the last successful migration).
         ValueError: If current version > target (downgrade not supported).
     """
+    if conn.in_transaction:
+        msg = (
+            "apply_pending_migrations() must not be called inside an existing transaction. "
+            "Commit or roll back the current transaction first."
+        )
+        raise RuntimeError(msg)
+
     current: int = conn.execute("PRAGMA user_version").fetchone()[0]
 
     if current == target_version:
@@ -197,6 +204,9 @@ def apply_pending_migrations(conn: sqlite3.Connection, target_version: int) -> i
     if current > target_version:
         msg = f"Database schema v{current} is newer than this version of filigree (expects v{target_version}). Downgrade is not supported."
         raise ValueError(msg)
+
+    # Capture caller's FK setting so we can restore it in finally.
+    original_fk: int = conn.execute("PRAGMA foreign_keys").fetchone()[0]
 
     applied = 0
     for version in range(current, target_version):
@@ -230,9 +240,10 @@ def apply_pending_migrations(conn: sqlite3.Connection, target_version: int) -> i
             conn.rollback()
             raise MigrationError(version, version + 1, exc) from exc
         finally:
-            # Restore FK enforcement. After commit/rollback the connection
-            # is in autocommit mode, so this PRAGMA takes effect immediately.
-            conn.execute("PRAGMA foreign_keys=ON")
+            # Restore caller's original FK enforcement setting.
+            # After commit/rollback the connection is in autocommit mode,
+            # so this PRAGMA takes effect immediately.
+            conn.execute(f"PRAGMA foreign_keys={'ON' if original_fk else 'OFF'}")
 
     return applied
 

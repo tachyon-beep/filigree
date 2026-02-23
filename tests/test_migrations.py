@@ -243,6 +243,133 @@ class TestMigrationRunner:
             conn.close()
 
 
+class TestMigrationRunnerTransactionGuard:
+    """Bug filigree-8b0f07: rollback must not discard caller-owned transaction work."""
+
+    def test_raises_when_called_inside_existing_transaction(self, tmp_path: Path) -> None:
+        """Calling apply_pending_migrations inside an open transaction must fail fast."""
+        conn = _make_db(tmp_path)
+        conn.execute("CREATE TABLE t (id INTEGER PRIMARY KEY)")
+        conn.execute("PRAGMA user_version = 1")
+        conn.commit()
+
+        from filigree import migrations
+
+        original = migrations.MIGRATIONS.copy()
+
+        def noop(c: sqlite3.Connection) -> None:
+            pass
+
+        migrations.MIGRATIONS[1] = noop
+        try:
+            # Start a caller-owned transaction
+            conn.execute("INSERT INTO t VALUES (1)")
+            assert conn.in_transaction  # precondition
+
+            with pytest.raises(RuntimeError, match="existing transaction"):
+                apply_pending_migrations(conn, 2)
+
+            # Caller's transaction must still be intact (not rolled back)
+            assert conn.in_transaction
+            conn.commit()
+            row = conn.execute("SELECT id FROM t").fetchone()
+            assert row[0] == 1  # caller data preserved
+        finally:
+            migrations.MIGRATIONS.clear()
+            migrations.MIGRATIONS.update(original)
+            conn.close()
+
+
+class TestMigrationRunnerFKPreservation:
+    """Bug filigree-3831c4: FK enforcement setting must be preserved."""
+
+    def test_fk_off_preserved_after_migration(self, tmp_path: Path) -> None:
+        """If caller had FK=OFF, it must still be OFF after migration."""
+        conn = _make_db(tmp_path)
+        conn.execute("CREATE TABLE t (id INTEGER PRIMARY KEY)")
+        conn.execute("PRAGMA user_version = 1")
+        conn.commit()
+
+        from filigree import migrations
+
+        original = migrations.MIGRATIONS.copy()
+
+        def noop(c: sqlite3.Connection) -> None:
+            pass
+
+        migrations.MIGRATIONS[1] = noop
+        try:
+            # Caller explicitly disables FKs
+            conn.execute("PRAGMA foreign_keys=OFF")
+            fk_before = conn.execute("PRAGMA foreign_keys").fetchone()[0]
+            assert fk_before == 0  # precondition: OFF
+
+            apply_pending_migrations(conn, 2)
+
+            fk_after = conn.execute("PRAGMA foreign_keys").fetchone()[0]
+            assert fk_after == 0  # must be restored to OFF
+        finally:
+            migrations.MIGRATIONS.clear()
+            migrations.MIGRATIONS.update(original)
+            conn.close()
+
+    def test_fk_on_preserved_after_migration(self, tmp_path: Path) -> None:
+        """If caller had FK=ON, it must still be ON after migration."""
+        conn = _make_db(tmp_path)
+        conn.execute("CREATE TABLE t (id INTEGER PRIMARY KEY)")
+        conn.execute("PRAGMA user_version = 1")
+        conn.commit()
+
+        from filigree import migrations
+
+        original = migrations.MIGRATIONS.copy()
+
+        def noop(c: sqlite3.Connection) -> None:
+            pass
+
+        migrations.MIGRATIONS[1] = noop
+        try:
+            conn.execute("PRAGMA foreign_keys=ON")
+            fk_before = conn.execute("PRAGMA foreign_keys").fetchone()[0]
+            assert fk_before == 1  # precondition: ON
+
+            apply_pending_migrations(conn, 2)
+
+            fk_after = conn.execute("PRAGMA foreign_keys").fetchone()[0]
+            assert fk_after == 1
+        finally:
+            migrations.MIGRATIONS.clear()
+            migrations.MIGRATIONS.update(original)
+            conn.close()
+
+    def test_fk_restored_after_failed_migration(self, tmp_path: Path) -> None:
+        """FK setting must be restored even when a migration fails."""
+        conn = _make_db(tmp_path)
+        conn.execute("CREATE TABLE t (id INTEGER PRIMARY KEY)")
+        conn.execute("PRAGMA user_version = 1")
+        conn.commit()
+
+        from filigree import migrations
+
+        original = migrations.MIGRATIONS.copy()
+
+        def bad_migration(c: sqlite3.Connection) -> None:
+            raise RuntimeError("boom")
+
+        migrations.MIGRATIONS[1] = bad_migration
+        try:
+            conn.execute("PRAGMA foreign_keys=OFF")
+            with pytest.raises(MigrationError):
+                apply_pending_migrations(conn, 2)
+
+            fk_after = conn.execute("PRAGMA foreign_keys").fetchone()[0]
+            assert fk_after == 0  # must be restored to OFF
+        finally:
+            migrations.MIGRATIONS.clear()
+            migrations.MIGRATIONS.update(original)
+            conn.close()
+
+
 # ---------------------------------------------------------------------------
 # SQLite helper tests
 # ---------------------------------------------------------------------------
