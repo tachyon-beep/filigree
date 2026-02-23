@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import json
 import fcntl
+import json
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -118,9 +118,7 @@ class TestProjectRegistration:
         with pytest.raises(ValueError, match="Prefix collision"):
             register_project(second)
 
-    def test_register_project_is_idempotent_for_same_path(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_register_project_is_idempotent_for_same_path(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         config_dir = tmp_path / ".config" / "filigree"
         monkeypatch.setattr("filigree.server.SERVER_CONFIG_DIR", config_dir)
         monkeypatch.setattr("filigree.server.SERVER_CONFIG_FILE", config_dir / "server.json")
@@ -206,9 +204,7 @@ class TestConfigValidation:
 
     def test_non_dict_project_values_dropped(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         config_dir = self._setup(tmp_path, monkeypatch)
-        (config_dir / "server.json").write_text(
-            '{"projects": {"/good": {"prefix": "a"}, "/bad": "string-value"}}'
-        )
+        (config_dir / "server.json").write_text('{"projects": {"/good": {"prefix": "a"}, "/bad": "string-value"}}')
         config = read_server_config()
         assert "/good" in config.projects
         assert "/bad" not in config.projects
@@ -230,9 +226,7 @@ class TestConfigValidation:
 class TestPidOwnership:
     """Bug filigree-f56a78: start_daemon/daemon_status must verify PID ownership."""
 
-    def test_start_daemon_clears_stale_foreign_pid(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_start_daemon_clears_stale_foreign_pid(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """If PID file points to a live non-filigree process, start should proceed."""
         config_dir = tmp_path / ".config" / "filigree"
         config_dir.mkdir(parents=True)
@@ -261,9 +255,7 @@ class TestPidOwnership:
         assert result.success
         assert "11111" in result.message
 
-    def test_daemon_status_not_running_for_foreign_pid(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_daemon_status_not_running_for_foreign_pid(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """If PID file points to a live non-filigree process, status should be not running."""
         config_dir = tmp_path / ".config" / "filigree"
         config_dir.mkdir(parents=True)
@@ -385,9 +377,7 @@ class TestDaemonLifecycle:
         status = daemon_status()
         assert not status.running
 
-    def test_claim_current_process_as_daemon_writes_pid_and_port(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_claim_current_process_as_daemon_writes_pid_and_port(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         config_dir = tmp_path / ".config" / "filigree"
         monkeypatch.setattr("filigree.server.SERVER_CONFIG_DIR", config_dir)
         monkeypatch.setattr("filigree.server.SERVER_CONFIG_FILE", config_dir / "server.json")
@@ -401,9 +391,7 @@ class TestDaemonLifecycle:
         assert pid_data["cmd"] == "filigree"
         assert read_server_config().port == 9911
 
-    def test_claim_current_process_as_daemon_refuses_live_foreign_pid(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_claim_current_process_as_daemon_refuses_live_foreign_pid(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         config_dir = tmp_path / ".config" / "filigree"
         config_dir.mkdir(parents=True)
         pid_file = config_dir / "server.pid"
@@ -431,3 +419,57 @@ class TestDaemonLifecycle:
 
         release_daemon_pid_if_owned(123)
         assert not pid_file.exists()
+
+
+class TestStartDaemonLocking:
+    """Bug filigree-f6c971: start_daemon must serialize with fcntl.flock."""
+
+    def test_start_daemon_acquires_lock(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        config_dir = tmp_path / ".config" / "filigree"
+        monkeypatch.setattr("filigree.server.SERVER_CONFIG_DIR", config_dir)
+        monkeypatch.setattr("filigree.server.SERVER_CONFIG_FILE", config_dir / "server.json")
+        monkeypatch.setattr("filigree.server.SERVER_PID_FILE", config_dir / "server.pid")
+
+        lock_ops: list[int] = []
+        original_flock = fcntl.flock
+
+        def tracking_flock(fd: object, op: int) -> None:
+            lock_ops.append(op)
+            original_flock(fd, op)  # type: ignore[arg-type]
+
+        monkeypatch.setattr("filigree.server.fcntl.flock", tracking_flock)
+
+        def mock_popen(cmd, **kwargs):  # type: ignore[no-untyped-def]
+            mock = MagicMock()
+            mock.pid = 77777
+            mock.poll.return_value = None
+            return mock
+
+        monkeypatch.setattr("filigree.server.subprocess.Popen", mock_popen)
+
+        from filigree.server import start_daemon
+
+        result = start_daemon()
+        assert result.success
+        assert fcntl.LOCK_EX in lock_ops
+
+
+class TestStartDaemonPopenFailure:
+    """B2 from plan review: Popen OSError must return DaemonResult, not raise."""
+
+    def test_start_returns_failure_when_popen_raises(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        config_dir = tmp_path / ".config" / "filigree"
+        monkeypatch.setattr("filigree.server.SERVER_CONFIG_DIR", config_dir)
+        monkeypatch.setattr("filigree.server.SERVER_CONFIG_FILE", config_dir / "server.json")
+        monkeypatch.setattr("filigree.server.SERVER_PID_FILE", config_dir / "server.pid")
+
+        def raising_popen(cmd, **kwargs):  # type: ignore[no-untyped-def]
+            raise FileNotFoundError("filigree command not found")
+
+        monkeypatch.setattr("filigree.server.subprocess.Popen", raising_popen)
+
+        from filigree.server import start_daemon
+
+        result = start_daemon()
+        assert not result.success
+        assert "Failed to start" in result.message

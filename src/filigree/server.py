@@ -110,8 +110,7 @@ def register_project(filigree_dir: Path) -> None:
             existing_prefix = str(meta.get("prefix", "filigree")) if isinstance(meta, dict) else "filigree"
             if existing_prefix == prefix:
                 raise ValueError(
-                    f"Prefix collision: {prefix!r} already registered by {existing_path}. "
-                    "Choose a unique prefix in .filigree/config.json."
+                    f"Prefix collision: {prefix!r} already registered by {existing_path}. Choose a unique prefix in .filigree/config.json."
                 )
 
         config.projects[project_key] = {"prefix": prefix}
@@ -153,37 +152,47 @@ def start_daemon(port: int | None = None) -> DaemonResult:
     """Start the filigree server daemon."""
     from filigree.core import find_filigree_command
 
-    # Check if already running — verify PID is actually a filigree process
-    info = read_pid_file(SERVER_PID_FILE)
-    if info and is_pid_alive(info["pid"]):
-        if verify_pid_ownership(SERVER_PID_FILE, expected_cmd="filigree"):
-            return DaemonResult(False, f"Daemon already running (pid {info['pid']})")
-        # Stale PID from a reused process — clean up and proceed
-        logger.warning("Stale PID file (pid %d is not filigree); cleaning up", info["pid"])
-        SERVER_PID_FILE.unlink(missing_ok=True)
-
-    config = read_server_config()
-    daemon_port = port or config.port
-    # Persist the effective daemon port so status/hooks/install agree.
-    if config.port != daemon_port:
-        config.port = daemon_port
-        write_server_config(config)
-
     SERVER_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    filigree_cmd = find_filigree_command()
-    log_file = SERVER_CONFIG_DIR / "server.log"
+    lock_path = SERVER_CONFIG_DIR / "server.lock"
+    with open(lock_path, "w") as lock_fd:
+        fcntl.flock(lock_fd, fcntl.LOCK_EX)
 
-    with open(log_file, "w") as log_fd:
-        proc = subprocess.Popen(
-            [*filigree_cmd, "dashboard", "--no-browser", "--server-mode", "--port", str(daemon_port)],
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=log_fd,
-            start_new_session=True,
-        )
+        # Check if already running — verify PID is actually a filigree process
+        info = read_pid_file(SERVER_PID_FILE)
+        if info and is_pid_alive(info["pid"]):
+            if verify_pid_ownership(SERVER_PID_FILE, expected_cmd="filigree"):
+                return DaemonResult(False, f"Daemon already running (pid {info['pid']})")
+            # Stale PID from a reused process — clean up and proceed
+            logger.warning("Stale PID file (pid %d is not filigree); cleaning up", info["pid"])
+            SERVER_PID_FILE.unlink(missing_ok=True)
 
-    write_pid_file(SERVER_PID_FILE, proc.pid, cmd="filigree")
+        config = read_server_config()
+        daemon_port = port or config.port
+        # Persist the effective daemon port so status/hooks/install agree.
+        if config.port != daemon_port:
+            config.port = daemon_port
+            write_server_config(config)
 
+        filigree_cmd = find_filigree_command()
+        log_file = SERVER_CONFIG_DIR / "server.log"
+
+        try:
+            with open(log_file, "w") as log_fd:
+                proc = subprocess.Popen(
+                    [*filigree_cmd, "dashboard", "--no-browser", "--server-mode", "--port", str(daemon_port)],
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL,
+                    stderr=log_fd,
+                    start_new_session=True,
+                )
+        except OSError as exc:
+            return DaemonResult(False, f"Failed to start daemon: {exc}")
+
+        write_pid_file(SERVER_PID_FILE, proc.pid, cmd="filigree")
+        # Lock released here — critical section is complete
+
+    # Post-startup health check runs outside the lock to avoid blocking
+    # concurrent register_project() calls
     time.sleep(0.5)
     exit_code = proc.poll()
     if exit_code is not None:
