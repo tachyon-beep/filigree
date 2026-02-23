@@ -42,7 +42,7 @@ def cycle_time(db: FiligreeDB, issue_id: str) -> float | None:
 
     events = db.conn.execute(
         "SELECT event_type, new_value, created_at FROM events "
-        "WHERE issue_id = ? AND event_type = 'status_changed' ORDER BY created_at ASC",
+        "WHERE issue_id = ? AND event_type = 'status_changed' ORDER BY created_at ASC, id ASC",
         (issue_id,),
     ).fetchall()
     return _cycle_time_from_events(
@@ -89,7 +89,7 @@ def _fetch_status_events_by_issue(db: FiligreeDB, issue_ids: list[str]) -> dict[
                 "FROM events "
                 "WHERE event_type = 'status_changed' "
                 f"AND issue_id IN ({placeholders}) "
-                "ORDER BY issue_id ASC, created_at ASC"
+                "ORDER BY issue_id ASC, created_at ASC, id ASC"
             ),
             tuple(chunk),
         ).fetchall()
@@ -142,20 +142,23 @@ def get_flow_metrics(db: FiligreeDB, *, days: int = 30) -> dict[str, Any]:
 
     cutoff_dt = datetime.now(UTC) - timedelta(days=days)
 
-    # Paginate through all done issues to avoid silent truncation
+    # Paginate through all done issues to avoid silent truncation.
+    # Query both "closed" (template-defined done states) and "archived"
+    # (synthetic status set by archive_closed()) to avoid undercounting.
     page_size = 1000
-    offset = 0
     recent_closed = []
-    while True:
-        page = db.list_issues(status="closed", limit=page_size, offset=offset)
-        for i in page:
-            if i.closed_at:
-                closed_dt = _parse_iso(i.closed_at)
-                if closed_dt is not None and closed_dt >= cutoff_dt:
-                    recent_closed.append(i)
-        if len(page) < page_size:
-            break
-        offset += page_size
+    for status_filter in ("closed", "archived"):
+        offset = 0
+        while True:
+            page = db.list_issues(status=status_filter, limit=page_size, offset=offset)
+            for i in page:
+                if i.closed_at:
+                    closed_dt = _parse_iso(i.closed_at)
+                    if closed_dt is not None and closed_dt >= cutoff_dt:
+                        recent_closed.append(i)
+            if len(page) < page_size:
+                break
+            offset += page_size
 
     cycle_times: list[float] = []
     lead_times: list[float] = []

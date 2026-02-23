@@ -318,3 +318,15 @@ class TestFlowMetrics:
             if "from events" in sql and "event_type = 'status_changed'" in sql
         ]
         assert len(event_queries) == 1, f"expected 1 batched status-events query, got {len(event_queries)}"
+
+    def test_flow_metrics_includes_archived_issues(self, db: FiligreeDB) -> None:
+        """Archived issues (from archive_closed) must be counted in throughput."""
+        issue = db.create_issue("Will archive")
+        db.update_issue(issue.id, status="in_progress")
+        db.close_issue(issue.id)
+        # archive_closed rewrites status to 'archived' but preserves closed_at
+        db.archive_closed(days_old=0)
+        refreshed = db.get_issue(issue.id)
+        assert refreshed.status == "archived"
+        data = get_flow_metrics(db, days=30)
+        assert data["throughput"] >= 1, "Archived issues should be counted"
