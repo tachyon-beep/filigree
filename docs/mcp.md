@@ -111,7 +111,7 @@ Workflow guide with optional live project context. Agents use this to understand
 | `priority` | 0-4 | no | Priority (default: 2) |
 | `description` | string | no | Issue description |
 | `notes` | string | no | Additional notes |
-| `labels` | string[] | no | Labels |
+| `labels` | string[] | no | Labels to attach during creation (no separate `add_label` call needed) |
 | `deps` | string[] | no | Dependency issue IDs |
 | `parent_id` | string | no | Parent issue ID |
 | `fields` | object | no | Custom fields from template schema |

@@ -330,7 +330,10 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="create_issue",
-            description="Create a new issue. Use get_template first to see available fields for the type.",
+            description=(
+                "Create a new issue. You can set labels at creation time via labels=[...]. "
+                "Use get_template first to see available fields for the type."
+            ),
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -347,7 +350,11 @@ async def list_tools() -> list[Tool]:
                     "description": {"type": "string", "description": "Issue description"},
                     "notes": {"type": "string", "description": "Additional notes"},
                     "fields": {"type": "object", "description": "Custom fields (from template schema)"},
-                    "labels": {"type": "array", "items": {"type": "string"}, "description": "Labels"},
+                    "labels": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Labels to attach during creation (avoids a follow-up add_label call)",
+                    },
                     "deps": {"type": "array", "items": {"type": "string"}, "description": "Issue IDs this depends on"},
                     "actor": {"type": "string", "description": "Agent/user identity for audit trail"},
                 },

@@ -1163,6 +1163,13 @@ class TestFileTools:
             "register_file",
         }.issubset(names)
 
+    async def test_create_issue_tool_docs_call_out_labels_at_creation(self, mcp_db: FiligreeDB) -> None:
+        tools = await list_tools()
+        create_tool = next(t for t in tools if t.name == "create_issue")
+        assert "labels" in create_tool.description.lower()
+        labels_schema = (create_tool.inputSchema or {}).get("properties", {}).get("labels", {})
+        assert "creation" in (labels_schema.get("description") or "").lower()
+
     async def test_register_file_and_get_file_round_trip(self, mcp_db: FiligreeDB) -> None:
         created = _parse(await call_tool("register_file", {"path": "src/example.py", "language": "python"}))
         assert "error" not in created
