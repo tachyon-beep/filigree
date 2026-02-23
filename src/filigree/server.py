@@ -153,10 +153,14 @@ def start_daemon(port: int | None = None) -> DaemonResult:
     """Start the filigree server daemon."""
     from filigree.core import find_filigree_command
 
-    # Check if already running
+    # Check if already running — verify PID is actually a filigree process
     info = read_pid_file(SERVER_PID_FILE)
     if info and is_pid_alive(info["pid"]):
-        return DaemonResult(False, f"Daemon already running (pid {info['pid']})")
+        if verify_pid_ownership(SERVER_PID_FILE, expected_cmd="filigree"):
+            return DaemonResult(False, f"Daemon already running (pid {info['pid']})")
+        # Stale PID from a reused process — clean up and proceed
+        logger.warning("Stale PID file (pid %d is not filigree); cleaning up", info["pid"])
+        SERVER_PID_FILE.unlink(missing_ok=True)
 
     config = read_server_config()
     daemon_port = port or config.port
@@ -231,6 +235,10 @@ def daemon_status() -> DaemonStatus:
     """Check daemon status."""
     info = read_pid_file(SERVER_PID_FILE)
     if info is None or not is_pid_alive(info["pid"]):
+        return DaemonStatus(running=False)
+
+    # Verify PID belongs to filigree before reporting as running
+    if not verify_pid_ownership(SERVER_PID_FILE, expected_cmd="filigree"):
         return DaemonStatus(running=False)
 
     config = read_server_config()

@@ -227,6 +227,59 @@ class TestConfigValidation:
         assert config.projects == {}
 
 
+class TestPidOwnership:
+    """Bug filigree-f56a78: start_daemon/daemon_status must verify PID ownership."""
+
+    def test_start_daemon_clears_stale_foreign_pid(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """If PID file points to a live non-filigree process, start should proceed."""
+        config_dir = tmp_path / ".config" / "filigree"
+        config_dir.mkdir(parents=True)
+        pid_file = config_dir / "server.pid"
+        pid_file.write_text(json.dumps({"pid": 99999, "cmd": "filigree"}))
+
+        monkeypatch.setattr("filigree.server.SERVER_CONFIG_DIR", config_dir)
+        monkeypatch.setattr("filigree.server.SERVER_CONFIG_FILE", config_dir / "server.json")
+        monkeypatch.setattr("filigree.server.SERVER_PID_FILE", pid_file)
+
+        # PID is alive but NOT a filigree process
+        monkeypatch.setattr("filigree.server.is_pid_alive", lambda pid: True)
+        monkeypatch.setattr("filigree.server.verify_pid_ownership", lambda *a, **kw: False)
+
+        def mock_popen(cmd, **kwargs):  # type: ignore[no-untyped-def]
+            mock = MagicMock()
+            mock.pid = 11111
+            mock.poll.return_value = None
+            return mock
+
+        monkeypatch.setattr("filigree.server.subprocess.Popen", mock_popen)
+
+        from filigree.server import start_daemon
+
+        result = start_daemon()
+        assert result.success
+        assert "11111" in result.message
+
+    def test_daemon_status_not_running_for_foreign_pid(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """If PID file points to a live non-filigree process, status should be not running."""
+        config_dir = tmp_path / ".config" / "filigree"
+        config_dir.mkdir(parents=True)
+        pid_file = config_dir / "server.pid"
+        pid_file.write_text(json.dumps({"pid": 99999, "cmd": "filigree"}))
+
+        monkeypatch.setattr("filigree.server.SERVER_PID_FILE", pid_file)
+        monkeypatch.setattr("filigree.server.is_pid_alive", lambda pid: True)
+        monkeypatch.setattr("filigree.server.verify_pid_ownership", lambda *a, **kw: False)
+
+        from filigree.server import daemon_status
+
+        status = daemon_status()
+        assert not status.running
+
+
 class TestDaemonLifecycle:
     def test_start_writes_pid_file(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         config_dir = tmp_path / ".config" / "filigree"
