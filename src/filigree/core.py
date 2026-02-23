@@ -2747,6 +2747,7 @@ class FiligreeDB:
         findings: list[dict[str, Any]],
         scan_run_id: str = "",
         mark_unseen: bool = False,
+        create_issues: bool = False,
     ) -> dict[str, Any]:
         """Ingest scan results: create/update file records and findings.
 
@@ -2757,6 +2758,10 @@ class FiligreeDB:
         that are NOT in this batch are set to ``unseen_in_latest`` status.
         Only findings with a non-terminal status are affected (``fixed`` and
         ``false_positive`` are left alone).
+
+        When *create_issues* is ``True``, each finding without an ``issue_id``
+        is promoted to a new candidate ``bug`` issue and linked to its file via
+        ``file_associations(assoc_type='bug_in')``.
 
         Returns summary stats including ``new_finding_ids``.
         """
@@ -2813,8 +2818,92 @@ class FiligreeDB:
             "findings_created": 0,
             "findings_updated": 0,
             "new_finding_ids": [],
+            "issues_created": 0,
+            "issue_ids": [],
             "warnings": warnings,
         }
+
+        def _priority_for_severity(severity: str) -> int:
+            return {
+                "critical": 0,
+                "high": 1,
+                "medium": 2,
+                "low": 3,
+                "info": 3,
+            }.get(severity, 2)
+
+        def _create_issue_for_finding(
+            *,
+            finding_id: str,
+            file_id: str,
+            path: str,
+            rule_id: str,
+            severity: str,
+            message: str,
+            suggestion: str,
+            line_start: int | None,
+            line_end: int | None,
+        ) -> str:
+            summary = message.strip().splitlines()[0].strip() if message and message.strip() else "Scanner finding"
+            location = f"{path}:{line_start}" if line_start is not None else path
+            title = f"[{scan_source}] {location} {summary}"
+            if len(title) > 200:
+                title = f"{title[:197]}..."
+
+            description_lines = [
+                "Automated finding promoted for triage.",
+                "",
+                f"- Scanner: `{scan_source}`",
+                f"- Rule ID: `{rule_id}`",
+                f"- Severity: `{severity}`",
+                f"- File: `{path}`",
+            ]
+            if line_start is not None:
+                if line_end is not None and line_end != line_start:
+                    description_lines.append(f"- Lines: `{line_start}`-`{line_end}`")
+                else:
+                    description_lines.append(f"- Line: `{line_start}`")
+            description_lines.extend(
+                [
+                    "",
+                    "Message:",
+                    message or "(empty)",
+                ]
+            )
+            if suggestion:
+                description_lines.extend(["", "Suggested fix:", suggestion])
+            description = "\n".join(description_lines)
+
+            issue = self.create_issue(
+                title,
+                type="bug",
+                priority=_priority_for_severity(severity),
+                description=description,
+                fields={
+                    "source": "scan",
+                    "scan_source": scan_source,
+                    "scan_finding_id": finding_id,
+                    "scan_rule_id": rule_id,
+                    "scan_severity": severity,
+                    "file_id": file_id,
+                    "file_path": path,
+                    "line_start": line_start,
+                    "line_end": line_end,
+                },
+                labels=["candidate", "scan_finding"],
+                actor=f"scanner:{scan_source}",
+            )
+            self.conn.execute(
+                "UPDATE scan_findings SET issue_id = ?, updated_at = ? WHERE id = ?",
+                (issue.id, now, finding_id),
+            )
+            self.conn.execute(
+                "INSERT OR IGNORE INTO file_associations (file_id, issue_id, assoc_type, created_at) VALUES (?, ?, 'bug_in', ?)",
+                (file_id, issue.id, now),
+            )
+            stats["issues_created"] += 1
+            stats["issue_ids"].append(issue.id)
+            return issue.id
 
         # Track which finding IDs were seen, keyed by file_id, for mark_unseen
         seen_finding_ids: dict[str, list[str]] = {}
@@ -2864,7 +2953,7 @@ class FiligreeDB:
                 suggestion = suggestion[:10_000] + "\n[truncated]"
 
             existing_finding = self.conn.execute(
-                "SELECT id, seen_count, scan_run_id FROM scan_findings "
+                "SELECT id, seen_count, scan_run_id, issue_id FROM scan_findings "
                 "WHERE file_id = ? AND scan_source = ? AND rule_id = ? AND coalesce(line_start, -1) = ?",
                 (file_id, scan_source, rule_id, dedup_line),
             ).fetchone()
@@ -2897,6 +2986,24 @@ class FiligreeDB:
                 )
                 stats["findings_updated"] += 1
                 seen_finding_ids.setdefault(file_id, []).append(existing_finding["id"])
+                existing_issue_id = existing_finding["issue_id"] or ""
+                if create_issues and not existing_issue_id:
+                    _create_issue_for_finding(
+                        finding_id=existing_finding["id"],
+                        file_id=file_id,
+                        path=path,
+                        rule_id=rule_id,
+                        severity=severity,
+                        message=f.get("message", ""),
+                        suggestion=suggestion,
+                        line_start=line_start,
+                        line_end=f.get("line_end"),
+                    )
+                elif create_issues and existing_issue_id:
+                    self.conn.execute(
+                        "INSERT OR IGNORE INTO file_associations (file_id, issue_id, assoc_type, created_at) VALUES (?, ?, 'bug_in', ?)",
+                        (file_id, existing_issue_id, now),
+                    )
             else:
                 finding_id = self._generate_finding_id()
                 self.conn.execute(
@@ -2925,6 +3032,18 @@ class FiligreeDB:
                 stats["findings_created"] += 1
                 stats["new_finding_ids"].append(finding_id)
                 seen_finding_ids.setdefault(file_id, []).append(finding_id)
+                if create_issues:
+                    _create_issue_for_finding(
+                        finding_id=finding_id,
+                        file_id=file_id,
+                        path=path,
+                        rule_id=rule_id,
+                        severity=severity,
+                        message=f.get("message", ""),
+                        suggestion=suggestion,
+                        line_start=line_start,
+                        line_end=f.get("line_end"),
+                    )
 
         # Mark unseen findings as unseen_in_latest (atomic per file+source)
         if mark_unseen:

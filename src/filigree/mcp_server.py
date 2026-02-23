@@ -2078,7 +2078,7 @@ async def _dispatch(name: str, arguments: dict[str, Any], tracker: FiligreeDB) -
                 return _text({"error": str(e), "code": "invalid_command"})
 
             # Validate command is available after template substitution.
-            cmd_err = validate_scanner_command(cmd)
+            cmd_err = validate_scanner_command(cmd, project_root=project_root)
             if cmd_err is not None:
                 return _text({"error": cmd_err, "code": "command_not_found"})
 

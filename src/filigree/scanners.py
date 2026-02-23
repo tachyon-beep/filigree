@@ -13,6 +13,7 @@ Template variables substituted at invocation:
 from __future__ import annotations
 
 import logging
+import os
 import re
 import shlex
 import shutil
@@ -131,11 +132,18 @@ def load_scanner(scanners_dir: Path, name: str) -> ScannerConfig | None:
     return _parse_toml(toml_path)
 
 
-def validate_scanner_command(command: str | Sequence[str]) -> str | None:
+def validate_scanner_command(
+    command: str | Sequence[str],
+    *,
+    project_root: str | Path | None = None,
+) -> str | None:
     """Check that the first token of a command is available on PATH.
 
     Accepts either a raw shell command string or a pre-tokenized command list.
     Returns None if valid, or an error message string if not found.
+
+    When *project_root* is provided, relative executable paths such as
+    ``./scripts/run_scan`` are validated relative to that project root.
     """
     tokens: list[str]
     if isinstance(command, str):
@@ -151,6 +159,22 @@ def validate_scanner_command(command: str | Sequence[str]) -> str | None:
     if not tokens:
         return "Empty command"
     binary = tokens[0]
+
+    # Path-like executable tokens (contains a separator or explicit relative
+    # prefix) should be checked as files, optionally against project_root.
+    if "/" in binary or "\\" in binary:
+        candidate_paths: list[Path] = []
+        binary_path = Path(binary)
+        if binary_path.is_absolute():
+            candidate_paths.append(binary_path)
+        else:
+            if project_root is not None:
+                candidate_paths.append(Path(project_root) / binary_path)
+            candidate_paths.append(binary_path)
+        for candidate in candidate_paths:
+            if candidate.is_file() and os.access(candidate, os.X_OK):
+                return None
+
     if shutil.which(binary) is None:
         return f"Command {binary!r} not found on PATH"
     return None

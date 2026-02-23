@@ -2045,7 +2045,9 @@ class TestProjectStore:
         (config_dir / "server.json").write_text("{bad json")
         diff = project_store.reload()
 
-        assert diff == {"added": [], "removed": []}
+        assert diff["added"] == []
+        assert diff["removed"] == []
+        assert diff["error"]
         after_keys = {p["key"] for p in project_store.list_projects()}
         assert after_keys == before_keys
 
@@ -2181,6 +2183,16 @@ class TestMultiProjectManagement:
         assert "status" in data
         assert "added" in data
         assert "removed" in data
+
+    async def test_reload_endpoint_surfaces_errors(self, multi_client: AsyncClient, tmp_path: Path) -> None:
+        config_dir = tmp_path / ".config" / "filigree"
+        (config_dir / "server.json").write_text("{bad json")
+
+        resp = await multi_client.post("/api/reload")
+        assert resp.status_code == 409
+        err = resp.json()["error"]
+        assert err["code"] == "RELOAD_FAILED"
+        assert "reload" in err["message"].lower()
 
     async def test_health_in_server_mode(self, multi_client: AsyncClient) -> None:
         resp = await multi_client.get("/api/health")

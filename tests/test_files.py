@@ -242,6 +242,57 @@ class TestProcessScanResults:
         assert result["files_created"] == 0
         assert result["findings_created"] == 0
         assert result["new_finding_ids"] == []
+        assert result["issues_created"] == 0
+        assert result["issue_ids"] == []
+
+    def test_create_issues_promotes_finding_to_bug_and_links_file(self, db: FiligreeDB) -> None:
+        result = db.process_scan_results(
+            scan_source="codex",
+            create_issues=True,
+            findings=[
+                {
+                    "path": "src/main.py",
+                    "rule_id": "logic-error",
+                    "severity": "high",
+                    "message": "Off-by-one in pagination loop",
+                    "line_start": 42,
+                },
+            ],
+        )
+        assert result["issues_created"] == 1
+        assert len(result["issue_ids"]) == 1
+
+        issue_id = result["issue_ids"][0]
+        issue = db.get_issue(issue_id)
+        assert issue.type == "bug"
+        assert "candidate" in issue.labels
+        assert "scan_finding" in issue.labels
+
+        file_record = db.get_file_by_path("src/main.py")
+        assert file_record is not None
+        finding = db.get_findings(file_record.id)[0]
+        assert finding.issue_id == issue_id
+
+        associations = db.get_file_associations(file_record.id)
+        assert any(a["issue_id"] == issue_id and a["assoc_type"] == "bug_in" for a in associations)
+
+    def test_create_issues_backfills_existing_unlinked_finding(self, db: FiligreeDB) -> None:
+        finding = {
+            "path": "src/main.py",
+            "rule_id": "logic-error",
+            "severity": "high",
+            "message": "Off-by-one in pagination loop",
+            "line_start": 42,
+        }
+        db.process_scan_results(scan_source="codex", create_issues=False, findings=[finding])
+        result = db.process_scan_results(scan_source="codex", create_issues=True, findings=[finding])
+
+        assert result["issues_created"] == 1
+        issue_id = result["issue_ids"][0]
+        file_record = db.get_file_by_path("src/main.py")
+        assert file_record is not None
+        updated_finding = db.get_findings(file_record.id)[0]
+        assert updated_finding.issue_id == issue_id
 
     def test_ingest_finding_missing_path(self, db: FiligreeDB) -> None:
         with pytest.raises(ValueError, match="path"):
@@ -2081,6 +2132,38 @@ class TestScanResultsEndpointEnhancements:
         assert statuses["E501"] == "open"
         assert statuses["E502"] == "unseen_in_latest"
 
+    async def test_create_issues_via_api(self, client: AsyncClient, api_db: FiligreeDB) -> None:
+        resp = await client.post(
+            "/api/v1/scan-results",
+            json={
+                "scan_source": "codex",
+                "create_issues": True,
+                "findings": [
+                    {
+                        "path": "src/main.py",
+                        "rule_id": "logic-error",
+                        "severity": "high",
+                        "message": "Off-by-one in pagination loop",
+                        "line_start": 42,
+                    },
+                ],
+            },
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["issues_created"] == 1
+        issue_id = data["issue_ids"][0]
+
+        issue = api_db.get_issue(issue_id)
+        assert issue.type == "bug"
+
+        file_record = api_db.get_file_by_path("src/main.py")
+        assert file_record is not None
+        finding = api_db.get_findings(file_record.id)[0]
+        assert finding.issue_id == issue_id
+        associations = api_db.get_file_associations(file_record.id)
+        assert any(a["issue_id"] == issue_id and a["assoc_type"] == "bug_in" for a in associations)
+
 
 class TestSortBySeverityEndpoint:
     """Tests for sort=severity on findings endpoint."""
@@ -2318,6 +2401,14 @@ class TestInputValidation400s:
         resp = await client.post(
             "/api/v1/scan-results",
             json={"scan_source": "ruff", "findings": [42]},
+        )
+        assert resp.status_code == 400
+        assert resp.json()["error"]["code"] == "VALIDATION_ERROR"
+
+    async def test_scan_create_issues_must_be_boolean(self, client: AsyncClient) -> None:
+        resp = await client.post(
+            "/api/v1/scan-results",
+            json={"scan_source": "ruff", "create_issues": "yes", "findings": []},
         )
         assert resp.status_code == 400
         assert resp.json()["error"]["code"] == "VALIDATION_ERROR"

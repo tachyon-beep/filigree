@@ -1575,6 +1575,95 @@ class TestInstallModeIntegration:
         assert mcp["mcpServers"]["filigree"]["url"] == f"http://localhost:9911/mcp/?project={prefix}"
 
 
+class TestServerRegisterReload:
+    def test_server_register_reloads_running_daemon(
+        self, cli_in_project: tuple[CliRunner, Path], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        runner, _ = cli_in_project
+
+        from filigree.server import DaemonStatus
+
+        observed: dict[str, object] = {}
+
+        def _register(filigree_dir: Path) -> None:
+            observed["registered"] = str(filigree_dir)
+
+        class _Resp:
+            status = 200
+
+            def __enter__(self) -> _Resp:
+                return self
+
+            def __exit__(self, exc_type: object, exc: object, tb: object) -> bool:
+                return False
+
+        def _urlopen(req: object, timeout: int = 0) -> _Resp:
+            observed["reload_url"] = getattr(req, "full_url", "")
+            observed["reload_timeout"] = timeout
+            return _Resp()
+
+        monkeypatch.setattr("filigree.server.register_project", _register)
+        monkeypatch.setattr("filigree.server.daemon_status", lambda: DaemonStatus(running=True, pid=123, port=9911, project_count=1))
+        monkeypatch.setattr("urllib.request.urlopen", _urlopen)
+
+        result = runner.invoke(cli, ["server", "register", "."])
+        assert result.exit_code == 0
+        assert "Registered" in result.output
+        assert "Reloaded running daemon" in result.output
+        assert observed["reload_url"] == "http://127.0.0.1:9911/api/reload"
+
+    def test_server_unregister_reloads_running_daemon(
+        self, cli_in_project: tuple[CliRunner, Path], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        runner, _ = cli_in_project
+
+        from filigree.server import DaemonStatus
+
+        observed: dict[str, object] = {}
+
+        def _unregister(filigree_dir: Path) -> None:
+            observed["unregistered"] = str(filigree_dir)
+
+        class _Resp:
+            status = 200
+
+            def __enter__(self) -> _Resp:
+                return self
+
+            def __exit__(self, exc_type: object, exc: object, tb: object) -> bool:
+                return False
+
+        def _urlopen(req: object, timeout: int = 0) -> _Resp:
+            observed["reload_url"] = getattr(req, "full_url", "")
+            observed["reload_timeout"] = timeout
+            return _Resp()
+
+        monkeypatch.setattr("filigree.server.unregister_project", _unregister)
+        monkeypatch.setattr("filigree.server.daemon_status", lambda: DaemonStatus(running=True, pid=123, port=9911, project_count=1))
+        monkeypatch.setattr("urllib.request.urlopen", _urlopen)
+
+        result = runner.invoke(cli, ["server", "unregister", "."])
+        assert result.exit_code == 0
+        assert "Unregistered" in result.output
+        assert "Reloaded running daemon" in result.output
+        assert observed["reload_url"] == "http://127.0.0.1:9911/api/reload"
+
+    def test_server_register_skips_reload_when_daemon_not_running(
+        self, cli_in_project: tuple[CliRunner, Path], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        runner, _ = cli_in_project
+
+        from filigree.server import DaemonStatus
+
+        monkeypatch.setattr("filigree.server.register_project", lambda _p: None)
+        monkeypatch.setattr("filigree.server.daemon_status", lambda: DaemonStatus(running=False))
+
+        result = runner.invoke(cli, ["server", "register", "."])
+        assert result.exit_code == 0
+        assert "Registered" in result.output
+        assert "Reloaded running daemon" not in result.output
+
+
 class TestNoFiligreeDir:
     def test_commands_fail_without_init(self, tmp_path: Path, cli_runner: CliRunner) -> None:
         original = os.getcwd()

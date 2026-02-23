@@ -134,14 +134,14 @@ class ProjectStore:
         """Return ``[{key, name, path}]`` for the frontend."""
         return [{"key": k, **v} for k, v in self._projects.items()]
 
-    def reload(self) -> dict[str, list[str]]:
-        """Re-read server.json.  On read failure, retains existing state."""
+    def reload(self) -> dict[str, Any]:
+        """Re-read server.json. On read failure, retains existing state."""
         old_keys = set(self._projects)
         try:
             self.load()
-        except Exception:
+        except Exception as exc:
             logger.error("Failed to reload server.json — retaining existing state", exc_info=True)
-            return {"added": [], "removed": []}
+            return {"added": [], "removed": [], "error": str(exc)}
         new_keys = set(self._projects)
         removed = sorted(old_keys - new_keys)
 
@@ -158,6 +158,7 @@ class ProjectStore:
         return {
             "added": sorted(new_keys - old_keys),
             "removed": removed,
+            "error": "",
         }
 
     def close_all(self) -> None:
@@ -1165,6 +1166,13 @@ def _create_project_router() -> Any:
                     "path": "/api/v1/scan-results",
                     "description": "Ingest scan results",
                     "status": "live",
+                    "request_body": {
+                        "scan_source": "string (required)",
+                        "findings": "array (required)",
+                        "scan_run_id": "string (optional)",
+                        "mark_unseen": "boolean (optional)",
+                        "create_issues": "boolean (optional, default false)",
+                    },
                 },
                 {"method": "GET", "path": "/api/files", "description": "List tracked files", "status": "live"},
                 {
@@ -1308,6 +1316,9 @@ def _create_project_router() -> Any:
         if not scan_source:
             return _error_response("scan_source is required", "VALIDATION_ERROR", 400)
         findings = body.get("findings", [])
+        create_issues = body.get("create_issues", False)
+        if not isinstance(create_issues, bool):
+            return _error_response("create_issues must be a boolean", "VALIDATION_ERROR", 400)
         status_code = 202 if not findings else 200
         try:
             result = db.process_scan_results(
@@ -1315,6 +1326,7 @@ def _create_project_router() -> Any:
                 findings=findings,
                 scan_run_id=body.get("scan_run_id", ""),
                 mark_unseen=bool(body.get("mark_unseen", False)),
+                create_issues=create_issues,
             )
         except ValueError as e:
             return _error_response(str(e), "VALIDATION_ERROR", 400)
@@ -1455,6 +1467,12 @@ def create_app(*, server_mode: bool = False) -> Any:
             if _project_store is None:
                 return JSONResponse({"status": "error", "detail": "Not in server mode"}, status_code=500)
             diff = _project_store.reload()
+            if diff.get("error"):
+                return _error_response(
+                    f"Failed to reload project store: {diff['error']}",
+                    "RELOAD_FAILED",
+                    409,
+                )
             logger.info("Project store reloaded: %s", diff)
             return JSONResponse({"status": "ok", **diff})
 

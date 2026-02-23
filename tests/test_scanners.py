@@ -145,6 +145,28 @@ class TestValidateScannerCommand:
     def test_empty_tokenized_command_list(self) -> None:
         assert validate_scanner_command([]) == "Empty command"
 
+    def test_relative_executable_resolves_against_project_root(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+        scanner_exec = project_root / "scanner_exec.sh"
+        scanner_exec.write_text("#!/usr/bin/env bash\nexit 0\n")
+        scanner_exec.chmod(0o755)
+
+        monkeypatch.chdir(tmp_path)
+        assert validate_scanner_command("./scanner_exec.sh", project_root=project_root) is None
+
+    def test_relative_executable_fails_without_project_root(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+        scanner_exec = project_root / "scanner_exec.sh"
+        scanner_exec.write_text("#!/usr/bin/env bash\nexit 0\n")
+        scanner_exec.chmod(0o755)
+
+        monkeypatch.chdir(tmp_path)
+        err = validate_scanner_command("./scanner_exec.sh")
+        assert err is not None
+        assert "not found" in err
+
 
 class TestScannerExamples:
     @staticmethod

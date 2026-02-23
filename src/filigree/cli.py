@@ -1827,6 +1827,34 @@ def explain_state(type_name: str, state_name: str, as_json: bool) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _reload_server_daemon_if_running() -> tuple[bool, str]:
+    """POST /api/reload to a running daemon so it picks up server.json changes."""
+    from filigree.server import daemon_status
+
+    status = daemon_status()
+    if not status.running or status.port is None:
+        return True, "daemon_not_running"
+
+    import urllib.error
+    import urllib.request
+
+    req = urllib.request.Request(
+        f"http://127.0.0.1:{status.port}/api/reload",
+        method="POST",
+        data=b"",
+        headers={"Content-Type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=2) as resp:  # noqa: S310
+            if resp.status >= 400:
+                return False, f"daemon reload failed with HTTP {resp.status}"
+    except urllib.error.HTTPError as e:
+        return False, f"daemon reload failed with HTTP {e.code}"
+    except (urllib.error.URLError, TimeoutError, OSError) as e:
+        return False, f"daemon reload request failed: {e}"
+    return True, "daemon_reloaded"
+
+
 @cli.group()
 def server() -> None:
     """Manage the filigree server daemon."""
@@ -1879,8 +1907,18 @@ def server_register(path: str) -> None:
     if not filigree_dir.is_dir():
         click.echo(f"No .filigree/ found at {project_path}", err=True)
         sys.exit(1)
-    register_project(filigree_dir)
+    try:
+        register_project(filigree_dir)
+    except Exception as e:
+        click.echo(str(e), err=True)
+        sys.exit(1)
     click.echo(f"Registered {filigree_dir}")
+    ok, reason = _reload_server_daemon_if_running()
+    if not ok:
+        click.echo(f"Warning: {reason}", err=True)
+        sys.exit(1)
+    if reason == "daemon_reloaded":
+        click.echo("Reloaded running daemon")
 
 
 @server.command("unregister")
@@ -1891,8 +1929,18 @@ def server_unregister(path: str) -> None:
 
     project_path = Path(path).resolve()
     filigree_dir = project_path / ".filigree" if project_path.name != ".filigree" else project_path
-    unregister_project(filigree_dir)
+    try:
+        unregister_project(filigree_dir)
+    except Exception as e:
+        click.echo(str(e), err=True)
+        sys.exit(1)
     click.echo(f"Unregistered {filigree_dir}")
+    ok, reason = _reload_server_daemon_if_running()
+    if not ok:
+        click.echo(f"Warning: {reason}", err=True)
+        sys.exit(1)
+    if reason == "daemon_reloaded":
+        click.echo("Reloaded running daemon")
 
 
 if __name__ == "__main__":

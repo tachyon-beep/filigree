@@ -1563,6 +1563,41 @@ class TestScannerTools:
             (scanners_dir / "templated-scanner.toml").unlink(missing_ok=True)
             mcp_mod._scan_cooldowns.clear()
 
+    async def test_trigger_scan_allows_project_relative_executable_path(self, mcp_db: FiligreeDB) -> None:
+        import filigree.mcp_server as mcp_mod
+
+        project_root = mcp_mod._filigree_dir.parent
+        target = project_root / "relative_exec_target.py"
+        scanner_exec = project_root / "scanner_exec.sh"
+        scanners_dir = mcp_mod._filigree_dir / "scanners"
+        scanners_dir.mkdir(exist_ok=True)
+
+        try:
+            target.write_text("x = 1\n")
+            scanner_exec.write_text("#!/usr/bin/env bash\nexit 0\n")
+            scanner_exec.chmod(0o755)
+            (scanners_dir / "relative-scanner.toml").write_text(
+                '[scanner]\nname = "relative-scanner"\ndescription = "Relative executable"\n'
+                'command = "./scanner_exec.sh"\n'
+                'args = ["{file}", "--scan-run-id", "{scan_run_id}"]\nfile_types = ["py"]\n'
+            )
+
+            result = _parse(
+                await call_tool(
+                    "trigger_scan",
+                    {
+                        "scanner": "relative-scanner",
+                        "file_path": "relative_exec_target.py",
+                    },
+                )
+            )
+            assert result.get("status") == "triggered"
+        finally:
+            target.unlink(missing_ok=True)
+            scanner_exec.unlink(missing_ok=True)
+            (scanners_dir / "relative-scanner.toml").unlink(missing_ok=True)
+            mcp_mod._scan_cooldowns.clear()
+
     async def test_trigger_scan_cooldown_is_scoped_per_project(self, tmp_path: Path) -> None:
         import filigree.mcp_server as mcp_mod
 
