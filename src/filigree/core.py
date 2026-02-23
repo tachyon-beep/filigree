@@ -2436,8 +2436,8 @@ class FiligreeDB:
                         ),
                     )
                 elif record_type == "event":
-                    self.conn.execute(
-                        "INSERT OR IGNORE INTO events "
+                    cursor = self.conn.execute(
+                        f"INSERT {conflict} INTO events "
                         "(issue_id, event_type, actor, old_value, new_value, comment, created_at) "
                         "VALUES (?, ?, ?, ?, ?, ?, ?)",
                         (
@@ -2450,6 +2450,8 @@ class FiligreeDB:
                             record.get("created_at", _now_iso()),
                         ),
                     )
+                    count += cursor.rowcount
+                    continue
                 else:
                     continue  # Unknown record type — skip
 
@@ -2773,6 +2775,9 @@ class FiligreeDB:
                 raise ValueError(f"findings[{i}] must be a dict, got {type(f).__name__}")
             if "path" not in f:
                 raise ValueError(f"findings[{i}] is missing required key 'path'")
+            if not isinstance(f["path"], str):
+                raise ValueError(f"findings[{i}] path must be a string, got {type(f['path']).__name__}")
+            f["path"] = _normalize_scan_path(f["path"])
             if "rule_id" not in f:
                 raise ValueError(f"findings[{i}] is missing required key 'rule_id'")
             if "message" not in f:
@@ -2791,8 +2796,17 @@ class FiligreeDB:
             if not isinstance(severity, str):
                 msg = f"findings[{i}] severity must be a string, got {type(severity).__name__}"
                 raise ValueError(msg)
-            if isinstance(f["path"], str):
-                f["path"] = _normalize_scan_path(f["path"])
+            for ln_field in ("line_start", "line_end"):
+                ln_val = f.get(ln_field)
+                if ln_val is not None and not isinstance(ln_val, int):
+                    raise ValueError(
+                        f"findings[{i}] {ln_field} must be an integer or null, got {type(ln_val).__name__}"
+                    )
+            suggestion = f.get("suggestion")
+            if suggestion is not None and not isinstance(suggestion, str):
+                raise ValueError(
+                    f"findings[{i}] suggestion must be a string, got {type(suggestion).__name__}"
+                )
             # Normalize: strip whitespace and lowercase
             normalized = severity.strip().lower()
             if normalized in VALID_SEVERITIES:

@@ -155,6 +155,61 @@ class TestImportJsonl:
         with pytest.raises(sqlite3.IntegrityError):
             populated_db.import_jsonl(out, merge=False)
 
+    def test_import_event_uses_conflict_variable(self, db: FiligreeDB, tmp_path: Path) -> None:
+        """Bug filigree-769ea4: event branch must respect merge flag, not hardcode OR IGNORE."""
+        # Create an issue first so the event FK is valid
+        issue = db.create_issue("Event test")
+
+        # Write a JSONL file with one event
+        jsonl = tmp_path / "events.jsonl"
+        event_line = json.dumps(
+            {
+                "_type": "event",
+                "issue_id": issue.id,
+                "event_type": "status_change",
+                "actor": "alice",
+                "old_value": "open",
+                "new_value": "closed",
+                "comment": "",
+                "created_at": "2026-01-01T00:00:00+00:00",
+            }
+        )
+        jsonl.write_text(event_line + "\n")
+
+        # First import succeeds
+        count1 = db.import_jsonl(jsonl)
+        assert count1 == 1
+
+        # Second import with merge=False should ABORT on the duplicate event
+        with pytest.raises(sqlite3.IntegrityError):
+            db.import_jsonl(jsonl, merge=False)
+
+    def test_import_merge_event_count_accurate(self, db: FiligreeDB, tmp_path: Path) -> None:
+        """Bug filigree-769ea4: merge=True must not count skipped events."""
+        issue = db.create_issue("Count test")
+
+        jsonl = tmp_path / "events.jsonl"
+        event_line = json.dumps(
+            {
+                "_type": "event",
+                "issue_id": issue.id,
+                "event_type": "status_change",
+                "actor": "alice",
+                "old_value": "open",
+                "new_value": "closed",
+                "comment": "",
+                "created_at": "2026-01-01T00:00:00+00:00",
+            }
+        )
+        jsonl.write_text(event_line + "\n")
+
+        # Import once
+        db.import_jsonl(jsonl, merge=True)
+
+        # Import again with merge — duplicate event should be skipped, count=0
+        count2 = db.import_jsonl(jsonl, merge=True)
+        assert count2 == 0, f"Expected 0 (duplicate skipped), got {count2}"
+
     def test_import_skips_unknown_types(self, db: FiligreeDB, tmp_path: Path) -> None:
         jsonl = tmp_path / "unknown.jsonl"
         jsonl.write_text('{"_type": "alien", "data": "hello"}\n')

@@ -383,7 +383,7 @@ class TestProcessScanResults:
 
     def test_runtime_exception_rolls_back_pending_scan_writes(self, db: FiligreeDB) -> None:
         """Mid-batch runtime exceptions must rollback partial writes."""
-        with pytest.raises(TypeError):
+        with pytest.raises(ValueError, match="suggestion must be a string"):
             db.process_scan_results(
                 scan_source="ruff",
                 findings=[
@@ -393,7 +393,7 @@ class TestProcessScanResults:
                         "rule_id": "E999",
                         "severity": "low",
                         "message": "bad",
-                        "suggestion": 123,  # len(int) triggers runtime TypeError
+                        "suggestion": 123,  # upfront validation catches non-string
                     },
                 ],
             )
@@ -403,6 +403,44 @@ class TestProcessScanResults:
         db.create_issue("post-error commit probe")
         assert db.conn.execute("SELECT COUNT(*) FROM file_records").fetchone()[0] == 0
         assert db.conn.execute("SELECT COUNT(*) FROM scan_findings").fetchone()[0] == 0
+
+    def test_non_string_path_rejected(self, db: FiligreeDB) -> None:
+        """Bug filigree-0dbe1a: non-string path must raise ValueError, not crash."""
+        with pytest.raises(ValueError, match="path must be a string"):
+            db.process_scan_results(
+                scan_source="ruff",
+                findings=[{"path": 123, "rule_id": "E1", "severity": "low", "message": "m"}],
+            )
+
+    def test_non_integer_line_start_rejected(self, db: FiligreeDB) -> None:
+        """Bug filigree-0dbe1a: non-integer line_start must raise ValueError."""
+        with pytest.raises(ValueError, match="line_start must be"):
+            db.process_scan_results(
+                scan_source="ruff",
+                findings=[
+                    {"path": "a.py", "rule_id": "E1", "severity": "low", "message": "m", "line_start": "ten"},
+                ],
+            )
+
+    def test_non_integer_line_end_rejected(self, db: FiligreeDB) -> None:
+        """Bug filigree-0dbe1a: non-integer line_end must raise ValueError."""
+        with pytest.raises(ValueError, match="line_end must be"):
+            db.process_scan_results(
+                scan_source="ruff",
+                findings=[
+                    {"path": "a.py", "rule_id": "E1", "severity": "low", "message": "m", "line_end": "twenty"},
+                ],
+            )
+
+    def test_non_string_suggestion_rejected(self, db: FiligreeDB) -> None:
+        """Bug filigree-0dbe1a: non-string suggestion must raise ValueError."""
+        with pytest.raises(ValueError, match="suggestion must be a string"):
+            db.process_scan_results(
+                scan_source="ruff",
+                findings=[
+                    {"path": "a.py", "rule_id": "E1", "severity": "low", "message": "m", "suggestion": 42},
+                ],
+            )
 
     def test_scan_metadata_persisted_on_create(self, db: FiligreeDB) -> None:
         db.process_scan_results(

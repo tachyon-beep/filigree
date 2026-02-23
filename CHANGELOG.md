@@ -56,6 +56,7 @@ Server/ethereal operating modes, file intelligence + scanner workflows, Graph v2
 - `filigree server register` and `filigree server unregister` now trigger daemon reload when server mode is already running
 - Scanner command validation now resolves project-relative executables (for example `./scanner_exec.sh`) during trigger checks
 - Install instruction marker parsing improved to tolerate missing metadata/version fields
+- Release workflow pack now enabled by default for all new projects alongside core and planning; `suggested_children` for release type expanded to include epic, milestone, task, bug, and feature
 - README/docs expanded with architecture plans, mode guidance, and dashboard visuals
 
 ### Fixed
@@ -66,6 +67,9 @@ Server/ethereal operating modes, file intelligence + scanner workflows, Graph v2
 - File view click-handler escaping fixed for issue IDs containing apostrophes
 - HTTP MCP request context isolation fixed for per-request DB/project directory selection
 - Issue type names now reserved from label taxonomy to prevent collisions
+- Duplicate workflow transitions (same `from_state -> to_state`) now rejected at parse and validation time — previously silently accepted with inconsistent dict/tuple behavior
+- Enforcement value `"none"` rejected from templates — only `"hard"` and `"soft"` are valid `EnforcementLevel` values
+- Release `rolled_back` state recategorized from `done` to `wip` — allows resumption transition to `development`, matching the `incident.resolved` fix pattern
 
 #### Server/daemon reliability
 
@@ -83,6 +87,7 @@ Server/ethereal operating modes, file intelligence + scanner workflows, Graph v2
 - `stop_daemon()` verifies process death after SIGKILL and reports failure when the process survives; PID file cleaned up in all terminal paths to prevent permanent stuck state
 - `claim_current_process_as_daemon()` now verifies PID ownership before refusing to claim — a reused PID from a non-filigree process no longer blocks the claim
 - `stop_daemon()` catches `ProcessLookupError` on SIGTERM when the process dies between the liveness check and the signal delivery
+- Off-by-one in `find_available_port()` retry loop — now tries `base + PORT_RETRIES` candidates as documented
 
 #### Files/findings and scanner robustness
 
@@ -93,6 +98,8 @@ Server/ethereal operating modes, file intelligence + scanner workflows, Graph v2
 - `min_findings` now counts all non-terminal finding statuses
 - `list_files` filter validation and project-fallback detail-state behavior corrected
 - `/api/v1/scan-results` now enforces boolean validation for `create_issues`
+- `scan_source` validated as string in `/api/v1/scan-results` — non-string values return 400 instead of crashing
+- Pagination `limit` and `offset` enforce minimum values (`limit >= 1`, `offset >= 0`) across all API endpoints — prevents SQLite `LIMIT -1` unbounded queries
 
 #### Dashboard and analytics quality
 
@@ -101,7 +108,21 @@ Server/ethereal operating modes, file intelligence + scanner workflows, Graph v2
 - Graph controls hardened for inactive focus/path states and large-graph zoom readability
 - Files API sort-direction wiring and stale detail-selection clearing fixed
 - Missing split-pane window bindings restored; async loader error handling tightened
+- Flow metrics now include `archived` issues so `archive_closed()` results count in throughput
+- Analytics SQL queries use deterministic tiebreaker (`id ASC`) for stable cycle-time computation when events share timestamps
 - Migration atomicity restored for FK-referenced table rebuilds; dashboard startup guard added
+
+#### CLI
+
+- `import` command catches `OSError` for filesystem errors — clean message instead of traceback
+- `claim-next` wraps `db.claim_next()` in `ValueError` handling with JSON/plaintext error output
+
+#### Migration
+
+- Priority normalization hardened (`_safe_priority()`) — non-numeric and out-of-range values coerced during migration instead of crashing
+- Timestamp normalization added (`_safe_timestamp()`) — NULL/empty timestamps replaced with valid ISO-8601 fallbacks
+- `apply_pending_migrations()` guarded against being called inside an existing transaction — raises `RuntimeError` immediately
+- Caller's `foreign_keys` PRAGMA setting preserved across migrations instead of unconditionally restoring to ON
 
 ### Removed
 
