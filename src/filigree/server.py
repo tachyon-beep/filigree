@@ -36,18 +36,35 @@ class ServerConfig:
 
 
 def read_server_config() -> ServerConfig:
-    """Read server.json. Returns defaults if missing."""
+    """Read server.json. Returns defaults if missing or invalid."""
     if not SERVER_CONFIG_FILE.exists():
         return ServerConfig()
     try:
         data = json.loads(SERVER_CONFIG_FILE.read_text())
-        return ServerConfig(
-            port=data.get("port", DEFAULT_PORT),
-            projects=data.get("projects", {}),
-        )
     except (json.JSONDecodeError, OSError) as exc:
         logger.warning("Corrupt server config %s: %s", SERVER_CONFIG_FILE, exc)
         return ServerConfig()
+
+    if not isinstance(data, dict):
+        logger.warning("Server config %s is not a JSON object; using defaults", SERVER_CONFIG_FILE)
+        return ServerConfig()
+
+    # Coerce port
+    raw_port = data.get("port", DEFAULT_PORT)
+    try:
+        port = int(raw_port)
+    except (TypeError, ValueError):
+        port = DEFAULT_PORT
+    if not (1 <= port <= 65535):
+        port = DEFAULT_PORT
+
+    # Coerce projects — must be dict of dicts
+    raw_projects = data.get("projects", {})
+    if not isinstance(raw_projects, dict):
+        raw_projects = {}
+    projects = {str(k): v for k, v in raw_projects.items() if isinstance(v, dict)}
+
+    return ServerConfig(port=port, projects=projects)
 
 
 def write_server_config(config: ServerConfig) -> None:

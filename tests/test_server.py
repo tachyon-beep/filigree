@@ -157,6 +157,76 @@ class TestVersionEnforcement:
             register_project(filigree_dir)
 
 
+class TestConfigValidation:
+    """Bugs filigree-11862e / filigree-ddceff: read_server_config schema validation."""
+
+    def _setup(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+        config_dir = tmp_path / ".config" / "filigree"
+        config_dir.mkdir(parents=True)
+        monkeypatch.setattr("filigree.server.SERVER_CONFIG_DIR", config_dir)
+        monkeypatch.setattr("filigree.server.SERVER_CONFIG_FILE", config_dir / "server.json")
+        return config_dir
+
+    def test_non_dict_json_returns_defaults(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        config_dir = self._setup(tmp_path, monkeypatch)
+        (config_dir / "server.json").write_text('["a", "list"]')
+        config = read_server_config()
+        assert config.port == 8377
+        assert config.projects == {}
+
+    def test_string_port_coerced_to_int(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        config_dir = self._setup(tmp_path, monkeypatch)
+        (config_dir / "server.json").write_text('{"port": "9000"}')
+        config = read_server_config()
+        assert config.port == 9000
+
+    def test_non_numeric_port_returns_default(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        config_dir = self._setup(tmp_path, monkeypatch)
+        (config_dir / "server.json").write_text('{"port": "not-a-number"}')
+        config = read_server_config()
+        assert config.port == 8377
+
+    def test_out_of_range_port_returns_default(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        config_dir = self._setup(tmp_path, monkeypatch)
+        (config_dir / "server.json").write_text('{"port": 99999}')
+        config = read_server_config()
+        assert config.port == 8377
+
+    def test_negative_port_returns_default(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        config_dir = self._setup(tmp_path, monkeypatch)
+        (config_dir / "server.json").write_text('{"port": -1}')
+        config = read_server_config()
+        assert config.port == 8377
+
+    def test_non_dict_projects_ignored(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        config_dir = self._setup(tmp_path, monkeypatch)
+        (config_dir / "server.json").write_text('{"projects": "not-a-dict"}')
+        config = read_server_config()
+        assert config.projects == {}
+
+    def test_non_dict_project_values_dropped(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        config_dir = self._setup(tmp_path, monkeypatch)
+        (config_dir / "server.json").write_text(
+            '{"projects": {"/good": {"prefix": "a"}, "/bad": "string-value"}}'
+        )
+        config = read_server_config()
+        assert "/good" in config.projects
+        assert "/bad" not in config.projects
+
+    def test_null_json_returns_defaults(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        config_dir = self._setup(tmp_path, monkeypatch)
+        (config_dir / "server.json").write_text("null")
+        config = read_server_config()
+        assert config.port == 8377
+
+    def test_empty_config_file_returns_defaults(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        config_dir = self._setup(tmp_path, monkeypatch)
+        (config_dir / "server.json").write_text("")
+        config = read_server_config()
+        assert config.port == 8377
+        assert config.projects == {}
+
+
 class TestDaemonLifecycle:
     def test_start_writes_pid_file(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         config_dir = tmp_path / ".config" / "filigree"
