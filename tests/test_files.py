@@ -2525,3 +2525,25 @@ class TestInputValidation400s:
         resp = await client.get("/api/files/hotspots?limit=bad")
         assert resp.status_code == 400
         assert resp.json()["error"]["code"] == "VALIDATION_ERROR"
+
+    # -- scan_source type validation -------------------------------------------
+
+    async def test_scan_results_non_string_scan_source_rejected(self, client: AsyncClient) -> None:
+        resp = await client.post(
+            "/api/v1/scan-results",
+            json={"scan_source": 123, "findings": []},
+        )
+        assert resp.status_code == 400
+        assert "scan_source" in resp.json()["error"]["message"]
+
+    # -- negative pagination values --------------------------------------------
+
+    async def test_files_negative_limit_rejected(self, client: AsyncClient) -> None:
+        resp = await client.get("/api/files?limit=-1")
+        assert resp.status_code == 400
+        assert resp.json()["error"]["code"] == "VALIDATION_ERROR"
+
+    async def test_files_negative_offset_rejected(self, client: AsyncClient) -> None:
+        resp = await client.get("/api/files?offset=-5")
+        assert resp.status_code == 400
+        assert resp.json()["error"]["code"] == "VALIDATION_ERROR"

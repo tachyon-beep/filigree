@@ -204,16 +204,26 @@ def _error_response(
     )
 
 
-def _safe_int(value: str, name: str, default: int) -> int | JSONResponse:
-    """Parse a query-param string to int, returning a 400 error response on failure."""
+def _safe_int(value: str, name: str, default: int, *, min_value: int | None = None) -> int | JSONResponse:
+    """Parse a query-param string to int, returning a 400 error response on failure.
+
+    When *min_value* is set, values below that floor are rejected with 400.
+    """
     try:
-        return int(value)
+        result = int(value)
     except (ValueError, TypeError):
         return _error_response(
             f'Invalid value for {name}: "{value}". Must be an integer.',
             "VALIDATION_ERROR",
             400,
         )
+    if min_value is not None and result < min_value:
+        return _error_response(
+            f'Invalid value for {name}: {result}. Must be >= {min_value}.',
+            "VALIDATION_ERROR",
+            400,
+        )
+    return result
 
 
 _GRAPH_MODE_VALUES = frozenset({"legacy", "v2"})
@@ -1121,13 +1131,13 @@ def _create_project_router() -> Any:
     async def api_list_files(request: Request, db: FiligreeDB = Depends(_get_db)) -> JSONResponse:
         """List tracked file records with optional filtering and pagination."""
         params = request.query_params
-        limit = _safe_int(params.get("limit", "100"), "limit", 100)
+        limit = _safe_int(params.get("limit", "100"), "limit", 100, min_value=1)
         if isinstance(limit, JSONResponse):
             return limit
-        offset = _safe_int(params.get("offset", "0"), "offset", 0)
+        offset = _safe_int(params.get("offset", "0"), "offset", 0, min_value=0)
         if isinstance(offset, JSONResponse):
             return offset
-        min_findings = _safe_int(params.get("min_findings", "0"), "min_findings", 0)
+        min_findings = _safe_int(params.get("min_findings", "0"), "min_findings", 0, min_value=0)
         if isinstance(min_findings, JSONResponse):
             return min_findings
         result = db.list_files_paginated(
@@ -1147,7 +1157,7 @@ def _create_project_router() -> Any:
     async def api_file_hotspots(request: Request, db: FiligreeDB = Depends(_get_db)) -> JSONResponse:
         """Files ranked by weighted finding severity score."""
         params = request.query_params
-        limit = _safe_int(params.get("limit", "10"), "limit", 10)
+        limit = _safe_int(params.get("limit", "10"), "limit", 10, min_value=1)
         if isinstance(limit, JSONResponse):
             return limit
         result = db.get_file_hotspots(limit=limit)
@@ -1256,10 +1266,10 @@ def _create_project_router() -> Any:
         except KeyError:
             return _error_response(f"File not found: {file_id}", "FILE_NOT_FOUND", 404)
         params = request.query_params
-        limit = _safe_int(params.get("limit", "100"), "limit", 100)
+        limit = _safe_int(params.get("limit", "100"), "limit", 100, min_value=1)
         if isinstance(limit, JSONResponse):
             return limit
-        offset = _safe_int(params.get("offset", "0"), "offset", 0)
+        offset = _safe_int(params.get("offset", "0"), "offset", 0, min_value=0)
         if isinstance(offset, JSONResponse):
             return offset
         try:
@@ -1314,10 +1324,10 @@ def _create_project_router() -> Any:
     async def api_get_file_timeline(file_id: str, request: Request, db: FiligreeDB = Depends(_get_db)) -> JSONResponse:
         """Get merged timeline of events for a file."""
         params = request.query_params
-        limit = _safe_int(params.get("limit", "50"), "limit", 50)
+        limit = _safe_int(params.get("limit", "50"), "limit", 50, min_value=1)
         if isinstance(limit, JSONResponse):
             return limit
-        offset = _safe_int(params.get("offset", "0"), "offset", 0)
+        offset = _safe_int(params.get("offset", "0"), "offset", 0, min_value=0)
         if isinstance(offset, JSONResponse):
             return offset
         event_type = params.get("event_type")
@@ -1360,8 +1370,8 @@ def _create_project_router() -> Any:
         if not isinstance(body, dict):
             return _error_response("Request body must be a JSON object", "VALIDATION_ERROR", 400)
         scan_source = body.get("scan_source", "")
-        if not scan_source:
-            return _error_response("scan_source is required", "VALIDATION_ERROR", 400)
+        if not isinstance(scan_source, str) or not scan_source:
+            return _error_response("scan_source is required and must be a string", "VALIDATION_ERROR", 400)
         findings = body.get("findings", [])
         if "create_issues" in body:
             return _error_response(
@@ -1388,7 +1398,7 @@ def _create_project_router() -> Any:
     async def api_scan_runs(request: Request, db: FiligreeDB = Depends(_get_db)) -> JSONResponse:
         """Get scan run history from scan_findings grouped by scan_run_id."""
         params = request.query_params
-        limit = _safe_int(params.get("limit", "10"), "limit", 10)
+        limit = _safe_int(params.get("limit", "10"), "limit", 10, min_value=1)
         if isinstance(limit, JSONResponse):
             return limit
         try:
