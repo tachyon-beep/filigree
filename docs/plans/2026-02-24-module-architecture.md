@@ -12,9 +12,117 @@
 
 ---
 
+## Review Panel Findings (2026-02-24)
+
+**Verdict: CHANGES_REQUESTED → fixes applied below**
+
+4-reviewer panel (reality, architecture, quality, systems) found 7 blocking issues and 9 warnings. All blocking issues have been resolved in this updated plan. Key changes:
+
+1. **Added Task 0 (pre-work)**: Create `db_base.py` Protocol for mypy strict, `cli_common.py` for CLI helpers, update `pyproject.toml` per-file-ignores, record baselines
+2. **Fixed B1**: Added `get_valid_transitions` and `validate_issue` to Task 2 extraction list
+3. **Fixed B2**: Resolved design doc conflict — `_validate_status`/`_validate_parent_id` go in WorkflowMixin (plan is canonical)
+4. **Fixed B3/B4**: Added re-export steps to Tasks 7 and 10 for backward-compatible imports
+5. **Fixed B5**: Removed hallucinated `pass_actor` — CLI uses `ctx.obj["actor"]`
+6. **Fixed B6**: Added cross-mixin dependency table and comments to Tasks 1, 3
+7. **Fixed B7**: Task 0 creates `db_base.py` with Protocol for mypy strict compatibility
+8. **Fixed W2/W3**: CLI and dashboard use `*_common.py` to avoid circular imports
+9. **Fixed W4**: Corrected `_normalize_scan_path` line range to 141-155
+
+Full review saved to: `docs/plans/2026-02-24-module-architecture.review.json`
+
+### Cross-Mixin Dependency Table
+
+| Caller Method | Caller Mixin | Calls | Target Mixin |
+|--------------|-------------|-------|-------------|
+| `create_issue` | IssuesMixin | `self._record_event()` | EventsMixin |
+| `update_issue` | IssuesMixin | `self._record_event()` | EventsMixin |
+| `reopen_issue` | IssuesMixin | `self._record_event()` | EventsMixin |
+| `claim_issue` | IssuesMixin | `self._record_event()` | EventsMixin |
+| `release_claim` | IssuesMixin | `self._record_event()` | EventsMixin |
+| `create_issue` | IssuesMixin | `self._validate_status()` | WorkflowMixin |
+| `create_issue` | IssuesMixin | `self._validate_label_name()` | WorkflowMixin |
+| `update_issue` | IssuesMixin | `self._validate_status()` | WorkflowMixin |
+| `add_dependency` | PlanningMixin | `self._record_event()` | EventsMixin |
+| `remove_dependency` | PlanningMixin | `self._record_event()` | EventsMixin |
+| `create_plan` | PlanningMixin | `self._record_event()`, `self.create_issue()` | EventsMixin, IssuesMixin |
+| `archive_closed` | EventsMixin | `self._get_states_for_category()` | WorkflowMixin |
+| `undo_last` | EventsMixin | `self._record_event()` | self |
+| `get_stats` | MetaMixin | `self._get_states_for_category()` | WorkflowMixin |
+| `bulk_insert_issue` | MetaMixin | `self._validate_parent_id()` | WorkflowMixin |
+| `_create_issue_for_finding` | FilesMixin | `self.create_issue()` | IssuesMixin |
+
+### Task Dependency Chain
+
+- Tasks 1-6 must be done **in order** (each builds on prior mixin extractions)
+- Tasks 7-10 are independent of each other but all require Tasks 1-6 complete
+- Rollback: revert tasks in reverse order (6→5→4→3→2→1)
+
+---
+
+## Task 0: Pre-work (before any extraction)
+
+**Step 1: Record baselines**
+
+```bash
+uv run pytest tests/ --co -q 2>&1 | tail -1   # Record test count
+filigree --help 2>&1 | grep -c "  "             # Record CLI command count
+```
+
+**Step 2: Create `src/filigree/db_base.py` — mypy Protocol for mixin attributes**
+
+```python
+"""Protocol declaring shared attributes that all DB mixins access via self."""
+
+from __future__ import annotations
+
+import sqlite3
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Protocol
+
+if TYPE_CHECKING:
+    from filigree.templates import TemplateRegistry
+
+
+class DBMixinProtocol(Protocol):
+    """Attributes provided by FiligreeDB.__init__ that mixins may access."""
+
+    db_path: Path
+    prefix: str
+    enabled_packs: list[str]
+    _conn: sqlite3.Connection | None
+    _template_registry: TemplateRegistry | None
+
+    @property
+    def conn(self) -> sqlite3.Connection: ...
+```
+
+**Step 3: Create `src/filigree/cli_common.py` — shared CLI helpers**
+
+Move `_get_db()` and `_refresh_summary()` from `cli.py` into this module to avoid circular imports between `cli.py` and `cli_commands/*.py`.
+
+**Step 4: Update `pyproject.toml` per-file-ignores**
+
+Add glob patterns for new module paths:
+```toml
+"src/filigree/db_*.py" = ["S608"]
+"src/filigree/dashboard_routes/*.py" = ["E501", "S608", "B008"]
+"src/filigree/mcp_tools/*.py" = ["E501", "S110"]
+```
+
+**Step 5: Commit pre-work**
+
+```bash
+git add src/filigree/db_base.py src/filigree/cli_common.py pyproject.toml
+git commit -m "refactor: add pre-work for module architecture split"
+```
+
+---
+
 ## Task 1: Extract EventsMixin from core.py
 
-The most self-contained domain — event recording, undo, archive, compact. Only 10 other methods call `_record_event`, so this mixin has minimal inbound dependencies.
+The most self-contained domain — event recording, undo, archive, compact. 10 methods contain 22 `_record_event` call sites, all resolving via `self` at runtime.
+
+**Cross-mixin note:** `archive_closed()` calls `self._get_states_for_category()` (WorkflowMixin). This resolves at runtime when composed into `FiligreeDB`. Add a comment in `db_events.py`: `# Requires WorkflowMixin._get_states_for_category via self`.
 
 **Files:**
 - Create: `src/filigree/db_events.py`
@@ -181,7 +289,7 @@ Expected: FAIL
 
 **Step 3: Create db_workflow.py**
 
-Extract from `core.py`:
+Extract from `core.py` (two line ranges: 592-745 and 1554-1595):
 - `templates` property (lines 592-607)
 - `_seed_templates` (lines 608-612)
 - `reload_templates` (lines 613-616)
@@ -194,8 +302,12 @@ Extract from `core.py`:
 - `_resolve_status_category` (lines 706-712)
 - `_reserved_label_names` (lines 723-726) — property
 - `_validate_label_name` (lines 727-745)
+- `get_valid_transitions` (lines 1554-1562) — **NOTE: not contiguous with above range**
+- `validate_issue` (lines 1563-1595) — **NOTE: not contiguous with above range**
 
-Note: `_validate_status` and `_validate_parent_id` are called by `IssuesMixin` methods — they resolve via `self` at runtime.
+**Cross-mixin note:** `_validate_status` and `_validate_parent_id` are called by IssuesMixin and MetaMixin methods. `_get_states_for_category` is called by EventsMixin.archive_closed and MetaMixin.get_stats. All resolve via `self` at runtime.
+
+**Canonical placement:** This is the authoritative home for these methods (the design doc's IssuesMixin assignment for `_validate_status`/`_validate_parent_id` is superseded by this plan).
 
 **Step 4: Update core.py**
 
@@ -224,6 +336,8 @@ git commit -m "refactor: extract WorkflowMixin from FiligreeDB"
 ## Task 3: Extract MetaMixin from core.py
 
 Comments, labels, stats, import/export, bulk operations.
+
+**Cross-mixin note:** `get_stats()` calls `self._get_states_for_category()` (WorkflowMixin). `bulk_insert_issue()` calls `self._validate_parent_id()` (WorkflowMixin). Add comments in `db_meta.py` documenting these dependencies. **Requires Task 2 (WorkflowMixin) complete.**
 
 **Files:**
 - Create: `src/filigree/db_meta.py`
@@ -467,7 +581,7 @@ def test_file_associations():
 
 **Step 2: Verify failure, Step 3: Create db_files.py**
 
-Extract all 25 file-domain methods (lines 2463-3654). Move `_normalize_scan_path` (lines 141-333) too — it's only used by file methods.
+Extract all 25 file-domain methods (lines 2463-3654). Move `_normalize_scan_path` (lines 141-155) too — it's a short helper only used by file methods. Do NOT move SCHEMA_SQL or other module-level constants that follow it.
 
 Cross-domain: `_create_issue_for_finding` calls `self.create_issue()` (IssuesMixin). Resolves via `self`.
 
@@ -573,6 +687,16 @@ async def handle_call_tool(name: str, arguments: dict) -> list[TextContent]:
 
 Keep resources, prompts, `create_mcp_app()`, and `main()` in `mcp_server.py`.
 
+**Important:** Add re-exports in `mcp_server.py` for backward compatibility — `tests/test_mcp.py` imports `_text`, `_safe_path`, `_MAX_LIST_RESULTS` directly from `filigree.mcp_server`:
+```python
+from filigree.mcp_tools.common import _text, _safe_path, _MAX_LIST_RESULTS  # noqa: F401
+```
+
+**Note on `get_metrics`:** The MCP `get_metrics` tool calls `get_flow_metrics()` from `filigree.analytics`, NOT a method on `FiligreeDB`. The handler in `mcp_tools/meta.py` must import and call it as a standalone function:
+```python
+from filigree.analytics import get_flow_metrics
+```
+
 **Step 7: Run MCP tests**
 
 Run: `uv run pytest tests/test_mcp.py -v --tb=short`
@@ -617,21 +741,23 @@ def test_cli_commands_package_exists():
 
 **Step 2: Create cli_commands/ package**
 
-Each file defines Click commands. Example for `cli_commands/issues.py`:
+Each file defines Click commands. Import shared helpers from `cli_common.py` (NOT from `cli.py` — that would cause circular imports). Example for `cli_commands/issues.py`:
 
 ```python
 import click
-from filigree.cli import _get_db, _refresh_summary, pass_actor
+from filigree.cli_common import _get_db, _refresh_summary
 
 @click.command()
 @click.argument("title")
-# ... options ...
-@pass_actor
-def create(actor, title, ...):
+@click.pass_context
+def create(ctx, title, ...):
     """Create a new issue."""
+    actor = ctx.obj["actor"]  # actor passed via cli group's ctx.obj
     db = _get_db()
     ...
 ```
+
+**NOTE:** There is no `pass_actor` decorator. The CLI passes actor via Click's context object (`ctx.obj["actor"]`).
 
 Domain grouping:
 - `issues.py`: create, show, list_issues, update, close, reopen
@@ -645,7 +771,7 @@ Domain grouping:
 
 **Step 3: Update cli.py**
 
-Keep: `cli` group, `_get_db()`, `_refresh_summary()`, `pass_actor` decorator.
+Keep: `cli` group definition and `@click.pass_context` setup. The `_get_db()` and `_refresh_summary()` helpers now live in `cli_common.py` (created in Task 0).
 
 Add command registration:
 ```python
@@ -684,7 +810,8 @@ Split 38 API routes into domain-grouped FastAPI routers.
 
 **Step 1: Create dashboard_routes/common.py**
 
-Extract helpers:
+Extract helpers AND the `_get_db` dependency (to avoid circular imports):
+- `_get_db()` (lines 311-332) — moved here so route modules import from common, not dashboard.py
 - `_error_response()` (lines 191-204)
 - `_safe_int()` (lines 207-216)
 - `_parse_bool_value()` (lines 225-236)
@@ -694,15 +821,16 @@ Extract helpers:
 - `_resolve_graph_runtime()` (lines 248-270)
 - `_coerce_graph_mode()` (lines 296-308)
 
+Also move the module-level `_db` variable and `_current_project_key` ContextVar here.
+
 **Step 2: Create domain route files**
 
-Each uses `APIRouter` and gets the DB via `Depends(_get_db)`:
+Each uses `APIRouter` and gets the DB via `Depends(_get_db)`. Import `_get_db` from `dashboard_routes/common.py` (NOT from `dashboard.py` — that would cause circular imports):
 
 ```python
 # dashboard_routes/issues.py
 from fastapi import APIRouter, Depends, Request
-from filigree.dashboard_routes.common import _error_response, _safe_int
-from filigree.dashboard import _get_db
+from filigree.dashboard_routes.common import _error_response, _safe_int, _get_db
 
 router = APIRouter()
 
@@ -771,7 +899,18 @@ Extract: `install_codex_mcp`, `_install_mcp_ethereal_mode`, `_install_mcp_server
 
 **Step 4: Update install.py**
 
-Import and delegate to support modules.
+Import and delegate to support modules. **Add re-exports** for backward compatibility — `tests/test_install.py` imports `run_doctor`, `install_claude_code_hooks`, `_has_hook_command`, `CheckResult`, etc. directly from `filigree.install`:
+
+```python
+# Re-exports for backward compatibility
+from filigree.install_support.doctor import run_doctor, CheckResult  # noqa: F401
+from filigree.install_support.hooks import (  # noqa: F401
+    install_claude_code_hooks,
+    _has_hook_command,
+    _find_filigree_mcp_command,
+    _extract_hook_binary,
+)
+```
 
 **Step 5: Run install tests, lint, commit**
 
@@ -805,11 +944,31 @@ Expected: No file over 900 lines (db_files.py is the largest at ~900)
 
 **Step 4: Verify public API unchanged**
 
+Add these as actual tests in `tests/test_module_split.py`:
+
 ```python
-# Quick smoke test
-from filigree.core import FiligreeDB, Issue, FileRecord, ScanFinding
-from filigree.core import find_filigree_root, read_config, write_config
-from filigree import FiligreeDB, Issue, __version__
+def test_package_level_imports():
+    """Verify top-level package re-exports still work."""
+    from filigree import FiligreeDB, Issue, __version__
+    assert FiligreeDB is not None
+    assert __version__ is not None
+
+
+def test_core_module_exports():
+    """Verify all expected symbols still importable from core."""
+    from filigree.core import FiligreeDB, Issue, FileRecord, ScanFinding
+    from filigree.core import find_filigree_root, read_config, write_config
+    from filigree.core import DB_FILENAME, VALID_ASSOC_TYPES, VALID_SEVERITIES
+
+
+def test_mcp_backward_compat_imports():
+    """Verify re-exports from mcp_server.py for test_mcp.py."""
+    from filigree.mcp_server import _text, _safe_path, _MAX_LIST_RESULTS
+
+
+def test_install_backward_compat_imports():
+    """Verify re-exports from install.py for test_install.py."""
+    from filigree.install import run_doctor, install_claude_code_hooks
 ```
 
 **Step 5: Commit any cleanup**

@@ -55,7 +55,8 @@ src/filigree/
 - `claim_issue`, `release_claim`, `claim_next`
 - `list_issues`, `search_issues`
 - `batch_close`, `batch_update`, `batch_add_label`, `batch_add_comment`
-- `_validate_status`, `_validate_parent_id`
+
+> **Note:** `_validate_status` and `_validate_parent_id` are in **WorkflowMixin**, not here. IssuesMixin calls them via `self` (MRO resolution).
 
 **FilesMixin** (`db_files.py`):
 - `register_file`, `get_file`, `get_file_by_path`
@@ -79,6 +80,7 @@ src/filigree/
 - `get_ready`, `get_blocked`, `get_critical_path`
 
 **WorkflowMixin** (`db_workflow.py`):
+- `_validate_status`, `_validate_parent_id` (called cross-mixin by IssuesMixin and MetaMixin)
 - `get_valid_transitions`, `validate_issue`
 - `_get_states_for_category`, `_infer_status_category`, `_resolve_status_category`
 - `_seed_templates`, `reload_templates`, `get_template`, `list_templates`
