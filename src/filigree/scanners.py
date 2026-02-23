@@ -23,6 +23,8 @@ from typing import Sequence
 
 logger = logging.getLogger(__name__)
 
+_SAFE_NAME_RE = re.compile(r"^[\w-]+$")
+
 
 @dataclass(frozen=True)
 class ScannerConfig:
@@ -47,14 +49,14 @@ class ScannerConfig:
         Raises ValueError if the command string is malformed (e.g. unmatched quotes).
         """
         subs = {
-            "{file}": file_path,
-            "{api_url}": api_url,
-            "{project_root}": project_root,
-            "{scan_run_id}": scan_run_id,
+            "{file}": str(file_path),
+            "{api_url}": str(api_url),
+            "{project_root}": str(project_root),
+            "{scan_run_id}": str(scan_run_id),
         }
         try:
             base = shlex.split(self.command)
-        except ValueError as e:
+        except (TypeError, ValueError) as e:
             msg = f"Malformed command string in scanner {self.name!r}: {e}"
             raise ValueError(msg) from e
         expanded_base = []
@@ -63,7 +65,11 @@ class ScannerConfig:
                 token = token.replace(key, val)
             expanded_base.append(token)
         expanded_args = []
-        for arg in self.args:
+        for raw_arg in self.args:
+            if not isinstance(raw_arg, str):
+                msg = f"Malformed args in scanner {self.name!r}: expected string entries"
+                raise ValueError(msg)
+            arg = raw_arg
             for key, val in subs.items():
                 arg = arg.replace(key, val)
             expanded_args.append(arg)
@@ -88,16 +94,45 @@ def _parse_toml(path: Path) -> ScannerConfig | None:
         return None
 
     scanner = data.get("scanner")
-    if not isinstance(scanner, dict) or "name" not in scanner or "command" not in scanner:
-        logger.warning("Invalid scanner TOML (missing [scanner] name/command): %s", path)
+    if not isinstance(scanner, dict):
+        logger.warning("Invalid scanner TOML (missing [scanner] table): %s", path)
+        return None
+
+    name = scanner.get("name")
+    command = scanner.get("command")
+    description = scanner.get("description", "")
+    args = scanner.get("args", [])
+    file_types = scanner.get("file_types", [])
+
+    if not isinstance(name, str) or not isinstance(command, str):
+        logger.warning("Invalid scanner TOML ([scanner] name/command must be strings): %s", path)
+        return None
+    if not isinstance(description, str):
+        logger.warning("Invalid scanner TOML ([scanner] description must be a string): %s", path)
+        return None
+    if not isinstance(args, list) or not all(isinstance(arg, str) for arg in args):
+        logger.warning("Invalid scanner TOML ([scanner] args must be list[str]): %s", path)
+        return None
+    if not isinstance(file_types, list) or not all(isinstance(ext, str) for ext in file_types):
+        logger.warning("Invalid scanner TOML ([scanner] file_types must be list[str]): %s", path)
+        return None
+    if name != path.stem:
+        logger.warning(
+            "Invalid scanner TOML ([scanner] name must match filename stem %r): %s",
+            path.stem,
+            path,
+        )
+        return None
+    if not _SAFE_NAME_RE.match(name):
+        logger.warning("Invalid scanner TOML ([scanner] name contains unsafe characters): %s", path)
         return None
 
     return ScannerConfig(
-        name=scanner["name"],
-        description=scanner.get("description", ""),
-        command=scanner["command"],
-        args=scanner.get("args", []),
-        file_types=scanner.get("file_types", []),
+        name=name,
+        description=description,
+        command=command,
+        args=args,
+        file_types=file_types,
     )
 
 
@@ -117,9 +152,6 @@ def list_scanners(scanners_dir: Path) -> list[ScannerConfig]:
         if cfg is not None:
             results.append(cfg)
     return results
-
-
-_SAFE_NAME_RE = re.compile(r"^[\w-]+$")
 
 
 def load_scanner(scanners_dir: Path, name: str) -> ScannerConfig | None:

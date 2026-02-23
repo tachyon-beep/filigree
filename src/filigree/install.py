@@ -95,25 +95,40 @@ def _find_filigree_mcp_command() -> str:
 
     Resolution order:
     1. ``shutil.which("filigree-mcp")`` — absolute path if on PATH
-    2. Sibling of the running Python interpreter (covers venv case)
-    3. Sibling of the filigree binary if on PATH
+    2. Sibling of the running Python interpreter (covers venv case),
+       probing ``filigree-mcp`` and ``filigree-mcp.exe``
+    3. Sibling of the filigree binary if on PATH, probing the same names
     4. Bare ``"filigree-mcp"`` fallback
     """
     which = shutil.which("filigree-mcp")
     if which:
         return which
     # Check next to the running Python (works in venv even when not on PATH)
-    candidate = Path(sys.executable).parent / "filigree-mcp"
-    if candidate.exists():
-        return str(candidate)
+    for name in ("filigree-mcp", "filigree-mcp.exe"):
+        candidate = Path(sys.executable).parent / name
+        if candidate.is_file():
+            return str(candidate)
     # Fall back to looking in the same dir as filigree
     filigree_path = shutil.which("filigree")
     if filigree_path:
         filigree_dir = Path(filigree_path).parent
-        candidate = filigree_dir / "filigree-mcp"
-        if candidate.exists():
-            return str(candidate)
+        for name in ("filigree-mcp", "filigree-mcp.exe"):
+            candidate = filigree_dir / name
+            if candidate.is_file():
+                return str(candidate)
     return "filigree-mcp"
+
+
+def _is_absolute_command_path(path: str) -> bool:
+    """Return True when *path* looks like an absolute command path."""
+    if not path:
+        return False
+    if Path(path).is_absolute():
+        return True
+    # Handle Windows absolute paths when running on non-Windows hosts.
+    if path.startswith("\\\\"):
+        return True
+    return len(path) > 2 and path[0].isalpha() and path[1] == ":" and path[2] in ("/", "\\")
 
 
 def _read_mcp_json(mcp_json_path: Path) -> dict[str, Any]:
@@ -778,6 +793,8 @@ def run_doctor(project_root: Path | None = None) -> list[CheckResult]:
     if config_path.exists():
         try:
             config = json.loads(config_path.read_text())
+            if not isinstance(config, dict):
+                raise ValueError("config.json must be a JSON object")
             prefix = config.get("prefix", "?")
             results.append(CheckResult("config.json", True, f"Prefix: {prefix}"))
         except json.JSONDecodeError as e:
@@ -786,6 +803,15 @@ def run_doctor(project_root: Path | None = None) -> list[CheckResult]:
                     "config.json",
                     False,
                     f"Invalid JSON: {e}",
+                    fix_hint="Fix or regenerate .filigree/config.json",
+                )
+            )
+        except ValueError:
+            results.append(
+                CheckResult(
+                    "config.json",
+                    False,
+                    "Invalid JSON shape: expected an object",
                     fix_hint="Fix or regenerate .filigree/config.json",
                 )
             )
@@ -901,11 +927,14 @@ def run_doctor(project_root: Path | None = None) -> list[CheckResult]:
             mcp = json.loads(mcp_json.read_text())
             if not isinstance(mcp, dict):
                 raise ValueError("not a JSON object")
-            filigree_mcp_entry = mcp.get("mcpServers", {}).get("filigree")
+            servers = mcp.get("mcpServers", {})
+            if not isinstance(servers, dict):
+                raise ValueError("mcpServers must be a JSON object")
+            filigree_mcp_entry = servers.get("filigree")
             if filigree_mcp_entry:
                 # Validate binary path if it's an absolute path
                 mcp_command = filigree_mcp_entry.get("command", "") if isinstance(filigree_mcp_entry, dict) else ""
-                if "/" in mcp_command and not Path(mcp_command).exists():
+                if _is_absolute_command_path(mcp_command) and not Path(mcp_command).exists():
                     results.append(
                         CheckResult(
                             "Claude Code MCP",
@@ -947,16 +976,28 @@ def run_doctor(project_root: Path | None = None) -> list[CheckResult]:
     # 7. Check MCP configuration — Codex
     codex_config = (filigree_dir.parent) / ".codex" / "config.toml"
     if codex_config.exists():
-        content = codex_config.read_text()
-        if "[mcp_servers.filigree]" in content:
-            results.append(CheckResult("Codex MCP", True, "Configured in .codex/config.toml"))
-        else:
+        try:
+            parsed = tomllib.loads(codex_config.read_text())
+            mcp_servers = parsed.get("mcp_servers", {})
+            filigree_server = mcp_servers.get("filigree") if isinstance(mcp_servers, dict) else None
+            if isinstance(filigree_server, dict):
+                results.append(CheckResult("Codex MCP", True, "Configured in .codex/config.toml"))
+            else:
+                results.append(
+                    CheckResult(
+                        "Codex MCP",
+                        False,
+                        "filigree not in .codex/config.toml",
+                        fix_hint="Run: filigree install --codex",
+                    )
+                )
+        except tomllib.TOMLDecodeError:
             results.append(
                 CheckResult(
                     "Codex MCP",
                     False,
-                    "filigree not in .codex/config.toml",
-                    fix_hint="Run: filigree install --codex",
+                    "Invalid .codex/config.toml",
+                    fix_hint="Fix .codex/config.toml or run: filigree install --codex",
                 )
             )
     else:
@@ -977,7 +1018,7 @@ def run_doctor(project_root: Path | None = None) -> list[CheckResult]:
             if _has_hook_command(s, SESSION_CONTEXT_COMMAND):
                 # Validate binary path if it's an absolute path
                 hook_binary = _extract_hook_binary(s, SESSION_CONTEXT_COMMAND)
-                if hook_binary and "/" in hook_binary and not Path(hook_binary).exists():
+                if hook_binary and _is_absolute_command_path(hook_binary) and not Path(hook_binary).exists():
                     results.append(
                         CheckResult(
                             "Claude Code hooks",
@@ -1091,7 +1132,7 @@ def run_doctor(project_root: Path | None = None) -> list[CheckResult]:
 
     try:
         mode = get_mode(filigree_dir)
-    except (json.JSONDecodeError, OSError):
+    except (AttributeError, ValueError, json.JSONDecodeError, OSError):
         mode = "ethereal"  # Fall back to default if config is unreadable
 
     if mode == "ethereal":

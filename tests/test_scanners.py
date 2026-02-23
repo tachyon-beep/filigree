@@ -63,6 +63,24 @@ class TestListScanners:
         result = list_scanners(scanners_dir)
         assert result == []
 
+    def test_skips_invalid_field_types(self, tmp_path: Path) -> None:
+        scanners_dir = tmp_path / "scanners"
+        scanners_dir.mkdir()
+        (scanners_dir / "bad.toml").write_text(
+            '[scanner]\nname = "bad"\ndescription = "d"\ncommand = "python x.py"\nargs = "not-a-list"\nfile_types = [123]\n'
+        )
+        result = list_scanners(scanners_dir)
+        assert result == []
+
+    def test_skips_name_filename_mismatch(self, tmp_path: Path) -> None:
+        scanners_dir = tmp_path / "scanners"
+        scanners_dir.mkdir()
+        (scanners_dir / "wrapper.toml").write_text(
+            '[scanner]\nname = "different-name"\ndescription = "d"\ncommand = "python x.py"\nargs = []\nfile_types = []\n'
+        )
+        result = list_scanners(scanners_dir)
+        assert result == []
+
 
 # ── load_scanner ─────────────────────────────────────────────────────
 
@@ -98,6 +116,16 @@ class TestLoadScanner:
         assert load_scanner(scanners_dir, "foo/bar") is None
         assert load_scanner(scanners_dir, "..") is None
 
+    def test_load_rejects_name_filename_mismatch(self, tmp_path: Path) -> None:
+        scanners_dir = tmp_path / "scanners"
+        scanners_dir.mkdir(exist_ok=True)
+        (scanners_dir / "wrapper.toml").write_text(
+            '[scanner]\nname = "different-name"\ndescription = "desc"\n'
+            'command = "python scripts/wrapper.py"\n'
+            'args = ["--root", "{file}"]\nfile_types = ["py"]\n'
+        )
+        assert load_scanner(scanners_dir, "wrapper") is None
+
     def test_build_command_with_scan_run_id(self, tmp_path: Path) -> None:
         scanners_dir = tmp_path / "scanners"
         self._write_scanner(scanners_dir)
@@ -124,6 +152,18 @@ class TestLoadScanner:
             file_types=[],
         )
         with pytest.raises(ValueError, match=r"[Mm]alformed"):
+            cfg.build_command(file_path="x.py")
+
+    def test_build_command_rejects_non_string_args(self) -> None:
+        """Invalid arg types should produce ValueError, not AttributeError/TypeError."""
+        cfg = ScannerConfig(
+            name="bad",
+            description="bad args",
+            command="python scanner.py",
+            args=["--file", "ok", 42],  # type: ignore[list-item]
+            file_types=[],
+        )
+        with pytest.raises(ValueError, match=r"[Mm]alformed args"):
             cfg.build_command(file_path="x.py")
 
 

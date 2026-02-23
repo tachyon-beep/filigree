@@ -5,6 +5,8 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import pytest
+
 from filigree.core import FiligreeDB
 from filigree.summary import generate_summary, write_summary
 
@@ -85,6 +87,18 @@ class TestGenerateSummary:
         assert "Stale task" in summary
         assert "5d stale" in summary
 
+    def test_stale_section_includes_malformed_updated_at(self, db: FiligreeDB) -> None:
+        """Malformed updated_at should be surfaced as stale with a clear marker."""
+        issue = db.create_issue("Malformed stale task")
+        db.update_issue(issue.id, status="in_progress")
+        db.conn.execute("UPDATE issues SET updated_at = ? WHERE id = ?", ("not-a-timestamp", issue.id))
+        db.conn.commit()
+
+        summary = generate_summary(db)
+        assert "## Stale (in_progress >3 days, no activity)" in summary
+        assert "Malformed stale task" in summary
+        assert "malformed updated_at: not-a-timestamp" in summary
+
     def test_no_stale_when_recent(self, db: FiligreeDB) -> None:
         """Recently updated in-progress issues don't appear in stale section."""
         issue = db.create_issue("Fresh task")
@@ -134,6 +148,20 @@ class TestGenerateSummary:
         assert "\x00" not in summary
         assert "\x1b" not in summary
         assert "\x07" not in summary
+
+    def test_blocked_section_uses_blocked_by_without_get_issue_lookups(self, db: FiligreeDB) -> None:
+        """Blocked summary rendering should not do per-blocker get_issue DB lookups."""
+        from unittest.mock import patch
+
+        blocked_issue = db.create_issue("Blocked without lookup")
+        blocker = db.create_issue("Blocking issue")
+        db.add_dependency(blocked_issue.id, blocker.id)
+
+        with patch.object(db, "get_issue", side_effect=AssertionError("generate_summary should not call get_issue")):
+            summary = generate_summary(db)
+
+        assert "Blocked without lookup" in summary
+        assert f"blocked by: {blocker.id}" in summary
 
 
 class TestSummaryChunkedParentLookup:
@@ -271,6 +299,21 @@ class TestCategoryAwareSummary:
         summary = generate_summary(db)
         assert "## Needs Attention" not in summary
 
+    def test_recent_activity_shows_old_value_only_detail(self, db: FiligreeDB) -> None:
+        """Events with only old_value should still render detail in Recent Activity."""
+        issue = db.create_issue("Old value event source")
+        created_at = (datetime.now(UTC) + timedelta(seconds=5)).isoformat()
+        db.conn.execute(
+            "INSERT INTO events (issue_id, event_type, actor, old_value, new_value, comment, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (issue.id, "field_cleared", "tester", "legacy-value", None, "", created_at),
+        )
+        db.conn.commit()
+
+        summary = generate_summary(db)
+        assert "FIELD CLEARED" in summary
+        assert "legacy-value\u2192" in summary
+
 
 class TestWriteSummary:
     def test_atomic_write(self, db: FiligreeDB, tmp_path: Path) -> None:
@@ -315,3 +358,26 @@ class TestWriteSummary:
         # Two calls must use different temp paths
         assert len(temp_paths) == 2
         assert temp_paths[0] != temp_paths[1]
+
+    def test_fd_closed_when_fdopen_fails(self, db: FiligreeDB, tmp_path: Path) -> None:
+        """If os.fdopen fails, write_summary must close the raw fd and clean temp file."""
+        import os
+        from unittest.mock import patch
+
+        output = tmp_path / "context.md"
+        original_close = os.close
+        closed_fds: list[int] = []
+
+        def tracking_close(fd: int) -> None:
+            closed_fds.append(fd)
+            original_close(fd)
+
+        with patch("filigree.summary.os.fdopen", side_effect=OSError("fdopen failed")), patch(
+            "filigree.summary.os.close", side_effect=tracking_close
+        ):
+            with pytest.raises(OSError, match="fdopen failed"):
+                write_summary(db, output)
+
+        assert closed_fds, "Expected os.close to be called for leaked fd cleanup"
+        leftovers = list(tmp_path.glob(".context_*.tmp"))
+        assert leftovers == []

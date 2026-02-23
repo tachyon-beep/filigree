@@ -1341,6 +1341,35 @@ class TestScannerTools:
         assert "error" in result
         assert "not found" in result["error"].lower()
 
+    async def test_trigger_scan_malformed_scanner_returns_not_found(self, mcp_db: FiligreeDB) -> None:
+        import filigree.mcp_server as mcp_mod
+
+        scanners_dir = mcp_mod._filigree_dir / "scanners"
+        scanners_dir.mkdir(exist_ok=True)
+        (scanners_dir / "bad.toml").write_text(
+            '[scanner]\nname = "bad"\ndescription = "bad scanner"\ncommand = "echo"\nargs = "not-a-list"\nfile_types = ["py"]\n'
+        )
+
+        project_root = mcp_mod._filigree_dir.parent
+        target = project_root / "bad_target.py"
+        try:
+            target.write_text("x = 1\n")
+            result = _parse(
+                await call_tool(
+                    "trigger_scan",
+                    {
+                        "scanner": "bad",
+                        "file_path": "bad_target.py",
+                    },
+                )
+            )
+            assert result["code"] == "scanner_not_found"
+            assert "bad" not in result.get("available_scanners", [])
+        finally:
+            target.unlink(missing_ok=True)
+            (scanners_dir / "bad.toml").unlink(missing_ok=True)
+            mcp_mod._scan_cooldowns.clear()
+
     async def test_trigger_scan_path_traversal_rejected(self, mcp_db: FiligreeDB) -> None:
         self._write_scanner_toml(mcp_db)
         result = _parse(

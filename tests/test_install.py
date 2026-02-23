@@ -222,6 +222,16 @@ class TestRunDoctor:
         assert not config_check.passed
         assert "Invalid JSON" in config_check.message
 
+    def test_config_json_non_object(self, filigree_project: Path) -> None:
+        """Doctor should reject config.json that is valid JSON but not an object."""
+        config_path = filigree_project / FILIGREE_DIR_NAME / CONFIG_FILENAME
+        config_path.write_text("[]")
+        results = run_doctor(filigree_project)
+        config_check = next((r for r in results if r.name == "config.json"), None)
+        assert config_check is not None
+        assert not config_check.passed
+        assert "expected an object" in config_check.message
+
     def test_non_dict_mcp_json_does_not_crash(self, filigree_project: Path) -> None:
         """Doctor should handle .mcp.json containing a list instead of a dict."""
         mcp_path = filigree_project / ".mcp.json"
@@ -305,6 +315,15 @@ class TestRunDoctor:
         assert not mcp_check.passed
         assert "Invalid .mcp.json" in mcp_check.message
 
+    def test_mcp_json_non_object_servers(self, filigree_project: Path) -> None:
+        """Doctor should reject .mcp.json where mcpServers is not an object."""
+        (filigree_project / ".mcp.json").write_text(json.dumps({"mcpServers": []}))
+        results = run_doctor(filigree_project)
+        mcp_check = next((r for r in results if r.name == "Claude Code MCP"), None)
+        assert mcp_check is not None
+        assert not mcp_check.passed
+        assert "Invalid .mcp.json" in mcp_check.message
+
     def test_mcp_json_with_filigree(self, filigree_project: Path) -> None:
         """Doctor should pass when .mcp.json has filigree configured."""
         (filigree_project / ".mcp.json").write_text(json.dumps({"mcpServers": {"filigree": {"type": "stdio"}}}))
@@ -339,6 +358,28 @@ class TestRunDoctor:
         codex_check = next((r for r in results if r.name == "Codex MCP"), None)
         assert codex_check is not None
         assert not codex_check.passed
+
+    def test_codex_filigree_comment_does_not_count(self, filigree_project: Path) -> None:
+        """Doctor should not treat commented filigree table text as configured."""
+        codex_dir = filigree_project / ".codex"
+        codex_dir.mkdir()
+        (codex_dir / "config.toml").write_text("# [mcp_servers.filigree]\n[mcp_servers.other]\n")
+        results = run_doctor(filigree_project)
+        codex_check = next((r for r in results if r.name == "Codex MCP"), None)
+        assert codex_check is not None
+        assert not codex_check.passed
+        assert "filigree not in .codex/config.toml" in codex_check.message
+
+    def test_codex_invalid_toml(self, filigree_project: Path) -> None:
+        """Doctor should report invalid TOML instead of false configured state."""
+        codex_dir = filigree_project / ".codex"
+        codex_dir.mkdir()
+        (codex_dir / "config.toml").write_text("[broken\n")
+        results = run_doctor(filigree_project)
+        codex_check = next((r for r in results if r.name == "Codex MCP"), None)
+        assert codex_check is not None
+        assert not codex_check.passed
+        assert "Invalid .codex/config.toml" in codex_check.message
 
     def test_claude_md_missing(self, filigree_project: Path) -> None:
         """Doctor should warn when CLAUDE.md is absent."""
@@ -416,6 +457,20 @@ class TestFindFiligreeMcpCommand:
         fake_python = tmp_path / "python3"
         fake_python.touch()
         mcp_bin = tmp_path / "filigree-mcp"
+        mcp_bin.touch()
+
+        with (
+            patch("filigree.install.shutil.which", return_value=None),
+            patch("filigree.install.sys.executable", str(fake_python)),
+        ):
+            result = _find_filigree_mcp_command()
+            assert result == str(mcp_bin)
+
+    def test_fallback_to_sys_executable_sibling_windows_exe(self, tmp_path: Path) -> None:
+        """When only filigree-mcp.exe is present, it should still be found."""
+        fake_python = tmp_path / "python3"
+        fake_python.touch()
+        mcp_bin = tmp_path / "filigree-mcp.exe"
         mcp_bin.touch()
 
         with (
@@ -957,6 +1012,24 @@ class TestDoctorMcpPathValidation:
         assert mcp_check is not None
         assert mcp_check.passed
 
+    def test_stale_windows_mcp_binary_detected(self, filigree_project: Path) -> None:
+        """Doctor should detect nonexistent Windows absolute path in .mcp.json command."""
+        mcp_config = {
+            "mcpServers": {
+                "filigree": {
+                    "type": "stdio",
+                    "command": r"C:\stale\venv\Scripts\filigree-mcp.exe",
+                    "args": ["--project", str(filigree_project)],
+                }
+            }
+        }
+        (filigree_project / ".mcp.json").write_text(json.dumps(mcp_config))
+        results = run_doctor(filigree_project)
+        mcp_check = next((r for r in results if r.name == "Claude Code MCP"), None)
+        assert mcp_check is not None
+        assert not mcp_check.passed
+        assert "Binary not found" in mcp_check.message
+
 
 class TestDoctorHookPathValidation:
     def test_stale_hook_binary_detected(self, filigree_project: Path) -> None:
@@ -1054,6 +1127,32 @@ class TestDoctorHookPathValidation:
         hooks_check = next((r for r in results if r.name == "Claude Code hooks"), None)
         assert hooks_check is not None
         assert hooks_check.passed
+
+    def test_stale_windows_hook_binary_detected(self, filigree_project: Path) -> None:
+        """Doctor should detect nonexistent Windows absolute path in hook command."""
+        claude_dir = filigree_project / ".claude"
+        claude_dir.mkdir(exist_ok=True)
+        settings = {
+            "hooks": {
+                "SessionStart": [
+                    {
+                        "hooks": [
+                            {
+                                "type": "command",
+                                "command": "\"C:\\stale\\venv\\Scripts\\filigree.exe\" session-context",
+                                "timeout": 5000,
+                            }
+                        ]
+                    }
+                ]
+            }
+        }
+        (claude_dir / "settings.json").write_text(json.dumps(settings))
+        results = run_doctor(filigree_project)
+        hooks_check = next((r for r in results if r.name == "Claude Code hooks"), None)
+        assert hooks_check is not None
+        assert not hooks_check.passed
+        assert "Binary not found" in hooks_check.message
 
 
 class TestInstallSkills:
