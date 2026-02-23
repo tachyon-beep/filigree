@@ -27,6 +27,7 @@ from filigree.install import (
     FILIGREE_INSTRUCTIONS_MARKER,
     _instructions_hash,
     inject_instructions,
+    install_codex_skills,
     install_skills,
 )
 
@@ -149,20 +150,34 @@ def _check_instructions_freshness(project_root: Path) -> list[str]:
         inject_instructions(md_path)
         messages.append(f"Updated filigree instructions in {filename}")
 
-    # Check skill pack
-    skill_target = project_root / ".claude" / "skills" / "filigree-workflow" / "SKILL.md"
-    if skill_target.exists():
-        from filigree.install import _get_skills_source_dir
+    # Check skill packs (Claude Code and Codex use different target dirs)
+    from filigree.install import _get_skills_source_dir
 
-        source_skill = _get_skills_source_dir() / "filigree-workflow" / "SKILL.md"
-        if source_skill.exists():
-            import hashlib
+    source_skill = _get_skills_source_dir() / "filigree-workflow" / "SKILL.md"
+    if source_skill.exists():
+        import hashlib
 
-            target_hash = hashlib.sha256(skill_target.read_bytes()).hexdigest()[:8]
-            source_hash = hashlib.sha256(source_skill.read_bytes()).hexdigest()[:8]
+        source_hash = hashlib.sha256(source_skill.read_bytes()).hexdigest()[:8]
+
+        skill_targets = [
+            (
+                project_root / ".claude" / "skills" / "filigree-workflow" / "SKILL.md",
+                install_skills,
+                "Updated filigree skill pack",
+            ),
+            (
+                project_root / ".agents" / "skills" / "filigree-workflow" / "SKILL.md",
+                install_codex_skills,
+                "Updated filigree Codex skill pack",
+            ),
+        ]
+        for target_path, installer, msg in skill_targets:
+            if not target_path.exists():
+                continue
+            target_hash = hashlib.sha256(target_path.read_bytes()).hexdigest()[:8]
             if target_hash != source_hash:
-                install_skills(project_root)
-                messages.append("Updated filigree skill pack")
+                installer(project_root)
+                messages.append(msg)
 
     return messages
 

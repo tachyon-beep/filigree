@@ -22,6 +22,7 @@ from filigree.hooks import (
 from filigree.install import (
     _instructions_hash,
     inject_instructions,
+    install_codex_skills,
     install_skills,
 )
 
@@ -326,6 +327,21 @@ class TestCheckInstructionsFreshness:
         install_skills(tmp_path)
         messages = _check_instructions_freshness(tmp_path)
         assert not any("skill pack" in m for m in messages)
+
+    def test_updates_stale_codex_skill_pack(self, tmp_path: Path) -> None:
+        """Codex skill pack under .agents/skills/ should be refreshed when stale."""
+        skill_dir = tmp_path / ".agents" / "skills" / "filigree-workflow"
+        skill_dir.mkdir(parents=True)
+        skill_md = skill_dir / "SKILL.md"
+        skill_md.write_text("# Old codex skill content that differs from current\n")
+        messages = _check_instructions_freshness(tmp_path)
+        assert any("codex skill" in m.lower() for m in messages)
+
+    def test_skips_fresh_codex_skill_pack(self, tmp_path: Path) -> None:
+        """Codex skill pack matching shipped version should not be updated."""
+        install_codex_skills(tmp_path)
+        messages = _check_instructions_freshness(tmp_path)
+        assert not any("codex skill" in m.lower() for m in messages)
 
 
 class TestGenerateSessionContextFreshness:

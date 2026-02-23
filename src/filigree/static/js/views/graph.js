@@ -19,6 +19,7 @@ const GRAPH_TIME_WINDOW_STORAGE_KEY = "filigree.graph.time_window_days.v1";
 const DEFAULT_GRAPH_TIME_WINDOW_DAYS = 7;
 const VALID_GRAPH_TIME_WINDOW_DAYS = new Set([0, 1, 7, 14, 30, 90, 180, 365]);
 const GRAPH_MAX_ZOOM = 4;
+const GRAPH_WHEEL_SENSITIVITY = 0.15;
 const GRAPH_FIT_ZOOM_CAP = 1.5;
 let _focusInputDebounceId = null;
 let _assigneeInputDebounceId = null;
@@ -931,6 +932,7 @@ export function renderGraph() {
       style: graphStyles(),
       minZoom: graphMinZoom,
       maxZoom: GRAPH_MAX_ZOOM,
+      wheelSensitivity: GRAPH_WHEEL_SENSITIVITY,
     });
     created = true;
     fitGraphWithCaps();
@@ -989,6 +991,7 @@ export function renderGraph() {
         style: graphStyles(),
         minZoom: graphMinZoom,
         maxZoom: GRAPH_MAX_ZOOM,
+        wheelSensitivity: GRAPH_WHEEL_SENSITIVITY,
       });
       created = true;
       if (selectedNodeId && state.cy.$id(selectedNodeId).length) {

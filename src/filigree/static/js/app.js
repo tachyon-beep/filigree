@@ -226,7 +226,7 @@ function setProject(key, opts) {
   const sel = document.getElementById("projectSwitcher");
   if (sel) sel.value = key;
   const proj = state.allProjects.find((p) => p.key === key);
-  document.title = proj ? `${proj.name} \u2014 Filigree` : "Filigree Dashboard";
+  document.title = proj ? `Filigree \u2014 ${proj.name}` : "Filigree Dashboard";
   state.selectedCards.clear();
   if (!opts?.keepDetail) closeDetail();
   updateHash();

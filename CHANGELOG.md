@@ -88,6 +88,8 @@ Server/ethereal operating modes, file intelligence + scanner workflows, Graph v2
 - `claim_current_process_as_daemon()` now verifies PID ownership before refusing to claim — a reused PID from a non-filigree process no longer blocks the claim
 - `stop_daemon()` catches `ProcessLookupError` on SIGTERM when the process dies between the liveness check and the signal delivery
 - Off-by-one in `find_available_port()` retry loop — now tries `base + PORT_RETRIES` candidates as documented
+- `setup_logging()` now removes and closes stale `RotatingFileHandler`s when `filigree_dir` changes — prevents handler leaks and duplicate log writes in long-lived processes
+- Session skill freshness check now covers Codex installs under `.agents/skills/` in addition to `.claude/skills/`
 
 #### Files/findings and scanner robustness
 
@@ -100,6 +102,9 @@ Server/ethereal operating modes, file intelligence + scanner workflows, Graph v2
 - `/api/v1/scan-results` now enforces boolean validation for `create_issues`
 - `scan_source` validated as string in `/api/v1/scan-results` — non-string values return 400 instead of crashing
 - Pagination `limit` and `offset` enforce minimum values (`limit >= 1`, `offset >= 0`) across all API endpoints — prevents SQLite `LIMIT -1` unbounded queries
+- `trigger_scan` cooldown set immediately after rate-limit check (before any await) and rolled back on failure — closes check-then-act race window
+- `process_scan_results()` validates `path`, `line_start`/`line_end`, and `suggestion` types upfront with clear error messages instead of crashing in SQL/JSON operations
+- `add_file_association` pre-checks issue existence and returns `not_found` instead of misclassifying as `validation_error`
 
 #### Dashboard and analytics quality
 
@@ -110,7 +115,11 @@ Server/ethereal operating modes, file intelligence + scanner workflows, Graph v2
 - Missing split-pane window bindings restored; async loader error handling tightened
 - Flow metrics now include `archived` issues so `archive_closed()` results count in throughput
 - Analytics SQL queries use deterministic tiebreaker (`id ASC`) for stable cycle-time computation when events share timestamps
+- `list_issues` returns empty result when `status_category` expansion yields no matching states, instead of silently dropping the filter
+- `import_jsonl` event branch uses shared `conflict` variable and counts via `cursor.rowcount` so `merge=True` accurately reports 0 for skipped duplicates
 - Migration atomicity restored for FK-referenced table rebuilds; dashboard startup guard added
+- Graph zoom-in no longer jumps aggressively from extreme zoom-out levels — `wheelSensitivity` reduced from Cytoscape default (1.0) to 0.15
+- Page title reversed from "[project] — Filigree" to "Filigree — [project]"
 
 #### CLI
 
