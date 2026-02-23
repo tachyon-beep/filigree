@@ -136,7 +136,8 @@ class ProjectStore:
 
     def reload(self) -> dict[str, Any]:
         """Re-read server.json. On read failure, retains existing state."""
-        old_keys = set(self._projects)
+        old_projects = dict(self._projects)
+        old_keys = set(old_projects)
         try:
             self.load()
         except Exception as exc:
@@ -144,9 +145,15 @@ class ProjectStore:
             return {"added": [], "removed": [], "error": str(exc)}
         new_keys = set(self._projects)
         removed = sorted(old_keys - new_keys)
+        path_changed = sorted(
+            key
+            for key in (old_keys & new_keys)
+            if old_projects[key].get("path") != self._projects[key].get("path")
+        )
 
-        # Close and evict stale DB handles for projects removed from server.json.
-        for key in removed:
+        # Close and evict stale DB handles for removed projects and projects
+        # whose path changed under the same key.
+        for key in [*removed, *path_changed]:
             db = self._dbs.pop(key, None)
             if db is None:
                 continue
@@ -1362,13 +1369,16 @@ def _create_project_router() -> Any:
                 "VALIDATION_ERROR",
                 400,
             )
+        mark_unseen = body.get("mark_unseen", False)
+        if not isinstance(mark_unseen, bool):
+            return _error_response("mark_unseen must be a boolean", "VALIDATION_ERROR", 400)
         status_code = 202 if not findings else 200
         try:
             result = db.process_scan_results(
                 scan_source=scan_source,
                 findings=findings,
                 scan_run_id=body.get("scan_run_id", ""),
-                mark_unseen=bool(body.get("mark_unseen", False)),
+                mark_unseen=mark_unseen,
             )
         except ValueError as e:
             return _error_response(str(e), "VALIDATION_ERROR", 400)

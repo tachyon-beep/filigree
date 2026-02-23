@@ -1100,7 +1100,7 @@ def import_data(input_file: str, merge: bool) -> None:
 
 
 @cli.command("archive")
-@click.option("--days", default=30, type=int, help="Archive issues closed more than N days ago (default: 30)")
+@click.option("--days", default=30, type=click.IntRange(min=0), help="Archive issues closed more than N days ago (default: 30)")
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON")
 @click.pass_context
 def archive(ctx: click.Context, days: int, as_json: bool) -> None:
@@ -1120,7 +1120,7 @@ def archive(ctx: click.Context, days: int, as_json: bool) -> None:
 
 
 @cli.command("clean-stale-findings")
-@click.option("--days", default=30, type=int, help="Mark as fixed if unseen for more than N days (default: 30)")
+@click.option("--days", default=30, type=click.IntRange(min=0), help="Mark as fixed if unseen for more than N days (default: 30)")
 @click.option("--scan-source", default=None, type=str, help="Only clean findings from this scan source")
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON")
 @click.pass_context
@@ -1137,7 +1137,7 @@ def clean_stale_findings(ctx: click.Context, days: int, scan_source: str | None,
 
 
 @cli.command("compact")
-@click.option("--keep", default=50, type=int, help="Keep N most recent events per archived issue (default: 50)")
+@click.option("--keep", default=50, type=click.IntRange(min=0), help="Keep N most recent events per archived issue (default: 50)")
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON")
 def compact(keep: int, as_json: bool) -> None:
     """Compact event history for archived issues."""

@@ -2049,6 +2049,34 @@ class TestProjectStore:
         assert "bravo" not in project_store._dbs
         assert bravo_db._conn is None
 
+    def test_reload_evicts_db_handle_when_project_path_changes(self, project_store: ProjectStore, tmp_path: Path) -> None:
+        import json
+
+        bravo_db = project_store.get_db("bravo")
+        old_db_path = bravo_db.db_path
+        assert "bravo" in project_store._dbs
+
+        replacement_dir = _create_project(tmp_path, "proj-bravo-replacement", "bravo", 4)
+        config_dir = tmp_path / ".config" / "filigree"
+        existing = json.loads((config_dir / "server.json").read_text())
+
+        old_bravo_paths = [k for k, v in existing["projects"].items() if v["prefix"] == "bravo"]
+        assert len(old_bravo_paths) == 1
+        del existing["projects"][old_bravo_paths[0]]
+        existing["projects"][str(replacement_dir)] = {"prefix": "bravo"}
+        (config_dir / "server.json").write_text(json.dumps(existing))
+
+        diff = project_store.reload()
+
+        assert diff["added"] == []
+        assert diff["removed"] == []
+        assert "bravo" not in project_store._dbs
+        assert bravo_db._conn is None
+
+        reopened = project_store.get_db("bravo")
+        assert reopened.db_path != old_db_path
+        assert reopened.db_path.parent == replacement_dir
+
     def test_reload_corrupt_file_retains_state(self, project_store: ProjectStore, tmp_path: Path) -> None:
         config_dir = tmp_path / ".config" / "filigree"
         before_keys = {p["key"] for p in project_store.list_projects()}

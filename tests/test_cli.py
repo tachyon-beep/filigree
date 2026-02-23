@@ -701,12 +701,30 @@ class TestJsonRetrofit:
         assert "archived" in data
         assert "count" in data
 
+    def test_archive_rejects_negative_days(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        runner, _ = cli_in_project
+        result = runner.invoke(cli, ["archive", "--days", "-1"])
+        assert result.exit_code != 0
+        assert "Invalid value for '--days'" in result.output
+
     def test_compact_json(self, cli_in_project: tuple[CliRunner, Path]) -> None:
         runner, _ = cli_in_project
         result = runner.invoke(cli, ["compact", "--json"])
         assert result.exit_code == 0
         data = json.loads(result.output)
         assert "deleted_events" in data
+
+    def test_compact_rejects_negative_keep(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        runner, _ = cli_in_project
+        result = runner.invoke(cli, ["compact", "--keep", "-1"])
+        assert result.exit_code != 0
+        assert "Invalid value for '--keep'" in result.output
+
+    def test_clean_stale_findings_rejects_negative_days(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        runner, _ = cli_in_project
+        result = runner.invoke(cli, ["clean-stale-findings", "--days", "-1"])
+        assert result.exit_code != 0
+        assert "Invalid value for '--days'" in result.output
 
     def test_label_add_json(self, cli_in_project: tuple[CliRunner, Path]) -> None:
         runner, _ = cli_in_project

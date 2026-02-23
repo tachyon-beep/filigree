@@ -95,17 +95,25 @@ def read_pid_file(pid_file: Path) -> dict[str, Any] | None:
         try:
             data = _json.loads(text)
             if isinstance(data, dict) and "pid" in data:
-                return {"pid": int(data["pid"]), "cmd": data.get("cmd", "unknown")}
+                pid = int(data["pid"])
+                if pid <= 0:
+                    return None
+                return {"pid": pid, "cmd": data.get("cmd", "unknown")}
         except (_json.JSONDecodeError, TypeError):
             pass
         # Fall back to plain integer (legacy format)
-        return {"pid": int(text), "cmd": "unknown"}
+        pid = int(text)
+        if pid <= 0:
+            return None
+        return {"pid": pid, "cmd": "unknown"}
     except (ValueError, OSError):
         return None
 
 
 def is_pid_alive(pid: int) -> bool:
     """Check if a process is running (via kill signal 0)."""
+    if pid <= 0:
+        return False
     try:
         os.kill(pid, 0)
         return True
@@ -228,4 +236,8 @@ def read_port_file(port_file: Path) -> int | None:
 def cleanup_legacy_tmp_files() -> None:
     """Remove legacy /tmp/filigree-dashboard.* files from the hybrid mode era."""
     for name in ("filigree-dashboard.pid", "filigree-dashboard.lock", "filigree-dashboard.log"):
-        Path("/tmp", name).unlink(missing_ok=True)  # noqa: S108
+        path = Path("/tmp", name)  # noqa: S108
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            logger.debug("Failed to remove legacy tmp file %s", path, exc_info=True)

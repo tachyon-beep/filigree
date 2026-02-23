@@ -7,6 +7,7 @@ Separate module from core, operates on FiligreeDB read-only.
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from collections.abc import Callable
 from typing import Any
 
 from filigree.core import FiligreeDB
@@ -36,24 +37,32 @@ def cycle_time(db: FiligreeDB, issue_id: str) -> float | None:
 
     Returns None if the issue hasn't been through a WIP->done transition.
     """
-    wip_states = set(db._get_states_for_category("wip")) or {"in_progress"}
-    done_states = set(db._get_states_for_category("done")) or {"closed"}
+    issue = db.get_issue(issue_id)
+    issue_type = issue.type
 
     events = db.conn.execute(
-        "SELECT event_type, new_value, created_at FROM events WHERE issue_id = ? AND event_type = 'status_changed' ORDER BY created_at ASC",
+        "SELECT event_type, new_value, created_at FROM events "
+        "WHERE issue_id = ? AND event_type = 'status_changed' ORDER BY created_at ASC",
         (issue_id,),
     ).fetchall()
-    return _cycle_time_from_events(events, wip_states, done_states)
+    return _cycle_time_from_events(
+        events,
+        lambda state: db._resolve_status_category(issue_type, state),
+    )
 
 
-def _cycle_time_from_events(events: list[Any], wip_states: set[str], done_states: set[str]) -> float | None:
+def _cycle_time_from_events(
+    events: list[Any],
+    resolve_category: Callable[[str], str],
+) -> float | None:
     """Compute cycle time from ordered status-change event rows."""
     start: datetime | None = None
     end: datetime | None = None
     for evt in events:
-        if evt["new_value"] in wip_states and start is None:
+        category = resolve_category(evt["new_value"])
+        if category == "wip" and start is None:
             start = _parse_iso(evt["created_at"])
-        elif evt["new_value"] in done_states and start is not None:
+        elif category == "done" and start is not None:
             end = _parse_iso(evt["created_at"])
             if end is not None:
                 break  # Use first parseable done event after WIP start
@@ -151,12 +160,13 @@ def get_flow_metrics(db: FiligreeDB, *, days: int = 30) -> dict[str, Any]:
     cycle_times: list[float] = []
     lead_times: list[float] = []
     by_type: dict[str, list[float]] = {}
-    wip_states = set(db._get_states_for_category("wip")) or {"in_progress"}
-    done_states = set(db._get_states_for_category("done")) or {"closed"}
     status_events = _fetch_status_events_by_issue(db, [issue.id for issue in recent_closed])
 
     for issue in recent_closed:
-        ct = _cycle_time_from_events(status_events.get(issue.id, []), wip_states, done_states)
+        ct = _cycle_time_from_events(
+            status_events.get(issue.id, []),
+            lambda state, issue_type=issue.type: db._resolve_status_category(issue_type, state),
+        )
         lt = lead_time(db, issue=issue)
         if ct is not None:
             cycle_times.append(ct)

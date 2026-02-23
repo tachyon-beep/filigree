@@ -2494,6 +2494,15 @@ class TestInputValidation400s:
         assert resp.json()["error"]["code"] == "VALIDATION_ERROR"
         assert "not supported" in resp.json()["error"]["message"].lower()
 
+    async def test_scan_mark_unseen_must_be_boolean(self, client: AsyncClient) -> None:
+        resp = await client.post(
+            "/api/v1/scan-results",
+            json={"scan_source": "ruff", "mark_unseen": "false", "findings": []},
+        )
+        assert resp.status_code == 400
+        assert resp.json()["error"]["code"] == "VALIDATION_ERROR"
+        assert "mark_unseen must be a boolean" in resp.json()["error"]["message"]
+
     # -- P2c: pagination query params ----------------------------------------
 
     async def test_files_limit_not_int(self, client: AsyncClient) -> None:

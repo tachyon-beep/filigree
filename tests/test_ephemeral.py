@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from filigree.ephemeral import (
+    cleanup_legacy_tmp_files,
     cleanup_stale_pid,
     compute_port,
     find_available_port,
@@ -92,11 +93,20 @@ class TestPidLifecycle:
         assert info["pid"] == 12345
         assert info["cmd"] == "unknown"
 
+    def test_read_non_positive_pid_returns_none(self, tmp_path: Path) -> None:
+        pid_file = tmp_path / "ephemeral.pid"
+        pid_file.write_text("0")
+        assert read_pid_file(pid_file) is None
+
     def test_is_pid_alive_for_self(self) -> None:
         assert is_pid_alive(os.getpid()) is True
 
     def test_is_pid_alive_for_dead(self) -> None:
         assert is_pid_alive(99999999) is False
+
+    def test_is_pid_alive_non_positive_false(self) -> None:
+        assert is_pid_alive(0) is False
+        assert is_pid_alive(-1) is False
 
     def test_verify_pid_ownership_for_self(self, tmp_path: Path) -> None:
         pid_file = tmp_path / "ephemeral.pid"
@@ -182,3 +192,23 @@ class TestPortFile:
         port_file = tmp_path / "ephemeral.port"
         port_file.write_text("not-a-number\ngarbage")
         assert read_port_file(port_file) is None
+
+
+class TestLegacyCleanup:
+    def test_cleanup_legacy_tmp_files_ignores_permission_errors(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        calls: list[str] = []
+
+        def fake_unlink(self: Path, *, missing_ok: bool = False) -> None:  # noqa: ARG001
+            calls.append(self.name)
+            if self.name == "filigree-dashboard.pid":
+                raise PermissionError("denied")
+
+        monkeypatch.setattr(Path, "unlink", fake_unlink)
+
+        cleanup_legacy_tmp_files()
+
+        assert calls == [
+            "filigree-dashboard.pid",
+            "filigree-dashboard.lock",
+            "filigree-dashboard.log",
+        ]

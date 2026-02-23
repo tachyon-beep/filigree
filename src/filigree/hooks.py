@@ -37,6 +37,19 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 READY_CAP = 15
+CONTEXT_TITLE_MAX_LEN = 160
+
+
+def _sanitize_context_title(raw: str) -> str:
+    """Sanitize issue titles for hook context output safety."""
+    text = str(raw or "")
+    # Collapse structural whitespace to prevent line-breaking/context injection.
+    text = " ".join(text.replace("\r", " ").replace("\n", " ").replace("\t", " ").split())
+    # Drop remaining non-printable control characters.
+    text = "".join(ch for ch in text if ch.isprintable())
+    if len(text) > CONTEXT_TITLE_MAX_LEN:
+        text = text[: CONTEXT_TITLE_MAX_LEN - 3] + "..."
+    return text or "(untitled)"
 
 
 def _build_context(db: FiligreeDB, filigree_dir: Path | None = None) -> str:
@@ -62,7 +75,8 @@ def _build_context(db: FiligreeDB, filigree_dir: Path | None = None) -> str:
     if in_progress:
         lines.append("IN PROGRESS (resume these):")
         for issue in in_progress:
-            lines.append(f'P{issue.priority} {issue.id} [{issue.type}] "{issue.title}"')
+            title = _sanitize_context_title(issue.title)
+            lines.append(f'P{issue.priority} {issue.id} [{issue.type}] "{title}"')
         lines.append("")
 
     # Ready to work
@@ -71,7 +85,8 @@ def _build_context(db: FiligreeDB, filigree_dir: Path | None = None) -> str:
         shown = ready[:READY_CAP]
         lines.append(f"READY TO WORK ({len(ready)} tasks with no blockers):")
         for issue in shown:
-            lines.append(f'P{issue.priority} {issue.id} [{issue.type}] "{issue.title}"')
+            title = _sanitize_context_title(issue.title)
+            lines.append(f'P{issue.priority} {issue.id} [{issue.type}] "{title}"')
         if len(ready) > READY_CAP:
             lines.append("  ... (truncated, run 'filigree ready' for full list)")
         lines.append("")
@@ -83,7 +98,8 @@ def _build_context(db: FiligreeDB, filigree_dir: Path | None = None) -> str:
         lines.append(f"Critical path ({len(crit)} issues):")
         for i, item in enumerate(crit):
             prefix = "  -> " if i > 0 else "  "
-            lines.append(f'{prefix}P{item["priority"]} {item["id"]} [{item["type"]}] "{item["title"]}"')
+            title = _sanitize_context_title(str(item["title"]))
+            lines.append(f'{prefix}P{item["priority"]} {item["id"]} [{item["type"]}] "{title}"')
         lines.append("")
 
     # Stats
@@ -198,10 +214,14 @@ def generate_session_context() -> str | None:
 
 def _is_port_listening(port: int, host: str = "127.0.0.1") -> bool:
     """Check whether *port* is accepting connections on *host*."""
+    if not (1 <= port <= 65535):
+        return False
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.settimeout(0.5)
     try:
         return sock.connect_ex((host, port)) == 0
+    except (OSError, OverflowError):
+        return False
     finally:
         sock.close()
 
@@ -240,9 +260,9 @@ def _ensure_dashboard_ethereal_mode(filigree_dir: Path) -> str:
         cleanup_legacy_tmp_files,
         cleanup_stale_pid,
         find_available_port,
-        is_pid_alive,
         read_pid_file,
         read_port_file,
+        verify_pid_ownership,
         write_pid_file,
         write_port_file,
     )
@@ -253,11 +273,23 @@ def _ensure_dashboard_ethereal_mode(filigree_dir: Path) -> str:
     port_file = filigree_dir / "ephemeral.port"
     lock_file = filigree_dir / "ephemeral.lock"
 
+    def _reuse_running_dashboard() -> str | None:
+        pid_info = read_pid_file(pid_file)
+        existing_port = read_port_file(port_file)
+        if not pid_info or not existing_port:
+            return None
+        if not verify_pid_ownership(pid_file, expected_cmd="filigree"):
+            pid_file.unlink(missing_ok=True)
+            port_file.unlink(missing_ok=True)
+            return None
+        if _is_port_listening(existing_port):
+            return f"Filigree dashboard running on http://localhost:{existing_port}"
+        return None
+
     # Check if already running from a previous session
-    pid_info = read_pid_file(pid_file)
-    existing_port = read_port_file(port_file)
-    if pid_info and existing_port and is_pid_alive(pid_info["pid"]) and _is_port_listening(existing_port):
-        return f"Filigree dashboard running on http://localhost:{existing_port}"
+    running_message = _reuse_running_dashboard()
+    if running_message:
+        return running_message
 
     # Clean up stale state
     cleanup_stale_pid(pid_file)
@@ -272,10 +304,9 @@ def _ensure_dashboard_ethereal_mode(filigree_dir: Path) -> str:
             return "Filigree dashboard: another session is starting it, skipping"
 
         # Re-check after acquiring lock
-        pid_info = read_pid_file(pid_file)
-        existing_port = read_port_file(port_file)
-        if pid_info and existing_port and is_pid_alive(pid_info["pid"]) and _is_port_listening(existing_port):
-            return f"Filigree dashboard running on http://localhost:{existing_port}"
+        running_message = _reuse_running_dashboard()
+        if running_message:
+            return running_message
 
         port = find_available_port(filigree_dir)
         filigree_cmd = find_filigree_command()
