@@ -22,7 +22,7 @@ class TestConfigEnabledPacks:
         # FiligreeDB constructor applies the default when enabled_packs=None
         db = FiligreeDB(filigree_dir / "filigree.db", prefix="test", enabled_packs=config.get("enabled_packs"))
         db.initialize()
-        assert db.enabled_packs == ["core", "planning"]
+        assert db.enabled_packs == ["core", "planning", "release"]
         db.close()
 
     def test_read_config_preserves_explicit_enabled_packs(self, tmp_path: Path) -> None:
@@ -51,7 +51,7 @@ class TestConfigEnabledPacks:
 
         config = read_config(filigree_dir)
         assert config["prefix"] == "filigree"
-        assert config["enabled_packs"] == ["core", "planning"]
+        assert config["enabled_packs"] == ["core", "planning", "release"]
 
     def test_from_project_passes_enabled_packs(self, tmp_path: Path) -> None:
         """FiligreeDB.from_project() should read enabled_packs from config."""
@@ -86,5 +86,5 @@ class TestConfigEnabledPacks:
         init_db.close()
 
         db = FiligreeDB.from_project(tmp_path)
-        assert db.enabled_packs == ["core", "planning"]
+        assert db.enabled_packs == ["core", "planning", "release"]
         db.close()

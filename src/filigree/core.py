@@ -78,7 +78,7 @@ def read_config(filigree_dir: Path) -> dict[str, Any]:
     if config_path.exists():
         result: dict[str, Any] = json.loads(config_path.read_text())
         return result
-    return {"prefix": "filigree", "version": 1, "enabled_packs": ["core", "planning"]}
+    return {"prefix": "filigree", "version": 1, "enabled_packs": ["core", "planning", "release"]}
 
 
 def write_config(filigree_dir: Path, config: dict[str, Any]) -> None:
@@ -340,7 +340,7 @@ def _seed_builtin_packs(conn: sqlite3.Connection, now: str) -> int:
     from filigree.templates_data import BUILT_IN_PACKS
 
     count = 0
-    default_enabled = {"core", "planning"}
+    default_enabled = {"core", "planning", "release"}
 
     for pack_name, pack_data in BUILT_IN_PACKS.items():
         enabled = 1 if pack_name in default_enabled else 0
@@ -517,7 +517,7 @@ class FiligreeDB:
         self.db_path = Path(db_path)
         self.prefix = prefix
         self._enabled_packs_override = list(enabled_packs) if enabled_packs is not None else None
-        self.enabled_packs = self._enabled_packs_override if self._enabled_packs_override is not None else ["core", "planning"]
+        self.enabled_packs = self._enabled_packs_override if self._enabled_packs_override is not None else ["core", "planning", "release"]
         self._conn: sqlite3.Connection | None = None
         self._check_same_thread = check_same_thread
         self._template_registry: TemplateRegistry | None = template_registry

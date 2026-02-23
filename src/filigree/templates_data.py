@@ -1578,7 +1578,7 @@ _RELEASE_PACK: dict[str, Any] = {
                     "description": "How to revert if the release fails",
                 },
             ],
-            "suggested_children": ["release_item"],
+            "suggested_children": ["release_item", "epic", "milestone", "task", "bug", "feature"],
             "suggested_labels": ["major", "minor", "patch", "hotfix"],
         },
         "release_item": {

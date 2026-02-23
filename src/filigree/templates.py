@@ -683,7 +683,7 @@ class TemplateRegistry:
 
         from filigree.templates_data import BUILT_IN_PACKS
 
-        _default_packs = ["core", "planning"]
+        _default_packs = ["core", "planning", "release"]
         if enabled_packs is None:
             # Read enabled packs from config
             config_path = filigree_dir / "config.json"
