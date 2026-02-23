@@ -261,3 +261,50 @@ class TestDaemonLifecycle:
 
         status = daemon_status()
         assert not status.running
+
+    def test_claim_current_process_as_daemon_writes_pid_and_port(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        config_dir = tmp_path / ".config" / "filigree"
+        monkeypatch.setattr("filigree.server.SERVER_CONFIG_DIR", config_dir)
+        monkeypatch.setattr("filigree.server.SERVER_CONFIG_FILE", config_dir / "server.json")
+        monkeypatch.setattr("filigree.server.SERVER_PID_FILE", config_dir / "server.pid")
+
+        from filigree.server import claim_current_process_as_daemon, read_server_config
+
+        assert claim_current_process_as_daemon(port=9911)
+        pid_data = json.loads((config_dir / "server.pid").read_text())
+        assert pid_data["pid"] > 0
+        assert pid_data["cmd"] == "filigree"
+        assert read_server_config().port == 9911
+
+    def test_claim_current_process_as_daemon_refuses_live_foreign_pid(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        config_dir = tmp_path / ".config" / "filigree"
+        config_dir.mkdir(parents=True)
+        pid_file = config_dir / "server.pid"
+        pid_file.write_text(json.dumps({"pid": 54321, "cmd": "filigree"}))
+        monkeypatch.setattr("filigree.server.SERVER_PID_FILE", pid_file)
+        monkeypatch.setattr("filigree.server.is_pid_alive", lambda pid: pid == 54321)
+
+        from filigree.server import claim_current_process_as_daemon
+
+        assert not claim_current_process_as_daemon(port=9911)
+        pid_data = json.loads(pid_file.read_text())
+        assert pid_data["pid"] == 54321
+
+    def test_release_daemon_pid_if_owned(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        config_dir = tmp_path / ".config" / "filigree"
+        config_dir.mkdir(parents=True)
+        pid_file = config_dir / "server.pid"
+        monkeypatch.setattr("filigree.server.SERVER_PID_FILE", pid_file)
+
+        from filigree.server import release_daemon_pid_if_owned
+
+        pid_file.write_text(json.dumps({"pid": 123, "cmd": "filigree"}))
+        release_daemon_pid_if_owned(999)
+        assert pid_file.exists()
+
+        release_daemon_pid_if_owned(123)
+        assert not pid_file.exists()

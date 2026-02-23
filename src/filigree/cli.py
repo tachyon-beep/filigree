@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import json as json_mod
 import logging
+import os
 import sqlite3
 import sys
 from pathlib import Path
@@ -992,7 +993,20 @@ def dashboard(port: int, no_browser: bool, server_mode: bool) -> None:
     except ImportError:
         click.echo('Dashboard requires extra dependencies. Install with: pip install "filigree[dashboard]"', err=True)
         sys.exit(1)
-    dashboard_main(port=port, no_browser=no_browser, server_mode=server_mode)
+
+    pid_claimed = False
+    current_pid = os.getpid()
+    if server_mode:
+        from filigree.server import claim_current_process_as_daemon
+
+        pid_claimed = claim_current_process_as_daemon(port=port)
+    try:
+        dashboard_main(port=port, no_browser=no_browser, server_mode=server_mode)
+    finally:
+        if server_mode and pid_claimed:
+            from filigree.server import release_daemon_pid_if_owned
+
+            release_daemon_pid_if_owned(current_pid)
 
 
 @cli.command("session-context")

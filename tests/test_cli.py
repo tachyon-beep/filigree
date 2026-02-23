@@ -1664,6 +1664,71 @@ class TestServerRegisterReload:
         assert "Reloaded running daemon" not in result.output
 
 
+class TestDashboardServerModePidTracking:
+    def test_dashboard_server_mode_claims_pid_for_status(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cli_runner: CliRunner
+    ) -> None:
+        config_dir = tmp_path / ".server-config"
+        monkeypatch.setattr("filigree.server.SERVER_CONFIG_DIR", config_dir)
+        monkeypatch.setattr("filigree.server.SERVER_CONFIG_FILE", config_dir / "server.json")
+        monkeypatch.setattr("filigree.server.SERVER_PID_FILE", config_dir / "server.pid")
+
+        observed: dict[str, object] = {}
+
+        def _fake_dashboard_main(port: int, no_browser: bool, server_mode: bool) -> None:
+            from filigree.server import SERVER_PID_FILE, daemon_status
+
+            status = daemon_status()
+            observed["port_arg"] = port
+            observed["no_browser_arg"] = no_browser
+            observed["server_mode_arg"] = server_mode
+            observed["status_running"] = status.running
+            observed["status_port"] = status.port
+            observed["pid_file_exists_during_run"] = SERVER_PID_FILE.exists()
+
+        monkeypatch.setattr("filigree.dashboard.main", _fake_dashboard_main)
+
+        result = cli_runner.invoke(cli, ["dashboard", "--server-mode", "--no-browser", "--port", "9911"])
+        assert result.exit_code == 0
+        assert observed["port_arg"] == 9911
+        assert observed["no_browser_arg"] is True
+        assert observed["server_mode_arg"] is True
+        assert observed["status_running"] is True
+        assert observed["status_port"] == 9911
+        assert observed["pid_file_exists_during_run"] is True
+        assert not (config_dir / "server.pid").exists()
+
+    def test_dashboard_server_mode_does_not_override_live_tracked_pid(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cli_runner: CliRunner
+    ) -> None:
+        config_dir = tmp_path / ".server-config"
+        config_dir.mkdir(parents=True)
+        pid_file = config_dir / "server.pid"
+        pid_file.write_text('{"pid": 54321, "cmd": "filigree"}')
+
+        monkeypatch.setattr("filigree.server.SERVER_CONFIG_DIR", config_dir)
+        monkeypatch.setattr("filigree.server.SERVER_CONFIG_FILE", config_dir / "server.json")
+        monkeypatch.setattr("filigree.server.SERVER_PID_FILE", pid_file)
+        monkeypatch.setattr("filigree.server.is_pid_alive", lambda pid: pid == 54321)
+
+        observed: dict[str, object] = {}
+
+        def _fake_dashboard_main(port: int, no_browser: bool, server_mode: bool) -> None:
+            from filigree.server import daemon_status
+
+            status = daemon_status()
+            observed["status_running"] = status.running
+            observed["status_pid"] = status.pid
+
+        monkeypatch.setattr("filigree.dashboard.main", _fake_dashboard_main)
+
+        result = cli_runner.invoke(cli, ["dashboard", "--server-mode", "--no-browser"])
+        assert result.exit_code == 0
+        assert observed["status_running"] is True
+        assert observed["status_pid"] == 54321
+        assert json.loads(pid_file.read_text())["pid"] == 54321
+
+
 class TestNoFiligreeDir:
     def test_commands_fail_without_init(self, tmp_path: Path, cli_runner: CliRunner) -> None:
         original = os.getcwd()
