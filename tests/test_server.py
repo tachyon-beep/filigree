@@ -473,3 +473,101 @@ class TestStartDaemonPopenFailure:
         result = start_daemon()
         assert not result.success
         assert "Failed to start" in result.message
+
+
+class TestStopDaemonSigkill:
+    """Bug filigree-186813: stop_daemon must verify kill succeeded after SIGKILL."""
+
+    def test_stop_returns_failure_when_sigkill_fails(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        config_dir = tmp_path / ".config" / "filigree"
+        config_dir.mkdir(parents=True)
+        pid_file = config_dir / "server.pid"
+        pid_file.write_text(json.dumps({"pid": 54321, "cmd": "filigree"}))
+        monkeypatch.setattr("filigree.server.SERVER_PID_FILE", pid_file)
+
+        # Process is always alive — survives both SIGTERM and SIGKILL
+        monkeypatch.setattr("filigree.server.is_pid_alive", lambda pid: True)
+        monkeypatch.setattr("filigree.server.verify_pid_ownership", lambda *a, **kw: True)
+        monkeypatch.setattr("os.kill", lambda pid, sig: None)
+        monkeypatch.setattr("time.sleep", lambda _: None)
+
+        from filigree.server import stop_daemon
+
+        result = stop_daemon()
+        assert not result.success
+        assert "SIGKILL" in result.message or "Failed" in result.message
+
+    def test_stop_succeeds_when_sigkill_kills_process(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        config_dir = tmp_path / ".config" / "filigree"
+        config_dir.mkdir(parents=True)
+        pid_file = config_dir / "server.pid"
+        pid_file.write_text(json.dumps({"pid": 54321, "cmd": "filigree"}))
+        monkeypatch.setattr("filigree.server.SERVER_PID_FILE", pid_file)
+
+        # Process survives SIGTERM (50 checks), but dies after SIGKILL
+        alive_count = 0
+
+        def mock_alive(pid: int) -> bool:
+            nonlocal alive_count
+            alive_count += 1
+            # First call (stop_daemon liveness check) + 50 SIGTERM waits = 51 calls alive
+            # After SIGKILL (call 52+) = dead
+            return alive_count <= 51
+
+        monkeypatch.setattr("filigree.server.is_pid_alive", mock_alive)
+        monkeypatch.setattr("filigree.server.verify_pid_ownership", lambda *a, **kw: True)
+        monkeypatch.setattr("os.kill", lambda pid, sig: None)
+        monkeypatch.setattr("time.sleep", lambda _: None)
+
+        from filigree.server import stop_daemon
+
+        result = stop_daemon()
+        assert result.success
+        assert "Force-killed" in result.message
+
+    def test_stop_handles_sigkill_permission_error(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        config_dir = tmp_path / ".config" / "filigree"
+        config_dir.mkdir(parents=True)
+        pid_file = config_dir / "server.pid"
+        pid_file.write_text(json.dumps({"pid": 54321, "cmd": "filigree"}))
+        monkeypatch.setattr("filigree.server.SERVER_PID_FILE", pid_file)
+
+        monkeypatch.setattr("filigree.server.is_pid_alive", lambda pid: True)
+        monkeypatch.setattr("filigree.server.verify_pid_ownership", lambda *a, **kw: True)
+        monkeypatch.setattr("time.sleep", lambda _: None)
+
+        kill_count = 0
+
+        def mock_kill(pid: int, sig: int) -> None:
+            nonlocal kill_count
+            kill_count += 1
+            if kill_count > 1:  # SIGKILL (second kill call)
+                raise PermissionError("Operation not permitted")
+
+        monkeypatch.setattr("os.kill", mock_kill)
+
+        from filigree.server import stop_daemon
+
+        result = stop_daemon()
+        assert not result.success
+        assert "Permission denied" in result.message
+
+    def test_sigkill_failure_still_cleans_pid_file(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """B1 from plan review: PID file must be cleaned up even when SIGKILL fails."""
+        config_dir = tmp_path / ".config" / "filigree"
+        config_dir.mkdir(parents=True)
+        pid_file = config_dir / "server.pid"
+        pid_file.write_text(json.dumps({"pid": 54321, "cmd": "filigree"}))
+        monkeypatch.setattr("filigree.server.SERVER_PID_FILE", pid_file)
+
+        monkeypatch.setattr("filigree.server.is_pid_alive", lambda pid: True)
+        monkeypatch.setattr("filigree.server.verify_pid_ownership", lambda *a, **kw: True)
+        monkeypatch.setattr("os.kill", lambda pid, sig: None)
+        monkeypatch.setattr("time.sleep", lambda _: None)
+
+        from filigree.server import stop_daemon
+
+        result = stop_daemon()
+        assert not result.success
+        # Critical: PID file must be removed to prevent stuck state
+        assert not pid_file.exists()

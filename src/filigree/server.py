@@ -233,8 +233,19 @@ def stop_daemon() -> DaemonResult:
     try:
         os.kill(pid, signal.SIGKILL)
         time.sleep(0.2)
-    except (PermissionError, ProcessLookupError):
-        pass
+    except ProcessLookupError:
+        # Process died between last check and SIGKILL — success
+        SERVER_PID_FILE.unlink(missing_ok=True)
+        return DaemonResult(True, f"Force-killed filigree daemon (pid {pid})")
+    except PermissionError:
+        return DaemonResult(False, f"Permission denied sending SIGKILL to pid {pid}")
+
+    # Verify the process is actually dead
+    if is_pid_alive(pid):
+        # B1 fix: still clean up PID file to prevent permanent stuck state
+        SERVER_PID_FILE.unlink(missing_ok=True)
+        logger.warning("Failed to kill daemon (pid %d) even with SIGKILL", pid)
+        return DaemonResult(False, f"Failed to kill daemon (pid {pid}) even with SIGKILL")
 
     SERVER_PID_FILE.unlink(missing_ok=True)
     return DaemonResult(True, f"Force-killed filigree daemon (pid {pid})")
