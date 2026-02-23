@@ -1816,6 +1816,9 @@ async def _dispatch(name: str, arguments: dict[str, Any], tracker: FiligreeDB) -
             offset = arguments.get("offset", 0)
             min_findings = arguments.get("min_findings")
             has_severity = arguments.get("has_severity")
+            language = arguments.get("language")
+            path_prefix = arguments.get("path_prefix")
+            scan_source = arguments.get("scan_source")
             sort = arguments.get("sort", "updated_at")
             direction = arguments.get("direction")
             valid_sorts = {"updated_at", "first_seen", "path", "language"}
@@ -1836,15 +1839,21 @@ async def _dispatch(name: str, arguments: dict[str, Any], tracker: FiligreeDB) -
                 return _text({"error": f"sort must be one of {sorted(valid_sorts)}", "code": "validation_error"})
             if direction is not None and (not isinstance(direction, str) or direction.upper() not in {"ASC", "DESC"}):
                 return _text({"error": "direction must be 'asc' or 'desc'", "code": "validation_error"})
+            if language is not None and not isinstance(language, str):
+                return _text({"error": "language must be a string", "code": "validation_error"})
+            if path_prefix is not None and not isinstance(path_prefix, str):
+                return _text({"error": "path_prefix must be a string", "code": "validation_error"})
+            if scan_source is not None and not isinstance(scan_source, str):
+                return _text({"error": "scan_source must be a string", "code": "validation_error"})
 
             result = tracker.list_files_paginated(
                 limit=limit,
                 offset=offset,
-                language=arguments.get("language"),
-                path_prefix=arguments.get("path_prefix"),
+                language=language,
+                path_prefix=path_prefix,
                 min_findings=min_findings,
                 has_severity=has_severity,
-                scan_source=arguments.get("scan_source"),
+                scan_source=scan_source,
                 sort=sort,
                 direction=direction,
             )

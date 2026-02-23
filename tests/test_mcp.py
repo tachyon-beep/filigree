@@ -1194,6 +1194,21 @@ class TestFileTools:
         result = _parse(await call_tool("list_files", {"sort": "bad_sort"}))
         assert result["code"] == "validation_error"
 
+    @pytest.mark.parametrize(
+        ("field", "value"),
+        [
+            ("language", {"bad": "type"}),
+            ("path_prefix", {"bad": "type"}),
+            ("scan_source", {"bad": "type"}),
+        ],
+    )
+    async def test_list_files_optional_string_filters_reject_non_strings(
+        self, mcp_db: FiligreeDB, field: str, value: dict[str, str]
+    ) -> None:
+        result = _parse(await call_tool("list_files", {field: value}))
+        assert result["code"] == "validation_error"
+        assert result["error"] == f"{field} must be a string"
+
     async def test_add_file_association_and_get_issue_files(self, mcp_db: FiligreeDB) -> None:
         issue = mcp_db.create_issue("Issue for file association")
         file_data = _parse(await call_tool("register_file", {"path": "src/assoc.py"}))

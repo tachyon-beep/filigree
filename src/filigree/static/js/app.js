@@ -253,7 +253,7 @@ async function loadProjects() {
 
     if (currentMissing) {
       const fallbackKey = state.allProjects.length > 0 ? state.allProjects[0].key : "";
-      setProject(fallbackKey, { keepDetail: true });
+      setProject(fallbackKey);
       showToast("Selected project was removed. Switched to an available project.", "warning");
     }
   } catch (_e) {

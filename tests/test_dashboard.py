@@ -117,7 +117,8 @@ class TestGraphFrontendContracts:
     def test_project_refresh_falls_back_when_selected_project_is_removed(self) -> None:
         app_js = (STATIC_DIR / "js" / "app.js").read_text()
         assert "const currentMissing =" in app_js
-        assert "setProject(fallbackKey, { keepDetail: true });" in app_js
+        assert "setProject(fallbackKey);" in app_js
+        assert "setProject(fallbackKey, { keepDetail: true });" not in app_js
         assert "Selected project was removed. Switched to an available project." in app_js
 
     def test_graph_query_builder_includes_v2_filters(self) -> None:
