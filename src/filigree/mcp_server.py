@@ -12,13 +12,13 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-from contextvars import ContextVar
 import json
 import logging
 import secrets
 import subprocess
 import sys
 import time
+from contextvars import ContextVar
 from datetime import UTC
 from pathlib import Path
 from typing import Any
@@ -1113,6 +1113,11 @@ async def _dispatch(name: str, arguments: dict[str, Any], tracker: FiligreeDB) -
                 if category_states:
                     # Use the category name which list_issues already handles
                     status_filter = status_category
+                else:
+                    # Category requested but no states match — return empty
+                    return _text(
+                        {"issues": [], "limit": arguments.get("limit", 100), "offset": arguments.get("offset", 0), "has_more": False}
+                    )
 
             no_limit = arguments.get("no_limit", False)
             requested_limit = arguments.get("limit", 100)
@@ -1836,12 +1841,8 @@ async def _dispatch(name: str, arguments: dict[str, Any], tracker: FiligreeDB) -
                 return _text({"error": "offset must be a non-negative integer", "code": "validation_error"})
             if min_findings is not None and (not isinstance(min_findings, int) or min_findings < 0):
                 return _text({"error": "min_findings must be a non-negative integer", "code": "validation_error"})
-            if has_severity is not None and (
-                not isinstance(has_severity, str) or has_severity not in VALID_SEVERITIES
-            ):
-                return _text(
-                    {"error": f"has_severity must be one of {sorted(VALID_SEVERITIES)}", "code": "validation_error"}
-                )
+            if has_severity is not None and (not isinstance(has_severity, str) or has_severity not in VALID_SEVERITIES):
+                return _text({"error": f"has_severity must be one of {sorted(VALID_SEVERITIES)}", "code": "validation_error"})
             if not isinstance(sort, str) or sort not in valid_sorts:
                 return _text({"error": f"sort must be one of {sorted(valid_sorts)}", "code": "validation_error"})
             if direction is not None and (not isinstance(direction, str) or direction.upper() not in {"ASC", "DESC"}):
@@ -1889,9 +1890,7 @@ async def _dispatch(name: str, arguments: dict[str, Any], tracker: FiligreeDB) -
                 return _text({"error": "limit must be an integer in [1, 10000]", "code": "validation_error"})
             if not isinstance(offset, int) or offset < 0:
                 return _text({"error": "offset must be a non-negative integer", "code": "validation_error"})
-            if event_type is not None and (
-                not isinstance(event_type, str) or event_type not in valid_event_types
-            ):
+            if event_type is not None and (not isinstance(event_type, str) or event_type not in valid_event_types):
                 return _text(
                     {
                         "error": f"event_type must be one of {sorted(valid_event_types)}",
@@ -1931,6 +1930,11 @@ async def _dispatch(name: str, arguments: dict[str, Any], tracker: FiligreeDB) -
                 tracker.get_file(file_id)
             except KeyError:
                 return _text({"error": f"File not found: {file_id}", "code": "not_found"})
+
+            try:
+                tracker.get_issue(issue_id)
+            except KeyError:
+                return _text({"error": f"Issue not found: {issue_id}", "code": "not_found"})
 
             try:
                 tracker.add_file_association(file_id, issue_id, assoc_type)
@@ -2061,6 +2065,10 @@ async def _dispatch(name: str, arguments: dict[str, Any], tracker: FiligreeDB) -
                     }
                 )
 
+            # Reserve cooldown BEFORE any await points to prevent concurrent
+            # calls from bypassing rate limiting (filigree-5bee22).
+            _scan_cooldowns[cooldown_key] = now_mono
+
             # Build command — catches ValueError for malformed command strings.
             # Use canonical project-relative path so scanner output can correlate
             # with file_records/path keys from register_file().
@@ -2075,11 +2083,13 @@ async def _dispatch(name: str, arguments: dict[str, Any], tracker: FiligreeDB) -
                     scan_run_id=scan_run_id,
                 )
             except ValueError as e:
+                del _scan_cooldowns[cooldown_key]
                 return _text({"error": str(e), "code": "invalid_command"})
 
             # Validate command is available after template substitution.
             cmd_err = validate_scanner_command(cmd, project_root=project_root)
             if cmd_err is not None:
+                del _scan_cooldowns[cooldown_key]
                 return _text({"error": cmd_err, "code": "command_not_found"})
 
             # Register file in file_records
@@ -2097,6 +2107,7 @@ async def _dispatch(name: str, arguments: dict[str, Any], tracker: FiligreeDB) -
                     start_new_session=True,
                 )
             except OSError as e:
+                del _scan_cooldowns[cooldown_key]
                 return _text(
                     {
                         "error": f"Failed to spawn scanner process: {e}",
@@ -2119,9 +2130,6 @@ async def _dispatch(name: str, arguments: dict[str, Any], tracker: FiligreeDB) -
                         "exit_code": exit_code,
                     }
                 )
-
-            # Record cooldown timestamp
-            _scan_cooldowns[cooldown_key] = now_mono
 
             if _logger:
                 _logger.info(
