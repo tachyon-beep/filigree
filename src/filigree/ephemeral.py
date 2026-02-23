@@ -54,7 +54,7 @@ def find_available_port(filigree_dir: Path) -> int:
     with a clear "address in use" error, and (3) the caller can retry.
     """
     base = compute_port(filigree_dir)
-    for offset in range(PORT_RETRIES):
+    for offset in range(PORT_RETRIES + 1):
         candidate = base + offset
         if candidate >= 65536:
             break

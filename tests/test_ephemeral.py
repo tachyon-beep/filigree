@@ -65,6 +65,22 @@ class TestFindAvailablePort:
         finally:
             sock.close()
 
+    def test_tries_base_plus_retries_candidates(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Loop tries 1 base + PORT_RETRIES sequential ports before OS fallback."""
+        from filigree import ephemeral
+
+        checked: list[int] = []
+
+        def fake_is_port_free(port: int) -> bool:
+            checked.append(port)
+            return False  # all ports "occupied"
+
+        monkeypatch.setattr(ephemeral, "_is_port_free", fake_is_port_free)
+        find_available_port(Path("/some/project/.filigree"))
+
+        # Should check base + PORT_RETRIES sequential candidates
+        assert len(checked) == ephemeral.PORT_RETRIES + 1
+
 
 class TestPidLifecycle:
     def test_write_and_read_pid(self, tmp_path: Path) -> None:

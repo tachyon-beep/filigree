@@ -1,1 +1,0 @@
-No concrete bug found in /home/john/filigree/src/filigree/data/__init__.py

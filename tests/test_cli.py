@@ -1690,6 +1690,9 @@ class TestDashboardServerModePidTracking:
         monkeypatch.setattr("filigree.server.SERVER_CONFIG_DIR", config_dir)
         monkeypatch.setattr("filigree.server.SERVER_CONFIG_FILE", config_dir / "server.json")
         monkeypatch.setattr("filigree.server.SERVER_PID_FILE", config_dir / "server.pid")
+        # The test process is pytest, not filigree — stub ownership check so
+        # PID tracking logic (the real subject under test) isn't blocked.
+        monkeypatch.setattr("filigree.server.verify_pid_ownership", lambda *a, **kw: True)
 
         observed: dict[str, object] = {}
 
@@ -1728,6 +1731,9 @@ class TestDashboardServerModePidTracking:
         monkeypatch.setattr("filigree.server.SERVER_CONFIG_FILE", config_dir / "server.json")
         monkeypatch.setattr("filigree.server.SERVER_PID_FILE", pid_file)
         monkeypatch.setattr("filigree.server.is_pid_alive", lambda pid: pid == 54321)
+        # Stub ownership so the claim path respects the existing live PID
+        # without doing real OS process inspection on the fake PID.
+        monkeypatch.setattr("filigree.server.verify_pid_ownership", lambda *a, **kw: True)
 
         observed: dict[str, object] = {}
 
