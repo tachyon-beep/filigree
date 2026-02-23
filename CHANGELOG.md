@@ -81,6 +81,8 @@ Server/ethereal operating modes, file intelligence + scanner workflows, Graph v2
 - `start_daemon()` and `daemon_status()` verify PID ownership via `verify_pid_ownership()` — stale PIDs from reused processes no longer cause false "already running" or false status
 - `start_daemon()` wraps `subprocess.Popen` in `try/except OSError` to return a clean `DaemonResult` instead of propagating raw exceptions while holding the lock
 - `stop_daemon()` verifies process death after SIGKILL and reports failure when the process survives; PID file cleaned up in all terminal paths to prevent permanent stuck state
+- `claim_current_process_as_daemon()` now verifies PID ownership before refusing to claim — a reused PID from a non-filigree process no longer blocks the claim
+- `stop_daemon()` catches `ProcessLookupError` on SIGTERM when the process dies between the liveness check and the signal delivery
 
 #### Files/findings and scanner robustness
 
