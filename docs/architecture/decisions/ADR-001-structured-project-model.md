@@ -1,9 +1,17 @@
 # ADR-001: Structured Project Model — Strategic / Execution / Deliverable Layers
 
-**Status**: Proposed
+**Status**: Superseded by Workflow Extensibility Design
 **Date**: 2026-02-24
+**Superseded**: 2026-02-25
 **Deciders**: John (project lead)
 **Context**: Filigree's existing packs (core, planning, release) provide issue types but don't enforce a coherent project structure model
+
+> **Supersession note**: This ADR was submitted to a 5-round multi-agent facilitated discussion (6 specialist agents) which identified fundamental problems with the three-FK approach — primarily that hardcoded FK columns violate the domain-agnostic engine philosophy, create schema-to-pack coupling, and don't extend to non-software domains. The discussion produced a replacement design: a unified `item_links` table with registry-governed link types, universal container roles (Goal/Cycle/Stream), and a clean-break v2.0 architecture.
+>
+> - **Replacement design**: [docs/plans/2026-02-25-workflow-extensibility-design.md](../../plans/2026-02-25-workflow-extensibility-design.md)
+> - **Discussion transcript**: [docs/plans/2026-02-25-workflow-discussion-transcript.md](../../plans/2026-02-25-workflow-discussion-transcript.md)
+> - **Review annex**: [docs/plans/2026-02-25-workflow-review-annex.md](../../plans/2026-02-25-workflow-review-annex.md)
+> - **Tracking**: filigree-b86cf6d780 (v2.0 — Workflow Extensibility)
 
 ## Summary
 
