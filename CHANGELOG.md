@@ -133,7 +133,11 @@ Server/ethereal operating modes, file intelligence + scanner workflows, Graph v2
 - `claim-next` wraps `db.claim_next()` in `ValueError` handling with JSON/plaintext error output
 - `session-context` and `ensure-dashboard` hooks now log at WARNING and emit stderr message on failure instead of swallowing at DEBUG
 - `read_config()` catches `JSONDecodeError`/`OSError` — corrupt `config.json` returns defaults with warning instead of cascading crashes
-- MCP `_build_workflow_text` fallback now logs at WARNING instead of silently returning stale static text
+- MCP `_build_workflow_text` fallback now logs at ERROR (not WARNING) since a failing template registry indicates a real problem
+- MCP `get_workflow_prompt` narrows `except RuntimeError` to only silence "not initialized"; unexpected RuntimeErrors now logged at ERROR
+- `generate_session_context` freshness-check failure warning now includes `project_root` for debuggability
+- `ProjectStore.reload()` DB close errors now log at WARNING (matching `close_all()`) instead of DEBUG
+- `create_app` MCP ImportError now logged at DEBUG with `exc_info` instead of silently swallowed
 - MCP `release_claim` tool description corrected: clarifies it clears assignee only (does not change status)
 - `_install_mcp_server_mode` prefix-read failure narrowed to `JSONDecodeError`/`OSError` and elevated to WARNING; `_install_mcp_ethereal_mode` logs `claude mcp add` stderr on failure
 - Duplicate `_check_same_thread` assignment removed from `FiligreeDB.__init__`

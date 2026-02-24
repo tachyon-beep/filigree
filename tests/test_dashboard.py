@@ -2082,6 +2082,34 @@ class TestProjectStore:
         assert "bravo" not in project_store._dbs
         assert bravo_db._conn is None
 
+    def test_reload_logs_db_close_error_at_warning(self, project_store: ProjectStore, tmp_path: Path) -> None:
+        """Bug filigree-191611: reload must log DB close errors at warning, not debug."""
+        import json
+        from unittest.mock import patch
+
+        # Force a DB handle to exist
+        bravo_db = project_store.get_db("bravo")
+        assert "bravo" in project_store._dbs
+
+        # Make close() raise
+        original_close = bravo_db.close
+        bravo_db.close = lambda: (_ for _ in ()).throw(RuntimeError("close failed"))  # type: ignore[assignment]
+
+        # Remove bravo from config so reload tries to close it
+        config_dir = tmp_path / ".config" / "filigree"
+        existing = json.loads((config_dir / "server.json").read_text())
+        to_remove = [k for k, v in existing["projects"].items() if v["prefix"] == "bravo"]
+        for k in to_remove:
+            del existing["projects"][k]
+        (config_dir / "server.json").write_text(json.dumps(existing))
+
+        with patch("filigree.dashboard.logger") as mock_logger:
+            project_store.reload()
+
+        mock_logger.warning.assert_called_once()
+        assert "bravo" in str(mock_logger.warning.call_args)
+        bravo_db.close = original_close  # type: ignore[assignment]
+
     def test_reload_evicts_db_handle_when_project_path_changes(self, project_store: ProjectStore, tmp_path: Path) -> None:
         import json
 

@@ -252,7 +252,7 @@ def _build_workflow_text() -> str:
 
         return "\n".join(lines) + "\n"
     except Exception:
-        logging.getLogger(__name__).warning(
+        logging.getLogger(__name__).error(
             "Failed to build dynamic workflow text; falling back to static",
             exc_info=True,
         )
@@ -295,8 +295,9 @@ async def get_workflow_prompt(name: str, arguments: dict[str, str] | None = None
             messages.append(
                 PromptMessage(role="user", content=TextContent(type="text", text=summary)),
             )
-        except RuntimeError:
-            pass  # DB not initialized — skip context
+        except RuntimeError as exc:
+            if "not initialized" not in str(exc):
+                logging.getLogger(__name__).error("Unexpected RuntimeError building prompt context", exc_info=True)
     return GetPromptResult(description="Filigree workflow guide with project context", messages=messages)
 
 

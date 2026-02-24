@@ -966,6 +966,34 @@ class TestDynamicWorkflowPrompt:
         assert "task" in text.lower()
         assert "Registered Types" in text or "Key tools" in text
 
+    async def test_build_workflow_text_error_logs_at_error_level(self, mcp_db: FiligreeDB) -> None:
+        """Bug filigree-964d67: template registry failures must log at error, not warning."""
+        import logging
+
+        import filigree.mcp_server as mcp_mod
+
+        original = mcp_mod._get_db
+
+        def _boom() -> None:
+            raise RuntimeError("template registry broken")
+
+        mcp_mod._get_db = _boom
+        try:
+            logger = logging.getLogger("filigree.mcp_server")
+            with pytest.MonkeyPatch.context() as mp:
+                logged_errors: list[str] = []
+                logged_warnings: list[str] = []
+                mp.setattr(logger, "error", lambda msg, *a, **kw: logged_errors.append(msg))
+                mp.setattr(logger, "warning", lambda msg, *a, **kw: logged_warnings.append(msg))
+                from filigree.mcp_server import _build_workflow_text
+
+                text = _build_workflow_text()
+            assert "Dynamic workflow info unavailable" in text
+            assert len(logged_errors) == 1
+            assert logged_warnings == []
+        finally:
+            mcp_mod._get_db = original
+
     async def test_workflow_prompt_fallback_without_db(self) -> None:
         import filigree.mcp_server as mcp_mod
 
@@ -977,6 +1005,56 @@ class TestDynamicWorkflowPrompt:
             assert "Filigree Workflow" in text
         finally:
             mcp_mod.db = original_db
+
+
+class TestPromptRuntimeErrorNarrowing:
+    """Bug filigree-0458c5: get_workflow_prompt should only silence 'not initialized' RuntimeError."""
+
+    async def test_unexpected_runtime_error_is_logged(self, mcp_db: FiligreeDB) -> None:
+        """Non-initialization RuntimeErrors must be logged at error level, not swallowed."""
+        import logging
+
+        import filigree.mcp_server as mcp_mod
+
+        original = mcp_mod.generate_summary
+
+        def _boom(_db: object) -> str:
+            raise RuntimeError("maximum recursion depth exceeded")
+
+        mcp_mod.generate_summary = _boom
+        try:
+            logger = logging.getLogger("filigree.mcp_server")
+            with pytest.MonkeyPatch.context() as mp:
+                logged_errors: list[str] = []
+                mp.setattr(logger, "error", lambda msg, *a, **kw: logged_errors.append(msg))
+                result = await get_workflow_prompt("filigree-workflow", {"include_context": "true"})
+            assert len(result.messages) >= 1  # prompt still returned
+            assert any("Unexpected" in e for e in logged_errors)
+        finally:
+            mcp_mod.generate_summary = original
+
+    async def test_not_initialized_error_is_silenced(self, mcp_db: FiligreeDB) -> None:
+        """'not initialized' RuntimeError should be silently ignored (expected at startup)."""
+        import logging
+
+        import filigree.mcp_server as mcp_mod
+
+        original = mcp_mod.generate_summary
+
+        def _not_init(_db: object) -> str:
+            raise RuntimeError("DB not initialized")
+
+        mcp_mod.generate_summary = _not_init
+        try:
+            logger = logging.getLogger("filigree.mcp_server")
+            with pytest.MonkeyPatch.context() as mp:
+                logged_errors: list[str] = []
+                mp.setattr(logger, "error", lambda msg, *a, **kw: logged_errors.append(msg))
+                result = await get_workflow_prompt("filigree-workflow", {"include_context": "true"})
+            assert len(result.messages) == 1  # no context appended
+            assert logged_errors == []  # no error logged
+        finally:
+            mcp_mod.generate_summary = original
 
 
 class TestInstructionsUpdate:

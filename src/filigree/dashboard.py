@@ -160,7 +160,7 @@ class ProjectStore:
             try:
                 db.close()
             except Exception:
-                logger.debug("Error closing removed project DB for key=%r", key, exc_info=True)
+                logger.warning("Error closing removed project DB for key=%r", key, exc_info=True)
 
         return {
             "added": sorted(new_keys - old_keys),
@@ -1406,7 +1406,7 @@ def create_app(*, server_mode: bool = False) -> Any:
         else:
             _mcp_handler, _mcp_lifespan_factory = create_mcp_app(db_resolver=lambda: _db)
     except ImportError:
-        pass  # MCP SDK not installed
+        logger.debug("MCP streamable-HTTP not available (SDK not installed or import error)", exc_info=True)
 
     @contextlib.asynccontextmanager
     async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
