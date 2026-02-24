@@ -291,10 +291,10 @@ export function renderTypeKanban(stateColumns, template) {
       const issues = stateColumns[s.name] || [];
       const catColor = CATEGORY_COLORS[s.category] || "#64748B";
       return (
-        `<div class="kanban-col flex flex-col" data-status="${s.name}" data-status-category="${s.category}">` +
+        `<div class="kanban-col flex flex-col" data-status="${escHtml(s.name)}" data-status-category="${escHtml(s.category)}">` +
         '<div class="flex items-center gap-2 mb-2 px-1">' +
         `<span class="w-2 h-2 rounded-full" style="background:${catColor}"></span>` +
-        `<span class="font-medium text-xs" style="color:var(--text-primary)">${s.name}</span>` +
+        `<span class="font-medium text-xs" style="color:var(--text-primary)">${escHtml(s.name)}</span>` +
         `<span class="text-xs" style="color:var(--text-muted)">${issues.length}</span>` +
         "</div>" +
         '<div class="flex flex-col gap-2 overflow-y-auto scrollbar-thin pr-1 min-h-[200px]" style="max-height: calc(100vh - 160px);">' +

@@ -207,6 +207,17 @@ class TestValidateScannerCommand:
         assert err is not None
         assert "not found" in err
 
+    def test_malformed_token_list_returns_error(self) -> None:
+        """Bug filigree-0723b7: non-stringable tokens return error, not crash."""
+
+        # An object whose __str__ raises TypeError
+        class BadToken:
+            def __str__(self) -> str:
+                raise TypeError("cannot convert")
+
+        err = validate_scanner_command([BadToken()])
+        assert err == "Malformed command token list"
+
 
 class TestScannerExamples:
     @staticmethod

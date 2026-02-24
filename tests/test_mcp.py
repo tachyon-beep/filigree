@@ -8,7 +8,7 @@ from contextlib import asynccontextmanager
 from contextvars import ContextVar
 from pathlib import Path
 from typing import Any
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -1086,6 +1086,56 @@ class TestExportImportPathTraversal:
         assert "error" in data
         assert data["code"] != "invalid_path"
 
+    async def test_import_jsonl_unexpected_exception_propagates(self, mcp_db: FiligreeDB) -> None:
+        """Unexpected exceptions (not ValueError/OSError/sqlite3.Error) must propagate."""
+        project_root = mcp_db.db_path.parent.parent
+        valid_file = project_root / "valid.jsonl"
+        valid_file.write_text("")  # empty is fine for path validation
+
+        with (
+            patch.object(mcp_db, "import_jsonl", side_effect=RuntimeError("unexpected internal error")),
+            pytest.raises(RuntimeError, match="unexpected internal error"),
+        ):
+            await call_tool("import_jsonl", {"input_path": "valid.jsonl"})
+
+    async def test_import_jsonl_expected_exceptions_handled_gracefully(self, mcp_db: FiligreeDB) -> None:
+        """ValueError, OSError, sqlite3.Error must be caught and return structured error."""
+        import sqlite3
+
+        project_root = mcp_db.db_path.parent.parent
+        valid_file = project_root / "valid.jsonl"
+        valid_file.write_text("")
+
+        for exc_type in (ValueError, OSError, sqlite3.OperationalError):
+            with patch.object(mcp_db, "import_jsonl", side_effect=exc_type("test error")):
+                result = await call_tool("import_jsonl", {"input_path": "valid.jsonl"})
+                data = _parse(result)
+                assert "error" in data, f"{exc_type.__name__} must be caught gracefully"
+                assert data["code"] == "import_error"
+
+
+class TestRefreshSummaryLogging:
+    """Bug filigree-c13236: _refresh_summary must log even when _logger is None."""
+
+    async def test_refresh_summary_logs_when_logger_is_none(self, mcp_db: FiligreeDB) -> None:
+        """When _logger is None, fallback to logging.getLogger(__name__)."""
+        import filigree.mcp_server as mcp_mod
+
+        original_logger = mcp_mod._logger
+        mcp_mod._logger = None
+
+        try:
+            with (
+                patch.object(mcp_mod, "write_summary", side_effect=OSError("disk full")),
+                patch("logging.getLogger") as mock_get_logger,
+            ):
+                mock_fallback = MagicMock()
+                mock_get_logger.return_value = mock_fallback
+                mcp_mod._refresh_summary()
+                mock_fallback.warning.assert_called_once()
+        finally:
+            mcp_mod._logger = original_logger
+
 
 class TestMCPTransactionSafety:
     """MCP-level safety net: no dirty transactions survive after failed tool calls."""
@@ -1627,6 +1677,33 @@ class TestScannerTools:
             scanner_exec.unlink(missing_ok=True)
             (scanners_dir / "relative-scanner.toml").unlink(missing_ok=True)
             mcp_mod._scan_cooldowns.clear()
+
+    async def test_trigger_scan_response_includes_log_path(self, mcp_db: FiligreeDB) -> None:
+        """trigger_scan must include log_path in response and create the log file."""
+        import filigree.mcp_server as mcp_mod
+
+        project_root = mcp_mod._filigree_dir.parent
+        target = project_root / "log_target.py"
+        try:
+            target.write_text("x = 1\n")
+            self._write_scanner_toml(mcp_db)
+            result = _parse(
+                await call_tool(
+                    "trigger_scan",
+                    {"scanner": "test-scanner", "file_path": "log_target.py"},
+                )
+            )
+            assert "error" not in result
+            assert "log_path" in result, "Response must include log_path for diagnostics"
+            assert result["log_path"].endswith(".log")
+
+            # Verify the log file was actually created on disk
+            scan_log = mcp_mod._filigree_dir / "scans"
+            assert scan_log.is_dir(), ".filigree/scans/ directory must exist"
+            log_files = list(scan_log.glob("*.log"))
+            assert len(log_files) >= 1, "At least one scan log file must be created"
+        finally:
+            target.unlink(missing_ok=True)
 
     async def test_trigger_scan_cooldown_is_scoped_per_project(self, tmp_path: Path) -> None:
         import filigree.mcp_server as mcp_mod

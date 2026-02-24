@@ -192,7 +192,7 @@ def validate_scanner_command(
     else:
         try:
             tokens = [str(t) for t in command]
-        except Exception:
+        except (TypeError, ValueError):
             return "Malformed command token list"
     if not tokens:
         return "Empty command"

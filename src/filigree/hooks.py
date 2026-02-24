@@ -202,7 +202,7 @@ def generate_session_context() -> str | None:
     try:
         freshness_messages = _check_instructions_freshness(project_root)
     except Exception:
-        logger.debug("Instructions freshness check failed", exc_info=True)
+        logger.warning("Instructions freshness check failed", exc_info=True)
 
     config = read_config(filigree_dir)
     db = FiligreeDB(
@@ -392,8 +392,8 @@ def _ensure_dashboard_server_mode(filigree_dir: Path, port: int | None) -> str:
         )
         with urllib.request.urlopen(req, timeout=2):  # noqa: S310
             pass
-    except Exception:
-        logger.debug("Failed to POST /api/reload to daemon", exc_info=True)
-        reload_warning = " (reload failed)"
+    except Exception as exc:
+        logger.warning("Failed to POST /api/reload to daemon: %s", exc, exc_info=True)
+        reload_warning = f" (reload failed: {type(exc).__name__})"
 
     return f"Filigree server running on http://localhost:{daemon_port}{reload_warning}"

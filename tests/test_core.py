@@ -349,3 +349,20 @@ class TestWriteAtomic:
         target.write_text("original")
         write_atomic(target, "updated")
         assert target.read_text() == "updated"
+
+    def test_error_cleanup_removes_tmp_and_preserves_original(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Bug filigree-07485f: on os.replace failure, temp file must be removed and original preserved."""
+        target = tmp_path / "test.txt"
+        target.write_text("precious data")
+        tmp_file = target.with_suffix(".txt.tmp")
+
+        def failing_replace(src: object, dst: object) -> None:
+            raise OSError("disk full")
+
+        monkeypatch.setattr("os.replace", failing_replace)
+
+        with pytest.raises(OSError, match="disk full"):
+            write_atomic(target, "new content that should not land")
+
+        assert target.read_text() == "precious data", "Original file must be untouched"
+        assert not tmp_file.exists(), "Temp file must be cleaned up on failure"

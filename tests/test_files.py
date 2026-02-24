@@ -130,6 +130,23 @@ class TestListFiles:
         files = db.list_files(path_prefix="src/core/")
         assert len(files) == 2
 
+    def test_list_with_path_prefix_escapes_like_wildcards(self, db: FiligreeDB) -> None:
+        """path_prefix containing SQL LIKE wildcards (% and _) must match literally."""
+        db.register_file("src/file_test.py")
+        db.register_file("src/filextest.py")  # _ wildcard would match this
+        db.register_file("src/file%test.py")
+        db.register_file("src/fileABCtest.py")  # % wildcard would match this
+
+        # Underscore must be literal — only file_test.py should match
+        files = db.list_files(path_prefix="file_test")
+        assert len(files) == 1
+        assert files[0].path == "src/file_test.py"
+
+        # Percent must be literal — only file%test.py should match
+        files = db.list_files(path_prefix="file%test")
+        assert len(files) == 1
+        assert files[0].path == "src/file%test.py"
+
     def test_list_sorted_by_path(self, db: FiligreeDB) -> None:
         db.register_file("z.py")
         db.register_file("a.py")
@@ -1407,6 +1424,17 @@ class TestFileEndpoints:
         assert err["code"] == "VALIDATION_ERROR"
         assert "Issue not found" in err["message"]
 
+    async def test_post_invalid_json_body_returns_400(self, client: AsyncClient, api_db: FiligreeDB) -> None:
+        """Bug filigree-4d8aa1: invalid JSON must return 400, not swallow unexpected exceptions."""
+        f = api_db.register_file("src/main.py")
+        resp = await client.post(
+            f"/api/files/{f.id}/associations",
+            content=b"this is not json",
+            headers={"Content-Type": "application/json"},
+        )
+        assert resp.status_code == 400
+        assert "Invalid JSON body" in resp.json()["error"]["message"]
+
     async def test_schema_endpoint_statuses_updated(self, client: AsyncClient) -> None:
         resp = await client.get("/api/files/_schema")
         data = resp.json()
@@ -2071,6 +2099,21 @@ class TestPaginationMetadata:
         result = db.list_files_paginated(language="python")
         assert result["total"] == 5
         assert len(result["results"]) == 5
+
+    def test_list_files_paginated_escapes_like_wildcards(self, db: FiligreeDB) -> None:
+        """path_prefix LIKE wildcards must be escaped in paginated variant too."""
+        db.register_file("src/file_test.py")
+        db.register_file("src/filextest.py")
+        db.register_file("src/file%test.py")
+        db.register_file("src/fileABCtest.py")
+
+        result = db.list_files_paginated(path_prefix="file_test")
+        assert result["total"] == 1
+        assert result["results"][0]["path"] == "src/file_test.py"
+
+        result = db.list_files_paginated(path_prefix="file%test")
+        assert result["total"] == 1
+        assert result["results"][0]["path"] == "src/file%test.py"
 
 
 class TestBidirectionalEndpoints:

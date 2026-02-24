@@ -15,6 +15,7 @@ import asyncio
 import json
 import logging
 import secrets
+import sqlite3
 import subprocess
 import sys
 import time
@@ -115,8 +116,7 @@ def _refresh_summary() -> None:
         try:
             write_summary(_get_db(), filigree_dir / SUMMARY_FILENAME)
         except Exception:
-            if _logger:
-                _logger.warning("Failed to refresh context.md", exc_info=True)
+            (_logger or logging.getLogger(__name__)).warning("Failed to refresh context.md", exc_info=True)
 
 
 def _safe_path(raw: str) -> Path:
@@ -1594,7 +1594,8 @@ async def _dispatch(name: str, arguments: dict[str, Any], tracker: FiligreeDB) -
                 count = tracker.import_jsonl(safe, merge=arguments.get("merge", False))
                 _refresh_summary()
                 return _text({"status": "ok", "records": count, "path": str(safe)})
-            except Exception as e:
+            except (ValueError, OSError, sqlite3.Error) as e:
+                logging.getLogger(__name__).warning("import_jsonl failed: %s", e, exc_info=True)
                 return _text({"error": str(e), "code": "import_error"})
 
         case "archive_closed":
@@ -2099,18 +2100,28 @@ async def _dispatch(name: str, arguments: dict[str, Any], tracker: FiligreeDB) -
             # Register file in file_records
             file_record = tracker.register_file(canonical_path)
 
-            # Spawn detached process
+            # Spawn detached process with stderr captured to a log file
+            # so scanner errors are diagnosable.
             # Scanner TOML files are project-local config editable only by
             # users with filesystem access (not via MCP). S603 is acceptable.
+            scan_log_dir = filigree_dir / "scans"
+            scan_log_dir.mkdir(parents=True, exist_ok=True)
+            scan_log_path = scan_log_dir / f"{scan_run_id}.log"
+            try:
+                scan_log_fd = open(scan_log_path, "w")  # noqa: SIM115
+            except OSError:
+                scan_log_fd = None
             try:
                 proc = subprocess.Popen(
                     cmd,
                     cwd=str(project_root),
                     stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
+                    stderr=scan_log_fd if scan_log_fd is not None else subprocess.DEVNULL,
                     start_new_session=True,
                 )
             except OSError as e:
+                if scan_log_fd is not None:
+                    scan_log_fd.close()
                 del _scan_cooldowns[cooldown_key]
                 return _text(
                     {
@@ -2125,13 +2136,17 @@ async def _dispatch(name: str, arguments: dict[str, Any], tracker: FiligreeDB) -
             await asyncio.sleep(0.2)
             exit_code = proc.poll()
             if exit_code is not None and exit_code != 0:
+                log_hint = ""
+                if scan_log_path.exists():
+                    log_hint = f" Check log: {scan_log_path.relative_to(filigree_dir.parent)}"
                 return _text(
                     {
-                        "error": f"Scanner process exited immediately with code {exit_code}",
+                        "error": f"Scanner process exited immediately with code {exit_code}.{log_hint}",
                         "code": "spawn_failed",
                         "scanner": scanner_name,
                         "file_id": file_record.id,
                         "exit_code": exit_code,
+                        "log_path": str(scan_log_path.relative_to(filigree_dir.parent)),
                     }
                 )
 
@@ -2144,6 +2159,7 @@ async def _dispatch(name: str, arguments: dict[str, Any], tracker: FiligreeDB) -
                     scan_run_id,
                 )
 
+            log_rel = str(scan_log_path.relative_to(filigree_dir.parent))
             scan_result: dict[str, Any] = {
                 "status": "triggered",
                 "scanner": scanner_name,
@@ -2151,10 +2167,12 @@ async def _dispatch(name: str, arguments: dict[str, Any], tracker: FiligreeDB) -
                 "file_id": file_record.id,
                 "scan_run_id": scan_run_id,
                 "pid": proc.pid,
+                "log_path": log_rel,
                 "message": (
                     f"Scan triggered with run_id={scan_run_id!r}. "
                     f"Results will be POSTed to {api_url}. "
-                    f"Poll findings via file_id={file_record.id!r}."
+                    f"Poll findings via file_id={file_record.id!r}. "
+                    f"Scanner log: {log_rel}"
                 ),
             }
             if file_type_warning:

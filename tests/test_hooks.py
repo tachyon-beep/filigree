@@ -550,3 +550,49 @@ class TestEnsureDashboardEthereal:
         assert "http://localhost:9911" in result
         assert observed["url"] == "http://127.0.0.1:9911/api/reload"
         assert observed["timeout"] == 2
+
+    def test_server_mode_reload_failure_logs_at_warning(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Bug filigree-57b02c: reload POST failure must log at warning, not debug."""
+        from filigree.server import ServerConfig
+
+        filigree_dir = tmp_path / ".filigree"
+        filigree_dir.mkdir()
+        (filigree_dir / "config.json").write_text(json.dumps({"prefix": "test", "version": 1, "mode": "server"}))
+        db = FiligreeDB(filigree_dir / DB_FILENAME, prefix="test")
+        db.initialize()
+        db.close()
+
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr("filigree.server.register_project", lambda _p: None)
+        monkeypatch.setattr("filigree.server.read_server_config", lambda: ServerConfig(port=9911))
+        monkeypatch.setattr("filigree.hooks._is_port_listening", lambda *a: True)
+        monkeypatch.setattr("urllib.request.urlopen", lambda *a, **kw: (_ for _ in ()).throw(ConnectionRefusedError("refused")))
+
+        with patch("filigree.hooks.logger") as mock_logger:
+            result = ensure_dashboard_running()
+
+        mock_logger.warning.assert_called_once()
+        assert "ConnectionRefusedError" in result
+
+
+class TestFreshnessCheckLogLevel:
+    """Bug filigree-ff0974: freshness check failure must log at warning, not debug."""
+
+    def test_freshness_check_failure_logs_at_warning(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        db_dir = tmp_path / ".filigree"
+        db_dir.mkdir()
+        (db_dir / "config.json").write_text(json.dumps({"prefix": "test", "version": 1}))
+        db = FiligreeDB(db_dir / DB_FILENAME, prefix="test")
+        db.initialize()
+        db.close()
+
+        with (
+            patch("filigree.hooks.find_filigree_root", return_value=db_dir),
+            patch("filigree.hooks.read_config", return_value={"prefix": "test"}),
+            patch("filigree.hooks._check_instructions_freshness", side_effect=RuntimeError("boom")),
+            patch("filigree.hooks.logger") as mock_logger,
+        ):
+            result = generate_session_context()
+
+        assert result is not None
+        mock_logger.warning.assert_called_once()

@@ -446,6 +446,38 @@ class TestDaemonLifecycle:
         assert not pid_file.exists()
 
 
+class TestStopDaemonEarlyReturns:
+    """Bug filigree-6908d9: stop_daemon() early-return branches need test coverage."""
+
+    def test_stop_daemon_no_pid_file_returns_not_running(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """No PID file at all → success=False, descriptive message."""
+        config_dir = tmp_path / ".config" / "filigree"
+        pid_file = config_dir / "server.pid"
+        monkeypatch.setattr("filigree.server.SERVER_PID_FILE", pid_file)
+
+        from filigree.server import stop_daemon
+
+        result = stop_daemon()
+        assert not result.success
+        assert "No PID file" in result.message
+
+    def test_stop_daemon_dead_pid_cleans_up_file(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """PID file exists but process is dead → success=True, PID file removed."""
+        config_dir = tmp_path / ".config" / "filigree"
+        config_dir.mkdir(parents=True)
+        pid_file = config_dir / "server.pid"
+        pid_file.write_text(json.dumps({"pid": 99999, "cmd": "filigree"}))
+        monkeypatch.setattr("filigree.server.SERVER_PID_FILE", pid_file)
+        monkeypatch.setattr("filigree.server.is_pid_alive", lambda pid: False)
+
+        from filigree.server import stop_daemon
+
+        result = stop_daemon()
+        assert result.success
+        assert "not running" in result.message.lower()
+        assert not pid_file.exists(), "PID file must be cleaned up when process is dead"
+
+
 class TestStartDaemonLocking:
     """Bug filigree-f6c971: start_daemon must serialize with fcntl.flock."""
 
@@ -479,6 +511,42 @@ class TestStartDaemonLocking:
         assert fcntl.LOCK_EX in lock_ops
 
 
+class TestStartDaemonAlreadyRunning:
+    """Bug filigree-075ff0: start_daemon must detect already-running filigree daemon."""
+
+    def test_start_daemon_already_running_prevents_duplicate(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """If PID file points to a live filigree process, start must fail (no duplicate spawn)."""
+        config_dir = tmp_path / ".config" / "filigree"
+        config_dir.mkdir(parents=True)
+        pid_file = config_dir / "server.pid"
+        pid_file.write_text(json.dumps({"pid": 12345, "cmd": "filigree"}))
+        monkeypatch.setattr("filigree.server.SERVER_CONFIG_DIR", config_dir)
+        monkeypatch.setattr("filigree.server.SERVER_CONFIG_FILE", config_dir / "server.json")
+        monkeypatch.setattr("filigree.server.SERVER_PID_FILE", pid_file)
+
+        # PID is alive AND is a filigree process
+        monkeypatch.setattr("filigree.server.is_pid_alive", lambda pid: True)
+        monkeypatch.setattr("filigree.server.verify_pid_ownership", lambda *a, **kw: True)
+
+        popen_calls: list[object] = []
+
+        def mock_popen(cmd, **kwargs):  # type: ignore[no-untyped-def]
+            popen_calls.append(cmd)
+            mock = MagicMock()
+            mock.pid = 99999
+            mock.poll.return_value = None
+            return mock
+
+        monkeypatch.setattr("filigree.server.subprocess.Popen", mock_popen)
+
+        from filigree.server import start_daemon
+
+        result = start_daemon()
+        assert not result.success
+        assert "already running" in result.message.lower()
+        assert popen_calls == [], "Must NOT spawn a new process when daemon already running"
+
+
 class TestStartDaemonPopenFailure:
     """B2 from plan review: Popen OSError must return DaemonResult, not raise."""
 
@@ -498,6 +566,30 @@ class TestStartDaemonPopenFailure:
         result = start_daemon()
         assert not result.success
         assert "Failed to start" in result.message
+
+
+class TestStopDaemonRefusesNonFiligree:
+    """Bug filigree-250c9a: stop_daemon must refuse to kill non-filigree processes."""
+
+    def test_stop_daemon_refuses_non_filigree_pid(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """PID alive but not filigree → success=False, refuses to kill."""
+        config_dir = tmp_path / ".config" / "filigree"
+        config_dir.mkdir(parents=True)
+        pid_file = config_dir / "server.pid"
+        pid_file.write_text(json.dumps({"pid": 54321, "cmd": "filigree"}))
+        monkeypatch.setattr("filigree.server.SERVER_PID_FILE", pid_file)
+        monkeypatch.setattr("filigree.server.is_pid_alive", lambda pid: True)
+        monkeypatch.setattr("filigree.server.verify_pid_ownership", lambda *a, **kw: False)
+
+        kills: list[int] = []
+        monkeypatch.setattr("os.kill", lambda pid, sig: kills.append(pid))
+
+        from filigree.server import stop_daemon
+
+        result = stop_daemon()
+        assert not result.success
+        assert "refusing to kill" in result.message.lower()
+        assert kills == [], "Must NOT send any signal to non-filigree process"
 
 
 class TestStopDaemonSigkill:

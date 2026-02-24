@@ -207,7 +207,7 @@ async def _parse_json_body(request: Request) -> dict[str, Any] | JSONResponse:
     """Parse and validate a JSON object body, returning 400 on failure."""
     try:
         body = await request.json()
-    except Exception:
+    except (json.JSONDecodeError, ValueError, UnicodeDecodeError):
         return _error_response("Invalid JSON body", "VALIDATION_ERROR", 400)
     if not isinstance(body, dict):
         return _error_response("Request body must be a JSON object", "VALIDATION_ERROR", 400)

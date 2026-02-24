@@ -2596,8 +2596,9 @@ class FiligreeDB:
             clauses.append("language = ?")
             params.append(language)
         if path_prefix is not None:
-            clauses.append("path LIKE ?")
-            params.append(f"%{path_prefix}%")
+            escaped = path_prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            clauses.append("path LIKE ? ESCAPE '\\'")
+            params.append(f"%{escaped}%")
 
         where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
         valid_sorts = {"updated_at", "first_seen", "path", "language"}
@@ -2642,8 +2643,9 @@ class FiligreeDB:
             clauses.append("language = ?")
             params.append(language)
         if path_prefix is not None:
-            clauses.append("path LIKE ?")
-            params.append(f"%{path_prefix}%")
+            escaped = path_prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            clauses.append("path LIKE ? ESCAPE '\\'")
+            params.append(f"%{escaped}%")
         if min_findings is not None and min_findings > 0:
             clauses.append(
                 "(SELECT COUNT(*) FROM scan_findings sf"

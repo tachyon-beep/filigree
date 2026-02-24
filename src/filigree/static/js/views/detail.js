@@ -273,7 +273,7 @@ export async function openDetail(issueId) {
           : "background:var(--surface-overlay);color:var(--text-muted)";
         const cls = t.ready ? "" : "cursor-not-allowed";
         const missingText = t.missing_fields.length
-          ? ` <span style="color:var(--text-muted)">(missing: ${t.missing_fields.join(", ")})</span>`
+          ? ` <span style="color:var(--text-muted)">(missing: ${t.missing_fields.map((f) => escHtml(f)).join(", ")})</span>`
           : "";
         return (
           `<button ${t.ready ? `onclick="updateIssue('${safeId}',{status:'${escJsSingle(t.to)}'},this)"` : "disabled"}` +
