@@ -4,6 +4,7 @@ from pathlib import Path
 
 from filigree.core import FiligreeDB
 from filigree.db_events import EventsMixin
+from filigree.db_files import FilesMixin
 from filigree.db_issues import IssuesMixin
 from filigree.db_meta import MetaMixin
 from filigree.db_planning import PlanningMixin
@@ -171,3 +172,29 @@ def test_search_issues(db: FiligreeDB) -> None:
     # search_issues uses FTS5 or LIKE fallback — both should find it
     results = db.search_issues("searchable")
     assert len(results) >= 1
+
+
+# -- FilesMixin -------------------------------------------------------------
+
+
+def test_files_mixin_is_base_class() -> None:
+    """FiligreeDB should inherit from FilesMixin."""
+    assert issubclass(FiligreeDB, FilesMixin)
+
+
+def test_register_and_get_file(db: FiligreeDB) -> None:
+    """register_file and get_file should work through FilesMixin composition."""
+    f = db.register_file(path="src/example.py", language="python")
+    retrieved = db.get_file(f.id)
+    assert retrieved.path == "src/example.py"
+    assert retrieved.language == "python"
+
+
+def test_file_associations(db: FiligreeDB) -> None:
+    """add_file_association and get_file_associations should work."""
+    issue = db.create_issue(title="assoc-test")
+    f = db.register_file(path="src/assoc.py")
+    db.add_file_association(f.id, issue.id, assoc_type="bug_in")
+    assocs = db.get_file_associations(f.id)
+    assert len(assocs) == 1
+    assert assocs[0]["issue_id"] == issue.id
