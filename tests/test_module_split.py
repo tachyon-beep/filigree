@@ -1,7 +1,10 @@
 """Verify mixin-based FiligreeDB composition works correctly."""
 
+from pathlib import Path
+
 from filigree.core import FiligreeDB
 from filigree.db_events import EventsMixin
+from filigree.db_meta import MetaMixin
 from filigree.db_workflow import WorkflowMixin
 
 
@@ -53,3 +56,28 @@ def test_validate_status(db: FiligreeDB) -> None:
     """_validate_status should work through mixin composition."""
     # Should not raise for valid status
     db._validate_status("open", "task")
+
+
+# -- MetaMixin --------------------------------------------------------------
+
+
+def test_meta_mixin_is_base_class() -> None:
+    """FiligreeDB should inherit from MetaMixin."""
+    assert issubclass(FiligreeDB, MetaMixin)
+
+
+def test_comments_available(db: FiligreeDB) -> None:
+    """Comment operations should work through mixin composition."""
+    issue = db.create_issue(title="test")
+    comment_id = db.add_comment(issue.id, "hello")
+    assert isinstance(comment_id, int)
+    comments = db.get_comments(issue.id)
+    assert len(comments) == 1
+
+
+def test_export_import_roundtrip(db: FiligreeDB, tmp_path: Path) -> None:
+    """Export/import should work through mixin composition."""
+    db.create_issue(title="export-test")
+    out = str(tmp_path / "export.jsonl")
+    count = db.export_jsonl(out)
+    assert count > 0
