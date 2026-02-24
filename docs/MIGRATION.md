@@ -76,7 +76,7 @@ Created .filigree/config.json
 Created .filigree/filigree.db
 ```
 
-This creates the `.filigree/` directory. Issue IDs will use the format `{prefix}-{6hex}` where the prefix defaults to the directory name.
+This creates the `.filigree/` directory. Issue IDs will use the format `{prefix}-{10hex}` where the prefix defaults to the directory name.
 
 ### Set up integrations
 

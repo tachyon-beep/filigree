@@ -207,7 +207,7 @@ Filigree data lives in `.filigree/` and is accessed via these MCP tools.
 - **reload_templates** — refresh templates after editing .filigree/templates/
 
 ## Conventions
-- Issue IDs: `{prefix}-{6hex}` (e.g., `myproj-a3f9b2`)
+- Issue IDs: `{prefix}-{10hex}` (e.g., `myproj-a3f9b2e1c0`)
 - Priorities: P0 (critical) through P4 (low)
 - Each type has its own state machine — use `list_types` to discover
 - Use `get_valid_transitions <id>` before status changes

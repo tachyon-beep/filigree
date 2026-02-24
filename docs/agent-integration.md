@@ -61,10 +61,10 @@ When multiple agents are active, **claiming prevents double-work**. The `claim_i
 ```bash
 # Agent 1 claims successfully
 filigree --actor agent-1 claim-next --assignee agent-1
-# Returns: {"id": "proj-a3f9b2", "title": "Fix auth bug", ...}
+# Returns: {"id": "proj-a3f9b2e1c0", "title": "Fix auth bug", ...}
 
 # Agent 2 tries the same issue — fails
-filigree --actor agent-2 claim proj-a3f9b2 --assignee agent-2
+filigree --actor agent-2 claim proj-a3f9b2e1c0 --assignee agent-2
 # Returns: error — already claimed by agent-1
 ```
 
@@ -91,14 +91,14 @@ Every mutation records an **actor**. The `--actor` flag (CLI) or `actor` paramet
 
 ```bash
 filigree --actor agent-alpha create "Fix auth"
-filigree --actor agent-beta close proj-a3f9b2
+filigree --actor agent-beta close proj-a3f9b2e1c0
 ```
 
 Via MCP, every write tool accepts an `actor` parameter:
 
 ```
 create_issue(title="Fix auth", actor="agent-alpha")
-close_issue(id="proj-a3f9b2", actor="agent-beta")
+close_issue(id="proj-a3f9b2e1c0", actor="agent-beta")
 ```
 
 Event history is queryable per-issue or globally:
