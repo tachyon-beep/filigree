@@ -5,6 +5,7 @@ from pathlib import Path
 
 from filigree.core import FiligreeDB
 from filigree.db_events import EventsMixin
+from filigree.db_workflow import WorkflowMixin
 
 
 def _make_db() -> FiligreeDB:
@@ -46,4 +47,29 @@ def test_archive_compact_available() -> None:
     assert isinstance(archived, list)
     compacted = db.compact_events(keep_recent=50)
     assert isinstance(compacted, int)
+    db.close()
+
+
+# -- WorkflowMixin ----------------------------------------------------------
+
+
+def test_workflow_mixin_is_base_class() -> None:
+    """FiligreeDB should inherit from WorkflowMixin."""
+    assert issubclass(FiligreeDB, WorkflowMixin)
+
+
+def test_templates_available() -> None:
+    """Template listing should work through mixin composition."""
+    db = _make_db()
+    templates = db.list_templates()
+    assert isinstance(templates, list)
+    assert len(templates) > 0  # builtins exist
+    db.close()
+
+
+def test_validate_status() -> None:
+    """_validate_status should work through mixin composition."""
+    db = _make_db()
+    # Should not raise for valid status
+    db._validate_status("open", "task")
     db.close()
