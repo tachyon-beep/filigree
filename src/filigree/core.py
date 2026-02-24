@@ -57,7 +57,7 @@ _SKIP_EVENTS = frozenset({"transition_warning"})
 # ---------------------------------------------------------------------------
 
 Severity = Literal["critical", "high", "medium", "low", "info"]
-FindingStatus = Literal["open", "fixed", "false_positive", "wont_fix", "duplicate"]
+FindingStatus = Literal["open", "acknowledged", "fixed", "false_positive", "unseen_in_latest"]
 StatusCategory = Literal["open", "wip", "done"]
 
 
@@ -642,7 +642,6 @@ class FiligreeDB:
 
     # SQL fragment for filtering open (non-terminal) findings.
     _OPEN_FINDINGS_FILTER = "status NOT IN ('fixed', 'false_positive')"
-    _OPEN_FINDINGS_FILTER_F = "f.status NOT IN ('fixed', 'false_positive')"
     _OPEN_FINDINGS_FILTER_SF = "sf.status NOT IN ('fixed', 'false_positive')"
 
     def __init__(
@@ -2715,8 +2714,6 @@ class FiligreeDB:
         ).fetchall()
         return [self._build_file_record(r) for r in rows]
 
-    _VALID_SEVERITIES = frozenset({"critical", "high", "medium", "low", "info"})
-
     def list_files_paginated(
         self,
         *,
@@ -2755,7 +2752,7 @@ class FiligreeDB:
         if min_findings is not None and min_findings > 0:
             clauses.append(f"(SELECT COUNT(*) FROM scan_findings sf WHERE sf.file_id = fr.id AND {self._OPEN_FINDINGS_FILTER_SF}) >= ?")
             params.append(min_findings)
-        if has_severity and has_severity in self._VALID_SEVERITIES:
+        if has_severity and has_severity in VALID_SEVERITIES:
             clauses.append(
                 "(SELECT COUNT(*) FROM scan_findings sf"
                 " WHERE sf.file_id = fr.id"
@@ -3794,7 +3791,7 @@ class FiligreeDB:
                 continue
 
             self.conn.execute(
-                "DELETE FROM events WHERE id IN (  SELECT id FROM events WHERE issue_id = ? ORDER BY created_at ASC LIMIT ?)",
+                "DELETE FROM events WHERE id IN (SELECT id FROM events WHERE issue_id = ? ORDER BY created_at ASC LIMIT ?)",
                 (issue_id, event_count - keep_recent),
             )
             total_deleted += event_count - keep_recent

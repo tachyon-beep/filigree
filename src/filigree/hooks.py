@@ -201,8 +201,10 @@ def generate_session_context() -> str | None:
     freshness_messages: list[str] = []
     try:
         freshness_messages = _check_instructions_freshness(project_root)
-    except Exception:
+    except (OSError, UnicodeDecodeError, ValueError):
         logger.warning("Instructions freshness check failed for %s", project_root, exc_info=True)
+    except Exception:
+        logger.error("Unexpected error in instructions freshness check for %s", project_root, exc_info=True)
 
     config = read_config(filigree_dir)
     db = FiligreeDB(

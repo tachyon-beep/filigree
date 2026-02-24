@@ -600,7 +600,26 @@ class TestEnsureDashboardEthereal:
 class TestFreshnessCheckLogLevel:
     """Bug filigree-ff0974: freshness check failure must log at warning, not debug."""
 
-    def test_freshness_check_failure_logs_at_warning(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_freshness_check_expected_error_logs_at_warning(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        db_dir = tmp_path / ".filigree"
+        db_dir.mkdir()
+        (db_dir / "config.json").write_text(json.dumps({"prefix": "test", "version": 1}))
+        db = FiligreeDB(db_dir / DB_FILENAME, prefix="test")
+        db.initialize()
+        db.close()
+
+        with (
+            patch("filigree.hooks.find_filigree_root", return_value=db_dir),
+            patch("filigree.hooks.read_config", return_value={"prefix": "test"}),
+            patch("filigree.hooks._check_instructions_freshness", side_effect=OSError("disk full")),
+            patch("filigree.hooks.logger") as mock_logger,
+        ):
+            result = generate_session_context()
+
+        assert result is not None
+        mock_logger.warning.assert_called_once()
+
+    def test_freshness_check_unexpected_error_logs_at_error(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         db_dir = tmp_path / ".filigree"
         db_dir.mkdir()
         (db_dir / "config.json").write_text(json.dumps({"prefix": "test", "version": 1}))
@@ -617,4 +636,4 @@ class TestFreshnessCheckLogLevel:
             result = generate_session_context()
 
         assert result is not None
-        mock_logger.warning.assert_called_once()
+        mock_logger.error.assert_called_once()

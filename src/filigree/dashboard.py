@@ -120,6 +120,7 @@ class ProjectStore:
         if key not in self._dbs:
             info = self._projects[key]
             filigree_path = Path(info["path"])
+            db: FiligreeDB | None = None
             try:
                 config = read_config(filigree_path)
                 db = FiligreeDB(
@@ -131,7 +132,8 @@ class ProjectStore:
                 self._dbs[key] = db
             except Exception:
                 logger.error("Failed to open project DB for key=%r path=%s", key, filigree_path, exc_info=True)
-                db.close()
+                if db is not None:
+                    db.close()
                 raise
         return self._dbs[key]
 

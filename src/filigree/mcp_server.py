@@ -318,6 +318,15 @@ def _build_workflow_text() -> str:
                 lines.append(f"- **{pack.pack}** v{pack.version}: {type_names}")
 
         return "\n".join(lines) + "\n"
+    except sqlite3.Error:
+        logging.getLogger(__name__).error(
+            "Database error building workflow text — database may need repair",
+            exc_info=True,
+        )
+        return (
+            _WORKFLOW_TEXT_STATIC + "\n\n> **WARNING:** Database error prevented loading "
+            "workflow types. Run `filigree doctor` to diagnose.\n"
+        )
     except Exception:
         logging.getLogger(__name__).error(
             "Failed to build dynamic workflow text; falling back to static",

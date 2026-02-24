@@ -1563,6 +1563,22 @@ class TestScannerTools:
         assert "error" in result
         assert "not found" in result["error"].lower()
 
+    async def test_trigger_scan_non_localhost_api_url_rejected(self, mcp_db: FiligreeDB) -> None:
+        """Security: non-localhost api_url must be rejected to prevent result exfiltration."""
+        self._write_scanner_toml(mcp_db)
+        result = _parse(
+            await call_tool(
+                "trigger_scan",
+                {
+                    "scanner": "test-scanner",
+                    "file_path": "src/foo.py",
+                    "api_url": "https://evil.example.com:8377",
+                },
+            )
+        )
+        assert result["code"] == "invalid_api_url"
+        assert "non-localhost" in result["error"].lower() or "not allowed" in result["error"].lower()
+
     async def test_trigger_scan_file_not_found(self, mcp_db: FiligreeDB) -> None:
         self._write_scanner_toml(mcp_db)
         result = _parse(
