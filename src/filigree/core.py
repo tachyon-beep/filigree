@@ -330,10 +330,101 @@ CREATE TABLE IF NOT EXISTS file_events (
 CREATE INDEX IF NOT EXISTS idx_file_events_file ON file_events(file_id);
 """
 
-# V1 schema (without file tables) — kept for migration tests
-SCHEMA_V1_SQL = SCHEMA_SQL.split("-- ---- File records & scan findings (v2)")[0]
-if SCHEMA_V1_SQL == SCHEMA_SQL:
-    raise RuntimeError("SCHEMA_V1_SQL split marker not found — check comment text in SCHEMA_SQL")
+# V1 schema (without file tables) — kept for migration tests.
+# Defined as a standalone constant to avoid brittle string-split coupling.
+SCHEMA_V1_SQL = """\
+CREATE TABLE IF NOT EXISTS issues (
+    id          TEXT PRIMARY KEY,
+    title       TEXT NOT NULL,
+    status      TEXT NOT NULL DEFAULT 'open',
+    priority    INTEGER NOT NULL DEFAULT 2,
+    type        TEXT NOT NULL DEFAULT 'task',
+    parent_id   TEXT REFERENCES issues(id) ON DELETE SET NULL,
+    assignee    TEXT DEFAULT '',
+    created_at  TEXT NOT NULL,
+    updated_at  TEXT NOT NULL,
+    closed_at   TEXT,
+    description TEXT DEFAULT '',
+    notes       TEXT DEFAULT ''
+);
+
+CREATE TABLE IF NOT EXISTS dependencies (
+    issue_id       TEXT NOT NULL REFERENCES issues(id),
+    depends_on_id  TEXT NOT NULL REFERENCES issues(id),
+    type           TEXT NOT NULL DEFAULT 'blocks',
+    created_at     TEXT NOT NULL,
+    PRIMARY KEY (issue_id, depends_on_id)
+);
+
+CREATE TABLE IF NOT EXISTS events (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    issue_id   TEXT NOT NULL REFERENCES issues(id),
+    event_type TEXT NOT NULL,
+    actor      TEXT DEFAULT '',
+    old_value  TEXT,
+    new_value  TEXT,
+    comment    TEXT DEFAULT '',
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_events_issue ON events(issue_id);
+CREATE INDEX IF NOT EXISTS idx_events_created ON events(created_at);
+CREATE INDEX IF NOT EXISTS idx_events_issue_time ON events(issue_id, created_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_events_dedup
+  ON events(issue_id, event_type, actor,
+    coalesce(old_value,''), coalesce(new_value,''), created_at);
+
+CREATE TABLE IF NOT EXISTS comments (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    issue_id   TEXT NOT NULL REFERENCES issues(id),
+    author     TEXT DEFAULT '',
+    text       TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_comments_issue ON comments(issue_id, created_at);
+
+CREATE TABLE IF NOT EXISTS labels (
+    issue_id TEXT NOT NULL REFERENCES issues(id),
+    label    TEXT NOT NULL,
+    PRIMARY KEY (issue_id, label)
+);
+
+CREATE TABLE IF NOT EXISTS type_templates (
+    type          TEXT PRIMARY KEY,
+    pack          TEXT NOT NULL DEFAULT 'core',
+    definition    TEXT NOT NULL,
+    is_builtin    BOOLEAN NOT NULL DEFAULT 0,
+    created_at    TEXT NOT NULL,
+    updated_at    TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS packs (
+    name          TEXT PRIMARY KEY,
+    version       TEXT NOT NULL,
+    definition    TEXT NOT NULL,
+    is_builtin    BOOLEAN NOT NULL DEFAULT 0,
+    enabled       BOOLEAN NOT NULL DEFAULT 1
+);
+
+-- FTS5 full-text search with sync triggers
+CREATE VIRTUAL TABLE IF NOT EXISTS issues_fts USING fts5(
+    title, description, content='issues', content_rowid='rowid'
+);
+
+CREATE TRIGGER IF NOT EXISTS issues_fts_insert AFTER INSERT ON issues BEGIN
+    INSERT INTO issues_fts(rowid, title, description) VALUES (new.rowid, new.title, new.description);
+END;
+CREATE TRIGGER IF NOT EXISTS issues_fts_update AFTER UPDATE OF title, description ON issues BEGIN
+    INSERT INTO issues_fts(issues_fts, rowid, title, description)
+        VALUES('delete', old.rowid, old.title, old.description);
+    INSERT INTO issues_fts(rowid, title, description) VALUES (new.rowid, new.title, new.description);
+END;
+CREATE TRIGGER IF NOT EXISTS issues_fts_delete AFTER DELETE ON issues BEGIN
+    INSERT INTO issues_fts(issues_fts, rowid, title, description)
+        VALUES('delete', old.rowid, old.title, old.description);
+END;
+"""
 
 CURRENT_SCHEMA_VERSION = 4
 
@@ -668,7 +759,17 @@ class FiligreeDB:
                     "type": tpl.type,
                     "display_name": tpl.display_name,
                     "description": tpl.description,
-                    "fields_schema": [{"name": f.name, "type": f.type, "description": f.description} for f in tpl.fields_schema],
+                    "fields_schema": [
+                        {
+                            "name": f.name,
+                            "type": f.type,
+                            "description": f.description,
+                            **({"options": list(f.options)} if f.options else {}),
+                            **({"default": f.default} if f.default is not None else {}),
+                            **({"required_at": list(f.required_at)} if f.required_at else {}),
+                        }
+                        for f in tpl.fields_schema
+                    ],
                 }
             )
         return sorted(result, key=lambda t: t["type"])
@@ -1247,12 +1348,14 @@ class FiligreeDB:
         if not assignee or not assignee.strip():
             msg = "Assignee cannot be empty"
             raise ValueError(msg)
-        # Look up the issue type so we know which states are "open"
-        row = self.conn.execute("SELECT type FROM issues WHERE id = ?", (issue_id,)).fetchone()
+        # Look up the issue type and current assignee so we know which states are "open"
+        # and can record old_value for undo
+        row = self.conn.execute("SELECT type, assignee FROM issues WHERE id = ?", (issue_id,)).fetchone()
         if row is None:
             msg = f"Issue not found: {issue_id}"
             raise KeyError(msg)
         issue_type = row["type"]
+        old_assignee = row["assignee"] or ""
 
         # Get all open-category states for this type
         open_states: list[str] = []
@@ -1284,7 +1387,7 @@ class FiligreeDB:
                 msg = f"Cannot claim {issue_id}: status is '{current['status']}', expected open-category state"
                 raise ValueError(msg)
 
-            self._record_event(issue_id, "claimed", actor=actor, new_value=assignee)
+            self._record_event(issue_id, "claimed", actor=actor, old_value=old_assignee, new_value=assignee)
             self.conn.commit()
         except Exception:
             self.conn.rollback()
@@ -2217,10 +2320,11 @@ class FiligreeDB:
                 )
 
             case "claimed":
-                # Restore: clear the assignee that was set by claim
+                # Restore: revert to the assignee before the claim (usually '' but
+                # preserves prior assignee if the claim re-assigned from another agent)
                 self.conn.execute(
-                    "UPDATE issues SET assignee = '', updated_at = ? WHERE id = ?",
-                    (now, issue_id),
+                    "UPDATE issues SET assignee = ?, updated_at = ? WHERE id = ?",
+                    (row["old_value"] if row["old_value"] is not None else "", now, issue_id),
                 )
 
             case "dependency_added":

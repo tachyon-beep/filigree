@@ -141,6 +141,9 @@ Server/ethereal operating modes, file intelligence + scanner workflows, Graph v2
 - MCP `release_claim` tool description corrected: clarifies it clears assignee only (does not change status)
 - `_install_mcp_server_mode` prefix-read failure narrowed to `JSONDecodeError`/`OSError` and elevated to WARNING; `_install_mcp_ethereal_mode` logs `claude mcp add` stderr on failure
 - Duplicate `_check_same_thread` assignment removed from `FiligreeDB.__init__`
+- `list_templates()` now includes `required_at`, `options`, and `default` in field schema — matches `get_template()` output
+- `claim_issue()` now records prior assignee as `old_value` in claimed event; `undo_last` restores it instead of always blanking
+- `SCHEMA_V1_SQL` refactored from brittle `SCHEMA_SQL.split()` to standalone constant with test assertions for subset integrity
 
 #### Migration
 

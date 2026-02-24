@@ -91,6 +91,24 @@ class TestUndoClaim:
         assert result["issue"]["status"] == "confirmed"
         assert result["issue"]["assignee"] == ""
 
+    def test_undo_claim_restores_prior_assignee(self, db: FiligreeDB) -> None:
+        """Bug filigree-a8e7cf: undo claim must restore prior assignee, not blank."""
+        issue = db.create_issue("Test")
+        # Alice claims first
+        db.claim_issue(issue.id, assignee="alice", actor="t")
+        assert db.get_issue(issue.id).assignee == "alice"
+
+        # Release and let bob claim (alice's claim is released, bob claims fresh)
+        db.release_claim(issue.id, actor="t")
+        db.claim_issue(issue.id, assignee="bob", actor="t")
+        assert db.get_issue(issue.id).assignee == "bob"
+
+        # Undo bob's claim — should restore to "" (what was there before bob claimed)
+        result = db.undo_last(issue.id, actor="t")
+        assert result["undone"] is True
+        assert result["event_type"] == "claimed"
+        assert result["issue"]["assignee"] == ""
+
 
 class TestUndoDependency:
     def test_undo_dependency_added(self, db: FiligreeDB) -> None:

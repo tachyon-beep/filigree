@@ -242,6 +242,28 @@ class TestTemplates:
         assert "task" in types
         assert "milestone" in types
 
+    def test_list_templates_includes_required_at(self, db: FiligreeDB) -> None:
+        """Bug filigree-66aa8b: list_templates must include required_at, options, default."""
+        templates = db.list_templates()
+        bug_tpl = next(t for t in templates if t["type"] == "bug")
+        fields_by_name = {f["name"]: f for f in bug_tpl["fields_schema"]}
+        # Bug 'severity' field has options and required_at
+        severity = fields_by_name.get("severity")
+        assert severity is not None
+        assert "options" in severity
+        assert "required_at" in severity
+        assert "confirmed" in severity["required_at"]
+        # Verify parity with get_template
+        get_tpl = db.get_template("bug")
+        assert get_tpl is not None
+        get_fields = {f["name"]: f for f in get_tpl["fields_schema"]}
+        for name, field in get_fields.items():
+            list_field = fields_by_name.get(name)
+            assert list_field is not None, f"Missing field {name} in list_templates"
+            if "required_at" in field:
+                assert "required_at" in list_field, f"Missing required_at for {name}"
+                assert field["required_at"] == list_field["required_at"]
+
     def test_get_template(self, db: FiligreeDB) -> None:
         tpl = db.get_template("bug")
         assert tpl is not None

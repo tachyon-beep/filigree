@@ -22,7 +22,7 @@ from pathlib import Path
 
 import pytest
 
-from filigree.core import CURRENT_SCHEMA_VERSION, SCHEMA_SQL, FiligreeDB
+from filigree.core import CURRENT_SCHEMA_VERSION, SCHEMA_SQL, SCHEMA_V1_SQL, FiligreeDB
 from filigree.migrations import (
     MigrationError,
     add_column,
@@ -67,6 +67,26 @@ def _get_table_names(conn: sqlite3.Connection) -> set[str]:
 
 def _get_schema_version(conn: sqlite3.Connection) -> int:
     return conn.execute("PRAGMA user_version").fetchone()[0]
+
+
+# ---------------------------------------------------------------------------
+# Schema constant integrity
+# ---------------------------------------------------------------------------
+
+
+class TestSchemaV1Constant:
+    """Verify SCHEMA_V1_SQL is a proper subset of SCHEMA_SQL."""
+
+    def test_v1_is_subset_of_full_schema(self) -> None:
+        assert SCHEMA_V1_SQL != SCHEMA_SQL, "SCHEMA_V1_SQL should not equal SCHEMA_SQL (missing file tables)"
+
+    def test_v1_contains_core_tables(self) -> None:
+        for table in ("issues", "dependencies", "events", "comments", "labels", "type_templates", "packs"):
+            assert f"CREATE TABLE IF NOT EXISTS {table}" in SCHEMA_V1_SQL
+
+    def test_v1_excludes_file_tables(self) -> None:
+        for table in ("file_records", "scan_findings", "file_associations", "file_events"):
+            assert table not in SCHEMA_V1_SQL
 
 
 # ---------------------------------------------------------------------------
