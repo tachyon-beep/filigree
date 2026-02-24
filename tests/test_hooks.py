@@ -141,17 +141,29 @@ class TestExecutableResolution:
 class TestEnsureDashboardDependencyCheck:
     """Bug filigree-caa62b: dependency check must detect missing uvicorn/fastapi."""
 
-    def test_reports_error_when_uvicorn_missing(self) -> None:
+    def test_reports_error_when_uvicorn_missing(self, tmp_path: Path) -> None:
         """Should detect missing uvicorn even though filigree.dashboard imports it lazily."""
-        with patch.dict("sys.modules", {"uvicorn": None}):
+        filigree_dir = tmp_path / ".filigree"
+        filigree_dir.mkdir()
+        with (
+            patch("filigree.hooks.find_filigree_root", return_value=filigree_dir),
+            patch("filigree.hooks.get_mode", return_value="ethereal"),
+            patch.dict("sys.modules", {"uvicorn": None}),
+        ):
             result = ensure_dashboard_running()
         assert "requires extra dependencies" in result
 
-    def test_reports_error_when_fastapi_missing(self) -> None:
+    def test_reports_error_when_fastapi_missing(self, tmp_path: Path) -> None:
         """Should detect missing fastapi even though filigree.dashboard imports it lazily."""
+        filigree_dir = tmp_path / ".filigree"
+        filigree_dir.mkdir()
         # Also block fastapi sub-modules that might be cached
         blocked = {"fastapi": None, "fastapi.responses": None}
-        with patch.dict("sys.modules", blocked):
+        with (
+            patch("filigree.hooks.find_filigree_root", return_value=filigree_dir),
+            patch("filigree.hooks.get_mode", return_value="ethereal"),
+            patch.dict("sys.modules", blocked),
+        ):
             result = ensure_dashboard_running()
         assert "requires extra dependencies" in result
 
