@@ -169,11 +169,11 @@ class ProjectStore:
 
     def close_all(self) -> None:
         """Close all open DB connections."""
-        for db in self._dbs.values():
+        for key, db in self._dbs.items():
             try:
                 db.close()
             except Exception:
-                logger.debug("Error closing DB", exc_info=True)
+                logger.warning("Error closing DB for project %s", key, exc_info=True)
         self._dbs.clear()
 
     @property
@@ -214,7 +214,7 @@ async def _parse_json_body(request: Request) -> dict[str, Any] | JSONResponse:
     return body
 
 
-def _safe_int(value: str, name: str, default: int, *, min_value: int | None = None) -> int | JSONResponse:
+def _safe_int(value: str, name: str, *, min_value: int | None = None) -> int | JSONResponse:
     """Parse a query-param string to int, returning a 400 error response on failure.
 
     When *min_value* is set, values below that floor are rejected with 400.
@@ -265,12 +265,12 @@ def _get_bool_param(params: Mapping[str, str], name: str, default: bool) -> bool
 
 
 def _read_graph_runtime_config(db: FiligreeDB) -> dict[str, Any]:
-    """Read graph runtime settings from project config, if available."""
-    try:
-        return read_config(db.db_path.parent)
-    except Exception:
-        logger.warning("Failed to read graph runtime config", exc_info=True)
-        return {}
+    """Read graph runtime settings from project config, if available.
+
+    Note: read_config() already handles JSONDecodeError/OSError internally
+    and returns defaults, so no outer try/except is needed here.
+    """
+    return read_config(db.db_path.parent)
 
 
 def _resolve_graph_runtime(db: FiligreeDB) -> dict[str, Any]:
@@ -303,7 +303,7 @@ def _parse_csv_param(raw: str) -> list[str]:
 
 
 def _safe_bounded_int(raw: str, *, name: str, min_value: int, max_value: int) -> int | JSONResponse:
-    value = _safe_int(raw, name, 0)
+    value = _safe_int(raw, name)
     if not isinstance(value, int):
         return _error_response(
             f'Invalid value for {name}: "{raw}". Must be an integer between {min_value} and {max_value}.',
@@ -1097,13 +1097,13 @@ def _create_project_router() -> Any:
     async def api_list_files(request: Request, db: FiligreeDB = Depends(_get_db)) -> JSONResponse:
         """List tracked file records with optional filtering and pagination."""
         params = request.query_params
-        limit = _safe_int(params.get("limit", "100"), "limit", 100, min_value=1)
+        limit = _safe_int(params.get("limit", "100"), "limit", min_value=1)
         if isinstance(limit, JSONResponse):
             return limit
-        offset = _safe_int(params.get("offset", "0"), "offset", 0, min_value=0)
+        offset = _safe_int(params.get("offset", "0"), "offset", min_value=0)
         if isinstance(offset, JSONResponse):
             return offset
-        min_findings = _safe_int(params.get("min_findings", "0"), "min_findings", 0, min_value=0)
+        min_findings = _safe_int(params.get("min_findings", "0"), "min_findings", min_value=0)
         if isinstance(min_findings, JSONResponse):
             return min_findings
         result = db.list_files_paginated(
@@ -1123,7 +1123,7 @@ def _create_project_router() -> Any:
     async def api_file_hotspots(request: Request, db: FiligreeDB = Depends(_get_db)) -> JSONResponse:
         """Files ranked by weighted finding severity score."""
         params = request.query_params
-        limit = _safe_int(params.get("limit", "10"), "limit", 10, min_value=1)
+        limit = _safe_int(params.get("limit", "10"), "limit", min_value=1)
         if isinstance(limit, JSONResponse):
             return limit
         result = db.get_file_hotspots(limit=limit)
@@ -1232,10 +1232,10 @@ def _create_project_router() -> Any:
         except KeyError:
             return _error_response(f"File not found: {file_id}", "FILE_NOT_FOUND", 404)
         params = request.query_params
-        limit = _safe_int(params.get("limit", "100"), "limit", 100, min_value=1)
+        limit = _safe_int(params.get("limit", "100"), "limit", min_value=1)
         if isinstance(limit, JSONResponse):
             return limit
-        offset = _safe_int(params.get("offset", "0"), "offset", 0, min_value=0)
+        offset = _safe_int(params.get("offset", "0"), "offset", min_value=0)
         if isinstance(offset, JSONResponse):
             return offset
         try:
@@ -1287,10 +1287,10 @@ def _create_project_router() -> Any:
     async def api_get_file_timeline(file_id: str, request: Request, db: FiligreeDB = Depends(_get_db)) -> JSONResponse:
         """Get merged timeline of events for a file."""
         params = request.query_params
-        limit = _safe_int(params.get("limit", "50"), "limit", 50, min_value=1)
+        limit = _safe_int(params.get("limit", "50"), "limit", min_value=1)
         if isinstance(limit, JSONResponse):
             return limit
-        offset = _safe_int(params.get("offset", "0"), "offset", 0, min_value=0)
+        offset = _safe_int(params.get("offset", "0"), "offset", min_value=0)
         if isinstance(offset, JSONResponse):
             return offset
         event_type = params.get("event_type")
@@ -1355,7 +1355,7 @@ def _create_project_router() -> Any:
     async def api_scan_runs(request: Request, db: FiligreeDB = Depends(_get_db)) -> JSONResponse:
         """Get scan run history from scan_findings grouped by scan_run_id."""
         params = request.query_params
-        limit = _safe_int(params.get("limit", "10"), "limit", 10, min_value=1)
+        limit = _safe_int(params.get("limit", "10"), "limit", min_value=1)
         if isinstance(limit, JSONResponse):
             return limit
         try:

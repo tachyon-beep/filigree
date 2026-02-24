@@ -301,6 +301,26 @@ class TestPostToApi:
             warn_call = mock_logger.warning.call_args
             assert "severity coerced" in str(warn_call)
 
+    def test_http_error_body_read_failure_still_logs(self) -> None:
+        """Bug filigree-4876d3: network failure reading error body should not crash."""
+        import urllib.error
+
+        err = urllib.error.HTTPError(
+            url="http://localhost:8377/api/v1/scan-results",
+            code=500,
+            msg="Internal Server Error",
+            hdrs={},  # type: ignore[arg-type]
+            fp=MagicMock(read=MagicMock(side_effect=OSError("connection reset"))),
+        )
+        with patch("urllib.request.urlopen", side_effect=err):
+            result = post_to_api(
+                api_url="http://localhost:8377",
+                scan_source="test",
+                scan_run_id="run-1",
+                findings=[{"path": "x.py", "rule_id": "other", "severity": "info", "message": "test"}],
+            )
+        assert result is False  # Graceful degradation: returns False, doesn't crash
+
 
 # ── find_files ─────────────────────────────────────────────────────────
 

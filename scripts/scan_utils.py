@@ -352,7 +352,7 @@ def post_to_api(
             return True
     except urllib.error.HTTPError as e:
         body_text = ""
-        with contextlib.suppress(Exception):
+        with contextlib.suppress(OSError, urllib.error.URLError):
             body_text = e.read().decode("utf-8", errors="replace")[:500]
         logger.warning(
             "API POST failed: HTTP %d for %s — %s (endpoint: %s)",

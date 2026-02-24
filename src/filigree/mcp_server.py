@@ -252,7 +252,11 @@ def _build_workflow_text() -> str:
             "Failed to build dynamic workflow text; falling back to static",
             exc_info=True,
         )
-        return _WORKFLOW_TEXT_STATIC
+        return (
+            _WORKFLOW_TEXT_STATIC + "\n\n> **Note:** Dynamic workflow info unavailable. "
+            "Custom types, states, and packs may not be reflected above. "
+            "Use `list_types` and `list_packs` for current workflow details.\n"
+        )
 
 
 @server.list_prompts()  # type: ignore[untyped-decorator,no-untyped-call]
@@ -343,13 +347,13 @@ async def list_tools() -> list[Tool]:
                         "type": "integer",
                         "default": 100,
                         "minimum": 1,
-                        "description": "Max results (default 100)",
+                        "description": f"Max results (default 100, capped at {_MAX_LIST_RESULTS} unless no_limit=true)",
                     },
                     "offset": {"type": "integer", "default": 0, "minimum": 0, "description": "Skip first N results"},
                     "no_limit": {
                         "type": "boolean",
                         "default": False,
-                        "description": "Bypass the default result cap. Use with caution on large projects.",
+                        "description": f"Bypass the default result cap of {_MAX_LIST_RESULTS}. Use with caution on large projects.",
                     },
                 },
             },
@@ -507,13 +511,13 @@ async def list_tools() -> list[Tool]:
                         "type": "integer",
                         "default": 100,
                         "minimum": 1,
-                        "description": "Max results (default 100)",
+                        "description": f"Max results (default 100, capped at {_MAX_LIST_RESULTS} unless no_limit=true)",
                     },
                     "offset": {"type": "integer", "default": 0, "minimum": 0, "description": "Skip first N results"},
                     "no_limit": {
                         "type": "boolean",
                         "default": False,
-                        "description": "Bypass the default result cap. Use with caution on large projects.",
+                        "description": f"Bypass the default result cap of {_MAX_LIST_RESULTS}. Use with caution on large projects.",
                     },
                 },
                 "required": ["query"],
@@ -758,7 +762,7 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="release_claim",
-            description="Release a claimed issue by clearing its assignee. Does NOT change status. Reverses claim_issue.",
+            description="Release a claimed issue by clearing its assignee. Does NOT change status. Only succeeds if the issue has an assignee.",
             inputSchema={
                 "type": "object",
                 "properties": {

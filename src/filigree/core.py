@@ -495,7 +495,7 @@ VALID_ASSOC_TYPES = frozenset({"bug_in", "task_for", "scan_finding", "mentioned_
 
 
 def _generate_id_standalone(prefix: str) -> str:
-    """Generate a short unique ID like 'myproject-a3f' (no collision check)."""
+    """Generate a short unique ID like 'myproject-a3f9b2' (no collision check)."""
     return f"{prefix}-{uuid.uuid4().hex[:6]}"
 
 
@@ -1335,6 +1335,7 @@ class FiligreeDB:
             raise ValueError(msg)
         ready = self.get_ready()
 
+        skipped = 0
         for issue in ready:
             if type_filter is not None and issue.type != type_filter:
                 continue
@@ -1344,8 +1345,12 @@ class FiligreeDB:
                 continue
             try:
                 return self.claim_issue(issue.id, assignee=assignee, actor=actor or assignee)
-            except ValueError:
-                continue  # Race condition: someone else claimed it
+            except ValueError as exc:
+                skipped += 1
+                logger.debug("claim_next: skipping %s: %s", issue.id, exc)
+                continue  # Race condition or status mismatch
+        if skipped:
+            logger.warning("claim_next: all %d candidate(s) failed to claim for '%s'", skipped, assignee)
         return None
 
     def batch_close(
@@ -2511,8 +2516,14 @@ class FiligreeDB:
     ) -> FileRecord:
         """Register a file or update it if already registered (upsert by path).
 
+        Path is normalized via ``_normalize_scan_path`` to ensure consistent
+        identity regardless of caller (MCP tool, scan ingestion, etc.).
+
         Returns the FileRecord (created or updated).
         """
+        path = _normalize_scan_path(path)
+        if not path:
+            raise ValueError("File path cannot be empty after normalization")
         now = _now_iso()
         existing = self.conn.execute("SELECT * FROM file_records WHERE path = ?", (path,)).fetchone()
 
@@ -2636,39 +2647,39 @@ class FiligreeDB:
         When *has_severity* is provided (e.g. ``"critical"``), only files
         with at least one open finding of that severity are returned.
         """
+        # Use "fr" alias throughout so the same WHERE works in both the COUNT
+        # and enriched queries without string replacement.
         clauses: list[str] = []
         params: list[Any] = []
 
         if language is not None:
-            clauses.append("language = ?")
+            clauses.append("fr.language = ?")
             params.append(language)
         if path_prefix is not None:
             escaped = path_prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-            clauses.append("path LIKE ? ESCAPE '\\'")
+            clauses.append("fr.path LIKE ? ESCAPE '\\'")
             params.append(f"%{escaped}%")
         if min_findings is not None and min_findings > 0:
             clauses.append(
-                "(SELECT COUNT(*) FROM scan_findings sf"
-                " WHERE sf.file_id = file_records.id"
-                " AND sf.status NOT IN ('fixed', 'false_positive')) >= ?"
+                "(SELECT COUNT(*) FROM scan_findings sf WHERE sf.file_id = fr.id AND sf.status NOT IN ('fixed', 'false_positive')) >= ?"
             )
             params.append(min_findings)
         if has_severity and has_severity in self._VALID_SEVERITIES:
             clauses.append(
                 "(SELECT COUNT(*) FROM scan_findings sf"
-                " WHERE sf.file_id = file_records.id"
+                " WHERE sf.file_id = fr.id"
                 " AND sf.status NOT IN ('fixed', 'false_positive')"
                 " AND sf.severity = ?) > 0"
             )
             params.append(has_severity)
         if scan_source:
-            clauses.append("EXISTS (SELECT 1 FROM scan_findings sf WHERE sf.file_id = file_records.id AND sf.scan_source = ?)")
+            clauses.append("EXISTS (SELECT 1 FROM scan_findings sf WHERE sf.file_id = fr.id AND sf.scan_source = ?)")
             params.append(scan_source)
 
         where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
 
         total: int = self.conn.execute(
-            f"SELECT COUNT(*) FROM file_records{where}",
+            f"SELECT COUNT(*) FROM file_records fr{where}",
             params,
         ).fetchone()[0]
 
@@ -2682,7 +2693,6 @@ class FiligreeDB:
             f"(SELECT COUNT(*) FROM scan_findings sf WHERE sf.file_id = fr.id AND {_open} AND sf.severity='{s}') AS cnt_{s},"
             for s in ("critical", "high", "medium", "low", "info")
         )
-        fr_where = where.replace("file_records.id", "fr.id")
         enriched_sql = (
             f"SELECT fr.*, "
             f"(SELECT COUNT(*) FROM scan_findings sf"
@@ -2695,7 +2705,7 @@ class FiligreeDB:
             f"(SELECT COUNT(*) FROM file_associations fa"
             f" WHERE fa.file_id = fr.id"
             f") AS associations_count"
-            f" FROM file_records fr{fr_where}"
+            f" FROM file_records fr{where}"
             f" ORDER BY {sort_col} {order}"
             f" LIMIT ? OFFSET ?"
         )

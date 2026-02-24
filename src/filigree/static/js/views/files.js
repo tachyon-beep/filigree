@@ -124,6 +124,7 @@ export async function loadFiles() {
       { key: null, label: "High", cls: "text-center" },
       { key: null, label: "Medium", cls: "text-center" },
       { key: null, label: "Low", cls: "text-center" },
+      { key: null, label: "Closed", cls: "text-center" },
       { key: null, label: "Issues", cls: "text-center" },
       { key: "updated_at", label: "Last Update", cls: "text-right" },
     ];
@@ -146,6 +147,7 @@ export async function loadFiles() {
         const updated = f.updated_at
           ? new Date(f.updated_at).toLocaleDateString()
           : "\u2014";
+        const closedCount = (s.total_findings || 0) - (s.open_findings || 0);
         return (
           `<tr class="bg-overlay-hover cursor-pointer ${border}" onclick="openFileDetail('${safeFileId}')" role="button" tabindex="0">` +
           `<td class="py-2 px-3 text-accent truncate max-w-xs" title="${escHtml(f.path)}">${escHtml(f.path)}</td>` +
@@ -154,6 +156,7 @@ export async function loadFiles() {
           `<td class="py-2 px-3 text-center">${severityBadge("high", s.high)}</td>` +
           `<td class="py-2 px-3 text-center">${severityBadge("medium", s.medium)}</td>` +
           `<td class="py-2 px-3 text-center">${severityBadge("low", s.low)}</td>` +
+          `<td class="py-2 px-3 text-center">${closedCount ? `<span class="text-xs" style="color:var(--status-done)">${closedCount}</span>` : "\u2014"}</td>` +
           `<td class="py-2 px-3 text-center">${assocCount || "\u2014"}</td>` +
           `<td class="py-2 px-3 text-right" style="color:var(--text-muted)">${updated}</td>` +
           "</tr>"

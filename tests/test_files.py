@@ -90,6 +90,24 @@ class TestRegisterFile:
         result = db.get_file_by_path("nonexistent.py")
         assert result is None
 
+    def test_register_normalizes_path(self, db: FiligreeDB) -> None:
+        """Bug filigree-b78901: register_file must normalize paths for consistent identity."""
+        f1 = db.register_file("src/foo/../bar.py")
+        f2 = db.register_file("src/bar.py")
+        assert f1.id == f2.id  # Same file, same record
+        assert f1.path == "src/bar.py"  # Stored normalized
+
+    def test_register_normalizes_backslashes(self, db: FiligreeDB) -> None:
+        """Windows-style paths should be normalized to forward slashes."""
+        f1 = db.register_file("src\\utils\\helper.py")
+        f2 = db.register_file("src/utils/helper.py")
+        assert f1.id == f2.id
+
+    def test_register_empty_path_after_normalization_raises(self, db: FiligreeDB) -> None:
+        """Path that normalizes to empty (e.g. '.') should be rejected."""
+        with pytest.raises(ValueError, match="empty after normalization"):
+            db.register_file(".")
+
 
 class TestListFiles:
     """Tests for listing file records."""

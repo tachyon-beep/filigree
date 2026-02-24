@@ -76,10 +76,12 @@ class TestFindAvailablePort:
             return False  # all ports "occupied"
 
         monkeypatch.setattr(ephemeral, "_is_port_free", fake_is_port_free)
-        find_available_port(Path("/some/project/.filigree"))
+        port = find_available_port(Path("/some/project/.filigree"))
 
         # Should check base + PORT_RETRIES sequential candidates
         assert len(checked) == ephemeral.PORT_RETRIES + 1
+        # OS fallback must return a valid port
+        assert 1 <= port <= 65535
 
 
 class TestPidLifecycle:
