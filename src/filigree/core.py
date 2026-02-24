@@ -19,6 +19,7 @@ import shutil
 import sqlite3
 import sys
 import uuid
+from collections import deque
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -502,6 +503,13 @@ def _now_iso() -> str:
     return datetime.now(UTC).isoformat()
 
 
+def _validate_string_list(value: object, name: str) -> None:
+    """Raise TypeError if *value* is not a list of strings."""
+    if not isinstance(value, list) or not all(isinstance(i, str) for i in value):
+        msg = f"{name} must be a list of strings"
+        raise TypeError(msg)
+
+
 # ---------------------------------------------------------------------------
 # FiligreeDB — the core
 # ---------------------------------------------------------------------------
@@ -714,15 +722,17 @@ class FiligreeDB:
             return cat
         return self._infer_status_category(status)
 
-    def _generate_id(self) -> str:
-        """Generate a unique ID using O(1) EXISTS checks against the PK index."""
+    def _generate_unique_id(self, table: str, infix: str = "") -> str:
+        """Generate a unique ID using O(1) EXISTS checks against the PK index.
+
+        *table* is always a hardcoded literal at the call site (never user input).
+        """
+        sep = f"-{infix}-" if infix else "-"
         for _ in range(10):
-            candidate = f"{self.prefix}-{uuid.uuid4().hex[:6]}"
-            exists = self.conn.execute("SELECT 1 FROM issues WHERE id = ?", (candidate,)).fetchone()
-            if exists is None:
+            candidate = f"{self.prefix}{sep}{uuid.uuid4().hex[:6]}"
+            if self.conn.execute(f"SELECT 1 FROM {table} WHERE id = ?", (candidate,)).fetchone() is None:
                 return candidate
-        # 10 collisions in a row is astronomically unlikely; use longer suffix
-        return f"{self.prefix}-{uuid.uuid4().hex[:10]}"
+        return f"{self.prefix}{sep}{uuid.uuid4().hex[:10]}"
 
     def _reserved_label_names(self) -> set[str]:
         """Issue type names are reserved and cannot be used as free-form labels."""
@@ -789,7 +799,7 @@ class FiligreeDB:
                 msg = f"Invalid dependency IDs (not found): {', '.join(missing)}"
                 raise ValueError(msg)
 
-        issue_id = self._generate_id()
+        issue_id = self._generate_unique_id("issues")
         now = _now_iso()
         fields = fields or {}
 
@@ -897,26 +907,16 @@ class FiligreeDB:
         for r in self.conn.execute(f"SELECT id, parent_id FROM issues WHERE parent_id IN ({placeholders})", issue_ids).fetchall():
             children_by_id[r["parent_id"]].append(r["id"])
 
-        # 6. Batch compute open blocker counts (category-aware)
+        # 6. Batch compute open blocker counts (reuses done_states/done_ph from step 4)
         open_blockers_by_id: dict[str, int] = dict.fromkeys(issue_ids, 0)
-        done_states = self._get_states_for_category("done")
-        if done_states:
-            done_ph = ",".join("?" * len(done_states))
-            for r in self.conn.execute(
-                f"SELECT d.issue_id, COUNT(*) as cnt FROM dependencies d "
-                f"JOIN issues i ON d.depends_on_id = i.id "
-                f"WHERE d.issue_id IN ({placeholders}) AND i.status NOT IN ({done_ph}) "
-                f"GROUP BY d.issue_id",
-                [*issue_ids, *done_states],
-            ).fetchall():
-                open_blockers_by_id[r["issue_id"]] = r["cnt"]
-        else:
-            # No done-category states: every dependency is an active blocker
-            for r in self.conn.execute(
-                f"SELECT d.issue_id, COUNT(*) as cnt FROM dependencies d WHERE d.issue_id IN ({placeholders}) GROUP BY d.issue_id",
-                issue_ids,
-            ).fetchall():
-                open_blockers_by_id[r["issue_id"]] = r["cnt"]
+        for r in self.conn.execute(
+            f"SELECT d.issue_id, COUNT(*) as cnt FROM dependencies d "
+            f"JOIN issues i ON d.depends_on_id = i.id "
+            f"WHERE d.issue_id IN ({placeholders}) AND i.status NOT IN ({done_ph}) "
+            f"GROUP BY d.issue_id",
+            [*issue_ids, *done_states],
+        ).fetchall():
+            open_blockers_by_id[r["issue_id"]] = r["cnt"]
 
         # 7. Compute open states for is_ready check
         open_states_set = set(self._get_states_for_category("open")) or {"open"}
@@ -1356,9 +1356,7 @@ class FiligreeDB:
         actor: str = "",
     ) -> tuple[list[Issue], list[dict[str, str]]]:
         """Close multiple issues with per-item error handling. Returns (closed, errors)."""
-        if not isinstance(issue_ids, list) or not all(isinstance(i, str) for i in issue_ids):
-            msg = "issue_ids must be a list of strings"
-            raise TypeError(msg)
+        _validate_string_list(issue_ids, "issue_ids")
         results: list[Issue] = []
         errors: list[dict[str, str]] = []
         for issue_id in issue_ids:
@@ -1381,9 +1379,7 @@ class FiligreeDB:
         actor: str = "",
     ) -> tuple[list[Issue], list[dict[str, str]]]:
         """Update multiple issues with the same changes. Returns (updated, errors)."""
-        if not isinstance(issue_ids, list) or not all(isinstance(i, str) for i in issue_ids):
-            msg = "issue_ids must be a list of strings"
-            raise TypeError(msg)
+        _validate_string_list(issue_ids, "issue_ids")
         results: list[Issue] = []
         errors: list[dict[str, str]] = []
         for issue_id in issue_ids:
@@ -1411,9 +1407,7 @@ class FiligreeDB:
         label: str,
     ) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
         """Add the same label to multiple issues. Returns (labeled, errors)."""
-        if not isinstance(issue_ids, list) or not all(isinstance(i, str) for i in issue_ids):
-            msg = "issue_ids must be a list of strings"
-            raise TypeError(msg)
+        _validate_string_list(issue_ids, "issue_ids")
         if not isinstance(label, str):
             msg = "label must be a string"
             raise TypeError(msg)
@@ -1439,9 +1433,7 @@ class FiligreeDB:
         author: str = "",
     ) -> tuple[list[dict[str, str | int]], list[dict[str, str]]]:
         """Add the same comment to multiple issues. Returns (commented, errors)."""
-        if not isinstance(issue_ids, list) or not all(isinstance(i, str) for i in issue_ids):
-            msg = "issue_ids must be a list of strings"
-            raise TypeError(msg)
+        _validate_string_list(issue_ids, "issue_ids")
         if not isinstance(text, str):
             msg = "text must be a string"
             raise TypeError(msg)
@@ -1630,9 +1622,9 @@ class FiligreeDB:
         If issue_id is reachable, adding the new edge would close a cycle.
         """
         visited: set[str] = set()
-        queue = [depends_on_id]
+        queue = deque([depends_on_id])
         while queue:
-            current = queue.pop(0)
+            current = queue.popleft()
             if current == issue_id:
                 return True
             if current in visited:
@@ -1760,12 +1752,12 @@ class FiligreeDB:
             return []
 
         # Topological sort (Kahn's algorithm) + longest path DP
-        queue = [nid for nid in open_ids if in_degree[nid] == 0]
+        queue = deque(nid for nid in open_ids if in_degree[nid] == 0)
         dist: dict[str, int] = dict.fromkeys(open_ids, 0)
         pred: dict[str, str | None] = dict.fromkeys(open_ids, None)
 
         while queue:
-            node = queue.pop(0)
+            node = queue.popleft()
             for neighbor in forward[node]:
                 if dist[node] + 1 > dist[neighbor]:
                     dist[neighbor] = dist[node] + 1
@@ -1868,7 +1860,7 @@ class FiligreeDB:
 
         try:
             # Create milestone
-            ms_id = self._generate_id()
+            ms_id = self._generate_unique_id("issues")
             ms_fields = milestone.get("fields") or {}
             self.conn.execute(
                 "INSERT INTO issues (id, title, status, priority, type, parent_id, assignee, "
@@ -1893,7 +1885,7 @@ class FiligreeDB:
 
             for phase_idx, phase_data in enumerate(phases):
                 # Create phase
-                phase_id = self._generate_id()
+                phase_id = self._generate_unique_id("issues")
                 phase_fields = phase_data.get("fields") or {}
                 phase_fields["sequence"] = phase_idx + 1
                 self.conn.execute(
@@ -1918,7 +1910,7 @@ class FiligreeDB:
                 phase_step_ids: list[str] = []
                 steps = phase_data.get("steps") or []
                 for step_idx, step_data in enumerate(steps):
-                    step_id = self._generate_id()
+                    step_id = self._generate_unique_id("issues")
                     step_fields = step_data.get("fields") or {}
                     step_fields["sequence"] = step_idx + 1
                     self.conn.execute(
@@ -2463,23 +2455,9 @@ class FiligreeDB:
 
     # -- File records & scan findings ----------------------------------------
 
-    def _generate_file_id(self) -> str:
-        """Generate a unique file record ID like 'prefix-f-abc123'."""
-        for _ in range(10):
-            candidate = f"{self.prefix}-f-{uuid.uuid4().hex[:6]}"
-            exists = self.conn.execute("SELECT 1 FROM file_records WHERE id = ?", (candidate,)).fetchone()
-            if exists is None:
-                return candidate
-        return f"{self.prefix}-f-{uuid.uuid4().hex[:10]}"
-
-    def _generate_finding_id(self) -> str:
-        """Generate a unique scan finding ID like 'prefix-sf-abc123'."""
-        for _ in range(10):
-            candidate = f"{self.prefix}-sf-{uuid.uuid4().hex[:6]}"
-            exists = self.conn.execute("SELECT 1 FROM scan_findings WHERE id = ?", (candidate,)).fetchone()
-            if exists is None:
-                return candidate
-        return f"{self.prefix}-sf-{uuid.uuid4().hex[:10]}"
+    # _generate_file_id and _generate_finding_id are now handled by
+    # _generate_unique_id("file_records", "f") and
+    # _generate_unique_id("scan_findings", "sf") respectively.
 
     def _build_file_record(self, row: sqlite3.Row) -> FileRecord:
         """Build a FileRecord from a database row."""
@@ -2579,7 +2557,7 @@ class FiligreeDB:
             self.conn.commit()
             return self.get_file(existing["id"])
 
-        file_id = self._generate_file_id()
+        file_id = self._generate_unique_id("file_records", "f")
         self.conn.execute(
             "INSERT INTO file_records (id, path, language, file_type, first_seen, updated_at, metadata) VALUES (?, ?, ?, ?, ?, ?, ?)",
             (file_id, path, language, file_type, now, now, json.dumps(metadata or {})),
@@ -2941,7 +2919,7 @@ class FiligreeDB:
                     )
                     stats["files_updated"] += 1
                 else:
-                    file_id = self._generate_file_id()
+                    file_id = self._generate_unique_id("file_records", "f")
                     self.conn.execute(
                         "INSERT INTO file_records (id, path, language, first_seen, updated_at) VALUES (?, ?, ?, ?, ?)",
                         (file_id, path, language, now, now),
@@ -3019,7 +2997,7 @@ class FiligreeDB:
                             (file_id, existing_issue_id, now),
                         )
                 else:
-                    finding_id = self._generate_finding_id()
+                    finding_id = self._generate_unique_id("scan_findings", "sf")
                     self.conn.execute(
                         "INSERT INTO scan_findings "
                         "(id, file_id, scan_source, rule_id, severity, status, message, "

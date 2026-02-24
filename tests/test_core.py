@@ -211,23 +211,23 @@ class TestGetStatsByCategory:
 
 
 class TestGenerateId:
-    """Verify _generate_id uses O(1) EXISTS check, not full-table scan."""
+    """Verify _generate_unique_id uses O(1) EXISTS check, not full-table scan."""
 
     def test_generate_id_returns_prefixed_id(self, db: FiligreeDB) -> None:
-        issue_id = db._generate_id()
+        issue_id = db._generate_unique_id("issues")
         assert issue_id.startswith("test-")
         assert len(issue_id) == len("test-") + 6
 
     def test_generate_id_avoids_collisions(self, db: FiligreeDB) -> None:
-        ids = {db._generate_id() for _ in range(50)}
+        ids = {db._generate_unique_id("issues") for _ in range(50)}
         assert len(ids) == 50
 
     def test_generate_id_uses_exists_check(self, db: FiligreeDB) -> None:
         """Verify the implementation queries by specific ID, not all IDs."""
         import inspect
 
-        source = inspect.getsource(db._generate_id)
-        assert "SELECT 1 FROM issues WHERE id = ?" in source
+        source = inspect.getsource(db._generate_unique_id)
+        assert "SELECT 1 FROM {table} WHERE id = ?" in source
         assert "SELECT id FROM issues" not in source
 
 

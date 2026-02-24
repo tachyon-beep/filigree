@@ -624,8 +624,8 @@ def _get_skills_source_dir() -> Path:
     return Path(__file__).parent / "skills"
 
 
-def install_skills(project_root: Path) -> tuple[bool, str]:
-    """Copy filigree skill pack into ``.claude/skills/`` for the project.
+def _install_skill_to(project_root: Path, target_subpath: Path) -> tuple[bool, str]:
+    """Copy the filigree skill pack into *target_subpath* under *project_root*.
 
     Idempotent — overwrites existing skill files to keep them up-to-date
     with the installed filigree version.
@@ -635,39 +635,24 @@ def install_skills(project_root: Path) -> tuple[bool, str]:
     if not skill_source.is_dir():
         return False, f"Skill source not found at {skill_source}"
 
-    target_dir = project_root / ".claude" / "skills" / SKILL_NAME
+    target_dir = project_root / target_subpath / SKILL_NAME
     target_dir.parent.mkdir(parents=True, exist_ok=True)
 
-    # Copy the skill, overwriting to pick up version upgrades
     if target_dir.exists():
         shutil.rmtree(target_dir)
     shutil.copytree(skill_source, target_dir)
 
     return True, f"Installed skill pack to {target_dir}"
+
+
+def install_skills(project_root: Path) -> tuple[bool, str]:
+    """Copy filigree skill pack into ``.claude/skills/`` for the project."""
+    return _install_skill_to(project_root, Path(".claude") / "skills")
 
 
 def install_codex_skills(project_root: Path) -> tuple[bool, str]:
-    """Copy filigree skill pack into ``.agents/skills/`` for Codex.
-
-    Codex discovers skills at ``.agents/skills/<name>/SKILL.md``.
-    Uses the same skill content as Claude Code.
-
-    Idempotent — overwrites existing skill files to keep them up-to-date
-    with the installed filigree version.
-    """
-    source_dir = _get_skills_source_dir()
-    skill_source = source_dir / SKILL_NAME
-    if not skill_source.is_dir():
-        return False, f"Skill source not found at {skill_source}"
-
-    target_dir = project_root / ".agents" / "skills" / SKILL_NAME
-    target_dir.parent.mkdir(parents=True, exist_ok=True)
-
-    if target_dir.exists():
-        shutil.rmtree(target_dir)
-    shutil.copytree(skill_source, target_dir)
-
-    return True, f"Installed skill pack to {target_dir}"
+    """Copy filigree skill pack into ``.agents/skills/`` for Codex."""
+    return _install_skill_to(project_root, Path(".agents") / "skills")
 
 
 # ---------------------------------------------------------------------------

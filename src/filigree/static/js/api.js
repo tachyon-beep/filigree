@@ -18,6 +18,22 @@ function extractError(body, fallback) {
   return e || fallback;
 }
 
+/** Generic write (POST/PATCH/DELETE) helper — returns { ok, data?, error? }. */
+async function writeRequest(path, { method = "POST", body, errorLabel } = {}) {
+  try {
+    const opts = { method, headers: JSON_HEADERS };
+    if (body !== undefined) opts.body = JSON.stringify(body);
+    const resp = await fetch(apiUrl(path), opts);
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({}));
+      return { ok: false, error: extractError(err, errorLabel) };
+    }
+    return { ok: true, data: await resp.json() };
+  } catch (_e) {
+    return { ok: false, error: "Network error" };
+  }
+}
+
 // --- Read operations (return data or null) ---
 
 export async function fetchIssues() {
@@ -156,192 +172,51 @@ export async function fetchProjects(ttl) {
 
 // --- Write operations (return { ok, data?, error? }) ---
 
-export async function patchIssue(issueId, body) {
-  try {
-    const resp = await fetch(apiUrl(`/issue/${issueId}`), {
-      method: "PATCH",
-      headers: JSON_HEADERS,
-      body: JSON.stringify(body),
-    });
-    if (!resp.ok) {
-      const err = await resp.json().catch(() => ({}));
-      return { ok: false, error: extractError(err, "Update failed") };
-    }
-    return { ok: true, data: await resp.json() };
-  } catch (_e) {
-    return { ok: false, error: "Network error" };
-  }
+export function patchIssue(issueId, body) {
+  return writeRequest(`/issue/${issueId}`, { method: "PATCH", body, errorLabel: "Update failed" });
 }
 
-export async function postCloseIssue(issueId, reason) {
-  try {
-    const resp = await fetch(apiUrl(`/issue/${issueId}/close`), {
-      method: "POST",
-      headers: JSON_HEADERS,
-      body: JSON.stringify({ reason: reason || "" }),
-    });
-    if (!resp.ok) {
-      const err = await resp.json().catch(() => ({}));
-      return { ok: false, error: extractError(err, "Close failed") };
-    }
-    return { ok: true, data: await resp.json() };
-  } catch (_e) {
-    return { ok: false, error: "Network error" };
-  }
+export function postCloseIssue(issueId, reason) {
+  return writeRequest(`/issue/${issueId}/close`, { body: { reason: reason || "" }, errorLabel: "Close failed" });
 }
 
-export async function postReopenIssue(issueId) {
-  try {
-    const resp = await fetch(apiUrl(`/issue/${issueId}/reopen`), {
-      method: "POST",
-      headers: JSON_HEADERS,
-      body: JSON.stringify({}),
-    });
-    if (!resp.ok) {
-      const err = await resp.json().catch(() => ({}));
-      return { ok: false, error: extractError(err, "Reopen failed") };
-    }
-    return { ok: true, data: await resp.json() };
-  } catch (_e) {
-    return { ok: false, error: "Network error" };
-  }
+export function postReopenIssue(issueId) {
+  return writeRequest(`/issue/${issueId}/reopen`, { body: {}, errorLabel: "Reopen failed" });
 }
 
-export async function postClaimIssue(issueId, assignee) {
-  try {
-    const resp = await fetch(apiUrl(`/issue/${issueId}/claim`), {
-      method: "POST",
-      headers: JSON_HEADERS,
-      body: JSON.stringify({ assignee }),
-    });
-    if (!resp.ok) {
-      const err = await resp.json().catch(() => ({}));
-      return { ok: false, error: extractError(err, "Claim failed") };
-    }
-    return { ok: true, data: await resp.json() };
-  } catch (_e) {
-    return { ok: false, error: "Network error" };
-  }
+export function postClaimIssue(issueId, assignee) {
+  return writeRequest(`/issue/${issueId}/claim`, { body: { assignee }, errorLabel: "Claim failed" });
 }
 
-export async function postReleaseIssue(issueId) {
-  try {
-    const resp = await fetch(apiUrl(`/issue/${issueId}/release`), {
-      method: "POST",
-      headers: JSON_HEADERS,
-      body: JSON.stringify({}),
-    });
-    if (!resp.ok) {
-      const err = await resp.json().catch(() => ({}));
-      return { ok: false, error: extractError(err, "Release failed") };
-    }
-    return { ok: true, data: await resp.json() };
-  } catch (_e) {
-    return { ok: false, error: "Network error" };
-  }
+export function postReleaseIssue(issueId) {
+  return writeRequest(`/issue/${issueId}/release`, { body: {}, errorLabel: "Release failed" });
 }
 
-export async function postAddDependency(issueId, dependsOnId) {
-  try {
-    const resp = await fetch(apiUrl(`/issue/${issueId}/dependencies`), {
-      method: "POST",
-      headers: JSON_HEADERS,
-      body: JSON.stringify({ depends_on: dependsOnId }),
-    });
-    if (!resp.ok) {
-      const err = await resp.json().catch(() => ({}));
-      return { ok: false, error: extractError(err, "Add failed") };
-    }
-    return { ok: true, data: await resp.json() };
-  } catch (_e) {
-    return { ok: false, error: "Network error" };
-  }
+export function postAddDependency(issueId, dependsOnId) {
+  return writeRequest(`/issue/${issueId}/dependencies`, { body: { depends_on: dependsOnId }, errorLabel: "Add failed" });
 }
 
-export async function deleteIssueDep(issueId, depId) {
-  try {
-    const resp = await fetch(apiUrl(`/issue/${issueId}/dependencies/${depId}`), {
-      method: "DELETE",
-    });
-    if (!resp.ok) {
-      const err = await resp.json().catch(() => ({}));
-      return { ok: false, error: extractError(err, "Remove failed") };
-    }
-    return { ok: true, data: await resp.json() };
-  } catch (_e) {
-    return { ok: false, error: "Network error" };
-  }
+export function deleteIssueDep(issueId, depId) {
+  return writeRequest(`/issue/${issueId}/dependencies/${depId}`, { method: "DELETE", errorLabel: "Remove failed" });
 }
 
-export async function postComment(issueId, text) {
-  try {
-    const resp = await fetch(apiUrl(`/issue/${issueId}/comments`), {
-      method: "POST",
-      headers: JSON_HEADERS,
-      body: JSON.stringify({ text }),
-    });
-    if (!resp.ok) {
-      const err = await resp.json().catch(() => ({}));
-      return { ok: false, error: extractError(err, "Comment failed") };
-    }
-    return { ok: true, data: await resp.json() };
-  } catch (_e) {
-    return { ok: false, error: "Network error" };
-  }
+export function postComment(issueId, text) {
+  return writeRequest(`/issue/${issueId}/comments`, { body: { text }, errorLabel: "Comment failed" });
 }
 
-export async function postCreateIssue(body) {
-  try {
-    const resp = await fetch(apiUrl("/issues"), {
-      method: "POST",
-      headers: JSON_HEADERS,
-      body: JSON.stringify(body),
-    });
-    if (!resp.ok) {
-      const err = await resp.json().catch(() => ({}));
-      return { ok: false, error: extractError(err, "Create failed") };
-    }
-    return { ok: true, data: await resp.json() };
-  } catch (_e) {
-    return { ok: false, error: "Network error" };
-  }
+export function postCreateIssue(body) {
+  return writeRequest("/issues", { body, errorLabel: "Create failed" });
 }
 
-export async function postBatchUpdate(issueIds, fields) {
-  try {
-    const resp = await fetch(apiUrl("/batch/update"), {
-      method: "POST",
-      headers: JSON_HEADERS,
-      body: JSON.stringify({ issue_ids: issueIds, ...fields }),
-    });
-    if (!resp.ok) {
-      const err = await resp.json().catch(() => ({}));
-      return { ok: false, error: extractError(err, "Batch update failed") };
-    }
-    return { ok: true, data: await resp.json() };
-  } catch (_e) {
-    return { ok: false, error: "Network error" };
-  }
+export function postBatchUpdate(issueIds, fields) {
+  return writeRequest("/batch/update", { body: { issue_ids: issueIds, ...fields }, errorLabel: "Batch update failed" });
 }
 
-export async function postBatchClose(issueIds, reason, actor) {
-  try {
-    const body = { issue_ids: issueIds };
-    if (reason) body.reason = reason;
-    if (actor) body.actor = actor;
-    const resp = await fetch(apiUrl("/batch/close"), {
-      method: "POST",
-      headers: JSON_HEADERS,
-      body: JSON.stringify(body),
-    });
-    if (!resp.ok) {
-      const err = await resp.json().catch(() => ({}));
-      return { ok: false, error: extractError(err, "Batch close failed") };
-    }
-    return { ok: true, data: await resp.json() };
-  } catch (_e) {
-    return { ok: false, error: "Network error" };
-  }
+export function postBatchClose(issueIds, reason, actor) {
+  const body = { issue_ids: issueIds };
+  if (reason) body.reason = reason;
+  if (actor) body.actor = actor;
+  return writeRequest("/batch/close", { body, errorLabel: "Batch close failed" });
 }
 
 export async function postReload() {
@@ -412,39 +287,13 @@ export async function fetchScanRuns(limit) {
   }
 }
 
-export async function postFileAssociation(fileId, body) {
-  try {
-    const resp = await fetch(apiUrl(`/files/${encodeURIComponent(fileId)}/associations`), {
-      method: "POST",
-      headers: JSON_HEADERS,
-      body: JSON.stringify(body),
-    });
-    if (!resp.ok) {
-      const err = await resp.json().catch(() => ({}));
-      return { ok: false, error: extractError(err, "Association failed") };
-    }
-    return { ok: true, data: await resp.json() };
-  } catch (_e) {
-    return { ok: false, error: "Network error" };
-  }
+export function postFileAssociation(fileId, body) {
+  return writeRequest(`/files/${encodeURIComponent(fileId)}/associations`, { body, errorLabel: "Association failed" });
 }
 
-export async function patchFileFinding(fileId, findingId, body) {
-  try {
-    const resp = await fetch(
-      apiUrl(`/files/${encodeURIComponent(fileId)}/findings/${encodeURIComponent(findingId)}`),
-      {
-        method: "PATCH",
-        headers: JSON_HEADERS,
-        body: JSON.stringify(body),
-      },
-    );
-    if (!resp.ok) {
-      const err = await resp.json().catch(() => ({}));
-      return { ok: false, error: extractError(err, "Finding update failed") };
-    }
-    return { ok: true, data: await resp.json() };
-  } catch (_e) {
-    return { ok: false, error: "Network error" };
-  }
+export function patchFileFinding(fileId, findingId, body) {
+  return writeRequest(
+    `/files/${encodeURIComponent(fileId)}/findings/${encodeURIComponent(findingId)}`,
+    { method: "PATCH", body, errorLabel: "Finding update failed" },
+  );
 }

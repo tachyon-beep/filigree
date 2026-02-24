@@ -34,6 +34,8 @@ from time import perf_counter
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     from fastapi.responses import JSONResponse
     from starlette.requests import Request
 
@@ -201,6 +203,17 @@ def _error_response(
     )
 
 
+async def _parse_json_body(request: Request) -> dict[str, Any] | JSONResponse:
+    """Parse and validate a JSON object body, returning 400 on failure."""
+    try:
+        body = await request.json()
+    except Exception:
+        return _error_response("Invalid JSON body", "VALIDATION_ERROR", 400)
+    if not isinstance(body, dict):
+        return _error_response("Request body must be a JSON object", "VALIDATION_ERROR", 400)
+    return body
+
+
 def _safe_int(value: str, name: str, default: int, *, min_value: int | None = None) -> int | JSONResponse:
     """Parse a query-param string to int, returning a 400 error response on failure.
 
@@ -241,6 +254,14 @@ def _parse_bool_value(raw: str, name: str) -> bool | JSONResponse:
         400,
         {"param": name, "value": raw},
     )
+
+
+def _get_bool_param(params: Mapping[str, str], name: str, default: bool) -> bool | JSONResponse:
+    """Extract a boolean query param, returning *default* when absent."""
+    raw = params.get(name)
+    if raw is None:
+        return default
+    return _parse_bool_value(raw, name)
 
 
 def _read_graph_runtime_config(db: FiligreeDB) -> dict[str, Any]:
@@ -408,37 +429,18 @@ def _create_project_router() -> Any:
         params = request.query_params
         issue_map = {i.id: i for i in issues}
 
-        include_done = True
-        include_done_raw = params.get("include_done")
-        if include_done_raw is not None:
-            include_done_value = _parse_bool_value(include_done_raw, "include_done")
-            if isinstance(include_done_value, JSONResponse):
-                return include_done_value
-            include_done = include_done_value
-
-        blocked_only = False
-        blocked_only_raw = params.get("blocked_only")
-        if blocked_only_raw is not None:
-            blocked_only_value = _parse_bool_value(blocked_only_raw, "blocked_only")
-            if isinstance(blocked_only_value, JSONResponse):
-                return blocked_only_value
-            blocked_only = blocked_only_value
-
-        ready_only = False
-        ready_only_raw = params.get("ready_only")
-        if ready_only_raw is not None:
-            ready_only_value = _parse_bool_value(ready_only_raw, "ready_only")
-            if isinstance(ready_only_value, JSONResponse):
-                return ready_only_value
-            ready_only = ready_only_value
-
-        critical_path_only = False
-        critical_path_only_raw = params.get("critical_path_only")
-        if critical_path_only_raw is not None:
-            critical_only_value = _parse_bool_value(critical_path_only_raw, "critical_path_only")
-            if isinstance(critical_only_value, JSONResponse):
-                return critical_only_value
-            critical_path_only = critical_only_value
+        include_done = _get_bool_param(params, "include_done", True)
+        if isinstance(include_done, JSONResponse):
+            return include_done
+        blocked_only = _get_bool_param(params, "blocked_only", False)
+        if isinstance(blocked_only, JSONResponse):
+            return blocked_only
+        ready_only = _get_bool_param(params, "ready_only", False)
+        if isinstance(ready_only, JSONResponse):
+            return ready_only
+        critical_path_only = _get_bool_param(params, "critical_path_only", False)
+        if isinstance(critical_path_only, JSONResponse):
+            return critical_path_only
 
         if ready_only and blocked_only:
             return _error_response(
@@ -797,12 +799,9 @@ def _create_project_router() -> Any:
     @router.patch("/issue/{issue_id}")
     async def api_update_issue(issue_id: str, request: Request, db: FiligreeDB = Depends(_get_db)) -> JSONResponse:
         """Update issue fields (status, priority, assignee, etc.)."""
-        try:
-            body = await request.json()
-        except Exception:
-            return _error_response("Invalid JSON body", "VALIDATION_ERROR", 400)
-        if not isinstance(body, dict):
-            return _error_response("Request body must be a JSON object", "VALIDATION_ERROR", 400)
+        body = await _parse_json_body(request)
+        if isinstance(body, JSONResponse):
+            return body
         actor = body.pop("actor", "dashboard")
         priority = body.get("priority")
         if priority is not None and not isinstance(priority, int):
@@ -828,12 +827,9 @@ def _create_project_router() -> Any:
     @router.post("/issue/{issue_id}/close")
     async def api_close_issue(issue_id: str, request: Request, db: FiligreeDB = Depends(_get_db)) -> JSONResponse:
         """Close an issue."""
-        try:
-            body = await request.json()
-        except Exception:
-            return _error_response("Invalid JSON body", "VALIDATION_ERROR", 400)
-        if not isinstance(body, dict):
-            return _error_response("Request body must be a JSON object", "VALIDATION_ERROR", 400)
+        body = await _parse_json_body(request)
+        if isinstance(body, JSONResponse):
+            return body
         actor = body.get("actor", "dashboard")
         reason = body.get("reason", "")
         fields = body.get("fields")
@@ -850,12 +846,9 @@ def _create_project_router() -> Any:
     @router.post("/issue/{issue_id}/reopen")
     async def api_reopen_issue(issue_id: str, request: Request, db: FiligreeDB = Depends(_get_db)) -> JSONResponse:
         """Reopen a closed issue."""
-        try:
-            body = await request.json()
-        except Exception:
-            return _error_response("Invalid JSON body", "VALIDATION_ERROR", 400)
-        if not isinstance(body, dict):
-            return _error_response("Request body must be a JSON object", "VALIDATION_ERROR", 400)
+        body = await _parse_json_body(request)
+        if isinstance(body, JSONResponse):
+            return body
         actor = body.get("actor", "dashboard")
         try:
             issue = db.reopen_issue(issue_id, actor=actor)
@@ -872,12 +865,9 @@ def _create_project_router() -> Any:
             db.get_issue(issue_id)
         except KeyError:
             return _error_response(f"Issue not found: {issue_id}", "ISSUE_NOT_FOUND", 404)
-        try:
-            body = await request.json()
-        except Exception:
-            return _error_response("Invalid JSON body", "VALIDATION_ERROR", 400)
-        if not isinstance(body, dict):
-            return _error_response("Request body must be a JSON object", "VALIDATION_ERROR", 400)
+        body = await _parse_json_body(request)
+        if isinstance(body, JSONResponse):
+            return body
         text = body.get("text", "")
         author = body.get("author", "")
         try:
@@ -936,12 +926,9 @@ def _create_project_router() -> Any:
     @router.post("/batch/update")
     async def api_batch_update(request: Request, db: FiligreeDB = Depends(_get_db)) -> JSONResponse:
         """Batch update issues."""
-        try:
-            body = await request.json()
-        except Exception:
-            return _error_response("Invalid JSON body", "VALIDATION_ERROR", 400)
-        if not isinstance(body, dict):
-            return _error_response("Request body must be a JSON object", "VALIDATION_ERROR", 400)
+        body = await _parse_json_body(request)
+        if isinstance(body, JSONResponse):
+            return body
         issue_ids = body.get("issue_ids")
         if not isinstance(issue_ids, list):
             return _error_response("issue_ids must be a JSON array", "VALIDATION_ERROR", 400)
@@ -969,12 +956,9 @@ def _create_project_router() -> Any:
     @router.post("/batch/close")
     async def api_batch_close(request: Request, db: FiligreeDB = Depends(_get_db)) -> JSONResponse:
         """Batch close issues."""
-        try:
-            body = await request.json()
-        except Exception:
-            return _error_response("Invalid JSON body", "VALIDATION_ERROR", 400)
-        if not isinstance(body, dict):
-            return _error_response("Request body must be a JSON object", "VALIDATION_ERROR", 400)
+        body = await _parse_json_body(request)
+        if isinstance(body, JSONResponse):
+            return body
         issue_ids = body.get("issue_ids")
         if not isinstance(issue_ids, list):
             return _error_response("issue_ids must be a JSON array", "VALIDATION_ERROR", 400)
@@ -1009,12 +993,9 @@ def _create_project_router() -> Any:
     @router.post("/issues", status_code=201)
     async def api_create_issue(request: Request, db: FiligreeDB = Depends(_get_db)) -> JSONResponse:
         """Create a new issue."""
-        try:
-            body = await request.json()
-        except Exception:
-            return _error_response("Invalid JSON body", "VALIDATION_ERROR", 400)
-        if not isinstance(body, dict):
-            return _error_response("Request body must be a JSON object", "VALIDATION_ERROR", 400)
+        body = await _parse_json_body(request)
+        if isinstance(body, JSONResponse):
+            return body
         title = body.get("title", "")
         priority = body.get("priority", 2)
         if not isinstance(priority, int):
@@ -1039,12 +1020,9 @@ def _create_project_router() -> Any:
     @router.post("/issue/{issue_id}/claim")
     async def api_claim_issue(issue_id: str, request: Request, db: FiligreeDB = Depends(_get_db)) -> JSONResponse:
         """Claim an issue."""
-        try:
-            body = await request.json()
-        except Exception:
-            return _error_response("Invalid JSON body", "VALIDATION_ERROR", 400)
-        if not isinstance(body, dict):
-            return _error_response("Request body must be a JSON object", "VALIDATION_ERROR", 400)
+        body = await _parse_json_body(request)
+        if isinstance(body, JSONResponse):
+            return body
         assignee = body.get("assignee", "")
         if not assignee or not assignee.strip():
             return _error_response("assignee is required and cannot be empty", "VALIDATION_ERROR", 400)
@@ -1060,12 +1038,9 @@ def _create_project_router() -> Any:
     @router.post("/issue/{issue_id}/release")
     async def api_release_claim(issue_id: str, request: Request, db: FiligreeDB = Depends(_get_db)) -> JSONResponse:
         """Release a claimed issue."""
-        try:
-            body = await request.json()
-        except Exception:
-            return _error_response("Invalid JSON body", "VALIDATION_ERROR", 400)
-        if not isinstance(body, dict):
-            return _error_response("Request body must be a JSON object", "VALIDATION_ERROR", 400)
+        body = await _parse_json_body(request)
+        if isinstance(body, JSONResponse):
+            return body
         actor = body.get("actor", "dashboard")
         try:
             issue = db.release_claim(issue_id, actor=actor)
@@ -1078,12 +1053,9 @@ def _create_project_router() -> Any:
     @router.post("/claim-next")
     async def api_claim_next(request: Request, db: FiligreeDB = Depends(_get_db)) -> JSONResponse:
         """Claim the highest-priority ready issue."""
-        try:
-            body = await request.json()
-        except Exception:
-            return _error_response("Invalid JSON body", "VALIDATION_ERROR", 400)
-        if not isinstance(body, dict):
-            return _error_response("Request body must be a JSON object", "VALIDATION_ERROR", 400)
+        body = await _parse_json_body(request)
+        if isinstance(body, JSONResponse):
+            return body
         assignee = body.get("assignee", "")
         if not assignee or not assignee.strip():
             return _error_response("assignee is required and cannot be empty", "VALIDATION_ERROR", 400)
@@ -1099,12 +1071,9 @@ def _create_project_router() -> Any:
     @router.post("/issue/{issue_id}/dependencies")
     async def api_add_dependency(issue_id: str, request: Request, db: FiligreeDB = Depends(_get_db)) -> JSONResponse:
         """Add a dependency: issue_id depends on depends_on."""
-        try:
-            body = await request.json()
-        except Exception:
-            return _error_response("Invalid JSON body", "VALIDATION_ERROR", 400)
-        if not isinstance(body, dict):
-            return _error_response("Request body must be a JSON object", "VALIDATION_ERROR", 400)
+        body = await _parse_json_body(request)
+        if isinstance(body, JSONResponse):
+            return body
         depends_on = body.get("depends_on", "")
         actor = body.get("actor", "dashboard")
         try:
@@ -1290,12 +1259,9 @@ def _create_project_router() -> Any:
         db: FiligreeDB = Depends(_get_db),
     ) -> JSONResponse:
         """Update finding status and/or linked issue."""
-        try:
-            body = await request.json()
-        except Exception:
-            return _error_response("Invalid JSON body", "VALIDATION_ERROR", 400)
-        if not isinstance(body, dict):
-            return _error_response("Request body must be a JSON object", "VALIDATION_ERROR", 400)
+        body = await _parse_json_body(request)
+        if isinstance(body, JSONResponse):
+            return body
         status = body.get("status")
         issue_id = body.get("issue_id")
         if status is None and issue_id is None:
@@ -1341,12 +1307,9 @@ def _create_project_router() -> Any:
             db.get_file(file_id)
         except KeyError:
             return _error_response(f"File not found: {file_id}", "FILE_NOT_FOUND", 404)
-        try:
-            body = await request.json()
-        except Exception:
-            return _error_response("Invalid JSON body", "VALIDATION_ERROR", 400)
-        if not isinstance(body, dict):
-            return _error_response("Request body must be a JSON object", "VALIDATION_ERROR", 400)
+        body = await _parse_json_body(request)
+        if isinstance(body, JSONResponse):
+            return body
         issue_id = body.get("issue_id", "")
         assoc_type = body.get("assoc_type", "")
         if not issue_id or not assoc_type:
@@ -1360,12 +1323,9 @@ def _create_project_router() -> Any:
     @router.post("/v1/scan-results")
     async def api_scan_results(request: Request, db: FiligreeDB = Depends(_get_db)) -> JSONResponse:
         """Ingest scan results."""
-        try:
-            body = await request.json()
-        except Exception:
-            return _error_response("Invalid JSON body", "VALIDATION_ERROR", 400)
-        if not isinstance(body, dict):
-            return _error_response("Request body must be a JSON object", "VALIDATION_ERROR", 400)
+        body = await _parse_json_body(request)
+        if isinstance(body, JSONResponse):
+            return body
         scan_source = body.get("scan_source", "")
         if not isinstance(scan_source, str) or not scan_source:
             return _error_response("scan_source is required and must be a string", "VALIDATION_ERROR", 400)

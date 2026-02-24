@@ -61,6 +61,28 @@ _MAX_LIST_RESULTS = 50
 # Server setup
 # ---------------------------------------------------------------------------
 
+
+def _build_transition_error(
+    tracker: FiligreeDB,
+    issue_id: str,
+    error: str,
+    *,
+    include_ready: bool = True,
+) -> dict[str, Any]:
+    """Build a structured error dict with valid-transition hints."""
+    data: dict[str, Any] = {"error": error, "code": "invalid_transition"}
+    try:
+        transitions = tracker.get_valid_transitions(issue_id)
+        if include_ready:
+            data["valid_transitions"] = [{"to": t.to, "category": t.category, "ready": t.ready} for t in transitions]
+        else:
+            data["valid_transitions"] = [{"to": t.to, "category": t.category} for t in transitions]
+        data["hint"] = "Use get_valid_transitions to see allowed state changes"
+    except KeyError:
+        pass
+    return data
+
+
 server = Server("filigree")
 db: FiligreeDB | None = None
 _filigree_dir: Path | None = None
@@ -1215,14 +1237,7 @@ async def _dispatch(name: str, arguments: dict[str, Any], tracker: FiligreeDB) -
             except KeyError:
                 return _text({"error": f"Issue not found: {arguments['id']}", "code": "not_found"})
             except ValueError as e:
-                error_data: dict[str, Any] = {"error": str(e), "code": "invalid_transition"}
-                try:
-                    transitions = tracker.get_valid_transitions(arguments["id"])
-                    error_data["valid_transitions"] = [{"to": t.to, "category": t.category, "ready": t.ready} for t in transitions]
-                    error_data["hint"] = "Use get_valid_transitions to see allowed state changes"
-                except KeyError:
-                    pass
-                return _text(error_data)
+                return _text(_build_transition_error(tracker, arguments["id"], str(e)))
 
         case "close_issue":
             try:
@@ -1245,14 +1260,7 @@ async def _dispatch(name: str, arguments: dict[str, Any], tracker: FiligreeDB) -
             except KeyError:
                 return _text({"error": f"Issue not found: {arguments['id']}", "code": "not_found"})
             except ValueError as e:
-                error_data = {"error": str(e), "code": "invalid_transition"}
-                try:
-                    transitions = tracker.get_valid_transitions(arguments["id"])
-                    error_data["valid_transitions"] = [{"to": t.to, "category": t.category, "ready": t.ready} for t in transitions]
-                    error_data["hint"] = "Use get_valid_transitions to see allowed state changes"
-                except KeyError:
-                    pass
-                return _text(error_data)
+                return _text(_build_transition_error(tracker, arguments["id"], str(e)))
 
         case "reopen_issue":
             try:
@@ -1448,12 +1456,8 @@ async def _dispatch(name: str, arguments: dict[str, Any], tracker: FiligreeDB) -
                 except KeyError:
                     failed.append({"id": issue_id, "error": f"Issue not found: {issue_id}", "code": "not_found"})
                 except ValueError as e:
-                    fail_data: dict[str, Any] = {"id": issue_id, "error": str(e), "code": "invalid_transition"}
-                    try:
-                        transitions = tracker.get_valid_transitions(issue_id)
-                        fail_data["valid_transitions"] = [{"to": t.to, "category": t.category} for t in transitions]
-                    except KeyError:
-                        pass
+                    fail_data = _build_transition_error(tracker, issue_id, str(e), include_ready=False)
+                    fail_data["id"] = issue_id
                     failed.append(fail_data)
             _refresh_summary()
             ready_after = tracker.get_ready()
@@ -1494,12 +1498,8 @@ async def _dispatch(name: str, arguments: dict[str, Any], tracker: FiligreeDB) -
                 except KeyError:
                     update_failed.append({"id": issue_id, "error": f"Issue not found: {issue_id}", "code": "not_found"})
                 except ValueError as e:
-                    ufail: dict[str, Any] = {"id": issue_id, "error": str(e), "code": "invalid_transition"}
-                    try:
-                        transitions = tracker.get_valid_transitions(issue_id)
-                        ufail["valid_transitions"] = [{"to": t.to, "category": t.category} for t in transitions]
-                    except KeyError:
-                        pass
+                    ufail = _build_transition_error(tracker, issue_id, str(e), include_ready=False)
+                    ufail["id"] = issue_id
                     update_failed.append(ufail)
             _refresh_summary()
             return _text(
