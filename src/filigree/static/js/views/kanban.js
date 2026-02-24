@@ -282,7 +282,7 @@ export function toggleEpicExpand(epicId) {
 }
 
 // ---------------------------------------------------------------------------
-// renderTypeKanban — type-filtered kanban (WFT-FR-064)
+// renderTypeKanban — type-filtered kanban
 // ---------------------------------------------------------------------------
 
 export function renderTypeKanban(stateColumns, template) {

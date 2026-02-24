@@ -1,6 +1,7 @@
 """MCP server for the filigree issue tracker.
 
-Primary interface for agents. Direct SQLite, no daemon.
+Primary interface for agents. Direct SQLite in stdio mode (no daemon).
+Also mountable as streamable-HTTP handler inside the dashboard daemon for server mode.
 Exposes filigree operations as MCP tools.
 
 Usage:

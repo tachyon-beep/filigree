@@ -69,7 +69,7 @@ def generate_summary(db: FiligreeDB) -> str:
     stats = db.get_stats()
     ready = db.get_ready()
     blocked = db.get_blocked()
-    # WFT-FR-061: Use wip category to capture all work-in-progress states (fixing, verifying, etc.)
+    # Use wip category to capture all work-in-progress states (fixing, verifying, etc.)
     in_progress = db.list_issues(status="wip", limit=10000)
     recent = db.get_recent_events(limit=10)
 
@@ -100,7 +100,7 @@ def generate_summary(db: FiligreeDB) -> str:
             for r in rows:
                 parent_titles[r["id"]] = _sanitize_title(r["title"])
 
-    # WFT-FR-060: Vitals use category counts (open/wip/done) instead of literal status names
+    # Vitals use category counts (open/wip/done) instead of literal status names
     by_cat = stats.get("by_category", {})
     open_count = by_cat.get("open", 0)
     wip_count = by_cat.get("wip", 0)
@@ -146,14 +146,14 @@ def generate_summary(db: FiligreeDB) -> str:
 
             lines.append("")
 
-    # -- Ready to Work (WFT-NFR-010: limit 12)
+    # -- Ready to Work (limit 12)
     lines.append("## Ready to Work (no blockers, by priority)")
     if ready:
         for issue in ready[:12]:
             parent_ctx = ""
             if issue.parent_id and issue.parent_id in parent_titles:
                 parent_ctx = f" ({parent_titles[issue.parent_id]})"
-            # WFT-FR-061: Show state in parens when it differs from the default "open"
+            # Show state in parens when it differs from the default "open"
             state_info = f" ({issue.status})" if issue.status != "open" else ""
             title = _sanitize_title(issue.title)
             lines.append(f'- P{issue.priority} {issue.id} [{issue.type}] "{title}"{state_info}{parent_ctx}')
@@ -170,14 +170,14 @@ def generate_summary(db: FiligreeDB) -> str:
             parent_ctx = ""
             if issue.parent_id and issue.parent_id in parent_titles:
                 parent_ctx = f" ({parent_titles[issue.parent_id]})"
-            # WFT-FR-061: Show state in parens when it differs from the default "in_progress"
+            # Show state in parens when it differs from the default "in_progress"
             state_info = f" ({issue.status})" if issue.status != "in_progress" else ""
             lines.append(f'- {issue.id} [{issue.type}] "{_sanitize_title(issue.title)}"{state_info}{parent_ctx}')
     else:
         lines.append("- (none)")
     lines.append("")
 
-    # WFT-FR-071 / WFT-SR-013: Needs Attention — wip issues with missing required fields
+    # Needs Attention — wip issues with missing required fields
     needs_attention: list[tuple[Issue, list[str]]] = []
     for issue in in_progress:
         missing = db.templates.validate_fields_for_state(issue.type, issue.status, issue.fields)
@@ -227,7 +227,7 @@ def generate_summary(db: FiligreeDB) -> str:
         lines.append("- (none)")
     lines.append("")
 
-    # -- Epic Progress (WFT-NFR-010: limit 10; use status_category for done/open checks)
+    # -- Epic Progress (limit 10; use status_category for done/open checks)
     epics = db.list_issues(type="epic", limit=10000)
     open_epics = [e for e in epics if e.status_category != "done"]
     if open_epics:

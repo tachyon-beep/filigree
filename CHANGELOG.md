@@ -58,6 +58,7 @@ Server/ethereal operating modes, file intelligence + scanner workflows, Graph v2
 - Install instruction marker parsing improved to tolerate missing metadata/version fields
 - Release workflow pack now enabled by default for all new projects alongside core and planning; `suggested_children` for release type expanded to include epic, milestone, task, bug, and feature
 - README/docs expanded with architecture plans, mode guidance, and dashboard visuals
+- Stale comments and docstrings fixed across 10 source files: endpoint counts, module docstrings, internal spec references (WFT-*), naming discrepancies, and misleading path references all corrected or removed
 
 ### Fixed
 

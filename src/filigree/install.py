@@ -55,7 +55,7 @@ def _instructions_text() -> str:
 
 
 def _instructions_hash() -> str:
-    """Return first 8 chars of SHA256 of the instructions content."""
+    """Return first 8 hex characters of SHA256 of the instructions content."""
     return hashlib.sha256(_instructions_text().encode()).hexdigest()[:8]
 
 

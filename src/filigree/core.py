@@ -3,6 +3,9 @@
 Single source of truth for all SQLite operations. Both CLI and MCP server
 import from this module. No daemon, no sync — just direct SQLite with WAL mode.
 
+Covers issue CRUD, dependencies, events, comments, labels, workflow templates,
+file records, scan findings, file associations, and file event timelines.
+
 Convention-based discovery: each project has a `.filigree/` directory containing
 `filigree.db` (SQLite) and `config.json` (project prefix, version).
 """
@@ -695,7 +698,7 @@ class FiligreeDB:
     def templates(self) -> TemplateRegistry:
         """Lazy-loaded TemplateRegistry — created on first access.
 
-        Uses runtime import to avoid circular dependency (WFT-AR-001).
+        Uses runtime import to avoid circular dependency.
         Can be overridden via constructor injection for testing.
         """
         if self._template_registry is None:
@@ -983,7 +986,7 @@ class FiligreeDB:
         for r in self.conn.execute(f"SELECT issue_id, label FROM labels WHERE issue_id IN ({placeholders})", issue_ids).fetchall():
             labels_by_id[r["issue_id"]].append(r["label"])
 
-        # 3. Batch fetch "blocks" (issues that this one blocks — where depends_on_id = this)
+        # 3. Batch fetch "blocks" — issues blocked BY these IDs (where depends_on_id = this issue)
         blocks_by_id: dict[str, list[str]] = {iid: [] for iid in issue_ids}
         for r in self.conn.execute(
             f"SELECT depends_on_id, issue_id FROM dependencies WHERE depends_on_id IN ({placeholders})",
@@ -1098,7 +1101,7 @@ class FiligreeDB:
             self._validate_status(status, current.type)
 
             if not _skip_transition_check:
-                # WFT-FR-069: Atomic transition-with-fields
+                # Atomic transition-with-fields: validate merged fields against target state
                 merged_fields = {**current.fields}
                 if fields is not None:
                     merged_fields.update(fields)
@@ -2565,10 +2568,6 @@ class FiligreeDB:
         return count
 
     # -- File records & scan findings ----------------------------------------
-
-    # _generate_file_id and _generate_finding_id are now handled by
-    # _generate_unique_id("file_records", "f") and
-    # _generate_unique_id("scan_findings", "sf") respectively.
 
     def _build_file_record(self, row: sqlite3.Row) -> FileRecord:
         """Build a FileRecord from a database row."""

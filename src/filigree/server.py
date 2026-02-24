@@ -1,7 +1,7 @@
 """Server mode configuration and daemon management.
 
 Handles the persistent multi-project daemon for server installation mode.
-Config lives at ~/.config/filigree/server.json.
+Config lives at $HOME/.config/filigree/server.json (see SERVER_CONFIG_DIR).
 """
 
 from __future__ import annotations
@@ -263,7 +263,7 @@ def stop_daemon() -> DaemonResult:
 
     # Verify the process is actually dead
     if is_pid_alive(pid):
-        # B1 fix: still clean up PID file to prevent permanent stuck state
+        # Still clean up PID file even when SIGKILL fails, to prevent a permanently stuck state
         SERVER_PID_FILE.unlink(missing_ok=True)
         logger.warning("Failed to kill daemon (pid %d) even with SIGKILL", pid)
         return DaemonResult(False, f"Failed to kill daemon (pid {pid}) even with SIGKILL")

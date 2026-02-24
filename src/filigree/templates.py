@@ -27,7 +27,7 @@ _NAME_PATTERN = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 _VALID_CATEGORIES: frozenset[str] = frozenset({"open", "wip", "done"})
 
 # ---------------------------------------------------------------------------
-# Type aliases (WFT-NFR-015)
+# Type aliases
 # ---------------------------------------------------------------------------
 
 StateCategory = Literal["open", "wip", "done"]
@@ -35,7 +35,7 @@ EnforcementLevel = Literal["hard", "soft"]
 FieldType = Literal["text", "enum", "number", "date", "list", "boolean"]
 
 # ---------------------------------------------------------------------------
-# Frozen dataclasses (WFT-NFR-014)
+# Frozen dataclasses
 # ---------------------------------------------------------------------------
 # Templates use frozen=True for immutability (configuration data).
 # This differs intentionally from the mutable Issue dataclass (domain entity
@@ -155,7 +155,7 @@ class ValidationResult:
 
 
 # ---------------------------------------------------------------------------
-# Custom exceptions (WFT-AR-010)
+# Custom exceptions
 # ---------------------------------------------------------------------------
 
 
@@ -189,16 +189,16 @@ class HardEnforcementError(ValueError):
 
 
 # ---------------------------------------------------------------------------
-# TemplateRegistry (WFT-FR-001)
+# TemplateRegistry
 # ---------------------------------------------------------------------------
 
 
 class TemplateRegistry:
     """Loads, caches, and queries workflow templates and packs.
 
-    Templates are loaded once per instance and cached for the entire lifetime (WFT-NFR-005).
-    The registry builds O(1) lookup caches for category mapping (WFT-SR-002) and
-    transition validation (WFT-SR-003).
+    Templates are loaded once per instance and cached for the entire lifetime.
+    The registry builds O(1) lookup caches for category mapping and
+    transition validation.
     """
 
     # Size limits for custom templates (review B5 -- prevent DoS via huge templates)
@@ -350,7 +350,7 @@ class TemplateRegistry:
 
     @staticmethod
     def validate_type_template(tpl: TypeTemplate) -> list[str]:
-        """Validate a TypeTemplate for internal consistency (WFT-NFR-008).
+        """Validate a TypeTemplate for internal consistency.
 
         Returns:
             List of error messages. Empty list means valid.
@@ -449,10 +449,10 @@ class TemplateRegistry:
         logger.debug("Registering type: %s (pack=%s, %d states)", tpl.type, tpl.pack, len(tpl.states))
         self._types[tpl.type] = tpl
 
-        # Build category cache -- O(1) lookup, atomic replacement (WFT-SR-002)
+        # Build category cache -- O(1) lookup, atomic replacement
         self._category_cache[tpl.type] = {state.name: state.category for state in tpl.states}
 
-        # Build transition cache -- O(1) lookup (WFT-SR-003)
+        # Build transition cache -- O(1) lookup
         self._transition_cache[tpl.type] = {(t.from_state, t.to_state): t for t in tpl.transitions}
 
     def _register_pack(self, pack: WorkflowPack) -> None:
@@ -479,7 +479,7 @@ class TemplateRegistry:
         return list(self._packs.values())
 
     def get_initial_state(self, type_name: str) -> str:
-        """Initial state for a type. Falls back to 'open' if no template (WFT-FR-007)."""
+        """Initial state for a type. Falls back to 'open' if no template."""
         tpl = self._types.get(type_name)
         if tpl is None:
             logger.warning("Unknown type '%s' -- falling back to initial state 'open'", type_name)
@@ -487,7 +487,7 @@ class TemplateRegistry:
         return tpl.initial_state
 
     def get_category(self, type_name: str, state: str) -> StateCategory | None:
-        """Map a (type, state) pair to its category via O(1) cache (WFT-SR-002)."""
+        """Map a (type, state) pair to its category via O(1) cache."""
         type_cache = self._category_cache.get(type_name)
         if type_cache is None:
             return None
@@ -501,7 +501,7 @@ class TemplateRegistry:
         return [s.name for s in tpl.states]
 
     def get_first_state_of_category(self, type_name: str, category: StateCategory) -> str | None:
-        """Return the first state of a given category (array order) (WFT-FR-010)."""
+        """Return the first state of a given category (array order)."""
         tpl = self._types.get(type_name)
         if tpl is None:
             return None
@@ -514,7 +514,7 @@ class TemplateRegistry:
 
     @staticmethod
     def _is_field_populated(value: Any) -> bool:
-        """Check if a field value is considered populated (WFT-FR-012).
+        """Check if a field value is considered populated.
 
         None, empty strings, and whitespace-only strings are unpopulated.
         """
@@ -529,7 +529,7 @@ class TemplateRegistry:
         to_state: str,
         fields: dict[str, Any],
     ) -> TransitionResult:
-        """Validate a state transition (WFT-FR-011).
+        """Validate a state transition.
 
         Args:
             type_name: The issue type.
@@ -543,14 +543,14 @@ class TemplateRegistry:
         """
         tpl = self._types.get(type_name)
         if tpl is None:
-            # Fallback: unknown types allow all transitions (WFT-FR-016)
+            # Fallback: unknown types allow all transitions
             return TransitionResult(allowed=True, enforcement=None, missing_fields=(), warnings=())
 
         transition_map = self._transition_cache.get(type_name, {})
         transition = transition_map.get((from_state, to_state))
 
         if transition is None:
-            # Transition not in table: REJECTED for known types (WFT-FR-011)
+            # Transition not in table: REJECTED for known types
             return TransitionResult(
                 allowed=False,
                 enforcement=None,
@@ -594,7 +594,7 @@ class TemplateRegistry:
         current_state: str,
         fields: dict[str, Any],
     ) -> list[TransitionOption]:
-        """All valid transitions from current state with readiness info (WFT-FR-014).
+        """All valid transitions from current state with readiness info.
 
         Args:
             type_name: The issue type.
@@ -641,7 +641,7 @@ class TemplateRegistry:
         state: str,
         fields: dict[str, Any],
     ) -> list[str]:
-        """Return fields required at this state but not yet populated (WFT-FR-012).
+        """Return fields required at this state but not yet populated.
 
         Args:
             type_name: The issue type.
@@ -664,7 +664,7 @@ class TemplateRegistry:
     # -- Loading ------------------------------------------------------------
 
     def load(self, filigree_dir: Path, *, enabled_packs: list[str] | None = None) -> None:
-        """Load templates from all three layers (WFT-FR-002 through WFT-FR-005).
+        """Load templates from all three layers (built-in, DB, filesystem overrides).
 
         Layer 1: Built-in packs from templates_data.BUILT_IN_PACKS
         Layer 2: Installed packs from .filigree/packs/*.json

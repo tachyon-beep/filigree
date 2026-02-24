@@ -1,7 +1,7 @@
 # src/filigree/templates_data.py
 """Built-in workflow pack definitions.
 
-This module contains the data definitions for all built-in packs (WFT-NFR-013).
+This module contains the data definitions for all built-in packs.
 Logic lives in templates.py; this file is pure data.
 
 Each pack is a JSON-compatible dict matching the pack schema (design Section 4.2).

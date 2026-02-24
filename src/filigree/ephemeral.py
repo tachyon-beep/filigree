@@ -1,7 +1,8 @@
 """Ephemeral (session-scoped) dashboard lifecycle.
 
 Handles deterministic port selection, PID tracking, and stale process cleanup
-for the ethereal installation mode.
+for the ethereal installation mode. (The 'ephemeral' module name predates the
+mode rename to 'ethereal'.)
 """
 
 from __future__ import annotations

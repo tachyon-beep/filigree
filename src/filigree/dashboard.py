@@ -357,7 +357,7 @@ def _get_db() -> FiligreeDB:
 
 
 # ---------------------------------------------------------------------------
-# Project-scoped router — all 32 issue/workflow endpoints
+# Project-scoped router — all issue, workflow, and file endpoints
 # ---------------------------------------------------------------------------
 
 
@@ -732,7 +732,7 @@ def _create_project_router() -> Any:
 
     @router.get("/type/{type_name}")
     async def api_type_template(type_name: str, db: FiligreeDB = Depends(_get_db)) -> JSONResponse:
-        """Workflow template for a given issue type (WFT-FR-065)."""
+        """Workflow template for a given issue type."""
         tpl = db.templates.get_type(type_name)
         if tpl is None:
             valid_types = [t.type for t in db.templates.list_types()]

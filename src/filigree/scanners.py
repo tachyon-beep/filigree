@@ -46,6 +46,10 @@ class ScannerConfig:
     ) -> list[str]:
         """Build the full command list with template variables substituted.
 
+        The command string is first split with ``shlex.split()``, then template
+        variables are substituted on the resulting tokens. Variables inside quoted
+        segments expand literally within their token (they are not re-split).
+
         Raises ValueError if the command string is malformed (e.g. unmatched quotes).
         """
         subs = {
