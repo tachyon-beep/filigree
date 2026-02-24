@@ -354,27 +354,24 @@ version = "1.3.0"
 source = { editable = "." }
 dependencies = [
     { name = "click" },
+    { name = "mcp" },
     { name = "portalocker" },
 ]
 
 [package.optional-dependencies]
 all = [
     { name = "fastapi" },
-    { name = "mcp" },
     { name = "uvicorn" },
 ]
 dashboard = [
     { name = "fastapi" },
     { name = "uvicorn" },
 ]
-mcp = [
-    { name = "mcp" },
-]
 
 [package.dev-dependencies]
 dev = [
     { name = "coverage", extra = ["toml"] },
-    { name = "filigree", extra = ["dashboard", "mcp"] },
+    { name = "filigree", extra = ["dashboard"] },
     { name = "httpx" },
     { name = "mypy" },
     { name = "pre-commit" },
@@ -389,12 +386,11 @@ requires-dist = [
     { name = "click", specifier = ">=8.0" },
     { name = "fastapi", marker = "extra == 'dashboard'", specifier = ">=0.115" },
     { name = "filigree", extras = ["dashboard"], marker = "extra == 'all'" },
-    { name = "filigree", extras = ["mcp"], marker = "extra == 'all'" },
-    { name = "mcp", marker = "extra == 'mcp'", specifier = ">=1.0,<2" },
+    { name = "mcp", specifier = ">=1.0,<2" },
     { name = "portalocker", specifier = ">=2.7,<4" },
     { name = "uvicorn", marker = "extra == 'dashboard'", specifier = ">=0.34" },
 ]
-provides-extras = ["mcp", "dashboard", "all"]
+provides-extras = ["dashboard", "all"]
 
 [package.metadata.requires-dev]
 dev = [

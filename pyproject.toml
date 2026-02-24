@@ -27,6 +27,7 @@ classifiers = [
 ]
 dependencies = [
     "click>=8.0",
+    "mcp>=1.0,<2",
     "portalocker>=2.7,<4",
 ]
 
@@ -38,15 +39,11 @@ Changelog = "https://github.com/tachyon-beep/filigree/blob/main/CHANGELOG.md"
 Documentation = "https://github.com/tachyon-beep/filigree#readme"
 
 [project.optional-dependencies]
-mcp = [
-    "mcp>=1.0,<2",
-]
 dashboard = [
     "fastapi>=0.115",
     "uvicorn>=0.34",
 ]
 all = [
-    "filigree[mcp]",
     "filigree[dashboard]",
 ]
 

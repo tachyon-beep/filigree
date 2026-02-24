@@ -430,15 +430,17 @@ class TemplateRegistry:
                 cat = next(st.category for st in tpl.states if st.name == s)
                 warnings.append(f"state '{s}' (category={cat}) has no outgoing transitions (dead end)")
 
-        # Done-states with outgoing transitions: close_issue() treats these as
-        # "already closed", so the outgoing transitions are only reachable via
-        # update_issue(). Flag for design review.
+        # Done-states with outgoing transitions to other done states are
+        # unreachable: close_issue() treats done-category as "already closed",
+        # so done→done transitions can never fire.  Done→non-done transitions
+        # (e.g. released→rolled_back) are fine — reachable via update_issue().
         for s in sorted(done_states & from_states):
-            targets = [t.to_state for t in tpl.transitions if t.from_state == s]
-            warnings.append(
-                f"done-category state '{s}' has outgoing transitions to {targets} — "
-                f"close_issue() will reject issues in this state as 'already closed'"
-            )
+            done_targets = [t.to_state for t in tpl.transitions if t.from_state == s and t.to_state in done_states]
+            if done_targets:
+                warnings.append(
+                    f"done-category state '{s}' has transitions to other done states {done_targets} — "
+                    f"these are unreachable because close_issue() rejects issues already in a done state"
+                )
 
         return warnings
 

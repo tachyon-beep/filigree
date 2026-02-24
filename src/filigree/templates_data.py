@@ -1540,6 +1540,7 @@ _RELEASE_PACK: dict[str, Any] = {
                 {"name": "staged", "category": "wip"},
                 {"name": "released", "category": "done"},
                 {"name": "rolled_back", "category": "wip"},
+                {"name": "retired", "category": "done"},
                 {"name": "cancelled", "category": "done"},
             ],
             "initial_state": "planning",
@@ -1561,6 +1562,7 @@ _RELEASE_PACK: dict[str, Any] = {
                 {"from": "staged", "to": "development", "enforcement": "soft"},
                 {"from": "released", "to": "rolled_back", "enforcement": "soft"},
                 {"from": "rolled_back", "to": "development", "enforcement": "soft"},
+                {"from": "rolled_back", "to": "retired", "enforcement": "soft"},
             ],
             "fields_schema": [
                 {
@@ -1642,8 +1644,8 @@ _RELEASE_PACK: dict[str, Any] = {
             "release:      planning(O) --> development(W) --> frozen(W) --> testing(W) --> staged(W) --> released(D)\n"
             "                          \\-> cancelled(D) \\-> cancelled(D)\n"
             "                             \\-> development(W) [unfreeze]       \\-> rolled_back(W)\n"
-            "                                  \\-> development(W) [fix]\n"
-            "                                       \\-> development(W) [fix]\n"
+            "                                  \\-> development(W) [fix]            \\-> development(W) [re-release]\n"
+            "                                       \\-> development(W) [fix]       \\-> retired(D) [close out]\n"
             "              HARD: development-->frozen requires version\n"
             "\n"
             "release_item: queued(O) --> included(W) --> verified(D)\n"
@@ -1662,6 +1664,7 @@ _RELEASE_PACK: dict[str, Any] = {
             "staged": "Release is deployed to staging and awaiting go/no-go",
             "released": "Release has been shipped to production",
             "rolled_back": "Release was reverted after shipping",
+            "retired": "Rolled-back release permanently closed (not re-released)",
             "cancelled": "Release was abandoned before shipping",
             "queued": "Item is proposed for inclusion in the release",
             "included": "Item is confirmed for this release",

@@ -1061,10 +1061,10 @@ class TestBuiltInPackData:
         errors = TemplateRegistry.validate_type_template(tpl)
         assert errors == [], f"Validation errors for {type_name}: {errors}"
 
-    def test_release_type_has_eight_states(self) -> None:
+    def test_release_type_has_nine_states(self) -> None:
         raw = BUILT_IN_PACKS["release"]["types"]["release"]
         tpl = TemplateRegistry.parse_type_template(raw)
-        assert len(tpl.states) == 8
+        assert len(tpl.states) == 9
 
     def test_release_freeze_requires_version(self) -> None:
         raw = BUILT_IN_PACKS["release"]["types"]["release"]
@@ -1429,16 +1429,16 @@ class TestQualityCheckDoneOutgoing:
         concluded_warnings = [w for w in warnings if "concluded" in w]
         assert len(concluded_warnings) == 1
 
-    def test_builtin_release_done_states_warned(self) -> None:
-        """release.released (done) has outgoing transition to rolled_back.
+    def test_builtin_release_no_done_outgoing_warnings(self) -> None:
+        """released→rolled_back is done→wip, which is allowed (reachable via update_issue).
 
-        Note: rolled_back was changed from 'done' to 'wip' (filigree-284665),
-        so only 'released' produces this warning now.
+        The quality check only warns about done→done transitions, which are truly
+        unreachable since close_issue() rejects issues already in a done state.
         """
         from filigree.templates_data import BUILT_IN_PACKS
 
         raw = BUILT_IN_PACKS["release"]["types"]["release"]
         tpl = TemplateRegistry.parse_type_template(raw)
         warnings = TemplateRegistry.check_type_template_quality(tpl)
-        done_outgoing = [w for w in warnings if "outgoing" in w]
-        assert len(done_outgoing) == 1  # released→rolled_back only
+        done_outgoing = [w for w in warnings if "done state" in w]
+        assert len(done_outgoing) == 0
