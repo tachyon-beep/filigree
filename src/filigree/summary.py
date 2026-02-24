@@ -17,6 +17,15 @@ from filigree.core import FiligreeDB, Issue
 
 STALE_THRESHOLD_DAYS = 3
 
+
+class _MalformedTimestamp:
+    """Sentinel for unparseable timestamps (typed alternative to bare object())."""
+
+    __slots__ = ()
+
+
+_MALFORMED_TIMESTAMP = _MalformedTimestamp()
+
 # Matches C0/C1 control characters except tab/newline (which we handle separately)
 _CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]")
 
@@ -37,11 +46,12 @@ def _sanitize_title(text: str) -> str:
     return text
 
 
-def _parse_iso(ts: str) -> datetime:
+def _parse_iso(ts: str) -> datetime | _MalformedTimestamp:
     """Parse an ISO timestamp, handling timezone-aware and naive formats.
 
-    Always returns a UTC-aware datetime. Naive datetimes get UTC attached;
+    Returns a UTC-aware datetime on success. Naive datetimes get UTC attached;
     aware datetimes are converted to UTC via astimezone (not just replace).
+    Returns a malformed sentinel when parsing fails.
     """
     try:
         dt = datetime.fromisoformat(ts)
@@ -49,7 +59,7 @@ def _parse_iso(ts: str) -> datetime:
             return dt.replace(tzinfo=UTC)
         return dt.astimezone(UTC)
     except (ValueError, TypeError):
-        return datetime.now(UTC)
+        return _MALFORMED_TIMESTAMP
 
 
 def generate_summary(db: FiligreeDB) -> str:
@@ -59,7 +69,7 @@ def generate_summary(db: FiligreeDB) -> str:
     stats = db.get_stats()
     ready = db.get_ready()
     blocked = db.get_blocked()
-    # WFT-FR-061: Use wip category to capture all work-in-progress states (fixing, verifying, etc.)
+    # Use wip category to capture all work-in-progress states (fixing, verifying, etc.)
     in_progress = db.list_issues(status="wip", limit=10000)
     recent = db.get_recent_events(limit=10)
 
@@ -90,7 +100,7 @@ def generate_summary(db: FiligreeDB) -> str:
             for r in rows:
                 parent_titles[r["id"]] = _sanitize_title(r["title"])
 
-    # WFT-FR-060: Vitals use category counts (open/wip/done) instead of literal status names
+    # Vitals use category counts (open/wip/done) instead of literal status names
     by_cat = stats.get("by_category", {})
     open_count = by_cat.get("open", 0)
     wip_count = by_cat.get("wip", 0)
@@ -99,10 +109,7 @@ def generate_summary(db: FiligreeDB) -> str:
     blocked_count = stats["blocked_count"]
 
     lines.append("## Vitals")
-    lines.append(
-        f"Open: {open_count} | In Progress: {wip_count} | Done: {done_count}"
-        f" | Ready: {ready_count} | Blocked: {blocked_count}"
-    )
+    lines.append(f"Open: {open_count} | In Progress: {wip_count} | Done: {done_count} | Ready: {ready_count} | Blocked: {blocked_count}")
     lines.append("")
 
     # -- Active Plans (milestones)
@@ -139,14 +146,14 @@ def generate_summary(db: FiligreeDB) -> str:
 
             lines.append("")
 
-    # -- Ready to Work (WFT-NFR-010: limit 12)
+    # -- Ready to Work (limit 12)
     lines.append("## Ready to Work (no blockers, by priority)")
     if ready:
         for issue in ready[:12]:
             parent_ctx = ""
             if issue.parent_id and issue.parent_id in parent_titles:
                 parent_ctx = f" ({parent_titles[issue.parent_id]})"
-            # WFT-FR-061: Show state in parens when it differs from the default "open"
+            # Show state in parens when it differs from the default "open"
             state_info = f" ({issue.status})" if issue.status != "open" else ""
             title = _sanitize_title(issue.title)
             lines.append(f'- P{issue.priority} {issue.id} [{issue.type}] "{title}"{state_info}{parent_ctx}')
@@ -163,14 +170,14 @@ def generate_summary(db: FiligreeDB) -> str:
             parent_ctx = ""
             if issue.parent_id and issue.parent_id in parent_titles:
                 parent_ctx = f" ({parent_titles[issue.parent_id]})"
-            # WFT-FR-061: Show state in parens when it differs from the default "in_progress"
+            # Show state in parens when it differs from the default "in_progress"
             state_info = f" ({issue.status})" if issue.status != "in_progress" else ""
             lines.append(f'- {issue.id} [{issue.type}] "{_sanitize_title(issue.title)}"{state_info}{parent_ctx}')
     else:
         lines.append("- (none)")
     lines.append("")
 
-    # WFT-FR-071 / WFT-SR-013: Needs Attention — wip issues with missing required fields
+    # Needs Attention — wip issues with missing required fields
     needs_attention: list[tuple[Issue, list[str]]] = []
     for issue in in_progress:
         missing = db.templates.validate_fields_for_state(issue.type, issue.status, issue.fields)
@@ -189,13 +196,20 @@ def generate_summary(db: FiligreeDB) -> str:
 
     # -- Stale (wip-category >3 days with no activity)
     stale_cutoff = now - timedelta(days=STALE_THRESHOLD_DAYS)
-    stale = [i for i in in_progress if _parse_iso(i.updated_at) < stale_cutoff]
+    stale: list[tuple[Issue, datetime | _MalformedTimestamp]] = []
+    for issue in in_progress:
+        parsed_updated = _parse_iso(issue.updated_at)
+        if isinstance(parsed_updated, _MalformedTimestamp) or parsed_updated < stale_cutoff:
+            stale.append((issue, parsed_updated))
     if stale:
         lines.append("## Stale (in_progress >3 days, no activity)")
-        for issue in stale:
-            updated = _parse_iso(issue.updated_at)
-            days_ago = (now - updated).days
-            line = f'- P{issue.priority} {issue.id} [{issue.type}] "{_sanitize_title(issue.title)}" ({days_ago}d stale)'
+        for issue, parsed_updated in stale:
+            if isinstance(parsed_updated, _MalformedTimestamp):
+                marker = _sanitize_title(str(issue.updated_at))
+                line = f'- P{issue.priority} {issue.id} [{issue.type}] "{_sanitize_title(issue.title)}" (malformed updated_at: {marker})'
+            else:
+                days_ago = (now - parsed_updated).days
+                line = f'- P{issue.priority} {issue.id} [{issue.type}] "{_sanitize_title(issue.title)}" ({days_ago}d stale)'
             lines.append(line)
         lines.append("")
 
@@ -203,15 +217,7 @@ def generate_summary(db: FiligreeDB) -> str:
     lines.append("## Blocked (top 10 by priority)")
     if blocked:
         for issue in blocked[:10]:
-            blocker_names = []
-            for bid in issue.blocked_by:
-                try:
-                    b = db.get_issue(bid)
-                    if b.status_category != "done":
-                        blocker_names.append(f"{bid}")
-                except KeyError:
-                    blocker_names.append(bid)
-            blockers_str = ", ".join(blocker_names) if blocker_names else "?"
+            blockers_str = ", ".join(issue.blocked_by) if issue.blocked_by else "?"
             title = _sanitize_title(issue.title)
             line = f'- P{issue.priority} {issue.id} [{issue.type}] "{title}" \u2190 blocked by: {blockers_str}'
             lines.append(line)
@@ -221,7 +227,7 @@ def generate_summary(db: FiligreeDB) -> str:
         lines.append("- (none)")
     lines.append("")
 
-    # -- Epic Progress (WFT-NFR-010: limit 10; use status_category for done/open checks)
+    # -- Epic Progress (limit 10; use status_category for done/open checks)
     epics = db.list_issues(type="epic", limit=10000)
     open_epics = [e for e in epics if e.status_category != "done"]
     if open_epics:
@@ -275,6 +281,8 @@ def generate_summary(db: FiligreeDB) -> str:
             detail = ""
             if old_v and new_v:
                 detail = f" {old_v}\u2192{new_v}"
+            elif old_v:
+                detail = f" {old_v}\u2192"
             elif new_v:
                 detail = f" {new_v}"
             lines.append(f'- {evt_type} {evt["issue_id"]} "{title}"{detail}')
@@ -291,7 +299,13 @@ def write_summary(db: FiligreeDB, output_path: str | Path) -> None:
     output = Path(output_path)
     fd, tmp_name = tempfile.mkstemp(dir=output.parent, suffix=".tmp", prefix=".context_")
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
+        try:
+            f = os.fdopen(fd, "w", encoding="utf-8")
+        except BaseException:
+            with contextlib.suppress(OSError):
+                os.close(fd)
+            raise
+        with f:
             f.write(summary)
         os.replace(tmp_name, str(output))
     except BaseException:

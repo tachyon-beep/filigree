@@ -1,23 +1,25 @@
 # Filigree
 
-Agent-native issue tracker with convention-based project discovery.
+Local-first issue tracker designed for AI coding agents — SQLite, MCP tools, no cloud, no accounts.
 
 [![CI](https://github.com/tachyon-beep/filigree/actions/workflows/ci.yml/badge.svg)](https://github.com/tachyon-beep/filigree/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/filigree)](https://pypi.org/project/filigree/)
 [![Python 3.11+](https://img.shields.io/pypi/pyversions/filigree)](https://pypi.org/project/filigree/)
 [![License: MIT](https://img.shields.io/pypi/l/filigree)](https://github.com/tachyon-beep/filigree/blob/main/LICENSE)
 
+![Filigree Dashboard](docs/images/dashboard-screenshot.png)
+
 ## What Is Filigree?
 
-Filigree is a lightweight, SQLite-backed issue tracker designed for AI coding agents (Claude Code, Codex, etc.) to use as first-class citizens. It exposes 43 MCP tools so agents interact natively, plus a full CLI for humans and background subagents.
+Filigree is a lightweight, SQLite-backed issue tracker designed for AI coding agents (Claude Code, Codex, etc.) to use as first-class citizens. It exposes 53 MCP tools so agents interact natively, plus a full CLI for humans and background subagents.
 
-Traditional issue trackers are human-first — agents have to scrape CLI output or parse API responses. Filigree flips this: agents read a pre-computed `context.md` at session start, claim work with optimistic locking, follow enforced workflow state machines, and resume sessions via event streams. For Claude Code, `filigree install` wires up session hooks and a workflow skill pack so agents get project context automatically.
+Traditional issue trackers are human-first — agents scrape CLI output or parse API responses. Filigree flips this: agents get a pre-computed `context.md` at session start, claim work with optimistic locking, and resume sessions via event streams without re-reading history. For Claude Code, `filigree install` wires up session hooks and a workflow skill pack so agents get project context automatically.
 
-Filigree is local-first. No cloud, no accounts. Each project gets a `.filigree/` directory (like `.git/`) containing a SQLite database, configuration, and auto-generated context summary. The optional web dashboard can serve multiple projects from a single instance via an ephemeral project registry.
+Filigree is local-first. No cloud, no accounts. Each project gets a `.filigree/` directory (like `.git/`) containing a SQLite database, configuration, and auto-generated context summary. Installations support two modes: `ethereal` (default, per-project) and `server` (persistent multi-project daemon).
 
 ### Key Features
 
-- **MCP server** with 43 tools — agents interact natively without parsing text
+- **MCP server** with 53 tools — agents interact natively without parsing text
 - **Full CLI** with `--json` output for background subagents and `--actor` for audit trails
 - **Claude Code integration** — session hooks inject project snapshots at startup; bundled skill pack teaches agents workflow patterns
 - **Workflow templates** — 24 issue types across 9 packs with enforced state machines
@@ -25,7 +27,7 @@ Filigree is local-first. No cloud, no accounts. Each project gets a `.filigree/`
 - **Hierarchical planning** — milestone/phase/step hierarchies with automatic unblocking
 - **Atomic claiming** — optimistic locking prevents double-work in multi-agent scenarios
 - **Pre-computed context** — `context.md` regenerated on every mutation for instant agent orientation
-- **Web dashboard** — real-time project overview with Kanban drag-and-drop, dependency graphs, multi-project switching, and Deep Teal dark/light theme (optional extra)
+- **Web dashboard** — real-time project overview with Kanban drag-and-drop, Graph v2 dependency exploration, Files/Health views, and optional multi-project server mode
 - **Minimal dependencies** — just Python + SQLite + click (no framework overhead)
 - **Session resumption** — `get_changes --since <timestamp>` to catch up after downtime
 
@@ -77,18 +79,42 @@ filigree install --skills        # Workflow skill pack for agents
 filigree doctor                  # Verify installation health
 ```
 
-The session hook runs `filigree session-context` at startup, giving the agent a snapshot of in-progress work, ready tasks, and the critical path. The skill pack (`filigree-workflow`) teaches agents triage patterns, team coordination, and sprint planning via progressive disclosure.
+The session hook runs `filigree session-context` at startup, giving the agent a snapshot of in-progress work, ready tasks, and the critical path. The skill pack (`filigree-workflow`) teaches agents triage patterns, team coordination, and sprint planning step by step.
 
 ## Why Filigree?
 
-| | Filigree | GitHub Issues | Jira | TODO files |
-|-|----------|---------------|------|------------|
-| Agent-native (MCP tools) | Yes | No | No | No |
-| Works offline / local-first | Yes | No | No | Yes |
-| Structured queries & filtering | Yes | Yes | Yes | No |
-| Workflow state machines | Yes | Limited | Yes | No |
-| Zero configuration | Yes | No | No | Yes |
-| Dependency tracking | Yes | Limited | Yes | No |
+Filigree is designed for a specific niche: local-first, agent-driven development. It is not a replacement for GitHub Issues or Jira.
+
+| Feature | Filigree | GitHub Issues | Jira |
+|---------|----------|---------------|------|
+| Agent-native MCP tools | Yes | No | No |
+| Works offline, no account needed | Yes | No | No |
+| Enforced workflow state machines | Yes | Limited | Yes |
+| Dependency graph + critical path | Yes | Limited | Yes |
+| Structured queries and filtering | Yes | Yes | Yes |
+| Multi-user cloud collaboration | No | Yes | Yes |
+| Integration ecosystem (CI, Slack) | No | Yes | Yes |
+
+## When NOT to Use Filigree
+
+Filigree is designed for one niche well. It is the wrong tool if you need:
+
+**Team collaboration across machines.**
+Filigree has no cloud sync, no accounts, and no network-accessible API beyond localhost. If your team of humans needs to file bugs, assign tickets, and comment across different machines, use GitHub Issues, Linear, or Jira.
+
+**Integration with your existing toolchain.**
+Filigree does not connect to CI pipelines, Slack, PagerDuty, or third-party services. If your workflow requires automated ticket creation from alerts or Slack-based triage, Filigree will not fit without custom scripting.
+
+**A persistent project record outlasting the repository.**
+Your `.filigree/` directory lives with your project. If you need an audit trail that survives repository deletion or is accessible after the project ends, use a hosted service.
+
+**Multi-project portfolio management.**
+The web dashboard supports switching between local projects, but Filigree has no cross-project reporting, resource allocation, or roadmap views. It tracks tasks, not portfolios.
+
+**Mobile or browser-based access.**
+The dashboard runs on localhost. If stakeholders need to read or file issues from their phone or a machine where the project is not checked out, Filigree is not the right choice.
+
+**The sweet spot**: one developer or agent team, one project, offline or airgapped, where you want structured workflow enforcement and agent-native tooling without standing up external infrastructure.
 
 ## Documentation
 
@@ -96,7 +122,7 @@ The session hook runs `filigree session-context` at startup, giving the agent a 
 |----------|-------------|
 | [Getting Started](docs/getting-started.md) | 5-minute tutorial: install, init, first issue |
 | [CLI Reference](docs/cli.md) | All CLI commands with full parameter docs |
-| [MCP Server Reference](docs/mcp.md) | 43 MCP tools for agent-native interaction |
+| [MCP Server Reference](docs/mcp.md) | 53 MCP tools for agent-native interaction |
 | [Workflow Templates](docs/workflows.md) | State machines, packs, field schemas, enforcement |
 | [Agent Integration](docs/agent-integration.md) | Multi-agent patterns, claiming, session resumption |
 | [Python API Reference](docs/api-reference.md) | FiligreeDB, Issue, TemplateRegistry for programmatic use |
@@ -105,7 +131,15 @@ The session hook runs `filigree session-context` at startup, giving the agent a 
 
 ## Priority Scale
 
-See [Workflow Templates — Priority Scale](docs/workflows.md#priority-scale) for the full priority definitions (P0–P4).
+| Priority | Label | Meaning |
+|----------|-------|---------|
+| P0 | Critical | Drop everything |
+| P1 | High | Do next |
+| P2 | Medium | Default |
+| P3 | Low | When possible |
+| P4 | Backlog | Future consideration |
+
+Full definitions: [Workflow Templates — Priority Scale](docs/workflows.md#priority-scale)
 
 ## Development
 

@@ -674,9 +674,7 @@ class TestIncidentWorkflowE2E:
         assert inc.status == "resolved"
         assert inc.closed_at is None  # resolved is wip, not done yet
 
-        inc = incident_db.update_issue(
-            inc.id, status="closed", fields={"root_cause": "Database connection pool exhaustion"}
-        )
+        inc = incident_db.update_issue(inc.id, status="closed", fields={"root_cause": "Database connection pool exhaustion"})
         assert inc.status == "closed"
         assert inc.closed_at is not None
 

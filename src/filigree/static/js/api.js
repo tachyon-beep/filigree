@@ -1,0 +1,299 @@
+// ---------------------------------------------------------------------------
+// Pure API client — all fetch calls to the Filigree backend.
+// Returns data or { ok: false, error } objects. No DOM manipulation.
+// ---------------------------------------------------------------------------
+
+import { state } from "./state.js";
+
+function apiUrl(path) {
+  return state.API_BASE + path;
+}
+
+const JSON_HEADERS = { "Content-Type": "application/json" };
+
+/** Extract a human-readable message from structured or legacy error bodies. */
+function extractError(body, fallback) {
+  const e = body?.error;
+  if (e && typeof e === "object") return e.message || fallback;
+  return e || fallback;
+}
+
+/** Generic write (POST/PATCH/DELETE) helper — returns { ok, data?, error? }. */
+async function writeRequest(path, { method = "POST", body, errorLabel } = {}) {
+  try {
+    const opts = { method, headers: JSON_HEADERS };
+    if (body !== undefined) opts.body = JSON.stringify(body);
+    const resp = await fetch(apiUrl(path), opts);
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({}));
+      return { ok: false, error: extractError(err, errorLabel) };
+    }
+    return { ok: true, data: await resp.json() };
+  } catch (_e) {
+    return { ok: false, error: "Network error" };
+  }
+}
+
+// --- Read operations (return data or null) ---
+
+export async function fetchIssues() {
+  const resp = await fetch(apiUrl("/issues"));
+  if (!resp.ok) return null;
+  return resp.json();
+}
+
+export async function fetchDeps() {
+  const resp = await fetch(apiUrl("/dependencies"));
+  if (!resp.ok) return null;
+  return resp.json();
+}
+
+export async function fetchStats() {
+  const resp = await fetch(apiUrl("/stats"));
+  if (!resp.ok) return null;
+  return resp.json();
+}
+
+export async function fetchDashboardConfig() {
+  const resp = await fetch(apiUrl("/config"));
+  if (!resp.ok) return null;
+  return resp.json();
+}
+
+export async function fetchAllData() {
+  const results = await Promise.all([
+    fetch(apiUrl("/issues")),
+    fetch(apiUrl("/dependencies")),
+    fetch(apiUrl("/stats")),
+  ]);
+  if (!results[0].ok || !results[1].ok || !results[2].ok) {
+    return null;
+  }
+  return {
+    issues: await results[0].json(),
+    deps: await results[1].json(),
+    stats: await results[2].json(),
+  };
+}
+
+export async function fetchIssueDetail(issueId) {
+  const resp = await fetch(apiUrl(`/issue/${issueId}`));
+  if (!resp.ok) return null;
+  return resp.json();
+}
+
+export async function fetchIssueFiles(issueId) {
+  const resp = await fetch(apiUrl(`/issue/${issueId}/files`));
+  if (!resp.ok) return null;
+  return resp.json();
+}
+
+export async function fetchTransitions(issueId) {
+  try {
+    const resp = await fetch(apiUrl(`/issue/${issueId}/transitions`));
+    if (resp.ok) return resp.json();
+  } catch (_e) {
+    /* best-effort */
+  }
+  return [];
+}
+
+export async function fetchGraph(options = {}) {
+  const params = new URLSearchParams();
+  Object.entries(options).forEach(([key, value]) => {
+    if (value === undefined || value === null || value === "") return;
+    if (Array.isArray(value)) {
+      if (!value.length) return;
+      params.set(key, value.join(","));
+      return;
+    }
+    params.set(key, String(value));
+  });
+  const suffix = params.toString() ? `?${params.toString()}` : "";
+  const resp = await fetch(apiUrl(`/graph${suffix}`));
+  if (!resp.ok) return null;
+  return resp.json();
+}
+
+export async function fetchMetrics(days) {
+  const resp = await fetch(apiUrl(`/metrics?days=${days}`));
+  if (!resp.ok) return null;
+  return resp.json();
+}
+
+export async function fetchActivity(limit, since) {
+  let url = apiUrl("/activity");
+  const params = [];
+  if (limit) params.push(`limit=${limit}`);
+  if (since) params.push(`since=${encodeURIComponent(since)}`);
+  if (params.length) url += `?${params.join("&")}`;
+  const resp = await fetch(url);
+  if (!resp.ok) return null;
+  return resp.json();
+}
+
+export async function fetchTypeInfo(typeName) {
+  const resp = await fetch(apiUrl(`/type/${encodeURIComponent(typeName)}`));
+  if (!resp.ok) return null;
+  return resp.json();
+}
+
+export async function fetchTypes() {
+  const resp = await fetch(apiUrl("/types"));
+  if (!resp.ok) return [];
+  return resp.json();
+}
+
+export async function fetchPlan(milestoneId) {
+  const resp = await fetch(apiUrl(`/plan/${milestoneId}`));
+  if (!resp.ok) return null;
+  return resp.json();
+}
+
+export async function fetchCriticalPath() {
+  const resp = await fetch(apiUrl("/critical-path"));
+  if (!resp.ok) return null;
+  return resp.json();
+}
+
+export async function fetchSearch(query, limit) {
+  let url = apiUrl(`/search?q=${encodeURIComponent(query)}`);
+  if (limit) url += `&limit=${limit}`;
+  const resp = await fetch(url);
+  if (!resp.ok) return { results: [], total: 0 };
+  return resp.json();
+}
+
+export async function fetchProjects(ttl) {
+  const resp = await fetch(`/api/projects${ttl ? `?ttl=${ttl}` : ""}`);
+  if (!resp.ok) return [];
+  return resp.json();
+}
+
+// --- Write operations (return { ok, data?, error? }) ---
+
+export function patchIssue(issueId, body) {
+  return writeRequest(`/issue/${issueId}`, { method: "PATCH", body, errorLabel: "Update failed" });
+}
+
+export function postCloseIssue(issueId, reason) {
+  return writeRequest(`/issue/${issueId}/close`, { body: { reason: reason || "" }, errorLabel: "Close failed" });
+}
+
+export function postReopenIssue(issueId) {
+  return writeRequest(`/issue/${issueId}/reopen`, { body: {}, errorLabel: "Reopen failed" });
+}
+
+export function postClaimIssue(issueId, assignee) {
+  return writeRequest(`/issue/${issueId}/claim`, { body: { assignee }, errorLabel: "Claim failed" });
+}
+
+export function postReleaseIssue(issueId) {
+  return writeRequest(`/issue/${issueId}/release`, { body: {}, errorLabel: "Release failed" });
+}
+
+export function postAddDependency(issueId, dependsOnId) {
+  return writeRequest(`/issue/${issueId}/dependencies`, { body: { depends_on: dependsOnId }, errorLabel: "Add failed" });
+}
+
+export function deleteIssueDep(issueId, depId) {
+  return writeRequest(`/issue/${issueId}/dependencies/${depId}`, { method: "DELETE", errorLabel: "Remove failed" });
+}
+
+export function postComment(issueId, text) {
+  return writeRequest(`/issue/${issueId}/comments`, { body: { text }, errorLabel: "Comment failed" });
+}
+
+export function postCreateIssue(body) {
+  return writeRequest("/issues", { body, errorLabel: "Create failed" });
+}
+
+export function postBatchUpdate(issueIds, fields) {
+  return writeRequest("/batch/update", { body: { issue_ids: issueIds, ...fields }, errorLabel: "Batch update failed" });
+}
+
+export function postBatchClose(issueIds, reason, actor) {
+  const body = { issue_ids: issueIds };
+  if (reason) body.reason = reason;
+  if (actor) body.actor = actor;
+  return writeRequest("/batch/close", { body, errorLabel: "Batch close failed" });
+}
+
+export async function postReload() {
+  try {
+    const resp = await fetch("/api/reload", { method: "POST" });
+    return resp.json();
+  } catch (_e) {
+    return { ok: false };
+  }
+}
+
+// --- File & Findings API ---
+
+export async function fetchFiles(params) {
+  const qs = params ? "?" + new URLSearchParams(params) : "";
+  const resp = await fetch(apiUrl("/files" + qs));
+  if (!resp.ok) return null;
+  return resp.json();
+}
+
+export async function fetchFileDetail(fileId) {
+  const resp = await fetch(apiUrl(`/files/${encodeURIComponent(fileId)}`));
+  if (!resp.ok) return null;
+  return resp.json();
+}
+
+export async function fetchFileFindings(fileId, params) {
+  const qs = params ? "?" + new URLSearchParams(params) : "";
+  const resp = await fetch(apiUrl(`/files/${encodeURIComponent(fileId)}/findings` + qs));
+  if (!resp.ok) return null;
+  return resp.json();
+}
+
+export async function fetchFileTimeline(fileId, params) {
+  const qs = params ? "?" + new URLSearchParams(params) : "";
+  const resp = await fetch(apiUrl(`/files/${encodeURIComponent(fileId)}/timeline` + qs));
+  if (!resp.ok) return null;
+  return resp.json();
+}
+
+export async function fetchHotspots(limit) {
+  const qs = limit ? `?limit=${limit}` : "";
+  const resp = await fetch(apiUrl("/files/hotspots" + qs));
+  if (!resp.ok) return null;
+  return resp.json();
+}
+
+export async function fetchFileStats() {
+  const resp = await fetch(apiUrl("/files/stats"));
+  if (!resp.ok) return null;
+  return resp.json();
+}
+
+export async function fetchFileSchema() {
+  const resp = await fetch(apiUrl("/files/_schema"));
+  if (!resp.ok) return null;
+  return resp.json();
+}
+
+export async function fetchScanRuns(limit) {
+  try {
+    const qs = limit ? `?limit=${limit}` : "";
+    const resp = await fetch(apiUrl("/scan-runs" + qs));
+    if (!resp.ok) return { scan_runs: [] };
+    return resp.json();
+  } catch (_e) {
+    return { scan_runs: [] };
+  }
+}
+
+export function postFileAssociation(fileId, body) {
+  return writeRequest(`/files/${encodeURIComponent(fileId)}/associations`, { body, errorLabel: "Association failed" });
+}
+
+export function patchFileFinding(fileId, findingId, body) {
+  return writeRequest(
+    `/files/${encodeURIComponent(fileId)}/findings/${encodeURIComponent(findingId)}`,
+    { method: "PATCH", body, errorLabel: "Finding update failed" },
+  );
+}

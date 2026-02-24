@@ -1,0 +1,323 @@
+{
+  "verdict": "CHANGES_REQUESTED",
+  "summary": "Plan has 12 blocking issues after deduplication (from 19 raw findings across 4 reviewers). Most critical: Task 7 breaks 135 existing test usages without a migration strategy, hand-rolled TOML serialization is both injection-vulnerable and spec-noncompliant, stop_daemon has a PID-reuse kill-foreign-process hazard, and the /api/reload + /mcp/ endpoints required by server mode are entirely absent from the plan. 14 warnings should be addressed.",
+  "plan_file": "/home/john/filigree/docs/plans/2026-02-22-server-ethereal-modes.md",
+  "reviewed_at": "2026-02-22T18:00:00Z",
+  "reviewers": ["reality", "architecture", "quality", "systems"],
+  "blocking_issues": [
+    {
+      "id": "B1",
+      "title": "Task 7 breaks 135 existing test usages with no migration plan",
+      "sources": ["reality:R3", "reality:R4", "architecture:A4"],
+      "issue": "Task 7 says 'replace the client fixture' but tests/test_dashboard.py has 135 usages of `client: AsyncClient` across 30+ test classes, all depending on `_project_manager`, `Registry`, and `ProjectManager`. The plan shows only 3 new tests and a new fixture, with no strategy for migrating the existing 135 usages. The plan also only shows code snippets for dashboard.py, not a complete rewrite -- the remaining endpoint handlers still reference `_project_manager` and `_get_project_db()` which would be deleted.",
+      "evidence": "grep -c 'client: AsyncClient' tests/test_dashboard.py => 135. Current fixture at line 31 uses ProjectManager/Registry. Plan's replacement fixture uses `_db` which doesn't exist yet.",
+      "severity": 4,
+      "likelihood": 3,
+      "reversibility": 2,
+      "priority_score": 24,
+      "resolution": "Add explicit migration steps for all 30+ test classes. Provide the complete dashboard.py rewrite showing how every existing endpoint handler transitions from `_get_project_db(project_key)` to `_get_db()`. Consider a compatibility shim or a phased approach (fixture first, then endpoints)."
+    },
+    {
+      "id": "B2",
+      "title": "TOML injection via crafted project path in write_server_config()",
+      "sources": ["quality:Q1", "architecture:A2", "systems:SW7"],
+      "issue": "write_server_config() uses hand-rolled TOML serialization with f-string interpolation. A project path containing double-quotes or TOML metacharacters (e.g., a prefix like `evil\" } [injected]`) breaks the inline table syntax and allows injection of arbitrary TOML keys. Backslashes are not escaped either. This is also a spec-compliance issue: the generated TOML may not parse correctly with tomllib for certain paths.",
+      "evidence": "Plan line 1121: `f'\"{{path}}\" = {{ prefix = \"{{prefix}}\" }}'`. No quoting or escaping applied to path or prefix values.",
+      "severity": 4,
+      "likelihood": 2,
+      "reversibility": 2,
+      "priority_score": 16,
+      "resolution": "Replace hand-rolled TOML with JSON (matching the codebase pattern of config.json) or add tomli-w as a dependency. If TOML is required, use a proper serialization library. At minimum, validate/sanitize path and prefix values before interpolation."
+    },
+    {
+      "id": "B3",
+      "title": "PID reuse hazard: stop_daemon() and is_process_alive() can kill foreign processes",
+      "sources": ["quality:Q2", "quality:Q4"],
+      "issue": "os.kill(pid, 0) in is_process_alive() returns True for ANY process with that PID, not just filigree processes. If the original daemon dies and the OS reassigns that PID, stop_daemon() sends SIGTERM to an unrelated process. Additionally, os.kill() raises unhandled PermissionError if the PID belongs to another user's process. No test covers either scenario.",
+      "evidence": "Plan line 1292: `os.kill(pid, signal.SIGTERM)` without verifying process identity. Plan line 547: `os.kill(pid, 0)` catches only OSError/ProcessLookupError, not PermissionError.",
+      "severity": 4,
+      "likelihood": 2,
+      "reversibility": 3,
+      "priority_score": 24,
+      "resolution": "Validate process identity before killing: store the command line or a nonce in the PID file, then verify via /proc/{pid}/cmdline (Linux) or psutil. Catch PermissionError in is_process_alive(). Add tests for PID reuse and permission-denied scenarios."
+    },
+    {
+      "id": "B4",
+      "title": "Server mode /mcp/ endpoint entirely absent from plan",
+      "sources": ["systems:SW8"],
+      "issue": "The design doc specifies that server mode exposes MCP at /mcp/ (streamable HTTP), and Task 11 generates .mcp.json pointing to http://localhost:8377/mcp/. But no task in the plan actually implements the /mcp/ endpoint on the server. The MCP URL is a dead link. This makes server mode non-functional for its primary purpose.",
+      "evidence": "Plan line 1460 generates URL `http://localhost:{port}/mcp/`. Design doc line 117 specifies the endpoint. No task creates the FastAPI route.",
+      "severity": 4,
+      "likelihood": 3,
+      "reversibility": 1,
+      "priority_score": 12,
+      "resolution": "Add a new task (between Tasks 10 and 11) that implements the /mcp/ endpoint in dashboard.py using MCP SDK's streamable HTTP transport. Include project-scoping via query parameter as specified in the design doc."
+    },
+    {
+      "id": "B5",
+      "title": "/api/reload endpoint deleted but never reimplemented for server mode",
+      "sources": ["systems:S1", "architecture:AW2"],
+      "issue": "Task 7 removes /api/reload. The design doc explicitly requires hot-reload on project registration: 'if the daemon is running, hot-reloads via POST /api/reload'. No task reimplements this. Server mode register_project() only writes to server.toml with no way to notify the running daemon to pick up the new project.",
+      "evidence": "Design doc line 107: 'hot-reloads via POST /api/reload'. Plan Task 7 Step 3: 'Remove /api/register, /api/projects, /api/reload endpoints'. No subsequent task adds it back.",
+      "severity": 3,
+      "likelihood": 3,
+      "reversibility": 1,
+      "priority_score": 9,
+      "resolution": "Either reimplement /api/reload for server mode (guarded behind mode check), add file-watching on server.toml, or add a `filigree server reload` CLI command that signals the daemon."
+    },
+    {
+      "id": "B6",
+      "title": "test_cli.py uses `runner.invoke()` but no `runner` variable exists",
+      "sources": ["reality:R1"],
+      "issue": "Plan's TestInitMode and TestInstallMode test classes call `runner.invoke(cli, [...])`, but tests/test_cli.py has no module-level `runner` variable. The existing test file uses a `cli_runner` pytest fixture (defined in conftest.py) or destructures it from the `cli_in_project` fixture.",
+      "evidence": "tests/test_cli.py line 17: `def cli_in_project(tmp_path: Path, cli_runner: CliRunner)`. tests/conftest.py line 75: `def cli_runner() -> CliRunner`. Plan uses bare `runner` (undefined).",
+      "severity": 3,
+      "likelihood": 3,
+      "reversibility": 1,
+      "priority_score": 9,
+      "resolution": "Change plan to use `cli_runner` fixture parameter in TestInitMode and TestInstallMode, or add `runner = CliRunner()` at module scope. The fixture approach is preferred for consistency."
+    },
+    {
+      "id": "B7",
+      "title": "Missing `import json` in test_hooks.py and test_core.py",
+      "sources": ["reality:R2", "reality:RW3"],
+      "issue": "Plan's TestEnsureDashboardEthereal (test_hooks.py) calls json.dumps() but tests/test_hooks.py has no `import json`. Similarly, TestGetMode (test_core.py) uses json.dumps() but tests/test_core.py has no `import json`.",
+      "evidence": "grep 'import json' tests/test_hooks.py => no match. grep 'import json' tests/test_core.py => no match. Plan uses json.dumps in both files.",
+      "severity": 3,
+      "likelihood": 3,
+      "reversibility": 1,
+      "priority_score": 9,
+      "resolution": "Add `import json` to the imports section of both test files in the plan."
+    },
+    {
+      "id": "B8",
+      "title": "@pytest.mark.anyio conflicts with asyncio_mode='auto'; anyio not a test dependency",
+      "sources": ["quality:Q5", "reality:RW1"],
+      "issue": "Task 7's TestEtherealDashboard uses @pytest.mark.anyio, but pyproject.toml sets asyncio_mode='auto' (meaning async tests run automatically without markers). The existing test suite uses no markers on async tests. Additionally, pytest-anyio is not listed as a test dependency -- this will cause ModuleNotFoundError in CI.",
+      "evidence": "pyproject.toml line 167: `asyncio_mode = \"auto\"`. Plan lines 821/827/833: `@pytest.mark.anyio`. No pytest-anyio in test dependencies.",
+      "severity": 3,
+      "likelihood": 3,
+      "reversibility": 1,
+      "priority_score": 9,
+      "resolution": "Remove @pytest.mark.anyio decorators from TestEtherealDashboard. The asyncio_mode='auto' setting handles async test discovery automatically, matching the pattern of all existing async tests."
+    },
+    {
+      "id": "B9",
+      "title": "Lock/spawn TOCTOU: crash between Popen and write_pid leaves orphan",
+      "sources": ["systems:S2", "quality:Q6"],
+      "issue": "In _ensure_dashboard_ethereal_mode(), if the process crashes between subprocess.Popen() (line 746) and write_pid() (line 761), no PID file is written. The next session cannot detect the orphaned process and spawns a second instance on the same port. Similarly, write_pid(), write_port_file(), and write_server_config() are not atomic -- partial writes leave corrupt files.",
+      "evidence": "Plan lines 746-761: 15 lines of code between Popen and write_pid, including time.sleep(0.5) and proc.poll(). Any crash in this window leaves an orphan.",
+      "severity": 3,
+      "likelihood": 2,
+      "reversibility": 2,
+      "priority_score": 12,
+      "resolution": "Write PID file immediately after Popen succeeds, before the sleep/poll check. Use atomic write pattern (write to temp file, then rename) for PID, port, and config files. On startup failure, clean up the PID file."
+    },
+    {
+      "id": "B10",
+      "title": "stop_daemon sends SIGTERM and immediately deletes PID without waiting",
+      "sources": ["systems:S4"],
+      "issue": "stop_daemon() sends SIGTERM then immediately unlinks the PID file (lines 1292-1293). It does not wait for the process to actually exit. If `filigree server start` is called immediately after `stop`, the old process may still hold the port, causing the new daemon to fail to bind.",
+      "evidence": "Plan lines 1292-1293: `os.kill(pid, signal.SIGTERM)` followed immediately by `SERVER_PID_FILE.unlink(missing_ok=True)`. No os.waitpid() or retry loop.",
+      "severity": 3,
+      "likelihood": 2,
+      "reversibility": 1,
+      "priority_score": 6,
+      "resolution": "After sending SIGTERM, poll for process exit with a timeout (e.g., up to 5 seconds). Only delete the PID file after confirming the process has exited. Escalate to SIGKILL if the process does not exit within the timeout."
+    },
+    {
+      "id": "B11",
+      "title": "Circular import: server.py imports from install.py, install.py may import from server.py",
+      "sources": ["architecture:A3"],
+      "issue": "Task 10's start_daemon() imports _find_filigree_command from install.py (line 1246). Task 12 and Task 13 have install.py importing from server.py (register_project, daemon_status). This creates a circular import: server.py -> install.py -> server.py. The current plan uses lazy imports to defer, but this is fragile and mypy will flag it.",
+      "evidence": "Plan line 1246: `from filigree.install import _find_filigree_command`. Plan line 1536: `from filigree.server import register_project, daemon_status`. hooks.py line 27 already imports _find_filigree_command from install.py.",
+      "severity": 3,
+      "likelihood": 2,
+      "reversibility": 1,
+      "priority_score": 6,
+      "resolution": "Move _find_filigree_command() to core.py or a new utils.py module. Both server.py and install.py can then import from core/utils without circularity."
+    },
+    {
+      "id": "B12",
+      "title": "`filigree init --mode=server` on existing project silently ignores --mode",
+      "sources": ["systems:S3"],
+      "issue": "Task 2's init command has an early-return branch when `.filigree/` already exists (lines 164-171). This branch does not consult the --mode flag, so `filigree init --mode=server` on an existing ethereal project silently does nothing to change the mode.",
+      "evidence": "Plan lines 164-171: `if filigree_dir.exists(): ... return` without reading or writing mode to config.",
+      "severity": 2,
+      "likelihood": 2,
+      "reversibility": 1,
+      "priority_score": 4,
+      "resolution": "In the existing-project branch, either update the mode in config if --mode is explicitly provided, or print a warning telling the user to use `filigree install --mode=server` to change mode."
+    }
+  ],
+  "warnings": [
+    {
+      "id": "W1",
+      "source": "architecture:A1",
+      "issue": "Task 14 uses `git add -A` which stages unrelated changes; grep pre-check insufficient",
+      "priority_score": 6,
+      "recommendation": "Replace `git add -A` with explicit file list. Gate registry deletion on full CI run (pytest + mypy), not just grep."
+    },
+    {
+      "id": "W2",
+      "source": "quality:Q3, systems:SW3, architecture:AW5",
+      "issue": "TOCTOU race in find_available_port(): _is_port_free() releases socket before returning, another process can grab it",
+      "priority_score": 4,
+      "recommendation": "Accept as low-risk for deterministic port (race window is small). Document the limitation. The OS-fallback path (port 0) has the same issue and is worse since it returns a random port."
+    },
+    {
+      "id": "W3",
+      "source": "architecture:AW2, architecture:AW3",
+      "issue": "Design doc promises hot-reload and version enforcement, but no tasks implement either",
+      "priority_score": 6,
+      "recommendation": "Add tasks for version enforcement logic (compare schema versions on project registration) and hot-reload mechanism, or explicitly descope them as future work."
+    },
+    {
+      "id": "W4",
+      "source": "architecture:AW7",
+      "issue": "cli.py is modified in Tasks 2, 3, 10, and 12 -- high blast radius with 4 separate touches",
+      "priority_score": 4,
+      "recommendation": "Consider consolidating CLI changes. At minimum, ensure each task's test suite covers all previous CLI additions to catch regressions."
+    },
+    {
+      "id": "W5",
+      "source": "architecture:AW1",
+      "issue": "No integration test until Task 16 (smoke test). 15 tasks of unit-tested-only changes.",
+      "priority_score": 4,
+      "recommendation": "Add a lightweight integration test after Phase 2 (Task 6 or 7) that exercises the full ethereal flow: init -> install -> ensure-dashboard -> session-context."
+    },
+    {
+      "id": "W6",
+      "source": "systems:SW6",
+      "issue": "time.sleep(0.5) fixed delay is fragile for process startup check",
+      "priority_score": 3,
+      "recommendation": "Replace with a polling loop that checks port availability with exponential backoff (e.g., 0.1s increments up to 3s total)."
+    },
+    {
+      "id": "W7",
+      "source": "systems:SW1",
+      "issue": "No migration path for existing /tmp/filigree-dashboard.* files from current hybrid mode",
+      "priority_score": 3,
+      "recommendation": "Add cleanup logic in Task 15 that removes /tmp/filigree-dashboard.pid, .lock, .log if they exist. Or add a doctor check."
+    },
+    {
+      "id": "W8",
+      "source": "systems:SW2",
+      "issue": "Phase 2 without Phase 3 leaves server mode non-functional; plan is only partially shippable",
+      "priority_score": 3,
+      "recommendation": "Document that Phase 2 is independently shippable but Phase 3 requires completion of all tasks (including missing /mcp/ endpoint) to be functional. Consider a feature flag."
+    },
+    {
+      "id": "W9",
+      "source": "quality:QW1",
+      "issue": "No test for corrupt port file (non-numeric content in ephemeral.port)",
+      "priority_score": 2,
+      "recommendation": "Add a test for read_port_file() with non-numeric content, analogous to test_read_corrupt_pid_returns_none."
+    },
+    {
+      "id": "W10",
+      "source": "quality:QW2",
+      "issue": "No test for unknown mode warning in get_mode()",
+      "priority_score": 2,
+      "recommendation": "Add test case: config with mode='bogus' should return 'ethereal' and log a warning."
+    },
+    {
+      "id": "W11",
+      "source": "quality:QW3",
+      "issue": "Task 12 test does not isolate SERVER_PID_FILE, could interfere with real daemon",
+      "priority_score": 2,
+      "recommendation": "Add monkeypatch for SERVER_PID_FILE in TestInstallModeIntegration, matching the pattern used in TestDaemonLifecycle."
+    },
+    {
+      "id": "W12",
+      "source": "reality:RW4",
+      "issue": "Hardcoded 'filigree.db' in test_hooks.py instead of using DB_FILENAME constant",
+      "priority_score": 1,
+      "recommendation": "Use the DB_FILENAME constant from filigree.core for consistency."
+    },
+    {
+      "id": "W13",
+      "source": "systems:SW5",
+      "issue": "Divergence between init (always writes mode) and install (conditionally writes mode) could confuse users",
+      "priority_score": 2,
+      "recommendation": "Document the semantics clearly: init sets mode, install preserves existing mode unless explicitly overridden."
+    },
+    {
+      "id": "W14",
+      "source": "quality:QW8",
+      "issue": "test_init_invalid_mode_rejected only checks exit_code != 0 but does not verify .filigree/ was not created",
+      "priority_score": 1,
+      "recommendation": "Add assertion: `assert not (tmp_path / '.filigree').exists()`"
+    }
+  ],
+  "recommendations": [
+    {
+      "type": "TRACER_BULLET",
+      "source": "architecture",
+      "suggestion": "After Phase 1, implement a minimal end-to-end test that runs init -> install -> ensure-dashboard -> session-context to validate the ethereal flow before building server mode."
+    },
+    {
+      "type": "SERIALIZATION",
+      "source": "architecture + quality",
+      "suggestion": "Replace server.toml with server.json to match the codebase's existing pattern (config.json, registry.json). This eliminates the TOML injection risk, removes the need for hand-rolled serialization, and uses stdlib json module already imported everywhere."
+    },
+    {
+      "type": "ATOMICITY",
+      "source": "quality",
+      "suggestion": "Create a write_atomic(path, content) helper in core.py that writes to a temp file and renames. Use it for PID files, port files, and config files throughout."
+    },
+    {
+      "type": "PROCESS_IDENTITY",
+      "source": "quality + systems",
+      "suggestion": "Store a nonce or the command line alongside PID. On stop/cleanup, verify the process identity before sending signals. This prevents the foreign-process-kill scenario."
+    }
+  ],
+  "conflicts_resolved": [
+    {
+      "issue": "TOML injection severity classification",
+      "quality_view": "Blocking security issue (Q1: injection via crafted path)",
+      "architecture_view": "Blocking correctness issue (A2: spec-noncompliant TOML)",
+      "systems_view": "Warning (SW7: hand-rolled TOML)",
+      "resolution": "Classified as blocking (B2). Both injection and spec-noncompliance are real issues. The simplest fix is to switch to JSON, which resolves both."
+    },
+    {
+      "issue": "TOCTOU in port selection severity",
+      "quality_view": "Blocking (Q3)",
+      "architecture_view": "Warning (AW5)",
+      "systems_view": "Warning (SW3)",
+      "resolution": "Classified as warning (W2). The race window is extremely small for deterministic ports, and the fallback path has the same issue. Documenting the limitation is sufficient."
+    },
+    {
+      "issue": "/api/reload removal scope",
+      "systems_view": "Blocking -- breaks server mode hot-reload (S1)",
+      "architecture_view": "Warning -- design doc promise not met (AW2)",
+      "resolution": "Classified as blocking (B5). Server mode register_project() has no way to notify a running daemon, making dynamic project addition non-functional."
+    }
+  ],
+  "reviewer_summaries": {
+    "reality": {
+      "status": "ISSUES_FOUND",
+      "blocking_contributed": 3,
+      "warnings_contributed": 8,
+      "notes": "Caught critical test infrastructure issues (runner variable, missing imports, broken fixture). Most findings confirmed by codebase inspection."
+    },
+    "architecture": {
+      "status": "ISSUES_FOUND",
+      "blocking_contributed": 4,
+      "warnings_contributed": 7,
+      "notes": "Identified circular import risk, TOML spec issues, and incomplete test migration. Blast radius and integration test gap warnings are well-founded."
+    },
+    "quality": {
+      "status": "ISSUES_FOUND",
+      "blocking_contributed": 6,
+      "warnings_contributed": 8,
+      "notes": "Strongest findings on security (TOML injection) and safety (PID reuse, non-atomic writes). The anyio/asyncio conflict catch prevents CI failure."
+    },
+    "systems": {
+      "status": "ISSUES_FOUND",
+      "blocking_contributed": 4,
+      "warnings_contributed": 8,
+      "notes": "Uniquely identified the missing /mcp/ endpoint and /api/reload gap -- both are plan-level omissions that would make server mode non-functional."
+    }
+  }
+}

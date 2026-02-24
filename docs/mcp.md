@@ -1,6 +1,6 @@
 # MCP Server Reference
 
-Filigree exposes an MCP (Model Context Protocol) server so AI agents interact natively without parsing CLI output. The server provides 43 tools, 1 resource, and 1 prompt.
+Filigree exposes an MCP (Model Context Protocol) server so AI agents interact natively without parsing CLI output. The server provides 53 tools, 1 resource, and 1 prompt.
 
 ## Contents
 
@@ -19,6 +19,8 @@ Filigree exposes an MCP (Model Context Protocol) server so AI agents interact na
   - [Templates and Workflow](#templates-and-workflow)
   - [Analytics](#analytics)
   - [Data Management](#data-management)
+  - [Files and Traceability](#files-and-traceability)
+  - [Scanning](#scanning)
 
 ## Setup
 
@@ -27,6 +29,7 @@ The simplest path:
 ```bash
 filigree install --claude-code    # Writes .mcp.json (or uses `claude mcp add`)
 filigree install --codex          # Writes .codex/config.toml
+filigree install --mode=server    # Configure streamable HTTP MCP for daemon mode
 ```
 
 Or manually add to `.mcp.json`:
@@ -110,7 +113,7 @@ Workflow guide with optional live project context. Agents use this to understand
 | `priority` | 0-4 | no | Priority (default: 2) |
 | `description` | string | no | Issue description |
 | `notes` | string | no | Additional notes |
-| `labels` | string[] | no | Labels |
+| `labels` | string[] | no | Labels to attach during creation (no separate `add_label` call needed) |
 | `deps` | string[] | no | Dependency issue IDs |
 | `parent_id` | string | no | Parent issue ID |
 | `fields` | object | no | Custom fields from template schema |
@@ -137,6 +140,7 @@ Workflow guide with optional live project context. Agents use this to understand
 |-----------|------|----------|-------------|
 | `id` | string | yes | Issue ID |
 | `reason` | string | no | Close reason |
+| `fields` | object | no | Extra fields to set while closing (for enforced workflows) |
 | `actor` | string | no | Agent identity for audit trail |
 
 #### `reopen_issue`
@@ -286,6 +290,8 @@ Step deps within a phase use integer indices. Cross-phase deps use `"phase_idx.s
 |------|-------------|
 | `batch_update` | Update multiple issues with the same changes |
 | `batch_close` | Close multiple with per-item error reporting |
+| `batch_add_label` | Add the same label to multiple issues |
+| `batch_add_comment` | Add the same comment to multiple issues |
 
 #### `batch_update`
 
@@ -304,6 +310,22 @@ Step deps within a phase use integer indices. Cross-phase deps use `"phase_idx.s
 |-----------|------|----------|-------------|
 | `ids` | string[] | yes | Issue IDs |
 | `reason` | string | no | Close reason |
+| `actor` | string | no | Agent identity for audit trail |
+
+#### `batch_add_label`
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `ids` | string[] | yes | Issue IDs |
+| `label` | string | yes | Label to add |
+| `actor` | string | no | Agent identity for audit trail |
+
+#### `batch_add_comment`
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `ids` | string[] | yes | Issue IDs |
+| `text` | string | yes | Comment text |
 | `actor` | string | no | Agent identity for audit trail |
 
 ### Templates and Workflow
@@ -420,3 +442,104 @@ Step deps within a phase use integer indices. Cross-phase deps use `"phase_idx.s
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `keep_recent` | integer | no | Keep N most recent events per archived issue (default 50) |
+
+### Files and Traceability
+
+| Tool | Description |
+|------|-------------|
+| `list_files` | List tracked files with filtering, sorting, and pagination |
+| `get_file` | Get file detail + associations + findings summary |
+| `get_file_timeline` | Get merged file timeline events |
+| `get_issue_files` | List files associated with an issue |
+| `add_file_association` | Associate file and issue (`bug_in`, `task_for`, `scan_finding`, `mentioned_in`) |
+| `register_file` | Register/get file record by project-relative path |
+
+#### `list_files`
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `limit` | integer | no | Max results (default 100, max 10000) |
+| `offset` | integer | no | Skip first N results |
+| `language` | string | no | Filter by language |
+| `path_prefix` | string | no | Filter by path substring |
+| `min_findings` | integer | no | Minimum open findings count |
+| `has_severity` | enum | no | Require at least one open finding at severity |
+| `scan_source` | string | no | Filter by finding source |
+| `sort` | enum | no | `updated_at`, `first_seen`, `path`, `language` |
+| `direction` | enum | no | `asc`/`desc` |
+
+#### `get_file`
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `file_id` | string | yes | File ID |
+
+Response includes: `file`, `associations`, `recent_findings`, `summary`.
+
+#### `get_file_timeline`
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `file_id` | string | yes | File ID |
+| `limit` | integer | no | Max events (default 50) |
+| `offset` | integer | no | Skip first N events |
+| `event_type` | enum | no | `finding`, `association`, `file_metadata_update` |
+
+#### `get_issue_files`
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `issue_id` | string | yes | Issue ID |
+
+#### `add_file_association`
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `file_id` | string | yes | File ID |
+| `issue_id` | string | yes | Issue ID |
+| `assoc_type` | enum | yes | `bug_in`, `task_for`, `scan_finding`, `mentioned_in` |
+
+#### `register_file`
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `path` | string | yes | Project-relative file path |
+| `language` | string | no | Optional language hint |
+| `file_type` | string | no | Optional file type tag |
+| `metadata` | object | no | Optional metadata map |
+
+### Scanning
+
+| Tool | Description |
+|------|-------------|
+| `list_scanners` | List registered scanners |
+| `trigger_scan` | Trigger async file scan |
+
+#### `list_scanners`
+
+No parameters. Returns scanners registered in `.filigree/scanners/*.toml`.
+
+Response: `{scanners: [{name, description, file_types}]}`
+
+#### `trigger_scan`
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `scanner` | string | yes | Scanner name (from list_scanners) |
+| `file_path` | string | yes | File path to scan (relative to project root) |
+| `api_url` | string | no | Dashboard URL (default http://localhost:8377, localhost only) |
+
+Response: `{status, scanner, file_path, file_id, scan_run_id, pid, message}`
+
+**Workflow:**
+1. `list_scanners` — discover available scanners
+2. `trigger_scan` — fire-and-forget scan, get `file_id` and `scan_run_id`
+3. Check results later via `GET /api/files/{file_id}/findings`
+
+**Rate limiting:** Repeated triggers for the same scanner+file are rejected within a 30s cooldown window.
+
+**Important:** Results are POSTed to the dashboard API. Ensure the dashboard is running at the target `api_url` before triggering scans — if unreachable, results are silently lost.
+
+**Scanner registration:** Add TOML files to `.filigree/scanners/`. See `scripts/scanners/*.toml.example` for templates.
+
+For end-to-end issue/file/finding workflows (including dashboard UI and troubleshooting), see [File Traceability Playbook](file-traceability.md).

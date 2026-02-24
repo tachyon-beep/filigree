@@ -12,4 +12,10 @@ build/
 .pytest_cache/
 .coverage
 htmlcov/
-.filigree/
+.filigree/*
+!.filigree/.gitkeep
+.claude/
+node_modules/
+.mcp.json
+.codex/
+.agents/

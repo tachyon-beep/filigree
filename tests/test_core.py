@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import json
+import logging
+from pathlib import Path
+
 import pytest
 
-from filigree.core import FiligreeDB
+from filigree.core import FiligreeDB, find_filigree_command, get_mode, write_atomic
 
 
 class TestCreateAndGet:
@@ -66,6 +70,33 @@ class TestListAndSearch:
         assert "auth" in results[0].title.lower()
 
 
+class TestSearchFTSFallback:
+    """Bug filigree-35ef38: FTS fallback must only catch missing-table errors."""
+
+    def test_non_fts_operational_error_propagates(self, db: FiligreeDB) -> None:
+        """OperationalError unrelated to missing FTS5 must NOT be silently caught."""
+        import sqlite3
+        from unittest.mock import patch
+
+        db.create_issue("Searchable item")
+
+        original_execute = db.conn.execute
+
+        class _SpyConn:
+            """Wraps conn to intercept FTS queries."""
+
+            def __getattr__(self, name):
+                return getattr(db._conn, name)
+
+            def execute(self, sql, params=()):
+                if "issues_fts" in sql and "MATCH" in sql:
+                    raise sqlite3.OperationalError("database disk image is malformed")
+                return original_execute(sql, params)
+
+        with patch.object(db, "_conn", _SpyConn()), pytest.raises(sqlite3.OperationalError, match="malformed"):
+            db.search_issues("Searchable")
+
+
 class TestDependencies:
     def test_add_dependency(self, db: FiligreeDB) -> None:
         a = db.create_issue("Blocked task")
@@ -107,8 +138,8 @@ class TestDependencies:
 
 class TestLabelsAndComments:
     def test_labels_on_create(self, db: FiligreeDB) -> None:
-        issue = db.create_issue("Labeled", labels=["bug", "urgent"])
-        assert set(issue.labels) == {"bug", "urgent"}
+        issue = db.create_issue("Labeled", labels=["defect", "urgent"])
+        assert set(issue.labels) == {"defect", "urgent"}
 
     def test_add_remove_label(self, db: FiligreeDB) -> None:
         issue = db.create_issue("Label test")
@@ -118,6 +149,15 @@ class TestLabelsAndComments:
         db.remove_label(issue.id, "backend")
         refreshed = db.get_issue(issue.id)
         assert "backend" not in refreshed.labels
+
+    def test_create_rejects_reserved_type_label(self, db: FiligreeDB) -> None:
+        with pytest.raises(ValueError, match="reserved as an issue type"):
+            db.create_issue("Bad labels", labels=["bug", "urgent"])
+
+    def test_add_label_rejects_reserved_type_label_case_insensitive(self, db: FiligreeDB) -> None:
+        issue = db.create_issue("Label test")
+        with pytest.raises(ValueError, match="reserved as an issue type"):
+            db.add_label(issue.id, "BuG")
 
     def test_add_comment(self, db: FiligreeDB) -> None:
         issue = db.create_issue("Commentable")
@@ -198,23 +238,23 @@ class TestGetStatsByCategory:
 
 
 class TestGenerateId:
-    """Verify _generate_id uses O(1) EXISTS check, not full-table scan."""
+    """Verify _generate_unique_id uses O(1) EXISTS check, not full-table scan."""
 
     def test_generate_id_returns_prefixed_id(self, db: FiligreeDB) -> None:
-        issue_id = db._generate_id()
+        issue_id = db._generate_unique_id("issues")
         assert issue_id.startswith("test-")
         assert len(issue_id) == len("test-") + 6
 
     def test_generate_id_avoids_collisions(self, db: FiligreeDB) -> None:
-        ids = {db._generate_id() for _ in range(50)}
+        ids = {db._generate_unique_id("issues") for _ in range(50)}
         assert len(ids) == 50
 
     def test_generate_id_uses_exists_check(self, db: FiligreeDB) -> None:
         """Verify the implementation queries by specific ID, not all IDs."""
         import inspect
 
-        source = inspect.getsource(db._generate_id)
-        assert "SELECT 1 FROM issues WHERE id = ?" in source
+        source = inspect.getsource(db._generate_unique_id)
+        assert "SELECT 1 FROM {table} WHERE id = ?" in source
         assert "SELECT id FROM issues" not in source
 
 
@@ -265,3 +305,91 @@ class TestDescriptionNotesAuditTrail:
             (issue.id,),
         ).fetchall()
         assert len(events) == 0
+
+
+class TestGetMode:
+    def test_default_mode_is_ethereal(self, tmp_path: Path) -> None:
+        """Projects without a mode field default to ethereal."""
+        filigree_dir = tmp_path / ".filigree"
+        filigree_dir.mkdir()
+        config = {"prefix": "test", "version": 1}
+        (filigree_dir / "config.json").write_text(json.dumps(config))
+        assert get_mode(filigree_dir) == "ethereal"
+
+    def test_explicit_ethereal(self, tmp_path: Path) -> None:
+        filigree_dir = tmp_path / ".filigree"
+        filigree_dir.mkdir()
+        config = {"prefix": "test", "version": 1, "mode": "ethereal"}
+        (filigree_dir / "config.json").write_text(json.dumps(config))
+        assert get_mode(filigree_dir) == "ethereal"
+
+    def test_explicit_server(self, tmp_path: Path) -> None:
+        filigree_dir = tmp_path / ".filigree"
+        filigree_dir.mkdir()
+        config = {"prefix": "test", "version": 1, "mode": "server"}
+        (filigree_dir / "config.json").write_text(json.dumps(config))
+        assert get_mode(filigree_dir) == "server"
+
+    def test_missing_config_defaults_to_ethereal(self, tmp_path: Path) -> None:
+        filigree_dir = tmp_path / ".filigree"
+        filigree_dir.mkdir()
+        assert get_mode(filigree_dir) == "ethereal"
+
+    def test_unknown_mode_falls_back_to_ethereal(self, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+        """Unknown mode values fall back to ethereal with a warning."""
+        filigree_dir = tmp_path / ".filigree"
+        filigree_dir.mkdir()
+        config = {"prefix": "test", "version": 1, "mode": "bogus"}
+        (filigree_dir / "config.json").write_text(json.dumps(config))
+        with caplog.at_level(logging.WARNING, logger="filigree.core"):
+            result = get_mode(filigree_dir)
+        assert result == "ethereal"
+        assert "bogus" in caplog.text
+
+
+class TestFindFiligreeCommand:
+    def test_returns_list(self) -> None:
+        """Command is always a list of strings."""
+        result = find_filigree_command()
+        assert isinstance(result, list)
+        assert all(isinstance(s, str) for s in result)
+
+    def test_at_least_one_element(self) -> None:
+        result = find_filigree_command()
+        assert len(result) >= 1
+
+
+class TestWriteAtomic:
+    def test_writes_content(self, tmp_path: Path) -> None:
+        target = tmp_path / "test.txt"
+        write_atomic(target, "hello")
+        assert target.read_text() == "hello"
+
+    def test_no_tmp_file_left(self, tmp_path: Path) -> None:
+        target = tmp_path / "test.txt"
+        write_atomic(target, "hello")
+        assert not (tmp_path / "test.txt.tmp").exists()
+
+    def test_overwrites_existing_file(self, tmp_path: Path) -> None:
+        """Overwriting an existing file works correctly."""
+        target = tmp_path / "test.txt"
+        target.write_text("original")
+        write_atomic(target, "updated")
+        assert target.read_text() == "updated"
+
+    def test_error_cleanup_removes_tmp_and_preserves_original(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Bug filigree-07485f: on os.replace failure, temp file must be removed and original preserved."""
+        target = tmp_path / "test.txt"
+        target.write_text("precious data")
+        tmp_file = target.with_suffix(".txt.tmp")
+
+        def failing_replace(src: object, dst: object) -> None:
+            raise OSError("disk full")
+
+        monkeypatch.setattr("os.replace", failing_replace)
+
+        with pytest.raises(OSError, match="disk full"):
+            write_atomic(target, "new content that should not land")
+
+        assert target.read_text() == "precious data", "Original file must be untouched"
+        assert not tmp_file.exists(), "Temp file must be cleaned up on failure"

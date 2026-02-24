@@ -42,7 +42,9 @@ class TestMigrationV3:
         assert issue.status == "review"
 
     def test_schema_version_is_current(self, db: FiligreeDB) -> None:
-        assert db.get_schema_version() == 1
+        from filigree.core import CURRENT_SCHEMA_VERSION
+
+        assert db.get_schema_version() == CURRENT_SCHEMA_VERSION
 
 
 # ---------------------------------------------------------------------------
@@ -146,21 +148,15 @@ class TestCompaction:
 
 class TestPerformanceIndexes:
     def test_composite_index_exists(self, db: FiligreeDB) -> None:
-        indexes = db.conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_issues_status_priority'"
-        ).fetchall()
+        indexes = db.conn.execute("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_issues_status_priority'").fetchall()
         assert len(indexes) == 1
 
     def test_deps_covering_index_exists(self, db: FiligreeDB) -> None:
-        indexes = db.conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_deps_issue_depends'"
-        ).fetchall()
+        indexes = db.conn.execute("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_deps_issue_depends'").fetchall()
         assert len(indexes) == 1
 
     def test_events_time_index_exists(self, db: FiligreeDB) -> None:
-        indexes = db.conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_events_issue_time'"
-        ).fetchall()
+        indexes = db.conn.execute("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_events_issue_time'").fetchall()
         assert len(indexes) == 1
 
 

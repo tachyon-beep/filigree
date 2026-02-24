@@ -6,7 +6,7 @@ Step-by-step run sheet for migrating a project from [beads](https://github.com/s
 
 Beads is a git-backed issue tracker that stores data in `.beads/` directories using a Dolt-powered SQLite database. It syncs issue data through git commits, which can cause merge conflicts and data loss when branches diverge.
 
-Filigree replaces this with a local-first SQLite database (`.filigree/`) that never touches git. Agent access is via MCP tools (43 available) or CLI with `--json` output.
+Filigree replaces this with a local-first SQLite database (`.filigree/`) that never touches git. Agent access is via MCP tools (53 available) or CLI with `--json` output.
 
 Filigree's `migrate` command imports all beads issues, dependencies, events, labels, and comments in a single operation.
 
@@ -346,7 +346,7 @@ echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{}}
 | `bd search "query"` | `filigree search "query"` | FTS5 search |
 | `bd blocked` | `filigree blocked` | |
 | `bd stats` | `filigree stats` | |
-| `bd compact` | `filigree archive-closed` | Different mechanism |
+| `bd compact` | `filigree archive` | Different mechanism |
 | `bd sync` | *(not needed)* | Filigree is local-only |
 | `bd prime` | *(not needed)* | Context auto-regenerated on mutations |
 
@@ -354,7 +354,7 @@ echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{}}
 
 After migration, these filigree features are available:
 
-- **MCP tools** — 43 native tools for agent interaction (no CLI parsing)
+- **MCP tools** — 53 native tools for agent interaction (no CLI parsing)
 - **Workflow templates** — 24 issue types with enforced state machines
 - **Atomic claiming** — `filigree claim-next` with optimistic locking
 - **Milestone planning** — `filigree create-plan` for milestone/phase/step hierarchies

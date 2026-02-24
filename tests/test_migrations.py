@@ -22,7 +22,7 @@ from pathlib import Path
 
 import pytest
 
-from filigree.core import CURRENT_SCHEMA_VERSION, SCHEMA_SQL, FiligreeDB
+from filigree.core import CURRENT_SCHEMA_VERSION, SCHEMA_SQL, SCHEMA_V1_SQL, FiligreeDB
 from filigree.migrations import (
     MigrationError,
     add_column,
@@ -67,6 +67,26 @@ def _get_table_names(conn: sqlite3.Connection) -> set[str]:
 
 def _get_schema_version(conn: sqlite3.Connection) -> int:
     return conn.execute("PRAGMA user_version").fetchone()[0]
+
+
+# ---------------------------------------------------------------------------
+# Schema constant integrity
+# ---------------------------------------------------------------------------
+
+
+class TestSchemaV1Constant:
+    """Verify SCHEMA_V1_SQL is a proper subset of SCHEMA_SQL."""
+
+    def test_v1_is_subset_of_full_schema(self) -> None:
+        assert SCHEMA_V1_SQL != SCHEMA_SQL, "SCHEMA_V1_SQL should not equal SCHEMA_SQL (missing file tables)"
+
+    def test_v1_contains_core_tables(self) -> None:
+        for table in ("issues", "dependencies", "events", "comments", "labels", "type_templates", "packs"):
+            assert f"CREATE TABLE IF NOT EXISTS {table}" in SCHEMA_V1_SQL
+
+    def test_v1_excludes_file_tables(self) -> None:
+        for table in ("file_records", "scan_findings", "file_associations", "file_events"):
+            assert table not in SCHEMA_V1_SQL
 
 
 # ---------------------------------------------------------------------------
@@ -243,6 +263,133 @@ class TestMigrationRunner:
             conn.close()
 
 
+class TestMigrationRunnerTransactionGuard:
+    """Bug filigree-8b0f07: rollback must not discard caller-owned transaction work."""
+
+    def test_raises_when_called_inside_existing_transaction(self, tmp_path: Path) -> None:
+        """Calling apply_pending_migrations inside an open transaction must fail fast."""
+        conn = _make_db(tmp_path)
+        conn.execute("CREATE TABLE t (id INTEGER PRIMARY KEY)")
+        conn.execute("PRAGMA user_version = 1")
+        conn.commit()
+
+        from filigree import migrations
+
+        original = migrations.MIGRATIONS.copy()
+
+        def noop(c: sqlite3.Connection) -> None:
+            pass
+
+        migrations.MIGRATIONS[1] = noop
+        try:
+            # Start a caller-owned transaction
+            conn.execute("INSERT INTO t VALUES (1)")
+            assert conn.in_transaction  # precondition
+
+            with pytest.raises(RuntimeError, match="existing transaction"):
+                apply_pending_migrations(conn, 2)
+
+            # Caller's transaction must still be intact (not rolled back)
+            assert conn.in_transaction
+            conn.commit()
+            row = conn.execute("SELECT id FROM t").fetchone()
+            assert row[0] == 1  # caller data preserved
+        finally:
+            migrations.MIGRATIONS.clear()
+            migrations.MIGRATIONS.update(original)
+            conn.close()
+
+
+class TestMigrationRunnerFKPreservation:
+    """Bug filigree-3831c4: FK enforcement setting must be preserved."""
+
+    def test_fk_off_preserved_after_migration(self, tmp_path: Path) -> None:
+        """If caller had FK=OFF, it must still be OFF after migration."""
+        conn = _make_db(tmp_path)
+        conn.execute("CREATE TABLE t (id INTEGER PRIMARY KEY)")
+        conn.execute("PRAGMA user_version = 1")
+        conn.commit()
+
+        from filigree import migrations
+
+        original = migrations.MIGRATIONS.copy()
+
+        def noop(c: sqlite3.Connection) -> None:
+            pass
+
+        migrations.MIGRATIONS[1] = noop
+        try:
+            # Caller explicitly disables FKs
+            conn.execute("PRAGMA foreign_keys=OFF")
+            fk_before = conn.execute("PRAGMA foreign_keys").fetchone()[0]
+            assert fk_before == 0  # precondition: OFF
+
+            apply_pending_migrations(conn, 2)
+
+            fk_after = conn.execute("PRAGMA foreign_keys").fetchone()[0]
+            assert fk_after == 0  # must be restored to OFF
+        finally:
+            migrations.MIGRATIONS.clear()
+            migrations.MIGRATIONS.update(original)
+            conn.close()
+
+    def test_fk_on_preserved_after_migration(self, tmp_path: Path) -> None:
+        """If caller had FK=ON, it must still be ON after migration."""
+        conn = _make_db(tmp_path)
+        conn.execute("CREATE TABLE t (id INTEGER PRIMARY KEY)")
+        conn.execute("PRAGMA user_version = 1")
+        conn.commit()
+
+        from filigree import migrations
+
+        original = migrations.MIGRATIONS.copy()
+
+        def noop(c: sqlite3.Connection) -> None:
+            pass
+
+        migrations.MIGRATIONS[1] = noop
+        try:
+            conn.execute("PRAGMA foreign_keys=ON")
+            fk_before = conn.execute("PRAGMA foreign_keys").fetchone()[0]
+            assert fk_before == 1  # precondition: ON
+
+            apply_pending_migrations(conn, 2)
+
+            fk_after = conn.execute("PRAGMA foreign_keys").fetchone()[0]
+            assert fk_after == 1
+        finally:
+            migrations.MIGRATIONS.clear()
+            migrations.MIGRATIONS.update(original)
+            conn.close()
+
+    def test_fk_restored_after_failed_migration(self, tmp_path: Path) -> None:
+        """FK setting must be restored even when a migration fails."""
+        conn = _make_db(tmp_path)
+        conn.execute("CREATE TABLE t (id INTEGER PRIMARY KEY)")
+        conn.execute("PRAGMA user_version = 1")
+        conn.commit()
+
+        from filigree import migrations
+
+        original = migrations.MIGRATIONS.copy()
+
+        def bad_migration(c: sqlite3.Connection) -> None:
+            raise RuntimeError("boom")
+
+        migrations.MIGRATIONS[1] = bad_migration
+        try:
+            conn.execute("PRAGMA foreign_keys=OFF")
+            with pytest.raises(MigrationError):
+                apply_pending_migrations(conn, 2)
+
+            fk_after = conn.execute("PRAGMA foreign_keys").fetchone()[0]
+            assert fk_after == 0  # must be restored to OFF
+        finally:
+            migrations.MIGRATIONS.clear()
+            migrations.MIGRATIONS.update(original)
+            conn.close()
+
+
 # ---------------------------------------------------------------------------
 # SQLite helper tests
 # ---------------------------------------------------------------------------
@@ -412,7 +559,11 @@ class TestRebuildTable:
         conn.close()
 
     def test_rebuild_fk_referenced_table(self, tmp_path: Path) -> None:
-        """rebuild_table must work on tables referenced by FK from other tables."""
+        """rebuild_table works on FK-referenced tables when FK enforcement is off.
+
+        The migration runner disables FK enforcement before each migration
+        and validates integrity before commit. This test mirrors that pattern.
+        """
         conn = _make_db(tmp_path)
         conn.execute("CREATE TABLE parent (id TEXT PRIMARY KEY, name TEXT)")
         conn.execute("CREATE TABLE child (id TEXT PRIMARY KEY, parent_id TEXT REFERENCES parent(id))")
@@ -420,13 +571,18 @@ class TestRebuildTable:
         conn.execute("INSERT INTO child VALUES ('c1', 'p1')")
         conn.commit()
 
-        # Rebuild parent — this should not fail even though child references it
+        # Migration runner disables FKs before the transaction
+        conn.execute("PRAGMA foreign_keys=OFF")
+        conn.execute("BEGIN IMMEDIATE")
         rebuild_table(
             conn,
             "parent",
             "CREATE TABLE parent (id TEXT PRIMARY KEY, name TEXT, extra TEXT DEFAULT '')",
         )
+        violations = conn.execute("PRAGMA foreign_key_check").fetchall()
+        assert not violations
         conn.commit()
+        conn.execute("PRAGMA foreign_keys=ON")
 
         row = conn.execute("SELECT name FROM parent WHERE id = 'p1'").fetchone()
         assert row[0] == "Parent 1"
@@ -525,17 +681,11 @@ class TestMigrationAtomicity:
             conn.close()
 
     def test_rebuild_fk_table_failure_version_not_bumped(self, tmp_path: Path) -> None:
-        """Migration that rebuilds FK-referenced table then fails must not bump version.
+        """Migration that rebuilds FK-referenced table then fails rolls back completely.
 
-        SQLite limitation: rebuilding FK-referenced tables requires committing
-        mid-migration (PRAGMA foreign_keys=OFF only works outside transactions).
-        This means the rebuild itself cannot be rolled back.  However, the
-        migration runner must still NOT bump user_version, so the migration
-        will be retried on next startup.
-
-        Also verifies that rebuild_table re-enters a transaction with
-        BEGIN IMMEDIATE after the FK rebuild, so post-rebuild work IS
-        rolled back correctly.
+        With defer_foreign_keys, the rebuild stays within the caller's
+        transaction and can be fully rolled back on failure — including
+        the schema change itself.
         """
         conn = _make_db(tmp_path)
         conn.execute("CREATE TABLE parent (id TEXT PRIMARY KEY, name TEXT)")
@@ -568,12 +718,16 @@ class TestMigrationAtomicity:
             # Version must NOT have been bumped
             assert _get_schema_version(conn) == 1
 
-            # Rebuild itself was committed (inherent SQLite limitation),
-            # so the new schema is visible
+            # Entire rebuild was rolled back (defer_foreign_keys keeps
+            # the rebuild inside the caller's transaction)
             tables = _get_table_names(conn)
             assert "parent" in tables
 
-            # Post-rebuild INSERT was rolled back correctly
+            # Original schema restored — no 'extra' column
+            cols = _get_table_columns(conn, "parent")
+            assert "extra" not in cols, "rebuild should have been rolled back"
+
+            # Original data intact
             count = conn.execute("SELECT COUNT(*) FROM parent").fetchone()[0]
             assert count == 1, "post-rebuild DML should have been rolled back"
             row = conn.execute("SELECT name FROM parent WHERE id = 'p1'").fetchone()
@@ -592,8 +746,60 @@ class TestMigrationAtomicity:
             migrations.MIGRATIONS.update(original)
             conn.close()
 
+    def test_rebuild_fk_table_pre_rebuild_ops_rolled_back(self, tmp_path: Path) -> None:
+        """Pre-rebuild DML in the same migration is rolled back on failure.
+
+        This is the key atomicity test: operations BEFORE the rebuild are
+        also rolled back when a post-rebuild failure occurs.
+        """
+        conn = _make_db(tmp_path)
+        conn.execute("CREATE TABLE parent (id TEXT PRIMARY KEY, name TEXT)")
+        conn.execute("CREATE TABLE child (id TEXT PRIMARY KEY, pid TEXT REFERENCES parent(id))")
+        conn.execute("INSERT INTO parent VALUES ('p1', 'Alice')")
+        conn.execute("INSERT INTO child VALUES ('c1', 'p1')")
+        conn.execute("PRAGMA user_version = 1")
+        conn.commit()
+
+        from filigree import migrations
+
+        original = migrations.MIGRATIONS.copy()
+
+        def migration_with_pre_rebuild_dml(c: sqlite3.Connection) -> None:
+            """DML before rebuild, then rebuild FK table, then fail."""
+            c.execute("UPDATE parent SET name = 'MODIFIED' WHERE id = 'p1'")
+            rebuild_table(
+                c,
+                "parent",
+                "CREATE TABLE parent (id TEXT PRIMARY KEY, name TEXT, extra TEXT DEFAULT '')",
+            )
+            raise RuntimeError("Post-rebuild failure")
+
+        migrations.MIGRATIONS[1] = migration_with_pre_rebuild_dml
+        try:
+            with pytest.raises(MigrationError, match="Post-rebuild failure"):
+                apply_pending_migrations(conn, 2)
+
+            # Version not bumped
+            assert _get_schema_version(conn) == 1
+
+            # Pre-rebuild UPDATE was rolled back
+            row = conn.execute("SELECT name FROM parent WHERE id = 'p1'").fetchone()
+            assert row[0] == "Alice", "pre-rebuild DML should have been rolled back"
+
+            # Rebuild itself was rolled back
+            cols = _get_table_columns(conn, "parent")
+            assert "extra" not in cols, "rebuild should have been rolled back"
+        finally:
+            migrations.MIGRATIONS.clear()
+            migrations.MIGRATIONS.update(original)
+            conn.close()
+
     def test_rebuild_fk_table_validates_fk_check(self, tmp_path: Path) -> None:
-        """rebuild_table must raise on FK violations after rebuilding."""
+        """FK violations after rebuild are caught by foreign_key_check before commit.
+
+        The migration runner checks PRAGMA foreign_key_check after each
+        migration. This test verifies that pattern catches violations.
+        """
         conn = _make_db(tmp_path)
         conn.execute("CREATE TABLE parent (id TEXT PRIMARY KEY, name TEXT)")
         conn.execute("CREATE TABLE child (id TEXT PRIMARY KEY, pid TEXT REFERENCES parent(id))")
@@ -603,13 +809,18 @@ class TestMigrationAtomicity:
 
         # Rebuild parent with column_mapping that changes the PK value,
         # breaking the FK from child
-        with pytest.raises(sqlite3.IntegrityError, match="Foreign key violations"):
-            rebuild_table(
-                conn,
-                "parent",
-                "CREATE TABLE parent (id TEXT PRIMARY KEY, name TEXT)",
-                column_mapping={"id": "'CHANGED'", "name": "name"},
-            )
+        conn.execute("PRAGMA foreign_keys=OFF")
+        conn.execute("BEGIN IMMEDIATE")
+        rebuild_table(
+            conn,
+            "parent",
+            "CREATE TABLE parent (id TEXT PRIMARY KEY, name TEXT)",
+            column_mapping={"id": "'CHANGED'", "name": "name"},
+        )
+        violations = conn.execute("PRAGMA foreign_key_check").fetchall()
+        assert violations, "Should detect FK violations when PK values change"
+        conn.rollback()
+        conn.execute("PRAGMA foreign_keys=ON")
 
     def test_template_new_table_uses_execute_not_executescript(self, tmp_path: Path) -> None:
         """_template_new_table_migration must use execute(), not executescript().
@@ -702,6 +913,145 @@ class TestMigrationAtomicity:
         row = conn.execute("SELECT name FROM t WHERE id = 1").fetchone()
         assert row[0] == "Alice"
         conn.close()
+
+
+# ---------------------------------------------------------------------------
+# v2 → v3 migration tests
+# ---------------------------------------------------------------------------
+
+
+class TestMigrateV2ToV3:
+    """Tests for migration v2 → v3: scan_run_id + suggestion columns + index."""
+
+    @pytest.fixture
+    def v2_db(self, tmp_path: Path) -> sqlite3.Connection:
+        """Create a v2 database with scan_findings table (no suggestion/scan_run_id)."""
+        from filigree.core import SCHEMA_V1_SQL
+        from filigree.migrations import migrate_v1_to_v2
+
+        conn = _make_db(tmp_path)
+        conn.executescript(SCHEMA_V1_SQL)
+        conn.execute("PRAGMA user_version = 1")
+        conn.commit()
+
+        # Apply v1→v2 to get the scan_findings table
+        conn.execute("BEGIN IMMEDIATE")
+        migrate_v1_to_v2(conn)
+        conn.execute("PRAGMA user_version = 2")
+        conn.commit()
+
+        # Insert a representative finding
+        conn.execute("INSERT INTO file_records (id, path, first_seen, updated_at) VALUES ('f1', 'src/main.py', '2026-01-01', '2026-01-01')")
+        conn.execute(
+            "INSERT INTO scan_findings (id, file_id, scan_source, rule_id, severity, "
+            "status, message, first_seen, updated_at) "
+            "VALUES ('sf1', 'f1', 'ruff', 'E501', 'low', 'open', 'line too long', "
+            "'2026-01-01', '2026-01-01')"
+        )
+        conn.commit()
+        return conn
+
+    def test_migration_runs(self, v2_db: sqlite3.Connection) -> None:
+        applied = apply_pending_migrations(v2_db, 3)
+        assert applied == 1
+        assert _get_schema_version(v2_db) == 3
+
+    def test_columns_added(self, v2_db: sqlite3.Connection) -> None:
+        apply_pending_migrations(v2_db, 3)
+        cols = _get_table_columns(v2_db, "scan_findings")
+        assert "suggestion" in cols
+        assert "scan_run_id" in cols
+
+    def test_index_created(self, v2_db: sqlite3.Connection) -> None:
+        apply_pending_migrations(v2_db, 3)
+        indexes = _get_index_names(v2_db)
+        assert "idx_scan_findings_run" in indexes
+
+    def test_data_preserved(self, v2_db: sqlite3.Connection) -> None:
+        apply_pending_migrations(v2_db, 3)
+        row = v2_db.execute("SELECT message FROM scan_findings WHERE id = 'sf1'").fetchone()
+        assert row[0] == "line too long"
+
+    def test_new_columns_have_defaults(self, v2_db: sqlite3.Connection) -> None:
+        apply_pending_migrations(v2_db, 3)
+        row = v2_db.execute("SELECT suggestion, scan_run_id FROM scan_findings WHERE id = 'sf1'").fetchone()
+        assert row[0] == ""
+        assert row[1] == ""
+
+    def test_schema_matches_fresh(self, v2_db: sqlite3.Connection, tmp_path: Path) -> None:
+        """Migrated schema matches fresh SCHEMA_SQL for scan_findings table."""
+        apply_pending_migrations(v2_db, 3)
+
+        fresh = _make_db(tmp_path, "fresh.db")
+        from filigree.core import SCHEMA_SQL
+
+        fresh.executescript(SCHEMA_SQL)
+        fresh.commit()
+
+        migrated_cols = _get_table_columns(v2_db, "scan_findings")
+        fresh_cols = _get_table_columns(fresh, "scan_findings")
+        assert migrated_cols == fresh_cols, f"Column mismatch: {migrated_cols} != {fresh_cols}"
+
+        # Check that the new index exists in both
+        fresh_indexes = _get_index_names(fresh)
+        migrated_indexes = _get_index_names(v2_db)
+        assert "idx_scan_findings_run" in fresh_indexes
+        assert "idx_scan_findings_run" in migrated_indexes
+
+        fresh.close()
+
+
+# ---------------------------------------------------------------------------
+# v3 → v4 migration tests
+# ---------------------------------------------------------------------------
+
+
+class TestMigrateV3ToV4:
+    """Tests for migration v3 → v4: file_events table + index."""
+
+    @pytest.fixture
+    def v3_db(self, tmp_path: Path) -> sqlite3.Connection:
+        """Create a v3 database (file tables present, no file_events)."""
+        from filigree.core import SCHEMA_V1_SQL
+        from filigree.migrations import migrate_v1_to_v2, migrate_v2_to_v3
+
+        conn = _make_db(tmp_path)
+        conn.executescript(SCHEMA_V1_SQL)
+        conn.execute("PRAGMA user_version = 1")
+        conn.commit()
+
+        conn.execute("BEGIN IMMEDIATE")
+        migrate_v1_to_v2(conn)
+        conn.execute("PRAGMA user_version = 2")
+        conn.commit()
+
+        conn.execute("BEGIN IMMEDIATE")
+        migrate_v2_to_v3(conn)
+        conn.execute("PRAGMA user_version = 3")
+        conn.commit()
+        return conn
+
+    def test_migration_runs(self, v3_db: sqlite3.Connection) -> None:
+        applied = apply_pending_migrations(v3_db, 4)
+        assert applied == 1
+        assert _get_schema_version(v3_db) == 4
+
+    def test_table_created(self, v3_db: sqlite3.Connection) -> None:
+        apply_pending_migrations(v3_db, 4)
+        cols = _get_table_columns(v3_db, "file_events")
+        assert "file_id" in cols
+        assert "event_type" in cols
+        assert "field" in cols
+
+    def test_index_created(self, v3_db: sqlite3.Connection) -> None:
+        apply_pending_migrations(v3_db, 4)
+        indexes = _get_index_names(v3_db)
+        assert "idx_file_events_file" in indexes
+
+    def test_idempotent(self, v3_db: sqlite3.Connection) -> None:
+        apply_pending_migrations(v3_db, 4)
+        applied = apply_pending_migrations(v3_db, 4)
+        assert applied == 0
 
 
 # ---------------------------------------------------------------------------

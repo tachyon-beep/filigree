@@ -7,6 +7,165 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-02-24
+
+Server/ethereal operating modes, file intelligence + scanner workflows, Graph v2, and broad safety hardening.
+
+### Added
+
+#### Operating modes and server lifecycle
+
+- `filigree init --mode` and `filigree install --mode` for explicit ethereal/server setup
+- Server-mode config and registration system with schema-version enforcement
+- Server daemon lifecycle commands and process tracking helpers
+- Deterministic port selection and PID lifecycle tracking with atomic writes
+- Streamable HTTP MCP endpoint (`/mcp/`) for server mode
+- Session context now includes dashboard URL
+- Mode-aware doctor checks for ethereal/server installations
+
+#### Files, findings, and scanner platform
+
+- File records and scan findings workflow with metadata timeline events
+- Files and Code Health dashboard views (file list/detail/timeline, hotspots, health donut/coverage)
+- Split-pane findings workflow and live scan history in dashboard
+- Scanner registry loaded from TOML configs in `.filigree/scanners/`
+- New MCP tools: `list_scanners` and `trigger_scan`
+- Scanner trigger support for `scan_run_id` correlation
+- Optional `create_issues` flow for scan ingest to promote findings into candidate `bug` issues and create `bug_in` file associations
+- Scan ingest stats extended with `issues_created` and `issue_ids`
+- CLI init support for scanner directory creation
+- Shared scanner utilities and Claude scanner integration
+
+#### Dashboard UX
+
+- Kanban cards now display a left-edge colour band indicating issue type (bug=red, feature=purple, task=blue, epic=amber, milestone=emerald, step=grey)
+
+#### Dashboard graph v2
+
+- Graph v2 shipped with improved focus/path workflows and traversal behavior
+- Time-window filter with persisted default
+- Progressive-disclosure toolbar with grouped advanced controls
+- Improved interaction diagnostics and plain-language status messaging
+
+#### Installation and Codex integration
+
+- `filigree install --codex-skills` to install Codex skills into `.agents/skills/`
+- Doctor health check for Codex skills installation state
+
+### Changed
+
+- Dashboard frontend restructured from monolithic HTML script to ES-module architecture
+- Dashboard behavior split by mode: ethereal uses simplified single-project flow; server mode uses `ProjectStore` multi-project routing
+- API errors standardized, schema discovery surfaced, and instruction generation extracted for reuse
+- `filigree server register` and `filigree server unregister` now trigger daemon reload when server mode is already running
+- Scanner command validation now resolves project-relative executables (for example `./scanner_exec.sh`) during trigger checks
+- Install instruction marker parsing improved to tolerate missing metadata/version fields
+- Release workflow pack now enabled by default for all new projects alongside core and planning; `suggested_children` for release type expanded to include epic, milestone, task, bug, and feature
+- ADR-001 added documenting the structured project model (strategic/execution/deliverable layers)
+- README/docs expanded with architecture plans, mode guidance, and dashboard visuals
+- Stale comments and docstrings fixed across 10 source files: endpoint counts, module docstrings, internal spec references (WFT-*), naming discrepancies, and misleading path references all corrected or removed
+
+### Fixed
+
+#### Security and correctness
+
+- Dashboard XSS sinks fixed across detail, workflow, kanban, and move-modal surfaces
+- File view click-handler escaping fixed for issue IDs containing apostrophes
+- All onclick handlers in detail panel, activity feed, and code health views now use `escJsSingle()` for JS string contexts — fixes 6+ XSS injection points where `escHtml()` was misused or escaping was missing entirely
+- HTTP MCP request context isolation fixed for per-request DB/project directory selection
+- Issue type names now reserved from label taxonomy to prevent collisions
+- Duplicate workflow transitions (same `from_state -> to_state`) now rejected at parse and validation time — previously silently accepted with inconsistent dict/tuple behavior
+- Enforcement value `"none"` rejected from templates — only `"hard"` and `"soft"` are valid `EnforcementLevel` values
+- Release `rolled_back` state recategorized from `done` to `wip` — allows resumption transition to `development`, matching the `incident.resolved` fix pattern
+- `ProjectStore.get_db()` guarded against `UnboundLocalError` when `read_config()` fails before DB initialization
+- `FindingStatus` type alias aligned with DB schema — added `acknowledged` and `unseen_in_latest`, removed stale `wont_fix` and `duplicate`
+- Dead `_OPEN_FINDINGS_FILTER_F` and duplicate `_VALID_SEVERITIES` class attributes removed from `FiligreeDB`
+
+#### Server/daemon reliability
+
+- Multi-project reload and port consistency hardened in server mode
+- Reload failures now surface as `RELOAD_FAILED` instead of reporting a false-success response
+- `unregister_project` updates locked to prevent concurrent config races
+- Daemon ownership checks fixed for `python -m filigree` launch mode
+- Portable PID ownership fallback added when command-line process inspection is unavailable
+- Registry fallback key-collision handling corrected
+- Hook command resolution hardened across installation methods
+- `read_server_config()` now validates JSON shape and types: non-dict top-level returns defaults, port coerced to int and clamped to 1–65535, non-dict project entries dropped
+- Invalid port values in server config now log at WARNING before falling back to default (previously silent coercion)
+- `start_daemon()` serialized with `fcntl.flock` on `server.lock` to prevent concurrent start races
+- `start_daemon()` and `daemon_status()` verify PID ownership via `verify_pid_ownership()` — stale PIDs from reused processes no longer cause false "already running" or false status
+- `start_daemon()` wraps `subprocess.Popen` in `try/except OSError` to return a clean `DaemonResult` instead of propagating raw exceptions while holding the lock
+- `stop_daemon()` verifies process death after SIGKILL and reports failure when the process survives; PID file cleaned up in all terminal paths to prevent permanent stuck state
+- `claim_current_process_as_daemon()` now verifies PID ownership before refusing to claim — a reused PID from a non-filigree process no longer blocks the claim
+- `stop_daemon()` catches `ProcessLookupError` on SIGTERM when the process dies between the liveness check and the signal delivery
+- Off-by-one in `find_available_port()` retry loop — now tries `base + PORT_RETRIES` candidates as documented
+- `setup_logging()` now removes and closes stale `RotatingFileHandler`s when `filigree_dir` changes — prevents handler leaks and duplicate log writes in long-lived processes
+- Session skill freshness check now covers Codex installs under `.agents/skills/` in addition to `.claude/skills/`
+
+#### Files/findings and scanner robustness
+
+- `_parse_toml()` now distinguishes `OSError` from `TOMLDecodeError` with `exc_info` — unreadable scanner TOML files no longer silently vanish from `list_scanners`
+- Scanner paths canonicalized; datetime crash fixed; command templates expanded
+- Scan API hardened (`scan_run_id` persistence, suggestion support, severity fallback)
+- Findings metadata persistence corrected for create/update ingest paths
+- Metadata change detection fixed to compare parsed dictionary values
+- `min_findings` now counts all non-terminal finding statuses
+- `list_files` filter validation and project-fallback detail-state behavior corrected
+- `/api/v1/scan-results` now enforces boolean validation for `create_issues`
+- `scan_source` validated as string in `/api/v1/scan-results` — non-string values return 400 instead of crashing
+- Pagination `limit` and `offset` enforce minimum values (`limit >= 1`, `offset >= 0`) across all API endpoints — prevents SQLite `LIMIT -1` unbounded queries
+- `trigger_scan` cooldown set immediately after rate-limit check (before any await) and rolled back on failure — closes check-then-act race window
+- `process_scan_results()` validates `path`, `line_start`/`line_end`, and `suggestion` types upfront with clear error messages instead of crashing in SQL/JSON operations
+- `add_file_association` pre-checks issue existence and returns `not_found` instead of misclassifying as `validation_error`
+
+#### Dashboard and analytics quality
+
+- Flow metrics now batch status-event loading to remove N+1 event-query behavior
+- Graph toolbar overflow/stacking/disclosure behavior corrected across Graph v2 iterations
+- Graph controls hardened for inactive focus/path states and large-graph zoom readability
+- Files API sort-direction wiring and stale detail-selection clearing fixed
+- Missing split-pane window bindings restored; async loader error handling tightened
+- Flow metrics now include `archived` issues so `archive_closed()` results count in throughput
+- Analytics SQL queries use deterministic tiebreaker (`id ASC`) for stable cycle-time computation when events share timestamps
+- `list_issues` returns empty result when `status_category` expansion yields no matching states, instead of silently dropping the filter
+- `import_jsonl` event branch uses shared `conflict` variable and counts via `cursor.rowcount` so `merge=True` accurately reports 0 for skipped duplicates
+- Migration atomicity restored for FK-referenced table rebuilds; dashboard startup guard added
+- Graph zoom-in no longer jumps aggressively from extreme zoom-out levels — `wheelSensitivity` reduced from Cytoscape default (1.0) to 0.15
+- Page title reversed from "[project] — Filigree" to "Filigree — [project]"
+- `_read_graph_runtime_config()` failure logging elevated from DEBUG to WARNING
+- `api_scan_runs` exception handler narrowed from `Exception` to `sqlite3.Error`
+- Tour onboarding text corrected from "5 views" to "7 views" (adds Files and Code Health)
+
+#### CLI
+
+- `import` command catches `OSError` for filesystem errors — clean message instead of traceback
+- `claim-next` wraps `db.claim_next()` in `ValueError` handling with JSON/plaintext error output
+- `session-context` and `ensure-dashboard` hooks now log at WARNING and emit stderr message on failure instead of swallowing at DEBUG
+- `read_config()` catches `JSONDecodeError`/`OSError` — corrupt `config.json` returns defaults with warning instead of cascading crashes
+- MCP `_build_workflow_text` now separates `sqlite3.Error` (with actionable "run `filigree doctor`" message) from generic exceptions; both log at ERROR
+- MCP `get_workflow_prompt` narrows `except RuntimeError` to only silence "not initialized"; unexpected RuntimeErrors now logged at ERROR
+- `generate_session_context` freshness-check now splits expected errors (`OSError`, `UnicodeDecodeError`, `ValueError`) at WARNING from unexpected errors at ERROR; both include `project_root` for debuggability
+- `ProjectStore.reload()` DB close errors now log at WARNING (matching `close_all()`) instead of DEBUG
+- `create_app` MCP ImportError now logged at DEBUG with `exc_info` instead of silently swallowed
+- MCP `release_claim` tool description corrected: clarifies it clears assignee only (does not change status)
+- `_install_mcp_server_mode` prefix-read failure narrowed to `JSONDecodeError`/`OSError` and elevated to WARNING; `_install_mcp_ethereal_mode` logs `claude mcp add` stderr on failure
+- Duplicate `_check_same_thread` assignment removed from `FiligreeDB.__init__`
+- `list_templates()` now includes `required_at`, `options`, and `default` in field schema — matches `get_template()` output
+- `claim_issue()` now records prior assignee as `old_value` in claimed event; `undo_last` restores it instead of always blanking
+- `SCHEMA_V1_SQL` refactored from brittle `SCHEMA_SQL.split()` to standalone constant with test assertions for subset integrity
+
+#### Migration
+
+- Priority normalization hardened (`_safe_priority()`) — non-numeric and out-of-range values coerced during migration instead of crashing
+- Timestamp normalization added (`_safe_timestamp()`) — NULL/empty timestamps replaced with valid ISO-8601 fallbacks
+- `apply_pending_migrations()` guarded against being called inside an existing transaction — raises `RuntimeError` immediately
+- Caller's `foreign_keys` PRAGMA setting preserved across migrations instead of unconditionally restoring to ON
+
+### Removed
+
+- Hybrid registration system (`registry.py`) removed in favor of explicit mode-based registration paths
+- Checked-in `.mcp.json` removed from version control
+
 ## [1.2.0] - 2026-02-21
 
 Multi-project dashboard, UX overhaul, and Deep Teal color theme.
@@ -167,7 +326,6 @@ identified through systematic static analysis and verified against HEAD.
 
 ### Known Issues
 
-- `rebuild_table()` FK fallback path still calls `conn.commit()` mid-migration, breaking strict atomicity for FK-referenced table rebuilds (tracked as filigree-938818)
 - `cycle_time()` still executes per-issue events query inside `get_flow_metrics()` loop — lead_time N+1 fixed but cycle_time N+1 remains (tracked as filigree-f34f66)
 
 ## [1.1.0] - 2026-02-18
@@ -234,7 +392,8 @@ identified through systematic static analysis and verified against HEAD.
 - Issue validation against workflow templates (`validate`)
 - PEP 561 `py.typed` marker for downstream type checking
 
-[Unreleased]: https://github.com/tachyon-beep/filigree/compare/v1.2.0...HEAD
+[Unreleased]: https://github.com/tachyon-beep/filigree/compare/v1.3.0...HEAD
+[1.3.0]: https://github.com/tachyon-beep/filigree/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/tachyon-beep/filigree/compare/v1.1.1...v1.2.0
 [1.1.1]: https://github.com/tachyon-beep/filigree/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/tachyon-beep/filigree/compare/v1.0.0...v1.1.0

@@ -11,9 +11,32 @@ from __future__ import annotations
 import contextlib
 import json
 import sqlite3
+from datetime import UTC, datetime
 from pathlib import Path
 
 from filigree.core import FiligreeDB
+
+
+def _safe_priority(raw: int | float | str | None) -> int:
+    """Coerce a raw priority value to a valid int in 0..4, defaulting to 2."""
+    if raw is None:
+        return 2
+    try:
+        return max(0, min(4, int(raw)))
+    except (TypeError, ValueError):
+        return 2
+
+
+def _safe_timestamp(raw: object) -> str:
+    """Return a valid ISO-8601 timestamp string, falling back to now(UTC)."""
+    if raw and isinstance(raw, str) and raw.strip():
+        try:
+            datetime.fromisoformat(raw)
+            return raw
+        except ValueError:
+            pass
+    return datetime.now(UTC).isoformat()
+
 
 # Beads columns that map to the filigree `fields` JSON bag.
 # Everything not in the core schema gets stuffed into fields.
@@ -90,8 +113,7 @@ def migrate_from_beads(beads_db_path: str | Path, tracker: FiligreeDB) -> int:
                 status = "open"  # Default unknown statuses to open
 
             # Map priority (beads uses 0-4 same as us)
-            priority = row["priority"] if row["priority"] is not None else 2
-            priority = max(0, min(4, priority))
+            priority = _safe_priority(row["priority"])
 
             # Map type
             issue_type = row["issue_type"] or "task"
@@ -119,8 +141,8 @@ def migrate_from_beads(beads_db_path: str | Path, tracker: FiligreeDB) -> int:
                 "type": issue_type,
                 "parent_id": None,
                 "assignee": row["assignee"] or "",
-                "created_at": row["created_at"] or "",
-                "updated_at": row["updated_at"] or "",
+                "created_at": _safe_timestamp(row["created_at"]),
+                "updated_at": _safe_timestamp(row["updated_at"]),
                 "closed_at": row["closed_at"],
                 "description": row["description"] or "",
                 "notes": row["notes"] or "",
@@ -163,7 +185,7 @@ def migrate_from_beads(beads_db_path: str | Path, tracker: FiligreeDB) -> int:
                             "old_value": evt["old_value"],
                             "new_value": evt["new_value"],
                             "comment": evt["comment"] or "",
-                            "created_at": evt["created_at"] or "",
+                            "created_at": _safe_timestamp(evt["created_at"]),
                         }
                     )
         except sqlite3.OperationalError as e:
@@ -188,6 +210,8 @@ def migrate_from_beads(beads_db_path: str | Path, tracker: FiligreeDB) -> int:
             comments = beads_conn.execute("SELECT issue_id, author, text, created_at FROM comments").fetchall()
             for cmt in comments:
                 if cmt["issue_id"] in migrated_ids:
+                    cmt_ts = _safe_timestamp(cmt["created_at"])
+                    cmt_author = cmt["author"] or ""
                     tracker.conn.execute(
                         "INSERT INTO comments (issue_id, author, text, created_at) "
                         "SELECT ?, ?, ?, ? "
@@ -197,13 +221,13 @@ def migrate_from_beads(beads_db_path: str | Path, tracker: FiligreeDB) -> int:
                         ")",
                         (
                             cmt["issue_id"],
-                            cmt["author"] or "",
+                            cmt_author,
                             cmt["text"],
-                            cmt["created_at"] or "",
+                            cmt_ts,
                             cmt["issue_id"],
                             cmt["text"],
-                            cmt["author"] or "",
-                            cmt["created_at"] or "",
+                            cmt_author,
+                            cmt_ts,
                         ),
                     )
         except sqlite3.OperationalError as e:

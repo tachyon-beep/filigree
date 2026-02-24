@@ -54,9 +54,108 @@ class MigrationFn(Protocol):
 # Example: {1: migrate_v1_to_v2} means "if user_version == 1, run this to get to 2"
 # ---------------------------------------------------------------------------
 
+
+def migrate_v1_to_v2(conn: sqlite3.Connection) -> None:
+    """v1 → v2: Add file records, scan findings, and file associations tables.
+
+    Changes:
+      - new table 'file_records' for tracking source code files
+      - new table 'scan_findings' for security/code quality scan results
+      - new table 'file_associations' for linking files to issues
+      - indexes for efficient querying
+    """
+    conn.execute("""\
+        CREATE TABLE IF NOT EXISTS file_records (
+            id          TEXT PRIMARY KEY,
+            path        TEXT NOT NULL UNIQUE,
+            language    TEXT DEFAULT '',
+            file_type   TEXT DEFAULT '',
+            first_seen  TEXT NOT NULL,
+            updated_at  TEXT NOT NULL,
+            metadata    TEXT DEFAULT '{}'
+        )""")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_file_records_path ON file_records(path)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_file_records_language ON file_records(language)")
+
+    conn.execute("""\
+        CREATE TABLE IF NOT EXISTS scan_findings (
+            id            TEXT PRIMARY KEY,
+            file_id       TEXT NOT NULL REFERENCES file_records(id),
+            issue_id      TEXT REFERENCES issues(id) ON DELETE SET NULL,
+            scan_source   TEXT NOT NULL DEFAULT '',
+            rule_id       TEXT DEFAULT '',
+            severity      TEXT NOT NULL DEFAULT 'info',
+            status        TEXT NOT NULL DEFAULT 'open',
+            message       TEXT DEFAULT '',
+            line_start    INTEGER,
+            line_end      INTEGER,
+            seen_count    INTEGER DEFAULT 1,
+            first_seen    TEXT NOT NULL,
+            updated_at    TEXT NOT NULL,
+            last_seen_at  TEXT,
+            metadata      TEXT DEFAULT '{}',
+            CHECK (severity IN ('critical', 'high', 'medium', 'low', 'info')),
+            CHECK (status IN ('open', 'acknowledged', 'fixed', 'false_positive', 'unseen_in_latest'))
+        )""")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_scan_findings_file ON scan_findings(file_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_scan_findings_issue ON scan_findings(issue_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_scan_findings_severity ON scan_findings(severity)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_scan_findings_status ON scan_findings(status)")
+    conn.execute("""\
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_scan_findings_dedup
+          ON scan_findings(file_id, scan_source, rule_id, coalesce(line_start, -1))""")
+
+    conn.execute("""\
+        CREATE TABLE IF NOT EXISTS file_associations (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            file_id     TEXT NOT NULL REFERENCES file_records(id),
+            issue_id    TEXT NOT NULL REFERENCES issues(id),
+            assoc_type  TEXT NOT NULL,
+            created_at  TEXT NOT NULL,
+            UNIQUE(file_id, issue_id, assoc_type),
+            CHECK (assoc_type IN ('bug_in', 'task_for', 'scan_finding', 'mentioned_in'))
+        )""")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_file_assoc_file ON file_associations(file_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_file_assoc_issue ON file_associations(issue_id)")
+
+
+def migrate_v2_to_v3(conn: sqlite3.Connection) -> None:
+    """v2 → v3: Add scan_run_id, suggestion columns and scan_run_id index to scan_findings.
+
+    Changes:
+      - scan_findings: add 'suggestion' column (TEXT, default '')
+      - scan_findings: add 'scan_run_id' column (TEXT, default '')
+      - new index idx_scan_findings_run on scan_findings(scan_run_id)
+    """
+    add_column(conn, "scan_findings", "suggestion", "TEXT", "''")
+    add_column(conn, "scan_findings", "scan_run_id", "TEXT", "''")
+    add_index(conn, "idx_scan_findings_run", "scan_findings", ["scan_run_id"])
+
+
+def migrate_v3_to_v4(conn: sqlite3.Connection) -> None:
+    """v3 → v4: Add file_events table for file metadata timeline events.
+
+    Changes:
+      - new table 'file_events' for tracking file metadata field changes
+      - new index idx_file_events_file on file_events(file_id)
+    """
+    conn.execute("""\
+        CREATE TABLE IF NOT EXISTS file_events (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            file_id     TEXT NOT NULL REFERENCES file_records(id),
+            event_type  TEXT NOT NULL DEFAULT 'file_metadata_update',
+            field       TEXT NOT NULL,
+            old_value   TEXT DEFAULT '',
+            new_value   TEXT DEFAULT '',
+            created_at  TEXT NOT NULL
+        )""")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_file_events_file ON file_events(file_id)")
+
+
 MIGRATIONS: dict[int, MigrationFn] = {
-    # 1: migrate_v1_to_v2,
-    # 2: migrate_v2_to_v3,
+    1: migrate_v1_to_v2,
+    2: migrate_v2_to_v3,
+    3: migrate_v3_to_v4,
 }
 
 
@@ -90,17 +189,24 @@ def apply_pending_migrations(conn: sqlite3.Connection, target_version: int) -> i
             the last successful migration).
         ValueError: If current version > target (downgrade not supported).
     """
+    if conn.in_transaction:
+        msg = (
+            "apply_pending_migrations() must not be called inside an existing transaction. "
+            "Commit or roll back the current transaction first."
+        )
+        raise RuntimeError(msg)
+
     current: int = conn.execute("PRAGMA user_version").fetchone()[0]
 
     if current == target_version:
         return 0
 
     if current > target_version:
-        msg = (
-            f"Database schema v{current} is newer than this version of filigree "
-            f"(expects v{target_version}). Downgrade is not supported."
-        )
+        msg = f"Database schema v{current} is newer than this version of filigree (expects v{target_version}). Downgrade is not supported."
         raise ValueError(msg)
+
+    # Capture caller's FK setting so we can restore it in finally.
+    original_fk: int = conn.execute("PRAGMA foreign_keys").fetchone()[0]
 
     applied = 0
     for version in range(current, target_version):
@@ -115,15 +221,29 @@ def apply_pending_migrations(conn: sqlite3.Connection, target_version: int) -> i
 
         logger.info("Applying migration v%d → v%d ...", version, version + 1)
         try:
+            # Disable FK enforcement so rebuild_table() can atomically
+            # DROP + RENAME FK-referenced tables within the transaction.
+            # This PRAGMA only takes effect outside a transaction.
+            conn.execute("PRAGMA foreign_keys=OFF")
             conn.execute("BEGIN IMMEDIATE")
             migration(conn)
             conn.execute(f"PRAGMA user_version = {version + 1}")
+            # Validate FK integrity before committing — catches both
+            # migration bugs and pre-existing violations.
+            violations = conn.execute("PRAGMA foreign_key_check").fetchall()
+            if violations:
+                raise sqlite3.IntegrityError(f"Foreign key violations after migration: {violations}")
             conn.commit()
             applied += 1
             logger.info("Migration v%d → v%d complete.", version, version + 1)
         except Exception as exc:
             conn.rollback()
             raise MigrationError(version, version + 1, exc) from exc
+        finally:
+            # Restore caller's original FK enforcement setting.
+            # After commit/rollback the connection is in autocommit mode,
+            # so this PRAGMA takes effect immediately.
+            conn.execute(f"PRAGMA foreign_keys={'ON' if original_fk else 'OFF'}")
 
     return applied
 
@@ -264,45 +384,10 @@ def rebuild_table(
     insert_sql = f"INSERT INTO {temp_table} ({insert_cols}) SELECT {select_cols} FROM {table}"  # noqa: S608
     conn.execute(insert_sql)
 
-    try:
-        conn.execute(f"DROP TABLE {table}")
-    except sqlite3.IntegrityError:
-        # FK constraint prevents direct drop — must temporarily disable FK
-        # enforcement.  PRAGMA foreign_keys=OFF only takes effect outside a
-        # transaction, so we commit any active transaction first.
-        #
-        # IMPORTANT: This creates a "point of no return" for the caller's
-        # transaction.  If the caller (e.g. migration runner) later fails,
-        # the rebuild itself CANNOT be rolled back.  This is an inherent
-        # SQLite limitation — there is no way to atomically rebuild an
-        # FK-referenced table within a single transaction.  Alternatives
-        # (defer_foreign_keys, RENAME dance) do not work because SQLite's
-        # commit-time FK check and RENAME-time FK reference updates prevent
-        # them from succeeding.
-        #
-        # Migrations that rebuild FK-referenced tables should place the
-        # rebuild as the LAST operation to minimize post-rebuild failure risk.
-        in_txn = conn.in_transaction
-        if in_txn:
-            conn.commit()
-        conn.execute("PRAGMA foreign_keys=OFF")
-        try:
-            conn.execute("BEGIN IMMEDIATE")
-            conn.execute(f"DROP TABLE {table}")
-            conn.execute(f"ALTER TABLE {temp_table} RENAME TO {table}")
-            violations = conn.execute("PRAGMA foreign_key_check").fetchall()
-            if violations:
-                raise sqlite3.IntegrityError(f"Foreign key violations after rebuilding '{table}': {violations}")
-            conn.commit()
-        except BaseException:
-            conn.rollback()
-            raise
-        finally:
-            conn.execute("PRAGMA foreign_keys=ON")
-        if in_txn:
-            conn.execute("BEGIN IMMEDIATE")
-        return
-
+    # The caller (migration runner) is responsible for disabling FK
+    # enforcement before starting the transaction, so DROP TABLE works
+    # even for FK-referenced tables without breaking atomicity.
+    conn.execute(f"DROP TABLE {table}")
     conn.execute(f"ALTER TABLE {temp_table} RENAME TO {table}")
 
 
@@ -333,10 +418,6 @@ def _template_table_rebuild_migration(conn: sqlite3.Connection) -> None:
       - issues: drop legacy 'foo' column
 
     Uses rebuild_table because ALTER TABLE can't modify constraints.
-
-    NOTE: If the rebuilt table is referenced by FK from other tables,
-    place the rebuild_table() call LAST — see rebuild_table() docstring
-    for details on the non-atomic FK rebuild limitation.
     """
     new_schema = """\
     CREATE TABLE issues (

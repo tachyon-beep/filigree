@@ -79,10 +79,30 @@ class TestSetupLogging:
         file_handlers = [
             h
             for h in logger.handlers
-            if isinstance(h, logging.handlers.RotatingFileHandler)
-            and h.baseFilename == os.path.abspath(str(tmp_path / "filigree.log"))
+            if isinstance(h, logging.handlers.RotatingFileHandler) and h.baseFilename == os.path.abspath(str(tmp_path / "filigree.log"))
         ]
         assert len(file_handlers) == 1, f"Expected 1 handler, got {len(file_handlers)}"
+
+    def test_different_dir_replaces_handler(self, tmp_path: Path) -> None:
+        """Calling setup_logging with a new dir must close the old handler."""
+        dir_a = tmp_path / "a"
+        dir_a.mkdir()
+        dir_b = tmp_path / "b"
+        dir_b.mkdir()
+
+        logger = setup_logging(dir_a)
+        assert len(logger.handlers) == 1
+        old_handler = logger.handlers[0]
+
+        setup_logging(dir_b)
+        # Must replace, not accumulate
+        assert len(logger.handlers) == 1
+        new_handler = logger.handlers[0]
+        assert new_handler is not old_handler
+        expected_path = os.path.abspath(str(dir_b / "filigree.log"))
+        assert new_handler.baseFilename == expected_path  # type: ignore[union-attr]
+        # Old handler stream must be closed (FileHandler.close() sets stream to None)
+        assert old_handler.stream is None  # type: ignore[union-attr]
 
     def teardown_method(self) -> None:
         """Clean up the filigree logger handlers between tests."""

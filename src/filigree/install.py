@@ -8,15 +8,21 @@ Handles:
 
 from __future__ import annotations
 
+import hashlib
+import importlib.metadata
+import importlib.resources
 import json
 import logging
+import shlex
 import shutil
 import sqlite3
 import subprocess
+import sys
 import tomllib
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 from filigree.core import (
     CONFIG_FILENAME,
@@ -24,7 +30,9 @@ from filigree.core import (
     DB_FILENAME,
     FILIGREE_DIR_NAME,
     SUMMARY_FILENAME,
+    find_filigree_command,
     find_filigree_root,
+    read_config,
 )
 
 logger = logging.getLogger(__name__)
@@ -33,89 +41,48 @@ logger = logging.getLogger(__name__)
 # Workflow instructions (injected into CLAUDE.md / AGENTS.md)
 # ---------------------------------------------------------------------------
 
-FILIGREE_INSTRUCTIONS_MARKER = "<!-- filigree:instructions -->"
+# Detection prefix — matches both old "<!-- filigree:instructions -->" and
+# new "<!-- filigree:instructions:v1.3.0:abc12345 -->" formats.
+FILIGREE_INSTRUCTIONS_MARKER = "<!-- filigree:instructions"
 
-FILIGREE_INSTRUCTIONS = """\
-<!-- filigree:instructions -->
-## Filigree Issue Tracker
+_END_MARKER = "<!-- /filigree:instructions -->"
 
-Use `filigree` for all task tracking in this project. Data lives in `.filigree/`.
 
-### Quick Reference
+def _instructions_text() -> str:
+    """Read the instructions template from the shipped data file."""
+    ref = importlib.resources.files("filigree.data").joinpath("instructions.md")
+    return ref.read_text(encoding="utf-8")
 
-```bash
-# Finding work
-filigree ready                              # Show issues ready to work (no blockers)
-filigree list --status=open                 # All open issues
-filigree list --status=in_progress          # Active work
-filigree show <id>                          # Detailed issue view
 
-# Creating & updating
-filigree create "Title" --type=task --priority=2          # New issue
-filigree update <id> --status=in_progress                # Claim work
-filigree close <id>                                      # Mark complete
-filigree close <id> --reason="explanation"               # Close with reason
+def _instructions_hash() -> str:
+    """Return first 8 hex characters of SHA256 of the instructions content."""
+    return hashlib.sha256(_instructions_text().encode()).hexdigest()[:8]
 
-# Dependencies
-filigree add-dep <issue> <depends-on>       # Add dependency
-filigree remove-dep <issue> <depends-on>    # Remove dependency
-filigree blocked                            # Show blocked issues
 
-# Comments & labels
-filigree add-comment <id> "text"            # Add comment
-filigree get-comments <id>                  # List comments
-filigree add-label <id> <label>             # Add label
-filigree remove-label <id> <label>          # Remove label
+def _instructions_version() -> str:
+    """Return a sensible filigree version for instructions markers.
 
-# Workflow templates
-filigree types                              # List registered types with state flows
-filigree type-info <type>                   # Full workflow definition for a type
-filigree transitions <id>                   # Valid next states for an issue
-filigree packs                              # List enabled workflow packs
-filigree validate <id>                      # Validate issue against template
-filigree guide <pack>                       # Display workflow guide for a pack
+    Falls back to the package ``__version__`` (which itself handles
+    source-checkout cases) when distribution metadata is unavailable.
+    """
+    try:
+        return importlib.metadata.version("filigree")
+    except importlib.metadata.PackageNotFoundError:
+        from filigree import __version__
 
-# Atomic claiming
-filigree claim <id> --assignee <name>            # Claim issue (optimistic lock)
-filigree claim-next --assignee <name>            # Claim highest-priority ready issue
+        return __version__ or "0.0.0-dev"
 
-# Batch operations
-filigree batch-update <ids...> --priority=0      # Update multiple issues
-filigree batch-close <ids...>                    # Close multiple with error reporting
 
-# Planning
-filigree create-plan --file plan.json            # Create milestone/phase/step hierarchy
+def _build_instructions_block() -> str:
+    """Build the full instructions block with versioned markers."""
+    text = _instructions_text()
+    version = _instructions_version()
+    h = _instructions_hash()
+    opening = f"<!-- filigree:instructions:v{version}:{h} -->"
+    return f"{opening}\n{text}{_END_MARKER}"
 
-# Event history
-filigree changes --since 2026-01-01T00:00:00    # Events since timestamp
-filigree events <id>                             # Event history for issue
-filigree explain-state <type> <state>            # Explain a workflow state
 
-# All commands support --json and --actor flags
-filigree --actor bot-1 create "Title"            # Specify actor identity
-filigree list --json                             # Machine-readable output
-
-# Project health
-filigree stats                              # Project statistics
-filigree search "query"                     # Search issues
-filigree doctor                             # Health check
-```
-
-### Workflow
-1. `filigree ready` to find available work
-2. `filigree show <id>` to review details
-3. `filigree transitions <id>` to see valid state changes
-4. `filigree update <id> --status=in_progress` to claim it
-5. Do the work, commit code
-6. `filigree close <id>` when done
-
-### Priority Scale
-- P0: Critical (drop everything)
-- P1: High (do next)
-- P2: Medium (default)
-- P3: Low
-- P4: Backlog
-<!-- /filigree:instructions -->"""
+FILIGREE_INSTRUCTIONS = _build_instructions_block()
 
 
 # ---------------------------------------------------------------------------
@@ -124,23 +91,74 @@ filigree doctor                             # Health check
 
 
 def _find_filigree_mcp_command() -> str:
-    """Find the filigree-mcp executable path."""
-    # Check if filigree-mcp is on PATH
+    """Find the filigree-mcp executable path.
+
+    Resolution order:
+    1. ``shutil.which("filigree-mcp")`` — absolute path if on PATH
+    2. Sibling of the running Python interpreter (covers venv case),
+       probing ``filigree-mcp`` and ``filigree-mcp.exe``
+    3. Sibling of the filigree binary if on PATH, probing the same names
+    4. Bare ``"filigree-mcp"`` fallback
+    """
     which = shutil.which("filigree-mcp")
     if which:
         return which
-    # Fall back to looking in the same venv as filigree
+    # Check next to the running Python (works in venv even when not on PATH)
+    for name in ("filigree-mcp", "filigree-mcp.exe"):
+        candidate = Path(sys.executable).parent / name
+        if candidate.is_file():
+            return str(candidate)
+    # Fall back to looking in the same dir as filigree
     filigree_path = shutil.which("filigree")
     if filigree_path:
         filigree_dir = Path(filigree_path).parent
-        candidate = filigree_dir / "filigree-mcp"
-        if candidate.exists():
-            return str(candidate)
+        for name in ("filigree-mcp", "filigree-mcp.exe"):
+            candidate = filigree_dir / name
+            if candidate.is_file():
+                return str(candidate)
     return "filigree-mcp"
 
 
-def install_claude_code_mcp(project_root: Path) -> tuple[bool, str]:
-    """Install filigree-mcp into Claude Code's MCP config.
+def _is_absolute_command_path(path: str) -> bool:
+    """Return True when *path* looks like an absolute command path."""
+    if not path:
+        return False
+    if Path(path).is_absolute():
+        return True
+    # Handle Windows absolute paths when running on non-Windows hosts.
+    if path.startswith("\\\\"):
+        return True
+    return len(path) > 2 and path[0].isalpha() and path[1] == ":" and path[2] in ("/", "\\")
+
+
+def _read_mcp_json(mcp_json_path: Path) -> dict[str, Any]:
+    """Read existing .mcp.json or return a default structure."""
+    if mcp_json_path.exists():
+        try:
+            raw = json.loads(mcp_json_path.read_text())
+            if not isinstance(raw, dict):
+                raise ValueError("not a JSON object")
+            mcp_config = raw
+        except (json.JSONDecodeError, ValueError):
+            # Back up the corrupt/non-object file and start fresh
+            backup_path = mcp_json_path.parent / (mcp_json_path.name + ".bak")
+            shutil.copy2(mcp_json_path, backup_path)
+            logger.warning(
+                "Malformed .mcp.json detected; backed up to %s and creating fresh config",
+                backup_path,
+            )
+            mcp_config = {}
+    else:
+        mcp_config = {}
+
+    if "mcpServers" not in mcp_config or not isinstance(mcp_config["mcpServers"], dict):
+        mcp_config["mcpServers"] = {}
+
+    return mcp_config
+
+
+def _install_mcp_ethereal_mode(project_root: Path) -> tuple[bool, str]:
+    """Existing stdio-based MCP install (current behavior).
 
     Uses `claude mcp add` if available, otherwise writes .mcp.json directly.
     """
@@ -171,30 +189,19 @@ def install_claude_code_mcp(project_root: Path) -> tuple[bool, str]:
             )
             if result.returncode == 0:
                 return True, "Installed via `claude mcp add` (project scope)"
-        except (subprocess.TimeoutExpired, FileNotFoundError):
-            pass
+            logger.warning(
+                "`claude mcp add` failed (exit %d): %s",
+                result.returncode,
+                (result.stderr or "").strip(),
+            )
+        except subprocess.TimeoutExpired:
+            logger.warning("`claude mcp add` timed out after 10s")
+        except FileNotFoundError:
+            logger.warning("claude binary disappeared between which() and run()")
 
     # Fall back to writing .mcp.json directly
     mcp_json_path = project_root / ".mcp.json"
-    mcp_config: dict[str, Any] = {}
-    if mcp_json_path.exists():
-        try:
-            raw = json.loads(mcp_json_path.read_text())
-            if not isinstance(raw, dict):
-                raise ValueError("not a JSON object")
-            mcp_config = raw
-        except (json.JSONDecodeError, ValueError):
-            # Back up the corrupt/non-object file and start fresh
-            backup_path = mcp_json_path.parent / (mcp_json_path.name + ".bak")
-            shutil.copy2(mcp_json_path, backup_path)
-            logger.warning(
-                "Malformed .mcp.json detected; backed up to %s and creating fresh config",
-                backup_path,
-            )
-            mcp_config = {}
-
-    if "mcpServers" not in mcp_config or not isinstance(mcp_config["mcpServers"], dict):
-        mcp_config["mcpServers"] = {}
+    mcp_config = _read_mcp_json(mcp_json_path)
 
     mcp_config["mcpServers"]["filigree"] = {
         "type": "stdio",
@@ -204,6 +211,48 @@ def install_claude_code_mcp(project_root: Path) -> tuple[bool, str]:
 
     mcp_json_path.write_text(json.dumps(mcp_config, indent=2) + "\n")
     return True, f"Wrote {mcp_json_path}"
+
+
+def _install_mcp_server_mode(project_root: Path, port: int) -> tuple[bool, str]:
+    """Write streamable-http MCP config pointing to the daemon."""
+    mcp_json_path = project_root / ".mcp.json"
+    mcp_config = _read_mcp_json(mcp_json_path)
+    project_key = "filigree"
+
+    # Scope server-mode MCP requests to this project's configured key.
+    try:
+        config = read_config(project_root / FILIGREE_DIR_NAME)
+        prefix = config.get("prefix")
+        if isinstance(prefix, str) and prefix.strip():
+            project_key = prefix.strip()
+    except (json.JSONDecodeError, OSError) as exc:
+        logger.warning("Unable to read project prefix for server-mode MCP install: %s", exc)
+
+    encoded_key = quote(project_key, safe="")
+
+    mcp_config["mcpServers"]["filigree"] = {
+        "type": "streamable-http",
+        "url": f"http://localhost:{port}/mcp/?project={encoded_key}",
+    }
+
+    mcp_json_path.write_text(json.dumps(mcp_config, indent=2) + "\n")
+    return True, f"Wrote {mcp_json_path} (streamable-http, port {port})"
+
+
+def install_claude_code_mcp(
+    project_root: Path,
+    *,
+    mode: str = "ethereal",
+    server_port: int = 8377,
+) -> tuple[bool, str]:
+    """Install filigree MCP into Claude Code's config.
+
+    In ethereal mode: stdio transport (per-session process).
+    In server mode: streamable-http transport pointing to daemon.
+    """
+    if mode == "server":
+        return _install_mcp_server_mode(project_root, server_port)
+    return _install_mcp_ethereal_mode(project_root)
 
 
 def install_codex_mcp(project_root: Path) -> tuple[bool, str]:
@@ -269,10 +318,9 @@ def inject_instructions(file_path: Path) -> tuple[bool, str]:
         if FILIGREE_INSTRUCTIONS_MARKER in content:
             # Replace existing block
             start = content.index(FILIGREE_INSTRUCTIONS_MARKER)
-            end_marker = "<!-- /filigree:instructions -->"
-            end_pos = content.find(end_marker, start)
+            end_pos = content.find(_END_MARKER, start)
             if end_pos != -1:
-                end = end_pos + len(end_marker)
+                end = end_pos + len(_END_MARKER)
                 content = content[:start] + FILIGREE_INSTRUCTIONS + content[end:]
             else:
                 # Malformed — just replace from marker to end
@@ -323,6 +371,44 @@ SESSION_CONTEXT_COMMAND = "filigree session-context"
 ENSURE_DASHBOARD_COMMAND = "filigree ensure-dashboard"
 
 
+def _hook_cmd_matches(hook_command: str, bare_command: str) -> bool:
+    """Check whether *hook_command* is a bare, absolute-path, or module form of *bare_command*.
+
+    Uses ``shlex.split`` so paths containing spaces (common on Windows)
+    are handled correctly.
+
+    Matches:
+    - Exact: ``"filigree session-context"``
+    - Path:  ``"/path/to/filigree session-context"``
+    - Quoted path: ``"'/path with spaces/filigree' session-context"``
+    - Module: ``"/path/to/python -m filigree session-context"``
+    """
+    if hook_command == bare_command:
+        return True
+    try:
+        hook_tokens = shlex.split(hook_command)
+        bare_tokens = shlex.split(bare_command)
+    except ValueError:
+        return False
+    if not hook_tokens or not bare_tokens:
+        return False
+    n = len(bare_tokens)
+    if len(hook_tokens) < n:
+        return False
+    # Subcommand tokens (everything after the binary) must match exactly
+    if n > 1 and hook_tokens[-(n - 1) :] != bare_tokens[1:]:
+        return False
+    # Binary token: allow exact match or path-qualified match
+    bare_bin = bare_tokens[0]  # e.g. "filigree"
+    hook_bin = hook_tokens[-n]  # token in the matching position
+    if hook_bin == bare_bin:
+        return True
+    hook_base = hook_bin.rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
+    hook_base_lower = hook_base.lower()
+    bare_bin_lower = bare_bin.lower()
+    return hook_base_lower in {bare_bin_lower, f"{bare_bin_lower}.exe"}
+
+
 def _has_hook_command(settings: dict[str, Any], command: str) -> bool:
     """Check whether *command* already appears in SessionStart hooks."""
     if not isinstance(settings, dict):
@@ -340,16 +426,83 @@ def _has_hook_command(settings: dict[str, Any], command: str) -> bool:
         if not isinstance(hook_list, list):
             continue
         for hook in hook_list:
-            if isinstance(hook, dict) and hook.get("command") == command:
+            if isinstance(hook, dict) and _hook_cmd_matches(hook.get("command", ""), command):
                 return True
     return False
+
+
+def _upgrade_hook_commands(settings: dict[str, Any], bare_command: str, new_command: str) -> bool:
+    """Replace hook commands matching *bare_command* with *new_command*.
+
+    Walks the settings structure and replaces hook commands that match
+    the bare form (either bare or stale absolute path) with the current
+    absolute-path command.  Returns ``True`` if anything was changed.
+    """
+    changed = False
+    hooks = settings.get("hooks", {})
+    if not isinstance(hooks, dict):
+        return False
+    session_start = hooks.get("SessionStart", [])
+    if not isinstance(session_start, list):
+        return False
+    for matcher in session_start:
+        if not isinstance(matcher, dict):
+            continue
+        hook_list = matcher.get("hooks", [])
+        if not isinstance(hook_list, list):
+            continue
+        for hook in hook_list:
+            if not isinstance(hook, dict):
+                continue
+            cmd = hook.get("command", "")
+            if _hook_cmd_matches(cmd, bare_command) and cmd != new_command:
+                hook["command"] = new_command
+                changed = True
+    return changed
+
+
+def _extract_hook_binary(settings: dict[str, Any], bare_command: str) -> str | None:
+    """Extract the binary path from the first hook matching *bare_command*.
+
+    Uses ``shlex.split`` to correctly handle quoted paths that contain
+    spaces.  Returns ``None`` if no matching hook is found.
+    """
+    hooks = settings.get("hooks", {})
+    if not isinstance(hooks, dict):
+        return None
+    session_start = hooks.get("SessionStart", [])
+    if not isinstance(session_start, list):
+        return None
+    for matcher in session_start:
+        if not isinstance(matcher, dict):
+            continue
+        hook_list = matcher.get("hooks", [])
+        if not isinstance(hook_list, list):
+            continue
+        for hook in hook_list:
+            if not isinstance(hook, dict):
+                continue
+            cmd = hook.get("command", "")
+            if _hook_cmd_matches(cmd, bare_command):
+                if not cmd:
+                    return None
+                try:
+                    tokens = shlex.split(cmd)
+                except ValueError:
+                    tokens = cmd.split()
+                return tokens[0] if tokens else None
+    return None
 
 
 def install_claude_code_hooks(project_root: Path) -> tuple[bool, str]:
     """Register ``filigree session-context`` and ``filigree ensure-dashboard``
     as Claude Code SessionStart hooks in ``.claude/settings.json``.
 
-    Idempotent — won't duplicate existing entries.
+    Uses absolute paths for the filigree binary so hooks work even when
+    filigree is installed in a project-local venv that isn't on PATH.
+
+    Idempotent — won't duplicate existing entries.  Re-running upgrades
+    bare or stale absolute-path commands to the current binary location.
     """
     claude_dir = project_root / ".claude"
     claude_dir.mkdir(exist_ok=True)
@@ -360,38 +513,55 @@ def install_claude_code_hooks(project_root: Path) -> tuple[bool, str]:
         try:
             raw = settings_path.read_text()
             parsed = json.loads(raw)
-            if isinstance(parsed, dict):
-                settings = parsed
-            else:
-                # Non-object JSON — back up and start fresh
-                backup = settings_path.with_suffix(".json.bak")
-                import shutil as _shutil
-
-                _shutil.copy2(settings_path, backup)
-                logger.warning("Non-object settings.json; backed up to %s", backup)
-        except json.JSONDecodeError:
+            if not isinstance(parsed, dict):
+                raise ValueError("settings.json is not a JSON object")
+            settings = parsed
+        except (json.JSONDecodeError, ValueError):
             backup = settings_path.with_suffix(".json.bak")
-            import shutil as _shutil
+            shutil.copy2(settings_path, backup)
+            logger.warning("Malformed settings.json; backed up to %s", backup)
 
-            _shutil.copy2(settings_path, backup)
-            logger.warning("Corrupt settings.json; backed up to %s", backup)
+    # Resolve the filigree command tokens to build hook command strings.
+    # shlex.join properly quotes tokens containing spaces so the resulting
+    # shell command is safe on all platforms (e.g. Windows paths with spaces).
+    filigree_tokens = find_filigree_command()
+    filigree_prefix = shlex.join(filigree_tokens)
+    session_context_cmd = f"{filigree_prefix} session-context"
+    ensure_dashboard_cmd = f"{filigree_prefix} ensure-dashboard"
 
-    # Build list of commands to add
+    # Upgrade existing bare/stale commands to current absolute paths
+    upgraded: list[str] = []
+    if _upgrade_hook_commands(settings, SESSION_CONTEXT_COMMAND, session_context_cmd):
+        upgraded.append(SESSION_CONTEXT_COMMAND)
+    try:
+        import filigree.dashboard
+
+        if _upgrade_hook_commands(settings, ENSURE_DASHBOARD_COMMAND, ensure_dashboard_cmd):
+            upgraded.append(ENSURE_DASHBOARD_COMMAND)
+    except ImportError:
+        pass
+
+    # Build list of commands to add (those not already present)
     commands_to_add: list[str] = []
     if not _has_hook_command(settings, SESSION_CONTEXT_COMMAND):
-        commands_to_add.append(SESSION_CONTEXT_COMMAND)
+        commands_to_add.append(session_context_cmd)
 
     # Only add dashboard hook if the [dashboard] extra is available
     try:
         import filigree.dashboard  # noqa: F401
 
         if not _has_hook_command(settings, ENSURE_DASHBOARD_COMMAND):
-            commands_to_add.append(ENSURE_DASHBOARD_COMMAND)
+            commands_to_add.append(ensure_dashboard_cmd)
     except ImportError:
         pass
 
-    if not commands_to_add:
+    if not commands_to_add and not upgraded:
         return True, "Hooks already registered in .claude/settings.json"
+
+    if not commands_to_add and upgraded:
+        # Only upgrades, no new hooks needed
+        settings_path.write_text(json.dumps(settings, indent=2) + "\n")
+        return True, f"Upgraded hook commands in .claude/settings.json to use {filigree_prefix}"
 
     # Ensure structure exists (replace non-dict/non-list values)
     if "hooks" not in settings or not isinstance(settings.get("hooks"), dict):
@@ -446,8 +616,8 @@ def _get_skills_source_dir() -> Path:
     return Path(__file__).parent / "skills"
 
 
-def install_skills(project_root: Path) -> tuple[bool, str]:
-    """Copy filigree skill pack into ``.claude/skills/`` for the project.
+def _install_skill_to(project_root: Path, target_subpath: Path) -> tuple[bool, str]:
+    """Copy the filigree skill pack into *target_subpath* under *project_root*.
 
     Idempotent — overwrites existing skill files to keep them up-to-date
     with the installed filigree version.
@@ -457,15 +627,24 @@ def install_skills(project_root: Path) -> tuple[bool, str]:
     if not skill_source.is_dir():
         return False, f"Skill source not found at {skill_source}"
 
-    target_dir = project_root / ".claude" / "skills" / SKILL_NAME
+    target_dir = project_root / target_subpath / SKILL_NAME
     target_dir.parent.mkdir(parents=True, exist_ok=True)
 
-    # Copy the skill, overwriting to pick up version upgrades
     if target_dir.exists():
         shutil.rmtree(target_dir)
     shutil.copytree(skill_source, target_dir)
 
     return True, f"Installed skill pack to {target_dir}"
+
+
+def install_skills(project_root: Path) -> tuple[bool, str]:
+    """Copy filigree skill pack into ``.claude/skills/`` for the project."""
+    return _install_skill_to(project_root, Path(".claude") / "skills")
+
+
+def install_codex_skills(project_root: Path) -> tuple[bool, str]:
+    """Copy filigree skill pack into ``.agents/skills/`` for Codex."""
+    return _install_skill_to(project_root, Path(".agents") / "skills")
 
 
 # ---------------------------------------------------------------------------
@@ -485,6 +664,89 @@ class CheckResult:
     @property
     def icon(self) -> str:
         return "OK" if self.passed else "!!"
+
+
+def _doctor_ethereal_checks(filigree_dir: Path) -> list[CheckResult]:
+    """Ethereal mode health checks."""
+    from filigree.ephemeral import is_pid_alive, read_pid_file, read_port_file
+
+    results: list[CheckResult] = []
+    pid_file = filigree_dir / "ephemeral.pid"
+    port_file = filigree_dir / "ephemeral.port"
+
+    if pid_file.exists():
+        info = read_pid_file(pid_file)
+        if info and is_pid_alive(info["pid"]):
+            results.append(CheckResult("Ephemeral PID", True, f"Process {info['pid']} alive"))
+        else:
+            pid_val = info["pid"] if info else "unknown"
+            results.append(
+                CheckResult(
+                    "Ephemeral PID",
+                    False,
+                    f"Stale PID file (pid {pid_val})",
+                    fix_hint="Remove .filigree/ephemeral.pid or run: filigree ensure-dashboard",
+                )
+            )
+
+    if port_file.exists():
+        from filigree.hooks import _is_port_listening
+
+        port = read_port_file(port_file)
+        if port and _is_port_listening(port):
+            results.append(CheckResult("Ephemeral port", True, f"Port {port} listening"))
+        else:
+            results.append(
+                CheckResult(
+                    "Ephemeral port",
+                    False,
+                    f"Port {port} not listening",
+                    fix_hint="Dashboard may have crashed. Run: filigree ensure-dashboard",
+                )
+            )
+
+    return results
+
+
+def _doctor_server_checks(filigree_dir: Path) -> list[CheckResult]:
+    """Server mode health checks."""
+    from filigree.server import daemon_status, read_server_config
+
+    results: list[CheckResult] = []
+    status = daemon_status()
+    if status.running:
+        results.append(
+            CheckResult(
+                "Server daemon",
+                True,
+                f"Running (pid {status.pid}, port {status.port}, {status.project_count} projects)",
+            )
+        )
+    else:
+        results.append(
+            CheckResult(
+                "Server daemon",
+                False,
+                "Not running",
+                fix_hint="Run: filigree server start",
+            )
+        )
+
+    # Check registered projects health
+    config = read_server_config()
+    for path_str, info in config.projects.items():
+        p = Path(path_str)
+        if not p.is_dir():
+            results.append(
+                CheckResult(
+                    f'Project "{info.get("prefix", "?")}"',
+                    False,
+                    f"Directory gone: {path_str}",
+                    fix_hint=f"Run: filigree server unregister {p.parent}",
+                )
+            )
+
+    return results
 
 
 def run_doctor(project_root: Path | None = None) -> list[CheckResult]:
@@ -515,6 +777,8 @@ def run_doctor(project_root: Path | None = None) -> list[CheckResult]:
     if config_path.exists():
         try:
             config = json.loads(config_path.read_text())
+            if not isinstance(config, dict):
+                raise ValueError("config.json must be a JSON object")
             prefix = config.get("prefix", "?")
             results.append(CheckResult("config.json", True, f"Prefix: {prefix}"))
         except json.JSONDecodeError as e:
@@ -523,6 +787,15 @@ def run_doctor(project_root: Path | None = None) -> list[CheckResult]:
                     "config.json",
                     False,
                     f"Invalid JSON: {e}",
+                    fix_hint="Fix or regenerate .filigree/config.json",
+                )
+            )
+        except ValueError:
+            results.append(
+                CheckResult(
+                    "config.json",
+                    False,
+                    "Invalid JSON shape: expected an object",
                     fix_hint="Fix or regenerate .filigree/config.json",
                 )
             )
@@ -638,8 +911,24 @@ def run_doctor(project_root: Path | None = None) -> list[CheckResult]:
             mcp = json.loads(mcp_json.read_text())
             if not isinstance(mcp, dict):
                 raise ValueError("not a JSON object")
-            if "filigree" in mcp.get("mcpServers", {}):
-                results.append(CheckResult("Claude Code MCP", True, "Configured in .mcp.json"))
+            servers = mcp.get("mcpServers", {})
+            if not isinstance(servers, dict):
+                raise ValueError("mcpServers must be a JSON object")
+            filigree_mcp_entry = servers.get("filigree")
+            if filigree_mcp_entry:
+                # Validate binary path if it's an absolute path
+                mcp_command = filigree_mcp_entry.get("command", "") if isinstance(filigree_mcp_entry, dict) else ""
+                if _is_absolute_command_path(mcp_command) and not Path(mcp_command).exists():
+                    results.append(
+                        CheckResult(
+                            "Claude Code MCP",
+                            False,
+                            f"Binary not found at {mcp_command}",
+                            fix_hint="Run: filigree install --claude-code",
+                        )
+                    )
+                else:
+                    results.append(CheckResult("Claude Code MCP", True, "Configured in .mcp.json"))
             else:
                 results.append(
                     CheckResult(
@@ -671,16 +960,28 @@ def run_doctor(project_root: Path | None = None) -> list[CheckResult]:
     # 7. Check MCP configuration — Codex
     codex_config = (filigree_dir.parent) / ".codex" / "config.toml"
     if codex_config.exists():
-        content = codex_config.read_text()
-        if "[mcp_servers.filigree]" in content:
-            results.append(CheckResult("Codex MCP", True, "Configured in .codex/config.toml"))
-        else:
+        try:
+            parsed = tomllib.loads(codex_config.read_text())
+            mcp_servers = parsed.get("mcp_servers", {})
+            filigree_server = mcp_servers.get("filigree") if isinstance(mcp_servers, dict) else None
+            if isinstance(filigree_server, dict):
+                results.append(CheckResult("Codex MCP", True, "Configured in .codex/config.toml"))
+            else:
+                results.append(
+                    CheckResult(
+                        "Codex MCP",
+                        False,
+                        "filigree not in .codex/config.toml",
+                        fix_hint="Run: filigree install --codex",
+                    )
+                )
+        except tomllib.TOMLDecodeError:
             results.append(
                 CheckResult(
                     "Codex MCP",
                     False,
-                    "filigree not in .codex/config.toml",
-                    fix_hint="Run: filigree install --codex",
+                    "Invalid .codex/config.toml",
+                    fix_hint="Fix .codex/config.toml or run: filigree install --codex",
                 )
             )
     else:
@@ -699,7 +1000,19 @@ def run_doctor(project_root: Path | None = None) -> list[CheckResult]:
         try:
             s = json.loads(settings_json.read_text())
             if _has_hook_command(s, SESSION_CONTEXT_COMMAND):
-                results.append(CheckResult("Claude Code hooks", True, "session-context hook registered"))
+                # Validate binary path if it's an absolute path
+                hook_binary = _extract_hook_binary(s, SESSION_CONTEXT_COMMAND)
+                if hook_binary and _is_absolute_command_path(hook_binary) and not Path(hook_binary).exists():
+                    results.append(
+                        CheckResult(
+                            "Claude Code hooks",
+                            False,
+                            f"Binary not found at {hook_binary}",
+                            fix_hint="Run: filigree install --hooks",
+                        )
+                    )
+                else:
+                    results.append(CheckResult("Claude Code hooks", True, "session-context hook registered"))
             else:
                 results.append(
                     CheckResult(
@@ -739,6 +1052,20 @@ def run_doctor(project_root: Path | None = None) -> list[CheckResult]:
                 False,
                 f"{SKILL_NAME} skill not found in .claude/skills/",
                 fix_hint="Run: filigree install --skills",
+            )
+        )
+
+    # 9b. Check Codex skills
+    codex_skill_md = (filigree_dir.parent) / ".agents" / "skills" / SKILL_NAME / SKILL_MARKER
+    if codex_skill_md.exists():
+        results.append(CheckResult("Codex skills", True, f"{SKILL_NAME} skill installed"))
+    else:
+        results.append(
+            CheckResult(
+                "Codex skills",
+                False,
+                f"{SKILL_NAME} skill not found in .agents/skills/",
+                fix_hint="Run: filigree install --codex-skills",
             )
         )
 
@@ -784,7 +1111,20 @@ def run_doctor(project_root: Path | None = None) -> list[CheckResult]:
             )
     # AGENTS.md is optional — don't warn if it doesn't exist
 
-    # 12. Check git working tree status
+    # 12. Mode-specific checks
+    from filigree.core import get_mode
+
+    try:
+        mode = get_mode(filigree_dir)
+    except (AttributeError, ValueError, json.JSONDecodeError, OSError):
+        mode = "ethereal"  # Fall back to default if config is unreadable
+
+    if mode == "ethereal":
+        results.extend(_doctor_ethereal_checks(filigree_dir))
+    elif mode == "server":
+        results.extend(_doctor_server_checks(filigree_dir))
+
+    # 13. Check git working tree status
     try:
         result = subprocess.run(
             ["git", "-C", str(filigree_dir.parent), "status", "--porcelain"],

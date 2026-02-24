@@ -73,9 +73,7 @@ class TestDataclasses:
         assert tr.warnings == ("Watch out",)
 
     def test_transition_option(self) -> None:
-        to = TransitionOption(
-            to="closed", category="done", enforcement="soft", requires_fields=(), missing_fields=(), ready=True
-        )
+        to = TransitionOption(to="closed", category="done", enforcement="soft", requires_fields=(), missing_fields=(), ready=True)
         assert to.ready is True
 
     def test_validation_result(self) -> None:
@@ -201,9 +199,7 @@ class TestTemplateRegistry:
                 TransitionDefinition("verifying", "fixing", "soft"),
             ),
             fields_schema=(
-                FieldSchema(
-                    "severity", "enum", options=("critical", "major", "minor", "cosmetic"), required_at=("confirmed",)
-                ),
+                FieldSchema("severity", "enum", options=("critical", "major", "minor", "cosmetic"), required_at=("confirmed",)),
                 FieldSchema("fix_verification", "text", required_at=("verifying",)),
             ),
         )
@@ -463,9 +459,7 @@ class TestTransitionValidation:
                 TransitionDefinition("verifying", "fixing", "soft"),
             ),
             fields_schema=(
-                FieldSchema(
-                    "severity", "enum", options=("critical", "major", "minor", "cosmetic"), required_at=("confirmed",)
-                ),
+                FieldSchema("severity", "enum", options=("critical", "major", "minor", "cosmetic"), required_at=("confirmed",)),
                 FieldSchema("fix_verification", "text", required_at=("verifying",)),
             ),
         )
@@ -1344,9 +1338,7 @@ class TestTemplateLoading:
         quality_warnings = [r for r in caplog.records if "dead end" in r.message]
         assert len(quality_warnings) > 0, "Expected dead-end quality warning in logs"
 
-    def test_load_logs_done_state_outgoing_transition_warning(
-        self, filigree_dir: Path, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    def test_load_logs_done_state_outgoing_transition_warning(self, filigree_dir: Path, caplog: pytest.LogCaptureFixture) -> None:
         """Done-states with outgoing transitions should produce quality warning."""
         import logging
 
@@ -1438,11 +1430,15 @@ class TestQualityCheckDoneOutgoing:
         assert len(concluded_warnings) == 1
 
     def test_builtin_release_done_states_warned(self) -> None:
-        """release.released and release.rolled_back (done) have outgoing transitions."""
+        """release.released (done) has outgoing transition to rolled_back.
+
+        Note: rolled_back was changed from 'done' to 'wip' (filigree-284665),
+        so only 'released' produces this warning now.
+        """
         from filigree.templates_data import BUILT_IN_PACKS
 
         raw = BUILT_IN_PACKS["release"]["types"]["release"]
         tpl = TemplateRegistry.parse_type_template(raw)
         warnings = TemplateRegistry.check_type_template_quality(tpl)
         done_outgoing = [w for w in warnings if "outgoing" in w]
-        assert len(done_outgoing) == 2  # released→rolled_back, rolled_back→development
+        assert len(done_outgoing) == 1  # released→rolled_back only

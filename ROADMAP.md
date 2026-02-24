@@ -26,19 +26,40 @@ Filigree is an issue tracker designed for AI coding agents. This roadmap outline
 - **Dashboard UX overhaul** -- equal-width Kanban columns, drag-and-drop status changes with transition validation, header density reduction, type-filter/mode toggle conflict resolution, WCAG-compliant status badges, P0/P1 text priority labels, stale issue list, workflow auto-select, transition hints, claim modal improvements
 - **Deep Teal color theme** -- full migration from hardcoded Tailwind colors to 20 CSS custom properties on `:root`/`[data-theme="light"]`, 15 utility classes, JS `THEME_COLORS` object for Cytoscape; dark and light themes with consistent palette
 
-## Near-term (1.x releases)
+## Phase 1: Stability & Foundation (Immediate)
 
-- **Event-driven plugin system** -- extensible pre/post hooks on state transitions for custom automation
-- **GitHub integration** -- sync issues bidirectionally with GitHub Issues
-- **`filigree watch`** -- file-system triggered actions (auto-close on commit, etc.)
-- **Additional import formats** -- CSV, GitHub Issues JSON, Linear export
+*Technical debt, bug fixes, and cross-platform reliability.*
 
-## Future
+- **Cross-platform parity** -- replace `fcntl` with a cross-platform file locking mechanism (e.g., `portalocker`) to enable Server Mode and Session Hooks on Windows; abstract PID verification beyond raw `/proc` dependency
+- **Data integrity & scaling** -- increase ID entropy from 6 to 10 characters or switch to collision-resistant Crockford Base32; refactor `SCHEMA_V1_SQL` definition to be non-brittle
+- **Core reliability** -- fix lossy `undo_last` for claims by recording previous assignee state in event log; standardize batch operations in CLI to match MCP server's per-issue error reporting; fix broken template requirement display (`required` -> `required_at`)
 
-- **Multi-project federation** -- cross-project dependencies and shared dashboards
-- **Notification hooks** -- webhooks, Slack, and email on state changes
-- **Hardening** -- performance optimization for large databases (10k+ issues), fuzz testing
-- **Team coordination** -- enhanced multi-agent features (work queues, capacity tracking)
+## Phase 2: Codebase Intelligence (Next)
+
+*Bridging the gap between tasks (intent) and source code (implementation).*
+
+- **File hotspot analysis** -- "Hotspots" section in `context.md` listing files with high churn and high scan finding density to warn agents before they start work
+- **Traceability graph** -- automatic association of files to issues based on git commit messages parsed during `filigree watch`; bidirectional navigation between issues and file records
+- **Schema-aware interaction** -- type coercion in CLI and Dashboard so custom fields respect template type hints (`boolean`, `number`, `date`) instead of defaulting to strings
+- **Workflow visualization** -- `filigree visualize <type>` to export Mermaid/Graphviz diagrams of state machines
+
+## Phase 3: Agentic Coordination (Strategic)
+
+*Active collaboration protocols for multi-agent swarms.*
+
+- **Semantic intelligence** -- lightweight vector store sidecar for semantic search to detect and prevent duplicate bugs/tasks at creation time
+- **Explicit handoff protocols** -- `required_approver_role` on transitions (e.g., "Requirement" needs approval from a "Security Agent")
+- **Event-driven UI (SSE)** -- Server-Sent Events in the dashboard for real-time updates when agents claim or close work
+- **Async database layer** -- migrate from `sqlite3` to `aiosqlite` in `dashboard.py` to prevent synchronous blocking during heavy analytics queries
+
+## Phase 4: Ecosystem & Enterprise (Future)
+
+*Automation, integration, and large-scale use.*
+
+- **Bottleneck analytics** -- state-level duration tracking (e.g., "Avg time in 'verifying'") to identify process stalls
+- **Plugin system** -- pre/post transition hooks for custom automation (e.g., trigger a scan when a bug moves to 'verifying')
+- **GitHub bidirectional sync** -- local proxy for GitHub Issues, supporting offline-first agent work with upstream sync
+- **Visual workflow designer** -- drag-and-drop UI in the dashboard for creating and modifying workflow packs
 
 ## Contributing
 

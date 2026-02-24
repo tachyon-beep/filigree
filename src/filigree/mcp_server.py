@@ -1,6 +1,7 @@
 """MCP server for the filigree issue tracker.
 
-Primary interface for agents. Direct SQLite, no daemon.
+Primary interface for agents. Direct SQLite in stdio mode (no daemon).
+Also mountable as streamable-HTTP handler inside the dashboard daemon for server mode.
 Exposes filigree operations as MCP tools.
 
 Usage:
@@ -11,10 +12,17 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import logging
+import secrets
+import sqlite3
+import subprocess
 import sys
 import time
+from collections.abc import Callable
+from contextvars import ContextVar
+from datetime import UTC
 from pathlib import Path
 from typing import Any
 
@@ -34,10 +42,15 @@ from filigree.core import (
     DB_FILENAME,
     FILIGREE_DIR_NAME,
     SUMMARY_FILENAME,
+    VALID_ASSOC_TYPES,
+    VALID_SEVERITIES,
     FiligreeDB,
+    Issue,
     find_filigree_root,
     read_config,
 )
+from filigree.scanners import list_scanners as _list_scanners
+from filigree.scanners import load_scanner, validate_scanner_command
 from filigree.summary import generate_summary, write_summary
 
 # ---------------------------------------------------------------------------
@@ -48,31 +61,122 @@ from filigree.summary import generate_summary, write_summary
 # within token limits.  Callers can pass no_limit=true to bypass.
 _MAX_LIST_RESULTS = 50
 
+
+def _resolve_pagination(arguments: dict[str, Any]) -> tuple[int, int]:
+    """Compute effective limit and offset for paginated MCP list/search tools.
+
+    Handles the ``no_limit`` bypass and caps to ``_MAX_LIST_RESULTS``.
+    The returned *effective_limit* is the user-visible page size; callers
+    should overfetch by 1 (``limit=effective_limit + 1``) to detect ``has_more``.
+    """
+    no_limit = arguments.get("no_limit", False)
+    requested_limit = arguments.get("limit", 100)
+    offset = arguments.get("offset", 0)
+
+    effective_limit = (requested_limit if "limit" in arguments else 10_000_000) if no_limit else min(requested_limit, _MAX_LIST_RESULTS)
+
+    return effective_limit, offset
+
+
+def _apply_has_more(items: list[Any], effective_limit: int) -> tuple[list[Any], bool]:
+    """Trim an overfetched result list and return ``(trimmed, has_more)``."""
+    has_more = len(items) > effective_limit
+    if has_more:
+        items = items[:effective_limit]
+    return items, has_more
+
+
+def _validate_str(value: Any, name: str) -> list[TextContent] | None:
+    """Return a validation error if *value* is not ``None`` and not a ``str``."""
+    if value is not None and not isinstance(value, str):
+        return _text({"error": f"{name} must be a string", "code": "validation_error"})
+    return None
+
+
+def _validate_int_range(
+    value: Any,
+    name: str,
+    min_val: int | None = None,
+    max_val: int | None = None,
+) -> list[TextContent] | None:
+    """Return a validation error if *value* is not ``None`` and outside range.
+
+    When *value* is ``None`` it is considered optional and passes.
+    """
+    if value is None:
+        return None
+    if not isinstance(value, int):
+        return _text({"error": f"{name} must be an integer", "code": "validation_error"})
+    if min_val is not None and value < min_val:
+        return _text({"error": f"{name} must be >= {min_val}", "code": "validation_error"})
+    if max_val is not None and value > max_val:
+        return _text({"error": f"{name} must be <= {max_val}", "code": "validation_error"})
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Server setup
 # ---------------------------------------------------------------------------
+
+
+def _build_transition_error(
+    tracker: FiligreeDB,
+    issue_id: str,
+    error: str,
+    *,
+    include_ready: bool = True,
+) -> dict[str, Any]:
+    """Build a structured error dict with valid-transition hints."""
+    data: dict[str, Any] = {"error": error, "code": "invalid_transition"}
+    try:
+        transitions = tracker.get_valid_transitions(issue_id)
+        if include_ready:
+            data["valid_transitions"] = [{"to": t.to, "category": t.category, "ready": t.ready} for t in transitions]
+        else:
+            data["valid_transitions"] = [{"to": t.to, "category": t.category} for t in transitions]
+        data["hint"] = "Use get_valid_transitions to see allowed state changes"
+    except KeyError:
+        pass
+    return data
+
 
 server = Server("filigree")
 db: FiligreeDB | None = None
 _filigree_dir: Path | None = None
 _logger: logging.Logger | None = None
+_request_db: ContextVar[FiligreeDB | None] = ContextVar("filigree_request_db", default=None)
+_request_filigree_dir: ContextVar[Path | None] = ContextVar("filigree_request_dir", default=None)
+
+# Per-(project, scanner, file) cooldown to prevent unbounded process spawning.
+# Maps (project_scope, scanner_name, file_path) -> timestamp of last trigger.
+_scan_cooldowns: dict[tuple[str, str, str], float] = {}
+_SCAN_COOLDOWN_SECONDS = 30
 
 
 def _get_db() -> FiligreeDB:
-    if db is None:
+    active_db = _request_db.get() or db
+    if active_db is None:
         msg = "Database not initialized"
         raise RuntimeError(msg)
-    return db
+    return active_db
+
+
+def _get_filigree_dir() -> Path | None:
+    return _request_filigree_dir.get() or _filigree_dir
 
 
 def _refresh_summary() -> None:
     """Regenerate context.md after mutations (best-effort, never fatal)."""
-    if _filigree_dir is not None:
+    filigree_dir = _get_filigree_dir()
+    if filigree_dir is not None:
         try:
-            write_summary(_get_db(), _filigree_dir / SUMMARY_FILENAME)
+            write_summary(_get_db(), filigree_dir / SUMMARY_FILENAME)
+        except OSError:
+            (_logger or logging.getLogger(__name__)).warning("Failed to write context.md", exc_info=True)
         except Exception:
-            if _logger:
-                _logger.warning("Failed to refresh context.md", exc_info=True)
+            (_logger or logging.getLogger(__name__)).error(
+                "Unexpected error refreshing context.md — database may be inconsistent", exc_info=True
+            )
 
 
 def _safe_path(raw: str) -> Path:
@@ -84,12 +188,13 @@ def _safe_path(raw: str) -> Path:
         msg = f"Absolute paths not allowed: {raw}"
         raise ValueError(msg)
 
-    if _filigree_dir is None:
+    filigree_dir = _get_filigree_dir()
+    if filigree_dir is None:
         msg = "Project directory not initialized"
         raise ValueError(msg)
 
     # Resolve relative to project root (parent of .filigree/)
-    base = _filigree_dir.resolve().parent
+    base = filigree_dir.resolve().parent
     resolved = (base / raw).resolve()
 
     # Ensure resolved path is under the project root
@@ -106,6 +211,17 @@ def _text(content: Any) -> list[TextContent]:
     if isinstance(content, str):
         return [TextContent(type="text", text=content)]
     return [TextContent(type="text", text=json.dumps(content, indent=2, default=str))]
+
+
+def _slim_issue(issue: Issue) -> dict[str, Any]:
+    """Return a lightweight dict for search result listings."""
+    return {
+        "id": issue.id,
+        "title": issue.title,
+        "status": issue.status,
+        "priority": issue.priority,
+        "type": issue.type,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -180,7 +296,7 @@ Filigree data lives in `.filigree/` and is accessed via these MCP tools.
 
 def _build_workflow_text() -> str:
     """Build dynamic workflow prompt from template registry if available."""
-    if db is None:
+    if (_request_db.get() or db) is None:
         return _WORKFLOW_TEXT_STATIC
 
     try:
@@ -202,8 +318,25 @@ def _build_workflow_text() -> str:
                 lines.append(f"- **{pack.pack}** v{pack.version}: {type_names}")
 
         return "\n".join(lines) + "\n"
+    except sqlite3.Error:
+        logging.getLogger(__name__).error(
+            "Database error building workflow text — database may need repair",
+            exc_info=True,
+        )
+        return (
+            _WORKFLOW_TEXT_STATIC + "\n\n> **WARNING:** Database error prevented loading "
+            "workflow types. Run `filigree doctor` to diagnose.\n"
+        )
     except Exception:
-        return _WORKFLOW_TEXT_STATIC
+        logging.getLogger(__name__).error(
+            "Failed to build dynamic workflow text; falling back to static",
+            exc_info=True,
+        )
+        return (
+            _WORKFLOW_TEXT_STATIC + "\n\n> **Note:** Dynamic workflow info unavailable. "
+            "Custom types, states, and packs may not be reflected above. "
+            "Use `list_types` and `list_packs` for current workflow details.\n"
+        )
 
 
 @server.list_prompts()  # type: ignore[untyped-decorator,no-untyped-call]
@@ -238,8 +371,9 @@ async def get_workflow_prompt(name: str, arguments: dict[str, str] | None = None
             messages.append(
                 PromptMessage(role="user", content=TextContent(type="text", text=summary)),
             )
-        except RuntimeError:
-            pass  # DB not initialized — skip context
+        except RuntimeError as exc:
+            if "not initialized" not in str(exc):
+                logging.getLogger(__name__).error("Unexpected RuntimeError building prompt context", exc_info=True)
     return GetPromptResult(description="Filigree workflow guide with project context", messages=messages)
 
 
@@ -294,20 +428,23 @@ async def list_tools() -> list[Tool]:
                         "type": "integer",
                         "default": 100,
                         "minimum": 1,
-                        "description": "Max results (default 100)",
+                        "description": f"Max results (default 100, capped at {_MAX_LIST_RESULTS} unless no_limit=true)",
                     },
                     "offset": {"type": "integer", "default": 0, "minimum": 0, "description": "Skip first N results"},
                     "no_limit": {
                         "type": "boolean",
                         "default": False,
-                        "description": "Bypass the default result cap. Use with caution on large projects.",
+                        "description": f"Bypass the default result cap of {_MAX_LIST_RESULTS}. Use with caution on large projects.",
                     },
                 },
             },
         ),
         Tool(
             name="create_issue",
-            description="Create a new issue. Use get_template first to see available fields for the type.",
+            description=(
+                "Create a new issue. You can set labels at creation time via labels=[...]. "
+                "Use get_template first to see available fields for the type."
+            ),
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -324,7 +461,11 @@ async def list_tools() -> list[Tool]:
                     "description": {"type": "string", "description": "Issue description"},
                     "notes": {"type": "string", "description": "Additional notes"},
                     "fields": {"type": "object", "description": "Custom fields (from template schema)"},
-                    "labels": {"type": "array", "items": {"type": "string"}, "description": "Labels"},
+                    "labels": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Labels to attach during creation (avoids a follow-up add_label call)",
+                    },
                     "deps": {"type": "array", "items": {"type": "string"}, "description": "Issue IDs this depends on"},
                     "actor": {"type": "string", "description": "Agent/user identity for audit trail"},
                 },
@@ -451,13 +592,13 @@ async def list_tools() -> list[Tool]:
                         "type": "integer",
                         "default": 100,
                         "minimum": 1,
-                        "description": "Max results (default 100)",
+                        "description": f"Max results (default 100, capped at {_MAX_LIST_RESULTS} unless no_limit=true)",
                     },
                     "offset": {"type": "integer", "default": 0, "minimum": 0, "description": "Skip first N results"},
                     "no_limit": {
                         "type": "boolean",
                         "default": False,
-                        "description": "Bypass the default result cap. Use with caution on large projects.",
+                        "description": f"Bypass the default result cap of {_MAX_LIST_RESULTS}. Use with caution on large projects.",
                     },
                 },
                 "required": ["query"],
@@ -652,6 +793,40 @@ async def list_tools() -> list[Tool]:
             },
         ),
         Tool(
+            name="batch_add_label",
+            description="Add the same label to multiple issues in one call.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Issue IDs to update",
+                    },
+                    "label": {"type": "string", "description": "Label to add"},
+                    "actor": {"type": "string", "description": "Agent/user identity for audit trail"},
+                },
+                "required": ["ids", "label"],
+            },
+        ),
+        Tool(
+            name="batch_add_comment",
+            description="Add the same comment to multiple issues in one call.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Issue IDs to update",
+                    },
+                    "text": {"type": "string", "description": "Comment text"},
+                    "actor": {"type": "string", "description": "Agent/user identity for audit trail"},
+                },
+                "required": ["ids", "text"],
+            },
+        ),
+        Tool(
             name="get_metrics",
             description="Flow metrics: cycle time, lead time, throughput. Useful for retrospectives and velocity tracking.",
             inputSchema={
@@ -668,7 +843,7 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="release_claim",
-            description="Release a claimed issue back to open. Reverses claim_issue.",
+            description="Release a claimed issue by clearing its assignee. Does NOT change status. Only succeeds if the issue has an assignee.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -858,6 +1033,133 @@ async def list_tools() -> list[Tool]:
                 "required": ["assignee"],
             },
         ),
+        Tool(
+            name="list_files",
+            description="List tracked files with filtering, sorting, and pagination.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "limit": {"type": "integer", "default": 100, "minimum": 1, "maximum": 10000},
+                    "offset": {"type": "integer", "default": 0, "minimum": 0},
+                    "language": {"type": "string", "description": "Filter by language"},
+                    "path_prefix": {"type": "string", "description": "Filter by substring in file path"},
+                    "min_findings": {"type": "integer", "minimum": 0, "description": "Minimum open findings count"},
+                    "has_severity": {
+                        "type": "string",
+                        "enum": sorted(VALID_SEVERITIES),
+                        "description": "Require at least one open finding at this severity",
+                    },
+                    "scan_source": {"type": "string", "description": "Filter files by finding source"},
+                    "sort": {
+                        "type": "string",
+                        "enum": ["updated_at", "first_seen", "path", "language"],
+                        "default": "updated_at",
+                    },
+                    "direction": {"type": "string", "enum": ["asc", "desc", "ASC", "DESC"]},
+                },
+            },
+        ),
+        Tool(
+            name="get_file",
+            description="Get file details, linked issues, recent findings, and summary by file ID.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "file_id": {"type": "string", "description": "File ID"},
+                },
+                "required": ["file_id"],
+            },
+        ),
+        Tool(
+            name="get_file_timeline",
+            description="Get merged timeline events for a file (finding, association, metadata updates).",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "file_id": {"type": "string", "description": "File ID"},
+                    "limit": {"type": "integer", "default": 50, "minimum": 1, "maximum": 10000},
+                    "offset": {"type": "integer", "default": 0, "minimum": 0},
+                    "event_type": {
+                        "type": "string",
+                        "enum": ["finding", "association", "file_metadata_update"],
+                        "description": "Optional event type filter",
+                    },
+                },
+                "required": ["file_id"],
+            },
+        ),
+        Tool(
+            name="get_issue_files",
+            description="List files associated with an issue.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "issue_id": {"type": "string", "description": "Issue ID"},
+                },
+                "required": ["issue_id"],
+            },
+        ),
+        Tool(
+            name="add_file_association",
+            description="Create a file<->issue association. Idempotent for duplicate tuples.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "file_id": {"type": "string", "description": "File ID"},
+                    "issue_id": {"type": "string", "description": "Issue ID"},
+                    "assoc_type": {
+                        "type": "string",
+                        "enum": sorted(VALID_ASSOC_TYPES),
+                        "description": "Association type",
+                    },
+                },
+                "required": ["file_id", "issue_id", "assoc_type"],
+            },
+        ),
+        Tool(
+            name="register_file",
+            description="Register or fetch a file record by project-relative path without running a scanner.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "File path (relative to project root)"},
+                    "language": {"type": "string", "description": "Optional language hint"},
+                    "file_type": {"type": "string", "description": "Optional file type tag"},
+                    "metadata": {"type": "object", "description": "Optional metadata map"},
+                },
+                "required": ["path"],
+            },
+        ),
+        Tool(
+            name="list_scanners",
+            description="List registered scanners from .filigree/scanners/*.toml. Returns available scanner names, descriptions, and supported file types.",
+            inputSchema={
+                "type": "object",
+                "properties": {},
+            },
+        ),
+        Tool(
+            name="trigger_scan",
+            description=(
+                "Trigger an async bug scan on a file. Registers the file, spawns a detached scanner process, "
+                "and returns immediately with a scan_run_id for correlation. Check file findings later for results. "
+                "Note: results are POSTed to the dashboard API — ensure the dashboard is running at the target api_url. "
+                "Repeated triggers for the same scanner+file are rate-limited (30s cooldown)."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "scanner": {"type": "string", "description": "Scanner name (from list_scanners)"},
+                    "file_path": {"type": "string", "description": "File path to scan (relative to project root)"},
+                    "api_url": {
+                        "type": "string",
+                        "default": "http://localhost:8377",
+                        "description": "Dashboard URL where scanner POSTs results (localhost only by default)",
+                    },
+                },
+                "required": ["scanner", "file_path"],
+            },
+        ),
     ]
 
 
@@ -922,18 +1224,14 @@ async def _dispatch(name: str, arguments: dict[str, Any], tracker: FiligreeDB) -
                 if category_states:
                     # Use the category name which list_issues already handles
                     status_filter = status_category
+                else:
+                    # Category requested but no states match — return empty
+                    return _text(
+                        {"issues": [], "limit": arguments.get("limit", 100), "offset": arguments.get("offset", 0), "has_more": False}
+                    )
 
-            no_limit = arguments.get("no_limit", False)
-            requested_limit = arguments.get("limit", 100)
-            offset = arguments.get("offset", 0)
+            effective_limit, offset = _resolve_pagination(arguments)
 
-            if no_limit:
-                # Bypass cap; use caller's limit if explicit, otherwise fetch all
-                effective_limit = requested_limit if "limit" in arguments else 10_000_000
-            else:
-                effective_limit = min(requested_limit, _MAX_LIST_RESULTS)
-
-            # Overfetch by 1 to detect whether more results exist
             issues = tracker.list_issues(
                 status=status_filter,
                 type=arguments.get("type"),
@@ -944,9 +1242,7 @@ async def _dispatch(name: str, arguments: dict[str, Any], tracker: FiligreeDB) -
                 limit=effective_limit + 1,
                 offset=offset,
             )
-            has_more = len(issues) > effective_limit
-            if has_more:
-                issues = issues[:effective_limit]
+            issues, has_more = _apply_has_more(issues, effective_limit)
             return _text(
                 {
                     "issues": [i.to_dict() for i in issues],
@@ -1015,16 +1311,7 @@ async def _dispatch(name: str, arguments: dict[str, Any], tracker: FiligreeDB) -
             except KeyError:
                 return _text({"error": f"Issue not found: {arguments['id']}", "code": "not_found"})
             except ValueError as e:
-                error_data: dict[str, Any] = {"error": str(e), "code": "invalid_transition"}
-                try:
-                    transitions = tracker.get_valid_transitions(arguments["id"])
-                    error_data["valid_transitions"] = [
-                        {"to": t.to, "category": t.category, "ready": t.ready} for t in transitions
-                    ]
-                    error_data["hint"] = "Use get_valid_transitions to see allowed state changes"
-                except KeyError:
-                    pass
-                return _text(error_data)
+                return _text(_build_transition_error(tracker, arguments["id"], str(e)))
 
         case "close_issue":
             try:
@@ -1047,16 +1334,7 @@ async def _dispatch(name: str, arguments: dict[str, Any], tracker: FiligreeDB) -
             except KeyError:
                 return _text({"error": f"Issue not found: {arguments['id']}", "code": "not_found"})
             except ValueError as e:
-                error_data = {"error": str(e), "code": "invalid_transition"}
-                try:
-                    transitions = tracker.get_valid_transitions(arguments["id"])
-                    error_data["valid_transitions"] = [
-                        {"to": t.to, "category": t.category, "ready": t.ready} for t in transitions
-                    ]
-                    error_data["hint"] = "Use get_valid_transitions to see allowed state changes"
-                except KeyError:
-                    pass
-                return _text(error_data)
+                return _text(_build_transition_error(tracker, arguments["id"], str(e)))
 
         case "reopen_issue":
             try:
@@ -1101,10 +1379,7 @@ async def _dispatch(name: str, arguments: dict[str, Any], tracker: FiligreeDB) -
         case "get_blocked":
             issues = tracker.get_blocked()
             return _text(
-                [
-                    {"id": i.id, "title": i.title, "priority": i.priority, "type": i.type, "blocked_by": i.blocked_by}
-                    for i in issues
-                ]
+                [{"id": i.id, "title": i.title, "priority": i.priority, "type": i.type, "blocked_by": i.blocked_by} for i in issues]
             )
 
         case "get_plan":
@@ -1142,29 +1417,17 @@ async def _dispatch(name: str, arguments: dict[str, Any], tracker: FiligreeDB) -
             return _text(comments)
 
         case "search_issues":
-            no_limit = arguments.get("no_limit", False)
-            requested_limit = arguments.get("limit", 100)
-            offset = arguments.get("offset", 0)
-
-            def _slim(i: Any) -> dict[str, Any]:
-                return {"id": i.id, "title": i.title, "status": i.status, "priority": i.priority, "type": i.type}
-
-            if no_limit:
-                effective_limit = requested_limit if "limit" in arguments else 10_000_000
-            else:
-                effective_limit = min(requested_limit, _MAX_LIST_RESULTS)
+            effective_limit, offset = _resolve_pagination(arguments)
 
             issues = tracker.search_issues(
                 arguments["query"],
                 limit=effective_limit + 1,
                 offset=offset,
             )
-            has_more = len(issues) > effective_limit
-            if has_more:
-                issues = issues[:effective_limit]
+            issues, has_more = _apply_has_more(issues, effective_limit)
             return _text(
                 {
-                    "issues": [_slim(i) for i in issues],
+                    "issues": [_slim_issue(i) for i in issues],
                     "limit": effective_limit,
                     "offset": offset,
                     "has_more": has_more,
@@ -1255,12 +1518,8 @@ async def _dispatch(name: str, arguments: dict[str, Any], tracker: FiligreeDB) -
                 except KeyError:
                     failed.append({"id": issue_id, "error": f"Issue not found: {issue_id}", "code": "not_found"})
                 except ValueError as e:
-                    fail_data: dict[str, Any] = {"id": issue_id, "error": str(e), "code": "invalid_transition"}
-                    try:
-                        transitions = tracker.get_valid_transitions(issue_id)
-                        fail_data["valid_transitions"] = [{"to": t.to, "category": t.category} for t in transitions]
-                    except KeyError:
-                        pass
+                    fail_data = _build_transition_error(tracker, issue_id, str(e), include_ready=False)
+                    fail_data["id"] = issue_id
                     failed.append(fail_data)
             _refresh_summary()
             ready_after = tracker.get_ready()
@@ -1301,12 +1560,8 @@ async def _dispatch(name: str, arguments: dict[str, Any], tracker: FiligreeDB) -
                 except KeyError:
                     update_failed.append({"id": issue_id, "error": f"Issue not found: {issue_id}", "code": "not_found"})
                 except ValueError as e:
-                    ufail: dict[str, Any] = {"id": issue_id, "error": str(e), "code": "invalid_transition"}
-                    try:
-                        transitions = tracker.get_valid_transitions(issue_id)
-                        ufail["valid_transitions"] = [{"to": t.to, "category": t.category} for t in transitions]
-                    except KeyError:
-                        pass
+                    ufail = _build_transition_error(tracker, issue_id, str(e), include_ready=False)
+                    ufail["id"] = issue_id
                     update_failed.append(ufail)
             _refresh_summary()
             return _text(
@@ -1315,6 +1570,44 @@ async def _dispatch(name: str, arguments: dict[str, Any], tracker: FiligreeDB) -
                     "failed": update_failed,
                     "warnings": update_warnings,
                     "count": len(update_succeeded),
+                }
+            )
+
+        case "batch_add_label":
+            label_ids = arguments["ids"]
+            if not all(isinstance(i, str) for i in label_ids):
+                return _text({"error": "All issue IDs must be strings", "code": "validation_error"})
+            if not isinstance(arguments["label"], str):
+                return _text({"error": "label must be a string", "code": "validation_error"})
+            label_succeeded, label_failed = tracker.batch_add_label(label_ids, label=arguments["label"])
+            _refresh_summary()
+            return _text(
+                {
+                    "succeeded": [row["id"] for row in label_succeeded],
+                    "results": label_succeeded,
+                    "failed": label_failed,
+                    "count": len(label_succeeded),
+                }
+            )
+
+        case "batch_add_comment":
+            comment_ids = arguments["ids"]
+            if not all(isinstance(i, str) for i in comment_ids):
+                return _text({"error": "All issue IDs must be strings", "code": "validation_error"})
+            if not isinstance(arguments["text"], str):
+                return _text({"error": "text must be a string", "code": "validation_error"})
+            comment_succeeded, comment_failed = tracker.batch_add_comment(
+                comment_ids,
+                text=arguments["text"],
+                author=arguments.get("actor", "mcp"),
+            )
+            _refresh_summary()
+            return _text(
+                {
+                    "succeeded": [str(row["id"]) for row in comment_succeeded],
+                    "results": comment_succeeded,
+                    "failed": comment_failed,
+                    "count": len(comment_succeeded),
                 }
             )
 
@@ -1363,7 +1656,8 @@ async def _dispatch(name: str, arguments: dict[str, Any], tracker: FiligreeDB) -
                 count = tracker.import_jsonl(safe, merge=arguments.get("merge", False))
                 _refresh_summary()
                 return _text({"status": "ok", "records": count, "path": str(safe)})
-            except Exception as e:
+            except (ValueError, OSError, sqlite3.Error) as e:
+                logging.getLogger(__name__).warning("import_jsonl failed: %s", e, exc_info=True)
                 return _text({"error": str(e), "code": "import_error"})
 
         case "archive_closed":
@@ -1525,9 +1819,7 @@ async def _dispatch(name: str, arguments: dict[str, Any], tracker: FiligreeDB) -
                     wf_pack = tracker.templates.get_pack(type_tpl.pack)
                     if wf_pack is not None:
                         if wf_pack.guide is None:
-                            return _text(
-                                {"pack": wf_pack.pack, "guide": None, "message": "No guide available for this pack"}
-                            )
+                            return _text({"pack": wf_pack.pack, "guide": None, "message": "No guide available for this pack"})
                         return _text(
                             {
                                 "pack": wf_pack.pack,
@@ -1556,14 +1848,8 @@ async def _dispatch(name: str, arguments: dict[str, Any], tracker: FiligreeDB) -
                     state_def = s
                     break
             if state_def is None:
-                return _text(
-                    {"error": f"Unknown state '{state_name}' for type '{arguments['type']}'", "code": "not_found"}
-                )
-            inbound = [
-                {"from": td.from_state, "enforcement": td.enforcement}
-                for td in state_tpl.transitions
-                if td.to_state == state_name
-            ]
+                return _text({"error": f"Unknown state '{state_name}' for type '{arguments['type']}'", "code": "not_found"})
+            inbound = [{"from": td.from_state, "enforcement": td.enforcement} for td in state_tpl.transitions if td.to_state == state_name]
             outbound = [
                 {"to": td.to_state, "enforcement": td.enforcement, "requires_fields": list(td.requires_fields)}
                 for td in state_tpl.transitions
@@ -1604,8 +1890,446 @@ async def _dispatch(name: str, arguments: dict[str, Any], tracker: FiligreeDB) -
             result["selection_reason"] = f"Highest-priority {', '.join(parts)}"
             return _text(result)
 
+        case "list_files":
+            limit = arguments.get("limit", 100)
+            offset = arguments.get("offset", 0)
+            min_findings = arguments.get("min_findings")
+            has_severity = arguments.get("has_severity")
+            language = arguments.get("language")
+            path_prefix = arguments.get("path_prefix")
+            scan_source = arguments.get("scan_source")
+            sort = arguments.get("sort", "updated_at")
+            direction = arguments.get("direction")
+            valid_sorts = {"updated_at", "first_seen", "path", "language"}
+
+            # --- validation ---
+            for err in (
+                _validate_int_range(limit, "limit", min_val=1, max_val=10000),
+                _validate_int_range(offset, "offset", min_val=0),
+                _validate_int_range(min_findings, "min_findings", min_val=0),
+                _validate_str(language, "language"),
+                _validate_str(path_prefix, "path_prefix"),
+                _validate_str(scan_source, "scan_source"),
+            ):
+                if err is not None:
+                    return err
+            if has_severity is not None and (not isinstance(has_severity, str) or has_severity not in VALID_SEVERITIES):
+                return _text({"error": f"has_severity must be one of {sorted(VALID_SEVERITIES)}", "code": "validation_error"})
+            if not isinstance(sort, str) or sort not in valid_sorts:
+                return _text({"error": f"sort must be one of {sorted(valid_sorts)}", "code": "validation_error"})
+            if direction is not None and (not isinstance(direction, str) or direction.upper() not in {"ASC", "DESC"}):
+                return _text({"error": "direction must be 'asc' or 'desc'", "code": "validation_error"})
+
+            files_result = tracker.list_files_paginated(
+                limit=limit,
+                offset=offset,
+                language=language,
+                path_prefix=path_prefix,
+                min_findings=min_findings,
+                has_severity=has_severity,
+                scan_source=scan_source,
+                sort=sort,
+                direction=direction,
+            )
+            return _text(files_result)
+
+        case "get_file":
+            file_id = arguments.get("file_id", "")
+            if not isinstance(file_id, str) or not file_id.strip():
+                return _text({"error": "file_id is required", "code": "validation_error"})
+            try:
+                data = tracker.get_file_detail(file_id)
+            except KeyError:
+                return _text({"error": f"File not found: {file_id}", "code": "not_found"})
+            return _text(data)
+
+        case "get_file_timeline":
+            file_id = arguments.get("file_id", "")
+            limit = arguments.get("limit", 50)
+            offset = arguments.get("offset", 0)
+            event_type = arguments.get("event_type")
+            valid_event_types = {"finding", "association", "file_metadata_update"}
+
+            if not isinstance(file_id, str) or not file_id.strip():
+                return _text({"error": "file_id is required", "code": "validation_error"})
+            if not isinstance(limit, int) or limit < 1 or limit > 10000:
+                return _text({"error": "limit must be an integer in [1, 10000]", "code": "validation_error"})
+            if not isinstance(offset, int) or offset < 0:
+                return _text({"error": "offset must be a non-negative integer", "code": "validation_error"})
+            if event_type is not None and (not isinstance(event_type, str) or event_type not in valid_event_types):
+                return _text(
+                    {
+                        "error": f"event_type must be one of {sorted(valid_event_types)}",
+                        "code": "validation_error",
+                    }
+                )
+
+            try:
+                timeline_result = tracker.get_file_timeline(file_id, limit=limit, offset=offset, event_type=event_type)
+            except KeyError:
+                return _text({"error": f"File not found: {file_id}", "code": "not_found"})
+            return _text(timeline_result)
+
+        case "get_issue_files":
+            issue_id = arguments.get("issue_id", "")
+            if not isinstance(issue_id, str) or not issue_id.strip():
+                return _text({"error": "issue_id is required", "code": "validation_error"})
+            try:
+                tracker.get_issue(issue_id)
+            except KeyError:
+                return _text({"error": f"Issue not found: {issue_id}", "code": "not_found"})
+            return _text(tracker.get_issue_files(issue_id))
+
+        case "add_file_association":
+            file_id = arguments.get("file_id", "")
+            issue_id = arguments.get("issue_id", "")
+            assoc_type = arguments.get("assoc_type", "")
+
+            if not isinstance(file_id, str) or not file_id.strip():
+                return _text({"error": "file_id is required", "code": "validation_error"})
+            if not isinstance(issue_id, str) or not issue_id.strip():
+                return _text({"error": "issue_id is required", "code": "validation_error"})
+            if not isinstance(assoc_type, str) or not assoc_type.strip():
+                return _text({"error": "assoc_type is required", "code": "validation_error"})
+
+            try:
+                tracker.get_file(file_id)
+            except KeyError:
+                return _text({"error": f"File not found: {file_id}", "code": "not_found"})
+
+            try:
+                tracker.get_issue(issue_id)
+            except KeyError:
+                return _text({"error": f"Issue not found: {issue_id}", "code": "not_found"})
+
+            try:
+                tracker.add_file_association(file_id, issue_id, assoc_type)
+            except ValueError as e:
+                return _text({"error": str(e), "code": "validation_error"})
+            return _text({"status": "created"})
+
+        case "register_file":
+            raw_path = arguments.get("path", "")
+            language = arguments.get("language", "")
+            file_type = arguments.get("file_type", "")
+            metadata = arguments.get("metadata")
+
+            if not isinstance(raw_path, str) or not raw_path.strip():
+                return _text({"error": "path is required", "code": "validation_error"})
+            if language is not None and not isinstance(language, str):
+                return _text({"error": "language must be a string", "code": "validation_error"})
+            if file_type is not None and not isinstance(file_type, str):
+                return _text({"error": "file_type must be a string", "code": "validation_error"})
+            if metadata is not None and not isinstance(metadata, dict):
+                return _text({"error": "metadata must be an object", "code": "validation_error"})
+
+            try:
+                target = _safe_path(raw_path)
+            except ValueError as e:
+                return _text({"error": str(e), "code": "invalid_path"})
+
+            filigree_dir = _get_filigree_dir()
+            if filigree_dir is None:
+                return _text({"error": "Project directory not initialized", "code": "not_initialized"})
+
+            canonical_path = str(target.relative_to(filigree_dir.resolve().parent))
+            file_record = tracker.register_file(
+                canonical_path,
+                language=language or "",
+                file_type=file_type or "",
+                metadata=metadata,
+            )
+            return _text(file_record.to_dict())
+
+        case "list_scanners":
+            filigree_dir = _get_filigree_dir()
+            scanners_dir = filigree_dir / "scanners" if filigree_dir else None
+            if scanners_dir is None:
+                return _text({"scanners": [], "hint": "Project directory not initialized"})
+            scanners = _list_scanners(scanners_dir)
+            result_data: dict[str, Any] = {"scanners": [s.to_dict() for s in scanners]}
+            if not scanners:
+                result_data["hint"] = "No scanners registered. Add TOML files to .filigree/scanners/"
+            return _text(result_data)
+
+        case "trigger_scan":
+            from datetime import datetime
+            from urllib.parse import urlparse
+
+            filigree_dir = _get_filigree_dir()
+            if filigree_dir is None:
+                return _text({"error": "Project directory not initialized", "code": "not_initialized"})
+
+            scanner_name = arguments["scanner"]
+            file_path = arguments["file_path"]
+            api_url = arguments.get("api_url", "http://localhost:8377")
+
+            # Validate api_url — warn on non-localhost targets
+            parsed_url = urlparse(api_url)
+            url_host = parsed_url.hostname or ""
+            if url_host not in ("localhost", "127.0.0.1", "::1", ""):
+                return _text(
+                    {
+                        "error": f"Non-localhost api_url not allowed: {url_host!r}. Scanner results would be sent to an external host.",
+                        "code": "invalid_api_url",
+                    }
+                )
+
+            # Validate file path — prevent path traversal
+            try:
+                target = _safe_path(file_path)
+            except ValueError as e:
+                return _text({"error": str(e), "code": "invalid_path"})
+
+            # Load scanner config (name is validated inside load_scanner)
+            scanners_dir = filigree_dir / "scanners"
+            cfg = load_scanner(scanners_dir, scanner_name)
+            if cfg is None:
+                available = [s.name for s in _list_scanners(scanners_dir)]
+                return _text(
+                    {
+                        "error": f"Scanner {scanner_name!r} not found",
+                        "code": "scanner_not_found",
+                        "available_scanners": available,
+                    }
+                )
+
+            # Validate file exists
+            if not target.is_file():
+                return _text(
+                    {
+                        "error": f"File not found: {file_path}",
+                        "code": "file_not_found",
+                    }
+                )
+
+            # Warn if file type doesn't match scanner's declared types
+            file_type_warning = ""
+            if cfg.file_types:
+                ext = Path(file_path).suffix.lstrip(".")
+                if ext and ext not in cfg.file_types:
+                    file_type_warning = (
+                        f"Warning: file extension {ext!r} not in scanner's declared file_types {cfg.file_types}. Proceeding anyway."
+                    )
+
+            # Per-(project, scanner, file) cooldown — evict stale entries first
+            canonical_path = str(target.relative_to(filigree_dir.resolve().parent))
+            project_scope = str(tracker.db_path.parent.resolve())
+            cooldown_key = (project_scope, scanner_name, canonical_path)
+            now_mono = time.monotonic()
+            stale = [k for k, v in _scan_cooldowns.items() if now_mono - v >= _SCAN_COOLDOWN_SECONDS]
+            for k in stale:
+                del _scan_cooldowns[k]
+            last_trigger = _scan_cooldowns.get(cooldown_key, 0.0)
+            if now_mono - last_trigger < _SCAN_COOLDOWN_SECONDS:
+                remaining = _SCAN_COOLDOWN_SECONDS - (now_mono - last_trigger)
+                return _text(
+                    {
+                        "error": f"Scanner {scanner_name!r} was already triggered for {file_path!r} recently. Wait {remaining:.0f}s.",
+                        "code": "rate_limited",
+                        "retry_after_seconds": round(remaining),
+                    }
+                )
+
+            # Reserve cooldown BEFORE any await points to prevent concurrent
+            # calls from bypassing rate limiting (filigree-5bee22).
+            _scan_cooldowns[cooldown_key] = now_mono
+
+            # Build command — catches ValueError for malformed command strings.
+            # Use canonical project-relative path so scanner output can correlate
+            # with file_records/path keys from register_file().
+            project_root = filigree_dir.parent
+            ts = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S")
+            scan_run_id = f"{scanner_name}-{ts}-{secrets.token_hex(3)}"
+            try:
+                cmd = cfg.build_command(
+                    file_path=canonical_path,
+                    api_url=api_url,
+                    project_root=str(project_root),
+                    scan_run_id=scan_run_id,
+                )
+            except ValueError as e:
+                del _scan_cooldowns[cooldown_key]
+                return _text({"error": str(e), "code": "invalid_command"})
+
+            # Validate command is available after template substitution.
+            cmd_err = validate_scanner_command(cmd, project_root=project_root)
+            if cmd_err is not None:
+                del _scan_cooldowns[cooldown_key]
+                return _text({"error": cmd_err, "code": "command_not_found"})
+
+            # Register file in file_records
+            file_record = tracker.register_file(canonical_path)
+
+            # Spawn detached process with stderr captured to a log file
+            # so scanner errors are diagnosable.
+            # Scanner TOML files are project-local config editable only by
+            # users with filesystem access (not via MCP). S603 is acceptable.
+            scan_log_dir = filigree_dir / "scans"
+            scan_log_dir.mkdir(parents=True, exist_ok=True)
+            scan_log_path = scan_log_dir / f"{scan_run_id}.log"
+            try:
+                scan_log_fd = open(scan_log_path, "w")  # noqa: SIM115
+            except OSError:
+                scan_log_fd = None
+            try:
+                proc = subprocess.Popen(
+                    cmd,
+                    cwd=str(project_root),
+                    stdout=subprocess.DEVNULL,
+                    stderr=scan_log_fd if scan_log_fd is not None else subprocess.DEVNULL,
+                    start_new_session=True,
+                )
+            except OSError as e:
+                del _scan_cooldowns[cooldown_key]
+                return _text(
+                    {
+                        "error": f"Failed to spawn scanner process: {e}",
+                        "code": "spawn_failed",
+                        "scanner": scanner_name,
+                        "file_id": file_record.id,
+                    }
+                )
+            finally:
+                # Close parent's copy of the fd — child inherited its own via Popen.
+                if scan_log_fd is not None:
+                    scan_log_fd.close()
+
+            # Brief post-spawn check to detect immediate crashes
+            await asyncio.sleep(0.2)
+            exit_code = proc.poll()
+            if exit_code is not None and exit_code != 0:
+                log_hint = ""
+                if scan_log_path.exists():
+                    log_hint = f" Check log: {scan_log_path.relative_to(filigree_dir.parent)}"
+                return _text(
+                    {
+                        "error": f"Scanner process exited immediately with code {exit_code}.{log_hint}",
+                        "code": "spawn_failed",
+                        "scanner": scanner_name,
+                        "file_id": file_record.id,
+                        "exit_code": exit_code,
+                        "log_path": str(scan_log_path.relative_to(filigree_dir.parent)),
+                    }
+                )
+
+            if _logger:
+                _logger.info(
+                    "Spawned scanner %s for %s (pid=%d, run_id=%s)",
+                    scanner_name,
+                    file_path,
+                    proc.pid,
+                    scan_run_id,
+                )
+
+            log_rel = str(scan_log_path.relative_to(filigree_dir.parent))
+            scan_result: dict[str, Any] = {
+                "status": "triggered",
+                "scanner": scanner_name,
+                "file_path": file_path,
+                "file_id": file_record.id,
+                "scan_run_id": scan_run_id,
+                "pid": proc.pid,
+                "log_path": log_rel,
+                "message": (
+                    f"Scan triggered with run_id={scan_run_id!r}. "
+                    f"Results will be POSTed to {api_url}. "
+                    f"Poll findings via file_id={file_record.id!r}. "
+                    f"Scanner log: {log_rel}"
+                ),
+            }
+            if file_type_warning:
+                scan_result["warning"] = file_type_warning
+            return _text(scan_result)
+
         case _:
             return _text({"error": f"Unknown tool: {name}", "code": "unknown_tool"})
+
+
+# ---------------------------------------------------------------------------
+# HTTP transport factory (for server-mode dashboard)
+# ---------------------------------------------------------------------------
+
+
+def create_mcp_app(
+    db_resolver: Callable[[], FiligreeDB | None] | None = None,
+) -> tuple[Callable[..., Any], Callable[..., Any]]:
+    """Create an ASGI app + lifespan hook for MCP streamable-HTTP.
+
+    Returns ``(asgi_app, lifespan_context_manager)`` where:
+
+    * **asgi_app** is an ASGI callable to mount at ``/mcp`` in the
+      dashboard.
+    * **lifespan_context_manager** is an async-context-manager that
+      must be entered during the parent application's lifespan so the
+      underlying ``StreamableHTTPSessionManager`` task-group is
+      running before the first request arrives.
+
+    ``db_resolver`` — optional callable returning the active
+    :class:`FiligreeDB`. When provided, each request gets an isolated
+    request-local DB + project directory context.
+    """
+    from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
+
+    session_manager = StreamableHTTPSessionManager(
+        app=server,
+        json_response=False,
+        stateless=True,
+    )
+
+    async def _handle_mcp(scope: Any, receive: Any, send: Any) -> None:
+        db_token: Any = None
+        dir_token: Any = None
+        if db_resolver is not None:
+            from starlette.responses import JSONResponse
+
+            try:
+                resolved = db_resolver()
+            except KeyError as exc:
+                project_key = str(exc.args[0]) if exc.args else ""
+                resp = JSONResponse(
+                    {
+                        "error": "Unknown project",
+                        "code": "project_not_found",
+                        "project": project_key,
+                    },
+                    status_code=404,
+                )
+                await resp(scope, receive, send)
+                return
+
+            if resolved is None:
+                resp = JSONResponse(
+                    {
+                        "error": "Unable to resolve project database",
+                        "code": "project_unavailable",
+                    },
+                    status_code=503,
+                )
+                await resp(scope, receive, send)
+                return
+            db_token = _request_db.set(resolved)
+            dir_token = _request_filigree_dir.set(resolved.db_path.parent)
+        try:
+            await session_manager.handle_request(scope, receive, send)
+        except RuntimeError:
+            # Session manager not started (e.g. lifespan not triggered in
+            # test or ethereal mode).  Return 503 so the route is visible
+            # but clearly not ready.
+            from starlette.responses import JSONResponse
+
+            resp = JSONResponse(
+                {"error": "MCP session manager not initialized"},
+                status_code=503,
+            )
+            await resp(scope, receive, send)
+        finally:
+            if dir_token is not None:
+                _request_filigree_dir.reset(dir_token)
+            if db_token is not None:
+                _request_db.reset(db_token)
+
+    return _handle_mcp, session_manager.run
 
 
 # ---------------------------------------------------------------------------
@@ -1633,14 +2357,6 @@ async def _run(project_path: Path | None) -> None:
     db = FiligreeDB(filigree_dir / DB_FILENAME, prefix=config.get("prefix", "filigree"))
     db.initialize()
 
-    # Register with the global project registry (best-effort)
-    try:
-        from filigree.registry import Registry
-
-        Registry().register(filigree_dir)
-    except Exception:
-        logging.getLogger(__name__).debug("Best-effort registry registration failed", exc_info=True)
-
     from filigree.logging import setup_logging
 
     _logger = setup_logging(filigree_dir)
@@ -1654,9 +2370,7 @@ def main() -> None:
     import asyncio
 
     parser = argparse.ArgumentParser(description="Filigree MCP server")
-    parser.add_argument(
-        "--project", type=Path, default=None, help="Project root (auto-discovers .filigree/ if omitted)"
-    )
+    parser.add_argument("--project", type=Path, default=None, help="Project root (auto-discovers .filigree/ if omitted)")
     args = parser.parse_args()
 
     asyncio.run(_run(args.project))

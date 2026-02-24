@@ -209,8 +209,12 @@ class TestTemplateEnforcementValidation:
             TemplateRegistry.parse_type_template(raw)
 
     def test_valid_enforcement_values_accepted(self) -> None:
-        """Templates with valid enforcement values should parse fine."""
-        for enforcement in ("hard", "soft", "none"):
+        """Templates with valid enforcement values should parse fine.
+
+        Note: 'none' was removed as valid enforcement (filigree-9b9e45)
+        because it violated the EnforcementLevel Literal["hard", "soft"] contract.
+        """
+        for enforcement in ("hard", "soft"):
             raw = {
                 "type": "goodtype",
                 "display_name": "Good",

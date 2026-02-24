@@ -51,10 +51,15 @@ def setup_logging(filigree_dir: Path) -> logging.Logger:
     target_filename = os.path.abspath(str(log_path))
 
     with _setup_lock:
-        # Check if we already have a handler pointing to the desired log path.
-        for h in logger.handlers:
-            if isinstance(h, RotatingFileHandler) and h.baseFilename == target_filename:
+        # Check existing RotatingFileHandlers on the global logger.
+        for h in logger.handlers[:]:
+            if not isinstance(h, RotatingFileHandler):
+                continue
+            if h.baseFilename == target_filename:
                 return logger
+            # Different path — remove stale handler to avoid leaks / duplicates.
+            logger.removeHandler(h)
+            h.close()
 
         handler = RotatingFileHandler(
             str(log_path),

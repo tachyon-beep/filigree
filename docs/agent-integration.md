@@ -4,7 +4,7 @@ Filigree is built for AI coding agents. This guide covers how foreground agents,
 
 ## Foreground Agents
 
-Foreground agents (Claude Code, Codex) use the **MCP server** directly — 43 tools for full read/write access without parsing text.
+Foreground agents (Claude Code, Codex) use the **MCP server** directly — 53 tools for full read/write access without parsing text.
 
 ```bash
 filigree install --claude-code    # Set up MCP for Claude Code

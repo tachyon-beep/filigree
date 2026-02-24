@@ -50,8 +50,7 @@ class TestIncidentResolvedCategory:
         raw = BUILT_IN_PACKS["incident"]["types"]["incident"]
         states = {s["name"]: s["category"] for s in raw["states"]}
         assert states["resolved"] != "done", (
-            "incident.resolved should not be 'done' — it has an outgoing "
-            "transition to 'closed' that requires root_cause"
+            "incident.resolved should not be 'done' — it has an outgoing transition to 'closed' that requires root_cause"
         )
         assert states["resolved"] == "wip"
 
@@ -137,9 +136,7 @@ class TestDuplicateStateNameDetection:
             fields_schema=(),
         )
         errors = TemplateRegistry.validate_type_template(tpl)
-        assert any("duplicate" in e.lower() or "open" in e for e in errors), (
-            f"Expected duplicate state name error, got: {errors}"
-        )
+        assert any("duplicate" in e.lower() or "open" in e for e in errors), f"Expected duplicate state name error, got: {errors}"
 
     def test_parse_duplicate_state_names_raises(self) -> None:
         """parse_type_template should reject duplicate state names."""
@@ -309,3 +306,173 @@ class TestFieldSchemaTypeValidation:
         }
         with pytest.raises(ValueError, match=r"[Ii]nvalid.*field type"):
             TemplateRegistry.parse_type_template(raw)
+
+
+# -- Bug: filigree-ab91b3 / filigree-3e3f12 — Duplicate transitions silently accepted
+
+
+class TestDuplicateTransitionDetection:
+    """Bug fix: filigree-ab91b3, filigree-3e3f12 — duplicate (from, to) transitions."""
+
+    def test_parse_duplicate_transitions_raises(self) -> None:
+        """parse_type_template should reject duplicate (from_state, to_state) pairs."""
+        raw = {
+            "type": "dup_trans",
+            "display_name": "Dup Trans",
+            "states": [
+                {"name": "open", "category": "open"},
+                {"name": "closed", "category": "done"},
+            ],
+            "initial_state": "open",
+            "transitions": [
+                {"from": "open", "to": "closed", "enforcement": "soft"},
+                {"from": "open", "to": "closed", "enforcement": "hard"},  # duplicate!
+            ],
+            "fields_schema": [],
+        }
+        with pytest.raises(ValueError, match=r"[Dd]uplicate.*transition"):
+            TemplateRegistry.parse_type_template(raw)
+
+    def test_validate_duplicate_transitions_reported(self) -> None:
+        """validate_type_template should report duplicate transitions as errors."""
+        from filigree.templates import StateDefinition, TransitionDefinition
+
+        tpl = TypeTemplate(
+            type="dup_trans",
+            display_name="Dup Trans",
+            description="",
+            pack="test",
+            states=(
+                StateDefinition(name="open", category="open"),
+                StateDefinition(name="closed", category="done"),
+            ),
+            initial_state="open",
+            transitions=(
+                TransitionDefinition(from_state="open", to_state="closed", enforcement="soft"),
+                TransitionDefinition(from_state="open", to_state="closed", enforcement="hard"),
+            ),
+            fields_schema=(),
+        )
+        errors = TemplateRegistry.validate_type_template(tpl)
+        assert any("duplicate" in e.lower() and "transition" in e.lower() for e in errors)
+
+    def test_no_false_positive_on_unique_transitions(self) -> None:
+        """Templates with unique transitions should validate cleanly."""
+        from filigree.templates import StateDefinition, TransitionDefinition
+
+        tpl = TypeTemplate(
+            type="clean",
+            display_name="Clean",
+            description="",
+            pack="test",
+            states=(
+                StateDefinition(name="open", category="open"),
+                StateDefinition(name="working", category="wip"),
+                StateDefinition(name="closed", category="done"),
+            ),
+            initial_state="open",
+            transitions=(
+                TransitionDefinition(from_state="open", to_state="working", enforcement="soft"),
+                TransitionDefinition(from_state="working", to_state="closed", enforcement="soft"),
+            ),
+            fields_schema=(),
+        )
+        errors = TemplateRegistry.validate_type_template(tpl)
+        dup_errors = [e for e in errors if "duplicate" in e.lower() and "transition" in e.lower()]
+        assert dup_errors == []
+
+    def test_builtin_packs_have_no_duplicate_transitions(self) -> None:
+        """All built-in pack types must have unique transitions."""
+        for pack_name, pack_data in BUILT_IN_PACKS.items():
+            for type_name, type_data in pack_data.get("types", {}).items():
+                tpl = TemplateRegistry.parse_type_template(type_data)
+                errors = TemplateRegistry.validate_type_template(tpl)
+                dup_errors = [e for e in errors if "duplicate" in e.lower() and "transition" in e.lower()]
+                assert dup_errors == [], f"{pack_name}/{type_name} has duplicate transitions: {dup_errors}"
+
+
+# -- Bug: filigree-9b9e45 — Enforcement "none" accepted but not in type ------
+
+
+class TestEnforcementNoneRejected:
+    """Bug fix: filigree-9b9e45 — 'none' enforcement violates type contract."""
+
+    def test_parse_rejects_none_enforcement(self) -> None:
+        """parse_type_template should reject enforcement='none'."""
+        raw = {
+            "type": "none_enf",
+            "display_name": "None Enforcement",
+            "states": [
+                {"name": "open", "category": "open"},
+                {"name": "closed", "category": "done"},
+            ],
+            "initial_state": "open",
+            "transitions": [
+                {"from": "open", "to": "closed", "enforcement": "none"},
+            ],
+            "fields_schema": [],
+        }
+        with pytest.raises(ValueError, match=r"[Ii]nvalid.*enforcement"):
+            TemplateRegistry.parse_type_template(raw)
+
+    def test_parse_still_accepts_hard_and_soft(self) -> None:
+        """hard and soft enforcement must still be accepted."""
+        for enf in ("hard", "soft"):
+            raw = {
+                "type": "valid_enf",
+                "display_name": "Valid",
+                "states": [
+                    {"name": "open", "category": "open"},
+                    {"name": "closed", "category": "done"},
+                ],
+                "initial_state": "open",
+                "transitions": [
+                    {"from": "open", "to": "closed", "enforcement": enf},
+                ],
+                "fields_schema": [],
+            }
+            tpl = TemplateRegistry.parse_type_template(raw)
+            assert tpl.transitions[0].enforcement == enf
+
+    def test_builtin_packs_only_use_hard_or_soft(self) -> None:
+        """No built-in template should use enforcement='none'."""
+        for pack_name, pack_data in BUILT_IN_PACKS.items():
+            for type_name, type_data in pack_data.get("types", {}).items():
+                for t in type_data.get("transitions", []):
+                    assert t["enforcement"] in ("hard", "soft"), (
+                        f"{pack_name}/{type_name}: transition {t['from']}->{t['to']} "
+                        f"uses enforcement='{t['enforcement']}' (only 'hard'/'soft' allowed)"
+                    )
+
+
+# -- Bug: filigree-284665 — rolled_back state category mismatch -----
+
+
+class TestRolledBackCategoryFix:
+    """Bug fix: filigree-284665 — release.rolled_back must not be 'done'."""
+
+    def test_rolled_back_is_not_done(self) -> None:
+        """rolled_back has outgoing transition to development, so it cannot be 'done'."""
+        raw = BUILT_IN_PACKS["release"]["types"]["release"]
+        states = {s["name"]: s["category"] for s in raw["states"]}
+        assert states["rolled_back"] != "done", "release.rolled_back should not be 'done' — it has a transition to 'development'"
+
+    def test_rolled_back_is_wip(self) -> None:
+        """rolled_back should be 'wip' since it can resume development."""
+        raw = BUILT_IN_PACKS["release"]["types"]["release"]
+        states = {s["name"]: s["category"] for s in raw["states"]}
+        assert states["rolled_back"] == "wip"
+
+    def test_rolled_back_to_development_transition_exists(self) -> None:
+        """The rolled_back→development transition should still exist."""
+        raw = BUILT_IN_PACKS["release"]["types"]["release"]
+        tpl = TemplateRegistry.parse_type_template(raw)
+        rollback_to_dev = [t for t in tpl.transitions if t.from_state == "rolled_back" and t.to_state == "development"]
+        assert len(rollback_to_dev) == 1
+
+    def test_release_still_has_two_done_states(self) -> None:
+        """released and cancelled should remain done (only rolled_back changes)."""
+        raw = BUILT_IN_PACKS["release"]["types"]["release"]
+        states = {s["name"]: s["category"] for s in raw["states"]}
+        assert states["released"] == "done"
+        assert states["cancelled"] == "done"

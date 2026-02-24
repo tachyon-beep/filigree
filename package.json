@@ -1,0 +1,31 @@
+{
+  "name": "filigree",
+  "version": "1.0.0",
+  "description": "Agent-native issue tracker with convention-based project discovery.",
+  "main": "index.js",
+  "directories": {
+    "doc": "docs",
+    "test": "tests"
+  },
+  "scripts": {
+    "lint": "biome check src/filigree/static/js/",
+    "lint:fix": "biome check --fix src/filigree/static/js/",
+    "format": "biome format --write src/filigree/static/js/",
+    "format:check": "biome format src/filigree/static/js/"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tachyon-beep/filigree.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "bugs": {
+    "url": "https://github.com/tachyon-beep/filigree/issues"
+  },
+  "homepage": "https://github.com/tachyon-beep/filigree#readme",
+  "devDependencies": {
+    "@biomejs/biome": "2.4.3"
+  }
+}

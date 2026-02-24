@@ -25,6 +25,8 @@ Usage:
 from __future__ import annotations
 
 import json as json_mod
+import logging
+import os
 import sqlite3
 import sys
 from pathlib import Path
@@ -39,6 +41,7 @@ from filigree.core import (
     SUMMARY_FILENAME,
     FiligreeDB,
     find_filigree_root,
+    get_mode,
     read_config,
     write_config,
 )
@@ -84,7 +87,13 @@ def cli(ctx: click.Context, actor: str) -> None:
 
 @cli.command()
 @click.option("--prefix", default=None, help="ID prefix for issues (default: directory name)")
-def init(prefix: str | None) -> None:
+@click.option(
+    "--mode",
+    type=click.Choice(["ethereal", "server"], case_sensitive=False),
+    default=None,
+    help="Installation mode (default: ethereal)",
+)
+def init(prefix: str | None, mode: str | None) -> None:
     """Initialize .filigree/ in the current directory."""
     cwd = Path.cwd()
     filigree_dir = cwd / FILIGREE_DIR_NAME
@@ -96,12 +105,20 @@ def init(prefix: str | None) -> None:
         db = FiligreeDB(filigree_dir / DB_FILENAME, prefix=config.get("prefix", "filigree"))
         db.initialize()
         db.close()
+        (filigree_dir / "scanners").mkdir(exist_ok=True)
+        # Update mode if explicitly provided
+        if mode is not None:
+            config["mode"] = mode
+            write_config(filigree_dir, config)
+            click.echo(f"  Mode: {mode}")
         return
 
     prefix = prefix or cwd.name
+    mode = mode or "ethereal"
     filigree_dir.mkdir()
+    (filigree_dir / "scanners").mkdir()
 
-    config = {"prefix": prefix, "version": 1}
+    config = {"prefix": prefix, "version": 1, "mode": mode}
     write_config(filigree_dir, config)
 
     db = FiligreeDB(filigree_dir / DB_FILENAME, prefix=prefix)
@@ -111,7 +128,9 @@ def init(prefix: str | None) -> None:
 
     click.echo(f"Initialized {FILIGREE_DIR_NAME}/ in {cwd}")
     click.echo(f"  Prefix: {prefix}")
+    click.echo(f"  Mode: {mode}")
     click.echo(f"  Database: {filigree_dir / DB_FILENAME}")
+    click.echo(f"  Scanners: {filigree_dir / 'scanners'}/ (add .toml files to register scanners)")
     click.echo("\nNext: filigree install")
 
 
@@ -390,11 +409,7 @@ def close(ctx: click.Context, issue_ids: tuple[str, ...], reason: str, as_json: 
             # Include newly-unblocked issues (minimal fields to save tokens)
             closed_ids = {d["id"] for d in closed}
             ready = db.get_ready()
-            unblocked = [
-                {"id": i.id, "title": i.title, "priority": i.priority, "type": i.type}
-                for i in ready
-                if i.id not in closed_ids
-            ]
+            unblocked = [{"id": i.id, "title": i.title, "priority": i.priority, "type": i.type} for i in ready if i.id not in closed_ids]
             click.echo(json_mod.dumps({"closed": closed, "unblocked": unblocked}, indent=2, default=str))
         _refresh_summary(db)
 
@@ -637,7 +652,14 @@ def add_label(issue_id: str, label_name: str, as_json: bool) -> None:
             else:
                 click.echo(f"Not found: {issue_id}", err=True)
             sys.exit(1)
-        added = db.add_label(issue_id, label_name)
+        try:
+            added = db.add_label(issue_id, label_name)
+        except ValueError as e:
+            if as_json:
+                click.echo(json_mod.dumps({"error": str(e)}))
+            else:
+                click.echo(f"Error: {e}", err=True)
+            sys.exit(1)
         status = "added" if added else "already_exists"
         if as_json:
             click.echo(json_mod.dumps({"issue_id": issue_id, "label": label_name, "status": status}))
@@ -779,6 +801,13 @@ def migrate(from_beads: bool, beads_db: str | None) -> None:
 @click.option("--gitignore", is_flag=True, help="Add .filigree/ to .gitignore only")
 @click.option("--hooks", "hooks_only", is_flag=True, help="Install Claude Code hooks only")
 @click.option("--skills", "skills_only", is_flag=True, help="Install Claude Code skills only")
+@click.option("--codex-skills", "codex_skills_only", is_flag=True, help="Install Codex skills only")
+@click.option(
+    "--mode",
+    type=click.Choice(["ethereal", "server"], case_sensitive=False),
+    default=None,
+    help="Installation mode (default: preserve existing or ethereal)",
+)
 def install(
     claude_code: bool,
     codex: bool,
@@ -787,6 +816,8 @@ def install(
     gitignore: bool,
     hooks_only: bool,
     skills_only: bool,
+    codex_skills_only: bool,
+    mode: str | None,
 ) -> None:
     """Install filigree into the current project.
 
@@ -799,6 +830,7 @@ def install(
         install_claude_code_hooks,
         install_claude_code_mcp,
         install_codex_mcp,
+        install_codex_skills,
         install_skills,
     )
 
@@ -808,13 +840,30 @@ def install(
         click.echo(f"No {FILIGREE_DIR_NAME}/ found. Run 'filigree init' first.", err=True)
         sys.exit(1)
 
+    # Update mode in config if explicitly provided
+    if mode is not None:
+        config = read_config(filigree_dir)
+        config["mode"] = mode
+        write_config(filigree_dir, config)
+
+    # Resolve effective mode (explicit flag > config > default)
+    mode = mode or get_mode(filigree_dir)
+
     project_root = filigree_dir.parent
-    install_all = not any([claude_code, codex, claude_md, agents_md, gitignore, hooks_only, skills_only])
+    install_all = not any([claude_code, codex, claude_md, agents_md, gitignore, hooks_only, skills_only, codex_skills_only])
 
     results: list[tuple[str, bool, str]] = []
+    server_port = 8377
+    if mode == "server":
+        try:
+            from filigree.server import read_server_config
+
+            server_port = read_server_config().port
+        except Exception:
+            logging.getLogger(__name__).debug("Failed to read server config port; defaulting to 8377", exc_info=True)
 
     if install_all or claude_code:
-        ok, msg = install_claude_code_mcp(project_root)
+        ok, msg = install_claude_code_mcp(project_root, mode=mode, server_port=server_port)
         results.append(("Claude Code MCP", ok, msg))
 
     if install_all or codex:
@@ -840,6 +889,23 @@ def install(
     if install_all or claude_code or skills_only:
         ok, msg = install_skills(project_root)
         results.append(("Claude Code skills", ok, msg))
+
+    if install_all or codex or codex_skills_only:
+        ok, msg = install_codex_skills(project_root)
+        results.append(("Codex skills", ok, msg))
+
+    # Server mode: register project in server.json
+    if mode == "server":
+        try:
+            from filigree.server import daemon_status, register_project
+
+            register_project(filigree_dir)
+            results.append(("Server registration", True, "Registered in server.json"))
+            status = daemon_status()
+            if not status.running:
+                click.echo('\nNote: start the daemon with "filigree server start"')
+        except Exception as e:
+            results.append(("Server registration", False, str(e)))
 
     for name, ok, msg in results:
         icon = "OK" if ok else "!!"
@@ -919,35 +985,57 @@ def metrics(as_json: bool, days: int) -> None:
 @cli.command()
 @click.option("--port", default=8377, type=int, help="Server port (default 8377)")
 @click.option("--no-browser", is_flag=True, help="Don't auto-open browser")
-def dashboard(port: int, no_browser: bool) -> None:
+@click.option("--server-mode", is_flag=True, help="Multi-project server mode (reads server.json)")
+def dashboard(port: int, no_browser: bool, server_mode: bool) -> None:
     """Launch the web dashboard (requires filigree[dashboard])."""
     try:
         from filigree.dashboard import main as dashboard_main
     except ImportError:
         click.echo('Dashboard requires extra dependencies. Install with: pip install "filigree[dashboard]"', err=True)
         sys.exit(1)
-    dashboard_main(port=port, no_browser=no_browser)
+
+    pid_claimed = False
+    current_pid = os.getpid()
+    if server_mode:
+        from filigree.server import claim_current_process_as_daemon
+
+        pid_claimed = claim_current_process_as_daemon(port=port)
+    try:
+        dashboard_main(port=port, no_browser=no_browser, server_mode=server_mode)
+    finally:
+        if server_mode and pid_claimed:
+            from filigree.server import release_daemon_pid_if_owned
+
+            release_daemon_pid_if_owned(current_pid)
 
 
 @cli.command("session-context")
 def session_context() -> None:
     """Output project snapshot for Claude Code session context."""
-    from filigree.hooks import generate_session_context
+    try:
+        from filigree.hooks import generate_session_context
 
-    context = generate_session_context()
-    if context:
-        click.echo(context)
+        context = generate_session_context()
+        if context:
+            click.echo(context)
+    except Exception:
+        logging.getLogger(__name__).warning("session-context hook failed", exc_info=True)
+        click.echo("Warning: session-context hook failed (run with -v for details)", err=True)
 
 
 @cli.command("ensure-dashboard")
-@click.option("--port", default=8377, type=int, help="Dashboard port (default 8377)")
-def ensure_dashboard_cmd(port: int) -> None:
+@click.option("--port", default=None, type=int, help="Dashboard port override (server mode)")
+def ensure_dashboard_cmd(port: int | None) -> None:
     """Ensure the filigree dashboard is running."""
-    from filigree.hooks import ensure_dashboard_running
+    try:
+        from filigree.hooks import ensure_dashboard_running
 
-    message = ensure_dashboard_running(port=port)
-    if message:
-        click.echo(message)
+        message = ensure_dashboard_running(port=port)
+        if message:
+            click.echo(message)
+    except Exception:
+        logging.getLogger(__name__).warning("ensure-dashboard hook failed", exc_info=True)
+        click.echo("Warning: ensure-dashboard hook failed (run with -v for details)", err=True)
 
 
 @cli.command("critical-path")
@@ -1006,7 +1094,7 @@ def import_data(input_file: str, merge: bool) -> None:
     with _get_db() as db:
         try:
             count = db.import_jsonl(input_file, merge=merge)
-        except (json_mod.JSONDecodeError, KeyError, ValueError, sqlite3.IntegrityError) as e:
+        except (json_mod.JSONDecodeError, KeyError, ValueError, sqlite3.IntegrityError, OSError) as e:
             click.echo(f"Import failed: {e}", err=True)
             sys.exit(1)
         _refresh_summary(db)
@@ -1014,7 +1102,7 @@ def import_data(input_file: str, merge: bool) -> None:
 
 
 @cli.command("archive")
-@click.option("--days", default=30, type=int, help="Archive issues closed more than N days ago (default: 30)")
+@click.option("--days", default=30, type=click.IntRange(min=0), help="Archive issues closed more than N days ago (default: 30)")
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON")
 @click.pass_context
 def archive(ctx: click.Context, days: int, as_json: bool) -> None:
@@ -1033,8 +1121,25 @@ def archive(ctx: click.Context, days: int, as_json: bool) -> None:
         _refresh_summary(db)
 
 
+@cli.command("clean-stale-findings")
+@click.option("--days", default=30, type=click.IntRange(min=0), help="Mark as fixed if unseen for more than N days (default: 30)")
+@click.option("--scan-source", default=None, type=str, help="Only clean findings from this scan source")
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+@click.pass_context
+def clean_stale_findings(ctx: click.Context, days: int, scan_source: str | None, as_json: bool) -> None:
+    """Move stale unseen_in_latest findings to fixed status."""
+    with _get_db() as db:
+        result = db.clean_stale_findings(days=days, scan_source=scan_source, actor=ctx.obj["actor"])
+        if as_json:
+            click.echo(json_mod.dumps(result))
+        elif result["findings_fixed"] > 0:
+            click.echo(f"Fixed {result['findings_fixed']} stale findings (unseen > {days} days)")
+        else:
+            click.echo("No stale findings to clean")
+
+
 @cli.command("compact")
-@click.option("--keep", default=50, type=int, help="Keep N most recent events per archived issue (default: 50)")
+@click.option("--keep", default=50, type=click.IntRange(min=0), help="Keep N most recent events per archived issue (default: 50)")
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON")
 def compact(keep: int, as_json: bool) -> None:
     """Compact event history for archived issues."""
@@ -1149,9 +1254,7 @@ def type_info(type_name: str, as_json: bool) -> None:
                     }
                     for t in tpl.transitions
                 ],
-                "fields_schema": [
-                    {"name": f.name, "type": f.type, "description": f.description} for f in tpl.fields_schema
-                ],
+                "fields_schema": [{"name": f.name, "type": f.type, "description": f.description} for f in tpl.fields_schema],
             }
             click.echo(json_mod.dumps(data, indent=2))
             return
@@ -1370,13 +1473,20 @@ def claim_next(
 ) -> None:
     """Claim the highest-priority ready issue matching filters."""
     with _get_db() as db:
-        issue = db.claim_next(
-            assignee,
-            type_filter=type_filter,
-            priority_min=priority_min,
-            priority_max=priority_max,
-            actor=ctx.obj["actor"],
-        )
+        try:
+            issue = db.claim_next(
+                assignee,
+                type_filter=type_filter,
+                priority_min=priority_min,
+                priority_max=priority_max,
+                actor=ctx.obj["actor"],
+            )
+        except ValueError as e:
+            if as_json:
+                click.echo(json_mod.dumps({"error": str(e)}))
+            else:
+                click.echo(f"Error: {e}", err=True)
+            sys.exit(1)
         if issue is None:
             if as_json:
                 click.echo(json_mod.dumps({"status": "empty"}))
@@ -1533,9 +1643,7 @@ def batch_close(ctx: click.Context, issue_ids: tuple[str, ...], reason: str, as_
             click.echo(
                 json_mod.dumps(
                     {
-                        "closed": [
-                            {"id": i.id, "title": i.title, "priority": i.priority, "type": i.type} for i in closed
-                        ],
+                        "closed": [{"id": i.id, "title": i.title, "priority": i.priority, "type": i.type} for i in closed],
                         "errors": errors,
                     },
                     indent=2,
@@ -1548,6 +1656,72 @@ def batch_close(ctx: click.Context, issue_ids: tuple[str, ...], reason: str, as_
             for err in errors:
                 click.echo(f"  Error {err['id']}: {err['error']}", err=True)
             click.echo(f"Closed {len(closed)}/{len(issue_ids)} issues")
+        _refresh_summary(db)
+
+
+@cli.command("batch-add-label")
+@click.argument("label_name")
+@click.argument("issue_ids", nargs=-1, required=True)
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+def batch_add_label(label_name: str, issue_ids: tuple[str, ...], as_json: bool) -> None:
+    """Add the same label to multiple issues."""
+    with _get_db() as db:
+        labeled, errors = db.batch_add_label(list(issue_ids), label=label_name)
+
+        if as_json:
+            click.echo(
+                json_mod.dumps(
+                    {
+                        "labeled": labeled,
+                        "errors": errors,
+                    },
+                    indent=2,
+                    default=str,
+                )
+            )
+        else:
+            for row in labeled:
+                if row["status"] == "added":
+                    click.echo(f"  Added label '{label_name}' to {row['id']}")
+                else:
+                    click.echo(f"  Label '{label_name}' already on {row['id']}")
+            for err in errors:
+                click.echo(f"  Error {err['id']}: {err['error']}", err=True)
+            click.echo(f"Labeled {len(labeled)}/{len(issue_ids)} issues")
+        _refresh_summary(db)
+
+
+@cli.command("batch-add-comment")
+@click.argument("text")
+@click.argument("issue_ids", nargs=-1, required=True)
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+@click.pass_context
+def batch_add_comment(ctx: click.Context, text: str, issue_ids: tuple[str, ...], as_json: bool) -> None:
+    """Add the same comment to multiple issues."""
+    with _get_db() as db:
+        commented, errors = db.batch_add_comment(
+            list(issue_ids),
+            text=text,
+            author=ctx.obj["actor"],
+        )
+
+        if as_json:
+            click.echo(
+                json_mod.dumps(
+                    {
+                        "commented": commented,
+                        "errors": errors,
+                    },
+                    indent=2,
+                    default=str,
+                )
+            )
+        else:
+            for row in commented:
+                click.echo(f"  Added comment {row['comment_id']} to {row['id']}")
+            for err in errors:
+                click.echo(f"  Error {err['id']}: {err['error']}", err=True)
+            click.echo(f"Commented on {len(commented)}/{len(issue_ids)} issues")
         _refresh_summary(db)
 
 
@@ -1628,9 +1802,7 @@ def explain_state(type_name: str, state_name: str, as_json: bool) -> None:
             click.echo(f"Unknown state '{state_name}' for type '{type_name}'", err=True)
             sys.exit(1)
 
-        inbound = [
-            {"from": t.from_state, "enforcement": t.enforcement} for t in tpl.transitions if t.to_state == state_name
-        ]
+        inbound = [{"from": t.from_state, "enforcement": t.enforcement} for t in tpl.transitions if t.to_state == state_name]
         outbound: list[dict[str, Any]] = [
             {"to": t.to_state, "enforcement": t.enforcement, "requires_fields": list(t.requires_fields)}
             for t in tpl.transitions
@@ -1671,6 +1843,127 @@ def explain_state(type_name: str, state_name: str, as_json: bool) -> None:
             click.echo("\nNo outbound transitions (terminal state)")
         if required_fields:
             click.echo(f"\nRequired fields at this state: {', '.join(required_fields)}")
+
+
+# ---------------------------------------------------------------------------
+# Server daemon commands
+# ---------------------------------------------------------------------------
+
+
+def _reload_server_daemon_if_running() -> tuple[bool, str]:
+    """POST /api/reload to a running daemon so it picks up server.json changes."""
+    from filigree.server import daemon_status
+
+    status = daemon_status()
+    if not status.running or status.port is None:
+        return True, "daemon_not_running"
+
+    import urllib.error
+    import urllib.request
+
+    req = urllib.request.Request(
+        f"http://127.0.0.1:{status.port}/api/reload",
+        method="POST",
+        data=b"",
+        headers={"Content-Type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=2) as resp:  # noqa: S310
+            if resp.status >= 400:
+                return False, f"daemon reload failed with HTTP {resp.status}"
+    except urllib.error.HTTPError as e:
+        return False, f"daemon reload failed with HTTP {e.code}"
+    except (urllib.error.URLError, TimeoutError, OSError) as e:
+        return False, f"daemon reload request failed: {e}"
+    return True, "daemon_reloaded"
+
+
+@cli.group()
+def server() -> None:
+    """Manage the filigree server daemon."""
+
+
+@server.command("start")
+@click.option("--port", default=None, type=int, help="Override port")
+def server_start(port: int | None) -> None:
+    """Start the filigree daemon."""
+    from filigree.server import start_daemon
+
+    result = start_daemon(port=port)
+    click.echo(result.message)
+    if not result.success:
+        sys.exit(1)
+
+
+@server.command("stop")
+def server_stop() -> None:
+    """Stop the filigree daemon."""
+    from filigree.server import stop_daemon
+
+    result = stop_daemon()
+    click.echo(result.message)
+    if not result.success:
+        sys.exit(1)
+
+
+@server.command("status")
+def server_status_cmd() -> None:
+    """Show daemon status."""
+    from filigree.server import daemon_status
+
+    status = daemon_status()
+    if status.running:
+        click.echo(f"Filigree daemon running (pid {status.pid}) on port {status.port}")
+        click.echo(f"  Projects: {status.project_count}")
+    else:
+        click.echo("Filigree daemon is not running")
+
+
+@server.command("register")
+@click.argument("path", default=".", type=click.Path(exists=True))
+def server_register(path: str) -> None:
+    """Register a project with the server."""
+    from filigree.server import register_project
+
+    project_path = Path(path).resolve()
+    filigree_dir = project_path / ".filigree" if project_path.name != ".filigree" else project_path
+    if not filigree_dir.is_dir():
+        click.echo(f"No .filigree/ found at {project_path}", err=True)
+        sys.exit(1)
+    try:
+        register_project(filigree_dir)
+    except Exception as e:
+        click.echo(str(e), err=True)
+        sys.exit(1)
+    click.echo(f"Registered {filigree_dir}")
+    ok, reason = _reload_server_daemon_if_running()
+    if not ok:
+        click.echo(f"Warning: {reason}", err=True)
+        sys.exit(1)
+    if reason == "daemon_reloaded":
+        click.echo("Reloaded running daemon")
+
+
+@server.command("unregister")
+@click.argument("path", default=".", type=click.Path())
+def server_unregister(path: str) -> None:
+    """Unregister a project from the server."""
+    from filigree.server import unregister_project
+
+    project_path = Path(path).resolve()
+    filigree_dir = project_path / ".filigree" if project_path.name != ".filigree" else project_path
+    try:
+        unregister_project(filigree_dir)
+    except Exception as e:
+        click.echo(str(e), err=True)
+        sys.exit(1)
+    click.echo(f"Unregistered {filigree_dir}")
+    ok, reason = _reload_server_daemon_if_running()
+    if not ok:
+        click.echo(f"Warning: {reason}", err=True)
+        sys.exit(1)
+    if reason == "daemon_reloaded":
+        click.echo("Reloaded running daemon")
 
 
 if __name__ == "__main__":

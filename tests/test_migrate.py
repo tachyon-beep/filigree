@@ -180,8 +180,7 @@ class TestMigrationPreservesZeroValues:
             );
         """)
         conn.execute(
-            "INSERT INTO issues (id, title, estimated_minutes, quality_score, created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT INTO issues (id, title, estimated_minutes, quality_score, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
             ("iss-z", "Zero fields", 0, "0", "2026-01-01T00:00:00", "2026-01-01T00:00:00"),
         )
         conn.commit()
@@ -338,6 +337,241 @@ class TestMigrationAtomicity:
         original_bulk_commit()  # commit anything that might have leaked
         issues = db.list_issues(limit=10000)
         assert not any(i.id == "bd-ok1" for i in issues)
+
+
+class TestMigrationPriorityCoercion:
+    """Bug filigree-fa9ddf: non-numeric priority must not crash migration."""
+
+    _BEADS_SCHEMA = """
+        CREATE TABLE issues (
+            id TEXT PRIMARY KEY, title TEXT, status TEXT DEFAULT 'open',
+            priority INTEGER DEFAULT 2, issue_type TEXT DEFAULT 'task',
+            parent_id TEXT, parent_epic TEXT, assignee TEXT DEFAULT '',
+            created_at TEXT, updated_at TEXT, closed_at TEXT, deleted_at TEXT,
+            description TEXT DEFAULT '', notes TEXT DEFAULT '',
+            metadata TEXT DEFAULT 'null',
+            design TEXT DEFAULT '', acceptance_criteria TEXT DEFAULT '',
+            estimated_minutes INTEGER DEFAULT 0, close_reason TEXT DEFAULT '',
+            external_ref TEXT DEFAULT '', mol_type TEXT DEFAULT '',
+            work_type TEXT DEFAULT '', quality_score TEXT DEFAULT '',
+            source_system TEXT DEFAULT '', event_kind TEXT DEFAULT '',
+            actor TEXT DEFAULT '', target TEXT DEFAULT '',
+            payload TEXT DEFAULT '', source_repo TEXT DEFAULT '',
+            await_type TEXT DEFAULT '', await_id TEXT DEFAULT '',
+            role_type TEXT DEFAULT '', rig TEXT DEFAULT '',
+            spec_id TEXT DEFAULT '', wisp_type TEXT DEFAULT '',
+            sender TEXT DEFAULT ''
+        );
+        CREATE TABLE dependencies (
+            issue_id TEXT, depends_on_id TEXT, type TEXT DEFAULT 'blocks',
+            PRIMARY KEY (issue_id, depends_on_id)
+        );
+    """
+
+    def test_string_priority_falls_back_to_default(self, tmp_path: Path, db: FiligreeDB) -> None:
+        db_path = tmp_path / "priority_beads.db"
+        conn = sqlite3.connect(str(db_path))
+        conn.executescript(self._BEADS_SCHEMA)
+        now = "2026-01-01T00:00:00+00:00"
+        conn.execute(
+            "INSERT INTO issues (id, title, priority, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+            ("iss-str", "String priority", "high", now, now),
+        )
+        conn.commit()
+        conn.close()
+
+        count = migrate_from_beads(db_path, db)
+        assert count == 1
+        issue = db.get_issue("iss-str")
+        assert issue.priority == 2  # default fallback
+
+    def test_float_string_priority_coerced(self, tmp_path: Path, db: FiligreeDB) -> None:
+        db_path = tmp_path / "priority_beads.db"
+        conn = sqlite3.connect(str(db_path))
+        conn.executescript(self._BEADS_SCHEMA)
+        now = "2026-01-01T00:00:00+00:00"
+        conn.execute(
+            "INSERT INTO issues (id, title, priority, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+            ("iss-flt", "Float priority", "1.7", now, now),
+        )
+        conn.commit()
+        conn.close()
+
+        count = migrate_from_beads(db_path, db)
+        assert count == 1
+        issue = db.get_issue("iss-flt")
+        assert issue.priority == 1  # truncated to int, clamped
+
+    def test_out_of_range_priority_clamped(self, tmp_path: Path, db: FiligreeDB) -> None:
+        db_path = tmp_path / "priority_beads.db"
+        conn = sqlite3.connect(str(db_path))
+        conn.executescript(self._BEADS_SCHEMA)
+        now = "2026-01-01T00:00:00+00:00"
+        conn.execute(
+            "INSERT INTO issues (id, title, priority, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+            ("iss-big", "Big priority", 99, now, now),
+        )
+        conn.commit()
+        conn.close()
+
+        count = migrate_from_beads(db_path, db)
+        assert count == 1
+        assert db.get_issue("iss-big").priority == 4  # clamped to max
+
+
+class TestMigrationTimestampNormalization:
+    """Bug filigree-40fe9c: missing timestamps must not be written as empty strings."""
+
+    _BEADS_SCHEMA = """
+        CREATE TABLE issues (
+            id TEXT PRIMARY KEY, title TEXT, status TEXT DEFAULT 'open',
+            priority INTEGER DEFAULT 2, issue_type TEXT DEFAULT 'task',
+            parent_id TEXT, parent_epic TEXT, assignee TEXT DEFAULT '',
+            created_at TEXT, updated_at TEXT, closed_at TEXT, deleted_at TEXT,
+            description TEXT DEFAULT '', notes TEXT DEFAULT '',
+            metadata TEXT DEFAULT 'null',
+            design TEXT DEFAULT '', acceptance_criteria TEXT DEFAULT '',
+            estimated_minutes INTEGER DEFAULT 0, close_reason TEXT DEFAULT '',
+            external_ref TEXT DEFAULT '', mol_type TEXT DEFAULT '',
+            work_type TEXT DEFAULT '', quality_score TEXT DEFAULT '',
+            source_system TEXT DEFAULT '', event_kind TEXT DEFAULT '',
+            actor TEXT DEFAULT '', target TEXT DEFAULT '',
+            payload TEXT DEFAULT '', source_repo TEXT DEFAULT '',
+            await_type TEXT DEFAULT '', await_id TEXT DEFAULT '',
+            role_type TEXT DEFAULT '', rig TEXT DEFAULT '',
+            spec_id TEXT DEFAULT '', wisp_type TEXT DEFAULT '',
+            sender TEXT DEFAULT ''
+        );
+        CREATE TABLE dependencies (
+            issue_id TEXT, depends_on_id TEXT, type TEXT DEFAULT 'blocks',
+            PRIMARY KEY (issue_id, depends_on_id)
+        );
+        CREATE TABLE events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            issue_id TEXT NOT NULL, event_type TEXT, actor TEXT DEFAULT '',
+            old_value TEXT, new_value TEXT,
+            comment TEXT DEFAULT '', created_at TEXT
+        );
+        CREATE TABLE comments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            issue_id TEXT NOT NULL, author TEXT DEFAULT '',
+            text TEXT NOT NULL, created_at TEXT
+        );
+    """
+
+    def test_null_created_at_gets_valid_timestamp(self, tmp_path: Path, db: FiligreeDB) -> None:
+        db_path = tmp_path / "ts_beads.db"
+        conn = sqlite3.connect(str(db_path))
+        conn.executescript(self._BEADS_SCHEMA)
+        # Insert with NULL timestamps (created_at and updated_at both NULL)
+        conn.execute(
+            "INSERT INTO issues (id, title) VALUES (?, ?)",
+            ("iss-null", "Null timestamps"),
+        )
+        conn.commit()
+        conn.close()
+
+        count = migrate_from_beads(db_path, db)
+        assert count == 1
+        row = db.conn.execute("SELECT created_at, updated_at FROM issues WHERE id = ?", ("iss-null",)).fetchone()
+        # Must NOT be empty string
+        assert row["created_at"] != ""
+        assert row["updated_at"] != ""
+        # Must be valid ISO-8601 (parseable)
+        from datetime import datetime
+
+        datetime.fromisoformat(row["created_at"])
+        datetime.fromisoformat(row["updated_at"])
+
+    def test_empty_string_created_at_gets_valid_timestamp(self, tmp_path: Path, db: FiligreeDB) -> None:
+        db_path = tmp_path / "ts_beads.db"
+        conn = sqlite3.connect(str(db_path))
+        conn.executescript(self._BEADS_SCHEMA)
+        conn.execute(
+            "INSERT INTO issues (id, title, created_at, updated_at) VALUES (?, ?, ?, ?)",
+            ("iss-empty", "Empty timestamps", "", ""),
+        )
+        conn.commit()
+        conn.close()
+
+        count = migrate_from_beads(db_path, db)
+        assert count == 1
+        row = db.conn.execute("SELECT created_at, updated_at FROM issues WHERE id = ?", ("iss-empty",)).fetchone()
+        assert row["created_at"] != ""
+        assert row["updated_at"] != ""
+        from datetime import datetime
+
+        datetime.fromisoformat(row["created_at"])
+        datetime.fromisoformat(row["updated_at"])
+
+    def test_event_null_timestamp_gets_valid_fallback(self, tmp_path: Path, db: FiligreeDB) -> None:
+        db_path = tmp_path / "ts_beads.db"
+        conn = sqlite3.connect(str(db_path))
+        conn.executescript(self._BEADS_SCHEMA)
+        now = "2026-01-01T00:00:00+00:00"
+        conn.execute(
+            "INSERT INTO issues (id, title, created_at, updated_at) VALUES (?, ?, ?, ?)",
+            ("iss-ev", "Has events", now, now),
+        )
+        # Event with NULL created_at
+        conn.execute(
+            "INSERT INTO events (issue_id, event_type, created_at) VALUES (?, ?, ?)",
+            ("iss-ev", "created", None),
+        )
+        conn.commit()
+        conn.close()
+
+        count = migrate_from_beads(db_path, db)
+        assert count == 1
+        events = db.conn.execute("SELECT created_at FROM events WHERE issue_id = ?", ("iss-ev",)).fetchall()
+        for evt in events:
+            assert evt["created_at"] != ""
+            from datetime import datetime
+
+            datetime.fromisoformat(evt["created_at"])
+
+    def test_comment_null_timestamp_gets_valid_fallback(self, tmp_path: Path, db: FiligreeDB) -> None:
+        db_path = tmp_path / "ts_beads.db"
+        conn = sqlite3.connect(str(db_path))
+        conn.executescript(self._BEADS_SCHEMA)
+        now = "2026-01-01T00:00:00+00:00"
+        conn.execute(
+            "INSERT INTO issues (id, title, created_at, updated_at) VALUES (?, ?, ?, ?)",
+            ("iss-cmt", "Has comments", now, now),
+        )
+        conn.execute(
+            "INSERT INTO comments (issue_id, author, text, created_at) VALUES (?, ?, ?, ?)",
+            ("iss-cmt", "alice", "no timestamp", None),
+        )
+        conn.commit()
+        conn.close()
+
+        count = migrate_from_beads(db_path, db)
+        assert count == 1
+        comments = db.get_comments("iss-cmt")
+        assert len(comments) == 1
+        assert comments[0]["created_at"] != ""
+        from datetime import datetime
+
+        datetime.fromisoformat(comments[0]["created_at"])
+
+    def test_valid_timestamps_preserved(self, tmp_path: Path, db: FiligreeDB) -> None:
+        """Existing valid timestamps must pass through unchanged."""
+        db_path = tmp_path / "ts_beads.db"
+        conn = sqlite3.connect(str(db_path))
+        conn.executescript(self._BEADS_SCHEMA)
+        ts = "2026-01-15T10:30:00+00:00"
+        conn.execute(
+            "INSERT INTO issues (id, title, created_at, updated_at) VALUES (?, ?, ?, ?)",
+            ("iss-ok", "Good timestamps", ts, ts),
+        )
+        conn.commit()
+        conn.close()
+
+        migrate_from_beads(db_path, db)
+        row = db.conn.execute("SELECT created_at, updated_at FROM issues WHERE id = ?", ("iss-ok",)).fetchone()
+        assert row["created_at"] == ts
+        assert row["updated_at"] == ts
 
 
 class TestMigrationEdgeCases:

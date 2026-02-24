@@ -18,6 +18,33 @@ import pytest
 from filigree.core import FiligreeDB
 
 
+class TestClaimNextExhaustion:
+    """Bug fix: filigree-2e5383 — claim_next logs when all candidates fail."""
+
+    def test_claim_next_no_warning_when_no_candidates(self, db: FiligreeDB) -> None:
+        """When no ready issues exist, claim_next returns None without warning."""
+        issue = db.create_issue("Target")
+        db.claim_issue(issue.id, assignee="agent1")
+
+        result = db.claim_next("agent2")
+        assert result is None
+
+    def test_claim_next_logs_on_race_exhaustion(self, db: FiligreeDB) -> None:
+        """When claim_issue raises ValueError for all candidates, warn about exhaustion."""
+        db.create_issue("Target")
+
+        # Simulate claim_issue always raising ValueError (race condition)
+        with (
+            patch.object(db, "claim_issue", side_effect=ValueError("race")),
+            patch("filigree.core.logger") as mock_logger,
+        ):
+            result = db.claim_next("agent2")
+
+        assert result is None
+        mock_logger.warning.assert_called_once()
+        assert "failed to claim" in str(mock_logger.warning.call_args)
+
+
 class TestClaimRaceCondition:
     """Bug fix: filigree-be24de — claim_issue race condition."""
 
@@ -111,8 +138,7 @@ class TestCreateIssuePartialWriteRollback:
 
         issues_after = len(db.list_issues())
         assert issues_after == issues_before, (
-            f"Expected {issues_before} issues, got {issues_after} — "
-            "orphaned issue was committed after failed create_issue"
+            f"Expected {issues_before} issues, got {issues_after} — orphaned issue was committed after failed create_issue"
         )
 
     def test_invalid_deps_no_orphan_events(self, db: FiligreeDB) -> None:
@@ -127,8 +153,7 @@ class TestCreateIssuePartialWriteRollback:
 
         events_after = db.conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]
         assert events_after == events_before, (
-            f"Expected {events_before} events, got {events_after} — "
-            "orphaned 'created' event was committed after failed create_issue"
+            f"Expected {events_before} events, got {events_after} — orphaned 'created' event was committed after failed create_issue"
         )
 
     def test_invalid_deps_no_orphan_labels(self, db: FiligreeDB) -> None:
@@ -136,14 +161,13 @@ class TestCreateIssuePartialWriteRollback:
         labels_before = db.conn.execute("SELECT COUNT(*) FROM labels").fetchone()[0]
 
         with pytest.raises(ValueError, match="Invalid dependency IDs"):
-            db.create_issue("Label orphan", labels=["bug", "urgent"], deps=["missing-id"])
+            db.create_issue("Label orphan", labels=["defect", "urgent"], deps=["missing-id"])
 
         db.conn.commit()
 
         labels_after = db.conn.execute("SELECT COUNT(*) FROM labels").fetchone()[0]
         assert labels_after == labels_before, (
-            f"Expected {labels_before} labels, got {labels_after} — "
-            "orphaned labels were committed after failed create_issue"
+            f"Expected {labels_before} labels, got {labels_after} — orphaned labels were committed after failed create_issue"
         )
 
 
@@ -163,8 +187,7 @@ class TestUpdateIssuePartialEventRollback:
 
         events_after = db.conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]
         assert events_after == events_before, (
-            f"Expected {events_before} events, got {events_after} — "
-            "orphaned title_changed event was committed after failed update_issue"
+            f"Expected {events_before} events, got {events_after} — orphaned title_changed event was committed after failed update_issue"
         )
 
         # Title should remain unchanged

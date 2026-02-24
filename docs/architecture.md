@@ -15,9 +15,11 @@ Every filigree project has a `.filigree/` directory at its root, discovered by w
 
 ```
 .filigree/
-  config.json    # Project config: prefix, version, enabled_packs
+  config.json    # Project config: prefix, version, mode, enabled_packs
   filigree.db    # SQLite database (WAL mode)
   context.md     # Auto-generated project summary, refreshed on every mutation
+  scanners/      # Scanner registry (*.toml), optional
+  ephemeral.pid  # Runtime PID metadata in ethereal mode, optional
   templates/     # Project-local workflow template overrides (optional)
   packs/         # Installed workflow packs (optional)
 ```
@@ -28,12 +30,14 @@ Every filigree project has a `.filigree/` directory at its root, discovered by w
 {
   "prefix": "myproj",
   "version": 1,
+  "mode": "ethereal",
   "enabled_packs": ["core", "planning"]
 }
 ```
 
 - **prefix** — used in issue IDs (`{prefix}-{6hex}`, e.g., `myproj-a3f9b2`)
 - **version** — config format version
+- **mode** — installation mode (`ethereal` or `server`)
 - **enabled_packs** — which workflow packs are active
 
 ## Source Layout
@@ -43,12 +47,16 @@ src/filigree/
   __init__.py        # Package version and metadata
   core.py            # FiligreeDB class, SQLite schema, Issue dataclass
   cli.py             # Click CLI (all commands)
-  mcp_server.py      # MCP server (43 tools, 1 resource, 1 prompt)
+  mcp_server.py      # MCP server (53 tools, 1 resource, 1 prompt)
   templates.py       # Workflow template engine (registry, validation, transitions)
   templates_data.py  # Built-in template definitions (24 types across 9 packs)
   summary.py         # context.md generator
   analytics.py       # Flow metrics (cycle time, lead time, throughput)
   install.py         # MCP config, CLAUDE.md injection, doctor checks
+  hooks.py           # Session hooks (context + dashboard bootstrap)
+  server.py          # Persistent daemon config and lifecycle helpers
+  ephemeral.py       # Ethereal-mode PID and process lifecycle helpers
+  scanners.py        # Scanner registry and command validation
   migrate.py         # Beads-to-filigree migration
   migrations.py      # Schema migration framework (registry, runner, SQLite helpers)
   dashboard.py       # FastAPI web dashboard
@@ -71,7 +79,7 @@ src/filigree/
 
 ## Database Schema
 
-SQLite with WAL mode. Schema version 1.
+SQLite with WAL mode. Schema version 4.
 
 ### Tables
 
@@ -195,7 +203,7 @@ Filigree finds the project root by walking up the filesystem looking for `.filig
 
 - No environment variables to set
 - No config files to parse
-- No server URLs to resolve
+- No server URLs to resolve in default `ethereal` mode
 - Works from any subdirectory of the project
 
 ### Template-Driven Validation

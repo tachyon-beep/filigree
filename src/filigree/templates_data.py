@@ -1,7 +1,7 @@
 # src/filigree/templates_data.py
 """Built-in workflow pack definitions.
 
-This module contains the data definitions for all built-in packs (WFT-NFR-013).
+This module contains the data definitions for all built-in packs.
 Logic lives in templates.py; this file is pure data.
 
 Each pack is a JSON-compatible dict matching the pack schema (design Section 4.2).
@@ -804,8 +804,7 @@ _RISK_PACK: dict[str, Any] = {
         ],
         "common_mistakes": [
             "Skipping assessment -- going straight from identified to mitigating loses the scoring data",
-            "Accepting risks without rationale -- the hard gate exists because "
-            "undocumented acceptance is invisible risk",
+            "Accepting risks without rationale -- the hard gate exists because undocumented acceptance is invisible risk",
             "Creating mitigations without linking to a risk -- orphan mitigations have no context",
             "Never retiring old risks -- the risk list grows unbounded and becomes noise",
             "Treating ineffective mitigations as failures -- they are data; loop back to planned with a new approach",
@@ -1181,8 +1180,7 @@ _INCIDENT_PACK: dict[str, Any] = {
         "common_mistakes": [
             "Closing without root cause -- the hard gate exists because 'fixed it' is not a root cause",
             "Skipping postmortems on sev3/sev4 -- small incidents reveal systemic patterns",
-            "Postmortems without action items -- the hard gate requires them because insights without "
-            "actions change nothing",
+            "Postmortems without action items -- the hard gate requires them because insights without actions change nothing",
             "Not linking to the causing bug -- incident-to-bug traceability prevents repeat incidents",
             "Blame in postmortems -- keep them blameless; focus on contributing_factors, not people",
         ],
@@ -1541,7 +1539,7 @@ _RELEASE_PACK: dict[str, Any] = {
                 {"name": "testing", "category": "wip"},
                 {"name": "staged", "category": "wip"},
                 {"name": "released", "category": "done"},
-                {"name": "rolled_back", "category": "done"},
+                {"name": "rolled_back", "category": "wip"},
                 {"name": "cancelled", "category": "done"},
             ],
             "initial_state": "planning",
@@ -1580,7 +1578,7 @@ _RELEASE_PACK: dict[str, Any] = {
                     "description": "How to revert if the release fails",
                 },
             ],
-            "suggested_children": ["release_item"],
+            "suggested_children": ["release_item", "epic", "milestone", "task", "bug", "feature"],
             "suggested_labels": ["major", "minor", "patch", "hotfix"],
         },
         "release_item": {
@@ -1643,7 +1641,7 @@ _RELEASE_PACK: dict[str, Any] = {
         "state_diagram": (
             "release:      planning(O) --> development(W) --> frozen(W) --> testing(W) --> staged(W) --> released(D)\n"
             "                          \\-> cancelled(D) \\-> cancelled(D)\n"
-            "                             \\-> development(W) [unfreeze]       \\-> rolled_back(D)\n"
+            "                             \\-> development(W) [unfreeze]       \\-> rolled_back(W)\n"
             "                                  \\-> development(W) [fix]\n"
             "                                       \\-> development(W) [fix]\n"
             "              HARD: development-->frozen requires version\n"
