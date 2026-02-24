@@ -52,25 +52,13 @@ function readGraphTimeWindowPrefs() {
   }
 }
 
-function writeGraphTimeWindowPrefs(settings) {
-  try {
-    window.localStorage?.setItem(GRAPH_TIME_WINDOW_STORAGE_KEY, JSON.stringify(settings));
-  } catch (_e) {
-    // noop: localStorage might be unavailable in hardened contexts.
-  }
-}
-
-function getSavedGraphTimeWindowDays(projectKey) {
-  const prefs = readGraphTimeWindowPrefs();
-  return normalizeGraphTimeWindowDays(prefs[projectKey]);
-}
-
 function ensureGraphTimeWindowControl() {
   const select = document.getElementById("graphTimeWindow");
   if (!select) return DEFAULT_GRAPH_TIME_WINDOW_DAYS;
   const projectKey = getGraphProjectStorageKey();
   if (select.dataset.projectKey !== projectKey) {
-    select.value = String(getSavedGraphTimeWindowDays(projectKey));
+    const prefs = readGraphTimeWindowPrefs();
+    select.value = String(normalizeGraphTimeWindowDays(prefs[projectKey]));
     select.dataset.projectKey = projectKey;
   }
   const days = normalizeGraphTimeWindowDays(select.value);
@@ -84,7 +72,11 @@ function persistGraphTimeWindowDays(days) {
   const projectKey = getGraphProjectStorageKey();
   const prefs = readGraphTimeWindowPrefs();
   prefs[projectKey] = normalizeGraphTimeWindowDays(days);
-  writeGraphTimeWindowPrefs(prefs);
+  try {
+    window.localStorage?.setItem(GRAPH_TIME_WINDOW_STORAGE_KEY, JSON.stringify(prefs));
+  } catch (_e) {
+    // noop: localStorage might be unavailable in hardened contexts.
+  }
 }
 
 function issueWithinWindow(issue, windowDays) {
@@ -243,19 +235,22 @@ function updateGraphClearButtons() {
 }
 
 function updateGraphPerfState() {
+  const nodeCount = state.cy ? state.cy.nodes().length : 0;
+  const edgeCount = state.cy ? state.cy.edges().length : 0;
+  const countEl = document.getElementById("graphNodeEdgeCount");
+  if (countEl) {
+    countEl.textContent = `${nodeCount} nodes, ${edgeCount} edges`;
+  }
   const el = document.getElementById("graphPerfState");
   if (!el) return;
   const t = state.graphTelemetry || {};
   const queryMs = t.query_ms ?? "-";
   const renderMs = t.render_ms ?? "-";
-  const nodeCount = state.cy ? state.cy.nodes().length : 0;
-  const edgeCount = state.cy ? state.cy.edges().length : 0;
-  el.textContent = `${nodeCount} nodes, ${edgeCount} edges`;
   if (queryMs === "-" && renderMs === "-") {
-    el.title = "";
+    el.textContent = "";
     return;
   }
-  el.title = `Query ${queryMs}ms | Render ${renderMs}ms`;
+  el.textContent = `Query ${queryMs}ms | Render ${renderMs}ms`;
 }
 
 function maybeShowGraphDefaultPresetNotice(preset) {

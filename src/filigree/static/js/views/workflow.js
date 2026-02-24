@@ -10,6 +10,17 @@ import { escHtml, escJsSingle } from "../ui.js";
 const WORKFLOW_HIDDEN = { phase: 1, step: 1, work_package: 1, deliverable: 1 };
 
 /**
+ * Prettify a raw identifier for display: replace underscores/hyphens with
+ * spaces and title-case each word.
+ *   "in_progress" -> "In Progress"
+ *   "wont_fix"    -> "Wont Fix"
+ */
+function prettifyName(raw) {
+  if (!raw) return "";
+  return raw.replace(/[_-]/g, " ").replace(/\b\w/g, (ch) => ch.toUpperCase());
+}
+
+/**
  * Populate the workflow-type dropdown (once) then fetch the selected type's
  * template and render its state-machine graph.
  */
@@ -68,7 +79,7 @@ export function renderWorkflowGraph(template, stateCounts) {
     return {
       data: {
         id: s.name,
-        label: s.name + (count ? ` (${count})` : ""),
+        label: prettifyName(s.name) + (count ? ` (${count})` : ""),
         category: s.category,
         count,
       },

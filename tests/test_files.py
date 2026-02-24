@@ -1215,6 +1215,49 @@ class TestFileDetailCore:
         assert detail["summary"]["total_findings"] == 15
 
 
+class TestCreateIssuesExistingUnlinkedFailure:
+    """Test that create_issues=True propagates exceptions on existing unlinked findings."""
+
+    def test_create_issue_failure_propagates_on_existing_finding(self, db: FiligreeDB) -> None:
+        """When create_issues=True and creating a bug issue fails for an existing
+        unlinked finding, the exception propagates and scan writes are rolled back."""
+        from unittest.mock import patch
+
+        # First, ingest a finding without creating issues
+        db.process_scan_results(
+            scan_source="codex",
+            create_issues=False,
+            findings=[
+                {
+                    "path": "src/bad.py",
+                    "rule_id": "logic-error",
+                    "severity": "high",
+                    "message": "Off-by-one in loop",
+                    "line_start": 10,
+                },
+            ],
+        )
+
+        # Now re-ingest with create_issues=True, but patch create_issue to fail
+        with (
+            patch.object(db, "create_issue", side_effect=RuntimeError("DB write failed")),
+            pytest.raises(RuntimeError, match="DB write failed"),
+        ):
+            db.process_scan_results(
+                scan_source="codex",
+                create_issues=True,
+                findings=[
+                    {
+                        "path": "src/bad.py",
+                        "rule_id": "logic-error",
+                        "severity": "high",
+                        "message": "Off-by-one in loop",
+                        "line_start": 10,
+                    },
+                ],
+            )
+
+
 # ---------------------------------------------------------------------------
 # Migration tests
 # ---------------------------------------------------------------------------
@@ -2755,3 +2798,97 @@ class TestGetScanRunsCore:
             )
         runs = db.get_scan_runs(limit=2)
         assert len(runs) == 2
+
+
+class TestCreateIssuesPartialFailure:
+    """Test that create_issues=True handles mid-batch failures correctly.
+
+    When create_issues=True and the inner create_issue() fails mid-way
+    through a batch, process_scan_results raises the exception and rolls
+    back uncommitted scan data. Because create_issue() commits its own
+    transaction internally, earlier successful issues are already persisted
+    -- this is inherent to the current architecture.
+    """
+
+    def test_create_issue_failure_raises_and_rolls_back_uncommitted(self, db: FiligreeDB) -> None:
+        """When create_issues=True and bug creation fails for the second finding,
+        the exception propagates and uncommitted scan writes are rolled back.
+
+        The first finding's issue (committed by create_issue) persists, but
+        the second finding's file/finding data (uncommitted) does not.
+        """
+        from unittest.mock import patch
+
+        original_create = db.create_issue
+        call_count = 0
+
+        def failing_create(*args: object, **kwargs: object) -> object:
+            nonlocal call_count
+            call_count += 1
+            if call_count >= 2:
+                raise RuntimeError("Simulated issue creation failure")
+            return original_create(*args, **kwargs)
+
+        with (
+            patch.object(db, "create_issue", side_effect=failing_create),
+            pytest.raises(RuntimeError, match="Simulated issue creation failure"),
+        ):
+            db.process_scan_results(
+                scan_source="codex",
+                create_issues=True,
+                findings=[
+                    {
+                        "path": "src/a.py",
+                        "rule_id": "logic-error-1",
+                        "severity": "high",
+                        "message": "Off by one",
+                        "line_start": 10,
+                    },
+                    {
+                        "path": "src/b.py",
+                        "rule_id": "logic-error-2",
+                        "severity": "critical",
+                        "message": "Null deref",
+                        "line_start": 20,
+                    },
+                ],
+            )
+
+        # First finding's issue was committed by create_issue() -- it persists
+        issues = db.list_issues()
+        assert len(issues) == 1
+        assert "Off by one" in issues[0].title
+
+        # First finding's file/finding also committed (same txn as issue)
+        file_a = db.get_file_by_path("src/a.py")
+        assert file_a is not None
+
+        # Second finding's file was never committed -- rolled back
+        file_b = db.get_file_by_path("src/b.py")
+        assert file_b is None
+
+    def test_create_issues_succeeds_for_two_findings(self, db: FiligreeDB) -> None:
+        """Baseline: create_issues=True for multiple findings creates all issues."""
+        result = db.process_scan_results(
+            scan_source="codex",
+            create_issues=True,
+            findings=[
+                {
+                    "path": "src/a.py",
+                    "rule_id": "logic-error-1",
+                    "severity": "high",
+                    "message": "Off by one",
+                    "line_start": 10,
+                },
+                {
+                    "path": "src/b.py",
+                    "rule_id": "logic-error-2",
+                    "severity": "critical",
+                    "message": "Null deref",
+                    "line_start": 20,
+                },
+            ],
+        )
+        assert result["issues_created"] == 2
+        assert len(result["issue_ids"]) == 2
+        assert result["findings_created"] == 2

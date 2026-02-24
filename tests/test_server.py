@@ -16,6 +16,34 @@ from filigree.server import (
 )
 
 
+class TestServerConfigPortValidation:
+    """Task filigree-afbc13: ServerConfig __post_init__ port validation."""
+
+    def test_port_zero_raises(self) -> None:
+        with pytest.raises(ValueError, match="port must be between 1 and 65535"):
+            ServerConfig(port=0)
+
+    def test_port_negative_raises(self) -> None:
+        with pytest.raises(ValueError, match="port must be between 1 and 65535"):
+            ServerConfig(port=-1)
+
+    def test_port_above_max_raises(self) -> None:
+        with pytest.raises(ValueError, match="port must be between 1 and 65535"):
+            ServerConfig(port=65536)
+
+    def test_port_min_boundary_succeeds(self) -> None:
+        config = ServerConfig(port=1)
+        assert config.port == 1
+
+    def test_port_max_boundary_succeeds(self) -> None:
+        config = ServerConfig(port=65535)
+        assert config.port == 65535
+
+    def test_default_port_succeeds(self) -> None:
+        config = ServerConfig()
+        assert config.port == 8377
+
+
 class TestServerConfig:
     def test_default_config(self) -> None:
         config = ServerConfig()

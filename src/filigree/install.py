@@ -513,21 +513,13 @@ def install_claude_code_hooks(project_root: Path) -> tuple[bool, str]:
         try:
             raw = settings_path.read_text()
             parsed = json.loads(raw)
-            if isinstance(parsed, dict):
-                settings = parsed
-            else:
-                # Non-object JSON — back up and start fresh
-                backup = settings_path.with_suffix(".json.bak")
-                import shutil as _shutil
-
-                _shutil.copy2(settings_path, backup)
-                logger.warning("Non-object settings.json; backed up to %s", backup)
-        except json.JSONDecodeError:
+            if not isinstance(parsed, dict):
+                raise ValueError("settings.json is not a JSON object")
+            settings = parsed
+        except (json.JSONDecodeError, ValueError):
             backup = settings_path.with_suffix(".json.bak")
-            import shutil as _shutil
-
-            _shutil.copy2(settings_path, backup)
-            logger.warning("Corrupt settings.json; backed up to %s", backup)
+            shutil.copy2(settings_path, backup)
+            logger.warning("Malformed settings.json; backed up to %s", backup)
 
     # Resolve the filigree command tokens to build hook command strings.
     # shlex.join properly quotes tokens containing spaces so the resulting

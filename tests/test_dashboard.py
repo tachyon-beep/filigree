@@ -347,8 +347,11 @@ class TestGraphFrontendContracts:
 
     def test_graph_perf_state_user_facing_text_and_tooltip_timings(self) -> None:
         graph_js = (STATIC_DIR / "js" / "views" / "graph.js").read_text()
-        assert "el.textContent = `${nodeCount} nodes, ${edgeCount} edges`;" in graph_js
-        assert "el.title = `Query ${queryMs}ms | Render ${renderMs}ms`;" in graph_js
+        # Node/edge count moved to dedicated diagnostics element
+        assert 'document.getElementById("graphNodeEdgeCount")' in graph_js
+        assert "countEl.textContent = `${nodeCount} nodes, ${edgeCount} edges`;" in graph_js
+        # Timing now visible text, not tooltip
+        assert "el.textContent = `Query ${queryMs}ms | Render ${renderMs}ms`;" in graph_js
         assert "Perf q:" not in graph_js
 
     def test_v2_empty_status_categories_guard_returns_empty_graph(self) -> None:
@@ -2269,6 +2272,24 @@ class TestMultiProjectRouting:
             async with AsyncClient(transport=transport, base_url="http://test") as client:
                 resp = await client.get("/api/issues")
                 assert resp.status_code == 503
+        finally:
+            dash_module._project_store = None
+
+    async def test_empty_store_503_propagates_to_multiple_endpoints(self, tmp_path: Path) -> None:
+        """503 from _get_db() propagates to all project-scoped endpoints when no projects registered."""
+        empty_store = ProjectStore()
+        dash_module._project_store = empty_store
+        try:
+            app = create_app(server_mode=True)
+            transport = ASGITransport(app=app)
+            async with AsyncClient(transport=transport, base_url="http://test") as client:
+                # Verify multiple endpoints return 503 with correct detail message
+                for endpoint in ("/api/issues", "/api/stats", "/api/graph"):
+                    resp = await client.get(endpoint)
+                    assert resp.status_code == 503, f"{endpoint} returned {resp.status_code}, expected 503"
+                    body = resp.json()
+                    assert "detail" in body, f"{endpoint} missing 'detail' key"
+                    assert "No projects registered" in body["detail"]
         finally:
             dash_module._project_store = None
 

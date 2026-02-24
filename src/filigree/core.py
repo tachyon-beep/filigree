@@ -26,7 +26,7 @@ from collections import deque
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal, TypedDict
 
 if TYPE_CHECKING:
     from filigree.templates import TemplateRegistry, TransitionOption, ValidationResult
@@ -53,6 +53,34 @@ _REVERSIBLE_EVENTS = frozenset(
 _SKIP_EVENTS = frozenset({"transition_warning"})
 
 # ---------------------------------------------------------------------------
+# Constrained-string Literal types
+# ---------------------------------------------------------------------------
+
+Severity = Literal["critical", "high", "medium", "low", "info"]
+FindingStatus = Literal["open", "fixed", "false_positive", "wont_fix", "duplicate"]
+StatusCategory = Literal["open", "wip", "done"]
+
+
+class ProjectConfig(TypedDict, total=False):
+    """Shape of .filigree/config.json."""
+
+    prefix: str
+    version: int
+    enabled_packs: list[str]
+    mode: str
+
+
+class PaginatedResult(TypedDict):
+    """Envelope returned by paginated query methods."""
+
+    results: list[dict[str, Any]]
+    total: int
+    limit: int
+    offset: int
+    has_more: bool
+
+
+# ---------------------------------------------------------------------------
 # Convention-based discovery
 # ---------------------------------------------------------------------------
 
@@ -76,21 +104,21 @@ def find_filigree_root(start: Path | None = None) -> Path:
     raise FileNotFoundError(msg)
 
 
-def read_config(filigree_dir: Path) -> dict[str, Any]:
+def read_config(filigree_dir: Path) -> ProjectConfig:
     """Read .filigree/config.json. Returns defaults if missing or corrupt."""
-    defaults: dict[str, Any] = {"prefix": "filigree", "version": 1, "enabled_packs": ["core", "planning", "release"]}
+    defaults = ProjectConfig(prefix="filigree", version=1, enabled_packs=["core", "planning", "release"])
     config_path = filigree_dir / CONFIG_FILENAME
     if not config_path.exists():
         return defaults
     try:
-        result: dict[str, Any] = json.loads(config_path.read_text())
+        result: ProjectConfig = json.loads(config_path.read_text())
         return result
     except (json.JSONDecodeError, OSError) as exc:
         logger.warning("Failed to read %s, using defaults: %s", config_path, exc)
         return defaults
 
 
-def write_config(filigree_dir: Path, config: dict[str, Any]) -> None:
+def write_config(filigree_dir: Path, config: dict[str, Any] | ProjectConfig) -> None:
     """Write .filigree/config.json."""
     config_path = filigree_dir / CONFIG_FILENAME
     config_path.write_text(json.dumps(config, indent=2) + "\n")
@@ -488,7 +516,7 @@ class Issue:
     blocked_by: list[str] = field(default_factory=list)
     is_ready: bool = False
     children: list[str] = field(default_factory=list)
-    status_category: str = "open"
+    status_category: StatusCategory = "open"
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -540,7 +568,7 @@ class FileRecord:
 class ScanFinding:
     id: str
     file_id: str
-    severity: str = "info"
+    severity: Severity = "info"
     status: str = "open"
     scan_source: str = ""
     rule_id: str = ""
@@ -611,6 +639,11 @@ def _validate_string_list(value: object, name: str) -> None:
 
 class FiligreeDB:
     """Direct SQLite operations. No daemon, no sync. Importable by CLI and MCP."""
+
+    # SQL fragment for filtering open (non-terminal) findings.
+    _OPEN_FINDINGS_FILTER = "status NOT IN ('fixed', 'false_positive')"
+    _OPEN_FINDINGS_FILTER_F = "f.status NOT IN ('fixed', 'false_positive')"
+    _OPEN_FINDINGS_FILTER_SF = "sf.status NOT IN ('fixed', 'false_positive')"
 
     def __init__(
         self,
@@ -809,7 +842,7 @@ class FiligreeDB:
         return states
 
     @staticmethod
-    def _infer_status_category(status: str) -> str:
+    def _infer_status_category(status: str) -> StatusCategory:
         """Infer status category from status name when no template is available."""
         done_names = {"closed", "done", "resolved", "wont_fix", "cancelled", "archived"}
         wip_names = {"in_progress", "fixing", "verifying", "reviewing", "testing", "active"}
@@ -819,7 +852,7 @@ class FiligreeDB:
             return "wip"
         return "open"
 
-    def _resolve_status_category(self, issue_type: str, status: str) -> str:
+    def _resolve_status_category(self, issue_type: str, status: str) -> StatusCategory:
         """Resolve status category via template or fallback heuristic for unknown types."""
         cat = self.templates.get_category(issue_type, status)
         if cat is not None:
@@ -1270,10 +1303,7 @@ class FiligreeDB:
         current = self.get_issue(issue_id)
 
         # Determine done state via template system
-        cat: str | None = self.templates.get_category(current.type, current.status)
-        if cat is None:
-            cat = self._infer_status_category(current.status)
-        if cat == "done":
+        if self._resolve_status_category(current.type, current.status) == "done":
             msg = f"Issue {issue_id} is already closed (status: '{current.status}', closed_at: {current.closed_at})"
             raise ValueError(msg)
 
@@ -1324,10 +1354,7 @@ class FiligreeDB:
         Clears closed_at. Only works on issues in done-category states.
         """
         current = self.get_issue(issue_id)
-        cat: str | None = self.templates.get_category(current.type, current.status)
-        if cat is None:
-            cat = self._infer_status_category(current.status)
-        if cat != "done":
+        if self._resolve_status_category(current.type, current.status) != "done":
             msg = f"Cannot reopen {issue_id}: status '{current.status}' is not in a done-category state"
             raise ValueError(msg)
 
@@ -1765,70 +1792,52 @@ class FiligreeDB:
 
     # -- Ready / Blocked -----------------------------------------------------
 
+    def _resolve_open_done_states(self) -> tuple[list[str], list[str], str, str]:
+        """Return (open_states, done_states, open_placeholders, done_placeholders).
+
+        ``done_states`` falls back to ``["closed"]`` when no templates define done states.
+        """
+        open_states = self._get_states_for_category("open")
+        done_states = self._get_states_for_category("done") or ["closed"]
+        open_ph = ",".join("?" * len(open_states))
+        done_ph = ",".join("?" * len(done_states))
+        return open_states, done_states, open_ph, done_ph
+
     def get_ready(self) -> list[Issue]:
         """Issues in open-category states with no open blockers."""
-        open_states = self._get_states_for_category("open")
-        done_states = self._get_states_for_category("done")
+        open_states, done_states, open_ph, done_ph = self._resolve_open_done_states()
 
         if not open_states:
             return []
 
-        open_ph = ",".join("?" * len(open_states))
-        if done_states:
-            done_ph = ",".join("?" * len(done_states))
-            rows = self.conn.execute(
-                f"SELECT i.id FROM issues i "
-                f"WHERE i.status IN ({open_ph}) "
-                f"AND NOT EXISTS ("
-                f"  SELECT 1 FROM dependencies d "
-                f"  JOIN issues blocker ON d.depends_on_id = blocker.id "
-                f"  WHERE d.issue_id = i.id AND blocker.status NOT IN ({done_ph})"
-                f") ORDER BY i.priority, i.created_at",
-                [*open_states, *done_states],
-            ).fetchall()
-        else:
-            # No done states configured means every dependency is an open blocker.
-            rows = self.conn.execute(
-                f"SELECT i.id FROM issues i "
-                f"WHERE i.status IN ({open_ph}) "
-                f"AND NOT EXISTS ("
-                f"  SELECT 1 FROM dependencies d "
-                f"  WHERE d.issue_id = i.id"
-                f") ORDER BY i.priority, i.created_at",
-                open_states,
-            ).fetchall()
+        rows = self.conn.execute(
+            f"SELECT i.id FROM issues i "
+            f"WHERE i.status IN ({open_ph}) "
+            f"AND NOT EXISTS ("
+            f"  SELECT 1 FROM dependencies d "
+            f"  JOIN issues blocker ON d.depends_on_id = blocker.id "
+            f"  WHERE d.issue_id = i.id AND blocker.status NOT IN ({done_ph})"
+            f") ORDER BY i.priority, i.created_at",
+            [*open_states, *done_states],
+        ).fetchall()
 
         return self._build_issues_batch([r["id"] for r in rows])
 
     def get_blocked(self) -> list[Issue]:
         """Issues in open-category states that have at least one non-done blocker."""
-        open_states = self._get_states_for_category("open")
-        done_states = self._get_states_for_category("done")
+        open_states, done_states, open_ph, done_ph = self._resolve_open_done_states()
 
         if not open_states:
             return []
 
-        open_ph = ",".join("?" * len(open_states))
-        if done_states:
-            done_ph = ",".join("?" * len(done_states))
-            rows = self.conn.execute(
-                f"SELECT DISTINCT i.id FROM issues i "
-                f"JOIN dependencies d ON d.issue_id = i.id "
-                f"JOIN issues blocker ON d.depends_on_id = blocker.id "
-                f"WHERE i.status IN ({open_ph}) AND blocker.status NOT IN ({done_ph}) "
-                f"ORDER BY i.priority, i.created_at",
-                [*open_states, *done_states],
-            ).fetchall()
-        else:
-            # No done states defined — all blockers count
-            rows = self.conn.execute(
-                f"SELECT DISTINCT i.id FROM issues i "
-                f"JOIN dependencies d ON d.issue_id = i.id "
-                f"JOIN issues blocker ON d.depends_on_id = blocker.id "
-                f"WHERE i.status IN ({open_ph}) "
-                f"ORDER BY i.priority, i.created_at",
-                open_states,
-            ).fetchall()
+        rows = self.conn.execute(
+            f"SELECT DISTINCT i.id FROM issues i "
+            f"JOIN dependencies d ON d.issue_id = i.id "
+            f"JOIN issues blocker ON d.depends_on_id = blocker.id "
+            f"WHERE i.status IN ({open_ph}) AND blocker.status NOT IN ({done_ph}) "
+            f"ORDER BY i.priority, i.created_at",
+            [*open_states, *done_states],
+        ).fetchall()
 
         return self._build_issues_batch([r["id"] for r in rows])
 
@@ -2140,49 +2149,28 @@ class FiligreeDB:
         for row in self.conn.execute("SELECT type, COUNT(*) as cnt FROM issues GROUP BY type").fetchall():
             by_type[row["type"]] = row["cnt"]
 
-        open_states = self._get_states_for_category("open")
-        done_states = self._get_states_for_category("done")
+        open_states, done_states, open_ph, done_ph = self._resolve_open_done_states()
         if not open_states:
             ready_count = 0
             blocked_count = 0
         else:
-            open_ph = ",".join("?" * len(open_states))
-            if done_states:
-                done_ph = ",".join("?" * len(done_states))
-                ready_count = self.conn.execute(
-                    f"SELECT COUNT(*) as cnt FROM issues i "
-                    f"WHERE i.status IN ({open_ph}) "
-                    f"AND NOT EXISTS ("
-                    f"  SELECT 1 FROM dependencies d "
-                    f"  JOIN issues blocker ON d.depends_on_id = blocker.id "
-                    f"  WHERE d.issue_id = i.id AND blocker.status NOT IN ({done_ph})"
-                    f")",
-                    [*open_states, *done_states],
-                ).fetchone()["cnt"]
-                blocked_count = self.conn.execute(
-                    f"SELECT COUNT(DISTINCT i.id) as cnt FROM issues i "
-                    f"JOIN dependencies d ON d.issue_id = i.id "
-                    f"JOIN issues blocker ON d.depends_on_id = blocker.id "
-                    f"WHERE i.status IN ({open_ph}) AND blocker.status NOT IN ({done_ph})",
-                    [*open_states, *done_states],
-                ).fetchone()["cnt"]
-            else:
-                # No done states configured — every dependency is an active blocker
-                ready_count = self.conn.execute(
-                    f"SELECT COUNT(*) as cnt FROM issues i "
-                    f"WHERE i.status IN ({open_ph}) "
-                    f"AND NOT EXISTS ("
-                    f"  SELECT 1 FROM dependencies d "
-                    f"  WHERE d.issue_id = i.id"
-                    f")",
-                    open_states,
-                ).fetchone()["cnt"]
-                blocked_count = self.conn.execute(
-                    f"SELECT COUNT(DISTINCT i.id) as cnt FROM issues i "
-                    f"JOIN dependencies d ON d.issue_id = i.id "
-                    f"WHERE i.status IN ({open_ph})",
-                    open_states,
-                ).fetchone()["cnt"]
+            ready_count = self.conn.execute(
+                f"SELECT COUNT(*) as cnt FROM issues i "
+                f"WHERE i.status IN ({open_ph}) "
+                f"AND NOT EXISTS ("
+                f"  SELECT 1 FROM dependencies d "
+                f"  JOIN issues blocker ON d.depends_on_id = blocker.id "
+                f"  WHERE d.issue_id = i.id AND blocker.status NOT IN ({done_ph})"
+                f")",
+                [*open_states, *done_states],
+            ).fetchone()["cnt"]
+            blocked_count = self.conn.execute(
+                f"SELECT COUNT(DISTINCT i.id) as cnt FROM issues i "
+                f"JOIN dependencies d ON d.issue_id = i.id "
+                f"JOIN issues blocker ON d.depends_on_id = blocker.id "
+                f"WHERE i.status IN ({open_ph}) AND blocker.status NOT IN ({done_ph})",
+                [*open_states, *done_states],
+            ).fetchone()["cnt"]
 
         dep_count = self.conn.execute("SELECT COUNT(*) as cnt FROM dependencies").fetchone()["cnt"]
 
@@ -2741,7 +2729,7 @@ class FiligreeDB:
         scan_source: str | None = None,
         sort: str = "updated_at",
         direction: str | None = None,
-    ) -> dict[str, Any]:
+    ) -> PaginatedResult:
         """List file records with pagination metadata.
 
         Returns ``{results, total, limit, offset, has_more}``.
@@ -2765,15 +2753,13 @@ class FiligreeDB:
             clauses.append("fr.path LIKE ? ESCAPE '\\'")
             params.append(f"%{escaped}%")
         if min_findings is not None and min_findings > 0:
-            clauses.append(
-                "(SELECT COUNT(*) FROM scan_findings sf WHERE sf.file_id = fr.id AND sf.status NOT IN ('fixed', 'false_positive')) >= ?"
-            )
+            clauses.append(f"(SELECT COUNT(*) FROM scan_findings sf WHERE sf.file_id = fr.id AND {self._OPEN_FINDINGS_FILTER_SF}) >= ?")
             params.append(min_findings)
         if has_severity and has_severity in self._VALID_SEVERITIES:
             clauses.append(
                 "(SELECT COUNT(*) FROM scan_findings sf"
                 " WHERE sf.file_id = fr.id"
-                " AND sf.status NOT IN ('fixed', 'false_positive')"
+                f" AND {self._OPEN_FINDINGS_FILTER_SF}"
                 " AND sf.severity = ?) > 0"
             )
             params.append(has_severity)
@@ -2793,7 +2779,7 @@ class FiligreeDB:
         default_order = "ASC" if sort_col == "path" else "DESC"
         order = direction.upper() if direction and direction.upper() in ("ASC", "DESC") else default_order
 
-        _open = "sf.status NOT IN ('fixed', 'false_positive')"
+        _open = self._OPEN_FINDINGS_FILTER_SF
         _sev_cols = " ".join(
             f"(SELECT COUNT(*) FROM scan_findings sf WHERE sf.file_id = fr.id AND {_open} AND sf.severity='{s}') AS cnt_{s},"
             for s in ("critical", "high", "medium", "low", "info")
@@ -3318,53 +3304,26 @@ class FiligreeDB:
 
     _VALID_FINDING_SORTS = frozenset({"updated_at", "severity"})
 
-    def get_findings(
+    @staticmethod
+    def _severity_bucket_sql(open_filter: str) -> str:
+        """Build ``SUM(CASE WHEN severity=... AND <open_filter> ...)`` columns for all severities."""
+        parts = " ".join(
+            f"SUM(CASE WHEN severity='{s}' AND {open_filter} THEN 1 ELSE 0 END) AS {s}," for s in ("critical", "high", "medium", "low")
+        )
+        return f"{parts} SUM(CASE WHEN severity='info' AND {open_filter} THEN 1 ELSE 0 END) AS info"
+
+    def _findings_where(
         self,
         file_id: str,
         *,
         severity: str | None = None,
         status: str | None = None,
         sort: str = "updated_at",
-        limit: int = 100,
-        offset: int = 0,
-    ) -> list[ScanFinding]:
-        """Get scan findings for a file with optional filters."""
-        if sort not in self._VALID_FINDING_SORTS:
-            valid = ", ".join(sorted(self._VALID_FINDING_SORTS))
-            raise ValueError(f'Invalid sort field "{sort}". Must be one of: {valid}')
+    ) -> tuple[str, list[Any], str]:
+        """Build WHERE clause, params, and ORDER clause for findings queries.
 
-        clauses = ["file_id = ?"]
-        params: list[Any] = [file_id]
-
-        if severity is not None:
-            clauses.append("severity = ?")
-            params.append(severity)
-        if status is not None:
-            clauses.append("status = ?")
-            params.append(status)
-
-        where = " AND ".join(clauses)
-        order_clause = f"{self._SEVERITY_ORDER_SQL} ASC, updated_at DESC" if sort == "severity" else "updated_at DESC"
-
-        rows = self.conn.execute(
-            f"SELECT * FROM scan_findings WHERE {where} ORDER BY {order_clause} LIMIT ? OFFSET ?",
-            [*params, limit, offset],
-        ).fetchall()
-        return [self._build_scan_finding(r) for r in rows]
-
-    def get_findings_paginated(
-        self,
-        file_id: str,
-        *,
-        severity: str | None = None,
-        status: str | None = None,
-        sort: str = "updated_at",
-        limit: int = 100,
-        offset: int = 0,
-    ) -> dict[str, Any]:
-        """Get scan findings with pagination metadata.
-
-        Returns ``{results, total, limit, offset, has_more}``.
+        Returns ``(where, params, order_clause)`` — shared by
+        ``get_findings`` and ``get_findings_paginated``.
         """
         if sort not in self._VALID_FINDING_SORTS:
             valid = ", ".join(sorted(self._VALID_FINDING_SORTS))
@@ -3381,20 +3340,50 @@ class FiligreeDB:
             params.append(status)
 
         where = " AND ".join(clauses)
+        order_clause = f"{self._SEVERITY_ORDER_SQL} ASC, updated_at DESC" if sort == "severity" else "updated_at DESC"
+        return where, params, order_clause
+
+    def get_findings(
+        self,
+        file_id: str,
+        *,
+        severity: str | None = None,
+        status: str | None = None,
+        sort: str = "updated_at",
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[ScanFinding]:
+        """Get scan findings for a file with optional filters."""
+        where, params, order_clause = self._findings_where(file_id, severity=severity, status=status, sort=sort)
+        rows = self.conn.execute(
+            f"SELECT * FROM scan_findings WHERE {where} ORDER BY {order_clause} LIMIT ? OFFSET ?",
+            [*params, limit, offset],
+        ).fetchall()
+        return [self._build_scan_finding(r) for r in rows]
+
+    def get_findings_paginated(
+        self,
+        file_id: str,
+        *,
+        severity: str | None = None,
+        status: str | None = None,
+        sort: str = "updated_at",
+        limit: int = 100,
+        offset: int = 0,
+    ) -> PaginatedResult:
+        """Get scan findings with pagination metadata.
+
+        Returns ``{results, total, limit, offset, has_more}``.
+        """
+        where, params, _order = self._findings_where(file_id, severity=severity, status=status, sort=sort)
 
         total: int = self.conn.execute(
             f"SELECT COUNT(*) FROM scan_findings WHERE {where}",
             params,
         ).fetchone()[0]
 
-        order_clause = f"{self._SEVERITY_ORDER_SQL} ASC, updated_at DESC" if sort == "severity" else "updated_at DESC"
-
-        rows = self.conn.execute(
-            f"SELECT * FROM scan_findings WHERE {where} ORDER BY {order_clause} LIMIT ? OFFSET ?",
-            [*params, limit, offset],
-        ).fetchall()
-
-        results = [self._build_scan_finding(r).to_dict() for r in rows]
+        findings = self.get_findings(file_id, severity=severity, status=status, sort=sort, limit=limit, offset=offset)
+        results = [f.to_dict() for f in findings]
         return {
             "results": results,
             "total": total,
@@ -3415,15 +3404,12 @@ class FiligreeDB:
         counted towards ``open_findings`` and severity buckets.
         """
         # "open" = not fixed/false_positive; build SUM(CASE …) per severity
-        _open = "status NOT IN ('fixed', 'false_positive')"
-        _sev = " ".join(
-            f"SUM(CASE WHEN severity='{s}' AND {_open} THEN 1 ELSE 0 END) AS {s}," for s in ("critical", "high", "medium", "low")
-        )
+        _open = self._OPEN_FINDINGS_FILTER
+        _sev = self._severity_bucket_sql(_open)
         row = self.conn.execute(
             f"SELECT COUNT(*) AS total_findings, "
             f"SUM(CASE WHEN {_open} THEN 1 ELSE 0 END) AS open_findings, "
             f"{_sev} "
-            f"SUM(CASE WHEN severity='info' AND {_open} THEN 1 ELSE 0 END) AS info "
             f"FROM scan_findings WHERE file_id = ?",
             (file_id,),
         ).fetchone()
@@ -3446,16 +3432,13 @@ class FiligreeDB:
              "files_with_findings": 8,
              "critical": 2, "high": 3, "medium": 5, "low": 4, "info": 1}
         """
-        _open = "status NOT IN ('fixed', 'false_positive')"
-        _sev = " ".join(
-            f"SUM(CASE WHEN severity='{s}' AND {_open} THEN 1 ELSE 0 END) AS {s}," for s in ("critical", "high", "medium", "low")
-        )
+        _open = self._OPEN_FINDINGS_FILTER
+        _sev = self._severity_bucket_sql(_open)
         row = self.conn.execute(
             f"SELECT COUNT(*) AS total_findings, "
             f"SUM(CASE WHEN {_open} THEN 1 ELSE 0 END) AS open_findings, "
             f"COUNT(DISTINCT CASE WHEN {_open} THEN file_id END) AS files_with_findings, "
             f"{_sev} "
-            f"SUM(CASE WHEN severity='info' AND {_open} THEN 1 ELSE 0 END) AS info "
             f"FROM scan_findings",
         ).fetchone()
         return {
@@ -3636,7 +3619,7 @@ class FiligreeDB:
         limit: int = 50,
         offset: int = 0,
         event_type: str | None = None,
-    ) -> dict[str, Any]:
+    ) -> PaginatedResult:
         """Build a merged timeline of events for a file.
 
         Assembles entries from scan findings and file associations, sorted

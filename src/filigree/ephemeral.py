@@ -15,9 +15,17 @@ import shlex
 import socket
 import subprocess
 from pathlib import Path
-from typing import Any
+from typing import TypedDict
 
 logger = logging.getLogger(__name__)
+
+
+class PidInfo(TypedDict):
+    """Typed structure returned by :func:`read_pid_file`."""
+
+    pid: int
+    cmd: str
+
 
 PORT_BASE = 8400
 PORT_RANGE = 1000
@@ -85,7 +93,7 @@ def write_pid_file(pid_file: Path, pid: int, *, cmd: str = "filigree") -> None:
     write_atomic(pid_file, content)
 
 
-def read_pid_file(pid_file: Path) -> dict[str, Any] | None:
+def read_pid_file(pid_file: Path) -> PidInfo | None:
     """Read PID info from file. Returns None if missing or corrupt.
 
     Supports both JSON format (new) and plain integer (legacy).

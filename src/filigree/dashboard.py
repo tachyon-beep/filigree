@@ -45,6 +45,7 @@ from filigree.core import (
     VALID_FINDING_STATUSES,
     VALID_SEVERITIES,
     FiligreeDB,
+    Issue,
     find_filigree_root,
     read_config,
 )
@@ -215,6 +216,23 @@ async def _parse_json_body(request: Request) -> dict[str, Any] | JSONResponse:
     return body
 
 
+def _parse_pagination(
+    params: Mapping[str, str],
+    default_limit: int = 100,
+) -> tuple[int, int] | JSONResponse:
+    """Extract ``limit`` and ``offset`` from query params with validation.
+
+    Returns ``(limit, offset)`` on success or a 400 ``JSONResponse`` on error.
+    """
+    limit = _safe_int(params.get("limit", str(default_limit)), "limit", min_value=1)
+    if not isinstance(limit, int):
+        return limit
+    offset = _safe_int(params.get("offset", "0"), "offset", min_value=0)
+    if not isinstance(offset, int):
+        return offset
+    return limit, offset
+
+
 def _safe_int(value: str, name: str, *, min_value: int | None = None) -> int | JSONResponse:
     """Parse a query-param string to int, returning a 400 error response on failure.
 
@@ -271,7 +289,7 @@ def _read_graph_runtime_config(db: FiligreeDB) -> dict[str, Any]:
     Note: read_config() already handles JSONDecodeError/OSError internally
     and returns defaults, so no outer try/except is needed here.
     """
-    return read_config(db.db_path.parent)
+    return dict(read_config(db.db_path.parent))
 
 
 def _resolve_graph_runtime(db: FiligreeDB) -> dict[str, Any]:
@@ -357,6 +375,270 @@ def _get_db() -> FiligreeDB:
 
 
 # ---------------------------------------------------------------------------
+# Graph v2 helpers
+# ---------------------------------------------------------------------------
+
+
+class _GraphV2Params:
+    """Validated parameters for a graph v2 query."""
+
+    __slots__ = (
+        "assignee_filter",
+        "blocked_only",
+        "critical_path_only",
+        "edge_limit",
+        "include_done",
+        "node_limit",
+        "ready_only",
+        "scope_radius",
+        "scope_root",
+        "status_filter",
+        "type_filter",
+        "window_cutoff",
+        "window_days",
+    )
+
+    def __init__(self) -> None:
+        self.include_done: bool = True
+        self.blocked_only: bool = False
+        self.ready_only: bool = False
+        self.critical_path_only: bool = False
+        self.node_limit: int = 600
+        self.edge_limit: int = 2000
+        self.scope_root: str | None = None
+        self.scope_radius: int = 0
+        self.type_filter: set[str] = set()
+        self.status_filter: set[str] = set()
+        self.assignee_filter: str | None = None
+        self.window_days: int | None = None
+        self.window_cutoff: datetime | None = None
+
+
+def _parse_graph_v2_params(
+    params: Mapping[str, str],
+    issues: list[Issue],
+    issue_map: dict[str, Issue],
+) -> _GraphV2Params | JSONResponse:
+    """Parse and validate all graph v2 query parameters.
+
+    Returns a ``_GraphV2Params`` on success or a ``JSONResponse`` on the
+    first validation failure.
+    """
+    gp = _GraphV2Params()
+
+    include_done = _get_bool_param(params, "include_done", True)
+    if not isinstance(include_done, bool):
+        return include_done
+    gp.include_done = include_done
+
+    blocked_only = _get_bool_param(params, "blocked_only", False)
+    if not isinstance(blocked_only, bool):
+        return blocked_only
+    gp.blocked_only = blocked_only
+
+    ready_only = _get_bool_param(params, "ready_only", False)
+    if not isinstance(ready_only, bool):
+        return ready_only
+    gp.ready_only = ready_only
+
+    critical_path_only = _get_bool_param(params, "critical_path_only", False)
+    if not isinstance(critical_path_only, bool):
+        return critical_path_only
+    gp.critical_path_only = critical_path_only
+
+    if gp.ready_only and gp.blocked_only:
+        return _error_response(
+            "ready_only and blocked_only cannot both be true.",
+            "GRAPH_INVALID_PARAM",
+            422,
+            {"param": "ready_only,blocked_only"},
+        )
+
+    # Limits
+    node_limit_raw = params.get("node_limit")
+    if node_limit_raw is not None:
+        node_limit_value = _safe_bounded_int(node_limit_raw, name="node_limit", min_value=50, max_value=2000)
+        if not isinstance(node_limit_value, int):
+            return node_limit_value
+        gp.node_limit = node_limit_value
+
+    edge_limit_raw = params.get("edge_limit")
+    if edge_limit_raw is not None:
+        edge_limit_value = _safe_bounded_int(edge_limit_raw, name="edge_limit", min_value=50, max_value=5000)
+        if not isinstance(edge_limit_value, int):
+            return edge_limit_value
+        gp.edge_limit = edge_limit_value
+
+    # Scope
+    gp.scope_root = params.get("scope_root") or None
+    if gp.scope_root and gp.scope_root not in issue_map:
+        return _error_response(
+            f"Unknown scope_root issue id: {gp.scope_root}",
+            "GRAPH_INVALID_PARAM",
+            404,
+            {"param": "scope_root", "value": gp.scope_root},
+        )
+
+    gp.scope_radius = 2 if gp.scope_root else 0
+    scope_radius_raw = params.get("scope_radius")
+    if scope_radius_raw is not None:
+        scope_radius_value = _safe_bounded_int(scope_radius_raw, name="scope_radius", min_value=0, max_value=6)
+        if not isinstance(scope_radius_value, int):
+            return scope_radius_value
+        gp.scope_radius = scope_radius_value
+        if not gp.scope_root:
+            return _error_response(
+                "scope_radius requires scope_root.",
+                "GRAPH_INVALID_PARAM",
+                422,
+                {"param": "scope_radius", "value": scope_radius_raw},
+            )
+
+    # Type filter
+    type_filter_raw = params.get("types")
+    gp.type_filter = set(_parse_csv_param(type_filter_raw)) if type_filter_raw else set()
+    if gp.type_filter:
+        known_types = {i.type for i in issues}
+        unknown_types = sorted(gp.type_filter - known_types)
+        if unknown_types:
+            return _error_response(
+                f"Unknown types: {', '.join(unknown_types)}",
+                "GRAPH_INVALID_PARAM",
+                400,
+                {"param": "types", "value": type_filter_raw},
+            )
+
+    # Status category filter
+    status_filter_raw = params.get("status_categories")
+    gp.status_filter = set(_parse_csv_param(status_filter_raw)) if status_filter_raw else set()
+    if gp.status_filter:
+        unknown_cats = sorted(gp.status_filter - _GRAPH_STATUS_CATEGORIES)
+        if unknown_cats:
+            return _error_response(
+                f"Unknown status_categories: {', '.join(unknown_cats)}",
+                "GRAPH_INVALID_PARAM",
+                400,
+                {"param": "status_categories", "value": status_filter_raw},
+            )
+
+    gp.assignee_filter = params.get("assignee")
+
+    # Time window
+    window_days_raw = params.get("window_days")
+    if window_days_raw is not None:
+        window_days_value = _safe_bounded_int(window_days_raw, name="window_days", min_value=0, max_value=3650)
+        if not isinstance(window_days_value, int):
+            return window_days_value
+        gp.window_days = window_days_value
+    gp.window_cutoff = datetime.now(UTC) - timedelta(days=gp.window_days) if gp.window_days and gp.window_days > 0 else None
+
+    return gp
+
+
+def _issue_updated_at_utc(issue: Issue) -> datetime | None:
+    """Parse an issue's updated_at (or created_at) into a UTC datetime."""
+    raw = issue.updated_at or issue.created_at
+    if not raw or not isinstance(raw, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
+
+
+def _filter_graph_nodes(
+    issues: list[Issue],
+    issue_map: dict[str, Issue],
+    gp: _GraphV2Params,
+    scoped_ids: set[str] | None,
+    critical_path_ids: set[str],
+) -> list[dict[str, Any]]:
+    """Apply all graph v2 filters and return node dicts."""
+
+    def _open_blocker_count(issue_id: str) -> int:
+        issue = issue_map[issue_id]
+        total = 0
+        for blocker_id in issue.blocked_by:
+            blocker = issue_map.get(blocker_id)
+            if blocker and blocker.status_category != "done":
+                total += 1
+        return total
+
+    def _open_blocks_count(issue_id: str) -> int:
+        issue = issue_map[issue_id]
+        total = 0
+        for blocked_id in issue.blocks:
+            blocked_issue = issue_map.get(blocked_id)
+            if blocked_issue and blocked_issue.status_category != "done":
+                total += 1
+        return total
+
+    filtered: list[dict[str, Any]] = []
+    for issue in issues:
+        if scoped_ids is not None and issue.id not in scoped_ids:
+            continue
+        if not gp.include_done and issue.status_category == "done":
+            continue
+        if gp.type_filter and issue.type not in gp.type_filter:
+            continue
+        if gp.status_filter and issue.status_category not in gp.status_filter:
+            continue
+        if gp.assignee_filter is not None and issue.assignee != gp.assignee_filter:
+            continue
+        if gp.window_cutoff is not None:
+            ts = _issue_updated_at_utc(issue)
+            if ts is None or ts < gp.window_cutoff:
+                continue
+
+        blocker_count = _open_blocker_count(issue.id)
+        blocks_count = _open_blocks_count(issue.id)
+        if gp.blocked_only and blocker_count == 0:
+            continue
+        if gp.ready_only and not issue.is_ready:
+            continue
+        if gp.critical_path_only and issue.id not in critical_path_ids:
+            continue
+
+        filtered.append(
+            {
+                "id": issue.id,
+                "title": issue.title,
+                "status": issue.status,
+                "status_category": issue.status_category,
+                "priority": issue.priority,
+                "type": issue.type,
+                "assignee": issue.assignee,
+                "is_ready": issue.is_ready,
+                "blocked_by_open_count": blocker_count,
+                "blocks_open_count": blocks_count,
+            }
+        )
+    return filtered
+
+
+def _filter_graph_edges(
+    deps: list[dict[str, Any]],
+    visible_ids: set[str],
+    critical_path_ids: set[str],
+) -> list[dict[str, Any]]:
+    """Build edge dicts for visible nodes."""
+    return [
+        {
+            "id": f"{dep['to']}->{dep['from']}",
+            "source": dep["to"],
+            "target": dep["from"],
+            "kind": dep["type"],
+            "is_critical_path": dep["to"] in critical_path_ids and dep["from"] in critical_path_ids,
+        }
+        for dep in deps
+        if dep["to"] in visible_ids and dep["from"] in visible_ids
+    ]
+
+
+# ---------------------------------------------------------------------------
 # Project-scoped router — all issue, workflow, and file endpoints
 # ---------------------------------------------------------------------------
 
@@ -422,225 +704,49 @@ def _create_project_router() -> Any:
 
         # Graph v2 query model
         started = perf_counter()
-        params = request.query_params
         issue_map = {i.id: i for i in issues}
 
-        include_done = _get_bool_param(params, "include_done", True)
-        if isinstance(include_done, JSONResponse):
-            return include_done
-        blocked_only = _get_bool_param(params, "blocked_only", False)
-        if isinstance(blocked_only, JSONResponse):
-            return blocked_only
-        ready_only = _get_bool_param(params, "ready_only", False)
-        if isinstance(ready_only, JSONResponse):
-            return ready_only
-        critical_path_only = _get_bool_param(params, "critical_path_only", False)
-        if isinstance(critical_path_only, JSONResponse):
-            return critical_path_only
-
-        if ready_only and blocked_only:
-            return _error_response(
-                "ready_only and blocked_only cannot both be true.",
-                "GRAPH_INVALID_PARAM",
-                422,
-                {"param": "ready_only,blocked_only"},
-            )
-
-        node_limit = 600
-        node_limit_raw = params.get("node_limit")
-        if node_limit_raw is not None:
-            node_limit_value = _safe_bounded_int(node_limit_raw, name="node_limit", min_value=50, max_value=2000)
-            if isinstance(node_limit_value, JSONResponse):
-                return node_limit_value
-            node_limit = node_limit_value
-
-        edge_limit = 2000
-        edge_limit_raw = params.get("edge_limit")
-        if edge_limit_raw is not None:
-            edge_limit_value = _safe_bounded_int(edge_limit_raw, name="edge_limit", min_value=50, max_value=5000)
-            if isinstance(edge_limit_value, JSONResponse):
-                return edge_limit_value
-            edge_limit = edge_limit_value
-
-        scope_root = params.get("scope_root") or None
-        if scope_root and scope_root not in issue_map:
-            return _error_response(
-                f"Unknown scope_root issue id: {scope_root}",
-                "GRAPH_INVALID_PARAM",
-                404,
-                {"param": "scope_root", "value": scope_root},
-            )
-
-        scope_radius = 2 if scope_root else 0
-        scope_radius_raw = params.get("scope_radius")
-        if scope_radius_raw is not None:
-            scope_radius_value = _safe_bounded_int(scope_radius_raw, name="scope_radius", min_value=0, max_value=6)
-            if isinstance(scope_radius_value, JSONResponse):
-                return scope_radius_value
-            scope_radius = scope_radius_value
-            if not scope_root:
-                return _error_response(
-                    "scope_radius requires scope_root.",
-                    "GRAPH_INVALID_PARAM",
-                    422,
-                    {"param": "scope_radius", "value": scope_radius_raw},
-                )
-
-        type_filter_raw = params.get("types")
-        type_filter = set(_parse_csv_param(type_filter_raw)) if type_filter_raw else set()
-        if type_filter:
-            known_types = {i.type for i in issues}
-            unknown_types = sorted(type_filter - known_types)
-            if unknown_types:
-                return _error_response(
-                    f"Unknown types: {', '.join(unknown_types)}",
-                    "GRAPH_INVALID_PARAM",
-                    400,
-                    {"param": "types", "value": type_filter_raw},
-                )
-
-        status_filter_raw = params.get("status_categories")
-        status_filter = set(_parse_csv_param(status_filter_raw)) if status_filter_raw else set()
-        if status_filter:
-            unknown_cats = sorted(status_filter - _GRAPH_STATUS_CATEGORIES)
-            if unknown_cats:
-                return _error_response(
-                    f"Unknown status_categories: {', '.join(unknown_cats)}",
-                    "GRAPH_INVALID_PARAM",
-                    400,
-                    {"param": "status_categories", "value": status_filter_raw},
-                )
-
-        assignee_filter = params.get("assignee")
-
-        window_days: int | None = None
-        window_days_raw = params.get("window_days")
-        if window_days_raw is not None:
-            window_days_value = _safe_bounded_int(window_days_raw, name="window_days", min_value=0, max_value=3650)
-            if isinstance(window_days_value, JSONResponse):
-                return window_days_value
-            window_days = window_days_value
-        window_cutoff = datetime.now(UTC) - timedelta(days=window_days) if window_days and window_days > 0 else None
+        gp = _parse_graph_v2_params(request.query_params, issues, issue_map)
+        if isinstance(gp, JSONResponse):
+            return gp
 
         critical_path_ids: set[str] = set()
-        if critical_path_only:
+        if gp.critical_path_only:
             critical_path_ids = {node["id"] for node in db.get_critical_path()}
 
         # Scope neighborhood (undirected BFS around scope_root)
         scoped_ids: set[str] | None = None
-        if scope_root:
+        if gp.scope_root:
             neighbors: dict[str, set[str]] = {}
             for dep in deps:
-                blocker = dep["to"]
-                blocked = dep["from"]
-                neighbors.setdefault(blocker, set()).add(blocked)
-                neighbors.setdefault(blocked, set()).add(blocker)
+                neighbors.setdefault(dep["to"], set()).add(dep["from"])
+                neighbors.setdefault(dep["from"], set()).add(dep["to"])
 
-            scoped_ids = {scope_root}
-            queue: deque[tuple[str, int]] = deque([(scope_root, 0)])
+            scoped_ids = {gp.scope_root}
+            queue: deque[tuple[str, int]] = deque([(gp.scope_root, 0)])
             while queue:
                 current, dist = queue.popleft()
-                if dist >= scope_radius:
+                if dist >= gp.scope_radius:
                     continue
                 for nxt in neighbors.get(current, set()):
-                    if nxt in scoped_ids:
-                        continue
-                    scoped_ids.add(nxt)
-                    queue.append((nxt, dist + 1))
+                    if nxt not in scoped_ids:
+                        scoped_ids.add(nxt)
+                        queue.append((nxt, dist + 1))
 
-        def _open_blocker_count(issue_id: str) -> int:
-            issue = issue_map[issue_id]
-            total = 0
-            for blocker_id in issue.blocked_by:
-                blocker = issue_map.get(blocker_id)
-                if blocker and blocker.status_category != "done":
-                    total += 1
-            return total
-
-        def _open_blocks_count(issue_id: str) -> int:
-            issue = issue_map[issue_id]
-            total = 0
-            for blocked_id in issue.blocks:
-                blocked_issue = issue_map.get(blocked_id)
-                if blocked_issue and blocked_issue.status_category != "done":
-                    total += 1
-            return total
-
-        def _issue_updated_at(issue: Any) -> datetime | None:
-            raw = issue.updated_at or issue.created_at
-            if not raw or not isinstance(raw, str):
-                return None
-            try:
-                parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
-            except ValueError:
-                return None
-            if parsed.tzinfo is None:
-                return parsed.replace(tzinfo=UTC)
-            return parsed.astimezone(UTC)
-
-        filtered_nodes: list[dict[str, Any]] = []
-        for issue in issues:
-            if scoped_ids is not None and issue.id not in scoped_ids:
-                continue
-            if not include_done and issue.status_category == "done":
-                continue
-            if type_filter and issue.type not in type_filter:
-                continue
-            if status_filter and issue.status_category not in status_filter:
-                continue
-            if assignee_filter is not None and issue.assignee != assignee_filter:
-                continue
-            if window_cutoff is not None:
-                issue_updated_at = _issue_updated_at(issue)
-                if issue_updated_at is None or issue_updated_at < window_cutoff:
-                    continue
-
-            blocker_count = _open_blocker_count(issue.id)
-            blocks_count = _open_blocks_count(issue.id)
-            if blocked_only and blocker_count == 0:
-                continue
-            if ready_only and not issue.is_ready:
-                continue
-            if critical_path_only and issue.id not in critical_path_ids:
-                continue
-
-            filtered_nodes.append(
-                {
-                    "id": issue.id,
-                    "title": issue.title,
-                    "status": issue.status,
-                    "status_category": issue.status_category,
-                    "priority": issue.priority,
-                    "type": issue.type,
-                    "assignee": issue.assignee,
-                    "is_ready": issue.is_ready,
-                    "blocked_by_open_count": blocker_count,
-                    "blocks_open_count": blocks_count,
-                }
-            )
+        filtered_nodes = _filter_graph_nodes(issues, issue_map, gp, scoped_ids, critical_path_ids)
 
         total_nodes_before_limit = len(filtered_nodes)
         truncated = False
-        if len(filtered_nodes) > node_limit:
-            filtered_nodes = filtered_nodes[:node_limit]
+        if len(filtered_nodes) > gp.node_limit:
+            filtered_nodes = filtered_nodes[: gp.node_limit]
             truncated = True
 
         visible_ids = {node["id"] for node in filtered_nodes}
-        filtered_edges = [
-            {
-                "id": f"{dep['to']}->{dep['from']}",
-                "source": dep["to"],
-                "target": dep["from"],
-                "kind": dep["type"],
-                "is_critical_path": dep["to"] in critical_path_ids and dep["from"] in critical_path_ids,
-            }
-            for dep in deps
-            if dep["to"] in visible_ids and dep["from"] in visible_ids
-        ]
+        filtered_edges = _filter_graph_edges(deps, visible_ids, critical_path_ids)
 
         total_edges_before_limit = len(filtered_edges)
-        if len(filtered_edges) > edge_limit:
-            filtered_edges = filtered_edges[:edge_limit]
+        if len(filtered_edges) > gp.edge_limit:
+            filtered_edges = filtered_edges[: gp.edge_limit]
             truncated = True
 
         query_ms = int((perf_counter() - started) * 1000)
@@ -650,20 +756,20 @@ def _create_project_router() -> Any:
                 "mode": "v2",
                 "compatibility_mode": runtime["compatibility_mode"],
                 "query": {
-                    "scope_root": scope_root,
-                    "scope_radius": scope_radius if scope_root else None,
-                    "include_done": include_done,
-                    "types": sorted(type_filter) if type_filter else [],
-                    "status_categories": sorted(status_filter) if status_filter else [],
-                    "assignee": assignee_filter,
-                    "blocked_only": blocked_only,
-                    "ready_only": ready_only,
-                    "critical_path_only": critical_path_only,
-                    "window_days": window_days,
+                    "scope_root": gp.scope_root,
+                    "scope_radius": gp.scope_radius if gp.scope_root else None,
+                    "include_done": gp.include_done,
+                    "types": sorted(gp.type_filter) if gp.type_filter else [],
+                    "status_categories": sorted(gp.status_filter) if gp.status_filter else [],
+                    "assignee": gp.assignee_filter,
+                    "blocked_only": gp.blocked_only,
+                    "ready_only": gp.ready_only,
+                    "critical_path_only": gp.critical_path_only,
+                    "window_days": gp.window_days,
                 },
                 "limits": {
-                    "node_limit": node_limit,
-                    "edge_limit": edge_limit,
+                    "node_limit": gp.node_limit,
+                    "edge_limit": gp.edge_limit,
                     "truncated": truncated,
                 },
                 "telemetry": {
@@ -1093,12 +1199,10 @@ def _create_project_router() -> Any:
     async def api_list_files(request: Request, db: FiligreeDB = Depends(_get_db)) -> JSONResponse:
         """List tracked file records with optional filtering and pagination."""
         params = request.query_params
-        limit = _safe_int(params.get("limit", "100"), "limit", min_value=1)
-        if isinstance(limit, JSONResponse):
-            return limit
-        offset = _safe_int(params.get("offset", "0"), "offset", min_value=0)
-        if isinstance(offset, JSONResponse):
-            return offset
+        pagination = _parse_pagination(params)
+        if isinstance(pagination, JSONResponse):
+            return pagination
+        limit, offset = pagination
         min_findings = _safe_int(params.get("min_findings", "0"), "min_findings", min_value=0)
         if isinstance(min_findings, JSONResponse):
             return min_findings
@@ -1228,12 +1332,10 @@ def _create_project_router() -> Any:
         except KeyError:
             return _error_response(f"File not found: {file_id}", "FILE_NOT_FOUND", 404)
         params = request.query_params
-        limit = _safe_int(params.get("limit", "100"), "limit", min_value=1)
-        if isinstance(limit, JSONResponse):
-            return limit
-        offset = _safe_int(params.get("offset", "0"), "offset", min_value=0)
-        if isinstance(offset, JSONResponse):
-            return offset
+        pagination = _parse_pagination(params)
+        if isinstance(pagination, JSONResponse):
+            return pagination
+        limit, offset = pagination
         try:
             result = db.get_findings_paginated(
                 file_id,
@@ -1283,12 +1385,10 @@ def _create_project_router() -> Any:
     async def api_get_file_timeline(file_id: str, request: Request, db: FiligreeDB = Depends(_get_db)) -> JSONResponse:
         """Get merged timeline of events for a file."""
         params = request.query_params
-        limit = _safe_int(params.get("limit", "50"), "limit", min_value=1)
-        if isinstance(limit, JSONResponse):
-            return limit
-        offset = _safe_int(params.get("offset", "0"), "offset", min_value=0)
-        if isinstance(offset, JSONResponse):
-            return offset
+        pagination = _parse_pagination(params, default_limit=50)
+        if isinstance(pagination, JSONResponse):
+            return pagination
+        limit, offset = pagination
         event_type = params.get("event_type")
         try:
             result = db.get_file_timeline(file_id, limit=limit, offset=offset, event_type=event_type)

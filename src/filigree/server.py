@@ -16,6 +16,7 @@ import subprocess
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TypedDict
 
 from filigree.core import read_config, write_atomic
 from filigree.ephemeral import is_pid_alive, read_pid_file, verify_pid_ownership, write_pid_file
@@ -30,10 +31,20 @@ DEFAULT_PORT = 8377
 SUPPORTED_SCHEMA_VERSION = 1  # Max schema version this filigree version can handle
 
 
+class ProjectEntry(TypedDict):
+    """Typed structure for a registered project in server.json."""
+
+    prefix: str
+
+
 @dataclass
 class ServerConfig:
     port: int = DEFAULT_PORT
-    projects: dict[str, dict[str, str]] = field(default_factory=dict)
+    projects: dict[str, ProjectEntry] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if not (1 <= self.port <= 65535):
+            raise ValueError(f"port must be between 1 and 65535, got {self.port}")
 
 
 def _backup_corrupt_config() -> None:
@@ -76,7 +87,11 @@ def read_server_config() -> ServerConfig:
     raw_projects = data.get("projects", {})
     if not isinstance(raw_projects, dict):
         raw_projects = {}
-    projects = {str(k): v for k, v in raw_projects.items() if isinstance(v, dict)}
+    projects: dict[str, ProjectEntry] = {
+        str(k): v  # type: ignore[misc]
+        for k, v in raw_projects.items()
+        if isinstance(v, dict)
+    }
 
     return ServerConfig(port=port, projects=projects)
 

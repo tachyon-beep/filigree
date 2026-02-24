@@ -20,6 +20,7 @@ import sqlite3
 import subprocess
 import sys
 import time
+from collections.abc import Callable
 from contextvars import ContextVar
 from datetime import UTC
 from pathlib import Path
@@ -44,6 +45,7 @@ from filigree.core import (
     VALID_ASSOC_TYPES,
     VALID_SEVERITIES,
     FiligreeDB,
+    Issue,
     find_filigree_root,
     read_config,
 )
@@ -58,6 +60,59 @@ from filigree.summary import generate_summary, write_summary
 # Hard cap on list_issues / search_issues results to keep MCP response size
 # within token limits.  Callers can pass no_limit=true to bypass.
 _MAX_LIST_RESULTS = 50
+
+
+def _resolve_pagination(arguments: dict[str, Any]) -> tuple[int, int]:
+    """Compute effective limit and offset for paginated MCP list/search tools.
+
+    Handles the ``no_limit`` bypass and caps to ``_MAX_LIST_RESULTS``.
+    The returned *effective_limit* is the user-visible page size; callers
+    should overfetch by 1 (``limit=effective_limit + 1``) to detect ``has_more``.
+    """
+    no_limit = arguments.get("no_limit", False)
+    requested_limit = arguments.get("limit", 100)
+    offset = arguments.get("offset", 0)
+
+    effective_limit = (requested_limit if "limit" in arguments else 10_000_000) if no_limit else min(requested_limit, _MAX_LIST_RESULTS)
+
+    return effective_limit, offset
+
+
+def _apply_has_more(items: list[Any], effective_limit: int) -> tuple[list[Any], bool]:
+    """Trim an overfetched result list and return ``(trimmed, has_more)``."""
+    has_more = len(items) > effective_limit
+    if has_more:
+        items = items[:effective_limit]
+    return items, has_more
+
+
+def _validate_str(value: Any, name: str) -> list[TextContent] | None:
+    """Return a validation error if *value* is not ``None`` and not a ``str``."""
+    if value is not None and not isinstance(value, str):
+        return _text({"error": f"{name} must be a string", "code": "validation_error"})
+    return None
+
+
+def _validate_int_range(
+    value: Any,
+    name: str,
+    min_val: int | None = None,
+    max_val: int | None = None,
+) -> list[TextContent] | None:
+    """Return a validation error if *value* is not ``None`` and outside range.
+
+    When *value* is ``None`` it is considered optional and passes.
+    """
+    if value is None:
+        return None
+    if not isinstance(value, int):
+        return _text({"error": f"{name} must be an integer", "code": "validation_error"})
+    if min_val is not None and value < min_val:
+        return _text({"error": f"{name} must be >= {min_val}", "code": "validation_error"})
+    if max_val is not None and value > max_val:
+        return _text({"error": f"{name} must be <= {max_val}", "code": "validation_error"})
+    return None
+
 
 # ---------------------------------------------------------------------------
 # Server setup
@@ -156,6 +211,17 @@ def _text(content: Any) -> list[TextContent]:
     if isinstance(content, str):
         return [TextContent(type="text", text=content)]
     return [TextContent(type="text", text=json.dumps(content, indent=2, default=str))]
+
+
+def _slim_issue(issue: Issue) -> dict[str, Any]:
+    """Return a lightweight dict for search result listings."""
+    return {
+        "id": issue.id,
+        "title": issue.title,
+        "status": issue.status,
+        "priority": issue.priority,
+        "type": issue.type,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -1155,17 +1221,8 @@ async def _dispatch(name: str, arguments: dict[str, Any], tracker: FiligreeDB) -
                         {"issues": [], "limit": arguments.get("limit", 100), "offset": arguments.get("offset", 0), "has_more": False}
                     )
 
-            no_limit = arguments.get("no_limit", False)
-            requested_limit = arguments.get("limit", 100)
-            offset = arguments.get("offset", 0)
+            effective_limit, offset = _resolve_pagination(arguments)
 
-            if no_limit:
-                # Bypass cap; use caller's limit if explicit, otherwise fetch all
-                effective_limit = requested_limit if "limit" in arguments else 10_000_000
-            else:
-                effective_limit = min(requested_limit, _MAX_LIST_RESULTS)
-
-            # Overfetch by 1 to detect whether more results exist
             issues = tracker.list_issues(
                 status=status_filter,
                 type=arguments.get("type"),
@@ -1176,9 +1233,7 @@ async def _dispatch(name: str, arguments: dict[str, Any], tracker: FiligreeDB) -
                 limit=effective_limit + 1,
                 offset=offset,
             )
-            has_more = len(issues) > effective_limit
-            if has_more:
-                issues = issues[:effective_limit]
+            issues, has_more = _apply_has_more(issues, effective_limit)
             return _text(
                 {
                     "issues": [i.to_dict() for i in issues],
@@ -1353,29 +1408,17 @@ async def _dispatch(name: str, arguments: dict[str, Any], tracker: FiligreeDB) -
             return _text(comments)
 
         case "search_issues":
-            no_limit = arguments.get("no_limit", False)
-            requested_limit = arguments.get("limit", 100)
-            offset = arguments.get("offset", 0)
-
-            def _slim(i: Any) -> dict[str, Any]:
-                return {"id": i.id, "title": i.title, "status": i.status, "priority": i.priority, "type": i.type}
-
-            if no_limit:
-                effective_limit = requested_limit if "limit" in arguments else 10_000_000
-            else:
-                effective_limit = min(requested_limit, _MAX_LIST_RESULTS)
+            effective_limit, offset = _resolve_pagination(arguments)
 
             issues = tracker.search_issues(
                 arguments["query"],
                 limit=effective_limit + 1,
                 offset=offset,
             )
-            has_more = len(issues) > effective_limit
-            if has_more:
-                issues = issues[:effective_limit]
+            issues, has_more = _apply_has_more(issues, effective_limit)
             return _text(
                 {
-                    "issues": [_slim(i) for i in issues],
+                    "issues": [_slim_issue(i) for i in issues],
                     "limit": effective_limit,
                     "offset": offset,
                     "has_more": has_more,
@@ -1850,26 +1893,25 @@ async def _dispatch(name: str, arguments: dict[str, Any], tracker: FiligreeDB) -
             direction = arguments.get("direction")
             valid_sorts = {"updated_at", "first_seen", "path", "language"}
 
-            if not isinstance(limit, int) or limit < 1 or limit > 10000:
-                return _text({"error": "limit must be an integer in [1, 10000]", "code": "validation_error"})
-            if not isinstance(offset, int) or offset < 0:
-                return _text({"error": "offset must be a non-negative integer", "code": "validation_error"})
-            if min_findings is not None and (not isinstance(min_findings, int) or min_findings < 0):
-                return _text({"error": "min_findings must be a non-negative integer", "code": "validation_error"})
+            # --- validation ---
+            for err in (
+                _validate_int_range(limit, "limit", min_val=1, max_val=10000),
+                _validate_int_range(offset, "offset", min_val=0),
+                _validate_int_range(min_findings, "min_findings", min_val=0),
+                _validate_str(language, "language"),
+                _validate_str(path_prefix, "path_prefix"),
+                _validate_str(scan_source, "scan_source"),
+            ):
+                if err is not None:
+                    return err
             if has_severity is not None and (not isinstance(has_severity, str) or has_severity not in VALID_SEVERITIES):
                 return _text({"error": f"has_severity must be one of {sorted(VALID_SEVERITIES)}", "code": "validation_error"})
             if not isinstance(sort, str) or sort not in valid_sorts:
                 return _text({"error": f"sort must be one of {sorted(valid_sorts)}", "code": "validation_error"})
             if direction is not None and (not isinstance(direction, str) or direction.upper() not in {"ASC", "DESC"}):
                 return _text({"error": "direction must be 'asc' or 'desc'", "code": "validation_error"})
-            if language is not None and not isinstance(language, str):
-                return _text({"error": "language must be a string", "code": "validation_error"})
-            if path_prefix is not None and not isinstance(path_prefix, str):
-                return _text({"error": "path_prefix must be a string", "code": "validation_error"})
-            if scan_source is not None and not isinstance(scan_source, str):
-                return _text({"error": "scan_source must be a string", "code": "validation_error"})
 
-            result = tracker.list_files_paginated(
+            files_result = tracker.list_files_paginated(
                 limit=limit,
                 offset=offset,
                 language=language,
@@ -1880,7 +1922,7 @@ async def _dispatch(name: str, arguments: dict[str, Any], tracker: FiligreeDB) -
                 sort=sort,
                 direction=direction,
             )
-            return _text(result)
+            return _text(files_result)
 
         case "get_file":
             file_id = arguments.get("file_id", "")
@@ -1914,10 +1956,10 @@ async def _dispatch(name: str, arguments: dict[str, Any], tracker: FiligreeDB) -
                 )
 
             try:
-                result = tracker.get_file_timeline(file_id, limit=limit, offset=offset, event_type=event_type)
+                timeline_result = tracker.get_file_timeline(file_id, limit=limit, offset=offset, event_type=event_type)
             except KeyError:
                 return _text({"error": f"File not found: {file_id}", "code": "not_found"})
-            return _text(result)
+            return _text(timeline_result)
 
         case "get_issue_files":
             issue_id = arguments.get("issue_id", "")
@@ -2200,7 +2242,9 @@ async def _dispatch(name: str, arguments: dict[str, Any], tracker: FiligreeDB) -
 # ---------------------------------------------------------------------------
 
 
-def create_mcp_app(db_resolver: Any = None) -> Any:
+def create_mcp_app(
+    db_resolver: Callable[[], FiligreeDB | None] | None = None,
+) -> tuple[Callable[..., Any], Callable[..., Any]]:
     """Create an ASGI app + lifespan hook for MCP streamable-HTTP.
 
     Returns ``(asgi_app, lifespan_context_manager)`` where:
