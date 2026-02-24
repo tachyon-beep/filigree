@@ -5,6 +5,7 @@ from pathlib import Path
 from filigree.core import FiligreeDB
 from filigree.db_events import EventsMixin
 from filigree.db_meta import MetaMixin
+from filigree.db_planning import PlanningMixin
 from filigree.db_workflow import WorkflowMixin
 
 
@@ -81,3 +82,27 @@ def test_export_import_roundtrip(db: FiligreeDB, tmp_path: Path) -> None:
     out = str(tmp_path / "export.jsonl")
     count = db.export_jsonl(out)
     assert count > 0
+
+
+# -- PlanningMixin ----------------------------------------------------------
+
+
+def test_planning_mixin_is_base_class() -> None:
+    """FiligreeDB should inherit from PlanningMixin."""
+    assert issubclass(FiligreeDB, PlanningMixin)
+
+
+def test_dependency_management(db: FiligreeDB) -> None:
+    """Dependency operations should work through mixin composition."""
+    a = db.create_issue(title="a")
+    b = db.create_issue(title="b")
+    db.add_dependency(b.id, a.id)
+    blocked = db.get_blocked()
+    assert any(i.id == b.id for i in blocked)
+
+
+def test_get_ready(db: FiligreeDB) -> None:
+    """get_ready should work through mixin composition."""
+    db.create_issue(title="ready-test")
+    ready = db.get_ready()
+    assert len(ready) >= 1
