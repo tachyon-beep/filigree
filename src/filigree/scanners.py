@@ -88,9 +88,15 @@ def _parse_toml(path: Path) -> ScannerConfig | None:
     import tomllib
 
     try:
-        data = tomllib.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        logger.warning("Failed to parse scanner TOML: %s", path)
+        raw = path.read_text(encoding="utf-8")
+    except OSError:
+        logger.warning("Failed to read scanner TOML: %s", path, exc_info=True)
+        return None
+
+    try:
+        data = tomllib.loads(raw)
+    except tomllib.TOMLDecodeError:
+        logger.warning("Failed to parse scanner TOML: %s", path, exc_info=True)
         return None
 
     scanner = data.get("scanner")

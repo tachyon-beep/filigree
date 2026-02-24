@@ -54,8 +54,10 @@ def read_server_config() -> ServerConfig:
     try:
         port = int(raw_port)
     except (TypeError, ValueError):
+        logger.warning("Invalid port value %r in server config; using default %d", raw_port, DEFAULT_PORT)
         port = DEFAULT_PORT
     if not (1 <= port <= 65535):
+        logger.warning("Port %d out of range (1-65535) in server config; using default %d", port, DEFAULT_PORT)
         port = DEFAULT_PORT
 
     # Coerce projects — must be dict of dicts

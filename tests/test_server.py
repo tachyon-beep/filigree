@@ -599,6 +599,28 @@ class TestStopDaemonSigkill:
         assert not result.success
         assert "Permission denied" in result.message
 
+    def test_stop_returns_failure_on_sigterm_permission_error(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """PermissionError on initial SIGTERM (e.g., daemon owned by different user)."""
+        config_dir = tmp_path / ".config" / "filigree"
+        config_dir.mkdir(parents=True)
+        pid_file = config_dir / "server.pid"
+        pid_file.write_text(json.dumps({"pid": 54321, "cmd": "filigree"}))
+        monkeypatch.setattr("filigree.server.SERVER_PID_FILE", pid_file)
+
+        monkeypatch.setattr("filigree.server.is_pid_alive", lambda pid: True)
+        monkeypatch.setattr("filigree.server.verify_pid_ownership", lambda *a, **kw: True)
+
+        def mock_kill(pid: int, sig: int) -> None:
+            raise PermissionError("Operation not permitted")
+
+        monkeypatch.setattr("os.kill", mock_kill)
+
+        from filigree.server import stop_daemon
+
+        result = stop_daemon()
+        assert not result.success
+        assert "Permission denied" in result.message
+
     def test_sigkill_failure_still_cleans_pid_file(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """B1 from plan review: PID file must be cleaned up even when SIGKILL fails."""
         config_dir = tmp_path / ".config" / "filigree"

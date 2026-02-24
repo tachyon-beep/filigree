@@ -65,6 +65,7 @@ Server/ethereal operating modes, file intelligence + scanner workflows, Graph v2
 
 - Dashboard XSS sinks fixed across detail, workflow, kanban, and move-modal surfaces
 - File view click-handler escaping fixed for issue IDs containing apostrophes
+- All onclick handlers in detail panel, activity feed, and code health views now use `escJsSingle()` for JS string contexts — fixes 6+ XSS injection points where `escHtml()` was misused or escaping was missing entirely
 - HTTP MCP request context isolation fixed for per-request DB/project directory selection
 - Issue type names now reserved from label taxonomy to prevent collisions
 - Duplicate workflow transitions (same `from_state -> to_state`) now rejected at parse and validation time — previously silently accepted with inconsistent dict/tuple behavior
@@ -81,6 +82,7 @@ Server/ethereal operating modes, file intelligence + scanner workflows, Graph v2
 - Registry fallback key-collision handling corrected
 - Hook command resolution hardened across installation methods
 - `read_server_config()` now validates JSON shape and types: non-dict top-level returns defaults, port coerced to int and clamped to 1–65535, non-dict project entries dropped
+- Invalid port values in server config now log at WARNING before falling back to default (previously silent coercion)
 - `start_daemon()` serialized with `fcntl.flock` on `server.lock` to prevent concurrent start races
 - `start_daemon()` and `daemon_status()` verify PID ownership via `verify_pid_ownership()` — stale PIDs from reused processes no longer cause false "already running" or false status
 - `start_daemon()` wraps `subprocess.Popen` in `try/except OSError` to return a clean `DaemonResult` instead of propagating raw exceptions while holding the lock
@@ -93,6 +95,7 @@ Server/ethereal operating modes, file intelligence + scanner workflows, Graph v2
 
 #### Files/findings and scanner robustness
 
+- `_parse_toml()` now distinguishes `OSError` from `TOMLDecodeError` with `exc_info` — unreadable scanner TOML files no longer silently vanish from `list_scanners`
 - Scanner paths canonicalized; datetime crash fixed; command templates expanded
 - Scan API hardened (`scan_run_id` persistence, suggestion support, severity fallback)
 - Findings metadata persistence corrected for create/update ingest paths
@@ -120,11 +123,20 @@ Server/ethereal operating modes, file intelligence + scanner workflows, Graph v2
 - Migration atomicity restored for FK-referenced table rebuilds; dashboard startup guard added
 - Graph zoom-in no longer jumps aggressively from extreme zoom-out levels — `wheelSensitivity` reduced from Cytoscape default (1.0) to 0.15
 - Page title reversed from "[project] — Filigree" to "Filigree — [project]"
+- `_read_graph_runtime_config()` failure logging elevated from DEBUG to WARNING
+- `api_scan_runs` exception handler narrowed from `Exception` to `sqlite3.Error`
+- Tour onboarding text corrected from "5 views" to "7 views" (adds Files and Code Health)
 
 #### CLI
 
 - `import` command catches `OSError` for filesystem errors — clean message instead of traceback
 - `claim-next` wraps `db.claim_next()` in `ValueError` handling with JSON/plaintext error output
+- `session-context` and `ensure-dashboard` hooks now log at WARNING and emit stderr message on failure instead of swallowing at DEBUG
+- `read_config()` catches `JSONDecodeError`/`OSError` — corrupt `config.json` returns defaults with warning instead of cascading crashes
+- MCP `_build_workflow_text` fallback now logs at WARNING instead of silently returning stale static text
+- MCP `release_claim` tool description corrected: clarifies it clears assignee only (does not change status)
+- `_install_mcp_server_mode` prefix-read failure narrowed to `JSONDecodeError`/`OSError` and elevated to WARNING; `_install_mcp_ethereal_mode` logs `claude mcp add` stderr on failure
+- Duplicate `_check_same_thread` assignment removed from `FiligreeDB.__init__`
 
 #### Migration
 

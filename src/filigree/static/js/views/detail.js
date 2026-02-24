@@ -65,6 +65,7 @@ export async function openDetail(issueId) {
     }
   }
 
+  const safeId = escJsSingle(d.id);
   const statusCat = d.status_category || "open";
   const statusColor = CATEGORY_COLORS[statusCat] || "#64748B";
   const prioColor = PRIORITY_COLORS[d.priority] || "#6B7280";
@@ -156,7 +157,7 @@ export async function openDetail(issueId) {
         : "";
 
   header.innerHTML =
-    `<span class="text-xs" style="color:var(--text-muted)">${d.id}</span>` +
+    `<span class="text-xs" style="color:var(--text-muted)">${escHtml(d.id)}</span>` +
     "<div>" +
     (state.detailHistory.length
       ? '<button onclick="detailBack()" class="text-muted text-primary-hover text-xs mr-2">&larr; Back</button>'
@@ -169,7 +170,7 @@ export async function openDetail(issueId) {
     `<span class="text-lg">${typeIcon}</span>` +
     `<span class="text-lg font-semibold" style="color:var(--text-primary)">${escHtml(d.title)}</span>` +
     (d.type === "milestone" || d.type === "epic"
-      ? `<button onclick="loadPlanView('${d.id}')" class="text-xs bg-overlay bg-overlay-hover px-2 py-1 rounded ml-2">View Plan</button>`
+      ? `<button onclick="loadPlanView('${safeId}')" class="text-xs bg-overlay bg-overlay-hover px-2 py-1 rounded ml-2">View Plan</button>`
       : "") +
     "</div>" +
     '<div class="flex items-center gap-2 mb-4 flex-wrap">' +
@@ -202,8 +203,8 @@ export async function openDetail(issueId) {
     ((d.blocked_by || []).length
       ? '<div class="mb-3"><div class="text-xs font-medium text-red-400 mb-1">Blocked by &larr;</div>' +
         blockerHtml +
-        `<button onclick="showAddBlocker('${d.id}')" class="text-xs hover:underline mt-1" style="color:var(--accent)">+ Add blocker</button></div>`
-      : `<div class="mb-3"><button onclick="showAddBlocker('${d.id}')" class="text-xs hover:underline" style="color:var(--accent)">+ Add blocker</button></div>`) +
+        `<button onclick="showAddBlocker('${safeId}')" class="text-xs hover:underline mt-1" style="color:var(--accent)">+ Add blocker</button></div>`
+      : `<div class="mb-3"><button onclick="showAddBlocker('${safeId}')" class="text-xs hover:underline" style="color:var(--accent)">+ Add blocker</button></div>`) +
     ((d.blocks || []).length
       ? '<div class="mb-3"><div class="text-xs font-medium mb-1" style="color:var(--accent)">Blocks \u2192</div>' +
         blocksHtml +
@@ -230,36 +231,36 @@ export async function openDetail(issueId) {
     '<div id="transitionBtns" class="flex flex-wrap gap-1 mb-2"></div>' +
     '<div class="flex gap-2 mb-2">' +
     '<label for="prioSelect" class="text-xs" style="color:var(--text-secondary)">Priority</label> ' +
-    `<select id="prioSelect" onchange="updateIssue('${d.id}', {priority: parseInt(this.value)})" class="text-xs rounded px-2 py-1" style="background:var(--surface-overlay);color:var(--text-primary);border:1px solid var(--border-strong)">` +
+    `<select id="prioSelect" onchange="updateIssue('${safeId}', {priority: parseInt(this.value)})" class="text-xs rounded px-2 py-1" style="background:var(--surface-overlay);color:var(--text-primary);border:1px solid var(--border-strong)">` +
     [0, 1, 2, 3, 4]
       .map((p) => `<option value="${p}"${d.priority === p ? " selected" : ""}>P${p}</option>`)
       .join("") +
     "</select>" +
     '<label for="assigneeInput" class="text-xs" style="color:var(--text-secondary)">Assignee</label> ' +
     `<input id="assigneeInput" type="text" placeholder="Assignee" value="${escHtml(d.assignee || "")}"` +
-    ` onkeydown="if(event.key==='Enter')updateIssue('${d.id}',{assignee:this.value})"` +
+    ` onkeydown="if(event.key==='Enter')updateIssue('${safeId}',{assignee:this.value})"` +
     ' class="text-xs rounded px-2 py-1 flex-1" style="background:var(--surface-overlay);color:var(--text-primary);border:1px solid var(--border-strong)">' +
     "</div>" +
     (statusCat !== "done"
-      ? `<button onclick="closeIssue('${d.id}')" class="text-xs bg-red-900/50 text-red-400 px-3 py-1 rounded border border-red-800 hover:bg-red-900 mb-2">Close</button>`
-      : `<button onclick="reopenIssue('${d.id}')" class="text-xs bg-green-900/50 text-green-400 px-3 py-1 rounded border border-green-800 hover:bg-green-900 mb-2">Reopen</button>`) +
+      ? `<button onclick="closeIssue('${safeId}')" class="text-xs bg-red-900/50 text-red-400 px-3 py-1 rounded border border-red-800 hover:bg-red-900 mb-2">Close</button>`
+      : `<button onclick="reopenIssue('${safeId}')" class="text-xs bg-green-900/50 text-green-400 px-3 py-1 rounded border border-green-800 hover:bg-green-900 mb-2">Reopen</button>`) +
     (statusCat !== "done" && !d.assignee
-      ? `<button onclick="claimIssue('${d.id}')" class="text-xs bg-emerald-900/50 text-emerald-400 px-3 py-1 rounded border border-emerald-800 hover:bg-emerald-900 mb-2 ml-1">Claim</button>`
+      ? `<button onclick="claimIssue('${safeId}')" class="text-xs bg-emerald-900/50 text-emerald-400 px-3 py-1 rounded border border-emerald-800 hover:bg-emerald-900 mb-2 ml-1">Claim</button>`
       : "") +
     (d.assignee
-      ? `<button onclick="releaseIssue('${d.id}')" class="text-xs bg-overlay bg-overlay-hover px-3 py-1.5 rounded mb-2 ml-1" style="color:var(--text-primary);border:1px solid var(--border-strong)">Release</button>`
+      ? `<button onclick="releaseIssue('${safeId}')" class="text-xs bg-overlay bg-overlay-hover px-3 py-1.5 rounded mb-2 ml-1" style="color:var(--text-primary);border:1px solid var(--border-strong)">Release</button>`
       : "") +
     "</div>" +
     // Comment input
     '<div class="mt-3 pt-3" style="border-top:1px solid var(--border-default)">' +
     '<label for="commentInput" class="text-xs font-medium mb-1" style="color:var(--text-secondary)">Add Comment</label>' +
     '<div class="flex gap-1">' +
-    `<input id="commentInput" type="text" placeholder="Comment..." onkeydown="if(event.key==='Enter')addComment('${d.id}')"` +
+    `<input id="commentInput" type="text" placeholder="Comment..." onkeydown="if(event.key==='Enter')addComment('${safeId}')"` +
     ' class="text-xs rounded px-2 py-1 flex-1 focus:outline-none" style="background:var(--surface-overlay);color:var(--text-primary);border:1px solid var(--border-strong)">' +
-    `<button onclick="addComment('${d.id}')" class="text-xs px-2 py-1 rounded bg-accent-hover" style="background:var(--accent);color:var(--surface-base)">Send</button>` +
+    `<button onclick="addComment('${safeId}')" class="text-xs px-2 py-1 rounded bg-accent-hover" style="background:var(--accent);color:var(--surface-base)">Send</button>` +
     "</div>" +
     "</div>" +
-    `<div class="mt-3 text-xs select-all" style="color:var(--text-muted)" title="Copy this command to view in terminal">filigree show ${d.id}</div>`;
+    `<div class="mt-3 text-xs select-all" style="color:var(--text-muted)" title="Copy this command to view in terminal">filigree show ${escHtml(d.id)}</div>`;
 
   // Load transitions async and render buttons
   loadTransitions(issueId).then((transitions) => {
@@ -275,7 +276,7 @@ export async function openDetail(issueId) {
           ? ` <span style="color:var(--text-muted)">(missing: ${t.missing_fields.join(", ")})</span>`
           : "";
         return (
-          `<button ${t.ready ? `onclick="updateIssue('${issueId}',{status:'${t.to}'},this)"` : "disabled"}` +
+          `<button ${t.ready ? `onclick="updateIssue('${safeId}',{status:'${escJsSingle(t.to)}'},this)"` : "disabled"}` +
           ` class="text-xs px-2 py-1 rounded ${cls}" style="${btnStyle}">` +
           `${t.to}${missingText}</button>`
         );
@@ -392,6 +393,7 @@ export async function reopenIssue(issueId) {
 // ---------------------------------------------------------------------------
 
 export async function claimIssue(issueId) {
+  const safeIssueId = escJsSingle(issueId);
   const existing = document.getElementById("claimModal");
   if (existing) existing.remove();
   const saved = localStorage.getItem("filigree_claim_name") || "";
@@ -407,7 +409,7 @@ export async function claimIssue(issueId) {
       : '<div class="mb-2"></div>') +
     '<div class="flex justify-end gap-2">' +
     `<button onclick="document.getElementById('claimModal').remove()" class="text-xs bg-overlay bg-overlay-hover px-3 py-1.5 rounded">Cancel</button>` +
-    `<button onclick="confirmClaim('${issueId}')" class="text-xs bg-emerald-600 text-white px-3 py-1.5 rounded hover:bg-emerald-700">Claim</button>` +
+    `<button onclick="confirmClaim('${safeIssueId}')" class="text-xs bg-emerald-600 text-white px-3 py-1.5 rounded hover:bg-emerald-700">Claim</button>` +
     "</div></div>";
   document.body.appendChild(modal);
   modal.onclick = (e) => {
@@ -495,6 +497,7 @@ export async function removeDependency(issueId, depId) {
 // ---------------------------------------------------------------------------
 
 export async function showAddBlocker(issueId) {
+  const safeIssueId = escJsSingle(issueId);
   const existing = document.getElementById("addBlockerModal");
   if (existing) existing.remove();
   const modal = document.createElement("div");
@@ -531,8 +534,8 @@ export async function showAddBlocker(issueId) {
             .filter((r) => r.id !== issueId)
             .map(
               (r) =>
-                `<div class="flex items-center gap-2 py-1 px-1 cursor-pointer bg-overlay-hover rounded" onclick="addDependency('${issueId}','${r.id}')">` +
-                `<span style="color:var(--text-secondary)">${r.id}</span>` +
+                `<div class="flex items-center gap-2 py-1 px-1 cursor-pointer bg-overlay-hover rounded" onclick="addDependency('${safeIssueId}','${escJsSingle(r.id)}')">` +
+                `<span style="color:var(--text-secondary)">${escHtml(r.id)}</span>` +
                 `<span style="color:var(--text-primary)" class="truncate">${escHtml(r.title.slice(0, 30))}</span></div>`,
             )
             .join("") || '<div style="color:var(--text-muted)">No results</div>';

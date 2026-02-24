@@ -189,8 +189,15 @@ def _install_mcp_ethereal_mode(project_root: Path) -> tuple[bool, str]:
             )
             if result.returncode == 0:
                 return True, "Installed via `claude mcp add` (project scope)"
-        except (subprocess.TimeoutExpired, FileNotFoundError):
-            pass
+            logger.warning(
+                "`claude mcp add` failed (exit %d): %s",
+                result.returncode,
+                (result.stderr or "").strip(),
+            )
+        except subprocess.TimeoutExpired:
+            logger.warning("`claude mcp add` timed out after 10s")
+        except FileNotFoundError:
+            logger.warning("claude binary disappeared between which() and run()")
 
     # Fall back to writing .mcp.json directly
     mcp_json_path = project_root / ".mcp.json"
@@ -218,8 +225,8 @@ def _install_mcp_server_mode(project_root: Path, port: int) -> tuple[bool, str]:
         prefix = config.get("prefix")
         if isinstance(prefix, str) and prefix.strip():
             project_key = prefix.strip()
-    except Exception:
-        logger.debug("Unable to read project prefix for server-mode MCP install", exc_info=True)
+    except (json.JSONDecodeError, OSError) as exc:
+        logger.warning("Unable to read project prefix for server-mode MCP install: %s", exc)
 
     encoded_key = quote(project_key, safe="")
 

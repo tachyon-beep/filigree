@@ -226,6 +226,10 @@ def _build_workflow_text() -> str:
 
         return "\n".join(lines) + "\n"
     except Exception:
+        logging.getLogger(__name__).warning(
+            "Failed to build dynamic workflow text; falling back to static",
+            exc_info=True,
+        )
         return _WORKFLOW_TEXT_STATIC
 
 
@@ -732,7 +736,7 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="release_claim",
-            description="Release a claimed issue back to open. Reverses claim_issue.",
+            description="Release a claimed issue by clearing its assignee. Does NOT change status. Reverses claim_issue.",
             inputSchema={
                 "type": "object",
                 "properties": {

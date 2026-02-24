@@ -43,7 +43,7 @@ export const SEVERITY_COLORS = {
 export const TOUR_STEPS = [
   {
     el: "#btnKanban",
-    text: "The dashboard has 5 views: Kanban (default), Graph, Metrics, Activity, and Workflow. Each shows your issues differently.",
+    text: "The dashboard has 7 views: Kanban (default), Graph, Metrics, Activity, Workflow, Files, and Code Health. Each shows your issues differently.",
     pos: "bottom",
   },
   {

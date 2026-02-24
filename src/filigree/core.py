@@ -73,12 +73,17 @@ def find_filigree_root(start: Path | None = None) -> Path:
 
 
 def read_config(filigree_dir: Path) -> dict[str, Any]:
-    """Read .filigree/config.json. Returns defaults if missing."""
+    """Read .filigree/config.json. Returns defaults if missing or corrupt."""
+    defaults: dict[str, Any] = {"prefix": "filigree", "version": 1, "enabled_packs": ["core", "planning", "release"]}
     config_path = filigree_dir / CONFIG_FILENAME
-    if config_path.exists():
+    if not config_path.exists():
+        return defaults
+    try:
         result: dict[str, Any] = json.loads(config_path.read_text())
         return result
-    return {"prefix": "filigree", "version": 1, "enabled_packs": ["core", "planning", "release"]}
+    except (json.JSONDecodeError, OSError) as exc:
+        logger.warning("Failed to read %s, using defaults: %s", config_path, exc)
+        return defaults
 
 
 def write_config(filigree_dir: Path, config: dict[str, Any]) -> None:
@@ -521,7 +526,6 @@ class FiligreeDB:
         self._conn: sqlite3.Connection | None = None
         self._check_same_thread = check_same_thread
         self._template_registry: TemplateRegistry | None = template_registry
-        self._check_same_thread = check_same_thread
 
     @classmethod
     def from_project(cls, project_path: Path | None = None) -> FiligreeDB:

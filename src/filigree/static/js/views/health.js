@@ -4,7 +4,7 @@
 
 import { fetchFiles, fetchFileStats, fetchHotspots, fetchScanRuns } from "../api.js";
 import { SEVERITY_COLORS, state } from "../state.js";
-import { escHtml } from "../ui.js";
+import { escHtml, escJsSingle } from "../ui.js";
 
 // --- Main loader ---
 
@@ -95,7 +95,7 @@ function renderHotspotsWidget(hotspots) {
       const barWidth = ((h.score / maxScore) * 100).toFixed(1);
 
       return (
-        `<div class="flex items-center gap-2 mb-2 cursor-pointer bg-overlay-hover rounded px-2 py-1" onclick="switchView('files');setTimeout(()=>openFileDetail('${escHtml(f.id)}'),100)" role="button" tabindex="0">` +
+        `<div class="flex items-center gap-2 mb-2 cursor-pointer bg-overlay-hover rounded px-2 py-1" onclick="switchView('files');setTimeout(()=>openFileDetail('${escJsSingle(f.id)}'),100)" role="button" tabindex="0">` +
         `<span class="text-xs truncate w-48" style="color:var(--text-primary)" title="${escHtml(f.path)}">${escHtml(f.path)}</span>` +
         `<div class="flex-1 h-3 rounded overflow-hidden flex" style="background:var(--surface-base);max-width:${barWidth}%">` +
         segments +
@@ -237,7 +237,7 @@ function renderRecentScansWidget(scanRuns) {
       const findings = run.total_findings || 0;
 
       return (
-        `<div class="flex items-center gap-2 mb-2 rounded px-2 py-1.5 cursor-pointer bg-overlay-hover" onclick="filterFilesByScanSource('${escHtml(run.scan_source || '')}')" role="button" tabindex="0">` +
+        `<div class="flex items-center gap-2 mb-2 rounded px-2 py-1.5 cursor-pointer bg-overlay-hover" onclick="filterFilesByScanSource('${escJsSingle(run.scan_source || '')}')" role="button" tabindex="0">` +
         `<span class="text-xs font-medium rounded px-1.5 py-0.5 shrink-0" style="${_sourceBadge(run.scan_source)}">${source}</span>` +
         `<span class="text-xs truncate flex-1" style="color:var(--text-primary)" title="${runId}">${runId}</span>` +
         `<span class="text-xs shrink-0" style="color:var(--text-muted)">${escHtml(String(files))} files</span>` +

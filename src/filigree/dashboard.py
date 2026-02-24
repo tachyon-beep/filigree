@@ -24,6 +24,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import sqlite3
 import webbrowser
 from collections import deque
 from contextvars import ContextVar
@@ -247,7 +248,7 @@ def _read_graph_runtime_config(db: FiligreeDB) -> dict[str, Any]:
     try:
         return read_config(db.db_path.parent)
     except Exception:
-        logger.debug("Failed to read graph runtime config", exc_info=True)
+        logger.warning("Failed to read graph runtime config", exc_info=True)
         return {}
 
 
@@ -1399,7 +1400,7 @@ def _create_project_router() -> Any:
             return limit
         try:
             runs = db.get_scan_runs(limit=limit)
-        except Exception:
+        except sqlite3.Error:
             logger.exception("Failed to query scan runs")
             return _error_response("Failed to query scan runs", "INTERNAL_ERROR", 500)
         return JSONResponse({"scan_runs": runs}, headers={"Cache-Control": "no-cache"})

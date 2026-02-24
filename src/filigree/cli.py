@@ -1019,7 +1019,8 @@ def session_context() -> None:
         if context:
             click.echo(context)
     except Exception:
-        logging.getLogger(__name__).debug("session-context hook failed", exc_info=True)
+        logging.getLogger(__name__).warning("session-context hook failed", exc_info=True)
+        click.echo("Warning: session-context hook failed (run with -v for details)", err=True)
 
 
 @cli.command("ensure-dashboard")
@@ -1033,7 +1034,8 @@ def ensure_dashboard_cmd(port: int | None) -> None:
         if message:
             click.echo(message)
     except Exception:
-        logging.getLogger(__name__).debug("ensure-dashboard hook failed", exc_info=True)
+        logging.getLogger(__name__).warning("ensure-dashboard hook failed", exc_info=True)
+        click.echo("Warning: ensure-dashboard hook failed (run with -v for details)", err=True)
 
 
 @cli.command("critical-path")

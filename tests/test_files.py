@@ -2585,3 +2585,112 @@ class TestInputValidation400s:
         resp = await client.get("/api/files?offset=-5")
         assert resp.status_code == 400
         assert resp.json()["error"]["code"] == "VALIDATION_ERROR"
+
+
+# ---------------------------------------------------------------------------
+# _normalize_scan_path edge cases (filigree-7bff85)
+# ---------------------------------------------------------------------------
+
+
+class TestNormalizeScanPath:
+    """Direct unit tests for _normalize_scan_path edge cases."""
+
+    def test_empty_string(self) -> None:
+        from filigree.core import _normalize_scan_path
+
+        assert _normalize_scan_path("") == ""
+
+    def test_dot_path(self) -> None:
+        from filigree.core import _normalize_scan_path
+
+        assert _normalize_scan_path(".") == ""
+
+    def test_trailing_slash(self) -> None:
+        from filigree.core import _normalize_scan_path
+
+        assert _normalize_scan_path("src/main.py/") == "src/main.py"
+
+    def test_double_slash(self) -> None:
+        from filigree.core import _normalize_scan_path
+
+        result = _normalize_scan_path("src//main.py")
+        assert result == "src/main.py"
+
+    def test_backslash_path(self) -> None:
+        from filigree.core import _normalize_scan_path
+
+        assert _normalize_scan_path(r"src\main.py") == "src/main.py"
+
+    def test_dot_backslash_prefix(self) -> None:
+        from filigree.core import _normalize_scan_path
+
+        assert _normalize_scan_path(r".\src\main.py") == "src/main.py"
+
+    def test_parent_traversal(self) -> None:
+        from filigree.core import _normalize_scan_path
+
+        assert _normalize_scan_path("src/../main.py") == "main.py"
+
+    def test_normal_path_unchanged(self) -> None:
+        from filigree.core import _normalize_scan_path
+
+        assert _normalize_scan_path("src/main.py") == "src/main.py"
+
+
+# ---------------------------------------------------------------------------
+# get_scan_runs core-level tests (filigree-694a75)
+# ---------------------------------------------------------------------------
+
+
+class TestGetScanRunsCore:
+    """Core-level unit tests for FiligreeDB.get_scan_runs()."""
+
+    def test_empty_table(self, db: FiligreeDB) -> None:
+        assert db.get_scan_runs() == []
+
+    def test_excludes_empty_scan_run_id(self, db: FiligreeDB) -> None:
+        db.process_scan_results(
+            scan_source="ruff",
+            scan_run_id="",
+            findings=[{"path": "a.py", "rule_id": "R1", "severity": "low", "message": "m"}],
+        )
+        assert db.get_scan_runs() == []
+
+    def test_single_run(self, db: FiligreeDB) -> None:
+        db.process_scan_results(
+            scan_source="codex",
+            scan_run_id="run-1",
+            findings=[{"path": "a.py", "rule_id": "R1", "severity": "low", "message": "m"}],
+        )
+        runs = db.get_scan_runs()
+        assert len(runs) == 1
+        assert runs[0]["scan_run_id"] == "run-1"
+        assert runs[0]["scan_source"] == "codex"
+        assert runs[0]["total_findings"] == 1
+        assert runs[0]["files_scanned"] == 1
+
+    def test_multi_file_scan_run(self, db: FiligreeDB) -> None:
+        """files_scanned should count distinct files, not total findings."""
+        db.process_scan_results(
+            scan_source="codex",
+            scan_run_id="run-multi",
+            findings=[
+                {"path": "a.py", "rule_id": "R1", "severity": "low", "message": "m"},
+                {"path": "a.py", "rule_id": "R2", "severity": "high", "message": "n"},
+                {"path": "b.py", "rule_id": "R1", "severity": "low", "message": "m"},
+            ],
+        )
+        runs = db.get_scan_runs()
+        assert len(runs) == 1
+        assert runs[0]["total_findings"] == 3
+        assert runs[0]["files_scanned"] == 2
+
+    def test_limit_parameter(self, db: FiligreeDB) -> None:
+        for i in range(5):
+            db.process_scan_results(
+                scan_source="ruff",
+                scan_run_id=f"run-{i}",
+                findings=[{"path": f"f{i}.py", "rule_id": "R1", "severity": "low", "message": "m"}],
+            )
+        runs = db.get_scan_runs(limit=2)
+        assert len(runs) == 2

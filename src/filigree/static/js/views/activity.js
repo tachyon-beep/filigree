@@ -3,7 +3,7 @@
 // ---------------------------------------------------------------------------
 
 import { fetchActivity } from "../api.js";
-import { escHtml } from "../ui.js";
+import { escHtml, escJsSingle } from "../ui.js";
 
 /**
  * Fetch recent activity events and render them as a day-grouped timeline
@@ -45,7 +45,7 @@ export async function loadActivity() {
         return (
           separator +
           '<div class="flex items-start gap-3 py-2 cursor-pointer bg-overlay-hover" style="border-bottom:1px solid var(--surface-raised)" onclick="openDetail(\'' +
-          e.issue_id +
+          escJsSingle(e.issue_id) +
           "')" +
           ">" +
           '<span class="shrink-0 w-24" style="color:var(--text-muted)">' +

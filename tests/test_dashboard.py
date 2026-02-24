@@ -2171,8 +2171,16 @@ class TestMultiProjectRouting:
         assert len(data) == 2
 
     async def test_unknown_project_404(self, multi_client: AsyncClient) -> None:
-        """GET /api/p/nonexistent/issues returns 404."""
+        """GET /api/p/nonexistent/issues returns structured 404, not raw stack trace."""
         resp = await multi_client.get("/api/p/nonexistent/issues")
+        assert resp.status_code == 404
+        data = resp.json()
+        assert "detail" in data
+        assert "nonexistent" in data["detail"]
+
+    async def test_empty_project_key_returns_404(self, multi_client: AsyncClient) -> None:
+        """GET /api/p//issues with empty key does not match any route."""
+        resp = await multi_client.get("/api/p//issues")
         assert resp.status_code == 404
 
     async def test_mcp_unknown_project_returns_404(self, multi_client: AsyncClient) -> None:
