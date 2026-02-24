@@ -616,11 +616,6 @@ VALID_ASSOC_TYPES = frozenset({"bug_in", "task_for", "scan_finding", "mentioned_
 # ---------------------------------------------------------------------------
 
 
-def _generate_id_standalone(prefix: str) -> str:
-    """Generate a short unique ID like 'myproject-a3f9b2c4e1' (no collision check)."""
-    return f"{prefix}-{uuid.uuid4().hex[:10]}"
-
-
 def _now_iso() -> str:
     return datetime.now(UTC).isoformat()
 
