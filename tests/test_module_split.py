@@ -4,6 +4,7 @@ from pathlib import Path
 
 from filigree.core import FiligreeDB
 from filigree.db_events import EventsMixin
+from filigree.db_issues import IssuesMixin
 from filigree.db_meta import MetaMixin
 from filigree.db_planning import PlanningMixin
 from filigree.db_workflow import WorkflowMixin
@@ -106,3 +107,56 @@ def test_get_ready(db: FiligreeDB) -> None:
     db.create_issue(title="ready-test")
     ready = db.get_ready()
     assert len(ready) >= 1
+
+
+# -- IssuesMixin ------------------------------------------------------------
+
+
+def test_issues_mixin_is_base_class() -> None:
+    """FiligreeDB should inherit from IssuesMixin."""
+    assert issubclass(FiligreeDB, IssuesMixin)
+
+
+def test_full_issue_lifecycle(db: FiligreeDB) -> None:
+    """create/update/close should work through IssuesMixin composition."""
+    issue = db.create_issue(title="lifecycle")
+    assert issue.title == "lifecycle"
+    db.update_issue(issue.id, title="updated")
+    updated = db.get_issue(issue.id)
+    assert updated.title == "updated"
+    db.close_issue(issue.id)
+    closed = db.get_issue(issue.id)
+    assert closed.status_category == "done"
+
+
+def test_batch_operations(db: FiligreeDB) -> None:
+    """batch_update should work through IssuesMixin composition."""
+    a = db.create_issue(title="batch-a")
+    b = db.create_issue(title="batch-b")
+    db.batch_update([a.id, b.id], priority=0)
+    assert db.get_issue(a.id).priority == 0
+    assert db.get_issue(b.id).priority == 0
+
+
+def test_claim_and_release(db: FiligreeDB) -> None:
+    """claim_issue and release_claim should work through IssuesMixin."""
+    issue = db.create_issue(title="claimable")
+    claimed = db.claim_issue(issue.id, assignee="agent-1")
+    assert claimed.assignee == "agent-1"
+    released = db.release_claim(issue.id)
+    assert released.assignee == ""
+
+
+def test_list_issues(db: FiligreeDB) -> None:
+    """list_issues should work through IssuesMixin composition."""
+    db.create_issue(title="listable-item")
+    found = db.list_issues(status="open")
+    assert len(found) >= 1
+
+
+def test_search_issues(db: FiligreeDB) -> None:
+    """search_issues should work through IssuesMixin composition."""
+    db.create_issue(title="searchable-xyz")
+    # search_issues uses FTS5 or LIKE fallback — both should find it
+    results = db.search_issues("searchable")
+    assert len(results) >= 1

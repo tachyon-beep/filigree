@@ -36,7 +36,7 @@ class TestClaimNextExhaustion:
         # Simulate claim_issue always raising ValueError (race condition)
         with (
             patch.object(db, "claim_issue", side_effect=ValueError("race")),
-            patch("filigree.core.logger") as mock_logger,
+            patch("filigree.db_issues.logger") as mock_logger,
         ):
             result = db.claim_next("agent2")
 
