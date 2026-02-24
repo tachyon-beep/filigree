@@ -243,7 +243,7 @@ class TestGenerateId:
     def test_generate_id_returns_prefixed_id(self, db: FiligreeDB) -> None:
         issue_id = db._generate_unique_id("issues")
         assert issue_id.startswith("test-")
-        assert len(issue_id) == len("test-") + 6
+        assert len(issue_id) == len("test-") + 10
 
     def test_generate_id_avoids_collisions(self, db: FiligreeDB) -> None:
         ids = {db._generate_unique_id("issues") for _ in range(50)}

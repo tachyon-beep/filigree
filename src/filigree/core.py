@@ -617,8 +617,8 @@ VALID_ASSOC_TYPES = frozenset({"bug_in", "task_for", "scan_finding", "mentioned_
 
 
 def _generate_id_standalone(prefix: str) -> str:
-    """Generate a short unique ID like 'myproject-a3f9b2' (no collision check)."""
-    return f"{prefix}-{uuid.uuid4().hex[:6]}"
+    """Generate a short unique ID like 'myproject-a3f9b2c4e1' (no collision check)."""
+    return f"{prefix}-{uuid.uuid4().hex[:10]}"
 
 
 def _now_iso() -> str:
@@ -865,10 +865,10 @@ class FiligreeDB:
         """
         sep = f"-{infix}-" if infix else "-"
         for _ in range(10):
-            candidate = f"{self.prefix}{sep}{uuid.uuid4().hex[:6]}"
+            candidate = f"{self.prefix}{sep}{uuid.uuid4().hex[:10]}"
             if self.conn.execute(f"SELECT 1 FROM {table} WHERE id = ?", (candidate,)).fetchone() is None:
                 return candidate
-        return f"{self.prefix}{sep}{uuid.uuid4().hex[:10]}"
+        return f"{self.prefix}{sep}{uuid.uuid4().hex[:16]}"
 
     def _reserved_label_names(self) -> set[str]:
         """Issue type names are reserved and cannot be used as free-form labels."""
