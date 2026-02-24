@@ -14,6 +14,7 @@ import os
 import shlex
 import socket
 import subprocess
+import sys
 from pathlib import Path
 from typing import TypedDict
 
@@ -123,8 +124,16 @@ def read_pid_file(pid_file: Path) -> PidInfo | None:
 
 
 def is_pid_alive(pid: int) -> bool:
-    """Check if a process is running (via kill signal 0)."""
+    """Check if a process is running. Uses signal 0 on POSIX, OpenProcess on Windows."""
     if pid <= 0:
+        return False
+    if sys.platform == "win32":
+        import ctypes
+
+        handle = ctypes.windll.kernel32.OpenProcess(0x1000, False, pid)  # type: ignore[union-attr]  # PROCESS_QUERY_LIMITED_INFORMATION
+        if handle:
+            ctypes.windll.kernel32.CloseHandle(handle)  # type: ignore[union-attr]
+            return True
         return False
     try:
         os.kill(pid, 0)
@@ -134,7 +143,11 @@ def is_pid_alive(pid: int) -> bool:
 
 
 def _read_os_command_line(pid: int) -> list[str] | None:
-    """Best-effort read of OS process command line tokens."""
+    """Best-effort read of OS process command line tokens.
+
+    Fallback chain: /proc (Linux) -> ps (macOS/BSD) -> wmic (Windows).
+    """
+    # Linux: read /proc/{pid}/cmdline directly.
     proc_cmdline = Path("/proc") / str(pid) / "cmdline"
     try:
         if proc_cmdline.exists():
@@ -145,24 +158,43 @@ def _read_os_command_line(pid: int) -> list[str] | None:
     except OSError:
         pass
 
-    # Fallback for environments without /proc.
+    # macOS/BSD: use ps.
+    if sys.platform != "win32":
+        try:
+            result = subprocess.run(
+                ["ps", "-p", str(pid), "-o", "command="],
+                capture_output=True,
+                text=True,
+                timeout=1.0,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return None
+        cmdline = result.stdout.strip()
+        if not cmdline:
+            return None
+        try:
+            return shlex.split(cmdline)
+        except ValueError:
+            return [cmdline]
+
+    # Windows: use wmic (available on all supported Windows versions).
     try:
         result = subprocess.run(
-            ["ps", "-p", str(pid), "-o", "command="],
+            ["wmic", "process", "where", f"ProcessId={pid}", "get", "CommandLine", "/VALUE"],
             capture_output=True,
             text=True,
-            timeout=1.0,
+            timeout=2.0,
             check=False,
         )
     except (OSError, subprocess.SubprocessError):
         return None
-    cmdline = result.stdout.strip()
-    if not cmdline:
-        return None
-    try:
-        return shlex.split(cmdline)
-    except ValueError:
-        return [cmdline]
+    for line in result.stdout.splitlines():
+        if line.startswith("CommandLine="):
+            cmdline = line[len("CommandLine=") :].strip()
+            if cmdline:
+                return cmdline.split()
+    return None
 
 
 def verify_pid_ownership(pid_file: Path, *, expected_cmd: str = "filigree") -> bool:
