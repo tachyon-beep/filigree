@@ -1504,31 +1504,18 @@ async def _dispatch(name: str, arguments: dict[str, Any], tracker: FiligreeDB) -
             if not all(isinstance(i, str) for i in ids):
                 return _text({"error": "All issue IDs must be strings", "code": "validation_error"})
             ready_before = {i.id for i in tracker.get_ready()}
-            succeeded: list[str] = []
-            failed: list[dict[str, Any]] = []
-            warnings: list[str] = []
-            for issue_id in ids:
-                try:
-                    issue = tracker.close_issue(
-                        issue_id,
-                        reason=arguments.get("reason", ""),
-                        actor=arguments.get("actor", "mcp"),
-                    )
-                    succeeded.append(issue.id)
-                except KeyError:
-                    failed.append({"id": issue_id, "error": f"Issue not found: {issue_id}", "code": "not_found"})
-                except ValueError as e:
-                    fail_data = _build_transition_error(tracker, issue_id, str(e), include_ready=False)
-                    fail_data["id"] = issue_id
-                    failed.append(fail_data)
+            closed, failed = tracker.batch_close(
+                ids,
+                reason=arguments.get("reason", ""),
+                actor=arguments.get("actor", "mcp"),
+            )
             _refresh_summary()
             ready_after = tracker.get_ready()
             newly_unblocked = [i for i in ready_after if i.id not in ready_before]
             batch_result: dict[str, Any] = {
-                "succeeded": succeeded,
+                "succeeded": [i.id for i in closed],
                 "failed": failed,
-                "warnings": warnings,
-                "count": len(succeeded),
+                "count": len(closed),
             }
             if newly_unblocked:
                 batch_result["newly_unblocked"] = [
@@ -1543,33 +1530,20 @@ async def _dispatch(name: str, arguments: dict[str, Any], tracker: FiligreeDB) -
             u_fields = arguments.get("fields")
             if u_fields is not None and not isinstance(u_fields, dict):
                 return _text({"error": "fields must be a JSON object", "code": "validation_error"})
-            update_succeeded: list[str] = []
-            update_failed: list[dict[str, Any]] = []
-            update_warnings: list[str] = []
-            for issue_id in u_ids:
-                try:
-                    issue = tracker.update_issue(
-                        issue_id,
-                        status=arguments.get("status"),
-                        priority=arguments.get("priority"),
-                        assignee=arguments.get("assignee"),
-                        fields=u_fields,
-                        actor=arguments.get("actor", "mcp"),
-                    )
-                    update_succeeded.append(issue.id)
-                except KeyError:
-                    update_failed.append({"id": issue_id, "error": f"Issue not found: {issue_id}", "code": "not_found"})
-                except ValueError as e:
-                    ufail = _build_transition_error(tracker, issue_id, str(e), include_ready=False)
-                    ufail["id"] = issue_id
-                    update_failed.append(ufail)
+            updated, update_failed = tracker.batch_update(
+                u_ids,
+                status=arguments.get("status"),
+                priority=arguments.get("priority"),
+                assignee=arguments.get("assignee"),
+                fields=u_fields,
+                actor=arguments.get("actor", "mcp"),
+            )
             _refresh_summary()
             return _text(
                 {
-                    "succeeded": update_succeeded,
+                    "succeeded": [i.id for i in updated],
                     "failed": update_failed,
-                    "warnings": update_warnings,
-                    "count": len(update_succeeded),
+                    "count": len(updated),
                 }
             )
 

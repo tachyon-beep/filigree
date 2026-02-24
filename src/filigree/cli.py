@@ -1621,6 +1621,9 @@ def batch_update(
                 click.echo(f"  Updated {issue.id}: {issue.title}")
             for err in errors:
                 click.echo(f"  Error {err['id']}: {err['error']}", err=True)
+                if "valid_transitions" in err:
+                    valid = ", ".join(t["to"] for t in err["valid_transitions"])
+                    click.echo(f"    Valid transitions: {valid}", err=True)
             click.echo(f"Updated {len(results)} issues")
         _refresh_summary(db)
 
@@ -1655,6 +1658,9 @@ def batch_close(ctx: click.Context, issue_ids: tuple[str, ...], reason: str, as_
                 click.echo(f"  Closed {issue.id}: {issue.title}")
             for err in errors:
                 click.echo(f"  Error {err['id']}: {err['error']}", err=True)
+                if "valid_transitions" in err:
+                    valid = ", ".join(t["to"] for t in err["valid_transitions"])
+                    click.echo(f"    Valid transitions: {valid}", err=True)
             click.echo(f"Closed {len(closed)}/{len(issue_ids)} issues")
         _refresh_summary(db)
 

@@ -1491,18 +1491,24 @@ class FiligreeDB:
         *,
         reason: str = "",
         actor: str = "",
-    ) -> tuple[list[Issue], list[dict[str, str]]]:
+    ) -> tuple[list[Issue], list[dict[str, Any]]]:
         """Close multiple issues with per-item error handling. Returns (closed, errors)."""
         _validate_string_list(issue_ids, "issue_ids")
         results: list[Issue] = []
-        errors: list[dict[str, str]] = []
+        errors: list[dict[str, Any]] = []
         for issue_id in issue_ids:
             try:
                 results.append(self.close_issue(issue_id, reason=reason, actor=actor))
             except KeyError:
-                errors.append({"id": issue_id, "error": f"Not found: {issue_id}"})
+                errors.append({"id": issue_id, "error": f"Not found: {issue_id}", "code": "not_found"})
             except ValueError as e:
-                errors.append({"id": issue_id, "error": str(e)})
+                err: dict[str, Any] = {"id": issue_id, "error": str(e), "code": "invalid_transition"}
+                try:
+                    transitions = self.get_valid_transitions(issue_id)
+                    err["valid_transitions"] = [{"to": t.to, "category": t.category} for t in transitions]
+                except KeyError:
+                    pass
+                errors.append(err)
         return results, errors
 
     def batch_update(
@@ -1514,11 +1520,11 @@ class FiligreeDB:
         assignee: str | None = None,
         fields: dict[str, Any] | None = None,
         actor: str = "",
-    ) -> tuple[list[Issue], list[dict[str, str]]]:
+    ) -> tuple[list[Issue], list[dict[str, Any]]]:
         """Update multiple issues with the same changes. Returns (updated, errors)."""
         _validate_string_list(issue_ids, "issue_ids")
         results: list[Issue] = []
-        errors: list[dict[str, str]] = []
+        errors: list[dict[str, Any]] = []
         for issue_id in issue_ids:
             try:
                 results.append(
@@ -1532,9 +1538,15 @@ class FiligreeDB:
                     )
                 )
             except KeyError:
-                errors.append({"id": issue_id, "error": f"Not found: {issue_id}"})
+                errors.append({"id": issue_id, "error": f"Not found: {issue_id}", "code": "not_found"})
             except ValueError as e:
-                errors.append({"id": issue_id, "error": str(e)})
+                err: dict[str, Any] = {"id": issue_id, "error": str(e), "code": "invalid_transition"}
+                try:
+                    transitions = self.get_valid_transitions(issue_id)
+                    err["valid_transitions"] = [{"to": t.to, "category": t.category} for t in transitions]
+                except KeyError:
+                    pass
+                errors.append(err)
         return results, errors
 
     def batch_add_label(
