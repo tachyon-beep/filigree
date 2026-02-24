@@ -438,11 +438,250 @@ pack system instead of external scanners.
 
 - **Transform authoring UX** — how do agents/humans author the tree-sitter queries
   and operation args? A builder tool or template library would reduce friction.
-- **Multi-file transforms** — a single logical change sometimes spans multiple files
-  (e.g., rename a function and update all call sites). Should a task support
-  multiple file deltas, or should these be modeled as linked tasks?
 - **Conflict resolution** — when two tasks target the same AST node, the second
   transform is written assuming the first already applied. What tooling helps
   authors get this right?
 - **Dashboard visualization** — how should the before/after diff and AST query
   match be rendered in the dashboard?
+
+---
+
+## Design Review Addendum (2026-02-25)
+
+**Reviewed by:** 8-specialist panel (architect, systems engineer, Python specialist,
+Rust specialist, quality engineer, SDLC specialist, security architect,
+parser/compiler specialist). 3 rounds, full consensus achieved.
+
+**Full transcript:** `2026-02-25-plugin-design-review-transcript.md`
+
+### Resolved: Multi-file Transforms
+
+Multi-delta-per-task. The delta schema changes to an array:
+
+```json
+{
+  "deltas": [
+    {"file": "src/core.py", "transforms": [...], "assertions": [...]},
+    {"file": "src/__init__.py", "transforms": [...], "assertions": [...]},
+    {"file": "tests/test_core.py", "transforms": [...], "assertions": [...]}
+  ]
+}
+```
+
+Single-file tasks use a one-element array. The execution engine processes `deltas[]`
+uniformly. Within a task, all file deltas are applied atomically (snapshot all files
+before any writes, restore all on any failure). Each `deltas[].file` is
+independently path-validated; any invalid path rejects the entire task.
+
+### Critical Design Revisions Required
+
+The following changes were identified as must-haves before implementation begins.
+These represent consensus findings from the 8-specialist review panel.
+
+#### 1. Source Generation Model (CST, not AST)
+
+Tree-sitter produces **concrete syntax trees (CSTs)**, not abstract syntax trees.
+Critically, tree-sitter has **no AST-to-source serialization** — there is no way to
+modify a tree node and produce valid source code from the modified tree.
+
+Every operation must be implemented as a Python code module that:
+1. Uses tree-sitter queries to locate target CST nodes (Query Layer)
+2. Computes text edits (byte range + replacement string) using language-specific
+   Python logic, including indentation handling (Edit Computation Layer)
+3. Applies text edits to the source file via a shared edit engine (Edit Application
+   Layer)
+
+Operations are NOT declarative configs. The JSON definition in the language pack
+declares the operation's **interface** (name, parameters); the **implementation** is
+a Python class conforming to the `OperationHandler` protocol:
+
+```python
+class OperationHandler(Protocol):
+    def validate_args(self, args: dict) -> list[str]:
+        """Return validation errors. Empty = valid."""
+        ...
+
+    def compute_edit(self, source: bytes, tree: Tree, match: Node, args: dict) -> list[TextEdit]:
+        """Compute text edits. Must not have side effects."""
+        ...
+```
+
+**Implementation cost:** ~40 operation implementations (5 languages × ~8
+operations), each 50-300 lines of Python. The Python language pack alone is
+estimated at 800-1200 lines of operation code due to indentation-as-correctness.
+
+**Formatter-as-normalizer:** Languages with deterministic formatters (Rust via
+`rustfmt`, C via `clang-format`, JS via `prettier`) can generate syntactically
+correct but unformatted code and run the formatter as a post-transform step. This
+significantly simplifies operation handlers for those languages. Python cannot use
+this approach because whitespace is semantic — the Python language pack requires an
+explicit indentation engine.
+
+**Hard invariant:** Every transform operates on a freshly-parsed CST from the
+on-disk file. After any text edit, the previous CST is invalid due to shifted byte
+offsets. Re-parse before every subsequent transform.
+
+#### 2. Grammar/Toolchain Split
+
+Language packs must be split into two concerns:
+
+**Grammar pack** (built-in, pure, deterministic):
+- Tree-sitter language reference and file extension mapping
+- Named queries (reusable S-expression patterns)
+- Operation handler implementations (Python OperationHandler classes)
+
+**Toolchain config** (project-level, overridable):
+- Validator commands per language (mypy, ruff, cargo check, etc.)
+- Validator arguments, timeouts, and scoping (file vs package vs workspace)
+- Required vs advisory distinction
+- Output format parsing (e.g., `--message-format=json` for cargo)
+
+This split resolves multiple issues:
+- `{file}` placeholders don't work for cargo (operates on packages/workspaces)
+- Projects may use pyright instead of mypy, or have custom validator configurations
+- Eliminates command injection by design — delta authors reference validators by
+  name, never by command template
+
+Language packs provide **default validator recommendations** as documentation, but
+the actual validator configuration is project-level.
+
+#### 3. Execution Model: Phase-Level with Safety Invariants
+
+The execution atomicity boundary is the **phase** (atomic within, sequential
+across phases), not the plan:
+
+- `execute-deltas <plan-id>` defaults to full-plan execution (all phases
+  sequentially). `--phase=<id>` available for selective execution.
+- Before executing each phase: re-validate ALL remaining phases' deltas against
+  current disk state (catches cross-phase staleness). This includes file hash
+  verification.
+- All file snapshots for a phase taken before any writes within that phase.
+- If a phase fails and rolls back, all subsequent phases are automatically marked
+  `stale`. The user must re-validate before further execution.
+- No auto-resume after rollback — explicit user action required to continue.
+
+#### 4. No Lifecycle Hooks
+
+Remove the `lifecycle_hooks` section from the extension pack definition. The
+code-delta extension does not need a generic hook framework.
+
+Instead:
+- `validate-deltas` and `execute-deltas` are direct CLI/MCP commands
+- These commands set the `delta_status` field on tasks as a side effect
+- The existing transition gate mechanism reads `delta_status` to allow/block
+  transitions (e.g., `{"type": "field_eq", "field": "delta_status", "value":
+  "green"}`)
+- This composes with filigree-next's existing gate evaluator without new machinery
+
+Note: the `field_eq` and `all_linked_field_eq` gate conditions must be added to
+the workflow extensibility design's gate vocabulary.
+
+#### 5. Assertion Vocabulary Expansion
+
+The current assertion vocabulary (`exists`, `not_exists`, `count:N`) is too coarse
+to prevent false greens. Expand to:
+
+- `exists` — a node matching the query exists (unchanged)
+- `not_exists` — no node matches the query (unchanged)
+- `count:N` — exactly N nodes match (unchanged)
+- `text_equals` — the captured node's text matches an expected string
+- `text_matches` — regex match on captured node text
+- `parent_is` — the matched node has a specific parent node type
+
+Assertions are explicitly **structural sanity checks**, not semantic correctness
+proofs. They catch "the transform produced valid syntax" and "the target node
+exists with the right content." Semantic correctness comes from toolchain validators
+(mypy, cargo check).
+
+#### 6. Security Requirements
+
+**Must-have for v1.0:**
+
+- **Path containment**: Every `delta.file` value passes through `_safe_path()` at
+  authoring time AND execution time. Reject paths containing `..`, absolute paths,
+  symlinks resolving outside project root, and any path under `.filigree/`.
+- **Command safety**: All validator subprocess invocations use `shell=False` with
+  list-of-strings args. Delta authors reference validators by name, never by
+  command template.
+- **Input validation**: Transform `args` validated against strict per-operation
+  grammars (allowlists for identifiers, type expressions, module paths). Never
+  `eval()` or `exec()` on args.
+- **Content-addressed deltas**: Hash delta content at authoring, hash target files
+  at validation. Verify both hashes at execution time. Any mismatch aborts.
+- **Human execution gate**: `execute-deltas` requires a human actor. Agents can
+  author, validate, and review, but cannot execute.
+- **Built-in enforcement**: The registry loader rejects language and extension pack
+  definitions from `.filigree/packs/` and `.filigree/templates/`. Only workflow
+  packs support user-provided definitions.
+
+#### 7. Lifecycle Integration
+
+**Git integration:**
+- Pre-execution check for clean working tree (or `--allow-dirty` flag)
+- Record branch + commit SHA at validation time, detect drift at execution time
+- Each successful phase execution can produce a git commit (optional auto-commit)
+- Rollback via `git checkout -- <affected files>` as alternative to custom snapshots
+
+**Audit trail — new event types:**
+- `delta_validated`: plan_id, task_id, file, result, validator output
+- `delta_executed`: plan_id, task_id, file, transforms applied, commit SHA
+- `delta_failed`: plan_id, task_id, file, failure reason, rollback status
+- `delta_stale`: plan_id, task_id, file, reason for staleness
+
+#### 8. Validator Execution Contract
+
+Each validator definition in the project toolchain config must include:
+
+```json
+{
+  "command": "mypy",
+  "args": ["--no-error-summary", "src/"],
+  "scope": "project",
+  "timeout_seconds": 120,
+  "success_exit_codes": [0],
+  "required": true,
+  "fail_if_missing": true,
+  "output_parser": "text"
+}
+```
+
+- `scope`: `"file"`, `"package"`, `"project"`, or `"workspace"`
+- `timeout_seconds`: hard timeout, exceeded = failure = rollback
+- `required`: false = advisory-only, failure logged but doesn't block
+- `fail_if_missing`: error if command not found (prevents silent skip = false green)
+- `output_parser`: structured output parsing (e.g., `"cargo-json"` for
+  `--message-format=json`)
+
+#### 9. Scope Reductions
+
+- **Defer `extract_function`** to v1.1 — requires semantic analysis (scope
+  resolution, variable capture) beyond tree-sitter's capability.
+- **Single-file `rename_symbol` only in v1.0** — cross-file rename requires
+  `find_references` capability, defer to v1.1.
+- **Scope HTML pack to pure HTML** — exclude embedded `<script>` JS, `<style>` CSS,
+  and template languages (Jinja2, etc.) which require multi-language injection.
+
+#### 10. Implementation Phasing
+
+**Phase 1 — Declarative Extensions:**
+Schema extensions (delta field, delta_status), transition gates (field_eq on
+delta_status), multi-delta-per-task schema. Validates that extension packs compose
+with filigree-next before building the execution engine.
+
+**Phase 2 — Code Execution Engine:**
+Operation handlers (OperationHandler protocol), grammar packs (tree-sitter
+integration), toolchain config, validate-deltas/execute-deltas commands, snapshot/
+rollback, security controls.
+
+### Revised Key Design Decisions
+
+| Decision          | Original                                      | Revised (Post-Review)                                   |
+|-------------------|-----------------------------------------------|---------------------------------------------------------|
+| Transform format  | Declarative operations                        | Python OperationHandler protocol (code, not config)     |
+| Execution model   | Plan-level all-or-nothing                     | Phase-level atomic, plan-level sequential (with safety invariants) |
+| Validator home    | Inside language packs                         | Project-level toolchain config (grammar/toolchain split) |
+| Delta schema      | Single file per task                          | Multi-delta-per-task (`deltas[]` array)                 |
+| Lifecycle hooks   | Extension pack hook declarations              | Removed — direct CLI/MCP commands + field-based gates   |
+| Security model    | Not addressed                                 | Path jail, content-addressing, human execution gate     |
+| extract_function  | Included in initial set                       | Deferred to v1.1                                        |
+| Implementation    | Single phase                                  | Phase 1 declarative, Phase 2 execution engine           |
