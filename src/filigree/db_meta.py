@@ -239,7 +239,7 @@ class MetaMixin(DBMixinProtocol):
                 record_type = record.pop("_type", None)
 
                 if record_type == "issue":
-                    self.conn.execute(
+                    cursor = self.conn.execute(
                         f"INSERT {conflict} INTO issues "
                         "(id, title, status, priority, type, parent_id, assignee, "
                         "created_at, updated_at, closed_at, description, notes, fields) "
@@ -261,7 +261,7 @@ class MetaMixin(DBMixinProtocol):
                         ),
                     )
                 elif record_type == "dependency":
-                    self.conn.execute(
+                    cursor = self.conn.execute(
                         f"INSERT {conflict} INTO dependencies (issue_id, depends_on_id, type, created_at) VALUES (?, ?, ?, ?)",
                         (
                             record["issue_id"],
@@ -271,12 +271,12 @@ class MetaMixin(DBMixinProtocol):
                         ),
                     )
                 elif record_type == "label":
-                    self.conn.execute(
+                    cursor = self.conn.execute(
                         f"INSERT {conflict} INTO labels (issue_id, label) VALUES (?, ?)",
                         (record["issue_id"], record["label"]),
                     )
                 elif record_type == "comment":
-                    self.conn.execute(
+                    cursor = self.conn.execute(
                         f"INSERT {conflict} INTO comments (issue_id, author, text, created_at) VALUES (?, ?, ?, ?)",
                         (
                             record.get("issue_id", ""),
@@ -300,12 +300,10 @@ class MetaMixin(DBMixinProtocol):
                             record.get("created_at", _now_iso()),
                         ),
                     )
-                    count += cursor.rowcount
-                    continue
                 else:
                     continue  # Unknown record type — skip
 
-                count += 1
+                count += cursor.rowcount
 
         self.conn.commit()
         return count

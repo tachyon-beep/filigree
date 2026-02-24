@@ -85,6 +85,17 @@ def test_export_import_roundtrip(db: FiligreeDB, tmp_path: Path) -> None:
     assert count > 0
 
 
+def test_import_merge_returns_zero_for_duplicates(db: FiligreeDB, tmp_path: Path) -> None:
+    """import_jsonl with merge=True should count 0 when all records are duplicates."""
+    db.create_issue(title="dup-test")
+    out = tmp_path / "export.jsonl"
+    first_count = db.export_jsonl(str(out))
+    assert first_count > 0
+    # Import the same data again — all records are duplicates
+    dup_count = db.import_jsonl(str(out), merge=True)
+    assert dup_count == 0, f"Expected 0 for duplicate import, got {dup_count}"
+
+
 # -- PlanningMixin ----------------------------------------------------------
 
 
