@@ -49,25 +49,23 @@ from filigree.summary import write_summary
 
 
 def _get_db() -> FiligreeDB:
-    """Discover .filigree/ and return an initialized FiligreeDB."""
-    try:
-        filigree_dir = find_filigree_root()
-    except FileNotFoundError:
-        click.echo(f"No {FILIGREE_DIR_NAME}/ found. Run 'filigree init' first.", err=True)
-        sys.exit(1)
-    config = read_config(filigree_dir)
-    db = FiligreeDB(filigree_dir / DB_FILENAME, prefix=config.get("prefix", "filigree"))
-    db.initialize()
-    return db
+    """Discover .filigree/ and return an initialized FiligreeDB.
+
+    Delegates to :func:`filigree.cli_common.get_db`.
+    """
+    from filigree.cli_common import get_db
+
+    return get_db()
 
 
 def _refresh_summary(db: FiligreeDB) -> None:
-    """Regenerate context.md after mutations."""
-    try:
-        filigree_dir = find_filigree_root()
-        write_summary(db, filigree_dir / SUMMARY_FILENAME)
-    except FileNotFoundError:
-        pass  # No .filigree/ dir — skip summary
+    """Regenerate context.md after mutations.
+
+    Delegates to :func:`filigree.cli_common.refresh_summary`.
+    """
+    from filigree.cli_common import refresh_summary
+
+    refresh_summary(db)
 
 
 # ---------------------------------------------------------------------------
