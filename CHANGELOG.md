@@ -61,6 +61,7 @@ Server/ethereal operating modes, file intelligence + scanner workflows, Graph v2
 - Scanner command validation now resolves project-relative executables (for example `./scanner_exec.sh`) during trigger checks
 - Install instruction marker parsing improved to tolerate missing metadata/version fields
 - Release workflow pack now enabled by default for all new projects alongside core and planning; `suggested_children` for release type expanded to include epic, milestone, task, bug, and feature
+- ADR-001 added documenting the structured project model (strategic/execution/deliverable layers)
 - README/docs expanded with architecture plans, mode guidance, and dashboard visuals
 - Stale comments and docstrings fixed across 10 source files: endpoint counts, module docstrings, internal spec references (WFT-*), naming discrepancies, and misleading path references all corrected or removed
 
@@ -76,6 +77,9 @@ Server/ethereal operating modes, file intelligence + scanner workflows, Graph v2
 - Duplicate workflow transitions (same `from_state -> to_state`) now rejected at parse and validation time — previously silently accepted with inconsistent dict/tuple behavior
 - Enforcement value `"none"` rejected from templates — only `"hard"` and `"soft"` are valid `EnforcementLevel` values
 - Release `rolled_back` state recategorized from `done` to `wip` — allows resumption transition to `development`, matching the `incident.resolved` fix pattern
+- `ProjectStore.get_db()` guarded against `UnboundLocalError` when `read_config()` fails before DB initialization
+- `FindingStatus` type alias aligned with DB schema — added `acknowledged` and `unseen_in_latest`, removed stale `wont_fix` and `duplicate`
+- Dead `_OPEN_FINDINGS_FILTER_F` and duplicate `_VALID_SEVERITIES` class attributes removed from `FiligreeDB`
 
 #### Server/daemon reliability
 
@@ -138,9 +142,9 @@ Server/ethereal operating modes, file intelligence + scanner workflows, Graph v2
 - `claim-next` wraps `db.claim_next()` in `ValueError` handling with JSON/plaintext error output
 - `session-context` and `ensure-dashboard` hooks now log at WARNING and emit stderr message on failure instead of swallowing at DEBUG
 - `read_config()` catches `JSONDecodeError`/`OSError` — corrupt `config.json` returns defaults with warning instead of cascading crashes
-- MCP `_build_workflow_text` fallback now logs at ERROR (not WARNING) since a failing template registry indicates a real problem
+- MCP `_build_workflow_text` now separates `sqlite3.Error` (with actionable "run `filigree doctor`" message) from generic exceptions; both log at ERROR
 - MCP `get_workflow_prompt` narrows `except RuntimeError` to only silence "not initialized"; unexpected RuntimeErrors now logged at ERROR
-- `generate_session_context` freshness-check failure warning now includes `project_root` for debuggability
+- `generate_session_context` freshness-check now splits expected errors (`OSError`, `UnicodeDecodeError`, `ValueError`) at WARNING from unexpected errors at ERROR; both include `project_root` for debuggability
 - `ProjectStore.reload()` DB close errors now log at WARNING (matching `close_all()`) instead of DEBUG
 - `create_app` MCP ImportError now logged at DEBUG with `exc_info` instead of silently swallowed
 - MCP `release_claim` tool description corrected: clarifies it clears assignee only (does not change status)
