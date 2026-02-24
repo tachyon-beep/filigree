@@ -10,6 +10,7 @@ import fcntl
 import json
 import logging
 import os
+import shutil
 import signal
 import subprocess
 import time
@@ -35,6 +36,15 @@ class ServerConfig:
     projects: dict[str, dict[str, str]] = field(default_factory=dict)
 
 
+def _backup_corrupt_config() -> None:
+    """Back up a corrupt server.json before callers overwrite it with defaults."""
+    backup_path = SERVER_CONFIG_FILE.parent / (SERVER_CONFIG_FILE.name + ".bak")
+    try:
+        shutil.copy2(SERVER_CONFIG_FILE, backup_path)
+    except OSError:
+        logger.debug("Could not back up corrupt config to %s", backup_path, exc_info=True)
+
+
 def read_server_config() -> ServerConfig:
     """Read server.json. Returns defaults if missing or invalid."""
     if not SERVER_CONFIG_FILE.exists():
@@ -42,11 +52,13 @@ def read_server_config() -> ServerConfig:
     try:
         data = json.loads(SERVER_CONFIG_FILE.read_text())
     except (json.JSONDecodeError, OSError) as exc:
-        logger.warning("Corrupt server config %s: %s", SERVER_CONFIG_FILE, exc)
+        _backup_corrupt_config()
+        logger.warning("Corrupt server config %s: %s — backed up to .bak", SERVER_CONFIG_FILE, exc)
         return ServerConfig()
 
     if not isinstance(data, dict):
-        logger.warning("Server config %s is not a JSON object; using defaults", SERVER_CONFIG_FILE)
+        _backup_corrupt_config()
+        logger.warning("Server config %s is not a JSON object; backed up to .bak, using defaults", SERVER_CONFIG_FILE)
         return ServerConfig()
 
     # Coerce port
@@ -148,6 +160,10 @@ class DaemonStatus:
     pid: int | None = None
     port: int | None = None
     project_count: int = 0
+
+    def __post_init__(self) -> None:
+        if self.running and (self.pid is None or self.port is None):
+            raise ValueError("DaemonStatus with running=True requires both pid and port")
 
 
 def start_daemon(port: int | None = None) -> DaemonResult:

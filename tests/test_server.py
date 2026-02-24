@@ -229,6 +229,80 @@ class TestConfigValidation:
         assert config.projects == {}
 
 
+class TestDaemonStatusInvariant:
+    """Bug filigree-2c232d: DaemonStatus must reject running=True with pid=None."""
+
+    def test_running_true_requires_pid_and_port(self) -> None:
+        from filigree.server import DaemonStatus
+
+        with pytest.raises(ValueError, match="requires both pid and port"):
+            DaemonStatus(running=True, pid=None, port=None)
+
+    def test_running_true_requires_port(self) -> None:
+        from filigree.server import DaemonStatus
+
+        with pytest.raises(ValueError, match="requires both pid and port"):
+            DaemonStatus(running=True, pid=123, port=None)
+
+    def test_running_false_allows_none(self) -> None:
+        from filigree.server import DaemonStatus
+
+        status = DaemonStatus(running=False)
+        assert status.pid is None
+        assert status.port is None
+
+    def test_running_true_with_both_succeeds(self) -> None:
+        from filigree.server import DaemonStatus
+
+        status = DaemonStatus(running=True, pid=123, port=8377)
+        assert status.pid == 123
+        assert status.port == 8377
+
+
+class TestCorruptConfigBackup:
+    """Bug filigree-c4d454: corrupt server.json should be backed up before defaults overwrite it."""
+
+    def _setup(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+        config_dir = tmp_path / ".config" / "filigree"
+        config_dir.mkdir(parents=True)
+        monkeypatch.setattr("filigree.server.SERVER_CONFIG_DIR", config_dir)
+        monkeypatch.setattr("filigree.server.SERVER_CONFIG_FILE", config_dir / "server.json")
+        return config_dir
+
+    def test_corrupt_json_creates_backup(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        config_dir = self._setup(tmp_path, monkeypatch)
+        corrupt_content = "{this is not valid json!!!"
+        (config_dir / "server.json").write_text(corrupt_content)
+
+        config = read_server_config()
+        assert config.port == 8377  # Returns defaults
+
+        backup = config_dir / "server.json.bak"
+        assert backup.exists()
+        assert backup.read_text() == corrupt_content
+
+    def test_non_dict_json_creates_backup(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        config_dir = self._setup(tmp_path, monkeypatch)
+        non_dict_content = '["a", "list"]'
+        (config_dir / "server.json").write_text(non_dict_content)
+
+        read_server_config()
+
+        backup = config_dir / "server.json.bak"
+        assert backup.exists()
+        assert backup.read_text() == non_dict_content
+
+    def test_valid_config_no_backup(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        config_dir = self._setup(tmp_path, monkeypatch)
+        (config_dir / "server.json").write_text('{"port": 9000}')
+
+        config = read_server_config()
+        assert config.port == 9000
+
+        backup = config_dir / "server.json.bak"
+        assert not backup.exists()
+
+
 class TestPidOwnership:
     """Bug filigree-f56a78: start_daemon/daemon_status must verify PID ownership."""
 
@@ -302,6 +376,36 @@ class TestDaemonLifecycle:
         pid_data = json.loads((config_dir / "server.pid").read_text())
         assert pid_data["pid"] == 54321
         assert pid_data["cmd"] == "filigree"
+
+    def test_start_daemon_immediate_exit_reports_failure(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Bug filigree-154be9: if daemon crashes immediately, start should report failure and clean up PID file."""
+        config_dir = tmp_path / ".config" / "filigree"
+        monkeypatch.setattr("filigree.server.SERVER_CONFIG_DIR", config_dir)
+        monkeypatch.setattr("filigree.server.SERVER_CONFIG_FILE", config_dir / "server.json")
+        pid_file = config_dir / "server.pid"
+        monkeypatch.setattr("filigree.server.SERVER_PID_FILE", pid_file)
+
+        log_file = config_dir / "server.log"
+
+        def mock_popen(cmd, **kwargs):  # type: ignore[no-untyped-def]
+            # Write something to the log file to simulate stderr output
+            log_file.write_text("ImportError: no module named uvicorn")
+            mock = MagicMock()
+            mock.pid = 99999
+            mock.poll.return_value = 1  # Exited immediately with code 1
+            return mock
+
+        monkeypatch.setattr("filigree.server.subprocess.Popen", mock_popen)
+        monkeypatch.setattr("filigree.server.time.sleep", lambda _: None)
+
+        from filigree.server import start_daemon
+
+        result = start_daemon()
+        assert not result.success
+        assert "exited immediately" in result.message.lower()
+        assert "code 1" in result.message
+        # PID file should be cleaned up
+        assert not pid_file.exists()
 
     def test_stop_kills_process(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         config_dir = tmp_path / ".config" / "filigree"
