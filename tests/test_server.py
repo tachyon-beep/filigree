@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-import fcntl
 import json
 from pathlib import Path
 from unittest.mock import MagicMock
 
+import portalocker
 import pytest
 
 from filigree.server import (
@@ -124,11 +124,11 @@ class TestProjectRegistration:
         def _fake_flock(_fd: object, op: int) -> None:
             lock_ops.append(op)
 
-        monkeypatch.setattr("filigree.server.fcntl.flock", _fake_flock)
+        monkeypatch.setattr("filigree.server.portalocker.lock", _fake_flock)
         unregister_project(filigree_dir)
 
         assert lock_ops
-        assert lock_ops[0] == fcntl.LOCK_EX
+        assert lock_ops[0] == portalocker.LOCK_EX
 
     def test_register_project_rejects_prefix_collision(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         config_dir = tmp_path / ".config" / "filigree"
@@ -582,27 +582,27 @@ class TestClaimDaemonLocking:
     """Bug filigree-f0707e: claim_current_process_as_daemon must acquire file lock."""
 
     def test_claim_acquires_flock(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        """claim_current_process_as_daemon must use fcntl.flock like start_daemon."""
+        """claim_current_process_as_daemon must use portalocker.lock like start_daemon."""
         config_dir = tmp_path / ".config" / "filigree"
         monkeypatch.setattr("filigree.server.SERVER_CONFIG_DIR", config_dir)
         monkeypatch.setattr("filigree.server.SERVER_CONFIG_FILE", config_dir / "server.json")
         monkeypatch.setattr("filigree.server.SERVER_PID_FILE", config_dir / "server.pid")
 
-        flock_calls: list[tuple] = []
-        original_flock = fcntl.flock
+        lock_calls: list[tuple] = []
+        original_lock = portalocker.lock
 
-        def _spy_flock(fd, operation):
-            flock_calls.append((fd, operation))
-            return original_flock(fd, operation)
+        def _spy_lock(fd, operation):
+            lock_calls.append((fd, operation))
+            return original_lock(fd, operation)
 
-        monkeypatch.setattr("filigree.server.fcntl.flock", _spy_flock)
+        monkeypatch.setattr("filigree.server.portalocker.lock", _spy_lock)
 
         from filigree.server import claim_current_process_as_daemon
 
         assert claim_current_process_as_daemon(port=9911)
-        assert len(flock_calls) >= 1, "claim_current_process_as_daemon must acquire fcntl.flock"
+        assert len(lock_calls) >= 1, "claim_current_process_as_daemon must acquire portalocker.lock"
         # Verify exclusive lock was requested
-        assert any(op & fcntl.LOCK_EX for _, op in flock_calls), "Must use LOCK_EX"
+        assert any(op & portalocker.LOCK_EX for _, op in lock_calls), "Must use LOCK_EX"
 
 
 class TestStopDaemonEarlyReturns:
@@ -638,7 +638,7 @@ class TestStopDaemonEarlyReturns:
 
 
 class TestStartDaemonLocking:
-    """Bug filigree-f6c971: start_daemon must serialize with fcntl.flock."""
+    """Bug filigree-f6c971: start_daemon must serialize with portalocker.lock."""
 
     def test_start_daemon_acquires_lock(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         config_dir = tmp_path / ".config" / "filigree"
@@ -647,13 +647,13 @@ class TestStartDaemonLocking:
         monkeypatch.setattr("filigree.server.SERVER_PID_FILE", config_dir / "server.pid")
 
         lock_ops: list[int] = []
-        original_flock = fcntl.flock
+        original_lock = portalocker.lock
 
-        def tracking_flock(fd: object, op: int) -> None:
+        def tracking_lock(fd: object, op: int) -> None:
             lock_ops.append(op)
-            original_flock(fd, op)  # type: ignore[arg-type]
+            original_lock(fd, op)  # type: ignore[arg-type]
 
-        monkeypatch.setattr("filigree.server.fcntl.flock", tracking_flock)
+        monkeypatch.setattr("filigree.server.portalocker.lock", tracking_lock)
 
         def mock_popen(cmd, **kwargs):  # type: ignore[no-untyped-def]
             mock = MagicMock()
@@ -667,7 +667,7 @@ class TestStartDaemonLocking:
 
         result = start_daemon()
         assert result.success
-        assert fcntl.LOCK_EX in lock_ops
+        assert portalocker.LOCK_EX in lock_ops
 
 
 class TestStartDaemonAlreadyRunning:
