@@ -115,8 +115,12 @@ def _refresh_summary() -> None:
     if filigree_dir is not None:
         try:
             write_summary(_get_db(), filigree_dir / SUMMARY_FILENAME)
+        except OSError:
+            (_logger or logging.getLogger(__name__)).warning("Failed to write context.md", exc_info=True)
         except Exception:
-            (_logger or logging.getLogger(__name__)).warning("Failed to refresh context.md", exc_info=True)
+            (_logger or logging.getLogger(__name__)).error(
+                "Unexpected error refreshing context.md — database may be inconsistent", exc_info=True
+            )
 
 
 def _safe_path(raw: str) -> Path:
@@ -2124,8 +2128,6 @@ async def _dispatch(name: str, arguments: dict[str, Any], tracker: FiligreeDB) -
                     start_new_session=True,
                 )
             except OSError as e:
-                if scan_log_fd is not None:
-                    scan_log_fd.close()
                 del _scan_cooldowns[cooldown_key]
                 return _text(
                     {
@@ -2135,6 +2137,10 @@ async def _dispatch(name: str, arguments: dict[str, Any], tracker: FiligreeDB) -
                         "file_id": file_record.id,
                     }
                 )
+            finally:
+                # Close parent's copy of the fd — child inherited its own via Popen.
+                if scan_log_fd is not None:
+                    scan_log_fd.close()
 
             # Brief post-spawn check to detect immediate crashes
             await asyncio.sleep(0.2)

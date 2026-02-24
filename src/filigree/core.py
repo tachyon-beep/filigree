@@ -1536,7 +1536,9 @@ class FiligreeDB:
                 "ORDER BY issues_fts.rank LIMIT ? OFFSET ?",
                 (fts_query, limit, offset),
             ).fetchall()
-        except sqlite3.OperationalError:
+        except sqlite3.OperationalError as exc:
+            if "no such table" not in str(exc) and "no such module" not in str(exc):
+                raise
             # FTS5 not available — fall back to LIKE
             escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
             pattern = f"%{escaped}%"

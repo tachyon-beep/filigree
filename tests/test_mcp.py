@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import builtins
 import json
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
@@ -1137,6 +1138,42 @@ class TestRefreshSummaryLogging:
             mcp_mod._logger = original_logger
 
 
+class TestRefreshSummaryErrorEscalation:
+    """Bug filigree-e45c0d: _refresh_summary must log at error for non-OSError exceptions."""
+
+    async def test_db_error_logged_at_error_level(self, mcp_db: FiligreeDB) -> None:
+        import sqlite3
+
+        import filigree.mcp_server as mcp_mod
+
+        mock_logger = MagicMock()
+        original_logger = mcp_mod._logger
+        mcp_mod._logger = mock_logger
+
+        try:
+            with patch.object(mcp_mod, "write_summary", side_effect=sqlite3.DatabaseError("database disk image is malformed")):
+                mcp_mod._refresh_summary()
+                mock_logger.error.assert_called_once()
+                assert "malformed" in str(mock_logger.error.call_args) or "context.md" in str(mock_logger.error.call_args)
+        finally:
+            mcp_mod._logger = original_logger
+
+    async def test_os_error_still_logged_at_warning(self, mcp_db: FiligreeDB) -> None:
+        import filigree.mcp_server as mcp_mod
+
+        mock_logger = MagicMock()
+        original_logger = mcp_mod._logger
+        mcp_mod._logger = mock_logger
+
+        try:
+            with patch.object(mcp_mod, "write_summary", side_effect=OSError("disk full")):
+                mcp_mod._refresh_summary()
+                mock_logger.warning.assert_called_once()
+                mock_logger.error.assert_not_called()
+        finally:
+            mcp_mod._logger = original_logger
+
+
 class TestMCPTransactionSafety:
     """MCP-level safety net: no dirty transactions survive after failed tool calls."""
 
@@ -1704,6 +1741,48 @@ class TestScannerTools:
             assert len(log_files) >= 1, "At least one scan log file must be created"
         finally:
             target.unlink(missing_ok=True)
+
+    async def test_trigger_scan_closes_log_fd_after_popen(self, mcp_db: FiligreeDB) -> None:
+        """Bug filigree-dfe017: scan_log_fd must be closed after Popen to prevent fd leak."""
+        import filigree.mcp_server as mcp_mod
+
+        class _Proc:
+            pid = 12345
+
+            @staticmethod
+            def poll() -> None:
+                return None
+
+        project_root = mcp_mod._filigree_dir.parent
+        target = project_root / "fd_leak_target.py"
+        try:
+            target.write_text("x = 1\n")
+            self._write_scanner_toml(mcp_db)
+            mock_fd = MagicMock()
+            mock_fd.__enter__ = MagicMock(return_value=mock_fd)
+            mock_fd.__exit__ = MagicMock(return_value=False)
+            original_open = builtins.open
+
+            def _spy_open(path, *args, **kwargs):
+                if str(path).endswith(".log"):
+                    return mock_fd
+                return original_open(path, *args, **kwargs)
+
+            with (
+                patch("filigree.mcp_server.subprocess.Popen", return_value=_Proc()),
+                patch("builtins.open", side_effect=_spy_open),
+            ):
+                result = _parse(
+                    await call_tool(
+                        "trigger_scan",
+                        {"scanner": "test-scanner", "file_path": "fd_leak_target.py"},
+                    )
+                )
+            assert "error" not in result, f"trigger_scan failed: {result}"
+            mock_fd.close.assert_called_once(), "scan_log_fd must be closed after Popen succeeds"
+        finally:
+            target.unlink(missing_ok=True)
+            mcp_mod._scan_cooldowns.clear()
 
     async def test_trigger_scan_cooldown_is_scoped_per_project(self, tmp_path: Path) -> None:
         import filigree.mcp_server as mcp_mod

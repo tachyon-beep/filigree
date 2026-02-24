@@ -358,6 +358,25 @@ class TestGraphFrontendContracts:
         assert "status_categories: []" in graph_js
 
 
+class TestSafeBoundedInt:
+    """Bug filigree-2c3119: _safe_bounded_int must pass through _safe_int's error response."""
+
+    def test_non_integer_returns_safe_int_error_code(self) -> None:
+        """When _safe_int fails, its error response (VALIDATION_ERROR) must propagate, not be replaced."""
+        import json
+
+        from starlette.responses import JSONResponse
+
+        from filigree.dashboard import _safe_bounded_int
+
+        result = _safe_bounded_int("abc", name="window_days", min_value=1, max_value=365)
+        assert isinstance(result, JSONResponse)
+
+        body = json.loads(result.body.decode())
+        # Must use _safe_int's VALIDATION_ERROR, not the replaced GRAPH_INVALID_PARAM
+        assert body["error"]["code"] == "VALIDATION_ERROR"
+
+
 class TestGraphAdvancedAPI:
     async def test_graph_combined_filters(self, client: AsyncClient) -> None:
         resp = await client.get(
@@ -1999,6 +2018,19 @@ class TestProjectStore:
     def test_get_db_unknown_key_raises(self, project_store: ProjectStore) -> None:
         with pytest.raises(KeyError):
             project_store.get_db("nonexistent")
+
+    def test_get_db_closes_connection_on_init_failure(self, project_store: ProjectStore) -> None:
+        """Bug filigree-6128be: DB connection must be closed if initialize() fails."""
+        from unittest.mock import patch
+
+        with (
+            patch.object(FiligreeDB, "initialize", side_effect=RuntimeError("migration exploded")),
+            pytest.raises(RuntimeError, match="migration exploded"),
+        ):
+            project_store.get_db("alpha")
+
+        # After failure, the key should NOT be cached — next call retries
+        assert "alpha" not in project_store._dbs
 
     def test_reload_adds_new_project(self, project_store: ProjectStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         import json

@@ -116,6 +116,19 @@ class TestPidLifecycle:
         pid_file.write_text("0")
         assert read_pid_file(pid_file) is None
 
+    def test_read_corrupt_pid_logs_warning(self, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+        """Bug filigree-0c570e: corrupt PID file must log a warning, not silently return None."""
+        import logging
+
+        pid_file = tmp_path / "ephemeral.pid"
+        pid_file.write_text("not-a-number-or-json!!!")
+        with caplog.at_level(logging.WARNING):
+            result = read_pid_file(pid_file)
+        assert result is None
+        assert any("corrupt" in r.message.lower() or "pid" in r.message.lower() for r in caplog.records), (
+            "read_pid_file must log a warning when PID file exists but can't be parsed"
+        )
+
     def test_is_pid_alive_for_self(self) -> None:
         assert is_pid_alive(os.getpid()) is True
 

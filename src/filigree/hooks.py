@@ -327,14 +327,17 @@ def _ensure_dashboard_ethereal_mode(filigree_dir: Path) -> str:
         filigree_cmd = find_filigree_command()
 
         log_file = filigree_dir / "ephemeral.log"
-        with open(log_file, "w") as log_fd:
-            proc = subprocess.Popen(
-                [*filigree_cmd, "dashboard", "--no-browser", "--port", str(port)],
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.DEVNULL,
-                stderr=log_fd,
-                start_new_session=True,
-            )
+        try:
+            with open(log_file, "w") as log_fd:
+                proc = subprocess.Popen(
+                    [*filigree_cmd, "dashboard", "--no-browser", "--port", str(port)],
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL,
+                    stderr=log_fd,
+                    start_new_session=True,
+                )
+        except OSError as exc:
+            return f"Failed to start dashboard: {exc}"
 
         write_pid_file(pid_file, proc.pid, cmd="filigree")
         write_port_file(port_file, port)

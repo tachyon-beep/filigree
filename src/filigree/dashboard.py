@@ -130,6 +130,7 @@ class ProjectStore:
                 self._dbs[key] = db
             except Exception:
                 logger.error("Failed to open project DB for key=%r path=%s", key, filigree_path, exc_info=True)
+                db.close()
                 raise
         return self._dbs[key]
 
@@ -305,12 +306,7 @@ def _parse_csv_param(raw: str) -> list[str]:
 def _safe_bounded_int(raw: str, *, name: str, min_value: int, max_value: int) -> int | JSONResponse:
     value = _safe_int(raw, name)
     if not isinstance(value, int):
-        return _error_response(
-            f'Invalid value for {name}: "{raw}". Must be an integer between {min_value} and {max_value}.',
-            "GRAPH_INVALID_PARAM",
-            400,
-            {"param": name, "value": raw},
-        )
+        return value  # pass through _safe_int's error response
     if value < min_value or value > max_value:
         return _error_response(
             f'Invalid value for {name}: "{raw}". Must be between {min_value} and {max_value}.',

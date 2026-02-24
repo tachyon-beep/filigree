@@ -70,6 +70,33 @@ class TestListAndSearch:
         assert "auth" in results[0].title.lower()
 
 
+class TestSearchFTSFallback:
+    """Bug filigree-35ef38: FTS fallback must only catch missing-table errors."""
+
+    def test_non_fts_operational_error_propagates(self, db: FiligreeDB) -> None:
+        """OperationalError unrelated to missing FTS5 must NOT be silently caught."""
+        import sqlite3
+        from unittest.mock import patch
+
+        db.create_issue("Searchable item")
+
+        original_execute = db.conn.execute
+
+        class _SpyConn:
+            """Wraps conn to intercept FTS queries."""
+
+            def __getattr__(self, name):
+                return getattr(db._conn, name)
+
+            def execute(self, sql, params=()):
+                if "issues_fts" in sql and "MATCH" in sql:
+                    raise sqlite3.OperationalError("database disk image is malformed")
+                return original_execute(sql, params)
+
+        with patch.object(db, "_conn", _SpyConn()), pytest.raises(sqlite3.OperationalError, match="malformed"):
+            db.search_issues("Searchable")
+
+
 class TestDependencies:
     def test_add_dependency(self, db: FiligreeDB) -> None:
         a = db.create_issue("Blocked task")

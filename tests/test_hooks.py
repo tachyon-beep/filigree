@@ -479,6 +479,28 @@ class TestEnsureDashboardEthereal:
         assert "9188" in result
         assert "12345" in (filigree_dir / "ephemeral.pid").read_text()
 
+    def test_popen_failure_returns_clean_message(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Bug filigree-4913d0: if Popen raises OSError, return message not traceback."""
+        filigree_dir = tmp_path / ".filigree"
+        filigree_dir.mkdir()
+        config = {"prefix": "test", "version": 1, "mode": "ethereal"}
+        (filigree_dir / "config.json").write_text(json.dumps(config))
+        db = FiligreeDB(filigree_dir / DB_FILENAME, prefix="test")
+        db.initialize()
+        db.close()
+
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr("filigree.hooks._is_port_listening", lambda *a: False)
+        monkeypatch.setattr(
+            "filigree.hooks.subprocess.Popen",
+            MagicMock(side_effect=FileNotFoundError("No such file or directory: 'filigree'")),
+        )
+
+        result = ensure_dashboard_running()
+        assert "failed" in result.lower() or "error" in result.lower()
+        # Must NOT raise — returns a human-readable string
+        assert isinstance(result, str)
+
     def test_server_mode_returns_not_running(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """In server mode, reports daemon status without spawning."""
         filigree_dir = tmp_path / ".filigree"

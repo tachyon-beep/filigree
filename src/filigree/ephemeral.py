@@ -108,7 +108,8 @@ def read_pid_file(pid_file: Path) -> dict[str, Any] | None:
         if pid <= 0:
             return None
         return {"pid": pid, "cmd": "unknown"}
-    except (ValueError, OSError):
+    except (ValueError, OSError) as exc:
+        logger.warning("Corrupt PID file %s: %s", pid_file, exc)
         return None
 
 

@@ -297,34 +297,41 @@ def claim_current_process_as_daemon(*, port: int | None = None) -> bool:
     Returns ``True`` when the current process owns (or successfully claimed)
     ``server.pid``. Returns ``False`` if a different live process is already
     tracked.
+
+    Uses ``fcntl.flock`` to serialise with ``start_daemon()`` and
+    ``register_project()``, preventing two callers from simultaneously
+    reading an empty PID file and both writing their own PID.
     """
     current_pid = os.getpid()
     SERVER_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    lock_path = SERVER_CONFIG_DIR / "server.lock"
+    with open(lock_path, "w") as lock_fd:
+        fcntl.flock(lock_fd, fcntl.LOCK_EX)
 
-    info = read_pid_file(SERVER_PID_FILE)
-    if info is not None:
-        tracked_pid = info["pid"]
-        if tracked_pid == current_pid:
-            if port is not None:
-                config = read_server_config()
-                if config.port != port:
-                    config.port = port
-                    write_server_config(config)
-            return True
-        if is_pid_alive(tracked_pid):
-            if verify_pid_ownership(SERVER_PID_FILE, expected_cmd="filigree"):
-                return False
-            # Stale PID from a reused process — clean up and proceed
-            logger.warning("Stale PID file (pid %d is not filigree); cleaning up", tracked_pid)
-        SERVER_PID_FILE.unlink(missing_ok=True)
+        info = read_pid_file(SERVER_PID_FILE)
+        if info is not None:
+            tracked_pid = info["pid"]
+            if tracked_pid == current_pid:
+                if port is not None:
+                    config = read_server_config()
+                    if config.port != port:
+                        config.port = port
+                        write_server_config(config)
+                return True
+            if is_pid_alive(tracked_pid):
+                if verify_pid_ownership(SERVER_PID_FILE, expected_cmd="filigree"):
+                    return False
+                # Stale PID from a reused process — clean up and proceed
+                logger.warning("Stale PID file (pid %d is not filigree); cleaning up", tracked_pid)
+            SERVER_PID_FILE.unlink(missing_ok=True)
 
-    write_pid_file(SERVER_PID_FILE, current_pid, cmd="filigree")
-    if port is not None:
-        config = read_server_config()
-        if config.port != port:
-            config.port = port
-            write_server_config(config)
-    return True
+        write_pid_file(SERVER_PID_FILE, current_pid, cmd="filigree")
+        if port is not None:
+            config = read_server_config()
+            if config.port != port:
+                config.port = port
+                write_server_config(config)
+        return True
 
 
 def release_daemon_pid_if_owned(pid: int) -> None:

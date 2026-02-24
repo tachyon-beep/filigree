@@ -550,6 +550,33 @@ class TestDaemonLifecycle:
         assert not pid_file.exists()
 
 
+class TestClaimDaemonLocking:
+    """Bug filigree-f0707e: claim_current_process_as_daemon must acquire file lock."""
+
+    def test_claim_acquires_flock(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """claim_current_process_as_daemon must use fcntl.flock like start_daemon."""
+        config_dir = tmp_path / ".config" / "filigree"
+        monkeypatch.setattr("filigree.server.SERVER_CONFIG_DIR", config_dir)
+        monkeypatch.setattr("filigree.server.SERVER_CONFIG_FILE", config_dir / "server.json")
+        monkeypatch.setattr("filigree.server.SERVER_PID_FILE", config_dir / "server.pid")
+
+        flock_calls: list[tuple] = []
+        original_flock = fcntl.flock
+
+        def _spy_flock(fd, operation):
+            flock_calls.append((fd, operation))
+            return original_flock(fd, operation)
+
+        monkeypatch.setattr("filigree.server.fcntl.flock", _spy_flock)
+
+        from filigree.server import claim_current_process_as_daemon
+
+        assert claim_current_process_as_daemon(port=9911)
+        assert len(flock_calls) >= 1, "claim_current_process_as_daemon must acquire fcntl.flock"
+        # Verify exclusive lock was requested
+        assert any(op & fcntl.LOCK_EX for _, op in flock_calls), "Must use LOCK_EX"
+
+
 class TestStopDaemonEarlyReturns:
     """Bug filigree-6908d9: stop_daemon() early-return branches need test coverage."""
 
