@@ -1285,14 +1285,16 @@ class TestMCPTransactionSafety:
         )
 
     async def test_unhandled_error_rolls_back_dirty_transaction(self, mcp_db: FiligreeDB) -> None:
-        """Safety net: unhandled exception from _dispatch rolls back any dirty txn.
+        """Safety net: unhandled exception from handler rolls back any dirty txn.
 
         Simulates a core function that writes to the DB then raises without
         rolling back — the MCP call_tool() safety net must clean up.
         """
+        import filigree.mcp_server as mcp_mod
 
-        async def _bad_dispatch(name: str, arguments: dict[str, Any], tracker: FiligreeDB) -> list[Any]:
+        async def _bad_handler(arguments: dict[str, Any]) -> list[Any]:
             # Simulate a buggy mutation: INSERT a row, then crash
+            tracker = mcp_mod._get_db()
             tracker.conn.execute(
                 "INSERT INTO issues (id, title, type, status, priority, description, "
                 "notes, assignee, parent_id, fields, created_at, updated_at) "
@@ -1302,8 +1304,14 @@ class TestMCPTransactionSafety:
             msg = "Simulated unprotected crash"
             raise RuntimeError(msg)
 
-        with patch("filigree.mcp_server._dispatch", _bad_dispatch), pytest.raises(RuntimeError):
-            await call_tool("create_issue", {"title": "Irrelevant"})
+        original = mcp_mod._all_handlers.get("create_issue")
+        mcp_mod._all_handlers["create_issue"] = _bad_handler
+        try:
+            with pytest.raises(RuntimeError):
+                await call_tool("create_issue", {"title": "Irrelevant"})
+        finally:
+            if original is not None:
+                mcp_mod._all_handlers["create_issue"] = original
 
         # The safety net in call_tool() should have rolled back the dirty txn
         assert not mcp_db.conn.in_transaction, "MCP safety net failed — dirty transaction survived after unhandled exception"
@@ -1638,7 +1646,7 @@ class TestScannerTools:
         try:
             target.write_text("x = 1\n")
             self._write_scanner_toml(mcp_db)
-            with patch("filigree.mcp_server.subprocess.Popen", return_value=_Proc()) as popen:
+            with patch("filigree.mcp_tools.files.subprocess.Popen", return_value=_Proc()) as popen:
                 result = _parse(
                     await call_tool(
                         "trigger_scan",
@@ -1863,7 +1871,7 @@ class TestScannerTools:
                 return original_open(path, *args, **kwargs)
 
             with (
-                patch("filigree.mcp_server.subprocess.Popen", return_value=_Proc()),
+                patch("filigree.mcp_tools.files.subprocess.Popen", return_value=_Proc()),
                 patch("builtins.open", side_effect=_spy_open),
             ):
                 result = _parse(
@@ -2158,7 +2166,7 @@ class TestTriggerScanCooldownRace:
                     cooldown_was_set_before_sleep = True
                 await original_sleep(duration)
 
-            with patch("filigree.mcp_server.asyncio.sleep", side_effect=spy_sleep):
+            with patch("filigree.mcp_tools.files.asyncio.sleep", side_effect=spy_sleep):
                 result = _parse(
                     await call_tool(
                         "trigger_scan",
@@ -2185,7 +2193,7 @@ class TestTriggerScanCooldownRace:
             target.write_text("y = 1\n")
             mcp_mod._scan_cooldowns.clear()
 
-            with patch("filigree.mcp_server.subprocess.Popen", side_effect=OSError("mock spawn fail")):
+            with patch("filigree.mcp_tools.files.subprocess.Popen", side_effect=OSError("mock spawn fail")):
                 result = _parse(
                     await call_tool(
                         "trigger_scan",

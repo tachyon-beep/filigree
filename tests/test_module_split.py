@@ -1,6 +1,8 @@
-"""Verify mixin-based FiligreeDB composition works correctly."""
+"""Verify mixin-based FiligreeDB composition and MCP tool module split."""
 
 from pathlib import Path
+
+from mcp.types import Tool
 
 from filigree.core import FiligreeDB
 from filigree.db_events import EventsMixin
@@ -9,6 +11,60 @@ from filigree.db_issues import IssuesMixin
 from filigree.db_meta import MetaMixin
 from filigree.db_planning import PlanningMixin
 from filigree.db_workflow import WorkflowMixin
+
+# ---------------------------------------------------------------------------
+# MCP tool module split tests
+# ---------------------------------------------------------------------------
+
+_DOMAIN_MODULES = ("issues", "planning", "files", "workflow", "meta")
+
+
+def test_mcp_tools_package_exists() -> None:
+    """All 5 domain modules import and expose register()."""
+    from filigree.mcp_tools import files, issues, meta, planning, workflow
+
+    for mod in (issues, planning, files, workflow, meta):
+        assert callable(getattr(mod, "register", None)), f"{mod.__name__} missing register()"
+
+
+def test_mcp_tools_register_shape() -> None:
+    """register() returns (list[Tool], dict[str, Callable])."""
+    from filigree.mcp_tools import files, issues, meta, planning, workflow
+
+    for mod in (issues, planning, files, workflow, meta):
+        tools, handlers = mod.register()
+        assert isinstance(tools, list), f"{mod.__name__}.register() tools is not a list"
+        assert all(isinstance(t, Tool) for t in tools), f"{mod.__name__} has non-Tool items"
+        assert isinstance(handlers, dict), f"{mod.__name__}.register() handlers is not a dict"
+        for name, fn in handlers.items():
+            assert isinstance(name, str), f"{mod.__name__} handler key is not str"
+            assert callable(fn), f"{mod.__name__} handler {name} is not callable"
+        # Every tool should have a matching handler
+        tool_names = {t.name for t in tools}
+        handler_names = set(handlers.keys())
+        assert tool_names == handler_names, (
+            f"{mod.__name__}: tool/handler mismatch — tools={tool_names - handler_names}, handlers={handler_names - tool_names}"
+        )
+
+
+def test_mcp_tools_total_count() -> None:
+    """All 53 tools are registered across domain modules."""
+    from filigree.mcp_tools import files, issues, meta, planning, workflow
+
+    total = 0
+    for mod in (issues, planning, files, workflow, meta):
+        tools, _ = mod.register()
+        total += len(tools)
+    assert total == 53, f"Expected 53 tools total, got {total}"
+
+
+def test_mcp_backward_compat_imports() -> None:
+    """_text, _MAX_LIST_RESULTS, _safe_path importable from mcp_server."""
+    from filigree.mcp_server import _MAX_LIST_RESULTS, _safe_path, _text
+
+    assert _MAX_LIST_RESULTS == 50
+    assert callable(_text)
+    assert callable(_safe_path)
 
 
 def test_events_mixin_is_base_class() -> None:
