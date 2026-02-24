@@ -36,6 +36,10 @@ Server/ethereal operating modes, file intelligence + scanner workflows, Graph v2
 - CLI init support for scanner directory creation
 - Shared scanner utilities and Claude scanner integration
 
+#### Dashboard UX
+
+- Kanban cards now display a left-edge colour band indicating issue type (bug=red, feature=purple, task=blue, epic=amber, milestone=emerald, step=grey)
+
 #### Dashboard graph v2
 
 - Graph v2 shipped with improved focus/path workflows and traversal behavior

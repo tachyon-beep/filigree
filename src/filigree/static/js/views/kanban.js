@@ -4,7 +4,7 @@
 
 import { fetchTransitions, patchIssue } from "../api.js";
 import { getFilteredIssues } from "../filters.js";
-import { CATEGORY_COLORS, PRIORITY_COLORS, state, TYPE_ICONS } from "../state.js";
+import { CATEGORY_COLORS, PRIORITY_COLORS, state, TYPE_COLORS, TYPE_ICONS } from "../state.js";
 import { escHtml, escJsSingle, showToast } from "../ui.js";
 
 // --- Callbacks for functions not yet available at import time ---
@@ -195,6 +195,7 @@ export function renderClusterCard(epic) {
 
 export function renderCard(issue) {
   const typeIcon = TYPE_ICONS[issue.type] || "";
+  const typeColor = TYPE_COLORS[issue.type] || "#6B7280";
   const prioColor = PRIORITY_COLORS[issue.priority] || "#6B7280";
   const cat = issue.status_category || "open";
   const catColor = CATEGORY_COLORS[cat] || "#64748B";
@@ -240,10 +241,11 @@ export function renderCard(issue) {
   }
 
   return (
-    `<div class="card rounded p-3 cursor-pointer ${readyClass} ${agingClass} ${changedClass}"` +
+    `<div class="card rounded relative p-3 pl-5 cursor-pointer ${readyClass} ${agingClass} ${changedClass}"` +
     ' style="background:var(--surface-raised);border:1px solid var(--border-default)"' +
     (isDraggable ? ' draggable="true"' : "") +
     ` tabindex="0" data-id="${escHtml(issue.id)}" onclick="openDetail('${safeIssueId}')">` +
+    `<div class="absolute left-0 top-0 bottom-0 w-1 rounded-l" style="background:${typeColor}"></div>` +
     '<div class="flex items-center gap-2 mb-1">' +
     checkbox +
     `<span>${typeIcon}</span>` +

@@ -32,6 +32,15 @@ export const TYPE_ICONS = {
   step: "\u25B6",
 };
 
+export const TYPE_COLORS = {
+  bug: "#EF4444",
+  feature: "#8B5CF6",
+  task: "#3B82F6",
+  epic: "#F59E0B",
+  milestone: "#10B981",
+  step: "#6B7280",
+};
+
 export const SEVERITY_COLORS = {
   critical: { bg: "bg-red-900/50", text: "text-red-400", border: "border-red-800", hex: "#EF4444" },
   high: { bg: "bg-orange-900/50", text: "text-orange-400", border: "border-orange-800", hex: "#F97316" },
