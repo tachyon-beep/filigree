@@ -28,6 +28,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, TypedDict
 
+from filigree.db_base import StatusCategory, _now_iso
 from filigree.db_events import EventsMixin
 from filigree.db_workflow import WorkflowMixin
 
@@ -42,7 +43,6 @@ logger = logging.getLogger(__name__)
 
 Severity = Literal["critical", "high", "medium", "low", "info"]
 FindingStatus = Literal["open", "acknowledged", "fixed", "false_positive", "unseen_in_latest"]
-StatusCategory = Literal["open", "wip", "done"]
 
 
 class ProjectConfig(TypedDict, total=False):
@@ -598,10 +598,6 @@ VALID_ASSOC_TYPES = frozenset({"bug_in", "task_for", "scan_finding", "mentioned_
 # ---------------------------------------------------------------------------
 # ID generation
 # ---------------------------------------------------------------------------
-
-
-def _now_iso() -> str:
-    return datetime.now(UTC).isoformat()
 
 
 def _validate_string_list(value: object, name: str) -> None:

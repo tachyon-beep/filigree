@@ -10,39 +10,23 @@ Python's MRO when composed into ``FiligreeDB``.
 
 from __future__ import annotations
 
-import sqlite3
-from datetime import UTC, datetime
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from filigree.db_base import DBMixinProtocol, StatusCategory, _now_iso
+
 if TYPE_CHECKING:
-    from filigree.core import StatusCategory
     from filigree.templates import TemplateRegistry, TransitionOption, ValidationResult
 
 
-def _now_iso() -> str:
-    return datetime.now(UTC).isoformat()
-
-
-class WorkflowMixin:
+class WorkflowMixin(DBMixinProtocol):
     """Template and workflow operations for FiligreeDB.
 
-    Cross-mixin dependencies resolved at runtime via MRO:
-    - ``self.conn`` — from FiligreeDB.__init__ / DBMixinProtocol
-    - ``self.db_path`` — from FiligreeDB.__init__ / DBMixinProtocol
-    - ``self._template_registry`` — from FiligreeDB.__init__ / DBMixinProtocol
-    - ``self._enabled_packs_override`` — from FiligreeDB.__init__
-    - ``self.get_issue()`` — from IssuesMixin (future) / FiligreeDB
+    Inherits ``DBMixinProtocol`` for type-safe access to shared attributes
+    (``self.conn``, ``self.db_path``, ``self.get_issue()``, etc.). Actual
+    implementations provided by ``FiligreeDB`` at composition time via MRO.
     """
 
-    # Attribute declarations for mypy — actual values set by FiligreeDB.__init__
-    db_path: Path
-    _template_registry: TemplateRegistry | None
-    _enabled_packs_override: list[str] | None
-
-    @property
-    def conn(self) -> sqlite3.Connection:  # type: ignore[empty-body]  # pragma: no cover
-        """Provided by FiligreeDB — declared here for mypy."""
+    _template_registry: TemplateRegistry | None  # narrowing needed by templates property
 
     @property
     def templates(self) -> TemplateRegistry:
@@ -204,7 +188,7 @@ class WorkflowMixin:
         Delegates to TemplateRegistry.get_valid_transitions() with the issue's
         current state and fields. Returns an empty list for unknown types.
         """
-        issue = self.get_issue(issue_id)  # type: ignore[attr-defined]
+        issue = self.get_issue(issue_id)
         return self.templates.get_valid_transitions(issue.type, issue.status, issue.fields)
 
     def validate_issue(self, issue_id: str) -> ValidationResult:
@@ -217,7 +201,7 @@ class WorkflowMixin:
         """
         from filigree.templates import ValidationResult
 
-        issue = self.get_issue(issue_id)  # type: ignore[attr-defined]
+        issue = self.get_issue(issue_id)
         tpl = self.templates.get_type(issue.type)
         if tpl is None:
             return ValidationResult(valid=True, warnings=(), errors=())
