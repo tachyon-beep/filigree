@@ -8,7 +8,7 @@ import pytest
 
 
 def _load_codex_bug_hunt() -> ModuleType:
-    script_path = Path(__file__).resolve().parents[1] / "scripts" / "codex_bug_hunt.py"
+    script_path = Path(__file__).resolve().parents[2] / "scripts" / "codex_bug_hunt.py"
     spec = importlib.util.spec_from_file_location("codex_bug_hunt_script", script_path)
     assert spec is not None
     assert spec.loader is not None

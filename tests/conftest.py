@@ -19,11 +19,43 @@ from filigree.core import (
 )
 
 
+def make_db(
+    tmp_path: Path,
+    *,
+    packs: list[str] | None = None,
+    prefix: str = "test",
+    check_same_thread: bool = True,
+) -> FiligreeDB:
+    """Factory for FiligreeDB instances in tests.
+
+    Centralizes construction so pack-specific fixtures reduce to one-liners.
+    When *packs* is provided, a .filigree/ directory with config.json is
+    created to match how production code discovers enabled packs.
+    """
+    if packs is None:
+        d = FiligreeDB(
+            tmp_path / "filigree.db",
+            prefix=prefix,
+            check_same_thread=check_same_thread,
+        )
+    else:
+        filigree_dir = tmp_path / FILIGREE_DIR_NAME
+        filigree_dir.mkdir(exist_ok=True)
+        write_config(filigree_dir, {"prefix": prefix, "version": 1, "enabled_packs": packs})
+        d = FiligreeDB(
+            filigree_dir / DB_FILENAME,
+            prefix=prefix,
+            enabled_packs=packs,
+            check_same_thread=check_same_thread,
+        )
+    d.initialize()
+    return d
+
+
 @pytest.fixture
 def db(tmp_path: Path) -> Generator[FiligreeDB, None, None]:
-    """Fresh FiligreeDB for each test."""
-    d = FiligreeDB(tmp_path / "filigree.db", prefix="test")
-    d.initialize()
+    """Fresh FiligreeDB for each test (default packs)."""
+    d = make_db(tmp_path)
     yield d
     d.close()
 

@@ -222,7 +222,7 @@ class TestValidateScannerCommand:
 class TestScannerExamples:
     @staticmethod
     def _read_example(example_name: str) -> dict[str, object]:
-        repo_root = Path(__file__).resolve().parents[1]
+        repo_root = Path(__file__).resolve().parents[2]
         example_path = repo_root / "scripts" / "scanners" / example_name
         return tomllib.loads(example_path.read_text(encoding="utf-8"))
 

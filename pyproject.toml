@@ -166,6 +166,10 @@ ignore_missing_imports = true
 testpaths = ["tests"]
 addopts = "-ra -q"
 asyncio_mode = "auto"
+markers = [
+    "slow: tests that take >1s",
+    "integration: tests spanning multiple modules",
+]
 
 # ---------------------------------------------------------------------------
 # Coverage
