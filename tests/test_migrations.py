@@ -22,7 +22,8 @@ from pathlib import Path
 
 import pytest
 
-from filigree.core import CURRENT_SCHEMA_VERSION, SCHEMA_SQL, SCHEMA_V1_SQL, FiligreeDB
+from filigree.core import FiligreeDB
+from filigree.db_schema import CURRENT_SCHEMA_VERSION, SCHEMA_SQL, SCHEMA_V1_SQL
 from filigree.migrations import (
     MigrationError,
     add_column,
@@ -926,7 +927,7 @@ class TestMigrateV2ToV3:
     @pytest.fixture
     def v2_db(self, tmp_path: Path) -> sqlite3.Connection:
         """Create a v2 database with scan_findings table (no suggestion/scan_run_id)."""
-        from filigree.core import SCHEMA_V1_SQL
+        from filigree.db_schema import SCHEMA_V1_SQL
         from filigree.migrations import migrate_v1_to_v2
 
         conn = _make_db(tmp_path)
@@ -983,7 +984,7 @@ class TestMigrateV2ToV3:
         apply_pending_migrations(v2_db, 3)
 
         fresh = _make_db(tmp_path, "fresh.db")
-        from filigree.core import SCHEMA_SQL
+        from filigree.db_schema import SCHEMA_SQL
 
         fresh.executescript(SCHEMA_SQL)
         fresh.commit()
@@ -1012,7 +1013,7 @@ class TestMigrateV3ToV4:
     @pytest.fixture
     def v3_db(self, tmp_path: Path) -> sqlite3.Connection:
         """Create a v3 database (file tables present, no file_events)."""
-        from filigree.core import SCHEMA_V1_SQL
+        from filigree.db_schema import SCHEMA_V1_SQL
         from filigree.migrations import migrate_v1_to_v2, migrate_v2_to_v3
 
         conn = _make_db(tmp_path)

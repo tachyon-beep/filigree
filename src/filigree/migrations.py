@@ -11,10 +11,10 @@ The migration runner:
   4. Wraps each migration in a transaction (rollback on failure)
 
 Usage — adding a new migration:
-  1. Increment CURRENT_SCHEMA_VERSION in core.py
+  1. Increment CURRENT_SCHEMA_VERSION in db_schema.py
   2. Add a function here: def migrate_v<N>_to_v<N+1>(conn) -> None
   3. Register it in MIGRATIONS: N: migrate_v<N>_to_v<N+1>
-  4. Update SCHEMA_SQL in core.py to match the post-migration state
+  4. Update SCHEMA_SQL in db_schema.py to match the post-migration state
   5. Add a test in tests/test_migrations.py
 
 SQLite ALTER TABLE limitations (why helpers exist):

@@ -8,13 +8,13 @@ from pathlib import Path
 import pytest
 
 from filigree.core import (
-    CURRENT_SCHEMA_VERSION,
     FILIGREE_DIR_NAME,
     FiligreeDB,
     find_filigree_root,
     read_config,
     write_config,
 )
+from filigree.db_schema import CURRENT_SCHEMA_VERSION
 
 
 class TestUpdateIssuePaths:

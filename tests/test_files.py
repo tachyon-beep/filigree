@@ -8,7 +8,8 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 import filigree.dashboard as dash_module
-from filigree.core import CURRENT_SCHEMA_VERSION, FiligreeDB
+from filigree.core import FiligreeDB
+from filigree.db_schema import CURRENT_SCHEMA_VERSION
 from filigree.dashboard import create_app
 
 # ---------------------------------------------------------------------------
@@ -1281,7 +1282,7 @@ class TestFileMigration:
         db_path = tmp_path / "filigree.db"
         conn = sqlite3.connect(str(db_path))
         # Manually create only v1 tables (without file tables)
-        from filigree.core import SCHEMA_V1_SQL
+        from filigree.db_schema import SCHEMA_V1_SQL
 
         conn.executescript(SCHEMA_V1_SQL)
         conn.execute("PRAGMA user_version = 1")

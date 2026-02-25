@@ -16,12 +16,12 @@ from pathlib import Path
 
 from filigree.core import (
     CONFIG_FILENAME,
-    CURRENT_SCHEMA_VERSION,
     DB_FILENAME,
     FILIGREE_DIR_NAME,
     SUMMARY_FILENAME,
     find_filigree_root,
 )
+from filigree.db_schema import CURRENT_SCHEMA_VERSION
 from filigree.install_support import (
     FILIGREE_INSTRUCTIONS_MARKER,
     SKILL_MARKER,
