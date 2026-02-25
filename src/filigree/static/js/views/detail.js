@@ -18,7 +18,7 @@ import {
 } from "../api.js";
 import { updateHash } from "../router.js";
 import { CATEGORY_COLORS, PRIORITY_COLORS, state, TYPE_ICONS } from "../state.js";
-import { escHtml, escJsSingle, setLoading, showToast, trapFocus } from "../ui.js";
+import { escHtml, escJsSingle, issueIdChip, setLoading, showToast, trapFocus } from "../ui.js";
 
 // --- Callbacks for functions not yet available at import time ---
 
@@ -157,7 +157,7 @@ export async function openDetail(issueId) {
         : "";
 
   header.innerHTML =
-    `<span class="text-xs" style="color:var(--text-muted)">${escHtml(d.id)}</span>` +
+    `<span class="text-xs">${issueIdChip(d.id)}</span>` +
     "<div>" +
     (state.detailHistory.length
       ? '<button onclick="detailBack()" class="text-muted text-primary-hover text-xs mr-2">&larr; Back</button>'

@@ -27,13 +27,14 @@ from filigree.summary import write_summary
 
 @click.command()
 @click.option("--prefix", default=None, help="ID prefix for issues (default: directory name)")
+@click.option("--name", default=None, help="Human-readable project name (default: directory name)")
 @click.option(
     "--mode",
     type=click.Choice(["ethereal", "server"], case_sensitive=False),
     default=None,
     help="Installation mode (default: ethereal)",
 )
-def init(prefix: str | None, mode: str | None) -> None:
+def init(prefix: str | None, name: str | None, mode: str | None) -> None:
     """Initialize .filigree/ in the current directory."""
     cwd = Path.cwd()
     filigree_dir = cwd / FILIGREE_DIR_NAME
@@ -54,11 +55,12 @@ def init(prefix: str | None, mode: str | None) -> None:
         return
 
     prefix = prefix or cwd.name
+    name = name or cwd.name
     mode = mode or "ethereal"
     filigree_dir.mkdir()
     (filigree_dir / "scanners").mkdir()
 
-    config = {"prefix": prefix, "version": 1, "mode": mode}
+    config = {"prefix": prefix, "name": name, "version": 1, "mode": mode}
     write_config(filigree_dir, config)
 
     db = FiligreeDB(filigree_dir / DB_FILENAME, prefix=prefix)

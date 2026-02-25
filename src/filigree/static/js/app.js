@@ -46,6 +46,7 @@ import {
   batchSetPriority,
   closePopover,
   closeSettingsMenu,
+  copyIssueId,
   escHtml,
   escJsSingle,
   endTour,
@@ -573,6 +574,7 @@ window.toggleGraphLegend = toggleGraphLegend;
 window.toggleKanbanLegend = toggleKanbanLegend;
 window.batchSetPriority = batchSetPriority;
 window.batchCloseSelected = batchCloseSelected;
+window.copyIssueId = copyIssueId;
 
 // Kanban
 window.toggleEpicExpand = toggleEpicExpand;

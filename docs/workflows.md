@@ -89,6 +89,7 @@ Defects, regressions, and unexpected behavior.
 ```
 triage(O) ──> confirmed(O) ──> fixing(W) ──> verifying(W) ──> closed(D)
          \──> wont_fix(D)                 \──> fixing(W)  [loop]
+         \──> not_a_bug(D)
 ```
 
 **Hard gates:**

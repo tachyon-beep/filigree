@@ -613,10 +613,10 @@ class TestBuiltInPackData:
         tpl = TemplateRegistry.parse_type_template(raw)
         assert tpl.initial_state == "open"
 
-    def test_core_bug_has_six_states(self) -> None:
+    def test_core_bug_has_seven_states(self) -> None:
         raw = BUILT_IN_PACKS["core"]["types"]["bug"]
         tpl = TemplateRegistry.parse_type_template(raw)
-        assert len(tpl.states) == 6
+        assert len(tpl.states) == 7
 
     def test_core_bug_has_hard_enforcement(self) -> None:
         raw = BUILT_IN_PACKS["core"]["types"]["bug"]

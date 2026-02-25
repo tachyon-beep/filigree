@@ -51,6 +51,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 _db: FiligreeDB | None = None
+_config: dict[str, Any] = {}
 
 # Server mode: per-request project key set by middleware
 _current_project_key: ContextVar[str] = ContextVar("project_key", default="")
@@ -101,7 +102,9 @@ class ProjectStore:
             if prefix in projects:
                 existing = projects[prefix]["path"]
                 raise ValueError(f"Prefix collision: {prefix!r} claimed by both {existing} and {filigree_path_str}")
-            projects[prefix] = {"name": prefix, "path": filigree_path_str}
+            proj_config = read_config(filigree_path)
+            display_name = proj_config.get("name") or prefix
+            projects[prefix] = {"name": display_name, "path": filigree_path_str}
         self._projects = projects
 
     def get_db(self, key: str) -> FiligreeDB:
@@ -332,7 +335,7 @@ def create_app(*, server_mode: bool = False) -> Any:
             return JSONResponse(_project_store.list_projects())
         # Ethereal mode: single project with empty key so setProject("")
         # routes to /api (not /api/p/prefix/ which would 404).
-        name = _db.prefix if _db is not None else ""
+        name = _config.get("name") or (_db.prefix if _db is not None else "")
         return JSONResponse([{"key": "", "name": name, "path": ""}])
 
     if server_mode:
@@ -413,6 +416,7 @@ def main(port: int = DEFAULT_PORT, *, no_browser: bool = False, server_mode: boo
     else:
         filigree_dir = find_filigree_root()
         config = read_config(filigree_dir)
+        _config.update(config)
         _db = FiligreeDB(
             filigree_dir / DB_FILENAME,
             prefix=config.get("prefix", "filigree"),

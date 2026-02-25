@@ -5,7 +5,7 @@
 import { fetchTransitions, patchIssue } from "../api.js";
 import { getFilteredIssues } from "../filters.js";
 import { CATEGORY_COLORS, PRIORITY_COLORS, state, TYPE_COLORS, TYPE_ICONS } from "../state.js";
-import { escHtml, escJsSingle, showToast } from "../ui.js";
+import { escHtml, escJsSingle, issueIdChip, showToast } from "../ui.js";
 
 // --- Callbacks for functions not yet available at import time ---
 
@@ -255,7 +255,7 @@ export function renderCard(issue) {
     `<span class="font-medium truncate" style="color:var(--text-primary)">${escHtml(issue.title.slice(0, 50))}</span>` +
     "</div>" +
     '<div class="flex items-center gap-2 text-xs" style="color:var(--text-muted)">' +
-    `<span>${escHtml(issue.id)}</span>` +
+    issueIdChip(issue.id) +
     `<span class="rounded px-1" style="background:var(--surface-overlay);color:var(--text-secondary)">${escHtml(issue.type.replace(/_/g, " "))}</span>` +
     `<span class="rounded px-1" style="background:${catColor}33;color:${catColor}">${escHtml(issue.status || "")}</span>` +
     (blockedCount > 0

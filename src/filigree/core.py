@@ -62,6 +62,7 @@ class ProjectConfig(TypedDict, total=False):
     """Shape of .filigree/config.json."""
 
     prefix: str
+    name: str
     version: int
     enabled_packs: list[str]
     mode: str

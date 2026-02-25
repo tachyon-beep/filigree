@@ -176,6 +176,14 @@ tailwind.config = {
       <option value="2">P2</option>
       <option value="3-4">P3-P4</option>
     </select>
+    <select id="filterUpdatedDays" onchange="applyFilters()" class="bg-overlay text-primary text-xs rounded px-2 py-1 border border-strong">
+      <option value="0">Updated: Any time</option>
+      <option value="1">Last 1 day</option>
+      <option value="7">Last 7 days</option>
+      <option value="14">Last 14 days</option>
+      <option value="30">Last 30 days</option>
+      <option value="90">Last 90 days</option>
+    </select>
     <label for="filterSearch" class="text-xs text-secondary sr-only">Search</label>
     <div class="relative">
       <input id="filterSearch" type="text" placeholder="Search..." oninput="debouncedSearch()"
@@ -401,9 +409,9 @@ tailwind.config = {
   </div>
 
   <!-- Metrics view -->
-  <div id="metricsView" class="flex-1 hidden overflow-y-auto p-6">
-    <div class="max-w-3xl mx-auto">
-      <div class="flex items-center gap-3 mb-6">
+  <div id="metricsView" class="flex-1 hidden flex flex-col">
+    <div class="shrink-0 px-6 pt-6 pb-2">
+      <div class="max-w-3xl mx-auto flex items-center gap-3">
         <span class="text-base font-semibold text-primary">Flow Metrics</span>
         <select id="metricsDays" onchange="loadMetrics()" class="bg-overlay text-xs rounded px-2 py-1 border border-strong">
           <option value="7">7 days</option>
@@ -411,18 +419,26 @@ tailwind.config = {
           <option value="90">90 days</option>
         </select>
       </div>
-      <div id="metricsContent" class="text-secondary text-xs">Loading...</div>
+    </div>
+    <div class="flex-1 overflow-y-auto scrollbar-thin px-6 pb-6">
+      <div class="max-w-3xl mx-auto">
+        <div id="metricsContent" class="text-secondary text-xs">Loading...</div>
+      </div>
     </div>
   </div>
 
   <!-- Activity view -->
-  <div id="activityView" class="flex-1 hidden overflow-y-auto p-6">
-    <div class="max-w-3xl mx-auto">
-      <div class="flex items-center gap-3 mb-4">
+  <div id="activityView" class="flex-1 hidden flex flex-col">
+    <div class="shrink-0 px-6 pt-6 pb-2">
+      <div class="max-w-3xl mx-auto flex items-center gap-3">
         <span class="text-base font-semibold text-primary">Recent Activity</span>
         <button onclick="loadActivity()" class="text-xs bg-overlay px-2 py-1 rounded bg-overlay-hover">Refresh</button>
       </div>
-      <div id="activityContent" class="text-secondary text-xs">Loading...</div>
+    </div>
+    <div class="flex-1 overflow-y-auto scrollbar-thin px-6 pb-6">
+      <div class="max-w-3xl mx-auto">
+        <div id="activityContent" class="text-secondary text-xs">Loading...</div>
+      </div>
     </div>
   </div>
 
@@ -438,9 +454,9 @@ tailwind.config = {
   </div>
 
   <!-- Files view -->
-  <div id="filesView" class="flex-1 hidden overflow-y-auto p-6">
-    <div class="max-w-6xl mx-auto">
-      <div class="flex items-center gap-3 mb-4">
+  <div id="filesView" class="flex-1 hidden flex flex-col">
+    <div class="shrink-0 px-6 pt-6 pb-2">
+      <div class="max-w-6xl mx-auto flex items-center gap-3">
         <span class="text-base font-semibold text-primary">Files</span>
         <div class="flex items-center gap-2">
           <input id="filesSearch" type="text" placeholder="Filter by path..."
@@ -450,17 +466,25 @@ tailwind.config = {
           </label>
         </div>
       </div>
-      <div id="filesContent" class="text-secondary text-xs">Loading...</div>
+    </div>
+    <div class="flex-1 overflow-y-auto scrollbar-thin px-6 pb-6">
+      <div class="max-w-6xl mx-auto">
+        <div id="filesContent" class="text-secondary text-xs">Loading...</div>
+      </div>
     </div>
   </div>
 
   <!-- Code Health view -->
-  <div id="healthView" class="flex-1 hidden overflow-y-auto p-6">
-    <div class="max-w-5xl mx-auto">
-      <div class="flex items-center gap-3 mb-4">
+  <div id="healthView" class="flex-1 hidden flex flex-col">
+    <div class="shrink-0 px-6 pt-6 pb-2">
+      <div class="max-w-5xl mx-auto flex items-center gap-3">
         <span class="text-base font-semibold text-primary">Code Health</span>
       </div>
-      <div id="healthContent" class="text-secondary text-xs">Loading...</div>
+    </div>
+    <div class="flex-1 overflow-y-auto scrollbar-thin px-6 pb-6">
+      <div class="max-w-5xl mx-auto">
+        <div id="healthContent" class="text-secondary text-xs">Loading...</div>
+      </div>
     </div>
   </div>
 

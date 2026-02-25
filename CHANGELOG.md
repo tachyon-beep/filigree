@@ -7,6 +7,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+#### Workflow
+
+- `not_a_bug` done-state for bug workflow — distinct from `wont_fix` for triage rejections (transitions from `triage` and `confirmed`)
+- `retired` state added to release workflow with quality-check refinements
+
+#### Dashboard UX
+
+- Click-to-copy on issue IDs in kanban cards and detail panel header (hover underline, toast feedback, keyboard accessible)
+- "Updated in last X days" dropdown filter in the main issue toolbar (1d, 7d, 14d, 30d, 90d) — persisted with other filter settings
+- Sticky headers for metrics, activity, files, and health views (header stays visible while content scrolls)
+
+#### Configuration
+
+- `name` field in `ProjectConfig` / `.filigree/config.json` — separates human-readable project name from the technical ID prefix
+- `filigree init --name` option to set display name independently of `--prefix`
+- Dashboard title and server-mode project list now use `name` with fallback to `prefix`
+
+### Changed
+
+#### Architecture (v1.4.0 refactor)
+
+- `FiligreeDB` decomposed into domain mixins: `EventsMixin`, `WorkflowMixin`, `MetaMixin`, `PlanningMixin`, `IssuesMixin`, `FilesMixin` — each in its own module under `src/filigree/`
+- `DBMixinProtocol` wired into all mixins, eliminating 33 `type: ignore` comments
+- CLI commands split from monolithic `cli.py` into `cli_commands/` subpackage
+- MCP tools split into domain modules
+- Dashboard routes split into `dashboard_routes/` subpackage
+- `install.py` split into `install_support/` subpackage
+
+#### Documentation
+
+- Plugin system & language packs design document added with 8-specialist review consensus
+- ADR-001 superseded in favour of workflow extensibility design
+- Issue ID format documentation corrected from `{6hex}` to `{10hex}`
+
+### Fixed
+
+- Issue ID entropy increased from 6 to 10 hex characters to reduce collision probability at scale
+- `import_jsonl` uses `cursor.rowcount` for all record types — accurate counts for merge dedup
+- Batch error reporting enriched with `code` and `valid_transitions` fields
+- Stale `filigree[mcp]` extra removed from packaging; WMIC parsing made quoting-aware for Windows compatibility
+- PID verification abstracted beyond `/proc` for cross-platform support
+- `fcntl.flock()` replaced with `portalocker` for cross-platform file locking
+- Dead code `_generate_id_standalone()` removed
+
 ## [1.3.0] - 2026-02-24
 
 Server/ethereal operating modes, file intelligence + scanner workflows, Graph v2, and broad safety hardening.

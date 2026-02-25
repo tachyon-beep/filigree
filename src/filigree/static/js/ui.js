@@ -157,6 +157,31 @@ export function endTour() {
 }
 
 // ---------------------------------------------------------------------------
+// Copy issue ID to clipboard
+// ---------------------------------------------------------------------------
+export function copyIssueId(id, event) {
+  event.stopPropagation();
+  navigator.clipboard.writeText(id).then(
+    () => showToast("Copied " + id, "success"),
+    () => showToast("Copy failed", "error"),
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Render a clickable issue ID span (reusable across views)
+// ---------------------------------------------------------------------------
+export function issueIdChip(id) {
+  const safeId = escJsSingle(id);
+  return (
+    `<span class="cursor-pointer hover:underline" style="color:var(--text-muted)" ` +
+    `title="Click to copy" tabindex="0" role="button" ` +
+    `onclick="copyIssueId('${safeId}', event)" ` +
+    `onkeydown="if(event.key==='Enter')copyIssueId('${safeId}', event)"` +
+    `>${escHtml(id)}</span>`
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Button loading state
 // ---------------------------------------------------------------------------
 export function setLoading(el, loading) {
