@@ -11,6 +11,7 @@ import logging
 import sqlite3
 import subprocess
 import tomllib
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -41,14 +42,14 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
+@dataclass
 class CheckResult:
     """Result of a single doctor check."""
 
-    def __init__(self, name: str, passed: bool, message: str, *, fix_hint: str = "") -> None:
-        self.name = name
-        self.passed = passed
-        self.message = message
-        self.fix_hint = fix_hint
+    name: str
+    passed: bool
+    message: str
+    fix_hint: str = ""
 
     @property
     def icon(self) -> str:

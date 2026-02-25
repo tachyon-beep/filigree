@@ -21,7 +21,7 @@ import sqlite3
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, TypedDict
+from typing import TYPE_CHECKING, Any, Literal, NewType, TypedDict
 
 from filigree.db_base import StatusCategory
 from filigree.db_events import EventsMixin
@@ -209,6 +209,8 @@ def _seed_builtin_packs(conn: sqlite3.Connection, now: str) -> int:
 # Data classes
 # ---------------------------------------------------------------------------
 
+ISOTimestamp = NewType("ISOTimestamp", str)
+
 
 @dataclass
 class Issue:
@@ -219,9 +221,9 @@ class Issue:
     type: str = "task"
     parent_id: str | None = None
     assignee: str = ""
-    created_at: str = ""
-    updated_at: str = ""
-    closed_at: str | None = None
+    created_at: ISOTimestamp = ISOTimestamp("")
+    updated_at: ISOTimestamp = ISOTimestamp("")
+    closed_at: ISOTimestamp | None = None
     description: str = ""
     notes: str = ""
     fields: dict[str, Any] = field(default_factory=dict)
@@ -263,8 +265,8 @@ class FileRecord:
     path: str
     language: str = ""
     file_type: str = ""
-    first_seen: str = ""
-    updated_at: str = ""
+    first_seen: ISOTimestamp = ISOTimestamp("")
+    updated_at: ISOTimestamp = ISOTimestamp("")
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -294,9 +296,9 @@ class ScanFinding:
     line_end: int | None = None
     issue_id: str | None = None
     seen_count: int = 1
-    first_seen: str = ""
-    updated_at: str = ""
-    last_seen_at: str | None = None
+    first_seen: ISOTimestamp = ISOTimestamp("")
+    updated_at: ISOTimestamp = ISOTimestamp("")
+    last_seen_at: ISOTimestamp | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
