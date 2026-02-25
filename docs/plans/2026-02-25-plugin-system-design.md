@@ -1,10 +1,11 @@
 # Plugin System & Language Packs — Design Document
 
 **Date:** 2026-02-25
-**Status:** Proposed (Revision 2.1 — invariant precision pass)
+**Status:** Proposed (Revision 3 — final review fixes)
 **Target:** filigree-next (clean-break architecture)
-**Review:** 8-specialist panel, 3 rounds, full consensus
+**Review:** 8-specialist panel (Rev 2) + 4-specialist final review (Rev 3)
 **Transcript:** `2026-02-25-plugin-design-review-transcript.md`
+**Final review:** `2026-02-25-plugin-final-review-annex.md`
 
 ## Problem Statement
 
@@ -27,8 +28,8 @@ change, execute with confidence.
    atomically.
 2. **Language-aware transforms** — CST-level operations that survive formatting
    changes, comment insertions, and unrelated edits.
-3. **Mix-and-match language support** — a single project can enable Python, Rust, C,
-   JavaScript, and HTML grammar packs simultaneously.
+3. **Mix-and-match language support** — a single project can enable multiple grammar
+   packs simultaneously (e.g., Python + JavaScript + CSS + HTML).
 4. **Replace the scanner system** — toolchain validators subsume
    `.filigree/scanners/*.toml` and SARIF findings with native, structured
    alternatives.
@@ -37,7 +38,7 @@ change, execute with confidence.
 
 ## Architecture: Layered Pack System
 
-Three pack types compose to deliver the full system:
+Two pack types plus a built-in feature module compose to deliver the full system:
 
 ```
 ┌─────────────────────────────────────────────────────┐
@@ -47,11 +48,11 @@ Three pack types compose to deliver the full system:
 ├─────────────────────────────────────────────────────┤
 │  Grammar Pack (new)                                  │
 │  CST parser, operation handlers, named queries       │
-│  e.g. "python", "rust", "c", "javascript", "html"   │
+│  e.g. "python", "javascript", "css", "html"          │
 ├─────────────────────────────────────────────────────┤
-│  Extension Pack (new)                                │
-│  schema extensions, references grammar packs         │
-│  e.g. "code-delta", "coverage-tracking"              │
+│  Code-Delta Module (new, built-in)                   │
+│  schema extensions, delta lifecycle, execution engine │
+│  composes grammar packs into workflow                 │
 └─────────────────────────────────────────────────────┘
 
 Separate from packs (project-level, not distributed):
@@ -63,21 +64,29 @@ Separate from packs (project-level, not distributed):
 └─────────────────────────────────────────────────────┘
 ```
 
+The code-delta module is a built-in feature, not a pack. Unlike workflow and
+grammar packs, there is no "extension pack" abstraction — code-delta is the only
+consumer of grammar packs, and building a generic extension system for one concrete
+use case would be premature. If a second grammar-pack consumer materializes in the
+future, the abstraction can be extracted then.
+
 ### Composition via config
 
 ```json
 {
   "packs": {
     "workflow": ["core", "planning", "release"],
-    "grammar": ["python", "rust", "c", "javascript", "html"],
-    "extensions": ["code-delta"]
+    "grammar": ["python", "javascript", "css", "html"]
+  },
+  "features": {
+    "code_delta": true
   }
 }
 ```
 
 ### Language routing
 
-When the code-delta extension needs to parse or transform a file, it resolves the
+When the code-delta module needs to parse or transform a file, it resolves the
 grammar pack by file extension. Each grammar pack declares its extensions:
 
 ```json
@@ -89,16 +98,37 @@ grammar pack by file extension. Each grammar pack declares its extensions:
 }
 ```
 
-Multiple grammar packs coexist. The extension dispatches to the correct one per
-file. If no grammar pack matches a file, the task is flagged as unresolvable (red).
+Multiple grammar packs coexist. The code-delta module dispatches to the correct one
+per file. If no grammar pack matches a file, the task is flagged as unresolvable
+(red). If multiple grammar packs claim the same extension (e.g., future overlap),
+the engine rejects the configuration at load time — ambiguous extensions require
+the delta element to specify an explicit `language` field.
 
 ### Distribution
 
 All packs are built-in — they ship with filigree. No external plugin discovery or
-third-party packaging. New languages require a filigree release. The registry loader
-enforces this: language and extension pack definitions from `.filigree/packs/` or
+third-party packaging in v1.0. New languages require a filigree release. The
+registry loader enforces this: grammar pack definitions from `.filigree/packs/` or
 `.filigree/templates/` are rejected. Only workflow packs support user-provided
 definitions.
+
+The initial language set covers filigree's own codebase: Python (core logic) and
+JavaScript/CSS/HTML (dashboard). This "dogfood first" scope validates the design
+against real usage before expanding to additional languages.
+
+**Future language extensibility (design constraint):** The grammar pack interface
+is intentionally language-agnostic. Adding a new language requires:
+
+1. A tree-sitter grammar binding (150+ already exist)
+2. A grammar pack JSON definition (file extensions, queries, operation declarations)
+3. Python `OperationHandler` implementations for each declared operation
+4. A formatter declaration (if the language has one)
+
+No changes to the execution engine, delta schema, validation pipeline, or toolchain
+profile system are needed. The architecture supports any language tree-sitter can
+parse. The v1.0 "built-in only" constraint is a distribution policy, not an
+architectural limitation — it can be relaxed in a future version if demand warrants
+community-contributed grammar packs.
 
 ## Grammar Pack Structure
 
@@ -153,11 +183,17 @@ class OperationHandler(Protocol):
         ...
 
     def compute_edit(
-        self, source: bytes, tree: Tree, match: Node, args: dict
+        self, source: bytes, tree: Tree, captures: dict[str, Node], args: dict
     ) -> list[TextEdit]:
-        """Compute text edits. Must not have side effects."""
+        """Compute text edits from matched captures. Must not have side effects."""
         ...
 ```
+
+The `captures` parameter provides all named captures from the tree-sitter query
+(e.g., `{"fn": <Node>, "rt": <Node>}`). Handlers use these to locate the exact
+nodes they need to modify. A query `(function_definition name: (identifier) @fn
+return_type: (type) @rt)` produces `captures = {"fn": <name node>, "rt": <type
+node>}`.
 
 Where `TextEdit` is:
 
@@ -166,12 +202,53 @@ Where `TextEdit` is:
 class TextEdit:
     start_byte: int
     end_byte: int
-    replacement: str
+    replacement: str  # UTF-8 encoded when applied to source bytes
 ```
 
-**Implementation cost:** ~40 operation implementations (5 languages × ~8
+**Encoding contract:** `replacement` is a Python `str`. The edit application engine
+encodes it as UTF-8 before splicing into the source `bytes`. Byte-offset arithmetic
+after insertion uses `len(replacement.encode('utf-8'))`, not `len(replacement)`.
+
+**Validation:** `start_byte` must be ≤ `end_byte`. A zero-length range
+(`start_byte == end_byte`) is a valid insertion. Inverted ranges are rejected.
+
+**Implementation cost:** ~16 operation implementations (2 language groups × ~8
 operations), each 50–300 lines of Python. The Python grammar pack alone is estimated
-at 800–1200 lines of operation code due to indentation-as-correctness.
+at 800–1200 lines of operation code due to indentation-as-correctness. The
+JavaScript pack shares some structural similarity with Python (tree-sitter queries
+are similar for function/class definitions) but has distinct formatting needs.
+
+### Handler dispatch
+
+Each grammar pack provides a **handler registry** — a `dict[str, OperationHandler]`
+mapping operation names to handler instances. The registry is returned by a
+module-level factory function in the grammar pack's Python module:
+
+```python
+# filigree/grammar_packs/python/handlers.py
+def create_handlers() -> dict[str, OperationHandler]:
+    return {
+        "rename_symbol": RenameSymbolHandler(),
+        "add_type_annotation": AddTypeAnnotationHandler(),
+        "add_import": AddImportHandler(),
+        # ...
+    }
+```
+
+The engine resolves handlers by: grammar pack name → handler registry → operation
+name. Unknown operation names produce an immediate validation error (not a runtime
+KeyError).
+
+### Multi-match dispatch
+
+When a query matches multiple nodes (e.g., "all untyped parameters"), the engine
+calls `compute_edit` **once per match**. Each call receives the captures for that
+specific match. The engine collects all returned `TextEdit` values into a single
+batch and applies them together (descending `start_byte` order, overlap rejection).
+
+This means `add_import` handlers that need whole-file context (e.g., checking if
+an import already exists) should use the `source` and `tree` parameters for
+context, not expect to see all matches at once.
 
 ### Formatter-as-normalizer
 
@@ -183,20 +260,25 @@ This is a first-class field on grammar packs:
 
 ```json
 {
-  "pack": "rust",
+  "pack": "javascript",
   "kind": "grammar",
   "has_deterministic_formatter": true,
-  "formatter": "rustfmt"
+  "formatter": "prettier"
 }
 ```
 
 | Language   | Formatter        | Effect on operation handlers |
 |------------|------------------|------------------------------|
-| Rust       | `rustfmt`        | Generate valid syntax, skip formatting |
-| C          | `clang-format`   | Same — format post-transform |
-| JavaScript | `prettier`       | Same — format post-transform |
 | Python     | None (semantic whitespace) | Must handle indentation in edit computation |
+| JavaScript | `prettier`       | Generate valid syntax, skip formatting |
+| CSS        | `prettier`       | Same — format post-transform |
 | HTML       | None (structural) | Must handle indentation in edit computation |
+
+**Formatter timing:** Formatters run **per-file**, after all transforms for that
+file are applied but before assertions are evaluated. This ensures assertions check
+the formatted output. A formatter failure on one file does not roll back transforms
+on other files within the same task — it marks only the failing file's element as
+red.
 
 ### Grammar pack definition format
 
@@ -235,7 +317,7 @@ resolution, variable capture) beyond tree-sitter's capability.
 
 1. **Operations are per-language.** The operation name (`add_type_annotation`) is
    universal; the implementation is language-specific. Python produces `x: int`,
-   Rust produces `x: i32`, C uses a different syntax entirely.
+   JavaScript uses JSDoc `/** @type {number} */` or TypeScript-style annotations.
 
 2. **Named queries are reusable.** Both transforms and assertions can reference
    them. "Find all untyped parameters" is a query; "add type annotations to all
@@ -257,14 +339,19 @@ resolution, variable capture) beyond tree-sitter's capability.
 4. **Grammar packs are pure.** No shell commands, no environment dependencies, no
    I/O beyond reading source files. Toolchain integration is separate.
 
+5. **Query resource limits.** All tree-sitter query executions are bounded:
+   - **Max match count:** 10,000 matches per query (prevents `(_) @x` on large files)
+   - **Per-query timeout:** 5 seconds
+   - **Max captures per query:** 100 named captures
+   Exceeding any limit aborts the query and marks the delta element as red.
+
 ### Initial grammar packs
 
 | Pack         | Extensions             | Formatter          | Notes                                   |
 |--------------|------------------------|--------------------|-----------------------------------------|
 | `python`     | `.py`, `.pyi`          | None (semantic ws) | Most complete — primary language          |
-| `rust`       | `.rs`                  | `rustfmt`          | Cargo-workspace aware                    |
-| `c`          | `.c`, `.h`             | `clang-format`     | Minimal operation set initially          |
-| `javascript` | `.js`, `.mjs`, `.cjs`  | `prettier`         | Could expand to `.jsx`                   |
+| `javascript` | `.js`, `.mjs`, `.cjs`  | `prettier`         | Could expand to `.jsx`, `.ts` in v1.1    |
+| `css`        | `.css`                 | `prettier`         | Selector/property-level operations       |
 | `html`       | `.html`, `.htm`        | None               | Pure HTML only — no embedded JS/CSS/templates |
 
 ## Toolchain Profile
@@ -276,12 +363,37 @@ name, never by command template.
 Grammar packs provide **default validator recommendations** as documentation only.
 The actual validator configuration lives in the project's toolchain profile.
 
+### Toolchain integrity
+
+`toolchain.toml` is project-level and in-repo. Since the `command` field specifies
+an executable, it is a potential code execution vector. Mitigations:
+
+1. **Content-addressing at validation time:** `validate-deltas` computes the
+   SHA-256 of `toolchain.toml` and stores it alongside the delta's `pre_hash`
+   values. At execution time, the hash is re-verified. Any change between
+   validation and execution aborts.
+2. **Command allowlist (recommended):** Projects may define an explicit allowlist
+   of permitted validator commands in `toolchain.toml` itself:
+   ```toml
+   [toolchain]
+   allowed_commands = ["mypy", "ruff", "prettier", "eslint"]
+   ```
+   When present, the engine rejects any validator whose `command` is not in the
+   list. When absent, any command is permitted (backwards-compatible, but logged
+   as a warning).
+3. **No relative paths:** `command` must be a bare executable name (resolved via
+   PATH) or an absolute path. Relative paths (`./scripts/check.py`) are rejected
+   to prevent in-repo executable planting.
+
 ### Validator contract
 
 Each validator definition specifies an execution contract:
 
 ```toml
 # .filigree/toolchain.toml
+
+[toolchain]
+allowed_commands = ["mypy", "ruff", "prettier", "eslint"]
 
 [validators.python-typecheck]
 command = "mypy"
@@ -297,7 +409,7 @@ cwd = "project_root"
 
 [validators.python-lint]
 command = "ruff"
-args = ["check", "{file}"]
+args = ["check", "--", "{file}"]
 scope = "file"
 timeout_seconds = 30
 success_exit_codes = [0]
@@ -305,37 +417,36 @@ required = true
 fail_if_missing = true
 output_parser = "text"
 
-[validators.rust-check]
-command = "cargo"
-args = ["check", "--message-format=json"]
-scope = "workspace"
-timeout_seconds = 300
+[validators.js-lint]
+command = "eslint"
+args = ["--format=json", "--", "{file}"]
+scope = "file"
+timeout_seconds = 30
 success_exit_codes = [0]
 required = true
 fail_if_missing = true
-output_parser = "cargo-json"
-cwd = "workspace_root"
+output_parser = "json"
 ```
 
 ### Validator contract fields
 
 | Field               | Type            | Description |
 |---------------------|-----------------|-------------|
-| `command`           | string          | Executable name (resolved via PATH) |
-| `args`              | list[string]    | Arguments. `{file}` placeholder available for file-scoped validators only |
+| `command`           | string          | Executable name (resolved via PATH) or absolute path. Relative paths rejected |
+| `args`              | list[string]    | Arguments. `{file}` placeholder available for file-scoped validators only. A `--` separator must precede `{file}` to prevent filename-as-flag injection (engine enforces this) |
 | `scope`             | enum            | `"file"`, `"package"`, `"project"`, or `"workspace"` |
 | `timeout_seconds`   | int             | Hard timeout. Exceeded = failure = rollback |
 | `success_exit_codes`| list[int]       | Exit codes treated as success (default: `[0]`) |
 | `required`          | bool            | `true` = must pass, `false` = advisory (logged, doesn't block) |
 | `fail_if_missing`   | bool            | `true` = error if command not found (prevents silent false green) |
-| `output_parser`     | string          | `"text"`, `"json"`, `"cargo-json"`, `"sarif"` |
+| `output_parser`     | string          | `"text"`, `"json"`, `"sarif"` |
 | `env_allowlist`     | list[string]    | Environment variables passed to subprocess (all others stripped) |
 | `cwd`               | string          | Working directory: `"project_root"`, `"workspace_root"`, or `"file_parent"` |
 
 ### Scope model
 
-The `{file}` placeholder is only valid for `scope = "file"` validators. Cargo,
-mypy (in strict mode), and similar tools operate at project/workspace scope — they
+The `{file}` placeholder is only valid for `scope = "file"` validators. mypy
+(in strict mode) and similar tools operate at project/workspace scope — they
 never accept individual file targets. The scope field makes this explicit rather
 than papering over it with broken placeholders.
 
@@ -345,12 +456,16 @@ than papering over it with broken placeholders.
 |-------------|-----------------------------------|-----------------|--------------------|
 | `file`      | Per file touched by transforms    | Yes             | `ruff check {file}` |
 | `project`   | Once per project                  | No              | `mypy src/`        |
-| `workspace` | Once per workspace                | No              | `cargo check`      |
+| `workspace` | Once per workspace                | No              | `mypy src/`        |
+
+**`{file}` injection prevention:** The engine enforces that `args` contains a `--`
+element before any element containing `{file}`. This prevents filenames starting
+with `--` from being interpreted as flags. Additionally, all `{file}` substitutions
+are prefixed with `./` (e.g., `./src/core.py`) to prevent bare `-`-prefixed paths.
 
 **Deferred to v1.1:** `package` scope with `{package}` placeholder. This requires
-workspace/package discovery logic per language (Cargo workspace membership, npm
-workspaces, Python namespace packages) and is substantial enough to warrant its own
-design pass.
+workspace/package discovery logic per language (npm workspaces, Python namespace
+packages) and is substantial enough to warrant its own design pass if needed.
 
 ### Two-tiered validation
 
@@ -360,60 +475,62 @@ Validation happens in two tiers with different performance characteristics:
    the transform produced syntactically valid output and the expected nodes exist
    with correct content.
 2. **Semantic validation** (slow, runs after structural) — toolchain validators
-   (mypy, cargo check) verify that the code is semantically correct.
+   (mypy, eslint) verify that the code is semantically correct.
 
 This ordering prevents slow validator runs on structurally broken code.
 
-## Extension Pack: Code Delta
+**Validator deduplication:** Project-scoped and workspace-scoped validators are
+deduped per phase — they run once regardless of how many delta elements reference
+them. File-scoped validators run once per unique file. This prevents silent
+double-runs that waste time while ensuring no validator is accidentally skipped.
 
-The `code-delta` extension pack wires grammar packs into the workflow lifecycle. It
-adds schema to task-level items and provides commands for validation and execution.
+## Code-Delta Module
 
-### Definition format
+The code-delta module is a **built-in feature** (not a pack) that wires grammar
+packs into the workflow lifecycle. It adds schema to task-level items and provides
+commands for validation and execution. It is enabled via `features.code_delta` in
+the project config.
+
+### Schema extensions
+
+When code-delta is enabled, the following fields are added to `task` and `step`
+item types:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `delta` | object | The delta payload (see Delta Schema below) |
+| `delta_status` | enum | `pending`, `green`, `red`, `stale` (derived cache) |
+| `delta_confidence` | enum | `structural`, `validated`, `tested` (derived cache) |
+
+### Commands
+
+| Command | CLI | MCP | Description |
+|---------|-----|-----|-------------|
+| `validate-deltas` | `filigree validate-deltas <plan-id> [--phase=<id>]` | `validate_deltas` | Dry-run validation, sets delta_status and delta_confidence |
+| `execute-deltas` | `filigree execute-deltas <plan-id> [--phase=<id>]` | `execute_deltas` | Atomic execution with rollback |
+| `delta-status` | `filigree delta-status <plan-id>` | `get_delta_status` | Green/red/stale/pending counts + confidence breakdown |
+
+### Gate types
+
+The code-delta module registers gate types that compose with the existing
+transition gate system:
 
 ```json
 {
-  "pack": "code-delta",
-  "kind": "extension",
-  "version": "2.0",
-  "requires_grammar_pack": true,
-
-  "schema_extensions": {
-    "applicable_types": ["task", "step"],
-    "fields": [
-      {
-        "name": "delta",
-        "type": "object",
-        "schema": "See: Delta Schema below"
-      },
-      {
-        "name": "delta_status",
-        "type": "enum",
-        "options": ["pending", "green", "red", "stale"],
-        "default": "pending",
-        "derived": true
-      }
-    ]
-  },
-
-  "commands": {
-    "validate-deltas": "Validate all deltas in a plan/phase against current disk state",
-    "execute-deltas": "Apply all deltas atomically with rollback",
-    "delta-status": "Report green/red/stale/pending counts for a plan/phase"
-  },
-
-  "gates": {
-    "field_set": {"field": "delta"},
-    "field_eq": {"field": "delta_status", "value": "green"},
-    "all_linked_field_eq": {"link_type": "parent", "direction": "inbound",
-                            "field": "delta_status", "value": "green"}
-  }
+  "field_set": {"field": "delta"},
+  "field_eq": {"field": "delta_status", "value": "green"},
+  "field_eq": {"field": "delta_confidence", "value": "tested"},
+  "all_children_field_eq": {"field": "delta_status", "value": "green"}
 }
 ```
 
+Note: `all_children_field_eq` replaces the previous `all_linked_field_eq` with
+`link_type: "parent", direction: "inbound"` — the old naming was semantically
+inverted (it checked children, not parents, despite the name).
+
 No lifecycle hooks. Validation and execution are explicit commands (CLI + MCP), not
-callbacks. The existing transition gate mechanism reads `delta_status` to
-allow/block state transitions.
+callbacks. The gate evaluator reads `delta_status` and `delta_confidence` —
+no coupling between commands and the gate system.
 
 ### Delta schema
 
@@ -423,6 +540,7 @@ Multi-file tasks use multiple elements. Single-file tasks use a one-element arra
 ```json
 {
   "delta": {
+    "schema_version": 1,
     "elements": [
       {
         "path": "src/filigree/core.py",
@@ -459,6 +577,7 @@ Multi-file tasks use multiple elements. Single-file tasks use a one-element arra
 
 | Field          | Description |
 |----------------|-------------|
+| `schema_version` | Integer version of the delta schema format. Current: `1`. Allows future schema evolution without breaking stored deltas |
 | `elements[]`   | Array of per-file deltas. Processed uniformly; single-file = one element |
 | `.path`        | Relative path from project root. Must pass `_safe_path()` validation |
 | `.language`    | Grammar pack name (optional — inferred from extension if omitted) |
@@ -517,6 +636,12 @@ has been verified:
 The UI surfaces this — a delta can be "green but only structural" which is
 meaningfully different from "green and fully tested."
 
+**Gate enforcement:** The `active → executing` phase transition gate defaults to
+requiring `delta_confidence == "tested"` (not just `delta_status == "green"`). This
+prevents the "structural green is good enough" shortcut from bypassing semantic
+validation. Plans can override this with a `minimum_confidence` field (e.g.,
+`"validated"` for draft plans), but must do so explicitly.
+
 ### Delta status lifecycle
 
 ```
@@ -549,7 +674,8 @@ accepting untracked partial chaos.
 2. FOR EACH PHASE (sequential):
 
    2a. VALIDATE (read-only, no disk changes)
-       ├── Re-validate ALL remaining phases against current disk
+       ├── Re-validate this phase + downstream phases that share files
+       ├── (Only phases whose elements[].path sets overlap this phase's outputs)
        ├── Verify file hashes match pre_hash on every element
        ├── Verify delta digests match stored content
        ├── For each task in topological order:
@@ -575,8 +701,10 @@ accepting untracked partial chaos.
        ├── Run toolchain validators (two-tiered: structural then semantic)
        │   ├── Journal: validator_started / validator_passed / validator_failed
        │   └── If any required validator fails → ROLLBACK, abort
-       ├── Journal: phase_committed
-       └── Optional: git commit (--auto-commit flag)
+       ├── Journal: phase_commit_initiated
+       ├── Optional: git commit --no-verify (--auto-commit flag)
+       ├── Journal: phase_committed (with commit_sha if git)
+       └── If git commit fails → ROLLBACK, abort
 
    2d. ON FAILURE → ROLLBACK
        ├── Restore all files from snapshot
@@ -602,17 +730,26 @@ rollback unit.
 
 Even with git-as-rollback, a journal is needed for crash recovery and audit:
 
-| Event                | Fields |
-|----------------------|--------|
-| `execution_started`  | plan_id, actor, timestamp, baseline_sha |
-| `phase_validated`    | plan_id, phase_id, result, file_hashes |
-| `file_written`       | plan_id, task_id, file_path, edit_count |
-| `validator_started`  | plan_id, validator_name, scope |
-| `validator_passed`   | plan_id, validator_name, duration_ms |
-| `validator_failed`   | plan_id, validator_name, exit_code, output_snippet |
-| `phase_committed`    | plan_id, phase_id, commit_sha |
-| `phase_rolled_back`  | plan_id, phase_id, reason, files_restored |
-| `execution_completed`| plan_id, phases_committed, phases_failed |
+| Event                     | Fields |
+|---------------------------|--------|
+| `execution_started`       | plan_id, actor, timestamp, baseline_sha, toolchain_hash |
+| `phase_validated`         | plan_id, phase_id, result, file_hashes |
+| `file_written`            | plan_id, task_id, file_path, edit_count |
+| `validator_started`       | plan_id, validator_name, scope |
+| `validator_passed`        | plan_id, validator_name, duration_ms |
+| `validator_failed`        | plan_id, validator_name, exit_code, output_snippet |
+| `phase_commit_initiated`  | plan_id, phase_id |
+| `phase_committed`         | plan_id, phase_id, commit_sha (null if no auto-commit) |
+| `phase_rolled_back`       | plan_id, phase_id, reason, files_restored, upstream_phase_id (if cascade) |
+| `execution_completed`     | plan_id, phases_committed, phases_failed |
+
+**Crash recovery protocol:** On startup, the engine scans the journal for
+incomplete executions. If `phase_commit_initiated` exists without a corresponding
+`phase_committed`, the engine checks `git log` (if git backend) to determine
+whether the commit actually landed. If committed: write the missing
+`phase_committed` entry and continue. If not committed: treat as rollback. This
+two-phase journal design prevents the split-brain state where the journal and git
+disagree about what happened.
 
 ### Mutual exclusion
 
@@ -640,8 +777,10 @@ interface: `create(file_list) → handle`, `restore(handle)`, `discard(handle)`.
    files.)
 2. **Snapshot:** Record `HEAD` SHA as `baseline_sha`. No branch creation needed.
 3. **On phase commit (success):** If `--auto-commit`, run
-   `git add <affected_files> && git commit -m "filigree: <phase_name>"`.
-   Otherwise, leave changes staged but uncommitted.
+   `git add <affected_files> && git commit --no-verify -m "filigree: <phase_name>"`.
+   `--no-verify` is mandatory to prevent git hooks from executing arbitrary code
+   during the delta execution window. Otherwise, leave changes staged but
+   uncommitted.
 4. **On rollback (failure):** Run `git restore --source <baseline_sha> -- <filelist>`
    to restore exactly the affected files without touching the rest of the tree.
 5. **Discard:** No-op (baseline SHA requires no cleanup).
@@ -667,8 +806,11 @@ layer.
 This applies beyond the plugin system to all file operations in filigree-next:
 
 - All file paths must be **relative to project root**
+- **NFC-normalize** all paths and apply `os.path.normcase()` before any comparison
+  (prevents Unicode homoglyph bypass and case-sensitivity exploits on macOS/Windows)
 - Normalise and **reject any path escaping root** (`..`, absolute paths, symlinks
   resolving outside)
+- **Resolve symlinks** and verify the resolved path is still within project root
 - **Exclude** `.filigree/` and optionally `.git/` and other sensitive directories
 - Validate per delta element; reject whole task on any invalid element
 - Implemented as `_safe_path()` called at authoring time AND execution time (defense
@@ -734,7 +876,7 @@ the human's decision to invoke the agent constitutes authorization.
 
 ## Integration with filigree-next
 
-The code-delta extension adds no new execution machinery to core. It composes with
+The code-delta module adds no new execution machinery to core. It composes with
 filigree-next's existing item_links and transition gates.
 
 ### Execution ordering via item_links
@@ -744,7 +886,7 @@ The topological sort for delta execution is a query over the existing item_links
 
 ### Commands replace hooks
 
-No generic hook framework. The code-delta extension provides three explicit commands:
+No generic hook framework. The code-delta module provides three explicit commands:
 
 | Command | CLI | MCP | Description |
 |---------|-----|-----|-------------|
@@ -771,17 +913,17 @@ These commands set `delta_status` as a side effect. The gate evaluator reads
   }
 ]
 
-# Phase-level: can't execute until all child tasks are green
-# "parent" with direction "inbound" means "all items whose parent is this phase"
+# Phase-level: can't execute until all child tasks are green + tested
 "transitions": [
   {
     "from": "active",
     "to": "executing",
     "enforcement": "hard",
     "gates": [
-      {"type": "all_linked_field_eq", "link_type": "parent",
-       "direction": "inbound",
-       "field": "delta_status", "value": "green"}
+      {"type": "all_children_field_eq",
+       "field": "delta_status", "value": "green"},
+      {"type": "all_children_field_eq",
+       "field": "delta_confidence", "value": "tested"}
     ]
   },
   {
@@ -789,15 +931,25 @@ These commands set `delta_status` as a side effect. The gate evaluator reads
     "to": "completed",
     "enforcement": "hard",
     "gates": [
-      {"type": "all_linked", "link_type": "parent",
-       "direction": "inbound",
-       "condition": {"status_category": "done"}}
+      {"type": "all_children_status", "status_category": "done"}
     ]
   }
 ]
 ```
 
-Note: `field_eq` and `all_linked_field_eq` gate types must be added to the
+Gate types registered by the code-delta module:
+
+| Gate type | Description |
+|-----------|-------------|
+| `field_set` | Field exists and is non-null, non-empty |
+| `field_eq` | Field equals a specific value |
+| `all_children_field_eq` | All child items have field equal to value |
+| `all_children_status` | All child items are in a status category |
+
+`field_set` semantics: `null` → not set. Empty string `""` → not set. Empty
+object `{}` → not set. Empty list `[]` → not set. `false` → set. `0` → set.
+
+Note: `field_eq` and `all_children_field_eq` gate types must be added to the
 workflow extensibility design's gate vocabulary.
 
 ### Workflow
@@ -812,7 +964,7 @@ workflow extensibility design's gate vocabulary.
 ```
 AUTHORING (agent or human creates the plan)
 │
-├─ filigree create-plan with code-delta extension enabled
+├─ filigree create-plan with code-delta enabled
 │  ├─ Phase: "Add type annotations to core.py"
 │  │  ├─ Task 1: annotate create_issue return type
 │  │  │  └─ delta: {elements: [{path, transforms, assertions, validate_with}]}
@@ -845,7 +997,7 @@ EXECUTION (phase-level atomic, plan-level sequential)
 ├─ filigree execute-deltas <plan-id>
 │  ├─ Acquire execution lock
 │  ├─ For each phase:
-│  │  ├─ Re-validate all remaining phases (hash + digest verification)
+│  │  ├─ Re-validate this phase + file-overlapping downstream phases
 │  │  ├─ Snapshot phase files (git or file-copy backend)
 │  │  ├─ Apply transforms in topological order
 │  │  ├─ Run per-task assertions
@@ -877,19 +1029,24 @@ pack system instead of external scanners.
 | Decision          | Choice                                                    | Rationale                                                     |
 |-------------------|-----------------------------------------------------------|---------------------------------------------------------------|
 | Target version    | filigree-next only                                        | Clean slate, no legacy compromises                            |
-| Architecture      | Layered packs (workflow + grammar + extension)             | Composes with existing pack model                             |
+| Architecture      | Packs (workflow + grammar) + code-delta module (built-in)  | No premature extension abstraction; one consumer, one module  |
 | Parser foundation | tree-sitter (CST)                                         | 150+ languages, battle-tested, Python bindings                |
 | Source generation | Text edits via OperationHandler (code, not config)         | CST has no serialization — operations must produce text edits |
+| Handler dispatch  | Per-match invocation with `captures: dict[str, Node]`      | Handlers see all named captures; consistent per-match model   |
 | Grammar/toolchain | Split: grammar packs (pure) + toolchain profile (project)  | Eliminates command injection; supports project-specific tools |
-| Delta schema      | Multi-element per task with content addressing              | Multi-file changes without task noise; tamper/TOCTOU resistance |
+| Toolchain integrity | Content-addressed toolchain.toml + command allowlist      | Prevents in-repo executable planting via PR                   |
+| Delta schema      | Multi-element per task with content addressing + version    | Multi-file changes without task noise; tamper/TOCTOU resistance |
 | Execution model   | Phase-level atomic, plan-level sequential                  | Survivable large refactors with safety invariants             |
+| Re-validation     | Dependency-aware (shared-file phases only), not all-remaining | O(n) common case instead of O(n²); correctness preserved    |
+| Journal           | Two-phase commits (initiated → committed)                  | Prevents journal/git split-brain on crash                     |
 | Lifecycle         | Explicit commands + field-based gates (no hooks)           | No untestable mini-runtime; composes with existing gates      |
-| Security          | Path jail, content-addressing, shell=False, confirmation prompt | Defense in depth at every layer                            |
-| Rollback          | Git-preferred, snapshot-fallback                           | Git when available, degrade gracefully                        |
+| Confidence gates  | Phase execution requires `delta_confidence == "tested"`    | Prevents structural-only green from bypassing semantic checks |
+| Security          | Path jail (NFC + normcase), content-addressing, shell=False | Defense in depth at every layer                              |
+| Rollback          | Git-preferred (--no-verify), snapshot-fallback             | Git when available, degrade gracefully; no hook execution     |
 | Distribution      | Built-in only                                              | No package discovery overhead, security boundary              |
 | Validation        | Two-tiered: structural (CST) then semantic (toolchain)     | Fast feedback on broken syntax before slow validators         |
-| Initial languages | Python, Rust, C, JavaScript, HTML                          | Covers primary use cases                                      |
-| Formatters        | First-class field on grammar packs                         | Explicit per-language pipeline, not implicit assumption        |
+| Initial languages | Python, JavaScript, CSS, HTML                              | Dogfood first — filigree's own languages                      |
+| Formatters        | First-class field, per-file timing                         | Explicit per-language pipeline; format before assertions      |
 
 ## Staged Delivery
 
@@ -899,37 +1056,41 @@ pack system instead of external scanners.
 tree-sitter queries. It ships a small query template library per grammar pack and
 expects authors to write queries directly.
 
-- Grammar packs (Python, Rust, C, JavaScript, HTML)
+**Scope:** filigree's own languages (Python + JavaScript/CSS/HTML).
+
+- Grammar packs: Python, JavaScript, CSS, HTML
 - Minimal operation set: `rename_symbol` (single-file), `add_import`,
-  `remove_import`, `add_type_annotation` (where feasible), `add_parameter`,
-  `remove_parameter`, `add_decorator`
-- Multi-element delta schema with content addressing
+  `remove_import`, `add_type_annotation` (Python), `add_parameter`,
+  `remove_parameter`, `add_decorator` (Python)
+- Multi-element delta schema with content addressing and schema version
 - Assertion vocabulary: `exists`, `not_exists`, `count_eq`, `count_gte`,
   `capture_equals`, `capture_regex`, `node_text_contains`
-- Confidence levels (structural / validated / tested)
-- Validator contract + toolchain profile (TOML)
-- Phase-level atomic execution with re-validation and rollback
-- Execution journal + mutual exclusion
-- Git-preferred rollback backend
+- Confidence levels (structural / validated / tested) with gate enforcement
+- Validator contract + toolchain profile (TOML) with integrity checking
+- Phase-level atomic execution with dependency-aware re-validation and rollback
+- Two-phase execution journal + mutual exclusion
+- Git-preferred rollback backend (--no-verify)
 - Interactive confirmation prompt (CLI) / agent-directed execution (MCP)
-- Path jail invariant
+- Path jail invariant (NFC-normalized, symlink-resolved)
+- Query resource limits (match count, timeout, captures)
 - Audit events (delta lifecycle)
 
 ### v1.1+
 
+- Additional languages (Rust, TypeScript, etc.) based on demand
 - `extract_function` and other high-risk refactors
 - Cross-file `rename_symbol` (requires `find_references`)
 - More powerful assertions (cross-file consistency, plan-level)
 - Richer git integration (PR creation, branch management)
 - Optional CI/CD automation
 - HTML embedded language support (`<script>`, `<style>`, templates)
-- Full RBAC authorization model
 - Signed deltas
 
 ## Open Questions
 
 - **Transform authoring UX** — how do agents/humans author tree-sitter queries
   and operation args? A builder tool or template library would reduce friction.
+  (This is the primary adoption risk — if authoring is too hard, nobody will use it.)
 - **Conflict resolution** — when two tasks target the same CST node, the second
   transform assumes the first already applied. What tooling helps authors get this
   right?
@@ -939,12 +1100,82 @@ expects authors to write queries directly.
   (deferred, but needs design before v1.1)
 - **Python indentation engine** — specification needed for correctness-grade
   indentation handling in the Python grammar pack
-- **Rust workspace discovery** — `Cargo.toml` workspace detection and package
-  resolution for workspace-scoped validators
+- **HTML embedded language boundary** — the HTML grammar pack is "pure HTML only"
+  in v1.0. What's the interaction model when transforms target an HTML file that
+  contains `<script>` or `<style>` tags? Should those regions be masked or flagged?
 
 ---
 
 ## Change Log
+
+### Revision 3 (2026-02-25) — Final Review Fixes
+
+Incorporates findings from 4-specialist final review panel (architecture critic,
+threat analyst, API architect, systems thinker). See
+`2026-02-25-plugin-final-review-annex.md` for full review report.
+
+**A) Language scope reduction**
+- Reduced from 5 languages (Python, Rust, C, JavaScript, HTML) to 4:
+  Python, JavaScript, CSS, HTML — filigree's own codebase languages
+- Removed Rust, C grammar packs from v1.0; moved to v1.1+ based on demand
+- Added CSS grammar pack (tree-sitter-css, prettier formatter)
+- Rationale: "dogfood first" — validate the design with filigree's own code
+
+**B) Extension pack abstraction removed**
+- Replaced "extension pack" layer with built-in code-delta module
+- Only one extension was ever specified; premature abstraction removed
+- Code-delta is now a `features.code_delta` toggle, not a pack
+- Previous: three-layer model (workflow + grammar + extension)
+
+**C) OperationHandler protocol fixes (blocking)**
+- Changed `match: Node` to `captures: dict[str, Node]` — handlers need all
+  named captures, not just a single node
+- Added UTF-8 encoding contract on `TextEdit.replacement`
+- Added `start_byte <= end_byte` validation rule
+- Specified per-match dispatch model (one `compute_edit` call per match)
+- Added handler registry specification (module-level factory function)
+- Previous: single Node parameter, unspecified dispatch
+
+**D) Journal-Git atomicity (blocking)**
+- Two-phase journal entries: `phase_commit_initiated` then `phase_committed`
+- Git commits use `--no-verify` to prevent hook-based code execution
+- Added crash recovery protocol (check git log on incomplete entries)
+- Previous: journal wrote "committed" before git commit — split-brain risk
+
+**E) Toolchain security hardening (blocking)**
+- Added toolchain.toml content-addressing (hash verified at execution time)
+- Added `allowed_commands` allowlist in `[toolchain]` section
+- Rejected relative paths in `command` field
+- Added `--` end-of-flags separator before `{file}` substitution
+- All `{file}` paths prefixed with `./` to prevent flag injection
+- Previous: `command` field accepted arbitrary executables
+
+**F) Confidence-level gate enforcement**
+- Phase execution gate now requires `delta_confidence == "tested"` by default
+- Plans can override with explicit `minimum_confidence` for draft work
+- Prevents "structural green is good enough" bypass of semantic validators
+
+**G) Dependency-aware re-validation**
+- Changed from "re-validate ALL remaining phases" to "re-validate this phase +
+  downstream phases sharing files"
+- Reduces O(n²) to O(n) for non-overlapping phase plans
+- Previous: quadratic validation cost with plan size
+
+**H) Gate naming fix**
+- Replaced `all_linked_field_eq` (link_type: "parent", direction: "inbound")
+  with `all_children_field_eq` — previous naming was semantically inverted
+- Added `field_set` edge-case semantics (null, empty string/object/list = unset)
+
+**I) Security hardening**
+- Path jail: added NFC normalization + `os.path.normcase()` + symlink resolution
+- Tree-sitter queries: added resource limits (10K matches, 5s timeout, 100 captures)
+- Validator deduplication: project/workspace-scoped validators deduped per phase
+- Formatter timing: specified as per-file, post-transform, pre-assertion
+
+**J) Delta schema versioning**
+- Added `schema_version: 1` field to delta payload
+- Added `delta_confidence` as separate derived field alongside `delta_status`
+- Added `toolchain_hash` to `execution_started` journal event
 
 ### Revision 2 (2026-02-25) — Post-Review Consolidation
 
