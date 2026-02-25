@@ -10,6 +10,7 @@ MCP tests moved to tests/mcp/test_error_handling.py
 from __future__ import annotations
 
 import inspect
+from pathlib import Path
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -20,7 +21,7 @@ from filigree.dashboard import create_app
 
 
 @pytest.fixture
-async def dashboard_client(tmp_path) -> AsyncClient:
+async def dashboard_client(tmp_path: Path) -> AsyncClient:
     """Create a test client with a fresh populated DB for dashboard tests."""
     d = FiligreeDB(tmp_path / "filigree.db", prefix="test", check_same_thread=False)
     d.initialize()

@@ -11,6 +11,7 @@ from click.testing import CliRunner
 
 from filigree.cli import cli
 from filigree.core import DB_FILENAME, FILIGREE_DIR_NAME, read_config
+from tests.cli.conftest import _extract_id
 
 
 class TestInit:
@@ -207,10 +208,6 @@ class TestStatsAndSearch:
         assert result.exit_code == 0
         assert "1 results" in result.output
 
-
-def _extract_id(create_output: str) -> str:
-    """Extract issue ID from 'Created test-abc123: Title' output."""
-    return create_output.split(":")[0].replace("Created ", "").strip()
 
 
 class TestReopen:
