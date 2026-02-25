@@ -31,6 +31,7 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from starlette.requests import Request
 
+from filigree import __version__
 from filigree.core import (
     DB_FILENAME,
     FiligreeDB,
@@ -325,9 +326,10 @@ def create_app(*, server_mode: bool = False) -> Any:
                     "status": "ok",
                     "mode": "server",
                     "projects": len(_project_store.list_projects()),
+                    "version": __version__,
                 }
             )
-        return JSONResponse({"status": "ok", "mode": "ethereal"})
+        return JSONResponse({"status": "ok", "mode": "ethereal", "version": __version__})
 
     @app.get("/api/projects")
     async def api_projects() -> JSONResponse:

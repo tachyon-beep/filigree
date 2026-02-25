@@ -523,6 +523,13 @@ loadProjectFilterSettings();
   if (state.selectedIssue) openDetail(state.selectedIssue);
   if (!localStorage.getItem("filigree_tour_done")) setTimeout(startTour, 1500);
   initDragAndDrop();
+  fetch("/api/health")
+    .then((r) => r.json())
+    .then((d) => {
+      const el = document.getElementById("footVersion");
+      if (el && d.version) el.textContent = `v${d.version}`;
+    })
+    .catch(() => {});
 });
 
 setInterval(() => {
