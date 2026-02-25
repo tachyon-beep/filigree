@@ -1,7 +1,7 @@
 # Plugin System & Language Packs — Design Document
 
 **Date:** 2026-02-25
-**Status:** Proposed (Revision 2 — post-review)
+**Status:** Proposed (Revision 2.1 — invariant precision pass)
 **Target:** filigree-next (clean-break architecture)
 **Review:** 8-specialist panel, 3 rounds, full consensus
 **Transcript:** `2026-02-25-plugin-design-review-transcript.md`
@@ -80,13 +80,12 @@ Separate from packs (project-level, not distributed):
 When the code-delta extension needs to parse or transform a file, it resolves the
 grammar pack by file extension. Each grammar pack declares its extensions:
 
-```python
+```json
 {
   "pack": "python",
   "kind": "grammar",
   "file_extensions": [".py", ".pyi"],
-  "tree_sitter_language": "python",
-  ...
+  "tree_sitter_language": "python"
 }
 ```
 
@@ -126,6 +125,20 @@ range + replacement string). The architecture has three layers:
 **Hard invariant:** Every transform operates on a freshly-parsed CST from the
 current source bytes. After any text edit, the previous CST is invalid due to
 shifted byte offsets. Re-parse before every subsequent transform.
+
+**Edit conflict rules:**
+
+- Within a single `compute_edit()` call, a handler may return multiple `TextEdit`
+  values. These edits are applied as a **batch**: they must not overlap (no two
+  edits may cover overlapping byte ranges). Overlapping edits within a batch are
+  illegal and abort the transform.
+- Exception: identical replacements to identical byte ranges are deduplicated, not
+  rejected.
+- Within a batch, edits are applied in **descending `start_byte` order** so that
+  earlier edits do not shift the byte offsets of later edits.
+- Between transforms (across `compute_edit()` calls), the engine re-parses the
+  source after each batch. The next transform sees a fresh CST with correct byte
+  offsets. No cross-transform offset management is needed.
 
 ### OperationHandler protocol
 
@@ -168,13 +181,12 @@ significantly simplifies operation handlers.
 
 This is a first-class field on grammar packs:
 
-```python
+```json
 {
   "pack": "rust",
   "kind": "grammar",
   "has_deterministic_formatter": true,
-  "formatter": "rustfmt",
-  ...
+  "formatter": "rustfmt"
 }
 ```
 
@@ -188,7 +200,7 @@ This is a first-class field on grammar packs:
 
 ### Grammar pack definition format
 
-```python
+```json
 {
   "pack": "python",
   "kind": "grammar",
@@ -323,16 +335,22 @@ cwd = "workspace_root"
 ### Scope model
 
 The `{file}` placeholder is only valid for `scope = "file"` validators. Cargo,
-mypy (in strict mode), and similar tools operate at package/project/workspace scope
-— they never accept individual file targets. The scope field makes this explicit
-rather than papering over it with broken placeholders.
+mypy (in strict mode), and similar tools operate at project/workspace scope — they
+never accept individual file targets. The scope field makes this explicit rather
+than papering over it with broken placeholders.
+
+**v1.0 scopes** (no parameterized placeholders beyond `{file}`):
 
 | Scope       | When run                          | `{file}` valid? | Example            |
 |-------------|-----------------------------------|-----------------|--------------------|
 | `file`      | Per file touched by transforms    | Yes             | `ruff check {file}` |
-| `package`   | Per package containing changes    | No              | `cargo check -p {package}` |
 | `project`   | Once per project                  | No              | `mypy src/`        |
 | `workspace` | Once per workspace                | No              | `cargo check`      |
+
+**Deferred to v1.1:** `package` scope with `{package}` placeholder. This requires
+workspace/package discovery logic per language (Cargo workspace membership, npm
+workspaces, Python namespace packages) and is substantial enough to warrant its own
+design pass.
 
 ### Two-tiered validation
 
@@ -353,7 +371,7 @@ adds schema to task-level items and provides commands for validation and executi
 
 ### Definition format
 
-```python
+```json
 {
   "pack": "code-delta",
   "kind": "extension",
@@ -380,14 +398,15 @@ adds schema to task-level items and provides commands for validation and executi
 
   "commands": {
     "validate-deltas": "Validate all deltas in a plan/phase against current disk state",
-    "execute-deltas": "Apply all deltas atomically with rollback (human gate required)",
+    "execute-deltas": "Apply all deltas atomically with rollback",
     "delta-status": "Report green/red/stale/pending counts for a plan/phase"
   },
 
   "gates": {
     "field_set": {"field": "delta"},
     "field_eq": {"field": "delta_status", "value": "green"},
-    "all_linked_field_eq": {"link_type": "contains", "field": "delta_status", "value": "green"}
+    "all_linked_field_eq": {"link_type": "parent", "direction": "inbound",
+                            "field": "delta_status", "value": "green"}
   }
 }
 ```
@@ -476,6 +495,13 @@ right content." Semantic correctness comes from toolchain validators.
 | `capture_equals`  | Named capture's text equals expected | `{"capture": "@rt", "expect": "capture_equals", "value": "Issue"}` |
 | `capture_regex`   | Named capture's text matches regex | `{"capture": "@name", "expect": "capture_regex", "value": "^test_.*"}` |
 | `node_text_contains` | Bounded substring check on matched node | `{"query": "...", "expect": "node_text_contains", "value": "return"}` |
+
+**Capture text semantics:** Tree-sitter captures are byte ranges into the source
+buffer. "Capture text" is defined as the **raw source slice decoded as UTF-8**, with
+no trimming, no whitespace normalization, and no line-ending conversion. If a
+capture includes leading indentation, the text includes that indentation. If
+trimming is needed, use `capture_regex` with an appropriate pattern. This avoids
+implicit normalization that silently changes assertion behavior across platforms.
 
 ### Confidence levels
 
@@ -597,15 +623,32 @@ completion or crash.
 
 ### Rollback backends
 
-Rollback is a selectable backend:
+Rollback is a selectable backend. Both implement the same `SnapshotBackend`
+interface: `create(file_list) → handle`, `restore(handle)`, `discard(handle)`.
 
 | Backend       | When used | Mechanism |
 |---------------|-----------|-----------|
-| **git** (preferred) | Repo is clean, git available | `git stash` or checkpoint branch; rollback via `git checkout -- <files>` |
+| **git** (preferred) | Repo is clean, git available | See exact contract below |
 | **snapshot** (fallback) | Git unavailable or `--no-git` | Copy affected files to temp directory; rollback via file restore |
 
-Git is preferred but not mandatory. The execution engine auto-selects based on
-environment. Both backends are tested against the same interface contract.
+**Git backend exact contract:**
+
+1. **Pre-flight:** Require clean working tree (`git status --porcelain` is empty).
+   If dirty and `--allow-dirty` is set, refuse — unrelated uncommitted changes
+   make rollback unsafe because `git restore` would discard them. (`--allow-dirty`
+   only skips the cleanliness check for *untracked* files, not for modified tracked
+   files.)
+2. **Snapshot:** Record `HEAD` SHA as `baseline_sha`. No branch creation needed.
+3. **On phase commit (success):** If `--auto-commit`, run
+   `git add <affected_files> && git commit -m "filigree: <phase_name>"`.
+   Otherwise, leave changes staged but uncommitted.
+4. **On rollback (failure):** Run `git restore --source <baseline_sha> -- <filelist>`
+   to restore exactly the affected files without touching the rest of the tree.
+5. **Discard:** No-op (baseline SHA requires no cleanup).
+
+Git is preferred but not mandatory. The execution engine auto-selects: if `git
+rev-parse --is-inside-work-tree` succeeds and the tree is clean, use git; otherwise
+fall back to snapshot.
 
 ### Staleness detection
 
@@ -640,6 +683,23 @@ This applies beyond the plugin system to all file operations in filigree-next:
   current file. Any mismatch → abort
 - Provides: tamper detection, TOCTOU resistance, audit immutability
 
+**Canonicalization rules for `digest`:**
+
+The digest covers the **intent** (transforms, assertions, validators, paths) but
+not the **observations** (pre_hash, post_hash — these change on revalidation).
+
+1. Construct a JSON object containing only: `elements[].path`,
+   `elements[].language` (always included, even if inferred — otherwise digest
+   changes depending on inference), `elements[].transforms`,
+   `elements[].assertions`, `elements[].validate_with`
+2. Serialize with: sorted keys, no whitespace (`separators=(',', ':')` in Python),
+   UTF-8 encoding. No floating-point values permitted in delta payloads (all
+   numeric values are integers).
+3. `digest` = `sha256:<hex of UTF-8 bytes>`
+
+This prevents "digest mismatch" ghosts caused by key ordering or whitespace
+differences across serializers.
+
 ### Command safety
 
 - All validator subprocess invocations use `shell=False` with list-of-strings args
@@ -655,11 +715,16 @@ This applies beyond the plugin system to all file operations in filigree-next:
 - Never `eval()` or `exec()` on args
 - Strict argument typing enforced by `OperationHandler.validate_args()`
 
-### Human execution gate
+### Execution authorization
 
-- `execute-deltas` requires a human actor (separation-of-duties lite)
-- Agents can author, validate, and review deltas, but cannot execute
-- This is a v1.0 constraint; future versions may relax with signed approvals
+Agents nominally have unrestricted access to the execution environment, so
+`execute-deltas` does not enforce a human-only gate. The agent executes when
+directed by the human. The security boundary is the content-addressing and path
+jail — not actor identity.
+
+In interactive CLI mode, `execute-deltas` prompts for confirmation before writing
+(`--yes` to skip). In MCP mode, the tool is available without additional gating —
+the human's decision to invoke the agent constitutes authorization.
 
 ### Dependency graph as attack surface
 
@@ -684,7 +749,7 @@ No generic hook framework. The code-delta extension provides three explicit comm
 | Command | CLI | MCP | Description |
 |---------|-----|-----|-------------|
 | `validate-deltas` | `filigree validate-deltas <plan-id>` | `validate_deltas` | Dry-run validation, sets delta_status |
-| `execute-deltas` | `filigree execute-deltas <plan-id>` | `execute_deltas` | Atomic execution with rollback (human gate) |
+| `execute-deltas` | `filigree execute-deltas <plan-id>` | `execute_deltas` | Atomic execution with rollback |
 | `delta-status` | `filigree delta-status <plan-id>` | `get_delta_status` | Green/red/stale/pending counts + confidence |
 
 These commands set `delta_status` as a side effect. The gate evaluator reads
@@ -707,13 +772,15 @@ These commands set `delta_status` as a side effect. The gate evaluator reads
 ]
 
 # Phase-level: can't execute until all child tasks are green
+# "parent" with direction "inbound" means "all items whose parent is this phase"
 "transitions": [
   {
     "from": "active",
     "to": "executing",
     "enforcement": "hard",
     "gates": [
-      {"type": "all_linked_field_eq", "link_type": "contains",
+      {"type": "all_linked_field_eq", "link_type": "parent",
+       "direction": "inbound",
        "field": "delta_status", "value": "green"}
     ]
   },
@@ -722,7 +789,8 @@ These commands set `delta_status` as a side effect. The gate evaluator reads
     "to": "completed",
     "enforcement": "hard",
     "gates": [
-      {"type": "all_linked", "link_type": "contains",
+      {"type": "all_linked", "link_type": "parent",
+       "direction": "inbound",
        "condition": {"status_category": "done"}}
     ]
   }
@@ -774,7 +842,7 @@ REVIEW (human inspects each atomic change)
 │
 EXECUTION (phase-level atomic, plan-level sequential)
 │
-├─ filigree execute-deltas <plan-id> (human gate required)
+├─ filigree execute-deltas <plan-id>
 │  ├─ Acquire execution lock
 │  ├─ For each phase:
 │  │  ├─ Re-validate all remaining phases (hash + digest verification)
@@ -816,7 +884,7 @@ pack system instead of external scanners.
 | Delta schema      | Multi-element per task with content addressing              | Multi-file changes without task noise; tamper/TOCTOU resistance |
 | Execution model   | Phase-level atomic, plan-level sequential                  | Survivable large refactors with safety invariants             |
 | Lifecycle         | Explicit commands + field-based gates (no hooks)           | No untestable mini-runtime; composes with existing gates      |
-| Security          | Path jail, content-addressing, human gate, shell=False     | Defense in depth at every layer                               |
+| Security          | Path jail, content-addressing, shell=False, confirmation prompt | Defense in depth at every layer                            |
 | Rollback          | Git-preferred, snapshot-fallback                           | Git when available, degrade gracefully                        |
 | Distribution      | Built-in only                                              | No package discovery overhead, security boundary              |
 | Validation        | Two-tiered: structural (CST) then semantic (toolchain)     | Fast feedback on broken syntax before slow validators         |
@@ -826,6 +894,10 @@ pack system instead of external scanners.
 ## Staged Delivery
 
 ### v1.0 — Declarative + Safe Execution
+
+**Non-goal:** v1.0 does not ship a query builder or visual authoring tool for
+tree-sitter queries. It ships a small query template library per grammar pack and
+expects authors to write queries directly.
 
 - Grammar packs (Python, Rust, C, JavaScript, HTML)
 - Minimal operation set: `rename_symbol` (single-file), `add_import`,
@@ -839,7 +911,7 @@ pack system instead of external scanners.
 - Phase-level atomic execution with re-validation and rollback
 - Execution journal + mutual exclusion
 - Git-preferred rollback backend
-- Human execution gate
+- Interactive confirmation prompt (CLI) / agent-directed execution (MCP)
 - Path jail invariant
 - Audit events (delta lifecycle)
 
@@ -849,7 +921,7 @@ pack system instead of external scanners.
 - Cross-file `rename_symbol` (requires `find_references`)
 - More powerful assertions (cross-file consistency, plan-level)
 - Richer git integration (PR creation, branch management)
-- Optional CI/CD automation (agent execution with signed approvals)
+- Optional CI/CD automation
 - HTML embedded language support (`<script>`, `<style>`, templates)
 - Full RBAC authorization model
 - Signed deltas
@@ -934,6 +1006,33 @@ design feedback. Changes listed by topic:
   cross-file assertions)
 - Moved source generation model (CST not AST) into grammar pack section
 - Added OperationHandler protocol with TextEdit dataclass
+
+### Revision 2.1 (2026-02-25) — Invariant Precision Pass
+
+Addresses reviewer feedback on remaining ambiguity traps. No design changes;
+only invariant specifications and terminology fixes.
+
+1. **Delta digest canonicalization** — added concrete serialization rules (sorted
+   keys, no whitespace, UTF-8, no floats; digest covers intent not observations)
+2. **Capture text semantics** — defined as raw UTF-8 source slice, no trimming
+3. **Edit conflict rules** — overlapping edits in a batch are illegal; descending
+   start_byte application order; identical-range dedup
+4. **`contains` → `parent`** — replaced all `contains` link type references with
+   `parent` (inbound direction) to match filigree-next's link type vocabulary
+5. **`{package}` scope deferred** — removed from v1.0 scope table; package
+   discovery requires per-language design, deferred to v1.1
+6. **Git backend exact contract** — pinned to: require clean tree, record HEAD SHA,
+   `git restore --source` for rollback, defined `--allow-dirty` semantics
+7. **Human execution gate removed** — agents execute when directed by humans;
+   security boundary is content-addressing and path jail, not actor identity
+8. **Code example syntax normalized** — JSON data blocks use `json` fence, Python
+   code blocks use `python` fence
+9. **v1.0 non-goal** — explicitly states no query builder ships in v1.0
+
+### Revision 2 (2026-02-25) — Post-Review Consolidation
+
+Incorporates all findings from the 8-specialist panel review and subsequent
+design feedback. Committed at `9ec456e`. See above for full change list.
 
 ### Revision 1 (2026-02-25) — Initial Design
 
