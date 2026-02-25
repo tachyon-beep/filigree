@@ -27,16 +27,16 @@ from pathlib import Path
 #   - tests/test_mcp.py
 #   - src/filigree/hooks.py
 #   - src/filigree/cli_commands/admin.py
-from filigree.install_support import (  # noqa: F401
+from filigree.install_support import (
     FILIGREE_INSTRUCTIONS_MARKER,
     SKILL_MARKER,
     SKILL_NAME,
 )
-from filigree.install_support.doctor import (  # noqa: F401
+from filigree.install_support.doctor import (
     CheckResult,
     run_doctor,
 )
-from filigree.install_support.hooks import (  # noqa: F401
+from filigree.install_support.hooks import (
     ENSURE_DASHBOARD_COMMAND,
     SESSION_CONTEXT_COMMAND,
     _extract_hook_binary,
@@ -45,7 +45,7 @@ from filigree.install_support.hooks import (  # noqa: F401
     _upgrade_hook_commands,
     install_claude_code_hooks,
 )
-from filigree.install_support.integrations import (  # noqa: F401
+from filigree.install_support.integrations import (
     _find_filigree_mcp_command,
     _read_mcp_json,
     install_claude_code_mcp,
@@ -62,29 +62,29 @@ __all__ = [
     "SKILL_NAME",
     # Doctor
     "CheckResult",
-    "run_doctor",
-    # Hooks
-    "_extract_hook_binary",
-    "_has_hook_command",
-    "_hook_cmd_matches",
-    "_upgrade_hook_commands",
-    "install_claude_code_hooks",
-    # Integrations
-    "_find_filigree_mcp_command",
-    "_read_mcp_json",
-    "install_claude_code_mcp",
-    "install_codex_mcp",
     # Local
     "_build_instructions_block",
+    # Hooks
+    "_extract_hook_binary",
+    # Integrations
+    "_find_filigree_mcp_command",
     "_get_skills_source_dir",
+    "_has_hook_command",
+    "_hook_cmd_matches",
     "_install_skill_to",
     "_instructions_hash",
     "_instructions_text",
     "_instructions_version",
+    "_read_mcp_json",
+    "_upgrade_hook_commands",
     "ensure_gitignore",
     "inject_instructions",
+    "install_claude_code_hooks",
+    "install_claude_code_mcp",
+    "install_codex_mcp",
     "install_codex_skills",
     "install_skills",
+    "run_doctor",
 ]
 
 # ---------------------------------------------------------------------------

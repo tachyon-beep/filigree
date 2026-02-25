@@ -193,7 +193,10 @@ def _read_os_command_line(pid: int) -> list[str] | None:
         if line.startswith("CommandLine="):
             cmdline = line[len("CommandLine=") :].strip()
             if cmdline:
-                return cmdline.split()
+                try:
+                    return shlex.split(cmdline, posix=False)
+                except ValueError:
+                    return [cmdline]
     return None
 
 

@@ -396,7 +396,6 @@ provides-extras = ["dashboard", "all"]
 dev = [
     { name = "coverage", extras = ["toml"], specifier = ">=7.0" },
     { name = "filigree", extras = ["dashboard"] },
-    { name = "filigree", extras = ["mcp"] },
     { name = "httpx", specifier = ">=0.28" },
     { name = "mypy", specifier = ">=1.14" },
     { name = "pre-commit", specifier = ">=4.0" },
