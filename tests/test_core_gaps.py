@@ -108,6 +108,9 @@ class TestCycleDetection:
         db.add_dependency(a.id, c.id)
         db.add_dependency(b.id, d.id)
         db.add_dependency(c.id, d.id)  # Should not raise
+        # Verify all 4 deps persisted (diamond is legal)
+        dep_count = db.conn.execute("SELECT COUNT(*) FROM dependencies").fetchone()[0]
+        assert dep_count == 4
 
 
 class TestDependencyOperations:

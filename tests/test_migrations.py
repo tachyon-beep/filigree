@@ -444,6 +444,7 @@ class TestAddIndex:
         conn.execute("CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT)")
         add_index(conn, "idx_t_name", "t", ["name"])
         add_index(conn, "idx_t_name", "t", ["name"])  # no error
+        assert "idx_t_name" in _get_index_names(conn)
         conn.close()
 
     def test_composite_index(self, tmp_path: Path) -> None:
@@ -475,6 +476,8 @@ class TestDropIndex:
     def test_idempotent(self, tmp_path: Path) -> None:
         conn = _make_db(tmp_path)
         drop_index(conn, "nonexistent_index")  # no error
+        # Confirm no indexes were accidentally created
+        assert "nonexistent_index" not in _get_index_names(conn)
         conn.close()
 
 
@@ -493,6 +496,8 @@ class TestRenameColumn:
         conn.execute("CREATE TABLE t (id INTEGER PRIMARY KEY, old_name TEXT)")
         rename_column(conn, "t", "old_name", "new_name")
         rename_column(conn, "t", "old_name", "new_name")  # no error
+        assert "new_name" in _get_table_columns(conn, "t")
+        assert "old_name" not in _get_table_columns(conn, "t")
         conn.close()
 
     def test_error_on_missing_source(self, tmp_path: Path) -> None:

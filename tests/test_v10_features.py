@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import Generator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -134,11 +135,13 @@ class TestCompaction:
         assert deleted == 0
 
     def test_vacuum(self, db: FiligreeDB) -> None:
-        # Just ensure it doesn't error
-        db.vacuum()
+        # vacuum() returns None; verify it completes without error
+        result = db.vacuum()
+        assert result is None
 
     def test_analyze(self, db: FiligreeDB) -> None:
-        db.analyze()
+        result = db.analyze()
+        assert result is None
 
 
 # ---------------------------------------------------------------------------
@@ -167,7 +170,7 @@ class TestPerformanceIndexes:
 
 class TestMCPV10:
     @pytest.fixture(autouse=True)
-    def _setup_mcp(self, tmp_path: Path) -> None:
+    def _setup_mcp(self, tmp_path: Path) -> Generator[None, None, None]:
         import filigree.mcp_server as mcp_mod
         from filigree.core import SUMMARY_FILENAME
 
@@ -177,9 +180,14 @@ class TestMCPV10:
         (filigree_dir / SUMMARY_FILENAME).write_text("# test\n")
         d = FiligreeDB(filigree_dir / DB_FILENAME, prefix="mcp")
         d.initialize()
+        original_db = mcp_mod.db
+        original_dir = mcp_mod._filigree_dir
         mcp_mod.db = d
         mcp_mod._filigree_dir = filigree_dir
         self.db = d
+        yield
+        mcp_mod.db = original_db
+        mcp_mod._filigree_dir = original_dir
 
     def _parse(self, result: list) -> dict | str:
         text = result[0].text

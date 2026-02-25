@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+from collections.abc import Generator
 from pathlib import Path
 
 import pytest
@@ -230,7 +231,7 @@ class TestImportJsonl:
 
 class TestMCPReleaseClaim:
     @pytest.fixture(autouse=True)
-    def _setup_mcp(self, tmp_path: Path) -> None:
+    def _setup_mcp(self, tmp_path: Path) -> Generator[None, None, None]:
         import filigree.mcp_server as mcp_mod
         from filigree.core import SUMMARY_FILENAME
 
@@ -240,10 +241,15 @@ class TestMCPReleaseClaim:
         (filigree_dir / SUMMARY_FILENAME).write_text("# test\n")
         d = FiligreeDB(filigree_dir / DB_FILENAME, prefix="mcp")
         d.initialize()
+        original_db = mcp_mod.db
+        original_dir = mcp_mod._filigree_dir
         mcp_mod.db = d
         mcp_mod._filigree_dir = filigree_dir
         self.db = d
         self.tmp_path = tmp_path
+        yield
+        mcp_mod.db = original_db
+        mcp_mod._filigree_dir = original_dir
 
     def _parse(self, result: list) -> dict | str:
         text = result[0].text
@@ -280,7 +286,7 @@ class TestMCPReleaseClaim:
 
 class TestMCPExportImport:
     @pytest.fixture(autouse=True)
-    def _setup_mcp(self, tmp_path: Path) -> None:
+    def _setup_mcp(self, tmp_path: Path) -> Generator[None, None, None]:
         import filigree.mcp_server as mcp_mod
         from filigree.core import SUMMARY_FILENAME
 
@@ -290,10 +296,15 @@ class TestMCPExportImport:
         (filigree_dir / SUMMARY_FILENAME).write_text("# test\n")
         d = FiligreeDB(filigree_dir / DB_FILENAME, prefix="mcp")
         d.initialize()
+        original_db = mcp_mod.db
+        original_dir = mcp_mod._filigree_dir
         mcp_mod.db = d
         mcp_mod._filigree_dir = filigree_dir
         self.db = d
         self.tmp_path = tmp_path
+        yield
+        mcp_mod.db = original_db
+        mcp_mod._filigree_dir = original_dir
 
     def _parse(self, result: list) -> dict | str:
         text = result[0].text

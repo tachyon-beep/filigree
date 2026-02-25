@@ -1298,7 +1298,8 @@ class TestInstallMcpServerMode:
         config = {"prefix": "test", "mode": "server"}
         (filigree_dir / "config.json").write_text(json.dumps(config))
 
-        ok, _msg = install_claude_code_mcp(project_root, mode="server", server_port=8377)
+        with patch("filigree.install_support.integrations.shutil.which", return_value=None):
+            ok, _msg = install_claude_code_mcp(project_root, mode="server", server_port=8377)
         assert ok
         mcp = json.loads((project_root / ".mcp.json").read_text())
         server_config = mcp["mcpServers"]["filigree"]
@@ -1307,7 +1308,8 @@ class TestInstallMcpServerMode:
 
     def test_ethereal_mode_writes_stdio(self, tmp_path: Path) -> None:
         project_root = tmp_path
-        ok, _msg = install_claude_code_mcp(project_root, mode="ethereal")
+        with patch("filigree.install_support.integrations.shutil.which", return_value=None):
+            ok, _msg = install_claude_code_mcp(project_root, mode="ethereal")
         assert ok
         mcp = json.loads((project_root / ".mcp.json").read_text())
         server_config = mcp["mcpServers"]["filigree"]

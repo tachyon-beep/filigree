@@ -113,8 +113,9 @@ def test_templates_available(db: FiligreeDB) -> None:
 
 def test_validate_status(db: FiligreeDB) -> None:
     """_validate_status should work through mixin composition."""
-    # Should not raise for valid status
-    db._validate_status("open", "task")
+    # Should not raise for valid status; returns None on success
+    result = db._validate_status("open", "task")
+    assert result is None
 
 
 # -- MetaMixin --------------------------------------------------------------

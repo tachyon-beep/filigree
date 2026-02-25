@@ -1196,60 +1196,48 @@ class TestExportImportPathTraversal:
 class TestRefreshSummaryLogging:
     """Bug filigree-c13236: _refresh_summary must log even when _logger is None."""
 
-    async def test_refresh_summary_logs_when_logger_is_none(self, mcp_db: FiligreeDB) -> None:
+    async def test_refresh_summary_logs_when_logger_is_none(self, mcp_db: FiligreeDB, monkeypatch: pytest.MonkeyPatch) -> None:
         """When _logger is None, fallback to logging.getLogger(__name__)."""
         import filigree.mcp_server as mcp_mod
 
-        original_logger = mcp_mod._logger
-        mcp_mod._logger = None
+        monkeypatch.setattr(mcp_mod, "_logger", None)
 
-        try:
-            with (
-                patch.object(mcp_mod, "write_summary", side_effect=OSError("disk full")),
-                patch("logging.getLogger") as mock_get_logger,
-            ):
-                mock_fallback = MagicMock()
-                mock_get_logger.return_value = mock_fallback
-                mcp_mod._refresh_summary()
-                mock_fallback.warning.assert_called_once()
-        finally:
-            mcp_mod._logger = original_logger
+        with (
+            patch.object(mcp_mod, "write_summary", side_effect=OSError("disk full")),
+            patch("logging.getLogger") as mock_get_logger,
+        ):
+            mock_fallback = MagicMock()
+            mock_get_logger.return_value = mock_fallback
+            mcp_mod._refresh_summary()
+            mock_fallback.warning.assert_called_once()
 
 
 class TestRefreshSummaryErrorEscalation:
     """Bug filigree-e45c0d: _refresh_summary must log at error for non-OSError exceptions."""
 
-    async def test_db_error_logged_at_error_level(self, mcp_db: FiligreeDB) -> None:
+    async def test_db_error_logged_at_error_level(self, mcp_db: FiligreeDB, monkeypatch: pytest.MonkeyPatch) -> None:
         import sqlite3
 
         import filigree.mcp_server as mcp_mod
 
         mock_logger = MagicMock()
-        original_logger = mcp_mod._logger
-        mcp_mod._logger = mock_logger
+        monkeypatch.setattr(mcp_mod, "_logger", mock_logger)
 
-        try:
-            with patch.object(mcp_mod, "write_summary", side_effect=sqlite3.DatabaseError("database disk image is malformed")):
-                mcp_mod._refresh_summary()
-                mock_logger.error.assert_called_once()
-                assert "malformed" in str(mock_logger.error.call_args) or "context.md" in str(mock_logger.error.call_args)
-        finally:
-            mcp_mod._logger = original_logger
+        with patch.object(mcp_mod, "write_summary", side_effect=sqlite3.DatabaseError("database disk image is malformed")):
+            mcp_mod._refresh_summary()
+            mock_logger.error.assert_called_once()
+            assert "malformed" in str(mock_logger.error.call_args) or "context.md" in str(mock_logger.error.call_args)
 
-    async def test_os_error_still_logged_at_warning(self, mcp_db: FiligreeDB) -> None:
+    async def test_os_error_still_logged_at_warning(self, mcp_db: FiligreeDB, monkeypatch: pytest.MonkeyPatch) -> None:
         import filigree.mcp_server as mcp_mod
 
         mock_logger = MagicMock()
-        original_logger = mcp_mod._logger
-        mcp_mod._logger = mock_logger
+        monkeypatch.setattr(mcp_mod, "_logger", mock_logger)
 
-        try:
-            with patch.object(mcp_mod, "write_summary", side_effect=OSError("disk full")):
-                mcp_mod._refresh_summary()
-                mock_logger.warning.assert_called_once()
-                mock_logger.error.assert_not_called()
-        finally:
-            mcp_mod._logger = original_logger
+        with patch.object(mcp_mod, "write_summary", side_effect=OSError("disk full")):
+            mcp_mod._refresh_summary()
+            mock_logger.warning.assert_called_once()
+            mock_logger.error.assert_not_called()
 
 
 class TestMCPTransactionSafety:
