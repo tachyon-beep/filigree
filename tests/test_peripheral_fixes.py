@@ -192,9 +192,9 @@ class TestCodexTomlBackslash:
     def test_backslash_paths_escaped(self, tmp_path: Path) -> None:
         """Windows-style backslash paths must be escaped in TOML output."""
         with (
-            patch("filigree.install.shutil.which", return_value=None),
+            patch("filigree.install_support.integrations.shutil.which", return_value=None),
             patch(
-                "filigree.install._find_filigree_mcp_command",
+                "filigree.install_support.integrations._find_filigree_mcp_command",
                 return_value="C:\\Program Files\\filigree\\filigree-mcp.exe",
             ),
         ):
@@ -207,9 +207,9 @@ class TestCodexTomlBackslash:
     def test_unix_paths_unchanged(self, tmp_path: Path) -> None:
         """Unix paths (no backslashes) should be passed through unchanged."""
         with (
-            patch("filigree.install.shutil.which", return_value=None),
+            patch("filigree.install_support.integrations.shutil.which", return_value=None),
             patch(
-                "filigree.install._find_filigree_mcp_command",
+                "filigree.install_support.integrations._find_filigree_mcp_command",
                 return_value="/usr/local/bin/filigree-mcp",
             ),
         ):
@@ -232,7 +232,7 @@ class TestCodexTomlPresenceCheck:
         config = codex_dir / "config.toml"
         config.write_text('[mcp_servers.filigree-extra]\ncommand = "other"\n')
 
-        with patch("filigree.install.shutil.which", return_value=None):
+        with patch("filigree.install_support.integrations.shutil.which", return_value=None):
             ok, msg = install_codex_mcp(tmp_path)
         assert ok
         # Should have written a new filigree section (not returned "Already configured")
@@ -247,7 +247,7 @@ class TestCodexTomlPresenceCheck:
         config = codex_dir / "config.toml"
         config.write_text('[mcp_servers.filigree]\ncommand = "filigree-mcp"\n')
 
-        with patch("filigree.install.shutil.which", return_value=None):
+        with patch("filigree.install_support.integrations.shutil.which", return_value=None):
             ok, msg = install_codex_mcp(tmp_path)
         assert ok
         assert "Already configured" in msg
@@ -295,7 +295,7 @@ class TestMalformedMcpJson:
         mcp_json = tmp_path / ".mcp.json"
         mcp_json.write_text("{this is not valid json!!!")
 
-        with patch("filigree.install.shutil.which", return_value=None):
+        with patch("filigree.install_support.integrations.shutil.which", return_value=None):
             ok, _msg = install_claude_code_mcp(tmp_path)
 
         assert ok
@@ -309,7 +309,7 @@ class TestMalformedMcpJson:
         corrupt_content = "{this is not valid json!!!"
         mcp_json.write_text(corrupt_content)
 
-        with patch("filigree.install.shutil.which", return_value=None):
+        with patch("filigree.install_support.integrations.shutil.which", return_value=None):
             install_claude_code_mcp(tmp_path)
 
         backup = tmp_path / ".mcp.json.bak"
@@ -322,7 +322,7 @@ class TestMalformedMcpJson:
         existing = {"mcpServers": {"other_tool": {"type": "stdio", "command": "other"}}}
         mcp_json.write_text(json.dumps(existing))
 
-        with patch("filigree.install.shutil.which", return_value=None):
+        with patch("filigree.install_support.integrations.shutil.which", return_value=None):
             ok, _msg = install_claude_code_mcp(tmp_path)
 
         assert ok
@@ -337,7 +337,7 @@ class TestMalformedMcpJson:
         mcp_json = tmp_path / ".mcp.json"
         mcp_json.write_text("")
 
-        with patch("filigree.install.shutil.which", return_value=None):
+        with patch("filigree.install_support.integrations.shutil.which", return_value=None):
             ok, _msg = install_claude_code_mcp(tmp_path)
 
         assert ok

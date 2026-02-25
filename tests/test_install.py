@@ -448,7 +448,7 @@ class TestFindFiligreeMcpCommand:
         def _fake_which(name: str) -> str | None:
             return f"/usr/bin/{name}" if name == "filigree-mcp" else None
 
-        with patch("filigree.install.shutil.which", side_effect=_fake_which):
+        with patch("filigree.install_support.integrations.shutil.which", side_effect=_fake_which):
             result = _find_filigree_mcp_command()
             assert result == "/usr/bin/filigree-mcp"
 
@@ -460,8 +460,8 @@ class TestFindFiligreeMcpCommand:
         mcp_bin.touch()
 
         with (
-            patch("filigree.install.shutil.which", return_value=None),
-            patch("filigree.install.sys.executable", str(fake_python)),
+            patch("filigree.install_support.integrations.shutil.which", return_value=None),
+            patch("filigree.install_support.integrations.sys.executable", str(fake_python)),
         ):
             result = _find_filigree_mcp_command()
             assert result == str(mcp_bin)
@@ -474,8 +474,8 @@ class TestFindFiligreeMcpCommand:
         mcp_bin.touch()
 
         with (
-            patch("filigree.install.shutil.which", return_value=None),
-            patch("filigree.install.sys.executable", str(fake_python)),
+            patch("filigree.install_support.integrations.shutil.which", return_value=None),
+            patch("filigree.install_support.integrations.sys.executable", str(fake_python)),
         ):
             result = _find_filigree_mcp_command()
             assert result == str(mcp_bin)
@@ -493,8 +493,8 @@ class TestFindFiligreeMcpCommand:
             return None
 
         with (
-            patch("filigree.install.shutil.which", side_effect=fake_which),
-            patch("filigree.install.sys.executable", "/nonexistent/python3"),
+            patch("filigree.install_support.integrations.shutil.which", side_effect=fake_which),
+            patch("filigree.install_support.integrations.sys.executable", "/nonexistent/python3"),
         ):
             result = _find_filigree_mcp_command()
             assert result == str(mcp_bin)
@@ -502,8 +502,8 @@ class TestFindFiligreeMcpCommand:
     def test_default_fallback(self) -> None:
         """When nothing found, return 'filigree-mcp'."""
         with (
-            patch("filigree.install.shutil.which", return_value=None),
-            patch("filigree.install.sys.executable", "/nonexistent/python3"),
+            patch("filigree.install_support.integrations.shutil.which", return_value=None),
+            patch("filigree.install_support.integrations.sys.executable", "/nonexistent/python3"),
         ):
             result = _find_filigree_mcp_command()
             assert result == "filigree-mcp"
@@ -543,7 +543,7 @@ class TestFindFiligreeCommand:
 class TestInstallClaudeCodeMcp:
     def test_writes_mcp_json(self, tmp_path: Path) -> None:
         """Should write .mcp.json when claude CLI is not available."""
-        with patch("filigree.install.shutil.which", return_value=None):
+        with patch("filigree.install_support.integrations.shutil.which", return_value=None):
             ok, _msg = install_claude_code_mcp(tmp_path)
         assert ok
         mcp_json = tmp_path / ".mcp.json"
@@ -555,7 +555,7 @@ class TestInstallClaudeCodeMcp:
         """Should preserve existing entries in .mcp.json."""
         existing = {"mcpServers": {"other_tool": {"type": "stdio"}}}
         (tmp_path / ".mcp.json").write_text(json.dumps(existing))
-        with patch("filigree.install.shutil.which", return_value=None):
+        with patch("filigree.install_support.integrations.shutil.which", return_value=None):
             ok, _msg = install_claude_code_mcp(tmp_path)
         assert ok
         data = json.loads((tmp_path / ".mcp.json").read_text())
@@ -565,7 +565,7 @@ class TestInstallClaudeCodeMcp:
     def test_handles_non_dict_mcp_json(self, tmp_path: Path) -> None:
         """Non-object .mcp.json should be backed up and reset, not crash."""
         (tmp_path / ".mcp.json").write_text("[]")
-        with patch("filigree.install.shutil.which", return_value=None):
+        with patch("filigree.install_support.integrations.shutil.which", return_value=None):
             ok, _msg = install_claude_code_mcp(tmp_path)
         assert ok
         data = json.loads((tmp_path / ".mcp.json").read_text())
@@ -574,7 +574,7 @@ class TestInstallClaudeCodeMcp:
     def test_handles_non_dict_mcp_servers(self, tmp_path: Path) -> None:
         """mcpServers as a list should be replaced with {}, not crash."""
         (tmp_path / ".mcp.json").write_text(json.dumps({"mcpServers": []}))
-        with patch("filigree.install.shutil.which", return_value=None):
+        with patch("filigree.install_support.integrations.shutil.which", return_value=None):
             ok, _msg = install_claude_code_mcp(tmp_path)
         assert ok
         data = json.loads((tmp_path / ".mcp.json").read_text())
@@ -584,7 +584,7 @@ class TestInstallClaudeCodeMcp:
     def test_handles_string_mcp_servers(self, tmp_path: Path) -> None:
         """mcpServers as a string should be replaced with {}, not crash."""
         (tmp_path / ".mcp.json").write_text(json.dumps({"mcpServers": "bad"}))
-        with patch("filigree.install.shutil.which", return_value=None):
+        with patch("filigree.install_support.integrations.shutil.which", return_value=None):
             ok, _msg = install_claude_code_mcp(tmp_path)
         assert ok
         data = json.loads((tmp_path / ".mcp.json").read_text())
@@ -595,7 +595,7 @@ class TestInstallClaudeCodeMcp:
 class TestInstallCodexMcp:
     def test_creates_codex_config(self, tmp_path: Path) -> None:
         """Should create .codex/config.toml with filigree config."""
-        with patch("filigree.install.shutil.which", return_value=None):
+        with patch("filigree.install_support.integrations.shutil.which", return_value=None):
             ok, _msg = install_codex_mcp(tmp_path)
         assert ok
         config = (tmp_path / ".codex" / "config.toml").read_text()
@@ -606,7 +606,7 @@ class TestInstallCodexMcp:
         codex_dir = tmp_path / ".codex"
         codex_dir.mkdir()
         (codex_dir / "config.toml").write_text("[mcp_servers.filigree]\ncommand = 'filigree-mcp'\n")
-        with patch("filigree.install.shutil.which", return_value=None):
+        with patch("filigree.install_support.integrations.shutil.which", return_value=None):
             ok, msg = install_codex_mcp(tmp_path)
         assert ok
         assert "Already configured" in msg
@@ -618,7 +618,7 @@ class TestInstallCodexMcp:
         # Use a project root whose name contains a double quote
         weird_root = tmp_path / 'proj"name'
         weird_root.mkdir()
-        with patch("filigree.install.shutil.which", return_value=None):
+        with patch("filigree.install_support.integrations.shutil.which", return_value=None):
             ok, _msg = install_codex_mcp(weird_root)
         assert ok
         config_text = (weird_root / ".codex" / "config.toml").read_text()
@@ -634,7 +634,7 @@ class TestInstallCodexMcpMalformedToml:
         codex_dir = tmp_path / ".codex"
         codex_dir.mkdir()
         (codex_dir / "config.toml").write_text("[broken\nthis is not valid toml")
-        with patch("filigree.install.shutil.which", return_value=None):
+        with patch("filigree.install_support.integrations.shutil.which", return_value=None):
             ok, msg = install_codex_mcp(tmp_path)
         assert not ok
         assert "malformed TOML" in msg
@@ -644,7 +644,7 @@ class TestInstallCodexMcpMalformedToml:
         codex_dir.mkdir()
         original = "[broken\nthis is not valid toml"
         (codex_dir / "config.toml").write_text(original)
-        with patch("filigree.install.shutil.which", return_value=None):
+        with patch("filigree.install_support.integrations.shutil.which", return_value=None):
             install_codex_mcp(tmp_path)
         assert (codex_dir / "config.toml").read_text() == original
 
@@ -654,7 +654,7 @@ class TestInstallClaudeCodeHooks:
     MOCK_BIN = "/mock/venv/bin/filigree"
 
     def test_creates_settings_json(self, tmp_path: Path) -> None:
-        with patch("filigree.install.find_filigree_command", return_value=self.MOCK_TOKENS):
+        with patch("filigree.install_support.hooks.find_filigree_command", return_value=self.MOCK_TOKENS):
             ok, _msg = install_claude_code_hooks(tmp_path)
         assert ok
         settings_path = tmp_path / ".claude" / "settings.json"
@@ -669,7 +669,7 @@ class TestInstallClaudeCodeHooks:
         claude_dir.mkdir()
         existing = {"someOtherKey": True}
         (claude_dir / "settings.json").write_text(json.dumps(existing))
-        with patch("filigree.install.find_filigree_command", return_value=self.MOCK_TOKENS):
+        with patch("filigree.install_support.hooks.find_filigree_command", return_value=self.MOCK_TOKENS):
             ok, _msg = install_claude_code_hooks(tmp_path)
         assert ok
         data = json.loads((claude_dir / "settings.json").read_text())
@@ -677,7 +677,7 @@ class TestInstallClaudeCodeHooks:
         assert "hooks" in data
 
     def test_idempotent(self, tmp_path: Path) -> None:
-        with patch("filigree.install.find_filigree_command", return_value=self.MOCK_TOKENS):
+        with patch("filigree.install_support.hooks.find_filigree_command", return_value=self.MOCK_TOKENS):
             install_claude_code_hooks(tmp_path)
             install_claude_code_hooks(tmp_path)
         data = json.loads((tmp_path / ".claude" / "settings.json").read_text())
@@ -690,7 +690,7 @@ class TestInstallClaudeCodeHooks:
         claude_dir = tmp_path / ".claude"
         claude_dir.mkdir()
         (claude_dir / "settings.json").write_text("{corrupt json!!!")
-        with patch("filigree.install.find_filigree_command", return_value=self.MOCK_TOKENS):
+        with patch("filigree.install_support.hooks.find_filigree_command", return_value=self.MOCK_TOKENS):
             ok, _msg = install_claude_code_hooks(tmp_path)
         assert ok
         # Backup should exist
@@ -698,7 +698,7 @@ class TestInstallClaudeCodeHooks:
 
     def test_dashboard_hook_conditional(self, tmp_path: Path) -> None:
         """Dashboard hook is added only when dashboard extra is importable."""
-        with patch("filigree.install.find_filigree_command", return_value=self.MOCK_TOKENS):
+        with patch("filigree.install_support.hooks.find_filigree_command", return_value=self.MOCK_TOKENS):
             ok, _msg = install_claude_code_hooks(tmp_path)
         assert ok
         data = json.loads((tmp_path / ".claude" / "settings.json").read_text())
@@ -728,7 +728,7 @@ class TestInstallClaudeCodeHooks:
             }
         }
         (claude_dir / "settings.json").write_text(json.dumps(settings))
-        with patch("filigree.install.find_filigree_command", return_value=self.MOCK_TOKENS):
+        with patch("filigree.install_support.hooks.find_filigree_command", return_value=self.MOCK_TOKENS):
             ok, msg = install_claude_code_hooks(tmp_path)
         assert ok
         assert "Upgraded" in msg or "Registered" in msg
@@ -763,7 +763,7 @@ class TestInstallClaudeCodeHooks:
             pass
         settings = {"hooks": {"SessionStart": [{"hooks": hooks_list}]}}
         (claude_dir / "settings.json").write_text(json.dumps(settings))
-        with patch("filigree.install.find_filigree_command", return_value=self.MOCK_TOKENS):
+        with patch("filigree.install_support.hooks.find_filigree_command", return_value=self.MOCK_TOKENS):
             ok, msg = install_claude_code_hooks(tmp_path)
         assert ok
         assert "Upgraded" in msg
@@ -792,7 +792,7 @@ class TestInstallClaudeCodeHooks:
             }
         }
         (claude_dir / "settings.json").write_text(json.dumps(settings))
-        with patch("filigree.install.find_filigree_command", return_value=self.MOCK_TOKENS):
+        with patch("filigree.install_support.hooks.find_filigree_command", return_value=self.MOCK_TOKENS):
             ok, _msg = install_claude_code_hooks(tmp_path)
         assert ok
         data = json.loads((claude_dir / "settings.json").read_text())
@@ -805,7 +805,7 @@ class TestInstallClaudeCodeHooks:
         import shlex
 
         spaced_tokens = ["/path with spaces/python", "-m", "filigree"]
-        with patch("filigree.install.find_filigree_command", return_value=spaced_tokens):
+        with patch("filigree.install_support.hooks.find_filigree_command", return_value=spaced_tokens):
             ok, _msg = install_claude_code_hooks(tmp_path)
         assert ok
         data = json.loads((tmp_path / ".claude" / "settings.json").read_text())
@@ -902,7 +902,7 @@ class TestInstallHooksMalformedStructure:
         claude_dir = tmp_path / ".claude"
         claude_dir.mkdir()
         (claude_dir / "settings.json").write_text(json.dumps({"hooks": []}))
-        with patch("filigree.install.find_filigree_command", return_value=self.MOCK_TOKENS):
+        with patch("filigree.install_support.hooks.find_filigree_command", return_value=self.MOCK_TOKENS):
             ok, _msg = install_claude_code_hooks(tmp_path)
         assert ok
         data = json.loads((claude_dir / "settings.json").read_text())
@@ -913,7 +913,7 @@ class TestInstallHooksMalformedStructure:
         claude_dir = tmp_path / ".claude"
         claude_dir.mkdir()
         (claude_dir / "settings.json").write_text(json.dumps({"hooks": {"SessionStart": "bad"}}))
-        with patch("filigree.install.find_filigree_command", return_value=self.MOCK_TOKENS):
+        with patch("filigree.install_support.hooks.find_filigree_command", return_value=self.MOCK_TOKENS):
             ok, _msg = install_claude_code_hooks(tmp_path)
         assert ok
         data = json.loads((claude_dir / "settings.json").read_text())
@@ -949,7 +949,7 @@ class TestDoctorHooksCheck:
         # Use a real path that exists so the binary path check passes
         mock_bin = str(filigree_project / "filigree")
         (filigree_project / "filigree").touch()
-        with patch("filigree.install.find_filigree_command", return_value=[mock_bin]):
+        with patch("filigree.install_support.hooks.find_filigree_command", return_value=[mock_bin]):
             install_claude_code_hooks(filigree_project)
         results = run_doctor(filigree_project)
         hooks_check = next((r for r in results if r.name == "Claude Code hooks"), None)
@@ -1279,7 +1279,7 @@ class TestDoctorConnectionLeak:
         def fake_connect(*args: object, **kwargs: object) -> MagicMock:
             return mock_conn
 
-        with patch("filigree.install.sqlite3.connect", side_effect=fake_connect):
+        with patch("filigree.install_support.doctor.sqlite3.connect", side_effect=fake_connect):
             results = run_doctor(filigree_project)
 
         # Connection should have been closed despite the error
