@@ -13,17 +13,6 @@ from filigree.cli import cli
 from filigree.core import DB_FILENAME, FILIGREE_DIR_NAME, read_config
 
 
-@pytest.fixture
-def cli_in_project(tmp_path: Path, cli_runner: CliRunner) -> tuple[CliRunner, Path]:
-    """Initialize a filigree project in tmp_path and return (runner, project_root)."""
-    original_cwd = os.getcwd()
-    os.chdir(str(tmp_path))
-    result = cli_runner.invoke(cli, ["init", "--prefix", "test"])
-    assert result.exit_code == 0
-    yield cli_runner, tmp_path
-    os.chdir(original_cwd)
-
-
 class TestInit:
     def test_init_creates_filigree_dir(self, tmp_path: Path, cli_runner: CliRunner) -> None:
         original = os.getcwd()
