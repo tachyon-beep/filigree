@@ -551,25 +551,20 @@ class TestClaimAPI:
 class TestClaimEmptyAssigneeAPI:
     """Bug filigree-040ddb: dashboard claim endpoints must reject empty assignee."""
 
-    async def test_claim_empty_assignee_returns_400(self, client: AsyncClient, dashboard_db: FiligreeDB) -> None:
+    @pytest.mark.parametrize("body", [{"assignee": ""}, {}], ids=["empty", "missing"])
+    async def test_claim_issue_rejects_bad_assignee(
+        self, client: AsyncClient, dashboard_db: FiligreeDB, body: dict
+    ) -> None:
         ids = dashboard_db._test_ids  # type: ignore[attr-defined]
-        resp = await client.post(f"/api/issue/{ids['a']}/claim", json={"assignee": ""})
+        resp = await client.post(f"/api/issue/{ids['a']}/claim", json=body)
         assert resp.status_code == 400
         assert "assignee" in resp.json()["error"]["message"].lower()
 
-    async def test_claim_missing_assignee_returns_400(self, client: AsyncClient, dashboard_db: FiligreeDB) -> None:
-        ids = dashboard_db._test_ids  # type: ignore[attr-defined]
-        resp = await client.post(f"/api/issue/{ids['a']}/claim", json={})
-        assert resp.status_code == 400
-        assert "assignee" in resp.json()["error"]["message"].lower()
-
-    async def test_claim_next_empty_assignee_returns_400(self, client: AsyncClient) -> None:
-        resp = await client.post("/api/claim-next", json={"assignee": ""})
-        assert resp.status_code == 400
-        assert "assignee" in resp.json()["error"]["message"].lower()
-
-    async def test_claim_next_missing_assignee_returns_400(self, client: AsyncClient) -> None:
-        resp = await client.post("/api/claim-next", json={})
+    @pytest.mark.parametrize("body", [{"assignee": ""}, {}], ids=["empty", "missing"])
+    async def test_claim_next_rejects_bad_assignee(
+        self, client: AsyncClient, body: dict
+    ) -> None:
+        resp = await client.post("/api/claim-next", json=body)
         assert resp.status_code == 400
         assert "assignee" in resp.json()["error"]["message"].lower()
 
@@ -883,69 +878,62 @@ class TestBatchAPI:
 class TestNonObjectBodyReturns400:
     """Non-dict JSON bodies (e.g. []) must return 400, not crash with 500."""
 
-    async def test_update_issue_rejects_array_body(self, client: AsyncClient) -> None:
-        resp = await client.patch("/api/issue/test-1", content="[]")
-        assert resp.status_code == 400
-
-    async def test_create_issue_rejects_array_body(self, client: AsyncClient) -> None:
-        resp = await client.post("/api/issues", content="[]")
-        assert resp.status_code == 400
-
-    async def test_close_issue_rejects_array_body(self, client: AsyncClient) -> None:
-        resp = await client.post("/api/issue/test-1/close", content="[]")
-        assert resp.status_code == 400
-
-    async def test_batch_update_rejects_array_body(self, client: AsyncClient) -> None:
-        resp = await client.post("/api/batch/update", content="[]")
+    @pytest.mark.parametrize(
+        ("method", "path"),
+        [
+            ("PATCH", "/api/issue/test-1"),
+            ("POST", "/api/issues"),
+            ("POST", "/api/issue/test-1/close"),
+            ("POST", "/api/batch/update"),
+        ],
+        ids=["update", "create", "close", "batch-update"],
+    )
+    async def test_rejects_array_body(self, client: AsyncClient, method: str, path: str) -> None:
+        resp = await client.request(method, path, content="[]")
         assert resp.status_code == 400
 
 
 class TestBatchAPIInputValidation:
     """Bug filigree-366a6d: null issue_ids crashes with 500 TypeError."""
 
-    async def test_batch_update_null_issue_ids_returns_400(self, client: AsyncClient) -> None:
-        """Sending issue_ids: null should return 400, not crash with 500."""
-        resp = await client.post("/api/batch/update", json={"issue_ids": None, "priority": 1})
+    @pytest.mark.parametrize(
+        ("endpoint", "body"),
+        [
+            ("/api/batch/update", {"issue_ids": None, "priority": 1}),
+            ("/api/batch/close", {"issue_ids": None}),
+        ],
+        ids=["update-null", "close-null"],
+    )
+    async def test_null_issue_ids_returns_400(
+        self, client: AsyncClient, endpoint: str, body: dict
+    ) -> None:
+        resp = await client.post(endpoint, json=body)
         assert resp.status_code == 400
         assert "issue_ids" in resp.json()["error"]["message"].lower()
 
-    async def test_batch_close_null_issue_ids_returns_400(self, client: AsyncClient) -> None:
-        """Sending issue_ids: null should return 400, not crash with 500."""
-        resp = await client.post("/api/batch/close", json={"issue_ids": None})
+    @pytest.mark.parametrize(
+        ("endpoint", "body", "check_message"),
+        [
+            ("/api/batch/update", {"issue_ids": "not-a-list", "priority": 1}, None),
+            ("/api/batch/close", {"issue_ids": "not-a-list"}, None),
+            ("/api/batch/update", {"priority": 1}, None),
+            ("/api/batch/close", {"reason": "done"}, None),
+            ("/api/batch/update", {"issue_ids": [123], "priority": 1}, "string"),
+            ("/api/batch/close", {"issue_ids": [123]}, "string"),
+        ],
+        ids=[
+            "update-string", "close-string",
+            "update-missing", "close-missing",
+            "update-non-string-elements", "close-non-string-elements",
+        ],
+    )
+    async def test_invalid_issue_ids_returns_400(
+        self, client: AsyncClient, endpoint: str, body: dict, check_message: str | None
+    ) -> None:
+        resp = await client.post(endpoint, json=body)
         assert resp.status_code == 400
-        assert "issue_ids" in resp.json()["error"]["message"].lower()
-
-    async def test_batch_update_string_issue_ids_returns_400(self, client: AsyncClient) -> None:
-        """Sending issue_ids as a string should return 400."""
-        resp = await client.post("/api/batch/update", json={"issue_ids": "not-a-list", "priority": 1})
-        assert resp.status_code == 400
-
-    async def test_batch_close_string_issue_ids_returns_400(self, client: AsyncClient) -> None:
-        """Sending issue_ids as a string should return 400."""
-        resp = await client.post("/api/batch/close", json={"issue_ids": "not-a-list"})
-        assert resp.status_code == 400
-
-    async def test_batch_update_missing_issue_ids_returns_400(self, client: AsyncClient) -> None:
-        """Omitting issue_ids entirely should return 400."""
-        resp = await client.post("/api/batch/update", json={"priority": 1})
-        assert resp.status_code == 400
-
-    async def test_batch_close_missing_issue_ids_returns_400(self, client: AsyncClient) -> None:
-        """Omitting issue_ids entirely should return 400."""
-        resp = await client.post("/api/batch/close", json={"reason": "done"})
-        assert resp.status_code == 400
-
-    async def test_batch_update_non_string_ids_returns_400(self, client: AsyncClient) -> None:
-        """Sending issue_ids with non-string elements (e.g. integers) should return 400."""
-        resp = await client.post("/api/batch/update", json={"issue_ids": [123], "priority": 1})
-        assert resp.status_code == 400
-        assert "string" in resp.json()["error"]["message"].lower()
-
-    async def test_batch_close_non_string_ids_returns_400(self, client: AsyncClient) -> None:
-        """Sending issue_ids with non-string elements should return 400."""
-        resp = await client.post("/api/batch/close", json={"issue_ids": [123]})
-        assert resp.status_code == 400
-        assert "string" in resp.json()["error"]["message"].lower()
+        if check_message:
+            assert check_message in resp.json()["error"]["message"].lower()
 
 
 class TestBatchClosePartialMutation:
@@ -1213,47 +1201,22 @@ class TestDashboardBatchCloseKeyError:
 class TestDashboardMalformedJSON:
     """Endpoints should return 400 for malformed JSON bodies."""
 
-    async def test_update_malformed_json(self, client: AsyncClient) -> None:
-        resp = await client.patch(
-            "/api/issue/test-abc123",
-            content=b"not valid json{{{",
-            headers={"content-type": "application/json"},
-        )
-        assert resp.status_code == 400
-        assert "error" in resp.json()
-
-    async def test_close_malformed_json(self, client: AsyncClient) -> None:
-        resp = await client.post(
-            "/api/issue/test-abc123/close",
-            content=b"not valid json",
-            headers={"content-type": "application/json"},
-        )
-        assert resp.status_code == 400
-        assert "error" in resp.json()
-
-    async def test_create_malformed_json(self, client: AsyncClient) -> None:
-        resp = await client.post(
-            "/api/issues",
-            content=b"{broken",
-            headers={"content-type": "application/json"},
-        )
-        assert resp.status_code == 400
-        assert "error" in resp.json()
-
-    async def test_batch_close_malformed_json(self, client: AsyncClient) -> None:
-        resp = await client.post(
-            "/api/batch/close",
-            content=b"not json",
-            headers={"content-type": "application/json"},
-        )
-        assert resp.status_code == 400
-        assert "error" in resp.json()
-
-    async def test_batch_update_malformed_json(self, client: AsyncClient) -> None:
-        resp = await client.post(
-            "/api/batch/update",
-            content=b"not json",
-            headers={"content-type": "application/json"},
+    @pytest.mark.parametrize(
+        ("method", "path", "body"),
+        [
+            ("PATCH", "/api/issue/test-abc123", b"not valid json{{{"),
+            ("POST", "/api/issue/test-abc123/close", b"not valid json"),
+            ("POST", "/api/issues", b"{broken"),
+            ("POST", "/api/batch/close", b"not json"),
+            ("POST", "/api/batch/update", b"not json"),
+        ],
+        ids=["update", "close", "create", "batch-close", "batch-update"],
+    )
+    async def test_malformed_json_returns_400(
+        self, client: AsyncClient, method: str, path: str, body: bytes
+    ) -> None:
+        resp = await client.request(
+            method, path, content=body, headers={"content-type": "application/json"}
         )
         assert resp.status_code == 400
         assert "error" in resp.json()

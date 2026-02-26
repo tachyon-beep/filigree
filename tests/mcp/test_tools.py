@@ -1432,6 +1432,7 @@ class TestFileTools:
         assert result["code"] == "validation_error"
 
 
+@pytest.mark.slow
 class TestScannerTools:
     """Tests for list_scanners and trigger_scan MCP tools."""
 
@@ -2088,6 +2089,7 @@ class TestAddFileAssociationIssueNotFound:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.slow
 class TestTriggerScanCooldownRace:
     """Bug fix: filigree-5bee22 — cooldown must be set before async operations."""
 

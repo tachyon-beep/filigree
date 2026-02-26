@@ -331,6 +331,7 @@ class TestCorruptConfigBackup:
         assert not backup.exists()
 
 
+@pytest.mark.slow
 class TestPidOwnership:
     """Bug filigree-f56a78: start_daemon/daemon_status must verify PID ownership."""
 
@@ -380,6 +381,7 @@ class TestPidOwnership:
         assert not status.running
 
 
+@pytest.mark.slow
 class TestDaemonLifecycle:
     def test_start_writes_pid_file(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         config_dir = tmp_path / ".config" / "filigree"
@@ -637,6 +639,7 @@ class TestStopDaemonEarlyReturns:
         assert not pid_file.exists(), "PID file must be cleaned up when process is dead"
 
 
+@pytest.mark.slow
 class TestStartDaemonLocking:
     """Bug filigree-f6c971: start_daemon must serialize with portalocker.lock."""
 

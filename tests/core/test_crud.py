@@ -303,25 +303,17 @@ class TestClaimIssue:
 class TestClaimEmptyAssignee:
     """Bug filigree-040ddb: claim_issue/claim_next must reject empty assignee."""
 
-    def test_claim_issue_empty_string_raises(self, db: FiligreeDB) -> None:
+    @pytest.mark.parametrize("assignee", ["", "   "], ids=["empty", "whitespace"])
+    def test_claim_issue_rejects_blank_assignee(self, db: FiligreeDB, assignee: str) -> None:
         issue = db.create_issue("Claimable")
         with pytest.raises(ValueError, match="Assignee cannot be empty"):
-            db.claim_issue(issue.id, assignee="")
+            db.claim_issue(issue.id, assignee=assignee)
 
-    def test_claim_issue_whitespace_only_raises(self, db: FiligreeDB) -> None:
-        issue = db.create_issue("Claimable")
-        with pytest.raises(ValueError, match="Assignee cannot be empty"):
-            db.claim_issue(issue.id, assignee="   ")
-
-    def test_claim_next_empty_string_raises(self, db: FiligreeDB) -> None:
+    @pytest.mark.parametrize("assignee", ["", "   "], ids=["empty", "whitespace"])
+    def test_claim_next_rejects_blank_assignee(self, db: FiligreeDB, assignee: str) -> None:
         db.create_issue("Ready")
         with pytest.raises(ValueError, match="Assignee cannot be empty"):
-            db.claim_next("")
-
-    def test_claim_next_whitespace_only_raises(self, db: FiligreeDB) -> None:
-        db.create_issue("Ready")
-        with pytest.raises(ValueError, match="Assignee cannot be empty"):
-            db.claim_next("   ")
+            db.claim_next(assignee)
 
 
 class TestReparenting:

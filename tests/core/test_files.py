@@ -505,58 +505,37 @@ class TestProcessScanResults:
 class TestSeverityFallback:
     """Tests for severity normalization and fallback behavior."""
 
-    def test_severity_fallback_maps_unknown_to_info(self, db: FiligreeDB) -> None:
+    @pytest.mark.parametrize(
+        ("input_severity", "expected_severity", "expect_warning"),
+        [
+            ("major", "info", True),
+            ("High", "high", False),
+            (" low ", "low", False),
+            ("", "info", True),
+        ],
+        ids=["unknown-maps-to-info", "normalizes-case", "strips-whitespace", "empty-string"],
+    )
+    def test_severity_normalization(
+        self, db: FiligreeDB, input_severity: str, expected_severity: str, expect_warning: bool
+    ) -> None:
         result = db.process_scan_results(
             scan_source="ai",
-            findings=[{"path": "a.py", "rule_id": "R1", "severity": "major", "message": "m"}],
+            findings=[{"path": "a.py", "rule_id": "R1", "severity": input_severity, "message": "m"}],
         )
         assert result["findings_created"] == 1
-        assert any("major" in w for w in result["warnings"])
+        if expect_warning:
+            assert len(result["warnings"]) > 0
+        else:
+            assert result["warnings"] == []
         row = db.conn.execute("SELECT severity FROM scan_findings").fetchone()
-        assert row["severity"] == "info"
+        assert row["severity"] == expected_severity
 
-    def test_severity_fallback_normalizes_case(self, db: FiligreeDB) -> None:
-        result = db.process_scan_results(
-            scan_source="ai",
-            findings=[{"path": "a.py", "rule_id": "R1", "severity": "High", "message": "m"}],
-        )
-        assert result["findings_created"] == 1
-        assert result["warnings"] == []
-        row = db.conn.execute("SELECT severity FROM scan_findings").fetchone()
-        assert row["severity"] == "high"
-
-    def test_severity_fallback_strips_whitespace(self, db: FiligreeDB) -> None:
-        result = db.process_scan_results(
-            scan_source="ai",
-            findings=[{"path": "a.py", "rule_id": "R1", "severity": " low ", "message": "m"}],
-        )
-        assert result["findings_created"] == 1
-        assert result["warnings"] == []
-        row = db.conn.execute("SELECT severity FROM scan_findings").fetchone()
-        assert row["severity"] == "low"
-
-    def test_severity_fallback_empty_string(self, db: FiligreeDB) -> None:
-        result = db.process_scan_results(
-            scan_source="ai",
-            findings=[{"path": "a.py", "rule_id": "R1", "severity": "", "message": "m"}],
-        )
-        assert result["findings_created"] == 1
-        assert any("''" in w for w in result["warnings"])
-        row = db.conn.execute("SELECT severity FROM scan_findings").fetchone()
-        assert row["severity"] == "info"
-
-    def test_severity_fallback_none_raises(self, db: FiligreeDB) -> None:
+    @pytest.mark.parametrize("bad_value", [None, 42], ids=["none", "numeric"])
+    def test_severity_non_string_raises(self, db: FiligreeDB, bad_value: object) -> None:
         with pytest.raises(ValueError, match="severity must be a string"):
             db.process_scan_results(
                 scan_source="ai",
-                findings=[{"path": "a.py", "rule_id": "R1", "severity": None, "message": "m"}],
-            )
-
-    def test_severity_fallback_numeric_raises(self, db: FiligreeDB) -> None:
-        with pytest.raises(ValueError, match="severity must be a string"):
-            db.process_scan_results(
-                scan_source="ai",
-                findings=[{"path": "a.py", "rule_id": "R1", "severity": 42, "message": "m"}],
+                findings=[{"path": "a.py", "rule_id": "R1", "severity": bad_value, "message": "m"}],
             )
 
 

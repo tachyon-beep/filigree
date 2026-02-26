@@ -12,27 +12,20 @@ from filigree.core import find_filigree_command, get_mode, write_atomic
 
 
 class TestGetMode:
-    def test_default_mode_is_ethereal(self, tmp_path: Path) -> None:
-        """Projects without a mode field default to ethereal."""
+    @pytest.mark.parametrize(
+        ("config", "expected"),
+        [
+            ({"prefix": "test", "version": 1}, "ethereal"),
+            ({"prefix": "test", "version": 1, "mode": "ethereal"}, "ethereal"),
+            ({"prefix": "test", "version": 1, "mode": "server"}, "server"),
+        ],
+        ids=["no-mode-field", "explicit-ethereal", "explicit-server"],
+    )
+    def test_mode_from_config(self, tmp_path: Path, config: dict, expected: str) -> None:
         filigree_dir = tmp_path / ".filigree"
         filigree_dir.mkdir()
-        config = {"prefix": "test", "version": 1}
         (filigree_dir / "config.json").write_text(json.dumps(config))
-        assert get_mode(filigree_dir) == "ethereal"
-
-    def test_explicit_ethereal(self, tmp_path: Path) -> None:
-        filigree_dir = tmp_path / ".filigree"
-        filigree_dir.mkdir()
-        config = {"prefix": "test", "version": 1, "mode": "ethereal"}
-        (filigree_dir / "config.json").write_text(json.dumps(config))
-        assert get_mode(filigree_dir) == "ethereal"
-
-    def test_explicit_server(self, tmp_path: Path) -> None:
-        filigree_dir = tmp_path / ".filigree"
-        filigree_dir.mkdir()
-        config = {"prefix": "test", "version": 1, "mode": "server"}
-        (filigree_dir / "config.json").write_text(json.dumps(config))
-        assert get_mode(filigree_dir) == "server"
+        assert get_mode(filigree_dir) == expected
 
     def test_missing_config_defaults_to_ethereal(self, tmp_path: Path) -> None:
         filigree_dir = tmp_path / ".filigree"

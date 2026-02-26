@@ -166,6 +166,7 @@ class TestGenerateSummary:
         assert f"blocked by: {blocker.id}" in summary
 
 
+@pytest.mark.slow
 class TestSummaryChunkedParentLookup:
     """Bug filigree-4ce103: generate_summary must chunk parent_id lookups to avoid SQLite bind limit."""
 

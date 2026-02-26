@@ -504,6 +504,7 @@ class TestInstallMode:
         assert config["mode"] == "server"
 
 
+@pytest.mark.slow
 class TestInstallModeIntegration:
     def test_install_server_mode_registers_project(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cli_runner: CliRunner) -> None:
         monkeypatch.chdir(tmp_path)
