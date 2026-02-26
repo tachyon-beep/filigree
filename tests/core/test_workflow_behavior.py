@@ -8,6 +8,7 @@ lifecycle operations respect per-type state machines.
 from __future__ import annotations
 
 import json
+from collections.abc import Generator
 from pathlib import Path
 
 import pytest
@@ -22,7 +23,7 @@ from tests._db_factory import make_db
 
 
 @pytest.fixture
-def db(tmp_path: Path) -> FiligreeDB:
+def db(tmp_path: Path) -> Generator[FiligreeDB, None, None]:
     """A FiligreeDB instance with templates loaded (core + planning packs enabled)."""
     d = make_db(tmp_path, packs=["core", "planning"])
     yield d
@@ -30,7 +31,7 @@ def db(tmp_path: Path) -> FiligreeDB:
 
 
 @pytest.fixture
-def incident_db(tmp_path: Path) -> FiligreeDB:
+def incident_db(tmp_path: Path) -> Generator[FiligreeDB, None, None]:
     """FiligreeDB with incident pack enabled for hard-enforcement tests."""
     d = make_db(tmp_path, packs=["core", "planning", "incident"])
     yield d

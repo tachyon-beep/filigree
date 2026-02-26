@@ -227,12 +227,89 @@ def doctor(fix: bool, verbose: bool) -> None:
         click.echo("\nApplying fixes...")
         try:
             filigree_dir = find_filigree_root()
-            # Refresh context.md
-            with get_db() as db:
-                _write_summary(db, filigree_dir / SUMMARY_FILENAME)
-                click.echo("  OK  Regenerated context.md")
-        except (FileNotFoundError, Exception) as e:
-            click.echo(f"  !!  Fix failed: {e}", err=True)
+        except FileNotFoundError:
+            click.echo("  !!  Cannot fix: no .filigree/ directory found", err=True)
+            sys.exit(1)
+
+        from filigree.install import (
+            ensure_gitignore,
+            inject_instructions,
+            install_claude_code_hooks,
+            install_claude_code_mcp,
+            install_codex_mcp,
+            install_codex_skills,
+            install_skills,
+        )
+
+        project_root = filigree_dir.parent
+        mode = get_mode(filigree_dir)
+        server_port = 8377
+        if mode == "server":
+            try:
+                from filigree.server import read_server_config
+
+                server_port = read_server_config().port
+            except Exception:
+                logging.getLogger(__name__).debug("Failed to read server port for --fix; using default", exc_info=True)
+
+        # Map check names to their fix functions
+        fixable: dict[str, tuple[str, ...]] = {
+            "context.md": ("context.md",),
+            ".gitignore": ("gitignore",),
+            "Claude Code MCP": ("claude_code_mcp",),
+            "Codex MCP": ("codex_mcp",),
+            "Claude Code hooks": ("hooks",),
+            "Claude Code skills": ("skills",),
+            "Codex skills": ("codex_skills",),
+            "CLAUDE.md": ("claude_md",),
+            "AGENTS.md": ("agents_md",),
+        }
+
+        fixed = 0
+        for r in results:
+            if r.passed or r.name not in fixable:
+                continue
+
+            fix_key = fixable[r.name][0]
+            ok = False
+            try:
+                if fix_key == "context.md":
+                    with get_db() as db:
+                        _write_summary(db, filigree_dir / SUMMARY_FILENAME)
+                    click.echo(f"  OK  Fixed: {r.name}")
+                    ok = True
+                elif fix_key == "gitignore":
+                    ok, msg = ensure_gitignore(project_root)
+                    click.echo(f"  {'OK' if ok else '!!'} {r.name}: {msg}")
+                elif fix_key == "claude_code_mcp":
+                    ok, msg = install_claude_code_mcp(project_root, mode=mode, server_port=server_port)
+                    click.echo(f"  {'OK' if ok else '!!'} {r.name}: {msg}")
+                elif fix_key == "codex_mcp":
+                    ok, msg = install_codex_mcp(project_root)
+                    click.echo(f"  {'OK' if ok else '!!'} {r.name}: {msg}")
+                elif fix_key == "hooks":
+                    ok, msg = install_claude_code_hooks(project_root)
+                    click.echo(f"  {'OK' if ok else '!!'} {r.name}: {msg}")
+                elif fix_key == "skills":
+                    ok, msg = install_skills(project_root)
+                    click.echo(f"  {'OK' if ok else '!!'} {r.name}: {msg}")
+                elif fix_key == "codex_skills":
+                    ok, msg = install_codex_skills(project_root)
+                    click.echo(f"  {'OK' if ok else '!!'} {r.name}: {msg}")
+                elif fix_key == "claude_md":
+                    ok, msg = inject_instructions(project_root / "CLAUDE.md")
+                    click.echo(f"  {'OK' if ok else '!!'} {r.name}: {msg}")
+                elif fix_key == "agents_md":
+                    ok, msg = inject_instructions(project_root / "AGENTS.md")
+                    click.echo(f"  {'OK' if ok else '!!'} {r.name}: {msg}")
+                if ok:
+                    fixed += 1
+            except Exception as e:
+                click.echo(f"  !!  Cannot fix {r.name}: {e}", err=True)
+
+        unfixed = failed - fixed
+        if unfixed > 0:
+            click.echo(f"\n  Fixed {fixed}/{failed} issues. {unfixed} require manual intervention.")
 
     if failed == 0:
         click.echo("\nAll checks passed.")

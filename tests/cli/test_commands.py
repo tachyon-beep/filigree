@@ -209,7 +209,6 @@ class TestStatsAndSearch:
         assert "1 results" in result.output
 
 
-
 class TestReopen:
     def test_reopen_issue(self, cli_in_project: tuple[CliRunner, Path]) -> None:
         runner, _ = cli_in_project
