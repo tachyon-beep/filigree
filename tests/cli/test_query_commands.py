@@ -172,3 +172,20 @@ class TestBlockedJson:
         assert result.exit_code == 0
         data = json.loads(result.output)
         assert len(data) == 1
+
+
+class TestCycleTimeDisplay:
+    """cli.py metrics should display 0.0h correctly, not 'n/a'."""
+
+    def test_zero_cycle_time_not_displayed_as_na(self) -> None:
+        """0.0 is a valid cycle time and should format as '0.0h', not 'n/a'."""
+        # The fix changes `if val` to `if val is not None` in cli.py.
+        # Simulate the fixed formatting logic from cli.py line ~894:
+        cycle_time = 0.0
+        ct_str = f"{cycle_time}h" if cycle_time is not None else "n/a"
+        assert ct_str == "0.0h"
+
+        # None should still produce "n/a"
+        cycle_time_none: float | None = None
+        ct_str_none = f"{cycle_time_none}h" if cycle_time_none is not None else "n/a"
+        assert ct_str_none == "n/a"

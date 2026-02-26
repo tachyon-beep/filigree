@@ -1381,3 +1381,151 @@ class TestInstructionsSessionHint:
 
         text = _instructions_text()
         assert "filigree session-context" in text
+
+
+# ===========================================================================
+# Peripheral robustness fixes (from test_peripheral_fixes.py)
+# Covers: TOML escaping, presence check, PackageNotFoundError, malformed .mcp.json
+# ===========================================================================
+
+
+class TestCodexTomlBackslash:
+    def test_backslash_paths_escaped(self, tmp_path: Path) -> None:
+        """Windows-style backslash paths must be escaped in TOML output."""
+        with (
+            patch("filigree.install_support.integrations.shutil.which", return_value=None),
+            patch(
+                "filigree.install_support.integrations._find_filigree_mcp_command",
+                return_value="C:\\Program Files\\filigree\\filigree-mcp.exe",
+            ),
+        ):
+            ok, _msg = install_codex_mcp(tmp_path)
+        assert ok
+        content = (tmp_path / ".codex" / "config.toml").read_text()
+        # The raw TOML should have escaped backslashes
+        assert "C:\\\\Program Files\\\\filigree\\\\filigree-mcp.exe" in content
+
+    def test_unix_paths_unchanged(self, tmp_path: Path) -> None:
+        """Unix paths (no backslashes) should be passed through unchanged."""
+        with (
+            patch("filigree.install_support.integrations.shutil.which", return_value=None),
+            patch(
+                "filigree.install_support.integrations._find_filigree_mcp_command",
+                return_value="/usr/local/bin/filigree-mcp",
+            ),
+        ):
+            ok, _msg = install_codex_mcp(tmp_path)
+        assert ok
+        content = (tmp_path / ".codex" / "config.toml").read_text()
+        assert "/usr/local/bin/filigree-mcp" in content
+
+
+class TestCodexTomlPresenceCheck:
+    def test_filigree_extra_does_not_match(self, tmp_path: Path) -> None:
+        """A TOML section [mcp_servers.filigree-extra] should NOT be mistaken for filigree."""
+        codex_dir = tmp_path / ".codex"
+        codex_dir.mkdir()
+        config = codex_dir / "config.toml"
+        config.write_text('[mcp_servers.filigree-extra]\ncommand = "other"\n')
+
+        with patch("filigree.install_support.integrations.shutil.which", return_value=None):
+            ok, msg = install_codex_mcp(tmp_path)
+        assert ok
+        # Should have written a new filigree section (not returned "Already configured")
+        assert "Already configured" not in msg
+        content = config.read_text()
+        assert "[mcp_servers.filigree]" in content
+
+    def test_exact_filigree_detected(self, tmp_path: Path) -> None:
+        """An existing [mcp_servers.filigree] section should be detected correctly."""
+        codex_dir = tmp_path / ".codex"
+        codex_dir.mkdir()
+        config = codex_dir / "config.toml"
+        config.write_text('[mcp_servers.filigree]\ncommand = "filigree-mcp"\n')
+
+        with patch("filigree.install_support.integrations.shutil.which", return_value=None):
+            ok, msg = install_codex_mcp(tmp_path)
+        assert ok
+        assert "Already configured" in msg
+
+
+class TestPackageNotFoundError:
+    def test_import_works_without_package_metadata(self) -> None:
+        """Importing filigree should work even when package metadata is unavailable."""
+        from importlib.metadata import PackageNotFoundError
+
+        with patch(
+            "importlib.metadata.version",
+            side_effect=PackageNotFoundError("filigree"),
+        ):
+            # Re-import the module to trigger the version lookup
+            import importlib
+
+            import filigree
+
+            importlib.reload(filigree)
+            assert filigree.__version__ == "0.0.0-dev"
+
+    def test_version_set_when_installed(self) -> None:
+        """When package is installed, __version__ should be set from metadata."""
+        import filigree
+
+        # In our test environment, filigree should be installed
+        assert filigree.__version__ is not None
+        assert isinstance(filigree.__version__, str)
+
+
+class TestMalformedMcpJson:
+    def test_malformed_json_recovered(self, tmp_path: Path) -> None:
+        """If .mcp.json contains invalid JSON, install should recover gracefully."""
+        mcp_json = tmp_path / ".mcp.json"
+        mcp_json.write_text("{this is not valid json!!!")
+
+        with patch("filigree.install_support.integrations.shutil.which", return_value=None):
+            ok, _msg = install_claude_code_mcp(tmp_path)
+
+        assert ok
+        # The output file should now be valid JSON with filigree configured
+        data = json.loads(mcp_json.read_text())
+        assert "filigree" in data["mcpServers"]
+
+    def test_malformed_json_backup_created(self, tmp_path: Path) -> None:
+        """The corrupt .mcp.json should be backed up before overwriting."""
+        mcp_json = tmp_path / ".mcp.json"
+        corrupt_content = "{this is not valid json!!!"
+        mcp_json.write_text(corrupt_content)
+
+        with patch("filigree.install_support.integrations.shutil.which", return_value=None):
+            install_claude_code_mcp(tmp_path)
+
+        backup = tmp_path / ".mcp.json.bak"
+        assert backup.exists()
+        assert backup.read_text() == corrupt_content
+
+    def test_valid_json_preserved(self, tmp_path: Path) -> None:
+        """Valid .mcp.json with existing entries should be preserved."""
+        mcp_json = tmp_path / ".mcp.json"
+        existing = {"mcpServers": {"other_tool": {"type": "stdio", "command": "other"}}}
+        mcp_json.write_text(json.dumps(existing))
+
+        with patch("filigree.install_support.integrations.shutil.which", return_value=None):
+            ok, _msg = install_claude_code_mcp(tmp_path)
+
+        assert ok
+        data = json.loads(mcp_json.read_text())
+        assert "other_tool" in data["mcpServers"]
+        assert "filigree" in data["mcpServers"]
+        # No backup should be created for valid JSON
+        assert not (tmp_path / ".mcp.json.bak").exists()
+
+    def test_empty_json_file(self, tmp_path: Path) -> None:
+        """An empty .mcp.json file should be handled gracefully."""
+        mcp_json = tmp_path / ".mcp.json"
+        mcp_json.write_text("")
+
+        with patch("filigree.install_support.integrations.shutil.which", return_value=None):
+            ok, _msg = install_claude_code_mcp(tmp_path)
+
+        assert ok
+        data = json.loads(mcp_json.read_text())
+        assert "filigree" in data["mcpServers"]

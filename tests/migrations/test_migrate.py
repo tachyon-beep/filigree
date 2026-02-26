@@ -9,6 +9,7 @@ import pytest
 
 from filigree.core import FiligreeDB
 from filigree.migrate import migrate_from_beads
+from filigree.migrations import rebuild_table
 
 
 class TestMigration:
@@ -649,3 +650,193 @@ class TestMigrationEdgeCases:
 
         count = migrate_from_beads(db_path, db)
         assert count == 0
+
+
+# ===========================================================================
+# rebuild_table edge cases (from test_minor_fixes.py)
+# ===========================================================================
+
+
+class TestRebuildTableNoSharedColumns:
+    """rebuild_table should raise ValueError when schemas share zero columns."""
+
+    def test_no_shared_columns_raises(self) -> None:
+        """When old and new schemas have no columns in common, raise ValueError."""
+        conn = sqlite3.connect(":memory:")
+        conn.execute("CREATE TABLE test_tbl (alpha TEXT, beta INTEGER)")
+        conn.execute("INSERT INTO test_tbl VALUES ('hello', 42)")
+
+        new_schema = "CREATE TABLE test_tbl (gamma TEXT, delta REAL)"
+
+        with pytest.raises(ValueError, match="No shared columns"):
+            rebuild_table(conn, "test_tbl", new_schema)
+
+        conn.close()
+
+    def test_shared_columns_succeeds(self) -> None:
+        """When schemas share columns, rebuild_table should work normally."""
+        conn = sqlite3.connect(":memory:")
+        conn.execute("CREATE TABLE test_tbl (id TEXT, name TEXT, old_col INTEGER)")
+        conn.execute("INSERT INTO test_tbl VALUES ('1', 'test', 99)")
+
+        new_schema = "CREATE TABLE test_tbl (id TEXT, name TEXT, new_col REAL DEFAULT 0.0)"
+        rebuild_table(conn, "test_tbl", new_schema)
+
+        rows = conn.execute("SELECT id, name FROM test_tbl").fetchall()
+        assert len(rows) == 1
+        assert rows[0] == ("1", "test")
+
+        conn.close()
+
+
+# ===========================================================================
+# Migration robustness (from test_peripheral_fixes.py)
+# Covers: idempotent comments, connection safety, targeted exceptions
+# ===========================================================================
+
+
+class TestMigrateIdempotency:
+    def test_no_duplicate_comments_on_remigration(self, beads_db: Path, db: FiligreeDB) -> None:
+        """Running migration twice must not create duplicate comments."""
+        migrate_from_beads(beads_db, db)
+        comments_first = db.get_comments("bd-bbb222")
+        assert len(comments_first) == 1
+
+        # Run migration again — comments should be deduped
+        migrate_from_beads(beads_db, db)
+        comments_second = db.get_comments("bd-bbb222")
+        assert len(comments_second) == 1
+        assert comments_second[0]["text"] == "working on this"
+
+    def test_different_comments_not_suppressed(self, tmp_path: Path, db: FiligreeDB) -> None:
+        """Dedup should only match on (issue_id, text, author), not suppress distinct comments."""
+        db_path = tmp_path / "beads_multi_comment.db"
+        conn = sqlite3.connect(str(db_path))
+        now = "2026-01-15T10:00:00+00:00"
+        conn.executescript("""
+            CREATE TABLE issues (
+                id TEXT PRIMARY KEY, title TEXT, status TEXT DEFAULT 'open',
+                priority INTEGER DEFAULT 2, issue_type TEXT DEFAULT 'task',
+                parent_id TEXT, parent_epic TEXT, assignee TEXT DEFAULT '',
+                created_at TEXT, updated_at TEXT, closed_at TEXT, deleted_at TEXT,
+                description TEXT DEFAULT '', notes TEXT DEFAULT '',
+                metadata TEXT DEFAULT 'null'
+            );
+            CREATE TABLE dependencies (
+                issue_id TEXT, depends_on_id TEXT, type TEXT DEFAULT 'blocks',
+                PRIMARY KEY (issue_id, depends_on_id)
+            );
+            CREATE TABLE comments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                issue_id TEXT NOT NULL, author TEXT DEFAULT '',
+                text TEXT NOT NULL, created_at TEXT
+            );
+        """)
+        conn.execute(
+            "INSERT INTO issues (id, title, created_at, updated_at) VALUES (?, ?, ?, ?)",
+            ("bd-x01", "Test issue", now, now),
+        )
+        conn.execute(
+            "INSERT INTO comments (issue_id, author, text, created_at) VALUES (?, ?, ?, ?)",
+            ("bd-x01", "alice", "comment one", now),
+        )
+        conn.execute(
+            "INSERT INTO comments (issue_id, author, text, created_at) VALUES (?, ?, ?, ?)",
+            ("bd-x01", "alice", "comment two", now),
+        )
+        conn.commit()
+        conn.close()
+
+        migrate_from_beads(db_path, db)
+        comments = db.get_comments("bd-x01")
+        assert len(comments) == 2
+        texts = {c["text"] for c in comments}
+        assert texts == {"comment one", "comment two"}
+
+
+class TestMigrateConnectionSafety:
+    def test_connection_closed_on_error(self, tmp_path: Path, db: FiligreeDB) -> None:
+        """If an error occurs during migration, the beads connection must still be closed."""
+        db_path = tmp_path / "bad_beads.db"
+        conn = sqlite3.connect(str(db_path))
+        # Create a DB that will cause an error during issue migration
+        # (missing required columns like 'metadata' causes IndexError)
+        conn.execute("CREATE TABLE issues (id TEXT PRIMARY KEY, deleted_at TEXT)")
+        conn.execute("INSERT INTO issues (id) VALUES ('bd-broken')")
+        conn.commit()
+        conn.close()
+
+        with pytest.raises((sqlite3.OperationalError, IndexError)):
+            migrate_from_beads(db_path, db)
+
+        # The connection should be closed — verify by opening the file again
+        verify_conn = sqlite3.connect(str(db_path))
+        verify_conn.execute("SELECT * FROM issues")
+        verify_conn.close()
+
+
+class TestMigrateTargetedExceptions:
+    def test_missing_events_table_graceful(self, tmp_path: Path, db: FiligreeDB) -> None:
+        """Missing events table should be handled gracefully."""
+        db_path = tmp_path / "no_events_beads.db"
+        conn = sqlite3.connect(str(db_path))
+        now = "2026-01-01T00:00:00+00:00"
+        conn.executescript("""
+            CREATE TABLE issues (
+                id TEXT PRIMARY KEY, title TEXT, status TEXT DEFAULT 'open',
+                priority INTEGER DEFAULT 2, issue_type TEXT DEFAULT 'task',
+                parent_id TEXT, parent_epic TEXT, assignee TEXT DEFAULT '',
+                created_at TEXT, updated_at TEXT, closed_at TEXT, deleted_at TEXT,
+                description TEXT DEFAULT '', notes TEXT DEFAULT '',
+                metadata TEXT DEFAULT 'null'
+            );
+            CREATE TABLE dependencies (
+                issue_id TEXT, depends_on_id TEXT, type TEXT DEFAULT 'blocks',
+                PRIMARY KEY (issue_id, depends_on_id)
+            );
+        """)
+        conn.execute(
+            "INSERT INTO issues (id, title, created_at, updated_at) VALUES (?, ?, ?, ?)",
+            ("bd-test01", "Test", now, now),
+        )
+        conn.commit()
+        conn.close()
+
+        # Should not raise — missing events/labels/comments tables are expected
+        count = migrate_from_beads(db_path, db)
+        assert count == 1
+
+    def test_unexpected_sqlite_error_propagates(self, tmp_path: Path, db: FiligreeDB) -> None:
+        """Non-'missing table' SQLite errors should NOT be silently suppressed."""
+        db_path = tmp_path / "corrupt_beads.db"
+        conn = sqlite3.connect(str(db_path))
+        now = "2026-01-01T00:00:00+00:00"
+        conn.executescript("""
+            CREATE TABLE issues (
+                id TEXT PRIMARY KEY, title TEXT, status TEXT DEFAULT 'open',
+                priority INTEGER DEFAULT 2, issue_type TEXT DEFAULT 'task',
+                parent_id TEXT, parent_epic TEXT, assignee TEXT DEFAULT '',
+                created_at TEXT, updated_at TEXT, closed_at TEXT, deleted_at TEXT,
+                description TEXT DEFAULT '', notes TEXT DEFAULT '',
+                metadata TEXT DEFAULT 'null'
+            );
+            CREATE TABLE dependencies (
+                issue_id TEXT, depends_on_id TEXT, type TEXT DEFAULT 'blocks',
+                PRIMARY KEY (issue_id, depends_on_id)
+            );
+            CREATE TABLE events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                issue_id TEXT NOT NULL
+            );
+        """)
+        conn.execute(
+            "INSERT INTO issues (id, title, created_at, updated_at) VALUES (?, ?, ?, ?)",
+            ("bd-test01", "Test", now, now),
+        )
+        conn.commit()
+        conn.close()
+
+        # The events table exists but lacks the columns we query, so this
+        # should raise an OperationalError that is NOT "no such table"
+        with pytest.raises(sqlite3.OperationalError):
+            migrate_from_beads(db_path, db)

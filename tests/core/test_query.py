@@ -240,3 +240,30 @@ class TestGetStatsEmptyDoneStates:
             stats = db.get_stats()
             # With no done states, B blocks A, so A is blocked and B is ready
             assert stats["blocked_count"] >= 1
+
+
+class TestFTS5SpecialCharacters:
+    """FTS5 search should handle special characters gracefully."""
+
+    def test_search_with_special_characters_returns_valid_terms(self, db: FiligreeDB) -> None:
+        """Searching for 'notification @#$%' should find issues matching 'notification'."""
+        db.create_issue("Fix notification system")
+        db.create_issue("Unrelated feature")
+        results = db.search_issues("notification @#$%")
+        assert len(results) == 1
+        assert "notification" in results[0].title.lower()
+
+    def test_search_with_only_special_characters_returns_empty(self, db: FiligreeDB) -> None:
+        """Searching for only special characters should return empty, not error."""
+        db.create_issue("Some issue")
+        results = db.search_issues("@#$%^&()")
+        assert results == []
+
+    def test_search_with_mixed_special_and_valid(self, db: FiligreeDB) -> None:
+        """Special chars mixed with valid terms should still find matches."""
+        db.create_issue("Authentication bug in login")
+        results = db.search_issues("auth!@#enti")
+        # "auth" and "enti" are separate tokens after sanitization — but the original
+        # becomes "authentication" after stripping specials, which may tokenize differently.
+        # The key point is: no crash.
+        assert isinstance(results, list)

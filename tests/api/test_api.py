@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -1184,3 +1185,94 @@ class TestEtherealTracerBullet:
                 assert (await client.post("/api/register", json={})).status_code in (404, 405)
         finally:
             dash_module._db = None
+
+
+# ===========================================================================
+# Dashboard error handling regression tests (from test_error_handling_fixes.py)
+# Covers: filigree-4c2fd9 (batch/close + JSON validation),
+#         filigree-9e7ed0 (sync-in-async handlers)
+# ===========================================================================
+
+
+class TestDashboardBatchCloseKeyError:
+    """POST /api/batch/close with nonexistent ID returns per-item error."""
+
+    async def test_batch_close_nonexistent_id(self, client: AsyncClient) -> None:
+        resp = await client.post(
+            "/api/batch/close",
+            json={"issue_ids": ["nonexistent-xyz"]},
+        )
+        # Returns 200 with per-item error collection (not fail-fast 404)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data["closed"]) == 0
+        assert len(data["errors"]) == 1
+        assert data["errors"][0]["id"] == "nonexistent-xyz"
+
+
+class TestDashboardMalformedJSON:
+    """Endpoints should return 400 for malformed JSON bodies."""
+
+    async def test_update_malformed_json(self, client: AsyncClient) -> None:
+        resp = await client.patch(
+            "/api/issue/test-abc123",
+            content=b"not valid json{{{",
+            headers={"content-type": "application/json"},
+        )
+        assert resp.status_code == 400
+        assert "error" in resp.json()
+
+    async def test_close_malformed_json(self, client: AsyncClient) -> None:
+        resp = await client.post(
+            "/api/issue/test-abc123/close",
+            content=b"not valid json",
+            headers={"content-type": "application/json"},
+        )
+        assert resp.status_code == 400
+        assert "error" in resp.json()
+
+    async def test_create_malformed_json(self, client: AsyncClient) -> None:
+        resp = await client.post(
+            "/api/issues",
+            content=b"{broken",
+            headers={"content-type": "application/json"},
+        )
+        assert resp.status_code == 400
+        assert "error" in resp.json()
+
+    async def test_batch_close_malformed_json(self, client: AsyncClient) -> None:
+        resp = await client.post(
+            "/api/batch/close",
+            content=b"not json",
+            headers={"content-type": "application/json"},
+        )
+        assert resp.status_code == 400
+        assert "error" in resp.json()
+
+    async def test_batch_update_malformed_json(self, client: AsyncClient) -> None:
+        resp = await client.post(
+            "/api/batch/update",
+            content=b"not json",
+            headers={"content-type": "application/json"},
+        )
+        assert resp.status_code == 400
+        assert "error" in resp.json()
+
+
+class TestDashboardHandlersAreAsync:
+    """All endpoints must be async to avoid thread pool dispatch and shared-DB races.
+
+    Supersedes the old sync-handler test. See TestDashboardConcurrency in tests/api/test_api.py
+    for the full concurrency safety test (filigree-4b8e41).
+    """
+
+    def test_all_handlers_are_async(self) -> None:
+        """All route handlers must be async def (not plain def)."""
+        app = create_app()
+        for route in app.routes:
+            if not hasattr(route, "endpoint"):
+                continue
+            handler = route.endpoint  # type: ignore[union-attr]
+            assert inspect.iscoroutinefunction(handler), (
+                f"Handler {route.path} must be async def to avoid thread pool dispatch"  # type: ignore[union-attr]
+            )
