@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from filigree.core import FiligreeDB, write_config
+from tests._db_factory import make_db
 
 
 class TestFiligreeDBTemplatesProperty:
@@ -12,12 +13,7 @@ class TestFiligreeDBTemplatesProperty:
 
     def test_templates_property_returns_registry(self, tmp_path: Path) -> None:
         """db.templates should return a TemplateRegistry instance."""
-        filigree_dir = tmp_path / ".filigree"
-        filigree_dir.mkdir()
-        write_config(filigree_dir, {"prefix": "test", "version": 1, "enabled_packs": ["core", "planning"]})
-
-        db = FiligreeDB(filigree_dir / "filigree.db", prefix="test")
-        db.initialize()
+        db = make_db(tmp_path, packs=["core", "planning"])
 
         from filigree.templates import TemplateRegistry
 
@@ -26,12 +22,7 @@ class TestFiligreeDBTemplatesProperty:
 
     def test_templates_property_lazy(self, tmp_path: Path) -> None:
         """Registry should not be created until first access."""
-        filigree_dir = tmp_path / ".filigree"
-        filigree_dir.mkdir()
-        write_config(filigree_dir, {"prefix": "test", "version": 1})
-
-        db = FiligreeDB(filigree_dir / "filigree.db", prefix="test")
-        db.initialize()
+        db = make_db(tmp_path)
 
         # Before first access, internal attribute should be None
         assert db._template_registry is None
@@ -48,12 +39,7 @@ class TestFiligreeDBTemplatesProperty:
 
     def test_templates_property_has_types(self, tmp_path: Path) -> None:
         """Loaded registry should have types from enabled packs."""
-        filigree_dir = tmp_path / ".filigree"
-        filigree_dir.mkdir()
-        write_config(filigree_dir, {"prefix": "test", "version": 1, "enabled_packs": ["core", "planning"]})
-
-        db = FiligreeDB(filigree_dir / "filigree.db", prefix="test")
-        db.initialize()
+        db = make_db(tmp_path, packs=["core", "planning"])
 
         reg = db.templates
         assert reg.get_type("task") is not None
@@ -104,12 +90,7 @@ class TestFiligreeDBTemplatesProperty:
 
     def test_templates_property_uses_filigree_dir(self, tmp_path: Path) -> None:
         """The registry should load from the correct .filigree directory."""
-        filigree_dir = tmp_path / ".filigree"
-        filigree_dir.mkdir()
-        write_config(filigree_dir, {"prefix": "test", "version": 1, "enabled_packs": ["core"]})
-
-        db = FiligreeDB(filigree_dir / "filigree.db", prefix="test")
-        db.initialize()
+        db = make_db(tmp_path, packs=["core"])
 
         reg = db.templates
         # Only core enabled, so planning types should not be loaded

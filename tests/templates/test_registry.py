@@ -1,10 +1,10 @@
-# tests/test_templates.py
-"""Tests for the workflow template system."""
+"""Tests for the workflow template system — registry, validation, loading, packs."""
 
 from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import ClassVar
 
 import pytest
 
@@ -429,143 +429,373 @@ class TestTemplateRegistry:
         assert any("ghost_field" in e for e in errors)
 
 
-class TestTransitionValidation:
-    """Test validate_transition, get_valid_transitions, validate_fields_for_state."""
+class TestStateCategoryValidation:
+    """Bug fix: filigree-fe2078 — invalid categories silently accepted."""
 
-    @pytest.fixture
-    def registry(self) -> TemplateRegistry:
-        """A registry with bug type for transition testing."""
-        reg = TemplateRegistry()
-        bug_tpl = TypeTemplate(
-            type="bug",
-            display_name="Bug",
-            description="Bug report",
-            pack="core",
+    def test_valid_categories_accepted(self) -> None:
+        """open, wip, done should be accepted without error."""
+        for cat in ("open", "wip", "done"):
+            sd = StateDefinition(name="test_state", category=cat)  # type: ignore[arg-type]
+            assert sd.category == cat
+
+    def test_invalid_category_raises_valueerror(self) -> None:
+        """An invalid category string should be rejected at construction time."""
+        with pytest.raises(ValueError, match=r"[Ii]nvalid.*category"):
+            StateDefinition(name="broken_state", category="bogus")  # type: ignore[arg-type]
+
+    def test_empty_category_raises_valueerror(self) -> None:
+        """An empty category string should be rejected."""
+        with pytest.raises(ValueError, match=r"[Ii]nvalid.*category"):
+            StateDefinition(name="empty_cat", category="")  # type: ignore[arg-type]
+
+    def test_typo_category_raises_valueerror(self) -> None:
+        """Common typos like 'Done' or 'WIP' should be rejected (case-sensitive)."""
+        with pytest.raises(ValueError, match=r"[Ii]nvalid.*category"):
+            StateDefinition(name="typo_state", category="Done")  # type: ignore[arg-type]
+
+
+class TestDuplicateStateNameDetection:
+    """Bug fix: filigree-eff214 — duplicate states silently overwrite in cache."""
+
+    def test_duplicate_state_names_detected_in_validation(self) -> None:
+        """validate_type_template should report duplicate state names as errors."""
+        tpl = TypeTemplate(
+            type="test_type",
+            display_name="Test",
+            description="",
+            pack="test",
             states=(
-                StateDefinition("triage", "open"),
-                StateDefinition("confirmed", "open"),
-                StateDefinition("fixing", "wip"),
-                StateDefinition("verifying", "wip"),
-                StateDefinition("closed", "done"),
-                StateDefinition("wont_fix", "done"),
+                StateDefinition(name="open", category="open"),
+                StateDefinition(name="closed", category="done"),
+                StateDefinition(name="open", category="wip"),  # duplicate name!
             ),
-            initial_state="triage",
-            transitions=(
-                TransitionDefinition("triage", "confirmed", "soft"),
-                TransitionDefinition("triage", "wont_fix", "soft"),
-                TransitionDefinition("confirmed", "fixing", "soft"),
-                TransitionDefinition("fixing", "verifying", "soft", requires_fields=("fix_verification",)),
-                TransitionDefinition("verifying", "closed", "hard", requires_fields=("fix_verification",)),
-                TransitionDefinition("verifying", "fixing", "soft"),
-            ),
-            fields_schema=(
-                FieldSchema("severity", "enum", options=("critical", "major", "minor", "cosmetic"), required_at=("confirmed",)),
-                FieldSchema("fix_verification", "text", required_at=("verifying",)),
-            ),
+            initial_state="open",
+            transitions=(),
+            fields_schema=(),
         )
-        reg._register_type(bug_tpl)
-        return reg
+        errors = TemplateRegistry.validate_type_template(tpl)
+        assert any("duplicate" in e.lower() or "open" in e for e in errors), f"Expected duplicate state name error, got: {errors}"
 
-    # -- validate_transition tests --
+    def test_parse_duplicate_state_names_raises(self) -> None:
+        """parse_type_template should reject duplicate state names."""
+        raw = {
+            "type": "dup_test",
+            "display_name": "Dup Test",
+            "states": [
+                {"name": "open", "category": "open"},
+                {"name": "closed", "category": "done"},
+                {"name": "open", "category": "wip"},  # duplicate!
+            ],
+            "initial_state": "open",
+            "transitions": [],
+            "fields_schema": [],
+        }
+        with pytest.raises(ValueError, match=r"[Dd]uplicate.*state"):
+            TemplateRegistry.parse_type_template(raw)
 
-    def test_soft_transition_allowed(self, registry: TemplateRegistry) -> None:
-        result = registry.validate_transition("bug", "triage", "confirmed", {})
-        assert result.allowed is True
-        assert result.enforcement == "soft"
+    def test_no_false_positive_on_unique_states(self) -> None:
+        """Templates with unique state names should validate cleanly."""
+        tpl = TypeTemplate(
+            type="clean_type",
+            display_name="Clean",
+            description="",
+            pack="test",
+            states=(
+                StateDefinition(name="open", category="open"),
+                StateDefinition(name="in_progress", category="wip"),
+                StateDefinition(name="closed", category="done"),
+            ),
+            initial_state="open",
+            transitions=(),
+            fields_schema=(),
+        )
+        errors = TemplateRegistry.validate_type_template(tpl)
+        dup_errors = [e for e in errors if "duplicate" in e.lower()]
+        assert dup_errors == []
 
-    def test_soft_transition_warns_on_missing_fields(self, registry: TemplateRegistry) -> None:
-        result = registry.validate_transition("bug", "triage", "confirmed", {})
-        assert result.allowed is True
-        assert len(result.warnings) >= 1
 
-    def test_hard_transition_blocks_on_missing_fields(self, registry: TemplateRegistry) -> None:
-        result = registry.validate_transition("bug", "verifying", "closed", {})
-        assert result.allowed is False
-        assert result.enforcement == "hard"
-        assert "fix_verification" in result.missing_fields
+class TestEnabledPacksValidation:
+    """Bug fix: filigree-d3dd2e — malformed enabled_packs crash or mis-select."""
 
-    def test_hard_transition_allowed_when_fields_present(self, registry: TemplateRegistry) -> None:
-        result = registry.validate_transition("bug", "verifying", "closed", {"fix_verification": "Tests pass"})
-        assert result.allowed is True
-        assert result.enforcement == "hard"
+    def test_string_enabled_packs_in_config(self, tmp_path: Path) -> None:
+        """A string value for enabled_packs should not silently split into chars."""
+        filigree_dir = tmp_path / ".filigree"
+        filigree_dir.mkdir()
+        config = {"enabled_packs": "core"}  # string, not list
+        (filigree_dir / "config.json").write_text(json.dumps(config))
+        reg = TemplateRegistry()
+        reg.load(filigree_dir)
+        # Should fall back to defaults or use ["core"], not ['c','o','r','e']
+        assert reg.get_type("task") is not None
 
-    def test_undefined_transition_rejected_for_known_type(self, registry: TemplateRegistry) -> None:
-        """Transitions not in the table are rejected for known types."""
-        result = registry.validate_transition("bug", "triage", "closed", {})
-        assert result.allowed is False
-        assert result.enforcement is None
-        assert len(result.warnings) >= 1
-        assert "not in the standard workflow" in result.warnings[0]
+    def test_integer_enabled_packs_in_config(self, tmp_path: Path) -> None:
+        """A non-iterable value should not crash — should fall back to defaults."""
+        filigree_dir = tmp_path / ".filigree"
+        filigree_dir.mkdir()
+        config = {"enabled_packs": 42}
+        (filigree_dir / "config.json").write_text(json.dumps(config))
+        reg = TemplateRegistry()
+        reg.load(filigree_dir)  # Must not crash
+        assert reg.get_type("task") is not None
 
-    def test_empty_string_treated_as_missing(self, registry: TemplateRegistry) -> None:
-        result = registry.validate_transition("bug", "verifying", "closed", {"fix_verification": ""})
-        assert result.allowed is False
+    def test_list_with_non_string_elements(self, tmp_path: Path) -> None:
+        """Elements that aren't strings should be handled gracefully."""
+        filigree_dir = tmp_path / ".filigree"
+        filigree_dir.mkdir()
+        config = {"enabled_packs": ["core", 123, None]}
+        (filigree_dir / "config.json").write_text(json.dumps(config))
+        reg = TemplateRegistry()
+        reg.load(filigree_dir)  # Must not crash
+        assert reg.get_type("task") is not None
 
-    def test_whitespace_only_treated_as_missing(self, registry: TemplateRegistry) -> None:
-        """Whitespace-only string should be treated as unpopulated."""
-        result = registry.validate_transition("bug", "verifying", "closed", {"fix_verification": "   "})
-        assert result.allowed is False
+    def test_string_enabled_packs_override_parameter(self, tmp_path: Path) -> None:
+        """Passing a string as enabled_packs parameter should not split into chars."""
+        filigree_dir = tmp_path / ".filigree"
+        filigree_dir.mkdir()
+        (filigree_dir / "config.json").write_text("{}")
+        reg = TemplateRegistry()
+        reg.load(filigree_dir, enabled_packs="core")  # type: ignore[arg-type]
+        # Should load core pack, not ['c','o','r','e']
+        assert reg.get_type("task") is not None
 
-    def test_none_treated_as_missing(self, registry: TemplateRegistry) -> None:
-        result = registry.validate_transition("bug", "verifying", "closed", {"fix_verification": None})
-        assert result.allowed is False
 
-    def test_unknown_type_always_allowed(self, registry: TemplateRegistry) -> None:
-        """Unknown types get fallback: all transitions allowed (WFT-FR-016)."""
-        result = registry.validate_transition("unknown", "open", "closed", {})
-        assert result.allowed is True
-        assert result.enforcement is None
+class TestParseTemplateMalformedTransitionsFields:
+    """Bug fix: filigree-b25e83 — raw TypeError for non-list transitions/fields."""
 
-    # -- get_valid_transitions tests --
+    _VALID_BASE: ClassVar[dict] = {
+        "type": "test_type",
+        "display_name": "Test",
+        "states": [
+            {"name": "open", "category": "open"},
+            {"name": "closed", "category": "done"},
+        ],
+        "initial_state": "open",
+    }
 
-    def test_get_valid_transitions_from_triage(self, registry: TemplateRegistry) -> None:
-        options = registry.get_valid_transitions("bug", "triage", {})
-        assert len(options) == 2
-        targets = {o.to for o in options}
-        assert targets == {"confirmed", "wont_fix"}
+    def test_transitions_as_string_raises_valueerror(self) -> None:
+        """A string 'transitions' should raise ValueError, not TypeError."""
+        raw = {**self._VALID_BASE, "transitions": "not a list", "fields_schema": []}
+        with pytest.raises(ValueError, match=r"transitions.*must be a list"):
+            TemplateRegistry.parse_type_template(raw)
 
-    def test_get_valid_transitions_readiness(self, registry: TemplateRegistry) -> None:
-        """Options should show readiness based on missing fields."""
-        options = registry.get_valid_transitions("bug", "fixing", {})
-        verifying = next(o for o in options if o.to == "verifying")
-        assert verifying.ready is False
-        assert "fix_verification" in verifying.missing_fields
+    def test_transitions_as_dict_raises_valueerror(self) -> None:
+        raw = {**self._VALID_BASE, "transitions": {"from": "open"}, "fields_schema": []}
+        with pytest.raises(ValueError, match=r"transitions.*must be a list"):
+            TemplateRegistry.parse_type_template(raw)
 
-    def test_get_valid_transitions_ready_when_fields_present(self, registry: TemplateRegistry) -> None:
-        options = registry.get_valid_transitions("bug", "fixing", {"fix_verification": "Tests pass"})
-        verifying = next(o for o in options if o.to == "verifying")
-        assert verifying.ready is True
-        assert verifying.missing_fields == ()
+    def test_fields_schema_as_string_raises_valueerror(self) -> None:
+        raw = {**self._VALID_BASE, "transitions": [], "fields_schema": "not a list"}
+        with pytest.raises(ValueError, match=r"fields_schema.*must be a list"):
+            TemplateRegistry.parse_type_template(raw)
 
-    def test_get_valid_transitions_unknown_type(self, registry: TemplateRegistry) -> None:
-        options = registry.get_valid_transitions("unknown", "open", {})
-        assert options == []
+    def test_fields_schema_as_int_raises_valueerror(self) -> None:
+        raw = {**self._VALID_BASE, "transitions": [], "fields_schema": 42}
+        with pytest.raises(ValueError, match=r"fields_schema.*must be a list"):
+            TemplateRegistry.parse_type_template(raw)
 
-    def test_get_valid_transitions_includes_category(self, registry: TemplateRegistry) -> None:
-        options = registry.get_valid_transitions("bug", "triage", {})
-        confirmed_opt = next(o for o in options if o.to == "confirmed")
-        assert confirmed_opt.category == "open"
-        wont_fix_opt = next(o for o in options if o.to == "wont_fix")
-        assert wont_fix_opt.category == "done"
+    def test_transition_element_not_dict_raises_valueerror(self) -> None:
+        raw = {**self._VALID_BASE, "transitions": ["not a dict"], "fields_schema": []}
+        with pytest.raises(ValueError, match=r"transition.*must be a dict"):
+            TemplateRegistry.parse_type_template(raw)
 
-    # -- validate_fields_for_state tests --
+    def test_field_element_not_dict_raises_valueerror(self) -> None:
+        raw = {**self._VALID_BASE, "transitions": [], "fields_schema": ["not a dict"]}
+        with pytest.raises(ValueError, match=r"field.*must be a dict"):
+            TemplateRegistry.parse_type_template(raw)
 
-    def test_validate_fields_for_state(self, registry: TemplateRegistry) -> None:
-        missing = registry.validate_fields_for_state("bug", "confirmed", {})
-        assert "severity" in missing
 
-    def test_validate_fields_for_state_populated(self, registry: TemplateRegistry) -> None:
-        missing = registry.validate_fields_for_state("bug", "confirmed", {"severity": "major"})
-        assert missing == []
+class TestFieldSchemaTypeValidation:
+    """Bug fix: filigree-ca5711 — invalid FieldSchema.type silently accepted."""
 
-    def test_validate_fields_for_state_unknown_type(self, registry: TemplateRegistry) -> None:
-        missing = registry.validate_fields_for_state("unknown", "open", {})
-        assert missing == []
+    def test_valid_field_types_accepted(self) -> None:
+        for ft in ("text", "enum", "number", "date", "list", "boolean"):
+            fs = FieldSchema(name="test_field", type=ft)  # type: ignore[arg-type]
+            assert fs.type == ft
 
-    def test_validate_fields_for_state_no_requirements(self, registry: TemplateRegistry) -> None:
-        """State with no required_at fields returns empty list."""
-        missing = registry.validate_fields_for_state("bug", "triage", {})
-        assert missing == []
+    def test_invalid_field_type_raises_valueerror(self) -> None:
+        with pytest.raises(ValueError, match=r"[Ii]nvalid.*field type"):
+            FieldSchema(name="bad_field", type="integer")  # type: ignore[arg-type]
+
+    def test_empty_field_type_raises_valueerror(self) -> None:
+        with pytest.raises(ValueError, match=r"[Ii]nvalid.*field type"):
+            FieldSchema(name="bad_field", type="")  # type: ignore[arg-type]
+
+    def test_parse_template_rejects_invalid_field_type(self) -> None:
+        """parse_type_template should reject fields with invalid type values."""
+        raw = {
+            "type": "test_type",
+            "display_name": "Test",
+            "states": [
+                {"name": "open", "category": "open"},
+                {"name": "closed", "category": "done"},
+            ],
+            "initial_state": "open",
+            "transitions": [],
+            "fields_schema": [{"name": "bad", "type": "integer"}],
+        }
+        with pytest.raises(ValueError, match=r"[Ii]nvalid.*field type"):
+            TemplateRegistry.parse_type_template(raw)
+
+
+class TestDuplicateTransitionDetection:
+    """Bug fix: filigree-ab91b3, filigree-3e3f12 — duplicate (from, to) transitions."""
+
+    def test_parse_duplicate_transitions_raises(self) -> None:
+        """parse_type_template should reject duplicate (from_state, to_state) pairs."""
+        raw = {
+            "type": "dup_trans",
+            "display_name": "Dup Trans",
+            "states": [
+                {"name": "open", "category": "open"},
+                {"name": "closed", "category": "done"},
+            ],
+            "initial_state": "open",
+            "transitions": [
+                {"from": "open", "to": "closed", "enforcement": "soft"},
+                {"from": "open", "to": "closed", "enforcement": "hard"},  # duplicate!
+            ],
+            "fields_schema": [],
+        }
+        with pytest.raises(ValueError, match=r"[Dd]uplicate.*transition"):
+            TemplateRegistry.parse_type_template(raw)
+
+    def test_validate_duplicate_transitions_reported(self) -> None:
+        """validate_type_template should report duplicate transitions as errors."""
+        from filigree.templates import StateDefinition, TransitionDefinition
+
+        tpl = TypeTemplate(
+            type="dup_trans",
+            display_name="Dup Trans",
+            description="",
+            pack="test",
+            states=(
+                StateDefinition(name="open", category="open"),
+                StateDefinition(name="closed", category="done"),
+            ),
+            initial_state="open",
+            transitions=(
+                TransitionDefinition(from_state="open", to_state="closed", enforcement="soft"),
+                TransitionDefinition(from_state="open", to_state="closed", enforcement="hard"),
+            ),
+            fields_schema=(),
+        )
+        errors = TemplateRegistry.validate_type_template(tpl)
+        assert any("duplicate" in e.lower() and "transition" in e.lower() for e in errors)
+
+    def test_no_false_positive_on_unique_transitions(self) -> None:
+        """Templates with unique transitions should validate cleanly."""
+        from filigree.templates import StateDefinition, TransitionDefinition
+
+        tpl = TypeTemplate(
+            type="clean",
+            display_name="Clean",
+            description="",
+            pack="test",
+            states=(
+                StateDefinition(name="open", category="open"),
+                StateDefinition(name="working", category="wip"),
+                StateDefinition(name="closed", category="done"),
+            ),
+            initial_state="open",
+            transitions=(
+                TransitionDefinition(from_state="open", to_state="working", enforcement="soft"),
+                TransitionDefinition(from_state="working", to_state="closed", enforcement="soft"),
+            ),
+            fields_schema=(),
+        )
+        errors = TemplateRegistry.validate_type_template(tpl)
+        dup_errors = [e for e in errors if "duplicate" in e.lower() and "transition" in e.lower()]
+        assert dup_errors == []
+
+    def test_builtin_packs_have_no_duplicate_transitions(self) -> None:
+        """All built-in pack types must have unique transitions."""
+        for pack_name, pack_data in BUILT_IN_PACKS.items():
+            for type_name, type_data in pack_data.get("types", {}).items():
+                tpl = TemplateRegistry.parse_type_template(type_data)
+                errors = TemplateRegistry.validate_type_template(tpl)
+                dup_errors = [e for e in errors if "duplicate" in e.lower() and "transition" in e.lower()]
+                assert dup_errors == [], f"{pack_name}/{type_name} has duplicate transitions: {dup_errors}"
+
+
+class TestEnforcementNoneRejected:
+    """Bug fix: filigree-9b9e45 — 'none' enforcement violates type contract."""
+
+    def test_parse_rejects_none_enforcement(self) -> None:
+        """parse_type_template should reject enforcement='none'."""
+        raw = {
+            "type": "none_enf",
+            "display_name": "None Enforcement",
+            "states": [
+                {"name": "open", "category": "open"},
+                {"name": "closed", "category": "done"},
+            ],
+            "initial_state": "open",
+            "transitions": [
+                {"from": "open", "to": "closed", "enforcement": "none"},
+            ],
+            "fields_schema": [],
+        }
+        with pytest.raises(ValueError, match=r"[Ii]nvalid.*enforcement"):
+            TemplateRegistry.parse_type_template(raw)
+
+    def test_parse_still_accepts_hard_and_soft(self) -> None:
+        """hard and soft enforcement must still be accepted."""
+        for enf in ("hard", "soft"):
+            raw = {
+                "type": "valid_enf",
+                "display_name": "Valid",
+                "states": [
+                    {"name": "open", "category": "open"},
+                    {"name": "closed", "category": "done"},
+                ],
+                "initial_state": "open",
+                "transitions": [
+                    {"from": "open", "to": "closed", "enforcement": enf},
+                ],
+                "fields_schema": [],
+            }
+            tpl = TemplateRegistry.parse_type_template(raw)
+            assert tpl.transitions[0].enforcement == enf
+
+    def test_builtin_packs_only_use_hard_or_soft(self) -> None:
+        """No built-in template should use enforcement='none'."""
+        for pack_name, pack_data in BUILT_IN_PACKS.items():
+            for type_name, type_data in pack_data.get("types", {}).items():
+                for t in type_data.get("transitions", []):
+                    assert t["enforcement"] in ("hard", "soft"), (
+                        f"{pack_name}/{type_name}: transition {t['from']}->{t['to']} "
+                        f"uses enforcement='{t['enforcement']}' (only 'hard'/'soft' allowed)"
+                    )
+
+
+class TestRolledBackCategoryFix:
+    """Bug fix: filigree-284665 — release.rolled_back must not be 'done'."""
+
+    def test_rolled_back_is_not_done(self) -> None:
+        """rolled_back has outgoing transition to development, so it cannot be 'done'."""
+        raw = BUILT_IN_PACKS["release"]["types"]["release"]
+        states = {s["name"]: s["category"] for s in raw["states"]}
+        assert states["rolled_back"] != "done", "release.rolled_back should not be 'done' — it has a transition to 'development'"
+
+    def test_rolled_back_is_wip(self) -> None:
+        """rolled_back should be 'wip' since it can resume development."""
+        raw = BUILT_IN_PACKS["release"]["types"]["release"]
+        states = {s["name"]: s["category"] for s in raw["states"]}
+        assert states["rolled_back"] == "wip"
+
+    def test_rolled_back_to_development_transition_exists(self) -> None:
+        """The rolled_back->development transition should still exist."""
+        raw = BUILT_IN_PACKS["release"]["types"]["release"]
+        tpl = TemplateRegistry.parse_type_template(raw)
+        rollback_to_dev = [t for t in tpl.transitions if t.from_state == "rolled_back" and t.to_state == "development"]
+        assert len(rollback_to_dev) == 1
+
+    def test_release_still_has_two_done_states(self) -> None:
+        """released and cancelled should remain done (only rolled_back changes)."""
+        raw = BUILT_IN_PACKS["release"]["types"]["release"]
+        states = {s["name"]: s["category"] for s in raw["states"]}
+        assert states["released"] == "done"
+        assert states["cancelled"] == "done"
 
 
 class TestBuiltInPackData:
@@ -1430,9 +1660,9 @@ class TestQualityCheckDoneOutgoing:
         assert len(concluded_warnings) == 1
 
     def test_builtin_release_no_done_outgoing_warnings(self) -> None:
-        """released→rolled_back is done→wip, which is allowed (reachable via update_issue).
+        """released->rolled_back is done->wip, which is allowed (reachable via update_issue).
 
-        The quality check only warns about done→done transitions, which are truly
+        The quality check only warns about done->done transitions, which are truly
         unreachable since close_issue() rejects issues already in a done state.
         """
         from filigree.templates_data import BUILT_IN_PACKS
