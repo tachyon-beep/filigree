@@ -195,3 +195,37 @@ class TestIncidentResolvedCategory:
         raw = BUILT_IN_PACKS["incident"]["types"]["incident"]
         states = {s["name"]: s["category"] for s in raw["states"]}
         assert states["closed"] == "done"
+
+
+# ===========================================================================
+# validate_issue upcoming transition warnings (from test_core_gaps.py)
+# ===========================================================================
+
+
+class TestValidateIssueUpcoming:
+    def test_validate_shows_upcoming_transition_requirements(self, db: FiligreeDB) -> None:
+        """validate_issue should show fields needed for next transitions."""
+        bug = db.create_issue("Bug", type="bug")
+        # Move bug to fixing state (triage -> confirmed -> fixing)
+        db.update_issue(bug.id, status="confirmed")
+        db.update_issue(bug.id, status="fixing")
+        result = db.validate_issue(bug.id)
+        # fixing -> verifying requires fix_verification
+        assert any("fix_verification" in str(w) for w in result.warnings)
+        assert any("Transition to 'verifying' requires" in str(w) for w in result.warnings)
+
+    def test_validate_no_upcoming_when_fields_set(self, db: FiligreeDB) -> None:
+        """No upcoming warnings when required fields are already populated."""
+        bug = db.create_issue("Bug", type="bug", fields={"fix_verification": "tested"})
+        db.update_issue(bug.id, status="confirmed")
+        db.update_issue(bug.id, status="fixing")
+        result = db.validate_issue(bug.id)
+        # fix_verification is set, so no warning about it
+        assert not any("fix_verification" in str(w) for w in result.warnings)
+
+    def test_validate_unknown_type_still_valid(self, db: FiligreeDB) -> None:
+        """Unknown types validate as valid with no warnings."""
+        issue = db.create_issue("Unknown")
+        # Default type 'task' is known, but let's just check it returns valid
+        result = db.validate_issue(issue.id)
+        assert result.valid is True

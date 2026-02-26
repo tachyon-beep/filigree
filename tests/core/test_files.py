@@ -515,9 +515,7 @@ class TestSeverityFallback:
         ],
         ids=["unknown-maps-to-info", "normalizes-case", "strips-whitespace", "empty-string"],
     )
-    def test_severity_normalization(
-        self, db: FiligreeDB, input_severity: str, expected_severity: str, expect_warning: bool
-    ) -> None:
+    def test_severity_normalization(self, db: FiligreeDB, input_severity: str, expected_severity: str, expect_warning: bool) -> None:
         result = db.process_scan_results(
             scan_source="ai",
             findings=[{"path": "a.py", "rule_id": "R1", "severity": input_severity, "message": "m"}],

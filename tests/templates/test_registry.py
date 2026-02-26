@@ -9,6 +9,7 @@ from typing import ClassVar
 
 import pytest
 
+from filigree.core import FiligreeDB
 from filigree.templates import (
     FieldSchema,
     HardEnforcementError,
@@ -1790,3 +1791,116 @@ class TestRolledBackTransition:
         warnings = TemplateRegistry.check_type_template_quality(tpl)
         dead_end_warnings = [w for w in warnings if "rolled_back" in w and "dead end" in w]
         assert dead_end_warnings == [], f"rolled_back still flagged as dead end: {dead_end_warnings}"
+
+
+# ===========================================================================
+# Template API tests (from test_core_gaps.py)
+# ===========================================================================
+
+
+class TestTemplates:
+    def test_list_templates(self, db: FiligreeDB) -> None:
+        templates = db.list_templates()
+        types = {t["type"] for t in templates}
+        assert "bug" in types
+        assert "task" in types
+        assert "milestone" in types
+
+    def test_list_templates_includes_required_at(self, db: FiligreeDB) -> None:
+        """Bug filigree-66aa8b: list_templates must include required_at, options, default."""
+        templates = db.list_templates()
+        bug_tpl = next(t for t in templates if t["type"] == "bug")
+        fields_by_name = {f["name"]: f for f in bug_tpl["fields_schema"]}
+        # Bug 'severity' field has options and required_at
+        severity = fields_by_name.get("severity")
+        assert severity is not None
+        assert "options" in severity
+        assert "required_at" in severity
+        assert "confirmed" in severity["required_at"]
+        # Verify parity with get_template
+        get_tpl = db.get_template("bug")
+        assert get_tpl is not None
+        get_fields = {f["name"]: f for f in get_tpl["fields_schema"]}
+        for name, field in get_fields.items():
+            list_field = fields_by_name.get(name)
+            assert list_field is not None, f"Missing field {name} in list_templates"
+            if "required_at" in field:
+                assert "required_at" in list_field, f"Missing required_at for {name}"
+                assert field["required_at"] == list_field["required_at"]
+
+    def test_get_template(self, db: FiligreeDB) -> None:
+        tpl = db.get_template("bug")
+        assert tpl is not None
+        assert tpl["display_name"] == "Bug Report"
+        assert len(tpl["fields_schema"]) > 0
+
+    def test_get_unknown_template(self, db: FiligreeDB) -> None:
+        assert db.get_template("nonexistent") is None
+
+    def test_get_template_uses_runtime_override(self, tmp_path: Path) -> None:
+        filigree_dir = tmp_path / ".filigree"
+        filigree_dir.mkdir()
+        (filigree_dir / "templates").mkdir()
+        (filigree_dir / "config.json").write_text(json.dumps({"prefix": "test", "version": 1, "enabled_packs": ["core", "planning"]}))
+        (filigree_dir / "templates" / "bug.json").write_text(
+            json.dumps(
+                {
+                    "type": "bug",
+                    "display_name": "Bug Override",
+                    "description": "Runtime override for bug workflow",
+                    "pack": "custom",
+                    "states": [
+                        {"name": "intake", "category": "open"},
+                        {"name": "fixing", "category": "wip"},
+                        {"name": "closed", "category": "done"},
+                    ],
+                    "initial_state": "intake",
+                    "transitions": [
+                        {"from": "intake", "to": "fixing", "enforcement": "soft"},
+                        {"from": "fixing", "to": "closed", "enforcement": "soft"},
+                    ],
+                    "fields_schema": [],
+                }
+            )
+        )
+
+        db = FiligreeDB(filigree_dir / "filigree.db", prefix="test")
+        db.initialize()
+        try:
+            created = db.create_issue("Overridden bug", type="bug")
+            tpl = db.get_template("bug")
+            assert tpl is not None
+            assert tpl["display_name"] == "Bug Override"
+            assert created.status == "intake"
+        finally:
+            db.close()
+
+
+class TestGetTemplateEnriched:
+    def test_get_template_includes_states(self, db: FiligreeDB) -> None:
+        tpl = db.get_template("bug")
+        assert tpl is not None
+        assert "states" in tpl
+        state_names = [s["name"] for s in tpl["states"]]
+        assert "triage" in state_names
+        assert "closed" in state_names
+        assert all("category" in s for s in tpl["states"])
+
+    def test_get_template_includes_transitions(self, db: FiligreeDB) -> None:
+        tpl = db.get_template("bug")
+        assert tpl is not None
+        assert "transitions" in tpl
+        assert any(t["from"] == "triage" and t["to"] == "confirmed" for t in tpl["transitions"])
+
+    def test_get_template_includes_initial_state(self, db: FiligreeDB) -> None:
+        tpl = db.get_template("bug")
+        assert tpl is not None
+        assert "initial_state" in tpl
+        assert tpl["initial_state"] == "triage"
+
+    def test_get_template_task(self, db: FiligreeDB) -> None:
+        tpl = db.get_template("task")
+        assert tpl is not None
+        assert tpl["initial_state"] == "open"
+        assert len(tpl["states"]) >= 3
+        assert len(tpl["transitions"]) >= 2
