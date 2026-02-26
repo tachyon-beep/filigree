@@ -4,10 +4,12 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
 from filigree.core import FiligreeDB
+from filigree.summary import _parse_iso as summary_parse_iso
 from filigree.summary import generate_summary, write_summary
 
 
@@ -381,3 +383,62 @@ class TestWriteSummary:
         assert closed_fds, "Expected os.close to be called for leaked fd cleanup"
         leftovers = list(tmp_path.glob(".context_*.tmp"))
         assert leftovers == []
+
+
+# ---------------------------------------------------------------------------
+# Bug fixes: summary timezone handling, WIP limit
+# (consolidated from test_analytics_templates_fixes.py)
+# ---------------------------------------------------------------------------
+
+
+class TestSummaryTimezoneHandling:
+    def test_naive_datetime_gets_utc(self) -> None:
+        """Naive datetime should get UTC attached via replace."""
+        result = summary_parse_iso("2026-01-15T10:00:00")
+        assert result.tzinfo is not None
+        assert result.tzinfo == UTC
+
+    def test_aware_datetime_converted_to_utc(self) -> None:
+        """Aware datetime with non-UTC timezone should be converted to UTC."""
+        # +05:00 timezone
+        result = summary_parse_iso("2026-01-15T15:00:00+05:00")
+        assert result.tzinfo is not None
+        # 15:00 +05:00 should be 10:00 UTC
+        assert result.hour == 10
+
+    def test_utc_datetime_unchanged(self) -> None:
+        """UTC datetime should remain unchanged."""
+        result = summary_parse_iso("2026-01-15T10:00:00+00:00")
+        assert result.hour == 10
+        assert result.tzinfo is not None
+
+    def test_stale_detection_with_aware_datetimes(self, db: FiligreeDB) -> None:
+        """Stale detection should work correctly with timezone-aware timestamps."""
+        issue = db.create_issue("Stale task")
+        db.update_issue(issue.id, status="in_progress")
+        # Backdate to 5 days ago using a non-UTC timezone
+        old_ts = (datetime.now(UTC) - timedelta(days=5)).isoformat()
+        db.conn.execute("UPDATE issues SET updated_at = ? WHERE id = ?", (old_ts, issue.id))
+        db.conn.commit()
+        summary = generate_summary(db)
+        assert "Stale" in summary
+        assert "Stale task" in summary
+
+
+class TestSummaryWipLimit:
+    def test_list_issues_called_with_high_limit(self, db: FiligreeDB) -> None:
+        """Verify that list_issues is called with a high limit in generate_summary."""
+        # We patch list_issues to track calls with limit parameter
+        original_list_issues = db.list_issues
+        call_limits: list[int | None] = []
+
+        def tracking_list_issues(**kwargs):  # type: ignore[no-untyped-def]
+            call_limits.append(kwargs.get("limit"))
+            return original_list_issues(**kwargs)
+
+        with patch.object(db, "list_issues", side_effect=tracking_list_issues):
+            generate_summary(db)
+
+        # All calls should have limit=10000 (not the default 100)
+        for limit in call_limits:
+            assert limit == 10000, f"list_issues called with limit={limit}, expected 10000"

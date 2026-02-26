@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from unittest.mock import patch
 
+from filigree.analytics import _parse_iso as analytics_parse_iso
 from filigree.analytics import cycle_time, get_flow_metrics, lead_time
 from filigree.core import FiligreeDB, Issue
 
@@ -326,3 +328,91 @@ class TestFlowMetrics:
         assert refreshed.status == "archived"
         data = get_flow_metrics(db, days=30)
         assert data["throughput"] >= 1, "Archived issues should be counted"
+
+
+# ---------------------------------------------------------------------------
+# Bug fixes: cycle_time reopen, _parse_iso, flow_metrics date comparison
+# (consolidated from test_analytics_templates_fixes.py)
+# ---------------------------------------------------------------------------
+
+
+class TestCycleTimeReopen:
+    def test_cycle_time_uses_first_close(self, db: FiligreeDB) -> None:
+        """Cycle time should measure first WIP to first done, not first WIP to last done."""
+        issue = db.create_issue("Reopen test")
+        db.update_issue(issue.id, status="in_progress")
+        db.close_issue(issue.id)
+
+        # Record cycle_time after first close
+        ct_first = cycle_time(db, issue.id)
+        assert ct_first is not None
+
+        # Reopen and close again
+        db.reopen_issue(issue.id)
+        db.update_issue(issue.id, status="in_progress")
+        # Backdate the second close to make it clearly different
+        db.close_issue(issue.id)
+
+        ct_after_reopen = cycle_time(db, issue.id)
+        assert ct_after_reopen is not None
+        # Should be the same as the first close (break after first done)
+        assert ct_after_reopen == ct_first
+
+
+class TestAnalyticsParseIso:
+    def test_garbage_returns_none(self) -> None:
+        """Garbage strings should return None, not datetime.now()."""
+        result = analytics_parse_iso("not-a-date")
+        assert result is None
+
+    def test_empty_string_returns_none(self) -> None:
+        result = analytics_parse_iso("")
+        assert result is None
+
+    def test_valid_iso_string(self) -> None:
+        """Valid ISO string should return correct datetime."""
+        result = analytics_parse_iso("2026-01-15T10:00:00+00:00")
+        assert result is not None
+        assert result.year == 2026
+        assert result.month == 1
+        assert result.day == 15
+
+    def test_naive_iso_string_gets_utc(self) -> None:
+        """Naive ISO string should get UTC timezone attached."""
+        result = analytics_parse_iso("2026-01-15T10:00:00")
+        assert result is not None
+        assert result.tzinfo is not None
+        assert result.tzinfo == UTC
+
+    def test_result_is_not_now(self) -> None:
+        """On failure, should NOT return datetime.now()."""
+        before = datetime.now(UTC)
+        result = analytics_parse_iso("garbage")
+        assert result is None
+        # Verify it's truly None, not something close to now
+        assert result != before
+
+
+class TestFlowMetricsDateComparison:
+    def test_metrics_correctly_filter_by_cutoff_date(self, db: FiligreeDB) -> None:
+        """Verify metrics use proper datetime comparison, not string comparison."""
+        issue = db.create_issue("Recent close")
+        db.update_issue(issue.id, status="in_progress")
+        db.close_issue(issue.id)
+
+        data = get_flow_metrics(db, days=30)
+        assert data["throughput"] >= 1
+
+    def test_metrics_exclude_old_issues(self, db: FiligreeDB) -> None:
+        """Issues closed before the cutoff should be excluded."""
+        issue = db.create_issue("Old close")
+        db.update_issue(issue.id, status="in_progress")
+        db.close_issue(issue.id)
+
+        # Backdate the closed_at to 60 days ago
+        old_ts = (datetime.now(UTC) - timedelta(days=60)).isoformat()
+        db.conn.execute("UPDATE issues SET closed_at = ? WHERE id = ?", (old_ts, issue.id))
+        db.conn.commit()
+
+        data = get_flow_metrics(db, days=30)
+        assert data["throughput"] == 0

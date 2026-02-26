@@ -1622,3 +1622,171 @@ class TestQualityCheckDoneOutgoing:
         warnings = TemplateRegistry.check_type_template_quality(tpl)
         done_outgoing = [w for w in warnings if "done state" in w]
         assert len(done_outgoing) == 0
+
+
+# ---------------------------------------------------------------------------
+# Bug fixes: enforcement validation, malformed shape, rolled_back transition
+# (consolidated from test_analytics_templates_fixes.py)
+# ---------------------------------------------------------------------------
+
+
+class TestTemplateEnforcementValidation:
+    def test_invalid_enforcement_raises_error(self) -> None:
+        """Template with invalid enforcement value should raise ValueError."""
+        raw = {
+            "type": "badtype",
+            "display_name": "Bad",
+            "description": "Bad type",
+            "states": [
+                {"name": "open", "category": "open"},
+                {"name": "closed", "category": "done"},
+            ],
+            "initial_state": "open",
+            "transitions": [
+                {"from": "open", "to": "closed", "enforcement": "invalid_value"},
+            ],
+            "fields_schema": [],
+        }
+        with pytest.raises(ValueError, match="invalid enforcement"):
+            TemplateRegistry.parse_type_template(raw)
+
+    def test_valid_enforcement_values_accepted(self) -> None:
+        """Templates with valid enforcement values should parse fine.
+
+        Note: 'none' was removed as valid enforcement (filigree-9b9e45)
+        because it violated the EnforcementLevel Literal["hard", "soft"] contract.
+        """
+        for enforcement in ("hard", "soft"):
+            raw = {
+                "type": "goodtype",
+                "display_name": "Good",
+                "description": "Good type",
+                "states": [
+                    {"name": "open", "category": "open"},
+                    {"name": "closed", "category": "done"},
+                ],
+                "initial_state": "open",
+                "transitions": [
+                    {"from": "open", "to": "closed", "enforcement": enforcement},
+                ],
+                "fields_schema": [],
+            }
+            tpl = TemplateRegistry.parse_type_template(raw)
+            assert tpl.transitions[0].enforcement == enforcement
+
+
+class TestTemplateMalformedShape:
+    def test_states_none_raises_value_error(self) -> None:
+        """Template with states=None should raise ValueError, not TypeError."""
+        raw = {
+            "type": "badshape",
+            "display_name": "Bad",
+            "description": "Bad shape",
+            "states": None,
+            "initial_state": "open",
+            "transitions": [],
+            "fields_schema": [],
+        }
+        with pytest.raises(ValueError, match="must be a list"):
+            TemplateRegistry.parse_type_template(raw)
+
+    def test_states_string_raises_value_error(self) -> None:
+        """Template with states as a string should raise ValueError."""
+        raw = {
+            "type": "badshape",
+            "display_name": "Bad",
+            "description": "Bad shape",
+            "states": "not a list",
+            "initial_state": "open",
+            "transitions": [],
+            "fields_schema": [],
+        }
+        with pytest.raises(ValueError, match="must be a list"):
+            TemplateRegistry.parse_type_template(raw)
+
+    def test_state_missing_name_raises_value_error(self) -> None:
+        """State dict without 'name' key should raise ValueError."""
+        raw = {
+            "type": "badshape",
+            "display_name": "Bad",
+            "description": "Bad shape",
+            "states": [{"category": "open"}],  # missing 'name'
+            "initial_state": "open",
+            "transitions": [],
+            "fields_schema": [],
+        }
+        with pytest.raises(ValueError, match="must be a dict with 'name' and 'category'"):
+            TemplateRegistry.parse_type_template(raw)
+
+    def test_state_missing_category_raises_value_error(self) -> None:
+        """State dict without 'category' key should raise ValueError."""
+        raw = {
+            "type": "badshape",
+            "display_name": "Bad",
+            "description": "Bad shape",
+            "states": [{"name": "open"}],  # missing 'category'
+            "initial_state": "open",
+            "transitions": [],
+            "fields_schema": [],
+        }
+        with pytest.raises(ValueError, match="must be a dict with 'name' and 'category'"):
+            TemplateRegistry.parse_type_template(raw)
+
+    def test_malformed_template_in_pack_loading_does_not_crash(self, tmp_path: object) -> None:
+        """Malformed template in _load_pack_data should be skipped, not crash."""
+        filigree_dir = Path(str(tmp_path)) / ".filigree"
+        filigree_dir.mkdir()
+        templates_dir = filigree_dir / "templates"
+        templates_dir.mkdir()
+
+        # Write a template with states=None (would cause TypeError without fix)
+        bad_template = {
+            "type": "crasher",
+            "display_name": "Crasher",
+            "description": "Should not crash loading",
+            "states": None,
+            "initial_state": "open",
+            "transitions": [],
+            "fields_schema": [],
+        }
+        (templates_dir / "crasher.json").write_text(json.dumps(bad_template))
+
+        config = {"prefix": "test", "version": 1, "enabled_packs": ["core"]}
+        (filigree_dir / "config.json").write_text(json.dumps(config))
+
+        reg = TemplateRegistry()
+        reg.load(filigree_dir)  # Should not raise
+        assert reg.get_type("task") is not None  # Built-ins still loaded
+        assert reg.get_type("crasher") is None  # Bad template was skipped
+
+
+class TestRolledBackTransition:
+    def test_rolled_back_has_outbound_transition(self) -> None:
+        """rolled_back state should have a transition to development."""
+        raw = BUILT_IN_PACKS["release"]["types"]["release"]
+        tpl = TemplateRegistry.parse_type_template(raw)
+        rollback_transitions = [t for t in tpl.transitions if t.from_state == "rolled_back"]
+        assert len(rollback_transitions) >= 1, "rolled_back should have at least one outbound transition"
+
+    def test_rolled_back_can_go_to_development(self) -> None:
+        """rolled_back should transition to development with soft enforcement."""
+        raw = BUILT_IN_PACKS["release"]["types"]["release"]
+        tpl = TemplateRegistry.parse_type_template(raw)
+        rb_to_dev = [t for t in tpl.transitions if t.from_state == "rolled_back" and t.to_state == "development"]
+        assert len(rb_to_dev) == 1, "Should have exactly one rolled_back -> development transition"
+        assert rb_to_dev[0].enforcement == "soft"
+
+    def test_release_type_validates_with_rollback_transition(self) -> None:
+        """Release type should still pass validation with the new transition."""
+        raw = BUILT_IN_PACKS["release"]["types"]["release"]
+        tpl = TemplateRegistry.parse_type_template(raw)
+        errors = TemplateRegistry.validate_type_template(tpl)
+        assert errors == [], f"Validation errors: {errors}"
+
+    def test_rolled_back_not_dead_end(self) -> None:
+        """rolled_back should not appear in dead-end quality warnings."""
+        raw = BUILT_IN_PACKS["release"]["types"]["release"]
+        tpl = TemplateRegistry.parse_type_template(raw)
+        warnings = TemplateRegistry.check_type_template_quality(tpl)
+        dead_end_warnings = [w for w in warnings if "rolled_back" in w and "dead end" in w]
+        assert dead_end_warnings == [], f"rolled_back still flagged as dead end: {dead_end_warnings}"
