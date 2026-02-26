@@ -418,6 +418,33 @@ class TestReleaseClaim:
         with pytest.raises(ValueError, match="no assignee set"):
             db.release_claim(issue.id)
 
+    def test_release_records_event(self, db: FiligreeDB) -> None:
+        issue = db.create_issue("Event check")
+        db.claim_issue(issue.id, assignee="agent-1")
+        db.release_claim(issue.id, actor="agent-1")
+        events = db.get_recent_events(limit=10)
+        released_events = [e for e in events if e["event_type"] == "released"]
+        assert len(released_events) == 1
+        assert released_events[0]["actor"] == "agent-1"
+
+    def test_release_closed_issue_no_assignee(self, db: FiligreeDB) -> None:
+        issue = db.create_issue("Closed one")
+        db.close_issue(issue.id)
+        with pytest.raises(ValueError, match="no assignee set"):
+            db.release_claim(issue.id)
+
+    def test_release_not_found(self, db: FiligreeDB) -> None:
+        with pytest.raises(KeyError, match="not found"):
+            db.release_claim("nonexistent-xyz")
+
+    def test_release_then_reclaim(self, db: FiligreeDB) -> None:
+        issue = db.create_issue("Reclaim test")
+        db.claim_issue(issue.id, assignee="agent-1")
+        db.release_claim(issue.id)
+        reclaimed = db.claim_issue(issue.id, assignee="agent-2")
+        assert reclaimed.status == "open"  # status unchanged
+        assert reclaimed.assignee == "agent-2"
+
 
 # ---------------------------------------------------------------------------
 # Task 1.10: Category-Aware Queries

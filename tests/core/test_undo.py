@@ -244,3 +244,70 @@ class TestGetIssueEvents:
     def test_raises_on_nonexistent(self, db: FiligreeDB) -> None:
         with pytest.raises(KeyError):
             db.get_issue_events("nonexistent-abc123")
+
+
+class TestUndoCloseConsistency:
+    """Bug fix: keel-3e899d — undo_last closed_at consistency."""
+
+    def test_undo_close_clears_closed_at(self, db: FiligreeDB) -> None:
+        """Closing an issue then undoing should clear closed_at."""
+        issue = db.create_issue("Undo close test")
+        db.close_issue(issue.id)
+
+        # Verify closed_at is set
+        closed = db.get_issue(issue.id)
+        assert closed.closed_at is not None
+
+        # Undo the close
+        result = db.undo_last(issue.id)
+        assert result["undone"] is True
+
+        # closed_at should be cleared
+        undone = db.get_issue(issue.id)
+        assert undone.closed_at is None
+        assert undone.status_category != "done"
+
+    def test_undo_to_done_sets_closed_at(self, db: FiligreeDB) -> None:
+        """Undoing from a non-done state back to a done state should set closed_at."""
+        issue = db.create_issue("Undo to done test")
+
+        # Close the issue (status -> closed, closed_at set)
+        db.close_issue(issue.id)
+        closed = db.get_issue(issue.id)
+        assert closed.closed_at is not None
+
+        # Reopen the issue (status -> open, closed_at cleared)
+        db.reopen_issue(issue.id)
+        reopened = db.get_issue(issue.id)
+        assert reopened.closed_at is None
+
+        # Now undo the reopen — this should restore the closed status
+        # The most recent reversible event should be the status_changed from reopen
+        result = db.undo_last(issue.id)
+        assert result["undone"] is True
+
+        # closed_at should be set because we're back in a done state
+        restored = db.get_issue(issue.id)
+        assert restored.status_category == "done"
+        assert restored.closed_at is not None
+
+    def test_undo_close_restores_correct_status(self, db: FiligreeDB) -> None:
+        """Test that undoing a close restores the previous status and clears closed_at."""
+        issue = db.create_issue("Undo close status test")
+
+        # Move to in_progress first
+        db.update_issue(issue.id, status="in_progress")
+
+        # Close
+        db.close_issue(issue.id)
+        closed = db.get_issue(issue.id)
+        assert closed.closed_at is not None
+        assert closed.status_category == "done"
+
+        # Undo close -> should restore to in_progress
+        result = db.undo_last(issue.id)
+        assert result["undone"] is True
+        after_undo = db.get_issue(issue.id)
+        assert after_undo.status == "in_progress"
+        assert after_undo.closed_at is None
+        assert after_undo.status_category != "done"

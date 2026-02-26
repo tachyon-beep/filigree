@@ -1,19 +1,4 @@
-"""Tests for the schema migration framework.
-
-Testing strategy:
-  1. Framework tests — verify the migration runner handles edge cases
-  2. Schema equivalence — migrated DB must match a fresh DB at the same version
-  3. Per-migration tests — each migration gets its own test class (add as needed)
-
-To add tests for a new migration (e.g., v2 → v3):
-  1. Add a TestMigrateV2ToV3 class below
-  2. Create a v2 database fixture (snapshot of SCHEMA_SQL before the migration)
-  3. Run the migration and verify:
-     - Schema matches fresh initialization
-     - Data is preserved and transformed correctly
-     - Indexes exist
-     - Constraints are enforced
-"""
+"""Tests for schema migrations, versioning, and database evolution."""
 
 from __future__ import annotations
 
@@ -234,7 +219,7 @@ class TestMigrationRunner:
             conn.close()
 
     def test_partial_failure_preserves_successful_steps(self, tmp_path: Path) -> None:
-        """If migration 2→3 fails, v1→v2 is still committed."""
+        """If migration 2->3 fails, v1->v2 is still committed."""
         conn = _make_db(tmp_path)
         conn.execute("CREATE TABLE t (id INTEGER PRIMARY KEY)")
         conn.execute("PRAGMA user_version = 1")
@@ -255,7 +240,7 @@ class TestMigrationRunner:
         try:
             with pytest.raises(MigrationError, match="Boom"):
                 apply_pending_migrations(conn, 3)
-            # v1→v2 succeeded and was committed
+            # v1->v2 succeeded and was committed
             assert _get_schema_version(conn) == 2
             assert "a" in _get_table_columns(conn, "t")
         finally:
@@ -690,7 +675,7 @@ class TestMigrationAtomicity:
         """Migration that rebuilds FK-referenced table then fails rolls back completely.
 
         With defer_foreign_keys, the rebuild stays within the caller's
-        transaction and can be fully rolled back on failure — including
+        transaction and can be fully rolled back on failure -- including
         the schema change itself.
         """
         conn = _make_db(tmp_path)
@@ -729,7 +714,7 @@ class TestMigrationAtomicity:
             tables = _get_table_names(conn)
             assert "parent" in tables
 
-            # Original schema restored — no 'extra' column
+            # Original schema restored -- no 'extra' column
             cols = _get_table_columns(conn, "parent")
             assert "extra" not in cols, "rebuild should have been rolled back"
 
@@ -922,12 +907,12 @@ class TestMigrationAtomicity:
 
 
 # ---------------------------------------------------------------------------
-# v2 → v3 migration tests
+# v2 -> v3 migration tests
 # ---------------------------------------------------------------------------
 
 
 class TestMigrateV2ToV3:
-    """Tests for migration v2 → v3: scan_run_id + suggestion columns + index."""
+    """Tests for migration v2 -> v3: scan_run_id + suggestion columns + index."""
 
     @pytest.fixture
     def v2_db(self, tmp_path: Path) -> sqlite3.Connection:
@@ -940,7 +925,7 @@ class TestMigrateV2ToV3:
         conn.execute("PRAGMA user_version = 1")
         conn.commit()
 
-        # Apply v1→v2 to get the scan_findings table
+        # Apply v1->v2 to get the scan_findings table
         conn.execute("BEGIN IMMEDIATE")
         migrate_v1_to_v2(conn)
         conn.execute("PRAGMA user_version = 2")
@@ -1008,12 +993,12 @@ class TestMigrateV2ToV3:
 
 
 # ---------------------------------------------------------------------------
-# v3 → v4 migration tests
+# v3 -> v4 migration tests
 # ---------------------------------------------------------------------------
 
 
 class TestMigrateV3ToV4:
-    """Tests for migration v3 → v4: file_events table + index."""
+    """Tests for migration v3 -> v4: file_events table + index."""
 
     @pytest.fixture
     def v3_db(self, tmp_path: Path) -> sqlite3.Connection:
@@ -1104,7 +1089,7 @@ class TestSchemaEquivalence:
 
     # -- Template for per-version equivalence tests --------------------------
     #
-    # Uncomment and adapt when adding migration v1 → v2:
+    # Uncomment and adapt when adding migration v1 -> v2:
     #
     # # Snapshot of SCHEMA_SQL before v2 changes (copy from git history)
     # V1_SCHEMA_SQL = """..."""
@@ -1178,7 +1163,7 @@ class TestFiligreeDBMigration:
 # ---------------------------------------------------------------------------
 
 # class TestMigrateV1ToV2:
-#     """Tests for migration v1 → v2.
+#     """Tests for migration v1 -> v2.
 #
 #     Describe what the migration does and why.
 #     """
@@ -1227,3 +1212,70 @@ class TestFiligreeDBMigration:
 #             assert _get_table_columns(v1_db, table) == _get_table_columns(fresh, table), \
 #                 f"Column mismatch in {table}"
 #         fresh.close()
+
+
+# ---------------------------------------------------------------------------
+# File migration tests (from test_files.py)
+# ---------------------------------------------------------------------------
+
+
+class TestFileMigration:
+    """Verify v1->v2 migration adds file tables to existing databases."""
+
+    def test_migration_creates_tables(self, tmp_path: Path) -> None:
+        # Create a fresh database
+        d = FiligreeDB(tmp_path / "filigree.db", prefix="test")
+        d.initialize()
+        # Should be at current version (fresh DB gets latest schema)
+        assert d.get_schema_version() == CURRENT_SCHEMA_VERSION
+        d.close()
+
+    def test_migration_from_v1(self, tmp_path: Path) -> None:
+        """Simulate an existing v1 database that needs migration."""
+        import sqlite3
+
+        db_path = tmp_path / "filigree.db"
+        conn = sqlite3.connect(str(db_path))
+        # Manually create only v1 tables (without file tables)
+        from filigree.db_schema import SCHEMA_V1_SQL
+
+        conn.executescript(SCHEMA_V1_SQL)
+        conn.execute("PRAGMA user_version = 1")
+        conn.commit()
+        conn.close()
+
+        # Opening with FiligreeDB should run migration
+        d = FiligreeDB(db_path, prefix="test")
+        d.initialize()
+        assert d.get_schema_version() == CURRENT_SCHEMA_VERSION
+        # File tables should now exist
+        row = d.conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='file_records'").fetchone()
+        assert row is not None
+        d.close()
+
+
+# ---------------------------------------------------------------------------
+# Schema versioning tests (from test_core_gaps.py)
+# ---------------------------------------------------------------------------
+
+
+class TestSchemaVersioning:
+    def test_version_set_after_init(self, db: FiligreeDB) -> None:
+        assert db.get_schema_version() == CURRENT_SCHEMA_VERSION
+
+    def test_fresh_db_gets_current_version(self, tmp_path: Path) -> None:
+        """A fresh database should get CURRENT_SCHEMA_VERSION."""
+        d = FiligreeDB(tmp_path / "filigree.db", prefix="test")
+        d.initialize()
+        assert d.get_schema_version() == CURRENT_SCHEMA_VERSION
+        d.close()
+
+    def test_custom_status_after_migration(self, db: FiligreeDB) -> None:
+        """After v3 migration removes CHECK constraint, custom status values are accepted by SQLite."""
+        db.conn.execute(
+            "INSERT INTO issues (id, title, status, priority, type, created_at, updated_at) "
+            "VALUES ('test-custom1', 'Custom status', 'review', 2, 'task', '2026-01-01', '2026-01-01')",
+        )
+        db.conn.commit()
+        issue = db.get_issue("test-custom1")
+        assert issue.status == "review"

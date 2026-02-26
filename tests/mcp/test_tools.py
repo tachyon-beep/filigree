@@ -6,6 +6,7 @@ import asyncio
 import builtins
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
@@ -2194,3 +2195,76 @@ class TestTriggerScanCooldownRace:
             target.unlink(missing_ok=True)
             (scanners_dir / "bad-cmd.toml").unlink(missing_ok=True)
             mcp_mod._scan_cooldowns.clear()
+
+
+# ---------------------------------------------------------------------------
+# v0.5: release_claim, export, import via MCP
+# ---------------------------------------------------------------------------
+
+
+class TestMCPReleaseClaim:
+    async def test_release_via_mcp(self, mcp_db: FiligreeDB) -> None:
+        issue = mcp_db.create_issue("MCP release")
+        mcp_db.claim_issue(issue.id, assignee="agent-1")
+        result = await call_tool("release_claim", {"id": issue.id})
+        data = _parse(result)
+        assert data["status"] == "open"  # status unchanged
+        assert data["assignee"] == ""
+
+    async def test_release_conflict_via_mcp(self, mcp_db: FiligreeDB) -> None:
+        issue = mcp_db.create_issue("Not claimed")
+        result = await call_tool("release_claim", {"id": issue.id})
+        data = _parse(result)
+        assert data["code"] == "conflict"
+
+    async def test_release_not_found_via_mcp(self, mcp_db: FiligreeDB) -> None:
+        result = await call_tool("release_claim", {"id": "nonexistent-xyz"})
+        data = _parse(result)
+        assert data["code"] == "not_found"
+
+
+class TestMCPExportImport:
+    async def test_export_via_mcp(self, mcp_db: FiligreeDB) -> None:
+        mcp_db.create_issue("Export me")
+        result = await call_tool("export_jsonl", {"output_path": "mcp_export.jsonl"})
+        data = _parse(result)
+        assert data["status"] == "ok"
+        assert data["records"] > 0
+
+    async def test_import_via_mcp(self, mcp_db: FiligreeDB) -> None:
+        mcp_db.create_issue("Import source")
+        await call_tool("export_jsonl", {"output_path": "mcp_roundtrip.jsonl"})
+        # Import into same DB with merge
+        result = await call_tool("import_jsonl", {"input_path": "mcp_roundtrip.jsonl", "merge": True})
+        data = _parse(result)
+        assert data["status"] == "ok"
+
+    async def test_import_bad_path_via_mcp(self, mcp_db: FiligreeDB) -> None:
+        result = await call_tool("import_jsonl", {"input_path": "/nonexistent/file.jsonl"})
+        data = _parse(result)
+        assert data["code"] == "invalid_path"
+
+
+# ---------------------------------------------------------------------------
+# v1.0: archive_closed, compact_events via MCP
+# ---------------------------------------------------------------------------
+
+
+class TestMCPV10:
+    async def test_archive_closed_via_mcp(self, mcp_db: FiligreeDB) -> None:
+        issue = mcp_db.create_issue("Archive via MCP")
+        mcp_db.close_issue(issue.id)
+        old_date = (datetime.now(UTC) - timedelta(days=60)).isoformat()
+        mcp_db.conn.execute("UPDATE issues SET closed_at = ? WHERE id = ?", (old_date, issue.id))
+        mcp_db.conn.commit()
+
+        result = await call_tool("archive_closed", {"days_old": 30})
+        data = _parse(result)
+        assert data["status"] == "ok"
+        assert data["archived_count"] == 1
+
+    async def test_compact_events_via_mcp(self, mcp_db: FiligreeDB) -> None:
+        result = await call_tool("compact_events", {})
+        data = _parse(result)
+        assert data["status"] == "ok"
+        assert data["events_deleted"] == 0
