@@ -10,7 +10,6 @@ from filigree.templates import (
     StateDefinition,
     TemplateRegistry,
     TransitionDefinition,
-    TransitionResult,
     TypeTemplate,
 )
 from filigree.templates_data import BUILT_IN_PACKS
@@ -55,21 +54,18 @@ class TestTransitionValidation:
 
     # -- validate_transition tests --
 
-    def test_soft_transition_allowed(self, registry: TemplateRegistry) -> None:
+    def test_soft_transition_allowed_with_missing_field_warning(self, registry: TemplateRegistry) -> None:
         result = registry.validate_transition("bug", "triage", "confirmed", {})
         assert result.allowed is True
         assert result.enforcement == "soft"
-
-    def test_soft_transition_warns_on_missing_fields(self, registry: TemplateRegistry) -> None:
-        result = registry.validate_transition("bug", "triage", "confirmed", {})
-        assert result.allowed is True
         assert len(result.warnings) >= 1
+        assert "severity" in result.warnings[0]
 
     def test_hard_transition_blocks_on_missing_fields(self, registry: TemplateRegistry) -> None:
         result = registry.validate_transition("bug", "verifying", "closed", {})
         assert result.allowed is False
         assert result.enforcement == "hard"
-        assert "fix_verification" in result.missing_fields
+        assert result.missing_fields == ("fix_verification",)
 
     def test_hard_transition_allowed_when_fields_present(self, registry: TemplateRegistry) -> None:
         result = registry.validate_transition("bug", "verifying", "closed", {"fix_verification": "Tests pass"})
@@ -81,6 +77,7 @@ class TestTransitionValidation:
         result = registry.validate_transition("bug", "triage", "closed", {})
         assert result.allowed is False
         assert result.enforcement is None
+        assert result.missing_fields == ()
         assert len(result.warnings) >= 1
         assert "not in the standard workflow" in result.warnings[0]
 
@@ -116,7 +113,8 @@ class TestTransitionValidation:
         options = registry.get_valid_transitions("bug", "fixing", {})
         verifying = next(o for o in options if o.to == "verifying")
         assert verifying.ready is False
-        assert "fix_verification" in verifying.missing_fields
+        assert verifying.enforcement == "soft"
+        assert verifying.missing_fields == ("fix_verification",)
 
     def test_get_valid_transitions_ready_when_fields_present(self, registry: TemplateRegistry) -> None:
         options = registry.get_valid_transitions("bug", "fixing", {"fix_verification": "Tests pass"})
@@ -139,7 +137,7 @@ class TestTransitionValidation:
 
     def test_validate_fields_for_state(self, registry: TemplateRegistry) -> None:
         missing = registry.validate_fields_for_state("bug", "confirmed", {})
-        assert "severity" in missing
+        assert missing == ["severity"]
 
     def test_validate_fields_for_state_populated(self, registry: TemplateRegistry) -> None:
         missing = registry.validate_fields_for_state("bug", "confirmed", {"severity": "major"})

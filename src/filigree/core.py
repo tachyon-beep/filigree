@@ -342,6 +342,9 @@ class FiligreeDB(FilesMixin, IssuesMixin, EventsMixin, WorkflowMixin, MetaMixin,
     ) -> None:
         self.db_path = Path(db_path)
         self.prefix = prefix
+        if enabled_packs is not None and isinstance(enabled_packs, str):
+            msg = f"enabled_packs must be a list of strings, not a bare string: {enabled_packs!r}"
+            raise TypeError(msg)
         self._enabled_packs_override = list(enabled_packs) if enabled_packs is not None else None
         self.enabled_packs = self._enabled_packs_override if self._enabled_packs_override is not None else ["core", "planning", "release"]
         self._conn: sqlite3.Connection | None = None

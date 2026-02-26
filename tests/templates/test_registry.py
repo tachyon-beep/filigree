@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 from typing import ClassVar
 
@@ -234,11 +235,11 @@ class TestTemplateRegistry:
         assert registry.get_category("bug", "closed") == "done"
         assert registry.get_category("bug", "wont_fix") == "done"
 
-    def test_get_category_cache_is_o1(self, registry: TemplateRegistry) -> None:
-        """Category cache should be a hierarchical dict lookup, not iteration."""
-        assert hasattr(registry, "_category_cache")
-        assert "bug" in registry._category_cache
-        assert "triage" in registry._category_cache["bug"]
+    def test_get_category_returns_correct_values_after_registration(self, registry: TemplateRegistry) -> None:
+        """All registered states should return correct categories."""
+        expected = {"triage": "open", "confirmed": "open", "fixing": "wip", "closed": "done", "wont_fix": "done"}
+        for state, category in expected.items():
+            assert registry.get_category("bug", state) == category, f"bug.{state} should be {category}"
 
     def test_get_category_unknown_state(self, registry: TemplateRegistry) -> None:
         """Unknown state for known type returns None."""
@@ -661,8 +662,6 @@ class TestDuplicateTransitionDetection:
 
     def test_validate_duplicate_transitions_reported(self) -> None:
         """validate_type_template should report duplicate transitions as errors."""
-        from filigree.templates import StateDefinition, TransitionDefinition
-
         tpl = TypeTemplate(
             type="dup_trans",
             display_name="Dup Trans",
@@ -684,8 +683,6 @@ class TestDuplicateTransitionDetection:
 
     def test_no_false_positive_on_unique_transitions(self) -> None:
         """Templates with unique transitions should validate cleanly."""
-        from filigree.templates import StateDefinition, TransitionDefinition
-
         tpl = TypeTemplate(
             type="clean",
             display_name="Clean",
@@ -908,37 +905,6 @@ class TestBuiltInPackData:
 
     # -- Workflow guide tests (WFT-FR-031) --
 
-    def test_core_pack_has_guide(self) -> None:
-        guide = BUILT_IN_PACKS["core"].get("guide")
-        assert guide is not None
-
-    def test_planning_pack_has_guide(self) -> None:
-        guide = BUILT_IN_PACKS["planning"].get("guide")
-        assert guide is not None
-
-    def test_risk_pack_has_guide(self) -> None:
-        guide = BUILT_IN_PACKS["risk"].get("guide")
-        assert guide is not None
-
-    def test_spike_pack_has_guide(self) -> None:
-        guide = BUILT_IN_PACKS["spike"].get("guide")
-        assert guide is not None
-
-    def test_requirements_pack_has_guide(self) -> None:
-        assert BUILT_IN_PACKS["requirements"].get("guide") is not None
-
-    def test_roadmap_pack_has_guide(self) -> None:
-        assert BUILT_IN_PACKS["roadmap"].get("guide") is not None
-
-    def test_incident_pack_has_guide(self) -> None:
-        assert BUILT_IN_PACKS["incident"].get("guide") is not None
-
-    def test_debt_pack_has_guide(self) -> None:
-        assert BUILT_IN_PACKS["debt"].get("guide") is not None
-
-    def test_release_pack_has_guide(self) -> None:
-        assert BUILT_IN_PACKS["release"].get("guide") is not None
-
     @pytest.mark.parametrize("pack_name", _ALL_PACKS)
     def test_guide_has_required_fields(self, pack_name: str) -> None:
         guide = BUILT_IN_PACKS[pack_name]["guide"]
@@ -1006,8 +972,6 @@ class TestBuiltInPackData:
     def test_planning_pack_has_relationships(self) -> None:
         rels = BUILT_IN_PACKS["planning"]["relationships"]
         assert len(rels) >= 3  # milestone->phase, phase->step, work_package->milestone at minimum
-
-    # -- All types have required fields --
 
     # -- Risk pack structural tests --
 
@@ -1368,14 +1332,6 @@ class TestTemplateLoading:
         assert reg.get_type("bug") is not None
         assert reg.get_type("milestone") is not None
 
-    def test_load_respects_enabled_packs(self, filigree_dir: Path) -> None:
-        """Only types from enabled packs should be available."""
-        reg = TemplateRegistry()
-        reg.load(filigree_dir)
-        # Core and planning enabled — their types exist
-        assert reg.get_type("task") is not None
-        assert reg.get_type("milestone") is not None
-
     def test_load_enabled_packs_override(self, filigree_dir: Path) -> None:
         """Explicit enabled_packs argument should override config selection."""
         reg = TemplateRegistry()
@@ -1531,7 +1487,6 @@ class TestTemplateLoading:
 
     def test_load_logs_quality_warnings(self, filigree_dir: Path, caplog: pytest.LogCaptureFixture) -> None:
         """Quality warnings should be logged during load (filigree-e71b54)."""
-        import logging
 
         # Create a template with a dead-end non-done state (quality warning)
         templates_dir = filigree_dir / "templates"
@@ -1570,7 +1525,6 @@ class TestTemplateLoading:
 
     def test_load_logs_done_state_outgoing_transition_warning(self, filigree_dir: Path, caplog: pytest.LogCaptureFixture) -> None:
         """Done-states with outgoing transitions should produce quality warning."""
-        import logging
 
         templates_dir = filigree_dir / "templates"
         templates_dir.mkdir()
@@ -1651,8 +1605,6 @@ class TestQualityCheckDoneOutgoing:
 
     def test_builtin_spike_concluded_warned(self) -> None:
         """spike.concluded (done) has outgoing transition to actioned — should warn."""
-        from filigree.templates_data import BUILT_IN_PACKS
-
         raw = BUILT_IN_PACKS["spike"]["types"]["spike"]
         tpl = TemplateRegistry.parse_type_template(raw)
         warnings = TemplateRegistry.check_type_template_quality(tpl)
@@ -1665,8 +1617,6 @@ class TestQualityCheckDoneOutgoing:
         The quality check only warns about done->done transitions, which are truly
         unreachable since close_issue() rejects issues already in a done state.
         """
-        from filigree.templates_data import BUILT_IN_PACKS
-
         raw = BUILT_IN_PACKS["release"]["types"]["release"]
         tpl = TemplateRegistry.parse_type_template(raw)
         warnings = TemplateRegistry.check_type_template_quality(tpl)

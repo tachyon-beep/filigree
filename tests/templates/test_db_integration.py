@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from filigree.core import FiligreeDB, write_config
 from tests._db_factory import make_db
 
@@ -136,3 +138,8 @@ class TestFiligreeDBTemplatesProperty:
         assert db.templates.get_type("task") is not None
         assert db.templates.get_type("milestone") is not None
         db.close()
+
+    def test_string_enabled_packs_raises_type_error(self, tmp_path: Path) -> None:
+        """FiligreeDB constructor must reject a bare string for enabled_packs."""
+        with pytest.raises(TypeError, match="bare string"):
+            FiligreeDB(tmp_path / "filigree.db", prefix="test", enabled_packs="core")  # type: ignore[arg-type]
