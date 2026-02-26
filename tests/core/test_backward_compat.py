@@ -1,4 +1,4 @@
-# tests/test_backward_compat.py
+# tests/core/test_backward_compat.py
 """Template integration tests — validates core behaviors work with templates.
 
 These tests lock in the guarantee that existing behavior is preserved when
@@ -10,12 +10,12 @@ Validates: WFT-AR-011, WFT-SR-015
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import pytest
 
 from filigree.core import FiligreeDB
+from tests._db_factory import make_db
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -25,14 +25,9 @@ from filigree.core import FiligreeDB
 @pytest.fixture
 def db(tmp_path: Path) -> FiligreeDB:
     """Standard FiligreeDB with core + planning packs enabled."""
-    filigree_dir = tmp_path / ".filigree"
-    filigree_dir.mkdir()
-    config = {"prefix": "test", "version": 1, "enabled_packs": ["core", "planning"]}
-    (filigree_dir / "config.json").write_text(json.dumps(config))
-    db = FiligreeDB(filigree_dir / "filigree.db", prefix="test")
-    db.initialize()
-    yield db
-    db.close()
+    d = make_db(tmp_path, packs=["core", "planning"])
+    yield d
+    d.close()
 
 
 # ---------------------------------------------------------------------------

@@ -8,13 +8,13 @@ lifecycle operations respect per-type state machines.
 from __future__ import annotations
 
 import json
-from collections.abc import Generator
 from pathlib import Path
 
 import pytest
 
 from filigree.core import FiligreeDB
 from filigree.templates import TransitionOption, ValidationResult
+from tests._db_factory import make_db
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -24,27 +24,15 @@ from filigree.templates import TransitionOption, ValidationResult
 @pytest.fixture
 def db(tmp_path: Path) -> FiligreeDB:
     """A FiligreeDB instance with templates loaded (core + planning packs enabled)."""
-    filigree_dir = tmp_path / ".filigree"
-    filigree_dir.mkdir()
-    config = {"prefix": "test", "version": 1, "enabled_packs": ["core", "planning"]}
-    (filigree_dir / "config.json").write_text(json.dumps(config))
-
-    db = FiligreeDB(filigree_dir / "filigree.db", prefix="test")
-    db.initialize()
-    yield db  # type: ignore[misc]
-    db.close()
+    d = make_db(tmp_path, packs=["core", "planning"])
+    yield d
+    d.close()
 
 
 @pytest.fixture
-def incident_db(tmp_path: Path) -> Generator[FiligreeDB, None, None]:
+def incident_db(tmp_path: Path) -> FiligreeDB:
     """FiligreeDB with incident pack enabled for hard-enforcement tests."""
-    filigree_dir = tmp_path / ".filigree"
-    filigree_dir.mkdir()
-    config = {"prefix": "test", "version": 1, "enabled_packs": ["core", "planning", "incident"]}
-    (filigree_dir / "config.json").write_text(json.dumps(config))
-
-    d = FiligreeDB(filigree_dir / "filigree.db", prefix="test")
-    d.initialize()
+    d = make_db(tmp_path, packs=["core", "planning", "incident"])
     yield d
     d.close()
 

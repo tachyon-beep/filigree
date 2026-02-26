@@ -1,34 +1,18 @@
-# tests/test_e2e_workflows.py
+# tests/workflows/test_e2e.py
 """End-to-end workflow tests for all workflow template packs.
 
 These tests exercise the full FiligreeDB lifecycle with real templates loaded,
 verifying that state machines, hard/soft enforcement, and field gates work
 correctly through the database layer.
+
+Pack-specific fixtures (db, req_db, roadmap_db, etc.) are in conftest.py.
 """
 
 from __future__ import annotations
 
-import json
-from pathlib import Path
-
 import pytest
 
 from filigree.core import FiligreeDB
-
-
-@pytest.fixture
-def db(tmp_path: Path) -> FiligreeDB:
-    """FiligreeDB with core + risk + spike packs enabled."""
-    filigree_dir = tmp_path / ".filigree"
-    filigree_dir.mkdir()
-    config = {"prefix": "test", "version": 1, "enabled_packs": ["core", "risk", "spike"]}
-    (filigree_dir / "config.json").write_text(json.dumps(config))
-
-    d = FiligreeDB(filigree_dir / "filigree.db", prefix="test")
-    d.initialize()
-    yield d
-    d.close()
-
 
 # ---------------------------------------------------------------------------
 # Risk workflow E2E
@@ -307,76 +291,6 @@ class TestCrossPackE2E:
 
         task_issue = db.get_issue(task.id)
         assert spike.id in task_issue.blocked_by
-
-
-# ---------------------------------------------------------------------------
-# Fixtures for Tier 3 packs
-# ---------------------------------------------------------------------------
-
-
-@pytest.fixture
-def req_db(tmp_path: Path) -> FiligreeDB:
-    """FiligreeDB with core + requirements packs enabled."""
-    filigree_dir = tmp_path / ".filigree"
-    filigree_dir.mkdir()
-    config = {"prefix": "test", "version": 1, "enabled_packs": ["core", "requirements"]}
-    (filigree_dir / "config.json").write_text(json.dumps(config))
-    d = FiligreeDB(filigree_dir / "filigree.db", prefix="test")
-    d.initialize()
-    yield d
-    d.close()
-
-
-@pytest.fixture
-def roadmap_db(tmp_path: Path) -> FiligreeDB:
-    """FiligreeDB with core + planning + roadmap packs enabled."""
-    filigree_dir = tmp_path / ".filigree"
-    filigree_dir.mkdir()
-    config = {"prefix": "test", "version": 1, "enabled_packs": ["core", "planning", "roadmap"]}
-    (filigree_dir / "config.json").write_text(json.dumps(config))
-    d = FiligreeDB(filigree_dir / "filigree.db", prefix="test")
-    d.initialize()
-    yield d
-    d.close()
-
-
-@pytest.fixture
-def incident_db(tmp_path: Path) -> FiligreeDB:
-    """FiligreeDB with core + incident packs enabled."""
-    filigree_dir = tmp_path / ".filigree"
-    filigree_dir.mkdir()
-    config = {"prefix": "test", "version": 1, "enabled_packs": ["core", "incident"]}
-    (filigree_dir / "config.json").write_text(json.dumps(config))
-    d = FiligreeDB(filigree_dir / "filigree.db", prefix="test")
-    d.initialize()
-    yield d
-    d.close()
-
-
-@pytest.fixture
-def debt_db(tmp_path: Path) -> FiligreeDB:
-    """FiligreeDB with core + debt packs enabled."""
-    filigree_dir = tmp_path / ".filigree"
-    filigree_dir.mkdir()
-    config = {"prefix": "test", "version": 1, "enabled_packs": ["core", "debt"]}
-    (filigree_dir / "config.json").write_text(json.dumps(config))
-    d = FiligreeDB(filigree_dir / "filigree.db", prefix="test")
-    d.initialize()
-    yield d
-    d.close()
-
-
-@pytest.fixture
-def release_db(tmp_path: Path) -> FiligreeDB:
-    """FiligreeDB with core + planning + release packs enabled."""
-    filigree_dir = tmp_path / ".filigree"
-    filigree_dir.mkdir()
-    config = {"prefix": "test", "version": 1, "enabled_packs": ["core", "planning", "release"]}
-    (filigree_dir / "config.json").write_text(json.dumps(config))
-    d = FiligreeDB(filigree_dir / "filigree.db", prefix="test")
-    d.initialize()
-    yield d
-    d.close()
 
 
 # ---------------------------------------------------------------------------
