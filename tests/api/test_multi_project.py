@@ -272,7 +272,7 @@ class TestMultiProjectRouting:
         assert alpha_resp.json()["prefix"] == "alpha"
         assert bravo_resp.json()["prefix"] == "bravo"
 
-    async def test_empty_store_returns_503(self, tmp_path: Path) -> None:
+    async def test_empty_store_returns_503(self) -> None:
         """A ProjectStore with 0 projects returns 503."""
         empty_store = ProjectStore()
         dash_module._project_store = empty_store
@@ -285,7 +285,7 @@ class TestMultiProjectRouting:
         finally:
             dash_module._project_store = None
 
-    async def test_empty_store_503_propagates_to_multiple_endpoints(self, tmp_path: Path) -> None:
+    async def test_empty_store_503_propagates_to_multiple_endpoints(self) -> None:
         """503 from _get_db() propagates to all project-scoped endpoints when no projects registered."""
         empty_store = ProjectStore()
         dash_module._project_store = empty_store

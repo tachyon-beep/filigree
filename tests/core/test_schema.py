@@ -917,7 +917,6 @@ class TestMigrateV2ToV3:
     @pytest.fixture
     def v2_db(self, tmp_path: Path) -> sqlite3.Connection:
         """Create a v2 database with scan_findings table (no suggestion/scan_run_id)."""
-        from filigree.db_schema import SCHEMA_V1_SQL
         from filigree.migrations import migrate_v1_to_v2
 
         conn = _make_db(tmp_path)
@@ -974,8 +973,6 @@ class TestMigrateV2ToV3:
         apply_pending_migrations(v2_db, 3)
 
         fresh = _make_db(tmp_path, "fresh.db")
-        from filigree.db_schema import SCHEMA_SQL
-
         fresh.executescript(SCHEMA_SQL)
         fresh.commit()
 
@@ -1232,13 +1229,9 @@ class TestFileMigration:
 
     def test_migration_from_v1(self, tmp_path: Path) -> None:
         """Simulate an existing v1 database that needs migration."""
-        import sqlite3
-
         db_path = tmp_path / "filigree.db"
         conn = sqlite3.connect(str(db_path))
         # Manually create only v1 tables (without file tables)
-        from filigree.db_schema import SCHEMA_V1_SQL
-
         conn.executescript(SCHEMA_V1_SQL)
         conn.execute("PRAGMA user_version = 1")
         conn.commit()

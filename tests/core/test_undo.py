@@ -1,4 +1,3 @@
-# tests/test_undo.py
 """Tests for the undo_last mechanism."""
 
 from __future__ import annotations

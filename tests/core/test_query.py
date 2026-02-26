@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sqlite3
 from unittest.mock import patch
 
 import pytest
@@ -36,9 +37,6 @@ class TestSearchFTSFallback:
 
     def test_non_fts_operational_error_propagates(self, db: FiligreeDB) -> None:
         """OperationalError unrelated to missing FTS5 must NOT be silently caught."""
-        import sqlite3
-        from unittest.mock import patch
-
         db.create_issue("Searchable item")
 
         original_execute = db.conn.execute

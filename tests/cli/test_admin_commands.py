@@ -742,7 +742,7 @@ class TestExportImportCli:
         # Import same data again without --merge → should fail cleanly
         result = runner.invoke(cli, ["import", export_path])
         assert result.exit_code != 0
-        assert "Import failed" in result.output or "Import failed" in (result.output + (result.output or ""))
+        assert "Import failed" in result.output
         # Must NOT contain a raw Python traceback
         assert "Traceback" not in (result.output or "")
 

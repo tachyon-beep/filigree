@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import sqlite3
+
 import pytest
 
 from filigree.core import FiligreeDB
@@ -163,8 +165,6 @@ class TestInvalidDepValidation:
 
     def test_nonexistent_dep_not_integrity_error(self, db: FiligreeDB) -> None:
         """The error should be ValueError, not sqlite3.IntegrityError."""
-        import sqlite3
-
         with pytest.raises(ValueError, match="Invalid dependency IDs"):
             db.create_issue("Bad deps 2", deps=["ghost-abc123"])
         # Explicitly ensure it's not an IntegrityError

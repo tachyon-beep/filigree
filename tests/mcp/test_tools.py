@@ -1836,7 +1836,7 @@ class TestScannerTools:
                     )
                 )
             assert "error" not in result, f"trigger_scan failed: {result}"
-            mock_fd.close.assert_called_once(), "scan_log_fd must be closed after Popen succeeds"
+            mock_fd.close.assert_called_once()  # scan_log_fd must be closed after Popen succeeds
         finally:
             target.unlink(missing_ok=True)
             mcp_mod._scan_cooldowns.clear()

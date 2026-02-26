@@ -90,7 +90,7 @@ class TestShowAndList:
     def test_show_issue(self, cli_in_project: tuple[CliRunner, Path]) -> None:
         runner, _ = cli_in_project
         result = runner.invoke(cli, ["create", "Show me"])
-        issue_id = result.output.split(":")[0].replace("Created ", "").strip()
+        issue_id = _extract_id(result.output)
         result = runner.invoke(cli, ["show", issue_id])
         assert result.exit_code == 0
         assert "Show me" in result.output
@@ -112,7 +112,7 @@ class TestShowAndList:
         runner, _ = cli_in_project
         runner.invoke(cli, ["create", "Open one"])
         r = runner.invoke(cli, ["create", "Close one"])
-        issue_id = r.output.split(":")[0].replace("Created ", "").strip()
+        issue_id = _extract_id(r.output)
         runner.invoke(cli, ["close", issue_id])
         result = runner.invoke(cli, ["list", "--status", "open"])
         assert "1 issues" in result.output
@@ -122,7 +122,7 @@ class TestUpdateAndClose:
     def test_update_status(self, cli_in_project: tuple[CliRunner, Path]) -> None:
         runner, _ = cli_in_project
         r = runner.invoke(cli, ["create", "Update me"])
-        issue_id = r.output.split(":")[0].replace("Created ", "").strip()
+        issue_id = _extract_id(r.output)
         result = runner.invoke(cli, ["update", issue_id, "--status", "in_progress"])
         assert result.exit_code == 0
         assert "in_progress" in result.output
@@ -135,7 +135,7 @@ class TestUpdateAndClose:
     def test_close_issue(self, cli_in_project: tuple[CliRunner, Path]) -> None:
         runner, _ = cli_in_project
         r = runner.invoke(cli, ["create", "Close me"])
-        issue_id = r.output.split(":")[0].replace("Created ", "").strip()
+        issue_id = _extract_id(r.output)
         result = runner.invoke(cli, ["close", issue_id])
         assert result.exit_code == 0
         assert "Closed" in result.output
@@ -143,7 +143,7 @@ class TestUpdateAndClose:
     def test_close_with_reason(self, cli_in_project: tuple[CliRunner, Path]) -> None:
         runner, _ = cli_in_project
         r = runner.invoke(cli, ["create", "Close with reason"])
-        issue_id = r.output.split(":")[0].replace("Created ", "").strip()
+        issue_id = _extract_id(r.output)
         result = runner.invoke(cli, ["close", issue_id, "--reason", "done"])
         assert result.exit_code == 0
 
@@ -167,6 +167,7 @@ class TestReopen:
     def test_reopen_not_found(self, cli_in_project: tuple[CliRunner, Path]) -> None:
         runner, _ = cli_in_project
         result = runner.invoke(cli, ["reopen", "nonexistent-abc"])
+        assert result.exit_code == 1
         assert "Not found" in result.output
 
 

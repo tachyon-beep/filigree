@@ -22,9 +22,9 @@ class TestReadyAndBlocked:
     def test_blocked(self, cli_in_project: tuple[CliRunner, Path]) -> None:
         runner, _ = cli_in_project
         r1 = runner.invoke(cli, ["create", "Blocked"])
-        id1 = r1.output.split(":")[0].replace("Created ", "").strip()
+        id1 = _extract_id(r1.output)
         r2 = runner.invoke(cli, ["create", "Blocker"])
-        id2 = r2.output.split(":")[0].replace("Created ", "").strip()
+        id2 = _extract_id(r2.output)
         runner.invoke(cli, ["add-dep", id1, id2])
         result = runner.invoke(cli, ["blocked"])
         assert result.exit_code == 0
@@ -35,9 +35,9 @@ class TestDependencies:
     def test_dep_add_and_remove(self, cli_in_project: tuple[CliRunner, Path]) -> None:
         runner, _ = cli_in_project
         r1 = runner.invoke(cli, ["create", "A"])
-        id1 = r1.output.split(":")[0].replace("Created ", "").strip()
+        id1 = _extract_id(r1.output)
         r2 = runner.invoke(cli, ["create", "B"])
-        id2 = r2.output.split(":")[0].replace("Created ", "").strip()
+        id2 = _extract_id(r2.output)
 
         result = runner.invoke(cli, ["add-dep", id1, id2])
         assert result.exit_code == 0
@@ -99,9 +99,9 @@ class TestCriticalPathCli:
     def test_critical_path_with_chain(self, cli_in_project: tuple[CliRunner, Path]) -> None:
         runner, _ = cli_in_project
         r1 = runner.invoke(cli, ["create", "Blocker"])
-        id1 = r1.output.split(":")[0].strip().split()[-1]
+        id1 = _extract_id(r1.output)
         r2 = runner.invoke(cli, ["create", "Blocked"])
-        id2 = r2.output.split(":")[0].strip().split()[-1]
+        id2 = _extract_id(r2.output)
         runner.invoke(cli, ["add-dep", id2, id1])
         result = runner.invoke(cli, ["critical-path"])
         assert result.exit_code == 0

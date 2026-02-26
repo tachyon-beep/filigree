@@ -19,7 +19,7 @@ class TestDashboardIndex:
         assert "text/html" in resp.headers["content-type"]
         assert "Filigree" in resp.text
 
-    async def test_html_file_exists(self) -> None:
+    def test_html_file_exists(self) -> None:
         assert (STATIC_DIR / "dashboard.html").exists()
 
     async def test_graph_v2_controls_present(self, client: AsyncClient) -> None:
@@ -118,7 +118,7 @@ class TestStatsAPI:
 
 
 class TestIssuesAPI:
-    async def test_list_all_issues(self, client: AsyncClient, dashboard_db: FiligreeDB) -> None:
+    async def test_list_all_issues(self, client: AsyncClient) -> None:
         resp = await client.get("/api/issues")
         assert resp.status_code == 200
         data = resp.json()
@@ -1163,22 +1163,24 @@ class TestEtherealTracerBullet:
 
         # Wire up dashboard
         dash_module._db = dashboard_db
-        app = create_app()
-        transport = ASGITransport(app=app)
-        async with AsyncClient(transport=transport, base_url="http://test") as client:
-            # Verify issues endpoint returns our issue
-            resp = await client.get("/api/issues")
-            assert resp.status_code == 200
-            issues = resp.json()
-            assert any(i["title"] == "Tracer bullet test" for i in issues)
+        try:
+            app = create_app()
+            transport = ASGITransport(app=app)
+            async with AsyncClient(transport=transport, base_url="http://test") as client:
+                # Verify issues endpoint returns our issue
+                resp = await client.get("/api/issues")
+                assert resp.status_code == 200
+                issues = resp.json()
+                assert any(i["title"] == "Tracer bullet test" for i in issues)
 
-            # Verify /api/projects returns single entry with empty key (ethereal)
-            proj_resp = await client.get("/api/projects")
-            assert proj_resp.status_code == 200
-            proj_data = proj_resp.json()
-            assert len(proj_data) == 1
-            assert proj_data[0]["key"] == ""
+                # Verify /api/projects returns single entry with empty key (ethereal)
+                proj_resp = await client.get("/api/projects")
+                assert proj_resp.status_code == 200
+                proj_data = proj_resp.json()
+                assert len(proj_data) == 1
+                assert proj_data[0]["key"] == ""
 
-            # Verify server-only endpoints are gone
-            assert (await client.post("/api/register", json={})).status_code in (404, 405)
-        dash_module._db = None
+                # Verify server-only endpoints are gone
+                assert (await client.post("/api/register", json={})).status_code in (404, 405)
+        finally:
+            dash_module._db = None

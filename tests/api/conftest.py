@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Generator
 from pathlib import Path
 
 import pytest
@@ -29,7 +29,7 @@ def dashboard_db(populated_db: FiligreeDB) -> FiligreeDB:
 
 
 @pytest.fixture
-async def client(dashboard_db: FiligreeDB, tmp_path: Path) -> AsyncIterator[AsyncClient]:
+async def client(dashboard_db: FiligreeDB) -> AsyncIterator[AsyncClient]:
     """Create a test client backed by a single-project DB (ethereal mode)."""
     dash_module._db = dashboard_db
     app = create_app()
@@ -53,13 +53,12 @@ def _create_project(base: Path, name: str, prefix: str, issue_count: int) -> Pat
 
 
 @pytest.fixture
-def project_store(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> ProjectStore:
+def project_store(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Generator[ProjectStore, None, None]:
     """Create a ProjectStore with two temp projects (alpha=1 issue, bravo=2 issues)."""
     config_dir = tmp_path / ".config" / "filigree"
     config_dir.mkdir(parents=True)
     monkeypatch.setattr("filigree.server.SERVER_CONFIG_DIR", config_dir)
     monkeypatch.setattr("filigree.server.SERVER_CONFIG_FILE", config_dir / "server.json")
-    monkeypatch.setattr("filigree.dashboard.ProjectStore.__init__", ProjectStore.__init__)
 
     alpha_dir = _create_project(tmp_path, "proj-alpha", "alpha", 1)
     bravo_dir = _create_project(tmp_path, "proj-bravo", "bravo", 2)
