@@ -167,7 +167,7 @@ testpaths = ["tests"]
 addopts = "-ra -q"
 asyncio_mode = "auto"
 markers = [
-    "slow: tests that take >1s",
+    "slow: tests that take >0.3s (subprocess, file locks, large data)",
     "integration: tests spanning multiple modules",
 ]
 

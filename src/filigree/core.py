@@ -174,7 +174,6 @@ def write_atomic(path: Path, content: str) -> None:
         raise
 
 
-
 def _seed_builtin_packs(conn: sqlite3.Connection, now: str) -> int:
     """Seed built-in packs and type templates into the database.
 
