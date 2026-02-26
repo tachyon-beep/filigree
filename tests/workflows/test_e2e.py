@@ -22,7 +22,7 @@ from filigree.core import FiligreeDB
 class TestRiskWorkflowE2E:
     """Full lifecycle tests for risk type."""
 
-    def test_full_mitigation_lifecycle(self, db: FiligreeDB) -> None:
+    def test_full_risk_lifecycle(self, db: FiligreeDB) -> None:
         """identified -> assessing -> assessed -> mitigating -> mitigated."""
         risk = db.create_issue("Data loss risk", type="risk")
         assert risk.status == "identified"

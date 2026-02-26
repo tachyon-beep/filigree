@@ -1,6 +1,6 @@
 """CLI tests for `filigree server` subcommands.
 
-Covers: filigree-577d66 (test gap — server CLI wiring)
+Covers: start, stop, status, register, unregister.
 All server functions are mocked; these test CLI arg parsing, exit codes, and output.
 """
 

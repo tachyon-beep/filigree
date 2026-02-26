@@ -16,8 +16,6 @@ from filigree.db_workflow import WorkflowMixin
 # MCP tool module split tests
 # ---------------------------------------------------------------------------
 
-_DOMAIN_MODULES = ("issues", "planning", "files", "workflow", "meta")
-
 
 def test_mcp_tools_package_exists() -> None:
     """All 5 domain modules import and expose register()."""

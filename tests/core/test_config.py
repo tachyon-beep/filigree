@@ -1,4 +1,4 @@
-# tests/test_config_packs.py
+# tests/core/test_config.py
 """Tests for config.json enabled_packs support."""
 
 from __future__ import annotations

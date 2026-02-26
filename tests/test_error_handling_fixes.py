@@ -119,7 +119,7 @@ class TestDashboardMalformedJSON:
 class TestDashboardHandlersAreAsync:
     """All endpoints must be async to avoid thread pool dispatch and shared-DB races.
 
-    Supersedes the old sync-handler test. See TestDashboardConcurrency in test_dashboard.py
+    Supersedes the old sync-handler test. See TestDashboardConcurrency in tests/api/test_api.py
     for the full concurrency safety test (filigree-4b8e41).
     """
 

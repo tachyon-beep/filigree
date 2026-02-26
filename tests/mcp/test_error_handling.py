@@ -31,6 +31,16 @@ class TestMCPCommentErrors:
         assert data["code"] == "not_found"
         assert "nonexistent-xyz" in data["error"]
 
+    async def test_add_comment_still_works(self, mcp_db: FiligreeDB) -> None:
+        """Verify normal add_comment still works after the fix."""
+        issue = mcp_db.create_issue("Commentable")
+        result = await call_tool(
+            "add_comment",
+            {"issue_id": issue.id, "text": "Hello"},
+        )
+        data = _parse(result)
+        assert data["status"] == "ok"
+
 
 class TestMCPLabelErrors:
     """MCP add_label and remove_label on missing issues."""
@@ -62,13 +72,3 @@ class TestMCPLabelErrors:
         )
         data = _parse(result)
         assert data["status"] == "added"
-
-    async def test_add_comment_still_works(self, mcp_db: FiligreeDB) -> None:
-        """Verify normal add_comment still works after the fix."""
-        issue = mcp_db.create_issue("Commentable")
-        result = await call_tool(
-            "add_comment",
-            {"issue_id": issue.id, "text": "Hello"},
-        )
-        data = _parse(result)
-        assert data["status"] == "ok"
