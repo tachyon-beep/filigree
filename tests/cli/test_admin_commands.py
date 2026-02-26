@@ -267,6 +267,36 @@ class TestDoctorCli:
         result = runner.invoke(cli, ["doctor", "--fix"])
         assert result.exit_code == 0
 
+    def test_doctor_fix_reports_manual_intervention_on_fixer_failure(
+        self, cli_in_project: tuple[CliRunner, Path], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """When a fixer returns ok=False, summary must show manual intervention count."""
+        runner, _ = cli_in_project
+
+        from filigree.install_support.doctor import CheckResult
+
+        # Two fixable failures: .gitignore (will fail to fix) and CLAUDE.md (will succeed)
+        mock_results = [
+            CheckResult(".gitignore", False, "missing", fix_hint="hint"),
+            CheckResult("CLAUDE.md", False, "missing", fix_hint="hint"),
+        ]
+        monkeypatch.setattr("filigree.install.run_doctor", lambda **_kw: mock_results)
+        monkeypatch.setattr(
+            "filigree.install.ensure_gitignore",
+            lambda _root: (False, "Permission denied"),
+        )
+        monkeypatch.setattr(
+            "filigree.install.inject_instructions",
+            lambda _path: (True, "Injected"),
+        )
+
+        result = runner.invoke(cli, ["doctor", "--fix"])
+
+        assert "!! .gitignore: Permission denied" in result.output
+        assert "OK CLAUDE.md: Injected" in result.output
+        assert "Fixed 1/2 issues" in result.output
+        assert "1 require manual intervention" in result.output
+
 
 class TestShowDetailedOutput:
     """Cover the human-readable show output branches."""
