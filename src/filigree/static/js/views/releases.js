@@ -15,6 +15,16 @@ let loadingReleaseIds = new Set();
 let errorReleaseIds = new Set();
 let _pendingFocusTarget = null;
 
+function scrollToReleaseCard(cardId) {
+  const el = document.getElementById(cardId);
+  if (!el) return;
+  el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  el.classList.remove('changed-flash');
+  void el.offsetWidth;
+  el.classList.add('changed-flash');
+}
+window._scrollToReleaseCard = scrollToReleaseCard;
+
 // --- Color helpers ---
 
 function statusBorderColor(status) {
@@ -25,7 +35,7 @@ function statusBorderColor(status) {
     case "frozen":
     case "testing":
     case "staged":
-      return "#F59E0B";
+      return document.body.dataset.theme === "light" ? "#B45309" : "#F59E0B";
     case "released":
       return "#10B981";
     case "cancelled":
@@ -89,7 +99,7 @@ function renderTreeNode(node, level, releaseId) {
   const pct = node.progress?.pct ?? 0;
 
   let html = '';
-  html += '<li role="treeitem" aria-level="' + (level + 1) + '"';
+  html += '<li role="treeitem" aria-level="' + (maxLevel + 1) + '"';
   if (hasChildren) {
     html += ' aria-expanded="' + (!isCollapsed) + '"';
   }
@@ -173,7 +183,7 @@ function renderTree(tree, releaseId) {
   let html = '';
   html += '<div class="flex items-center gap-2 mb-2">';
   html += '<button class="text-xs px-2 py-1 rounded bg-overlay bg-overlay-hover" ' +
-    'style="min-height:36px" ' +
+    'style="min-height:44px" ' +
     'onclick="window._collapseAllReleaseTree(\'' + escJsSingle(releaseId) + '\')">Collapse all</button>';
   html += '</div>';
 
@@ -335,6 +345,36 @@ function formatChildSummary(summary) {
   return parts.join(', ');
 }
 
+function formatTargetDate(isoDate) {
+  if (!isoDate) return '';
+  const target = new Date(isoDate);
+  if (isNaN(target.getTime())) return escHtml(isoDate);
+  const now = new Date();
+  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const targetStart = new Date(target.getFullYear(), target.getMonth(), target.getDate());
+  const diffDays = Math.round((targetStart - todayStart) / (1000 * 60 * 60 * 24));
+
+  const formatted = target.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+  let relative;
+  let color = 'var(--text-muted)';
+
+  if (diffDays < 0) {
+    const absDays = Math.abs(diffDays);
+    relative = absDays === 1 ? '1 day overdue' : absDays + ' days overdue';
+    color = '#EF4444';
+  } else if (diffDays === 0) {
+    relative = 'today';
+    color = '#F59E0B';
+  } else if (diffDays <= 7) {
+    relative = diffDays === 1 ? 'tomorrow' : 'in ' + diffDays + ' days';
+    color = '#F59E0B';
+  } else {
+    relative = 'in ' + diffDays + ' days';
+  }
+
+  return '<span style="color:' + color + '">Target: ' + escHtml(formatted) + ' (' + escHtml(relative) + ')</span>';
+}
+
 // --- Card rendering ---
 
 function renderReleaseCard(release) {
@@ -391,14 +431,14 @@ function renderReleaseCard(release) {
 
   // Target date
   if (release.target_date) {
-    html += '<div class="text-xs mt-1" style="color:var(--text-muted)">Target: ' + escHtml(release.target_date) + '</div>';
+    html += '<div class="text-xs mt-1">' + formatTargetDate(release.target_date) + '</div>';
   }
 
   // Blocks / Blocked by links
   if (release.blocks && release.blocks.length > 0) {
     html += '<div class="text-xs mt-1" style="color:var(--text-muted)">Blocks: ';
     html += release.blocks.map((b) =>
-      '<a href="#" class="hover:underline" style="color:var(--accent)" onclick="event.preventDefault();document.getElementById(\'release-card-' + escJsSingle(b.id) + '\')?.scrollIntoView({behavior:\'smooth\',block:\'center\'})">' + escHtml(b.title) + '</a>'
+      '<a href="#" class="hover:underline" style="color:var(--accent)" onclick="event.preventDefault();window._scrollToReleaseCard(\'release-card-' + escJsSingle(b.id) + '\')">' + escHtml(b.title) + '</a>'
     ).join(', ');
     html += '</div>';
   }
@@ -406,7 +446,7 @@ function renderReleaseCard(release) {
   if (release.blocked_by && release.blocked_by.length > 0) {
     html += '<div class="text-xs mt-1" style="color:var(--text-muted)">Blocked by: ';
     html += release.blocked_by.map((b) =>
-      '<a href="#" class="hover:underline" style="color:var(--accent)" onclick="event.preventDefault();document.getElementById(\'release-card-' + escJsSingle(b.id) + '\')?.scrollIntoView({behavior:\'smooth\',block:\'center\'})">' + escHtml(b.title) + '</a>'
+      '<a href="#" class="hover:underline" style="color:var(--accent)" onclick="event.preventDefault();window._scrollToReleaseCard(\'release-card-' + escJsSingle(b.id) + '\')">' + escHtml(b.title) + '</a>'
     ).join(', ');
     html += '</div>';
   }
@@ -564,7 +604,7 @@ export async function loadReleases() {
     container.innerHTML =
       '<div class="p-6 text-center" style="color:var(--text-muted)">' +
       '<div class="font-medium mb-2" style="color:var(--text-primary)">No active releases.</div>' +
-      '<div>Show completed releases to see release history.</div></div>';
+      '<div>Use the \u201CShow released &amp; cancelled\u201D checkbox above to view release history.</div></div>';
     return;
   }
 
