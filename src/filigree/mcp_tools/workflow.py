@@ -236,7 +236,7 @@ async def _handle_get_valid_transitions(arguments: dict[str, Any]) -> list[TextC
         transitions = tracker.get_valid_transitions(arguments["issue_id"])
         issue = tracker.get_issue(arguments["issue_id"])
         tpl_data = tracker.get_template(issue.type)
-        field_schemas = {f["name"]: f for f in (tpl_data or {}).get("fields_schema", [])}
+        field_schemas = {f["name"]: f for f in tpl_data["fields_schema"]} if tpl_data else {}
         return _text(
             [
                 {

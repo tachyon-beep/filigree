@@ -190,7 +190,8 @@ async def _handle_get_plan(arguments: dict[str, Any]) -> list[TextContent]:
 
     tracker = _get_db()
     try:
-        plan_data = tracker.get_plan(arguments["milestone_id"])
+        plan_tree = tracker.get_plan(arguments["milestone_id"])
+        plan_data: dict[str, Any] = dict(plan_tree)
         total = plan_data.get("total_steps", 0)
         completed = plan_data.get("completed_steps", 0)
         plan_data["progress_pct"] = round(completed / total * 100, 1) if total > 0 else 0.0

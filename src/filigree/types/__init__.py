@@ -12,18 +12,78 @@ from filigree.types.core import (
     ProjectConfig,
     ScanFindingDict,
 )
-
-# Future domain modules — uncomment as Tasks 1B/1C populate them:
-# from filigree.types.files import ...
-# from filigree.types.events import ...
-# from filigree.types.planning import ...
-# from filigree.types.workflow import ...
+from filigree.types.events import (
+    EventRecord,
+    EventRecordWithTitle,
+    UndoFailure,
+    UndoResult,
+    UndoSuccess,
+)
+from filigree.types.files import (
+    CleanStaleResult,
+    FileAssociation,
+    FileDetail,
+    FileHotspot,
+    FindingsSummary,
+    GlobalFindingsStats,
+    HotspotFileRef,
+    IssueFileAssociation,
+    ScanIngestResult,
+    ScanRunRecord,
+    SeverityBreakdown,
+)
+from filigree.types.planning import (
+    CommentRecord,
+    CriticalPathNode,
+    DependencyRecord,
+    FlowMetrics,
+    PlanPhase,
+    PlanTree,
+    StatsResult,
+    TypeMetrics,
+)
+from filigree.types.workflow import (
+    FieldSchemaInfo,
+    StateInfo,
+    TemplateInfo,
+    TemplateListItem,
+    TransitionInfo,
+)
 
 __all__ = [
+    "CleanStaleResult",
+    "CommentRecord",
+    "CriticalPathNode",
+    "DependencyRecord",
+    "EventRecord",
+    "EventRecordWithTitle",
+    "FieldSchemaInfo",
+    "FileAssociation",
+    "FileDetail",
+    "FileHotspot",
     "FileRecordDict",
+    "FindingsSummary",
+    "FlowMetrics",
+    "GlobalFindingsStats",
+    "HotspotFileRef",
     "ISOTimestamp",
     "IssueDict",
+    "IssueFileAssociation",
     "PaginatedResult",
+    "PlanPhase",
+    "PlanTree",
     "ProjectConfig",
     "ScanFindingDict",
+    "ScanIngestResult",
+    "ScanRunRecord",
+    "SeverityBreakdown",
+    "StateInfo",
+    "StatsResult",
+    "TemplateInfo",
+    "TemplateListItem",
+    "TransitionInfo",
+    "TypeMetrics",
+    "UndoFailure",
+    "UndoResult",
+    "UndoSuccess",
 ]

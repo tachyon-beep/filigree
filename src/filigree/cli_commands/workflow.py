@@ -31,8 +31,8 @@ def templates(ctx: click.Context, issue_type: str | None) -> None:
                 req = " (required)" if f.get("required") else ""
                 click.echo(f"    {f['name']}: {f['type']}{req} — {f['description']}")
         else:
-            for tpl in db.list_templates():
-                click.echo(f"  {tpl['type']:<15} {tpl['display_name']}")
+            for item in db.list_templates():
+                click.echo(f"  {item['type']:<15} {item['display_name']}")
 
 
 @templates.command("reload")

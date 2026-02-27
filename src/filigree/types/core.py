@@ -28,6 +28,8 @@ class PaginatedResult(TypedDict):
 
 
 class IssueDict(TypedDict):
+    """Shape of Issue.to_dict() return value."""
+
     id: str
     title: str
     status: str
@@ -50,6 +52,8 @@ class IssueDict(TypedDict):
 
 
 class FileRecordDict(TypedDict):
+    """Shape of FileRecord.to_dict() return value."""
+
     id: str
     path: str
     language: str
@@ -60,6 +64,8 @@ class FileRecordDict(TypedDict):
 
 
 class ScanFindingDict(TypedDict):
+    """Shape of ScanFinding.to_dict() return value."""
+
     id: str
     file_id: str
     severity: str

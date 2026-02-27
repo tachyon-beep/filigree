@@ -386,7 +386,7 @@ def create_router() -> Any:
             truncated = True
 
         visible_ids = {node["id"] for node in filtered_nodes}
-        filtered_edges = _filter_graph_edges(deps, visible_ids, critical_path_ids)
+        filtered_edges = _filter_graph_edges([dict(d) for d in deps], visible_ids, critical_path_ids)
 
         total_edges_before_limit = len(filtered_edges)
         if len(filtered_edges) > gp.edge_limit:
@@ -428,9 +428,9 @@ def create_router() -> Any:
 
     @router.get("/stats")
     async def api_stats(db: FiligreeDB = Depends(_get_db)) -> JSONResponse:
-        stats = db.get_stats()
-        stats["prefix"] = db.prefix
-        return JSONResponse(stats)
+        stats_data: dict[str, Any] = dict(db.get_stats())
+        stats_data["prefix"] = db.prefix
+        return JSONResponse(stats_data)
 
     @router.get("/metrics")
     async def api_metrics(days: int = 30, db: FiligreeDB = Depends(_get_db)) -> JSONResponse:
