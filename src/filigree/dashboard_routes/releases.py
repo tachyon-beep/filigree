@@ -37,6 +37,7 @@ def _semver_sort_key(release: dict[str, Any]) -> tuple[float, int, int]:
     # Fallback: after semver releases, before future
     return (float("inf") - 1, 0, 0)
 
+
 # ---------------------------------------------------------------------------
 # Router factory
 # ---------------------------------------------------------------------------

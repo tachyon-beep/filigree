@@ -9,9 +9,10 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from filigree.db_base import DBMixinProtocol, StatusCategory, _now_iso
+from filigree.types.planning import CommentRecord, StatsResult
 
 
 class MetaMixin(DBMixinProtocol):
@@ -42,12 +43,12 @@ class MetaMixin(DBMixinProtocol):
         self.conn.commit()
         return cursor.lastrowid  # type: ignore[return-value]
 
-    def get_comments(self, issue_id: str) -> list[dict[str, Any]]:
+    def get_comments(self, issue_id: str) -> list[CommentRecord]:
         rows = self.conn.execute(
             "SELECT id, author, text, created_at FROM comments WHERE issue_id = ? ORDER BY created_at",
             (issue_id,),
         ).fetchall()
-        return [dict(r) for r in rows]
+        return cast(list[CommentRecord], [dict(r) for r in rows])
 
     # -- Labels --------------------------------------------------------------
 
@@ -70,7 +71,7 @@ class MetaMixin(DBMixinProtocol):
 
     # -- Stats ---------------------------------------------------------------
 
-    def get_stats(self) -> dict[str, Any]:
+    def get_stats(self) -> StatsResult:
         by_status = {}
         for row in self.conn.execute("SELECT status, COUNT(*) as cnt FROM issues GROUP BY status").fetchall():
             by_status[row["status"]] = row["cnt"]

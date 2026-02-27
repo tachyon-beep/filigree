@@ -8,9 +8,10 @@ Python's MRO when composed into ``FiligreeDB``.
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from filigree.db_base import DBMixinProtocol, _now_iso
+from filigree.types.events import EventRecord, EventRecordWithTitle, UndoResult
 
 if TYPE_CHECKING:
     from filigree.db_base import StatusCategory
@@ -66,14 +67,14 @@ class EventsMixin(DBMixinProtocol):
             (issue_id, event_type, actor, old_value, new_value, comment, _now_iso()),
         )
 
-    def get_recent_events(self, limit: int = 20) -> list[dict[str, Any]]:
+    def get_recent_events(self, limit: int = 20) -> list[EventRecordWithTitle]:
         rows = self.conn.execute(
             "SELECT e.*, i.title as issue_title FROM events e JOIN issues i ON e.issue_id = i.id ORDER BY e.created_at DESC LIMIT ?",
             (limit,),
         ).fetchall()
-        return [dict(r) for r in rows]
+        return cast(list[EventRecordWithTitle], [dict(r) for r in rows])
 
-    def get_events_since(self, since: str, *, limit: int = 100) -> list[dict[str, Any]]:
+    def get_events_since(self, since: str, *, limit: int = 100) -> list[EventRecordWithTitle]:
         """Get events since a given ISO timestamp, ordered chronologically."""
         rows = self.conn.execute(
             "SELECT e.*, i.title as issue_title FROM events e "
@@ -82,18 +83,18 @@ class EventsMixin(DBMixinProtocol):
             "ORDER BY e.created_at ASC LIMIT ?",
             (since, limit),
         ).fetchall()
-        return [dict(r) for r in rows]
+        return cast(list[EventRecordWithTitle], [dict(r) for r in rows])
 
-    def get_issue_events(self, issue_id: str, *, limit: int = 50) -> list[dict[str, Any]]:
+    def get_issue_events(self, issue_id: str, *, limit: int = 50) -> list[EventRecord]:
         """Get events for a specific issue, newest first."""
         self.get_issue(issue_id)  # raises KeyError if not found
         rows = self.conn.execute(
             "SELECT * FROM events WHERE issue_id = ? ORDER BY created_at DESC, id DESC LIMIT ?",
             (issue_id, limit),
         ).fetchall()
-        return [dict(r) for r in rows]
+        return cast(list[EventRecord], [dict(r) for r in rows])
 
-    def undo_last(self, issue_id: str, *, actor: str = "") -> dict[str, Any]:
+    def undo_last(self, issue_id: str, *, actor: str = "") -> UndoResult:
         """Undo the most recent reversible event for an issue.
 
         Returns dict with 'undone' bool and details. Only reverses the single
@@ -220,7 +221,7 @@ class EventsMixin(DBMixinProtocol):
             "undone": True,
             "event_type": event_type,
             "event_id": event_id,
-            "issue": self.get_issue(issue_id).to_dict(),
+            "issue": cast(dict[str, Any], self.get_issue(issue_id).to_dict()),
         }
 
     # -- Archival / Compaction ------------------------------------------------

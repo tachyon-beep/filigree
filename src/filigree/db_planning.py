@@ -10,9 +10,10 @@ from __future__ import annotations
 import json
 import logging
 from collections import deque
-from typing import TYPE_CHECKING, Any, TypedDict
+from typing import TYPE_CHECKING, Any, TypedDict, cast
 
 from filigree.db_base import DBMixinProtocol, _now_iso
+from filigree.types.planning import CriticalPathNode, DependencyRecord, PlanTree
 
 if TYPE_CHECKING:
     from filigree.core import Issue
@@ -156,7 +157,7 @@ class PlanningMixin(DBMixinProtocol):
         self.conn.commit()
         return True
 
-    def get_all_dependencies(self) -> list[dict[str, str]]:
+    def get_all_dependencies(self) -> list[DependencyRecord]:
         rows = self.conn.execute("SELECT issue_id, depends_on_id, type FROM dependencies").fetchall()
         return [{"from": r["issue_id"], "to": r["depends_on_id"], "type": r["type"]} for r in rows]
 
@@ -213,7 +214,7 @@ class PlanningMixin(DBMixinProtocol):
 
     # -- Critical path -------------------------------------------------------
 
-    def get_critical_path(self) -> list[dict[str, Any]]:
+    def get_critical_path(self) -> list[CriticalPathNode]:
         """Compute the longest dependency chain among non-done issues.
 
         Uses topological-order dynamic programming on the open-issue dependency DAG.
@@ -274,11 +275,11 @@ class PlanningMixin(DBMixinProtocol):
             current = pred[current]
         path.reverse()
 
-        return [info[nid] for nid in path]
+        return cast(list[CriticalPathNode], [info[nid] for nid in path])
 
     # -- Plan tree -----------------------------------------------------------
 
-    def get_plan(self, milestone_id: str) -> dict[str, Any]:
+    def get_plan(self, milestone_id: str) -> PlanTree:
         """Get milestone->phase->step tree with progress stats."""
         milestone = self.get_issue(milestone_id)
 
@@ -311,7 +312,7 @@ class PlanningMixin(DBMixinProtocol):
             result["total_steps"] += len(steps)
             result["completed_steps"] += completed
 
-        return result
+        return cast(PlanTree, result)
 
     def create_plan(
         self,
@@ -319,7 +320,7 @@ class PlanningMixin(DBMixinProtocol):
         phases: list[dict[str, Any]],
         *,
         actor: str = "",
-    ) -> dict[str, Any]:
+    ) -> PlanTree:
         """Create a full milestone -> phase -> step hierarchy in one transaction.
 
         Args:
@@ -527,7 +528,7 @@ class PlanningMixin(DBMixinProtocol):
                 }
             )
         # Group nodes: epics/milestones first, then loose items (tasks, bugs, etc.)
-        nodes.sort(key=lambda n: (0 if n["issue"].get("type") in ("epic", "milestone") else 1))
+        nodes.sort(key=lambda n: 0 if n["issue"].get("type") in ("epic", "milestone") else 1)
         return nodes
 
     def _progress_from_subtree(self, nodes: list[TreeNode]) -> ProgressDict:

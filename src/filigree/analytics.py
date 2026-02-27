@@ -11,6 +11,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from filigree.core import FiligreeDB
+from filigree.types.planning import FlowMetrics, TypeMetrics
 
 
 def _parse_iso(ts: str) -> datetime | None:
@@ -123,7 +124,7 @@ def lead_time(
     return (closed - created).total_seconds() / 3600
 
 
-def get_flow_metrics(db: FiligreeDB, *, days: int = 30) -> dict[str, Any]:
+def get_flow_metrics(db: FiligreeDB, *, days: int = 30) -> FlowMetrics:
     """Compute aggregate flow metrics for issues closed within the last N days.
 
     Args:
@@ -180,7 +181,7 @@ def get_flow_metrics(db: FiligreeDB, *, days: int = 30) -> dict[str, Any]:
         if lt is not None:
             lead_times.append(lt)
 
-    type_metrics: dict[str, dict[str, Any]] = {}
+    type_metrics: dict[str, TypeMetrics] = {}
     for issue_type, times in by_type.items():
         type_metrics[issue_type] = {
             "avg_cycle_time_hours": round(sum(times) / len(times), 1) if times else None,
