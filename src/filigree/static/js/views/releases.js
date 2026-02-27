@@ -80,12 +80,12 @@ function renderProgressBar(pct, name) {
 function renderTreeNode(node, level, releaseId) {
   const maxLevel = Math.min(level, 3);
   const indent = maxLevel * 24; // 24px per level (ml-6 equivalent)
-  const nodeId = node.id;
+  const nodeId = node.issue.id;
   const safeId = escJsSingle(nodeId);
   const isLeaf = !node.children || node.children.length === 0;
   const isCollapsed = collapsedNodeIds.has(nodeId);
   const hasChildren = !isLeaf;
-  const pct = node.progress_pct != null ? node.progress_pct : 0;
+  const pct = node.progress?.pct ?? 0;
 
   let html = '';
   html += '<li role="treeitem" aria-level="' + (level + 1) + '"';
@@ -109,22 +109,22 @@ function renderTreeNode(node, level, releaseId) {
     html += '<button class="text-xs flex items-center justify-center cursor-pointer" ' +
       'style="width:44px;height:44px;min-width:44px;min-height:44px;background:none;border:none;color:var(--text-secondary)" ' +
       'onclick="event.stopPropagation();window._toggleReleaseTreeNode(\'' + safeId + '\',\'' + escJsSingle(releaseId) + '\')" ' +
-      'aria-label="' + (isCollapsed ? 'Expand' : 'Collapse') + ' ' + escHtml(node.title || nodeId) + '">' +
+      'aria-label="' + (isCollapsed ? 'Expand' : 'Collapse') + ' ' + escHtml(node.issue.title || nodeId) + '">' +
       arrow + '</button>';
   } else {
     // Leaf — status badge inline
     html += '<span style="width:44px;min-width:44px;display:inline-flex;align-items:center;justify-content:center">' +
-      statusBadge(node.status || '') + '</span>';
+      statusBadge(node.issue.status || '') + '</span>';
   }
 
   // Title (clickable)
   html += '<span class="cursor-pointer hover:underline text-xs" style="color:var(--text-primary)" ' +
     'onclick="window.openDetail(\'' + safeId + '\')">' +
-    escHtml(node.title || nodeId) + '</span>';
+    escHtml(node.issue.title || nodeId) + '</span>';
 
   // Progress bar for non-leaf nodes
   if (hasChildren) {
-    html += ' ' + renderProgressBar(pct, node.title || nodeId);
+    html += ' ' + renderProgressBar(pct, node.issue.title || nodeId);
     html += ' <span class="text-xs" style="color:var(--text-muted)">' + pct + '%</span>';
   }
 
@@ -143,7 +143,7 @@ function renderTreeNode(node, level, releaseId) {
 }
 
 function collectTreeNodeIds(node, ids) {
-  ids.add(node.id);
+  ids.add(node.issue.id);
   if (node.children) {
     for (const child of node.children) {
       collectTreeNodeIds(child, ids);
@@ -315,6 +315,19 @@ function setTreeFocus(items, idx) {
   }
 }
 
+// --- Child summary formatting ---
+
+function formatChildSummary(summary) {
+  if (!summary) return '';
+  const parts = [];
+  if (summary.epics) parts.push(summary.epics + (summary.epics === 1 ? ' epic' : ' epics'));
+  if (summary.milestones) parts.push(summary.milestones + (summary.milestones === 1 ? ' milestone' : ' milestones'));
+  if (summary.tasks) parts.push(summary.tasks + (summary.tasks === 1 ? ' task' : ' tasks'));
+  if (summary.bugs) parts.push(summary.bugs + (summary.bugs === 1 ? ' bug' : ' bugs'));
+  if (summary.other) parts.push(summary.other + ' other');
+  return parts.join(', ');
+}
+
 // --- Card rendering ---
 
 function renderReleaseCard(release) {
@@ -323,7 +336,7 @@ function renderReleaseCard(release) {
   const isLoading = loadingReleaseIds.has(release.id);
   const isBlocked = release.blocked_by && release.blocked_by.length > 0;
   const safeId = escJsSingle(release.id);
-  const pct = release.progress_pct != null ? release.progress_pct : 0;
+  const pct = release.progress?.pct ?? 0;
   const textColor = isBlocked ? "color:var(--text-muted)" : "color:var(--text-primary)";
 
   let html = '';
@@ -360,8 +373,9 @@ function renderReleaseCard(release) {
   html += '<div class="flex flex-wrap gap-2 items-center text-xs" style="color:var(--text-muted)">';
   html += '<span>P' + (release.priority != null ? release.priority : '?') + '</span>';
 
-  if (release.child_summary) {
-    html += '<span>' + escHtml(release.child_summary) + '</span>';
+  const summaryText = formatChildSummary(release.child_summary);
+  if (summaryText) {
+    html += '<span>' + escHtml(summaryText) + '</span>';
   }
 
   html += renderProgressBar(pct, release.title || release.id);
@@ -377,7 +391,7 @@ function renderReleaseCard(release) {
   if (release.blocks && release.blocks.length > 0) {
     html += '<div class="text-xs mt-1" style="color:var(--text-muted)">Blocks: ';
     html += release.blocks.map((b) =>
-      '<a href="#" class="hover:underline" style="color:var(--accent)" onclick="event.preventDefault();document.getElementById(\'release-card-' + escJsSingle(b) + '\')?.scrollIntoView({behavior:\'smooth\',block:\'center\'})">' + escHtml(b) + '</a>'
+      '<a href="#" class="hover:underline" style="color:var(--accent)" onclick="event.preventDefault();document.getElementById(\'release-card-' + escJsSingle(b.id) + '\')?.scrollIntoView({behavior:\'smooth\',block:\'center\'})">' + escHtml(b.title) + '</a>'
     ).join(', ');
     html += '</div>';
   }
@@ -385,7 +399,7 @@ function renderReleaseCard(release) {
   if (release.blocked_by && release.blocked_by.length > 0) {
     html += '<div class="text-xs mt-1" style="color:var(--text-muted)">Blocked by: ';
     html += release.blocked_by.map((b) =>
-      '<a href="#" class="hover:underline" style="color:var(--accent)" onclick="event.preventDefault();document.getElementById(\'release-card-' + escJsSingle(b) + '\')?.scrollIntoView({behavior:\'smooth\',block:\'center\'})">' + escHtml(b) + '</a>'
+      '<a href="#" class="hover:underline" style="color:var(--accent)" onclick="event.preventDefault();document.getElementById(\'release-card-' + escJsSingle(b.id) + '\')?.scrollIntoView({behavior:\'smooth\',block:\'center\'})">' + escHtml(b.title) + '</a>'
     ).join(', ');
     html += '</div>';
   }
@@ -481,7 +495,7 @@ window._collapseAllReleaseTree = function (releaseId) {
 
   function collapseAll(node) {
     if (node.children && node.children.length > 0) {
-      collapsedNodeIds.add(node.id);
+      collapsedNodeIds.add(node.issue.id);
       for (const child of node.children) {
         collapseAll(child);
       }
@@ -517,12 +531,14 @@ export async function loadReleases() {
 
   // If we already have data in the cache for expanded releases, render immediately
   // but still fetch fresh data in the background
-  const releases = await fetchReleases(showReleased);
+  const data = await fetchReleases(showReleased);
 
-  if (!releases) {
+  if (!data) {
     container.innerHTML = '<div class="text-red-400">Failed to load releases.</div>';
     return;
   }
+
+  const releases = data.releases || [];
 
   if (!releases.length) {
     container.innerHTML =
