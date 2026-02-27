@@ -12,6 +12,7 @@ from httpx import ASGITransport, AsyncClient
 import filigree.dashboard as dash_module
 from filigree.core import DB_FILENAME, FiligreeDB, write_config
 from filigree.dashboard import ProjectStore, create_app
+from tests._db_factory import make_db
 
 
 @pytest.fixture
@@ -37,6 +38,33 @@ async def client(dashboard_db: FiligreeDB) -> AsyncIterator[AsyncClient]:
     async with AsyncClient(transport=transport, base_url="http://test") as c:
         yield c
     dash_module._db = None
+
+
+@pytest.fixture
+def release_dashboard_db(tmp_path: Path) -> FiligreeDB:
+    """FiligreeDB initialized with the release workflow pack enabled."""
+    return make_db(tmp_path, packs=["core", "planning", "release"], check_same_thread=False)
+
+
+@pytest.fixture
+async def release_client(release_dashboard_db: FiligreeDB) -> AsyncIterator[AsyncClient]:
+    """Test client backed by a DB with the release pack (ethereal mode)."""
+    dash_module._db = release_dashboard_db
+    app = create_app()
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as c:
+        yield c
+    dash_module._db = None
+
+
+def make_release_hierarchy(db: FiligreeDB, *, include_done: bool = False) -> tuple:
+    """Returns (release, epic, task). Mirrors tests/core/test_releases.py."""
+    release = db.create_issue("v1.0.0", type="release")
+    epic = db.create_issue("Epic A", type="epic", parent_id=release.id)
+    task = db.create_issue("Task A", type="task", parent_id=epic.id)
+    if include_done:
+        db.close_issue(task.id)
+    return release, epic, task
 
 
 def _create_project(base: Path, name: str, prefix: str, issue_count: int) -> Path:

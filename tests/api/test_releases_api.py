@@ -1,0 +1,191 @@
+"""Dashboard API tests — release endpoints."""
+
+from __future__ import annotations
+
+from httpx import AsyncClient
+
+from filigree.core import FiligreeDB
+
+
+class TestGetReleasesEndpoint:
+    """GET /api/releases — list releases with progress rollups."""
+
+    async def test_returns_200_with_releases_key(self, release_client: AsyncClient, release_dashboard_db: FiligreeDB) -> None:
+        resp = await release_client.get("/api/releases")
+        assert resp.status_code == 200
+        assert "releases" in resp.json()
+
+    async def test_excludes_done_releases_by_default(self, release_client: AsyncClient, release_dashboard_db: FiligreeDB) -> None:
+        db = release_dashboard_db
+        db.create_issue("Active Release", type="release")
+        r2 = db.create_issue("Done Release", type="release")
+        db.close_issue(r2.id)
+
+        resp = await release_client.get("/api/releases")
+        data = resp.json()
+        assert len(data["releases"]) == 1
+
+    async def test_include_released_shows_all(self, release_client: AsyncClient, release_dashboard_db: FiligreeDB) -> None:
+        db = release_dashboard_db
+        db.create_issue("Active Release", type="release")
+        r2 = db.create_issue("Done Release", type="release")
+        db.close_issue(r2.id)
+
+        resp = await release_client.get("/api/releases?include_released=true")
+        data = resp.json()
+        assert len(data["releases"]) == 2
+
+    async def test_include_released_false_is_default(self, release_client: AsyncClient, release_dashboard_db: FiligreeDB) -> None:
+        db = release_dashboard_db
+        db.create_issue("Active Release", type="release")
+        r2 = db.create_issue("Done Release", type="release")
+        db.close_issue(r2.id)
+
+        resp_default = await release_client.get("/api/releases")
+        resp_explicit = await release_client.get("/api/releases?include_released=false")
+        assert len(resp_default.json()["releases"]) == len(resp_explicit.json()["releases"])
+
+    async def test_invalid_include_released_returns_400(self, release_client: AsyncClient, release_dashboard_db: FiligreeDB) -> None:
+        resp = await release_client.get("/api/releases?include_released=maybe")
+        assert resp.status_code == 400
+
+    async def test_response_shape(self, release_client: AsyncClient, release_dashboard_db: FiligreeDB) -> None:
+        db = release_dashboard_db
+        release = db.create_issue("R1", type="release")
+        db.create_issue("T1", type="task", parent_id=release.id)
+
+        resp = await release_client.get("/api/releases")
+        data = resp.json()
+        assert len(data["releases"]) == 1
+        entry = data["releases"][0]
+        for key in ("id", "title", "status", "progress", "child_summary", "blocks", "blocked_by"):
+            assert key in entry, f"Missing key: {key}"
+
+    async def test_progress_shape(self, release_client: AsyncClient, release_dashboard_db: FiligreeDB) -> None:
+        db = release_dashboard_db
+        release = db.create_issue("R1", type="release")
+        db.create_issue("T1", type="task", parent_id=release.id)
+
+        resp = await release_client.get("/api/releases")
+        progress = resp.json()["releases"][0]["progress"]
+        for key in ("total", "completed", "in_progress", "open", "pct"):
+            assert key in progress, f"Missing progress key: {key}"
+            assert isinstance(progress[key], int)
+
+    async def test_blocks_are_id_title_objects(self, release_client: AsyncClient, release_dashboard_db: FiligreeDB) -> None:
+        db = release_dashboard_db
+        r1 = db.create_issue("Blocker", type="release")
+        r2 = db.create_issue("Blocked", type="release")
+        # r2 depends on r1 -> r1 blocks r2
+        db.add_dependency(r2.id, r1.id)
+
+        resp = await release_client.get("/api/releases")
+        releases = resp.json()["releases"]
+        entry_r1 = next(r for r in releases if r["id"] == r1.id)
+        assert len(entry_r1["blocks"]) == 1
+        assert "id" in entry_r1["blocks"][0]
+        assert "title" in entry_r1["blocks"][0]
+
+    async def test_empty_releases(self, release_client: AsyncClient, release_dashboard_db: FiligreeDB) -> None:
+        resp = await release_client.get("/api/releases")
+        assert resp.json()["releases"] == []
+
+    async def test_sort_order_unblocked_before_blocked(self, release_client: AsyncClient, release_dashboard_db: FiligreeDB) -> None:
+        db = release_dashboard_db
+        # Create a P2 unblocked release and a P1 blocked release
+        blocker = db.create_issue("Blocker Task", type="task")
+        r_blocked = db.create_issue("Blocked P1", type="release", priority=1)
+        r_unblocked = db.create_issue("Unblocked P2", type="release", priority=2)
+        # r_blocked depends on blocker -> blocker blocks r_blocked
+        db.add_dependency(r_blocked.id, blocker.id)
+
+        resp = await release_client.get("/api/releases")
+        releases = resp.json()["releases"]
+        # The unblocked P2 release should appear before the blocked P1 release
+        ids = [r["id"] for r in releases]
+        assert ids.index(r_unblocked.id) < ids.index(r_blocked.id)
+
+
+class TestGetReleaseTreeEndpoint:
+    """GET /api/release/{release_id}/tree — release hierarchy with progress."""
+
+    async def test_returns_200_with_tree(self, release_client: AsyncClient, release_dashboard_db: FiligreeDB) -> None:
+        db = release_dashboard_db
+        release = db.create_issue("R1", type="release")
+
+        resp = await release_client.get(f"/api/release/{release.id}/tree")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "release" in data
+        assert "children" in data
+
+    async def test_nonexistent_id_returns_404(self, release_client: AsyncClient, release_dashboard_db: FiligreeDB) -> None:
+        resp = await release_client.get("/api/release/nonexistent-abc123/tree")
+        assert resp.status_code == 404
+        assert resp.json()["error"]["code"] == "RELEASE_NOT_FOUND"
+
+    async def test_non_release_type_returns_404(self, release_client: AsyncClient, release_dashboard_db: FiligreeDB) -> None:
+        db = release_dashboard_db
+        epic = db.create_issue("E1", type="epic")
+
+        resp = await release_client.get(f"/api/release/{epic.id}/tree")
+        assert resp.status_code == 404
+        assert resp.json()["error"]["code"] == "NOT_A_RELEASE"
+
+    async def test_tree_structure_shape(self, release_client: AsyncClient, release_dashboard_db: FiligreeDB) -> None:
+        db = release_dashboard_db
+        release = db.create_issue("R1", type="release")
+        epic = db.create_issue("E1", type="epic", parent_id=release.id)
+        db.create_issue("T1", type="task", parent_id=epic.id)
+
+        resp = await release_client.get(f"/api/release/{release.id}/tree")
+        data = resp.json()
+        assert len(data["children"]) == 1
+        child = data["children"][0]
+        assert "issue" in child
+        assert "progress" in child
+        assert "children" in child
+
+    async def test_leaf_has_null_progress(self, release_client: AsyncClient, release_dashboard_db: FiligreeDB) -> None:
+        db = release_dashboard_db
+        release = db.create_issue("R1", type="release")
+        db.create_issue("T1", type="task", parent_id=release.id)
+
+        resp = await release_client.get(f"/api/release/{release.id}/tree")
+        data = resp.json()
+        child = data["children"][0]
+        assert child["progress"] is None
+
+    async def test_non_leaf_has_progress_dict(self, release_client: AsyncClient, release_dashboard_db: FiligreeDB) -> None:
+        db = release_dashboard_db
+        release = db.create_issue("R1", type="release")
+        epic = db.create_issue("E1", type="epic", parent_id=release.id)
+        db.create_issue("T1", type="task", parent_id=epic.id)
+
+        resp = await release_client.get(f"/api/release/{release.id}/tree")
+        data = resp.json()
+        epic_child = data["children"][0]
+        assert epic_child["progress"] is not None
+        for key in ("total", "completed", "pct"):
+            assert key in epic_child["progress"]
+
+    async def test_empty_release_returns_empty_children(self, release_client: AsyncClient, release_dashboard_db: FiligreeDB) -> None:
+        db = release_dashboard_db
+        release = db.create_issue("R1", type="release")
+
+        resp = await release_client.get(f"/api/release/{release.id}/tree")
+        data = resp.json()
+        assert data["children"] == []
+
+    async def test_release_with_only_direct_tasks(self, release_client: AsyncClient, release_dashboard_db: FiligreeDB) -> None:
+        db = release_dashboard_db
+        release = db.create_issue("R1", type="release")
+        db.create_issue("T1", type="task", parent_id=release.id)
+        db.create_issue("T2", type="task", parent_id=release.id)
+        db.create_issue("T3", type="task", parent_id=release.id)
+
+        resp = await release_client.get(f"/api/release/{release.id}/tree")
+        data = resp.json()
+        assert len(data["children"]) == 3
+        for child in data["children"]:
+            assert child["progress"] is None
