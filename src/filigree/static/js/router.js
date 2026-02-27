@@ -62,6 +62,12 @@ export function switchView(view) {
 
   updateHash();
 
+  // Update skip link to target current view
+  const skipLink = document.querySelector('a[href^="#"][class*="sr-only"]');
+  if (skipLink) {
+    skipLink.href = "#" + view + "View";
+  }
+
   const loader = viewLoaders[view];
   if (loader) {
     loader();
