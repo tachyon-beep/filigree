@@ -13,6 +13,7 @@ let expandedNodeIds = new Set();
 let showReleased = false;
 let loadingReleaseIds = new Set();
 let errorReleaseIds = new Set();
+let _pendingFocusTarget = null;
 
 // --- Color helpers ---
 
@@ -438,6 +439,7 @@ function renderReleaseCard(release) {
 window._toggleReleaseExpand = async function (releaseId) {
   if (expandedReleaseIds.has(releaseId)) {
     expandedReleaseIds.delete(releaseId);
+    // Collapse doesn't need focus management, so fire-and-forget is fine.
     loadReleases();
     return;
   }
@@ -457,7 +459,19 @@ window._toggleReleaseExpand = async function (releaseId) {
     errorReleaseIds.add(releaseId);
   } finally {
     loadingReleaseIds.delete(releaseId);
-    loadReleases();
+    _pendingFocusTarget = releaseId;
+    await loadReleases();
+
+    // Focus the first treeitem inside the expanded release card
+    const card = document.getElementById("release-card-" + releaseId);
+    if (card) {
+      const firstItem = card.querySelector('[role="treeitem"]');
+      if (firstItem) {
+        firstItem.setAttribute("tabindex", "0");
+        firstItem.focus();
+      }
+    }
+    _pendingFocusTarget = null;
   }
 };
 
@@ -573,6 +587,10 @@ export async function loadReleases() {
     html += renderReleaseCard(release);
   }
 
+  // Capture focused element identity before DOM replacement
+  const focusNodeId = document.activeElement?.dataset?.nodeId || null;
+  let focusCardId = document.activeElement?.closest?.('[id^="release-card-"]')?.id || null;
+
   container.innerHTML = html;
 
   // Restore scroll position
@@ -582,4 +600,21 @@ export async function loadReleases() {
 
   // Set up keyboard navigation on any rendered trees
   setupTreeKeyboard(container);
+
+  // Restore focus after re-render (skip if caller will handle focus)
+  if (!_pendingFocusTarget) {
+    if (focusNodeId) {
+      const targetNode = container.querySelector('[data-node-id="' + focusNodeId + '"]');
+      if (targetNode) {
+        targetNode.setAttribute("tabindex", "0");
+        targetNode.focus();
+        focusCardId = null; // prevent fallback
+      }
+    }
+    if (focusCardId) {
+      const card = document.getElementById(focusCardId);
+      const btn = card?.querySelector("button");
+      if (btn) btn.focus();
+    }
+  }
 }
