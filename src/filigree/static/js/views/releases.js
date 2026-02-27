@@ -344,10 +344,10 @@ function renderReleaseCard(release) {
   const isBlocked = release.blocked_by && release.blocked_by.length > 0;
   const safeId = escJsSingle(release.id);
   const pct = release.progress?.pct ?? 0;
-  const textColor = isBlocked ? "color:var(--text-muted)" : "color:var(--text-primary)";
+  const textColor = isBlocked ? "color:var(--text-secondary)" : "color:var(--text-primary)";
 
   let html = '';
-  html += '<div class="rounded mb-3" style="background:var(--surface-raised);border:1px solid var(--border-default);border-left:4px solid ' + borderColor + '" id="release-card-' + escHtml(release.id) + '">';
+  html += '<div class="rounded mb-3" role="article" aria-label="' + escHtml(release.title || release.id) + '" style="background:var(--surface-raised);border:1px solid var(--border-default);border-left:4px solid ' + borderColor + '" id="release-card-' + escHtml(release.id) + '">';
   html += '<div class="p-4">';
 
   // Header row: toggle + title + status badge
@@ -371,7 +371,7 @@ function renderReleaseCard(release) {
 
   // Blocked badge
   if (isBlocked) {
-    html += ' <span class="text-xs rounded px-1.5 py-0.5 shrink-0" style="background:#EF4444;color:#fff">[blocked]</span>';
+    html += ' <span class="text-xs rounded px-1.5 py-0.5 shrink-0" style="background:#EF4444;color:#fff" aria-label="blocked">blocked</span>';
   }
 
   html += '</div>';
@@ -415,7 +415,7 @@ function renderReleaseCard(release) {
   if (isExpanded) {
     html += '<div class="mt-3 pt-3" style="border-top:1px solid var(--border-default)">';
     if (isLoading) {
-      html += '<div class="text-xs py-2" style="color:var(--text-muted)">Loading tree...</div>';
+      html += '<div class="text-xs py-2" style="color:var(--text-muted)" role="status">Loading tree...</div>';
     } else if (errorReleaseIds.has(release.id)) {
       html += '<div class="text-xs py-2 flex items-center gap-2" style="color:var(--text-muted)">' +
         'Failed to load release tree.' +
