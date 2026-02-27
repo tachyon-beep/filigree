@@ -222,12 +222,13 @@ def _create_project_router() -> Any:
     """
     from fastapi import APIRouter
 
-    from filigree.dashboard_routes import analytics, files, issues
+    from filigree.dashboard_routes import analytics, files, issues, releases
 
     router = APIRouter()
     router.include_router(analytics.create_router())
     router.include_router(issues.create_router())
     router.include_router(files.create_router())
+    router.include_router(releases.create_router())
     return router
 
 
