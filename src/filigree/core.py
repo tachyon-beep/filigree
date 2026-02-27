@@ -21,7 +21,7 @@ import sqlite3
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, NewType, TypedDict
+from typing import TYPE_CHECKING, Any, Literal
 
 from filigree.db_base import StatusCategory
 from filigree.db_events import EventsMixin
@@ -37,6 +37,7 @@ from filigree.db_meta import MetaMixin
 from filigree.db_planning import PlanningMixin
 from filigree.db_schema import CURRENT_SCHEMA_VERSION, SCHEMA_SQL
 from filigree.db_workflow import WorkflowMixin
+from filigree.types.core import ISOTimestamp, PaginatedResult, ProjectConfig  # noqa: F401
 
 if TYPE_CHECKING:
     from filigree.templates import TemplateRegistry
@@ -59,24 +60,7 @@ Severity = Literal["critical", "high", "medium", "low", "info"]
 FindingStatus = Literal["open", "acknowledged", "fixed", "false_positive", "unseen_in_latest"]
 
 
-class ProjectConfig(TypedDict, total=False):
-    """Shape of .filigree/config.json."""
-
-    prefix: str
-    name: str
-    version: int
-    enabled_packs: list[str]
-    mode: str
-
-
-class PaginatedResult(TypedDict):
-    """Envelope returned by paginated query methods."""
-
-    results: list[dict[str, Any]]
-    total: int
-    limit: int
-    offset: int
-    has_more: bool
+# ProjectConfig and PaginatedResult moved to filigree.types.core (re-exported above)
 
 
 # ---------------------------------------------------------------------------
@@ -208,7 +192,8 @@ def _seed_builtin_packs(conn: sqlite3.Connection, now: str) -> int:
 # Data classes
 # ---------------------------------------------------------------------------
 
-ISOTimestamp = NewType("ISOTimestamp", str)
+# ISOTimestamp moved to filigree.types.core (re-exported above)
+_EMPTY_TS: ISOTimestamp = ISOTimestamp("")
 
 
 @dataclass
@@ -220,8 +205,8 @@ class Issue:
     type: str = "task"
     parent_id: str | None = None
     assignee: str = ""
-    created_at: ISOTimestamp = ISOTimestamp("")
-    updated_at: ISOTimestamp = ISOTimestamp("")
+    created_at: ISOTimestamp = _EMPTY_TS
+    updated_at: ISOTimestamp = _EMPTY_TS
     closed_at: ISOTimestamp | None = None
     description: str = ""
     notes: str = ""
@@ -264,8 +249,8 @@ class FileRecord:
     path: str
     language: str = ""
     file_type: str = ""
-    first_seen: ISOTimestamp = ISOTimestamp("")
-    updated_at: ISOTimestamp = ISOTimestamp("")
+    first_seen: ISOTimestamp = _EMPTY_TS
+    updated_at: ISOTimestamp = _EMPTY_TS
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -295,8 +280,8 @@ class ScanFinding:
     line_end: int | None = None
     issue_id: str | None = None
     seen_count: int = 1
-    first_seen: ISOTimestamp = ISOTimestamp("")
-    updated_at: ISOTimestamp = ISOTimestamp("")
+    first_seen: ISOTimestamp = _EMPTY_TS
+    updated_at: ISOTimestamp = _EMPTY_TS
     last_seen_at: ISOTimestamp | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
 

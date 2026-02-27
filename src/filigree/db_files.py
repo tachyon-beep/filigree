@@ -17,7 +17,8 @@ from typing import TYPE_CHECKING, Any
 from filigree.db_base import DBMixinProtocol, _now_iso
 
 if TYPE_CHECKING:
-    from filigree.core import FileRecord, Issue, PaginatedResult, ScanFinding
+    from filigree.core import FileRecord, Issue, ScanFinding
+    from filigree.types.core import PaginatedResult
 
 logger = logging.getLogger(__name__)
 
