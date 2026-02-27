@@ -12,13 +12,24 @@ import json
 import logging
 import os
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from filigree.db_base import DBMixinProtocol, _now_iso
 
 if TYPE_CHECKING:
     from filigree.core import FileRecord, Issue, ScanFinding
     from filigree.types.core import PaginatedResult
+    from filigree.types.files import (
+        CleanStaleResult,
+        FileAssociation,
+        FileDetail,
+        FileHotspot,
+        FindingsSummary,
+        GlobalFindingsStats,
+        IssueFileAssociation,
+        ScanIngestResult,
+        ScanRunRecord,
+    )
 
 logger = logging.getLogger(__name__)
 
@@ -357,7 +368,7 @@ class FilesMixin(DBMixinProtocol):
         scan_run_id: str = "",
         mark_unseen: bool = False,
         create_issues: bool = False,
-    ) -> dict[str, Any]:
+    ) -> ScanIngestResult:
         """Ingest scan results: create/update file records and findings.
 
         Each finding dict must have at minimum: path, rule_id, severity, message.
@@ -683,9 +694,9 @@ class FilesMixin(DBMixinProtocol):
             if self.conn.in_transaction:
                 self.conn.rollback()
             raise
-        return stats
+        return cast("ScanIngestResult", stats)
 
-    def get_scan_runs(self, *, limit: int = 10) -> list[dict[str, Any]]:
+    def get_scan_runs(self, *, limit: int = 10) -> list[ScanRunRecord]:
         """Query scan run history from scan_findings grouped by scan_run_id.
 
         Returns a list of scan run summaries, ordered by most recent activity.
@@ -793,7 +804,7 @@ class FilesMixin(DBMixinProtocol):
         days: int = 30,
         scan_source: str | None = None,
         actor: str = "",
-    ) -> dict[str, Any]:
+    ) -> CleanStaleResult:
         """Move ``unseen_in_latest`` findings older than *days* to ``fixed``.
 
         Only affects findings whose ``last_seen_at`` (or ``updated_at`` as
@@ -910,7 +921,7 @@ class FilesMixin(DBMixinProtocol):
             "has_more": (offset + limit) < total,
         }
 
-    def get_file_findings_summary(self, file_id: str) -> dict[str, Any]:
+    def get_file_findings_summary(self, file_id: str) -> FindingsSummary:
         """Get a severity-bucketed summary of findings for a file."""
         _open = self._OPEN_FINDINGS_FILTER
         _sev = self._severity_bucket_sql(_open)
@@ -931,7 +942,7 @@ class FilesMixin(DBMixinProtocol):
             "info": row["info"] or 0,
         }
 
-    def get_global_findings_stats(self) -> dict[str, Any]:
+    def get_global_findings_stats(self) -> GlobalFindingsStats:
         """Get project-wide severity-bucketed findings stats."""
         _open = self._OPEN_FINDINGS_FILTER
         _sev = self._severity_bucket_sql(_open)
@@ -953,7 +964,7 @@ class FilesMixin(DBMixinProtocol):
             "info": row["info"] or 0,
         }
 
-    def get_file_detail(self, file_id: str) -> dict[str, Any]:
+    def get_file_detail(self, file_id: str) -> FileDetail:
         """Get a structured file detail response with separated data layers."""
         f = self.get_file(file_id)
         associations = self.get_file_associations(file_id)
@@ -990,7 +1001,7 @@ class FilesMixin(DBMixinProtocol):
         )
         self.conn.commit()
 
-    def get_file_associations(self, file_id: str) -> list[dict[str, Any]]:
+    def get_file_associations(self, file_id: str) -> list[FileAssociation]:
         """Get all issue associations for a file."""
         rows = self.conn.execute(
             "SELECT fa.*, i.title as issue_title, i.status as issue_status "
@@ -1012,7 +1023,7 @@ class FilesMixin(DBMixinProtocol):
             for r in rows
         ]
 
-    def get_issue_files(self, issue_id: str) -> list[dict[str, Any]]:
+    def get_issue_files(self, issue_id: str) -> list[IssueFileAssociation]:
         """Get all files associated with an issue (issue -> files direction)."""
         rows = self.conn.execute(
             "SELECT fa.*, fr.path as file_path, fr.language as file_language "
@@ -1046,7 +1057,7 @@ class FilesMixin(DBMixinProtocol):
         ).fetchall()
         return [self._build_scan_finding(r) for r in rows]
 
-    def get_file_hotspots(self, *, limit: int = 10) -> list[dict[str, Any]]:
+    def get_file_hotspots(self, *, limit: int = 10) -> list[FileHotspot]:
         """Get files ranked by weighted finding severity score."""
         rows = self.conn.execute(
             """

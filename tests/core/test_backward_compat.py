@@ -184,23 +184,39 @@ class TestScanFindingToDictStability:
         db.register_file("/src/main.py", language="python", file_type="source")
         db.process_scan_results(
             scan_source="test",
-            findings=[{
-                "path": "/src/main.py",
-                "rule_id": "R001",
-                "message": "test finding",
-                "severity": "high",
-                "line_start": 1,
-                "line_end": 5,
-            }],
+            findings=[
+                {
+                    "path": "/src/main.py",
+                    "rule_id": "R001",
+                    "message": "test finding",
+                    "severity": "high",
+                    "line_start": 1,
+                    "line_end": 5,
+                }
+            ],
         )
         files = db.list_files_paginated(limit=1)
         file_id = files["results"][0]["id"]
         findings = db.get_findings_paginated(file_id=file_id, limit=1)
         sf = findings["results"][0]
         required_keys = {
-            "id", "file_id", "severity", "status", "scan_source", "rule_id",
-            "message", "suggestion", "scan_run_id", "line_start", "line_end",
-            "issue_id", "seen_count", "first_seen", "updated_at", "last_seen_at", "metadata",
+            "id",
+            "file_id",
+            "severity",
+            "status",
+            "scan_source",
+            "rule_id",
+            "message",
+            "suggestion",
+            "scan_run_id",
+            "line_start",
+            "line_end",
+            "issue_id",
+            "seen_count",
+            "first_seen",
+            "updated_at",
+            "last_seen_at",
+            "metadata",
         }
         assert set(sf.keys()) == required_keys
 
@@ -208,12 +224,14 @@ class TestScanFindingToDictStability:
         db.register_file("/src/main.py", language="python", file_type="source")
         db.process_scan_results(
             scan_source="test",
-            findings=[{
-                "path": "/src/main.py",
-                "rule_id": "R001",
-                "message": "test",
-                "severity": "high",
-            }],
+            findings=[
+                {
+                    "path": "/src/main.py",
+                    "rule_id": "R001",
+                    "message": "test",
+                    "severity": "high",
+                }
+            ],
         )
         files = db.list_files_paginated(limit=1)
         file_id = files["results"][0]["id"]
