@@ -40,7 +40,7 @@ User clicks a release card's expand toggle (▶)
   → On response: render collapsible nested tree inline below card header
 
 User clicks release title text
-  → Opens issue detail panel (existing showDetail(id) behavior)
+  → Opens issue detail panel (existing openDetail(id) behavior)
 
 User clicks issue title in tree
   → Opens issue detail panel (existing behavior)
@@ -251,7 +251,7 @@ Includes a **recursion depth guard** (max 10 levels) to prevent stack overflow f
 _MAX_TREE_DEPTH = 10
 
 def _build_tree(self, parent_id: str, *, _depth: int = 0) -> list[TreeNode]:
-    if _depth > self._MAX_TREE_DEPTH:
+    if _depth > _MAX_TREE_DEPTH:
         logger.warning("_build_tree: depth limit reached at parent_id=%s", parent_id)
         return []
 
@@ -328,6 +328,8 @@ def _resolve_issue_refs(self, ids: list[str]) -> list[IssueRef]:
 
 **Why this is acceptable now:** SQLite with WAL mode on a local machine handles 1000+ queries in <100ms. The summary endpoint is called on tab switch and on auto-refresh interval.
 
+**Refresh amplification:** The global `REFRESH_INTERVAL` is 15 seconds. When the releases tab is active, `loadReleases()` fires every 15 seconds via the `render()` → view loader cycle, producing ~576 queries per refresh for 9 active releases. This is the primary load driver — not the one-time tab-switch cost. The tree re-fetch for expanded releases adds to this. For now this is acceptable (SQLite handles it in <100ms), but if it becomes perceptible, consider: (a) skipping tree re-fetch on auto-refresh when no releases are expanded, or (b) using a longer per-view refresh interval for the releases tab.
+
 **Optimization threshold:** If the project exceeds ~200 release-descendant issues or the summary endpoint latency exceeds 500ms, consider:
 1. A single recursive CTE to count descendants in one SQL query
 2. Materializing progress counts (cache invalidation on issue status change)
@@ -348,7 +350,11 @@ async def api_releases(request: Request, db: FiligreeDB = Depends(_get_db)) -> J
     if not isinstance(include_released, bool):
         return include_released  # propagate the 400 error response
 
-    releases = db.get_releases_summary(include_released=include_released)
+    try:
+        releases = db.get_releases_summary(include_released=include_released)
+    except Exception:
+        logger.exception("Failed to load releases summary")
+        return _error_response("Internal error loading releases", "RELEASES_LOAD_ERROR", 500)
 
     # Sort is a UI concern — applied here, not in the DB layer
     # Unblocked first (actionability), then priority ASC, then created_at ASC
@@ -397,6 +403,12 @@ Module-level state:
 
 exports:
   loadReleases()  — registered as view loader
+
+Idempotency: loadReleases() is called on every render() cycle (including global
+auto-refresh every 15s and mutations from other views). This is expected and
+acceptable — re-fetching GET /api/releases is cheap (<100ms). The function
+should not debounce or skip calls; it re-renders the card list from fresh data
+each time, preserving expandedReleaseIds and collapsedNodeIds across re-renders.
 ```
 
 ### Layout — Roadmap Overview
@@ -493,9 +505,9 @@ When a release card's expand toggle is clicked, the tree renders inline below th
 | Action | Behavior |
 |--------|----------|
 | Click release card expand toggle (`[▶]`/`[▼]`) | Toggle expand/collapse for that release. Multi-expand: other cards stay as they are. On expand: show loading skeleton, fetch tree, render inline. On collapse: hide tree (keep cached data). |
-| Click release title text | Open issue detail panel for the release itself (reuse existing `showDetail(id)`) |
+| Click release title text | Open issue detail panel for the release itself (reuse existing `openDetail(id)`) |
 | Click `[▶]`/`[▼]` arrow on tree node | Toggle child visibility for that node. State stored in `collapsedNodeIds` by issue ID. |
-| Click issue title in tree | Open issue detail panel (reuse existing `showDetail(id)`) |
+| Click issue title in tree | Open issue detail panel (reuse existing `openDetail(id)`) |
 | Click "Collapse all" button | Collapse all expanded tree nodes within that release (add all non-leaf node IDs to `collapsedNodeIds`) |
 | Click release name in "Blocks"/"Blocked by" | Scroll to that release card and expand it (if not already expanded). If the target release is hidden (done/cancelled), enable "Show released" first. |
 | Toggle "Show released" checkbox | Re-fetch with `?include_released=true`, re-render card list. Preserve `expandedReleaseIds` — any previously-expanded release stays expanded using cached tree data. |
@@ -534,7 +546,7 @@ When `switchView('releases')` is called with a `release` param in the hash, the 
 - Background: `var(--surface-base)` for the unfilled portion
 - Same rounded style as existing plan tree bars in `workflow.js`
 
-**Status badges:** Reuse existing `statusBadge()` utility. **Note:** Verify contrast of `--status-open` (#64748B) and `--status-done` (#7B919C) against `--surface-raised` in browser accessibility panel at `text-xs` size. If below 4.5:1, switch to outline-style badges where text uses `--text-primary` and the badge has a `border` only.
+**Status badges:** Create a `statusBadge(status, category)` helper in `releases.js` that returns a styled `<span>` with the status text and appropriate color class. No shared utility exists — other views render status inline. Use the existing CSS variables (`--status-open`, `--status-done`, etc.) for colors. **Note:** Verify contrast of `--status-open` (#64748B) and `--status-done` (#7B919C) against `--surface-raised` in browser accessibility panel at `text-xs` size. If below 4.5:1, switch to outline-style badges where text uses `--text-primary` and the badge has a `border` only.
 
 **Priority:** Reuse existing priority color scheme (P0=red, P1=orange, P2=default, P3=muted)
 
@@ -567,7 +579,7 @@ The collapsible hierarchy uses the WAI-ARIA treeview pattern:
               class="min-h-[44px] min-w-[44px] flex items-center justify-center">
         ▼
       </button>
-      <button class="text-left hover:underline" onclick="showDetail('...')">
+      <button class="text-left hover:underline" onclick="openDetail('...')">
         [epic] Test Suite Reboot
       </button>
       <!-- progress bar with ARIA -->
@@ -581,7 +593,7 @@ The collapsible hierarchy uses the WAI-ARIA treeview pattern:
     <ul role="group">
       <li role="treeitem" aria-level="2">
         <!-- leaf node: no toggle button, just title + status -->
-        <button class="text-left hover:underline ml-6" onclick="showDetail('...')">
+        <button class="text-left hover:underline ml-6" onclick="openDetail('...')">
           [step] Phase 1 — fixtures
         </button>
         <span>done</span>
@@ -591,7 +603,7 @@ The collapsible hierarchy uses the WAI-ARIA treeview pattern:
 
   <!-- Leaf node (no children) -->
   <li role="treeitem" aria-level="1">
-    <button class="text-left hover:underline" onclick="showDetail('...')">
+    <button class="text-left hover:underline" onclick="openDetail('...')">
       [task] Dashboard auth
     </button>
     <span>open</span>
@@ -844,9 +856,10 @@ For a release that contains milestones (which contain phases, which contain step
 
 **`release_db` fixture** (for DB-layer tests in `tests/core/test_releases.py`):
 
-The `release_db` fixture already exists in `tests/workflows/conftest.py`. If not importable from `tests/core/`, duplicate in `tests/core/conftest.py`:
+The `release_db` fixture already exists in `tests/workflows/conftest.py`, but pytest fixtures are not importable across sibling conftest directories. **Duplicate** the fixture in `tests/core/conftest.py` with a comment noting the canonical source:
 
 ```python
+# Duplicated from tests/workflows/conftest.py — keep in sync
 @pytest.fixture
 def release_db(tmp_path: Path) -> FiligreeDB:
     return make_db(tmp_path, packs=["core", "planning", "release"])

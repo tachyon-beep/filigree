@@ -18,7 +18,7 @@ from filigree.db_base import DBMixinProtocol, StatusCategory, _now_iso
 
 if TYPE_CHECKING:
     from filigree.core import Issue
-    from filigree.templates import TemplateRegistry
+    from filigree.templates import TemplateRegistry, TransitionOption
 
 logger = logging.getLogger(__name__)
 
@@ -69,7 +69,7 @@ class IssuesMixin(DBMixinProtocol):
 
         # From PlanningMixin
         def get_ready(self) -> list[Issue]: ...
-        def get_valid_transitions(self, issue_id: str) -> list[Any]: ...
+        def get_valid_transitions(self, issue_id: str) -> list[TransitionOption]: ...
 
     # -- ID generation -------------------------------------------------------
 
