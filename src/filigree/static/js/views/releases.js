@@ -119,9 +119,10 @@ function renderTreeNode(node, level, releaseId) {
   }
 
   // Title (clickable)
-  html += '<span class="cursor-pointer hover:underline text-xs" style="color:var(--text-primary)" ' +
+  html += '<button class="cursor-pointer hover:underline text-xs text-left" ' +
+    'style="color:var(--text-primary);background:none;border:none;padding:0" ' +
     'onclick="window.openDetail(\'' + safeId + '\')">' +
-    escHtml(node.issue.title || nodeId) + '</span>';
+    escHtml(node.issue.title || nodeId) + '</button>';
 
   // Progress bar for non-leaf nodes
   if (hasChildren) {
@@ -191,6 +192,11 @@ function setupTreeKeyboard(container) {
   const treeRoots = container.querySelectorAll('[role="tree"]');
   treeRoots.forEach((tree) => {
     tree.addEventListener("keydown", handleTreeKeydown);
+    // Initialize roving tabindex — first item is the tab entry point
+    const firstItem = tree.querySelector('[role="treeitem"]');
+    if (firstItem) {
+      firstItem.setAttribute("tabindex", "0");
+    }
   });
 }
 
@@ -356,9 +362,9 @@ function renderReleaseCard(release) {
     arrow + '</button>';
 
   // Title (clickable)
-  html += '<span class="cursor-pointer hover:underline text-sm font-medium flex-1" style="' + textColor + '" ' +
+  html += '<button class="cursor-pointer hover:underline text-sm font-medium flex-1 text-left" style="' + textColor + ';background:none;border:none;padding:0" ' +
     'onclick="window.openDetail(\'' + safeId + '\')">' +
-    escHtml(release.title || release.id) + '</span>';
+    escHtml(release.title || release.id) + '</button>';
 
   // Status badge
   html += statusBadge(release.status);
