@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 from starlette.requests import Request
@@ -11,6 +12,30 @@ from filigree.core import FiligreeDB
 from filigree.dashboard_routes.common import _error_response, _get_bool_param
 
 logger = logging.getLogger(__name__)
+
+_SEMVER_RE = re.compile(r"v?(\d+)\.(\d+)(?:\.(\d+))?")
+_FUTURE_KEY = (float("inf"), 0, 0)
+
+
+def _semver_sort_key(release: dict[str, Any]) -> tuple[float, int, int]:
+    """Extract a (major, minor, patch) sort key from a release.
+
+    Checks the ``version`` field first, then falls back to the title.
+    Releases whose title matches "future" (case-insensitive) sort last.
+    """
+    version = release.get("version") or ""
+    title = release.get("title", "")
+
+    if title.strip().lower() == "future":
+        return _FUTURE_KEY
+
+    text = version or title
+    m = _SEMVER_RE.search(text)
+    if m:
+        return (int(m.group(1)), int(m.group(2)), int(m.group(3) or 0))
+
+    # Fallback: after semver releases, before future
+    return (float("inf") - 1, 0, 0)
 
 # ---------------------------------------------------------------------------
 # Router factory
@@ -45,8 +70,8 @@ def create_router() -> Any:
             return _error_response("Internal error loading releases", "RELEASES_LOAD_ERROR", 500)
 
         # Sort is a UI concern — applied here, not in the DB layer
-        # Unblocked first (actionability), then priority ASC, then created_at ASC
-        releases.sort(key=lambda r: (len(r["blocked_by"]) > 0, r["priority"], r["created_at"]))
+        # Primary: semantic version ascending; "future" always last
+        releases.sort(key=_semver_sort_key)
 
         return JSONResponse({"releases": releases})
 

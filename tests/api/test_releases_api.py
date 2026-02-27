@@ -90,20 +90,38 @@ class TestGetReleasesEndpoint:
         resp = await release_client.get("/api/releases")
         assert resp.json()["releases"] == []
 
-    async def test_sort_order_unblocked_before_blocked(self, release_client: AsyncClient, release_dashboard_db: FiligreeDB) -> None:
+    async def test_sort_order_by_semver(self, release_client: AsyncClient, release_dashboard_db: FiligreeDB) -> None:
         db = release_dashboard_db
-        # Create a P2 unblocked release and a P1 blocked release
-        blocker = db.create_issue("Blocker Task", type="task")
-        r_blocked = db.create_issue("Blocked P1", type="release", priority=1)
-        r_unblocked = db.create_issue("Unblocked P2", type="release", priority=2)
-        # r_blocked depends on blocker -> blocker blocks r_blocked
-        db.add_dependency(r_blocked.id, blocker.id)
+        r2 = db.create_issue("v2.0.0", type="release", fields={"version": "v2.0.0"})
+        r1 = db.create_issue("v1.0.0", type="release", fields={"version": "v1.0.0"})
+        r15 = db.create_issue("v1.5.0", type="release", fields={"version": "v1.5.0"})
 
         resp = await release_client.get("/api/releases")
         releases = resp.json()["releases"]
-        # The unblocked P2 release should appear before the blocked P1 release
         ids = [r["id"] for r in releases]
-        assert ids.index(r_unblocked.id) < ids.index(r_blocked.id)
+        assert ids == [r1.id, r15.id, r2.id]
+
+    async def test_sort_order_future_always_last(self, release_client: AsyncClient, release_dashboard_db: FiligreeDB) -> None:
+        db = release_dashboard_db
+        future = db.create_issue("Future", type="release")
+        r1 = db.create_issue("v1.0.0", type="release", fields={"version": "v1.0.0"})
+
+        resp = await release_client.get("/api/releases")
+        releases = resp.json()["releases"]
+        ids = [r["id"] for r in releases]
+        assert ids[-1] == future.id
+        assert ids[0] == r1.id
+
+    async def test_sort_order_version_from_title_fallback(self, release_client: AsyncClient, release_dashboard_db: FiligreeDB) -> None:
+        db = release_dashboard_db
+        # No version field — should parse from title
+        r2 = db.create_issue("v2.0.0 — Big Release", type="release")
+        r1 = db.create_issue("v1.0.0 — First", type="release")
+
+        resp = await release_client.get("/api/releases")
+        releases = resp.json()["releases"]
+        ids = [r["id"] for r in releases]
+        assert ids.index(r1.id) < ids.index(r2.id)
 
 
 class TestGetReleaseTreeEndpoint:
