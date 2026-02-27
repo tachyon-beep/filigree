@@ -526,6 +526,8 @@ class PlanningMixin(DBMixinProtocol):
                     "children": subtree,
                 }
             )
+        # Group nodes: epics/milestones first, then loose items (tasks, bugs, etc.)
+        nodes.sort(key=lambda n: (0 if n["issue"].get("type") in ("epic", "milestone") else 1))
         return nodes
 
     def _progress_from_subtree(self, nodes: list[TreeNode]) -> ProgressDict:
