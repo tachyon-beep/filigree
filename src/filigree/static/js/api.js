@@ -156,6 +156,19 @@ export async function fetchCriticalPath() {
   return resp.json();
 }
 
+export async function fetchReleases(includeReleased = false) {
+  const qs = includeReleased ? "?include_released=true" : "";
+  const resp = await fetch(apiUrl(`/releases${qs}`));
+  if (!resp.ok) return null;
+  return resp.json();
+}
+
+export async function fetchReleaseTree(releaseId) {
+  const resp = await fetch(apiUrl(`/release/${releaseId}/tree`));
+  if (!resp.ok) return null;
+  return resp.json();
+}
+
 export async function fetchSearch(query, limit) {
   let url = apiUrl(`/search?q=${encodeURIComponent(query)}`);
   if (limit) url += `&limit=${limit}`;

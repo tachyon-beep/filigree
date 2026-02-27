@@ -139,6 +139,7 @@ import {
   switchFileTab,
 } from "./views/files.js";
 import { filterFilesByScanSource, loadHealth } from "./views/health.js";
+import { loadReleases } from "./views/releases.js";
 
 // ---------------------------------------------------------------------------
 // Core data fetching (lives here because it touches every module)
@@ -321,6 +322,7 @@ registerView("activity", loadActivity);
 registerView("workflow", loadWorkflow);
 registerView("files", loadFiles);
 registerView("health", loadHealth);
+registerView("releases", loadReleases);
 
 // ---------------------------------------------------------------------------
 // Keyboard shortcuts
@@ -656,3 +658,6 @@ window.submitLinkIssue = submitLinkIssue;
 // Health
 window.loadHealth = loadHealth;
 window.filterFilesByScanSource = filterFilesByScanSource;
+
+// Releases
+window.loadReleases = loadReleases;
