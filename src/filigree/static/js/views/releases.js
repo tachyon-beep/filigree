@@ -9,7 +9,7 @@ import { escHtml, escJsSingle } from "../ui.js";
 
 let expandedReleaseIds = new Set();
 let releaseTreeCache = new Map();
-let collapsedNodeIds = new Set();
+let expandedNodeIds = new Set();
 let showReleased = false;
 let loadingReleaseIds = new Set();
 let errorReleaseIds = new Set();
@@ -83,7 +83,7 @@ function renderTreeNode(node, level, releaseId) {
   const nodeId = node.issue.id;
   const safeId = escJsSingle(nodeId);
   const isLeaf = !node.children || node.children.length === 0;
-  const isCollapsed = collapsedNodeIds.has(nodeId);
+  const isCollapsed = !expandedNodeIds.has(nodeId);
   const hasChildren = !isLeaf;
   const pct = node.progress?.pct ?? 0;
 
@@ -151,15 +151,15 @@ function collectTreeNodeIds(node, ids) {
   }
 }
 
-function drainStaleCollapsedIds(tree) {
+function drainStaleExpandedIds(tree) {
   const validIds = new Set();
   if (tree.children) {
     for (const child of tree.children) {
       collectTreeNodeIds(child, validIds);
     }
   }
-  for (const id of collapsedNodeIds) {
-    if (!validIds.has(id)) collapsedNodeIds.delete(id);
+  for (const id of expandedNodeIds) {
+    if (!validIds.has(id)) expandedNodeIds.delete(id);
   }
 }
 
@@ -451,7 +451,7 @@ window._toggleReleaseExpand = async function (releaseId) {
     if (tree) {
       releaseTreeCache.set(releaseId, tree);
       errorReleaseIds.delete(releaseId);
-      drainStaleCollapsedIds(tree);
+      drainStaleExpandedIds(tree);
     }
   } catch (_e) {
     errorReleaseIds.add(releaseId);
@@ -470,7 +470,7 @@ window._retryReleaseTree = async function (releaseId) {
     const tree = await fetchReleaseTree(releaseId);
     if (tree) {
       releaseTreeCache.set(releaseId, tree);
-      drainStaleCollapsedIds(tree);
+      drainStaleExpandedIds(tree);
     }
   } catch (_e) {
     errorReleaseIds.add(releaseId);
@@ -481,10 +481,10 @@ window._retryReleaseTree = async function (releaseId) {
 };
 
 window._toggleReleaseTreeNode = function (nodeId, releaseId) {
-  if (collapsedNodeIds.has(nodeId)) {
-    collapsedNodeIds.delete(nodeId);
+  if (expandedNodeIds.has(nodeId)) {
+    expandedNodeIds.delete(nodeId);
   } else {
-    collapsedNodeIds.add(nodeId);
+    expandedNodeIds.add(nodeId);
   }
   loadReleases();
 };
@@ -493,17 +493,17 @@ window._collapseAllReleaseTree = function (releaseId) {
   const tree = releaseTreeCache.get(releaseId);
   if (!tree || !tree.children) return;
 
-  function collapseAll(node) {
-    if (node.children && node.children.length > 0) {
-      collapsedNodeIds.add(node.issue.id);
+  function removeAll(node) {
+    expandedNodeIds.delete(node.issue.id);
+    if (node.children) {
       for (const child of node.children) {
-        collapseAll(child);
+        removeAll(child);
       }
     }
   }
 
   for (const child of tree.children) {
-    collapseAll(child);
+    removeAll(child);
   }
   loadReleases();
 };
@@ -556,7 +556,7 @@ export async function loadReleases() {
         fetchReleaseTree(id).then((tree) => {
           if (tree) {
             releaseTreeCache.set(id, tree);
-            drainStaleCollapsedIds(tree);
+            drainStaleExpandedIds(tree);
           }
         }).catch(() => { /* best-effort */ })
       );
