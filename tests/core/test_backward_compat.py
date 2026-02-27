@@ -158,6 +158,72 @@ class TestToDictStability:
         assert isinstance(d["is_ready"], bool)
 
 
+class TestFileRecordToDictStability:
+    """FileRecord.to_dict() must include all expected keys."""
+
+    def test_to_dict_keys(self, db: FiligreeDB) -> None:
+        db.register_file("/src/main.py", language="python", file_type="source")
+        files = db.list_files_paginated(limit=1)
+        fr = files["results"][0]
+        required_keys = {"id", "path", "language", "file_type", "first_seen", "updated_at", "metadata"}
+        assert required_keys.issubset(set(fr.keys()))
+
+    def test_to_dict_types(self, db: FiligreeDB) -> None:
+        db.register_file("/src/main.py", language="python", file_type="source")
+        files = db.list_files_paginated(limit=1)
+        fr = files["results"][0]
+        assert isinstance(fr["id"], str)
+        assert isinstance(fr["path"], str)
+        assert isinstance(fr["metadata"], dict)
+
+
+class TestScanFindingToDictStability:
+    """ScanFinding.to_dict() must include all expected keys."""
+
+    def test_to_dict_keys(self, db: FiligreeDB) -> None:
+        db.register_file("/src/main.py", language="python", file_type="source")
+        db.process_scan_results(
+            scan_source="test",
+            findings=[{
+                "path": "/src/main.py",
+                "rule_id": "R001",
+                "message": "test finding",
+                "severity": "high",
+                "line_start": 1,
+                "line_end": 5,
+            }],
+        )
+        files = db.list_files_paginated(limit=1)
+        file_id = files["results"][0]["id"]
+        findings = db.get_findings_paginated(file_id=file_id, limit=1)
+        sf = findings["results"][0]
+        required_keys = {
+            "id", "file_id", "severity", "status", "scan_source", "rule_id",
+            "message", "suggestion", "scan_run_id", "line_start", "line_end",
+            "issue_id", "seen_count", "first_seen", "updated_at", "last_seen_at", "metadata",
+        }
+        assert set(sf.keys()) == required_keys
+
+    def test_to_dict_types(self, db: FiligreeDB) -> None:
+        db.register_file("/src/main.py", language="python", file_type="source")
+        db.process_scan_results(
+            scan_source="test",
+            findings=[{
+                "path": "/src/main.py",
+                "rule_id": "R001",
+                "message": "test",
+                "severity": "high",
+            }],
+        )
+        files = db.list_files_paginated(limit=1)
+        file_id = files["results"][0]["id"]
+        findings = db.get_findings_paginated(file_id=file_id, limit=1)
+        sf = findings["results"][0]
+        assert isinstance(sf["id"], str)
+        assert isinstance(sf["severity"], str)
+        assert isinstance(sf["seen_count"], int)
+
+
 # ---------------------------------------------------------------------------
 # Dependencies and blocking
 # ---------------------------------------------------------------------------

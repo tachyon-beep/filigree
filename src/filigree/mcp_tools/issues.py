@@ -304,7 +304,7 @@ async def _handle_get_issue(arguments: dict[str, Any]) -> list[TextContent]:
     tracker = _get_db()
     try:
         issue = tracker.get_issue(arguments["id"])
-        data = issue.to_dict()
+        data: dict[str, Any] = dict(issue.to_dict())
         if arguments.get("include_transitions"):
             transitions = tracker.get_valid_transitions(arguments["id"])
             data["valid_transitions"] = [
@@ -401,7 +401,7 @@ async def _handle_update_issue(arguments: dict[str, Any]) -> list[TextContent]:
             actor=arguments.get("actor", "mcp"),
         )
         _refresh_summary()
-        result = issue.to_dict()
+        result: dict[str, Any] = dict(issue.to_dict())
         changed: list[str] = []
         if issue.status != before.status:
             changed.append("status")
@@ -442,7 +442,7 @@ async def _handle_close_issue(arguments: dict[str, Any]) -> list[TextContent]:
         _refresh_summary()
         ready_after = tracker.get_ready()
         newly_unblocked = [i for i in ready_after if i.id not in ready_before]
-        result = issue.to_dict()
+        result: dict[str, Any] = dict(issue.to_dict())
         if newly_unblocked:
             result["newly_unblocked"] = [{"id": i.id, "title": i.title, "priority": i.priority, "type": i.type} for i in newly_unblocked]
         return _text(result)
@@ -537,7 +537,7 @@ async def _handle_claim_next(arguments: dict[str, Any]) -> list[TextContent]:
     if claimed is None:
         return _text({"status": "empty", "reason": "No ready issues matching filters"})
     _refresh_summary()
-    result = claimed.to_dict()
+    result: dict[str, Any] = dict(claimed.to_dict())
     parts = [f"P{claimed.priority}"]
     if claimed.type != "task":
         parts.append(f"type={claimed.type}")

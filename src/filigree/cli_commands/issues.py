@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json as json_mod
 import sys
+from typing import Any
 
 import click
 
@@ -261,12 +262,12 @@ def update(
 def close(ctx: click.Context, issue_ids: tuple[str, ...], reason: str, as_json: bool) -> None:
     """Close one or more issues."""
     with get_db() as db:
-        closed: list[dict[str, object]] = []
+        closed: list[dict[str, Any]] = []
         for issue_id in issue_ids:
             try:
                 issue = db.close_issue(issue_id, reason=reason, actor=ctx.obj["actor"])
                 if as_json:
-                    closed.append(issue.to_dict())
+                    closed.append(dict(issue.to_dict()))
                 else:
                     click.echo(f"Closed {issue.id}: {issue.title}")
             except KeyError:
@@ -297,12 +298,12 @@ def close(ctx: click.Context, issue_ids: tuple[str, ...], reason: str, as_json: 
 def reopen(ctx: click.Context, issue_ids: tuple[str, ...], as_json: bool) -> None:
     """Reopen one or more closed issues."""
     with get_db() as db:
-        reopened: list[dict[str, object]] = []
+        reopened: list[dict[str, Any]] = []
         for issue_id in issue_ids:
             try:
                 issue = db.reopen_issue(issue_id, actor=ctx.obj["actor"])
                 if as_json:
-                    reopened.append(issue.to_dict())
+                    reopened.append(dict(issue.to_dict()))
                 else:
                     click.echo(f"Reopened {issue.id}: {issue.title} [{issue.status}]")
             except KeyError:

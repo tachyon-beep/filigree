@@ -44,7 +44,7 @@ def create_router() -> Any:
         except KeyError:
             return _error_response(f"Issue not found: {issue_id}", "ISSUE_NOT_FOUND", 404)
 
-        data = issue.to_dict()
+        data: dict[str, Any] = dict(issue.to_dict())
 
         # Resolve dep details for blocks and blocked_by
         dep_ids = set(issue.blocks + issue.blocked_by)

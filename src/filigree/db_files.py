@@ -327,7 +327,7 @@ class FilesMixin(DBMixinProtocol):
 
         results = []
         for r in rows:
-            d = self._build_file_record(r).to_dict()
+            d: dict[str, Any] = dict(self._build_file_record(r).to_dict())
             d["summary"] = {
                 "total_findings": r["total_findings"],
                 "open_findings": r["open_findings"],
@@ -901,7 +901,7 @@ class FilesMixin(DBMixinProtocol):
         ).fetchone()[0]
 
         findings = self.get_findings(file_id, severity=severity, status=status, sort=sort, limit=limit, offset=offset)
-        results = [f.to_dict() for f in findings]
+        results: list[dict[str, Any]] = [dict(f.to_dict()) for f in findings]
         return {
             "results": results,
             "total": total,

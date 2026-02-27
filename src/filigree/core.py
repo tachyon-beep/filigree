@@ -37,7 +37,14 @@ from filigree.db_meta import MetaMixin
 from filigree.db_planning import PlanningMixin
 from filigree.db_schema import CURRENT_SCHEMA_VERSION, SCHEMA_SQL
 from filigree.db_workflow import WorkflowMixin
-from filigree.types.core import ISOTimestamp, PaginatedResult, ProjectConfig  # noqa: F401
+from filigree.types.core import (  # noqa: F401
+    FileRecordDict,
+    ISOTimestamp,
+    IssueDict,
+    PaginatedResult,
+    ProjectConfig,
+    ScanFindingDict,
+)
 
 if TYPE_CHECKING:
     from filigree.templates import TemplateRegistry
@@ -219,28 +226,28 @@ class Issue:
     children: list[str] = field(default_factory=list)
     status_category: StatusCategory = "open"
 
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "id": self.id,
-            "title": self.title,
-            "status": self.status,
-            "status_category": self.status_category,
-            "priority": self.priority,
-            "type": self.type,
-            "parent_id": self.parent_id,
-            "assignee": self.assignee,
-            "created_at": self.created_at,
-            "updated_at": self.updated_at,
-            "closed_at": self.closed_at,
-            "description": self.description,
-            "notes": self.notes,
-            "fields": self.fields,
-            "labels": self.labels,
-            "blocks": self.blocks,
-            "blocked_by": self.blocked_by,
-            "is_ready": self.is_ready,
-            "children": self.children,
-        }
+    def to_dict(self) -> IssueDict:
+        return IssueDict(
+            id=self.id,
+            title=self.title,
+            status=self.status,
+            status_category=self.status_category,
+            priority=self.priority,
+            type=self.type,
+            parent_id=self.parent_id,
+            assignee=self.assignee,
+            created_at=self.created_at,
+            updated_at=self.updated_at,
+            closed_at=self.closed_at,
+            description=self.description,
+            notes=self.notes,
+            fields=self.fields,
+            labels=self.labels,
+            blocks=self.blocks,
+            blocked_by=self.blocked_by,
+            is_ready=self.is_ready,
+            children=self.children,
+        )
 
 
 @dataclass
@@ -253,16 +260,16 @@ class FileRecord:
     updated_at: ISOTimestamp = _EMPTY_TS
     metadata: dict[str, Any] = field(default_factory=dict)
 
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "id": self.id,
-            "path": self.path,
-            "language": self.language,
-            "file_type": self.file_type,
-            "first_seen": self.first_seen,
-            "updated_at": self.updated_at,
-            "metadata": self.metadata,
-        }
+    def to_dict(self) -> FileRecordDict:
+        return FileRecordDict(
+            id=self.id,
+            path=self.path,
+            language=self.language,
+            file_type=self.file_type,
+            first_seen=self.first_seen,
+            updated_at=self.updated_at,
+            metadata=self.metadata,
+        )
 
 
 @dataclass
@@ -285,26 +292,26 @@ class ScanFinding:
     last_seen_at: ISOTimestamp | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "id": self.id,
-            "file_id": self.file_id,
-            "severity": self.severity,
-            "status": self.status,
-            "scan_source": self.scan_source,
-            "rule_id": self.rule_id,
-            "message": self.message,
-            "suggestion": self.suggestion,
-            "scan_run_id": self.scan_run_id,
-            "line_start": self.line_start,
-            "line_end": self.line_end,
-            "issue_id": self.issue_id,
-            "seen_count": self.seen_count,
-            "first_seen": self.first_seen,
-            "updated_at": self.updated_at,
-            "last_seen_at": self.last_seen_at,
-            "metadata": self.metadata,
-        }
+    def to_dict(self) -> ScanFindingDict:
+        return ScanFindingDict(
+            id=self.id,
+            file_id=self.file_id,
+            severity=self.severity,
+            status=self.status,
+            scan_source=self.scan_source,
+            rule_id=self.rule_id,
+            message=self.message,
+            suggestion=self.suggestion,
+            scan_run_id=self.scan_run_id,
+            line_start=self.line_start,
+            line_end=self.line_end,
+            issue_id=self.issue_id,
+            seen_count=self.seen_count,
+            first_seen=self.first_seen,
+            updated_at=self.updated_at,
+            last_seen_at=self.last_seen_at,
+            metadata=self.metadata,
+        )
 
 
 # ---------------------------------------------------------------------------

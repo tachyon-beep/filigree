@@ -489,7 +489,7 @@ class PlanningMixin(DBMixinProtocol):
             blocked_by_resolved = self._resolve_issue_refs(release.blocked_by)
 
             # Build response dict explicitly — do not spread to_dict() and override keys
-            data = release.to_dict()
+            data: dict[str, Any] = dict(release.to_dict())
             data["version"] = release.fields.get("version")
             data["target_date"] = release.fields.get("target_date")
             data["blocks"] = blocks_resolved
@@ -521,7 +521,7 @@ class PlanningMixin(DBMixinProtocol):
             progress = self._progress_from_subtree(subtree) if subtree else None
             nodes.append(
                 {
-                    "issue": child.to_dict(),
+                    "issue": dict(child.to_dict()),
                     "progress": progress,
                     "children": subtree,
                 }
