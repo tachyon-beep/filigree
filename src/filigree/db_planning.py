@@ -8,14 +8,48 @@ Python's MRO when composed into ``FiligreeDB``.
 from __future__ import annotations
 
 import json
+import logging
 from collections import deque
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypedDict
 
 from filigree.db_base import DBMixinProtocol, _now_iso
 
 if TYPE_CHECKING:
     from filigree.core import Issue
     from filigree.templates import TemplateRegistry
+
+logger = logging.getLogger(__name__)
+
+
+class ProgressDict(TypedDict):
+    total: int
+    completed: int
+    in_progress: int
+    open: int
+    pct: int
+
+
+class ChildSummary(TypedDict):
+    epics: int
+    milestones: int
+    tasks: int
+    bugs: int
+    other: int
+    total: int
+
+
+class IssueRef(TypedDict):
+    id: str
+    title: str
+
+
+class TreeNode(TypedDict):
+    issue: dict[str, Any]
+    progress: ProgressDict | None
+    children: list[TreeNode]
+
+
+_MAX_TREE_DEPTH = 10
 
 
 class PlanningMixin(DBMixinProtocol):
@@ -433,3 +467,103 @@ class PlanningMixin(DBMixinProtocol):
             raise
 
         return self.get_plan(ms_id)
+
+    # -- Release tree --------------------------------------------------------
+
+    def get_releases_summary(self, *, include_released: bool = False) -> list[dict[str, Any]]:
+        releases = self.list_issues(type="release")
+        if not include_released:
+            # Note: rolled_back is category "wip", so it IS included (intentional —
+            # a rolled-back release needs attention, it is not "finished")
+            releases = [r for r in releases if r.status_category != "done"]
+
+        result: list[dict[str, Any]] = []
+        for release in releases:
+            # Build the full tree once; extract progress from it
+            subtree = self._build_tree(release.id)
+            progress = self._progress_from_subtree(subtree)
+
+            child_summary = self._summarize_children_by_type(subtree)
+
+            blocks_resolved = self._resolve_issue_refs(release.blocks)
+            blocked_by_resolved = self._resolve_issue_refs(release.blocked_by)
+
+            # Build response dict explicitly — do not spread to_dict() and override keys
+            data = release.to_dict()
+            data["version"] = release.fields.get("version")
+            data["target_date"] = release.fields.get("target_date")
+            data["blocks"] = blocks_resolved
+            data["blocked_by"] = blocked_by_resolved
+            data["progress"] = progress
+            data["child_summary"] = child_summary
+            result.append(data)
+
+        return result
+
+    def get_release_tree(self, release_id: str) -> dict[str, Any]:
+        release = self.get_issue(release_id)  # raises KeyError if not found
+        if release.type != "release":
+            raise ValueError(f"Issue {release_id} is not a release")
+        return {
+            "release": release.to_dict(),
+            "children": self._build_tree(release.id),
+        }
+
+    def _build_tree(self, parent_id: str, *, _depth: int = 0) -> list[TreeNode]:
+        if _depth > _MAX_TREE_DEPTH:
+            logger.warning("_build_tree: depth limit reached at parent_id=%s", parent_id)
+            return []
+
+        children = self.list_issues(parent_id=parent_id)
+        nodes: list[TreeNode] = []
+        for child in children:
+            subtree = self._build_tree(child.id, _depth=_depth + 1)
+            progress = self._progress_from_subtree(subtree) if subtree else None
+            nodes.append(
+                {
+                    "issue": child.to_dict(),
+                    "progress": progress,
+                    "children": subtree,
+                }
+            )
+        return nodes
+
+    def _progress_from_subtree(self, nodes: list[TreeNode]) -> ProgressDict:
+        total = completed = in_progress = open_count = 0
+        for node in nodes:
+            if not node["children"]:  # leaf node
+                cat = node["issue"].get("status_category", "open")
+                total += 1
+                if cat == "done":
+                    completed += 1
+                elif cat == "wip":
+                    in_progress += 1
+                else:
+                    open_count += 1
+            else:  # recurse into non-leaf's children
+                sub = self._progress_from_subtree(node["children"])
+                total += sub["total"]
+                completed += sub["completed"]
+                in_progress += sub["in_progress"]
+                open_count += sub["open"]
+        pct = round(completed / total * 100) if total > 0 else 0
+        return {"total": total, "completed": completed, "in_progress": in_progress, "open": open_count, "pct": pct}
+
+    def _summarize_children_by_type(self, nodes: list[TreeNode]) -> ChildSummary:
+        counts: ChildSummary = {"epics": 0, "milestones": 0, "tasks": 0, "bugs": 0, "other": 0, "total": len(nodes)}
+        type_map = {"epic": "epics", "milestone": "milestones", "task": "tasks", "bug": "bugs"}
+        for node in nodes:
+            key = type_map.get(node["issue"]["type"], "other")
+            counts[key] += 1  # type: ignore[literal-required]
+        return counts
+
+    def _resolve_issue_refs(self, ids: list[str]) -> list[IssueRef]:
+        refs: list[IssueRef] = []
+        for issue_id in ids:
+            try:
+                issue = self.get_issue(issue_id)
+                refs.append({"id": issue.id, "title": issue.title})
+            except KeyError:
+                logger.warning("_resolve_issue_refs: dangling reference %s", issue_id)
+                refs.append({"id": issue_id, "title": "(deleted)"})
+        return refs
