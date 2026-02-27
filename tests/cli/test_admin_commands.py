@@ -474,6 +474,15 @@ class TestInitMode:
         config = json.loads((tmp_path / ".filigree" / "config.json").read_text())
         assert config["mode"] == "server"
 
+    def test_init_existing_project_updates_name(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cli_runner: CliRunner) -> None:
+        """Running init --name=X on an existing project updates the name."""
+        monkeypatch.chdir(tmp_path)
+        cli_runner.invoke(cli, ["init"])
+        result = cli_runner.invoke(cli, ["init", "--name", "My Project"])
+        assert result.exit_code == 0
+        config = json.loads((tmp_path / ".filigree" / "config.json").read_text())
+        assert config["name"] == "My Project"
+
     def test_init_invalid_mode_no_directory_created(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cli_runner: CliRunner) -> None:
         monkeypatch.chdir(tmp_path)
         result = cli_runner.invoke(cli, ["init", "--mode", "bogus"])

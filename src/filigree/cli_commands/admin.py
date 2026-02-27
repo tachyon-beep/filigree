@@ -47,11 +47,18 @@ def init(prefix: str | None, name: str | None, mode: str | None) -> None:
         db.initialize()
         db.close()
         (filigree_dir / "scanners").mkdir(exist_ok=True)
-        # Update mode if explicitly provided
+        # Update name/mode if explicitly provided
+        updated = False
+        if name is not None:
+            config["name"] = name
+            updated = True
+            click.echo(f"  Name: {name}")
         if mode is not None:
             config["mode"] = mode
-            write_config(filigree_dir, config)
+            updated = True
             click.echo(f"  Mode: {mode}")
+        if updated:
+            write_config(filigree_dir, config)
         return
 
     prefix = prefix or cwd.name
