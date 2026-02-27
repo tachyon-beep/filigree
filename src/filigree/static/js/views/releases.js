@@ -128,9 +128,7 @@ function renderTreeNode(node, level, releaseId) {
     html += ' <span class="text-xs" style="color:var(--text-muted)">' + pct + '%</span>';
   }
 
-  html += '</li>';
-
-  // Render children if expanded
+  // Render children if expanded (INSIDE the li)
   if (hasChildren && !isCollapsed) {
     html += '<ul role="group">';
     for (const child of node.children) {
@@ -138,6 +136,8 @@ function renderTreeNode(node, level, releaseId) {
     }
     html += '</ul>';
   }
+
+  html += '</li>';
 
   return html;
 }
@@ -148,6 +148,18 @@ function collectTreeNodeIds(node, ids) {
     for (const child of node.children) {
       collectTreeNodeIds(child, ids);
     }
+  }
+}
+
+function drainStaleCollapsedIds(tree) {
+  const validIds = new Set();
+  if (tree.children) {
+    for (const child of tree.children) {
+      collectTreeNodeIds(child, validIds);
+    }
+  }
+  for (const id of collapsedNodeIds) {
+    if (!validIds.has(id)) collapsedNodeIds.delete(id);
   }
 }
 
@@ -224,8 +236,8 @@ function handleTreeKeydown(e) {
         }
       } else if (hasChildren && expanded) {
         // Move to first child
-        const group = item.nextElementSibling;
-        if (group && group.getAttribute("role") === "group") {
+        const group = item.querySelector('[role="group"]');
+        if (group) {
           const firstChild = group.querySelector('[role="treeitem"]');
           if (firstChild) {
             const newItems = getVisibleTreeItems(tree);
@@ -425,18 +437,7 @@ window._toggleReleaseExpand = async function (releaseId) {
     if (tree) {
       releaseTreeCache.set(releaseId, tree);
       errorReleaseIds.delete(releaseId);
-      // Drain stale collapsed IDs: remove IDs not in new tree
-      const validIds = new Set();
-      if (tree.children) {
-        for (const child of tree.children) {
-          collectTreeNodeIds(child, validIds);
-        }
-      }
-      const toRemove = [];
-      for (const id of collapsedNodeIds) {
-        if (!validIds.has(id)) toRemove.push(id);
-      }
-      toRemove.forEach((id) => collapsedNodeIds.delete(id));
+      drainStaleCollapsedIds(tree);
     }
   } catch (_e) {
     errorReleaseIds.add(releaseId);
@@ -455,18 +456,7 @@ window._retryReleaseTree = async function (releaseId) {
     const tree = await fetchReleaseTree(releaseId);
     if (tree) {
       releaseTreeCache.set(releaseId, tree);
-      // Drain stale collapsed IDs
-      const validIds = new Set();
-      if (tree.children) {
-        for (const child of tree.children) {
-          collectTreeNodeIds(child, validIds);
-        }
-      }
-      const toRemove = [];
-      for (const id of collapsedNodeIds) {
-        if (!validIds.has(id)) toRemove.push(id);
-      }
-      toRemove.forEach((id) => collapsedNodeIds.delete(id));
+      drainStaleCollapsedIds(tree);
     }
   } catch (_e) {
     errorReleaseIds.add(releaseId);
@@ -550,18 +540,7 @@ export async function loadReleases() {
         fetchReleaseTree(id).then((tree) => {
           if (tree) {
             releaseTreeCache.set(id, tree);
-            // Drain stale collapsed IDs
-            const validIds = new Set();
-            if (tree.children) {
-              for (const child of tree.children) {
-                collectTreeNodeIds(child, validIds);
-              }
-            }
-            const toRemove = [];
-            for (const nodeId of collapsedNodeIds) {
-              if (!validIds.has(nodeId)) toRemove.push(nodeId);
-            }
-            toRemove.forEach((nodeId) => collapsedNodeIds.delete(nodeId));
+            drainStaleCollapsedIds(tree);
           }
         }).catch(() => { /* best-effort */ })
       );
