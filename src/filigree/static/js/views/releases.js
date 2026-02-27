@@ -12,6 +12,7 @@ let releaseTreeCache = new Map();
 let collapsedNodeIds = new Set();
 let showReleased = false;
 let loadingReleaseIds = new Set();
+let errorReleaseIds = new Set();
 
 // --- Color helpers ---
 
@@ -34,23 +35,30 @@ function statusBorderColor(status) {
   }
 }
 
-function statusBadgeStyle(status) {
+function statusBadge(status) {
+  let style;
   switch (status) {
     case "planning":
-      return "background:var(--accent);color:var(--surface-base)";
+      style = "background:var(--accent);color:var(--surface-base)";
+      break;
     case "development":
     case "frozen":
     case "testing":
     case "staged":
-      return "background:#F59E0B;color:#000";
+      style = "background:#F59E0B;color:#000";
+      break;
     case "released":
-      return "background:#10B981;color:#fff";
+      style = "background:#10B981;color:#fff";
+      break;
     case "cancelled":
     case "rolled_back":
-      return "background:#EF4444;color:#fff";
+      style = "background:#EF4444;color:#fff";
+      break;
     default:
-      return "background:var(--surface-overlay);color:var(--text-secondary)";
+      style = "background:var(--surface-overlay);color:var(--text-secondary)";
+      break;
   }
+  return '<span class="text-xs rounded px-1.5 py-0.5" style="' + style + '">' + escHtml(status || 'open') + '</span>';
 }
 
 // --- Progress bar rendering ---
@@ -106,8 +114,7 @@ function renderTreeNode(node, level, releaseId) {
   } else {
     // Leaf — status badge inline
     html += '<span style="width:44px;min-width:44px;display:inline-flex;align-items:center;justify-content:center">' +
-      '<span class="text-xs rounded px-1.5 py-0.5" style="' + statusBadgeStyle(node.status || '') + '">' +
-      escHtml(node.status || 'open') + '</span></span>';
+      statusBadge(node.status || '') + '</span>';
   }
 
   // Title (clickable)
@@ -328,8 +335,7 @@ function renderReleaseCard(release) {
     escHtml(release.title || release.id) + '</span>';
 
   // Status badge
-  html += '<span class="text-xs rounded px-1.5 py-0.5 shrink-0" style="' + statusBadgeStyle(release.status) + '">' +
-    escHtml(release.status || 'open') + '</span>';
+  html += statusBadge(release.status);
 
   // Blocked badge
   if (isBlocked) {
@@ -377,6 +383,13 @@ function renderReleaseCard(release) {
     html += '<div class="mt-3 pt-3" style="border-top:1px solid var(--border-default)">';
     if (isLoading) {
       html += '<div class="text-xs py-2" style="color:var(--text-muted)">Loading tree...</div>';
+    } else if (errorReleaseIds.has(release.id)) {
+      html += '<div class="text-xs py-2 flex items-center gap-2" style="color:var(--text-muted)">' +
+        'Failed to load release tree.' +
+        ' <button class="text-xs px-2 py-1 rounded cursor-pointer" ' +
+        'style="background:var(--surface-overlay);color:var(--accent);border:1px solid var(--border-default);min-height:28px" ' +
+        'onclick="window._retryReleaseTree(\'' + safeId + '\')">Retry</button>' +
+        '</div>';
     } else {
       const tree = releaseTreeCache.get(release.id);
       if (tree) {
@@ -411,6 +424,7 @@ window._toggleReleaseExpand = async function (releaseId) {
     const tree = await fetchReleaseTree(releaseId);
     if (tree) {
       releaseTreeCache.set(releaseId, tree);
+      errorReleaseIds.delete(releaseId);
       // Drain stale collapsed IDs: remove IDs not in new tree
       const validIds = new Set();
       if (tree.children) {
@@ -425,7 +439,37 @@ window._toggleReleaseExpand = async function (releaseId) {
       toRemove.forEach((id) => collapsedNodeIds.delete(id));
     }
   } catch (_e) {
-    // best-effort
+    errorReleaseIds.add(releaseId);
+  } finally {
+    loadingReleaseIds.delete(releaseId);
+    loadReleases();
+  }
+};
+
+window._retryReleaseTree = async function (releaseId) {
+  errorReleaseIds.delete(releaseId);
+  loadingReleaseIds.add(releaseId);
+  loadReleases(); // Re-render to show loading state
+
+  try {
+    const tree = await fetchReleaseTree(releaseId);
+    if (tree) {
+      releaseTreeCache.set(releaseId, tree);
+      // Drain stale collapsed IDs
+      const validIds = new Set();
+      if (tree.children) {
+        for (const child of tree.children) {
+          collectTreeNodeIds(child, validIds);
+        }
+      }
+      const toRemove = [];
+      for (const id of collapsedNodeIds) {
+        if (!validIds.has(id)) toRemove.push(id);
+      }
+      toRemove.forEach((id) => collapsedNodeIds.delete(id));
+    }
+  } catch (_e) {
+    errorReleaseIds.add(releaseId);
   } finally {
     loadingReleaseIds.delete(releaseId);
     loadReleases();
