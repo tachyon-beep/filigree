@@ -625,6 +625,8 @@ class TestProactiveContext:
         assert "newly_unblocked" in data
         assert len(data["newly_unblocked"]) == 1
         assert data["newly_unblocked"][0]["id"] == blocked.id
+        # Wire format: SlimIssue 5-key contract
+        assert set(data["newly_unblocked"][0].keys()) == {"id", "title", "status", "priority", "type"}
 
     async def test_close_no_unblocked_items(self, mcp_db: FiligreeDB) -> None:
         issue = mcp_db.create_issue("Standalone")
@@ -871,6 +873,8 @@ class TestMCPMutationEnhancements:
         data = _parse(result)
         assert data["assignee"] == "agent-1"
         assert data["title"] == "Ready task"
+        assert "selection_reason" in data
+        assert isinstance(data["selection_reason"], str)
 
     async def test_claim_next_empty(self, mcp_db: FiligreeDB) -> None:
         result = await call_tool("claim_next", {"assignee": "agent-1"})

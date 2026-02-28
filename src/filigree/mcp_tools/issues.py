@@ -15,6 +15,17 @@ from filigree.mcp_tools.common import (
     _slim_issue,
     _text,
 )
+from filigree.types.api import (
+    BatchCloseResponse,
+    BatchUpdateResponse,
+    ClaimNextResponse,
+    ErrorResponse,
+    IssueListResponse,
+    IssueWithChangedFields,
+    IssueWithTransitions,
+    IssueWithUnblocked,
+    SearchResponse,
+)
 
 
 def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
@@ -304,23 +315,26 @@ async def _handle_get_issue(arguments: dict[str, Any]) -> list[TextContent]:
     tracker = _get_db()
     try:
         issue = tracker.get_issue(arguments["id"])
-        data: dict[str, Any] = dict(issue.to_dict())
         if arguments.get("include_transitions"):
             transitions = tracker.get_valid_transitions(arguments["id"])
-            data["valid_transitions"] = [
-                {
-                    "to": t.to,
-                    "category": t.category,
-                    "enforcement": t.enforcement,
-                    "requires_fields": list(t.requires_fields),
-                    "missing_fields": list(t.missing_fields),
-                    "ready": t.ready,
-                }
-                for t in transitions
-            ]
-        return _text(data)
+            result = IssueWithTransitions(
+                **issue.to_dict(),
+                valid_transitions=[
+                    {
+                        "to": t.to,
+                        "category": t.category,
+                        "enforcement": t.enforcement,
+                        "requires_fields": list(t.requires_fields),
+                        "missing_fields": list(t.missing_fields),
+                        "ready": t.ready,
+                    }
+                    for t in transitions
+                ],
+            )
+            return _text(result)
+        return _text(issue.to_dict())
     except KeyError:
-        return _text({"error": f"Issue not found: {arguments['id']}", "code": "not_found"})
+        return _text(ErrorResponse(error=f"Issue not found: {arguments['id']}", code="not_found"))
 
 
 async def _handle_list_issues(arguments: dict[str, Any]) -> list[TextContent]:
@@ -350,12 +364,12 @@ async def _handle_list_issues(arguments: dict[str, Any]) -> list[TextContent]:
     )
     issues, has_more = _apply_has_more(issues, effective_limit)
     return _text(
-        {
-            "issues": [i.to_dict() for i in issues],
-            "limit": effective_limit,
-            "offset": offset,
-            "has_more": has_more,
-        }
+        IssueListResponse(
+            issues=[i.to_dict() for i in issues],
+            limit=effective_limit,
+            offset=offset,
+            has_more=has_more,
+        )
     )
 
 
@@ -401,7 +415,6 @@ async def _handle_update_issue(arguments: dict[str, Any]) -> list[TextContent]:
             actor=arguments.get("actor", "mcp"),
         )
         _refresh_summary()
-        result: dict[str, Any] = dict(issue.to_dict())
         changed: list[str] = []
         if issue.status != before.status:
             changed.append("status")
@@ -419,7 +432,7 @@ async def _handle_update_issue(arguments: dict[str, Any]) -> list[TextContent]:
             changed.append("parent_id")
         if issue.fields != before.fields:
             changed.append("fields")
-        result["changed_fields"] = changed
+        result = IssueWithChangedFields(**issue.to_dict(), changed_fields=changed)
         return _text(result)
     except KeyError:
         return _text({"error": f"Issue not found: {arguments['id']}", "code": "not_found"})
@@ -442,10 +455,13 @@ async def _handle_close_issue(arguments: dict[str, Any]) -> list[TextContent]:
         _refresh_summary()
         ready_after = tracker.get_ready()
         newly_unblocked = [i for i in ready_after if i.id not in ready_before]
-        result: dict[str, Any] = dict(issue.to_dict())
         if newly_unblocked:
-            result["newly_unblocked"] = [{"id": i.id, "title": i.title, "priority": i.priority, "type": i.type} for i in newly_unblocked]
-        return _text(result)
+            close_result = IssueWithUnblocked(
+                **issue.to_dict(),
+                newly_unblocked=[_slim_issue(i) for i in newly_unblocked],
+            )
+            return _text(close_result)
+        return _text(issue.to_dict())
     except KeyError:
         return _text({"error": f"Issue not found: {arguments['id']}", "code": "not_found"})
     except ValueError as e:
@@ -482,12 +498,12 @@ async def _handle_search_issues(arguments: dict[str, Any]) -> list[TextContent]:
     )
     issues, has_more = _apply_has_more(issues, effective_limit)
     return _text(
-        {
-            "issues": [_slim_issue(i) for i in issues],
-            "limit": effective_limit,
-            "offset": offset,
-            "has_more": has_more,
-        }
+        SearchResponse(
+            issues=[_slim_issue(i) for i in issues],
+            limit=effective_limit,
+            offset=offset,
+            has_more=has_more,
+        )
     )
 
 
@@ -537,12 +553,14 @@ async def _handle_claim_next(arguments: dict[str, Any]) -> list[TextContent]:
     if claimed is None:
         return _text({"status": "empty", "reason": "No ready issues matching filters"})
     _refresh_summary()
-    result: dict[str, Any] = dict(claimed.to_dict())
     parts = [f"P{claimed.priority}"]
     if claimed.type != "task":
         parts.append(f"type={claimed.type}")
     parts.append("ready issue (no blockers)")
-    result["selection_reason"] = f"Highest-priority {', '.join(parts)}"
+    result = ClaimNextResponse(
+        **claimed.to_dict(),
+        selection_reason=f"Highest-priority {', '.join(parts)}",
+    )
     return _text(result)
 
 
@@ -562,13 +580,13 @@ async def _handle_batch_close(arguments: dict[str, Any]) -> list[TextContent]:
     _refresh_summary()
     ready_after = tracker.get_ready()
     newly_unblocked = [i for i in ready_after if i.id not in ready_before]
-    batch_result: dict[str, Any] = {
-        "succeeded": [i.id for i in closed],
-        "failed": failed,
-        "count": len(closed),
-    }
+    batch_result = BatchCloseResponse(
+        succeeded=[i.id for i in closed],
+        failed=failed,
+        count=len(closed),
+    )
     if newly_unblocked:
-        batch_result["newly_unblocked"] = [{"id": i.id, "title": i.title, "priority": i.priority, "type": i.type} for i in newly_unblocked]
+        batch_result["newly_unblocked"] = [_slim_issue(i) for i in newly_unblocked]
     return _text(batch_result)
 
 
@@ -592,9 +610,9 @@ async def _handle_batch_update(arguments: dict[str, Any]) -> list[TextContent]:
     )
     _refresh_summary()
     return _text(
-        {
-            "succeeded": [i.id for i in updated],
-            "failed": update_failed,
-            "count": len(updated),
-        }
+        BatchUpdateResponse(
+            succeeded=[i.id for i in updated],
+            failed=update_failed,
+            count=len(updated),
+        )
     )

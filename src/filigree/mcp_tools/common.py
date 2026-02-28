@@ -12,6 +12,7 @@ from typing import Any
 from mcp.types import TextContent
 
 from filigree.core import Issue
+from filigree.types.api import SlimIssue, TransitionError
 
 # Hard cap on list_issues / search_issues results to keep MCP response size
 # within token limits.  Callers can pass no_limit=true to bypass.
@@ -24,15 +25,15 @@ def _text(content: Any) -> list[TextContent]:
     return [TextContent(type="text", text=json.dumps(content, indent=2, default=str))]
 
 
-def _slim_issue(issue: Issue) -> dict[str, Any]:
+def _slim_issue(issue: Issue) -> SlimIssue:
     """Return a lightweight dict for search result listings."""
-    return {
-        "id": issue.id,
-        "title": issue.title,
-        "status": issue.status,
-        "priority": issue.priority,
-        "type": issue.type,
-    }
+    return SlimIssue(
+        id=issue.id,
+        title=issue.title,
+        status=issue.status,
+        priority=issue.priority,
+        type=issue.type,
+    )
 
 
 def _resolve_pagination(arguments: dict[str, Any]) -> tuple[int, int]:
@@ -93,9 +94,9 @@ def _build_transition_error(
     error: str,
     *,
     include_ready: bool = True,
-) -> dict[str, Any]:
+) -> TransitionError:
     """Build a structured error dict with valid-transition hints."""
-    data: dict[str, Any] = {"error": error, "code": "invalid_transition"}
+    data: TransitionError = {"error": error, "code": "invalid_transition"}
     try:
         transitions = tracker.get_valid_transitions(issue_id)
         if include_ready:
