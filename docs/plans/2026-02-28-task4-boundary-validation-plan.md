@@ -713,7 +713,7 @@ The 10 routes are:
 
 Note: `api_update_issue` uses `body.pop("actor", "dashboard")` — change to `body.get` + validate, then pop after validation succeeds to preserve the existing behavior of removing actor from body before passing to update_issue.
 
-Note: `api_create_issue` defaults to `""` not `"dashboard"` — keep the empty default but validate. Since empty string fails actor validation, change the default to `"dashboard"` to match other routes, OR skip validation when no actor is provided. Looking at the code, `body.get("actor", "")` passes empty string to core — this is the existing behavior. We should default to `"dashboard"` for consistency.
+**Decision:** `api_create_issue` currently defaults to `""` via `body.get("actor", "")`. Since empty string would now fail actor validation, change the default to `"dashboard"` to match all other routes. This is a minor behavior change — previously a no-actor create would store `""` as the actor in the audit trail; now it stores `"dashboard"`. Verify no existing tests assert on the old `""` actor value.
 
 Note: `api_remove_dependency` (line 432-439) hardcodes `actor="dashboard"` — no user input, no validation needed.
 
