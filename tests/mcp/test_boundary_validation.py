@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Any
-
 from filigree.core import FiligreeDB
 from filigree.mcp_server import call_tool
 from tests.mcp.conftest import _parse
@@ -77,3 +75,67 @@ class TestMCPActorValidation:
         data = _parse(result)
         assert data["code"] == "validation_error"
         assert "128" in data["error"]
+
+
+class TestMCPPriorityValidation:
+    """Priority range validation in MCP issue handlers."""
+
+    async def test_create_issue_priority_too_high(self, mcp_db: FiligreeDB) -> None:
+        result = await call_tool("create_issue", {"title": "Bad", "priority": 5})
+        data = _parse(result)
+        assert data["code"] == "validation_error"
+
+    async def test_create_issue_priority_too_low(self, mcp_db: FiligreeDB) -> None:
+        result = await call_tool("create_issue", {"title": "Bad", "priority": -1})
+        data = _parse(result)
+        assert data["code"] == "validation_error"
+
+    async def test_create_issue_priority_boundary_0(self, mcp_db: FiligreeDB) -> None:
+        result = await call_tool("create_issue", {"title": "Low bound", "priority": 0})
+        data = _parse(result)
+        assert "error" not in data
+        assert data["priority"] == 0
+
+    async def test_create_issue_priority_boundary_4(self, mcp_db: FiligreeDB) -> None:
+        result = await call_tool("create_issue", {"title": "High bound", "priority": 4})
+        data = _parse(result)
+        assert "error" not in data
+        assert data["priority"] == 4
+
+    async def test_update_issue_priority_out_of_range(self, mcp_db: FiligreeDB) -> None:
+        issue = mcp_db.create_issue("Target")
+        result = await call_tool("update_issue", {"id": issue.id, "priority": 99})
+        data = _parse(result)
+        assert data["code"] == "validation_error"
+
+    async def test_list_issues_priority_filter_out_of_range(self, mcp_db: FiligreeDB) -> None:
+        result = await call_tool("list_issues", {"priority": -1})
+        data = _parse(result)
+        assert data["code"] == "validation_error"
+
+    async def test_batch_update_priority_out_of_range(self, mcp_db: FiligreeDB) -> None:
+        issue = mcp_db.create_issue("Target")
+        result = await call_tool("batch_update", {"ids": [issue.id], "priority": 5})
+        data = _parse(result)
+        assert data["code"] == "validation_error"
+
+    async def test_claim_next_priority_min_out_of_range(self, mcp_db: FiligreeDB) -> None:
+        result = await call_tool(
+            "claim_next", {"assignee": "bot", "priority_min": -1}
+        )
+        data = _parse(result)
+        assert data["code"] == "validation_error"
+
+    async def test_claim_next_priority_max_out_of_range(self, mcp_db: FiligreeDB) -> None:
+        result = await call_tool(
+            "claim_next", {"assignee": "bot", "priority_max": 5}
+        )
+        data = _parse(result)
+        assert data["code"] == "validation_error"
+
+    async def test_update_issue_priority_none_allowed(self, mcp_db: FiligreeDB) -> None:
+        """Not providing priority should be fine (optional)."""
+        issue = mcp_db.create_issue("Target")
+        result = await call_tool("update_issue", {"id": issue.id, "title": "New"})
+        data = _parse(result)
+        assert "error" not in data or "code" not in data

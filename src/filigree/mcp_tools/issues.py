@@ -15,6 +15,7 @@ from filigree.mcp_tools.common import (
     _slim_issue,
     _text,
     _validate_actor,
+    _validate_int_range,
 )
 from filigree.types.api import (
     BatchCloseResponse,
@@ -341,6 +342,10 @@ async def _handle_get_issue(arguments: dict[str, Any]) -> list[TextContent]:
 async def _handle_list_issues(arguments: dict[str, Any]) -> list[TextContent]:
     from filigree.mcp_server import _get_db
 
+    priority = arguments.get("priority")
+    priority_err = _validate_int_range(priority, "priority", min_val=0, max_val=4)
+    if priority_err:
+        return priority_err
     tracker = _get_db()
     status_filter = arguments.get("status")
     status_category = arguments.get("status_category")
@@ -356,7 +361,7 @@ async def _handle_list_issues(arguments: dict[str, Any]) -> list[TextContent]:
     issues = tracker.list_issues(
         status=status_filter,
         type=arguments.get("type"),
-        priority=arguments.get("priority"),
+        priority=priority,
         parent_id=arguments.get("parent_id"),
         assignee=arguments.get("assignee"),
         label=arguments.get("label"),
@@ -380,12 +385,16 @@ async def _handle_create_issue(arguments: dict[str, Any]) -> list[TextContent]:
     actor, actor_err = _validate_actor(arguments.get("actor", "mcp"))
     if actor_err:
         return actor_err
+    priority = arguments.get("priority", 2)
+    priority_err = _validate_int_range(priority, "priority", min_val=0, max_val=4)
+    if priority_err:
+        return priority_err
     tracker = _get_db()
     try:
         issue = tracker.create_issue(
             arguments["title"],
             type=arguments.get("type", "task"),
-            priority=arguments.get("priority", 2),
+            priority=priority,
             parent_id=arguments.get("parent_id"),
             description=arguments.get("description", ""),
             notes=arguments.get("notes", ""),
@@ -406,13 +415,17 @@ async def _handle_update_issue(arguments: dict[str, Any]) -> list[TextContent]:
     actor, actor_err = _validate_actor(arguments.get("actor", "mcp"))
     if actor_err:
         return actor_err
+    priority = arguments.get("priority")
+    priority_err = _validate_int_range(priority, "priority", min_val=0, max_val=4)
+    if priority_err:
+        return priority_err
     tracker = _get_db()
     try:
         before = tracker.get_issue(arguments["id"])
         issue = tracker.update_issue(
             arguments["id"],
             status=arguments.get("status"),
-            priority=arguments.get("priority"),
+            priority=priority,
             title=arguments.get("title"),
             assignee=arguments.get("assignee"),
             description=arguments.get("description"),
@@ -564,12 +577,20 @@ async def _handle_claim_next(arguments: dict[str, Any]) -> list[TextContent]:
     actor, actor_err = _validate_actor(arguments.get("actor", arguments["assignee"]))
     if actor_err:
         return actor_err
+    priority_min = arguments.get("priority_min")
+    pmin_err = _validate_int_range(priority_min, "priority_min", min_val=0, max_val=4)
+    if pmin_err:
+        return pmin_err
+    priority_max = arguments.get("priority_max")
+    pmax_err = _validate_int_range(priority_max, "priority_max", min_val=0, max_val=4)
+    if pmax_err:
+        return pmax_err
     tracker = _get_db()
     claimed = tracker.claim_next(
         arguments["assignee"],
         type_filter=arguments.get("type"),
-        priority_min=arguments.get("priority_min"),
-        priority_max=arguments.get("priority_max"),
+        priority_min=priority_min,
+        priority_max=priority_max,
         actor=actor,
     )
     if claimed is None:
@@ -621,6 +642,10 @@ async def _handle_batch_update(arguments: dict[str, Any]) -> list[TextContent]:
     actor, actor_err = _validate_actor(arguments.get("actor", "mcp"))
     if actor_err:
         return actor_err
+    priority = arguments.get("priority")
+    priority_err = _validate_int_range(priority, "priority", min_val=0, max_val=4)
+    if priority_err:
+        return priority_err
     tracker = _get_db()
     u_ids = arguments["ids"]
     if not all(isinstance(i, str) for i in u_ids):
@@ -631,7 +656,7 @@ async def _handle_batch_update(arguments: dict[str, Any]) -> list[TextContent]:
     updated, update_failed = tracker.batch_update(
         u_ids,
         status=arguments.get("status"),
-        priority=arguments.get("priority"),
+        priority=priority,
         assignee=arguments.get("assignee"),
         fields=u_fields,
         actor=actor,
