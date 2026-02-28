@@ -138,6 +138,8 @@ def _resolve_graph_runtime(db: FiligreeDB) -> dict[str, Any]:
     enabled: bool
     if enabled_raw is not None:
         enabled_value = _parse_bool_value(enabled_raw, "FILIGREE_GRAPH_V2_ENABLED")
+        if not isinstance(enabled_value, bool):
+            logger.warning("Unparseable FILIGREE_GRAPH_V2_ENABLED=%r, falling back to False", enabled_raw)
         enabled = bool(enabled_value) if isinstance(enabled_value, bool) else False
     else:
         enabled = bool(config.get("graph_v2_enabled", False))

@@ -8,7 +8,7 @@ from typing import Any
 from mcp.types import TextContent, Tool
 
 from filigree.mcp_tools.common import _slim_issue, _text, _validate_actor, _validate_int_range
-from filigree.types.api import BlockedIssue, PlanResponse
+from filigree.types.api import BlockedIssue, CriticalPathResponse, DependencyActionResponse, ErrorResponse, PlanResponse
 
 
 def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
@@ -153,10 +153,10 @@ async def _handle_add_dependency(arguments: dict[str, Any]) -> list[TextContent]
             actor=actor,
         )
     except (ValueError, KeyError) as e:
-        return _text({"error": str(e), "code": "invalid"})
+        return _text(ErrorResponse(error=str(e), code="invalid"))
     _refresh_summary()
     status = "added" if added else "already_exists"
-    return _text({"status": status, "from_id": arguments["from_id"], "to_id": arguments["to_id"]})
+    return _text(DependencyActionResponse(status=status, from_id=arguments["from_id"], to_id=arguments["to_id"]))
 
 
 async def _handle_remove_dependency(arguments: dict[str, Any]) -> list[TextContent]:
@@ -173,7 +173,7 @@ async def _handle_remove_dependency(arguments: dict[str, Any]) -> list[TextConte
     )
     _refresh_summary()
     status = "removed" if removed else "not_found"
-    return _text({"status": status, "from_id": arguments["from_id"], "to_id": arguments["to_id"]})
+    return _text(DependencyActionResponse(status=status, from_id=arguments["from_id"], to_id=arguments["to_id"]))
 
 
 async def _handle_get_ready(arguments: dict[str, Any]) -> list[TextContent]:
@@ -209,7 +209,7 @@ async def _handle_get_plan(arguments: dict[str, Any]) -> list[TextContent]:
         )
         return _text(result)
     except KeyError:
-        return _text({"error": f"Milestone not found: {arguments['milestone_id']}", "code": "not_found"})
+        return _text(ErrorResponse(error=f"Milestone not found: {arguments['milestone_id']}", code="not_found"))
 
 
 async def _handle_create_plan(arguments: dict[str, Any]) -> list[TextContent]:
@@ -243,7 +243,7 @@ async def _handle_create_plan(arguments: dict[str, Any]) -> list[TextContent]:
         _refresh_summary()
         return _text(plan)
     except (KeyError, IndexError, ValueError) as e:
-        return _text({"error": str(e), "code": "invalid"})
+        return _text(ErrorResponse(error=str(e), code="invalid"))
 
 
 async def _handle_get_critical_path(arguments: dict[str, Any]) -> list[TextContent]:
@@ -251,4 +251,4 @@ async def _handle_get_critical_path(arguments: dict[str, Any]) -> list[TextConte
 
     tracker = _get_db()
     path = tracker.get_critical_path()
-    return _text({"path": path, "length": len(path)})
+    return _text(CriticalPathResponse(path=path, length=len(path)))

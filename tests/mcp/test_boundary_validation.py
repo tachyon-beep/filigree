@@ -210,3 +210,26 @@ class TestMCPPriorityValidation:
         result = await call_tool("update_issue", {"id": issue.id, "title": "New"})
         data = _parse(result)
         assert "error" not in data or "code" not in data
+
+
+class TestMCPStringValidation:
+    """_validate_str boundary tests for MCP file-tool filter fields."""
+
+    async def test_list_files_language_non_string(self, mcp_db: FiligreeDB) -> None:
+        """Non-string language filter should be rejected."""
+        result = await call_tool("list_files", {"language": 123})
+        data = _parse(result)
+        assert data["code"] == "validation_error"
+        assert "string" in data["error"]
+
+    async def test_list_files_path_prefix_non_string(self, mcp_db: FiligreeDB) -> None:
+        """Non-string path_prefix filter should be rejected."""
+        result = await call_tool("list_files", {"path_prefix": True})
+        data = _parse(result)
+        assert data["code"] == "validation_error"
+
+    async def test_list_files_scan_source_non_string(self, mcp_db: FiligreeDB) -> None:
+        """Non-string scan_source filter should be rejected."""
+        result = await call_tool("list_files", {"scan_source": ["test"]})
+        data = _parse(result)
+        assert data["code"] == "validation_error"

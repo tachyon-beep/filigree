@@ -25,7 +25,6 @@ from filigree.types.api import (
     IssueListResponse,
     IssueWithChangedFields,
     IssueWithTransitions,
-    IssueWithUnblocked,
     SearchResponse,
 )
 
@@ -404,7 +403,7 @@ async def _handle_create_issue(arguments: dict[str, Any]) -> list[TextContent]:
             actor=actor,
         )
     except ValueError as e:
-        return _text({"error": str(e), "code": "validation_error"})
+        return _text(ErrorResponse(error=str(e), code="validation_error"))
     _refresh_summary()
     return _text(issue.to_dict())
 
@@ -455,7 +454,7 @@ async def _handle_update_issue(arguments: dict[str, Any]) -> list[TextContent]:
         result = IssueWithChangedFields(**issue.to_dict(), changed_fields=changed)
         return _text(result)
     except KeyError:
-        return _text({"error": f"Issue not found: {arguments['id']}", "code": "not_found"})
+        return _text(ErrorResponse(error=f"Issue not found: {arguments['id']}", code="not_found"))
     except ValueError as e:
         return _text(_build_transition_error(tracker, arguments["id"], str(e)))
 
@@ -478,15 +477,12 @@ async def _handle_close_issue(arguments: dict[str, Any]) -> list[TextContent]:
         _refresh_summary()
         ready_after = tracker.get_ready()
         newly_unblocked = [i for i in ready_after if i.id not in ready_before]
+        result_dict = issue.to_dict()
         if newly_unblocked:
-            close_result = IssueWithUnblocked(
-                **issue.to_dict(),
-                newly_unblocked=[_slim_issue(i) for i in newly_unblocked],
-            )
-            return _text(close_result)
-        return _text(issue.to_dict())
+            result_dict["newly_unblocked"] = [_slim_issue(i) for i in newly_unblocked]  # type: ignore[typeddict-unknown-key]
+        return _text(result_dict)
     except KeyError:
-        return _text({"error": f"Issue not found: {arguments['id']}", "code": "not_found"})
+        return _text(ErrorResponse(error=f"Issue not found: {arguments['id']}", code="not_found"))
     except ValueError as e:
         return _text(_build_transition_error(tracker, arguments["id"], str(e)))
 
@@ -506,9 +502,9 @@ async def _handle_reopen_issue(arguments: dict[str, Any]) -> list[TextContent]:
         _refresh_summary()
         return _text(issue.to_dict())
     except KeyError:
-        return _text({"error": f"Issue not found: {arguments['id']}", "code": "not_found"})
+        return _text(ErrorResponse(error=f"Issue not found: {arguments['id']}", code="not_found"))
     except ValueError as e:
-        return _text({"error": str(e), "code": "invalid"})
+        return _text(ErrorResponse(error=str(e), code="invalid"))
 
 
 async def _handle_search_issues(arguments: dict[str, Any]) -> list[TextContent]:
@@ -549,9 +545,9 @@ async def _handle_claim_issue(arguments: dict[str, Any]) -> list[TextContent]:
         _refresh_summary()
         return _text(issue.to_dict())
     except KeyError:
-        return _text({"error": f"Issue not found: {arguments['id']}", "code": "not_found"})
+        return _text(ErrorResponse(error=f"Issue not found: {arguments['id']}", code="not_found"))
     except ValueError as e:
-        return _text({"error": str(e), "code": "conflict"})
+        return _text(ErrorResponse(error=str(e), code="conflict"))
 
 
 async def _handle_release_claim(arguments: dict[str, Any]) -> list[TextContent]:
@@ -566,9 +562,9 @@ async def _handle_release_claim(arguments: dict[str, Any]) -> list[TextContent]:
         _refresh_summary()
         return _text(issue.to_dict())
     except KeyError:
-        return _text({"error": f"Issue not found: {arguments['id']}", "code": "not_found"})
+        return _text(ErrorResponse(error=f"Issue not found: {arguments['id']}", code="not_found"))
     except ValueError as e:
-        return _text({"error": str(e), "code": "conflict"})
+        return _text(ErrorResponse(error=str(e), code="conflict"))
 
 
 async def _handle_claim_next(arguments: dict[str, Any]) -> list[TextContent]:
@@ -616,7 +612,7 @@ async def _handle_batch_close(arguments: dict[str, Any]) -> list[TextContent]:
     tracker = _get_db()
     ids = arguments["ids"]
     if not all(isinstance(i, str) for i in ids):
-        return _text({"error": "All issue IDs must be strings", "code": "validation_error"})
+        return _text(ErrorResponse(error="All issue IDs must be strings", code="validation_error"))
     ready_before = {i.id for i in tracker.get_ready()}
     closed, failed = tracker.batch_close(
         ids,
@@ -649,10 +645,10 @@ async def _handle_batch_update(arguments: dict[str, Any]) -> list[TextContent]:
     tracker = _get_db()
     u_ids = arguments["ids"]
     if not all(isinstance(i, str) for i in u_ids):
-        return _text({"error": "All issue IDs must be strings", "code": "validation_error"})
+        return _text(ErrorResponse(error="All issue IDs must be strings", code="validation_error"))
     u_fields = arguments.get("fields")
     if u_fields is not None and not isinstance(u_fields, dict):
-        return _text({"error": "fields must be a JSON object", "code": "validation_error"})
+        return _text(ErrorResponse(error="fields must be a JSON object", code="validation_error"))
     updated, update_failed = tracker.batch_update(
         u_ids,
         status=arguments.get("status"),

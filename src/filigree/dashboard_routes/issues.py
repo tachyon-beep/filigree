@@ -460,10 +460,15 @@ def create_router() -> APIRouter:
         return JSONResponse({"added": added})
 
     @router.delete("/issue/{issue_id}/dependencies/{dep_id}")
-    async def api_remove_dependency(issue_id: str, dep_id: str, db: FiligreeDB = Depends(_get_db)) -> JSONResponse:
+    async def api_remove_dependency(
+        issue_id: str, dep_id: str, actor: str = "dashboard", db: FiligreeDB = Depends(_get_db)
+    ) -> JSONResponse:
         """Remove a dependency."""
+        clean_actor, actor_err = _validate_actor(actor)
+        if actor_err:
+            return actor_err
         try:
-            removed = db.remove_dependency(issue_id, dep_id, actor="dashboard")
+            removed = db.remove_dependency(issue_id, dep_id, actor=clean_actor)
         except KeyError as e:
             return _error_response(str(e), "ISSUE_NOT_FOUND", 404)
         return JSONResponse({"removed": removed})

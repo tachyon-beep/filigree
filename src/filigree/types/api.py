@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from typing import Any, Literal, NotRequired, TypedDict
 
-from filigree.types.core import IssueDict
-from filigree.types.planning import CommentRecord, PlanPhase, StatsResult
+from filigree.types.core import ISOTimestamp, IssueDict
+from filigree.types.planning import CommentRecord, CriticalPathNode, PlanPhase, StatsResult
 
 # ---------------------------------------------------------------------------
 # Shared types
@@ -122,7 +122,7 @@ class IssueDetailEvent(TypedDict):
     actor: str
     old_value: str | None
     new_value: str | None
-    created_at: str
+    created_at: ISOTimestamp
 
 
 class EnrichedIssueDetail(IssueDict):
@@ -189,8 +189,37 @@ class BatchCloseResponse(_BatchCloseRequired, total=False):
 class PlanResponse(TypedDict):
     """Plan tree with computed progress percentage (MCP get_plan)."""
 
-    milestone: dict[str, Any]
+    milestone: IssueDict
     phases: list[PlanPhase]
     total_steps: int
     completed_steps: int
     progress_pct: float
+
+
+# ---------------------------------------------------------------------------
+# MCP planning / meta response shapes
+# ---------------------------------------------------------------------------
+
+
+class DependencyActionResponse(TypedDict):
+    """Response for add_dependency / remove_dependency MCP tools."""
+
+    status: str
+    from_id: str
+    to_id: str
+
+
+class CriticalPathResponse(TypedDict):
+    """Response for get_critical_path MCP tool."""
+
+    path: list[CriticalPathNode]
+    length: int
+
+
+class BatchActionResponse(TypedDict):
+    """Shared response shape for batch_add_label / batch_add_comment."""
+
+    succeeded: list[str]
+    results: list[dict[str, Any]]
+    failed: list[dict[str, Any]]
+    count: int

@@ -11,11 +11,14 @@ import pytest
 
 from filigree.core import FileRecord, FiligreeDB
 from filigree.types.api import (
+    BatchActionResponse,
     BatchCloseResponse,
     BatchUpdateResponse,
     BlockedIssue,
     ClaimNextResponse,
+    CriticalPathResponse,
     DepDetail,
+    DependencyActionResponse,
     EnrichedIssueDetail,
     ErrorResponse,
     IssueDetailEvent,
@@ -841,6 +844,37 @@ class TestPlanResponseShape:
         assert set(result.keys()) == set(hints.keys())
 
 
+class TestDependencyActionResponseShape:
+    def test_keys_match(self) -> None:
+        result = DependencyActionResponse(status="added", from_id="a", to_id="b")
+        hints = get_type_hints(DependencyActionResponse)
+        assert set(result.keys()) == set(hints.keys())
+
+
+class TestCriticalPathResponseShape:
+    def test_keys_match(self) -> None:
+        from filigree.types.planning import CriticalPathNode
+
+        result = CriticalPathResponse(
+            path=[CriticalPathNode(id="a", title="A", priority=2, type="task")],
+            length=1,
+        )
+        hints = get_type_hints(CriticalPathResponse)
+        assert set(result.keys()) == set(hints.keys())
+
+
+class TestBatchActionResponseShape:
+    def test_keys_match(self) -> None:
+        result = BatchActionResponse(
+            succeeded=["a"],
+            results=[{"id": "a", "status": "added"}],
+            failed=[],
+            count=1,
+        )
+        hints = get_type_hints(BatchActionResponse)
+        assert set(result.keys()) == set(hints.keys())
+
+
 class TestEnrichedIssueDetailShape:
     def test_keys_match(self, db: FiligreeDB) -> None:
         issue = db.create_issue("Test", type="task")
@@ -918,15 +952,18 @@ DASHBOARD_ISSUE_KEYS = {
     "status_category",
     "priority",
     "assignee",
+    "parent_id",
     "blocked_by",
     "blocks",
     "updated_at",
     "created_at",
+    "closed_at",
     "is_ready",
     "children",
     "labels",
     "description",
     "notes",
+    "fields",
 }
 
 

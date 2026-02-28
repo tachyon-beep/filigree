@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from typing import Any, TypedDict
+from typing import TypedDict
+
+from filigree.types.core import ISOTimestamp, IssueDict
 
 # ---------------------------------------------------------------------------
 # db_planning.py types
@@ -26,8 +28,8 @@ DependencyRecord = TypedDict("DependencyRecord", {"from": str, "to": str, "type"
 class PlanPhase(TypedDict):
     """A single phase entry inside a PlanTree."""
 
-    phase: dict[str, Any]
-    steps: list[dict[str, Any]]
+    phase: IssueDict
+    steps: list[IssueDict]
     total: int
     completed: int
     ready: int
@@ -36,7 +38,7 @@ class PlanPhase(TypedDict):
 class PlanTree(TypedDict):
     """Plan tree returned by ``get_plan()`` and ``create_plan()``."""
 
-    milestone: dict[str, Any]
+    milestone: IssueDict
     phases: list[PlanPhase]
     total_steps: int
     completed_steps: int
@@ -53,7 +55,7 @@ class CommentRecord(TypedDict):
     id: int
     author: str
     text: str
-    created_at: str
+    created_at: ISOTimestamp
 
 
 class StatsResult(TypedDict):

@@ -8,7 +8,7 @@ Python's MRO when composed into ``FiligreeDB``.
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, cast
 
 from filigree.db_base import DBMixinProtocol, _now_iso
 from filigree.types.events import EventRecord, EventRecordWithTitle, UndoResult
@@ -221,7 +221,7 @@ class EventsMixin(DBMixinProtocol):
             "undone": True,
             "event_type": event_type,
             "event_id": event_id,
-            "issue": cast(dict[str, Any], self.get_issue(issue_id).to_dict()),
+            "issue": self.get_issue(issue_id).to_dict(),
         }
 
     # -- Archival / Compaction ------------------------------------------------

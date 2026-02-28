@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from typing import Any, Literal, TypeAlias, TypedDict
+from typing import Literal, TypeAlias, TypedDict
+
+from filigree.types.core import ISOTimestamp, IssueDict
 
 
 class EventRecord(TypedDict):
@@ -20,7 +22,7 @@ class EventRecord(TypedDict):
     old_value: str | None
     new_value: str | None
     comment: str
-    created_at: str
+    created_at: ISOTimestamp
 
 
 class EventRecordWithTitle(EventRecord):
@@ -38,7 +40,7 @@ class UndoSuccess(TypedDict):
     undone: Literal[True]
     event_type: str
     event_id: int
-    issue: dict[str, Any]
+    issue: IssueDict
 
 
 class UndoFailure(TypedDict):

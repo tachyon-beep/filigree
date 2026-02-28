@@ -299,6 +299,51 @@ def test_property_stub_is_property(stub: _StubInfo) -> None:
 
 @pytest.mark.parametrize(
     "stub",
+    [s for s in _ALL_STUBS if s.is_property],
+    ids=[_stub_id(s) for s in _ALL_STUBS if s.is_property],
+)
+def test_property_return_type_matches(stub: _StubInfo) -> None:
+    """@property stub return type annotations must match the real fget signature."""
+    attr = getattr(FiligreeDB, stub.name, None)
+    assert attr is not None
+    assert isinstance(attr, property)
+    assert attr.fget is not None, f"Property '{stub.name}' has no fget"
+
+    # Get real return type from fget
+    real_sig = inspect.signature(attr.fget)
+
+    # Get stub return type from AST
+    filepath = _SRC_DIR / stub.source_file
+    source = filepath.read_text()
+    tree = ast.parse(source, filename=str(filepath))
+
+    stub_func: ast.FunctionDef | None = None
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == stub.name and node.lineno == stub.lineno:
+            stub_func = node
+            break
+
+    assert stub_func is not None
+    if stub_func.returns is None:
+        return  # No return annotation on stub — nothing to check
+
+    stub_return_src = ast.get_source_segment(source, stub_func.returns) or ""
+    if real_sig.return_annotation is inspect.Signature.empty:
+        pytest.fail(
+            f"{stub.source_file}:{stub.lineno} property '{stub.name}' stub has return type "
+            f"'{stub_return_src}' but real fget has no annotation"
+        )
+
+    real_return_str = _annotation_to_source(real_sig.return_annotation)
+    if _normalize_type_str(stub_return_src) != _normalize_type_str(real_return_str):
+        pytest.fail(
+            f"{stub.source_file}:{stub.lineno} property '{stub.name}' return type mismatch: "
+            f"stub='{stub_return_src}', real='{real_return_str}'"
+        )
+
+
+@pytest.mark.parametrize(
+    "stub",
     [s for s in _ALL_STUBS if not s.is_property],
     ids=[_stub_id(s) for s in _ALL_STUBS if not s.is_property],
 )
@@ -417,13 +462,22 @@ def _strip_annotations(func_node: ast.FunctionDef) -> str:
             p += "=..."
         parts.append(p)
 
-    if func_node.args.kwonlyargs:
+    # Handle *args / bare * separator
+    if func_node.args.vararg:
+        parts.append(f"*{func_node.args.vararg.arg}")
+    elif func_node.args.kwonlyargs:
         parts.append("*")
-        for i, arg in enumerate(func_node.args.kwonlyargs):
-            p = arg.arg
-            if i < len(kw_defaults) and kw_defaults[i] is not None:
-                p += "=..."
-            parts.append(p)
+
+    # Handle keyword-only args
+    for i, arg in enumerate(func_node.args.kwonlyargs):
+        p = arg.arg
+        if i < len(kw_defaults) and kw_defaults[i] is not None:
+            p += "=..."
+        parts.append(p)
+
+    # Handle **kwargs
+    if func_node.args.kwarg:
+        parts.append(f"**{func_node.args.kwarg.arg}")
 
     sig_str = ", ".join(parts)
     return f"def {func_node.name}({sig_str}): ...\n"

@@ -10,6 +10,7 @@ from typing import Any
 from mcp.types import TextContent, Tool
 
 from filigree.mcp_tools.common import _text, _validate_actor
+from filigree.types.api import BatchActionResponse, ErrorResponse
 
 
 def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
@@ -253,7 +254,7 @@ async def _handle_add_comment(arguments: dict[str, Any]) -> list[TextContent]:
     try:
         tracker.get_issue(arguments["issue_id"])
     except KeyError:
-        return _text({"error": f"Issue not found: {arguments['issue_id']}", "code": "not_found"})
+        return _text(ErrorResponse(error=f"Issue not found: {arguments['issue_id']}", code="not_found"))
     try:
         comment_id = tracker.add_comment(
             arguments["issue_id"],
@@ -261,7 +262,7 @@ async def _handle_add_comment(arguments: dict[str, Any]) -> list[TextContent]:
             author=actor,
         )
     except ValueError as e:
-        return _text({"error": str(e), "code": "validation_error"})
+        return _text(ErrorResponse(error=str(e), code="validation_error"))
     return _text({"status": "ok", "comment_id": comment_id})
 
 
@@ -272,7 +273,7 @@ async def _handle_get_comments(arguments: dict[str, Any]) -> list[TextContent]:
     try:
         tracker.get_issue(arguments["issue_id"])
     except KeyError:
-        return _text({"error": f"Issue not found: {arguments['issue_id']}", "code": "not_found"})
+        return _text(ErrorResponse(error=f"Issue not found: {arguments['issue_id']}", code="not_found"))
     comments = tracker.get_comments(arguments["issue_id"])
     return _text(comments)
 
@@ -284,11 +285,11 @@ async def _handle_add_label(arguments: dict[str, Any]) -> list[TextContent]:
     try:
         tracker.get_issue(arguments["issue_id"])
     except KeyError:
-        return _text({"error": f"Issue not found: {arguments['issue_id']}", "code": "not_found"})
+        return _text(ErrorResponse(error=f"Issue not found: {arguments['issue_id']}", code="not_found"))
     try:
         added = tracker.add_label(arguments["issue_id"], arguments["label"])
     except ValueError as e:
-        return _text({"error": str(e), "code": "validation_error"})
+        return _text(ErrorResponse(error=str(e), code="validation_error"))
     _refresh_summary()
     status = "added" if added else "already_exists"
     return _text({"status": status, "issue_id": arguments["issue_id"], "label": arguments["label"]})
@@ -301,11 +302,11 @@ async def _handle_remove_label(arguments: dict[str, Any]) -> list[TextContent]:
     try:
         tracker.get_issue(arguments["issue_id"])
     except KeyError:
-        return _text({"error": f"Issue not found: {arguments['issue_id']}", "code": "not_found"})
+        return _text(ErrorResponse(error=f"Issue not found: {arguments['issue_id']}", code="not_found"))
     try:
         removed = tracker.remove_label(arguments["issue_id"], arguments["label"])
     except ValueError as e:
-        return _text({"error": str(e), "code": "validation_error"})
+        return _text(ErrorResponse(error=str(e), code="validation_error"))
     _refresh_summary()
     status = "removed" if removed else "not_found"
     return _text({"status": status, "issue_id": arguments["issue_id"], "label": arguments["label"]})
@@ -317,18 +318,18 @@ async def _handle_batch_add_label(arguments: dict[str, Any]) -> list[TextContent
     tracker = _get_db()
     label_ids = arguments["ids"]
     if not all(isinstance(i, str) for i in label_ids):
-        return _text({"error": "All issue IDs must be strings", "code": "validation_error"})
+        return _text(ErrorResponse(error="All issue IDs must be strings", code="validation_error"))
     if not isinstance(arguments["label"], str):
-        return _text({"error": "label must be a string", "code": "validation_error"})
+        return _text(ErrorResponse(error="label must be a string", code="validation_error"))
     label_succeeded, label_failed = tracker.batch_add_label(label_ids, label=arguments["label"])
     _refresh_summary()
     return _text(
-        {
-            "succeeded": [row["id"] for row in label_succeeded],
-            "results": label_succeeded,
-            "failed": label_failed,
-            "count": len(label_succeeded),
-        }
+        BatchActionResponse(
+            succeeded=[row["id"] for row in label_succeeded],
+            results=label_succeeded,
+            failed=label_failed,
+            count=len(label_succeeded),
+        )
     )
 
 
@@ -341,9 +342,9 @@ async def _handle_batch_add_comment(arguments: dict[str, Any]) -> list[TextConte
     tracker = _get_db()
     comment_ids = arguments["ids"]
     if not all(isinstance(i, str) for i in comment_ids):
-        return _text({"error": "All issue IDs must be strings", "code": "validation_error"})
+        return _text(ErrorResponse(error="All issue IDs must be strings", code="validation_error"))
     if not isinstance(arguments["text"], str):
-        return _text({"error": "text must be a string", "code": "validation_error"})
+        return _text(ErrorResponse(error="text must be a string", code="validation_error"))
     comment_succeeded, comment_failed = tracker.batch_add_comment(
         comment_ids,
         text=arguments["text"],
@@ -351,12 +352,12 @@ async def _handle_batch_add_comment(arguments: dict[str, Any]) -> list[TextConte
     )
     _refresh_summary()
     return _text(
-        {
-            "succeeded": [str(row["id"]) for row in comment_succeeded],
-            "results": comment_succeeded,
-            "failed": comment_failed,
-            "count": len(comment_succeeded),
-        }
+        BatchActionResponse(
+            succeeded=[str(row["id"]) for row in comment_succeeded],
+            results=comment_succeeded,
+            failed=comment_failed,
+            count=len(comment_succeeded),
+        )
     )
 
 
@@ -404,9 +405,9 @@ async def _handle_export_jsonl(arguments: dict[str, Any]) -> list[TextContent]:
         count = tracker.export_jsonl(safe)
         return _text({"status": "ok", "records": count, "path": str(safe)})
     except ValueError as e:
-        return _text({"error": str(e), "code": "invalid_path"})
+        return _text(ErrorResponse(error=str(e), code="invalid_path"))
     except OSError as e:
-        return _text({"error": str(e), "code": "io_error"})
+        return _text(ErrorResponse(error=str(e), code="io_error"))
 
 
 async def _handle_import_jsonl(arguments: dict[str, Any]) -> list[TextContent]:
@@ -416,14 +417,14 @@ async def _handle_import_jsonl(arguments: dict[str, Any]) -> list[TextContent]:
     try:
         safe = _safe_path(arguments["input_path"])
     except ValueError as e:
-        return _text({"error": str(e), "code": "invalid_path"})
+        return _text(ErrorResponse(error=str(e), code="invalid_path"))
     try:
         count = tracker.import_jsonl(safe, merge=arguments.get("merge", False))
         _refresh_summary()
         return _text({"status": "ok", "records": count, "path": str(safe)})
     except (ValueError, OSError, sqlite3.Error) as e:
         logging.getLogger(__name__).warning("import_jsonl failed: %s", e, exc_info=True)
-        return _text({"error": str(e), "code": "import_error"})
+        return _text(ErrorResponse(error=str(e), code="import_error"))
 
 
 async def _handle_archive_closed(arguments: dict[str, Any]) -> list[TextContent]:
@@ -462,7 +463,7 @@ async def _handle_undo_last(arguments: dict[str, Any]) -> list[TextContent]:
             _refresh_summary()
         return _text(result)
     except KeyError:
-        return _text({"error": f"Issue not found: {arguments['id']}", "code": "not_found"})
+        return _text(ErrorResponse(error=f"Issue not found: {arguments['id']}", code="not_found"))
 
 
 async def _handle_get_issue_events(arguments: dict[str, Any]) -> list[TextContent]:
@@ -476,4 +477,4 @@ async def _handle_get_issue_events(arguments: dict[str, Any]) -> list[TextConten
         )
         return _text(events)
     except KeyError:
-        return _text({"error": f"Issue not found: {arguments['issue_id']}", "code": "not_found"})
+        return _text(ErrorResponse(error=f"Issue not found: {arguments['issue_id']}", code="not_found"))

@@ -7,6 +7,7 @@ be imported freely without triggering circular-import issues.
 from __future__ import annotations
 
 import json
+import logging
 from typing import TYPE_CHECKING, Any
 
 from mcp.types import TextContent
@@ -17,6 +18,8 @@ if TYPE_CHECKING:
     from filigree.core import FiligreeDB
 from filigree.types.api import SlimIssue, TransitionError
 from filigree.validation import sanitize_actor
+
+logger = logging.getLogger(__name__)
 
 # Hard cap on list_issues / search_issues results to keep MCP response size
 # within token limits.  Callers can pass no_limit=true to bypass.
@@ -117,5 +120,5 @@ def _build_transition_error(
             data["valid_transitions"] = [{"to": t.to, "category": t.category} for t in transitions]
         data["hint"] = "Use get_valid_transitions to see allowed state changes"
     except KeyError:
-        pass
+        logger.debug("Could not resolve transitions for %s", issue_id, exc_info=True)
     return data
