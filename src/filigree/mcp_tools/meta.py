@@ -10,7 +10,15 @@ from typing import Any
 from mcp.types import TextContent, Tool
 
 from filigree.mcp_tools.common import _parse_args, _text, _validate_actor
-from filigree.types.api import BatchActionResponse, ErrorResponse
+from filigree.types.api import (
+    AddCommentResult,
+    ArchiveClosedResponse,
+    BatchActionResponse,
+    CompactEventsResponse,
+    ErrorResponse,
+    JsonlTransferResponse,
+    LabelActionResponse,
+)
 from filigree.types.inputs import (
     AddCommentArgs,
     AddLabelArgs,
@@ -280,7 +288,7 @@ async def _handle_add_comment(arguments: dict[str, Any]) -> list[TextContent]:
         )
     except ValueError as e:
         return _text(ErrorResponse(error=str(e), code="validation_error"))
-    return _text({"status": "ok", "comment_id": comment_id})
+    return _text(AddCommentResult(status="ok", comment_id=comment_id))
 
 
 async def _handle_get_comments(arguments: dict[str, Any]) -> list[TextContent]:
@@ -311,7 +319,7 @@ async def _handle_add_label(arguments: dict[str, Any]) -> list[TextContent]:
         return _text(ErrorResponse(error=str(e), code="validation_error"))
     _refresh_summary()
     status = "added" if added else "already_exists"
-    return _text({"status": status, "issue_id": args["issue_id"], "label": args["label"]})
+    return _text(LabelActionResponse(status=status, issue_id=args["issue_id"], label=args["label"]))
 
 
 async def _handle_remove_label(arguments: dict[str, Any]) -> list[TextContent]:
@@ -329,7 +337,7 @@ async def _handle_remove_label(arguments: dict[str, Any]) -> list[TextContent]:
         return _text(ErrorResponse(error=str(e), code="validation_error"))
     _refresh_summary()
     status = "removed" if removed else "not_found"
-    return _text({"status": status, "issue_id": args["issue_id"], "label": args["label"]})
+    return _text(LabelActionResponse(status=status, issue_id=args["issue_id"], label=args["label"]))
 
 
 async def _handle_batch_add_label(arguments: dict[str, Any]) -> list[TextContent]:
@@ -428,7 +436,7 @@ async def _handle_export_jsonl(arguments: dict[str, Any]) -> list[TextContent]:
     try:
         safe = _safe_path(args["output_path"])
         count = tracker.export_jsonl(safe)
-        return _text({"status": "ok", "records": count, "path": str(safe)})
+        return _text(JsonlTransferResponse(status="ok", records=count, path=str(safe)))
     except ValueError as e:
         return _text(ErrorResponse(error=str(e), code="invalid_path"))
     except OSError as e:
@@ -447,7 +455,7 @@ async def _handle_import_jsonl(arguments: dict[str, Any]) -> list[TextContent]:
     try:
         count = tracker.import_jsonl(safe, merge=args.get("merge", False))
         _refresh_summary()
-        return _text({"status": "ok", "records": count, "path": str(safe)})
+        return _text(JsonlTransferResponse(status="ok", records=count, path=str(safe)))
     except (ValueError, OSError, sqlite3.Error) as e:
         logging.getLogger(__name__).warning("import_jsonl failed: %s", e, exc_info=True)
         return _text(ErrorResponse(error=str(e), code="import_error"))
@@ -466,7 +474,7 @@ async def _handle_archive_closed(arguments: dict[str, Any]) -> list[TextContent]
         actor=actor,
     )
     _refresh_summary()
-    return _text({"status": "ok", "archived_count": len(archived), "archived_ids": archived})
+    return _text(ArchiveClosedResponse(status="ok", archived_count=len(archived), archived_ids=archived))
 
 
 async def _handle_compact_events(arguments: dict[str, Any]) -> list[TextContent]:
@@ -475,7 +483,7 @@ async def _handle_compact_events(arguments: dict[str, Any]) -> list[TextContent]
     args = _parse_args(arguments, CompactEventsArgs)
     tracker = _get_db()
     deleted = tracker.compact_events(keep_recent=args.get("keep_recent", 50))
-    return _text({"status": "ok", "events_deleted": deleted})
+    return _text(CompactEventsResponse(status="ok", events_deleted=deleted))
 
 
 async def _handle_undo_last(arguments: dict[str, Any]) -> list[TextContent]:

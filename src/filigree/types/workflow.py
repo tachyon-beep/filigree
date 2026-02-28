@@ -57,3 +57,27 @@ class TemplateListItem(TypedDict):
     display_name: str
     description: str
     fields_schema: list[FieldSchemaInfo]
+
+
+class TypeListItem(TypedDict):
+    """Type summary returned by ``list_types`` MCP handler.
+
+    Shares several keys with ``TemplateListItem`` but omits
+    ``fields_schema`` and adds ``pack``, ``states``, and ``initial_state``.
+    """
+
+    type: str
+    display_name: str
+    description: str
+    pack: str
+    states: list[StateInfo]
+    initial_state: str
+
+
+class TypeInfoResponse(TemplateInfo):
+    """Full type info response from get_type_info MCP handler.
+
+    Extends ``TemplateInfo`` with the pack identifier.
+    """
+
+    pack: str

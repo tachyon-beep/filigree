@@ -223,3 +223,113 @@ class BatchActionResponse(TypedDict):
     results: list[dict[str, Any]]
     failed: list[dict[str, Any]]
     count: int
+
+
+# ---------------------------------------------------------------------------
+# MCP meta handler responses
+# ---------------------------------------------------------------------------
+
+
+class AddCommentResult(TypedDict):
+    """Response for add_comment MCP tool."""
+
+    status: str
+    comment_id: int
+
+
+class LabelActionResponse(TypedDict):
+    """Response for add_label / remove_label MCP tools."""
+
+    status: str
+    issue_id: str
+    label: str
+
+
+class JsonlTransferResponse(TypedDict):
+    """Response for export_jsonl / import_jsonl MCP tools."""
+
+    status: str
+    records: int
+    path: str
+
+
+class ArchiveClosedResponse(TypedDict):
+    """Response for archive_closed MCP tool."""
+
+    status: str
+    archived_count: int
+    archived_ids: list[str]
+
+
+class CompactEventsResponse(TypedDict):
+    """Response for compact_events MCP tool."""
+
+    status: str
+    events_deleted: int
+
+
+class ClaimNextEmptyResponse(TypedDict):
+    """Response when claim_next finds no matching issues."""
+
+    status: str
+    reason: str
+
+
+# ---------------------------------------------------------------------------
+# MCP workflow handler responses
+# ---------------------------------------------------------------------------
+
+
+class WorkflowStatesResponse(TypedDict):
+    """Response for get_workflow_states MCP tool."""
+
+    states: dict[str, list[str]]
+
+
+class PackListItem(TypedDict):
+    """Single pack entry returned by list_packs MCP tool."""
+
+    pack: str
+    version: str
+    display_name: str
+    description: str
+    types: list[str]
+    requires_packs: list[str]
+
+
+class ValidationResult(TypedDict):
+    """Response for validate_issue MCP tool."""
+
+    valid: bool
+    warnings: list[str]
+    errors: list[str]
+
+
+class _WorkflowGuideRequired(TypedDict):
+    """Required keys for WorkflowGuideResponse."""
+
+    pack: str
+    guide: dict[str, Any] | None
+
+
+class WorkflowGuideResponse(_WorkflowGuideRequired, total=False):
+    """Response for get_workflow_guide MCP tool.
+
+    ``pack`` and ``guide`` are always present.  ``message`` appears when
+    no guide is available; ``note`` appears when the pack was resolved
+    from a type name.
+    """
+
+    message: str
+    note: str
+
+
+class StateExplanation(TypedDict):
+    """Response for explain_state MCP tool."""
+
+    state: str
+    category: str
+    type: str
+    inbound_transitions: list[dict[str, str]]
+    outbound_transitions: list[dict[str, Any]]
+    required_fields: list[str]

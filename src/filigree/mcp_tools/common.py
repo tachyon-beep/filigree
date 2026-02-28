@@ -16,7 +16,7 @@ from filigree.core import Issue
 
 if TYPE_CHECKING:
     from filigree.core import FiligreeDB
-from filigree.types.api import SlimIssue, TransitionError
+from filigree.types.api import ErrorResponse, SlimIssue, TransitionError
 from filigree.validation import sanitize_actor
 
 logger = logging.getLogger(__name__)
@@ -83,7 +83,7 @@ def _apply_has_more(items: list[Any], effective_limit: int) -> tuple[list[Any], 
 def _validate_str(value: Any, name: str) -> list[TextContent] | None:
     """Return a validation error if *value* is not ``None`` and not a ``str``."""
     if value is not None and not isinstance(value, str):
-        return _text({"error": f"{name} must be a string", "code": "validation_error"})
+        return _text(ErrorResponse(error=f"{name} must be a string", code="validation_error"))
     return None
 
 
@@ -100,11 +100,11 @@ def _validate_int_range(
     if value is None:
         return None
     if isinstance(value, bool) or not isinstance(value, int):
-        return _text({"error": f"{name} must be an integer", "code": "validation_error"})
+        return _text(ErrorResponse(error=f"{name} must be an integer", code="validation_error"))
     if min_val is not None and value < min_val:
-        return _text({"error": f"{name} must be >= {min_val}", "code": "validation_error"})
+        return _text(ErrorResponse(error=f"{name} must be >= {min_val}", code="validation_error"))
     if max_val is not None and value > max_val:
-        return _text({"error": f"{name} must be <= {max_val}", "code": "validation_error"})
+        return _text(ErrorResponse(error=f"{name} must be <= {max_val}", code="validation_error"))
     return None
 
 
@@ -112,7 +112,7 @@ def _validate_actor(value: Any) -> tuple[str, list[TextContent] | None]:
     """Sanitize actor, returning (cleaned, None) or ("", error_response)."""
     cleaned, err = sanitize_actor(value)
     if err:
-        return ("", _text({"error": err, "code": "validation_error"}))
+        return ("", _text(ErrorResponse(error=err, code="validation_error")))
     return (cleaned, None)
 
 

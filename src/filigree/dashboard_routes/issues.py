@@ -18,6 +18,8 @@ from filigree.dashboard_routes.common import (
     _validate_priority,
 )
 from filigree.types.api import DepDetail, EnrichedIssueDetail, IssueDetailEvent
+from filigree.types.core import ISOTimestamp
+from filigree.types.planning import CommentRecord
 
 logger = logging.getLogger(__name__)
 
@@ -255,13 +257,13 @@ def create_router() -> APIRouter:
             return _error_response(str(e), "VALIDATION_ERROR", 400)
         # Fetch the comment from DB to get the real created_at timestamp
         comments = db.get_comments(issue_id)
-        created_at = ""
+        created_at = ISOTimestamp("")
         for c in comments:
             if c["id"] == comment_id:
                 created_at = c["created_at"]
                 break
         return JSONResponse(
-            {"id": comment_id, "author": author, "text": text, "created_at": created_at},
+            CommentRecord(id=comment_id, author=author, text=text, created_at=created_at),
             status_code=201,
         )
 

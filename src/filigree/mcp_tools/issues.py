@@ -18,6 +18,19 @@ from filigree.mcp_tools.common import (
     _validate_actor,
     _validate_int_range,
 )
+from filigree.types.api import (
+    BatchCloseResponse,
+    BatchUpdateResponse,
+    ClaimNextEmptyResponse,
+    ClaimNextResponse,
+    ErrorResponse,
+    IssueListResponse,
+    IssueWithChangedFields,
+    IssueWithTransitions,
+    IssueWithUnblocked,
+    SearchResponse,
+)
+from filigree.types.core import IssueDict
 from filigree.types.inputs import (
     BatchCloseArgs,
     BatchUpdateArgs,
@@ -31,16 +44,6 @@ from filigree.types.inputs import (
     ReopenIssueArgs,
     SearchIssuesArgs,
     UpdateIssueArgs,
-)
-from filigree.types.api import (
-    BatchCloseResponse,
-    BatchUpdateResponse,
-    ClaimNextResponse,
-    ErrorResponse,
-    IssueListResponse,
-    IssueWithChangedFields,
-    IssueWithTransitions,
-    SearchResponse,
 )
 
 
@@ -370,7 +373,7 @@ async def _handle_list_issues(arguments: dict[str, Any]) -> list[TextContent]:
         if category_states:
             status_filter = status_category
         else:
-            return _text({"issues": [], "limit": args.get("limit", 100), "offset": args.get("offset", 0), "has_more": False})
+            return _text(IssueListResponse(issues=[], limit=args.get("limit", 100), offset=args.get("offset", 0), has_more=False))
 
     effective_limit, offset = _resolve_pagination(arguments)
 
@@ -497,10 +500,13 @@ async def _handle_close_issue(arguments: dict[str, Any]) -> list[TextContent]:
         _refresh_summary()
         ready_after = tracker.get_ready()
         newly_unblocked = [i for i in ready_after if i.id not in ready_before]
-        result_dict = issue.to_dict()
         if newly_unblocked:
-            result_dict["newly_unblocked"] = [_slim_issue(i) for i in newly_unblocked]  # type: ignore[typeddict-unknown-key]
-        return _text(result_dict)
+            result: IssueWithUnblocked | IssueDict = IssueWithUnblocked(
+                **issue.to_dict(), newly_unblocked=[_slim_issue(i) for i in newly_unblocked]
+            )
+        else:
+            result = issue.to_dict()
+        return _text(result)
     except KeyError:
         return _text(ErrorResponse(error=f"Issue not found: {args['id']}", code="not_found"))
     except ValueError as e:
@@ -615,7 +621,7 @@ async def _handle_claim_next(arguments: dict[str, Any]) -> list[TextContent]:
         actor=actor,
     )
     if claimed is None:
-        return _text({"status": "empty", "reason": "No ready issues matching filters"})
+        return _text(ClaimNextEmptyResponse(status="empty", reason="No ready issues matching filters"))
     _refresh_summary()
     parts = [f"P{claimed.priority}"]
     if claimed.type != "task":

@@ -8,6 +8,14 @@ from typing import Any
 from mcp.types import TextContent, Tool
 
 from filigree.mcp_tools.common import _parse_args, _text
+from filigree.types.api import (
+    ErrorResponse,
+    PackListItem,
+    StateExplanation,
+    ValidationResult,
+    WorkflowGuideResponse,
+    WorkflowStatesResponse,
+)
 from filigree.types.inputs import (
     ExplainStateArgs,
     GetTemplateArgs,
@@ -15,6 +23,13 @@ from filigree.types.inputs import (
     GetValidTransitionsArgs,
     GetWorkflowGuideArgs,
     ValidateIssueArgs,
+)
+from filigree.types.workflow import (
+    FieldSchemaInfo,
+    StateInfo,
+    TransitionInfo,
+    TypeInfoResponse,
+    TypeListItem,
 )
 
 
@@ -141,7 +156,7 @@ async def _handle_get_template(arguments: dict[str, Any]) -> list[TextContent]:
     tracker = _get_db()
     tpl = tracker.get_template(args["type"])
     if tpl is None:
-        return _text({"error": f"Unknown template: {args['type']}", "code": "not_found"})
+        return _text(ErrorResponse(error=f"Unknown template: {args['type']}", code="not_found"))
     return _text(tpl)
 
 
@@ -150,13 +165,13 @@ async def _handle_get_workflow_states(arguments: dict[str, Any]) -> list[TextCon
 
     tracker = _get_db()
     return _text(
-        {
-            "states": {
+        WorkflowStatesResponse(
+            states={
                 "open": tracker._get_states_for_category("open"),
                 "wip": tracker._get_states_for_category("wip"),
                 "done": tracker._get_states_for_category("done"),
             }
-        }
+        )
     )
 
 
@@ -164,17 +179,17 @@ async def _handle_list_types(arguments: dict[str, Any]) -> list[TextContent]:
     from filigree.mcp_server import _get_db
 
     tracker = _get_db()
-    types_list = []
+    types_list: list[TypeListItem] = []
     for tt in tracker.templates.list_types():
         types_list.append(
-            {
-                "type": tt.type,
-                "display_name": tt.display_name,
-                "description": tt.description,
-                "pack": tt.pack,
-                "states": [{"name": s.name, "category": s.category} for s in tt.states],
-                "initial_state": tt.initial_state,
-            }
+            TypeListItem(
+                type=tt.type,
+                display_name=tt.display_name,
+                description=tt.description,
+                pack=tt.pack,
+                states=[StateInfo(name=s.name, category=s.category) for s in tt.states],
+                initial_state=tt.initial_state,
+            )
         )
     return _text(sorted(types_list, key=lambda t: str(t["type"])))
 
@@ -186,36 +201,33 @@ async def _handle_get_type_info(arguments: dict[str, Any]) -> list[TextContent]:
     tracker = _get_db()
     type_tpl = tracker.templates.get_type(args["type"])
     if type_tpl is None:
-        return _text({"error": f"Unknown type: {args['type']}", "code": "not_found"})
+        return _text(ErrorResponse(error=f"Unknown type: {args['type']}", code="not_found"))
+    fields: list[FieldSchemaInfo] = []
+    for fd in type_tpl.fields_schema:
+        fsi = FieldSchemaInfo(name=fd.name, type=fd.type, description=fd.description)
+        if fd.options:
+            fsi["options"] = list(fd.options)
+        if fd.default is not None:
+            fsi["default"] = fd.default
+        if fd.required_at:
+            fsi["required_at"] = list(fd.required_at)
+        fields.append(fsi)
     return _text(
-        {
-            "type": type_tpl.type,
-            "display_name": type_tpl.display_name,
-            "description": type_tpl.description,
-            "pack": type_tpl.pack,
-            "states": [{"name": s.name, "category": s.category} for s in type_tpl.states],
-            "initial_state": type_tpl.initial_state,
-            "transitions": [
-                {
-                    "from": td.from_state,
-                    "to": td.to_state,
-                    "enforcement": td.enforcement,
-                    "requires_fields": list(td.requires_fields),
-                }
+        TypeInfoResponse(
+            type=type_tpl.type,
+            display_name=type_tpl.display_name,
+            description=type_tpl.description,
+            pack=type_tpl.pack,
+            states=[StateInfo(name=s.name, category=s.category) for s in type_tpl.states],
+            initial_state=type_tpl.initial_state,
+            transitions=[
+                TransitionInfo(
+                    {"from": td.from_state, "to": td.to_state, "enforcement": td.enforcement, "requires_fields": list(td.requires_fields)}
+                )
                 for td in type_tpl.transitions
             ],
-            "fields_schema": [
-                {
-                    "name": fd.name,
-                    "type": fd.type,
-                    "description": fd.description,
-                    **({"options": list(fd.options)} if fd.options else {}),
-                    **({"default": fd.default} if fd.default is not None else {}),
-                    **({"required_at": list(fd.required_at)} if fd.required_at else {}),
-                }
-                for fd in type_tpl.fields_schema
-            ],
-        }
+            fields_schema=fields,
+        )
     )
 
 
@@ -223,17 +235,17 @@ async def _handle_list_packs(arguments: dict[str, Any]) -> list[TextContent]:
     from filigree.mcp_server import _get_db
 
     tracker = _get_db()
-    packs_list = []
+    packs_list: list[PackListItem] = []
     for pack in tracker.templates.list_packs():
         packs_list.append(
-            {
-                "pack": pack.pack,
-                "version": pack.version,
-                "display_name": pack.display_name,
-                "description": pack.description,
-                "types": sorted(pack.types.keys()),
-                "requires_packs": list(pack.requires_packs),
-            }
+            PackListItem(
+                pack=pack.pack,
+                version=pack.version,
+                display_name=pack.display_name,
+                description=pack.description,
+                types=sorted(pack.types.keys()),
+                requires_packs=list(pack.requires_packs),
+            )
         )
     return _text(sorted(packs_list, key=lambda p: str(p["pack"])))
 
@@ -268,7 +280,7 @@ async def _handle_get_valid_transitions(arguments: dict[str, Any]) -> list[TextC
             ]
         )
     except KeyError:
-        return _text({"error": f"Issue not found: {args['issue_id']}", "code": "not_found"})
+        return _text(ErrorResponse(error=f"Issue not found: {args['issue_id']}", code="not_found"))
 
 
 async def _handle_validate_issue(arguments: dict[str, Any]) -> list[TextContent]:
@@ -279,14 +291,14 @@ async def _handle_validate_issue(arguments: dict[str, Any]) -> list[TextContent]
     try:
         val_result = tracker.validate_issue(args["issue_id"])
         return _text(
-            {
-                "valid": val_result.valid,
-                "warnings": list(val_result.warnings),
-                "errors": list(val_result.errors),
-            }
+            ValidationResult(
+                valid=val_result.valid,
+                warnings=list(val_result.warnings),
+                errors=list(val_result.errors),
+            )
         )
     except KeyError:
-        return _text({"error": f"Issue not found: {args['issue_id']}", "code": "not_found"})
+        return _text(ErrorResponse(error=f"Issue not found: {args['issue_id']}", code="not_found"))
 
 
 async def _handle_get_workflow_guide(arguments: dict[str, Any]) -> list[TextContent]:
@@ -301,23 +313,23 @@ async def _handle_get_workflow_guide(arguments: dict[str, Any]) -> list[TextCont
             wf_pack = tracker.templates.get_pack(type_tpl.pack)
             if wf_pack is not None:
                 if wf_pack.guide is None:
-                    return _text({"pack": wf_pack.pack, "guide": None, "message": "No guide available for this pack"})
+                    return _text(WorkflowGuideResponse(pack=wf_pack.pack, guide=None, message="No guide available for this pack"))
                 return _text(
-                    {
-                        "pack": wf_pack.pack,
-                        "guide": wf_pack.guide,
-                        "note": f"Resolved type '{args['pack']}' to pack '{wf_pack.pack}'",
-                    }
+                    WorkflowGuideResponse(
+                        pack=wf_pack.pack,
+                        guide=wf_pack.guide,
+                        note=f"Resolved type '{args['pack']}' to pack '{wf_pack.pack}'",
+                    )
                 )
         return _text(
-            {
-                "error": f"Unknown pack: '{args['pack']}'. Use list_packs to see available packs, or list_types to see types.",
-                "code": "not_found",
-            }
+            ErrorResponse(
+                error=f"Unknown pack: '{args['pack']}'. Use list_packs to see available packs, or list_types to see types.",
+                code="not_found",
+            )
         )
     if wf_pack.guide is None:
-        return _text({"pack": wf_pack.pack, "guide": None, "message": "No guide available for this pack"})
-    return _text({"pack": wf_pack.pack, "guide": wf_pack.guide})
+        return _text(WorkflowGuideResponse(pack=wf_pack.pack, guide=None, message="No guide available for this pack"))
+    return _text(WorkflowGuideResponse(pack=wf_pack.pack, guide=wf_pack.guide))
 
 
 async def _handle_explain_state(arguments: dict[str, Any]) -> list[TextContent]:
@@ -327,7 +339,7 @@ async def _handle_explain_state(arguments: dict[str, Any]) -> list[TextContent]:
     tracker = _get_db()
     state_tpl = tracker.templates.get_type(args["type"])
     if state_tpl is None:
-        return _text({"error": f"Unknown type: {args['type']}", "code": "not_found"})
+        return _text(ErrorResponse(error=f"Unknown type: {args['type']}", code="not_found"))
     state_name = args["state"]
     state_def = None
     for s in state_tpl.states:
@@ -335,7 +347,7 @@ async def _handle_explain_state(arguments: dict[str, Any]) -> list[TextContent]:
             state_def = s
             break
     if state_def is None:
-        return _text({"error": f"Unknown state '{state_name}' for type '{args['type']}'", "code": "not_found"})
+        return _text(ErrorResponse(error=f"Unknown state '{state_name}' for type '{args['type']}'", code="not_found"))
     inbound = [{"from": td.from_state, "enforcement": td.enforcement} for td in state_tpl.transitions if td.to_state == state_name]
     outbound = [
         {"to": td.to_state, "enforcement": td.enforcement, "requires_fields": list(td.requires_fields)}
@@ -344,14 +356,14 @@ async def _handle_explain_state(arguments: dict[str, Any]) -> list[TextContent]:
     ]
     required_fields = [fd.name for fd in state_tpl.fields_schema if state_name in fd.required_at]
     return _text(
-        {
-            "state": state_name,
-            "category": state_def.category,
-            "type": args["type"],
-            "inbound_transitions": inbound,
-            "outbound_transitions": outbound,
-            "required_fields": required_fields,
-        }
+        StateExplanation(
+            state=state_name,
+            category=state_def.category,
+            type=args["type"],
+            inbound_transitions=inbound,
+            outbound_transitions=outbound,
+            required_fields=required_fields,
+        )
     )
 
 
