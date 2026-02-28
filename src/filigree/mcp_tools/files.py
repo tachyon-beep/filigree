@@ -13,7 +13,16 @@ from typing import Any
 from mcp.types import TextContent, Tool
 
 from filigree.core import VALID_ASSOC_TYPES, VALID_SEVERITIES
-from filigree.mcp_tools.common import _text, _validate_int_range, _validate_str
+from filigree.mcp_tools.common import _parse_args, _text, _validate_int_range, _validate_str
+from filigree.types.inputs import (
+    AddFileAssociationArgs,
+    GetFileArgs,
+    GetFileTimelineArgs,
+    GetIssueFilesArgs,
+    ListFilesArgs,
+    RegisterFileArgs,
+    TriggerScanArgs,
+)
 from filigree.scanners import list_scanners as _list_scanners
 from filigree.scanners import load_scanner, validate_scanner_command
 
@@ -172,16 +181,17 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
 async def _handle_list_files(arguments: dict[str, Any]) -> list[TextContent]:
     from filigree.mcp_server import _get_db
 
+    args = _parse_args(arguments, ListFilesArgs)
     tracker = _get_db()
-    limit = arguments.get("limit", 100)
-    offset = arguments.get("offset", 0)
-    min_findings = arguments.get("min_findings")
-    has_severity = arguments.get("has_severity")
-    language = arguments.get("language")
-    path_prefix = arguments.get("path_prefix")
-    scan_source = arguments.get("scan_source")
-    sort = arguments.get("sort", "updated_at")
-    direction = arguments.get("direction")
+    limit = args.get("limit", 100)
+    offset = args.get("offset", 0)
+    min_findings = args.get("min_findings")
+    has_severity = args.get("has_severity")
+    language = args.get("language")
+    path_prefix = args.get("path_prefix")
+    scan_source = args.get("scan_source")
+    sort = args.get("sort", "updated_at")
+    direction = args.get("direction")
     valid_sorts = {"updated_at", "first_seen", "path", "language"}
 
     for err in (
@@ -218,8 +228,9 @@ async def _handle_list_files(arguments: dict[str, Any]) -> list[TextContent]:
 async def _handle_get_file(arguments: dict[str, Any]) -> list[TextContent]:
     from filigree.mcp_server import _get_db
 
+    args = _parse_args(arguments, GetFileArgs)
     tracker = _get_db()
-    file_id = arguments.get("file_id", "")
+    file_id = args.get("file_id", "")
     if not isinstance(file_id, str) or not file_id.strip():
         return _text({"error": "file_id is required", "code": "validation_error"})
     try:
@@ -232,11 +243,12 @@ async def _handle_get_file(arguments: dict[str, Any]) -> list[TextContent]:
 async def _handle_get_file_timeline(arguments: dict[str, Any]) -> list[TextContent]:
     from filigree.mcp_server import _get_db
 
+    args = _parse_args(arguments, GetFileTimelineArgs)
     tracker = _get_db()
-    file_id = arguments.get("file_id", "")
-    limit = arguments.get("limit", 50)
-    offset = arguments.get("offset", 0)
-    event_type = arguments.get("event_type")
+    file_id = args.get("file_id", "")
+    limit = args.get("limit", 50)
+    offset = args.get("offset", 0)
+    event_type = args.get("event_type")
     valid_event_types = {"finding", "association", "file_metadata_update"}
 
     if not isinstance(file_id, str) or not file_id.strip():
@@ -263,8 +275,9 @@ async def _handle_get_file_timeline(arguments: dict[str, Any]) -> list[TextConte
 async def _handle_get_issue_files(arguments: dict[str, Any]) -> list[TextContent]:
     from filigree.mcp_server import _get_db
 
+    args = _parse_args(arguments, GetIssueFilesArgs)
     tracker = _get_db()
-    issue_id = arguments.get("issue_id", "")
+    issue_id = args.get("issue_id", "")
     if not isinstance(issue_id, str) or not issue_id.strip():
         return _text({"error": "issue_id is required", "code": "validation_error"})
     try:
@@ -277,10 +290,11 @@ async def _handle_get_issue_files(arguments: dict[str, Any]) -> list[TextContent
 async def _handle_add_file_association(arguments: dict[str, Any]) -> list[TextContent]:
     from filigree.mcp_server import _get_db
 
+    args = _parse_args(arguments, AddFileAssociationArgs)
     tracker = _get_db()
-    file_id = arguments.get("file_id", "")
-    issue_id = arguments.get("issue_id", "")
-    assoc_type = arguments.get("assoc_type", "")
+    file_id = args.get("file_id", "")
+    issue_id = args.get("issue_id", "")
+    assoc_type = args.get("assoc_type", "")
 
     if not isinstance(file_id, str) or not file_id.strip():
         return _text({"error": "file_id is required", "code": "validation_error"})
@@ -309,11 +323,12 @@ async def _handle_add_file_association(arguments: dict[str, Any]) -> list[TextCo
 async def _handle_register_file(arguments: dict[str, Any]) -> list[TextContent]:
     from filigree.mcp_server import _get_db, _get_filigree_dir, _safe_path
 
+    args = _parse_args(arguments, RegisterFileArgs)
     tracker = _get_db()
-    raw_path = arguments.get("path", "")
-    language = arguments.get("language", "")
-    file_type = arguments.get("file_type", "")
-    metadata = arguments.get("metadata")
+    raw_path = args.get("path", "")
+    language = args.get("language", "")
+    file_type = args.get("file_type", "")
+    metadata = args.get("metadata")
 
     if not isinstance(raw_path, str) or not raw_path.strip():
         return _text({"error": "path is required", "code": "validation_error"})
@@ -374,10 +389,11 @@ async def _handle_trigger_scan(arguments: dict[str, Any]) -> list[TextContent]:
     if filigree_dir is None:
         return _text({"error": "Project directory not initialized", "code": "not_initialized"})
 
+    args = _parse_args(arguments, TriggerScanArgs)
     tracker = _get_db()
-    scanner_name = arguments["scanner"]
-    file_path = arguments["file_path"]
-    api_url = arguments.get("api_url", "http://localhost:8377")
+    scanner_name = args["scanner"]
+    file_path = args["file_path"]
+    api_url = args.get("api_url", "http://localhost:8377")
 
     parsed_url = urlparse(api_url)
     url_host = parsed_url.hostname or ""

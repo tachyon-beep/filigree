@@ -7,7 +7,15 @@ from typing import Any
 
 from mcp.types import TextContent, Tool
 
-from filigree.mcp_tools.common import _text
+from filigree.mcp_tools.common import _parse_args, _text
+from filigree.types.inputs import (
+    ExplainStateArgs,
+    GetTemplateArgs,
+    GetTypeInfoArgs,
+    GetValidTransitionsArgs,
+    GetWorkflowGuideArgs,
+    ValidateIssueArgs,
+)
 
 
 def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
@@ -129,10 +137,11 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
 async def _handle_get_template(arguments: dict[str, Any]) -> list[TextContent]:
     from filigree.mcp_server import _get_db
 
+    args = _parse_args(arguments, GetTemplateArgs)
     tracker = _get_db()
-    tpl = tracker.get_template(arguments["type"])
+    tpl = tracker.get_template(args["type"])
     if tpl is None:
-        return _text({"error": f"Unknown template: {arguments['type']}", "code": "not_found"})
+        return _text({"error": f"Unknown template: {args['type']}", "code": "not_found"})
     return _text(tpl)
 
 
@@ -173,10 +182,11 @@ async def _handle_list_types(arguments: dict[str, Any]) -> list[TextContent]:
 async def _handle_get_type_info(arguments: dict[str, Any]) -> list[TextContent]:
     from filigree.mcp_server import _get_db
 
+    args = _parse_args(arguments, GetTypeInfoArgs)
     tracker = _get_db()
-    type_tpl = tracker.templates.get_type(arguments["type"])
+    type_tpl = tracker.templates.get_type(args["type"])
     if type_tpl is None:
-        return _text({"error": f"Unknown type: {arguments['type']}", "code": "not_found"})
+        return _text({"error": f"Unknown type: {args['type']}", "code": "not_found"})
     return _text(
         {
             "type": type_tpl.type,
@@ -231,10 +241,11 @@ async def _handle_list_packs(arguments: dict[str, Any]) -> list[TextContent]:
 async def _handle_get_valid_transitions(arguments: dict[str, Any]) -> list[TextContent]:
     from filigree.mcp_server import _get_db
 
+    args = _parse_args(arguments, GetValidTransitionsArgs)
     tracker = _get_db()
     try:
-        transitions = tracker.get_valid_transitions(arguments["issue_id"])
-        issue = tracker.get_issue(arguments["issue_id"])
+        transitions = tracker.get_valid_transitions(args["issue_id"])
+        issue = tracker.get_issue(args["issue_id"])
         tpl_data = tracker.get_template(issue.type)
         field_schemas = {f["name"]: f for f in tpl_data["fields_schema"]} if tpl_data else {}
         return _text(
@@ -257,15 +268,16 @@ async def _handle_get_valid_transitions(arguments: dict[str, Any]) -> list[TextC
             ]
         )
     except KeyError:
-        return _text({"error": f"Issue not found: {arguments['issue_id']}", "code": "not_found"})
+        return _text({"error": f"Issue not found: {args['issue_id']}", "code": "not_found"})
 
 
 async def _handle_validate_issue(arguments: dict[str, Any]) -> list[TextContent]:
     from filigree.mcp_server import _get_db
 
+    args = _parse_args(arguments, ValidateIssueArgs)
     tracker = _get_db()
     try:
-        val_result = tracker.validate_issue(arguments["issue_id"])
+        val_result = tracker.validate_issue(args["issue_id"])
         return _text(
             {
                 "valid": val_result.valid,
@@ -274,16 +286,17 @@ async def _handle_validate_issue(arguments: dict[str, Any]) -> list[TextContent]
             }
         )
     except KeyError:
-        return _text({"error": f"Issue not found: {arguments['issue_id']}", "code": "not_found"})
+        return _text({"error": f"Issue not found: {args['issue_id']}", "code": "not_found"})
 
 
 async def _handle_get_workflow_guide(arguments: dict[str, Any]) -> list[TextContent]:
     from filigree.mcp_server import _get_db
 
+    args = _parse_args(arguments, GetWorkflowGuideArgs)
     tracker = _get_db()
-    wf_pack = tracker.templates.get_pack(arguments["pack"])
+    wf_pack = tracker.templates.get_pack(args["pack"])
     if wf_pack is None:
-        type_tpl = tracker.templates.get_type(arguments["pack"])
+        type_tpl = tracker.templates.get_type(args["pack"])
         if type_tpl is not None:
             wf_pack = tracker.templates.get_pack(type_tpl.pack)
             if wf_pack is not None:
@@ -293,12 +306,12 @@ async def _handle_get_workflow_guide(arguments: dict[str, Any]) -> list[TextCont
                     {
                         "pack": wf_pack.pack,
                         "guide": wf_pack.guide,
-                        "note": f"Resolved type '{arguments['pack']}' to pack '{wf_pack.pack}'",
+                        "note": f"Resolved type '{args['pack']}' to pack '{wf_pack.pack}'",
                     }
                 )
         return _text(
             {
-                "error": f"Unknown pack: '{arguments['pack']}'. Use list_packs to see available packs, or list_types to see types.",
+                "error": f"Unknown pack: '{args['pack']}'. Use list_packs to see available packs, or list_types to see types.",
                 "code": "not_found",
             }
         )
@@ -310,18 +323,19 @@ async def _handle_get_workflow_guide(arguments: dict[str, Any]) -> list[TextCont
 async def _handle_explain_state(arguments: dict[str, Any]) -> list[TextContent]:
     from filigree.mcp_server import _get_db
 
+    args = _parse_args(arguments, ExplainStateArgs)
     tracker = _get_db()
-    state_tpl = tracker.templates.get_type(arguments["type"])
+    state_tpl = tracker.templates.get_type(args["type"])
     if state_tpl is None:
-        return _text({"error": f"Unknown type: {arguments['type']}", "code": "not_found"})
-    state_name = arguments["state"]
+        return _text({"error": f"Unknown type: {args['type']}", "code": "not_found"})
+    state_name = args["state"]
     state_def = None
     for s in state_tpl.states:
         if s.name == state_name:
             state_def = s
             break
     if state_def is None:
-        return _text({"error": f"Unknown state '{state_name}' for type '{arguments['type']}'", "code": "not_found"})
+        return _text({"error": f"Unknown state '{state_name}' for type '{args['type']}'", "code": "not_found"})
     inbound = [{"from": td.from_state, "enforcement": td.enforcement} for td in state_tpl.transitions if td.to_state == state_name]
     outbound = [
         {"to": td.to_state, "enforcement": td.enforcement, "requires_fields": list(td.requires_fields)}
@@ -333,7 +347,7 @@ async def _handle_explain_state(arguments: dict[str, Any]) -> list[TextContent]:
         {
             "state": state_name,
             "category": state_def.category,
-            "type": arguments["type"],
+            "type": args["type"],
             "inbound_transitions": inbound,
             "outbound_transitions": outbound,
             "required_fields": required_fields,

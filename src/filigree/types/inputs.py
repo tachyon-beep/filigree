@@ -197,6 +197,134 @@ class GetIssueEventsArgs(TypedDict):
     limit: NotRequired[int]
 
 
+# ---------------------------------------------------------------------------
+# planning.py handlers
+# ---------------------------------------------------------------------------
+
+
+class AddDependencyArgs(TypedDict):
+    from_id: str
+    to_id: str
+    actor: NotRequired[str]
+
+
+class RemoveDependencyArgs(TypedDict):
+    from_id: str
+    to_id: str
+    actor: NotRequired[str]
+
+
+class GetPlanArgs(TypedDict):
+    milestone_id: str
+
+
+class StepInput(TypedDict):
+    title: str
+    priority: NotRequired[int]
+    description: NotRequired[str]
+    deps: NotRequired[list[Any]]
+
+
+class PhaseInput(TypedDict):
+    title: str
+    priority: NotRequired[int]
+    description: NotRequired[str]
+    steps: NotRequired[list[StepInput]]
+
+
+class MilestoneInput(TypedDict):
+    title: str
+    priority: NotRequired[int]
+    description: NotRequired[str]
+
+
+class CreatePlanArgs(TypedDict):
+    milestone: MilestoneInput
+    phases: list[PhaseInput]
+    actor: NotRequired[str]
+
+
+# ---------------------------------------------------------------------------
+# workflow.py handlers
+# ---------------------------------------------------------------------------
+
+
+class GetTemplateArgs(TypedDict):
+    type: str
+
+
+class GetTypeInfoArgs(TypedDict):
+    type: str
+
+
+class GetValidTransitionsArgs(TypedDict):
+    issue_id: str
+
+
+class ValidateIssueArgs(TypedDict):
+    issue_id: str
+
+
+class GetWorkflowGuideArgs(TypedDict):
+    pack: str
+
+
+class ExplainStateArgs(TypedDict):
+    type: str
+    state: str
+
+
+# ---------------------------------------------------------------------------
+# files.py handlers
+# ---------------------------------------------------------------------------
+
+
+class ListFilesArgs(TypedDict):
+    limit: NotRequired[int]
+    offset: NotRequired[int]
+    language: NotRequired[str]
+    path_prefix: NotRequired[str]
+    min_findings: NotRequired[int]
+    has_severity: NotRequired[str]
+    scan_source: NotRequired[str]
+    sort: NotRequired[str]
+    direction: NotRequired[str]
+
+
+class GetFileArgs(TypedDict):
+    file_id: str
+
+
+class GetFileTimelineArgs(TypedDict):
+    file_id: str
+    limit: NotRequired[int]
+    offset: NotRequired[int]
+    event_type: NotRequired[str]
+
+
+class GetIssueFilesArgs(TypedDict):
+    issue_id: str
+
+
+class AddFileAssociationArgs(TypedDict):
+    file_id: str
+    issue_id: str
+    assoc_type: str
+
+
+class RegisterFileArgs(TypedDict):
+    path: str
+    language: NotRequired[str]
+    file_type: NotRequired[str]
+    metadata: NotRequired[dict[str, Any]]
+
+
+class TriggerScanArgs(TypedDict):
+    scanner: str
+    file_path: str
+    api_url: NotRequired[str]
+
+
 # Registry: tool_name -> TypedDict class.
 # Populated as TypedDicts are defined below.
 # No-argument tools (empty inputSchema properties) are intentionally excluded.
@@ -229,4 +357,24 @@ TOOL_ARGS_MAP: dict[str, type] = {
     "compact_events": CompactEventsArgs,
     "undo_last": UndoLastArgs,
     "get_issue_events": GetIssueEventsArgs,
+    # planning.py
+    "add_dependency": AddDependencyArgs,
+    "remove_dependency": RemoveDependencyArgs,
+    "get_plan": GetPlanArgs,
+    "create_plan": CreatePlanArgs,
+    # workflow.py
+    "get_template": GetTemplateArgs,
+    "get_type_info": GetTypeInfoArgs,
+    "get_valid_transitions": GetValidTransitionsArgs,
+    "validate_issue": ValidateIssueArgs,
+    "get_workflow_guide": GetWorkflowGuideArgs,
+    "explain_state": ExplainStateArgs,
+    # files.py
+    "list_files": ListFilesArgs,
+    "get_file": GetFileArgs,
+    "get_file_timeline": GetFileTimelineArgs,
+    "get_issue_files": GetIssueFilesArgs,
+    "add_file_association": AddFileAssociationArgs,
+    "register_file": RegisterFileArgs,
+    "trigger_scan": TriggerScanArgs,
 }

@@ -7,8 +7,14 @@ from typing import Any
 
 from mcp.types import TextContent, Tool
 
-from filigree.mcp_tools.common import _slim_issue, _text, _validate_actor, _validate_int_range
+from filigree.mcp_tools.common import _parse_args, _slim_issue, _text, _validate_actor, _validate_int_range
 from filigree.types.api import BlockedIssue, CriticalPathResponse, DependencyActionResponse, ErrorResponse, PlanResponse
+from filigree.types.inputs import (
+    AddDependencyArgs,
+    CreatePlanArgs,
+    GetPlanArgs,
+    RemoveDependencyArgs,
+)
 
 
 def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
@@ -142,38 +148,40 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
 async def _handle_add_dependency(arguments: dict[str, Any]) -> list[TextContent]:
     from filigree.mcp_server import _get_db, _refresh_summary
 
-    actor, actor_err = _validate_actor(arguments.get("actor", "mcp"))
+    args = _parse_args(arguments, AddDependencyArgs)
+    actor, actor_err = _validate_actor(args.get("actor", "mcp"))
     if actor_err:
         return actor_err
     tracker = _get_db()
     try:
         added = tracker.add_dependency(
-            arguments["from_id"],
-            arguments["to_id"],
+            args["from_id"],
+            args["to_id"],
             actor=actor,
         )
     except (ValueError, KeyError) as e:
         return _text(ErrorResponse(error=str(e), code="invalid"))
     _refresh_summary()
     status = "added" if added else "already_exists"
-    return _text(DependencyActionResponse(status=status, from_id=arguments["from_id"], to_id=arguments["to_id"]))
+    return _text(DependencyActionResponse(status=status, from_id=args["from_id"], to_id=args["to_id"]))
 
 
 async def _handle_remove_dependency(arguments: dict[str, Any]) -> list[TextContent]:
     from filigree.mcp_server import _get_db, _refresh_summary
 
-    actor, actor_err = _validate_actor(arguments.get("actor", "mcp"))
+    args = _parse_args(arguments, RemoveDependencyArgs)
+    actor, actor_err = _validate_actor(args.get("actor", "mcp"))
     if actor_err:
         return actor_err
     tracker = _get_db()
     removed = tracker.remove_dependency(
-        arguments["from_id"],
-        arguments["to_id"],
+        args["from_id"],
+        args["to_id"],
         actor=actor,
     )
     _refresh_summary()
     status = "removed" if removed else "not_found"
-    return _text(DependencyActionResponse(status=status, from_id=arguments["from_id"], to_id=arguments["to_id"]))
+    return _text(DependencyActionResponse(status=status, from_id=args["from_id"], to_id=args["to_id"]))
 
 
 async def _handle_get_ready(arguments: dict[str, Any]) -> list[TextContent]:
@@ -195,9 +203,10 @@ async def _handle_get_blocked(arguments: dict[str, Any]) -> list[TextContent]:
 async def _handle_get_plan(arguments: dict[str, Any]) -> list[TextContent]:
     from filigree.mcp_server import _get_db
 
+    args = _parse_args(arguments, GetPlanArgs)
     tracker = _get_db()
     try:
-        plan_tree = tracker.get_plan(arguments["milestone_id"])
+        plan_tree = tracker.get_plan(args["milestone_id"])
         total = plan_tree["total_steps"]
         completed = plan_tree["completed_steps"]
         result = PlanResponse(
@@ -209,22 +218,23 @@ async def _handle_get_plan(arguments: dict[str, Any]) -> list[TextContent]:
         )
         return _text(result)
     except KeyError:
-        return _text(ErrorResponse(error=f"Milestone not found: {arguments['milestone_id']}", code="not_found"))
+        return _text(ErrorResponse(error=f"Milestone not found: {args['milestone_id']}", code="not_found"))
 
 
 async def _handle_create_plan(arguments: dict[str, Any]) -> list[TextContent]:
     from filigree.mcp_server import _get_db, _refresh_summary
 
-    actor, actor_err = _validate_actor(arguments.get("actor", "mcp"))
+    args = _parse_args(arguments, CreatePlanArgs)
+    actor, actor_err = _validate_actor(args.get("actor", "mcp"))
     if actor_err:
         return actor_err
 
     # Validate priority on nested milestone/phase/step objects
-    milestone = arguments["milestone"]
+    milestone = args["milestone"]
     err = _validate_int_range(milestone.get("priority"), "milestone.priority", min_val=0, max_val=4)
     if err:
         return err
-    for pi, phase in enumerate(arguments.get("phases", [])):
+    for pi, phase in enumerate(args["phases"]):
         err = _validate_int_range(phase.get("priority"), f"phases[{pi}].priority", min_val=0, max_val=4)
         if err:
             return err
@@ -237,7 +247,7 @@ async def _handle_create_plan(arguments: dict[str, Any]) -> list[TextContent]:
     try:
         plan = tracker.create_plan(
             milestone,
-            arguments["phases"],
+            args["phases"],
             actor=actor,
         )
         _refresh_summary()
