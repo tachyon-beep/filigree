@@ -181,7 +181,7 @@ class TestGetReleasesSummary:
 
         result = db.get_releases_summary()
         entry_r2 = next(e for e in result if e["id"] == r2.id)
-        assert entry_r2["blocked_by"] == [{"id": r1.id, "title": "Blocker"}]
+        assert entry_r2["blocked_by"] == [{"id": r1.id, "title": "Blocker", "type": "release"}]
 
     def test_blocked_by_resolved_to_id_and_title(self, release_db: FiligreeDB) -> None:
         db = release_db
@@ -192,7 +192,7 @@ class TestGetReleasesSummary:
 
         result = db.get_releases_summary()
         entry_r1 = next(e for e in result if e["id"] == r1.id)
-        assert entry_r1["blocks"] == [{"id": r2.id, "title": "Blocked"}]
+        assert entry_r1["blocks"] == [{"id": r2.id, "title": "Blocked", "type": "release"}]
 
     def test_resolve_refs_handles_deleted_issue(self, release_db: FiligreeDB) -> None:
         db = release_db
@@ -201,6 +201,7 @@ class TestGetReleasesSummary:
         assert len(refs) == 1
         assert refs[0]["id"] == "nonexistent-id-12345"
         assert refs[0]["title"] == "(deleted)"
+        assert refs[0]["type"] == "unknown"
 
     def test_version_and_target_date_from_fields(self, release_db: FiligreeDB) -> None:
         db = release_db

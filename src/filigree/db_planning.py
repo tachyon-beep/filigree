@@ -42,6 +42,7 @@ class ChildSummary(TypedDict):
 class IssueRef(TypedDict):
     id: str
     title: str
+    type: str
 
 
 class TreeNode(TypedDict):
@@ -565,8 +566,8 @@ class PlanningMixin(DBMixinProtocol):
         for issue_id in ids:
             try:
                 issue = self.get_issue(issue_id)
-                refs.append({"id": issue.id, "title": issue.title})
+                refs.append({"id": issue.id, "title": issue.title, "type": issue.type})
             except KeyError:
                 logger.warning("_resolve_issue_refs: dangling reference %s", issue_id)
-                refs.append({"id": issue_id, "title": "(deleted)"})
+                refs.append({"id": issue_id, "title": "(deleted)", "type": "unknown"})
         return refs

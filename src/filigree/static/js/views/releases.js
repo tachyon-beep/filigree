@@ -40,6 +40,7 @@ function statusBorderColor(status) {
       return "#10B981";
     case "cancelled":
     case "rolled_back":
+    case "retired":
       return "#EF4444";
     default:
       return "var(--border-default)";
@@ -63,6 +64,7 @@ function statusBadge(status) {
       break;
     case "cancelled":
     case "rolled_back":
+    case "retired":
       style = "background:#EF4444;color:#fff";
       break;
     default:
@@ -375,6 +377,21 @@ function formatTargetDate(isoDate) {
   return '<span style="color:' + color + '">Target: ' + escHtml(formatted) + ' (' + escHtml(relative) + ')</span>';
 }
 
+// --- Blocker link rendering ---
+
+function renderBlockerLink(ref) {
+  const safeId = escJsSingle(ref.id);
+  if (ref.type === 'release') {
+    // Release blockers scroll to the card on this page, falling back to detail view
+    return '<a href="#" class="hover:underline" style="color:var(--accent)" onclick="event.preventDefault();' +
+      'var el=document.getElementById(\'release-card-' + safeId + '\');' +
+      'if(el){window._scrollToReleaseCard(\'release-card-' + safeId + '\')}' +
+      'else{window.openDetail(\'' + safeId + '\')}">' + escHtml(ref.title) + '</a>';
+  }
+  // Non-release blockers (milestones, tasks, etc.) open the issue detail panel
+  return '<a href="#" class="hover:underline" style="color:var(--accent)" onclick="event.preventDefault();window.openDetail(\'' + safeId + '\')">' + escHtml(ref.title) + '</a>';
+}
+
 // --- Card rendering ---
 
 function renderReleaseCard(release) {
@@ -437,17 +454,13 @@ function renderReleaseCard(release) {
   // Blocks / Blocked by links
   if (release.blocks && release.blocks.length > 0) {
     html += '<div class="text-xs mt-1" style="color:var(--text-muted)">Blocks: ';
-    html += release.blocks.map((b) =>
-      '<a href="#" class="hover:underline" style="color:var(--accent)" onclick="event.preventDefault();window._scrollToReleaseCard(\'release-card-' + escJsSingle(b.id) + '\')">' + escHtml(b.title) + '</a>'
-    ).join(', ');
+    html += release.blocks.map((b) => renderBlockerLink(b)).join(', ');
     html += '</div>';
   }
 
   if (release.blocked_by && release.blocked_by.length > 0) {
     html += '<div class="text-xs mt-1" style="color:var(--text-muted)">Blocked by: ';
-    html += release.blocked_by.map((b) =>
-      '<a href="#" class="hover:underline" style="color:var(--accent)" onclick="event.preventDefault();window._scrollToReleaseCard(\'release-card-' + escJsSingle(b.id) + '\')">' + escHtml(b.title) + '</a>'
-    ).join(', ');
+    html += release.blocked_by.map((b) => renderBlockerLink(b)).join(', ');
     html += '</div>';
   }
 
