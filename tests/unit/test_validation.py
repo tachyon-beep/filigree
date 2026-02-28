@@ -66,17 +66,17 @@ class TestSanitizeActor:
         assert "control" in err.lower()
 
     def test_bom(self) -> None:
-        cleaned, err = sanitize_actor("\uFEFF")
+        cleaned, err = sanitize_actor("\ufeff")
         assert cleaned == ""
         assert err is not None
 
     def test_zero_width_space(self) -> None:
-        cleaned, err = sanitize_actor("\u200B")
+        cleaned, err = sanitize_actor("\u200b")
         assert cleaned == ""
         assert err is not None
 
     def test_rtl_override(self) -> None:
-        cleaned, err = sanitize_actor("\u202E")
+        cleaned, err = sanitize_actor("\u202e")
         assert cleaned == ""
         assert err is not None
 

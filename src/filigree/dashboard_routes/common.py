@@ -197,13 +197,9 @@ def _validate_priority(value: Any, *, required: bool = False) -> int | None | JS
             return _error_response("priority is required", "VALIDATION_ERROR", 400)
         return None
     if not isinstance(value, int) or isinstance(value, bool):
-        return _error_response(
-            "priority must be an integer between 0 and 4", "INVALID_PRIORITY", 400
-        )
+        return _error_response("priority must be an integer between 0 and 4", "INVALID_PRIORITY", 400)
     if not (0 <= value <= 4):
-        return _error_response(
-            f"priority must be between 0 and 4, got {value}", "INVALID_PRIORITY", 400
-        )
+        return _error_response(f"priority must be between 0 and 4, got {value}", "INVALID_PRIORITY", 400)
     return value
 
 

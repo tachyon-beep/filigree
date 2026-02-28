@@ -73,7 +73,7 @@ class TestDashboardActorValidation:
         assert resp.status_code == 400
 
     async def test_create_issue_bom_actor(self, client: AsyncClient) -> None:
-        resp = await client.post("/api/issues", json={"title": "Test", "actor": "\uFEFF"})
+        resp = await client.post("/api/issues", json={"title": "Test", "actor": "\ufeff"})
         assert resp.status_code == 400
 
     async def test_claim_issue_valid_actor(self, client: AsyncClient) -> None:

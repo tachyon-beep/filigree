@@ -361,6 +361,7 @@ def create_router() -> Any:
         priority = _validate_priority(body.get("priority", 2))
         if isinstance(priority, JSONResponse):
             return priority
+        assert priority is not None  # always set via default=2
         try:
             issue = db.create_issue(
                 title,

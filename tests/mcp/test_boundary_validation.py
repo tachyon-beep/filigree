@@ -43,7 +43,7 @@ class TestMCPActorValidation:
 
     async def test_close_issue_bom_actor(self, mcp_db: FiligreeDB) -> None:
         issue = mcp_db.create_issue("Target")
-        result = await call_tool("close_issue", {"id": issue.id, "actor": "\uFEFF"})
+        result = await call_tool("close_issue", {"id": issue.id, "actor": "\ufeff"})
         data = _parse(result)
         assert data["code"] == "validation_error"
 
@@ -120,16 +120,12 @@ class TestMCPPriorityValidation:
         assert data["code"] == "validation_error"
 
     async def test_claim_next_priority_min_out_of_range(self, mcp_db: FiligreeDB) -> None:
-        result = await call_tool(
-            "claim_next", {"assignee": "bot", "priority_min": -1}
-        )
+        result = await call_tool("claim_next", {"assignee": "bot", "priority_min": -1})
         data = _parse(result)
         assert data["code"] == "validation_error"
 
     async def test_claim_next_priority_max_out_of_range(self, mcp_db: FiligreeDB) -> None:
-        result = await call_tool(
-            "claim_next", {"assignee": "bot", "priority_max": 5}
-        )
+        result = await call_tool("claim_next", {"assignee": "bot", "priority_max": 5})
         data = _parse(result)
         assert data["code"] == "validation_error"
 
