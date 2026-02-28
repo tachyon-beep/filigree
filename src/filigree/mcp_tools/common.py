@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypeVar, cast
 
 from mcp.types import TextContent
 
@@ -20,6 +20,19 @@ from filigree.types.api import SlimIssue, TransitionError
 from filigree.validation import sanitize_actor
 
 logger = logging.getLogger(__name__)
+
+_T = TypeVar("_T")
+
+
+def _parse_args(arguments: dict[str, Any], cls: type[_T]) -> _T:
+    """Cast MCP arguments to a typed dict for static analysis.
+
+    Safety: MCP SDK validates argument presence/types against JSON Schema
+    before handler invocation. Core validates authoritatively. This cast()
+    provides mypy type narrowing only — no runtime validation.
+    """
+    return cast(_T, arguments)
+
 
 # Hard cap on list_issues / search_issues results to keep MCP response size
 # within token limits.  Callers can pass no_limit=true to bypass.
