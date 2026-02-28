@@ -11,6 +11,8 @@ from filigree.core import FiligreeDB
 from filigree.dashboard_routes.common import (
     _error_response,
     _parse_json_body,
+    _validate_actor,
+    _validate_priority,
 )
 from filigree.types.api import DepDetail, EnrichedIssueDetail, IssueDetailEvent
 
@@ -167,10 +169,13 @@ def create_router() -> Any:
         body = await _parse_json_body(request)
         if isinstance(body, JSONResponse):
             return body
-        actor = body.pop("actor", "dashboard")
-        priority = body.get("priority")
-        if priority is not None and not isinstance(priority, int):
-            return _error_response("priority must be an integer between 0 and 4", "INVALID_PRIORITY", 400)
+        actor, actor_err = _validate_actor(body.get("actor", "dashboard"))
+        if actor_err:
+            return actor_err
+        body.pop("actor", None)
+        priority = _validate_priority(body.get("priority"))
+        if isinstance(priority, JSONResponse):
+            return priority
         try:
             issue = db.update_issue(
                 issue_id,
@@ -195,7 +200,9 @@ def create_router() -> Any:
         body = await _parse_json_body(request)
         if isinstance(body, JSONResponse):
             return body
-        actor = body.get("actor", "dashboard")
+        actor, actor_err = _validate_actor(body.get("actor", "dashboard"))
+        if actor_err:
+            return actor_err
         reason = body.get("reason", "")
         fields = body.get("fields")
         try:
@@ -214,7 +221,9 @@ def create_router() -> Any:
         body = await _parse_json_body(request)
         if isinstance(body, JSONResponse):
             return body
-        actor = body.get("actor", "dashboard")
+        actor, actor_err = _validate_actor(body.get("actor", "dashboard"))
+        if actor_err:
+            return actor_err
         try:
             issue = db.reopen_issue(issue_id, actor=actor)
         except KeyError:
@@ -279,10 +288,12 @@ def create_router() -> Any:
             return _error_response("issue_ids must be a JSON array", "VALIDATION_ERROR", 400)
         if not all(isinstance(i, str) for i in issue_ids):
             return _error_response("All issue_ids must be strings", "VALIDATION_ERROR", 400)
-        actor = body.get("actor", "dashboard")
-        priority = body.get("priority")
-        if priority is not None and not isinstance(priority, int):
-            return _error_response("priority must be an integer between 0 and 4", "INVALID_PRIORITY", 400)
+        actor, actor_err = _validate_actor(body.get("actor", "dashboard"))
+        if actor_err:
+            return actor_err
+        priority = _validate_priority(body.get("priority"))
+        if isinstance(priority, JSONResponse):
+            return priority
         updated, errors = db.batch_update(
             issue_ids,
             status=body.get("status"),
@@ -310,7 +321,9 @@ def create_router() -> Any:
         if not all(isinstance(i, str) for i in issue_ids):
             return _error_response("All issue_ids must be strings", "VALIDATION_ERROR", 400)
         reason = body.get("reason", "")
-        actor = body.get("actor", "dashboard")
+        actor, actor_err = _validate_actor(body.get("actor", "dashboard"))
+        if actor_err:
+            return actor_err
         closed, errors = db.batch_close(issue_ids, reason=reason, actor=actor)
         return JSONResponse(
             {
@@ -342,9 +355,12 @@ def create_router() -> Any:
         if isinstance(body, JSONResponse):
             return body
         title = body.get("title", "")
-        priority = body.get("priority", 2)
-        if not isinstance(priority, int):
-            return _error_response("priority must be an integer between 0 and 4", "INVALID_PRIORITY", 400)
+        actor, actor_err = _validate_actor(body.get("actor", "dashboard"))
+        if actor_err:
+            return actor_err
+        priority = _validate_priority(body.get("priority", 2))
+        if isinstance(priority, JSONResponse):
+            return priority
         try:
             issue = db.create_issue(
                 title,
@@ -356,7 +372,7 @@ def create_router() -> Any:
                 notes=body.get("notes", ""),
                 labels=body.get("labels"),
                 deps=body.get("deps"),
-                actor=body.get("actor", ""),
+                actor=actor,
             )
         except ValueError as e:
             return _error_response(str(e), "VALIDATION_ERROR", 400)
@@ -371,7 +387,9 @@ def create_router() -> Any:
         assignee = body.get("assignee", "")
         if not assignee or not assignee.strip():
             return _error_response("assignee is required and cannot be empty", "VALIDATION_ERROR", 400)
-        actor = body.get("actor", "dashboard")
+        actor, actor_err = _validate_actor(body.get("actor", "dashboard"))
+        if actor_err:
+            return actor_err
         try:
             issue = db.claim_issue(issue_id, assignee=assignee, actor=actor)
         except KeyError:
@@ -386,7 +404,9 @@ def create_router() -> Any:
         body = await _parse_json_body(request)
         if isinstance(body, JSONResponse):
             return body
-        actor = body.get("actor", "dashboard")
+        actor, actor_err = _validate_actor(body.get("actor", "dashboard"))
+        if actor_err:
+            return actor_err
         try:
             issue = db.release_claim(issue_id, actor=actor)
         except KeyError:
@@ -404,7 +424,9 @@ def create_router() -> Any:
         assignee = body.get("assignee", "")
         if not assignee or not assignee.strip():
             return _error_response("assignee is required and cannot be empty", "VALIDATION_ERROR", 400)
-        actor = body.get("actor", "dashboard")
+        actor, actor_err = _validate_actor(body.get("actor", "dashboard"))
+        if actor_err:
+            return actor_err
         try:
             issue = db.claim_next(assignee, actor=actor)
         except ValueError as e:
@@ -420,7 +442,9 @@ def create_router() -> Any:
         if isinstance(body, JSONResponse):
             return body
         depends_on = body.get("depends_on", "")
-        actor = body.get("actor", "dashboard")
+        actor, actor_err = _validate_actor(body.get("actor", "dashboard"))
+        if actor_err:
+            return actor_err
         try:
             added = db.add_dependency(issue_id, depends_on, actor=actor)
         except KeyError as e:

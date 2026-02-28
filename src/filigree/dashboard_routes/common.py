@@ -12,6 +12,7 @@ if TYPE_CHECKING:
     from fastapi.responses import JSONResponse
 
 from filigree.core import FiligreeDB, read_config
+from filigree.validation import sanitize_actor as _sanitize_actor
 
 logger = logging.getLogger(__name__)
 
@@ -184,3 +185,34 @@ def _coerce_graph_mode(raw: str | None, db: FiligreeDB) -> str | JSONResponse:
             {"param": "mode", "value": raw},
         )
     return mode
+
+
+def _validate_priority(value: Any, *, required: bool = False) -> int | None | JSONResponse:
+    """Validate a priority value from JSON body.
+
+    Returns the validated int, None (if optional and absent), or a JSONResponse error.
+    """
+    if value is None:
+        if required:
+            return _error_response("priority is required", "VALIDATION_ERROR", 400)
+        return None
+    if not isinstance(value, int) or isinstance(value, bool):
+        return _error_response(
+            "priority must be an integer between 0 and 4", "INVALID_PRIORITY", 400
+        )
+    if not (0 <= value <= 4):
+        return _error_response(
+            f"priority must be between 0 and 4, got {value}", "INVALID_PRIORITY", 400
+        )
+    return value
+
+
+def _validate_actor(value: Any) -> tuple[str, JSONResponse | None]:
+    """Validate an actor name from JSON body.
+
+    Returns (cleaned_actor, None) on success or ("", JSONResponse) on error.
+    """
+    cleaned, err = _sanitize_actor(value)
+    if err:
+        return ("", _error_response(err, "VALIDATION_ERROR", 400))
+    return (cleaned, None)
