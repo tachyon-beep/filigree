@@ -13,6 +13,7 @@ from mcp.types import TextContent
 
 from filigree.core import Issue
 from filigree.types.api import SlimIssue, TransitionError
+from filigree.validation import sanitize_actor
 
 # Hard cap on list_issues / search_issues results to keep MCP response size
 # within token limits.  Callers can pass no_limit=true to bypass.
@@ -86,6 +87,14 @@ def _validate_int_range(
     if max_val is not None and value > max_val:
         return _text({"error": f"{name} must be <= {max_val}", "code": "validation_error"})
     return None
+
+
+def _validate_actor(value: Any) -> tuple[str, list[TextContent] | None]:
+    """Sanitize actor, returning (cleaned, None) or ("", error_response)."""
+    cleaned, err = sanitize_actor(value)
+    if err:
+        return ("", _text({"error": err, "code": "validation_error"}))
+    return (cleaned, None)
 
 
 def _build_transition_error(

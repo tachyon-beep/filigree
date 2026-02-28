@@ -7,7 +7,7 @@ from typing import Any
 
 from mcp.types import TextContent, Tool
 
-from filigree.mcp_tools.common import _text
+from filigree.mcp_tools.common import _text, _validate_actor
 from filigree.types.api import PlanResponse
 
 
@@ -142,12 +142,15 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
 async def _handle_add_dependency(arguments: dict[str, Any]) -> list[TextContent]:
     from filigree.mcp_server import _get_db, _refresh_summary
 
+    actor, actor_err = _validate_actor(arguments.get("actor", "mcp"))
+    if actor_err:
+        return actor_err
     tracker = _get_db()
     try:
         added = tracker.add_dependency(
             arguments["from_id"],
             arguments["to_id"],
-            actor=arguments.get("actor", "mcp"),
+            actor=actor,
         )
     except (ValueError, KeyError) as e:
         return _text({"error": str(e), "code": "invalid"})
@@ -159,11 +162,14 @@ async def _handle_add_dependency(arguments: dict[str, Any]) -> list[TextContent]
 async def _handle_remove_dependency(arguments: dict[str, Any]) -> list[TextContent]:
     from filigree.mcp_server import _get_db, _refresh_summary
 
+    actor, actor_err = _validate_actor(arguments.get("actor", "mcp"))
+    if actor_err:
+        return actor_err
     tracker = _get_db()
     removed = tracker.remove_dependency(
         arguments["from_id"],
         arguments["to_id"],
-        actor=arguments.get("actor", "mcp"),
+        actor=actor,
     )
     _refresh_summary()
     status = "removed" if removed else "not_found"
@@ -209,12 +215,15 @@ async def _handle_get_plan(arguments: dict[str, Any]) -> list[TextContent]:
 async def _handle_create_plan(arguments: dict[str, Any]) -> list[TextContent]:
     from filigree.mcp_server import _get_db, _refresh_summary
 
+    actor, actor_err = _validate_actor(arguments.get("actor", "mcp"))
+    if actor_err:
+        return actor_err
     tracker = _get_db()
     try:
         plan = tracker.create_plan(
             arguments["milestone"],
             arguments["phases"],
-            actor=arguments.get("actor", "mcp"),
+            actor=actor,
         )
         _refresh_summary()
         return _text(plan)

@@ -14,6 +14,7 @@ from filigree.mcp_tools.common import (
     _resolve_pagination,
     _slim_issue,
     _text,
+    _validate_actor,
 )
 from filigree.types.api import (
     BatchCloseResponse,
@@ -376,6 +377,9 @@ async def _handle_list_issues(arguments: dict[str, Any]) -> list[TextContent]:
 async def _handle_create_issue(arguments: dict[str, Any]) -> list[TextContent]:
     from filigree.mcp_server import _get_db, _refresh_summary
 
+    actor, actor_err = _validate_actor(arguments.get("actor", "mcp"))
+    if actor_err:
+        return actor_err
     tracker = _get_db()
     try:
         issue = tracker.create_issue(
@@ -388,7 +392,7 @@ async def _handle_create_issue(arguments: dict[str, Any]) -> list[TextContent]:
             fields=arguments.get("fields"),
             labels=arguments.get("labels"),
             deps=arguments.get("deps"),
-            actor=arguments.get("actor", "mcp"),
+            actor=actor,
         )
     except ValueError as e:
         return _text({"error": str(e), "code": "validation_error"})
@@ -399,6 +403,9 @@ async def _handle_create_issue(arguments: dict[str, Any]) -> list[TextContent]:
 async def _handle_update_issue(arguments: dict[str, Any]) -> list[TextContent]:
     from filigree.mcp_server import _get_db, _refresh_summary
 
+    actor, actor_err = _validate_actor(arguments.get("actor", "mcp"))
+    if actor_err:
+        return actor_err
     tracker = _get_db()
     try:
         before = tracker.get_issue(arguments["id"])
@@ -412,7 +419,7 @@ async def _handle_update_issue(arguments: dict[str, Any]) -> list[TextContent]:
             notes=arguments.get("notes"),
             parent_id=arguments.get("parent_id"),
             fields=arguments.get("fields"),
-            actor=arguments.get("actor", "mcp"),
+            actor=actor,
         )
         _refresh_summary()
         changed: list[str] = []
@@ -443,13 +450,16 @@ async def _handle_update_issue(arguments: dict[str, Any]) -> list[TextContent]:
 async def _handle_close_issue(arguments: dict[str, Any]) -> list[TextContent]:
     from filigree.mcp_server import _get_db, _refresh_summary
 
+    actor, actor_err = _validate_actor(arguments.get("actor", "mcp"))
+    if actor_err:
+        return actor_err
     tracker = _get_db()
     try:
         ready_before = {i.id for i in tracker.get_ready()}
         issue = tracker.close_issue(
             arguments["id"],
             reason=arguments.get("reason", ""),
-            actor=arguments.get("actor", "mcp"),
+            actor=actor,
             fields=arguments.get("fields"),
         )
         _refresh_summary()
@@ -471,11 +481,14 @@ async def _handle_close_issue(arguments: dict[str, Any]) -> list[TextContent]:
 async def _handle_reopen_issue(arguments: dict[str, Any]) -> list[TextContent]:
     from filigree.mcp_server import _get_db, _refresh_summary
 
+    actor, actor_err = _validate_actor(arguments.get("actor", "mcp"))
+    if actor_err:
+        return actor_err
     tracker = _get_db()
     try:
         issue = tracker.reopen_issue(
             arguments["id"],
-            actor=arguments.get("actor", "mcp"),
+            actor=actor,
         )
         _refresh_summary()
         return _text(issue.to_dict())
@@ -510,12 +523,15 @@ async def _handle_search_issues(arguments: dict[str, Any]) -> list[TextContent]:
 async def _handle_claim_issue(arguments: dict[str, Any]) -> list[TextContent]:
     from filigree.mcp_server import _get_db, _refresh_summary
 
+    actor, actor_err = _validate_actor(arguments.get("actor", arguments["assignee"]))
+    if actor_err:
+        return actor_err
     tracker = _get_db()
     try:
         issue = tracker.claim_issue(
             arguments["id"],
             assignee=arguments["assignee"],
-            actor=arguments.get("actor", arguments["assignee"]),
+            actor=actor,
         )
         _refresh_summary()
         return _text(issue.to_dict())
@@ -528,9 +544,12 @@ async def _handle_claim_issue(arguments: dict[str, Any]) -> list[TextContent]:
 async def _handle_release_claim(arguments: dict[str, Any]) -> list[TextContent]:
     from filigree.mcp_server import _get_db, _refresh_summary
 
+    actor, actor_err = _validate_actor(arguments.get("actor", "mcp"))
+    if actor_err:
+        return actor_err
     tracker = _get_db()
     try:
-        issue = tracker.release_claim(arguments["id"], actor=arguments.get("actor", "mcp"))
+        issue = tracker.release_claim(arguments["id"], actor=actor)
         _refresh_summary()
         return _text(issue.to_dict())
     except KeyError:
@@ -542,13 +561,16 @@ async def _handle_release_claim(arguments: dict[str, Any]) -> list[TextContent]:
 async def _handle_claim_next(arguments: dict[str, Any]) -> list[TextContent]:
     from filigree.mcp_server import _get_db, _refresh_summary
 
+    actor, actor_err = _validate_actor(arguments.get("actor", arguments["assignee"]))
+    if actor_err:
+        return actor_err
     tracker = _get_db()
     claimed = tracker.claim_next(
         arguments["assignee"],
         type_filter=arguments.get("type"),
         priority_min=arguments.get("priority_min"),
         priority_max=arguments.get("priority_max"),
-        actor=arguments.get("actor", arguments["assignee"]),
+        actor=actor,
     )
     if claimed is None:
         return _text({"status": "empty", "reason": "No ready issues matching filters"})
@@ -567,6 +589,9 @@ async def _handle_claim_next(arguments: dict[str, Any]) -> list[TextContent]:
 async def _handle_batch_close(arguments: dict[str, Any]) -> list[TextContent]:
     from filigree.mcp_server import _get_db, _refresh_summary
 
+    actor, actor_err = _validate_actor(arguments.get("actor", "mcp"))
+    if actor_err:
+        return actor_err
     tracker = _get_db()
     ids = arguments["ids"]
     if not all(isinstance(i, str) for i in ids):
@@ -575,7 +600,7 @@ async def _handle_batch_close(arguments: dict[str, Any]) -> list[TextContent]:
     closed, failed = tracker.batch_close(
         ids,
         reason=arguments.get("reason", ""),
-        actor=arguments.get("actor", "mcp"),
+        actor=actor,
     )
     _refresh_summary()
     ready_after = tracker.get_ready()
@@ -593,6 +618,9 @@ async def _handle_batch_close(arguments: dict[str, Any]) -> list[TextContent]:
 async def _handle_batch_update(arguments: dict[str, Any]) -> list[TextContent]:
     from filigree.mcp_server import _get_db, _refresh_summary
 
+    actor, actor_err = _validate_actor(arguments.get("actor", "mcp"))
+    if actor_err:
+        return actor_err
     tracker = _get_db()
     u_ids = arguments["ids"]
     if not all(isinstance(i, str) for i in u_ids):
@@ -606,7 +634,7 @@ async def _handle_batch_update(arguments: dict[str, Any]) -> list[TextContent]:
         priority=arguments.get("priority"),
         assignee=arguments.get("assignee"),
         fields=u_fields,
-        actor=arguments.get("actor", "mcp"),
+        actor=actor,
     )
     _refresh_summary()
     return _text(

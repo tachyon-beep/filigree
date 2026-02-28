@@ -9,7 +9,7 @@ from typing import Any
 
 from mcp.types import TextContent, Tool
 
-from filigree.mcp_tools.common import _text
+from filigree.mcp_tools.common import _text, _validate_actor
 
 
 def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
@@ -246,6 +246,9 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
 async def _handle_add_comment(arguments: dict[str, Any]) -> list[TextContent]:
     from filigree.mcp_server import _get_db
 
+    actor, actor_err = _validate_actor(arguments.get("actor", "mcp"))
+    if actor_err:
+        return actor_err
     tracker = _get_db()
     try:
         tracker.get_issue(arguments["issue_id"])
@@ -255,7 +258,7 @@ async def _handle_add_comment(arguments: dict[str, Any]) -> list[TextContent]:
         comment_id = tracker.add_comment(
             arguments["issue_id"],
             arguments["text"],
-            author=arguments.get("actor", "mcp"),
+            author=actor,
         )
     except ValueError as e:
         return _text({"error": str(e), "code": "validation_error"})
@@ -332,6 +335,9 @@ async def _handle_batch_add_label(arguments: dict[str, Any]) -> list[TextContent
 async def _handle_batch_add_comment(arguments: dict[str, Any]) -> list[TextContent]:
     from filigree.mcp_server import _get_db, _refresh_summary
 
+    actor, actor_err = _validate_actor(arguments.get("actor", "mcp"))
+    if actor_err:
+        return actor_err
     tracker = _get_db()
     comment_ids = arguments["ids"]
     if not all(isinstance(i, str) for i in comment_ids):
@@ -341,7 +347,7 @@ async def _handle_batch_add_comment(arguments: dict[str, Any]) -> list[TextConte
     comment_succeeded, comment_failed = tracker.batch_add_comment(
         comment_ids,
         text=arguments["text"],
-        author=arguments.get("actor", "mcp"),
+        author=actor,
     )
     _refresh_summary()
     return _text(
@@ -423,10 +429,13 @@ async def _handle_import_jsonl(arguments: dict[str, Any]) -> list[TextContent]:
 async def _handle_archive_closed(arguments: dict[str, Any]) -> list[TextContent]:
     from filigree.mcp_server import _get_db, _refresh_summary
 
+    actor, actor_err = _validate_actor(arguments.get("actor", "mcp"))
+    if actor_err:
+        return actor_err
     tracker = _get_db()
     archived = tracker.archive_closed(
         days_old=arguments.get("days_old", 30),
-        actor=arguments.get("actor", "mcp"),
+        actor=actor,
     )
     _refresh_summary()
     return _text({"status": "ok", "archived_count": len(archived), "archived_ids": archived})
@@ -443,9 +452,12 @@ async def _handle_compact_events(arguments: dict[str, Any]) -> list[TextContent]
 async def _handle_undo_last(arguments: dict[str, Any]) -> list[TextContent]:
     from filigree.mcp_server import _get_db, _refresh_summary
 
+    actor, actor_err = _validate_actor(arguments.get("actor", "mcp"))
+    if actor_err:
+        return actor_err
     tracker = _get_db()
     try:
-        result = tracker.undo_last(arguments["id"], actor=arguments.get("actor", "mcp"))
+        result = tracker.undo_last(arguments["id"], actor=actor)
         if result["undone"]:
             _refresh_summary()
         return _text(result)
