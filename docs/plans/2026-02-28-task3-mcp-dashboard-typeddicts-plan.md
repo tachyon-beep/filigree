@@ -4,7 +4,11 @@
 
 **Goal:** Add TypedDicts for MCP tool handler and dashboard route responses that construct novel shapes (mutation sites, list/batch envelopes, error shapes).
 
-**Architecture:** Single new `types/api.py` module with ~15 TypedDicts. Flat TypedDict inheritance for handlers that spread `to_dict()` + extra keys (preserves wire format). True envelope TypedDicts for list/batch/search wrappers. Handler code refactored from dict mutation to typed construction.
+**Prerequisites:** Tasks 1A, 1B, and 1C must be complete. Specifically: `IssueDict` from `types.core`, and `StatsResult`, `CommentRecord`, `PlanPhase` from `types.planning` must exist.
+
+**Architecture:** Single new `types/api.py` module with 17 TypedDicts serving both MCP and dashboard layers. Uses `NotRequired` on individual optional fields for flat inheritance types (not `total=False` on the class, which would make inherited keys optional). Uses the split-base pattern for envelope types with mixed required/optional keys (matching convention in `types/workflow.py`). Handler code refactored from dict mutation to typed construction.
+
+**Wire format note:** One deliberate additive change: `newly_unblocked` entries in close/batch-close responses gain a `status` key (4→5 keys) for consistency with `SlimIssue`. This is backward-compatible for consumers that ignore unknown keys.
 
 **Tech Stack:** Python 3.11+ TypedDicts with `NotRequired`, mypy strict, ruff, pytest
 
@@ -31,13 +35,14 @@ from filigree.types.api import (
     BatchCloseResponse,
     BatchUpdateResponse,
     ClaimNextResponse,
-    CloseIssueResponse,
     DepDetail,
     EnrichedIssueDetail,
     ErrorResponse,
+    IssueDetailEvent,
     IssueListResponse,
     IssueWithChangedFields,
     IssueWithTransitions,
+    IssueWithUnblocked,
     PlanResponse,
     SearchResponse,
     SlimIssue,
@@ -108,13 +113,21 @@ class TransitionError(TypedDict):
 
 # ---------------------------------------------------------------------------
 # Flat inheritance — IssueDict + extra keys (preserves wire format)
+#
+# IMPORTANT: Never use `class Foo(IssueDict, total=False)` — this makes ALL
+# inherited IssueDict keys optional to mypy, defeating type safety. Instead
+# use `NotRequired` on individual optional fields.
+#
+# NOTE on **spread: `Foo(**issue.to_dict(), extra=val)` silently passes through
+# any extra keys that to_dict() might add in the future. The shape contract
+# tests in test_type_contracts.py catch drift by asserting exact key-set equality.
 # ---------------------------------------------------------------------------
 
 
-class IssueWithTransitions(IssueDict, total=False):
+class IssueWithTransitions(IssueDict):
     """Issue detail with optional valid_transitions (MCP get_issue)."""
 
-    valid_transitions: list[dict[str, Any]]
+    valid_transitions: NotRequired[list[dict[str, Any]]]
 
 
 class IssueWithChangedFields(IssueDict):
@@ -123,10 +136,10 @@ class IssueWithChangedFields(IssueDict):
     changed_fields: list[str]
 
 
-class IssueWithUnblocked(IssueDict, total=False):
+class IssueWithUnblocked(IssueDict):
     """Issue close response with optional newly-unblocked issues."""
 
-    newly_unblocked: list[SlimIssue]
+    newly_unblocked: NotRequired[list[SlimIssue]]
 
 
 class ClaimNextResponse(IssueDict):
@@ -161,7 +174,9 @@ class DepDetail(TypedDict):
 
 
 class IssueDetailEvent(TypedDict):
-    """Slim event shape from dashboard issue detail (5 columns, not full EventRecord)."""
+    """Slim 5-column projection of EventRecord — only the columns selected by
+    api_issue_detail's SQL query. Do NOT extend to full EventRecord; that is
+    a separate type in types/events.py."""
 
     event_type: str
     actor: str
@@ -180,6 +195,9 @@ class EnrichedIssueDetail(IssueDict):
 
 # ---------------------------------------------------------------------------
 # True envelopes — list / search / batch wrappers
+#
+# For types with mixed required/optional keys, use the split-base pattern
+# matching the convention in types/workflow.py (FieldSchemaInfo).
 # ---------------------------------------------------------------------------
 
 
@@ -209,16 +227,22 @@ class BatchUpdateResponse(TypedDict):
     count: int
 
 
-class BatchCloseResponse(TypedDict, total=False):
-    """Batch close result with optional newly-unblocked list.
-
-    ``succeeded``, ``failed``, and ``count`` are always present.
-    ``newly_unblocked`` is only included when issues were actually unblocked.
-    """
+class _BatchCloseRequired(TypedDict):
+    """Required keys for BatchCloseResponse (always present)."""
 
     succeeded: list[str]
     failed: list[dict[str, Any]]
     count: int
+
+
+class BatchCloseResponse(_BatchCloseRequired, total=False):
+    """Batch close result with optional newly-unblocked list.
+
+    ``succeeded``, ``failed``, and ``count`` are always present (enforced
+    by ``_BatchCloseRequired``). ``newly_unblocked`` is only included when
+    issues were actually unblocked.
+    """
+
     newly_unblocked: list[SlimIssue]
 
 
@@ -232,19 +256,7 @@ class PlanResponse(TypedDict):
     progress_pct: float
 ```
 
-**Important notes on `BatchCloseResponse`:** It uses `total=False` because `newly_unblocked` is optional AND the required keys (`succeeded`, `failed`, `count`) are always present at runtime. An alternative is splitting into required/optional base classes, but `total=False` is simpler here and mypy still catches missing keys at construction sites. If you prefer strictness, use:
-
-```python
-class _BatchCloseRequired(TypedDict):
-    succeeded: list[str]
-    failed: list[dict[str, Any]]
-    count: int
-
-class BatchCloseResponse(_BatchCloseRequired, total=False):
-    newly_unblocked: list[SlimIssue]
-```
-
-Use whichever pattern the implementer prefers — both are correct.
+**Important notes on `BatchCloseResponse`:** It uses the split-base pattern (`_BatchCloseRequired` + `BatchCloseResponse(total=False)`) to keep `succeeded`, `failed`, and `count` as required keys while making `newly_unblocked` optional. This matches the established convention in `types/workflow.py` (`_FieldSchemaRequired` + `FieldSchemaInfo`). Do NOT use `total=False` directly on a TypedDict with required keys — mypy would treat all keys as optional, silently accepting empty construction.
 
 **Also note `IssueDetailEvent`:** The dashboard `api_issue_detail` handler runs a raw SQL query that selects only 5 columns (`event_type, actor, old_value, new_value, created_at`), NOT the full 8-column `EventRecord`. So we need a separate slim type. Do NOT reuse `EventRecord` here.
 
@@ -257,7 +269,6 @@ from filigree.types.api import (
     BatchCloseResponse,
     BatchUpdateResponse,
     ClaimNextResponse,
-    CloseIssueResponse,
     DepDetail,
     EnrichedIssueDetail,
     ErrorResponse,
@@ -301,6 +312,8 @@ git commit -m "feat(types): add api.py with 17 MCP/dashboard response TypedDicts
 - Test: existing `tests/mcp/` tests serve as regression
 
 **Context:** The 5 MCP issue handlers that mutate `to_dict()` results need refactoring. The pattern is: replace `dict[str, Any]` intermediaries with typed construction. The `_slim_issue()` helper in `common.py` currently returns `dict[str, Any]` — change it to return `SlimIssue`. Similarly `_build_transition_error()` returns `dict[str, Any]` — change to `TransitionError`.
+
+**Import convention:** All `from filigree.types.api import ...` statements must go at the **module level** (top of the file), not inside handler function bodies. The inline imports shown in individual steps below are for clarity — the delivered code must consolidate them into a single module-level import block per file.
 
 **Step 1: Update `_slim_issue()` return type**
 
@@ -454,16 +467,16 @@ return _text(result)
 
 In `src/filigree/mcp_tools/issues.py`, change lines 445-448:
 
+> **Wire format change:** The current code produces 4-key dicts for `newly_unblocked` entries: `{id, title, priority, type}`. Using `_slim_issue()` produces 5-key `SlimIssue` dicts: `{id, title, status, priority, type}`. This adds `status` — a deliberate additive enrichment, backward-compatible for consumers that ignore unknown keys.
+
 ```python
-# Before:
+# Before (4-key newly_unblocked):
 result: dict[str, Any] = dict(issue.to_dict())
 if newly_unblocked:
     result["newly_unblocked"] = [{"id": i.id, "title": i.title, "priority": i.priority, "type": i.type} for i in newly_unblocked]
 return _text(result)
 
-# After:
-from filigree.types.api import IssueWithUnblocked
-
+# After (5-key SlimIssue — adds "status"):
 if newly_unblocked:
     result = IssueWithUnblocked(
         **issue.to_dict(),
@@ -562,7 +575,7 @@ return _text(
 **Step 9: Run verification**
 
 Run: `uv run ruff check src/filigree/mcp_tools/ && uv run mypy src/filigree/ && uv run pytest tests/mcp/ -v --tb=short`
-Expected: All clean. Existing MCP tests pass (wire format unchanged).
+Expected: All clean. Existing MCP tests pass. Note: `newly_unblocked` entries gain a `status` key (4→5 keys) — this is a deliberate additive change for `SlimIssue` consistency, backward-compatible for consumers that ignore unknown keys.
 
 **Step 10: Commit**
 
@@ -597,8 +610,10 @@ plan_data["progress_pct"] = round(completed / total * 100, 1) if total > 0 else 
 return _text(plan_data)
 
 # After:
-from filigree.types.api import PlanResponse
-
+# NOTE: This changes error behavior — the old .get() silently defaulted to 0,
+# the new direct key access will raise KeyError (caught by the existing handler).
+# This is an improvement: fail-fast enforces the PlanTree contract rather than
+# silently returning bogus progress_pct=0.0 for malformed plan trees.
 plan_tree = tracker.get_plan(arguments["milestone_id"])
 total = plan_tree["total_steps"]
 completed = plan_tree["completed_steps"]
@@ -640,6 +655,7 @@ for did in dep_ids:
             priority=dep.priority,
         )
     except KeyError:
+        logger.warning("dep resolution failed for %s in issue %s", did, issue_id)
         dep_details[did] = DepDetail(
             title=did,
             status="unknown",
@@ -647,6 +663,9 @@ for did in dep_ids:
             priority=2,
         )
 
+# NOTE: The SQL column list below must stay in sync with IssueDetailEvent fields.
+# IssueDetailEvent is a slim 5-column projection — NOT full EventRecord.
+# See types/events.py for the full EventRecord type.
 events = db.conn.execute(
     "SELECT event_type, actor, old_value, new_value, created_at FROM events WHERE issue_id = ? ORDER BY created_at DESC LIMIT 20",
     (issue_id,),
@@ -775,9 +794,19 @@ class TestBatchUpdateResponseShape:
 
 
 class TestBatchCloseResponseShape:
-    def test_keys_match(self, db: FiligreeDB) -> None:
+    def test_required_keys(self, db: FiligreeDB) -> None:
+        """Required keys (succeeded, failed, count) are always present."""
         from filigree.types.api import BatchCloseResponse
         result = BatchCloseResponse(succeeded=["a"], failed=[], count=1)
+        assert {"succeeded", "failed", "count"} <= set(result.keys())
+
+    def test_with_newly_unblocked(self, db: FiligreeDB) -> None:
+        """All 4 keys present when newly_unblocked is populated."""
+        from filigree.types.api import BatchCloseResponse
+        result = BatchCloseResponse(
+            succeeded=["a"], failed=[], count=1,
+            newly_unblocked=[SlimIssue(id="x", title="t", status="open", priority=2, type="task")],
+        )
         hints = get_type_hints(BatchCloseResponse)
         assert set(result.keys()) == set(hints.keys())
 
@@ -846,6 +875,34 @@ class TestEnrichedIssueDetailShape:
         )
         hints = get_type_hints(EnrichedIssueDetail)
         assert set(result.keys()) == set(hints.keys())
+
+
+# ---------------------------------------------------------------------------
+# Guard: ensure TYPES_DIR exists to prevent vacuous parametrize pass (W8)
+# ---------------------------------------------------------------------------
+
+def test_types_dir_exists() -> None:
+    """Sanity check: TYPES_DIR must exist, otherwise the import constraint
+    test would produce zero parametrize cases and pass vacuously."""
+    assert TYPES_DIR.exists(), f"types dir not found at {TYPES_DIR}"
+
+
+# ---------------------------------------------------------------------------
+# Dashboard JS contract: enriched issue detail keys (W9)
+# ---------------------------------------------------------------------------
+
+# Keys the JS frontend reads from the enriched issue detail endpoint
+DASHBOARD_ENRICHED_KEYS = DASHBOARD_ISSUE_KEYS | {
+    "dep_details", "events", "comments",
+}
+
+
+def test_enriched_issue_detail_keys_cover_dashboard_contract() -> None:
+    """EnrichedIssueDetail must contain all keys the dashboard JS reads
+    from the issue detail endpoint."""
+    hints = get_type_hints(EnrichedIssueDetail)
+    missing = DASHBOARD_ENRICHED_KEYS - set(hints.keys())
+    assert not missing, f"EnrichedIssueDetail missing keys consumed by dashboard JS: {missing}"
 ```
 
 **Step 2: Run all contract tests**
@@ -871,9 +928,179 @@ git commit -m "test(types): add shape contract tests for API response TypedDicts
 
 | Task | What | Files | TypedDicts |
 |------|------|-------|------------|
-| 1 | Create `types/api.py` + re-exports | types/api.py, types/__init__.py | 17 definitions |
+| 1 | Create `types/api.py` + re-exports | types/api.py, types/__init__.py | 18 definitions (incl. `_BatchCloseRequired` base) |
 | 2 | Refactor MCP issue handlers | mcp_tools/common.py, mcp_tools/issues.py | 10 used |
 | 3 | Refactor MCP planning + dashboard routes | mcp_tools/planning.py, dashboard_routes/issues.py, dashboard_routes/analytics.py | 5 used |
-| 4 | Shape contract tests | tests/util/test_type_contracts.py | 12 tested |
+| 4 | Shape contract tests + guards + dashboard contract | tests/util/test_type_contracts.py | 14 tested |
 
 **CI gate after each task:** `uv run ruff check src/ tests/ && uv run ruff format --check src/ tests/ && uv run mypy src/filigree/ && uv run pytest --tb=short`
+
+## Review panel changes applied (2026-02-28)
+
+| ID | Type | Fix applied |
+|----|------|-------------|
+| B1 | Blocking | Removed phantom `CloseIssueResponse` from imports/re-exports, replaced with `IssueWithUnblocked` |
+| B2 | Blocking | `BatchCloseResponse` now uses split-base pattern; `IssueWithTransitions`/`IssueWithUnblocked` use `NotRequired` instead of `total=False` |
+| B3 | Blocking | Documented wire format change: `newly_unblocked` gains `status` key (4→5 keys) |
+| B4 | Blocking | Fixed `TestBatchCloseResponseShape` to use subset assertion for required keys + full equality test with `newly_unblocked` |
+| W1 | Warning | Added prerequisites section |
+| W3 | Warning | Aligned naming to `ClaimNextResponse` (was `IssueWithSelectionReason` in design doc) |
+| W4 | Warning | Added `**spread` risk comments in flat inheritance section |
+| W5 | Warning | Added SQL↔TypedDict cross-reference comment for `IssueDetailEvent` |
+| W6 | Warning | Added `test_with_newly_unblocked` test case for populated path |
+| W7 | Warning | Acknowledged `.get()` → direct access behavioral change as intentional improvement |
+| W8 | Warning | Added `test_types_dir_exists()` guard against vacuous parametrize |
+| W9 | Warning | Added `DASHBOARD_ENRICHED_KEYS` contract test for `EnrichedIssueDetail` |
+| QW6 | Warning | Added `logger.warning` for dangling dep_id in `api_issue_detail` |
+| AW5 | Warning | Added import convention note: all imports must be module-level in delivered code |
+
+## Review panel amendments — round 2 (2026-02-28)
+
+Full 4-reviewer panel (Reality, Architecture, Quality, Systems) identified 10 warnings, 0 blockers. Verdict: **APPROVED_WITH_WARNINGS**. The following amendments must be applied during implementation.
+
+### Amendment A: Add `logger` to `dashboard_routes/issues.py` (Task 3 Step 2)
+
+`dashboard_routes/issues.py` has no `logger` in scope. Before adding `logger.warning()` for dangling dep_id, add at the module level:
+
+```python
+import logging
+
+logger = logging.getLogger(__name__)
+```
+
+### Amendment B: Add 3 missing shape tests to Task 4
+
+Task 4 tests 14 of 17 TypedDicts. Add shape tests for the 3 missing types. These should exercise both the absent and populated paths for `NotRequired` fields:
+
+```python
+class TestIssueWithTransitionsShape:
+    def test_keys_without_transitions(self, db: FiligreeDB) -> None:
+        from filigree.types.api import IssueWithTransitions
+        issue = db.create_issue("Test", type="task")
+        result = IssueWithTransitions(**issue.to_dict())
+        # NotRequired keys may be absent
+        assert {"id", "title", "status"} <= set(result.keys())
+
+    def test_keys_with_transitions(self, db: FiligreeDB) -> None:
+        from filigree.types.api import IssueWithTransitions
+        issue = db.create_issue("Test", type="task")
+        result = IssueWithTransitions(**issue.to_dict(), valid_transitions=[])
+        hints = get_type_hints(IssueWithTransitions)
+        assert set(result.keys()) == set(hints.keys())
+
+
+class TestIssueWithUnblockedShape:
+    def test_keys_without_unblocked(self, db: FiligreeDB) -> None:
+        from filigree.types.api import IssueWithUnblocked
+        issue = db.create_issue("Test", type="task")
+        result = IssueWithUnblocked(**issue.to_dict())
+        assert {"id", "title", "status"} <= set(result.keys())
+
+    def test_keys_with_unblocked(self, db: FiligreeDB) -> None:
+        from filigree.types.api import IssueWithUnblocked, SlimIssue
+        issue = db.create_issue("Test", type="task")
+        result = IssueWithUnblocked(
+            **issue.to_dict(),
+            newly_unblocked=[SlimIssue(id="x", title="t", status="open", priority=2, type="task")],
+        )
+        hints = get_type_hints(IssueWithUnblocked)
+        assert set(result.keys()) == set(hints.keys())
+
+
+class TestClaimNextResponseShape:
+    def test_keys_match(self, db: FiligreeDB) -> None:
+        from filigree.types.api import ClaimNextResponse
+        issue = db.create_issue("Test", type="task")
+        result = ClaimNextResponse(**issue.to_dict(), selection_reason="P2 ready issue")
+        hints = get_type_hints(ClaimNextResponse)
+        assert set(result.keys()) == set(hints.keys())
+
+    def test_value_types(self, db: FiligreeDB) -> None:
+        from filigree.types.api import ClaimNextResponse
+        issue = db.create_issue("Test", type="task")
+        result = ClaimNextResponse(**issue.to_dict(), selection_reason="P2 ready issue")
+        assert isinstance(result["selection_reason"], str)
+```
+
+### Amendment C: Wire format regression guard (Task 2 Step 9)
+
+After refactoring `_handle_close_issue` and `_handle_batch_close`, update the existing regression tests in `tests/mcp/test_tools.py` to lock in the 5-key `SlimIssue` contract:
+
+```python
+# In TestProactiveContext.test_close_returns_newly_unblocked:
+assert set(data["newly_unblocked"][0].keys()) == {"id", "title", "status", "priority", "type"}
+```
+
+### Amendment D: `IssueDetailEvent` populated-path test (Task 4 Step 1)
+
+Add a test that exercises `IssueDetailEvent` construction from a real SQL row:
+
+```python
+class TestIssueDetailEventFromSQL:
+    def test_construction_from_sql_row(self, db: FiligreeDB) -> None:
+        from filigree.types.api import IssueDetailEvent
+        issue = db.create_issue("Test", type="task")
+        db.update_issue(issue.id, status="in_progress")
+        rows = db.conn.execute(
+            "SELECT event_type, actor, old_value, new_value, created_at "
+            "FROM events WHERE issue_id = ? LIMIT 1",
+            (issue.id,),
+        ).fetchall()
+        assert len(rows) >= 1
+        event = IssueDetailEvent(**dict(rows[0]))
+        hints = get_type_hints(IssueDetailEvent)
+        assert set(event.keys()) == set(hints.keys())
+```
+
+### Amendment E: `selection_reason` assertion (Task 2 Step 9)
+
+In the existing `test_claim_next_success` MCP test, add:
+
+```python
+assert "selection_reason" in data
+assert isinstance(data["selection_reason"], str)
+```
+
+### Amendment F: Extension key namespace documentation (Task 1 Step 3)
+
+Add a comment in `types/api.py` near the flat-inheritance section listing reserved extension key names:
+
+```python
+# RESERVED EXTENSION KEYS — these names must never be added to IssueDict:
+# valid_transitions, changed_fields, newly_unblocked, selection_reason,
+# dep_details, events, comments
+```
+
+### Amendment G: Dangling dep_id fallback test (Task 4 Step 1)
+
+Add a test verifying the fallback `DepDetail` for a deleted dependency:
+
+```python
+class TestDanglingDepDetail:
+    def test_fallback_for_missing_dep(self, db: FiligreeDB) -> None:
+        from filigree.types.api import DepDetail
+        a = db.create_issue("A", type="task")
+        b = db.create_issue("B", type="task")
+        db.add_dependency(a.id, b.id)
+        db.conn.execute("DELETE FROM issues WHERE id = ?", (b.id,))
+        db.conn.commit()
+        # Simulate what api_issue_detail does for dangling deps
+        try:
+            db.get_issue(b.id)
+            assert False, "Should have raised KeyError"
+        except KeyError:
+            fallback = DepDetail(title=b.id, status="unknown", status_category="open", priority=2)
+            assert set(fallback.keys()) == {"title", "status", "status_category", "priority"}
+```
+
+### Amendment summary
+
+| ID | Source | Fix |
+|----|--------|-----|
+| A | Reality W2 | Add `logger` setup to `dashboard_routes/issues.py` |
+| B | Quality W1 | Add 3 missing shape tests (IssueWithTransitions, IssueWithUnblocked, ClaimNextResponse) |
+| C | Quality W2 + Architecture R2 | Wire format regression guard for `newly_unblocked` 5-key contract |
+| D | Quality W5 + Systems W1 | `IssueDetailEvent` populated-path test from real SQL |
+| E | Quality W6 | `selection_reason` assertion in existing MCP test |
+| F | Systems W2 | Extension key namespace documentation in `types/api.py` |
+| G | Quality W4 | Dangling dep_id fallback test |

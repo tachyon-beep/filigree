@@ -8,15 +8,19 @@ Add TypedDicts for MCP tool handler and dashboard route responses that construct
 
 Single new file `src/filigree/types/api.py` in the existing `types/` subpackage. All API response TypedDicts live here, organized by domain section.
 
-**Key constraint:** No JSON key renames. Existing MCP consumers and `dashboard.html` JS read response keys by name. Wire format is preserved exactly.
+**Key constraint:** No JSON key renames. Existing MCP consumers and `dashboard.html` JS read response keys by name. Wire format is preserved exactly, with one deliberate additive change: `newly_unblocked` entries in close/batch-close responses gain a `status` key (4→5 keys) for consistency with `SlimIssue`. This is backward-compatible for consumers that ignore unknown keys.
 
 **Two patterns based on response shape:**
 
-1. **Flat inheritance** — for handlers that spread `to_dict()` + extra keys into a flat dict. Uses `class FooResponse(IssueDict, total=False)` to extend the base type. Preserves flat wire format.
+1. **Flat inheritance** — for handlers that spread `to_dict()` + extra keys into a flat dict. Uses `NotRequired` on individual optional fields (e.g., `valid_transitions: NotRequired[list[...]]`) to keep inherited base keys required. For envelope types with a mix of required and optional keys, uses the split-base pattern (`_FooRequired` + `Foo(total=False)`) matching the established convention in `types/workflow.py`. Preserves flat wire format.
 
 2. **True envelopes** — for handlers that construct wrapper dicts with nested arrays/objects (list, batch, search responses). Uses composition: `issues: list[IssueDict]`.
 
-## Scope: 15 TypedDicts across ~12 handlers
+## Prerequisites
+
+This plan requires Tasks 1A, 1B, and 1C to be complete. Specifically: `IssueDict` from `types.core`, and `StatsResult`, `CommentRecord`, `PlanPhase` from `types.planning` must exist.
+
+## Scope: 17 TypedDicts across ~12 handlers
 
 ### Shared types
 
@@ -24,7 +28,7 @@ Single new file `src/filigree/types/api.py` in the existing `types/` subpackage.
 |-----------|------|---------|
 | `SlimIssue` | `id, title, status, priority, type` | `_slim_issue()`, search, unblocked lists |
 | `ErrorResponse` | `error, code` | All error returns |
-| `TransitionError` | `error, code (Literal), current_status, valid_transitions, hint?` | `_build_transition_error()` |
+| `TransitionError` | `error, code (Literal["invalid_transition"]), valid_transitions?, hint?` | `_build_transition_error()` |
 
 ### Flat inheritance (IssueDict + extra keys)
 
@@ -32,10 +36,10 @@ These preserve the existing flat wire format where `to_dict()` keys are spread a
 
 | TypedDict | Inherits | Extra keys | Handler |
 |-----------|----------|------------|---------|
-| `IssueWithTransitions` | `IssueDict, total=False` | `valid_transitions?` | `_handle_get_issue` |
+| `IssueWithTransitions` | `IssueDict` | `valid_transitions: NotRequired[list[...]]` | `_handle_get_issue` |
 | `IssueWithChangedFields` | `IssueDict` | `changed_fields: list[str]` | `_handle_update_issue` |
-| `IssueWithUnblocked` | `IssueDict, total=False` | `newly_unblocked?: list[SlimIssue]` | `_handle_close_issue` |
-| `IssueWithSelectionReason` | `IssueDict` | `selection_reason: str` | `_handle_claim_next` |
+| `IssueWithUnblocked` | `IssueDict` | `newly_unblocked: NotRequired[list[SlimIssue]]` | `_handle_close_issue` |
+| `ClaimNextResponse` | `IssueDict` | `selection_reason: str` | `_handle_claim_next` |
 | `EnrichedIssueDetail` | `IssueDict` | `dep_details, events, comments` | `api_issue_detail` |
 | `StatsWithPrefix` | `StatsResult` | `prefix: str` | `api_stats` |
 
@@ -46,14 +50,15 @@ These preserve the existing flat wire format where `to_dict()` keys are spread a
 | `IssueListResponse` | `issues: list[IssueDict], limit, offset, has_more` | `_handle_list_issues` |
 | `SearchResponse` | `issues: list[SlimIssue], limit, offset, has_more` | `_handle_search_issues` |
 | `BatchUpdateResponse` | `succeeded, failed, count` | `_handle_batch_update` |
-| `BatchCloseResponse` | `succeeded, failed, count, newly_unblocked?` | `_handle_batch_close` |
+| `BatchCloseResponse` | `succeeded, failed, count` (required) + `newly_unblocked?` (optional, split-base pattern) | `_handle_batch_close` |
 | `PlanResponse` | `milestone, phases, total_steps, completed_steps, progress_pct` | `_handle_get_plan` |
 
-### Dashboard helper type
+### Dashboard helper types
 
 | TypedDict | Keys | Used by |
 |-----------|------|---------|
 | `DepDetail` | `title, status, status_category, priority` | Nested in `EnrichedIssueDetail.dep_details` |
+| `IssueDetailEvent` | `event_type, actor, old_value, new_value, created_at` | Slim 5-column projection in `EnrichedIssueDetail.events` (NOT full `EventRecord` — the dashboard SQL selects only 5 columns) |
 
 ## Handler refactoring pattern
 
@@ -71,6 +76,10 @@ return _text(result)
 ```
 
 For `IssueDict` spread + optional keys, use `**` unpacking into the inherited TypedDict constructor. Mypy verifies all required keys are present and extra keys match the declared extensions.
+
+**Known limitation:** mypy does not propagate granular type narrowing through `**TypedDict` unpacking. If `to_dict()` returns extra keys not in the TypedDict, they pass through silently at runtime (since TypedDicts are plain dicts). The shape contract tests in `test_type_contracts.py` catch drift by asserting exact key-set equality.
+
+**`total=False` inheritance rule:** Never use `class Foo(IssueDict, total=False)` — this makes ALL inherited keys optional to mypy, defeating type safety. Instead use `NotRequired` on individual optional fields, or the split-base pattern for envelopes (see `types/workflow.py` for the established convention).
 
 **Dashboard detail refactoring:**
 
