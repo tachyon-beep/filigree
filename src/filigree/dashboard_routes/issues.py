@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from starlette.requests import Request
@@ -11,6 +12,9 @@ from filigree.dashboard_routes.common import (
     _error_response,
     _parse_json_body,
 )
+from filigree.types.api import DepDetail, EnrichedIssueDetail, IssueDetailEvent
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Router factory
@@ -44,40 +48,51 @@ def create_router() -> Any:
         except KeyError:
             return _error_response(f"Issue not found: {issue_id}", "ISSUE_NOT_FOUND", 404)
 
-        data: dict[str, Any] = dict(issue.to_dict())
-
         # Resolve dep details for blocks and blocked_by
         dep_ids = set(issue.blocks + issue.blocked_by)
-        dep_details: dict[str, dict[str, Any]] = {}
+        dep_details: dict[str, DepDetail] = {}
         for did in dep_ids:
             try:
                 dep = db.get_issue(did)
-                dep_details[did] = {
-                    "title": dep.title,
-                    "status": dep.status,
-                    "status_category": dep.status_category,
-                    "priority": dep.priority,
-                }
+                dep_details[did] = DepDetail(
+                    title=dep.title,
+                    status=dep.status,
+                    status_category=dep.status_category,
+                    priority=dep.priority,
+                )
             except KeyError:
-                dep_details[did] = {
-                    "title": did,
-                    "status": "unknown",
-                    "status_category": "open",
-                    "priority": 2,
-                }
-        data["dep_details"] = dep_details
+                logger.warning("dep resolution failed for %s in issue %s", did, issue_id)
+                dep_details[did] = DepDetail(
+                    title=did,
+                    status="unknown",
+                    status_category="open",
+                    priority=2,
+                )
 
-        # Events
+        # Events — NOTE: SQL column list must stay in sync with IssueDetailEvent fields.
+        # IssueDetailEvent is a slim 5-column projection — NOT full EventRecord.
         events = db.conn.execute(
             "SELECT event_type, actor, old_value, new_value, created_at FROM events WHERE issue_id = ? ORDER BY created_at DESC LIMIT 20",
             (issue_id,),
         ).fetchall()
-        data["events"] = [dict(e) for e in events]
+        event_list: list[IssueDetailEvent] = [
+            IssueDetailEvent(
+                event_type=e["event_type"],
+                actor=e["actor"],
+                old_value=e["old_value"],
+                new_value=e["new_value"],
+                created_at=e["created_at"],
+            )
+            for e in events
+        ]
 
-        # Comments
-        data["comments"] = db.get_comments(issue_id)
-
-        return JSONResponse(data)
+        result = EnrichedIssueDetail(
+            **issue.to_dict(),
+            dep_details=dep_details,
+            events=event_list,
+            comments=db.get_comments(issue_id),
+        )
+        return JSONResponse(result)
 
     @router.get("/dependencies")
     async def api_dependencies(db: FiligreeDB = Depends(_get_db)) -> JSONResponse:

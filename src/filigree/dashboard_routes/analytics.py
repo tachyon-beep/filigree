@@ -24,6 +24,7 @@ from filigree.dashboard_routes.common import (
     _resolve_graph_runtime,
     _safe_bounded_int,
 )
+from filigree.types.api import StatsWithPrefix
 
 # ---------------------------------------------------------------------------
 # Graph v2 helpers
@@ -428,9 +429,8 @@ def create_router() -> Any:
 
     @router.get("/stats")
     async def api_stats(db: FiligreeDB = Depends(_get_db)) -> JSONResponse:
-        stats_data: dict[str, Any] = dict(db.get_stats())
-        stats_data["prefix"] = db.prefix
-        return JSONResponse(stats_data)
+        result = StatsWithPrefix(**db.get_stats(), prefix=db.prefix)
+        return JSONResponse(result)
 
     @router.get("/metrics")
     async def api_metrics(days: int = 30, db: FiligreeDB = Depends(_get_db)) -> JSONResponse:

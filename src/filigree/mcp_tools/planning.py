@@ -8,6 +8,7 @@ from typing import Any
 from mcp.types import TextContent, Tool
 
 from filigree.mcp_tools.common import _text
+from filigree.types.api import PlanResponse
 
 
 def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
@@ -191,11 +192,16 @@ async def _handle_get_plan(arguments: dict[str, Any]) -> list[TextContent]:
     tracker = _get_db()
     try:
         plan_tree = tracker.get_plan(arguments["milestone_id"])
-        plan_data: dict[str, Any] = dict(plan_tree)
-        total = plan_data.get("total_steps", 0)
-        completed = plan_data.get("completed_steps", 0)
-        plan_data["progress_pct"] = round(completed / total * 100, 1) if total > 0 else 0.0
-        return _text(plan_data)
+        total = plan_tree["total_steps"]
+        completed = plan_tree["completed_steps"]
+        result = PlanResponse(
+            milestone=plan_tree["milestone"],
+            phases=plan_tree["phases"],
+            total_steps=total,
+            completed_steps=completed,
+            progress_pct=round(completed / total * 100, 1) if total > 0 else 0.0,
+        )
+        return _text(result)
     except KeyError:
         return _text({"error": f"Milestone not found: {arguments['milestone_id']}", "code": "not_found"})
 
