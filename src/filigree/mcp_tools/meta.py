@@ -9,8 +9,24 @@ from typing import Any
 
 from mcp.types import TextContent, Tool
 
-from filigree.mcp_tools.common import _text, _validate_actor
+from filigree.mcp_tools.common import _parse_args, _text, _validate_actor
 from filigree.types.api import BatchActionResponse, ErrorResponse
+from filigree.types.inputs import (
+    AddCommentArgs,
+    AddLabelArgs,
+    ArchiveClosedArgs,
+    BatchAddCommentArgs,
+    BatchAddLabelArgs,
+    CompactEventsArgs,
+    ExportJsonlArgs,
+    GetChangesArgs,
+    GetCommentsArgs,
+    GetIssueEventsArgs,
+    GetMetricsArgs,
+    ImportJsonlArgs,
+    RemoveLabelArgs,
+    UndoLastArgs,
+)
 
 
 def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
@@ -247,18 +263,19 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
 async def _handle_add_comment(arguments: dict[str, Any]) -> list[TextContent]:
     from filigree.mcp_server import _get_db
 
-    actor, actor_err = _validate_actor(arguments.get("actor", "mcp"))
+    args = _parse_args(arguments, AddCommentArgs)
+    actor, actor_err = _validate_actor(args.get("actor", "mcp"))
     if actor_err:
         return actor_err
     tracker = _get_db()
     try:
-        tracker.get_issue(arguments["issue_id"])
+        tracker.get_issue(args["issue_id"])
     except KeyError:
-        return _text(ErrorResponse(error=f"Issue not found: {arguments['issue_id']}", code="not_found"))
+        return _text(ErrorResponse(error=f"Issue not found: {args['issue_id']}", code="not_found"))
     try:
         comment_id = tracker.add_comment(
-            arguments["issue_id"],
-            arguments["text"],
+            args["issue_id"],
+            args["text"],
             author=actor,
         )
     except ValueError as e:
@@ -269,59 +286,63 @@ async def _handle_add_comment(arguments: dict[str, Any]) -> list[TextContent]:
 async def _handle_get_comments(arguments: dict[str, Any]) -> list[TextContent]:
     from filigree.mcp_server import _get_db
 
+    args = _parse_args(arguments, GetCommentsArgs)
     tracker = _get_db()
     try:
-        tracker.get_issue(arguments["issue_id"])
+        tracker.get_issue(args["issue_id"])
     except KeyError:
-        return _text(ErrorResponse(error=f"Issue not found: {arguments['issue_id']}", code="not_found"))
-    comments = tracker.get_comments(arguments["issue_id"])
+        return _text(ErrorResponse(error=f"Issue not found: {args['issue_id']}", code="not_found"))
+    comments = tracker.get_comments(args["issue_id"])
     return _text(comments)
 
 
 async def _handle_add_label(arguments: dict[str, Any]) -> list[TextContent]:
     from filigree.mcp_server import _get_db, _refresh_summary
 
+    args = _parse_args(arguments, AddLabelArgs)
     tracker = _get_db()
     try:
-        tracker.get_issue(arguments["issue_id"])
+        tracker.get_issue(args["issue_id"])
     except KeyError:
-        return _text(ErrorResponse(error=f"Issue not found: {arguments['issue_id']}", code="not_found"))
+        return _text(ErrorResponse(error=f"Issue not found: {args['issue_id']}", code="not_found"))
     try:
-        added = tracker.add_label(arguments["issue_id"], arguments["label"])
+        added = tracker.add_label(args["issue_id"], args["label"])
     except ValueError as e:
         return _text(ErrorResponse(error=str(e), code="validation_error"))
     _refresh_summary()
     status = "added" if added else "already_exists"
-    return _text({"status": status, "issue_id": arguments["issue_id"], "label": arguments["label"]})
+    return _text({"status": status, "issue_id": args["issue_id"], "label": args["label"]})
 
 
 async def _handle_remove_label(arguments: dict[str, Any]) -> list[TextContent]:
     from filigree.mcp_server import _get_db, _refresh_summary
 
+    args = _parse_args(arguments, RemoveLabelArgs)
     tracker = _get_db()
     try:
-        tracker.get_issue(arguments["issue_id"])
+        tracker.get_issue(args["issue_id"])
     except KeyError:
-        return _text(ErrorResponse(error=f"Issue not found: {arguments['issue_id']}", code="not_found"))
+        return _text(ErrorResponse(error=f"Issue not found: {args['issue_id']}", code="not_found"))
     try:
-        removed = tracker.remove_label(arguments["issue_id"], arguments["label"])
+        removed = tracker.remove_label(args["issue_id"], args["label"])
     except ValueError as e:
         return _text(ErrorResponse(error=str(e), code="validation_error"))
     _refresh_summary()
     status = "removed" if removed else "not_found"
-    return _text({"status": status, "issue_id": arguments["issue_id"], "label": arguments["label"]})
+    return _text({"status": status, "issue_id": args["issue_id"], "label": args["label"]})
 
 
 async def _handle_batch_add_label(arguments: dict[str, Any]) -> list[TextContent]:
     from filigree.mcp_server import _get_db, _refresh_summary
 
+    args = _parse_args(arguments, BatchAddLabelArgs)
     tracker = _get_db()
-    label_ids = arguments["ids"]
+    label_ids = args["ids"]
     if not all(isinstance(i, str) for i in label_ids):
         return _text(ErrorResponse(error="All issue IDs must be strings", code="validation_error"))
-    if not isinstance(arguments["label"], str):
+    if not isinstance(args["label"], str):
         return _text(ErrorResponse(error="label must be a string", code="validation_error"))
-    label_succeeded, label_failed = tracker.batch_add_label(label_ids, label=arguments["label"])
+    label_succeeded, label_failed = tracker.batch_add_label(label_ids, label=args["label"])
     _refresh_summary()
     return _text(
         BatchActionResponse(
@@ -336,18 +357,19 @@ async def _handle_batch_add_label(arguments: dict[str, Any]) -> list[TextContent
 async def _handle_batch_add_comment(arguments: dict[str, Any]) -> list[TextContent]:
     from filigree.mcp_server import _get_db, _refresh_summary
 
-    actor, actor_err = _validate_actor(arguments.get("actor", "mcp"))
+    args = _parse_args(arguments, BatchAddCommentArgs)
+    actor, actor_err = _validate_actor(args.get("actor", "mcp"))
     if actor_err:
         return actor_err
     tracker = _get_db()
-    comment_ids = arguments["ids"]
+    comment_ids = args["ids"]
     if not all(isinstance(i, str) for i in comment_ids):
         return _text(ErrorResponse(error="All issue IDs must be strings", code="validation_error"))
-    if not isinstance(arguments["text"], str):
+    if not isinstance(args["text"], str):
         return _text(ErrorResponse(error="text must be a string", code="validation_error"))
     comment_succeeded, comment_failed = tracker.batch_add_comment(
         comment_ids,
-        text=arguments["text"],
+        text=args["text"],
         author=actor,
     )
     _refresh_summary()
@@ -364,10 +386,11 @@ async def _handle_batch_add_comment(arguments: dict[str, Any]) -> list[TextConte
 async def _handle_get_changes(arguments: dict[str, Any]) -> list[TextContent]:
     from filigree.mcp_server import _get_db
 
+    args = _parse_args(arguments, GetChangesArgs)
     tracker = _get_db()
     events = tracker.get_events_since(
-        arguments["since"],
-        limit=arguments.get("limit", 100),
+        args["since"],
+        limit=args.get("limit", 100),
     )
     return _text(events)
 
@@ -392,16 +415,18 @@ async def _handle_get_metrics(arguments: dict[str, Any]) -> list[TextContent]:
     from filigree.analytics import get_flow_metrics
     from filigree.mcp_server import _get_db
 
+    args = _parse_args(arguments, GetMetricsArgs)
     tracker = _get_db()
-    return _text(get_flow_metrics(tracker, days=arguments.get("days", 30)))
+    return _text(get_flow_metrics(tracker, days=args.get("days", 30)))
 
 
 async def _handle_export_jsonl(arguments: dict[str, Any]) -> list[TextContent]:
     from filigree.mcp_server import _get_db, _safe_path
 
+    args = _parse_args(arguments, ExportJsonlArgs)
     tracker = _get_db()
     try:
-        safe = _safe_path(arguments["output_path"])
+        safe = _safe_path(args["output_path"])
         count = tracker.export_jsonl(safe)
         return _text({"status": "ok", "records": count, "path": str(safe)})
     except ValueError as e:
@@ -413,13 +438,14 @@ async def _handle_export_jsonl(arguments: dict[str, Any]) -> list[TextContent]:
 async def _handle_import_jsonl(arguments: dict[str, Any]) -> list[TextContent]:
     from filigree.mcp_server import _get_db, _refresh_summary, _safe_path
 
+    args = _parse_args(arguments, ImportJsonlArgs)
     tracker = _get_db()
     try:
-        safe = _safe_path(arguments["input_path"])
+        safe = _safe_path(args["input_path"])
     except ValueError as e:
         return _text(ErrorResponse(error=str(e), code="invalid_path"))
     try:
-        count = tracker.import_jsonl(safe, merge=arguments.get("merge", False))
+        count = tracker.import_jsonl(safe, merge=args.get("merge", False))
         _refresh_summary()
         return _text({"status": "ok", "records": count, "path": str(safe)})
     except (ValueError, OSError, sqlite3.Error) as e:
@@ -430,12 +456,13 @@ async def _handle_import_jsonl(arguments: dict[str, Any]) -> list[TextContent]:
 async def _handle_archive_closed(arguments: dict[str, Any]) -> list[TextContent]:
     from filigree.mcp_server import _get_db, _refresh_summary
 
-    actor, actor_err = _validate_actor(arguments.get("actor", "mcp"))
+    args = _parse_args(arguments, ArchiveClosedArgs)
+    actor, actor_err = _validate_actor(args.get("actor", "mcp"))
     if actor_err:
         return actor_err
     tracker = _get_db()
     archived = tracker.archive_closed(
-        days_old=arguments.get("days_old", 30),
+        days_old=args.get("days_old", 30),
         actor=actor,
     )
     _refresh_summary()
@@ -445,36 +472,39 @@ async def _handle_archive_closed(arguments: dict[str, Any]) -> list[TextContent]
 async def _handle_compact_events(arguments: dict[str, Any]) -> list[TextContent]:
     from filigree.mcp_server import _get_db
 
+    args = _parse_args(arguments, CompactEventsArgs)
     tracker = _get_db()
-    deleted = tracker.compact_events(keep_recent=arguments.get("keep_recent", 50))
+    deleted = tracker.compact_events(keep_recent=args.get("keep_recent", 50))
     return _text({"status": "ok", "events_deleted": deleted})
 
 
 async def _handle_undo_last(arguments: dict[str, Any]) -> list[TextContent]:
     from filigree.mcp_server import _get_db, _refresh_summary
 
-    actor, actor_err = _validate_actor(arguments.get("actor", "mcp"))
+    args = _parse_args(arguments, UndoLastArgs)
+    actor, actor_err = _validate_actor(args.get("actor", "mcp"))
     if actor_err:
         return actor_err
     tracker = _get_db()
     try:
-        result = tracker.undo_last(arguments["id"], actor=actor)
+        result = tracker.undo_last(args["id"], actor=actor)
         if result["undone"]:
             _refresh_summary()
         return _text(result)
     except KeyError:
-        return _text(ErrorResponse(error=f"Issue not found: {arguments['id']}", code="not_found"))
+        return _text(ErrorResponse(error=f"Issue not found: {args['id']}", code="not_found"))
 
 
 async def _handle_get_issue_events(arguments: dict[str, Any]) -> list[TextContent]:
     from filigree.mcp_server import _get_db
 
+    args = _parse_args(arguments, GetIssueEventsArgs)
     tracker = _get_db()
     try:
         events = tracker.get_issue_events(
-            arguments["issue_id"],
-            limit=arguments.get("limit", 50),
+            args["issue_id"],
+            limit=args.get("limit", 50),
         )
         return _text(events)
     except KeyError:
-        return _text(ErrorResponse(error=f"Issue not found: {arguments['issue_id']}", code="not_found"))
+        return _text(ErrorResponse(error=f"Issue not found: {args['issue_id']}", code="not_found"))

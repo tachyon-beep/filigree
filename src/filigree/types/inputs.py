@@ -123,6 +123,80 @@ class BatchUpdateArgs(TypedDict):
     actor: NotRequired[str]
 
 
+# ---------------------------------------------------------------------------
+# meta.py handlers
+# ---------------------------------------------------------------------------
+
+
+class AddCommentArgs(TypedDict):
+    issue_id: str
+    text: str
+    actor: NotRequired[str]
+
+
+class GetCommentsArgs(TypedDict):
+    issue_id: str
+
+
+class AddLabelArgs(TypedDict):
+    issue_id: str
+    label: str
+
+
+class RemoveLabelArgs(TypedDict):
+    issue_id: str
+    label: str
+
+
+class BatchAddLabelArgs(TypedDict):
+    ids: list[str]
+    label: str
+    actor: NotRequired[str]
+
+
+class BatchAddCommentArgs(TypedDict):
+    ids: list[str]
+    text: str
+    actor: NotRequired[str]
+
+
+class GetChangesArgs(TypedDict):
+    since: str
+    limit: NotRequired[int]
+
+
+class GetMetricsArgs(TypedDict):
+    days: NotRequired[int]
+
+
+class ExportJsonlArgs(TypedDict):
+    output_path: str
+
+
+class ImportJsonlArgs(TypedDict):
+    input_path: str
+    merge: NotRequired[bool]
+
+
+class ArchiveClosedArgs(TypedDict):
+    days_old: NotRequired[int]
+    actor: NotRequired[str]
+
+
+class CompactEventsArgs(TypedDict):
+    keep_recent: NotRequired[int]
+
+
+class UndoLastArgs(TypedDict):
+    id: str
+    actor: NotRequired[str]
+
+
+class GetIssueEventsArgs(TypedDict):
+    issue_id: str
+    limit: NotRequired[int]
+
+
 # Registry: tool_name -> TypedDict class.
 # Populated as TypedDicts are defined below.
 # No-argument tools (empty inputSchema properties) are intentionally excluded.
@@ -140,4 +214,19 @@ TOOL_ARGS_MAP: dict[str, type] = {
     "claim_next": ClaimNextArgs,
     "batch_close": BatchCloseArgs,
     "batch_update": BatchUpdateArgs,
+    # meta.py
+    "add_comment": AddCommentArgs,
+    "get_comments": GetCommentsArgs,
+    "add_label": AddLabelArgs,
+    "remove_label": RemoveLabelArgs,
+    "batch_add_label": BatchAddLabelArgs,
+    "batch_add_comment": BatchAddCommentArgs,
+    "get_changes": GetChangesArgs,
+    "get_metrics": GetMetricsArgs,
+    "export_jsonl": ExportJsonlArgs,
+    "import_jsonl": ImportJsonlArgs,
+    "archive_closed": ArchiveClosedArgs,
+    "compact_events": CompactEventsArgs,
+    "undo_last": UndoLastArgs,
+    "get_issue_events": GetIssueEventsArgs,
 }
