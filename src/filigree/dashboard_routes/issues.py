@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import TYPE_CHECKING
 
 from starlette.requests import Request
+
+if TYPE_CHECKING:
+    from fastapi import APIRouter
 
 from filigree.core import FiligreeDB
 from filigree.dashboard_routes.common import (
@@ -23,7 +26,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
-def create_router() -> Any:
+def create_router() -> APIRouter:
     """Build the APIRouter for issue, workflow, and dependency endpoints.
 
     NOTE: All handlers are intentionally async despite doing synchronous

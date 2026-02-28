@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from fastapi import APIRouter
 
 from starlette.requests import Request
 
@@ -43,7 +46,7 @@ def _semver_sort_key(release: dict[str, Any]) -> tuple[float, int, int]:
 # ---------------------------------------------------------------------------
 
 
-def create_router() -> Any:
+def create_router() -> APIRouter:
     """Build the APIRouter for release endpoints.
 
     NOTE: All handlers are intentionally async despite doing synchronous

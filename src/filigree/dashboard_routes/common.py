@@ -10,6 +10,7 @@ if TYPE_CHECKING:
     from collections.abc import Mapping
 
     from fastapi.responses import JSONResponse
+    from starlette.requests import Request
 
 from filigree.core import FiligreeDB, read_config
 from filigree.validation import sanitize_actor as _sanitize_actor
@@ -46,7 +47,7 @@ def _error_response(
     )
 
 
-async def _parse_json_body(request: Any) -> dict[str, Any] | JSONResponse:
+async def _parse_json_body(request: Request) -> dict[str, Any] | JSONResponse:
     """Parse and validate a JSON object body, returning 400 on failure."""
     import json
 

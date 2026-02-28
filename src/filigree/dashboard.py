@@ -29,7 +29,13 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from fastapi import APIRouter
+    from starlette.middleware.base import RequestResponseEndpoint
     from starlette.requests import Request
+    from starlette.responses import Response
+    from starlette.types import ASGIApp, Receive, Scope, Send
 
 from filigree import __version__
 from filigree.core import (
@@ -215,7 +221,7 @@ def _get_db() -> FiligreeDB:
 # ---------------------------------------------------------------------------
 
 
-def _create_project_router() -> Any:
+def _create_project_router() -> APIRouter:
     """Build the APIRouter containing all project-scoped endpoints.
 
     Delegates to domain-specific sub-routers in ``dashboard_routes/``.
@@ -237,7 +243,7 @@ def _create_project_router() -> Any:
 # ---------------------------------------------------------------------------
 
 
-def create_app(*, server_mode: bool = False) -> Any:
+def create_app(*, server_mode: bool = False) -> ASGIApp:
     """Create the FastAPI application with all dashboard endpoints.
 
     When *server_mode* is ``True`` the app serves multiple projects via
@@ -252,8 +258,8 @@ def create_app(*, server_mode: bool = False) -> Any:
     from fastapi.responses import HTMLResponse, JSONResponse
 
     # --- MCP streamable-HTTP setup (optional) ---
-    _mcp_handler: Any = None
-    _mcp_lifespan_factory: Any = None
+    _mcp_handler: ASGIApp | None = None
+    _mcp_lifespan_factory: Callable[..., Any] | None = None
     try:
         from filigree.mcp_server import create_mcp_app
 
@@ -294,7 +300,7 @@ def create_app(*, server_mode: bool = False) -> Any:
         from starlette.middleware.base import BaseHTTPMiddleware
 
         class ProjectMiddleware(BaseHTTPMiddleware):
-            async def dispatch(self, request: Request, call_next: Any) -> Any:
+            async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
                 path = request.url.path
                 # Match /api/p/{key}/… — extract the key segment
                 if path.startswith("/api/p/"):
@@ -375,10 +381,10 @@ def create_app(*, server_mode: bool = False) -> Any:
             class _McpProjectWrapper:
                 """ASGI wrapper that sets _current_project_key from ?project= query param."""
 
-                def __init__(self, inner: Any) -> None:
+                def __init__(self, inner: ASGIApp) -> None:
                     self._inner = inner
 
-                async def __call__(self, scope: dict[str, Any], receive: Any, send: Any) -> None:
+                async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
                     if scope["type"] in ("http", "websocket"):
                         qs = scope.get("query_string", b"").decode()
                         params = parse_qs(qs)
@@ -392,7 +398,7 @@ def create_app(*, server_mode: bool = False) -> Any:
                                 _current_project_key.reset(token)
                     await self._inner(scope, receive, send)
 
-            app.routes.append(Mount("/mcp", app=_McpProjectWrapper(_mcp_handler)))  # type: ignore[arg-type]
+            app.routes.append(Mount("/mcp", app=_McpProjectWrapper(_mcp_handler)))
         else:
             app.routes.append(Mount("/mcp", app=_mcp_handler))
 

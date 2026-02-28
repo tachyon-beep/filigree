@@ -11,6 +11,7 @@ import hashlib
 import json
 import logging
 import os
+import sqlite3
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, cast
 
@@ -87,7 +88,7 @@ class FilesMixin(DBMixinProtocol):
 
     # -- Build helpers -------------------------------------------------------
 
-    def _build_file_record(self, row: Any) -> FileRecord:
+    def _build_file_record(self, row: sqlite3.Row) -> FileRecord:
         """Build a FileRecord from a database row."""
         from filigree.core import FileRecord
 
@@ -103,7 +104,7 @@ class FilesMixin(DBMixinProtocol):
             metadata=meta,
         )
 
-    def _build_scan_finding(self, row: Any) -> ScanFinding:
+    def _build_scan_finding(self, row: sqlite3.Row) -> ScanFinding:
         """Build a ScanFinding from a database row."""
         from filigree.core import ScanFinding
 

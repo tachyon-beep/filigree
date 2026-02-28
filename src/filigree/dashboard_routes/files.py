@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import logging
 import sqlite3
-from typing import Any
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from fastapi import APIRouter
 
 from starlette.requests import Request
 
@@ -28,7 +31,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
-def create_router() -> Any:
+def create_router() -> APIRouter:
     """Build the APIRouter for file tracking and scan findings endpoints.
 
     NOTE: All handlers are intentionally async despite doing synchronous

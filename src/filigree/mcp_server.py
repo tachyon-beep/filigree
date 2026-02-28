@@ -17,7 +17,7 @@ import sqlite3
 import sys
 import time
 from collections.abc import Callable
-from contextvars import ContextVar
+from contextvars import ContextVar, Token
 from pathlib import Path
 from typing import Any
 
@@ -32,6 +32,7 @@ from mcp.types import (
     TextContent,
     Tool,
 )
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 from filigree.core import (
     DB_FILENAME,
@@ -164,7 +165,7 @@ async def list_resources() -> list[Resource]:
 
 
 @server.read_resource()  # type: ignore[untyped-decorator,no-untyped-call]
-async def read_context(uri: Any) -> str:
+async def read_context(uri: str) -> str:
     if str(uri) == CONTEXT_URI:
         return generate_summary(_get_db())
     msg = f"Unknown resource: {uri}"
@@ -343,7 +344,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
 
 def create_mcp_app(
     db_resolver: Callable[[], FiligreeDB | None] | None = None,
-) -> tuple[Callable[..., Any], Callable[..., Any]]:
+) -> tuple[ASGIApp, Callable[..., Any]]:
     """Create an ASGI app + lifespan hook for MCP streamable-HTTP.
 
     Returns ``(asgi_app, lifespan_context_manager)`` where:
@@ -367,9 +368,9 @@ def create_mcp_app(
         stateless=True,
     )
 
-    async def _handle_mcp(scope: Any, receive: Any, send: Any) -> None:
-        db_token: Any = None
-        dir_token: Any = None
+    async def _handle_mcp(scope: Scope, receive: Receive, send: Send) -> None:
+        db_token: Token[FiligreeDB | None] | None = None
+        dir_token: Token[Path | None] | None = None
         if db_resolver is not None:
             from starlette.responses import JSONResponse
 

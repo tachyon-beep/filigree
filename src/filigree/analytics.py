@@ -6,11 +6,11 @@ Separate module from core, operates on FiligreeDB read-only.
 
 from __future__ import annotations
 
+import sqlite3
 from collections.abc import Callable
 from datetime import UTC, datetime
-from typing import Any
 
-from filigree.core import FiligreeDB
+from filigree.core import FiligreeDB, Issue
 from filigree.types.planning import FlowMetrics, TypeMetrics
 
 
@@ -53,7 +53,7 @@ def cycle_time(db: FiligreeDB, issue_id: str) -> float | None:
 
 
 def _cycle_time_from_events(
-    events: list[Any],
+    events: list[sqlite3.Row],
     resolve_category: Callable[[str], str],
 ) -> float | None:
     """Compute cycle time from ordered status-change event rows."""
@@ -73,12 +73,12 @@ def _cycle_time_from_events(
     return (end - start).total_seconds() / 3600
 
 
-def _fetch_status_events_by_issue(db: FiligreeDB, issue_ids: list[str]) -> dict[str, list[Any]]:
+def _fetch_status_events_by_issue(db: FiligreeDB, issue_ids: list[str]) -> dict[str, list[sqlite3.Row]]:
     """Batch-fetch ordered status_changed events for issues."""
     if not issue_ids:
         return {}
 
-    by_issue: dict[str, list[Any]] = {}
+    by_issue: dict[str, list[sqlite3.Row]] = {}
     chunk_size = 500  # stay well below SQLite variable limits
 
     for i in range(0, len(issue_ids), chunk_size):
@@ -104,7 +104,7 @@ def lead_time(
     db: FiligreeDB,
     issue_id: str | None = None,
     *,
-    issue: Any | None = None,
+    issue: Issue | None = None,
 ) -> float | None:
     """Lead time: hours from creation to done (any done-category state).
 

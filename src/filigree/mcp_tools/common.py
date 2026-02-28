@@ -7,11 +7,14 @@ be imported freely without triggering circular-import issues.
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from mcp.types import TextContent
 
 from filigree.core import Issue
+
+if TYPE_CHECKING:
+    from filigree.core import FiligreeDB
 from filigree.types.api import SlimIssue, TransitionError
 from filigree.validation import sanitize_actor
 
@@ -20,7 +23,7 @@ from filigree.validation import sanitize_actor
 _MAX_LIST_RESULTS = 50
 
 
-def _text(content: Any) -> list[TextContent]:
+def _text(content: object) -> list[TextContent]:
     if isinstance(content, str):
         return [TextContent(type="text", text=content)]
     return [TextContent(type="text", text=json.dumps(content, indent=2, default=str))]
@@ -98,7 +101,7 @@ def _validate_actor(value: Any) -> tuple[str, list[TextContent] | None]:
 
 
 def _build_transition_error(
-    tracker: Any,
+    tracker: FiligreeDB,
     issue_id: str,
     error: str,
     *,

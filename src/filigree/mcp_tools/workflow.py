@@ -167,7 +167,7 @@ async def _handle_list_types(arguments: dict[str, Any]) -> list[TextContent]:
                 "initial_state": tt.initial_state,
             }
         )
-    return _text(sorted(types_list, key=lambda t: t["type"]))
+    return _text(sorted(types_list, key=lambda t: str(t["type"])))
 
 
 async def _handle_get_type_info(arguments: dict[str, Any]) -> list[TextContent]:
@@ -225,7 +225,7 @@ async def _handle_list_packs(arguments: dict[str, Any]) -> list[TextContent]:
                 "requires_packs": list(pack.requires_packs),
             }
         )
-    return _text(sorted(packs_list, key=lambda p: p["pack"]))
+    return _text(sorted(packs_list, key=lambda p: str(p["pack"])))
 
 
 async def _handle_get_valid_transitions(arguments: dict[str, Any]) -> list[TextContent]:

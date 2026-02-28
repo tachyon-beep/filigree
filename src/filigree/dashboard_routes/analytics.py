@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
+    from fastapi import APIRouter
     from fastapi.responses import JSONResponse
 
 from starlette.requests import Request
@@ -295,7 +296,7 @@ def _filter_graph_edges(
 # ---------------------------------------------------------------------------
 
 
-def create_router() -> Any:
+def create_router() -> APIRouter:
     """Build the APIRouter for analytics, graph, and metrics endpoints.
 
     NOTE: All handlers are intentionally async despite doing synchronous

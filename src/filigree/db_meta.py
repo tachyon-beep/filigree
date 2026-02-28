@@ -41,7 +41,11 @@ class MetaMixin(DBMixinProtocol):
             (issue_id, author, text, now),
         )
         self.conn.commit()
-        return cursor.lastrowid  # type: ignore[return-value]
+        rowid = cursor.lastrowid
+        if rowid is None:  # pragma: no cover — INSERT always sets lastrowid
+            msg = "INSERT did not produce a lastrowid"
+            raise RuntimeError(msg)
+        return rowid
 
     def get_comments(self, issue_id: str) -> list[CommentRecord]:
         rows = self.conn.execute(
