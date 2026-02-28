@@ -96,7 +96,13 @@ class FileDetail(TypedDict):
 
 
 class ScanRunRecord(TypedDict):
-    """Shape returned by ``get_scan_runs()``."""
+    """Shape returned by ``get_scan_runs()``.
+
+    Note: ``completed_at`` is ``MAX(updated_at)`` via SQL aggregate. The query
+    uses ``GROUP BY scan_run_id`` so each group has at least one row, guaranteeing
+    a non-NULL result. If the query changes to allow empty groups, this field
+    should be widened to ``ISOTimestamp | None``.
+    """
 
     scan_run_id: str
     scan_source: str

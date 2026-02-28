@@ -37,7 +37,7 @@ from filigree.db_meta import MetaMixin
 from filigree.db_planning import PlanningMixin
 from filigree.db_schema import CURRENT_SCHEMA_VERSION, SCHEMA_SQL
 from filigree.db_workflow import WorkflowMixin
-from filigree.types.core import (  # noqa: F401
+from filigree.types.core import (
     FileRecordDict,
     ISOTimestamp,
     IssueDict,
@@ -51,11 +51,18 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Re-exported names (canonical definitions moved to db_files during mixin split)
+# Re-exported names from db_files (canonical definitions moved during mixin split)
+# and from types.core (TypedDict re-exports for backward compat — see line 40)
 __all__ = [
     "VALID_ASSOC_TYPES",
     "VALID_FINDING_STATUSES",
     "VALID_SEVERITIES",
+    "FileRecordDict",
+    "ISOTimestamp",
+    "IssueDict",
+    "PaginatedResult",
+    "ProjectConfig",
+    "ScanFindingDict",
     "_normalize_scan_path",
 ]
 
