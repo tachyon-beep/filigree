@@ -11,11 +11,26 @@ from filigree.mcp_tools.common import (
     _MAX_LIST_RESULTS,
     _apply_has_more,
     _build_transition_error,
+    _parse_args,
     _resolve_pagination,
     _slim_issue,
     _text,
     _validate_actor,
     _validate_int_range,
+)
+from filigree.types.inputs import (
+    BatchCloseArgs,
+    BatchUpdateArgs,
+    ClaimIssueArgs,
+    ClaimNextArgs,
+    CloseIssueArgs,
+    CreateIssueArgs,
+    GetIssueArgs,
+    ListIssuesArgs,
+    ReleaseClaimArgs,
+    ReopenIssueArgs,
+    SearchIssuesArgs,
+    UpdateIssueArgs,
 )
 from filigree.types.api import (
     BatchCloseResponse,
@@ -313,11 +328,12 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
 async def _handle_get_issue(arguments: dict[str, Any]) -> list[TextContent]:
     from filigree.mcp_server import _get_db
 
+    args = _parse_args(arguments, GetIssueArgs)
     tracker = _get_db()
     try:
-        issue = tracker.get_issue(arguments["id"])
-        if arguments.get("include_transitions"):
-            transitions = tracker.get_valid_transitions(arguments["id"])
+        issue = tracker.get_issue(args["id"])
+        if args.get("include_transitions"):
+            transitions = tracker.get_valid_transitions(args["id"])
             result = IssueWithTransitions(
                 **issue.to_dict(),
                 valid_transitions=[
@@ -335,35 +351,36 @@ async def _handle_get_issue(arguments: dict[str, Any]) -> list[TextContent]:
             return _text(result)
         return _text(issue.to_dict())
     except KeyError:
-        return _text(ErrorResponse(error=f"Issue not found: {arguments['id']}", code="not_found"))
+        return _text(ErrorResponse(error=f"Issue not found: {args['id']}", code="not_found"))
 
 
 async def _handle_list_issues(arguments: dict[str, Any]) -> list[TextContent]:
     from filigree.mcp_server import _get_db
 
-    priority = arguments.get("priority")
+    args = _parse_args(arguments, ListIssuesArgs)
+    priority = args.get("priority")
     priority_err = _validate_int_range(priority, "priority", min_val=0, max_val=4)
     if priority_err:
         return priority_err
     tracker = _get_db()
-    status_filter = arguments.get("status")
-    status_category = arguments.get("status_category")
+    status_filter = args.get("status")
+    status_category = args.get("status_category")
     if status_category and not status_filter:
         category_states = tracker._get_states_for_category(status_category)
         if category_states:
             status_filter = status_category
         else:
-            return _text({"issues": [], "limit": arguments.get("limit", 100), "offset": arguments.get("offset", 0), "has_more": False})
+            return _text({"issues": [], "limit": args.get("limit", 100), "offset": args.get("offset", 0), "has_more": False})
 
     effective_limit, offset = _resolve_pagination(arguments)
 
     issues = tracker.list_issues(
         status=status_filter,
-        type=arguments.get("type"),
+        type=args.get("type"),
         priority=priority,
-        parent_id=arguments.get("parent_id"),
-        assignee=arguments.get("assignee"),
-        label=arguments.get("label"),
+        parent_id=args.get("parent_id"),
+        assignee=args.get("assignee"),
+        label=args.get("label"),
         limit=effective_limit + 1,
         offset=offset,
     )
@@ -381,25 +398,26 @@ async def _handle_list_issues(arguments: dict[str, Any]) -> list[TextContent]:
 async def _handle_create_issue(arguments: dict[str, Any]) -> list[TextContent]:
     from filigree.mcp_server import _get_db, _refresh_summary
 
-    actor, actor_err = _validate_actor(arguments.get("actor", "mcp"))
+    args = _parse_args(arguments, CreateIssueArgs)
+    actor, actor_err = _validate_actor(args.get("actor", "mcp"))
     if actor_err:
         return actor_err
-    priority = arguments.get("priority", 2)
+    priority = args.get("priority", 2)
     priority_err = _validate_int_range(priority, "priority", min_val=0, max_val=4)
     if priority_err:
         return priority_err
     tracker = _get_db()
     try:
         issue = tracker.create_issue(
-            arguments["title"],
-            type=arguments.get("type", "task"),
+            args["title"],
+            type=args.get("type", "task"),
             priority=priority,
-            parent_id=arguments.get("parent_id"),
-            description=arguments.get("description", ""),
-            notes=arguments.get("notes", ""),
-            fields=arguments.get("fields"),
-            labels=arguments.get("labels"),
-            deps=arguments.get("deps"),
+            parent_id=args.get("parent_id"),
+            description=args.get("description", ""),
+            notes=args.get("notes", ""),
+            fields=args.get("fields"),
+            labels=args.get("labels"),
+            deps=args.get("deps"),
             actor=actor,
         )
     except ValueError as e:
@@ -411,26 +429,27 @@ async def _handle_create_issue(arguments: dict[str, Any]) -> list[TextContent]:
 async def _handle_update_issue(arguments: dict[str, Any]) -> list[TextContent]:
     from filigree.mcp_server import _get_db, _refresh_summary
 
-    actor, actor_err = _validate_actor(arguments.get("actor", "mcp"))
+    args = _parse_args(arguments, UpdateIssueArgs)
+    actor, actor_err = _validate_actor(args.get("actor", "mcp"))
     if actor_err:
         return actor_err
-    priority = arguments.get("priority")
+    priority = args.get("priority")
     priority_err = _validate_int_range(priority, "priority", min_val=0, max_val=4)
     if priority_err:
         return priority_err
     tracker = _get_db()
     try:
-        before = tracker.get_issue(arguments["id"])
+        before = tracker.get_issue(args["id"])
         issue = tracker.update_issue(
-            arguments["id"],
-            status=arguments.get("status"),
+            args["id"],
+            status=args.get("status"),
             priority=priority,
-            title=arguments.get("title"),
-            assignee=arguments.get("assignee"),
-            description=arguments.get("description"),
-            notes=arguments.get("notes"),
-            parent_id=arguments.get("parent_id"),
-            fields=arguments.get("fields"),
+            title=args.get("title"),
+            assignee=args.get("assignee"),
+            description=args.get("description"),
+            notes=args.get("notes"),
+            parent_id=args.get("parent_id"),
+            fields=args.get("fields"),
             actor=actor,
         )
         _refresh_summary()
@@ -454,25 +473,26 @@ async def _handle_update_issue(arguments: dict[str, Any]) -> list[TextContent]:
         result = IssueWithChangedFields(**issue.to_dict(), changed_fields=changed)
         return _text(result)
     except KeyError:
-        return _text(ErrorResponse(error=f"Issue not found: {arguments['id']}", code="not_found"))
+        return _text(ErrorResponse(error=f"Issue not found: {args['id']}", code="not_found"))
     except ValueError as e:
-        return _text(_build_transition_error(tracker, arguments["id"], str(e)))
+        return _text(_build_transition_error(tracker, args["id"], str(e)))
 
 
 async def _handle_close_issue(arguments: dict[str, Any]) -> list[TextContent]:
     from filigree.mcp_server import _get_db, _refresh_summary
 
-    actor, actor_err = _validate_actor(arguments.get("actor", "mcp"))
+    args = _parse_args(arguments, CloseIssueArgs)
+    actor, actor_err = _validate_actor(args.get("actor", "mcp"))
     if actor_err:
         return actor_err
     tracker = _get_db()
     try:
         ready_before = {i.id for i in tracker.get_ready()}
         issue = tracker.close_issue(
-            arguments["id"],
-            reason=arguments.get("reason", ""),
+            args["id"],
+            reason=args.get("reason", ""),
             actor=actor,
-            fields=arguments.get("fields"),
+            fields=args.get("fields"),
         )
         _refresh_summary()
         ready_after = tracker.get_ready()
@@ -482,27 +502,28 @@ async def _handle_close_issue(arguments: dict[str, Any]) -> list[TextContent]:
             result_dict["newly_unblocked"] = [_slim_issue(i) for i in newly_unblocked]  # type: ignore[typeddict-unknown-key]
         return _text(result_dict)
     except KeyError:
-        return _text(ErrorResponse(error=f"Issue not found: {arguments['id']}", code="not_found"))
+        return _text(ErrorResponse(error=f"Issue not found: {args['id']}", code="not_found"))
     except ValueError as e:
-        return _text(_build_transition_error(tracker, arguments["id"], str(e)))
+        return _text(_build_transition_error(tracker, args["id"], str(e)))
 
 
 async def _handle_reopen_issue(arguments: dict[str, Any]) -> list[TextContent]:
     from filigree.mcp_server import _get_db, _refresh_summary
 
-    actor, actor_err = _validate_actor(arguments.get("actor", "mcp"))
+    args = _parse_args(arguments, ReopenIssueArgs)
+    actor, actor_err = _validate_actor(args.get("actor", "mcp"))
     if actor_err:
         return actor_err
     tracker = _get_db()
     try:
         issue = tracker.reopen_issue(
-            arguments["id"],
+            args["id"],
             actor=actor,
         )
         _refresh_summary()
         return _text(issue.to_dict())
     except KeyError:
-        return _text(ErrorResponse(error=f"Issue not found: {arguments['id']}", code="not_found"))
+        return _text(ErrorResponse(error=f"Issue not found: {args['id']}", code="not_found"))
     except ValueError as e:
         return _text(ErrorResponse(error=str(e), code="invalid"))
 
@@ -510,11 +531,12 @@ async def _handle_reopen_issue(arguments: dict[str, Any]) -> list[TextContent]:
 async def _handle_search_issues(arguments: dict[str, Any]) -> list[TextContent]:
     from filigree.mcp_server import _get_db
 
+    args = _parse_args(arguments, SearchIssuesArgs)
     tracker = _get_db()
     effective_limit, offset = _resolve_pagination(arguments)
 
     issues = tracker.search_issues(
-        arguments["query"],
+        args["query"],
         limit=effective_limit + 1,
         offset=offset,
     )
@@ -532,20 +554,21 @@ async def _handle_search_issues(arguments: dict[str, Any]) -> list[TextContent]:
 async def _handle_claim_issue(arguments: dict[str, Any]) -> list[TextContent]:
     from filigree.mcp_server import _get_db, _refresh_summary
 
-    actor, actor_err = _validate_actor(arguments.get("actor", arguments["assignee"]))
+    args = _parse_args(arguments, ClaimIssueArgs)
+    actor, actor_err = _validate_actor(args.get("actor", args["assignee"]))
     if actor_err:
         return actor_err
     tracker = _get_db()
     try:
         issue = tracker.claim_issue(
-            arguments["id"],
-            assignee=arguments["assignee"],
+            args["id"],
+            assignee=args["assignee"],
             actor=actor,
         )
         _refresh_summary()
         return _text(issue.to_dict())
     except KeyError:
-        return _text(ErrorResponse(error=f"Issue not found: {arguments['id']}", code="not_found"))
+        return _text(ErrorResponse(error=f"Issue not found: {args['id']}", code="not_found"))
     except ValueError as e:
         return _text(ErrorResponse(error=str(e), code="conflict"))
 
@@ -553,16 +576,17 @@ async def _handle_claim_issue(arguments: dict[str, Any]) -> list[TextContent]:
 async def _handle_release_claim(arguments: dict[str, Any]) -> list[TextContent]:
     from filigree.mcp_server import _get_db, _refresh_summary
 
-    actor, actor_err = _validate_actor(arguments.get("actor", "mcp"))
+    args = _parse_args(arguments, ReleaseClaimArgs)
+    actor, actor_err = _validate_actor(args.get("actor", "mcp"))
     if actor_err:
         return actor_err
     tracker = _get_db()
     try:
-        issue = tracker.release_claim(arguments["id"], actor=actor)
+        issue = tracker.release_claim(args["id"], actor=actor)
         _refresh_summary()
         return _text(issue.to_dict())
     except KeyError:
-        return _text(ErrorResponse(error=f"Issue not found: {arguments['id']}", code="not_found"))
+        return _text(ErrorResponse(error=f"Issue not found: {args['id']}", code="not_found"))
     except ValueError as e:
         return _text(ErrorResponse(error=str(e), code="conflict"))
 
@@ -570,21 +594,22 @@ async def _handle_release_claim(arguments: dict[str, Any]) -> list[TextContent]:
 async def _handle_claim_next(arguments: dict[str, Any]) -> list[TextContent]:
     from filigree.mcp_server import _get_db, _refresh_summary
 
-    actor, actor_err = _validate_actor(arguments.get("actor", arguments["assignee"]))
+    args = _parse_args(arguments, ClaimNextArgs)
+    actor, actor_err = _validate_actor(args.get("actor", args["assignee"]))
     if actor_err:
         return actor_err
-    priority_min = arguments.get("priority_min")
+    priority_min = args.get("priority_min")
     pmin_err = _validate_int_range(priority_min, "priority_min", min_val=0, max_val=4)
     if pmin_err:
         return pmin_err
-    priority_max = arguments.get("priority_max")
+    priority_max = args.get("priority_max")
     pmax_err = _validate_int_range(priority_max, "priority_max", min_val=0, max_val=4)
     if pmax_err:
         return pmax_err
     tracker = _get_db()
     claimed = tracker.claim_next(
-        arguments["assignee"],
-        type_filter=arguments.get("type"),
+        args["assignee"],
+        type_filter=args.get("type"),
         priority_min=priority_min,
         priority_max=priority_max,
         actor=actor,
@@ -606,17 +631,18 @@ async def _handle_claim_next(arguments: dict[str, Any]) -> list[TextContent]:
 async def _handle_batch_close(arguments: dict[str, Any]) -> list[TextContent]:
     from filigree.mcp_server import _get_db, _refresh_summary
 
-    actor, actor_err = _validate_actor(arguments.get("actor", "mcp"))
+    args = _parse_args(arguments, BatchCloseArgs)
+    actor, actor_err = _validate_actor(args.get("actor", "mcp"))
     if actor_err:
         return actor_err
     tracker = _get_db()
-    ids = arguments["ids"]
+    ids = args["ids"]
     if not all(isinstance(i, str) for i in ids):
         return _text(ErrorResponse(error="All issue IDs must be strings", code="validation_error"))
     ready_before = {i.id for i in tracker.get_ready()}
     closed, failed = tracker.batch_close(
         ids,
-        reason=arguments.get("reason", ""),
+        reason=args.get("reason", ""),
         actor=actor,
     )
     _refresh_summary()
@@ -635,25 +661,26 @@ async def _handle_batch_close(arguments: dict[str, Any]) -> list[TextContent]:
 async def _handle_batch_update(arguments: dict[str, Any]) -> list[TextContent]:
     from filigree.mcp_server import _get_db, _refresh_summary
 
-    actor, actor_err = _validate_actor(arguments.get("actor", "mcp"))
+    args = _parse_args(arguments, BatchUpdateArgs)
+    actor, actor_err = _validate_actor(args.get("actor", "mcp"))
     if actor_err:
         return actor_err
-    priority = arguments.get("priority")
+    priority = args.get("priority")
     priority_err = _validate_int_range(priority, "priority", min_val=0, max_val=4)
     if priority_err:
         return priority_err
     tracker = _get_db()
-    u_ids = arguments["ids"]
+    u_ids = args["ids"]
     if not all(isinstance(i, str) for i in u_ids):
         return _text(ErrorResponse(error="All issue IDs must be strings", code="validation_error"))
-    u_fields = arguments.get("fields")
+    u_fields = args.get("fields")
     if u_fields is not None and not isinstance(u_fields, dict):
         return _text(ErrorResponse(error="fields must be a JSON object", code="validation_error"))
     updated, update_failed = tracker.batch_update(
         u_ids,
-        status=arguments.get("status"),
+        status=args.get("status"),
         priority=priority,
-        assignee=arguments.get("assignee"),
+        assignee=args.get("assignee"),
         fields=u_fields,
         actor=actor,
     )
