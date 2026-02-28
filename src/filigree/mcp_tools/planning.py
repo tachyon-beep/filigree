@@ -7,8 +7,8 @@ from typing import Any
 
 from mcp.types import TextContent, Tool
 
-from filigree.mcp_tools.common import _text, _validate_actor
-from filigree.types.api import PlanResponse
+from filigree.mcp_tools.common import _slim_issue, _text, _validate_actor, _validate_int_range
+from filigree.types.api import BlockedIssue, PlanResponse
 
 
 def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
@@ -75,7 +75,7 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
                         "type": "object",
                         "properties": {
                             "title": {"type": "string"},
-                            "priority": {"type": "integer", "default": 2},
+                            "priority": {"type": "integer", "default": 2, "minimum": 0, "maximum": 4},
                             "description": {"type": "string", "default": ""},
                         },
                         "required": ["title"],
@@ -86,7 +86,7 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
                             "type": "object",
                             "properties": {
                                 "title": {"type": "string"},
-                                "priority": {"type": "integer", "default": 2},
+                                "priority": {"type": "integer", "default": 2, "minimum": 0, "maximum": 4},
                                 "description": {"type": "string", "default": ""},
                                 "steps": {
                                     "type": "array",
@@ -94,7 +94,7 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
                                         "type": "object",
                                         "properties": {
                                             "title": {"type": "string"},
-                                            "priority": {"type": "integer", "default": 2},
+                                            "priority": {"type": "integer", "default": 2, "minimum": 0, "maximum": 4},
                                             "description": {"type": "string", "default": ""},
                                             "deps": {
                                                 "type": "array",
@@ -181,7 +181,7 @@ async def _handle_get_ready(arguments: dict[str, Any]) -> list[TextContent]:
 
     tracker = _get_db()
     issues = tracker.get_ready()
-    return _text([{"id": i.id, "title": i.title, "priority": i.priority, "type": i.type} for i in issues])
+    return _text([_slim_issue(i) for i in issues])
 
 
 async def _handle_get_blocked(arguments: dict[str, Any]) -> list[TextContent]:
@@ -189,7 +189,7 @@ async def _handle_get_blocked(arguments: dict[str, Any]) -> list[TextContent]:
 
     tracker = _get_db()
     issues = tracker.get_blocked()
-    return _text([{"id": i.id, "title": i.title, "priority": i.priority, "type": i.type, "blocked_by": i.blocked_by} for i in issues])
+    return _text([BlockedIssue(**_slim_issue(i), blocked_by=i.blocked_by) for i in issues])
 
 
 async def _handle_get_plan(arguments: dict[str, Any]) -> list[TextContent]:
@@ -218,10 +218,25 @@ async def _handle_create_plan(arguments: dict[str, Any]) -> list[TextContent]:
     actor, actor_err = _validate_actor(arguments.get("actor", "mcp"))
     if actor_err:
         return actor_err
+
+    # Validate priority on nested milestone/phase/step objects
+    milestone = arguments["milestone"]
+    err = _validate_int_range(milestone.get("priority"), "milestone.priority", min_val=0, max_val=4)
+    if err:
+        return err
+    for pi, phase in enumerate(arguments.get("phases", [])):
+        err = _validate_int_range(phase.get("priority"), f"phases[{pi}].priority", min_val=0, max_val=4)
+        if err:
+            return err
+        for si, step in enumerate(phase.get("steps", [])):
+            err = _validate_int_range(step.get("priority"), f"phases[{pi}].steps[{si}].priority", min_val=0, max_val=4)
+            if err:
+                return err
+
     tracker = _get_db()
     try:
         plan = tracker.create_plan(
-            arguments["milestone"],
+            milestone,
             arguments["phases"],
             actor=actor,
         )

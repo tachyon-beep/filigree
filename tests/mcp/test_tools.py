@@ -246,6 +246,14 @@ class TestReadyAndBlocked:
         assert len(data) == 1
         assert data[0]["title"] == "Ready one"
 
+    async def test_get_ready_shape(self, mcp_db: FiligreeDB) -> None:
+        """get_ready must return SlimIssue shape (5 keys including status)."""
+        mcp_db.create_issue("Ready")
+        result = await call_tool("get_ready", {})
+        data = _parse(result)
+        expected_keys = {"id", "title", "status", "priority", "type"}
+        assert set(data[0].keys()) == expected_keys
+
     async def test_get_blocked(self, mcp_db: FiligreeDB) -> None:
         a = mcp_db.create_issue("Blocked")
         b = mcp_db.create_issue("Blocker")
@@ -255,6 +263,16 @@ class TestReadyAndBlocked:
         assert len(data) == 1
         assert data[0]["id"] == a.id
         assert b.id in data[0]["blocked_by"]
+
+    async def test_get_blocked_shape(self, mcp_db: FiligreeDB) -> None:
+        """get_blocked must return BlockedIssue shape (SlimIssue + blocked_by)."""
+        a = mcp_db.create_issue("Blocked")
+        b = mcp_db.create_issue("Blocker")
+        mcp_db.add_dependency(a.id, b.id)
+        result = await call_tool("get_blocked", {})
+        data = _parse(result)
+        expected_keys = {"id", "title", "status", "priority", "type", "blocked_by"}
+        assert set(data[0].keys()) == expected_keys
 
 
 class TestPlan:

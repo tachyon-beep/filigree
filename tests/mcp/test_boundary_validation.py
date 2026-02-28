@@ -129,6 +129,81 @@ class TestMCPPriorityValidation:
         data = _parse(result)
         assert data["code"] == "validation_error"
 
+    async def test_create_issue_priority_bool_true(self, mcp_db: FiligreeDB) -> None:
+        """bool is a subclass of int — True should be rejected, not silently become 1."""
+        result = await call_tool("create_issue", {"title": "Bad", "priority": True})
+        data = _parse(result)
+        assert data["code"] == "validation_error"
+
+    async def test_create_issue_priority_bool_false(self, mcp_db: FiligreeDB) -> None:
+        """bool is a subclass of int — False should be rejected, not silently become 0."""
+        result = await call_tool("create_issue", {"title": "Bad", "priority": False})
+        data = _parse(result)
+        assert data["code"] == "validation_error"
+
+    async def test_create_plan_milestone_priority_out_of_range(self, mcp_db: FiligreeDB) -> None:
+        """Invalid priority on milestone should be rejected at boundary."""
+        result = await call_tool(
+            "create_plan",
+            {
+                "milestone": {"title": "Bad", "priority": 99},
+                "phases": [{"title": "P1", "steps": [{"title": "S1"}]}],
+            },
+        )
+        data = _parse(result)
+        assert data["code"] == "validation_error"
+        assert "milestone.priority" in data["error"]
+
+    async def test_create_plan_phase_priority_out_of_range(self, mcp_db: FiligreeDB) -> None:
+        """Invalid priority on a phase should be rejected at boundary."""
+        result = await call_tool(
+            "create_plan",
+            {
+                "milestone": {"title": "M"},
+                "phases": [{"title": "P1", "priority": -1, "steps": [{"title": "S1"}]}],
+            },
+        )
+        data = _parse(result)
+        assert data["code"] == "validation_error"
+        assert "phases[0].priority" in data["error"]
+
+    async def test_create_plan_step_priority_out_of_range(self, mcp_db: FiligreeDB) -> None:
+        """Invalid priority on a step should be rejected at boundary."""
+        result = await call_tool(
+            "create_plan",
+            {
+                "milestone": {"title": "M"},
+                "phases": [{"title": "P1", "steps": [{"title": "S1", "priority": 5}]}],
+            },
+        )
+        data = _parse(result)
+        assert data["code"] == "validation_error"
+        assert "phases[0].steps[0].priority" in data["error"]
+
+    async def test_create_plan_step_priority_bool(self, mcp_db: FiligreeDB) -> None:
+        """Bool priority on a nested step should be rejected."""
+        result = await call_tool(
+            "create_plan",
+            {
+                "milestone": {"title": "M"},
+                "phases": [{"title": "P1", "steps": [{"title": "S1", "priority": True}]}],
+            },
+        )
+        data = _parse(result)
+        assert data["code"] == "validation_error"
+
+    async def test_create_plan_valid_priorities(self, mcp_db: FiligreeDB) -> None:
+        """Valid priorities (0-4) should succeed."""
+        result = await call_tool(
+            "create_plan",
+            {
+                "milestone": {"title": "M", "priority": 0},
+                "phases": [{"title": "P1", "priority": 4, "steps": [{"title": "S1", "priority": 2}]}],
+            },
+        )
+        data = _parse(result)
+        assert "error" not in data
+
     async def test_update_issue_priority_none_allowed(self, mcp_db: FiligreeDB) -> None:
         """Not providing priority should be fine (optional)."""
         issue = mcp_db.create_issue("Target")

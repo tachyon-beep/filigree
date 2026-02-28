@@ -13,6 +13,7 @@ from filigree.core import FileRecord, FiligreeDB
 from filigree.types.api import (
     BatchCloseResponse,
     BatchUpdateResponse,
+    BlockedIssue,
     ClaimNextResponse,
     DepDetail,
     EnrichedIssueDetail,
@@ -647,6 +648,23 @@ class TestSlimIssueShape:
         result = _slim_issue(issue)
         assert isinstance(result["id"], str)
         assert isinstance(result["priority"], int)
+
+
+class TestBlockedIssueShape:
+    def test_keys_match(self, db: FiligreeDB) -> None:
+        from filigree.mcp_tools.common import _slim_issue
+
+        issue = db.create_issue("Test", type="task")
+        result = BlockedIssue(**_slim_issue(issue), blocked_by=["other-id"])
+        hints = get_type_hints(BlockedIssue)
+        assert set(result.keys()) == set(hints.keys())
+
+    def test_extends_slim_issue(self) -> None:
+        """BlockedIssue must include all SlimIssue keys plus blocked_by."""
+        slim_keys = set(get_type_hints(SlimIssue).keys())
+        blocked_keys = set(get_type_hints(BlockedIssue).keys())
+        assert slim_keys < blocked_keys
+        assert "blocked_by" in blocked_keys - slim_keys
 
 
 class TestIssueWithTransitionsShape:

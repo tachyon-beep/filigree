@@ -83,7 +83,7 @@ def _validate_int_range(
     """
     if value is None:
         return None
-    if not isinstance(value, int):
+    if isinstance(value, bool) or not isinstance(value, int):
         return _text({"error": f"{name} must be an integer", "code": "validation_error"})
     if min_val is not None and value < min_val:
         return _text({"error": f"{name} must be >= {min_val}", "code": "validation_error"})

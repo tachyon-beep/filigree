@@ -590,7 +590,7 @@ class TestCommentAPI:
         assert resp.status_code == 201
         data = resp.json()
         assert data["text"] == "No author specified"
-        assert data["author"] == ""
+        assert data["author"] == "dashboard"
 
     async def test_add_comment_not_found(self, client: AsyncClient) -> None:
         resp = await client.post(

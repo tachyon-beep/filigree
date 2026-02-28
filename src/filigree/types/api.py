@@ -22,6 +22,12 @@ class SlimIssue(TypedDict):
     type: str
 
 
+class BlockedIssue(SlimIssue):
+    """Slim issue with blocked_by list for get_blocked responses."""
+
+    blocked_by: list[str]
+
+
 class ErrorResponse(TypedDict):
     """Standard error envelope returned by MCP/dashboard error paths."""
 

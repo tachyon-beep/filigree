@@ -76,6 +76,27 @@ class TestDashboardActorValidation:
         resp = await client.post("/api/issues", json={"title": "Test", "actor": "\ufeff"})
         assert resp.status_code == 400
 
+    async def test_add_comment_control_char_author(self, client: AsyncClient) -> None:
+        """Control characters in comment author should be rejected."""
+        resp = await client.post("/api/issues", json={"title": "Target"})
+        issue_id = resp.json()["id"]
+        resp = await client.post(
+            f"/api/issue/{issue_id}/comments",
+            json={"text": "hello", "author": "\x00evil"},
+        )
+        assert resp.status_code == 400
+        assert "VALIDATION_ERROR" in resp.json()["error"]["code"]
+
+    async def test_add_comment_empty_author(self, client: AsyncClient) -> None:
+        """Empty comment author should be rejected."""
+        resp = await client.post("/api/issues", json={"title": "Target"})
+        issue_id = resp.json()["id"]
+        resp = await client.post(
+            f"/api/issue/{issue_id}/comments",
+            json={"text": "hello", "author": ""},
+        )
+        assert resp.status_code == 400
+
     async def test_claim_issue_valid_actor(self, client: AsyncClient) -> None:
         """Valid actor should pass through."""
         resp = await client.post("/api/issues", json={"title": "Target"})

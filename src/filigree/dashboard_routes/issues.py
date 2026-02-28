@@ -246,7 +246,9 @@ def create_router() -> APIRouter:
         if isinstance(body, JSONResponse):
             return body
         text = body.get("text", "")
-        author = body.get("author", "")
+        author, author_err = _validate_actor(body.get("author", "dashboard"))
+        if author_err:
+            return author_err
         try:
             comment_id = db.add_comment(issue_id, text, author=author)
         except ValueError as e:
