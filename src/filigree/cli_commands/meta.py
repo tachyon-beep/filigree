@@ -202,7 +202,7 @@ def events_cmd(issue_id: str, limit: int, as_json: bool) -> None:
 @click.command("batch-update")
 @click.argument("issue_ids", nargs=-1, required=True)
 @click.option("--status", default=None, help="New status")
-@click.option("--priority", "-p", default=None, type=int, help="New priority")
+@click.option("--priority", "-p", default=None, type=click.IntRange(0, 4), help="New priority")
 @click.option("--assignee", default=None, help="New assignee")
 @click.option("--field", "-f", multiple=True, help="Custom field as key=value (repeatable)")
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON")

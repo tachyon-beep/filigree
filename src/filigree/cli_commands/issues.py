@@ -19,7 +19,7 @@ from filigree.cli_common import get_db, refresh_summary
     default="task",
     help="Issue type (task, bug, feature, epic, milestone, phase, step, requirement)",
 )
-@click.option("--priority", "-p", default=2, type=int, help="Priority 0-4 (0=critical)")
+@click.option("--priority", "-p", default=2, type=click.IntRange(0, 4), help="Priority 0-4 (0=critical)")
 @click.option("--parent", default=None, help="Parent issue ID")
 @click.option("--assignee", default="", help="Assignee")
 @click.option("--description", "-d", default="", help="Description")
@@ -135,7 +135,7 @@ def show(issue_id: str, as_json: bool) -> None:
 @click.command("list")
 @click.option("--status", default=None, help="Filter by status")
 @click.option("--type", "issue_type", default=None, help="Filter by type")
-@click.option("--priority", "-p", default=None, type=int, help="Filter by priority")
+@click.option("--priority", "-p", default=None, type=click.IntRange(0, 4), help="Filter by priority")
 @click.option("--parent", default=None, help="Filter by parent ID")
 @click.option("--assignee", default=None, help="Filter by assignee")
 @click.option("--label", default=None, help="Filter by label")
@@ -180,7 +180,7 @@ def list_issues(
 @click.command()
 @click.argument("issue_id")
 @click.option("--status", default=None, help="New status")
-@click.option("--priority", "-p", default=None, type=int, help="New priority")
+@click.option("--priority", "-p", default=None, type=click.IntRange(0, 4), help="New priority")
 @click.option("--title", default=None, help="New title")
 @click.option("--assignee", default=None, help="New assignee")
 @click.option("--description", "-d", default=None, help="New description")
@@ -356,8 +356,8 @@ def claim(ctx: click.Context, issue_id: str, assignee: str, as_json: bool) -> No
 @click.command("claim-next")
 @click.option("--assignee", required=True, help="Who is claiming")
 @click.option("--type", "type_filter", default=None, help="Filter by issue type")
-@click.option("--priority-min", default=None, type=int, help="Minimum priority (0=critical)")
-@click.option("--priority-max", default=None, type=int, help="Maximum priority")
+@click.option("--priority-min", default=None, type=click.IntRange(0, 4), help="Minimum priority (0=critical)")
+@click.option("--priority-max", default=None, type=click.IntRange(0, 4), help="Maximum priority")
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON")
 @click.pass_context
 def claim_next(

@@ -10,6 +10,7 @@ import click
 
 from filigree import __version__
 from filigree.cli_commands import admin, issues, meta, planning, server, workflow
+from filigree.validation import sanitize_actor
 
 
 @click.group()
@@ -19,7 +20,10 @@ from filigree.cli_commands import admin, issues, meta, planning, server, workflo
 def cli(ctx: click.Context, actor: str) -> None:
     """Filigree — agent-native issue tracker."""
     ctx.ensure_object(dict)
-    ctx.obj["actor"] = actor
+    cleaned, err = sanitize_actor(actor)
+    if err:
+        raise click.BadParameter(err, param_hint="'--actor'")
+    ctx.obj["actor"] = cleaned
 
 
 # Register domain command modules
