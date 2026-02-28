@@ -45,29 +45,17 @@ class SeverityBreakdown(TypedDict):
     info: int
 
 
-class FindingsSummary(TypedDict):
+class FindingsSummary(SeverityBreakdown):
     """Shape returned by ``get_file_findings_summary()``."""
 
     total_findings: int
     open_findings: int
-    critical: int
-    high: int
-    medium: int
-    low: int
-    info: int
 
 
-class GlobalFindingsStats(TypedDict):
+class GlobalFindingsStats(FindingsSummary):
     """Shape returned by ``get_global_findings_stats()``."""
 
-    total_findings: int
-    open_findings: int
     files_with_findings: int
-    critical: int
-    high: int
-    medium: int
-    low: int
-    info: int
 
 
 class HotspotFileRef(TypedDict):

@@ -524,14 +524,51 @@ def _annotation_to_source(annotation: Any) -> str:
 def _normalize_type_str(s: str) -> str:
     """Normalize a type string for comparison.
 
-    Strips whitespace around | and commas, normalizes bracket spacing.
+    Strips whitespace around | and commas, normalizes bracket spacing,
+    and converts ``Union[X, Y]`` to ``X|Y`` so both syntaxes compare equal.
     """
     s = s.strip()
     # Normalize whitespace around operators
     s = s.replace(" | ", "|").replace("| ", "|").replace(" |", "|")
     s = s.replace(" ,", ",").replace(", ", ",")
     s = s.replace("[ ", "[").replace(" ]", "]")
+    # Convert Union[X,Y,...] to X|Y|... (handles nested brackets correctly)
+    while "Union[" in s:
+        start = s.index("Union[")
+        # Find matching closing bracket
+        depth = 0
+        for i in range(start + len("Union[") - 1, len(s)):
+            if s[i] == "[":
+                depth += 1
+            elif s[i] == "]":
+                depth -= 1
+                if depth == 0:
+                    inner = s[start + len("Union[") : i]
+                    # Split on top-level commas only
+                    parts = _split_top_level(inner, ",")
+                    replacement = "|".join(parts)
+                    s = s[:start] + replacement + s[i + 1 :]
+                    break
     return s
+
+
+def _split_top_level(s: str, sep: str) -> list[str]:
+    """Split *s* on *sep* only at bracket depth 0."""
+    parts: list[str] = []
+    depth = 0
+    current: list[str] = []
+    for ch in s:
+        if ch in "([":
+            depth += 1
+        elif ch in ")]":
+            depth -= 1
+        if ch == sep and depth == 0:
+            parts.append("".join(current))
+            current = []
+        else:
+            current.append(ch)
+    parts.append("".join(current))
+    return parts
 
 
 def test_all_mixin_files_scanned() -> None:
@@ -547,4 +584,6 @@ def test_all_mixin_files_scanned() -> None:
 
 def test_stubs_discovered() -> None:
     """Sanity check: we should discover a meaningful number of stubs."""
-    assert len(_ALL_STUBS) >= 20, f"Expected at least 20 stubs, found {len(_ALL_STUBS)}. AST extraction may be broken."
+    # 28 stubs as of 2026-02-28.  Keep threshold within ~10% so regressions
+    # in the AST extraction logic are caught quickly.
+    assert len(_ALL_STUBS) >= 25, f"Expected at least 25 stubs, found {len(_ALL_STUBS)}. AST extraction may be broken."
