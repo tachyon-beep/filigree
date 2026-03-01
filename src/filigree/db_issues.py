@@ -15,6 +15,7 @@ import uuid
 from typing import TYPE_CHECKING, Any
 
 from filigree.db_base import DBMixinProtocol, StatusCategory, _now_iso
+from filigree.templates import validate_field_pattern
 
 if TYPE_CHECKING:
     from filigree.core import Issue
@@ -71,6 +72,48 @@ class IssuesMixin(DBMixinProtocol):
         def get_ready(self) -> list[Issue]: ...
         def get_valid_transitions(self, issue_id: str) -> list[TransitionOption]: ...
 
+    # -- Field validation ----------------------------------------------------
+
+    def _validate_field_values(self, issue_type: str, fields: dict[str, Any]) -> list[str]:
+        """Validate field values against their schema patterns.
+
+        Returns a list of error messages for fields that don't match.
+        """
+        tpl = self.templates.get_type(issue_type)
+        if tpl is None:
+            return []
+        schema_by_name = {f.name: f for f in tpl.fields_schema}
+        errors: list[str] = []
+        for name, value in fields.items():
+            fs = schema_by_name.get(name)
+            if fs is None:
+                continue
+            err = validate_field_pattern(fs, value)
+            if err is not None:
+                errors.append(err)
+        return errors
+
+    def _check_field_uniqueness(self, issue_type: str, fields: dict[str, Any], *, exclude_id: str | None = None) -> None:
+        """Raise ValueError if any unique field value conflicts with existing issues."""
+        tpl = self.templates.get_type(issue_type)
+        if tpl is None:
+            return
+        for fs in tpl.fields_schema:
+            if not fs.unique:
+                continue
+            value = fields.get(fs.name)
+            if value is None or (isinstance(value, str) and value.strip() == ""):
+                continue
+            sql = "SELECT id FROM issues WHERE type = ? AND json_extract(fields, ?) = ?"
+            params: list[Any] = [issue_type, f"$.{fs.name}", value]
+            if exclude_id is not None:
+                sql += " AND id != ?"
+                params.append(exclude_id)
+            row = self.conn.execute(sql, params).fetchone()
+            if row is not None:
+                msg = f"Duplicate value '{value}' for unique field '{fs.name}' on type '{issue_type}' (conflicts with issue {row['id']})"
+                raise ValueError(msg)
+
     # -- ID generation -------------------------------------------------------
 
     def _generate_unique_id(self, table: str, infix: str = "") -> str:
@@ -122,6 +165,14 @@ class IssuesMixin(DBMixinProtocol):
             raise ValueError(msg)
 
         self._validate_parent_id(parent_id)
+
+        # Validate field patterns and uniqueness BEFORE any writes
+        if fields:
+            pattern_errors = self._validate_field_values(type, fields)
+            if pattern_errors:
+                msg = "Field validation failed: " + "; ".join(pattern_errors)
+                raise ValueError(msg)
+            self._check_field_uniqueness(type, fields)
 
         # Validate deps BEFORE any writes to prevent partial commits
         if deps:
@@ -353,6 +404,14 @@ class IssuesMixin(DBMixinProtocol):
                                 f"'{current.type}'. Use get_valid_transitions() to see allowed transitions."
                             )
                         raise ValueError(msg)
+
+        # Validate field patterns and uniqueness for incoming fields
+        if fields is not None:
+            pattern_errors = self._validate_field_values(current.type, fields)
+            if pattern_errors:
+                msg = "Field validation failed: " + "; ".join(pattern_errors)
+                raise ValueError(msg)
+            self._check_field_uniqueness(current.type, fields, exclude_id=issue_id)
 
         # --- All validation passed — now record events and apply changes ---
         updates: list[str] = []

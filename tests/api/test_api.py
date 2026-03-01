@@ -124,7 +124,7 @@ class TestIssuesAPI:
         assert resp.status_code == 200
         data = resp.json()
         assert isinstance(data, list)
-        assert len(data) == 4  # epic + A + B + C
+        assert len(data) == 5  # epic + A + B + C + auto-seeded Future release
 
     async def test_issue_structure(self, client: AsyncClient) -> None:
         resp = await client.get("/api/issues")

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from filigree.core import FiligreeDB
@@ -37,7 +39,8 @@ class TestGetReleasesSummary:
         db.update_issue(r3.id, status="released")
 
         result = db.get_releases_summary()
-        assert len(result) == 2
+        # R1 + R2 + auto-seeded Future = 3 active releases (R3 is released/done)
+        assert len(result) == 3
 
     def test_include_released_flag_returns_all(self, release_db: FiligreeDB) -> None:
         db = release_db
@@ -51,7 +54,8 @@ class TestGetReleasesSummary:
         db.update_issue(r3.id, status="released")
 
         result = db.get_releases_summary(include_released=True)
-        assert len(result) == 3
+        # R1 + R2 + R3 + auto-seeded Future = 4 total
+        assert len(result) == 4
 
     def test_rolled_back_release_is_included_in_active(self, release_db: FiligreeDB) -> None:
         db = release_db
@@ -80,11 +84,12 @@ class TestGetReleasesSummary:
 
     def test_empty_release_no_children(self, release_db: FiligreeDB) -> None:
         db = release_db
-        db.create_issue("Empty", type="release")
+        r = db.create_issue("Empty", type="release")
 
         result = db.get_releases_summary()
-        assert len(result) == 1
-        entry = result[0]
+        # Auto-seeded Future + the "Empty" release = 2
+        assert len(result) == 2
+        entry = next(e for e in result if e["id"] == r.id)
         assert entry["progress"] == {"total": 0, "completed": 0, "in_progress": 0, "open": 0, "pct": 0}
         assert entry["child_summary"] == {"epics": 0, "milestones": 0, "tasks": 0, "bugs": 0, "other": 0, "total": 0}
 
@@ -385,6 +390,98 @@ class TestProgressFromSubtree:
 # ---------------------------------------------------------------------------
 # TestBuildTree
 # ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# TestVersionValidation — semver pattern + uniqueness
+# ---------------------------------------------------------------------------
+
+
+class TestVersionValidation:
+    """Tests for version field pattern validation and uniqueness enforcement."""
+
+    def test_valid_semver_creates(self, release_db: FiligreeDB) -> None:
+        r = release_db.create_issue("R1", type="release", fields={"version": "v1.2.3"})
+        assert r.fields["version"] == "v1.2.3"
+
+    def test_invalid_format_raises(self, release_db: FiligreeDB) -> None:
+        with pytest.raises(ValueError, match="does not match"):
+            release_db.create_issue("Bad", type="release", fields={"version": "1.2.3"})
+
+    def test_future_accepted(self, release_db: FiligreeDB) -> None:
+        # "Future" is already seeded, so creating another should fail (uniqueness)
+        # But the pattern itself accepts "Future"
+        r = release_db.get_issue(
+            release_db.conn.execute(
+                "SELECT id FROM issues WHERE type='release' AND json_extract(fields, '$.version') = 'Future'"
+            ).fetchone()["id"]
+        )
+        assert r.fields["version"] == "Future"
+
+    def test_lowercase_future_rejected(self, release_db: FiligreeDB) -> None:
+        with pytest.raises(ValueError, match="does not match"):
+            release_db.create_issue("Bad", type="release", fields={"version": "future"})
+
+    def test_uniqueness_duplicate_version_raises(self, release_db: FiligreeDB) -> None:
+        release_db.create_issue("R1", type="release", fields={"version": "v1.0.0"})
+        with pytest.raises(ValueError, match="Duplicate value"):
+            release_db.create_issue("R2", type="release", fields={"version": "v1.0.0"})
+
+    def test_uniqueness_same_value_noop_allowed(self, release_db: FiligreeDB) -> None:
+        r = release_db.create_issue("R1", type="release", fields={"version": "v1.0.0"})
+        # Updating with the same version should not raise
+        updated = release_db.update_issue(r.id, fields={"version": "v1.0.0"})
+        assert updated.fields["version"] == "v1.0.0"
+
+    def test_uniqueness_update_to_conflict_raises(self, release_db: FiligreeDB) -> None:
+        release_db.create_issue("R1", type="release", fields={"version": "v1.0.0"})
+        r2 = release_db.create_issue("R2", type="release", fields={"version": "v2.0.0"})
+        with pytest.raises(ValueError, match="Duplicate value"):
+            release_db.update_issue(r2.id, fields={"version": "v1.0.0"})
+
+    def test_uniqueness_across_closed(self, release_db: FiligreeDB) -> None:
+        r = release_db.create_issue("R1", type="release", fields={"version": "v1.0.0"})
+        # Close it by advancing through workflow
+        release_db.update_issue(r.id, status="development")
+        release_db.update_issue(r.id, status="frozen")
+        release_db.update_issue(r.id, status="testing")
+        release_db.update_issue(r.id, status="staged")
+        release_db.update_issue(r.id, status="released")
+        # Creating with same version should still fail
+        with pytest.raises(ValueError, match="Duplicate value"):
+            release_db.create_issue("R2", type="release", fields={"version": "v1.0.0"})
+
+    def test_auto_seed_future_exists_after_init(self, release_db: FiligreeDB) -> None:
+        row = release_db.conn.execute(
+            "SELECT id FROM issues WHERE type='release' AND json_extract(fields, '$.version') = 'Future'"
+        ).fetchone()
+        assert row is not None
+
+    def test_auto_seed_idempotent(self, release_db: FiligreeDB) -> None:
+        # Call _seed_future_release again — should not create a duplicate
+        release_db._seed_future_release()
+        release_db.conn.commit()
+        rows = release_db.conn.execute(
+            "SELECT id FROM issues WHERE type='release' AND json_extract(fields, '$.version') = 'Future'"
+        ).fetchall()
+        assert len(rows) == 1
+
+    def test_auto_seed_not_created_without_release_pack(self, tmp_path: Path) -> None:
+        from tests._db_factory import make_db
+
+        db = make_db(tmp_path, packs=["core", "planning"])
+        row = db.conn.execute("SELECT id FROM issues WHERE type='release' AND json_extract(fields, '$.version') = 'Future'").fetchone()
+        assert row is None
+        db.close()
+
+    def test_cannot_create_second_future(self, release_db: FiligreeDB) -> None:
+        with pytest.raises(ValueError, match="Duplicate value"):
+            release_db.create_issue("Another Future", type="release", fields={"version": "Future"})
+
+    def test_no_version_field_allowed(self, release_db: FiligreeDB) -> None:
+        """Creating a release without a version field is fine (version only required at frozen)."""
+        r = release_db.create_issue("No Version", type="release")
+        assert "version" not in r.fields or r.fields.get("version") is None
 
 
 class TestBuildTree:

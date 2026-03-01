@@ -12,17 +12,19 @@ from filigree.core import FiligreeDB
 
 class TestListAndSearch:
     def test_list_all(self, db: FiligreeDB) -> None:
+        baseline = len(db.list_issues())  # Future release singleton
         db.create_issue("A")
         db.create_issue("B")
-        assert len(db.list_issues()) == 2
+        assert len(db.list_issues()) == baseline + 2
 
     def test_list_filter_status(self, db: FiligreeDB) -> None:
+        open_before = len(db.list_issues(status="open"))  # Future release (planning = open category)
         a = db.create_issue("Open one")
         b = db.create_issue("Close one")
         db.close_issue(b.id)
         open_issues = db.list_issues(status="open")
-        assert len(open_issues) == 1
-        assert open_issues[0].id == a.id
+        assert len(open_issues) == open_before + 1
+        assert any(i.id == a.id for i in open_issues)
 
     def test_search(self, db: FiligreeDB) -> None:
         db.create_issue("Fix authentication bug")
@@ -92,6 +94,7 @@ class TestGetStatsByCategory:
 
     def test_get_stats_by_category(self, db: FiligreeDB) -> None:
         """by_category sums issues across open/wip/done."""
+        baseline_open = db.get_stats()["by_category"]["open"]  # Future release in open category
         db.create_issue("A")  # open → open category
         b = db.create_issue("B")
         db.update_issue(b.id, status="in_progress")  # wip category
@@ -100,7 +103,7 @@ class TestGetStatsByCategory:
 
         stats = db.get_stats()
         by_cat = stats["by_category"]
-        assert by_cat["open"] == 1
+        assert by_cat["open"] == baseline_open + 1
         assert by_cat["wip"] == 1
         assert by_cat["done"] == 1
 

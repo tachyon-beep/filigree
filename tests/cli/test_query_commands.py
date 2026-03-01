@@ -17,7 +17,8 @@ class TestReadyAndBlocked:
         runner.invoke(cli, ["create", "Ready task"])
         result = runner.invoke(cli, ["ready"])
         assert result.exit_code == 0
-        assert "1 ready" in result.output
+        # 1 created task + auto-seeded "Future" release = 2 ready
+        assert "2 ready" in result.output
 
     def test_blocked(self, cli_in_project: tuple[CliRunner, Path]) -> None:
         runner, _ = cli_in_project
@@ -133,7 +134,8 @@ class TestJsonOutput:
         result = runner.invoke(cli, ["list", "--json"])
         assert result.exit_code == 0
         data = json.loads(result.output)
-        assert len(data) == 2
+        # 2 created + auto-seeded "Future" release = 3
+        assert len(data) == 3
 
     def test_ready_json(self, cli_in_project: tuple[CliRunner, Path]) -> None:
         runner, _ = cli_in_project
@@ -141,7 +143,8 @@ class TestJsonOutput:
         result = runner.invoke(cli, ["ready", "--json"])
         assert result.exit_code == 0
         data = json.loads(result.output)
-        assert len(data) == 1
+        # 1 created + auto-seeded "Future" release = 2 ready
+        assert len(data) == 2
 
     def test_stats_json(self, cli_in_project: tuple[CliRunner, Path]) -> None:
         runner, _ = cli_in_project

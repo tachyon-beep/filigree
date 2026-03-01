@@ -113,7 +113,16 @@ def type_info(type_name: str, as_json: bool) -> None:
                     }
                     for t in tpl.transitions
                 ],
-                "fields_schema": [{"name": f.name, "type": f.type, "description": f.description} for f in tpl.fields_schema],
+                "fields_schema": [
+                    {
+                        "name": f.name,
+                        "type": f.type,
+                        "description": f.description,
+                        **({"pattern": f.pattern} if f.pattern else {}),
+                        **({"unique": f.unique} if f.unique else {}),
+                    }
+                    for f in tpl.fields_schema
+                ],
             }
             click.echo(json_mod.dumps(data, indent=2))
             return
@@ -131,8 +140,15 @@ def type_info(type_name: str, as_json: bool) -> None:
         if tpl.fields_schema:
             click.echo("\n  Fields:")
             for f in tpl.fields_schema:
-                req_at = f" (required at: {', '.join(f.required_at)})" if f.required_at else ""
-                click.echo(f"    {f.name}: {f.type} — {f.description}{req_at}")
+                notes: list[str] = []
+                if f.required_at:
+                    notes.append(f"required at: {', '.join(f.required_at)}")
+                if f.pattern:
+                    notes.append(f"pattern: {f.pattern}")
+                if f.unique:
+                    notes.append("unique")
+                suffix = f" ({'; '.join(notes)})" if notes else ""
+                click.echo(f"    {f.name}: {f.type} — {f.description}{suffix}")
 
 
 @click.command("transitions")

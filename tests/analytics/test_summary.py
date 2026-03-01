@@ -17,7 +17,8 @@ class TestGenerateSummary:
     def test_empty_db(self, db: FiligreeDB) -> None:
         summary = generate_summary(db)
         assert "Project Pulse" in summary
-        assert "Open: 0" in summary
+        # The auto-seeded "Future" release singleton means Open: 1, not 0
+        assert "Open: 1" in summary
         assert "(none)" in summary
 
     def test_with_issues(self, populated_db: FiligreeDB) -> None:
@@ -74,7 +75,8 @@ class TestGenerateSummary:
         for i in range(18):
             db.create_issue(f"Ready {i}")
         summary = generate_summary(db)
-        assert "...and 6 more" in summary
+        # 18 created + 1 auto-seeded Future release = 19 ready; 19 - 12 = 7 more
+        assert "...and 7 more" in summary
 
     def test_stale_section(self, db: FiligreeDB) -> None:
         """In-progress issues >3 days old appear in stale section."""
@@ -204,7 +206,8 @@ class TestCategoryAwareSummary:
         c = db.create_issue("C")
         db.close_issue(c.id)  # done
         summary = generate_summary(db)
-        assert "Open: 1" in summary
+        # Open: 2 = A + auto-seeded Future release (planning is open category)
+        assert "Open: 2" in summary
         assert "In Progress: 1" in summary
         assert "Done: 1" in summary
 
@@ -249,11 +252,11 @@ class TestCategoryAwareSummary:
         assert "(fixing)" in summary
 
     def test_ready_truncation_at_12(self, db: FiligreeDB) -> None:
-        """14 ready issues → shows 12 + '...and 2 more'."""
+        """14 ready issues + 1 auto-seeded Future release = 15 ready; shows 12 + '...and 3 more'."""
         for i in range(14):
             db.create_issue(f"Ready {i}")
         summary = generate_summary(db)
-        assert "...and 2 more" in summary
+        assert "...and 3 more" in summary
 
     def test_epic_limit_10(self, db: FiligreeDB) -> None:
         """12 open epics → only 10 shown in Epic Progress."""

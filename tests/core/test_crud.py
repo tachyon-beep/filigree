@@ -373,6 +373,9 @@ class TestClaimNextExhaustion:
 
     def test_claim_next_no_warning_when_no_candidates(self, db: FiligreeDB) -> None:
         """When no ready issues exist, claim_next returns None without warning."""
+        # Claim all pre-existing ready issues (e.g. the Future release singleton)
+        for existing in db.get_ready():
+            db.claim_issue(existing.id, assignee="agent1")
         issue = db.create_issue("Target")
         db.claim_issue(issue.id, assignee="agent1")
 
@@ -548,14 +551,18 @@ class TestExportJsonl:
             record = json.loads(line)
             if record["_type"] == "issue":
                 issues.append(record)
-        assert len(issues) == 4  # epic + A + B + C
+        assert len(issues) == 5  # Future release + epic + A + B + C
         assert any(i["title"] == "Issue A" for i in issues)
 
     def test_export_empty_db(self, db: FiligreeDB, tmp_path: Path) -> None:
         out = tmp_path / "export.jsonl"
         count = db.export_jsonl(out)
-        assert count == 0
-        assert out.read_text() == ""
+        # DB has the auto-seeded Future release singleton + its created event
+        assert count >= 1
+        lines = [line for line in out.read_text().strip().split("\n") if line]
+        issues = [json.loads(line) for line in lines if json.loads(line).get("_type") == "issue"]
+        assert len(issues) == 1
+        assert issues[0]["title"] == "Future"
 
 
 class TestImportJsonl:
@@ -578,7 +585,8 @@ class TestImportJsonl:
         fresh.initialize()
         fresh.import_jsonl(out)
         issues = fresh.list_issues(limit=100)
-        assert len(issues) == 4
+        # fresh DB auto-seeds 1 Future + imports 5 (Future + epic + A + B + C) = 6
+        assert len(issues) == 6
         titles = {i.title for i in issues}
         assert "Issue A" in titles
         assert "Epic E" in titles

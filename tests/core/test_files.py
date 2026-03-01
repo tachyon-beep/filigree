@@ -2038,8 +2038,10 @@ class TestCreateIssuesPartialFailure:
 
         # First finding's issue was committed by create_issue() -- it persists
         issues = db.list_issues()
-        assert len(issues) == 1
-        assert "Off by one" in issues[0].title
+        # DB has the auto-seeded Future release + the first finding's issue
+        non_future = [i for i in issues if i.title != "Future"]
+        assert len(non_future) == 1
+        assert "Off by one" in non_future[0].title
 
         # First finding's file/finding also committed (same txn as issue)
         file_a = db.get_file_by_path("src/a.py")

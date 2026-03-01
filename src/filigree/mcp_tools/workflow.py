@@ -211,6 +211,10 @@ async def _handle_get_type_info(arguments: dict[str, Any]) -> list[TextContent]:
             fsi["default"] = fd.default
         if fd.required_at:
             fsi["required_at"] = list(fd.required_at)
+        if fd.pattern:
+            fsi["pattern"] = fd.pattern
+        if fd.unique:
+            fsi["unique"] = fd.unique
         fields.append(fsi)
     return _text(
         TypeInfoResponse(

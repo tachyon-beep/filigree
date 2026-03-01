@@ -84,12 +84,37 @@ class FieldSchema:
     options: tuple[str, ...] = ()
     default: Any = None
     required_at: tuple[str, ...] = ()
+    pattern: str | None = None
+    unique: bool = False
 
     def __post_init__(self) -> None:
         if self.type not in _VALID_FIELD_TYPES:
             allowed = sorted(_VALID_FIELD_TYPES)
             msg = f"Invalid field type '{self.type}' for field '{self.name}': must be one of {allowed}"
             raise ValueError(msg)
+        if self.pattern is not None:
+            try:
+                re.compile(self.pattern)
+            except re.error as exc:
+                msg = f"Invalid regex pattern for field '{self.name}': {exc}"
+                raise ValueError(msg) from exc
+
+
+def validate_field_pattern(field: FieldSchema, value: Any) -> str | None:
+    """Return an error message if *value* doesn't match *field.pattern*, else None.
+
+    Skips None and empty strings (let ``required_at`` handle presence).
+    Uses ``re.fullmatch`` so the pattern must match the entire value.
+    """
+    if field.pattern is None:
+        return None
+    if value is None or (isinstance(value, str) and value.strip() == ""):
+        return None
+    if not isinstance(value, str):
+        return f"Field '{field.name}' pattern requires a string value, got {type(value).__name__}"
+    if not re.fullmatch(field.pattern, value):
+        return f"Field '{field.name}' value '{value}' does not match required pattern: {field.pattern}"
+    return None
 
 
 @dataclass(frozen=True)
@@ -332,6 +357,8 @@ class TemplateRegistry:
                 options=tuple(f.get("options", [])),
                 default=f.get("default"),
                 required_at=tuple(f.get("required_at", [])),
+                pattern=f.get("pattern"),
+                unique=f.get("unique", False),
             )
             for f in raw_fields
         )

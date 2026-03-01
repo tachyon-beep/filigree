@@ -1904,3 +1904,77 @@ class TestGetTemplateEnriched:
         assert tpl["initial_state"] == "open"
         assert len(tpl["states"]) >= 3
         assert len(tpl["transitions"]) >= 2
+
+
+# ---------------------------------------------------------------------------
+# TestFieldSchemaPattern — pattern and unique field validation
+# ---------------------------------------------------------------------------
+
+
+class TestFieldSchemaPattern:
+    """Tests for FieldSchema.pattern and FieldSchema.unique attributes."""
+
+    def test_pattern_valid_construction(self) -> None:
+        fs = FieldSchema(name="version", type="text", pattern=r"^v\d+\.\d+\.\d+$|^Future$")
+        assert fs.pattern == r"^v\d+\.\d+\.\d+$|^Future$"
+
+    def test_pattern_invalid_raises(self) -> None:
+        with pytest.raises(ValueError, match="Invalid regex pattern"):
+            FieldSchema(name="bad", type="text", pattern=r"[invalid")
+
+    def test_unique_defaults_false(self) -> None:
+        fs = FieldSchema(name="x", type="text")
+        assert fs.unique is False
+
+    def test_unique_true(self) -> None:
+        fs = FieldSchema(name="x", type="text", unique=True)
+        assert fs.unique is True
+
+    def test_validate_field_pattern_match(self) -> None:
+        from filigree.templates import validate_field_pattern
+
+        fs = FieldSchema(name="version", type="text", pattern=r"^v\d+\.\d+\.\d+$|^Future$")
+        assert validate_field_pattern(fs, "v1.2.3") is None
+        assert validate_field_pattern(fs, "Future") is None
+
+    def test_validate_field_pattern_no_match(self) -> None:
+        from filigree.templates import validate_field_pattern
+
+        fs = FieldSchema(name="version", type="text", pattern=r"^v\d+\.\d+\.\d+$|^Future$")
+        err = validate_field_pattern(fs, "1.2.3")
+        assert err is not None
+        assert "does not match" in err
+
+    def test_validate_field_pattern_skips_empty(self) -> None:
+        from filigree.templates import validate_field_pattern
+
+        fs = FieldSchema(name="version", type="text", pattern=r"^v\d+\.\d+\.\d+$")
+        assert validate_field_pattern(fs, None) is None
+        assert validate_field_pattern(fs, "") is None
+        assert validate_field_pattern(fs, "  ") is None
+
+    def test_validate_field_pattern_no_pattern(self) -> None:
+        from filigree.templates import validate_field_pattern
+
+        fs = FieldSchema(name="x", type="text")
+        assert validate_field_pattern(fs, "anything") is None
+
+    def test_parse_type_template_includes_pattern_and_unique(self) -> None:
+        raw = {
+            "type": "mytype",
+            "display_name": "My Type",
+            "description": "test",
+            "pack": "core",
+            "states": [
+                {"name": "open", "category": "open"},
+                {"name": "closed", "category": "done"},
+            ],
+            "initial_state": "open",
+            "transitions": [{"from": "open", "to": "closed", "enforcement": "soft"}],
+            "fields_schema": [
+                {"name": "code", "type": "text", "pattern": r"^[A-Z]{3}$", "unique": True},
+            ],
+        }
+        tpl = TemplateRegistry.parse_type_template(raw)
+        assert tpl.fields_schema[0].pattern == r"^[A-Z]{3}$"
+        assert tpl.fields_schema[0].unique is True

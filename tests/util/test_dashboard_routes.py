@@ -111,6 +111,33 @@ class TestSemverSortKey:
         # v1.0 and v1.0.0 are equal keys (1,0,0) so stable sort preserves input order
         assert titles == ["v1.0.0", "v1.0", "v2.0.0", "Backlog", "future"]
 
+    def test_version_field_future_exact_match(self) -> None:
+        """Version field 'Future' (exact) sorts last."""
+        from filigree.dashboard_routes.releases import _FUTURE_KEY, _semver_sort_key
+
+        release = {"version": "Future", "title": "Future Release"}
+        assert _semver_sort_key(release) == _FUTURE_KEY
+
+    def test_version_field_preferred_for_future(self) -> None:
+        """Version field 'Future' takes priority over title for Future detection."""
+        from filigree.dashboard_routes.releases import _FUTURE_KEY, _semver_sort_key
+
+        # version=Future should be detected even if title is something else
+        release = {"version": "Future", "title": "Upcoming"}
+        assert _semver_sort_key(release) == _FUTURE_KEY
+
+    def test_version_field_future_case_sensitive(self) -> None:
+        """Only exact 'Future' matches on version field, not 'future' or 'FUTURE'."""
+        from filigree.dashboard_routes.releases import _FUTURE_KEY, _NON_SEMVER_KEY, _semver_sort_key
+
+        # Lowercase in version field — should NOT match as Future
+        release_lower = {"version": "future", "title": ""}
+        assert _semver_sort_key(release_lower) == _NON_SEMVER_KEY
+
+        # But title-based fallback still catches lowercase when version is empty
+        release_title = {"version": "", "title": "future"}
+        assert _semver_sort_key(release_title) == _FUTURE_KEY
+
 
 # ---------------------------------------------------------------------------
 # _parse_bool_value / _get_bool_param tests (filigree-4f2e6e099c)

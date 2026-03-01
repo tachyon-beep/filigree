@@ -29,13 +29,15 @@ class FieldSchemaInfo(_FieldSchemaRequired, total=False):
     """Single field in a template's fields_schema.
 
     The ``name``, ``type``, and ``description`` keys are always present.
-    Optional keys (``options``, ``default``, ``required_at``) are only
-    included when the underlying template field defines them.
+    Optional keys (``options``, ``default``, ``required_at``, ``pattern``,
+    ``unique``) are only included when the underlying template field defines them.
     """
 
     options: list[str]
     default: Any
     required_at: list[str]
+    pattern: str
+    unique: bool
 
 
 class TemplateInfo(TypedDict):

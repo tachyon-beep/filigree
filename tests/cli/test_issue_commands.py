@@ -106,7 +106,8 @@ class TestShowAndList:
         runner.invoke(cli, ["create", "Issue B"])
         result = runner.invoke(cli, ["list"])
         assert result.exit_code == 0
-        assert "2 issues" in result.output
+        # 2 created + auto-seeded "Future" release = 3
+        assert "3 issues" in result.output
 
     def test_list_filter_status(self, cli_in_project: tuple[CliRunner, Path]) -> None:
         runner, _ = cli_in_project
@@ -115,7 +116,8 @@ class TestShowAndList:
         issue_id = _extract_id(r.output)
         runner.invoke(cli, ["close", issue_id])
         result = runner.invoke(cli, ["list", "--status", "open"])
-        assert "1 issues" in result.output
+        # 1 open task + auto-seeded "Future" release (planning = open category) = 2
+        assert "2 issues" in result.output
 
 
 class TestUpdateAndClose:
@@ -279,6 +281,8 @@ class TestClaimNextCli:
 
     def test_claim_next_empty(self, cli_in_project: tuple[CliRunner, Path]) -> None:
         runner, _ = cli_in_project
+        # Claim the auto-seeded "Future" release first so the queue is truly empty
+        runner.invoke(cli, ["claim-next", "--assignee", "drain"])
         result = runner.invoke(cli, ["claim-next", "--assignee", "agent-1"])
         assert result.exit_code == 0
         assert "No issues available" in result.output
@@ -294,6 +298,8 @@ class TestClaimNextCli:
 
     def test_claim_next_json_empty(self, cli_in_project: tuple[CliRunner, Path]) -> None:
         runner, _ = cli_in_project
+        # Claim the auto-seeded "Future" release first so the queue is truly empty
+        runner.invoke(cli, ["claim-next", "--assignee", "drain"])
         result = runner.invoke(cli, ["claim-next", "--assignee", "a", "--json"])
         assert result.exit_code == 0
         data = json.loads(result.output)

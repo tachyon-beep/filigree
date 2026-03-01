@@ -791,7 +791,8 @@ class TestExportImportCli:
         export_path = str(project_root / "empty.jsonl")
         result = runner.invoke(cli, ["export", export_path])
         assert result.exit_code == 0
-        assert "0 records" in result.output
+        # The auto-seeded "Future" release singleton means 1 record exists
+        assert "1 records" in result.output
 
     def test_import_oserror_shows_clean_error(self, cli_in_project: tuple[CliRunner, Path], monkeypatch: pytest.MonkeyPatch) -> None:
         """OSError during import should show clean error, not traceback."""

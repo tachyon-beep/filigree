@@ -17,7 +17,8 @@ from filigree.dashboard_routes.common import _error_response, _get_bool_param
 
 logger = logging.getLogger(__name__)
 
-_SEMVER_RE = re.compile(r"v?(\d+)\.(\d+)(?:\.(\d+))?")
+_SEMVER_STRICT_RE = re.compile(r"^v(\d+)\.(\d+)\.(\d+)$")
+_SEMVER_LOOSE_RE = re.compile(r"v?(\d+)\.(\d+)(?:\.(\d+))?")
 _NON_SEMVER_KEY = (999_999, 0, 0)
 _FUTURE_KEY = (999_999, 999_999, 0)
 
@@ -25,18 +26,34 @@ _FUTURE_KEY = (999_999, 999_999, 0)
 def _semver_sort_key(release: dict[str, Any]) -> tuple[int, int, int]:
     """Extract a (major, minor, patch) sort key from a release.
 
-    Checks the ``version`` field first, then falls back to the title.
-    Releases whose title matches "future" (case-insensitive) sort last.
+    Priority order for "Future" detection:
+      1. ``version == "Future"`` (exact match on version field)
+      2. Title matches "future" (case-insensitive, backward compat)
+
+    For semver parsing, checks version field first (strict 3-part),
+    then falls back to title (loose matching).
     Non-semver releases sort after all semver releases but before "future".
     """
     version = release.get("version") or ""
     title = release.get("title", "")
 
-    if title.strip().lower() == "future":
+    # Check version field for exact "Future" first
+    if version == "Future":
         return _FUTURE_KEY
 
+    # Backward compat: title-based Future detection
+    if not version and title.strip().lower() == "future":
+        return _FUTURE_KEY
+
+    # Try strict semver on version field
+    if version:
+        m = _SEMVER_STRICT_RE.match(version)
+        if m:
+            return (int(m.group(1)), int(m.group(2)), int(m.group(3)))
+
+    # Fallback: loose semver on version or title
     text = version or title
-    m = _SEMVER_RE.search(text)
+    m = _SEMVER_LOOSE_RE.search(text)
     if m:
         return (int(m.group(1)), int(m.group(2)), int(m.group(3) or 0))
 

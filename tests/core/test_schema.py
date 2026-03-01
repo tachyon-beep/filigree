@@ -1042,6 +1042,90 @@ class TestMigrateV3ToV4:
         assert applied == 0
 
 
+class TestMigrateV4ToV5:
+    """Tests for migration v4 -> v5: normalize release version fields."""
+
+    @pytest.fixture
+    def v4_db(self, tmp_path: Path) -> sqlite3.Connection:
+        """Create a v4 database using the full schema (stamped as v4)."""
+        conn = _make_db(tmp_path)
+        conn.executescript(SCHEMA_SQL)
+        conn.execute("PRAGMA user_version = 4")
+        conn.commit()
+        return conn
+
+    def _insert_release(self, conn: sqlite3.Connection, issue_id: str, title: str, version: str) -> None:
+        import json
+
+        now = "2026-01-01T00:00:00Z"
+        fields = json.dumps({"version": version}) if version else "{}"
+        conn.execute(
+            "INSERT INTO issues (id, title, status, priority, type, assignee, created_at, updated_at, fields) "
+            "VALUES (?, ?, 'open', 2, 'release', '', ?, ?, ?)",
+            (issue_id, title, now, now, fields),
+        )
+        conn.commit()
+
+    def test_normalizes_no_v_prefix(self, v4_db: sqlite3.Connection) -> None:
+        """'1.2.3' should become 'v1.2.3'."""
+        import json
+
+        self._insert_release(v4_db, "r1", "R1", "1.2.3")
+        apply_pending_migrations(v4_db, 5)
+        row = v4_db.execute("SELECT fields FROM issues WHERE id = 'r1'").fetchone()
+        assert json.loads(row["fields"])["version"] == "v1.2.3"
+        # Check migration comment
+        comment = v4_db.execute("SELECT text FROM comments WHERE issue_id = 'r1'").fetchone()
+        assert "normalized" in comment["text"].lower() or "1.2.3" in comment["text"]
+
+    def test_normalizes_two_part_version(self, v4_db: sqlite3.Connection) -> None:
+        """'v1.2' should become 'v1.2.0'."""
+        import json
+
+        self._insert_release(v4_db, "r2", "R2", "v1.2")
+        apply_pending_migrations(v4_db, 5)
+        row = v4_db.execute("SELECT fields FROM issues WHERE id = 'r2'").fetchone()
+        assert json.loads(row["fields"])["version"] == "v1.2.0"
+
+    def test_clears_unnormalizable_version(self, v4_db: sqlite3.Connection) -> None:
+        """'TBD' should be cleared with a comment."""
+        import json
+
+        self._insert_release(v4_db, "r3", "R3", "TBD")
+        apply_pending_migrations(v4_db, 5)
+        row = v4_db.execute("SELECT fields FROM issues WHERE id = 'r3'").fetchone()
+        fields = json.loads(row["fields"])
+        assert "version" not in fields
+        comment = v4_db.execute("SELECT text FROM comments WHERE issue_id = 'r3'").fetchone()
+        assert "cleared" in comment["text"].lower()
+
+    def test_leaves_compliant_versions_untouched(self, v4_db: sqlite3.Connection) -> None:
+        """'v1.2.3' and 'Future' should remain unchanged."""
+        import json
+
+        self._insert_release(v4_db, "r4", "R4", "v1.2.3")
+        self._insert_release(v4_db, "r5", "Future", "Future")
+        apply_pending_migrations(v4_db, 5)
+
+        row4 = v4_db.execute("SELECT fields FROM issues WHERE id = 'r4'").fetchone()
+        assert json.loads(row4["fields"])["version"] == "v1.2.3"
+        row5 = v4_db.execute("SELECT fields FROM issues WHERE id = 'r5'").fetchone()
+        assert json.loads(row5["fields"])["version"] == "Future"
+
+        # No comments added for compliant versions
+        comments4 = v4_db.execute("SELECT text FROM comments WHERE issue_id = 'r4'").fetchall()
+        assert len(comments4) == 0
+        comments5 = v4_db.execute("SELECT text FROM comments WHERE issue_id = 'r5'").fetchall()
+        assert len(comments5) == 0
+
+    def test_handles_empty_version_field(self, v4_db: sqlite3.Connection) -> None:
+        """Empty version should be left alone (no change, no comment)."""
+        self._insert_release(v4_db, "r6", "R6", "")
+        apply_pending_migrations(v4_db, 5)
+        comments = v4_db.execute("SELECT text FROM comments WHERE issue_id = 'r6'").fetchall()
+        assert len(comments) == 0
+
+
 # ---------------------------------------------------------------------------
 # Schema equivalence test
 # ---------------------------------------------------------------------------
@@ -1233,6 +1317,10 @@ class TestFileMigration:
         conn = sqlite3.connect(str(db_path))
         # Manually create only v1 tables (without file tables)
         conn.executescript(SCHEMA_V1_SQL)
+        # SCHEMA_V1_SQL predates the 'fields' column, but the v4->v5 migration
+        # (release version normalization) expects it. Add it to simulate a
+        # real v1 database that already had the fields column in its schema.
+        conn.execute("ALTER TABLE issues ADD COLUMN fields TEXT DEFAULT '{}'")
         conn.execute("PRAGMA user_version = 1")
         conn.commit()
         conn.close()

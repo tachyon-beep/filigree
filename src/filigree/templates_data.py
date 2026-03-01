@@ -1571,8 +1571,10 @@ _RELEASE_PACK: dict[str, Any] = {
                 {
                     "name": "version",
                     "type": "text",
-                    "description": "Version identifier (e.g., v2.1.0)",
+                    "description": "Version identifier. Must be 'Future' or semver vMAJOR.MINOR.PATCH (e.g., v2.1.0)",
                     "required_at": ["frozen"],
+                    "pattern": r"^v\d+\.\d+\.\d+$|^Future$",
+                    "unique": True,
                 },
                 {"name": "target_date", "type": "date", "description": "Planned release date"},
                 {"name": "changelog", "type": "text", "description": "Summary of changes in this release"},

@@ -77,6 +77,10 @@ class WorkflowMixin(DBMixinProtocol):
                 field_info["default"] = f.default
             if f.required_at:
                 field_info["required_at"] = list(f.required_at)
+            if f.pattern:
+                field_info["pattern"] = f.pattern
+            if f.unique:
+                field_info["unique"] = f.unique
             fields_schema.append(field_info)
         return TemplateInfo(
             type=tpl.type,
@@ -111,6 +115,10 @@ class WorkflowMixin(DBMixinProtocol):
                     fi["default"] = f.default
                 if f.required_at:
                     fi["required_at"] = list(f.required_at)
+                if f.pattern:
+                    fi["pattern"] = f.pattern
+                if f.unique:
+                    fi["unique"] = f.unique
                 fields.append(fi)
             result.append(
                 TemplateListItem(
@@ -205,10 +213,11 @@ class WorkflowMixin(DBMixinProtocol):
 
         Checks whether all fields required at the current state are populated.
         Also checks fields needed for next reachable transitions (upcoming requirements).
+        Checks field values against pattern constraints (non-blocking warnings).
         Returns a ValidationResult with warnings for missing recommended fields.
         Unknown types validate as valid (no template to check against).
         """
-        from filigree.templates import ValidationResult
+        from filigree.templates import ValidationResult, validate_field_pattern
 
         issue = self.get_issue(issue_id)
         tpl = self.templates.get_type(issue.type)
@@ -221,6 +230,15 @@ class WorkflowMixin(DBMixinProtocol):
         missing = self.templates.validate_fields_for_state(issue.type, issue.status, issue.fields)
         for field_name in missing:
             warnings.append(f"Field '{field_name}' is recommended at state '{issue.status}' for type '{issue.type}' but is not populated.")
+
+        # Check field values against pattern constraints (surfaces non-compliant legacy data)
+        for fs in tpl.fields_schema:
+            if fs.pattern is None:
+                continue
+            value = issue.fields.get(fs.name)
+            err = validate_field_pattern(fs, value)
+            if err is not None:
+                warnings.append(err)
 
         # Check upcoming requirements: fields needed for next transitions
         transitions = self.templates.get_valid_transitions(issue.type, issue.status, issue.fields)

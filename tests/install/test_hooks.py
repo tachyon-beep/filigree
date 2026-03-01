@@ -32,8 +32,10 @@ class TestBuildContext:
         result = _build_context(db)
         assert "=== Filigree Project Snapshot ===" in result
         assert "STATS:" in result
-        assert "0 ready" in result
+        # The auto-seeded "Future" release singleton counts as 1 ready issue
+        assert "1 ready" in result
         assert "0 blocked" in result
+        assert "Future" in result
 
     def test_ready_issues_shown(self, db: FiligreeDB) -> None:
         db.create_issue("Fix the bug", priority=1)

@@ -19,11 +19,12 @@ import os
 import shutil
 import sqlite3
 import sys
+import uuid as _uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
-from filigree.db_base import StatusCategory
+from filigree.db_base import StatusCategory, _now_iso
 from filigree.db_events import EventsMixin
 from filigree.db_files import (
     VALID_ASSOC_TYPES,
@@ -402,7 +403,35 @@ class FiligreeDB(FilesMixin, IssuesMixin, EventsMixin, WorkflowMixin, MetaMixin,
             apply_pending_migrations(self.conn, CURRENT_SCHEMA_VERSION)
 
         self._seed_templates()
+        self._seed_future_release()
         self.conn.commit()
+
+    def _seed_future_release(self) -> None:
+        """Create the "Future" release singleton if it doesn't exist.
+
+        Only runs when the ``release`` pack is enabled. Uses raw SQL to
+        avoid circular validation during init. Idempotent — skips if a
+        release with ``version == "Future"`` already exists.
+        """
+        if "release" not in self.enabled_packs:
+            return
+
+        existing = self.conn.execute(
+            "SELECT id FROM issues WHERE type = 'release' AND json_extract(fields, '$.version') = 'Future'"
+        ).fetchone()
+        if existing is not None:
+            return
+
+        initial_state = self.templates.get_initial_state("release")
+        issue_id = f"{self.prefix}-{_uuid.uuid4().hex[:10]}"
+        now = _now_iso()
+        self.conn.execute(
+            "INSERT INTO issues (id, title, status, priority, type, assignee, "
+            "created_at, updated_at, description, notes, fields) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (issue_id, "Future", initial_state, 4, "release", "", now, now, "", "", '{"version": "Future"}'),
+        )
+        logger.info("Seeded Future release singleton: %s", issue_id)
 
     def get_schema_version(self) -> int:
         """Return the current schema version from PRAGMA user_version."""
