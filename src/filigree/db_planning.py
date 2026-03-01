@@ -10,10 +10,10 @@ from __future__ import annotations
 import json
 import logging
 from collections import deque
-from typing import TYPE_CHECKING, Any, TypedDict, cast
+from typing import TYPE_CHECKING, Any, TypedDict
 
 from filigree.db_base import DBMixinProtocol, _now_iso
-from filigree.types.planning import CriticalPathNode, DependencyRecord, PlanTree
+from filigree.types.planning import CriticalPathNode, DependencyRecord, PlanPhase, PlanTree
 
 if TYPE_CHECKING:
     from filigree.core import Issue
@@ -230,7 +230,10 @@ class PlanningMixin(DBMixinProtocol):
             done_states if done_states else [],
         ).fetchall()
         open_ids = {r["id"] for r in open_rows}
-        info = {r["id"]: {"id": r["id"], "title": r["title"], "priority": r["priority"], "type": r["type"]} for r in open_rows}
+        info = {
+            r["id"]: CriticalPathNode(id=r["id"], title=r["title"], priority=r["priority"], type=r["type"])
+            for r in open_rows
+        }
 
         # edges: blocker -> list of issues it blocks (forward edges)
         forward: dict[str, list[str]] = {nid: [] for nid in open_ids}
@@ -276,7 +279,7 @@ class PlanningMixin(DBMixinProtocol):
             current = pred[current]
         path.reverse()
 
-        return cast(list[CriticalPathNode], [info[nid] for nid in path])
+        return [info[nid] for nid in path]
 
     # -- Plan tree -----------------------------------------------------------
 
@@ -287,12 +290,9 @@ class PlanningMixin(DBMixinProtocol):
         phases = self.list_issues(parent_id=milestone_id)
         phases.sort(key=lambda p: p.fields.get("sequence", 999))
 
-        result: dict[str, Any] = {
-            "milestone": milestone.to_dict(),
-            "phases": [],
-            "total_steps": 0,
-            "completed_steps": 0,
-        }
+        phase_list: list[PlanPhase] = []
+        total_steps = 0
+        completed_steps = 0
 
         for phase in phases:
             steps = self.list_issues(parent_id=phase.id)
@@ -301,19 +301,24 @@ class PlanningMixin(DBMixinProtocol):
             completed = sum(1 for s in steps if s.status_category == "done")
             ready = sum(1 for s in steps if s.is_ready)
 
-            result["phases"].append(
-                {
-                    "phase": phase.to_dict(),
-                    "steps": [s.to_dict() for s in steps],
-                    "total": len(steps),
-                    "completed": completed,
-                    "ready": ready,
-                }
+            phase_list.append(
+                PlanPhase(
+                    phase=phase.to_dict(),
+                    steps=[s.to_dict() for s in steps],
+                    total=len(steps),
+                    completed=completed,
+                    ready=ready,
+                )
             )
-            result["total_steps"] += len(steps)
-            result["completed_steps"] += completed
+            total_steps += len(steps)
+            completed_steps += completed
 
-        return cast(PlanTree, result)
+        return PlanTree(
+            milestone=milestone.to_dict(),
+            phases=phase_list,
+            total_steps=total_steps,
+            completed_steps=completed_steps,
+        )
 
     def create_plan(
         self,

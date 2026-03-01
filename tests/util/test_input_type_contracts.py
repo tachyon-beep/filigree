@@ -12,7 +12,7 @@ required/optional status). It does NOT verify type-level agreement
 from __future__ import annotations
 
 import importlib
-from typing import Any, get_type_hints
+from typing import get_type_hints
 
 import pytest
 from mcp.types import Tool
@@ -171,7 +171,5 @@ def test_tools_discovered() -> None:
 
 
 def test_args_map_not_empty() -> None:
-    """Guard against vacuous parametrization — map should grow as tasks complete."""
-    # This threshold increases as each task adds TypedDicts.
-    # Final target: 43 (all tools with arguments).
-    assert len(TOOL_ARGS_MAP) >= 0  # Start at 0, bump after each task
+    """Guard against regression — all 43 tools with arguments must have TypedDicts."""
+    assert len(TOOL_ARGS_MAP) >= 43

@@ -14,6 +14,8 @@ from mcp.types import TextContent, Tool
 
 from filigree.core import VALID_ASSOC_TYPES, VALID_SEVERITIES
 from filigree.mcp_tools.common import _parse_args, _text, _validate_int_range, _validate_str
+from filigree.scanners import list_scanners as _list_scanners
+from filigree.scanners import load_scanner, validate_scanner_command
 from filigree.types.inputs import (
     AddFileAssociationArgs,
     GetFileArgs,
@@ -23,8 +25,6 @@ from filigree.types.inputs import (
     RegisterFileArgs,
     TriggerScanArgs,
 )
-from filigree.scanners import list_scanners as _list_scanners
-from filigree.scanners import load_scanner, validate_scanner_command
 
 
 def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:

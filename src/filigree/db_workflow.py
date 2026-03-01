@@ -10,10 +10,16 @@ Python's MRO when composed into ``FiligreeDB``.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING
 
 from filigree.db_base import DBMixinProtocol, StatusCategory, _now_iso
-from filigree.types.workflow import TemplateInfo, TemplateListItem
+from filigree.types.workflow import (
+    FieldSchemaInfo,
+    StateInfo,
+    TemplateInfo,
+    TemplateListItem,
+    TransitionInfo,
+)
 
 if TYPE_CHECKING:
     from filigree.templates import TemplateRegistry, TransitionOption, ValidationResult
@@ -62,60 +68,52 @@ class WorkflowMixin(DBMixinProtocol):
         tpl = self.templates.get_type(issue_type)
         if tpl is None:
             return None
-        fields_schema: list[dict[str, Any]] = []
+        fields_schema: list[FieldSchemaInfo] = []
         for f in tpl.fields_schema:
-            field_dict: dict[str, Any] = {"name": f.name, "type": f.type, "description": f.description}
+            field_info: FieldSchemaInfo = FieldSchemaInfo(name=f.name, type=f.type, description=f.description)
             if f.options:
-                field_dict["options"] = list(f.options)
+                field_info["options"] = list(f.options)
             if f.default is not None:
-                field_dict["default"] = f.default
+                field_info["default"] = f.default
             if f.required_at:
-                field_dict["required_at"] = list(f.required_at)
-            fields_schema.append(field_dict)
-        return cast(
-            TemplateInfo,
-            {
-                "type": tpl.type,
-                "display_name": tpl.display_name,
-                "description": tpl.description,
-                "states": [{"name": s.name, "category": s.category} for s in tpl.states],
-                "initial_state": tpl.initial_state,
-                "transitions": [
-                    {
-                        "from": t.from_state,
-                        "to": t.to_state,
-                        "enforcement": t.enforcement,
-                        "requires_fields": list(t.requires_fields),
-                    }
-                    for t in tpl.transitions
-                ],
-                "fields_schema": fields_schema,
-            },
+                field_info["required_at"] = list(f.required_at)
+            fields_schema.append(field_info)
+        return TemplateInfo(
+            type=tpl.type,
+            display_name=tpl.display_name,
+            description=tpl.description,
+            states=[StateInfo(name=s.name, category=s.category) for s in tpl.states],
+            initial_state=tpl.initial_state,
+            transitions=[
+                TransitionInfo(**{
+                    "from": t.from_state, "to": t.to_state,
+                    "enforcement": t.enforcement, "requires_fields": list(t.requires_fields),
+                })
+                for t in tpl.transitions
+            ],
+            fields_schema=fields_schema,
         )
 
     def list_templates(self) -> list[TemplateListItem]:
         """List all registered templates via the registry (respects enabled_packs)."""
         result: list[TemplateListItem] = []
         for tpl in self.templates.list_types():
+            fields: list[FieldSchemaInfo] = []
+            for f in tpl.fields_schema:
+                fi: FieldSchemaInfo = FieldSchemaInfo(name=f.name, type=f.type, description=f.description)
+                if f.options:
+                    fi["options"] = list(f.options)
+                if f.default is not None:
+                    fi["default"] = f.default
+                if f.required_at:
+                    fi["required_at"] = list(f.required_at)
+                fields.append(fi)
             result.append(
-                cast(
-                    TemplateListItem,
-                    {
-                        "type": tpl.type,
-                        "display_name": tpl.display_name,
-                        "description": tpl.description,
-                        "fields_schema": [
-                            {
-                                "name": f.name,
-                                "type": f.type,
-                                "description": f.description,
-                                **({"options": list(f.options)} if f.options else {}),
-                                **({"default": f.default} if f.default is not None else {}),
-                                **({"required_at": list(f.required_at)} if f.required_at else {}),
-                            }
-                            for f in tpl.fields_schema
-                        ],
-                    },
+                TemplateListItem(
+                    type=tpl.type,
+                    display_name=tpl.display_name,
+                    description=tpl.description,
+                    fields_schema=fields,
                 )
             )
         return sorted(result, key=lambda t: t["type"])

@@ -13,9 +13,10 @@ import logging
 import os
 import sqlite3
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 
 from filigree.db_base import DBMixinProtocol, _now_iso
+from filigree.types.files import ScanIngestResult
 
 if TYPE_CHECKING:
     from filigree.core import FileRecord, Issue, ScanFinding
@@ -28,7 +29,6 @@ if TYPE_CHECKING:
         FindingsSummary,
         GlobalFindingsStats,
         IssueFileAssociation,
-        ScanIngestResult,
         ScanRunRecord,
     )
 
@@ -441,16 +441,16 @@ class FilesMixin(DBMixinProtocol):
                 f["severity"] = "info"
 
         now = _now_iso()
-        stats: dict[str, Any] = {
-            "files_created": 0,
-            "files_updated": 0,
-            "findings_created": 0,
-            "findings_updated": 0,
-            "new_finding_ids": [],
-            "issues_created": 0,
-            "issue_ids": [],
-            "warnings": warnings,
-        }
+        stats = ScanIngestResult(
+            files_created=0,
+            files_updated=0,
+            findings_created=0,
+            findings_updated=0,
+            new_finding_ids=[],
+            issues_created=0,
+            issue_ids=[],
+            warnings=warnings,
+        )
 
         def _priority_for_severity(severity: str) -> int:
             return {
@@ -695,7 +695,7 @@ class FilesMixin(DBMixinProtocol):
             if self.conn.in_transaction:
                 self.conn.rollback()
             raise
-        return cast("ScanIngestResult", stats)
+        return stats
 
     def get_scan_runs(self, *, limit: int = 10) -> list[ScanRunRecord]:
         """Query scan run history from scan_findings grouped by scan_run_id.
