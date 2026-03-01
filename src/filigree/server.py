@@ -211,7 +211,7 @@ def start_daemon(port: int | None = None) -> DaemonResult:
         log_file = SERVER_CONFIG_DIR / "server.log"
 
         try:
-            with open(log_file, "w") as log_fd:
+            with open(log_file, "a") as log_fd:
                 proc = subprocess.Popen(
                     [*filigree_cmd, "dashboard", "--no-browser", "--server-mode", "--port", str(daemon_port)],
                     stdin=subprocess.DEVNULL,

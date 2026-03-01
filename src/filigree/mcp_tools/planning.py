@@ -246,8 +246,8 @@ async def _handle_create_plan(arguments: dict[str, Any]) -> list[TextContent]:
     tracker = _get_db()
     try:
         plan = tracker.create_plan(
-            milestone,
-            args["phases"],
+            dict(milestone),
+            [dict(p) for p in args["phases"]],
             actor=actor,
         )
         _refresh_summary()

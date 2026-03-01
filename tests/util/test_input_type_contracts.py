@@ -46,18 +46,10 @@ def _discover_tools() -> list[tuple[str, Tool]]:
 _ALL_TOOLS = _discover_tools()
 
 # Tools with non-empty properties (need TypedDicts)
-_TOOLS_WITH_ARGS = [
-    (name, tool)
-    for name, tool in _ALL_TOOLS
-    if tool.inputSchema.get("properties", {})
-]
+_TOOLS_WITH_ARGS = [(name, tool) for name, tool in _ALL_TOOLS if tool.inputSchema.get("properties", {})]
 
 # Tools with empty properties (should NOT be in TOOL_ARGS_MAP)
-_TOOLS_WITHOUT_ARGS = [
-    (name, tool)
-    for name, tool in _ALL_TOOLS
-    if not tool.inputSchema.get("properties", {})
-]
+_TOOLS_WITHOUT_ARGS = [(name, tool) for name, tool in _ALL_TOOLS if not tool.inputSchema.get("properties", {})]
 
 
 # ---------------------------------------------------------------------------
@@ -66,7 +58,7 @@ _TOOLS_WITHOUT_ARGS = [
 
 
 @pytest.mark.parametrize(
-    "tool_name,tool",
+    ("tool_name", "tool"),
     _TOOLS_WITH_ARGS,
     ids=[name for name, _ in _TOOLS_WITH_ARGS],
 )
@@ -76,8 +68,7 @@ class TestSchemaTypedDictSync:
     def test_typeddict_registered(self, tool_name: str, tool: Tool) -> None:
         """Every tool with arguments must have a TypedDict in TOOL_ARGS_MAP."""
         assert tool_name in TOOL_ARGS_MAP, (
-            f"Tool '{tool_name}' has inputSchema properties but no TypedDict "
-            f"in TOOL_ARGS_MAP. Add one to types/inputs.py."
+            f"Tool '{tool_name}' has inputSchema properties but no TypedDict in TOOL_ARGS_MAP. Add one to types/inputs.py."
         )
 
     def test_keys_match(self, tool_name: str, tool: Tool) -> None:
@@ -88,9 +79,7 @@ class TestSchemaTypedDictSync:
         schema_keys = set(tool.inputSchema.get("properties", {}).keys())
         td_keys = set(get_type_hints(td_cls).keys())
         assert td_keys == schema_keys, (
-            f"Key mismatch for '{tool_name}':\n"
-            f"  TypedDict extra: {td_keys - schema_keys}\n"
-            f"  Schema extra:    {schema_keys - td_keys}"
+            f"Key mismatch for '{tool_name}':\n  TypedDict extra: {td_keys - schema_keys}\n  Schema extra:    {schema_keys - td_keys}"
         )
 
     def test_required_fields_match(self, tool_name: str, tool: Tool) -> None:
@@ -102,9 +91,7 @@ class TestSchemaTypedDictSync:
         # Python 3.11+ TypedDict exposes __required_keys__ / __optional_keys__
         td_required = td_cls.__required_keys__
         assert td_required == schema_required, (
-            f"Required mismatch for '{tool_name}':\n"
-            f"  TypedDict required: {td_required}\n"
-            f"  Schema required:    {schema_required}"
+            f"Required mismatch for '{tool_name}':\n  TypedDict required: {td_required}\n  Schema required:    {schema_required}"
         )
 
     def test_optional_fields_match(self, tool_name: str, tool: Tool) -> None:
@@ -117,9 +104,7 @@ class TestSchemaTypedDictSync:
         schema_optional = schema_props - schema_required
         td_optional = td_cls.__optional_keys__
         assert td_optional == schema_optional, (
-            f"Optional mismatch for '{tool_name}':\n"
-            f"  TypedDict optional: {td_optional}\n"
-            f"  Schema optional:    {schema_optional}"
+            f"Optional mismatch for '{tool_name}':\n  TypedDict optional: {td_optional}\n  Schema optional:    {schema_optional}"
         )
 
 
@@ -129,15 +114,14 @@ class TestSchemaTypedDictSync:
 
 
 @pytest.mark.parametrize(
-    "tool_name,tool",
+    ("tool_name", "tool"),
     _TOOLS_WITHOUT_ARGS,
     ids=[name for name, _ in _TOOLS_WITHOUT_ARGS],
 )
 def test_no_arg_tool_excluded(tool_name: str, tool: Tool) -> None:
     """Tools with empty inputSchema should not have a TypedDict mapping."""
     assert tool_name not in TOOL_ARGS_MAP, (
-        f"Tool '{tool_name}' has no inputSchema properties but is "
-        f"registered in TOOL_ARGS_MAP — remove it."
+        f"Tool '{tool_name}' has no inputSchema properties but is registered in TOOL_ARGS_MAP — remove it."
     )
 
 
@@ -151,23 +135,14 @@ def test_all_mcp_modules_covered() -> None:
     from pathlib import Path
 
     mcp_dir = Path(__file__).resolve().parents[2] / "src" / "filigree" / "mcp_tools"
-    actual_modules = {
-        f.stem for f in mcp_dir.glob("*.py") if f.stem not in ("__init__", "common")
-    }
+    actual_modules = {f.stem for f in mcp_dir.glob("*.py") if f.stem not in ("__init__", "common")}
     scanned_modules = {m.rsplit(".", 1)[-1] for m in _MCP_MODULES}
-    assert actual_modules == scanned_modules, (
-        f"Module mismatch:\n"
-        f"  On disk: {actual_modules}\n"
-        f"  Scanned: {scanned_modules}"
-    )
+    assert actual_modules == scanned_modules, f"Module mismatch:\n  On disk: {actual_modules}\n  Scanned: {scanned_modules}"
 
 
 def test_tools_discovered() -> None:
     """Sanity: we find a reasonable number of tools."""
-    assert len(_ALL_TOOLS) >= 50, (
-        f"Expected >=50 tools, found {len(_ALL_TOOLS)}. "
-        f"Did a module's register() break?"
-    )
+    assert len(_ALL_TOOLS) >= 50, f"Expected >=50 tools, found {len(_ALL_TOOLS)}. Did a module's register() break?"
 
 
 def test_args_map_not_empty() -> None:

@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-03-01
+
+Architectural refactor: decompose monolithic modules into domain-specific subpackages, add type safety with TypedDicts, boundary validation, releases tracking, and comprehensive test restructuring.
+
 ### Added
 
 #### Workflow

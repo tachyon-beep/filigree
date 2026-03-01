@@ -230,10 +230,7 @@ class PlanningMixin(DBMixinProtocol):
             done_states if done_states else [],
         ).fetchall()
         open_ids = {r["id"] for r in open_rows}
-        info = {
-            r["id"]: CriticalPathNode(id=r["id"], title=r["title"], priority=r["priority"], type=r["type"])
-            for r in open_rows
-        }
+        info = {r["id"]: CriticalPathNode(id=r["id"], title=r["title"], priority=r["priority"], type=r["type"]) for r in open_rows}
 
         # edges: blocker -> list of issues it blocks (forward edges)
         forward: dict[str, list[str]] = {nid: [] for nid in open_ids}

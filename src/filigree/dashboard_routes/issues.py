@@ -368,7 +368,8 @@ def create_router() -> APIRouter:
         priority = _validate_priority(body.get("priority", 2))
         if isinstance(priority, JSONResponse):
             return priority
-        assert priority is not None  # always set via default=2
+        if priority is None:  # pragma: no cover — always set via default=2
+            priority = 2
         try:
             issue = db.create_issue(
                 title,

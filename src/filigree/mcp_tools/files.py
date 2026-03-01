@@ -16,6 +16,7 @@ from filigree.core import VALID_ASSOC_TYPES, VALID_SEVERITIES
 from filigree.mcp_tools.common import _parse_args, _text, _validate_int_range, _validate_str
 from filigree.scanners import list_scanners as _list_scanners
 from filigree.scanners import load_scanner, validate_scanner_command
+from filigree.types.api import ErrorResponse
 from filigree.types.inputs import (
     AddFileAssociationArgs,
     GetFileArgs,
@@ -205,11 +206,11 @@ async def _handle_list_files(arguments: dict[str, Any]) -> list[TextContent]:
         if err is not None:
             return err
     if has_severity is not None and (not isinstance(has_severity, str) or has_severity not in VALID_SEVERITIES):
-        return _text({"error": f"has_severity must be one of {sorted(VALID_SEVERITIES)}", "code": "validation_error"})
+        return _text(ErrorResponse(error=f"has_severity must be one of {sorted(VALID_SEVERITIES)}", code="validation_error"))
     if not isinstance(sort, str) or sort not in valid_sorts:
-        return _text({"error": f"sort must be one of {sorted(valid_sorts)}", "code": "validation_error"})
+        return _text(ErrorResponse(error=f"sort must be one of {sorted(valid_sorts)}", code="validation_error"))
     if direction is not None and (not isinstance(direction, str) or direction.upper() not in {"ASC", "DESC"}):
-        return _text({"error": "direction must be 'asc' or 'desc'", "code": "validation_error"})
+        return _text(ErrorResponse(error="direction must be 'asc' or 'desc'", code="validation_error"))
 
     files_result = tracker.list_files_paginated(
         limit=limit,
@@ -484,8 +485,10 @@ async def _handle_trigger_scan(arguments: dict[str, Any]) -> list[TextContent]:
     scan_log_path = scan_log_dir / f"{scan_run_id}.log"
     try:
         scan_log_fd = open(scan_log_path, "w")  # noqa: SIM115
-    except OSError:
+    except OSError as log_err:
         scan_log_fd = None
+        _logger = __import__("logging").getLogger(__name__)
+        _logger.warning("Cannot open scan log %s: %s", scan_log_path, log_err)
     try:
         proc = subprocess.Popen(
             cmd,

@@ -85,10 +85,14 @@ class WorkflowMixin(DBMixinProtocol):
             states=[StateInfo(name=s.name, category=s.category) for s in tpl.states],
             initial_state=tpl.initial_state,
             transitions=[
-                TransitionInfo(**{
-                    "from": t.from_state, "to": t.to_state,
-                    "enforcement": t.enforcement, "requires_fields": list(t.requires_fields),
-                })
+                TransitionInfo(
+                    **{
+                        "from": t.from_state,
+                        "to": t.to_state,
+                        "enforcement": t.enforcement,
+                        "requires_fields": list(t.requires_fields),
+                    }
+                )
                 for t in tpl.transitions
             ],
             fields_schema=fields_schema,
