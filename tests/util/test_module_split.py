@@ -2,6 +2,7 @@
 
 from pathlib import Path
 
+import pytest
 from mcp.types import Tool
 
 from filigree.core import FiligreeDB
@@ -253,3 +254,46 @@ def test_file_associations(db: FiligreeDB) -> None:
     assocs = db.get_file_associations(f.id)
     assert len(assocs) == 1
     assert assocs[0]["issue_id"] == issue.id
+
+
+# -- _validate_string_list --------------------------------------------------
+
+
+class TestValidateStringList:
+    """Direct tests for _validate_string_list TypeError path (filigree-bdd0f35a36)."""
+
+    def test_non_list_raises_typeerror(self) -> None:
+        from filigree.db_issues import _validate_string_list
+
+        with pytest.raises(TypeError, match="must be a list of strings"):
+            _validate_string_list("not-a-list", "labels")
+
+    def test_list_with_non_strings_raises_typeerror(self) -> None:
+        from filigree.db_issues import _validate_string_list
+
+        with pytest.raises(TypeError, match="must be a list of strings"):
+            _validate_string_list([1, 2, 3], "labels")
+
+    def test_mixed_types_raises_typeerror(self) -> None:
+        from filigree.db_issues import _validate_string_list
+
+        with pytest.raises(TypeError, match="must be a list of strings"):
+            _validate_string_list(["valid", 42], "deps")
+
+    def test_valid_list_passes(self) -> None:
+        from filigree.db_issues import _validate_string_list
+
+        # Should not raise
+        _validate_string_list(["a", "b", "c"], "labels")
+
+    def test_empty_list_passes(self) -> None:
+        from filigree.db_issues import _validate_string_list
+
+        # Empty list is valid
+        _validate_string_list([], "labels")
+
+    def test_none_raises_typeerror(self) -> None:
+        from filigree.db_issues import _validate_string_list
+
+        with pytest.raises(TypeError, match="must be a list of strings"):
+            _validate_string_list(None, "labels")

@@ -238,7 +238,8 @@ class TestMCPPriorityValidation:
         issue = mcp_db.create_issue("Target")
         result = await call_tool("update_issue", {"id": issue.id, "title": "New"})
         data = _parse(result)
-        assert "error" not in data or "code" not in data
+        assert "error" not in data
+        assert data.get("title") == "New"
 
 
 class TestMCPStringValidation:

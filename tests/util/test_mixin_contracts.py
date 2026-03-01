@@ -587,3 +587,37 @@ def test_stubs_discovered() -> None:
     # 28 stubs as of 2026-02-28.  Keep threshold within ~10% so regressions
     # in the AST extraction logic are caught quickly.
     assert len(_ALL_STUBS) >= 25, f"Expected at least 25 stubs, found {len(_ALL_STUBS)}. AST extraction may be broken."
+
+
+def test_filigreedb_mro_contains_expected_bases() -> None:
+    """FiligreeDB's MRO should include exactly the expected mixin set."""
+    from filigree.db_events import EventsMixin
+    from filigree.db_files import FilesMixin
+    from filigree.db_issues import IssuesMixin
+    from filigree.db_meta import MetaMixin
+    from filigree.db_planning import PlanningMixin
+    from filigree.db_workflow import WorkflowMixin
+
+    expected_mixins = {FilesMixin, IssuesMixin, EventsMixin, WorkflowMixin, MetaMixin, PlanningMixin}
+    actual_bases = set(FiligreeDB.__mro__)
+    for mixin in expected_mixins:
+        assert mixin in actual_bases, f"{mixin.__name__} not in FiligreeDB MRO"
+
+
+def test_filigreedb_mro_order() -> None:
+    """FiligreeDB MRO should follow the declared base class order."""
+    from filigree.db_events import EventsMixin
+    from filigree.db_files import FilesMixin
+    from filigree.db_issues import IssuesMixin
+    from filigree.db_meta import MetaMixin
+    from filigree.db_planning import PlanningMixin
+    from filigree.db_workflow import WorkflowMixin
+
+    mro = FiligreeDB.__mro__
+    mixin_order = [cls for cls in mro if cls in {FilesMixin, IssuesMixin, EventsMixin, WorkflowMixin, MetaMixin, PlanningMixin}]
+    # Must match the class definition order in core.py:
+    # class FiligreeDB(FilesMixin, IssuesMixin, EventsMixin, WorkflowMixin, MetaMixin, PlanningMixin)
+    expected_order = [FilesMixin, IssuesMixin, EventsMixin, WorkflowMixin, MetaMixin, PlanningMixin]
+    assert mixin_order == expected_order, (
+        f"MRO order mismatch: {[c.__name__ for c in mixin_order]} != {[c.__name__ for c in expected_order]}"
+    )

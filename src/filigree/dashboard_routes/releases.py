@@ -18,14 +18,16 @@ from filigree.dashboard_routes.common import _error_response, _get_bool_param
 logger = logging.getLogger(__name__)
 
 _SEMVER_RE = re.compile(r"v?(\d+)\.(\d+)(?:\.(\d+))?")
-_FUTURE_KEY = (float("inf"), 0, 0)
+_NON_SEMVER_KEY = (999_999, 0, 0)
+_FUTURE_KEY = (999_999, 999_999, 0)
 
 
-def _semver_sort_key(release: dict[str, Any]) -> tuple[float, int, int]:
+def _semver_sort_key(release: dict[str, Any]) -> tuple[int, int, int]:
     """Extract a (major, minor, patch) sort key from a release.
 
     Checks the ``version`` field first, then falls back to the title.
     Releases whose title matches "future" (case-insensitive) sort last.
+    Non-semver releases sort after all semver releases but before "future".
     """
     version = release.get("version") or ""
     title = release.get("title", "")
@@ -39,7 +41,7 @@ def _semver_sort_key(release: dict[str, Any]) -> tuple[float, int, int]:
         return (int(m.group(1)), int(m.group(2)), int(m.group(3) or 0))
 
     # Fallback: after semver releases, before future
-    return (float("inf") - 1, 0, 0)
+    return _NON_SEMVER_KEY
 
 
 # ---------------------------------------------------------------------------
