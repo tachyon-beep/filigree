@@ -977,7 +977,7 @@ class TestDynamicWorkflowPrompt:
                 from filigree.mcp_server import _build_workflow_text
 
                 text = _build_workflow_text()
-            assert "Dynamic workflow info unavailable" in text
+            assert "Failed to load workflow types" in text
             assert len(logged_errors) == 1
             assert logged_warnings == []
         finally:

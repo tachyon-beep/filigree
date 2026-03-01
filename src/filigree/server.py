@@ -128,7 +128,11 @@ def register_project(filigree_dir: Path) -> None:
 
     SERVER_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     lock_path = SERVER_CONFIG_DIR / "server.lock"
-    with open(lock_path, "w") as lock_fd:
+    try:
+        lock_fd = open(lock_path, "w")  # noqa: SIM115
+    except OSError as e:
+        raise RuntimeError(f"Cannot create lock file at {lock_path}: {e}. Check permissions on {SERVER_CONFIG_DIR}.") from e
+    with lock_fd:
         portalocker.lock(lock_fd, portalocker.LOCK_EX)
         config = read_server_config()
         project_key = str(filigree_dir)
@@ -152,7 +156,11 @@ def unregister_project(filigree_dir: Path) -> None:
     filigree_dir = filigree_dir.resolve()
     SERVER_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     lock_path = SERVER_CONFIG_DIR / "server.lock"
-    with open(lock_path, "w") as lock_fd:
+    try:
+        lock_fd = open(lock_path, "w")  # noqa: SIM115
+    except OSError as e:
+        raise RuntimeError(f"Cannot create lock file at {lock_path}: {e}. Check permissions on {SERVER_CONFIG_DIR}.") from e
+    with lock_fd:
         portalocker.lock(lock_fd, portalocker.LOCK_EX)
         config = read_server_config()
         config.projects.pop(str(filigree_dir), None)

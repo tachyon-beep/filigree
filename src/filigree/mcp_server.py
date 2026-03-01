@@ -251,13 +251,13 @@ def _build_workflow_text() -> str:
         )
     except Exception:
         logging.getLogger(__name__).error(
-            "Failed to build dynamic workflow text; falling back to static",
+            "BUG: Unexpected error building dynamic workflow prompt — this is likely a code defect, not a configuration issue",
             exc_info=True,
         )
         return (
-            _WORKFLOW_TEXT_STATIC + "\n\n> **Note:** Dynamic workflow info unavailable. "
-            "Custom types, states, and packs may not be reflected above. "
-            "Use `list_types` and `list_packs` for current workflow details.\n"
+            _WORKFLOW_TEXT_STATIC + "\n\n> **ERROR:** Failed to load workflow types "
+            "due to an unexpected error. Run `filigree doctor` to diagnose. "
+            "Use `list_types` and `list_packs` directly.\n"
         )
 
 
@@ -294,7 +294,9 @@ async def get_workflow_prompt(name: str, arguments: dict[str, str] | None = None
                 PromptMessage(role="user", content=TextContent(type="text", text=summary)),
             )
         except RuntimeError as exc:
-            if "not initialized" not in str(exc):
+            if "not initialized" in str(exc):
+                logging.getLogger(__name__).debug("DB not yet initialized; prompt context omitted")
+            else:
                 logging.getLogger(__name__).error("Unexpected RuntimeError building prompt context", exc_info=True)
     return GetPromptResult(description="Filigree workflow guide with project context", messages=messages)
 

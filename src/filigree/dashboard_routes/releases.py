@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import re
+import sqlite3
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -69,8 +70,11 @@ def create_router() -> APIRouter:
 
         try:
             releases = db.get_releases_summary(include_released=include_released)
+        except sqlite3.Error:
+            logger.exception("Database error loading releases summary")
+            return _error_response("Database error loading releases", "RELEASES_LOAD_ERROR", 500)
         except Exception:
-            logger.exception("Failed to load releases summary")
+            logger.exception("BUG: Unexpected error loading releases summary")
             return _error_response("Internal error loading releases", "RELEASES_LOAD_ERROR", 500)
 
         # Sort is a UI concern — applied here, not in the DB layer
@@ -88,8 +92,11 @@ def create_router() -> APIRouter:
             return _error_response(f"Release not found: {release_id}", "RELEASE_NOT_FOUND", 404)
         except ValueError as e:
             return _error_response(str(e), "NOT_A_RELEASE", 404)
+        except sqlite3.Error:
+            logger.exception("Database error loading release tree for %s", release_id)
+            return _error_response("Database error loading release tree", "TREE_LOAD_ERROR", 500)
         except Exception:
-            logger.exception("Failed to load release tree for %s", release_id)
+            logger.exception("BUG: Unexpected error loading release tree for %s", release_id)
             return _error_response("Internal error loading release tree", "TREE_LOAD_ERROR", 500)
         return JSONResponse(tree)
 

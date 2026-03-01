@@ -476,7 +476,10 @@ async def _handle_update_issue(arguments: dict[str, Any]) -> list[TextContent]:
     except KeyError:
         return _text(ErrorResponse(error=f"Issue not found: {args['id']}", code="not_found"))
     except ValueError as e:
-        return _text(_build_transition_error(tracker, args["id"], str(e)))
+        msg = str(e)
+        if "status" in msg.lower() or "transition" in msg.lower() or "state" in msg.lower():
+            return _text(_build_transition_error(tracker, args["id"], msg))
+        return _text(ErrorResponse(error=msg, code="validation_error"))
 
 
 async def _handle_close_issue(arguments: dict[str, Any]) -> list[TextContent]:

@@ -392,12 +392,21 @@ async def _handle_batch_add_comment(arguments: dict[str, Any]) -> list[TextConte
 
 
 async def _handle_get_changes(arguments: dict[str, Any]) -> list[TextContent]:
+    from datetime import datetime
+
     from filigree.mcp_server import _get_db
 
     args = _parse_args(arguments, GetChangesArgs)
+    since = args["since"]
+    try:
+        datetime.fromisoformat(since.replace("Z", "+00:00"))
+    except (ValueError, AttributeError):
+        return _text(
+            ErrorResponse(error=f"Invalid ISO timestamp: {since!r}. Expected format: 2026-01-15T10:30:00", code="validation_error")
+        )
     tracker = _get_db()
     events = tracker.get_events_since(
-        args["since"],
+        since,
         limit=args.get("limit", 100),
     )
     return _text(events)
@@ -439,7 +448,7 @@ async def _handle_export_jsonl(arguments: dict[str, Any]) -> list[TextContent]:
         return _text(JsonlTransferResponse(status="ok", records=count, path=str(safe)))
     except ValueError as e:
         return _text(ErrorResponse(error=str(e), code="invalid_path"))
-    except OSError as e:
+    except (OSError, sqlite3.Error) as e:
         return _text(ErrorResponse(error=str(e), code="io_error"))
 
 

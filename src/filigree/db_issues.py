@@ -557,12 +557,10 @@ class IssuesMixin(DBMixinProtocol):
             raise ValueError(msg)
 
         initial_state = self.templates.get_initial_state(current.type)
-        try:
-            self._record_event(issue_id, "reopened", actor=actor, old_value=current.status, new_value=initial_state)
-            return self.update_issue(issue_id, status=initial_state, actor=actor, _skip_transition_check=True)
-        except Exception:
-            self.conn.rollback()
-            raise
+        # _record_event and update_issue share the same implicit transaction;
+        # update_issue owns the commit/rollback lifecycle.
+        self._record_event(issue_id, "reopened", actor=actor, old_value=current.status, new_value=initial_state)
+        return self.update_issue(issue_id, status=initial_state, actor=actor, _skip_transition_check=True)
 
     def claim_issue(self, issue_id: str, *, assignee: str, actor: str = "") -> Issue:
         """Atomically claim an open-category issue with optimistic locking.
@@ -883,6 +881,10 @@ class IssuesMixin(DBMixinProtocol):
             if "no such table" not in str(exc) and "no such module" not in str(exc):
                 raise
             # FTS5 not available — fall back to LIKE
+            logging.getLogger(__name__).warning(
+                "FTS5 search unavailable (%s); falling back to LIKE. Performance may be degraded. Run 'filigree doctor' to check.",
+                exc,
+            )
             escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
             pattern = f"%{escaped}%"
             rows = self.conn.execute(

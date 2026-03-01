@@ -8,6 +8,7 @@ Python's MRO when composed into ``FiligreeDB``.
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
@@ -230,9 +231,10 @@ class MetaMixin(DBMixinProtocol):
             input_path: Path to JSONL file
             merge: If True, skip existing records (OR IGNORE). If False, raise on conflict.
 
-        Returns the number of records imported.
+        Returns the number of records actually inserted (merge=True skips are not counted).
         """
         count = 0
+        skipped_types: dict[str, int] = {}
         conflict = "OR IGNORE" if merge else "OR ABORT"
 
         with Path(input_path).open() as f:
@@ -306,9 +308,15 @@ class MetaMixin(DBMixinProtocol):
                         ),
                     )
                 else:
-                    continue  # Unknown record type — skip
+                    skipped_types[record_type or "<missing>"] = skipped_types.get(record_type or "<missing>", 0) + 1
+                    continue
 
                 count += cursor.rowcount
+
+        if skipped_types:
+            _logger = logging.getLogger(__name__)
+            for rtype, rcount in skipped_types.items():
+                _logger.warning("import_jsonl: skipped %d record(s) with unknown type %r", rcount, rtype)
 
         self.conn.commit()
         return count
