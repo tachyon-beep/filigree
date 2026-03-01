@@ -76,6 +76,35 @@ class TestMCPActorValidation:
         assert data["code"] == "validation_error"
         assert "128" in data["error"]
 
+    async def test_reopen_issue_control_char_actor(self, mcp_db: FiligreeDB) -> None:
+        issue = mcp_db.create_issue("Target")
+        mcp_db.close_issue(issue.id, reason="done")
+        result = await call_tool("reopen_issue", {"id": issue.id, "actor": "\x00evil"})
+        data = _parse(result)
+        assert data["code"] == "validation_error"
+        assert "control" in data["error"].lower()
+
+    async def test_reopen_issue_empty_actor(self, mcp_db: FiligreeDB) -> None:
+        issue = mcp_db.create_issue("Target")
+        mcp_db.close_issue(issue.id, reason="done")
+        result = await call_tool("reopen_issue", {"id": issue.id, "actor": ""})
+        data = _parse(result)
+        assert data["code"] == "validation_error"
+
+    async def test_release_claim_control_char_actor(self, mcp_db: FiligreeDB) -> None:
+        issue = mcp_db.create_issue("Target")
+        mcp_db.claim_issue(issue.id, assignee="agent-1")
+        result = await call_tool("release_claim", {"id": issue.id, "actor": "\nbad"})
+        data = _parse(result)
+        assert data["code"] == "validation_error"
+
+    async def test_release_claim_empty_actor(self, mcp_db: FiligreeDB) -> None:
+        issue = mcp_db.create_issue("Target")
+        mcp_db.claim_issue(issue.id, assignee="agent-1")
+        result = await call_tool("release_claim", {"id": issue.id, "actor": ""})
+        data = _parse(result)
+        assert data["code"] == "validation_error"
+
 
 class TestMCPPriorityValidation:
     """Priority range validation in MCP issue handlers."""

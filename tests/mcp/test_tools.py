@@ -2222,8 +2222,47 @@ class TestTriggerScanCooldownRace:
 
 
 # ---------------------------------------------------------------------------
-# v0.5: release_claim, export, import via MCP
+# v0.5: reopen_issue, release_claim, export, import via MCP
 # ---------------------------------------------------------------------------
+
+
+class TestMCPReopenIssue:
+    async def test_reopen_closed_issue(self, mcp_db: FiligreeDB) -> None:
+        issue = mcp_db.create_issue("Reopen me")
+        mcp_db.close_issue(issue.id, reason="done")
+        result = await call_tool("reopen_issue", {"id": issue.id})
+        data = _parse(result)
+        assert data["status"] == "open"
+        assert data["closed_at"] is None
+
+    async def test_reopen_with_actor(self, mcp_db: FiligreeDB) -> None:
+        issue = mcp_db.create_issue("Actor reopen")
+        mcp_db.close_issue(issue.id, reason="done")
+        result = await call_tool("reopen_issue", {"id": issue.id, "actor": "agent-gamma"})
+        data = _parse(result)
+        assert data["status"] == "open"
+        events = mcp_db.get_recent_events(limit=5)
+        reopen_event = next(e for e in events if e["event_type"] == "reopened")
+        assert reopen_event["actor"] == "agent-gamma"
+
+    async def test_reopen_not_closed(self, mcp_db: FiligreeDB) -> None:
+        issue = mcp_db.create_issue("Still open")
+        result = await call_tool("reopen_issue", {"id": issue.id})
+        data = _parse(result)
+        assert data["code"] == "invalid"
+
+    async def test_reopen_not_found(self, mcp_db: FiligreeDB) -> None:
+        result = await call_tool("reopen_issue", {"id": "nonexistent-xyz"})
+        data = _parse(result)
+        assert data["code"] == "not_found"
+
+    async def test_reopen_default_actor_is_mcp(self, mcp_db: FiligreeDB) -> None:
+        issue = mcp_db.create_issue("Default actor reopen")
+        mcp_db.close_issue(issue.id, reason="done")
+        await call_tool("reopen_issue", {"id": issue.id})
+        events = mcp_db.get_recent_events(limit=5)
+        reopen_event = next(e for e in events if e["event_type"] == "reopened")
+        assert reopen_event["actor"] == "mcp"
 
 
 class TestMCPReleaseClaim:
