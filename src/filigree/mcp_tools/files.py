@@ -233,11 +233,11 @@ async def _handle_get_file(arguments: dict[str, Any]) -> list[TextContent]:
     tracker = _get_db()
     file_id = args.get("file_id", "")
     if not isinstance(file_id, str) or not file_id.strip():
-        return _text({"error": "file_id is required", "code": "validation_error"})
+        return _text(ErrorResponse(error="file_id is required", code="validation_error"))
     try:
         data = tracker.get_file_detail(file_id)
     except KeyError:
-        return _text({"error": f"File not found: {file_id}", "code": "not_found"})
+        return _text(ErrorResponse(error=f"File not found: {file_id}", code="not_found"))
     return _text(data)
 
 
@@ -253,23 +253,23 @@ async def _handle_get_file_timeline(arguments: dict[str, Any]) -> list[TextConte
     valid_event_types = {"finding", "association", "file_metadata_update"}
 
     if not isinstance(file_id, str) or not file_id.strip():
-        return _text({"error": "file_id is required", "code": "validation_error"})
+        return _text(ErrorResponse(error="file_id is required", code="validation_error"))
     if not isinstance(limit, int) or limit < 1 or limit > 10000:
-        return _text({"error": "limit must be an integer in [1, 10000]", "code": "validation_error"})
+        return _text(ErrorResponse(error="limit must be an integer in [1, 10000]", code="validation_error"))
     if not isinstance(offset, int) or offset < 0:
-        return _text({"error": "offset must be a non-negative integer", "code": "validation_error"})
+        return _text(ErrorResponse(error="offset must be a non-negative integer", code="validation_error"))
     if event_type is not None and (not isinstance(event_type, str) or event_type not in valid_event_types):
         return _text(
-            {
-                "error": f"event_type must be one of {sorted(valid_event_types)}",
-                "code": "validation_error",
-            }
+            ErrorResponse(
+                error=f"event_type must be one of {sorted(valid_event_types)}",
+                code="validation_error",
+            )
         )
 
     try:
         timeline_result = tracker.get_file_timeline(file_id, limit=limit, offset=offset, event_type=event_type)
     except KeyError:
-        return _text({"error": f"File not found: {file_id}", "code": "not_found"})
+        return _text(ErrorResponse(error=f"File not found: {file_id}", code="not_found"))
     return _text(timeline_result)
 
 
@@ -280,11 +280,11 @@ async def _handle_get_issue_files(arguments: dict[str, Any]) -> list[TextContent
     tracker = _get_db()
     issue_id = args.get("issue_id", "")
     if not isinstance(issue_id, str) or not issue_id.strip():
-        return _text({"error": "issue_id is required", "code": "validation_error"})
+        return _text(ErrorResponse(error="issue_id is required", code="validation_error"))
     try:
         tracker.get_issue(issue_id)
     except KeyError:
-        return _text({"error": f"Issue not found: {issue_id}", "code": "not_found"})
+        return _text(ErrorResponse(error=f"Issue not found: {issue_id}", code="not_found"))
     return _text(tracker.get_issue_files(issue_id))
 
 
@@ -298,26 +298,26 @@ async def _handle_add_file_association(arguments: dict[str, Any]) -> list[TextCo
     assoc_type = args.get("assoc_type", "")
 
     if not isinstance(file_id, str) or not file_id.strip():
-        return _text({"error": "file_id is required", "code": "validation_error"})
+        return _text(ErrorResponse(error="file_id is required", code="validation_error"))
     if not isinstance(issue_id, str) or not issue_id.strip():
-        return _text({"error": "issue_id is required", "code": "validation_error"})
+        return _text(ErrorResponse(error="issue_id is required", code="validation_error"))
     if not isinstance(assoc_type, str) or not assoc_type.strip():
-        return _text({"error": "assoc_type is required", "code": "validation_error"})
+        return _text(ErrorResponse(error="assoc_type is required", code="validation_error"))
 
     try:
         tracker.get_file(file_id)
     except KeyError:
-        return _text({"error": f"File not found: {file_id}", "code": "not_found"})
+        return _text(ErrorResponse(error=f"File not found: {file_id}", code="not_found"))
 
     try:
         tracker.get_issue(issue_id)
     except KeyError:
-        return _text({"error": f"Issue not found: {issue_id}", "code": "not_found"})
+        return _text(ErrorResponse(error=f"Issue not found: {issue_id}", code="not_found"))
 
     try:
         tracker.add_file_association(file_id, issue_id, assoc_type)
     except ValueError as e:
-        return _text({"error": str(e), "code": "validation_error"})
+        return _text(ErrorResponse(error=str(e), code="validation_error"))
     return _text({"status": "created"})
 
 
@@ -332,22 +332,22 @@ async def _handle_register_file(arguments: dict[str, Any]) -> list[TextContent]:
     metadata = args.get("metadata")
 
     if not isinstance(raw_path, str) or not raw_path.strip():
-        return _text({"error": "path is required", "code": "validation_error"})
+        return _text(ErrorResponse(error="path is required", code="validation_error"))
     if language is not None and not isinstance(language, str):
-        return _text({"error": "language must be a string", "code": "validation_error"})
+        return _text(ErrorResponse(error="language must be a string", code="validation_error"))
     if file_type is not None and not isinstance(file_type, str):
-        return _text({"error": "file_type must be a string", "code": "validation_error"})
+        return _text(ErrorResponse(error="file_type must be a string", code="validation_error"))
     if metadata is not None and not isinstance(metadata, dict):
-        return _text({"error": "metadata must be an object", "code": "validation_error"})
+        return _text(ErrorResponse(error="metadata must be an object", code="validation_error"))
 
     try:
         target = _safe_path(raw_path)
     except ValueError as e:
-        return _text({"error": str(e), "code": "invalid_path"})
+        return _text(ErrorResponse(error=str(e), code="invalid_path"))
 
     filigree_dir = _get_filigree_dir()
     if filigree_dir is None:
-        return _text({"error": "Project directory not initialized", "code": "not_initialized"})
+        return _text(ErrorResponse(error="Project directory not initialized", code="not_initialized"))
 
     canonical_path = str(target.relative_to(filigree_dir.resolve().parent))
     file_record = tracker.register_file(
@@ -388,7 +388,7 @@ async def _handle_trigger_scan(arguments: dict[str, Any]) -> list[TextContent]:
 
     filigree_dir = _get_filigree_dir()
     if filigree_dir is None:
-        return _text({"error": "Project directory not initialized", "code": "not_initialized"})
+        return _text(ErrorResponse(error="Project directory not initialized", code="not_initialized"))
 
     args = _parse_args(arguments, TriggerScanArgs)
     tracker = _get_db()
@@ -400,16 +400,16 @@ async def _handle_trigger_scan(arguments: dict[str, Any]) -> list[TextContent]:
     url_host = parsed_url.hostname or ""
     if url_host not in ("localhost", "127.0.0.1", "::1", ""):
         return _text(
-            {
-                "error": f"Non-localhost api_url not allowed: {url_host!r}. Scanner results would be sent to an external host.",
-                "code": "invalid_api_url",
-            }
+            ErrorResponse(
+                error=f"Non-localhost api_url not allowed: {url_host!r}. Scanner results would be sent to an external host.",
+                code="invalid_api_url",
+            )
         )
 
     try:
         target = _safe_path(file_path)
     except ValueError as e:
-        return _text({"error": str(e), "code": "invalid_path"})
+        return _text(ErrorResponse(error=str(e), code="invalid_path"))
 
     scanners_dir = filigree_dir / "scanners"
     cfg = load_scanner(scanners_dir, scanner_name)
@@ -425,10 +425,10 @@ async def _handle_trigger_scan(arguments: dict[str, Any]) -> list[TextContent]:
 
     if not target.is_file():
         return _text(
-            {
-                "error": f"File not found: {file_path}",
-                "code": "file_not_found",
-            }
+            ErrorResponse(
+                error=f"File not found: {file_path}",
+                code="file_not_found",
+            )
         )
 
     file_type_warning = ""
@@ -471,12 +471,12 @@ async def _handle_trigger_scan(arguments: dict[str, Any]) -> list[TextContent]:
         )
     except ValueError as e:
         del _scan_cooldowns[cooldown_key]
-        return _text({"error": str(e), "code": "invalid_command"})
+        return _text(ErrorResponse(error=str(e), code="invalid_command"))
 
     cmd_err = validate_scanner_command(cmd, project_root=project_root)
     if cmd_err is not None:
         del _scan_cooldowns[cooldown_key]
-        return _text({"error": cmd_err, "code": "command_not_found"})
+        return _text(ErrorResponse(error=cmd_err, code="command_not_found"))
 
     file_record = tracker.register_file(canonical_path)
 

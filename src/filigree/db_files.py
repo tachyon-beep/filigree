@@ -112,6 +112,11 @@ class FilesMixin(DBMixinProtocol):
         try:
             parsed_meta = json.loads(meta_raw) if meta_raw else {}
         except (json.JSONDecodeError, TypeError):
+            logger.warning(
+                "Corrupt metadata in scan finding (file_id=%s): %r",
+                row["file_id"],
+                meta_raw[:200] if meta_raw else meta_raw,
+            )
             parsed_meta = {}
         meta = parsed_meta if isinstance(parsed_meta, dict) else {}
         return ScanFinding(
@@ -175,6 +180,11 @@ class FilesMixin(DBMixinProtocol):
                 try:
                     old_meta_parsed = json.loads(old_meta_raw)
                 except (json.JSONDecodeError, TypeError):
+                    logger.warning(
+                        "Corrupt metadata for file %s (id=%s), treating as empty",
+                        existing["path"],
+                        existing["id"],
+                    )
                     old_meta_parsed = {}
                 if old_meta_parsed != metadata:
                     new_meta = json.dumps(metadata)

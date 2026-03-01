@@ -156,7 +156,7 @@ def _read_os_command_line(pid: int) -> list[str] | None:
             if tokens:
                 return tokens
     except OSError:
-        pass
+        logger.debug("Could not read %s", proc_cmdline, exc_info=True)
 
     # macOS/BSD: use ps.
     if sys.platform != "win32":
