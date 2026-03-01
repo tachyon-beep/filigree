@@ -369,11 +369,9 @@ async def _handle_list_issues(arguments: dict[str, Any]) -> list[TextContent]:
     status_filter = args.get("status")
     status_category = args.get("status_category")
     if status_category and not status_filter:
-        category_states = tracker._get_states_for_category(status_category)
-        if category_states:
-            status_filter = status_category
-        else:
-            return _text(IssueListResponse(issues=[], limit=args.get("limit", 100), offset=args.get("offset", 0), has_more=False))
+        # Pass the category name directly — list_issues() handles category
+        # expansion internally (open/wip/done + aliases like in_progress/closed).
+        status_filter = status_category
 
     effective_limit, offset = _resolve_pagination(arguments)
 

@@ -92,7 +92,8 @@ def _refresh_summary() -> None:
             (_logger or logging.getLogger(__name__)).warning("Failed to write context.md", exc_info=True)
         except Exception:
             (_logger or logging.getLogger(__name__)).error(
-                "Unexpected error refreshing context.md — database may be inconsistent", exc_info=True
+                "BUG in summary generation — context.md not updated. This is likely a code defect, not a database problem.",
+                exc_info=True,
             )
 
 
@@ -310,7 +311,6 @@ async def list_tools() -> list[Tool]:
 
 @server.call_tool()  # type: ignore[untyped-decorator]
 async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
-    tracker = _get_db()
     t0 = time.monotonic()
 
     try:
@@ -333,8 +333,11 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
         # Safety net: roll back any uncommitted transaction left by a failed
         # mutation.  Successful mutations commit explicitly; only partial
         # failures leave dirty state that would be flushed by the next commit.
-        if tracker.conn.in_transaction:
-            tracker.conn.rollback()
+        # Re-resolve _get_db() to ensure we roll back the correct connection
+        # in server mode where _request_db ContextVar scopes per-request.
+        active_db = _request_db.get() or db
+        if active_db is not None and active_db.conn.in_transaction:
+            active_db.conn.rollback()
 
 
 # ---------------------------------------------------------------------------

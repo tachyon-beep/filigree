@@ -68,12 +68,12 @@ def create_router() -> APIRouter:
                     priority=dep.priority,
                 )
             except KeyError:
-                logger.warning("dep resolution failed for %s in issue %s", did, issue_id)
+                logger.warning("Dangling dependency reference %s in issue %s", did, issue_id)
                 dep_details[did] = DepDetail(
-                    title=did,
-                    status="unknown",
-                    status_category="open",
-                    priority=2,
+                    title=f"[Deleted: {did}]",
+                    status="deleted",
+                    status_category="done",
+                    priority=4,
                 )
 
         # Events — NOTE: SQL column list must stay in sync with IssueDetailEvent fields.
