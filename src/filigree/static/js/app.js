@@ -46,6 +46,7 @@ import {
   batchSetPriority,
   closePopover,
   closeSettingsMenu,
+  copyIssueId,
   escHtml,
   escJsSingle,
   endTour,
@@ -138,6 +139,14 @@ import {
   switchFileTab,
 } from "./views/files.js";
 import { filterFilesByScanSource, loadHealth } from "./views/health.js";
+import {
+  collapseAllReleaseTree,
+  loadReleases,
+  retryReleaseTree,
+  scrollToReleaseCard,
+  toggleReleaseExpand,
+  toggleReleaseTreeNode,
+} from "./views/releases.js";
 
 // ---------------------------------------------------------------------------
 // Core data fetching (lives here because it touches every module)
@@ -185,8 +194,8 @@ async function loadDashboardConfig() {
       state.graphConfigLoaded = true;
       return;
     }
-  } catch (_e) {
-    // best effort fallback to legacy
+  } catch (err) {
+    console.warn("[loadDashboardConfig] Failed to load config, using defaults:", err);
   }
   state.graphConfig = {
     graph_v2_enabled: false,
@@ -320,6 +329,7 @@ registerView("activity", loadActivity);
 registerView("workflow", loadWorkflow);
 registerView("files", loadFiles);
 registerView("health", loadHealth);
+registerView("releases", loadReleases);
 
 // ---------------------------------------------------------------------------
 // Keyboard shortcuts
@@ -492,16 +502,15 @@ document.addEventListener("visibilitychange", () => {
 // Init sequence
 // ---------------------------------------------------------------------------
 
-parseHash();
+const hashResult = parseHash();
 populatePresets();
 loadProjectFilterSettings();
 
 (async function init() {
   await loadProjects();
-  const hash = window.location.hash;
-  const match = hash.match(/project=([^&]+)/);
-  if (match) {
-    const found = state.allProjects.find((p) => p.key === match[1]);
+  const hashProject = hashResult.project;
+  if (hashProject) {
+    const found = state.allProjects.find((p) => p.key === hashProject);
     if (found) {
       setProject(found.key, { keepDetail: true });
     } else if (state.allProjects.length > 0) {
@@ -522,6 +531,13 @@ loadProjectFilterSettings();
   if (state.selectedIssue) openDetail(state.selectedIssue);
   if (!localStorage.getItem("filigree_tour_done")) setTimeout(startTour, 1500);
   initDragAndDrop();
+  fetch("/api/health")
+    .then((r) => r.json())
+    .then((d) => {
+      const el = document.getElementById("footVersion");
+      if (el && d.version) el.textContent = `v${d.version}`;
+    })
+    .catch(() => {});
 });
 
 setInterval(() => {
@@ -573,6 +589,7 @@ window.toggleGraphLegend = toggleGraphLegend;
 window.toggleKanbanLegend = toggleKanbanLegend;
 window.batchSetPriority = batchSetPriority;
 window.batchCloseSelected = batchCloseSelected;
+window.copyIssueId = copyIssueId;
 
 // Kanban
 window.toggleEpicExpand = toggleEpicExpand;
@@ -647,3 +664,11 @@ window.submitLinkIssue = submitLinkIssue;
 // Health
 window.loadHealth = loadHealth;
 window.filterFilesByScanSource = filterFilesByScanSource;
+
+// Releases
+window.loadReleases = loadReleases;
+window._scrollToReleaseCard = scrollToReleaseCard;
+window._toggleReleaseExpand = toggleReleaseExpand;
+window._retryReleaseTree = retryReleaseTree;
+window._toggleReleaseTreeNode = toggleReleaseTreeNode;
+window._collapseAllReleaseTree = collapseAllReleaseTree;

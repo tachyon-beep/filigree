@@ -41,6 +41,8 @@ export function switchView(view) {
   if (filesEl) filesEl.classList.toggle("hidden", view !== "files");
   const healthEl = document.getElementById("healthView");
   if (healthEl) healthEl.classList.toggle("hidden", view !== "health");
+  const releasesEl = document.getElementById("releasesView");
+  if (releasesEl) releasesEl.classList.toggle("hidden", view !== "releases");
 
   document.getElementById("btnGraph").className = view === "graph" ? ACTIVE_CLASS : INACTIVE_CLASS;
   document.getElementById("btnKanban").className =
@@ -55,12 +57,33 @@ export function switchView(view) {
   if (btnFiles) btnFiles.className = view === "files" ? ACTIVE_CLASS : INACTIVE_CLASS;
   const btnHealth = document.getElementById("btnHealth");
   if (btnHealth) btnHealth.className = view === "health" ? ACTIVE_CLASS : INACTIVE_CLASS;
+  const btnReleases = document.getElementById("btnReleases");
+  if (btnReleases) btnReleases.className = view === "releases" ? ACTIVE_CLASS : INACTIVE_CLASS;
 
   updateHash();
 
+  // Update skip link to target current view
+  const skipLink = document.querySelector('a[href^="#"][class*="sr-only"]');
+  if (skipLink) {
+    skipLink.href = "#" + view + "View";
+  }
+
   const loader = viewLoaders[view];
   if (loader) {
-    loader();
+    try {
+      loader();
+    } catch (err) {
+      console.error(`[switchView] Failed to load "${view}" view:`, err);
+      const container = document.getElementById(view + "View");
+      if (container) {
+        container.innerHTML =
+          '<div class="p-4 text-xs" style="color:var(--text-muted)">' +
+          `Failed to load the ${view} view. ` +
+          '<button class="underline" style="color:var(--accent)" ' +
+          `onclick="switchView('${view}')">Retry</button>` +
+          "</div>";
+      }
+    }
   } else if (view === "kanban" && viewLoaders.kanban) {
     viewLoaders.kanban();
   }
@@ -136,6 +159,8 @@ export function parseHash() {
     state.currentView = "files";
   } else if (view === "health") {
     state.currentView = "health";
+  } else if (view === "releases") {
+    state.currentView = "releases";
   } else if (view === "kanban-cluster") {
     state.currentView = "kanban";
     state.kanbanMode = "cluster";
@@ -144,8 +169,18 @@ export function parseHash() {
     state.kanbanMode = "standard";
   }
 
+  const result = { project: null, issue: null };
+
   const issuePart = parts.find((p) => p.indexOf("issue=") === 0);
   if (issuePart) {
     state.selectedIssue = issuePart.split("=")[1];
+    result.issue = state.selectedIssue;
   }
+
+  const projectPart = parts.find((p) => p.indexOf("project=") === 0);
+  if (projectPart) {
+    result.project = decodeURIComponent(projectPart.split("=")[1]);
+  }
+
+  return result;
 }

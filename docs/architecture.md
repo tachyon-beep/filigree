@@ -35,7 +35,7 @@ Every filigree project has a `.filigree/` directory at its root, discovered by w
 }
 ```
 
-- **prefix** — used in issue IDs (`{prefix}-{6hex}`, e.g., `myproj-a3f9b2`)
+- **prefix** — used in issue IDs (`{prefix}-{10hex}`, e.g., `myproj-a3f9b2e1c0`)
 - **version** — config format version
 - **mode** — installation mode (`ethereal` or `server`)
 - **enabled_packs** — which workflow packs are active
@@ -47,7 +47,14 @@ src/filigree/
   __init__.py        # Package version and metadata
   core.py            # FiligreeDB class, SQLite schema, Issue dataclass
   cli.py             # Click CLI (all commands)
-  mcp_server.py      # MCP server (53 tools, 1 resource, 1 prompt)
+  mcp_server.py      # MCP server facade (globals, resources, prompts, dispatch)
+  mcp_tools/         # Domain-grouped MCP tool modules
+    common.py        # Pure helpers: _text, pagination, validation
+    issues.py        # 12 tools — CRUD, search, claim, batch
+    planning.py      # 7 tools — deps, ready/blocked, plans, critical path
+    files.py         # 8 tools — file tracking, scanners, scan triggering
+    workflow.py      # 10 tools — templates, types, packs, transitions
+    meta.py          # 16 tools — comments, labels, stats, export/import
   templates.py       # Workflow template engine (registry, validation, transitions)
   templates_data.py  # Built-in template definitions (24 types across 9 packs)
   summary.py         # context.md generator
@@ -87,7 +94,7 @@ SQLite with WAL mode. Schema version 4.
 
 ```sql
 CREATE TABLE issues (
-    id          TEXT PRIMARY KEY,       -- {prefix}-{6hex}
+    id          TEXT PRIMARY KEY,       -- {prefix}-{10hex}
     title       TEXT NOT NULL,
     status      TEXT NOT NULL DEFAULT 'open',
     priority    INTEGER NOT NULL DEFAULT 2,  -- 0-4

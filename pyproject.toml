@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "filigree"
-version = "1.3.0"
+version = "1.4.0"
 description = "Agent-native issue tracker with convention-based project discovery"
 requires-python = ">=3.11"
 license = "MIT"
@@ -27,6 +27,8 @@ classifiers = [
 ]
 dependencies = [
     "click>=8.0",
+    "mcp>=1.0,<2",
+    "portalocker>=2.7,<4",
 ]
 
 [project.urls]
@@ -37,15 +39,11 @@ Changelog = "https://github.com/tachyon-beep/filigree/blob/main/CHANGELOG.md"
 Documentation = "https://github.com/tachyon-beep/filigree#readme"
 
 [project.optional-dependencies]
-mcp = [
-    "mcp>=1.0,<2",
-]
 dashboard = [
     "fastapi>=0.115",
     "uvicorn>=0.34",
 ]
 all = [
-    "filigree[mcp]",
     "filigree[dashboard]",
 ]
 
@@ -87,7 +85,6 @@ dev = [
     "coverage[toml]>=7.0",
     "httpx>=0.28",
     "pre-commit>=4.0",
-    "filigree[mcp]",
     "filigree[dashboard]",
 ]
 
@@ -131,6 +128,9 @@ ignore = [
 "src/filigree/mcp_server.py" = ["E501", "S110"]  # MCP tool schemas have long inline JSON lines; best-effort registry
 "src/filigree/hooks.py" = ["S110"]  # Best-effort registry registration
 "src/filigree/dashboard.py" = ["E501", "S608", "B008"]  # Long HTML strings; SQL uses ? params; FastAPI Depends()
+"src/filigree/db_*.py" = ["S608"]  # SQL placeholders are parameterized ?-markers, not injection
+"src/filigree/dashboard_routes/*.py" = ["E501", "S608", "B008"]  # Long HTML strings; SQL uses ? params; FastAPI Depends()
+"src/filigree/mcp_tools/*.py" = ["E501", "S110"]  # MCP tool schemas have long inline JSON lines; best-effort registry
 
 [tool.ruff.lint.isort]
 known-first-party = ["filigree"]
@@ -166,6 +166,10 @@ ignore_missing_imports = true
 testpaths = ["tests"]
 addopts = "-ra -q"
 asyncio_mode = "auto"
+markers = [
+    "slow: tests that take >0.3s (subprocess, file locks, large data)",
+    "integration: tests spanning multiple modules",
+]
 
 # ---------------------------------------------------------------------------
 # Coverage

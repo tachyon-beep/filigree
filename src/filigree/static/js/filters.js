@@ -19,10 +19,12 @@ const DEFAULT_PROJECT_FILTERS = Object.freeze({
   active: true,
   closed: true,
   priority: "all",
+  updatedDays: "0",
   ready: true,
   blocked: false,
 });
 const VALID_PRIORITY_FILTERS = new Set(["all", "0-1", "2", "3-4"]);
+const VALID_UPDATED_DAYS = new Set(["0", "1", "7", "14", "30", "90"]);
 
 function getProjectStorageKey() {
   return state.currentProjectKey || "__default__";
@@ -33,11 +35,15 @@ function normalizeProjectFilters(raw) {
   const priority = VALID_PRIORITY_FILTERS.has(src.priority)
     ? src.priority
     : DEFAULT_PROJECT_FILTERS.priority;
+  const updatedDays = VALID_UPDATED_DAYS.has(String(src.updatedDays))
+    ? String(src.updatedDays)
+    : DEFAULT_PROJECT_FILTERS.updatedDays;
   return {
     open: src.open === undefined ? DEFAULT_PROJECT_FILTERS.open : !!src.open,
     active: src.active === undefined ? DEFAULT_PROJECT_FILTERS.active : !!src.active,
     closed: src.closed === undefined ? DEFAULT_PROJECT_FILTERS.closed : !!src.closed,
     priority,
+    updatedDays,
     ready: src.ready === undefined ? DEFAULT_PROJECT_FILTERS.ready : !!src.ready,
     blocked: src.blocked === undefined ? DEFAULT_PROJECT_FILTERS.blocked : !!src.blocked,
   };
@@ -119,6 +125,15 @@ export function getFilteredIssues() {
   if (prio === "0-1") items = items.filter((i) => i.priority <= 1);
   else if (prio === "2") items = items.filter((i) => i.priority === 2);
   else if (prio === "3-4") items = items.filter((i) => i.priority >= 3);
+
+  const updatedDays = parseInt(document.getElementById("filterUpdatedDays")?.value || "0", 10);
+  if (updatedDays > 0) {
+    const cutoff = Date.now() - updatedDays * 86400000;
+    items = items.filter((i) => {
+      const ts = i.updated_at || i.created_at;
+      return ts && new Date(ts).getTime() >= cutoff;
+    });
+  }
 
   if (state.searchResults !== null) {
     items = items.filter((i) => state.searchResults.has(i.id));
@@ -215,6 +230,7 @@ export function getFilterState() {
     active: document.getElementById("filterInProgress").checked,
     closed: document.getElementById("filterClosed").checked,
     priority: document.getElementById("filterPriority").value,
+    updatedDays: document.getElementById("filterUpdatedDays")?.value || "0",
     ready: state.readyFilter,
     blocked: state.blockedFilter,
     search: document.getElementById("filterSearch").value,
@@ -227,6 +243,8 @@ export function applyFilterState(filterState, opts = {}) {
   document.getElementById("filterInProgress").checked = normalized.active;
   document.getElementById("filterClosed").checked = normalized.closed;
   document.getElementById("filterPriority").value = normalized.priority;
+  const updatedEl = document.getElementById("filterUpdatedDays");
+  if (updatedEl) updatedEl.value = normalized.updatedDays;
   state.readyFilter = normalized.ready;
   state.blockedFilter = normalized.blocked;
   updateToggleButtons();

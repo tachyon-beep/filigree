@@ -49,7 +49,7 @@ This creates a `.filigree/` directory containing:
 - `config.json` — project prefix, install mode, enabled packs
 - `context.md` — auto-generated project summary
 
-Issue IDs use the format `{prefix}-{6hex}` (e.g., `myproj-a3f9b2`). The prefix defaults to your directory name.
+Issue IDs use the format `{prefix}-{10hex}` (e.g., `myproj-a3f9b2e1c0`). The prefix defaults to your directory name.
 
 ## Set Up Integrations
 
@@ -87,7 +87,7 @@ filigree create "Set up CI pipeline" --type=task --priority=1
 ```
 
 ```
-Created task myproj-a3f9b2: Set up CI pipeline (P1)
+Created task myproj-a3f9b2e1c0: Set up CI pipeline (P1)
 ```
 
 ## View the Ready Queue
@@ -97,7 +97,7 @@ filigree ready
 ```
 
 ```
-P1  myproj-a3f9b2  task  Set up CI pipeline
+P1  myproj-a3f9b2e1c0  task  Set up CI pipeline
 ```
 
 Shows all unblocked issues sorted by priority. This is what agents check first to find work.
@@ -105,32 +105,26 @@ Shows all unblocked issues sorted by priority. This is what agents check first t
 ## Work on an Issue
 
 ```bash
-filigree update myproj-a3f9b2 --status=in_progress
+filigree update myproj-a3f9b2e1c0 --status=in_progress
 ```
 
 ## Close an Issue
 
 ```bash
-filigree close myproj-a3f9b2
+filigree close myproj-a3f9b2e1c0
 ```
 
 Or with a reason:
 
 ```bash
-filigree close myproj-a3f9b2 --reason="Implemented in commit abc123"
+filigree close myproj-a3f9b2e1c0 --reason="Implemented in commit abc123"
 ```
 
 ## Optional Extras
 
 ### MCP Server
 
-Install the MCP extra for native agent integration:
-
-```bash
-pip install "filigree[mcp]"
-```
-
-The MCP server exposes 53 tools so agents interact with filigree without parsing CLI output. See [MCP Server Reference](mcp.md).
+The MCP server is included in the base install — no extra needed. It exposes 53 tools so agents interact with filigree without parsing CLI output. See [MCP Server Reference](mcp.md).
 
 ### Web Dashboard
 

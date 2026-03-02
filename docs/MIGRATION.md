@@ -32,10 +32,9 @@ For a minimal install (CLI only, no MCP or dashboard):
 pip install filigree
 ```
 
-Other extras:
+Optional extra:
 
 ```bash
-pip install "filigree[mcp]"          # CLI + MCP server
 pip install "filigree[dashboard]"    # CLI + web dashboard
 ```
 
@@ -76,7 +75,7 @@ Created .filigree/config.json
 Created .filigree/filigree.db
 ```
 
-This creates the `.filigree/` directory. Issue IDs will use the format `{prefix}-{6hex}` where the prefix defaults to the directory name.
+This creates the `.filigree/` directory. Issue IDs will use the format `{prefix}-{10hex}` where the prefix defaults to the directory name.
 
 ### Set up integrations
 

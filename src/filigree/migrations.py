@@ -11,10 +11,10 @@ The migration runner:
   4. Wraps each migration in a transaction (rollback on failure)
 
 Usage — adding a new migration:
-  1. Increment CURRENT_SCHEMA_VERSION in core.py
+  1. Increment CURRENT_SCHEMA_VERSION in db_schema.py
   2. Add a function here: def migrate_v<N>_to_v<N+1>(conn) -> None
   3. Register it in MIGRATIONS: N: migrate_v<N>_to_v<N+1>
-  4. Update SCHEMA_SQL in core.py to match the post-migration state
+  4. Update SCHEMA_SQL in db_schema.py to match the post-migration state
   5. Add a test in tests/test_migrations.py
 
 SQLite ALTER TABLE limitations (why helpers exist):
@@ -152,10 +152,73 @@ def migrate_v3_to_v4(conn: sqlite3.Connection) -> None:
     conn.execute("CREATE INDEX IF NOT EXISTS idx_file_events_file ON file_events(file_id)")
 
 
+def _now_iso() -> str:
+    """ISO timestamp for migration comments."""
+    from datetime import UTC, datetime
+
+    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def migrate_v4_to_v5(conn: sqlite3.Connection) -> None:
+    """v4 → v5: Normalize release version fields to vMAJOR.MINOR.PATCH or Future.
+
+    Changes:
+      - Normalizes non-compliant version field values on existing release issues
+      - Adds migration comments documenting changes
+      - Clears un-normalizable versions with explanatory comments
+    """
+    import json
+
+    semver_strict = re.compile(r"^v\d+\.\d+\.\d+$")
+    semver_loose = re.compile(r"^v?(\d+)\.(\d+)(?:\.(\d+))?$")
+
+    rows = conn.execute("SELECT id, title, fields FROM issues WHERE type = 'release'").fetchall()
+
+    for row in rows:
+        fields = json.loads(row["fields"] or "{}")
+        version = fields.get("version", "")
+        if not version:
+            continue
+
+        # Already compliant
+        if version == "Future" or semver_strict.match(version):
+            continue
+
+        # Try to normalize: "1.2.3" → "v1.2.3", "v1.2" → "v1.2.0"
+        m = semver_loose.match(version.strip())
+        if m:
+            normalized = f"v{m.group(1)}.{m.group(2)}.{m.group(3) or '0'}"
+            fields["version"] = normalized
+            conn.execute(
+                "UPDATE issues SET fields = ? WHERE id = ?",
+                (json.dumps(fields), row["id"]),
+            )
+            now = _now_iso()
+            conn.execute(
+                "INSERT INTO comments (issue_id, author, text, created_at) VALUES (?, ?, ?, ?)",
+                (row["id"], "migration", f"Version normalized: '{version}' → '{normalized}'", now),
+            )
+        else:
+            # Un-normalizable — clear and comment
+            original = version
+            fields.pop("version", None)
+            conn.execute(
+                "UPDATE issues SET fields = ? WHERE id = ?",
+                (json.dumps(fields), row["id"]),
+            )
+            now = _now_iso()
+            comment_text = f"Version field cleared during migration (was: '{original}'). Set a valid vX.Y.Z version before freezing."
+            conn.execute(
+                "INSERT INTO comments (issue_id, author, text, created_at) VALUES (?, ?, ?, ?)",
+                (row["id"], "migration", comment_text, now),
+            )
+
+
 MIGRATIONS: dict[int, MigrationFn] = {
     1: migrate_v1_to_v2,
     2: migrate_v2_to_v3,
     3: migrate_v3_to_v4,
+    4: migrate_v4_to_v5,
 }
 
 

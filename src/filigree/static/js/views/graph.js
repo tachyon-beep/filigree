@@ -1124,7 +1124,7 @@ export function computeHealthScore() {
     badge.className =
       "cursor-pointer px-2 py-0.5 rounded text-xs font-bold bg-red-900/50 text-red-400 border border-red-700";
 
-  window._healthBreakdown = {
+  state._healthBreakdown = {
     score,
     blocked: {
       score: blockedScore,
@@ -1154,7 +1154,7 @@ export function computeHealthScore() {
 // ---------------------------------------------------------------------------
 
 export function showHealthBreakdown() {
-  const b = window._healthBreakdown;
+  const b = state._healthBreakdown;
   if (!b) return;
   const panel = document.getElementById("detailContent");
   const dp = document.getElementById("detailPanel");

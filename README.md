@@ -47,10 +47,8 @@ filigree close <id>
 ## Installation
 
 ```bash
-pip install filigree                     # Core CLI
-pip install "filigree[mcp]"              # + MCP server
+pip install filigree                     # CLI + MCP server
 pip install "filigree[dashboard]"        # + Web dashboard
-pip install "filigree[all]"              # Everything
 ```
 
 Or from source:

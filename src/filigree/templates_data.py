@@ -64,13 +64,16 @@ _CORE_PACK: dict[str, Any] = {
                 {"name": "verifying", "category": "wip"},
                 {"name": "closed", "category": "done"},
                 {"name": "wont_fix", "category": "done"},
+                {"name": "not_a_bug", "category": "done"},
             ],
             "initial_state": "triage",
             "transitions": [
                 {"from": "triage", "to": "confirmed", "enforcement": "soft"},
                 {"from": "triage", "to": "wont_fix", "enforcement": "soft"},
+                {"from": "triage", "to": "not_a_bug", "enforcement": "soft"},
                 {"from": "confirmed", "to": "fixing", "enforcement": "soft"},
                 {"from": "confirmed", "to": "wont_fix", "enforcement": "soft"},
+                {"from": "confirmed", "to": "not_a_bug", "enforcement": "soft"},
                 {"from": "fixing", "to": "verifying", "enforcement": "soft", "requires_fields": ["fix_verification"]},
                 {"from": "verifying", "to": "closed", "enforcement": "hard", "requires_fields": ["fix_verification"]},
                 {"from": "verifying", "to": "fixing", "enforcement": "soft"},
@@ -1540,6 +1543,7 @@ _RELEASE_PACK: dict[str, Any] = {
                 {"name": "staged", "category": "wip"},
                 {"name": "released", "category": "done"},
                 {"name": "rolled_back", "category": "wip"},
+                {"name": "retired", "category": "done"},
                 {"name": "cancelled", "category": "done"},
             ],
             "initial_state": "planning",
@@ -1561,13 +1565,16 @@ _RELEASE_PACK: dict[str, Any] = {
                 {"from": "staged", "to": "development", "enforcement": "soft"},
                 {"from": "released", "to": "rolled_back", "enforcement": "soft"},
                 {"from": "rolled_back", "to": "development", "enforcement": "soft"},
+                {"from": "rolled_back", "to": "retired", "enforcement": "soft"},
             ],
             "fields_schema": [
                 {
                     "name": "version",
                     "type": "text",
-                    "description": "Version identifier (e.g., v2.1.0)",
+                    "description": "Version identifier. Must be 'Future' or semver vMAJOR.MINOR.PATCH (e.g., v2.1.0)",
                     "required_at": ["frozen"],
+                    "pattern": r"^v\d+\.\d+\.\d+$|^Future$",
+                    "unique": True,
                 },
                 {"name": "target_date", "type": "date", "description": "Planned release date"},
                 {"name": "changelog", "type": "text", "description": "Summary of changes in this release"},
@@ -1642,8 +1649,8 @@ _RELEASE_PACK: dict[str, Any] = {
             "release:      planning(O) --> development(W) --> frozen(W) --> testing(W) --> staged(W) --> released(D)\n"
             "                          \\-> cancelled(D) \\-> cancelled(D)\n"
             "                             \\-> development(W) [unfreeze]       \\-> rolled_back(W)\n"
-            "                                  \\-> development(W) [fix]\n"
-            "                                       \\-> development(W) [fix]\n"
+            "                                  \\-> development(W) [fix]            \\-> development(W) [re-release]\n"
+            "                                       \\-> development(W) [fix]       \\-> retired(D) [close out]\n"
             "              HARD: development-->frozen requires version\n"
             "\n"
             "release_item: queued(O) --> included(W) --> verified(D)\n"
@@ -1662,6 +1669,7 @@ _RELEASE_PACK: dict[str, Any] = {
             "staged": "Release is deployed to staging and awaiting go/no-go",
             "released": "Release has been shipped to production",
             "rolled_back": "Release was reverted after shipping",
+            "retired": "Rolled-back release permanently closed (not re-released)",
             "cancelled": "Release was abandoned before shipping",
             "queued": "Item is proposed for inclusion in the release",
             "included": "Item is confirmed for this release",

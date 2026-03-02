@@ -8,12 +8,13 @@ subcommands, which in turn are registered as Claude Code hooks by
 
 from __future__ import annotations
 
-import fcntl
 import logging
 import socket
 import subprocess
 import time
 from pathlib import Path
+
+import portalocker
 
 from filigree.core import (
     DB_FILENAME,
@@ -316,8 +317,8 @@ def _ensure_dashboard_ethereal_mode(filigree_dir: Path) -> str:
     try:
         lock_fd = open(lock_file, "w")  # noqa: SIM115
         try:
-            fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except OSError:
+            portalocker.lock(lock_fd, portalocker.LOCK_EX | portalocker.LOCK_NB)
+        except (OSError, portalocker.LockException):
             return "Filigree dashboard: another session is starting it, skipping"
 
         # Re-check after acquiring lock

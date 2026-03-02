@@ -18,7 +18,7 @@ import {
 } from "../api.js";
 import { updateHash } from "../router.js";
 import { CATEGORY_COLORS, PRIORITY_COLORS, state, TYPE_ICONS } from "../state.js";
-import { escHtml, escJsSingle, setLoading, showToast, trapFocus } from "../ui.js";
+import { escHtml, escJsSingle, issueIdChip, setLoading, showToast, trapFocus } from "../ui.js";
 
 // --- Callbacks for functions not yet available at import time ---
 
@@ -86,7 +86,7 @@ export async function openDetail(issueId) {
       return (
         '<div class="flex items-center gap-2 text-xs">' +
         `<span class="w-2 h-2 rounded-full shrink-0" style="background:${sc}"></span>` +
-        `<span class="cursor-pointer flex-1" style="color:var(--accent)" onclick="openDetail('${safeBid}')">${escHtml(det.title.slice(0, 40))}</span>` +
+        `<span class="cursor-pointer flex-1" style="color:var(--accent)" role="button" tabindex="0" onclick="openDetail('${safeBid}')">${escHtml(det.title.slice(0, 40))}</span>` +
         `<span style="color:var(--text-muted)">${escHtml(det.status || "")}</span>` +
         `<button onclick="event.stopPropagation();removeDependency('${safeIssueId}','${safeBid}')" class="text-red-400 hover:text-red-300 ml-1" title="Remove dependency">&times;</button></div>`
       );
@@ -101,7 +101,7 @@ export async function openDetail(issueId) {
       const sc = CATEGORY_COLORS[detCat] || "#64748B";
       const safeBid = escJsSingle(bid);
       return (
-        `<div class="flex items-center gap-2 text-xs cursor-pointer" style="color:var(--accent)" onclick="openDetail('${safeBid}')">` +
+        `<div class="flex items-center gap-2 text-xs cursor-pointer" style="color:var(--accent)" role="button" tabindex="0" onclick="openDetail('${safeBid}')">` +
         `<span class="w-2 h-2 rounded-full" style="background:${sc}"></span>` +
         `<span>${escHtml(det.title.slice(0, 40))}</span>` +
         `<span style="color:var(--text-muted)">${escHtml(det.status || "")}</span></div>`
@@ -157,7 +157,7 @@ export async function openDetail(issueId) {
         : "";
 
   header.innerHTML =
-    `<span class="text-xs" style="color:var(--text-muted)">${escHtml(d.id)}</span>` +
+    `<span class="text-xs">${issueIdChip(d.id)}</span>` +
     "<div>" +
     (state.detailHistory.length
       ? '<button onclick="detailBack()" class="text-muted text-primary-hover text-xs mr-2">&larr; Back</button>'
@@ -263,7 +263,8 @@ export async function openDetail(issueId) {
     `<div class="mt-3 text-xs select-all" style="color:var(--text-muted)" title="Copy this command to view in terminal">filigree show ${escHtml(d.id)}</div>`;
 
   // Load transitions async and render buttons
-  loadTransitions(issueId).then((transitions) => {
+  loadTransitions(issueId)
+    .then((transitions) => {
     const container = document.getElementById("transitionBtns");
     if (!container || !transitions.length) return;
     container.innerHTML = transitions
@@ -278,11 +279,19 @@ export async function openDetail(issueId) {
         return (
           `<button ${t.ready ? `onclick="updateIssue('${safeId}',{status:'${escJsSingle(t.to)}'},this)"` : "disabled"}` +
           ` class="text-xs px-2 py-1 rounded ${cls}" style="${btnStyle}">` +
-          `${t.to}${missingText}</button>`
+          `${escHtml(t.to)}${missingText}</button>`
         );
       })
       .join("");
-  });
+  })
+    .catch((err) => {
+      const container = document.getElementById("transitionBtns");
+      if (container) {
+        console.error("[detail] Failed to load transitions:", err);
+        container.innerHTML =
+          '<span class="text-xs" style="color:var(--text-muted)">Could not load transitions</span>';
+      }
+    });
 
   trapFocus(document.getElementById("detailPanel"));
 }
@@ -575,6 +584,8 @@ export async function addComment(issueId) {
   if (result.ok) {
     input.value = "";
     openDetail(issueId);
+  } else {
+    showToast(`Error: ${result.error || "Comment failed"}`, "error");
   }
 }
 

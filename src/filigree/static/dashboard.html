@@ -4,10 +4,11 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Filigree Dashboard</title>
-<script src="https://cdn.tailwindcss.com"></script>
-<script src="https://unpkg.com/cytoscape@3.30.4/dist/cytoscape.min.js"></script>
-<script src="https://unpkg.com/dagre@0.8.5/dist/dagre.min.js"></script>
-<script src="https://unpkg.com/cytoscape-dagre@2.5.0/cytoscape-dagre.js"></script>
+<script src="https://cdn.tailwindcss.com/3.4.17" integrity="sha384-igm5BeiBt36UU4gqwWS7imYmelpTsZlQ45FZf+XBn9MuJbn4nQr7yx1yFydocC/K" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/cytoscape@3.30.4/dist/cytoscape.min.js" integrity="sha384-H3uzGzTfGHUAumB8+s4GEdfFwzAceN9wCCndN8AXubWKFIPuBSWKKtWDx7RhSf/z" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/dagre@0.8.5/dist/dagre.min.js" integrity="sha384-2IH3T69EIKYC4c+RXZifZRvaH5SRUdacJW7j6HtE5rQbvLhKKdawxq6vpIzJ7j9M" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/cytoscape-dagre@2.5.0/cytoscape-dagre.js" integrity="sha384-u69h9ebXeSjlg6q/rb1zKTRAGu/h8deCl0409xpS/QJctMKnc4M9Fzkm01VOQdeF" crossorigin="anonymous"></script>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&display=swap">
 <style>
   :root {
     --surface-base: #0B1215;
@@ -68,7 +69,6 @@
   .bg-overlay-hover:hover { background: var(--surface-hover); }
   .text-primary-hover:hover { color: var(--text-primary); }
   .text-secondary-hover:hover { color: var(--text-secondary); }
-  @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&display=swap');
   body { font-family: 'JetBrains Mono', 'Fira Code', monospace; background: var(--surface-base); color: var(--text-primary); }
   #cy { width: 100%; height: 100%; }
   #cy, #workflowCy { background: var(--surface-base); }
@@ -156,6 +156,7 @@ tailwind.config = {
       <button id="btnWorkflow" onclick="switchView('workflow')" class="px-3 py-1 rounded text-xs font-medium" title="Workflow state machine diagram">Workflow</button>
       <button id="btnFiles" onclick="switchView('files')" class="px-3 py-1 rounded text-xs font-medium" title="File records and scan findings">Files</button>
       <button id="btnHealth" onclick="switchView('health')" class="px-3 py-1 rounded text-xs font-medium" title="Code health — hotspots, severity breakdown, scan coverage">Health</button>
+      <button id="btnReleases" onclick="switchView('releases')" class="px-3 py-1 rounded text-xs font-medium" title="Release roadmap and progress">Releases</button>
     </div>
   </div>
 
@@ -175,6 +176,14 @@ tailwind.config = {
       <option value="0-1">P0-P1</option>
       <option value="2">P2</option>
       <option value="3-4">P3-P4</option>
+    </select>
+    <select id="filterUpdatedDays" onchange="applyFilters()" class="bg-overlay text-primary text-xs rounded px-2 py-1 border border-strong">
+      <option value="0">Updated: Any time</option>
+      <option value="1">Last 1 day</option>
+      <option value="7">Last 7 days</option>
+      <option value="14">Last 14 days</option>
+      <option value="30">Last 30 days</option>
+      <option value="90">Last 90 days</option>
     </select>
     <label for="filterSearch" class="text-xs text-secondary sr-only">Search</label>
     <div class="relative">
@@ -401,9 +410,9 @@ tailwind.config = {
   </div>
 
   <!-- Metrics view -->
-  <div id="metricsView" class="flex-1 hidden overflow-y-auto p-6">
-    <div class="max-w-3xl mx-auto">
-      <div class="flex items-center gap-3 mb-6">
+  <div id="metricsView" class="flex-1 hidden flex flex-col">
+    <div class="shrink-0 px-6 pt-6 pb-2">
+      <div class="max-w-3xl mx-auto flex items-center gap-3">
         <span class="text-base font-semibold text-primary">Flow Metrics</span>
         <select id="metricsDays" onchange="loadMetrics()" class="bg-overlay text-xs rounded px-2 py-1 border border-strong">
           <option value="7">7 days</option>
@@ -411,18 +420,26 @@ tailwind.config = {
           <option value="90">90 days</option>
         </select>
       </div>
-      <div id="metricsContent" class="text-secondary text-xs">Loading...</div>
+    </div>
+    <div class="flex-1 overflow-y-auto scrollbar-thin px-6 pb-6">
+      <div class="max-w-3xl mx-auto">
+        <div id="metricsContent" class="text-secondary text-xs">Loading...</div>
+      </div>
     </div>
   </div>
 
   <!-- Activity view -->
-  <div id="activityView" class="flex-1 hidden overflow-y-auto p-6">
-    <div class="max-w-3xl mx-auto">
-      <div class="flex items-center gap-3 mb-4">
+  <div id="activityView" class="flex-1 hidden flex flex-col">
+    <div class="shrink-0 px-6 pt-6 pb-2">
+      <div class="max-w-3xl mx-auto flex items-center gap-3">
         <span class="text-base font-semibold text-primary">Recent Activity</span>
         <button onclick="loadActivity()" class="text-xs bg-overlay px-2 py-1 rounded bg-overlay-hover">Refresh</button>
       </div>
-      <div id="activityContent" class="text-secondary text-xs">Loading...</div>
+    </div>
+    <div class="flex-1 overflow-y-auto scrollbar-thin px-6 pb-6">
+      <div class="max-w-3xl mx-auto">
+        <div id="activityContent" class="text-secondary text-xs">Loading...</div>
+      </div>
     </div>
   </div>
 
@@ -438,9 +455,9 @@ tailwind.config = {
   </div>
 
   <!-- Files view -->
-  <div id="filesView" class="flex-1 hidden overflow-y-auto p-6">
-    <div class="max-w-6xl mx-auto">
-      <div class="flex items-center gap-3 mb-4">
+  <div id="filesView" class="flex-1 hidden flex flex-col">
+    <div class="shrink-0 px-6 pt-6 pb-2">
+      <div class="max-w-6xl mx-auto flex items-center gap-3">
         <span class="text-base font-semibold text-primary">Files</span>
         <div class="flex items-center gap-2">
           <input id="filesSearch" type="text" placeholder="Filter by path..."
@@ -450,17 +467,43 @@ tailwind.config = {
           </label>
         </div>
       </div>
-      <div id="filesContent" class="text-secondary text-xs">Loading...</div>
+    </div>
+    <div class="flex-1 overflow-y-auto scrollbar-thin px-6 pb-6">
+      <div class="max-w-6xl mx-auto">
+        <div id="filesContent" class="text-secondary text-xs">Loading...</div>
+      </div>
     </div>
   </div>
 
   <!-- Code Health view -->
-  <div id="healthView" class="flex-1 hidden overflow-y-auto p-6">
-    <div class="max-w-5xl mx-auto">
-      <div class="flex items-center gap-3 mb-4">
+  <div id="healthView" class="flex-1 hidden flex flex-col">
+    <div class="shrink-0 px-6 pt-6 pb-2">
+      <div class="max-w-5xl mx-auto flex items-center gap-3">
         <span class="text-base font-semibold text-primary">Code Health</span>
       </div>
-      <div id="healthContent" class="text-secondary text-xs">Loading...</div>
+    </div>
+    <div class="flex-1 overflow-y-auto scrollbar-thin px-6 pb-6">
+      <div class="max-w-5xl mx-auto">
+        <div id="healthContent" class="text-secondary text-xs">Loading...</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Releases view -->
+  <div id="releasesView" class="flex-1 hidden flex flex-col">
+    <div class="shrink-0 px-6 pt-6 pb-2">
+      <div class="max-w-5xl mx-auto flex items-center gap-3">
+        <h2 class="text-base font-semibold text-primary m-0">Releases</h2>
+        <label for="showReleased" class="flex items-center gap-1 text-xs cursor-pointer" style="color:var(--text-secondary)">
+          <input type="checkbox" id="showReleased" style="accent-color:var(--accent)">
+          Show released &amp; cancelled
+        </label>
+      </div>
+    </div>
+    <div class="flex-1 overflow-y-auto scrollbar-thin px-6 pb-6">
+      <div class="max-w-5xl mx-auto">
+        <div id="releasesContent" class="text-secondary text-xs">Loading...</div>
+      </div>
     </div>
   </div>
 
@@ -480,6 +523,7 @@ tailwind.config = {
   <span>Deps: <b id="footDeps" class="text-primary">0</b></span>
   <canvas id="sparkline" width="100" height="20" title="14-day throughput trend" class="opacity-70"></canvas>
   <span id="staleBadge" class="hidden text-xs bg-red-900/50 text-red-400 px-2 py-0.5 rounded border border-red-800 cursor-pointer" onclick="showStaleIssues()" title="WIP issues with no updates for >2 hours. Click to view."></span>
+  <span class="ml-auto text-muted" id="footVersion"></span>
 </footer>
 
 <div id="batchBar" class="fixed bottom-12 left-1/2 -translate-x-1/2 bg-raised border border-strong rounded-lg px-4 py-2 flex items-center gap-3 shadow-xl hidden z-20">

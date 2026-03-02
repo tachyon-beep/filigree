@@ -6,7 +6,6 @@ Config lives at $HOME/.config/filigree/server.json (see SERVER_CONFIG_DIR).
 
 from __future__ import annotations
 
-import fcntl
 import json
 import logging
 import os
@@ -17,6 +16,8 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TypedDict
+
+import portalocker
 
 from filigree.core import read_config, write_atomic
 from filigree.ephemeral import is_pid_alive, read_pid_file, verify_pid_ownership, write_pid_file
@@ -109,7 +110,7 @@ def write_server_config(config: ServerConfig) -> None:
 def register_project(filigree_dir: Path) -> None:
     """Register a project in server.json.
 
-    Uses ``fcntl.flock`` around the read-modify-write to prevent
+    Uses ``portalocker.lock`` around the read-modify-write to prevent
     concurrent sessions from losing each other's registrations.
     Raises ``ValueError`` if another registered project already uses
     the same prefix.
@@ -127,8 +128,12 @@ def register_project(filigree_dir: Path) -> None:
 
     SERVER_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     lock_path = SERVER_CONFIG_DIR / "server.lock"
-    with open(lock_path, "w") as lock_fd:
-        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+    try:
+        lock_fd = open(lock_path, "w")  # noqa: SIM115
+    except OSError as e:
+        raise RuntimeError(f"Cannot create lock file at {lock_path}: {e}. Check permissions on {SERVER_CONFIG_DIR}.") from e
+    with lock_fd:
+        portalocker.lock(lock_fd, portalocker.LOCK_EX)
         config = read_server_config()
         project_key = str(filigree_dir)
         prefix = str(project_config.get("prefix", "filigree"))
@@ -151,8 +156,12 @@ def unregister_project(filigree_dir: Path) -> None:
     filigree_dir = filigree_dir.resolve()
     SERVER_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     lock_path = SERVER_CONFIG_DIR / "server.lock"
-    with open(lock_path, "w") as lock_fd:
-        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+    try:
+        lock_fd = open(lock_path, "w")  # noqa: SIM115
+    except OSError as e:
+        raise RuntimeError(f"Cannot create lock file at {lock_path}: {e}. Check permissions on {SERVER_CONFIG_DIR}.") from e
+    with lock_fd:
+        portalocker.lock(lock_fd, portalocker.LOCK_EX)
         config = read_server_config()
         config.projects.pop(str(filigree_dir), None)
         write_server_config(config)
@@ -188,7 +197,7 @@ def start_daemon(port: int | None = None) -> DaemonResult:
     SERVER_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     lock_path = SERVER_CONFIG_DIR / "server.lock"
     with open(lock_path, "w") as lock_fd:
-        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+        portalocker.lock(lock_fd, portalocker.LOCK_EX)
 
         # Check if already running — verify PID is actually a filigree process
         info = read_pid_file(SERVER_PID_FILE)
@@ -210,7 +219,7 @@ def start_daemon(port: int | None = None) -> DaemonResult:
         log_file = SERVER_CONFIG_DIR / "server.log"
 
         try:
-            with open(log_file, "w") as log_fd:
+            with open(log_file, "a") as log_fd:
                 proc = subprocess.Popen(
                     [*filigree_cmd, "dashboard", "--no-browser", "--server-mode", "--port", str(daemon_port)],
                     stdin=subprocess.DEVNULL,
@@ -313,7 +322,7 @@ def claim_current_process_as_daemon(*, port: int | None = None) -> bool:
     ``server.pid``. Returns ``False`` if a different live process is already
     tracked.
 
-    Uses ``fcntl.flock`` to serialise with ``start_daemon()`` and
+    Uses ``portalocker.lock`` to serialise with ``start_daemon()`` and
     ``register_project()``, preventing two callers from simultaneously
     reading an empty PID file and both writing their own PID.
     """
@@ -321,7 +330,7 @@ def claim_current_process_as_daemon(*, port: int | None = None) -> bool:
     SERVER_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     lock_path = SERVER_CONFIG_DIR / "server.lock"
     with open(lock_path, "w") as lock_fd:
-        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+        portalocker.lock(lock_fd, portalocker.LOCK_EX)
 
         info = read_pid_file(SERVER_PID_FILE)
         if info is not None:
