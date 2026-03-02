@@ -255,13 +255,13 @@ def create_router() -> APIRouter:
             comment_id = db.add_comment(issue_id, text, author=author)
         except ValueError as e:
             return _error_response(str(e), "VALIDATION_ERROR", 400)
-        # Fetch the comment from DB to get the real created_at timestamp
-        comments = db.get_comments(issue_id)
-        created_at = ISOTimestamp("")
-        for c in comments:
-            if c["id"] == comment_id:
-                created_at = c["created_at"]
-                break
+        # Fetch just the single comment to get the real created_at timestamp
+        row = db.conn.execute("SELECT created_at FROM comments WHERE id = ?", (comment_id,)).fetchone()
+        if row is None:
+            logger = logging.getLogger(__name__)
+            logger.error("Comment %d not found immediately after INSERT for issue %s", comment_id, issue_id)
+            return _error_response("Internal error: comment created but not retrievable", "INTERNAL_ERROR", 500)
+        created_at = ISOTimestamp(row["created_at"])
         return JSONResponse(
             CommentRecord(id=comment_id, author=author, text=text, created_at=created_at),
             status_code=201,
@@ -270,6 +270,8 @@ def create_router() -> APIRouter:
     @router.get("/search")
     async def api_search(q: str = "", limit: int = 50, offset: int = 0, db: FiligreeDB = Depends(_get_db)) -> JSONResponse:
         """Full-text search across issues."""
+        limit = min(max(limit, 1), 1000)
+        offset = max(offset, 0)
         if not q.strip():
             return JSONResponse({"results": [], "total": 0})
         issues = db.search_issues(q, limit=limit, offset=offset)

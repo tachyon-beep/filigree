@@ -52,7 +52,7 @@ def _get_table_names(conn: sqlite3.Connection) -> set[str]:
 
 
 def _get_schema_version(conn: sqlite3.Connection) -> int:
-    return conn.execute("PRAGMA user_version").fetchone()[0]
+    return int(conn.execute("PRAGMA user_version").fetchone()[0])
 
 
 # ---------------------------------------------------------------------------
@@ -137,7 +137,7 @@ class TestMigrationRunner:
             c.execute("ALTER TABLE test_table ADD COLUMN name TEXT DEFAULT ''")
             did_run.append(True)
 
-        migrations.MIGRATIONS[1] = fake_v1_to_v2
+        migrations.MIGRATIONS[1] = fake_v1_to_v2  # type: ignore[assignment]
         try:
             applied = apply_pending_migrations(conn, 2)
             assert applied == 1
@@ -167,7 +167,7 @@ class TestMigrationRunner:
             c.execute("UPDATE test_table SET val = 'modified'")
             raise RuntimeError("Intentional failure")
 
-        migrations.MIGRATIONS[1] = bad_migration
+        migrations.MIGRATIONS[1] = bad_migration  # type: ignore[assignment]
         try:
             with pytest.raises(MigrationError, match="Intentional failure"):
                 apply_pending_migrations(conn, 2)
@@ -205,9 +205,9 @@ class TestMigrationRunner:
             c.execute("ALTER TABLE t ADD COLUMN c TEXT DEFAULT ''")
             order.append(3)
 
-        migrations.MIGRATIONS[1] = m1
-        migrations.MIGRATIONS[2] = m2
-        migrations.MIGRATIONS[3] = m3
+        migrations.MIGRATIONS[1] = m1  # type: ignore[assignment]
+        migrations.MIGRATIONS[2] = m2  # type: ignore[assignment]
+        migrations.MIGRATIONS[3] = m3  # type: ignore[assignment]
         try:
             applied = apply_pending_migrations(conn, 4)
             assert applied == 3
@@ -235,8 +235,8 @@ class TestMigrationRunner:
         def m2_fail(c: sqlite3.Connection) -> None:
             raise RuntimeError("Boom")
 
-        migrations.MIGRATIONS[1] = m1
-        migrations.MIGRATIONS[2] = m2_fail
+        migrations.MIGRATIONS[1] = m1  # type: ignore[assignment]
+        migrations.MIGRATIONS[2] = m2_fail  # type: ignore[assignment]
         try:
             with pytest.raises(MigrationError, match="Boom"):
                 apply_pending_migrations(conn, 3)
@@ -266,7 +266,7 @@ class TestMigrationRunnerTransactionGuard:
         def noop(c: sqlite3.Connection) -> None:
             pass
 
-        migrations.MIGRATIONS[1] = noop
+        migrations.MIGRATIONS[1] = noop  # type: ignore[assignment]
         try:
             # Start a caller-owned transaction
             conn.execute("INSERT INTO t VALUES (1)")
@@ -303,7 +303,7 @@ class TestMigrationRunnerFKPreservation:
         def noop(c: sqlite3.Connection) -> None:
             pass
 
-        migrations.MIGRATIONS[1] = noop
+        migrations.MIGRATIONS[1] = noop  # type: ignore[assignment]
         try:
             # Caller explicitly disables FKs
             conn.execute("PRAGMA foreign_keys=OFF")
@@ -333,7 +333,7 @@ class TestMigrationRunnerFKPreservation:
         def noop(c: sqlite3.Connection) -> None:
             pass
 
-        migrations.MIGRATIONS[1] = noop
+        migrations.MIGRATIONS[1] = noop  # type: ignore[assignment]
         try:
             conn.execute("PRAGMA foreign_keys=ON")
             fk_before = conn.execute("PRAGMA foreign_keys").fetchone()[0]
@@ -362,7 +362,7 @@ class TestMigrationRunnerFKPreservation:
         def bad_migration(c: sqlite3.Connection) -> None:
             raise RuntimeError("boom")
 
-        migrations.MIGRATIONS[1] = bad_migration
+        migrations.MIGRATIONS[1] = bad_migration  # type: ignore[assignment]
         try:
             conn.execute("PRAGMA foreign_keys=OFF")
             with pytest.raises(MigrationError):
@@ -650,7 +650,7 @@ class TestMigrationAtomicity:
             # Now fail after rebuild_table succeeded
             raise RuntimeError("Intentional post-rebuild failure")
 
-        migrations.MIGRATIONS[1] = bad_rebuild_migration
+        migrations.MIGRATIONS[1] = bad_rebuild_migration  # type: ignore[assignment]
         try:
             with pytest.raises(MigrationError, match="Intentional post-rebuild failure"):
                 apply_pending_migrations(conn, 2)
@@ -701,7 +701,7 @@ class TestMigrationAtomicity:
             c.execute("INSERT INTO parent VALUES ('p2', 'Bob', '')")
             raise RuntimeError("Intentional post-rebuild failure")
 
-        migrations.MIGRATIONS[1] = bad_fk_rebuild_migration
+        migrations.MIGRATIONS[1] = bad_fk_rebuild_migration  # type: ignore[assignment]
         try:
             with pytest.raises(MigrationError, match="Intentional post-rebuild failure"):
                 apply_pending_migrations(conn, 2)
@@ -765,7 +765,7 @@ class TestMigrationAtomicity:
             )
             raise RuntimeError("Post-rebuild failure")
 
-        migrations.MIGRATIONS[1] = migration_with_pre_rebuild_dml
+        migrations.MIGRATIONS[1] = migration_with_pre_rebuild_dml  # type: ignore[assignment]
         try:
             with pytest.raises(MigrationError, match="Post-rebuild failure"):
                 apply_pending_migrations(conn, 2)
@@ -857,7 +857,7 @@ class TestMigrationAtomicity:
             c.execute("INSERT INTO t VALUES (2, 'new_row')")
             raise RuntimeError("Fail after DML")
 
-        migrations.MIGRATIONS[1] = migration_with_dml_then_fail
+        migrations.MIGRATIONS[1] = migration_with_dml_then_fail  # type: ignore[assignment]
         try:
             with pytest.raises(MigrationError, match="Fail after DML"):
                 apply_pending_migrations(conn, 2)

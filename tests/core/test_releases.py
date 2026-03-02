@@ -6,11 +6,11 @@ from pathlib import Path
 
 import pytest
 
-from filigree.core import FiligreeDB
+from filigree.core import FiligreeDB, Issue
 from filigree.db_planning import TreeNode
 
 
-def make_release_hierarchy(db: FiligreeDB, *, include_done: bool = False) -> tuple:
+def make_release_hierarchy(db: FiligreeDB, *, include_done: bool = False) -> tuple[Issue, Issue, Issue]:
     """Returns (release, epic, task) for standard 3-level test hierarchy."""
     release = db.create_issue("v1.0.0", type="release", fields={"version": "v1.0.0"})
     epic = db.create_issue("Epic A", type="epic", parent_id=release.id)

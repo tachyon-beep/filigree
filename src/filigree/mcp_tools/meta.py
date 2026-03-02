@@ -344,6 +344,9 @@ async def _handle_batch_add_label(arguments: dict[str, Any]) -> list[TextContent
     from filigree.mcp_server import _get_db, _refresh_summary
 
     args = _parse_args(arguments, BatchAddLabelArgs)
+    _actor, actor_err = _validate_actor(args.get("actor", "mcp"))  # validated for rejection only
+    if actor_err:
+        return actor_err
     tracker = _get_db()
     label_ids = args["ids"]
     if not all(isinstance(i, str) for i in label_ids):

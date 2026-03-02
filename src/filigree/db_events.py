@@ -10,11 +10,8 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, cast
 
-from filigree.db_base import DBMixinProtocol, _now_iso
+from filigree.db_base import DBMixinProtocol, StatusCategory, _now_iso
 from filigree.types.events import EventRecord, EventRecordWithTitle, UndoResult
-
-if TYPE_CHECKING:
-    from filigree.db_base import StatusCategory
 
 # ---------------------------------------------------------------------------
 # Undo constants (moved from core.py — only used by undo_last)
@@ -69,7 +66,9 @@ class EventsMixin(DBMixinProtocol):
 
     def get_recent_events(self, limit: int = 20) -> list[EventRecordWithTitle]:
         rows = self.conn.execute(
-            "SELECT e.*, i.title as issue_title FROM events e JOIN issues i ON e.issue_id = i.id ORDER BY e.created_at DESC LIMIT ?",
+            "SELECT e.*, i.title as issue_title FROM events e "
+            "JOIN issues i ON e.issue_id = i.id "
+            "ORDER BY e.created_at DESC, e.id DESC LIMIT ?",
             (limit,),
         ).fetchall()
         return cast(list[EventRecordWithTitle], [dict(r) for r in rows])
@@ -80,7 +79,7 @@ class EventsMixin(DBMixinProtocol):
             "SELECT e.*, i.title as issue_title FROM events e "
             "JOIN issues i ON e.issue_id = i.id "
             "WHERE e.created_at > ? "
-            "ORDER BY e.created_at ASC LIMIT ?",
+            "ORDER BY e.created_at ASC, e.id ASC LIMIT ?",
             (since, limit),
         ).fetchall()
         return cast(list[EventRecordWithTitle], [dict(r) for r in rows])
@@ -278,7 +277,7 @@ class EventsMixin(DBMixinProtocol):
                 continue
 
             self.conn.execute(
-                "DELETE FROM events WHERE id IN (SELECT id FROM events WHERE issue_id = ? ORDER BY created_at ASC LIMIT ?)",
+                "DELETE FROM events WHERE id IN (SELECT id FROM events WHERE issue_id = ? ORDER BY created_at ASC, id ASC LIMIT ?)",
                 (issue_id, event_count - keep_recent),
             )
             total_deleted += event_count - keep_recent

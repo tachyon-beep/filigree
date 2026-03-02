@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
-from typing import ClassVar
+from typing import Any, ClassVar
 
 import pytest
 
@@ -437,7 +437,7 @@ class TestStateCategoryValidation:
     def test_valid_categories_accepted(self) -> None:
         """open, wip, done should be accepted without error."""
         for cat in ("open", "wip", "done"):
-            sd = StateDefinition(name="test_state", category=cat)  # type: ignore[arg-type]
+            sd = StateDefinition(name="test_state", category=cat)
             assert sd.category == cat
 
     def test_invalid_category_raises_valueerror(self) -> None:
@@ -564,7 +564,7 @@ class TestEnabledPacksValidation:
 class TestParseTemplateMalformedTransitionsFields:
     """Bug fix: filigree-b25e83 — raw TypeError for non-list transitions/fields."""
 
-    _VALID_BASE: ClassVar[dict] = {
+    _VALID_BASE: ClassVar[dict[str, Any]] = {
         "type": "test_type",
         "display_name": "Test",
         "states": [
@@ -611,7 +611,7 @@ class TestFieldSchemaTypeValidation:
 
     def test_valid_field_types_accepted(self) -> None:
         for ft in ("text", "enum", "number", "date", "list", "boolean"):
-            fs = FieldSchema(name="test_field", type=ft)  # type: ignore[arg-type]
+            fs = FieldSchema(name="test_field", type=ft)
             assert fs.type == ft
 
     def test_invalid_field_type_raises_valueerror(self) -> None:
@@ -1400,7 +1400,7 @@ class TestTemplateLoading:
         """Layer 2: packs from .filigree/packs/*.json are loaded."""
         packs_dir = filigree_dir / "packs"
         packs_dir.mkdir()
-        custom_pack = {
+        custom_pack: dict[str, Any] = {
             "pack": "custom_pack",
             "version": "1.0",
             "display_name": "Custom",
@@ -1441,7 +1441,7 @@ class TestTemplateLoading:
         """Packs not in enabled_packs should not have their types loaded."""
         packs_dir = filigree_dir / "packs"
         packs_dir.mkdir()
-        extra_pack = {
+        extra_pack: dict[str, Any] = {
             "pack": "extra",
             "version": "1.0",
             "display_name": "Extra",
@@ -1679,7 +1679,7 @@ class TestTemplateEnforcementValidation:
 class TestTemplateMalformedShape:
     def test_states_none_raises_value_error(self) -> None:
         """Template with states=None should raise ValueError, not TypeError."""
-        raw = {
+        raw: dict[str, Any] = {
             "type": "badshape",
             "display_name": "Bad",
             "description": "Bad shape",
@@ -1741,7 +1741,7 @@ class TestTemplateMalformedShape:
         templates_dir.mkdir()
 
         # Write a template with states=None (would cause TypeError without fix)
-        bad_template = {
+        bad_template: dict[str, Any] = {
             "type": "crasher",
             "display_name": "Crasher",
             "description": "Should not crash loading",

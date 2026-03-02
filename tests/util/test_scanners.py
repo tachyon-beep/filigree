@@ -215,7 +215,7 @@ class TestValidateScannerCommand:
             def __str__(self) -> str:
                 raise TypeError("cannot convert")
 
-        err = validate_scanner_command([BadToken()])
+        err = validate_scanner_command([BadToken()])  # type: ignore[list-item]
         assert err == "Malformed command token list"
 
 

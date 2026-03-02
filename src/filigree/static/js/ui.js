@@ -45,6 +45,7 @@ export function escJsSingle(str) {
 // ---------------------------------------------------------------------------
 // Contextual popovers
 // ---------------------------------------------------------------------------
+/** Show a contextual popover. The html parameter must be trusted (hardcoded) content. */
 export function showPopover(anchorEl, html) {
   closePopover();
   const pop = document.createElement("div");

@@ -61,19 +61,34 @@ export async function fetchDashboardConfig() {
 }
 
 export async function fetchAllData() {
-  const results = await Promise.all([
-    fetch(apiUrl("/issues")),
-    fetch(apiUrl("/dependencies")),
-    fetch(apiUrl("/stats")),
-  ]);
-  if (!results[0].ok || !results[1].ok || !results[2].ok) {
+  try {
+    const results = await Promise.allSettled([
+      fetch(apiUrl("/issues")),
+      fetch(apiUrl("/dependencies")),
+      fetch(apiUrl("/stats")),
+    ]);
+    const [issuesRes, depsRes, statsRes] = results;
+    const labels = ["issues", "dependencies", "stats"];
+    for (let i = 0; i < results.length; i++) {
+      const r = results[i];
+      if (r.status !== "fulfilled") {
+        console.error(`[fetchAllData] ${labels[i]} request failed:`, r.reason);
+        return null;
+      }
+      if (!r.value.ok) {
+        console.error(`[fetchAllData] ${labels[i]} returned HTTP ${r.value.status}`);
+        return null;
+      }
+    }
+    return {
+      issues: await issuesRes.value.json(),
+      deps: await depsRes.value.json(),
+      stats: await statsRes.value.json(),
+    };
+  } catch (err) {
+    console.error("[fetchAllData] Unexpected error:", err);
     return null;
   }
-  return {
-    issues: await results[0].json(),
-    deps: await results[1].json(),
-    stats: await results[2].json(),
-  };
 }
 
 export async function fetchIssueDetail(issueId) {
@@ -92,8 +107,9 @@ export async function fetchTransitions(issueId) {
   try {
     const resp = await fetch(apiUrl(`/issue/${issueId}/transitions`));
     if (resp.ok) return resp.json();
-  } catch (_e) {
-    /* best-effort */
+    console.warn(`[fetchTransitions] HTTP ${resp.status} for issue ${issueId}`);
+  } catch (err) {
+    console.error(`[fetchTransitions] Network error for issue ${issueId}:`, err);
   }
   return [];
 }
@@ -235,8 +251,13 @@ export function postBatchClose(issueIds, reason, actor) {
 export async function postReload() {
   try {
     const resp = await fetch("/api/reload", { method: "POST" });
+    if (!resp.ok) {
+      console.error("[postReload] HTTP", resp.status);
+      return { ok: false };
+    }
     return resp.json();
-  } catch (_e) {
+  } catch (err) {
+    console.error("[postReload] Network error:", err);
     return { ok: false };
   }
 }
@@ -293,9 +314,13 @@ export async function fetchScanRuns(limit) {
   try {
     const qs = limit ? `?limit=${limit}` : "";
     const resp = await fetch(apiUrl("/scan-runs" + qs));
-    if (!resp.ok) return { scan_runs: [] };
+    if (!resp.ok) {
+      console.warn("[fetchScanRuns] HTTP", resp.status);
+      return { scan_runs: [] };
+    }
     return resp.json();
-  } catch (_e) {
+  } catch (err) {
+    console.error("[fetchScanRuns] Network error:", err);
     return { scan_runs: [] };
   }
 }

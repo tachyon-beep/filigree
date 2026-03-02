@@ -100,9 +100,9 @@ class TestSetupLogging:
         new_handler = logger.handlers[0]
         assert new_handler is not old_handler
         expected_path = os.path.abspath(str(dir_b / "filigree.log"))
-        assert new_handler.baseFilename == expected_path  # type: ignore[union-attr]
+        assert new_handler.baseFilename == expected_path  # type: ignore[attr-defined]
         # Old handler stream must be closed (FileHandler.close() sets stream to None)
-        assert old_handler.stream is None  # type: ignore[union-attr]
+        assert old_handler.stream is None  # type: ignore[attr-defined]
 
     def teardown_method(self) -> None:
         """Clean up the filigree logger handlers between tests."""

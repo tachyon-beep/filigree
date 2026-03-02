@@ -602,8 +602,8 @@ class TestServerRegisterReload:
             def __enter__(self) -> _Resp:
                 return self
 
-            def __exit__(self, exc_type: object, exc: object, tb: object) -> bool:
-                return False
+            def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
+                pass
 
         def _urlopen(req: object, timeout: int = 0) -> _Resp:
             observed["reload_url"] = getattr(req, "full_url", "")
@@ -638,8 +638,8 @@ class TestServerRegisterReload:
             def __enter__(self) -> _Resp:
                 return self
 
-            def __exit__(self, exc_type: object, exc: object, tb: object) -> bool:
-                return False
+            def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
+                pass
 
         def _urlopen(req: object, timeout: int = 0) -> _Resp:
             observed["reload_url"] = getattr(req, "full_url", "")

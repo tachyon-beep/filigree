@@ -106,7 +106,7 @@ class TestProjectStore:
 
         # Make close() raise
         original_close = bravo_db.close
-        bravo_db.close = lambda: (_ for _ in ()).throw(RuntimeError("close failed"))  # type: ignore[assignment]
+        bravo_db.close = lambda: (_ for _ in ()).throw(RuntimeError("close failed"))  # type: ignore[method-assign]
 
         # Remove bravo from config so reload tries to close it
         config_dir = tmp_path / ".config" / "filigree"
@@ -121,7 +121,7 @@ class TestProjectStore:
 
         mock_logger.warning.assert_called_once()
         assert "bravo" in str(mock_logger.warning.call_args)
-        bravo_db.close = original_close  # type: ignore[assignment]
+        bravo_db.close = original_close  # type: ignore[method-assign]
 
     def test_reload_evicts_db_handle_when_project_path_changes(self, project_store: ProjectStore, tmp_path: Path) -> None:
         import json
@@ -200,6 +200,22 @@ class TestProjectStore:
     def test_empty_store_default_key(self) -> None:
         store = ProjectStore()
         assert store.default_key == ""
+
+    def test_close_all_closes_db_handles(self, project_store: ProjectStore) -> None:
+        """close_all() closes all open DB connections and clears the cache."""
+        project_store.get_db("alpha")
+        project_store.get_db("bravo")
+        assert len(project_store._dbs) == 2
+
+        project_store.close_all()
+        assert project_store._dbs == {}
+
+    def test_close_all_idempotent(self, project_store: ProjectStore) -> None:
+        """Calling close_all() twice should not raise."""
+        project_store.get_db("alpha")
+        project_store.close_all()
+        project_store.close_all()  # second call is a no-op
+        assert project_store._dbs == {}
 
     def test_prefix_collision_raises(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         import json

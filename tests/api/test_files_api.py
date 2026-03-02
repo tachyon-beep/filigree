@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from httpx import AsyncClient
 
-from filigree.core import FiligreeDB
+from tests.conftest import PopulatedDB
 
 
 class TestFilesSchemaAPI:
@@ -56,8 +56,8 @@ class TestScanRunsAPI:
         assert resp.status_code == 200
         assert resp.json() == {"scan_runs": []}
 
-    async def test_single_scan_run(self, client: AsyncClient, dashboard_db: FiligreeDB) -> None:
-        dashboard_db.process_scan_results(
+    async def test_single_scan_run(self, client: AsyncClient, dashboard_db: PopulatedDB) -> None:
+        dashboard_db.db.process_scan_results(
             scan_source="codex",
             scan_run_id="run-001",
             findings=[{"path": "a.py", "rule_id": "R1", "severity": "low", "message": "m"}],
@@ -71,13 +71,13 @@ class TestScanRunsAPI:
         assert runs[0]["total_findings"] == 1
         assert runs[0]["files_scanned"] == 1
 
-    async def test_multiple_runs_ordered_by_recent(self, client: AsyncClient, dashboard_db: FiligreeDB) -> None:
-        dashboard_db.process_scan_results(
+    async def test_multiple_runs_ordered_by_recent(self, client: AsyncClient, dashboard_db: PopulatedDB) -> None:
+        dashboard_db.db.process_scan_results(
             scan_source="codex",
             scan_run_id="run-old",
             findings=[{"path": "a.py", "rule_id": "R1", "severity": "low", "message": "m"}],
         )
-        dashboard_db.process_scan_results(
+        dashboard_db.db.process_scan_results(
             scan_source="claude",
             scan_run_id="run-new",
             findings=[{"path": "b.py", "rule_id": "R2", "severity": "high", "message": "m"}],
@@ -89,9 +89,9 @@ class TestScanRunsAPI:
         assert runs[0]["scan_run_id"] == "run-new"
         assert runs[1]["scan_run_id"] == "run-old"
 
-    async def test_limit_param(self, client: AsyncClient, dashboard_db: FiligreeDB) -> None:
+    async def test_limit_param(self, client: AsyncClient, dashboard_db: PopulatedDB) -> None:
         for i in range(5):
-            dashboard_db.process_scan_results(
+            dashboard_db.db.process_scan_results(
                 scan_source="ruff",
                 scan_run_id=f"run-{i:03d}",
                 findings=[{"path": f"f{i}.py", "rule_id": "R1", "severity": "low", "message": "m"}],
@@ -100,8 +100,8 @@ class TestScanRunsAPI:
         runs = resp.json()["scan_runs"]
         assert len(runs) == 2
 
-    async def test_empty_run_id_excluded(self, client: AsyncClient, dashboard_db: FiligreeDB) -> None:
-        dashboard_db.process_scan_results(
+    async def test_empty_run_id_excluded(self, client: AsyncClient, dashboard_db: PopulatedDB) -> None:
+        dashboard_db.db.process_scan_results(
             scan_source="ruff",
             scan_run_id="",
             findings=[{"path": "a.py", "rule_id": "R1", "severity": "low", "message": "m"}],
@@ -123,12 +123,12 @@ class TestScanRunsAPI:
 class TestFilesScanSourceFilterAPI:
     """GET /api/files?scan_source=... — filter files by scan source."""
 
-    async def test_scan_source_filters_files(self, client: AsyncClient, dashboard_db: FiligreeDB) -> None:
-        dashboard_db.process_scan_results(
+    async def test_scan_source_filters_files(self, client: AsyncClient, dashboard_db: PopulatedDB) -> None:
+        dashboard_db.db.process_scan_results(
             scan_source="codex",
             findings=[{"path": "a.py", "rule_id": "R1", "severity": "low", "message": "m"}],
         )
-        dashboard_db.process_scan_results(
+        dashboard_db.db.process_scan_results(
             scan_source="ruff",
             findings=[{"path": "b.py", "rule_id": "R2", "severity": "low", "message": "m"}],
         )
@@ -138,12 +138,12 @@ class TestFilesScanSourceFilterAPI:
         assert data["total"] == 1
         assert data["results"][0]["path"] == "a.py"
 
-    async def test_no_scan_source_returns_all(self, client: AsyncClient, dashboard_db: FiligreeDB) -> None:
-        dashboard_db.process_scan_results(
+    async def test_no_scan_source_returns_all(self, client: AsyncClient, dashboard_db: PopulatedDB) -> None:
+        dashboard_db.db.process_scan_results(
             scan_source="codex",
             findings=[{"path": "a.py", "rule_id": "R1", "severity": "low", "message": "m"}],
         )
-        dashboard_db.process_scan_results(
+        dashboard_db.db.process_scan_results(
             scan_source="ruff",
             findings=[{"path": "b.py", "rule_id": "R2", "severity": "low", "message": "m"}],
         )
@@ -172,8 +172,8 @@ class TestErrorMessagesIncludeValidOptions:
         assert "widgets" in err["message"]
         assert "task" in err["message"]
 
-    async def test_priority_error_includes_valid_range(self, client: AsyncClient, dashboard_db: FiligreeDB) -> None:
-        ids = dashboard_db._test_ids  # type: ignore[attr-defined]
+    async def test_priority_error_includes_valid_range(self, client: AsyncClient, dashboard_db: PopulatedDB) -> None:
+        ids = dashboard_db.ids
         resp = await client.patch(f"/api/issue/{ids['a']}", json={"priority": "high"})
         assert resp.status_code == 400
         err = resp.json()["error"]

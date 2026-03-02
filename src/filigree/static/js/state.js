@@ -155,6 +155,10 @@ export const state = {
   // Popover
   _activePopover: null,
 
+  // Cached view data (previously on window._)
+  _staleIssues: [],
+  _healthBreakdown: null,
+
   // File views
   filesData: null,
   filesPage: { offset: 0, limit: 25 },

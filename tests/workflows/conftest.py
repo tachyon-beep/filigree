@@ -40,7 +40,13 @@ def roadmap_db(tmp_path: Path) -> Generator[FiligreeDB, None, None]:
 
 @pytest.fixture
 def incident_db(tmp_path: Path) -> Generator[FiligreeDB, None, None]:
-    """FiligreeDB with core + incident packs enabled."""
+    """FiligreeDB with core + incident packs enabled.
+
+    Intentionally omits the planning pack — workflow e2e tests only exercise
+    incident, postmortem, and task types (task is in core). Adding planning
+    would mask issues where incident workflows inadvertently depend on
+    planning-pack types.
+    """
     d = make_db(tmp_path, packs=["core", "incident"])
     yield d
     d.close()
@@ -50,13 +56,5 @@ def incident_db(tmp_path: Path) -> Generator[FiligreeDB, None, None]:
 def debt_db(tmp_path: Path) -> Generator[FiligreeDB, None, None]:
     """FiligreeDB with core + debt packs enabled."""
     d = make_db(tmp_path, packs=["core", "debt"])
-    yield d
-    d.close()
-
-
-@pytest.fixture
-def release_db(tmp_path: Path) -> Generator[FiligreeDB, None, None]:
-    """FiligreeDB with core + planning + release packs enabled."""
-    d = make_db(tmp_path, packs=["core", "planning", "release"])
     yield d
     d.close()

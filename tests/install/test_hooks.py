@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -25,6 +26,7 @@ from filigree.install import (
     install_codex_skills,
     install_skills,
 )
+from tests.conftest import PopulatedDB
 
 
 class TestBuildContext:
@@ -68,8 +70,8 @@ class TestBuildContext:
         assert "truncated" in result
         assert "filigree ready" in result
 
-    def test_stats_line(self, populated_db: FiligreeDB) -> None:
-        result = _build_context(populated_db)
+    def test_stats_line(self, populated_db: PopulatedDB) -> None:
+        result = _build_context(populated_db.db)
         assert "STATS:" in result
         assert "ready" in result
         assert "blocked" in result
@@ -426,7 +428,7 @@ class TestEnsureDashboardEthereal:
 
         spawned_cmds: list[list[str]] = []
 
-        def mock_popen(cmd, **kwargs):
+        def mock_popen(cmd: list[str], **kwargs: Any) -> MagicMock:
             spawned_cmds.append(cmd)
             mock = MagicMock()
             mock.pid = 12345
@@ -481,7 +483,7 @@ class TestEnsureDashboardEthereal:
         monkeypatch.setattr("filigree.hooks._is_port_listening", lambda *a: a[0] == 9188)
         monkeypatch.setattr("filigree.hooks.time.sleep", lambda *a: None)
 
-        def mock_popen(_cmd, **_kwargs):
+        def mock_popen(_cmd: list[str], **_kwargs: Any) -> MagicMock:
             proc = MagicMock()
             proc.pid = 12345
             proc.poll.return_value = None
@@ -572,8 +574,8 @@ class TestEnsureDashboardEthereal:
             def __enter__(self) -> _Resp:
                 return self
 
-            def __exit__(self, *_args: object) -> bool:
-                return False
+            def __exit__(self, *_args: object) -> None:
+                pass
 
         def _fake_urlopen(req: object, timeout: int = 0) -> _Resp:
             observed["url"] = getattr(req, "full_url", "")

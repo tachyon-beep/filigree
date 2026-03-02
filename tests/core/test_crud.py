@@ -11,6 +11,7 @@ from unittest.mock import patch
 import pytest
 
 from filigree.core import FiligreeDB
+from tests.conftest import PopulatedDB
 
 
 class TestCreateAndGet:
@@ -523,16 +524,16 @@ class TestUpdateIssuePartialEventRollback:
 
 
 class TestExportJsonl:
-    def test_export_populated(self, populated_db: FiligreeDB, tmp_path: Path) -> None:
+    def test_export_populated(self, populated_db: PopulatedDB, tmp_path: Path) -> None:
         out = tmp_path / "export.jsonl"
-        count = populated_db.export_jsonl(out)
+        count = populated_db.db.export_jsonl(out)
         assert count > 0
         lines = out.read_text().strip().split("\n")
         assert len(lines) == count
 
-    def test_export_record_types(self, populated_db: FiligreeDB, tmp_path: Path) -> None:
+    def test_export_record_types(self, populated_db: PopulatedDB, tmp_path: Path) -> None:
         out = tmp_path / "export.jsonl"
-        populated_db.export_jsonl(out)
+        populated_db.db.export_jsonl(out)
         types_seen = set()
         for line in out.read_text().strip().split("\n"):
             record = json.loads(line)
@@ -543,9 +544,9 @@ class TestExportJsonl:
         assert "comment" in types_seen
         assert "event" in types_seen
 
-    def test_export_issue_fields(self, populated_db: FiligreeDB, tmp_path: Path) -> None:
+    def test_export_issue_fields(self, populated_db: PopulatedDB, tmp_path: Path) -> None:
         out = tmp_path / "export.jsonl"
-        populated_db.export_jsonl(out)
+        populated_db.db.export_jsonl(out)
         issues = []
         for line in out.read_text().strip().split("\n"):
             record = json.loads(line)
@@ -566,10 +567,10 @@ class TestExportJsonl:
 
 
 class TestImportJsonl:
-    def test_import_roundtrip(self, populated_db: FiligreeDB, tmp_path: Path) -> None:
+    def test_import_roundtrip(self, populated_db: PopulatedDB, tmp_path: Path) -> None:
         """Export from populated, import into fresh — counts should match."""
         out = tmp_path / "roundtrip.jsonl"
-        export_count = populated_db.export_jsonl(out)
+        export_count = populated_db.db.export_jsonl(out)
 
         fresh = FiligreeDB(tmp_path / "fresh.db", prefix="test")
         fresh.initialize()
@@ -577,9 +578,9 @@ class TestImportJsonl:
         assert import_count == export_count
         fresh.close()
 
-    def test_import_issues_arrive(self, populated_db: FiligreeDB, tmp_path: Path) -> None:
+    def test_import_issues_arrive(self, populated_db: PopulatedDB, tmp_path: Path) -> None:
         out = tmp_path / "data.jsonl"
-        populated_db.export_jsonl(out)
+        populated_db.db.export_jsonl(out)
 
         fresh = FiligreeDB(tmp_path / "fresh2.db", prefix="test")
         fresh.initialize()
@@ -592,9 +593,9 @@ class TestImportJsonl:
         assert "Epic E" in titles
         fresh.close()
 
-    def test_import_dependencies_arrive(self, populated_db: FiligreeDB, tmp_path: Path) -> None:
+    def test_import_dependencies_arrive(self, populated_db: PopulatedDB, tmp_path: Path) -> None:
         out = tmp_path / "data.jsonl"
-        populated_db.export_jsonl(out)
+        populated_db.db.export_jsonl(out)
 
         fresh = FiligreeDB(tmp_path / "fresh3.db", prefix="test")
         fresh.initialize()
@@ -603,20 +604,20 @@ class TestImportJsonl:
         assert len(deps) >= 1
         fresh.close()
 
-    def test_import_merge_skips_existing(self, populated_db: FiligreeDB, tmp_path: Path) -> None:
+    def test_import_merge_skips_existing(self, populated_db: PopulatedDB, tmp_path: Path) -> None:
         out = tmp_path / "merge.jsonl"
-        populated_db.export_jsonl(out)
+        populated_db.db.export_jsonl(out)
         # Import twice with merge — second import should not fail
-        count2 = populated_db.import_jsonl(out, merge=True)
+        count2 = populated_db.db.import_jsonl(out, merge=True)
         # All records skipped since they already exist (issues by PK, deps by PK, labels by PK)
         # Events don't have PK constraint so they get duplicated
         assert count2 >= 0
 
-    def test_import_without_merge_fails_on_conflict(self, populated_db: FiligreeDB, tmp_path: Path) -> None:
+    def test_import_without_merge_fails_on_conflict(self, populated_db: PopulatedDB, tmp_path: Path) -> None:
         out = tmp_path / "conflict.jsonl"
-        populated_db.export_jsonl(out)
+        populated_db.db.export_jsonl(out)
         with pytest.raises(sqlite3.IntegrityError):
-            populated_db.import_jsonl(out, merge=False)
+            populated_db.db.import_jsonl(out, merge=False)
 
     def test_import_event_uses_conflict_variable(self, db: FiligreeDB, tmp_path: Path) -> None:
         """Bug filigree-769ea4: event branch must respect merge flag, not hardcode OR IGNORE."""
@@ -717,6 +718,14 @@ class TestArchival:
         archived = db.archive_closed(days_old=0)
         assert issue.id not in archived
 
+    def test_archive_recently_closed_with_days_zero(self, db: FiligreeDB) -> None:
+        """days_old=0 should archive issues closed just now."""
+        issue = db.create_issue("Just closed")
+        db.close_issue(issue.id)
+        archived = db.archive_closed(days_old=0)
+        assert issue.id in archived
+        assert db.get_issue(issue.id).status == "archived"
+
     def test_archive_records_event(self, db: FiligreeDB) -> None:
         issue = db.create_issue("Archive event")
         db.close_issue(issue.id)
@@ -760,6 +769,27 @@ class TestCompaction:
         after = db.conn.execute("SELECT COUNT(*) as cnt FROM events WHERE issue_id = ?", (issue.id,)).fetchone()["cnt"]
         assert after == 10
 
+    def test_compact_with_keep_recent_zero(self, db: FiligreeDB) -> None:
+        """keep_recent=0 should delete ALL events for archived issues."""
+        issue = db.create_issue("Compact all")
+        db.update_issue(issue.id, title="v2")
+        db.update_issue(issue.id, title="v3")
+        db.close_issue(issue.id)
+        # Backdate and archive
+        old_date = (datetime.now(UTC) - timedelta(days=60)).isoformat()
+        db.conn.execute("UPDATE issues SET closed_at = ? WHERE id = ?", (old_date, issue.id))
+        db.conn.commit()
+        db.archive_closed(days_old=30)
+
+        before = db.conn.execute("SELECT COUNT(*) as cnt FROM events WHERE issue_id = ?", (issue.id,)).fetchone()["cnt"]
+        assert before > 0
+
+        deleted = db.compact_events(keep_recent=0)
+        assert deleted > 0
+
+        after = db.conn.execute("SELECT COUNT(*) as cnt FROM events WHERE issue_id = ?", (issue.id,)).fetchone()["cnt"]
+        assert after == 0
+
     def test_compact_skips_non_archived(self, db: FiligreeDB) -> None:
         issue = db.create_issue("Not archived")
         for i in range(20):
@@ -769,9 +799,7 @@ class TestCompaction:
 
     def test_vacuum(self, db: FiligreeDB) -> None:
         # vacuum() returns None; verify it completes without error
-        result = db.vacuum()
-        assert result is None
+        db.vacuum()
 
     def test_analyze(self, db: FiligreeDB) -> None:
-        result = db.analyze()
-        assert result is None
+        db.analyze()

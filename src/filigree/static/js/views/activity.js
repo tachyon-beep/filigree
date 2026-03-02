@@ -38,7 +38,7 @@ export async function loadActivity() {
             '<div class="flex-1" style="border-top:1px solid var(--border-default)"></div>' +
             "</div>";
         }
-        const title = e.issue_title ? escHtml(e.issue_title.slice(0, 50)) : e.issue_id;
+        const title = e.issue_title ? escHtml(e.issue_title.slice(0, 50)) : escHtml(e.issue_id);
         let detail = "";
         if (e.event_type === "status_changed") detail = `${e.old_value} \u2192 ${e.new_value}`;
         else if (e.new_value) detail = e.new_value;
@@ -71,7 +71,12 @@ export async function loadActivity() {
         );
       })
       .join("");
-  } catch (_e) {
-    container.innerHTML = '<div class="text-red-400">Failed to load activity.</div>';
+  } catch (err) {
+    console.error("[loadActivity] Failed:", err);
+    container.innerHTML =
+      '<div class="p-4 text-xs text-red-400">' +
+      "Failed to load activity. " +
+      '<button class="underline" style="color:var(--accent)" onclick="loadActivity()">Retry</button>' +
+      "</div>";
   }
 }

@@ -264,6 +264,132 @@ class TestResolveGraphRuntime:
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# _safe_int / _safe_bounded_int / _parse_pagination tests
+# ---------------------------------------------------------------------------
+
+
+class TestSafeInt:
+    """Unit tests for _safe_int in dashboard_routes/common.py."""
+
+    def test_valid_integer_string(self) -> None:
+        from filigree.dashboard_routes.common import _safe_int
+
+        assert _safe_int("42", "x") == 42
+
+    def test_negative_integer(self) -> None:
+        from filigree.dashboard_routes.common import _safe_int
+
+        assert _safe_int("-5", "x") == -5
+
+    def test_non_numeric_returns_400(self) -> None:
+        from filigree.dashboard_routes.common import _safe_int
+
+        result = _safe_int("abc", "x")
+        assert not isinstance(result, int)
+        assert result.status_code == 400
+
+    def test_below_min_value_returns_400(self) -> None:
+        from filigree.dashboard_routes.common import _safe_int
+
+        result = _safe_int("-1", "x", min_value=0)
+        assert not isinstance(result, int)
+        assert result.status_code == 400
+
+    def test_at_min_value_succeeds(self) -> None:
+        from filigree.dashboard_routes.common import _safe_int
+
+        assert _safe_int("0", "x", min_value=0) == 0
+
+    def test_no_min_value_allows_any(self) -> None:
+        from filigree.dashboard_routes.common import _safe_int
+
+        assert _safe_int("-999", "x") == -999
+
+
+class TestSafeBoundedInt:
+    """Unit tests for _safe_bounded_int in dashboard_routes/common.py."""
+
+    def test_within_bounds(self) -> None:
+        from filigree.dashboard_routes.common import _safe_bounded_int
+
+        assert _safe_bounded_int("50", name="x", min_value=1, max_value=100) == 50
+
+    def test_at_min_boundary(self) -> None:
+        from filigree.dashboard_routes.common import _safe_bounded_int
+
+        assert _safe_bounded_int("1", name="x", min_value=1, max_value=100) == 1
+
+    def test_at_max_boundary(self) -> None:
+        from filigree.dashboard_routes.common import _safe_bounded_int
+
+        assert _safe_bounded_int("100", name="x", min_value=1, max_value=100) == 100
+
+    def test_below_min_returns_400(self) -> None:
+        from filigree.dashboard_routes.common import _safe_bounded_int
+
+        result = _safe_bounded_int("0", name="x", min_value=1, max_value=100)
+        assert not isinstance(result, int)
+        assert result.status_code == 400
+
+    def test_above_max_returns_400(self) -> None:
+        from filigree.dashboard_routes.common import _safe_bounded_int
+
+        result = _safe_bounded_int("101", name="x", min_value=1, max_value=100)
+        assert not isinstance(result, int)
+        assert result.status_code == 400
+
+    def test_non_numeric_returns_400(self) -> None:
+        from filigree.dashboard_routes.common import _safe_bounded_int
+
+        result = _safe_bounded_int("abc", name="x", min_value=1, max_value=100)
+        assert not isinstance(result, int)
+        assert result.status_code == 400
+
+
+class TestParsePagination:
+    """Unit tests for _parse_pagination in dashboard_routes/common.py."""
+
+    def test_defaults(self) -> None:
+        from filigree.dashboard_routes.common import _parse_pagination
+
+        result = _parse_pagination({})
+        assert result == (100, 0)
+
+    def test_custom_limit_and_offset(self) -> None:
+        from filigree.dashboard_routes.common import _parse_pagination
+
+        result = _parse_pagination({"limit": "50", "offset": "10"})
+        assert result == (50, 10)
+
+    def test_custom_default_limit(self) -> None:
+        from filigree.dashboard_routes.common import _parse_pagination
+
+        result = _parse_pagination({}, default_limit=25)
+        assert result == (25, 0)
+
+    def test_limit_zero_returns_400(self) -> None:
+        from filigree.dashboard_routes.common import _parse_pagination
+
+        result = _parse_pagination({"limit": "0"})
+        assert not isinstance(result, tuple)
+        assert result.status_code == 400
+
+    def test_negative_offset_returns_400(self) -> None:
+        from filigree.dashboard_routes.common import _parse_pagination
+
+        result = _parse_pagination({"offset": "-1"})
+        assert not isinstance(result, tuple)
+        assert result.status_code == 400
+
+    def test_non_numeric_limit_returns_400(self) -> None:
+        from filigree.dashboard_routes.common import _parse_pagination
+
+        result = _parse_pagination({"limit": "xyz"})
+        assert not isinstance(result, tuple)
+        assert result.status_code == 400
+
+
 class TestDashboardRoutesStructure:
     """Structural tests for dashboard_routes/ subpackage."""
 

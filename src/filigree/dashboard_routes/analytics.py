@@ -450,6 +450,7 @@ def create_router() -> APIRouter:
     @router.get("/activity")
     async def api_activity(limit: int = 50, since: str = "", db: FiligreeDB = Depends(_get_db)) -> JSONResponse:
         """Recent events across all issues."""
+        limit = min(max(limit, 1), 1000)
         events = db.get_events_since(since, limit=limit) if since else db.get_recent_events(limit=limit)
         return JSONResponse(events)
 

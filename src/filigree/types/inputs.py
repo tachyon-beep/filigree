@@ -222,7 +222,7 @@ class StepInput(TypedDict):
     title: str
     priority: NotRequired[int]
     description: NotRequired[str]
-    deps: NotRequired[list[Any]]
+    deps: NotRequired[list[int | str]]
 
 
 class PhaseInput(TypedDict):

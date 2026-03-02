@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from filigree.core import FiligreeDB
 from filigree.mcp_server import call_tool
-from tests.mcp.conftest import _parse
+from tests.mcp._helpers import _parse
 
 
 class TestMCPCommentErrors:

@@ -377,11 +377,11 @@ class TestProcessScanResults:
 
     def test_ingest_finding_is_string(self, db: FiligreeDB) -> None:
         with pytest.raises(ValueError, match="dict"):
-            db.process_scan_results(scan_source="ruff", findings=["not-a-dict"])
+            db.process_scan_results(scan_source="ruff", findings=["not-a-dict"])  # type: ignore[list-item]
 
     def test_ingest_finding_is_number(self, db: FiligreeDB) -> None:
         with pytest.raises(ValueError, match="dict"):
-            db.process_scan_results(scan_source="ruff", findings=[42])
+            db.process_scan_results(scan_source="ruff", findings=[42])  # type: ignore[list-item]
 
     def test_bad_finding_at_end_does_not_persist_earlier_writes(self, db: FiligreeDB) -> None:
         """A bad finding later in the list must not leave earlier writes pending."""
@@ -472,6 +472,7 @@ class TestProcessScanResults:
             ],
         )
         f = db.get_file_by_path("a.py")
+        assert f is not None
         findings = db.get_findings(f.id)
         assert findings[0].metadata == {"url": "https://example.com", "tags": ["style"]}
 
@@ -489,6 +490,7 @@ class TestProcessScanResults:
             ],
         )
         f = db.get_file_by_path("a.py")
+        assert f is not None
         findings = db.get_findings(f.id)
         assert findings[0].metadata == {"v": 2}
 
@@ -498,6 +500,7 @@ class TestProcessScanResults:
             findings=[{"path": "a.py", "rule_id": "E1", "severity": "low", "message": "m"}],
         )
         f = db.get_file_by_path("a.py")
+        assert f is not None
         findings = db.get_findings(f.id)
         assert findings[0].metadata == {}
 
@@ -684,6 +687,7 @@ class TestFindingReopenOnRescan:
             findings=[{"path": "a.py", "rule_id": "E501", "severity": "low", "message": "m"}],
         )
         f = db.get_file_by_path("a.py")
+        assert f is not None
         db.conn.execute("UPDATE scan_findings SET status = 'fixed' WHERE file_id = ?", (f.id,))
         db.conn.commit()
         # Re-scan with the same finding
@@ -700,6 +704,7 @@ class TestFindingReopenOnRescan:
             findings=[{"path": "a.py", "rule_id": "E501", "severity": "low", "message": "m"}],
         )
         f = db.get_file_by_path("a.py")
+        assert f is not None
         db.conn.execute("UPDATE scan_findings SET status = 'unseen_in_latest' WHERE file_id = ?", (f.id,))
         db.conn.commit()
         db.process_scan_results(
@@ -715,6 +720,7 @@ class TestFindingReopenOnRescan:
             findings=[{"path": "a.py", "rule_id": "E501", "severity": "low", "message": "m"}],
         )
         f = db.get_file_by_path("a.py")
+        assert f is not None
         db.conn.execute("UPDATE scan_findings SET status = 'acknowledged' WHERE file_id = ?", (f.id,))
         db.conn.commit()
         db.process_scan_results(
@@ -730,6 +736,7 @@ class TestFindingReopenOnRescan:
             findings=[{"path": "a.py", "rule_id": "E501", "severity": "low", "message": "m"}],
         )
         f = db.get_file_by_path("a.py")
+        assert f is not None
         db.conn.execute("UPDATE scan_findings SET status = 'false_positive' WHERE file_id = ?", (f.id,))
         db.conn.commit()
         db.process_scan_results(
@@ -758,6 +765,7 @@ class TestMarkUnseen:
             mark_unseen=True,
         )
         f = db.get_file_by_path("a.py")
+        assert f is not None
         findings = db.get_findings(f.id)
         statuses = {finding.rule_id: finding.status for finding in findings}
         assert statuses["E501"] == "open"
@@ -778,6 +786,7 @@ class TestMarkUnseen:
             mark_unseen=True,
         )
         fb = db.get_file_by_path("b.py")
+        assert fb is not None
         findings_b = db.get_findings(fb.id)
         assert all(f.status == "open" for f in findings_b)
 
@@ -797,6 +806,7 @@ class TestMarkUnseen:
             mark_unseen=True,
         )
         fa = db.get_file_by_path("a.py")
+        assert fa is not None
         findings = db.get_findings(fa.id)
         eslint_finding = next(f for f in findings if f.scan_source == "eslint")
         assert eslint_finding.status == "open"
@@ -810,6 +820,7 @@ class TestMarkUnseen:
             ],
         )
         f = db.get_file_by_path("a.py")
+        assert f is not None
         findings = db.get_findings(f.id)
         # Manually mark E502 as fixed
         e502 = next(fi for fi in findings if fi.rule_id == "E502")
@@ -840,6 +851,7 @@ class TestMarkUnseen:
             mark_unseen=False,
         )
         f = db.get_file_by_path("a.py")
+        assert f is not None
         findings = db.get_findings(f.id)
         assert all(fi.status == "open" for fi in findings)
 
@@ -849,6 +861,7 @@ class TestMarkUnseen:
             findings=[{"path": "a.py", "rule_id": "E501", "severity": "low", "message": "m"}],
         )
         f = db.get_file_by_path("a.py")
+        assert f is not None
         first_last_seen = db.get_findings(f.id)[0].last_seen_at
 
         db.process_scan_results(
@@ -869,6 +882,7 @@ class TestCleanStaleFindings:
             findings=[{"path": "a.py", "rule_id": "E501", "severity": "low", "message": "m"}],
         )
         f = db.get_file_by_path("a.py")
+        assert f is not None
         finding = db.get_findings(f.id)[0]
         # Mark as unseen with an old last_seen_at
         db.conn.execute(
@@ -888,6 +902,7 @@ class TestCleanStaleFindings:
             findings=[{"path": "a.py", "rule_id": "E501", "severity": "low", "message": "m"}],
         )
         f = db.get_file_by_path("a.py")
+        assert f is not None
         finding = db.get_findings(f.id)[0]
         # Mark as unseen but with recent last_seen_at
         db.conn.execute(
@@ -909,6 +924,7 @@ class TestCleanStaleFindings:
             findings=[{"path": "a.py", "rule_id": "no-unused-vars", "severity": "high", "message": "m"}],
         )
         f = db.get_file_by_path("a.py")
+        assert f is not None
         findings = db.get_findings(f.id)
         for fi in findings:
             db.conn.execute(
@@ -937,6 +953,7 @@ class TestGetFindings:
             ],
         )
         f = db.get_file_by_path("a.py")
+        assert f is not None
         findings = db.get_findings(f.id)
         assert len(findings) == 2
 
@@ -949,6 +966,7 @@ class TestGetFindings:
             ],
         )
         f = db.get_file_by_path("a.py")
+        assert f is not None
         findings = db.get_findings(f.id, severity="high")
         assert len(findings) == 1
         assert findings[0].severity == "high"
@@ -961,6 +979,7 @@ class TestGetFindings:
             ],
         )
         f = db.get_file_by_path("a.py")
+        assert f is not None
         findings = db.get_findings(f.id, status="open")
         assert len(findings) == 1
         findings = db.get_findings(f.id, status="fixed")
@@ -972,6 +991,7 @@ class TestGetFindings:
             findings=[{"path": "a.py", "rule_id": f"E{i}", "severity": "low", "message": f"msg{i}"} for i in range(10)],
         )
         f = db.get_file_by_path("a.py")
+        assert f is not None
         page1 = db.get_findings(f.id, limit=5)
         assert len(page1) == 5
         page2 = db.get_findings(f.id, limit=5, offset=5)
@@ -1075,6 +1095,7 @@ class TestIssueFindings:
             findings=[{"path": "src/main.py", "rule_id": "E501", "severity": "low", "message": "Too long"}],
         )
         f = db.get_file_by_path("src/main.py")
+        assert f is not None
         # Directly link a finding to the issue
         finding = db.get_findings(f.id)[0]
         db.conn.execute("UPDATE scan_findings SET issue_id = ? WHERE id = ?", (issue.id, finding.id))
@@ -1110,6 +1131,7 @@ class TestFileDetailCore:
             ],
         )
         f = db.get_file_by_path("a.py")
+        assert f is not None
         summary = db.get_file_findings_summary(f.id)
         assert summary["total_findings"] == 4
         assert summary["open_findings"] == 4
@@ -1126,6 +1148,7 @@ class TestFileDetailCore:
             ],
         )
         f = db.get_file_by_path("a.py")
+        assert f is not None
         # Mark one as fixed
         findings = db.get_findings(f.id)
         db.conn.execute("UPDATE scan_findings SET status = 'fixed' WHERE id = ?", (findings[0].id,))
@@ -1152,6 +1175,7 @@ class TestFileDetailCore:
             ],
         )
         f = db.get_file_by_path("src/main.py")
+        assert f is not None
         db.add_file_association(f.id, issue.id, "bug_in")
         detail = db.get_file_detail(f.id)
         assert len(detail["associations"]) == 1
@@ -1168,6 +1192,7 @@ class TestFileDetailCore:
         findings = [{"path": "big.py", "rule_id": f"E{i:03d}", "severity": "low", "message": f"Finding {i}"} for i in range(15)]
         db.process_scan_results(scan_source="ruff", findings=findings)
         f = db.get_file_by_path("big.py")
+        assert f is not None
         detail = db.get_file_detail(f.id)
         assert len(detail["recent_findings"]) == 10
         assert detail["summary"]["total_findings"] == 15
@@ -1271,6 +1296,7 @@ class TestHotspots:
             ],
         )
         f = db.get_file_by_path("a.py")
+        assert f is not None
         findings = db.get_findings(f.id)
         # Mark finding as fixed
         db.conn.execute("UPDATE scan_findings SET status = 'fixed' WHERE id = ?", (findings[0].id,))
@@ -1293,6 +1319,7 @@ class TestSortBySeverity:
             ],
         )
         f = db.get_file_by_path("a.py")
+        assert f is not None
         results = db.get_findings(f.id, sort="severity")
         severities = [r.severity for r in results]
         assert severities == ["critical", "high", "medium", "low"]
@@ -1307,6 +1334,7 @@ class TestSortBySeverity:
             ],
         )
         f = db.get_file_by_path("a.py")
+        assert f is not None
         result = db.get_findings_paginated(f.id, sort="severity")
         severities = [r["severity"] for r in result["results"]]
         assert severities == ["critical", "high", "info"]
@@ -1317,6 +1345,7 @@ class TestSortBySeverity:
             findings=[{"path": "a.py", "rule_id": "E001", "severity": "low", "message": "m"}],
         )
         f = db.get_file_by_path("a.py")
+        assert f is not None
         with pytest.raises(ValueError, match="Invalid sort field"):
             db.get_findings(f.id, sort="bogus")
         with pytest.raises(ValueError, match="Invalid sort field"):
@@ -1331,6 +1360,7 @@ class TestSortBySeverity:
             ],
         )
         f = db.get_file_by_path("a.py")
+        assert f is not None
         # Default sort should not be by severity
         results = db.get_findings(f.id)
         # Should not crash, just returns in updated_at order
@@ -1360,6 +1390,7 @@ class TestMinFindingsFilter:
             ],
         )
         f = db.get_file_by_path("a.py")
+        assert f is not None
         findings = db.get_findings(f.id)
         # Mark 2 as fixed, leaving only 1 open
         db.conn.execute("UPDATE scan_findings SET status = 'fixed' WHERE id = ?", (findings[0].id,))
@@ -1377,6 +1408,7 @@ class TestMinFindingsFilter:
             ],
         )
         f = db.get_file_by_path("a.py")
+        assert f is not None
         findings = db.get_findings(f.id)
         # Mark one as acknowledged — should still count as active
         db.conn.execute("UPDATE scan_findings SET status = 'acknowledged' WHERE id = ?", (findings[0].id,))
@@ -1393,6 +1425,7 @@ class TestMinFindingsFilter:
             ],
         )
         f = db.get_file_by_path("a.py")
+        assert f is not None
         findings = db.get_findings(f.id)
         # Mark one as unseen_in_latest — should still count as active
         db.conn.execute(
@@ -1446,6 +1479,7 @@ class TestHasSeverityFilter:
             ],
         )
         f = db.get_file_by_path("a.py")
+        assert f is not None
         findings = db.get_findings(f.id)
         db.conn.execute("UPDATE scan_findings SET status = 'fixed' WHERE id = ?", (findings[0].id,))
         db.conn.commit()
@@ -1539,6 +1573,7 @@ class TestListFilesEnrichment:
             findings=[{"path": "a.py", "rule_id": "E1", "severity": "low", "message": "m"}],
         )
         f = db.get_file_by_path("a.py")
+        assert f is not None
         issue = db.create_issue("Bug in a.py")
         db.add_file_association(f.id, issue.id, "bug_in")
         result = db.list_files_paginated()
@@ -1553,6 +1588,7 @@ class TestListFilesEnrichment:
             ],
         )
         f = db.get_file_by_path("a.py")
+        assert f is not None
         findings = db.get_findings(f.id)
         db.conn.execute("UPDATE scan_findings SET status = 'fixed' WHERE id = ?", (findings[0].id,))
         db.conn.commit()
@@ -1588,6 +1624,7 @@ class TestFileTimeline:
             findings=[{"path": "a.py", "rule_id": "E501", "severity": "high", "message": "Long"}],
         )
         f = db.get_file_by_path("a.py")
+        assert f is not None
         result = db.get_file_timeline(f.id)
         assert result["total"] >= 1
         types = [e["type"] for e in result["results"]]
@@ -1599,6 +1636,7 @@ class TestFileTimeline:
             findings=[{"path": "a.py", "rule_id": "E501", "severity": "high", "message": "Long"}],
         )
         f = db.get_file_by_path("a.py")
+        assert f is not None
         # Trigger an update by changing status
         findings = db.get_findings(f.id)
         db.conn.execute(
@@ -1626,6 +1664,7 @@ class TestFileTimeline:
             findings=[{"path": "a.py", "rule_id": "E501", "severity": "low", "message": "msg"}],
         )
         f = db.get_file_by_path("a.py")
+        assert f is not None
         r1 = db.get_file_timeline(f.id)
         r2 = db.get_file_timeline(f.id)
         ids1 = [e["id"] for e in r1["results"]]
@@ -1654,6 +1693,7 @@ class TestFileTimeline:
             findings=[{"path": "a.py", "rule_id": f"E{i:03d}", "severity": "low", "message": f"msg{i}"} for i in range(10)],
         )
         f = db.get_file_by_path("a.py")
+        assert f is not None
         result = db.get_file_timeline(f.id, limit=3)
         assert len(result["results"]) == 3
         assert result["total"] == 10
@@ -1817,6 +1857,7 @@ class TestGlobalFindingsStats:
             ],
         )
         f = db.get_file_by_path("a.py")
+        assert f is not None
         findings = db.get_findings(f.id)
         db.conn.execute("UPDATE scan_findings SET status = 'fixed' WHERE id = ?", (findings[0].id,))
         db.conn.commit()
@@ -1859,6 +1900,7 @@ class TestPaginationMetadata:
             findings=[{"path": "a.py", "rule_id": f"E{i}", "severity": "low", "message": f"msg{i}"} for i in range(10)],
         )
         f = db.get_file_by_path("a.py")
+        assert f is not None
         result = db.get_findings_paginated(f.id, limit=5)
         assert result["total"] == 10
         assert result["has_more"] is True
@@ -2009,7 +2051,7 @@ class TestCreateIssuesPartialFailure:
             call_count += 1
             if call_count >= 2:
                 raise RuntimeError("Simulated issue creation failure")
-            return original_create(*args, **kwargs)
+            return original_create(*args, **kwargs)  # type: ignore[arg-type]
 
         with (
             patch.object(db, "create_issue", side_effect=failing_create),

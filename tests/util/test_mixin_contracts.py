@@ -317,7 +317,7 @@ def test_property_return_type_matches(stub: _StubInfo) -> None:
     source = filepath.read_text()
     tree = ast.parse(source, filename=str(filepath))
 
-    stub_func: ast.FunctionDef | None = None
+    stub_func: ast.FunctionDef | ast.AsyncFunctionDef | None = None
     for node in ast.walk(tree):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == stub.name and node.lineno == stub.lineno:
             stub_func = node
@@ -358,7 +358,7 @@ def test_stub_signature_matches(stub: _StubInfo) -> None:
     source = filepath.read_text()
     tree = ast.parse(source, filename=str(filepath))
 
-    stub_func: ast.FunctionDef | None = None
+    stub_func: ast.FunctionDef | ast.AsyncFunctionDef | None = None
     for node in ast.walk(tree):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == stub.name and node.lineno == stub.lineno:
             stub_func = node
@@ -408,7 +408,7 @@ def test_stub_return_type_matches(stub: _StubInfo) -> None:
     tree = ast.parse(source, filename=str(filepath))
 
     # Find the stub's return annotation in the AST
-    stub_func: ast.FunctionDef | None = None
+    stub_func: ast.FunctionDef | ast.AsyncFunctionDef | None = None
     for node in ast.walk(tree):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == stub.name and node.lineno == stub.lineno:
             stub_func = node
@@ -448,7 +448,7 @@ def test_stub_return_type_matches(stub: _StubInfo) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _strip_annotations(func_node: ast.FunctionDef) -> str:
+def _strip_annotations(func_node: ast.FunctionDef | ast.AsyncFunctionDef) -> str:
     """Build a minimal function def with no annotations (for signature extraction)."""
     defaults_offset = len(func_node.args.args) - len(func_node.args.defaults)
     kw_defaults = func_node.args.kw_defaults

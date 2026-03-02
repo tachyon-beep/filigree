@@ -10,29 +10,29 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 import filigree.dashboard as dash_module
-from filigree.core import DB_FILENAME, FiligreeDB, write_config
+from filigree.core import DB_FILENAME, FiligreeDB, Issue, write_config
 from filigree.dashboard import ProjectStore, create_app
 from tests._db_factory import make_db
+from tests.conftest import PopulatedDB
 
 
 @pytest.fixture
-def dashboard_db(populated_db: FiligreeDB) -> FiligreeDB:
+def dashboard_db(populated_db: PopulatedDB) -> PopulatedDB:
     """Use the populated_db fixture for dashboard tests.
 
-    Enables check_same_thread=False so sync handlers run in FastAPI's threadpool.
+    Reconnects the underlying DB with check_same_thread=False so sync
+    handlers run in FastAPI's threadpool.  Returns the full PopulatedDB
+    wrapper so tests can access ``.db`` and ``.ids``.
     """
-    populated_db._check_same_thread = False
-    if populated_db._conn is not None:
-        populated_db._conn.commit()
-        populated_db._conn.close()
-        populated_db._conn = None
+    db = populated_db.db
+    db.reconnect(check_same_thread=False)
     return populated_db
 
 
 @pytest.fixture
-async def client(dashboard_db: FiligreeDB) -> AsyncIterator[AsyncClient]:
+async def client(dashboard_db: PopulatedDB) -> AsyncIterator[AsyncClient]:
     """Create a test client backed by a single-project DB (ethereal mode)."""
-    dash_module._db = dashboard_db
+    dash_module._db = dashboard_db.db
     app = create_app()
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as c:
@@ -57,7 +57,7 @@ async def release_client(release_dashboard_db: FiligreeDB) -> AsyncIterator[Asyn
     dash_module._db = None
 
 
-def make_release_hierarchy(db: FiligreeDB, *, include_done: bool = False) -> tuple:
+def make_release_hierarchy(db: FiligreeDB, *, include_done: bool = False) -> tuple[Issue, Issue, Issue]:
     """Returns (release, epic, task). Mirrors tests/core/test_releases.py."""
     release = db.create_issue("v1.0.0", type="release")
     epic = db.create_issue("Epic A", type="epic", parent_id=release.id)

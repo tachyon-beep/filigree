@@ -12,6 +12,33 @@ from filigree.types.planning import CommentRecord, CriticalPathNode, PlanPhase, 
 # ---------------------------------------------------------------------------
 
 
+class TransitionDetail(TypedDict):
+    """Full transition info returned by get_issue and get_valid_transitions."""
+
+    to: str
+    category: str
+    enforcement: str | None
+    requires_fields: list[str]
+    missing_fields: list[str] | list[dict[str, Any]]
+    ready: bool
+
+
+class TransitionHint(TypedDict):
+    """Abbreviated transition hint included in error responses."""
+
+    to: str
+    category: str
+    ready: NotRequired[bool]
+
+
+class OutboundTransitionInfo(TypedDict):
+    """Outbound transition info returned by explain_state."""
+
+    to: str
+    enforcement: str
+    requires_fields: list[str]
+
+
 class SlimIssue(TypedDict):
     """Reduced 5-key issue shape for search results and unblocked lists."""
 
@@ -29,7 +56,11 @@ class BlockedIssue(SlimIssue):
 
 
 class ErrorResponse(TypedDict):
-    """Standard error envelope returned by MCP/dashboard error paths."""
+    """Flat error envelope returned by MCP tool handlers.
+
+    NOTE: Dashboard routes use a different nested format via _error_response()
+    in dashboard_routes/common.py: ``{"error": {"message", "code", "details"}}``.
+    """
 
     error: str
     code: str
@@ -43,7 +74,7 @@ class TransitionError(TypedDict):
 
     error: str
     code: Literal["invalid_transition"]
-    valid_transitions: NotRequired[list[dict[str, Any]]]
+    valid_transitions: NotRequired[list[TransitionHint]]
     hint: NotRequired[str]
 
 
@@ -67,7 +98,7 @@ class TransitionError(TypedDict):
 class IssueWithTransitions(IssueDict):
     """Issue detail with optional valid_transitions (MCP get_issue)."""
 
-    valid_transitions: NotRequired[list[dict[str, Any]]]
+    valid_transitions: NotRequired[list[TransitionDetail]]
 
 
 class IssueWithChangedFields(IssueDict):
@@ -331,5 +362,5 @@ class StateExplanation(TypedDict):
     category: str
     type: str
     inbound_transitions: list[dict[str, str]]
-    outbound_transitions: list[dict[str, Any]]
+    outbound_transitions: list[OutboundTransitionInfo]
     required_fields: list[str]

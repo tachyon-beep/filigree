@@ -59,7 +59,7 @@ def test_mcp_tools_total_count() -> None:
 
 def test_mcp_backward_compat_imports() -> None:
     """_text, _MAX_LIST_RESULTS, _safe_path importable from mcp_server."""
-    from filigree.mcp_server import _MAX_LIST_RESULTS, _safe_path, _text
+    from filigree.mcp_server import _MAX_LIST_RESULTS, _safe_path, _text  # type: ignore[attr-defined]
 
     assert _MAX_LIST_RESULTS == 50
     assert callable(_text)
@@ -84,7 +84,7 @@ def test_undo_last_available(db: FiligreeDB) -> None:
     issue = db.create_issue(title="original")
     db.update_issue(issue.id, title="changed")
     result = db.undo_last(issue.id)
-    assert result["event_type"] == "title_changed"
+    assert result["event_type"] == "title_changed"  # type: ignore[typeddict-item]
 
 
 def test_archive_compact_available(db: FiligreeDB) -> None:
@@ -113,7 +113,7 @@ def test_templates_available(db: FiligreeDB) -> None:
 def test_validate_status(db: FiligreeDB) -> None:
     """_validate_status should work through mixin composition."""
     # Should not raise for valid status; returns None on success
-    result = db._validate_status("open", "task")
+    result = db._validate_status("open", "task")  # type: ignore[func-returns-value]
     assert result is None
 
 

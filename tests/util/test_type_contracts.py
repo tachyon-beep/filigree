@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import ast
-from collections.abc import Generator
 from pathlib import Path
 from typing import get_type_hints
 
@@ -53,20 +52,8 @@ from filigree.types.planning import (
     StatsResult,
 )
 from filigree.types.workflow import TemplateInfo, TemplateListItem
-from tests._db_factory import make_db
 
-# ---------------------------------------------------------------------------
-# Fixture
-# ---------------------------------------------------------------------------
-
-
-@pytest.fixture
-def db(tmp_path: Path) -> Generator[FiligreeDB, None, None]:
-    """Fresh FiligreeDB for each test."""
-    d = make_db(tmp_path)
-    yield d
-    d.close()
-
+# db fixture inherited from tests/conftest.py (make_db with default packs)
 
 # ---------------------------------------------------------------------------
 # 1. Runtime shape tests — key-set + value-type checks
@@ -673,7 +660,7 @@ class TestBlockedIssueShape:
 class TestIssueWithTransitionsShape:
     def test_keys_without_transitions(self, db: FiligreeDB) -> None:
         issue = db.create_issue("Test", type="task")
-        result = IssueWithTransitions(**issue.to_dict())
+        result = IssueWithTransitions(**issue.to_dict())  # type: ignore[typeddict-item]
         # NotRequired keys may be absent
         assert {"id", "title", "status"} <= set(result.keys())
 
@@ -697,7 +684,7 @@ class TestIssueWithChangedFieldsShape:
 class TestIssueWithUnblockedShape:
     def test_keys_without_unblocked(self, db: FiligreeDB) -> None:
         issue = db.create_issue("Test", type="task")
-        result = IssueWithUnblocked(**issue.to_dict())
+        result = IssueWithUnblocked(**issue.to_dict())  # type: ignore[typeddict-item]
         assert {"id", "title", "status"} <= set(result.keys())
 
     def test_keys_with_unblocked(self, db: FiligreeDB) -> None:

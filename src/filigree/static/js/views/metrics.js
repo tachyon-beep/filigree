@@ -149,14 +149,14 @@ export async function renderSparkline() {
       else ctx.lineTo(x, y);
     });
     ctx.stroke();
-  } catch (_e) {
-    /* sparkline is non-critical */
+  } catch (err) {
+    console.debug("[renderSparkline] Non-critical sparkline error:", err);
   }
 }
 
 /**
  * Scan WIP issues for staleness (>2 h since last update) and update the
- * #staleBadge element.  Stores the stale list on window._staleIssues for
+ * #staleBadge element.  Stores the stale list on state._staleIssues for
  * the modal.
  */
 export function updateStaleBadge() {
@@ -174,7 +174,7 @@ export function updateStaleBadge() {
   } else {
     badge.classList.add("hidden");
   }
-  window._staleIssues = stale;
+  state._staleIssues = stale;
 }
 
 /**
@@ -182,7 +182,7 @@ export function updateStaleBadge() {
  * its detail panel.
  */
 export function showStaleIssues() {
-  const stale = window._staleIssues || [];
+  const stale = state._staleIssues || [];
   if (!stale.length) return;
   if (stale.length === 1) {
     // openDetail is still on the global scope during migration

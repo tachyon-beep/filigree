@@ -10,6 +10,7 @@ from mcp.types import TextContent, Tool
 from filigree.mcp_tools.common import _parse_args, _text
 from filigree.types.api import (
     ErrorResponse,
+    OutboundTransitionInfo,
     PackListItem,
     StateExplanation,
     ValidationResult,
@@ -353,8 +354,8 @@ async def _handle_explain_state(arguments: dict[str, Any]) -> list[TextContent]:
     if state_def is None:
         return _text(ErrorResponse(error=f"Unknown state '{state_name}' for type '{args['type']}'", code="not_found"))
     inbound = [{"from": td.from_state, "enforcement": td.enforcement} for td in state_tpl.transitions if td.to_state == state_name]
-    outbound = [
-        {"to": td.to_state, "enforcement": td.enforcement, "requires_fields": list(td.requires_fields)}
+    outbound: list[OutboundTransitionInfo] = [
+        OutboundTransitionInfo(to=td.to_state, enforcement=td.enforcement, requires_fields=list(td.requires_fields))
         for td in state_tpl.transitions
         if td.from_state == state_name
     ]

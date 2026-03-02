@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 from unittest.mock import MagicMock
 
 import portalocker
@@ -389,9 +390,9 @@ class TestDaemonLifecycle:
         monkeypatch.setattr("filigree.server.SERVER_CONFIG_FILE", config_dir / "server.json")
         monkeypatch.setattr("filigree.server.SERVER_PID_FILE", config_dir / "server.pid")
 
-        spawned: list = []
+        spawned: list[list[str]] = []
 
-        def mock_popen(cmd, **kwargs):  # type: ignore[no-untyped-def]
+        def mock_popen(cmd: list[str], **kwargs: Any) -> MagicMock:
             mock = MagicMock()
             mock.pid = 54321
             mock.poll.return_value = None
@@ -590,10 +591,10 @@ class TestClaimDaemonLocking:
         monkeypatch.setattr("filigree.server.SERVER_CONFIG_FILE", config_dir / "server.json")
         monkeypatch.setattr("filigree.server.SERVER_PID_FILE", config_dir / "server.pid")
 
-        lock_calls: list[tuple] = []
+        lock_calls: list[tuple[Any, Any]] = []
         original_lock = portalocker.lock
 
-        def _spy_lock(fd, operation):
+        def _spy_lock(fd: Any, operation: Any) -> None:
             lock_calls.append((fd, operation))
             return original_lock(fd, operation)
 

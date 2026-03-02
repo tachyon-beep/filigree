@@ -46,10 +46,10 @@ class TestSearchFTSFallback:
         class _SpyConn:
             """Wraps conn to intercept FTS queries."""
 
-            def __getattr__(self, name):
+            def __getattr__(self, name: str) -> object:
                 return getattr(db._conn, name)
 
-            def execute(self, sql, params=()):
+            def execute(self, sql: str, params: tuple[object, ...] = ()) -> sqlite3.Cursor:
                 if "issues_fts" in sql and "MATCH" in sql:
                     raise sqlite3.OperationalError("database disk image is malformed")
                 return original_execute(sql, params)

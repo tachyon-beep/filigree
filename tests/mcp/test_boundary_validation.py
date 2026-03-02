@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from filigree.core import FiligreeDB
 from filigree.mcp_server import call_tool
-from tests.mcp.conftest import _parse
+from tests.mcp._helpers import _parse
 
 
 class TestMCPActorValidation:
@@ -104,6 +104,37 @@ class TestMCPActorValidation:
         result = await call_tool("release_claim", {"id": issue.id, "actor": ""})
         data = _parse(result)
         assert data["code"] == "validation_error"
+
+    async def test_batch_add_label_empty_actor(self, mcp_db: FiligreeDB) -> None:
+        issue = mcp_db.create_issue("Label target")
+        result = await call_tool(
+            "batch_add_label",
+            {"ids": [issue.id], "label": "security", "actor": ""},
+        )
+        data = _parse(result)
+        assert data["code"] == "validation_error"
+        assert "empty" in data["error"]
+
+    async def test_batch_add_label_control_char_actor(self, mcp_db: FiligreeDB) -> None:
+        issue = mcp_db.create_issue("Label target")
+        result = await call_tool(
+            "batch_add_label",
+            {"ids": [issue.id], "label": "security", "actor": "\x00bad"},
+        )
+        data = _parse(result)
+        assert data["code"] == "validation_error"
+        assert "control" in data["error"].lower()
+
+    async def test_batch_add_label_valid_actor(self, mcp_db: FiligreeDB) -> None:
+        """Valid actor should succeed without errors."""
+        issue = mcp_db.create_issue("Label target")
+        result = await call_tool(
+            "batch_add_label",
+            {"ids": [issue.id], "label": "reviewed", "actor": "ci-bot"},
+        )
+        data = _parse(result)
+        assert "error" not in data
+        assert data["count"] == 1
 
 
 class TestMCPPriorityValidation:

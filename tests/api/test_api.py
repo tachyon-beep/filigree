@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+from typing import Any
 
 import pytest
 from httpx import ASGITransport, AsyncClient
 
 import filigree.dashboard as dash_module
-from filigree.core import FiligreeDB
 from filigree.dashboard import STATIC_DIR, create_app
+from tests.conftest import PopulatedDB
 
 
 class TestDashboardIndex:
@@ -136,24 +137,24 @@ class TestIssuesAPI:
 
 
 class TestIssueDetailAPI:
-    async def test_issue_detail(self, client: AsyncClient, dashboard_db: FiligreeDB) -> None:
-        ids = dashboard_db._test_ids  # type: ignore[attr-defined]
+    async def test_issue_detail(self, client: AsyncClient, dashboard_db: PopulatedDB) -> None:
+        ids = dashboard_db.ids
         resp = await client.get(f"/api/issue/{ids['a']}")
         assert resp.status_code == 200
         data = resp.json()
         assert data["id"] == ids["a"]
         assert data["title"] == "Issue A"
 
-    async def test_issue_detail_includes_deps(self, client: AsyncClient, dashboard_db: FiligreeDB) -> None:
-        ids = dashboard_db._test_ids  # type: ignore[attr-defined]
+    async def test_issue_detail_includes_deps(self, client: AsyncClient, dashboard_db: PopulatedDB) -> None:
+        ids = dashboard_db.ids
         resp = await client.get(f"/api/issue/{ids['a']}")
         data = resp.json()
         assert "dep_details" in data
         assert "events" in data
         assert "comments" in data
 
-    async def test_issue_detail_blocked_by_details(self, client: AsyncClient, dashboard_db: FiligreeDB) -> None:
-        ids = dashboard_db._test_ids  # type: ignore[attr-defined]
+    async def test_issue_detail_blocked_by_details(self, client: AsyncClient, dashboard_db: PopulatedDB) -> None:
+        ids = dashboard_db.ids
         resp = await client.get(f"/api/issue/{ids['a']}")
         data = resp.json()
         # A is blocked by B
@@ -171,8 +172,8 @@ class TestIssueDetailAPI:
         assert err["code"] == "ISSUE_NOT_FOUND"
         assert "nonexistent" in err["message"]
 
-    async def test_issue_with_comments(self, client: AsyncClient, dashboard_db: FiligreeDB) -> None:
-        ids = dashboard_db._test_ids  # type: ignore[attr-defined]
+    async def test_issue_with_comments(self, client: AsyncClient, dashboard_db: PopulatedDB) -> None:
+        ids = dashboard_db.ids
         resp = await client.get(f"/api/issue/{ids['b']}")
         data = resp.json()
         assert len(data["comments"]) == 1
@@ -249,8 +250,8 @@ class TestWorkflowAwareAPI:
 class TestTransitionsAPI:
     """GET /api/issue/{issue_id}/transitions — valid next states."""
 
-    async def test_transitions_for_open_issue(self, client: AsyncClient, dashboard_db: FiligreeDB) -> None:
-        ids = dashboard_db._test_ids  # type: ignore[attr-defined]
+    async def test_transitions_for_open_issue(self, client: AsyncClient, dashboard_db: PopulatedDB) -> None:
+        ids = dashboard_db.ids
         resp = await client.get(f"/api/issue/{ids['b']}/transitions")
         assert resp.status_code == 200
         data = resp.json()
@@ -324,8 +325,8 @@ class TestCreateIssueAPI:
         assert "nonexistent_type" in err["message"]
         assert "task" in err["message"]
 
-    async def test_create_with_parent(self, client: AsyncClient, dashboard_db: FiligreeDB) -> None:
-        ids = dashboard_db._test_ids  # type: ignore[attr-defined]
+    async def test_create_with_parent(self, client: AsyncClient, dashboard_db: PopulatedDB) -> None:
+        ids = dashboard_db.ids
         resp = await client.post(
             "/api/issues",
             json={"title": "Child issue", "parent_id": ids["epic"]},
@@ -334,8 +335,8 @@ class TestCreateIssueAPI:
         data = resp.json()
         assert data["parent_id"] == ids["epic"]
 
-    async def test_create_with_deps(self, client: AsyncClient, dashboard_db: FiligreeDB) -> None:
-        ids = dashboard_db._test_ids  # type: ignore[attr-defined]
+    async def test_create_with_deps(self, client: AsyncClient, dashboard_db: PopulatedDB) -> None:
+        ids = dashboard_db.ids
         resp = await client.post(
             "/api/issues",
             json={"title": "Dep issue", "deps": [ids["b"]]},
@@ -348,8 +349,8 @@ class TestCreateIssueAPI:
 class TestUpdateAPI:
     """PATCH /api/issue/{issue_id} — update issue fields."""
 
-    async def test_update_priority(self, client: AsyncClient, dashboard_db: FiligreeDB) -> None:
-        ids = dashboard_db._test_ids  # type: ignore[attr-defined]
+    async def test_update_priority(self, client: AsyncClient, dashboard_db: PopulatedDB) -> None:
+        ids = dashboard_db.ids
         resp = await client.patch(
             f"/api/issue/{ids['b']}",
             json={"priority": 0},
@@ -358,8 +359,8 @@ class TestUpdateAPI:
         data = resp.json()
         assert data["priority"] == 0
 
-    async def test_update_assignee(self, client: AsyncClient, dashboard_db: FiligreeDB) -> None:
-        ids = dashboard_db._test_ids  # type: ignore[attr-defined]
+    async def test_update_assignee(self, client: AsyncClient, dashboard_db: PopulatedDB) -> None:
+        ids = dashboard_db.ids
         resp = await client.patch(
             f"/api/issue/{ids['b']}",
             json={"assignee": "alice"},
@@ -368,8 +369,8 @@ class TestUpdateAPI:
         data = resp.json()
         assert data["assignee"] == "alice"
 
-    async def test_update_status(self, client: AsyncClient, dashboard_db: FiligreeDB) -> None:
-        ids = dashboard_db._test_ids  # type: ignore[attr-defined]
+    async def test_update_status(self, client: AsyncClient, dashboard_db: PopulatedDB) -> None:
+        ids = dashboard_db.ids
         resp = await client.patch(
             f"/api/issue/{ids['b']}",
             json={"status": "in_progress"},
@@ -378,8 +379,8 @@ class TestUpdateAPI:
         data = resp.json()
         assert data["status"] == "in_progress"
 
-    async def test_update_title(self, client: AsyncClient, dashboard_db: FiligreeDB) -> None:
-        ids = dashboard_db._test_ids  # type: ignore[attr-defined]
+    async def test_update_title(self, client: AsyncClient, dashboard_db: PopulatedDB) -> None:
+        ids = dashboard_db.ids
         resp = await client.patch(
             f"/api/issue/{ids['b']}",
             json={"title": "Renamed Issue B"},
@@ -396,8 +397,8 @@ class TestUpdateAPI:
         assert resp.status_code == 404
         assert "error" in resp.json()
 
-    async def test_update_invalid_transition(self, client: AsyncClient, dashboard_db: FiligreeDB) -> None:
-        ids = dashboard_db._test_ids  # type: ignore[attr-defined]
+    async def test_update_invalid_transition(self, client: AsyncClient, dashboard_db: PopulatedDB) -> None:
+        ids = dashboard_db.ids
         # Trying to transition to an invalid state should 409
         resp = await client.patch(
             f"/api/issue/{ids['b']}",
@@ -406,8 +407,8 @@ class TestUpdateAPI:
         assert resp.status_code == 409
         assert "error" in resp.json()
 
-    async def test_update_actor_defaults_to_dashboard(self, client: AsyncClient, dashboard_db: FiligreeDB) -> None:
-        ids = dashboard_db._test_ids  # type: ignore[attr-defined]
+    async def test_update_actor_defaults_to_dashboard(self, client: AsyncClient, dashboard_db: PopulatedDB) -> None:
+        ids = dashboard_db.ids
         resp = await client.patch(
             f"/api/issue/{ids['b']}",
             json={"priority": 3},
@@ -419,8 +420,8 @@ class TestUpdateAPI:
         # Most recent event should have actor "dashboard"
         assert any(e.get("actor") == "dashboard" for e in events)
 
-    async def test_update_custom_actor(self, client: AsyncClient, dashboard_db: FiligreeDB) -> None:
-        ids = dashboard_db._test_ids  # type: ignore[attr-defined]
+    async def test_update_custom_actor(self, client: AsyncClient, dashboard_db: PopulatedDB) -> None:
+        ids = dashboard_db.ids
         resp = await client.patch(
             f"/api/issue/{ids['b']}",
             json={"priority": 1, "actor": "bot-1"},
@@ -434,8 +435,8 @@ class TestUpdateAPI:
 class TestCloseReopenAPI:
     """POST /api/issue/{issue_id}/close and /reopen."""
 
-    async def test_close_issue(self, client: AsyncClient, dashboard_db: FiligreeDB) -> None:
-        ids = dashboard_db._test_ids  # type: ignore[attr-defined]
+    async def test_close_issue(self, client: AsyncClient, dashboard_db: PopulatedDB) -> None:
+        ids = dashboard_db.ids
         resp = await client.post(
             f"/api/issue/{ids['b']}/close",
             json={"reason": "completed"},
@@ -444,8 +445,8 @@ class TestCloseReopenAPI:
         data = resp.json()
         assert data["status_category"] == "done"
 
-    async def test_close_already_closed(self, client: AsyncClient, dashboard_db: FiligreeDB) -> None:
-        ids = dashboard_db._test_ids  # type: ignore[attr-defined]
+    async def test_close_already_closed(self, client: AsyncClient, dashboard_db: PopulatedDB) -> None:
+        ids = dashboard_db.ids
         # C is already closed
         resp = await client.post(
             f"/api/issue/{ids['c']}/close",
@@ -462,8 +463,8 @@ class TestCloseReopenAPI:
         assert resp.status_code == 404
         assert "error" in resp.json()
 
-    async def test_reopen_closed_issue(self, client: AsyncClient, dashboard_db: FiligreeDB) -> None:
-        ids = dashboard_db._test_ids  # type: ignore[attr-defined]
+    async def test_reopen_closed_issue(self, client: AsyncClient, dashboard_db: PopulatedDB) -> None:
+        ids = dashboard_db.ids
         # C is closed — reopen it
         resp = await client.post(
             f"/api/issue/{ids['c']}/reopen",
@@ -473,8 +474,8 @@ class TestCloseReopenAPI:
         data = resp.json()
         assert data["status_category"] == "open"
 
-    async def test_reopen_not_closed(self, client: AsyncClient, dashboard_db: FiligreeDB) -> None:
-        ids = dashboard_db._test_ids  # type: ignore[attr-defined]
+    async def test_reopen_not_closed(self, client: AsyncClient, dashboard_db: PopulatedDB) -> None:
+        ids = dashboard_db.ids
         # B is open — can't reopen
         resp = await client.post(
             f"/api/issue/{ids['b']}/reopen",
@@ -491,16 +492,16 @@ class TestCloseReopenAPI:
         assert resp.status_code == 404
         assert "error" in resp.json()
 
-    async def test_close_with_actor(self, client: AsyncClient, dashboard_db: FiligreeDB) -> None:
-        ids = dashboard_db._test_ids  # type: ignore[attr-defined]
+    async def test_close_with_actor(self, client: AsyncClient, dashboard_db: PopulatedDB) -> None:
+        ids = dashboard_db.ids
         resp = await client.post(
             f"/api/issue/{ids['b']}/close",
             json={"actor": "bot-2"},
         )
         assert resp.status_code == 200
 
-    async def test_reopen_with_actor(self, client: AsyncClient, dashboard_db: FiligreeDB) -> None:
-        ids = dashboard_db._test_ids  # type: ignore[attr-defined]
+    async def test_reopen_with_actor(self, client: AsyncClient, dashboard_db: PopulatedDB) -> None:
+        ids = dashboard_db.ids
         # C is closed, reopen with actor
         resp = await client.post(
             f"/api/issue/{ids['c']}/reopen",
@@ -510,8 +511,8 @@ class TestCloseReopenAPI:
 
 
 class TestClaimAPI:
-    async def test_claim_issue(self, client: AsyncClient, dashboard_db: FiligreeDB) -> None:
-        ids = dashboard_db._test_ids  # type: ignore[attr-defined]
+    async def test_claim_issue(self, client: AsyncClient, dashboard_db: PopulatedDB) -> None:
+        ids = dashboard_db.ids
         resp = await client.post(
             f"/api/issue/{ids['a']}/claim",
             json={"assignee": "agent-1"},
@@ -520,9 +521,9 @@ class TestClaimAPI:
         data = resp.json()
         assert data["assignee"] == "agent-1"
 
-    async def test_release_claim(self, client: AsyncClient, dashboard_db: FiligreeDB) -> None:
-        ids = dashboard_db._test_ids  # type: ignore[attr-defined]
-        dashboard_db.claim_issue(ids["a"], assignee="agent-1")
+    async def test_release_claim(self, client: AsyncClient, dashboard_db: PopulatedDB) -> None:
+        ids = dashboard_db.ids
+        dashboard_db.db.claim_issue(ids["a"], assignee="agent-1")
         resp = await client.post(
             f"/api/issue/{ids['a']}/release",
             json={},
@@ -531,7 +532,7 @@ class TestClaimAPI:
         data = resp.json()
         assert data["assignee"] == ""
 
-    async def test_claim_next(self, client: AsyncClient, dashboard_db: FiligreeDB) -> None:
+    async def test_claim_next(self, client: AsyncClient, dashboard_db: PopulatedDB) -> None:
         resp = await client.post(
             "/api/claim-next",
             json={"assignee": "agent-2"},
@@ -552,14 +553,14 @@ class TestClaimEmptyAssigneeAPI:
     """Bug filigree-040ddb: dashboard claim endpoints must reject empty assignee."""
 
     @pytest.mark.parametrize("body", [{"assignee": ""}, {}], ids=["empty", "missing"])
-    async def test_claim_issue_rejects_bad_assignee(self, client: AsyncClient, dashboard_db: FiligreeDB, body: dict) -> None:
-        ids = dashboard_db._test_ids  # type: ignore[attr-defined]
+    async def test_claim_issue_rejects_bad_assignee(self, client: AsyncClient, dashboard_db: PopulatedDB, body: dict[str, str]) -> None:
+        ids = dashboard_db.ids
         resp = await client.post(f"/api/issue/{ids['a']}/claim", json=body)
         assert resp.status_code == 400
         assert "assignee" in resp.json()["error"]["message"].lower()
 
     @pytest.mark.parametrize("body", [{"assignee": ""}, {}], ids=["empty", "missing"])
-    async def test_claim_next_rejects_bad_assignee(self, client: AsyncClient, body: dict) -> None:
+    async def test_claim_next_rejects_bad_assignee(self, client: AsyncClient, body: dict[str, str]) -> None:
         resp = await client.post("/api/claim-next", json=body)
         assert resp.status_code == 400
         assert "assignee" in resp.json()["error"]["message"].lower()
@@ -568,8 +569,8 @@ class TestClaimEmptyAssigneeAPI:
 class TestCommentAPI:
     """POST /api/issue/{issue_id}/comments — add a comment."""
 
-    async def test_add_comment(self, client: AsyncClient, dashboard_db: FiligreeDB) -> None:
-        ids = dashboard_db._test_ids  # type: ignore[attr-defined]
+    async def test_add_comment(self, client: AsyncClient, dashboard_db: PopulatedDB) -> None:
+        ids = dashboard_db.ids
         resp = await client.post(
             f"/api/issue/{ids['b']}/comments",
             json={"text": "A new comment", "author": "alice"},
@@ -581,8 +582,8 @@ class TestCommentAPI:
         assert "id" in data
         assert "created_at" in data
 
-    async def test_add_comment_default_author(self, client: AsyncClient, dashboard_db: FiligreeDB) -> None:
-        ids = dashboard_db._test_ids  # type: ignore[attr-defined]
+    async def test_add_comment_default_author(self, client: AsyncClient, dashboard_db: PopulatedDB) -> None:
+        ids = dashboard_db.ids
         resp = await client.post(
             f"/api/issue/{ids['a']}/comments",
             json={"text": "No author specified"},
@@ -600,8 +601,8 @@ class TestCommentAPI:
         assert resp.status_code == 404
         assert "error" in resp.json()
 
-    async def test_add_comment_empty_text(self, client: AsyncClient, dashboard_db: FiligreeDB) -> None:
-        ids = dashboard_db._test_ids  # type: ignore[attr-defined]
+    async def test_add_comment_empty_text(self, client: AsyncClient, dashboard_db: PopulatedDB) -> None:
+        ids = dashboard_db.ids
         resp = await client.post(
             f"/api/issue/{ids['b']}/comments",
             json={"text": ""},
@@ -609,8 +610,8 @@ class TestCommentAPI:
         assert resp.status_code == 400
         assert "error" in resp.json()
 
-    async def test_add_comment_whitespace_text(self, client: AsyncClient, dashboard_db: FiligreeDB) -> None:
-        ids = dashboard_db._test_ids  # type: ignore[attr-defined]
+    async def test_add_comment_whitespace_text(self, client: AsyncClient, dashboard_db: PopulatedDB) -> None:
+        ids = dashboard_db.ids
         resp = await client.post(
             f"/api/issue/{ids['b']}/comments",
             json={"text": "   "},
@@ -776,11 +777,11 @@ class TestPlanAPI:
         assert resp.status_code == 404
         assert "error" in resp.json()
 
-    async def test_plan_returns_tree(self, client: AsyncClient, dashboard_db: FiligreeDB) -> None:
+    async def test_plan_returns_tree(self, client: AsyncClient, dashboard_db: PopulatedDB) -> None:
         # Create a mini milestone -> phase -> step hierarchy
-        milestone = dashboard_db.create_issue("Test Milestone", type="milestone")
-        phase = dashboard_db.create_issue("Phase 1", type="phase", parent_id=milestone.id)
-        dashboard_db.create_issue("Step 1", type="step", parent_id=phase.id)
+        milestone = dashboard_db.db.create_issue("Test Milestone", type="milestone")
+        phase = dashboard_db.db.create_issue("Phase 1", type="phase", parent_id=milestone.id)
+        dashboard_db.db.create_issue("Step 1", type="step", parent_id=phase.id)
 
         resp = await client.get(f"/api/plan/{milestone.id}")
         assert resp.status_code == 200
@@ -798,8 +799,8 @@ class TestPlanAPI:
 class TestBatchAPI:
     """POST /api/batch/update and /api/batch/close — batch operations."""
 
-    async def test_batch_update_priority(self, client: AsyncClient, dashboard_db: FiligreeDB) -> None:
-        ids = dashboard_db._test_ids  # type: ignore[attr-defined]
+    async def test_batch_update_priority(self, client: AsyncClient, dashboard_db: PopulatedDB) -> None:
+        ids = dashboard_db.ids
         resp = await client.post(
             "/api/batch/update",
             json={"issue_ids": [ids["a"], ids["b"]], "priority": 0},
@@ -811,8 +812,8 @@ class TestBatchAPI:
         assert len(data["updated"]) == 2
         assert all(i["priority"] == 0 for i in data["updated"])
 
-    async def test_batch_update_with_errors(self, client: AsyncClient, dashboard_db: FiligreeDB) -> None:
-        ids = dashboard_db._test_ids  # type: ignore[attr-defined]
+    async def test_batch_update_with_errors(self, client: AsyncClient, dashboard_db: PopulatedDB) -> None:
+        ids = dashboard_db.ids
         resp = await client.post(
             "/api/batch/update",
             json={"issue_ids": [ids["a"], "nonexistent"], "priority": 1},
@@ -823,8 +824,8 @@ class TestBatchAPI:
         assert len(data["errors"]) == 1
         assert data["errors"][0]["id"] == "nonexistent"
 
-    async def test_batch_update_with_actor(self, client: AsyncClient, dashboard_db: FiligreeDB) -> None:
-        ids = dashboard_db._test_ids  # type: ignore[attr-defined]
+    async def test_batch_update_with_actor(self, client: AsyncClient, dashboard_db: PopulatedDB) -> None:
+        ids = dashboard_db.ids
         resp = await client.post(
             "/api/batch/update",
             json={"issue_ids": [ids["b"]], "priority": 3, "actor": "batch-bot"},
@@ -833,8 +834,8 @@ class TestBatchAPI:
         data = resp.json()
         assert len(data["updated"]) == 1
 
-    async def test_batch_close(self, client: AsyncClient, dashboard_db: FiligreeDB) -> None:
-        ids = dashboard_db._test_ids  # type: ignore[attr-defined]
+    async def test_batch_close(self, client: AsyncClient, dashboard_db: PopulatedDB) -> None:
+        ids = dashboard_db.ids
         resp = await client.post(
             "/api/batch/close",
             json={"issue_ids": [ids["b"]], "reason": "batch done"},
@@ -847,8 +848,8 @@ class TestBatchAPI:
         assert len(data["errors"]) == 0
         assert data["closed"][0]["id"] == ids["b"]
 
-    async def test_batch_close_already_closed(self, client: AsyncClient, dashboard_db: FiligreeDB) -> None:
-        ids = dashboard_db._test_ids  # type: ignore[attr-defined]
+    async def test_batch_close_already_closed(self, client: AsyncClient, dashboard_db: PopulatedDB) -> None:
+        ids = dashboard_db.ids
         # C is already closed — should report per-item error, not 409
         resp = await client.post(
             "/api/batch/close",
@@ -860,8 +861,8 @@ class TestBatchAPI:
         assert len(data["errors"]) == 1
         assert data["errors"][0]["id"] == ids["c"]
 
-    async def test_batch_close_with_actor(self, client: AsyncClient, dashboard_db: FiligreeDB) -> None:
-        ids = dashboard_db._test_ids  # type: ignore[attr-defined]
+    async def test_batch_close_with_actor(self, client: AsyncClient, dashboard_db: PopulatedDB) -> None:
+        ids = dashboard_db.ids
         resp = await client.post(
             "/api/batch/close",
             json={"issue_ids": [ids["b"]], "actor": "closer-bot"},
@@ -900,7 +901,7 @@ class TestBatchAPIInputValidation:
         ],
         ids=["update-null", "close-null"],
     )
-    async def test_null_issue_ids_returns_400(self, client: AsyncClient, endpoint: str, body: dict) -> None:
+    async def test_null_issue_ids_returns_400(self, client: AsyncClient, endpoint: str, body: dict[str, Any]) -> None:
         resp = await client.post(endpoint, json=body)
         assert resp.status_code == 400
         assert "issue_ids" in resp.json()["error"]["message"].lower()
@@ -924,7 +925,13 @@ class TestBatchAPIInputValidation:
             "close-non-string-elements",
         ],
     )
-    async def test_invalid_issue_ids_returns_400(self, client: AsyncClient, endpoint: str, body: dict, check_message: str | None) -> None:
+    async def test_invalid_issue_ids_returns_400(
+        self,
+        client: AsyncClient,
+        endpoint: str,
+        body: dict[str, Any],
+        check_message: str | None,
+    ) -> None:
         resp = await client.post(endpoint, json=body)
         assert resp.status_code == 400
         if check_message:
@@ -934,10 +941,10 @@ class TestBatchAPIInputValidation:
 class TestBatchClosePartialMutation:
     """Bug filigree-2cecbb: batch/close partially mutates then returns error."""
 
-    async def test_batch_close_collects_per_item_errors(self, client: AsyncClient, dashboard_db: FiligreeDB) -> None:
+    async def test_batch_close_collects_per_item_errors(self, client: AsyncClient, dashboard_db: PopulatedDB) -> None:
         """batch/close with mix of valid and invalid IDs should return 200
         with succeeded and failed lists, not a single error response."""
-        ids = dashboard_db._test_ids  # type: ignore[attr-defined]
+        ids = dashboard_db.ids
         # ids["a"] is open (closeable), "nonexistent" will fail
         resp = await client.post(
             "/api/batch/close",
@@ -952,7 +959,7 @@ class TestBatchClosePartialMutation:
         assert len(data["errors"]) == 1
         assert data["errors"][0]["id"] == "nonexistent"
 
-    async def test_batch_close_all_fail_returns_200_with_errors(self, client: AsyncClient, dashboard_db: FiligreeDB) -> None:
+    async def test_batch_close_all_fail_returns_200_with_errors(self, client: AsyncClient, dashboard_db: PopulatedDB) -> None:
         """Even if all items fail, batch/close should return 200 with errors list."""
         resp = await client.post(
             "/api/batch/close",
@@ -963,10 +970,10 @@ class TestBatchClosePartialMutation:
         assert len(data["closed"]) == 0
         assert len(data["errors"]) == 2
 
-    async def test_core_batch_close_returns_tuple(self, dashboard_db: FiligreeDB) -> None:
+    async def test_core_batch_close_returns_tuple(self, dashboard_db: PopulatedDB) -> None:
         """core.batch_close should return (results, errors) like batch_update."""
-        ids = dashboard_db._test_ids  # type: ignore[attr-defined]
-        result = dashboard_db.batch_close([ids["a"], "nonexistent"], reason="test")
+        ids = dashboard_db.ids
+        result = dashboard_db.db.batch_close([ids["a"], "nonexistent"], reason="test")
         # Should be a tuple of (closed_list, errors_list)
         assert isinstance(result, tuple)
         assert len(result) == 2
@@ -976,8 +983,8 @@ class TestBatchClosePartialMutation:
 
 
 class TestDependencyManagementAPI:
-    async def test_add_dependency(self, client: AsyncClient, dashboard_db: FiligreeDB) -> None:
-        ids = dashboard_db._test_ids  # type: ignore[attr-defined]
+    async def test_add_dependency(self, client: AsyncClient, dashboard_db: PopulatedDB) -> None:
+        ids = dashboard_db.ids
         resp = await client.post(
             f"/api/issue/{ids['b']}/dependencies",
             json={"depends_on": ids["c"]},
@@ -986,9 +993,9 @@ class TestDependencyManagementAPI:
         data = resp.json()
         assert data["added"] is True
 
-    async def test_remove_dependency(self, client: AsyncClient, dashboard_db: FiligreeDB) -> None:
-        ids = dashboard_db._test_ids  # type: ignore[attr-defined]
-        dashboard_db.add_dependency(ids["a"], ids["b"])
+    async def test_remove_dependency(self, client: AsyncClient, dashboard_db: PopulatedDB) -> None:
+        ids = dashboard_db.ids
+        dashboard_db.db.add_dependency(ids["a"], ids["b"])
         resp = await client.request(
             "DELETE",
             f"/api/issue/{ids['a']}/dependencies/{ids['b']}",
@@ -997,9 +1004,9 @@ class TestDependencyManagementAPI:
         data = resp.json()
         assert data["removed"] is True
 
-    async def test_add_dep_cycle_detection(self, client: AsyncClient, dashboard_db: FiligreeDB) -> None:
-        ids = dashboard_db._test_ids  # type: ignore[attr-defined]
-        dashboard_db.add_dependency(ids["a"], ids["b"])
+    async def test_add_dep_cycle_detection(self, client: AsyncClient, dashboard_db: PopulatedDB) -> None:
+        ids = dashboard_db.ids
+        dashboard_db.db.add_dependency(ids["a"], ids["b"])
         resp = await client.post(
             f"/api/issue/{ids['b']}/dependencies",
             json={"depends_on": ids["a"]},
@@ -1057,16 +1064,16 @@ class TestDashboardConcurrency:
 
         app = create_app()
         sync_handlers: list[str] = []
-        for route in app.routes:
+        for route in app.routes:  # type: ignore[attr-defined]
             if hasattr(route, "endpoint") and not asyncio.iscoroutinefunction(route.endpoint):
                 sync_handlers.append(f"{route.path} ({route.endpoint.__name__})")
         assert sync_handlers == [], f"Sync handlers run in thread pool, racing on shared DB: {sync_handlers}"
 
-    async def test_concurrent_requests_no_errors(self, client: AsyncClient, dashboard_db: FiligreeDB) -> None:
+    async def test_concurrent_requests_no_errors(self, client: AsyncClient, dashboard_db: PopulatedDB) -> None:
         """Concurrent reads + writes must all succeed without SQLite threading errors."""
         import asyncio
 
-        ids = dashboard_db._test_ids  # type: ignore[attr-defined]
+        ids = dashboard_db.ids
 
         async def read_issues() -> int:
             resp = await client.get("/api/issues")
@@ -1140,13 +1147,13 @@ class TestHealthAPI:
 class TestEtherealTracerBullet:
     """End-to-end validation that init+dashboard+API works together."""
 
-    async def test_single_project_lifecycle(self, dashboard_db: FiligreeDB) -> None:
+    async def test_single_project_lifecycle(self, dashboard_db: PopulatedDB) -> None:
         """Create an issue via DB, verify it appears in the API."""
         # Create an issue directly in the DB
-        dashboard_db.create_issue(title="Tracer bullet test")
+        dashboard_db.db.create_issue(title="Tracer bullet test")
 
         # Wire up dashboard
-        dash_module._db = dashboard_db
+        dash_module._db = dashboard_db.db
         try:
             app = create_app()
             transport = ASGITransport(app=app)
@@ -1223,10 +1230,88 @@ class TestDashboardHandlersAreAsync:
     def test_all_handlers_are_async(self) -> None:
         """All route handlers must be async def (not plain def)."""
         app = create_app()
-        for route in app.routes:
+        for route in app.routes:  # type: ignore[attr-defined]
             if not hasattr(route, "endpoint"):
                 continue
-            handler = route.endpoint  # type: ignore[union-attr]
-            assert inspect.iscoroutinefunction(handler), (
-                f"Handler {route.path} must be async def to avoid thread pool dispatch"  # type: ignore[union-attr]
-            )
+            handler = route.endpoint
+            assert inspect.iscoroutinefunction(handler), f"Handler {route.path} must be async def to avoid thread pool dispatch"
+
+
+class TestCORSMiddleware:
+    """CORS middleware should restrict origins to localhost only."""
+
+    async def test_cors_allows_localhost(self, client: AsyncClient) -> None:
+        resp = await client.options(
+            "/api/issues",
+            headers={
+                "Origin": "http://localhost:8080",
+                "Access-Control-Request-Method": "GET",
+            },
+        )
+        assert resp.headers.get("access-control-allow-origin") == "http://localhost:8080"
+
+    async def test_cors_allows_127_0_0_1(self, client: AsyncClient) -> None:
+        resp = await client.options(
+            "/api/issues",
+            headers={
+                "Origin": "http://127.0.0.1:8377",
+                "Access-Control-Request-Method": "GET",
+            },
+        )
+        assert resp.headers.get("access-control-allow-origin") == "http://127.0.0.1:8377"
+
+    async def test_cors_rejects_external_origin(self, client: AsyncClient) -> None:
+        resp = await client.options(
+            "/api/issues",
+            headers={
+                "Origin": "http://evil.com",
+                "Access-Control-Request-Method": "GET",
+            },
+        )
+        assert "access-control-allow-origin" not in resp.headers
+
+    async def test_cors_rejects_localhost_subdomain(self, client: AsyncClient) -> None:
+        """Ensure regex anchoring prevents localhost.evil.com from matching."""
+        resp = await client.options(
+            "/api/issues",
+            headers={
+                "Origin": "http://localhost.evil.com",
+                "Access-Control-Request-Method": "GET",
+            },
+        )
+        assert "access-control-allow-origin" not in resp.headers
+
+
+class TestBoundaryClamping:
+    """Input clamping tests for activity and search endpoints."""
+
+    async def test_activity_extreme_limit_clamped(self, client: AsyncClient) -> None:
+        """Limit > 1000 should be clamped, not rejected."""
+        resp = await client.get("/api/activity", params={"limit": 999999})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert isinstance(data, list)
+
+    async def test_activity_negative_limit_clamped(self, client: AsyncClient) -> None:
+        """Negative limit should be clamped to 1, not rejected."""
+        resp = await client.get("/api/activity", params={"limit": -5})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert isinstance(data, list)
+
+    async def test_search_extreme_limit_clamped(self, client: AsyncClient) -> None:
+        resp = await client.get("/api/search", params={"q": "Issue", "limit": 999999})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "results" in data
+
+    async def test_search_negative_offset_clamped(self, client: AsyncClient) -> None:
+        resp = await client.get("/api/search", params={"q": "Issue", "offset": -10})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "results" in data
+
+    async def test_search_zero_limit_clamped(self, client: AsyncClient) -> None:
+        """Limit of 0 should be clamped to 1."""
+        resp = await client.get("/api/search", params={"q": "Issue", "limit": 0})
+        assert resp.status_code == 200

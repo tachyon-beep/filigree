@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncGenerator, Generator
 from pathlib import Path
 
 import pytest
@@ -17,7 +18,7 @@ from filigree.dashboard import create_app
 
 
 @pytest.fixture
-def api_db(tmp_path: Path) -> FiligreeDB:
+def api_db(tmp_path: Path) -> Generator[FiligreeDB, None, None]:
     """Fresh DB for dashboard API tests with check_same_thread=False."""
     d = FiligreeDB(tmp_path / "filigree.db", prefix="test", check_same_thread=False)
     d.initialize()
@@ -26,7 +27,7 @@ def api_db(tmp_path: Path) -> FiligreeDB:
 
 
 @pytest.fixture
-async def client(api_db: FiligreeDB) -> AsyncClient:
+async def client(api_db: FiligreeDB) -> AsyncGenerator[AsyncClient, None]:
     """Test client wired to the api_db fixture (single-project mode)."""
     dash_module._db = api_db
     app = create_app()
@@ -91,6 +92,7 @@ class TestFileEndpoints:
             ],
         )
         f = api_db.get_file_by_path("x.py")
+        assert f is not None
         resp = await client.get(f"/api/files/{f.id}")
         data = resp.json()
         assert data["summary"]["total_findings"] == 2
@@ -124,6 +126,7 @@ class TestFileEndpoints:
             ],
         )
         f = api_db.get_file_by_path("a.py")
+        assert f is not None
         resp = await client.get(f"/api/files/{f.id}/findings")
         assert resp.status_code == 200
         data = resp.json()
@@ -242,6 +245,7 @@ class TestBidirectionalEndpoints:
             findings=[{"path": "a.py", "rule_id": "E501", "severity": "low", "message": "Too long"}],
         )
         f = api_db.get_file_by_path("a.py")
+        assert f is not None
         api_db.add_file_association(f.id, issue.id, "scan_finding")
         resp = await client.get(f"/api/issue/{issue.id}/findings")
         assert resp.status_code == 200
@@ -339,6 +343,7 @@ class TestPaginatedEndpoints:
             findings=[{"path": "a.py", "rule_id": f"E{i}", "severity": "low", "message": f"msg{i}"} for i in range(5)],
         )
         f = api_db.get_file_by_path("a.py")
+        assert f is not None
         resp = await client.get(f"/api/files/{f.id}/findings?limit=3")
         assert resp.status_code == 200
         data = resp.json()
@@ -404,6 +409,7 @@ class TestScanResultsEndpointEnhancements:
             },
         )
         f = api_db.get_file_by_path("a.py")
+        assert f is not None
         findings = api_db.get_findings(f.id)
         statuses = {fi.rule_id: fi.status for fi in findings}
         assert statuses["E501"] == "open"
@@ -445,6 +451,7 @@ class TestSortBySeverityEndpoint:
             ],
         )
         f = api_db.get_file_by_path("a.py")
+        assert f is not None
         resp = await client.get(f"/api/files/{f.id}/findings?sort=severity")
         assert resp.status_code == 200
         severities = [r["severity"] for r in resp.json()["results"]]
@@ -514,6 +521,7 @@ class TestTimelineEndpoint:
             findings=[{"path": "a.py", "rule_id": "E501", "severity": "low", "message": "msg"}],
         )
         f = api_db.get_file_by_path("a.py")
+        assert f is not None
         resp = await client.get(f"/api/files/{f.id}/timeline")
         assert resp.status_code == 200
         data = resp.json()
@@ -533,6 +541,7 @@ class TestTimelineEndpoint:
             findings=[{"path": "a.py", "rule_id": f"E{i:03d}", "severity": "low", "message": f"msg{i}"} for i in range(10)],
         )
         f = api_db.get_file_by_path("a.py")
+        assert f is not None
         resp = await client.get(f"/api/files/{f.id}/timeline?limit=3")
         assert resp.status_code == 200
         data = resp.json()
@@ -545,6 +554,7 @@ class TestTimelineEndpoint:
             findings=[{"path": "a.py", "rule_id": "E501", "severity": "low", "message": "msg"}],
         )
         f = api_db.get_file_by_path("a.py")
+        assert f is not None
         issue = api_db.create_issue("Fix it")
         api_db.add_file_association(f.id, issue.id, "bug_in")
 
@@ -561,6 +571,7 @@ class TestTimelineEndpoint:
             findings=[{"path": "a.py", "rule_id": "E501", "severity": "low", "message": "msg"}],
         )
         f = api_db.get_file_by_path("a.py")
+        assert f is not None
         issue = api_db.create_issue("Fix it")
         api_db.add_file_association(f.id, issue.id, "bug_in")
 
@@ -734,3 +745,37 @@ class TestInputValidation400s:
         resp = await client.get("/api/files?offset=-5")
         assert resp.status_code == 400
         assert resp.json()["error"]["code"] == "VALIDATION_ERROR"
+
+
+class TestFileStatsEndpoint:
+    """Tests for GET /api/files/stats — global findings severity breakdown."""
+
+    async def test_stats_empty_db(self, client: AsyncClient) -> None:
+        resp = await client.get("/api/files/stats")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["total_findings"] == 0
+        assert data["files_with_findings"] == 0
+
+    async def test_stats_with_findings(self, client: AsyncClient, api_db: FiligreeDB) -> None:
+        api_db.process_scan_results(
+            scan_source="ruff",
+            findings=[
+                {"path": "a.py", "rule_id": "S001", "severity": "critical", "message": "sec"},
+                {"path": "b.py", "rule_id": "E501", "severity": "low", "message": "style"},
+            ],
+        )
+        resp = await client.get("/api/files/stats")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["critical"] >= 1
+        assert data["low"] >= 1
+        assert data["total_findings"] >= 2
+        assert data["files_with_findings"] == 2
+
+    async def test_stats_response_shape(self, client: AsyncClient) -> None:
+        resp = await client.get("/api/files/stats")
+        assert resp.status_code == 200
+        data = resp.json()
+        for key in ("critical", "high", "medium", "low", "info", "total_findings", "open_findings", "files_with_findings"):
+            assert key in data, f"Missing key: {key}"

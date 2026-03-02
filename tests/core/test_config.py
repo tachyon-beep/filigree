@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -118,7 +119,7 @@ class TestGetMode:
         ],
         ids=["no-mode-field", "explicit-ethereal", "explicit-server"],
     )
-    def test_mode_from_config(self, tmp_path: Path, config: dict, expected: str) -> None:
+    def test_mode_from_config(self, tmp_path: Path, config: dict[str, Any], expected: str) -> None:
         filigree_dir = tmp_path / ".filigree"
         filigree_dir.mkdir()
         (filigree_dir / "config.json").write_text(json.dumps(config))

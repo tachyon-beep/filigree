@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from filigree.core import FiligreeDB
-from filigree.migrate import migrate_from_beads
+from filigree.migrate import _safe_priority, _safe_timestamp, migrate_from_beads
 from filigree.migrations import rebuild_table
 
 
@@ -840,3 +840,84 @@ class TestMigrateTargetedExceptions:
         # should raise an OperationalError that is NOT "no such table"
         with pytest.raises(sqlite3.OperationalError):
             migrate_from_beads(db_path, db)
+
+
+# ===========================================================================
+# Direct unit tests for migration helper functions
+# ===========================================================================
+
+
+class TestSafePriorityDirect:
+    """Direct unit tests for _safe_priority — covers every coercion path."""
+
+    @pytest.mark.parametrize(
+        ("raw", "expected"),
+        [
+            (None, 2),
+            (0, 0),
+            (4, 4),
+            (2, 2),
+            (-1, 0),
+            (10, 4),
+            (1.7, 1),
+            ("3", 3),
+            ("high", 2),
+            ("", 2),
+        ],
+        ids=[
+            "none-defaults-to-2",
+            "zero-preserved",
+            "max-preserved",
+            "mid-preserved",
+            "negative-clamped-to-0",
+            "over-max-clamped-to-4",
+            "float-truncated",
+            "string-int-coerced",
+            "non-numeric-string-defaults",
+            "empty-string-defaults",
+        ],
+    )
+    def test_safe_priority(self, raw: object, expected: int) -> None:
+        assert _safe_priority(raw) == expected  # type: ignore[arg-type]
+
+
+class TestSafeTimestampDirect:
+    """Direct unit tests for _safe_timestamp — covers every fallback path."""
+
+    def test_valid_iso_passthrough(self) -> None:
+        ts = "2026-01-15T10:00:00+00:00"
+        assert _safe_timestamp(ts) == ts
+
+    def test_valid_naive_iso_passthrough(self) -> None:
+        ts = "2026-01-15T10:00:00"
+        assert _safe_timestamp(ts) == ts
+
+    def test_none_falls_back_to_now(self) -> None:
+        from datetime import datetime
+
+        result = _safe_timestamp(None)
+        datetime.fromisoformat(result)  # should not raise
+
+    def test_empty_string_falls_back_to_now(self) -> None:
+        from datetime import datetime
+
+        result = _safe_timestamp("")
+        datetime.fromisoformat(result)
+
+    def test_whitespace_only_falls_back_to_now(self) -> None:
+        from datetime import datetime
+
+        result = _safe_timestamp("   ")
+        datetime.fromisoformat(result)
+
+    def test_invalid_string_falls_back_to_now(self) -> None:
+        from datetime import datetime
+
+        result = _safe_timestamp("not-a-date")
+        datetime.fromisoformat(result)
+
+    def test_non_string_falls_back_to_now(self) -> None:
+        from datetime import datetime
+
+        result = _safe_timestamp(12345)
+        datetime.fromisoformat(result)

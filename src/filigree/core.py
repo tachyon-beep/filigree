@@ -438,6 +438,23 @@ class FiligreeDB(FilesMixin, IssuesMixin, EventsMixin, WorkflowMixin, MetaMixin,
         result: int = self.conn.execute("PRAGMA user_version").fetchone()[0]
         return result
 
+    def reconnect(self, *, check_same_thread: bool = True) -> None:
+        """Close the current connection and reopen with a new ``check_same_thread`` setting.
+
+        Useful in tests where a DB created with the default
+        ``check_same_thread=True`` needs to be shared across threads
+        (e.g. async FastAPI test clients).
+        """
+        if self._conn is not None:
+            try:
+                self._conn.commit()
+            finally:
+                try:
+                    self._conn.close()
+                finally:
+                    self._conn = None
+        self._check_same_thread = check_same_thread
+
     def close(self) -> None:
         if self._conn is not None:
             self._conn.close()

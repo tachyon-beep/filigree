@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from collections.abc import Generator
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import pytest
@@ -20,6 +21,19 @@ from filigree.core import (
 from tests._db_factory import make_db
 
 
+@dataclass
+class PopulatedDB:
+    """Wrapper around FiligreeDB with pre-seeded issue IDs.
+
+    Avoids monkey-patching ``_test_ids`` onto FiligreeDB instances.
+    Access the underlying database via ``.db`` and the seed-issue IDs
+    via ``.ids`` (keys: ``epic``, ``a``, ``b``, ``c``).
+    """
+
+    db: FiligreeDB
+    ids: dict[str, str] = field(default_factory=dict)
+
+
 @pytest.fixture
 def db(tmp_path: Path) -> Generator[FiligreeDB, None, None]:
     """Fresh FiligreeDB for each test (default packs)."""
@@ -29,8 +43,11 @@ def db(tmp_path: Path) -> Generator[FiligreeDB, None, None]:
 
 
 @pytest.fixture
-def populated_db(db: FiligreeDB) -> FiligreeDB:
+def populated_db(db: FiligreeDB) -> PopulatedDB:
     """FiligreeDB pre-populated with a representative issue set.
+
+    Returns a ``PopulatedDB`` wrapper.  Access the database via ``.db``
+    and the seed-issue IDs via ``.ids``.
 
     Creates:
     - 3 issues (A=open P1, B=open P2, C=closed P3)
@@ -46,9 +63,7 @@ def populated_db(db: FiligreeDB) -> FiligreeDB:
     db.close_issue(c.id, reason="done")
     db.add_dependency(a.id, b.id)
     db.add_comment(b.id, "Test comment", author="tester")
-    # Store IDs for easy access in tests
-    db._test_ids: dict[str, str] = {"epic": epic.id, "a": a.id, "b": b.id, "c": c.id}  # type: ignore[attr-defined]
-    return db
+    return PopulatedDB(db=db, ids={"epic": epic.id, "a": a.id, "b": b.id, "c": c.id})
 
 
 @pytest.fixture
@@ -75,6 +90,14 @@ def filigree_project(tmp_path: Path) -> Path:
 def cli_runner() -> CliRunner:
     """Click CLI test runner."""
     return CliRunner()
+
+
+@pytest.fixture
+def release_db(tmp_path: Path) -> Generator[FiligreeDB, None, None]:
+    """FiligreeDB with core + planning + release packs enabled."""
+    d = make_db(tmp_path, packs=["core", "planning", "release"])
+    yield d
+    d.close()
 
 
 @pytest.fixture

@@ -15,7 +15,7 @@ let loadingReleaseIds = new Set();
 let errorReleaseIds = new Set();
 let _pendingFocusTarget = null;
 
-function scrollToReleaseCard(cardId) {
+export function scrollToReleaseCard(cardId) {
   const el = document.getElementById(cardId);
   if (!el) return;
   el.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -23,7 +23,7 @@ function scrollToReleaseCard(cardId) {
   void el.offsetWidth;
   el.classList.add('changed-flash');
 }
-window._scrollToReleaseCard = scrollToReleaseCard;
+// scrollToReleaseCard is exported and registered on window by app.js
 
 // --- Color helpers ---
 
@@ -493,9 +493,9 @@ function renderReleaseCard(release) {
   return html;
 }
 
-// --- Expand/collapse handlers (exposed on window) ---
+// --- Expand/collapse handlers (exported, registered on window by app.js) ---
 
-window._toggleReleaseExpand = async function (releaseId) {
+export async function toggleReleaseExpand(releaseId) {
   if (expandedReleaseIds.has(releaseId)) {
     expandedReleaseIds.delete(releaseId);
     // Collapse doesn't need focus management, so fire-and-forget is fine.
@@ -532,9 +532,9 @@ window._toggleReleaseExpand = async function (releaseId) {
     }
     _pendingFocusTarget = null;
   }
-};
+}
 
-window._retryReleaseTree = async function (releaseId) {
+export async function retryReleaseTree(releaseId) {
   errorReleaseIds.delete(releaseId);
   loadingReleaseIds.add(releaseId);
   loadReleases(); // Re-render to show loading state
@@ -551,18 +551,18 @@ window._retryReleaseTree = async function (releaseId) {
     loadingReleaseIds.delete(releaseId);
     loadReleases();
   }
-};
+}
 
-window._toggleReleaseTreeNode = function (nodeId, releaseId) {
+export function toggleReleaseTreeNode(nodeId, releaseId) {
   if (expandedNodeIds.has(nodeId)) {
     expandedNodeIds.delete(nodeId);
   } else {
     expandedNodeIds.add(nodeId);
   }
   loadReleases();
-};
+}
 
-window._collapseAllReleaseTree = function (releaseId) {
+export function collapseAllReleaseTree(releaseId) {
   const tree = releaseTreeCache.get(releaseId);
   if (!tree || !tree.children) return;
 
@@ -579,7 +579,7 @@ window._collapseAllReleaseTree = function (releaseId) {
     removeAll(child);
   }
   loadReleases();
-};
+}
 
 // --- Main loader ---
 

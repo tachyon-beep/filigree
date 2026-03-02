@@ -532,7 +532,7 @@ async def _handle_reopen_issue(arguments: dict[str, Any]) -> list[TextContent]:
     except KeyError:
         return _text(ErrorResponse(error=f"Issue not found: {args['id']}", code="not_found"))
     except ValueError as e:
-        return _text(ErrorResponse(error=str(e), code="invalid"))
+        return _text(ErrorResponse(error=str(e), code="invalid_transition"))
 
 
 async def _handle_search_issues(arguments: dict[str, Any]) -> list[TextContent]:

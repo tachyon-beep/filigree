@@ -89,7 +89,7 @@ class TestSchemaTypedDictSync:
         td_cls = TOOL_ARGS_MAP[tool_name]
         schema_required = set(tool.inputSchema.get("required", []))
         # Python 3.11+ TypedDict exposes __required_keys__ / __optional_keys__
-        td_required = td_cls.__required_keys__
+        td_required = td_cls.__required_keys__  # type: ignore[attr-defined]
         assert td_required == schema_required, (
             f"Required mismatch for '{tool_name}':\n  TypedDict required: {td_required}\n  Schema required:    {schema_required}"
         )
@@ -102,7 +102,7 @@ class TestSchemaTypedDictSync:
         schema_props = set(tool.inputSchema.get("properties", {}).keys())
         schema_required = set(tool.inputSchema.get("required", []))
         schema_optional = schema_props - schema_required
-        td_optional = td_cls.__optional_keys__
+        td_optional = td_cls.__optional_keys__  # type: ignore[attr-defined]
         assert td_optional == schema_optional, (
             f"Optional mismatch for '{tool_name}':\n  TypedDict optional: {td_optional}\n  Schema optional:    {schema_optional}"
         )

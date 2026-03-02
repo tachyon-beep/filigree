@@ -2,23 +2,17 @@
 
 from __future__ import annotations
 
-import json
 from collections.abc import Generator
 from pathlib import Path
-from typing import Any
 
 import pytest
 
 from filigree.core import DB_FILENAME, FILIGREE_DIR_NAME, SUMMARY_FILENAME, FiligreeDB, write_config
 
-
-def _parse(result: list[Any]) -> Any:
-    """Extract text content from MCP response and parse as JSON if possible."""
-    text = result[0].text
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        return text
+# Re-export _parse so existing ``from tests.mcp.conftest import _parse``
+# imports continue to work during migration.  New code should import from
+# ``tests.mcp._helpers`` instead.
+from tests.mcp._helpers import _parse as _parse
 
 
 @pytest.fixture

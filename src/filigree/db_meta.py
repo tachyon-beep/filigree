@@ -37,11 +37,15 @@ class MetaMixin(DBMixinProtocol):
             msg = "Comment text cannot be empty"
             raise ValueError(msg)
         now = _now_iso()
-        cursor = self.conn.execute(
-            "INSERT INTO comments (issue_id, author, text, created_at) VALUES (?, ?, ?, ?)",
-            (issue_id, author, text, now),
-        )
-        self.conn.commit()
+        try:
+            cursor = self.conn.execute(
+                "INSERT INTO comments (issue_id, author, text, created_at) VALUES (?, ?, ?, ?)",
+                (issue_id, author, text, now),
+            )
+            self.conn.commit()
+        except Exception:
+            self.conn.rollback()
+            raise
         rowid = cursor.lastrowid
         if rowid is None:  # pragma: no cover — INSERT always sets lastrowid
             msg = "INSERT did not produce a lastrowid"
@@ -59,19 +63,27 @@ class MetaMixin(DBMixinProtocol):
 
     def add_label(self, issue_id: str, label: str) -> bool:
         normalized = self._validate_label_name(label)
-        cursor = self.conn.execute(
-            "INSERT OR IGNORE INTO labels (issue_id, label) VALUES (?, ?)",
-            (issue_id, normalized),
-        )
-        self.conn.commit()
+        try:
+            cursor = self.conn.execute(
+                "INSERT OR IGNORE INTO labels (issue_id, label) VALUES (?, ?)",
+                (issue_id, normalized),
+            )
+            self.conn.commit()
+        except Exception:
+            self.conn.rollback()
+            raise
         return cursor.rowcount > 0
 
     def remove_label(self, issue_id: str, label: str) -> bool:
-        cursor = self.conn.execute(
-            "DELETE FROM labels WHERE issue_id = ? AND label = ?",
-            (issue_id, label),
-        )
-        self.conn.commit()
+        try:
+            cursor = self.conn.execute(
+                "DELETE FROM labels WHERE issue_id = ? AND label = ?",
+                (issue_id, label),
+            )
+            self.conn.commit()
+        except Exception:
+            self.conn.rollback()
+            raise
         return cursor.rowcount > 0
 
     # -- Stats ---------------------------------------------------------------

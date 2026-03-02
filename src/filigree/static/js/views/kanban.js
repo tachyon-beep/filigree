@@ -217,7 +217,7 @@ export function renderCard(issue) {
   const safeIssueId = escJsSingle(issue.id);
 
   const checkbox = state.multiSelectMode
-    ? `<input type="checkbox" ${state.selectedCards.has(issue.id) ? "checked" : ""} onclick="toggleCardSelect(event,'${safeIssueId}')" class="mr-1" style="accent-color:var(--accent)">`
+    ? `<input type="checkbox" ${state.selectedCards.has(issue.id) ? "checked" : ""} onclick="toggleCardSelect(event,'${safeIssueId}')" class="mr-1" style="accent-color:var(--accent)" aria-label="Select ${escHtml(issue.title.slice(0, 40))}">`
     : "";
 
   const isDraggable = state.kanbanMode !== "cluster" && !state.multiSelectMode;
@@ -353,6 +353,9 @@ export function initDragAndDrop() {
         col.classList.add(isValid ? "drag-valid" : "drag-invalid");
       }
       state._transitionsLoaded = true;
+    }).catch((err) => {
+      console.error("[kanban] Error loading transitions during drag:", err);
+      state._transitionsLoaded = true;
     });
   });
 
@@ -383,14 +386,18 @@ export function initDragAndDrop() {
     const issueId = state._dragIssueId;
     showToast(`Moving to ${targetStatus}...`, "info");
 
-    patchIssue(issueId, { status: targetStatus }).then((result) => {
-      if (result.ok) {
-        showToast(`Moved to ${targetStatus}`, "success");
-        if (callbacks.fetchData) callbacks.fetchData();
-      } else {
-        showToast(`Error: ${result.error || "Move failed"}`, "error");
-      }
-    });
+    patchIssue(issueId, { status: targetStatus })
+      .then((result) => {
+        if (result.ok) {
+          showToast(`Moved to ${targetStatus}`, "success");
+          if (callbacks.fetchData) callbacks.fetchData();
+        } else {
+          showToast(`Error: ${result.error || "Move failed"}`, "error");
+        }
+      })
+      .catch(() => {
+        showToast("Network error: could not move issue", "error");
+      });
   });
 
   board.addEventListener("dragend", (e) => {

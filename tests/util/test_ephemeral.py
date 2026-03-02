@@ -248,7 +248,7 @@ class TestReadOsCommandLine:
         def _factory(*args: object, **kwargs: object) -> Path:
             if args == ("/proc",):
                 return _orig_path(str(tmp_path / "proc"))
-            return _orig_path(*args, **kwargs)
+            return _orig_path(*args, **kwargs)  # type: ignore[arg-type]
 
         return _factory
 
@@ -260,7 +260,7 @@ class TestReadOsCommandLine:
         def _factory(*args: object, **kwargs: object) -> Path:
             if args == ("/proc",):
                 return _orig_path(str(tmp_path / "no-proc"))
-            return _orig_path(*args, **kwargs)
+            return _orig_path(*args, **kwargs)  # type: ignore[arg-type]
 
         return _factory
 

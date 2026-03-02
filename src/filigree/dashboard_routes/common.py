@@ -37,7 +37,11 @@ def _error_response(
     status_code: int,
     details: dict[str, Any] | None = None,
 ) -> JSONResponse:
-    """Return a structured error response and log the error."""
+    """Return a structured error response and log the error.
+
+    NOTE: Dashboard errors use a nested format ``{"error": {"message", "code", "details"}}``.
+    MCP tools use a flat ``ErrorResponse(error=str, code=str)`` — see types/api.py.
+    """
     from fastapi.responses import JSONResponse
 
     logger.warning("API error [%s] %s: %s", status_code, code, message)
@@ -107,7 +111,7 @@ def _parse_bool_value(raw: str, name: str) -> bool | JSONResponse:
         return False
     return _error_response(
         f'Invalid value for {name}: "{raw}". Must be one of true/false, 1/0, yes/no, on/off.',
-        "GRAPH_INVALID_PARAM",
+        "VALIDATION_ERROR",
         400,
         {"param": name, "value": raw},
     )
@@ -168,7 +172,7 @@ def _safe_bounded_int(raw: str, *, name: str, min_value: int, max_value: int) ->
     if value < min_value or value > max_value:
         return _error_response(
             f'Invalid value for {name}: "{raw}". Must be between {min_value} and {max_value}.',
-            "GRAPH_INVALID_PARAM",
+            "VALIDATION_ERROR",
             400,
             {"param": name, "value": raw},
         )

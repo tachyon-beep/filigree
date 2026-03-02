@@ -13,7 +13,7 @@ _scripts_dir = str(Path(__file__).resolve().parents[2] / "scripts")
 if _scripts_dir not in sys.path:
     sys.path.insert(0, _scripts_dir)
 
-from scan_utils import (  # noqa: E402, I001
+from scan_utils import (  # type: ignore[import-not-found]  # noqa: E402, I001
     _infer_rule_id,
     estimate_tokens,
     find_files,

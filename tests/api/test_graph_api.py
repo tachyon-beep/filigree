@@ -5,8 +5,8 @@ from __future__ import annotations
 import pytest
 from httpx import AsyncClient
 
-from filigree.core import FiligreeDB
 from filigree.dashboard import STATIC_DIR
+from tests.conftest import PopulatedDB
 
 
 class TestGraphFrontendContracts:
@@ -284,6 +284,7 @@ class TestSafeBoundedInt:
         result = _safe_bounded_int("abc", name="window_days", min_value=1, max_value=365)
         assert isinstance(result, JSONResponse)
 
+        assert isinstance(result.body, bytes)
         body = json.loads(result.body.decode())
         # Must use _safe_int's VALIDATION_ERROR, not the replaced GRAPH_INVALID_PARAM
         assert body["error"]["code"] == "VALIDATION_ERROR"
@@ -303,9 +304,9 @@ class TestGraphAdvancedAPI:
     async def test_graph_v2_and_legacy_edge_direction_consistency(
         self,
         client: AsyncClient,
-        dashboard_db: FiligreeDB,
+        dashboard_db: PopulatedDB,
     ) -> None:
-        ids = dashboard_db._test_ids  # type: ignore[attr-defined]
+        ids = dashboard_db.ids
         legacy = (await client.get("/api/graph?mode=legacy")).json()
         v2 = (await client.get("/api/graph?mode=v2")).json()
         expected_source = ids["b"]  # blocker
@@ -323,9 +324,9 @@ class TestGraphAdvancedAPI:
         assert len(crit_nodes) <= len(full_nodes)
         assert all(n["id"] for n in crit_nodes)
 
-    async def test_graph_truncation_semantics_metadata(self, client: AsyncClient, dashboard_db: FiligreeDB) -> None:
+    async def test_graph_truncation_semantics_metadata(self, client: AsyncClient, dashboard_db: PopulatedDB) -> None:
         for i in range(80):
-            dashboard_db.create_issue(title=f"Graph cap issue {i}", type="task", priority=2)
+            dashboard_db.db.create_issue(title=f"Graph cap issue {i}", type="task", priority=2)
         resp = await client.get("/api/graph?mode=v2&node_limit=50")
         assert resp.status_code == 200
         data = resp.json()
@@ -336,9 +337,9 @@ class TestGraphAdvancedAPI:
     async def test_graph_blocked_only_returns_only_currently_blocked_nodes(
         self,
         client: AsyncClient,
-        dashboard_db: FiligreeDB,
+        dashboard_db: PopulatedDB,
     ) -> None:
-        ids = dashboard_db._test_ids  # type: ignore[attr-defined]
+        ids = dashboard_db.ids
         resp = await client.get("/api/graph?mode=v2&blocked_only=true")
         assert resp.status_code == 200
         data = resp.json()
@@ -347,9 +348,9 @@ class TestGraphAdvancedAPI:
         assert all(n["blocked_by_open_count"] > 0 for n in data["nodes"])
         assert data["query"]["blocked_only"] is True
 
-    async def test_graph_assignee_filter_behavior(self, client: AsyncClient, dashboard_db: FiligreeDB) -> None:
-        ids = dashboard_db._test_ids  # type: ignore[attr-defined]
-        dashboard_db.update_issue(ids["a"], assignee="alice")
+    async def test_graph_assignee_filter_behavior(self, client: AsyncClient, dashboard_db: PopulatedDB) -> None:
+        ids = dashboard_db.ids
+        dashboard_db.db.update_issue(ids["a"], assignee="alice")
         resp = await client.get("/api/graph?mode=v2&assignee=alice")
         assert resp.status_code == 200
         data = resp.json()
@@ -358,8 +359,8 @@ class TestGraphAdvancedAPI:
         assert all(n["assignee"] == "alice" for n in data["nodes"])
         assert ids["a"] in {n["id"] for n in data["nodes"]}
 
-    async def test_graph_scope_radius_behavior(self, client: AsyncClient, dashboard_db: FiligreeDB) -> None:
-        ids = dashboard_db._test_ids  # type: ignore[attr-defined]
+    async def test_graph_scope_radius_behavior(self, client: AsyncClient, dashboard_db: PopulatedDB) -> None:
+        ids = dashboard_db.ids
         root = ids["a"]
         near = ids["b"]
 
@@ -377,13 +378,13 @@ class TestGraphAdvancedAPI:
         assert near in r1_nodes
         assert len(r1_nodes) >= len(r0_nodes)
 
-    async def test_graph_edge_limit_trimming_behavior(self, client: AsyncClient, dashboard_db: FiligreeDB) -> None:
-        target = dashboard_db.create_issue("Edge fan-in target", type="task", priority=2)
+    async def test_graph_edge_limit_trimming_behavior(self, client: AsyncClient, dashboard_db: PopulatedDB) -> None:
+        target = dashboard_db.db.create_issue("Edge fan-in target", type="task", priority=2)
         blockers: list[str] = []
         for i in range(60):
-            blocker = dashboard_db.create_issue(f"Edge blocker {i}", type="task", priority=2)
+            blocker = dashboard_db.db.create_issue(f"Edge blocker {i}", type="task", priority=2)
             blockers.append(blocker.id)
-            dashboard_db.add_dependency(target.id, blocker.id)
+            dashboard_db.db.add_dependency(target.id, blocker.id)
 
         resp = await client.get("/api/graph?mode=v2&edge_limit=50")
         assert resp.status_code == 200
@@ -393,14 +394,14 @@ class TestGraphAdvancedAPI:
         assert len(data["edges"]) == 50
         assert data["telemetry"]["total_edges_before_limit"] > 50
 
-    async def test_graph_window_days_filters_stale_nodes(self, client: AsyncClient, dashboard_db: FiligreeDB) -> None:
-        stale = dashboard_db.create_issue("Old graph issue", type="task", priority=2)
-        fresh = dashboard_db.create_issue("Fresh graph issue", type="task", priority=2)
-        dashboard_db.conn.execute(
+    async def test_graph_window_days_filters_stale_nodes(self, client: AsyncClient, dashboard_db: PopulatedDB) -> None:
+        stale = dashboard_db.db.create_issue("Old graph issue", type="task", priority=2)
+        fresh = dashboard_db.db.create_issue("Fresh graph issue", type="task", priority=2)
+        dashboard_db.db.conn.execute(
             "UPDATE issues SET updated_at = ? WHERE id = ?",
             ("2000-01-01T00:00:00+00:00", stale.id),
         )
-        dashboard_db.conn.commit()
+        dashboard_db.db.conn.commit()
 
         resp = await client.get("/api/graph?mode=v2&types=task&window_days=7")
         assert resp.status_code == 200
@@ -496,7 +497,7 @@ class TestGraphAPI:
         resp = await client.get("/api/graph?mode=v2&include_done=maybe")
         assert resp.status_code == 400
         err = resp.json()["error"]
-        assert err["code"] == "GRAPH_INVALID_PARAM"
+        assert err["code"] == "VALIDATION_ERROR"
         assert err["details"]["param"] == "include_done"
 
     async def test_graph_invalid_status_category(self, client: AsyncClient) -> None:
@@ -524,15 +525,31 @@ class TestGraphAPI:
         resp = await client.get("/api/graph?mode=v2&node_limit=10")
         assert resp.status_code == 400
         err = resp.json()["error"]
-        assert err["code"] == "GRAPH_INVALID_PARAM"
+        assert err["code"] == "VALIDATION_ERROR"
         assert err["details"]["param"] == "node_limit"
 
     async def test_graph_window_days_validation(self, client: AsyncClient) -> None:
         resp = await client.get("/api/graph?mode=v2&window_days=-1")
         assert resp.status_code == 400
         err = resp.json()["error"]
-        assert err["code"] == "GRAPH_INVALID_PARAM"
+        assert err["code"] == "VALIDATION_ERROR"
         assert err["details"]["param"] == "window_days"
+
+    async def test_graph_window_days_zero_is_noop(self, client: AsyncClient, dashboard_db: PopulatedDB) -> None:
+        """window_days=0 should not filter any nodes — it's a no-op."""
+        stale = dashboard_db.db.create_issue("Very old issue", type="task")
+        dashboard_db.db.conn.execute(
+            "UPDATE issues SET updated_at = ? WHERE id = ?",
+            ("2000-01-01T00:00:00+00:00", stale.id),
+        )
+        dashboard_db.db.conn.commit()
+
+        resp = await client.get("/api/graph?mode=v2&window_days=0")
+        assert resp.status_code == 200
+        data = resp.json()
+        node_ids = {n["id"] for n in data["nodes"]}
+        assert stale.id in node_ids
+        assert data["query"]["window_days"] == 0
 
     async def test_graph_mode_query_override_beats_compat_mode(self, client: AsyncClient, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("FILIGREE_GRAPH_API_MODE", "legacy")
@@ -549,9 +566,9 @@ class TestGraphAPI:
         data = resp.json()
         assert "mode" not in data
 
-    async def test_graph_v2_node_limit_truncation(self, client: AsyncClient, dashboard_db: FiligreeDB) -> None:
+    async def test_graph_v2_node_limit_truncation(self, client: AsyncClient, dashboard_db: PopulatedDB) -> None:
         for i in range(60):
-            dashboard_db.create_issue(title=f"Graph load issue {i}", type="task", priority=2)
+            dashboard_db.db.create_issue(title=f"Graph load issue {i}", type="task", priority=2)
         resp = await client.get("/api/graph?mode=v2&node_limit=50")
         assert resp.status_code == 200
         data = resp.json()

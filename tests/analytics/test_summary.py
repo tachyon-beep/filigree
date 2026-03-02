@@ -10,7 +10,8 @@ import pytest
 
 from filigree.core import FiligreeDB
 from filigree.summary import _parse_iso as summary_parse_iso
-from filigree.summary import generate_summary, write_summary
+from filigree.summary import _sanitize_title, generate_summary, write_summary
+from tests.conftest import PopulatedDB
 
 
 class TestGenerateSummary:
@@ -21,8 +22,8 @@ class TestGenerateSummary:
         assert "Open: 1" in summary
         assert "(none)" in summary
 
-    def test_with_issues(self, populated_db: FiligreeDB) -> None:
-        summary = generate_summary(populated_db)
+    def test_with_issues(self, populated_db: PopulatedDB) -> None:
+        summary = generate_summary(populated_db.db)
         assert "Project Pulse" in summary
         # Should show vitals
         assert "Open:" in summary
@@ -399,6 +400,7 @@ class TestSummaryTimezoneHandling:
     def test_naive_datetime_gets_utc(self) -> None:
         """Naive datetime should get UTC attached via replace."""
         result = summary_parse_iso("2026-01-15T10:00:00")
+        assert isinstance(result, datetime)
         assert result.tzinfo is not None
         assert result.tzinfo == UTC
 
@@ -406,6 +408,7 @@ class TestSummaryTimezoneHandling:
         """Aware datetime with non-UTC timezone should be converted to UTC."""
         # +05:00 timezone
         result = summary_parse_iso("2026-01-15T15:00:00+05:00")
+        assert isinstance(result, datetime)
         assert result.tzinfo is not None
         # 15:00 +05:00 should be 10:00 UTC
         assert result.hour == 10
@@ -413,6 +416,7 @@ class TestSummaryTimezoneHandling:
     def test_utc_datetime_unchanged(self) -> None:
         """UTC datetime should remain unchanged."""
         result = summary_parse_iso("2026-01-15T10:00:00+00:00")
+        assert isinstance(result, datetime)
         assert result.hour == 10
         assert result.tzinfo is not None
 
@@ -446,3 +450,39 @@ class TestSummaryWipLimit:
         # All calls should have limit=10000 (not the default 100)
         for limit in call_limits:
             assert limit == 10000, f"list_issues called with limit={limit}, expected 10000"
+
+
+class TestSanitizeTitle:
+    """Direct parametrized tests for the _sanitize_title security boundary."""
+
+    @pytest.mark.parametrize(
+        ("raw", "expected"),
+        [
+            ("normal text", "normal text"),
+            ("", ""),
+            ("a\x00b", "ab"),
+            ("\x07\x08\x0b\x0c\x7f", ""),
+            ("a\r\nb", "a b"),
+            ("a\rb", "a b"),
+            ("a\nb", "a b"),
+            ("a  b", "a b"),
+            ("  leading  trailing  ", "leading trailing"),
+            ("a" * 200, "a" * 200),
+            ("a" * 201, "a" * 197 + "..."),
+        ],
+        ids=[
+            "passthrough",
+            "empty",
+            "null-byte",
+            "only-control-chars",
+            "crlf-to-space",
+            "cr-to-space",
+            "lf-to-space",
+            "multi-space-collapse",
+            "leading-trailing-whitespace",
+            "exactly-200-no-truncation",
+            "over-200-truncated",
+        ],
+    )
+    def test_sanitize_title(self, raw: str, expected: str) -> None:
+        assert _sanitize_title(raw) == expected

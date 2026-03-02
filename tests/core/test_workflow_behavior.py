@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 from collections.abc import Generator
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -32,7 +33,13 @@ def db(tmp_path: Path) -> Generator[FiligreeDB, None, None]:
 
 @pytest.fixture
 def incident_db(tmp_path: Path) -> Generator[FiligreeDB, None, None]:
-    """FiligreeDB with incident pack enabled for hard-enforcement tests."""
+    """FiligreeDB with core + planning + incident packs enabled.
+
+    Includes planning because hard-enforcement tests (e.g.
+    ``test_close_incident_from_resolved_requires_root_cause``) exercise
+    close_issue() which resolves done-category states across all enabled
+    types, including planning-pack types like milestone.
+    """
     d = make_db(tmp_path, packs=["core", "planning", "incident"])
     yield d
     d.close()
@@ -586,7 +593,7 @@ class TestGetReadyCategory:
 
         packs_dir = filigree_dir / "packs"
         packs_dir.mkdir()
-        custom_pack = {
+        custom_pack: dict[str, Any] = {
             "pack": "custom_only",
             "version": "1.0",
             "display_name": "Custom Only",

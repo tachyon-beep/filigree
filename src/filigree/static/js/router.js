@@ -70,7 +70,20 @@ export function switchView(view) {
 
   const loader = viewLoaders[view];
   if (loader) {
-    loader();
+    try {
+      loader();
+    } catch (err) {
+      console.error(`[switchView] Failed to load "${view}" view:`, err);
+      const container = document.getElementById(view + "View");
+      if (container) {
+        container.innerHTML =
+          '<div class="p-4 text-xs" style="color:var(--text-muted)">' +
+          `Failed to load the ${view} view. ` +
+          '<button class="underline" style="color:var(--accent)" ' +
+          `onclick="switchView('${view}')">Retry</button>` +
+          "</div>";
+      }
+    }
   } else if (view === "kanban" && viewLoaders.kanban) {
     viewLoaders.kanban();
   }
@@ -156,8 +169,18 @@ export function parseHash() {
     state.kanbanMode = "standard";
   }
 
+  const result = { project: null, issue: null };
+
   const issuePart = parts.find((p) => p.indexOf("issue=") === 0);
   if (issuePart) {
     state.selectedIssue = issuePart.split("=")[1];
+    result.issue = state.selectedIssue;
   }
+
+  const projectPart = parts.find((p) => p.indexOf("project=") === 0);
+  if (projectPart) {
+    result.project = decodeURIComponent(projectPart.split("=")[1]);
+  }
+
+  return result;
 }

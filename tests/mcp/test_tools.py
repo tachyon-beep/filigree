@@ -14,7 +14,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from filigree.core import DB_FILENAME, FILIGREE_DIR_NAME, SUMMARY_FILENAME, FiligreeDB, write_config
-from filigree.mcp_server import (
+from filigree.mcp_server import (  # type: ignore[attr-defined]
     _MAX_LIST_RESULTS,
     _safe_path,
     _text,
@@ -25,7 +25,7 @@ from filigree.mcp_server import (
     list_tools,
     read_context,
 )
-from tests.mcp.conftest import _parse
+from tests.mcp._helpers import _parse
 
 
 class TestCreateAndGet:
@@ -627,14 +627,14 @@ class TestPrompt:
         assert "workflow" in result.description.lower()
         assert len(result.messages) >= 1
         # First message should contain the workflow text
-        assert "Filigree Workflow" in result.messages[0].content.text  # type: ignore[union-attr]
+        assert "Filigree Workflow" in result.messages[0].content.text
 
     async def test_workflow_prompt_includes_context(self, mcp_db: FiligreeDB) -> None:
         mcp_db.create_issue("Prompt context test")
         result = await get_workflow_prompt("filigree-workflow", None)
         assert len(result.messages) == 2
         # Second message should be the project summary
-        assert "Project Pulse" in result.messages[1].content.text  # type: ignore[union-attr]
+        assert "Project Pulse" in result.messages[1].content.text
 
     async def test_workflow_prompt_excludes_context(self, mcp_db: FiligreeDB) -> None:
         result = await get_workflow_prompt("filigree-workflow", {"include_context": "false"})
@@ -980,7 +980,7 @@ class TestDynamicWorkflowPrompt:
         def _boom() -> None:
             raise RuntimeError("template registry broken")
 
-        mcp_mod._get_db = _boom
+        mcp_mod._get_db = _boom  # type: ignore[assignment]
         try:
             logger = logging.getLogger("filigree.mcp_server")
             with pytest.MonkeyPatch.context() as mp:
@@ -1019,12 +1019,12 @@ class TestPromptRuntimeErrorNarrowing:
 
         import filigree.mcp_server as mcp_mod
 
-        original = mcp_mod.generate_summary
+        original = mcp_mod.generate_summary  # type: ignore[attr-defined]
 
         def _boom(_db: object) -> str:
             raise RuntimeError("maximum recursion depth exceeded")
 
-        mcp_mod.generate_summary = _boom
+        mcp_mod.generate_summary = _boom  # type: ignore[attr-defined, assignment]
         try:
             logger = logging.getLogger("filigree.mcp_server")
             with pytest.MonkeyPatch.context() as mp:
@@ -1034,7 +1034,7 @@ class TestPromptRuntimeErrorNarrowing:
             assert len(result.messages) >= 1  # prompt still returned
             assert any("Unexpected" in e for e in logged_errors)
         finally:
-            mcp_mod.generate_summary = original
+            mcp_mod.generate_summary = original  # type: ignore[attr-defined]
 
     async def test_not_initialized_error_is_silenced(self, mcp_db: FiligreeDB) -> None:
         """'not initialized' RuntimeError should be silently ignored (expected at startup)."""
@@ -1042,12 +1042,12 @@ class TestPromptRuntimeErrorNarrowing:
 
         import filigree.mcp_server as mcp_mod
 
-        original = mcp_mod.generate_summary
+        original = mcp_mod.generate_summary  # type: ignore[attr-defined]
 
         def _not_init(_db: object) -> str:
             raise RuntimeError("DB not initialized")
 
-        mcp_mod.generate_summary = _not_init
+        mcp_mod.generate_summary = _not_init  # type: ignore[attr-defined, assignment]
         try:
             logger = logging.getLogger("filigree.mcp_server")
             with pytest.MonkeyPatch.context() as mp:
@@ -1057,7 +1057,7 @@ class TestPromptRuntimeErrorNarrowing:
             assert len(result.messages) == 1  # no context appended
             assert logged_errors == []  # no error logged
         finally:
-            mcp_mod.generate_summary = original
+            mcp_mod.generate_summary = original  # type: ignore[attr-defined]
 
 
 class TestInstructionsUpdate:
@@ -1476,6 +1476,7 @@ class TestScannerTools:
         """Helper: write a scanner TOML into the test .filigree/scanners/ dir."""
         import filigree.mcp_server as mcp_mod
 
+        assert mcp_mod._filigree_dir is not None
         scanners_dir = mcp_mod._filigree_dir / "scanners"
         scanners_dir.mkdir(exist_ok=True)
         (scanners_dir / f"{name}.toml").write_text(
@@ -1510,6 +1511,7 @@ class TestScannerTools:
     async def test_trigger_scan_malformed_scanner_returns_not_found(self, mcp_db: FiligreeDB) -> None:
         import filigree.mcp_server as mcp_mod
 
+        assert mcp_mod._filigree_dir is not None
         scanners_dir = mcp_mod._filigree_dir / "scanners"
         scanners_dir.mkdir(exist_ok=True)
         (scanners_dir / "bad.toml").write_text(
@@ -1596,6 +1598,7 @@ class TestScannerTools:
     async def test_trigger_scan_success(self, mcp_db: FiligreeDB) -> None:
         import filigree.mcp_server as mcp_mod
 
+        assert mcp_mod._filigree_dir is not None
         project_root = mcp_mod._filigree_dir.parent
         target = project_root / "test_target.py"
         try:
@@ -1633,6 +1636,7 @@ class TestScannerTools:
             def poll() -> None:
                 return None
 
+        assert mcp_mod._filigree_dir is not None
         project_root = mcp_mod._filigree_dir.parent
         target = project_root / "canonical_target.py"
         try:
@@ -1659,6 +1663,7 @@ class TestScannerTools:
     async def test_trigger_scan_registers_file_idempotent(self, mcp_db: FiligreeDB) -> None:
         import filigree.mcp_server as mcp_mod
 
+        assert mcp_mod._filigree_dir is not None
         project_root = mcp_mod._filigree_dir.parent
         target = project_root / "existing.py"
         try:
@@ -1681,6 +1686,7 @@ class TestScannerTools:
     async def test_trigger_scan_rate_limited(self, mcp_db: FiligreeDB) -> None:
         import filigree.mcp_server as mcp_mod
 
+        assert mcp_mod._filigree_dir is not None
         project_root = mcp_mod._filigree_dir.parent
         target = project_root / "rate_test.py"
         try:
@@ -1718,6 +1724,7 @@ class TestScannerTools:
         """Scanning a .txt file with a py-only scanner should succeed with a warning."""
         import filigree.mcp_server as mcp_mod
 
+        assert mcp_mod._filigree_dir is not None
         project_root = mcp_mod._filigree_dir.parent
         target = project_root / "readme.txt"
         try:
@@ -1742,6 +1749,7 @@ class TestScannerTools:
     async def test_trigger_scan_allows_templated_executable_path(self, mcp_db: FiligreeDB) -> None:
         import filigree.mcp_server as mcp_mod
 
+        assert mcp_mod._filigree_dir is not None
         project_root = mcp_mod._filigree_dir.parent
         target = project_root / "templated_exec_target.py"
         scanner_exec = project_root / "scanner_exec.sh"
@@ -1777,6 +1785,7 @@ class TestScannerTools:
     async def test_trigger_scan_allows_project_relative_executable_path(self, mcp_db: FiligreeDB) -> None:
         import filigree.mcp_server as mcp_mod
 
+        assert mcp_mod._filigree_dir is not None
         project_root = mcp_mod._filigree_dir.parent
         target = project_root / "relative_exec_target.py"
         scanner_exec = project_root / "scanner_exec.sh"
@@ -1813,6 +1822,7 @@ class TestScannerTools:
         """trigger_scan must include log_path in response and create the log file."""
         import filigree.mcp_server as mcp_mod
 
+        assert mcp_mod._filigree_dir is not None
         project_root = mcp_mod._filigree_dir.parent
         target = project_root / "log_target.py"
         try:
@@ -1847,6 +1857,7 @@ class TestScannerTools:
             def poll() -> None:
                 return None
 
+        assert mcp_mod._filigree_dir is not None
         project_root = mcp_mod._filigree_dir.parent
         target = project_root / "fd_leak_target.py"
         try:
@@ -1857,7 +1868,7 @@ class TestScannerTools:
             mock_fd.__exit__ = MagicMock(return_value=False)
             original_open = builtins.open
 
-            def _spy_open(path, *args, **kwargs):
+            def _spy_open(path: Any, *args: Any, **kwargs: Any) -> Any:
                 if str(path).endswith(".log"):
                     return mock_fd
                 return original_open(path, *args, **kwargs)
@@ -2020,7 +2031,7 @@ class TestHttpMcpRequestContext:
                 async def _request(key: str) -> None:
                     token = selected_key.set(key)
                     try:
-                        await handler({"type": "http", "path": f"/{key}"}, _receive, _send)
+                        await handler({"type": "http", "path": f"/{key}"}, _receive, _send)  # type: ignore[arg-type]
                     finally:
                         selected_key.reset(token)
 
@@ -2138,6 +2149,7 @@ class TestTriggerScanCooldownRace:
         """
         import filigree.mcp_server as mcp_mod
 
+        assert mcp_mod._filigree_dir is not None
         project_root = mcp_mod._filigree_dir.parent
         target = project_root / "race_before_sleep.py"
         scanners_dir = mcp_mod._filigree_dir / "scanners"
@@ -2177,6 +2189,7 @@ class TestTriggerScanCooldownRace:
         """If process spawn fails (OSError), cooldown should be rolled back."""
         import filigree.mcp_server as mcp_mod
 
+        assert mcp_mod._filigree_dir is not None
         project_root = mcp_mod._filigree_dir.parent
         target = project_root / "spawn_fail.py"
         scanners_dir = mcp_mod._filigree_dir / "scanners"
@@ -2208,6 +2221,7 @@ class TestTriggerScanCooldownRace:
         """If command validation fails, cooldown should be rolled back."""
         import filigree.mcp_server as mcp_mod
 
+        assert mcp_mod._filigree_dir is not None
         project_root = mcp_mod._filigree_dir.parent
         target = project_root / "cmd_fail.py"
         scanners_dir = mcp_mod._filigree_dir / "scanners"
@@ -2263,7 +2277,7 @@ class TestMCPReopenIssue:
         issue = mcp_db.create_issue("Still open")
         result = await call_tool("reopen_issue", {"id": issue.id})
         data = _parse(result)
-        assert data["code"] == "invalid"
+        assert data["code"] == "invalid_transition"
 
     async def test_reopen_not_found(self, mcp_db: FiligreeDB) -> None:
         result = await call_tool("reopen_issue", {"id": "nonexistent-xyz"})

@@ -49,7 +49,7 @@ This creates a `.filigree/` directory containing:
 - `config.json` — project prefix, install mode, enabled packs
 - `context.md` — auto-generated project summary
 
-Issue IDs use the format `{prefix}-{10hex}` (e.g., `myproj-a3f9b2e1c0e1c0`). The prefix defaults to your directory name.
+Issue IDs use the format `{prefix}-{10hex}` (e.g., `myproj-a3f9b2e1c0`). The prefix defaults to your directory name.
 
 ## Set Up Integrations
 

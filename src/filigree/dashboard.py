@@ -289,6 +289,16 @@ def create_app(*, server_mode: bool = False) -> ASGIApp:
 
     app = FastAPI(title="Filigree Dashboard", docs_url=None, redoc_url=None, lifespan=_lifespan)
 
+    # CORS — restrict to localhost origins only (this is a local dev tool)
+    from starlette.middleware.cors import CORSMiddleware
+
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$",
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
     router = _create_project_router()
 
     if server_mode:

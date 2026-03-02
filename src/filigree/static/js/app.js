@@ -139,7 +139,14 @@ import {
   switchFileTab,
 } from "./views/files.js";
 import { filterFilesByScanSource, loadHealth } from "./views/health.js";
-import { loadReleases } from "./views/releases.js";
+import {
+  collapseAllReleaseTree,
+  loadReleases,
+  retryReleaseTree,
+  scrollToReleaseCard,
+  toggleReleaseExpand,
+  toggleReleaseTreeNode,
+} from "./views/releases.js";
 
 // ---------------------------------------------------------------------------
 // Core data fetching (lives here because it touches every module)
@@ -187,8 +194,8 @@ async function loadDashboardConfig() {
       state.graphConfigLoaded = true;
       return;
     }
-  } catch (_e) {
-    // best effort fallback to legacy
+  } catch (err) {
+    console.warn("[loadDashboardConfig] Failed to load config, using defaults:", err);
   }
   state.graphConfig = {
     graph_v2_enabled: false,
@@ -495,16 +502,15 @@ document.addEventListener("visibilitychange", () => {
 // Init sequence
 // ---------------------------------------------------------------------------
 
-parseHash();
+const hashResult = parseHash();
 populatePresets();
 loadProjectFilterSettings();
 
 (async function init() {
   await loadProjects();
-  const hash = window.location.hash;
-  const match = hash.match(/project=([^&]+)/);
-  if (match) {
-    const found = state.allProjects.find((p) => p.key === match[1]);
+  const hashProject = hashResult.project;
+  if (hashProject) {
+    const found = state.allProjects.find((p) => p.key === hashProject);
     if (found) {
       setProject(found.key, { keepDetail: true });
     } else if (state.allProjects.length > 0) {
@@ -661,3 +667,8 @@ window.filterFilesByScanSource = filterFilesByScanSource;
 
 // Releases
 window.loadReleases = loadReleases;
+window._scrollToReleaseCard = scrollToReleaseCard;
+window._toggleReleaseExpand = toggleReleaseExpand;
+window._retryReleaseTree = retryReleaseTree;
+window._toggleReleaseTreeNode = toggleReleaseTreeNode;
+window._collapseAllReleaseTree = collapseAllReleaseTree;
