@@ -29,19 +29,13 @@ This installs the CLI (`filigree`), MCP server (`filigree-mcp`), and web dashboa
 For a minimal install (CLI only, no MCP or dashboard):
 
 ```bash
-pip install filigree
-```
-
-Optional extra:
-
-```bash
-pip install "filigree[dashboard]"    # CLI + web dashboard
+pip install filigree                    # CLI + MCP server + web dashboard
 ```
 
 ### Option B: With uv
 
 ```bash
-uv add "filigree[all]"
+uv add filigree
 ```
 
 ### Option C: From source

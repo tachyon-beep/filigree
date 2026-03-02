@@ -129,15 +129,10 @@ The MCP server is included in the base install — no extra needed. It exposes 5
 ### Web Dashboard
 
 ```bash
-pip install "filigree[dashboard]"
 filigree dashboard --port=8377
 ```
 
-### Everything
-
-```bash
-pip install "filigree[all]"
-```
+The dashboard is included in the base install — no extra needed.
 
 ## Entry Points
 

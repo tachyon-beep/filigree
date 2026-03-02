@@ -363,12 +363,8 @@ def migrate(from_beads: bool, beads_db: str | None) -> None:
 @click.option("--no-browser", is_flag=True, help="Don't auto-open browser")
 @click.option("--server-mode", is_flag=True, help="Multi-project server mode (reads server.json)")
 def dashboard(port: int, no_browser: bool, server_mode: bool) -> None:
-    """Launch the web dashboard (requires filigree[dashboard])."""
-    try:
-        from filigree.dashboard import main as dashboard_main
-    except ImportError:
-        click.echo('Dashboard requires extra dependencies. Install with: pip install "filigree[dashboard]"', err=True)
-        sys.exit(1)
+    """Launch the web dashboard."""
+    from filigree.dashboard import main as dashboard_main
 
     pid_claimed = False
     current_pid = os.getpid()

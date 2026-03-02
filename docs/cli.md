@@ -620,7 +620,7 @@ Migrate issues from another system. Currently supports migrating from the beads 
 
 ### `dashboard`
 
-Launch the web dashboard. Requires `filigree[dashboard]` extra.
+Launch the web dashboard.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|

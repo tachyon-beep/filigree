@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.4.1] - 2026-03-03
 
+### Changed
+
+- Dashboard (`fastapi`, `uvicorn`) is now part of core dependencies — no more `filigree[dashboard]` extra required
+
 ### Fixed
 
 - `filigree init` on existing installs now reports schema migrations ("Schema upgraded v1 → v5") instead of silently applying them
