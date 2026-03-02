@@ -41,11 +41,15 @@ def init(prefix: str | None, name: str | None, mode: str | None) -> None:
 
     if filigree_dir.exists():
         click.echo(f"{FILIGREE_DIR_NAME}/ already exists in {cwd}")
-        # Still ensure DB is initialized
+        # Still ensure DB is initialized and migrated
         config = read_config(filigree_dir)
         db = FiligreeDB(filigree_dir / DB_FILENAME, prefix=config.get("prefix", "filigree"))
+        old_version = db.get_schema_version()
         db.initialize()
+        new_version = db.get_schema_version()
         db.close()
+        if new_version > old_version:
+            click.echo(f"  Schema upgraded v{old_version} → v{new_version}")
         (filigree_dir / "scanners").mkdir(exist_ok=True)
         # Update name/mode if explicitly provided
         updated = False
@@ -263,6 +267,7 @@ def doctor(fix: bool, verbose: bool) -> None:
         fixable: dict[str, tuple[str, ...]] = {
             "context.md": ("context.md",),
             ".gitignore": ("gitignore",),
+            "Schema version": ("schema",),
             "Claude Code MCP": ("claude_code_mcp",),
             "Codex MCP": ("codex_mcp",),
             "Claude Code hooks": ("hooks",),
@@ -284,6 +289,15 @@ def doctor(fix: bool, verbose: bool) -> None:
                     with get_db() as db:
                         _write_summary(db, filigree_dir / SUMMARY_FILENAME)
                     click.echo(f"  OK  Fixed: {r.name}")
+                    ok = True
+                elif fix_key == "schema":
+                    config = read_config(filigree_dir)
+                    db = FiligreeDB(filigree_dir / DB_FILENAME, prefix=config.get("prefix", "filigree"))
+                    old_ver = db.get_schema_version()
+                    db.initialize()
+                    new_ver = db.get_schema_version()
+                    db.close()
+                    click.echo(f"  OK  Schema upgraded v{old_ver} → v{new_ver}")
                     ok = True
                 elif fix_key == "gitignore":
                     ok, msg = ensure_gitignore(project_root)

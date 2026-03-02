@@ -238,7 +238,7 @@ def run_doctor(project_root: Path | None = None) -> list[CheckResult]:
                         "Schema version",
                         False,
                         f"v{schema_version} (current: v{CURRENT_SCHEMA_VERSION})",
-                        fix_hint="Database schema is outdated. Run: filigree init (applies migrations automatically)",
+                        fix_hint="Database schema is outdated. Run: filigree doctor --fix",
                     )
                 )
             else:
