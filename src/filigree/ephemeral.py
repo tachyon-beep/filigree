@@ -271,7 +271,8 @@ def read_port_file(port_file: Path) -> int | None:
         return None
     try:
         return int(port_file.read_text().strip())
-    except (ValueError, OSError):
+    except (ValueError, OSError) as exc:
+        logger.warning("Corrupt port file %s: %s", port_file, exc)
         return None
 
 

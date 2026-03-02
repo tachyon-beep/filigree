@@ -558,7 +558,16 @@ def run_doctor(project_root: Path | None = None) -> list[CheckResult]:
                 )
             else:
                 results.append(CheckResult("Git working tree", True, "Clean"))
-    except (subprocess.TimeoutExpired, FileNotFoundError):
-        pass  # Not in a git repo or git not available
+    except FileNotFoundError:
+        pass  # git not installed — not an error
+    except subprocess.TimeoutExpired:
+        results.append(
+            CheckResult(
+                "Git working tree",
+                False,
+                "git status timed out (5s)",
+                fix_hint="Check for .git/index.lock or repository corruption",
+            )
+        )
 
     return results

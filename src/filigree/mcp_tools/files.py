@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import secrets
 import subprocess
 import time
@@ -26,6 +27,8 @@ from filigree.types.inputs import (
     RegisterFileArgs,
     TriggerScanArgs,
 )
+
+_logger = logging.getLogger(__name__)
 
 
 def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
@@ -381,7 +384,6 @@ async def _handle_trigger_scan(arguments: dict[str, Any]) -> list[TextContent]:
         _SCAN_COOLDOWN_SECONDS,
         _get_db,
         _get_filigree_dir,
-        _logger,
         _safe_path,
         _scan_cooldowns,
     )
@@ -487,7 +489,6 @@ async def _handle_trigger_scan(arguments: dict[str, Any]) -> list[TextContent]:
         scan_log_fd = open(scan_log_path, "w")  # noqa: SIM115
     except OSError as log_err:
         scan_log_fd = None
-        _logger = __import__("logging").getLogger(__name__)
         _logger.warning("Cannot open scan log %s: %s", scan_log_path, log_err)
     try:
         proc = subprocess.Popen(
@@ -528,14 +529,13 @@ async def _handle_trigger_scan(arguments: dict[str, Any]) -> list[TextContent]:
             }
         )
 
-    if _logger:
-        _logger.info(
-            "Spawned scanner %s for %s (pid=%d, run_id=%s)",
-            scanner_name,
-            file_path,
-            proc.pid,
-            scan_run_id,
-        )
+    _logger.info(
+        "Spawned scanner %s for %s (pid=%d, run_id=%s)",
+        scanner_name,
+        file_path,
+        proc.pid,
+        scan_run_id,
+    )
 
     log_rel = str(scan_log_path.relative_to(filigree_dir.parent))
     scan_result: dict[str, Any] = {
