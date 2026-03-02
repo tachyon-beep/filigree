@@ -124,13 +124,7 @@ filigree close myproj-a3f9b2e1c0 --reason="Implemented in commit abc123"
 
 ### MCP Server
 
-Install the MCP extra for native agent integration:
-
-```bash
-pip install "filigree[mcp]"
-```
-
-The MCP server exposes 53 tools so agents interact with filigree without parsing CLI output. See [MCP Server Reference](mcp.md).
+The MCP server is included in the base install — no extra needed. It exposes 53 tools so agents interact with filigree without parsing CLI output. See [MCP Server Reference](mcp.md).
 
 ### Web Dashboard
 

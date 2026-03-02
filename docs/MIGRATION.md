@@ -32,10 +32,9 @@ For a minimal install (CLI only, no MCP or dashboard):
 pip install filigree
 ```
 
-Other extras:
+Optional extra:
 
 ```bash
-pip install "filigree[mcp]"          # CLI + MCP server
 pip install "filigree[dashboard]"    # CLI + web dashboard
 ```
 

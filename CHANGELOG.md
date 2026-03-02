@@ -442,7 +442,8 @@ identified through systematic static analysis and verified against HEAD.
 - Issue validation against workflow templates (`validate`)
 - PEP 561 `py.typed` marker for downstream type checking
 
-[Unreleased]: https://github.com/tachyon-beep/filigree/compare/v1.3.0...HEAD
+[Unreleased]: https://github.com/tachyon-beep/filigree/compare/v1.4.0...HEAD
+[1.4.0]: https://github.com/tachyon-beep/filigree/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/tachyon-beep/filigree/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/tachyon-beep/filigree/compare/v1.1.1...v1.2.0
 [1.1.1]: https://github.com/tachyon-beep/filigree/compare/v1.1.0...v1.1.1

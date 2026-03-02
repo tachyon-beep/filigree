@@ -46,11 +46,7 @@ Or manually add to `.mcp.json`:
 }
 ```
 
-Requires the MCP extra:
-
-```bash
-pip install "filigree[mcp]"
-```
+The MCP server is included in the base install — no extra needed.
 
 ## Resource
 
