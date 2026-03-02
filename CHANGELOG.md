@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.1] - 2026-03-03
+
+### Changed
+
+- Dashboard (`fastapi`, `uvicorn`) is now part of core dependencies — no more `filigree[dashboard]` extra required
+
+### Fixed
+
+- `filigree init` on existing installs now reports schema migrations ("Schema upgraded v1 → v5") instead of silently applying them
+- `filigree doctor --fix` can now auto-repair outdated database schemas (was missing from the fixable check map)
+- Dashboard broken by Tailwind CSS CDN SRI integrity hash mismatch — removed incompatible SRI attribute from dynamic CDN resource
+
 ## [1.4.0] - 2026-03-01
 
 Architectural refactor: decompose monolithic modules into domain-specific subpackages, add type safety with TypedDicts, boundary validation, releases tracking, and comprehensive test restructuring.

@@ -696,21 +696,14 @@ class TestInstallClaudeCodeHooks:
         # Backup should exist
         assert (claude_dir / "settings.json.bak").exists()
 
-    def test_dashboard_hook_conditional(self, tmp_path: Path) -> None:
-        """Dashboard hook is added only when dashboard extra is importable."""
+    def test_dashboard_hook_always_added(self, tmp_path: Path) -> None:
+        """Dashboard hook is always added (dashboard is part of core)."""
         with patch("filigree.install_support.hooks.find_filigree_command", return_value=self.MOCK_TOKENS):
             ok, _msg = install_claude_code_hooks(tmp_path)
         assert ok
         data = json.loads((tmp_path / ".claude" / "settings.json").read_text())
         cmds = [h["command"] for m in data["hooks"]["SessionStart"] for h in m["hooks"]]
-        # filigree.dashboard is available in this test env
-        # so ensure-dashboard should be registered
-        try:
-            import filigree.dashboard  # noqa: F401
-
-            assert any("ensure-dashboard" in c and self.MOCK_BIN in c for c in cmds)
-        except ImportError:
-            assert not any("ensure-dashboard" in c for c in cmds)
+        assert any("ensure-dashboard" in c and self.MOCK_BIN in c for c in cmds)
 
     def test_upgrades_bare_to_absolute(self, tmp_path: Path) -> None:
         """Bare hook commands should be upgraded to resolved versions."""
@@ -748,19 +741,14 @@ class TestInstallClaudeCodeHooks:
                 "timeout": 5000,
             },
         ]
-        # Include dashboard hook too (if dashboard extra is available)
-        try:
-            import filigree.dashboard  # noqa: F401
-
-            hooks_list.append(
-                {
-                    "type": "command",
-                    "command": f"{old_bin} ensure-dashboard",
-                    "timeout": 5000,
-                }
-            )
-        except ImportError:
-            pass
+        # Include dashboard hook too (dashboard is part of core)
+        hooks_list.append(
+            {
+                "type": "command",
+                "command": f"{old_bin} ensure-dashboard",
+                "timeout": 5000,
+            }
+        )
         settings = {"hooks": {"SessionStart": [{"hooks": hooks_list}]}}
         (claude_dir / "settings.json").write_text(json.dumps(settings))
         with patch("filigree.install_support.hooks.find_filigree_command", return_value=self.MOCK_TOKENS):

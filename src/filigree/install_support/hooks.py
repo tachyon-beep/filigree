@@ -196,27 +196,15 @@ def install_claude_code_hooks(project_root: Path) -> tuple[bool, str]:
     upgraded: list[str] = []
     if _upgrade_hook_commands(settings, SESSION_CONTEXT_COMMAND, session_context_cmd):
         upgraded.append(SESSION_CONTEXT_COMMAND)
-    try:
-        import filigree.dashboard
-
-        if _upgrade_hook_commands(settings, ENSURE_DASHBOARD_COMMAND, ensure_dashboard_cmd):
-            upgraded.append(ENSURE_DASHBOARD_COMMAND)
-    except ImportError:
-        pass
+    if _upgrade_hook_commands(settings, ENSURE_DASHBOARD_COMMAND, ensure_dashboard_cmd):
+        upgraded.append(ENSURE_DASHBOARD_COMMAND)
 
     # Build list of commands to add (those not already present)
     commands_to_add: list[str] = []
     if not _has_hook_command(settings, SESSION_CONTEXT_COMMAND):
         commands_to_add.append(session_context_cmd)
-
-    # Only add dashboard hook if the [dashboard] extra is available
-    try:
-        import filigree.dashboard  # noqa: F401
-
-        if not _has_hook_command(settings, ENSURE_DASHBOARD_COMMAND):
-            commands_to_add.append(ensure_dashboard_cmd)
-    except ImportError:
-        pass
+    if not _has_hook_command(settings, ENSURE_DASHBOARD_COMMAND):
+        commands_to_add.append(ensure_dashboard_cmd)
 
     if not commands_to_add and not upgraded:
         return True, "Hooks already registered in .claude/settings.json"

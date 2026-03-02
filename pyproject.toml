@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "filigree"
-version = "1.4.0"
+version = "1.4.1"
 description = "Agent-native issue tracker with convention-based project discovery"
 requires-python = ">=3.11"
 license = "MIT"
@@ -27,8 +27,10 @@ classifiers = [
 ]
 dependencies = [
     "click>=8.0",
+    "fastapi>=0.115",
     "mcp>=1.0,<2",
     "portalocker>=2.7,<4",
+    "uvicorn>=0.34",
 ]
 
 [project.urls]
@@ -37,15 +39,6 @@ Repository = "https://github.com/tachyon-beep/filigree"
 Issues = "https://github.com/tachyon-beep/filigree/issues"
 Changelog = "https://github.com/tachyon-beep/filigree/blob/main/CHANGELOG.md"
 Documentation = "https://github.com/tachyon-beep/filigree#readme"
-
-[project.optional-dependencies]
-dashboard = [
-    "fastapi>=0.115",
-    "uvicorn>=0.34",
-]
-all = [
-    "filigree[dashboard]",
-]
 
 [project.scripts]
 filigree = "filigree.cli:cli"
@@ -85,7 +78,6 @@ dev = [
     "coverage[toml]>=7.0",
     "httpx>=0.28",
     "pre-commit>=4.0",
-    "filigree[dashboard]",
 ]
 
 # ---------------------------------------------------------------------------

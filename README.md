@@ -47,8 +47,7 @@ filigree close <id>
 ## Installation
 
 ```bash
-pip install filigree                     # CLI + MCP server
-pip install "filigree[dashboard]"        # + Web dashboard
+pip install filigree                     # CLI + MCP server + Web dashboard
 ```
 
 Or from source:

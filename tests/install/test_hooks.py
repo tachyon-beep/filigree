@@ -142,50 +142,6 @@ class TestExecutableResolution:
         assert cmd[0] == expected_bin
 
 
-class TestEnsureDashboardDependencyCheck:
-    """Bug filigree-caa62b: dependency check must detect missing uvicorn/fastapi."""
-
-    def test_reports_error_when_uvicorn_missing(self, tmp_path: Path) -> None:
-        """Should detect missing uvicorn even though filigree.dashboard imports it lazily."""
-        filigree_dir = tmp_path / ".filigree"
-        filigree_dir.mkdir()
-        with (
-            patch("filigree.hooks.find_filigree_root", return_value=filigree_dir),
-            patch("filigree.hooks.get_mode", return_value="ethereal"),
-            patch.dict("sys.modules", {"uvicorn": None}),
-        ):
-            result = ensure_dashboard_running()
-        assert "requires extra dependencies" in result
-
-    def test_reports_error_when_fastapi_missing(self, tmp_path: Path) -> None:
-        """Should detect missing fastapi even though filigree.dashboard imports it lazily."""
-        filigree_dir = tmp_path / ".filigree"
-        filigree_dir.mkdir()
-        # Also block fastapi sub-modules that might be cached
-        blocked = {"fastapi": None, "fastapi.responses": None}
-        with (
-            patch("filigree.hooks.find_filigree_root", return_value=filigree_dir),
-            patch("filigree.hooks.get_mode", return_value="ethereal"),
-            patch.dict("sys.modules", blocked),
-        ):
-            result = ensure_dashboard_running()
-        assert "requires extra dependencies" in result
-
-    def test_server_mode_skips_dependency_gate(self, tmp_path: Path) -> None:
-        """Server mode should not require dashboard extras on client machines."""
-        filigree_dir = tmp_path / ".filigree"
-        with (
-            patch("filigree.hooks.find_filigree_root", return_value=filigree_dir),
-            patch("filigree.hooks.get_mode", return_value="server"),
-            patch("filigree.hooks._ensure_dashboard_server_mode", return_value="server-ok") as ensure_server,
-            patch.dict("sys.modules", {"uvicorn": None, "fastapi": None, "fastapi.responses": None}),
-        ):
-            result = ensure_dashboard_running()
-
-        assert result == "server-ok"
-        ensure_server.assert_called_once_with(filigree_dir, None)
-
-
 class TestEnsureDashboardSubprocessVerification:
     """Bug filigree-20ad27: must verify subprocess actually started."""
 
