@@ -43,11 +43,17 @@ def init(prefix: str | None, name: str | None, mode: str | None) -> None:
         click.echo(f"{FILIGREE_DIR_NAME}/ already exists in {cwd}")
         # Still ensure DB is initialized and migrated
         config = read_config(filigree_dir)
-        db = FiligreeDB(filigree_dir / DB_FILENAME, prefix=config.get("prefix", "filigree"))
-        old_version = db.get_schema_version()
-        db.initialize()
-        new_version = db.get_schema_version()
-        db.close()
+        db = FiligreeDB(
+            filigree_dir / DB_FILENAME,
+            prefix=config.get("prefix", "filigree"),
+            enabled_packs=config.get("enabled_packs"),
+        )
+        try:
+            old_version = db.get_schema_version()
+            db.initialize()
+            new_version = db.get_schema_version()
+        finally:
+            db.close()
         if new_version > old_version:
             click.echo(f"  Schema upgraded v{old_version} → v{new_version}")
         (filigree_dir / "scanners").mkdir(exist_ok=True)
@@ -292,12 +298,21 @@ def doctor(fix: bool, verbose: bool) -> None:
                     ok = True
                 elif fix_key == "schema":
                     config = read_config(filigree_dir)
-                    db = FiligreeDB(filigree_dir / DB_FILENAME, prefix=config.get("prefix", "filigree"))
-                    old_ver = db.get_schema_version()
-                    db.initialize()
-                    new_ver = db.get_schema_version()
-                    db.close()
-                    click.echo(f"  OK  Schema upgraded v{old_ver} → v{new_ver}")
+                    db = FiligreeDB(
+                        filigree_dir / DB_FILENAME,
+                        prefix=config.get("prefix", "filigree"),
+                        enabled_packs=config.get("enabled_packs"),
+                    )
+                    try:
+                        old_ver = db.get_schema_version()
+                        db.initialize()
+                        new_ver = db.get_schema_version()
+                    finally:
+                        db.close()
+                    if new_ver > old_ver:
+                        click.echo(f"  OK  Schema upgraded v{old_ver} → v{new_ver}")
+                    else:
+                        click.echo(f"  OK  Schema already current (v{new_ver})")
                     ok = True
                 elif fix_key == "gitignore":
                     ok, msg = ensure_gitignore(project_root)

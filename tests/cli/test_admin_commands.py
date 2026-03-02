@@ -490,23 +490,25 @@ class TestInitMode:
         assert not (tmp_path / ".filigree").exists()
 
 
+def _downgrade_db(tmp_path: Path, target_version: int = 1) -> None:
+    """Rewrite the user_version pragma to simulate an outdated schema."""
+    import sqlite3
+
+    db_path = tmp_path / ".filigree" / "filigree.db"
+    conn = sqlite3.connect(str(db_path))
+    conn.execute(f"PRAGMA user_version = {target_version}")
+    conn.commit()
+    conn.close()
+
+
 class TestInitSchemaMigration:
     """Test that `filigree init` on existing installs reports schema upgrades."""
-
-    def _downgrade_db(self, tmp_path: Path, target_version: int = 1) -> None:
-        """Rewrite the user_version pragma to simulate an outdated schema."""
-        import sqlite3
-
-        db_path = tmp_path / ".filigree" / "filigree.db"
-        conn = sqlite3.connect(str(db_path))
-        conn.execute(f"PRAGMA user_version = {target_version}")
-        conn.close()
 
     def test_init_existing_reports_schema_upgrade(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cli_runner: CliRunner) -> None:
         """Re-running init on an outdated schema prints 'Schema upgraded vN → vM'."""
         monkeypatch.chdir(tmp_path)
         cli_runner.invoke(cli, ["init"])
-        self._downgrade_db(tmp_path, target_version=1)
+        _downgrade_db(tmp_path, target_version=1)
 
         result = cli_runner.invoke(cli, ["init"])
         assert result.exit_code == 0
@@ -529,20 +531,11 @@ class TestInitSchemaMigration:
 class TestDoctorFixSchema:
     """Test that `filigree doctor --fix` can repair outdated schemas."""
 
-    def _downgrade_db(self, tmp_path: Path, target_version: int = 1) -> None:
-        """Rewrite the user_version pragma to simulate an outdated schema."""
-        import sqlite3
-
-        db_path = tmp_path / ".filigree" / "filigree.db"
-        conn = sqlite3.connect(str(db_path))
-        conn.execute(f"PRAGMA user_version = {target_version}")
-        conn.close()
-
     def test_doctor_fix_upgrades_outdated_schema(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cli_runner: CliRunner) -> None:
         """doctor --fix should apply migrations when schema is outdated."""
         monkeypatch.chdir(tmp_path)
         cli_runner.invoke(cli, ["init"])
-        self._downgrade_db(tmp_path, target_version=1)
+        _downgrade_db(tmp_path, target_version=1)
 
         result = cli_runner.invoke(cli, ["doctor", "--fix"])
         assert result.exit_code == 0
