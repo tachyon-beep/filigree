@@ -28,7 +28,7 @@ The simplest path:
 
 ```bash
 filigree install --claude-code    # Writes .mcp.json (or uses `claude mcp add`)
-filigree install --codex          # Writes .codex/config.toml
+filigree install --codex          # Writes ~/.codex/config.toml for the current project
 filigree install --mode=server    # Configure streamable HTTP MCP for daemon mode
 ```
 

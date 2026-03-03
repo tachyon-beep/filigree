@@ -87,7 +87,7 @@ For specific targets only:
 
 ```bash
 filigree install --claude-code    # Claude Code MCP only
-filigree install --codex          # OpenAI Codex only
+filigree install --codex          # OpenAI Codex only (updates ~/.codex/config.toml)
 filigree install --claude-md      # CLAUDE.md instructions only
 filigree install --agents-md      # AGENTS.md instructions only
 filigree install --gitignore      # .gitignore entry only

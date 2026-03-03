@@ -55,6 +55,11 @@ def _get_schema_version(conn: sqlite3.Connection) -> int:
     return int(conn.execute("PRAGMA user_version").fetchone()[0])
 
 
+def _get_foreign_keys(conn: sqlite3.Connection, table: str) -> list[sqlite3.Row]:
+    """Return PRAGMA foreign_key_list(table) rows."""
+    return conn.execute(f"PRAGMA foreign_key_list({table})").fetchall()
+
+
 # ---------------------------------------------------------------------------
 # Schema constant integrity
 # ---------------------------------------------------------------------------
@@ -1124,6 +1129,92 @@ class TestMigrateV4ToV5:
         apply_pending_migrations(v4_db, 5)
         comments = v4_db.execute("SELECT text FROM comments WHERE issue_id = 'r6'").fetchall()
         assert len(comments) == 0
+
+
+class TestMigrateV5ToV6:
+    """Tests for migration v5 -> v6: parent_id self-FK with ON DELETE SET NULL."""
+
+    V5_ISSUES_SCHEMA = """\
+    CREATE TABLE issues (
+        id          TEXT PRIMARY KEY,
+        title       TEXT NOT NULL,
+        status      TEXT NOT NULL DEFAULT 'open',
+        priority    INTEGER NOT NULL DEFAULT 2,
+        type        TEXT NOT NULL DEFAULT 'task',
+        parent_id   TEXT,
+        assignee    TEXT DEFAULT '',
+        created_at  TEXT NOT NULL,
+        updated_at  TEXT NOT NULL,
+        closed_at   TEXT,
+        description TEXT DEFAULT '',
+        notes       TEXT DEFAULT '',
+        fields      TEXT DEFAULT '{}',
+        CHECK (priority BETWEEN 0 AND 4)
+    )"""
+
+    def _make_v5_db_without_parent_fk(self, tmp_path: Path) -> sqlite3.Connection:
+        conn = _make_db(tmp_path)
+        conn.executescript(SCHEMA_SQL)
+        conn.commit()
+        conn.execute("PRAGMA foreign_keys=OFF")
+        rebuild_table(conn, "issues", self.V5_ISSUES_SCHEMA)
+        conn.execute("PRAGMA user_version = 5")
+        conn.commit()
+        conn.execute("PRAGMA foreign_keys=ON")
+        return conn
+
+    def test_rebuilds_old_v5_issues_table_and_preserves_data(self, tmp_path: Path) -> None:
+        """Legacy v5 issues tables gain the parent FK and keep their rows."""
+        conn = self._make_v5_db_without_parent_fk(tmp_path)
+        now = "2026-01-01T00:00:00Z"
+        conn.execute(
+            "INSERT INTO issues (id, title, status, priority, type, parent_id, assignee, created_at, updated_at, fields) "
+            "VALUES ('parent', 'Parent', 'open', 2, 'task', NULL, '', ?, ?, '{}')",
+            (now, now),
+        )
+        conn.execute(
+            "INSERT INTO issues (id, title, status, priority, type, parent_id, assignee, created_at, updated_at, fields) "
+            "VALUES ('child', 'Child', 'open', 2, 'task', 'parent', '', ?, ?, '{}')",
+            (now, now),
+        )
+        conn.execute(
+            "INSERT INTO issues (id, title, status, priority, type, parent_id, assignee, created_at, updated_at, fields) "
+            "VALUES ('orphan', 'Orphan', 'open', 2, 'task', 'missing', '', ?, ?, '{}')",
+            (now, now),
+        )
+        conn.commit()
+
+        applied = apply_pending_migrations(conn, 6)
+
+        assert applied == 1
+        assert _get_schema_version(conn) == 6
+        orphan_parent = conn.execute("SELECT parent_id FROM issues WHERE id = 'orphan'").fetchone()[0]
+        assert orphan_parent is None
+
+        parent_fk = next(row for row in _get_foreign_keys(conn, "issues") if row["from"] == "parent_id")
+        assert parent_fk["table"] == "issues"
+        assert parent_fk["on_delete"] == "SET NULL"
+
+        conn.execute("DELETE FROM issues WHERE id = 'parent'")
+        conn.commit()
+        child_parent = conn.execute("SELECT parent_id FROM issues WHERE id = 'child'").fetchone()[0]
+        assert child_parent is None
+        conn.close()
+
+    def test_restamps_already_correct_v5_schema(self, tmp_path: Path) -> None:
+        """Databases already shaped like v6 should still migrate cleanly."""
+        conn = _make_db(tmp_path)
+        conn.executescript(SCHEMA_SQL)
+        conn.execute("PRAGMA user_version = 5")
+        conn.commit()
+
+        applied = apply_pending_migrations(conn, 6)
+
+        assert applied == 1
+        assert _get_schema_version(conn) == 6
+        parent_fk = next(row for row in _get_foreign_keys(conn, "issues") if row["from"] == "parent_id")
+        assert parent_fk["on_delete"] == "SET NULL"
+        conn.close()
 
 
 # ---------------------------------------------------------------------------

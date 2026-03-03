@@ -221,8 +221,11 @@ class TestJsonRetrofit:
 
 
 class TestInstallCli:
-    def test_install_all(self, cli_in_project: tuple[CliRunner, Path]) -> None:
-        runner, _ = cli_in_project
+    def test_install_all(self, cli_in_project: tuple[CliRunner, Path], monkeypatch: pytest.MonkeyPatch) -> None:
+        runner, project = cli_in_project
+        codex_home = project / ".test-home"
+        codex_home.mkdir()
+        monkeypatch.setattr("filigree.install_support.integrations.Path.home", lambda: codex_home)
         result = runner.invoke(cli, ["install"])
         assert result.exit_code == 0
         assert "installed successfully" in result.output
@@ -246,6 +249,37 @@ class TestInstallCli:
         assert "Codex skills" in result.output
         skill_md = project / ".agents" / "skills" / "filigree-workflow" / "SKILL.md"
         assert skill_md.exists()
+
+    def test_install_codex_server_mode_passes_mode_and_port(
+        self, cli_in_project: tuple[CliRunner, Path], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        runner, project = cli_in_project
+
+        observed: dict[str, object] = {}
+
+        def _fake_install_codex_mcp(project_root: Path, *, mode: str = "ethereal", server_port: int = 8377) -> tuple[bool, str]:
+            observed["project_root"] = project_root
+            observed["mode"] = mode
+            observed["server_port"] = server_port
+            return True, "configured"
+
+        monkeypatch.setattr("filigree.install.install_codex_mcp", _fake_install_codex_mcp)
+        monkeypatch.setattr("filigree.server.register_project", lambda _p: None)
+
+        from filigree.server import DaemonStatus, ServerConfig, write_server_config
+
+        config_dir = project / ".server-config"
+        monkeypatch.setattr("filigree.server.SERVER_CONFIG_DIR", config_dir)
+        monkeypatch.setattr("filigree.server.SERVER_CONFIG_FILE", config_dir / "server.json")
+        monkeypatch.setattr("filigree.server.SERVER_PID_FILE", config_dir / "server.pid")
+        monkeypatch.setattr("filigree.server.daemon_status", lambda: DaemonStatus(running=False))
+        write_server_config(ServerConfig(port=9911))
+
+        result = runner.invoke(cli, ["install", "--codex", "--mode", "server"])
+        assert result.exit_code == 0, result.output
+        assert observed["project_root"] == project
+        assert observed["mode"] == "server"
+        assert observed["server_port"] == 9911
 
 
 class TestDoctorCli:
@@ -555,6 +589,9 @@ class TestInstallMode:
     def test_install_writes_mode_to_config(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cli_runner: CliRunner) -> None:
         """install --mode=server persists the mode to config.json."""
         monkeypatch.chdir(tmp_path)
+        codex_home = tmp_path / ".test-home"
+        codex_home.mkdir()
+        monkeypatch.setattr("filigree.install_support.integrations.Path.home", lambda: codex_home)
         # Set up a minimal project
         cli_runner.invoke(cli, ["init"])
         result = cli_runner.invoke(cli, ["install", "--mode", "server"])
@@ -567,6 +604,9 @@ class TestInstallMode:
     ) -> None:
         """install without --mode keeps the existing mode."""
         monkeypatch.chdir(tmp_path)
+        codex_home = tmp_path / ".test-home"
+        codex_home.mkdir()
+        monkeypatch.setattr("filigree.install_support.integrations.Path.home", lambda: codex_home)
         cli_runner.invoke(cli, ["init", "--mode", "server"])
         result = cli_runner.invoke(cli, ["install"])
         assert result.exit_code == 0
@@ -578,6 +618,9 @@ class TestInstallMode:
 class TestInstallModeIntegration:
     def test_install_server_mode_registers_project(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cli_runner: CliRunner) -> None:
         monkeypatch.chdir(tmp_path)
+        codex_home = tmp_path / ".test-home"
+        codex_home.mkdir()
+        monkeypatch.setattr("filigree.install_support.integrations.Path.home", lambda: codex_home)
         cli_runner.invoke(cli, ["init"])
 
         config_dir = tmp_path / ".server-config"
@@ -595,6 +638,9 @@ class TestInstallModeIntegration:
 
     def test_install_ethereal_mode_does_not_register(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cli_runner: CliRunner) -> None:
         monkeypatch.chdir(tmp_path)
+        codex_home = tmp_path / ".test-home"
+        codex_home.mkdir()
+        monkeypatch.setattr("filigree.install_support.integrations.Path.home", lambda: codex_home)
         cli_runner.invoke(cli, ["init"])
 
         config_dir = tmp_path / ".server-config"
@@ -612,6 +658,9 @@ class TestInstallModeIntegration:
 
     def test_install_server_mode_passes_mode_to_mcp(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cli_runner: CliRunner) -> None:
         monkeypatch.chdir(tmp_path)
+        codex_home = tmp_path / ".test-home"
+        codex_home.mkdir()
+        monkeypatch.setattr("filigree.install_support.integrations.Path.home", lambda: codex_home)
         cli_runner.invoke(cli, ["init"])
 
         config_dir = tmp_path / ".server-config"
@@ -627,6 +676,9 @@ class TestInstallModeIntegration:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cli_runner: CliRunner
     ) -> None:
         monkeypatch.chdir(tmp_path)
+        codex_home = tmp_path / ".test-home"
+        codex_home.mkdir()
+        monkeypatch.setattr("filigree.install_support.integrations.Path.home", lambda: codex_home)
         cli_runner.invoke(cli, ["init"])
 
         config_dir = tmp_path / ".server-config"

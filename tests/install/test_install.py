@@ -333,53 +333,86 @@ class TestRunDoctor:
         assert mcp_check.passed
 
     def test_codex_not_configured(self, filigree_project: Path) -> None:
-        """Doctor should warn when .codex/config.toml is absent."""
-        results = run_doctor(filigree_project)
+        """Doctor should warn when ~/.codex/config.toml is absent."""
+        home = filigree_project / "home"
+        home.mkdir()
+        with patch("filigree.install_support.doctor.Path.home", return_value=home):
+            results = run_doctor(filigree_project)
         codex_check = next((r for r in results if r.name == "Codex MCP"), None)
         assert codex_check is not None
         assert not codex_check.passed
 
     def test_codex_configured(self, filigree_project: Path) -> None:
         """Doctor should pass when codex config has filigree."""
-        codex_dir = filigree_project / ".codex"
+        home = filigree_project / "home"
+        codex_dir = home / ".codex"
+        home.mkdir()
         codex_dir.mkdir()
-        (codex_dir / "config.toml").write_text("[mcp_servers.filigree]\ncommand = 'filigree-mcp'\n")
-        results = run_doctor(filigree_project)
+        (codex_dir / "config.toml").write_text(
+            f"[mcp_servers.filigree]\ncommand = 'filigree-mcp'\nargs = ['--project', '{filigree_project}']\n"
+        )
+        with patch("filigree.install_support.doctor.Path.home", return_value=home):
+            results = run_doctor(filigree_project)
         codex_check = next((r for r in results if r.name == "Codex MCP"), None)
         assert codex_check is not None
         assert codex_check.passed
 
     def test_codex_without_filigree(self, filigree_project: Path) -> None:
         """Doctor should warn when codex config exists but lacks filigree."""
-        codex_dir = filigree_project / ".codex"
+        home = filigree_project / "home"
+        codex_dir = home / ".codex"
+        home.mkdir()
         codex_dir.mkdir()
         (codex_dir / "config.toml").write_text("[mcp_servers.other]\n")
-        results = run_doctor(filigree_project)
+        with patch("filigree.install_support.doctor.Path.home", return_value=home):
+            results = run_doctor(filigree_project)
         codex_check = next((r for r in results if r.name == "Codex MCP"), None)
         assert codex_check is not None
         assert not codex_check.passed
+
+    def test_codex_wrong_project_fails(self, filigree_project: Path) -> None:
+        """Doctor should fail when Codex filigree entry targets a different project."""
+        home = filigree_project / "home"
+        codex_dir = home / ".codex"
+        home.mkdir()
+        codex_dir.mkdir()
+        (codex_dir / "config.toml").write_text(
+            '[mcp_servers.filigree]\ncommand = "filigree-mcp"\nargs = ["--project", "/tmp/other"]\n'
+        )
+        with patch("filigree.install_support.doctor.Path.home", return_value=home):
+            results = run_doctor(filigree_project)
+        codex_check = next((r for r in results if r.name == "Codex MCP"), None)
+        assert codex_check is not None
+        assert not codex_check.passed
+        assert "targets a different project" in codex_check.message
 
     def test_codex_filigree_comment_does_not_count(self, filigree_project: Path) -> None:
         """Doctor should not treat commented filigree table text as configured."""
-        codex_dir = filigree_project / ".codex"
+        home = filigree_project / "home"
+        codex_dir = home / ".codex"
+        home.mkdir()
         codex_dir.mkdir()
         (codex_dir / "config.toml").write_text("# [mcp_servers.filigree]\n[mcp_servers.other]\n")
-        results = run_doctor(filigree_project)
+        with patch("filigree.install_support.doctor.Path.home", return_value=home):
+            results = run_doctor(filigree_project)
         codex_check = next((r for r in results if r.name == "Codex MCP"), None)
         assert codex_check is not None
         assert not codex_check.passed
-        assert "filigree not in .codex/config.toml" in codex_check.message
+        assert "filigree not in ~/.codex/config.toml" in codex_check.message
 
     def test_codex_invalid_toml(self, filigree_project: Path) -> None:
         """Doctor should report invalid TOML instead of false configured state."""
-        codex_dir = filigree_project / ".codex"
+        home = filigree_project / "home"
+        codex_dir = home / ".codex"
+        home.mkdir()
         codex_dir.mkdir()
         (codex_dir / "config.toml").write_text("[broken\n")
-        results = run_doctor(filigree_project)
+        with patch("filigree.install_support.doctor.Path.home", return_value=home):
+            results = run_doctor(filigree_project)
         codex_check = next((r for r in results if r.name == "Codex MCP"), None)
         assert codex_check is not None
         assert not codex_check.passed
-        assert "Invalid .codex/config.toml" in codex_check.message
+        assert "Invalid ~/.codex/config.toml" in codex_check.message
 
     def test_claude_md_missing(self, filigree_project: Path) -> None:
         """Doctor should warn when CLAUDE.md is absent."""
@@ -594,19 +627,32 @@ class TestInstallClaudeCodeMcp:
 
 class TestInstallCodexMcp:
     def test_creates_codex_config(self, tmp_path: Path) -> None:
-        """Should create .codex/config.toml with filigree config."""
-        with patch("filigree.install_support.integrations.shutil.which", return_value=None):
+        """Should create ~/.codex/config.toml with filigree config."""
+        home = tmp_path / "home"
+        home.mkdir()
+        with (
+            patch("filigree.install_support.integrations.Path.home", return_value=home),
+            patch("filigree.install_support.integrations.shutil.which", return_value=None),
+        ):
             ok, _msg = install_codex_mcp(tmp_path)
         assert ok
-        config = (tmp_path / ".codex" / "config.toml").read_text()
+        config = (home / ".codex" / "config.toml").read_text()
         assert "[mcp_servers.filigree]" in config
 
     def test_already_configured(self, tmp_path: Path) -> None:
         """Should detect when filigree is already configured."""
-        codex_dir = tmp_path / ".codex"
+        home = tmp_path / "home"
+        codex_dir = home / ".codex"
+        home.mkdir()
         codex_dir.mkdir()
-        (codex_dir / "config.toml").write_text("[mcp_servers.filigree]\ncommand = 'filigree-mcp'\n")
-        with patch("filigree.install_support.integrations.shutil.which", return_value=None):
+        (codex_dir / "config.toml").write_text(
+            f"[mcp_servers.filigree]\ncommand = 'filigree-mcp'\nargs = ['--project', '{tmp_path}']\n"
+        )
+        with (
+            patch("filigree.install_support.integrations._find_filigree_mcp_command", return_value="filigree-mcp"),
+            patch("filigree.install_support.integrations.Path.home", return_value=home),
+            patch("filigree.install_support.integrations.shutil.which", return_value=None),
+        ):
             ok, msg = install_codex_mcp(tmp_path)
         assert ok
         assert "Already configured" in msg
@@ -618,10 +664,15 @@ class TestInstallCodexMcp:
         # Use a project root whose name contains a double quote
         weird_root = tmp_path / 'proj"name'
         weird_root.mkdir()
-        with patch("filigree.install_support.integrations.shutil.which", return_value=None):
+        home = tmp_path / "home"
+        home.mkdir()
+        with (
+            patch("filigree.install_support.integrations.Path.home", return_value=home),
+            patch("filigree.install_support.integrations.shutil.which", return_value=None),
+        ):
             ok, _msg = install_codex_mcp(weird_root)
         assert ok
-        config_text = (weird_root / ".codex" / "config.toml").read_text()
+        config_text = (home / ".codex" / "config.toml").read_text()
         # Must be parseable as valid TOML
         parsed = tomllib.loads(config_text)
         assert "filigree" in parsed["mcp_servers"]
@@ -631,20 +682,30 @@ class TestInstallCodexMcpMalformedToml:
     """Bug filigree-d6bbbf: install_codex_mcp must fail on malformed TOML, not silently append."""
 
     def test_malformed_toml_returns_false(self, tmp_path: Path) -> None:
-        codex_dir = tmp_path / ".codex"
+        home = tmp_path / "home"
+        codex_dir = home / ".codex"
+        home.mkdir()
         codex_dir.mkdir()
         (codex_dir / "config.toml").write_text("[broken\nthis is not valid toml")
-        with patch("filigree.install_support.integrations.shutil.which", return_value=None):
+        with (
+            patch("filigree.install_support.integrations.Path.home", return_value=home),
+            patch("filigree.install_support.integrations.shutil.which", return_value=None),
+        ):
             ok, msg = install_codex_mcp(tmp_path)
         assert not ok
         assert "malformed TOML" in msg
 
     def test_malformed_toml_does_not_modify_file(self, tmp_path: Path) -> None:
-        codex_dir = tmp_path / ".codex"
+        home = tmp_path / "home"
+        codex_dir = home / ".codex"
+        home.mkdir()
         codex_dir.mkdir()
         original = "[broken\nthis is not valid toml"
         (codex_dir / "config.toml").write_text(original)
-        with patch("filigree.install_support.integrations.shutil.which", return_value=None):
+        with (
+            patch("filigree.install_support.integrations.Path.home", return_value=home),
+            patch("filigree.install_support.integrations.shutil.which", return_value=None),
+        ):
             install_codex_mcp(tmp_path)
         assert (codex_dir / "config.toml").read_text() == original
 
@@ -1380,7 +1441,10 @@ class TestInstructionsSessionHint:
 class TestCodexTomlBackslash:
     def test_backslash_paths_escaped(self, tmp_path: Path) -> None:
         """Windows-style backslash paths must be escaped in TOML output."""
+        home = tmp_path / "home"
+        home.mkdir()
         with (
+            patch("filigree.install_support.integrations.Path.home", return_value=home),
             patch("filigree.install_support.integrations.shutil.which", return_value=None),
             patch(
                 "filigree.install_support.integrations._find_filigree_mcp_command",
@@ -1389,13 +1453,16 @@ class TestCodexTomlBackslash:
         ):
             ok, _msg = install_codex_mcp(tmp_path)
         assert ok
-        content = (tmp_path / ".codex" / "config.toml").read_text()
+        content = (home / ".codex" / "config.toml").read_text()
         # The raw TOML should have escaped backslashes
         assert "C:\\\\Program Files\\\\filigree\\\\filigree-mcp.exe" in content
 
     def test_unix_paths_unchanged(self, tmp_path: Path) -> None:
         """Unix paths (no backslashes) should be passed through unchanged."""
+        home = tmp_path / "home"
+        home.mkdir()
         with (
+            patch("filigree.install_support.integrations.Path.home", return_value=home),
             patch("filigree.install_support.integrations.shutil.which", return_value=None),
             patch(
                 "filigree.install_support.integrations._find_filigree_mcp_command",
@@ -1404,19 +1471,24 @@ class TestCodexTomlBackslash:
         ):
             ok, _msg = install_codex_mcp(tmp_path)
         assert ok
-        content = (tmp_path / ".codex" / "config.toml").read_text()
+        content = (home / ".codex" / "config.toml").read_text()
         assert "/usr/local/bin/filigree-mcp" in content
 
 
 class TestCodexTomlPresenceCheck:
     def test_filigree_extra_does_not_match(self, tmp_path: Path) -> None:
         """A TOML section [mcp_servers.filigree-extra] should NOT be mistaken for filigree."""
-        codex_dir = tmp_path / ".codex"
+        home = tmp_path / "home"
+        codex_dir = home / ".codex"
+        home.mkdir()
         codex_dir.mkdir()
         config = codex_dir / "config.toml"
         config.write_text('[mcp_servers.filigree-extra]\ncommand = "other"\n')
 
-        with patch("filigree.install_support.integrations.shutil.which", return_value=None):
+        with (
+            patch("filigree.install_support.integrations.Path.home", return_value=home),
+            patch("filigree.install_support.integrations.shutil.which", return_value=None),
+        ):
             ok, msg = install_codex_mcp(tmp_path)
         assert ok
         # Should have written a new filigree section (not returned "Already configured")
@@ -1426,15 +1498,54 @@ class TestCodexTomlPresenceCheck:
 
     def test_exact_filigree_detected(self, tmp_path: Path) -> None:
         """An existing [mcp_servers.filigree] section should be detected correctly."""
-        codex_dir = tmp_path / ".codex"
+        home = tmp_path / "home"
+        codex_dir = home / ".codex"
+        home.mkdir()
         codex_dir.mkdir()
         config = codex_dir / "config.toml"
-        config.write_text('[mcp_servers.filigree]\ncommand = "filigree-mcp"\n')
+        config.write_text(f'[mcp_servers.filigree]\ncommand = "filigree-mcp"\nargs = ["--project", "{tmp_path}"]\n')
 
-        with patch("filigree.install_support.integrations.shutil.which", return_value=None):
+        with (
+            patch("filigree.install_support.integrations._find_filigree_mcp_command", return_value="filigree-mcp"),
+            patch("filigree.install_support.integrations.Path.home", return_value=home),
+            patch("filigree.install_support.integrations.shutil.which", return_value=None),
+        ):
             ok, msg = install_codex_mcp(tmp_path)
         assert ok
         assert "Already configured" in msg
+
+    def test_existing_other_project_is_reconfigured(self, tmp_path: Path) -> None:
+        """A filigree entry for another project should be rewritten for the current one."""
+        home = tmp_path / "home"
+        codex_dir = home / ".codex"
+        home.mkdir()
+        codex_dir.mkdir()
+        config = codex_dir / "config.toml"
+        config.write_text('[mcp_servers.filigree]\ncommand = "filigree-mcp"\nargs = ["--project", "/tmp/other"]\n')
+
+        with (
+            patch("filigree.install_support.integrations.Path.home", return_value=home),
+            patch("filigree.install_support.integrations.shutil.which", return_value=None),
+        ):
+            ok, msg = install_codex_mcp(tmp_path)
+        assert ok
+        assert "Already configured" not in msg
+        content = config.read_text()
+        assert f'args = ["--project", "{tmp_path}"]' in content
+
+    def test_server_mode_writes_url(self, tmp_path: Path) -> None:
+        """Server mode should write a streamable HTTP URL for Codex."""
+        home = tmp_path / "home"
+        home.mkdir()
+        filigree_dir = tmp_path / ".filigree"
+        filigree_dir.mkdir()
+        (filigree_dir / "config.json").write_text(json.dumps({"prefix": "testproj", "mode": "server"}))
+
+        with patch("filigree.install_support.integrations.Path.home", return_value=home):
+            ok, _msg = install_codex_mcp(tmp_path, mode="server", server_port=9911)
+        assert ok
+        content = (home / ".codex" / "config.toml").read_text()
+        assert 'url = "http://localhost:9911/mcp/?project=testproj"' in content
 
 
 class TestPackageNotFoundError:

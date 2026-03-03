@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Codex MCP install and doctor now validate the config Codex actually uses (`~/.codex/config.toml`), rewrite stale `filigree` entries that still target another project, and support server-mode MCP URL installs
+- Restored schema `v6` compatibility for historical databases by reinstating the missing `v5 -> v6` migration for the `issues.parent_id` self-foreign-key, including FTS rebuild handling after the table swap
 - JSONL export/import now round-trips the file subsystem (`file_records`, `scan_findings`, `file_associations`, `file_events`), reconciles the seeded `Future` release singleton on restore, and makes `merge=True` idempotent for imported comments and file history rows
 - Ethereal/server lifecycle helpers now degrade cleanly under restricted socket permissions, treat `PermissionError` liveness checks as live processes, and verify PID ownership against the expected dashboard command shape before reusing or stopping processes
 - Older Filigree binaries now refuse to open databases with a newer schema version instead of silently attempting an unsupported downgrade path

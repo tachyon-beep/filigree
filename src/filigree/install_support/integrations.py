@@ -1,6 +1,6 @@
 """MCP server installation for Claude Code and Codex.
 
-Handles writing ``.mcp.json`` (Claude Code) and ``.codex/config.toml``
+Handles writing ``.mcp.json`` (Claude Code) and ``~/.codex/config.toml``
 (Codex) entries that point to the ``filigree-mcp`` binary.
 """
 
@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import shutil
 import subprocess
 import sys
@@ -52,6 +53,72 @@ def _find_filigree_mcp_command() -> str:
             if candidate.is_file():
                 return str(candidate)
     return "filigree-mcp"
+
+
+def _codex_config_path() -> Path:
+    """Return the Codex MCP config path currently honored by Codex CLI."""
+    return Path.home() / ".codex" / "config.toml"
+
+
+def _toml_quote(value: str) -> str:
+    """Escape a string for inclusion in a TOML double-quoted string."""
+    return value.replace("\\", "\\\\").replace('"', '\\"')
+
+
+def _codex_server_mode_url(project_root: Path, port: int) -> str:
+    """Build the streamable-HTTP URL for Codex server-mode MCP."""
+    project_key = "filigree"
+    try:
+        config = read_config(project_root / FILIGREE_DIR_NAME)
+        prefix = config.get("prefix")
+        if isinstance(prefix, str) and prefix.strip():
+            project_key = prefix.strip()
+    except (json.JSONDecodeError, OSError) as exc:
+        logger.warning("Unable to read project prefix for Codex server-mode MCP install: %s", exc)
+    encoded_key = quote(project_key, safe="")
+    return f"http://localhost:{port}/mcp/?project={encoded_key}"
+
+
+def _build_codex_server_config(project_root: Path, *, mode: str, server_port: int) -> dict[str, Any]:
+    """Return the Codex MCP server config that should target this project."""
+    if mode == "server":
+        return {"url": _codex_server_mode_url(project_root, server_port)}
+    return {
+        "command": _find_filigree_mcp_command(),
+        "args": ["--project", str(project_root)],
+    }
+
+
+def _codex_server_block(server_config: dict[str, Any]) -> str:
+    """Serialize a Codex MCP server table for config.toml."""
+    lines: list[str] = ["[mcp_servers.filigree]"]
+    if "url" in server_config:
+        lines.append(f'url = "{_toml_quote(str(server_config["url"]))}"')
+    else:
+        lines.append(f'command = "{_toml_quote(str(server_config["command"]))}"')
+        args = server_config.get("args", [])
+        rendered_args = ", ".join(f'"{_toml_quote(str(arg))}"' for arg in args)
+        lines.append(f"args = [{rendered_args}]")
+    return "\n".join(lines) + "\n"
+
+
+def _upsert_toml_table(content: str, table_name: str, table_block: str) -> str:
+    """Replace or append a top-level TOML table without disturbing other content."""
+    pattern = re.compile(
+        rf"(?ms)^\[{re.escape(table_name)}\]\n.*?(?=^\[|\Z)",
+    )
+    if pattern.search(content):
+        updated = pattern.sub(table_block, content, count=1)
+    else:
+        updated = content
+        if updated and not updated.endswith("\n"):
+            updated += "\n"
+        if updated and not updated.endswith("\n\n"):
+            updated += "\n"
+        updated += table_block
+    if not updated.endswith("\n"):
+        updated += "\n"
+    return updated
 
 
 # ---------------------------------------------------------------------------
@@ -193,20 +260,21 @@ def install_claude_code_mcp(
 # ---------------------------------------------------------------------------
 
 
-def install_codex_mcp(project_root: Path) -> tuple[bool, str]:
+def install_codex_mcp(
+    project_root: Path,
+    *,
+    mode: str = "ethereal",
+    server_port: int = 8377,
+) -> tuple[bool, str]:
     """Install filigree-mcp into Codex's MCP config.
 
-    Writes to project-scoped .codex/config.toml if project is trusted,
-    otherwise to ~/.codex/config.toml.
+    Codex currently reads MCP config from ``~/.codex/config.toml``.
+    We update the shared ``mcp_servers.filigree`` entry so it targets
+    the current project.
     """
-    filigree_mcp = _find_filigree_mcp_command()
-
-    # Try project-scoped first
-    codex_dir = project_root / ".codex"
-    if not codex_dir.exists():
-        codex_dir.mkdir(exist_ok=True)
-
-    config_path = codex_dir / "config.toml"
+    config_path = _codex_config_path()
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    desired = _build_codex_server_config(project_root, mode=mode, server_port=server_port)
 
     # Read existing config if present
     existing = ""
@@ -217,23 +285,14 @@ def install_codex_mcp(project_root: Path) -> tuple[bool, str]:
     if existing.strip():
         try:
             parsed = tomllib.loads(existing)
-            if "filigree" in parsed.get("mcp_servers", {}):
-                return True, "Already configured in .codex/config.toml"
+            mcp_servers = parsed.get("mcp_servers", {})
+            filigree_server = mcp_servers.get("filigree") if isinstance(mcp_servers, dict) else None
+            if isinstance(filigree_server, dict) and filigree_server == desired:
+                return True, "Already configured in ~/.codex/config.toml"
         except tomllib.TOMLDecodeError:
             return False, f"Existing {config_path} contains malformed TOML; fix or remove it before configuring"
 
-    # Escape backslashes and double quotes in paths for TOML double-quoted strings
-    safe_command = str(filigree_mcp).replace("\\", "\\\\").replace('"', '\\"')
-    safe_project = str(project_root).replace("\\", "\\\\").replace('"', '\\"')
-
-    # Append MCP server config
-    toml_block = f"""
-[mcp_servers.filigree]
-command = "{safe_command}"
-args = ["--project", "{safe_project}"]
-"""
-
-    with config_path.open("a") as f:
-        f.write(toml_block)
+    updated = _upsert_toml_table(existing, "mcp_servers.filigree", _codex_server_block(desired))
+    config_path.write_text(updated)
 
     return True, f"Wrote {config_path}"

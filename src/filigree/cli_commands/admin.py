@@ -167,7 +167,7 @@ def install(
         results.append(("Claude Code MCP", ok, msg))
 
     if install_all or codex:
-        ok, msg = install_codex_mcp(project_root)
+        ok, msg = install_codex_mcp(project_root, mode=mode, server_port=server_port)
         results.append(("Codex MCP", ok, msg))
 
     if install_all or claude_md:
@@ -321,7 +321,7 @@ def doctor(fix: bool, verbose: bool) -> None:
                     ok, msg = install_claude_code_mcp(project_root, mode=mode, server_port=server_port)
                     click.echo(f"  {'OK' if ok else '!!'} {r.name}: {msg}")
                 elif fix_key == "codex_mcp":
-                    ok, msg = install_codex_mcp(project_root)
+                    ok, msg = install_codex_mcp(project_root, mode=mode, server_port=server_port)
                     click.echo(f"  {'OK' if ok else '!!'} {r.name}: {msg}")
                 elif fix_key == "hooks":
                     ok, msg = install_claude_code_hooks(project_root)
