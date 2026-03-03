@@ -195,6 +195,8 @@ def create_router() -> APIRouter:
             )
         except KeyError:
             return _error_response(f"Issue not found: {issue_id}", "ISSUE_NOT_FOUND", 404)
+        except TypeError as e:
+            return _error_response(str(e), "VALIDATION_ERROR", 400)
         except ValueError as e:
             return _error_response(str(e), "TRANSITION_ERROR", 409)
         return JSONResponse(issue.to_dict())
@@ -303,14 +305,17 @@ def create_router() -> APIRouter:
         priority = _validate_priority(body.get("priority"))
         if isinstance(priority, JSONResponse):
             return priority
-        updated, errors = db.batch_update(
-            issue_ids,
-            status=body.get("status"),
-            priority=priority,
-            assignee=body.get("assignee"),
-            fields=body.get("fields"),
-            actor=actor,
-        )
+        try:
+            updated, errors = db.batch_update(
+                issue_ids,
+                status=body.get("status"),
+                priority=priority,
+                assignee=body.get("assignee"),
+                fields=body.get("fields"),
+                actor=actor,
+            )
+        except TypeError as e:
+            return _error_response(str(e), "VALIDATION_ERROR", 400)
         return JSONResponse(
             {
                 "updated": [i.to_dict() for i in updated],
@@ -386,6 +391,8 @@ def create_router() -> APIRouter:
                 deps=body.get("deps"),
                 actor=actor,
             )
+        except TypeError as e:
+            return _error_response(str(e), "VALIDATION_ERROR", 400)
         except ValueError as e:
             return _error_response(str(e), "VALIDATION_ERROR", 400)
         return JSONResponse(issue.to_dict(), status_code=201)

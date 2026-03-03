@@ -329,6 +329,16 @@ class TestCreateIssueAPI:
         assert resp.status_code == 400
         assert "error" in resp.json()
 
+    async def test_create_invalid_fields_type_returns_400(self, client: AsyncClient) -> None:
+        resp = await client.post(
+            "/api/issues",
+            json={"title": "Bad fields", "fields": []},
+        )
+        assert resp.status_code == 400
+        err = resp.json()["error"]
+        assert err["code"] == "VALIDATION_ERROR"
+        assert "fields must be a dict" in err["message"]
+
     async def test_create_invalid_type_returns_400(self, client: AsyncClient) -> None:
         resp = await client.post(
             "/api/issues",
@@ -411,6 +421,17 @@ class TestUpdateAPI:
         )
         assert resp.status_code == 404
         assert "error" in resp.json()
+
+    async def test_update_invalid_fields_type_returns_400(self, client: AsyncClient, dashboard_db: PopulatedDB) -> None:
+        ids = dashboard_db.ids
+        resp = await client.patch(
+            f"/api/issue/{ids['a']}",
+            json={"fields": []},
+        )
+        assert resp.status_code == 400
+        err = resp.json()["error"]
+        assert err["code"] == "VALIDATION_ERROR"
+        assert "fields must be a dict" in err["message"]
 
     async def test_update_invalid_transition(self, client: AsyncClient, dashboard_db: PopulatedDB) -> None:
         ids = dashboard_db.ids
@@ -848,6 +869,19 @@ class TestBatchAPI:
         assert resp.status_code == 200
         data = resp.json()
         assert len(data["updated"]) == 1
+
+    async def test_batch_update_invalid_fields_type_returns_400(
+        self, client: AsyncClient, dashboard_db: PopulatedDB
+    ) -> None:
+        ids = dashboard_db.ids
+        resp = await client.post(
+            "/api/batch/update",
+            json={"issue_ids": [ids["a"]], "fields": []},
+        )
+        assert resp.status_code == 400
+        err = resp.json()["error"]
+        assert err["code"] == "VALIDATION_ERROR"
+        assert "fields must be a dict" in err["message"]
 
     async def test_batch_close(self, client: AsyncClient, dashboard_db: PopulatedDB) -> None:
         ids = dashboard_db.ids

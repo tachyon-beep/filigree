@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CLI, dashboard, hooks, and MCP project openers now honor configured `enabled_packs` instead of silently falling back to the default pack set
 - File lookups by path now normalize equivalent path spellings on read, matching the write-time identity rules used by scan ingestion and file registration
 - Issue creation/update now reject non-dict `fields` inputs with a stable validation error instead of crashing with an internal `AttributeError`
+- Dashboard issue create/update and batch update endpoints now translate invalid non-dict `fields` payloads into `400 VALIDATION_ERROR` responses instead of leaking `500` errors
 
 ## [1.4.1] - 2026-03-03
 
