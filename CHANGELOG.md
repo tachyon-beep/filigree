@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- JSONL export/import now round-trips the file subsystem (`file_records`, `scan_findings`, `file_associations`, `file_events`), reconciles the seeded `Future` release singleton on restore, and makes `merge=True` idempotent for imported comments and file history rows
+- Ethereal/server lifecycle helpers now degrade cleanly under restricted socket permissions, treat `PermissionError` liveness checks as live processes, and verify PID ownership against the expected dashboard command shape before reusing or stopping processes
+- Older Filigree binaries now refuse to open databases with a newer schema version instead of silently attempting an unsupported downgrade path
+
 ## [1.4.1] - 2026-03-03
 
 ### Changed
