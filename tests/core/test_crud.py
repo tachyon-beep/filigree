@@ -259,6 +259,17 @@ class TestCreateWithOptions:
         issue = db.create_issue("Blocked", deps=[blocker.id])
         assert blocker.id in issue.blocked_by
 
+    def test_create_rejects_non_dict_fields(self, db: FiligreeDB) -> None:
+        with pytest.raises(TypeError, match="fields must be a dict"):
+            db.create_issue("Bad fields", fields=["not", "a", "dict"])  # type: ignore[arg-type]
+
+
+class TestUpdateFieldValidation:
+    def test_update_rejects_non_dict_fields(self, db: FiligreeDB) -> None:
+        issue = db.create_issue("Mutable")
+        with pytest.raises(TypeError, match="fields must be a dict"):
+            db.update_issue(issue.id, fields=["not", "a", "dict"])  # type: ignore[arg-type]
+
 
 class TestClaimIssue:
     def test_claim_success(self, db: FiligreeDB) -> None:

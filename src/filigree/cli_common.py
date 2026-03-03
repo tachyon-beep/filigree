@@ -12,12 +12,10 @@ import sys
 import click
 
 from filigree.core import (
-    DB_FILENAME,
     FILIGREE_DIR_NAME,
     SUMMARY_FILENAME,
     FiligreeDB,
     find_filigree_root,
-    read_config,
 )
 from filigree.summary import write_summary
 
@@ -29,10 +27,7 @@ def get_db() -> FiligreeDB:
     except FileNotFoundError:
         click.echo(f"No {FILIGREE_DIR_NAME}/ found. Run 'filigree init' first.", err=True)
         sys.exit(1)
-    config = read_config(filigree_dir)
-    db = FiligreeDB(filigree_dir / DB_FILENAME, prefix=config.get("prefix", "filigree"))
-    db.initialize()
-    return db
+    return FiligreeDB.from_filigree_dir(filigree_dir)
 
 
 def refresh_summary(db: FiligreeDB) -> None:

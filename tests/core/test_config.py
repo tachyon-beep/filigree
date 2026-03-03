@@ -10,6 +10,7 @@ from typing import Any
 
 import pytest
 
+from filigree import cli_common
 from filigree.core import (
     FILIGREE_DIR_NAME,
     FiligreeDB,
@@ -101,6 +102,36 @@ class TestConfigEnabledPacks:
 
         db = FiligreeDB.from_project(tmp_path)
         assert db.enabled_packs == ["core", "planning", "release"]
+        db.close()
+
+    def test_from_filigree_dir_passes_enabled_packs(self, tmp_path: Path) -> None:
+        """FiligreeDB.from_filigree_dir() should preserve explicit enabled_packs."""
+        filigree_dir = tmp_path / ".filigree"
+        filigree_dir.mkdir()
+        write_config(filigree_dir, {"prefix": "proj", "version": 1, "enabled_packs": ["core"]})
+
+        init_db = FiligreeDB(filigree_dir / "filigree.db", prefix="proj", enabled_packs=["core"])
+        init_db.initialize()
+        init_db.close()
+
+        db = FiligreeDB.from_filigree_dir(filigree_dir)
+        assert db.enabled_packs == ["core"]
+        db.close()
+
+    def test_cli_common_get_db_uses_configured_enabled_packs(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """cli_common.get_db() should not fall back to default packs when config disables them."""
+        filigree_dir = tmp_path / ".filigree"
+        filigree_dir.mkdir()
+        write_config(filigree_dir, {"prefix": "proj", "version": 1, "enabled_packs": ["core"]})
+
+        init_db = FiligreeDB(filigree_dir / "filigree.db", prefix="proj", enabled_packs=["core"])
+        init_db.initialize()
+        init_db.close()
+
+        monkeypatch.chdir(tmp_path)
+        db = cli_common.get_db()
+        assert db.enabled_packs == ["core"]
+        assert db.list_issues() == []
         db.close()
 
 

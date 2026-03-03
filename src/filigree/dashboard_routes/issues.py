@@ -381,6 +381,7 @@ def create_router() -> APIRouter:
                 assignee=body.get("assignee", ""),
                 description=body.get("description", ""),
                 notes=body.get("notes", ""),
+                fields=body.get("fields"),
                 labels=body.get("labels"),
                 deps=body.get("deps"),
                 actor=actor,

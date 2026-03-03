@@ -17,12 +17,10 @@ from pathlib import Path
 import portalocker
 
 from filigree.core import (
-    DB_FILENAME,
     FiligreeDB,
     find_filigree_command,
     find_filigree_root,
     get_mode,
-    read_config,
 )
 from filigree.install import (
     FILIGREE_INSTRUCTIONS_MARKER,
@@ -207,13 +205,8 @@ def generate_session_context() -> str | None:
     except Exception:
         logger.error("Unexpected error in instructions freshness check for %s", project_root, exc_info=True)
 
-    config = read_config(filigree_dir)
-    db = FiligreeDB(
-        filigree_dir / DB_FILENAME,
-        prefix=config.get("prefix", "filigree"),
-    )
+    db = FiligreeDB.from_filigree_dir(filigree_dir)
     try:
-        db.initialize()
         context = _build_context(db, filigree_dir)
     finally:
         db.close()

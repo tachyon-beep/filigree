@@ -225,6 +225,7 @@ class FilesMixin(DBMixinProtocol):
 
     def get_file_by_path(self, path: str) -> FileRecord | None:
         """Get a file record by path. Returns None if not found."""
+        path = _normalize_scan_path(path)
         row = self.conn.execute("SELECT * FROM file_records WHERE path = ?", (path,)).fetchone()
         if row is None:
             return None

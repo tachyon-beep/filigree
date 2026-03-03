@@ -67,6 +67,13 @@ class TestRegisterFile:
         assert fetched is not None
         assert fetched.id == created.id
 
+    def test_get_file_by_path_normalizes_equivalent_paths(self, db: FiligreeDB) -> None:
+        """Equivalent path spellings should round-trip through get_file_by_path()."""
+        created = db.register_file("src/foo/../bar.py")
+        fetched = db.get_file_by_path(r"src\bar.py")
+        assert fetched is not None
+        assert fetched.id == created.id
+
     def test_get_file_by_path_not_found(self, db: FiligreeDB) -> None:
         result = db.get_file_by_path("nonexistent.py")
         assert result is None

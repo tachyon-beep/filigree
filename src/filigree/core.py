@@ -351,17 +351,23 @@ class FiligreeDB(FilesMixin, IssuesMixin, EventsMixin, WorkflowMixin, MetaMixin,
         self._template_registry: TemplateRegistry | None = template_registry
 
     @classmethod
-    def from_project(cls, project_path: Path | None = None) -> FiligreeDB:
-        """Create a FiligreeDB by discovering .filigree/ from project_path (or cwd)."""
-        filigree_dir = find_filigree_root(project_path)
+    def from_filigree_dir(cls, filigree_dir: Path, *, check_same_thread: bool = True) -> FiligreeDB:
+        """Create a FiligreeDB from an existing ``.filigree/`` directory."""
         config = read_config(filigree_dir)
         db = cls(
             filigree_dir / DB_FILENAME,
             prefix=config.get("prefix", "filigree"),
             enabled_packs=config.get("enabled_packs"),
+            check_same_thread=check_same_thread,
         )
         db.initialize()
         return db
+
+    @classmethod
+    def from_project(cls, project_path: Path | None = None) -> FiligreeDB:
+        """Create a FiligreeDB by discovering .filigree/ from project_path (or cwd)."""
+        filigree_dir = find_filigree_root(project_path)
+        return cls.from_filigree_dir(filigree_dir)
 
     def __enter__(self) -> FiligreeDB:
         return self

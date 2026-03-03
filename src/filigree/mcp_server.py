@@ -35,12 +35,10 @@ from mcp.types import (
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from filigree.core import (
-    DB_FILENAME,
     FILIGREE_DIR_NAME,
     SUMMARY_FILENAME,
     FiligreeDB,
     find_filigree_root,
-    read_config,
 )
 from filigree.mcp_tools.common import (  # noqa: F401  — re-exported for backward compat
     _MAX_LIST_RESULTS,
@@ -449,9 +447,7 @@ async def _run(project_path: Path | None) -> None:
             sys.exit(1)
 
     _filigree_dir = filigree_dir
-    config = read_config(filigree_dir)
-    db = FiligreeDB(filigree_dir / DB_FILENAME, prefix=config.get("prefix", "filigree"))
-    db.initialize()
+    db = FiligreeDB.from_filigree_dir(filigree_dir)
 
     from filigree.logging import setup_logging
 

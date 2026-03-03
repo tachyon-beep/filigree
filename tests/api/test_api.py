@@ -306,6 +306,21 @@ class TestCreateIssueAPI:
         assert data["description"] == "A bug report"
         assert data["assignee"] == "alice"
 
+    async def test_create_preserves_custom_fields(self, release_client: AsyncClient, release_dashboard_db: Any) -> None:
+        resp = await release_client.post(
+            "/api/issues",
+            json={
+                "title": "Release candidate",
+                "type": "release",
+                "fields": {"version": "v1.2.3"},
+            },
+        )
+        assert resp.status_code == 201
+        data = resp.json()
+        assert data["fields"] == {"version": "v1.2.3"}
+        stored = release_dashboard_db.get_issue(data["id"])
+        assert stored.fields == {"version": "v1.2.3"}
+
     async def test_create_empty_title_returns_400(self, client: AsyncClient) -> None:
         resp = await client.post(
             "/api/issues",

@@ -39,7 +39,6 @@ if TYPE_CHECKING:
 
 from filigree import __version__
 from filigree.core import (
-    DB_FILENAME,
     FiligreeDB,
     find_filigree_root,
     read_config,
@@ -123,13 +122,7 @@ class ProjectStore:
             filigree_path = Path(info["path"])
             db: FiligreeDB | None = None
             try:
-                config = read_config(filigree_path)
-                db = FiligreeDB(
-                    filigree_path / DB_FILENAME,
-                    prefix=config.get("prefix", key),
-                    check_same_thread=False,
-                )
-                db.initialize()
+                db = FiligreeDB.from_filigree_dir(filigree_path, check_same_thread=False)
                 self._dbs[key] = db
             except Exception:
                 logger.error("Failed to open project DB for key=%r path=%s", key, filigree_path, exc_info=True)
@@ -436,12 +429,7 @@ def main(port: int = DEFAULT_PORT, *, no_browser: bool = False, server_mode: boo
         filigree_dir = find_filigree_root()
         config = read_config(filigree_dir)
         _config.update(config)
-        _db = FiligreeDB(
-            filigree_dir / DB_FILENAME,
-            prefix=config.get("prefix", "filigree"),
-            check_same_thread=False,
-        )
-        _db.initialize()
+        _db = FiligreeDB.from_filigree_dir(filigree_dir, check_same_thread=False)
 
     app = create_app(server_mode=server_mode)
 

@@ -12,6 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - JSONL export/import now round-trips the file subsystem (`file_records`, `scan_findings`, `file_associations`, `file_events`), reconciles the seeded `Future` release singleton on restore, and makes `merge=True` idempotent for imported comments and file history rows
 - Ethereal/server lifecycle helpers now degrade cleanly under restricted socket permissions, treat `PermissionError` liveness checks as live processes, and verify PID ownership against the expected dashboard command shape before reusing or stopping processes
 - Older Filigree binaries now refuse to open databases with a newer schema version instead of silently attempting an unsupported downgrade path
+- Dashboard issue creation now preserves custom `fields`, so release/version metadata and other template-backed values survive `POST /api/issues`
+- CLI, dashboard, hooks, and MCP project openers now honor configured `enabled_packs` instead of silently falling back to the default pack set
+- File lookups by path now normalize equivalent path spellings on read, matching the write-time identity rules used by scan ingestion and file registration
+- Issue creation/update now reject non-dict `fields` inputs with a stable validation error instead of crashing with an internal `AttributeError`
 
 ## [1.4.1] - 2026-03-03
 
