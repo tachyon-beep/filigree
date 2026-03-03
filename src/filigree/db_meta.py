@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import sqlite3
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
@@ -191,8 +192,139 @@ class MetaMixin(DBMixinProtocol):
 
     # -- Export / Import (JSONL) -----------------------------------------------
 
+    @staticmethod
+    def _issue_fields_json(fields: Any) -> str:
+        if isinstance(fields, str):
+            return fields
+        return json.dumps(fields or {})
+
+    @classmethod
+    def _is_future_release_record(cls, record: dict[str, Any]) -> bool:
+        if record.get("type") != "release":
+            return False
+        try:
+            fields = json.loads(cls._issue_fields_json(record.get("fields", "{}")))
+        except (TypeError, json.JSONDecodeError):
+            return False
+        return isinstance(fields, dict) and fields.get("version") == "Future"
+
+    def _is_reconcilable_seeded_future(self, issue_id: str) -> bool:
+        row = self.conn.execute(
+            "SELECT id, title, assignee, description, notes, fields FROM issues WHERE id = ?",
+            (issue_id,),
+        ).fetchone()
+        if row is None:
+            return False
+        if row["title"] != "Future" or row["assignee"] != "" or row["description"] != "" or row["notes"] != "":
+            return False
+        try:
+            fields = json.loads(row["fields"] or "{}")
+        except (TypeError, json.JSONDecodeError):
+            return False
+        if not isinstance(fields, dict) or fields.get("version") != "Future":
+            return False
+
+        blockers = [
+            ("SELECT 1 FROM issues WHERE parent_id = ? LIMIT 1", (issue_id,)),
+            ("SELECT 1 FROM dependencies WHERE issue_id = ? OR depends_on_id = ? LIMIT 1", (issue_id, issue_id)),
+            ("SELECT 1 FROM labels WHERE issue_id = ? LIMIT 1", (issue_id,)),
+            ("SELECT 1 FROM comments WHERE issue_id = ? LIMIT 1", (issue_id,)),
+            ("SELECT 1 FROM events WHERE issue_id = ? LIMIT 1", (issue_id,)),
+            ("SELECT 1 FROM file_associations WHERE issue_id = ? LIMIT 1", (issue_id,)),
+            ("SELECT 1 FROM scan_findings WHERE issue_id = ? LIMIT 1", (issue_id,)),
+        ]
+        return not any(self.conn.execute(query, params).fetchone() is not None for query, params in blockers)
+
+    def _reconcile_future_release_import(self, issues: list[dict[str, Any]]) -> None:
+        imported_future_ids = [record["id"] for record in issues if self._is_future_release_record(record)]
+        if not imported_future_ids:
+            return
+        if len(imported_future_ids) > 1:
+            msg = "Import file contains multiple Future release issues"
+            raise ValueError(msg)
+
+        imported_id = imported_future_ids[0]
+        existing_ids = [
+            row["id"]
+            for row in self.conn.execute(
+                "SELECT id FROM issues WHERE type = 'release' AND json_extract(fields, '$.version') = 'Future'"
+            ).fetchall()
+        ]
+        conflicting_ids = [issue_id for issue_id in existing_ids if issue_id != imported_id]
+        if not conflicting_ids:
+            return
+        if len(conflicting_ids) == 1 and self._is_reconcilable_seeded_future(conflicting_ids[0]):
+            self.conn.execute("DELETE FROM issues WHERE id = ?", (conflicting_ids[0],))
+            return
+
+        msg = "Cannot import Future release: tracker already contains a different Future release"
+        raise ValueError(msg)
+
+    @staticmethod
+    def _json_text(value: Any) -> str:
+        if isinstance(value, str):
+            return value
+        return json.dumps(value or {})
+
+    def _resolve_imported_file_id(
+        self,
+        record: dict[str, Any],
+        *,
+        merge: bool,
+        conflict: str,
+        file_id_map: dict[str, str],
+    ) -> int:
+        src_id = record["id"]
+        path = record["path"]
+        cursor = self.conn.execute(
+            f"INSERT {conflict} INTO file_records (id, path, language, file_type, first_seen, updated_at, metadata) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                src_id,
+                path,
+                record.get("language", ""),
+                record.get("file_type", ""),
+                record.get("first_seen", _now_iso()),
+                record.get("updated_at", _now_iso()),
+                self._json_text(record.get("metadata", {})),
+            ),
+        )
+        if cursor.rowcount > 0:
+            file_id_map[src_id] = src_id
+            return cursor.rowcount
+
+        existing_by_id = self.conn.execute("SELECT id, path FROM file_records WHERE id = ?", (src_id,)).fetchone()
+        existing_by_path = self.conn.execute("SELECT id, path FROM file_records WHERE path = ?", (path,)).fetchone()
+
+        if existing_by_id is not None and existing_by_id["path"] != path:
+            msg = f"Import conflict for file id {src_id}: existing path {existing_by_id['path']!r} != imported path {path!r}"
+            raise ValueError(msg)
+
+        if not merge:
+            msg = f"Import conflict for file {path!r}"
+            raise sqlite3.IntegrityError(msg)
+
+        if existing_by_path is not None:
+            file_id_map[src_id] = existing_by_path["id"]
+            return 0
+
+        if existing_by_id is not None:
+            file_id_map[src_id] = existing_by_id["id"]
+            return 0
+
+        msg = f"Could not reconcile imported file record for path {path!r}"
+        raise sqlite3.IntegrityError(msg)
+
+    @staticmethod
+    def _remap_file_id(source_file_id: str, file_id_map: dict[str, str]) -> str:
+        try:
+            return file_id_map[source_file_id]
+        except KeyError as exc:
+            msg = f"Import references unknown file_id {source_file_id!r}"
+            raise ValueError(msg) from exc
+
     def export_jsonl(self, output_path: str | Path) -> int:
-        """Export all issues, dependencies, labels, comments, and events to JSONL.
+        """Export full project data to JSONL.
 
         Each line is a JSON object with a "type" field indicating the record type.
         Returns the total number of records written.
@@ -203,6 +335,20 @@ class MetaMixin(DBMixinProtocol):
             for row in self.conn.execute("SELECT * FROM issues ORDER BY created_at").fetchall():
                 record = dict(row)
                 record["_type"] = "issue"
+                f.write(json.dumps(record, default=str) + "\n")
+                count += 1
+
+            # Files
+            for row in self.conn.execute("SELECT * FROM file_records ORDER BY path").fetchall():
+                record = dict(row)
+                record["_type"] = "file_record"
+                f.write(json.dumps(record, default=str) + "\n")
+                count += 1
+
+            # Scan findings
+            for row in self.conn.execute("SELECT * FROM scan_findings ORDER BY first_seen, file_id, scan_source, rule_id").fetchall():
+                record = dict(row)
+                record["_type"] = "scan_finding"
                 f.write(json.dumps(record, default=str) + "\n")
                 count += 1
 
@@ -234,10 +380,24 @@ class MetaMixin(DBMixinProtocol):
                 f.write(json.dumps(record, default=str) + "\n")
                 count += 1
 
+            # File associations
+            for row in self.conn.execute("SELECT * FROM file_associations ORDER BY created_at, file_id, issue_id").fetchall():
+                record = dict(row)
+                record["_type"] = "file_association"
+                f.write(json.dumps(record, default=str) + "\n")
+                count += 1
+
+            # File events
+            for row in self.conn.execute("SELECT * FROM file_events ORDER BY created_at, file_id").fetchall():
+                record = dict(row)
+                record["_type"] = "file_event"
+                f.write(json.dumps(record, default=str) + "\n")
+                count += 1
+
         return count
 
     def import_jsonl(self, input_path: str | Path, *, merge: bool = False) -> int:
-        """Import issues from JSONL file.
+        """Import full project data from a JSONL file.
 
         Args:
             input_path: Path to JSONL file
@@ -248,6 +408,15 @@ class MetaMixin(DBMixinProtocol):
         count = 0
         skipped_types: dict[str, int] = {}
         conflict = "OR IGNORE" if merge else "OR ABORT"
+        issues: list[dict[str, Any]] = []
+        file_records: list[dict[str, Any]] = []
+        scan_findings: list[dict[str, Any]] = []
+        dependencies: list[dict[str, Any]] = []
+        labels: list[dict[str, Any]] = []
+        comments: list[dict[str, Any]] = []
+        events: list[dict[str, Any]] = []
+        file_associations: list[dict[str, Any]] = []
+        file_events: list[dict[str, Any]] = []
 
         with Path(input_path).open() as f:
             for line in f:
@@ -258,45 +427,139 @@ class MetaMixin(DBMixinProtocol):
                 record_type = record.pop("_type", None)
 
                 if record_type == "issue":
-                    cursor = self.conn.execute(
-                        f"INSERT {conflict} INTO issues "
-                        "(id, title, status, priority, type, parent_id, assignee, "
-                        "created_at, updated_at, closed_at, description, notes, fields) "
-                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                        (
-                            record["id"],
-                            record["title"],
-                            record.get("status", "open"),
-                            record.get("priority", 2),
-                            record.get("type", "task"),
-                            record.get("parent_id"),
-                            record.get("assignee", ""),
-                            record.get("created_at", _now_iso()),
-                            record.get("updated_at", _now_iso()),
-                            record.get("closed_at"),
-                            record.get("description", ""),
-                            record.get("notes", ""),
-                            record.get("fields", "{}"),
-                        ),
-                    )
+                    issues.append(record)
+                elif record_type == "file_record":
+                    file_records.append(record)
+                elif record_type == "scan_finding":
+                    scan_findings.append(record)
                 elif record_type == "dependency":
+                    dependencies.append(record)
+                elif record_type == "label":
+                    labels.append(record)
+                elif record_type == "comment":
+                    comments.append(record)
+                elif record_type == "event":
+                    events.append(record)
+                elif record_type == "file_association":
+                    file_associations.append(record)
+                elif record_type == "file_event":
+                    file_events.append(record)
+                else:
+                    skipped_types[record_type or "<missing>"] = skipped_types.get(record_type or "<missing>", 0) + 1
+
+        inserted_issue_ids: set[str] = set()
+        parent_map: dict[str, str] = {}
+        file_id_map: dict[str, str] = {}
+        try:
+            self._reconcile_future_release_import(issues)
+
+            for record in issues:
+                parent_id = record.get("parent_id")
+                fields = self._issue_fields_json(record.get("fields", "{}"))
+                cursor = self.conn.execute(
+                    f"INSERT {conflict} INTO issues "
+                    "(id, title, status, priority, type, parent_id, assignee, "
+                    "created_at, updated_at, closed_at, description, notes, fields) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        record["id"],
+                        record["title"],
+                        record.get("status", "open"),
+                        record.get("priority", 2),
+                        record.get("type", "task"),
+                        None,
+                        record.get("assignee", ""),
+                        record.get("created_at", _now_iso()),
+                        record.get("updated_at", _now_iso()),
+                        record.get("closed_at"),
+                        record.get("description", ""),
+                        record.get("notes", ""),
+                        fields,
+                    ),
+                )
+                count += cursor.rowcount
+                if cursor.rowcount > 0:
+                    inserted_issue_ids.add(record["id"])
+                    if parent_id:
+                        parent_map[record["id"]] = parent_id
+
+            for issue_id, parent_id in parent_map.items():
+                if issue_id in inserted_issue_ids:
+                    self.conn.execute("UPDATE issues SET parent_id = ? WHERE id = ?", (parent_id, issue_id))
+
+            for record in file_records:
+                count += self._resolve_imported_file_id(record, merge=merge, conflict=conflict, file_id_map=file_id_map)
+
+            for record in scan_findings:
+                file_id = self._remap_file_id(record["file_id"], file_id_map)
+                cursor = self.conn.execute(
+                    f"INSERT {conflict} INTO scan_findings "
+                    "(id, file_id, issue_id, scan_source, rule_id, severity, status, message, suggestion, scan_run_id, "
+                    "line_start, line_end, seen_count, first_seen, updated_at, last_seen_at, metadata) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        record["id"],
+                        file_id,
+                        record.get("issue_id"),
+                        record.get("scan_source", ""),
+                        record.get("rule_id", ""),
+                        record.get("severity", "info"),
+                        record.get("status", "open"),
+                        record.get("message", ""),
+                        record.get("suggestion", ""),
+                        record.get("scan_run_id", ""),
+                        record.get("line_start"),
+                        record.get("line_end"),
+                        record.get("seen_count", 1),
+                        record.get("first_seen", _now_iso()),
+                        record.get("updated_at", _now_iso()),
+                        record.get("last_seen_at"),
+                        self._json_text(record.get("metadata", {})),
+                    ),
+                )
+                count += cursor.rowcount
+
+            for record in dependencies:
+                cursor = self.conn.execute(
+                    f"INSERT {conflict} INTO dependencies (issue_id, depends_on_id, type, created_at) VALUES (?, ?, ?, ?)",
+                    (
+                        record["issue_id"],
+                        record["depends_on_id"],
+                        record.get("type", "blocks"),
+                        record.get("created_at", _now_iso()),
+                    ),
+                )
+                count += cursor.rowcount
+
+            for record in labels:
+                cursor = self.conn.execute(
+                    f"INSERT {conflict} INTO labels (issue_id, label) VALUES (?, ?)",
+                    (record["issue_id"], record["label"]),
+                )
+                count += cursor.rowcount
+
+            for record in comments:
+                if merge:
                     cursor = self.conn.execute(
-                        f"INSERT {conflict} INTO dependencies (issue_id, depends_on_id, type, created_at) VALUES (?, ?, ?, ?)",
+                        "INSERT INTO comments (issue_id, author, text, created_at) "
+                        "SELECT ?, ?, ?, ? "
+                        "WHERE NOT EXISTS ("
+                        "  SELECT 1 FROM comments WHERE issue_id = ? AND author = ? AND text = ? AND created_at = ?"
+                        ")",
                         (
-                            record["issue_id"],
-                            record["depends_on_id"],
-                            record.get("type", "blocks"),
+                            record.get("issue_id", ""),
+                            record.get("author", ""),
+                            record.get("text", ""),
+                            record.get("created_at", _now_iso()),
+                            record.get("issue_id", ""),
+                            record.get("author", ""),
+                            record.get("text", ""),
                             record.get("created_at", _now_iso()),
                         ),
                     )
-                elif record_type == "label":
+                else:
                     cursor = self.conn.execute(
-                        f"INSERT {conflict} INTO labels (issue_id, label) VALUES (?, ?)",
-                        (record["issue_id"], record["label"]),
-                    )
-                elif record_type == "comment":
-                    cursor = self.conn.execute(
-                        f"INSERT {conflict} INTO comments (issue_id, author, text, created_at) VALUES (?, ?, ?, ?)",
+                        "INSERT INTO comments (issue_id, author, text, created_at) VALUES (?, ?, ?, ?)",
                         (
                             record.get("issue_id", ""),
                             record.get("author", ""),
@@ -304,31 +567,85 @@ class MetaMixin(DBMixinProtocol):
                             record.get("created_at", _now_iso()),
                         ),
                     )
-                elif record_type == "event":
+                count += cursor.rowcount
+
+            for record in events:
+                cursor = self.conn.execute(
+                    f"INSERT {conflict} INTO events "
+                    "(issue_id, event_type, actor, old_value, new_value, comment, created_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        record.get("issue_id", ""),
+                        record.get("event_type", ""),
+                        record.get("actor", ""),
+                        record.get("old_value"),
+                        record.get("new_value"),
+                        record.get("comment", ""),
+                        record.get("created_at", _now_iso()),
+                    ),
+                )
+                count += cursor.rowcount
+
+            for record in file_associations:
+                file_id = self._remap_file_id(record["file_id"], file_id_map)
+                cursor = self.conn.execute(
+                    f"INSERT {conflict} INTO file_associations (file_id, issue_id, assoc_type, created_at) VALUES (?, ?, ?, ?)",
+                    (
+                        file_id,
+                        record["issue_id"],
+                        record.get("assoc_type", "bug_in"),
+                        record.get("created_at", _now_iso()),
+                    ),
+                )
+                count += cursor.rowcount
+
+            for record in file_events:
+                file_id = self._remap_file_id(record["file_id"], file_id_map)
+                if merge:
                     cursor = self.conn.execute(
-                        f"INSERT {conflict} INTO events "
-                        "(issue_id, event_type, actor, old_value, new_value, comment, created_at) "
-                        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                        "INSERT INTO file_events (file_id, event_type, field, old_value, new_value, created_at) "
+                        "SELECT ?, ?, ?, ?, ?, ? "
+                        "WHERE NOT EXISTS ("
+                        "  SELECT 1 FROM file_events "
+                        "  WHERE file_id = ? AND event_type = ? AND field = ? AND old_value = ? AND new_value = ? AND created_at = ?"
+                        ")",
                         (
-                            record.get("issue_id", ""),
-                            record.get("event_type", ""),
-                            record.get("actor", ""),
-                            record.get("old_value"),
-                            record.get("new_value"),
-                            record.get("comment", ""),
+                            file_id,
+                            record.get("event_type", "file_metadata_update"),
+                            record.get("field", ""),
+                            record.get("old_value", ""),
+                            record.get("new_value", ""),
+                            record.get("created_at", _now_iso()),
+                            file_id,
+                            record.get("event_type", "file_metadata_update"),
+                            record.get("field", ""),
+                            record.get("old_value", ""),
+                            record.get("new_value", ""),
                             record.get("created_at", _now_iso()),
                         ),
                     )
                 else:
-                    skipped_types[record_type or "<missing>"] = skipped_types.get(record_type or "<missing>", 0) + 1
-                    continue
-
+                    cursor = self.conn.execute(
+                        "INSERT INTO file_events (file_id, event_type, field, old_value, new_value, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                        (
+                            file_id,
+                            record.get("event_type", "file_metadata_update"),
+                            record.get("field", ""),
+                            record.get("old_value", ""),
+                            record.get("new_value", ""),
+                            record.get("created_at", _now_iso()),
+                        ),
+                    )
                 count += cursor.rowcount
+        except Exception:
+            self.conn.rollback()
+            raise
+        else:
+            self.conn.commit()
 
         if skipped_types:
             _logger = logging.getLogger(__name__)
             for rtype, rcount in skipped_types.items():
                 _logger.warning("import_jsonl: skipped %d record(s) with unknown type %r", rcount, rtype)
 
-        self.conn.commit()
         return count

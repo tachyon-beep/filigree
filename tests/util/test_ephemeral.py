@@ -84,6 +84,11 @@ class TestFindAvailablePort:
         # OS fallback must return a valid port
         assert 1 <= port <= 65535
 
+    def test_socket_permission_error_raises_runtime_error(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr("filigree.ephemeral.socket.socket", lambda *_a, **_k: (_ for _ in ()).throw(PermissionError(1, "denied")))
+        with pytest.raises(RuntimeError):
+            find_available_port(Path("/some/project/.filigree"))
+
 
 class TestPidLifecycle:
     def test_write_and_read_pid(self, tmp_path: Path) -> None:
@@ -140,6 +145,13 @@ class TestPidLifecycle:
         assert is_pid_alive(0) is False
         assert is_pid_alive(-1) is False
 
+    def test_is_pid_alive_permission_denied_means_alive(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        def _deny_kill(_pid: int, _sig: int) -> None:
+            raise PermissionError(1, "operation not permitted")
+
+        monkeypatch.setattr("filigree.ephemeral.os.kill", _deny_kill)
+        assert is_pid_alive(12345) is True
+
     def test_verify_pid_ownership_for_self(self, tmp_path: Path) -> None:
         pid_file = tmp_path / "ephemeral.pid"
         write_pid_file(pid_file, os.getpid(), cmd="python")
@@ -166,6 +178,15 @@ class TestPidLifecycle:
         )
         assert verify_pid_ownership(pid_file, expected_cmd="filigree") is True
 
+    def test_verify_pid_ownership_rejects_wrong_filigree_subcommand(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        pid_file = tmp_path / "ephemeral.pid"
+        write_pid_file(pid_file, os.getpid(), cmd="filigree dashboard")
+        monkeypatch.setattr(
+            "filigree.ephemeral._read_os_command_line",
+            lambda _pid: [sys.executable, "-m", "filigree", "session-context"],
+        )
+        assert verify_pid_ownership(pid_file, expected_cmd="filigree", required_args=("dashboard",)) is False
+
     def test_verify_pid_ownership_rejects_unrelated_python_module(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         pid_file = tmp_path / "ephemeral.pid"
         write_pid_file(pid_file, os.getpid(), cmd="filigree")
@@ -182,6 +203,13 @@ class TestPidLifecycle:
         write_pid_file(pid_file, os.getpid(), cmd="filigree")
         monkeypatch.setattr("filigree.ephemeral._read_os_command_line", lambda _pid: None)
         assert verify_pid_ownership(pid_file, expected_cmd="filigree") is True
+
+    def test_verify_pid_ownership_fallback_requires_expected_args(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        pid_file = tmp_path / "ephemeral.pid"
+        write_pid_file(pid_file, os.getpid(), cmd="filigree dashboard --server-mode")
+        monkeypatch.setattr("filigree.ephemeral._read_os_command_line", lambda _pid: None)
+        assert verify_pid_ownership(pid_file, expected_cmd="filigree", required_args=("dashboard", "--server-mode")) is True
+        assert verify_pid_ownership(pid_file, expected_cmd="filigree", required_args=("session-context",)) is False
 
     def test_verify_pid_ownership_fallback_rejects_mismatched_pid_file_cmd(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         pid_file = tmp_path / "ephemeral.pid"

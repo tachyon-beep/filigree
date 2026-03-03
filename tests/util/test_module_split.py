@@ -153,6 +153,57 @@ def test_import_merge_returns_zero_for_duplicates(db: FiligreeDB, tmp_path: Path
     assert dup_count == 0, f"Expected 0 for duplicate import, got {dup_count}"
 
 
+def test_export_import_roundtrip_with_files(db: FiligreeDB, tmp_path: Path) -> None:
+    """JSONL round-trip should include file-domain tables through MetaMixin composition."""
+    issue = db.create_issue(title="file-roundtrip")
+    file_rec = db.register_file("src/example.py", language="python")
+    db.conn.execute(
+        "INSERT INTO scan_findings "
+        "(id, file_id, issue_id, scan_source, rule_id, severity, status, message, suggestion, "
+        "scan_run_id, line_start, line_end, seen_count, first_seen, updated_at, last_seen_at, metadata) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            "mix-sf-1",
+            file_rec.id,
+            issue.id,
+            "ruff",
+            "F401",
+            "medium",
+            "open",
+            "unused import",
+            "",
+            "run-mix",
+            1,
+            1,
+            1,
+            "2026-01-01T00:00:00+00:00",
+            "2026-01-01T00:00:00+00:00",
+            "2026-01-01T00:00:00+00:00",
+            "{}",
+        ),
+    )
+    db.conn.execute(
+        "INSERT INTO file_associations (file_id, issue_id, assoc_type, created_at) VALUES (?, ?, ?, ?)",
+        (file_rec.id, issue.id, "bug_in", "2026-01-01T00:00:00+00:00"),
+    )
+    db.conn.execute(
+        "INSERT INTO file_events (file_id, event_type, field, old_value, new_value, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+        (file_rec.id, "file_metadata_update", "language", "", "python", "2026-01-01T00:00:00+00:00"),
+    )
+    db.conn.commit()
+
+    out = tmp_path / "files-export.jsonl"
+    count = db.export_jsonl(str(out))
+    assert count > 0
+
+    fresh = FiligreeDB(tmp_path / "fresh.db", prefix="test")
+    fresh.initialize()
+    import_count = fresh.import_jsonl(str(out))
+    assert import_count == count
+    assert fresh.conn.execute("SELECT COUNT(*) FROM file_records").fetchone()[0] == 1
+    assert fresh.conn.execute("SELECT COUNT(*) FROM scan_findings").fetchone()[0] == 1
+
+
 # -- PlanningMixin ----------------------------------------------------------
 
 

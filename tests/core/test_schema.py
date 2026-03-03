@@ -1238,6 +1238,20 @@ class TestFiligreeDBMigration:
         assert d.get_schema_version() == CURRENT_SCHEMA_VERSION
         d.close()
 
+    def test_initialize_rejects_newer_schema(self, tmp_path: Path) -> None:
+        """Older binaries must refuse to open newer databases."""
+        db_path = tmp_path / "future.db"
+        conn = _make_db(tmp_path, "future.db")
+        conn.executescript(SCHEMA_SQL)
+        conn.execute(f"PRAGMA user_version = {CURRENT_SCHEMA_VERSION + 1}")
+        conn.commit()
+        conn.close()
+
+        d = FiligreeDB(db_path, prefix="test")
+        with pytest.raises(ValueError, match="newer than this version"):
+            d.initialize()
+        d.close()
+
 
 # ---------------------------------------------------------------------------
 # Per-migration test template

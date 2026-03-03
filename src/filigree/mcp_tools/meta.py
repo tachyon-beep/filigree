@@ -161,7 +161,7 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
         ),
         Tool(
             name="export_jsonl",
-            description="Export all project data (issues, deps, labels, comments, events) to a JSONL file for backup or migration.",
+            description="Export all project data (issues, comments, deps, events, files, findings, associations) to a JSONL file for backup or migration.",
             inputSchema={
                 "type": "object",
                 "properties": {

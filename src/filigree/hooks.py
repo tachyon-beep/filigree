@@ -234,14 +234,15 @@ def _is_port_listening(port: int, host: str = "127.0.0.1") -> bool:
     """Check whether *port* is accepting connections on *host*."""
     if not (1 <= port <= 65535):
         return False
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sock.settimeout(0.5)
     try:
-        return sock.connect_ex((host, port)) == 0
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(0.5)
+        try:
+            return sock.connect_ex((host, port)) == 0
+        finally:
+            sock.close()
     except (OSError, OverflowError):
         return False
-    finally:
-        sock.close()
 
 
 def ensure_dashboard_running(port: int | None = None) -> str:
@@ -288,7 +289,7 @@ def _ensure_dashboard_ethereal_mode(filigree_dir: Path) -> str:
         existing_port = read_port_file(port_file)
         if not pid_info or not existing_port:
             return None
-        if not verify_pid_ownership(pid_file, expected_cmd="filigree"):
+        if not verify_pid_ownership(pid_file, expected_cmd="filigree", required_args=("dashboard",)):
             pid_file.unlink(missing_ok=True)
             port_file.unlink(missing_ok=True)
             return None
@@ -318,7 +319,10 @@ def _ensure_dashboard_ethereal_mode(filigree_dir: Path) -> str:
         if running_message:
             return running_message
 
-        port = find_available_port(filigree_dir)
+        try:
+            port = find_available_port(filigree_dir)
+        except (OSError, RuntimeError) as exc:
+            return f"Failed to choose dashboard port: {exc}"
         filigree_cmd = find_filigree_command()
 
         log_file = filigree_dir / "ephemeral.log"
@@ -334,7 +338,7 @@ def _ensure_dashboard_ethereal_mode(filigree_dir: Path) -> str:
         except OSError as exc:
             return f"Failed to start dashboard: {exc}"
 
-        write_pid_file(pid_file, proc.pid, cmd="filigree")
+        write_pid_file(pid_file, proc.pid, cmd="filigree dashboard")
         write_port_file(port_file, port)
 
         # Wait for startup

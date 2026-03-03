@@ -455,7 +455,7 @@ def metrics(as_json: bool, days: int) -> None:
 @click.command("export")
 @click.argument("output", type=click.Path())
 def export_data(output: str) -> None:
-    """Export all issues to JSONL file."""
+    """Export full project data to a JSONL file."""
     with get_db() as db:
         count = db.export_jsonl(output)
         click.echo(f"Exported {count} records to {output}")
@@ -465,7 +465,7 @@ def export_data(output: str) -> None:
 @click.argument("input_file", type=click.Path(exists=True))
 @click.option("--merge", is_flag=True, help="Skip existing records instead of failing on conflict")
 def import_data(input_file: str, merge: bool) -> None:
-    """Import issues from JSONL file."""
+    """Import full project data from a JSONL file."""
     with get_db() as db:
         try:
             count = db.import_jsonl(input_file, merge=merge)

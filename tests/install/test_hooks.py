@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import socket
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
@@ -114,6 +115,13 @@ class TestIsPortListening:
         assert _is_port_listening(0) is False
         assert _is_port_listening(-1) is False
         assert _is_port_listening(70000) is False
+
+    def test_socket_permission_error_returns_false(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        def _deny_socket(*_args: object, **_kwargs: object) -> socket.socket:
+            raise PermissionError(1, "Operation not permitted")
+
+        monkeypatch.setattr("filigree.hooks.socket.socket", _deny_socket)
+        assert _is_port_listening(9173) is False
 
 
 class TestExecutableResolution:
@@ -368,6 +376,27 @@ class TestSessionContextDashboardUrl:
         context = _build_context(db, filigree_dir)
         assert "localhost" not in context
 
+    def test_socket_probe_denied_still_builds_context(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        filigree_dir = tmp_path / ".filigree"
+        filigree_dir.mkdir()
+        config = {"prefix": "test", "version": 1, "mode": "ethereal"}
+        (filigree_dir / "config.json").write_text(json.dumps(config))
+        (filigree_dir / "ephemeral.port").write_text("9173")
+        (filigree_dir / "ephemeral.pid").write_text(str(os.getpid()))
+
+        db = FiligreeDB(filigree_dir / DB_FILENAME, prefix="test")
+        db.initialize()
+
+        def _deny_socket(*_args: object, **_kwargs: object) -> socket.socket:
+            raise PermissionError(1, "Operation not permitted")
+
+        monkeypatch.setattr("filigree.hooks.socket.socket", _deny_socket)
+        context = _build_context(db, filigree_dir)
+        db.close()
+
+        assert "Filigree Project Snapshot" in context
+        assert "http://localhost:9173" not in context
+
 
 class TestEnsureDashboardEthereal:
     def test_starts_dashboard_on_deterministic_port(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -472,6 +501,22 @@ class TestEnsureDashboardEthereal:
         assert "failed" in result.lower() or "error" in result.lower()
         # Must NOT raise — returns a human-readable string
         assert isinstance(result, str)
+
+    def test_port_probe_failure_returns_clean_message(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        filigree_dir = tmp_path / ".filigree"
+        filigree_dir.mkdir()
+        config = {"prefix": "test", "version": 1, "mode": "ethereal"}
+        (filigree_dir / "config.json").write_text(json.dumps(config))
+        db = FiligreeDB(filigree_dir / DB_FILENAME, prefix="test")
+        db.initialize()
+        db.close()
+
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr("filigree.ephemeral.find_available_port", lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("denied")))
+
+        result = ensure_dashboard_running()
+        assert "port" in result.lower()
+        assert "denied" in result.lower()
 
     def test_server_mode_returns_not_running(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """In server mode, reports daemon status without spawning."""

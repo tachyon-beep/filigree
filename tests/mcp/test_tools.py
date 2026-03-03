@@ -2330,6 +2330,55 @@ class TestMCPExportImport:
         data = _parse(result)
         assert data["status"] == "ok"
 
+    async def test_import_via_mcp_preserves_file_domain_rows(self, mcp_db: FiligreeDB) -> None:
+        issue = mcp_db.create_issue("File issue")
+        file_rec = mcp_db.register_file("src/mcp_file.py", language="python", metadata={"owner": "mcp"})
+        mcp_db.conn.execute(
+            "INSERT INTO scan_findings "
+            "(id, file_id, issue_id, scan_source, rule_id, severity, status, message, suggestion, "
+            "scan_run_id, line_start, line_end, seen_count, first_seen, updated_at, last_seen_at, metadata) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                "mcp-sf-1",
+                file_rec.id,
+                issue.id,
+                "ruff",
+                "F401",
+                "medium",
+                "open",
+                "unused import",
+                "",
+                "run-mcp",
+                12,
+                12,
+                1,
+                "2026-01-01T00:00:00+00:00",
+                "2026-01-01T00:00:00+00:00",
+                "2026-01-01T00:00:00+00:00",
+                '{"source":"mcp"}',
+            ),
+        )
+        mcp_db.conn.execute(
+            "INSERT INTO file_associations (file_id, issue_id, assoc_type, created_at) VALUES (?, ?, ?, ?)",
+            (file_rec.id, issue.id, "bug_in", "2026-01-01T00:00:00+00:00"),
+        )
+        mcp_db.conn.execute(
+            "INSERT INTO file_events (file_id, event_type, field, old_value, new_value, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+            (file_rec.id, "file_metadata_update", "language", "", "python", "2026-01-01T00:00:00+00:00"),
+        )
+        mcp_db.conn.commit()
+
+        export = _parse(await call_tool("export_jsonl", {"output_path": "mcp_files.jsonl"}))
+        assert export["status"] == "ok"
+
+        imported = _parse(await call_tool("import_jsonl", {"input_path": "mcp_files.jsonl", "merge": True}))
+        assert imported["status"] == "ok"
+        assert imported["records"] == 0
+        assert mcp_db.conn.execute("SELECT COUNT(*) FROM file_records").fetchone()[0] == 1
+        assert mcp_db.conn.execute("SELECT COUNT(*) FROM scan_findings").fetchone()[0] == 1
+        assert mcp_db.conn.execute("SELECT COUNT(*) FROM file_associations").fetchone()[0] == 1
+        assert mcp_db.conn.execute("SELECT COUNT(*) FROM file_events").fetchone()[0] == 1
+
     async def test_import_bad_path_via_mcp(self, mcp_db: FiligreeDB) -> None:
         result = await call_tool("import_jsonl", {"input_path": "/nonexistent/file.jsonl"})
         data = _parse(result)

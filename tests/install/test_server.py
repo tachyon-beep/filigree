@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
@@ -8,6 +9,7 @@ from unittest.mock import MagicMock
 import portalocker
 import pytest
 
+from filigree.db_schema import CURRENT_SCHEMA_VERSION, SCHEMA_SQL
 from filigree.server import (
     ServerConfig,
     read_server_config,
@@ -175,10 +177,15 @@ class TestVersionEnforcement:
             json.dumps(
                 {
                     "prefix": "future",
-                    "version": 999,
+                    "version": 1,
                 }
             )
         )
+        conn = sqlite3.connect(filigree_dir / "filigree.db")
+        conn.executescript(SCHEMA_SQL)
+        conn.execute(f"PRAGMA user_version = {CURRENT_SCHEMA_VERSION + 1}")
+        conn.commit()
+        conn.close()
 
         with pytest.raises(ValueError, match="schema version"):
             register_project(filigree_dir)
@@ -406,7 +413,7 @@ class TestDaemonLifecycle:
         assert result.success
         pid_data = json.loads((config_dir / "server.pid").read_text())
         assert pid_data["pid"] == 54321
-        assert pid_data["cmd"] == "filigree"
+        assert pid_data["cmd"] == "filigree dashboard --server-mode"
 
     def test_start_daemon_immediate_exit_reports_failure(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """Bug filigree-154be9: if daemon crashes immediately, start should report failure and clean up PID file."""
@@ -529,7 +536,7 @@ class TestDaemonLifecycle:
         assert claim_current_process_as_daemon(port=9911)
         pid_data = json.loads((config_dir / "server.pid").read_text())
         assert pid_data["pid"] > 0
-        assert pid_data["cmd"] == "filigree"
+        assert pid_data["cmd"] == "filigree dashboard --server-mode"
         assert read_server_config().port == 9911
 
     def test_claim_succeeds_when_tracked_pid_is_foreign_process(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

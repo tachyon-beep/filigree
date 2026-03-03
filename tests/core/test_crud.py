@@ -567,6 +567,47 @@ class TestExportJsonl:
 
 
 class TestImportJsonl:
+    @staticmethod
+    def _seed_file_domain(db: FiligreeDB, *, file_id: str = "test-f-1", finding_id: str = "test-sf-1") -> tuple[object, object]:
+        issue = db.create_issue("Bug for file")
+        file_rec = db.register_file("src/example.py", language="python", metadata={"owner": "core"})
+        db.conn.execute("UPDATE file_records SET id = ? WHERE id = ?", (file_id, file_rec.id))
+        db.conn.execute(
+            "INSERT INTO scan_findings "
+            "(id, file_id, issue_id, scan_source, rule_id, severity, status, message, suggestion, "
+            "scan_run_id, line_start, line_end, seen_count, first_seen, updated_at, last_seen_at, metadata) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                finding_id,
+                file_id,
+                issue.id,
+                "ruff",
+                "F401",
+                "medium",
+                "open",
+                "unused import",
+                "",
+                "run-1",
+                10,
+                10,
+                1,
+                "2026-01-01T00:00:00+00:00",
+                "2026-01-01T00:00:00+00:00",
+                "2026-01-01T00:00:00+00:00",
+                '{"source":"test"}',
+            ),
+        )
+        db.conn.execute(
+            "INSERT INTO file_associations (file_id, issue_id, assoc_type, created_at) VALUES (?, ?, ?, ?)",
+            (file_id, issue.id, "bug_in", "2026-01-01T00:00:00+00:00"),
+        )
+        db.conn.execute(
+            "INSERT INTO file_events (file_id, event_type, field, old_value, new_value, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+            (file_id, "file_metadata_update", "language", "", "python", "2026-01-01T00:00:00+00:00"),
+        )
+        db.conn.commit()
+        return issue, db.get_file(file_id)
+
     def test_import_roundtrip(self, populated_db: PopulatedDB, tmp_path: Path) -> None:
         """Export from populated, import into fresh — counts should match."""
         out = tmp_path / "roundtrip.jsonl"
@@ -586,11 +627,52 @@ class TestImportJsonl:
         fresh.initialize()
         fresh.import_jsonl(out)
         issues = fresh.list_issues(limit=100)
-        # fresh DB auto-seeds 1 Future + imports 5 (Future + epic + A + B + C) = 6
-        assert len(issues) == 6
+        assert len(issues) == 5
         titles = {i.title for i in issues}
         assert "Issue A" in titles
         assert "Epic E" in titles
+        fresh.close()
+
+    def test_import_roundtrip_preserves_file_domain_rows(self, db: FiligreeDB, tmp_path: Path) -> None:
+        issue, file_rec = self._seed_file_domain(db)
+
+        out = tmp_path / "file-roundtrip.jsonl"
+        export_count = db.export_jsonl(out)
+
+        fresh = FiligreeDB(tmp_path / "fresh-file.db", prefix="test")
+        fresh.initialize()
+        import_count = fresh.import_jsonl(out)
+
+        assert import_count == export_count
+        assert fresh.get_file(file_rec.id).path == "src/example.py"
+        finding = fresh.conn.execute("SELECT file_id, issue_id FROM scan_findings WHERE id = ?", ("test-sf-1",)).fetchone()
+        assert finding["file_id"] == file_rec.id
+        assert finding["issue_id"] == issue.id
+        assert fresh.conn.execute("SELECT COUNT(*) FROM file_associations").fetchone()[0] == 1
+        assert fresh.conn.execute("SELECT COUNT(*) FROM file_events").fetchone()[0] == 1
+        fresh.close()
+
+    def test_import_roundtrip_reconciles_seeded_future_singleton(self, db: FiligreeDB, tmp_path: Path) -> None:
+        out = tmp_path / "future-roundtrip.jsonl"
+        source_future = db.conn.execute(
+            "SELECT id FROM issues WHERE type = 'release' AND json_extract(fields, '$.version') = 'Future'"
+        ).fetchone()["id"]
+        db.export_jsonl(out)
+
+        fresh = FiligreeDB(tmp_path / "fresh-future.db", prefix="test")
+        fresh.initialize()
+        seeded_future = fresh.conn.execute(
+            "SELECT id FROM issues WHERE type = 'release' AND json_extract(fields, '$.version') = 'Future'"
+        ).fetchone()["id"]
+        assert seeded_future != source_future
+
+        fresh.import_jsonl(out)
+        future_rows = fresh.conn.execute(
+            "SELECT id FROM issues WHERE type = 'release' AND json_extract(fields, '$.version') = 'Future'"
+        ).fetchall()
+
+        assert len(future_rows) == 1
+        assert future_rows[0]["id"] == source_future
         fresh.close()
 
     def test_import_dependencies_arrive(self, populated_db: PopulatedDB, tmp_path: Path) -> None:
@@ -602,6 +684,28 @@ class TestImportJsonl:
         fresh.import_jsonl(out)
         deps = fresh.get_all_dependencies()
         assert len(deps) >= 1
+        fresh.close()
+
+    def test_import_roundtrip_with_parent_link_added_after_creation(self, db: FiligreeDB, tmp_path: Path) -> None:
+        """Late-added parent links should round-trip even if child was created first."""
+        child = db.create_issue("Child created first")
+        parent = db.create_issue("Parent created later")
+        db.update_issue(child.id, parent_id=parent.id, actor="tester")
+        dependent = db.create_issue("Dependent")
+        db.add_dependency(dependent.id, child.id, actor="tester")
+        db.add_comment(child.id, "linked after creation", author="alice")
+
+        out = tmp_path / "late-parent.jsonl"
+        export_count = db.export_jsonl(out)
+
+        fresh = FiligreeDB(tmp_path / "fresh-late-parent.db", prefix="test")
+        fresh.initialize()
+        import_count = fresh.import_jsonl(out)
+
+        assert import_count == export_count
+        assert fresh.get_issue(child.id).parent_id == parent.id
+        assert any(comment["text"] == "linked after creation" for comment in fresh.get_comments(child.id))
+        assert any(dep["from"] == dependent.id and dep["to"] == child.id for dep in fresh.get_all_dependencies())
         fresh.close()
 
     def test_import_merge_skips_existing(self, populated_db: PopulatedDB, tmp_path: Path) -> None:
@@ -673,6 +777,66 @@ class TestImportJsonl:
         # Import again with merge — duplicate event should be skipped, count=0
         count2 = db.import_jsonl(jsonl, merge=True)
         assert count2 == 0, f"Expected 0 (duplicate skipped), got {count2}"
+
+    def test_import_merge_comment_count_accurate(self, db: FiligreeDB, tmp_path: Path) -> None:
+        issue = db.create_issue("Comment count test")
+
+        jsonl = tmp_path / "comments.jsonl"
+        comment_line = json.dumps(
+            {
+                "_type": "comment",
+                "issue_id": issue.id,
+                "author": "alice",
+                "text": "hello",
+                "created_at": "2026-01-01T00:00:00+00:00",
+            }
+        )
+        jsonl.write_text(comment_line + "\n")
+
+        db.import_jsonl(jsonl, merge=True)
+        count2 = db.import_jsonl(jsonl, merge=True)
+        assert count2 == 0
+        assert len(db.get_comments(issue.id)) == 1
+
+    def test_import_merge_file_domain_count_accurate(self, db: FiligreeDB, tmp_path: Path) -> None:
+        self._seed_file_domain(db)
+        out = tmp_path / "file-merge.jsonl"
+        db.export_jsonl(out)
+
+        count2 = db.import_jsonl(out, merge=True)
+        assert count2 == 0
+        assert db.conn.execute("SELECT COUNT(*) FROM file_records").fetchone()[0] == 1
+        assert db.conn.execute("SELECT COUNT(*) FROM scan_findings").fetchone()[0] == 1
+        assert db.conn.execute("SELECT COUNT(*) FROM file_associations").fetchone()[0] == 1
+        assert db.conn.execute("SELECT COUNT(*) FROM file_events").fetchone()[0] == 1
+
+    def test_import_merge_reconciles_file_ids_by_path(self, tmp_path: Path) -> None:
+        source = FiligreeDB(tmp_path / "source.db", prefix="src")
+        source.initialize()
+        src_issue, _src_file = self._seed_file_domain(source, file_id="src-f1", finding_id="src-sf1")
+        out = tmp_path / "merge-by-path.jsonl"
+        source.export_jsonl(out)
+        source.close()
+
+        fresh = FiligreeDB(tmp_path / "dest.db", prefix="dst")
+        fresh.initialize()
+        dst_file = fresh.register_file("src/example.py", language="python")
+        fresh.import_jsonl(out, merge=True)
+
+        assert fresh.conn.execute("SELECT COUNT(*) FROM file_records WHERE path = ?", ("src/example.py",)).fetchone()[0] == 1
+        finding = fresh.conn.execute("SELECT file_id, issue_id FROM scan_findings WHERE id = ?", ("src-sf1",)).fetchone()
+        assert finding["file_id"] == dst_file.id
+        assert finding["issue_id"] == src_issue.id
+        assoc = fresh.conn.execute(
+            "SELECT file_id, issue_id FROM file_associations WHERE issue_id = ?",
+            (src_issue.id,),
+        ).fetchone()
+        assert assoc["file_id"] == dst_file.id
+        file_event = fresh.conn.execute(
+            "SELECT file_id FROM file_events WHERE event_type = 'file_metadata_update' AND field = 'language'"
+        ).fetchone()
+        assert file_event["file_id"] == dst_file.id
+        fresh.close()
 
     def test_import_skips_unknown_types(self, db: FiligreeDB, tmp_path: Path) -> None:
         jsonl = tmp_path / "unknown.jsonl"

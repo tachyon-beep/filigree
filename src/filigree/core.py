@@ -396,6 +396,12 @@ class FiligreeDB(FilesMixin, IssuesMixin, EventsMixin, WorkflowMixin, MetaMixin,
             # Fresh database — create everything from scratch
             self.conn.executescript(SCHEMA_SQL)
             self.conn.execute(f"PRAGMA user_version = {CURRENT_SCHEMA_VERSION}")
+        elif current_version > CURRENT_SCHEMA_VERSION:
+            msg = (
+                f"Database schema v{current_version} is newer than this version of "
+                f"filigree (expects v{CURRENT_SCHEMA_VERSION}). Downgrade is not supported."
+            )
+            raise ValueError(msg)
         elif current_version < CURRENT_SCHEMA_VERSION:
             # Existing database — apply pending migrations
             from filigree.migrations import apply_pending_migrations
