@@ -95,7 +95,7 @@ export const state = {
 
   // View state
   currentView: "kanban",
-  kanbanMode: "standard",
+  kanbanMode: "board",
   selectedIssue: null,
   selectedCards: new Set(),
   multiSelectMode: false,

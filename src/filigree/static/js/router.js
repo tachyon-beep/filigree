@@ -83,8 +83,8 @@ export function switchKanbanMode(mode) {
 
   state.kanbanMode = mode;
 
-  document.getElementById("btnStandard").className =
-    mode === "standard"
+  document.getElementById("btnBoard").className =
+    mode === "board"
       ? "px-2 py-0.5 rounded bg-accent text-primary"
       : "px-2 py-0.5 rounded bg-overlay bg-overlay-hover";
   document.getElementById("btnCluster").className =

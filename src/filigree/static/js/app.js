@@ -526,7 +526,7 @@ loadProjectFilterSettings();
 })().then(() => {
   switchView(state.currentView);
   if (state.kanbanMode === "cluster") switchKanbanMode("cluster");
-  else switchKanbanMode("standard");
+  else switchKanbanMode("board");
   if (state.selectedIssue) openDetail(state.selectedIssue);
   if (!localStorage.getItem("filigree_tour_done")) setTimeout(startTour, 1500);
   initDragAndDrop();
