@@ -154,7 +154,6 @@ tailwind.config = {
       <button id="btnInsights" onclick="switchView('insights')" class="px-3 py-1 rounded text-xs font-medium" title="Flow metrics — throughput, cycle time, lead time">Insights</button>
       <button id="btnWorkflow" onclick="switchView('workflow')" class="px-3 py-1 rounded text-xs font-medium" title="Workflow state machine diagram">Workflow</button>
       <button id="btnFiles" onclick="switchView('files')" class="px-3 py-1 rounded text-xs font-medium" title="File records and scan findings">Files</button>
-      <button id="btnHealth" onclick="switchView('health')" class="px-3 py-1 rounded text-xs font-medium" title="Code health — hotspots, severity breakdown, scan coverage">Health</button>
       <button id="btnReleases" onclick="switchView('releases')" class="px-3 py-1 rounded text-xs font-medium" title="Release roadmap and progress">Releases</button>
     </div>
   </div>
@@ -455,20 +454,6 @@ tailwind.config = {
     <div class="flex-1 overflow-y-auto scrollbar-thin px-6 pb-6">
       <div class="max-w-6xl mx-auto">
         <div id="filesContent" class="text-secondary text-xs">Loading...</div>
-      </div>
-    </div>
-  </div>
-
-  <!-- Code Health view -->
-  <div id="healthView" class="flex-1 hidden flex flex-col">
-    <div class="shrink-0 px-6 pt-6 pb-2">
-      <div class="max-w-5xl mx-auto flex items-center gap-3">
-        <span class="text-base font-semibold text-primary">Code Health</span>
-      </div>
-    </div>
-    <div class="flex-1 overflow-y-auto scrollbar-thin px-6 pb-6">
-      <div class="max-w-5xl mx-auto">
-        <div id="healthContent" class="text-secondary text-xs">Loading...</div>
       </div>
     </div>
   </div>

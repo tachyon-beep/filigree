@@ -11,10 +11,18 @@ import { escHtml, escJsSingle } from "../ui.js";
 export async function loadHealth() {
   const container = document.getElementById("healthContent");
   if (!container) return;
-  container.innerHTML = '<div style="color:var(--text-muted)">Loading...</div>';
+  await renderHealthOverview(container);
+}
 
+/**
+ * Render the full health overview into any container (for embedding in Files view).
+ * @param {HTMLElement} container - Target container element
+ * @param {Object} callbacks - { onClickFile: (id) => onclickExpr, onClickScan: (source) => onclickExpr }
+ */
+export async function renderHealthOverview(container, { onClickFile, onClickScan } = {}) {
+  container.innerHTML =
+    '<div style="color:var(--text-muted)" class="text-xs">Loading code quality...</div>';
   try {
-    // Fetch hotspots, file count, global findings stats, and scan runs in parallel
     const [hotspots, fileData, stats, scanRunData] = await Promise.all([
       fetchHotspots(10),
       fetchFiles({ limit: 1, offset: 0 }),
@@ -24,15 +32,11 @@ export async function loadHealth() {
 
     if (!hotspots && !fileData && !stats) {
       container.innerHTML =
-        '<div class="p-6 text-center" style="color:var(--text-muted)">' +
-        '<div class="font-medium mb-2" style="color:var(--text-primary)">No file data yet</div>' +
-        "<div>Ingest scan results to see code health metrics.</div></div>";
+        '<div class="text-xs" style="color:var(--text-muted)">No scan data yet — ingest results to see code health.</div>';
       return;
     }
 
     state.hotspots = hotspots;
-
-    // Use global stats for accurate severity counts across all files
     const agg = {
       critical: stats?.critical || 0,
       high: stats?.high || 0,
@@ -40,27 +44,26 @@ export async function loadHealth() {
       low: stats?.low || 0,
       info: stats?.info || 0,
     };
-
     const totalFiles = fileData?.total || 0;
     const filesWithFindings = stats?.files_with_findings || 0;
     const scanRuns = scanRunData?.scan_runs || [];
 
-    // Build 2x2 grid
     container.innerHTML =
       '<div class="grid grid-cols-1 md:grid-cols-2 gap-4">' +
-      renderHotspotsWidget(hotspots) +
+      renderHotspotsWidget(hotspots, onClickFile) +
       renderDonutWidget(agg) +
       renderCoverageWidget(filesWithFindings, totalFiles) +
-      renderRecentScansWidget(scanRuns) +
+      renderRecentScansWidget(scanRuns, onClickScan) +
       "</div>";
   } catch (_e) {
-    container.innerHTML = '<div class="text-red-400">Failed to load health data.</div>';
+    container.innerHTML =
+      '<div class="text-xs text-red-400">Failed to load health data.</div>';
   }
 }
 
 // --- Widget 1: Top 10 Hotspot Files ---
 
-function renderHotspotsWidget(hotspots) {
+function renderHotspotsWidget(hotspots, onClickFile) {
   if (!hotspots || !hotspots.length) {
     return (
       '<div class="rounded p-4" style="background:var(--surface-raised);border:1px solid var(--border-default)">' +
@@ -95,7 +98,7 @@ function renderHotspotsWidget(hotspots) {
       const barWidth = ((h.score / maxScore) * 100).toFixed(1);
 
       return (
-        `<div class="flex items-center gap-2 mb-2 cursor-pointer bg-overlay-hover rounded px-2 py-1" onclick="switchView('files');setTimeout(()=>openFileDetail('${escJsSingle(f.id)}'),100)" role="button" tabindex="0">` +
+        `<div class="flex items-center gap-2 mb-2 cursor-pointer bg-overlay-hover rounded px-2 py-1" onclick="${onClickFile ? onClickFile(f.id) : `switchView('files');setTimeout(()=>openFileDetail('${escJsSingle(f.id)}'),100)`}" role="button" tabindex="0">` +
         `<span class="text-xs truncate w-48" style="color:var(--text-primary)" title="${escHtml(f.path)}">${escHtml(f.path)}</span>` +
         `<div class="flex-1 h-3 rounded overflow-hidden flex" style="background:var(--surface-base);max-width:${barWidth}%">` +
         segments +
@@ -207,7 +210,7 @@ function _sourceBadge(source) {
   return colors[s] || "background:var(--surface-overlay);color:var(--text-secondary)";
 }
 
-function renderRecentScansWidget(scanRuns) {
+function renderRecentScansWidget(scanRuns, onClickScan) {
   const header =
     '<div class="text-xs font-medium mb-3" style="color:var(--text-secondary)">Recent Scan Activity</div>';
   const wrapper =
@@ -237,7 +240,7 @@ function renderRecentScansWidget(scanRuns) {
       const findings = run.total_findings || 0;
 
       return (
-        `<div class="flex items-center gap-2 mb-2 rounded px-2 py-1.5 cursor-pointer bg-overlay-hover" onclick="filterFilesByScanSource('${escJsSingle(run.scan_source || '')}')" role="button" tabindex="0">` +
+        `<div class="flex items-center gap-2 mb-2 rounded px-2 py-1.5 cursor-pointer bg-overlay-hover" onclick="${onClickScan ? onClickScan(run.scan_source || '') : `filterFilesByScanSource('${escJsSingle(run.scan_source || '')}')`}" role="button" tabindex="0">` +
         `<span class="text-xs font-medium rounded px-1.5 py-0.5 shrink-0" style="${_sourceBadge(run.scan_source)}">${source}</span>` +
         `<span class="text-xs truncate flex-1" style="color:var(--text-primary)" title="${runId}">${runId}</span>` +
         `<span class="text-xs shrink-0" style="color:var(--text-muted)">${escHtml(String(files))} files</span>` +

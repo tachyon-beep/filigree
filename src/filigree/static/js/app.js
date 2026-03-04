@@ -136,7 +136,6 @@ import {
   submitLinkIssue,
   switchFileTab,
 } from "./views/files.js";
-import { filterFilesByScanSource, loadHealth } from "./views/health.js";
 import {
   collapseAllReleaseTree,
   loadReleases,
@@ -325,7 +324,6 @@ registerView("graph", renderGraph);
 registerView("insights", loadMetrics);
 registerView("workflow", loadWorkflow);
 registerView("files", loadFiles);
-registerView("health", loadHealth);
 registerView("releases", loadReleases);
 
 // ---------------------------------------------------------------------------
@@ -654,10 +652,6 @@ window.createIssueFromFinding = createIssueFromFinding;
 window.closeFinding = closeFinding;
 window.showLinkIssueModal = showLinkIssueModal;
 window.submitLinkIssue = submitLinkIssue;
-
-// Health
-window.loadHealth = loadHealth;
-window.filterFilesByScanSource = filterFilesByScanSource;
 
 // Releases
 window.loadReleases = loadReleases;

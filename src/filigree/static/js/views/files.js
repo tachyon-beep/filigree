@@ -13,6 +13,7 @@ import {
 import { updateHash } from "../router.js";
 import { SEVERITY_COLORS, state } from "../state.js";
 import { escHtml, escJsSingle, showCreateForm, showToast } from "../ui.js";
+import { renderHealthOverview } from "./health.js";
 
 // --- Accumulated page state for "load more" ---
 let _findingsAccum = [];
@@ -45,9 +46,67 @@ function healthBorderClass(summary) {
 
 let _searchTimeout = null;
 
+// Inline scan source filter (replaces filterFilesByScanSource from health.js)
+function filterFilesByScanSourceInline(source) {
+  state.filesScanSource = source || "";
+  state.filesPage.offset = 0;
+  loadFiles();
+}
+window.filterFilesByScanSourceInline = filterFilesByScanSourceInline;
+
 export async function loadFiles() {
   const container = document.getElementById("filesContent");
   if (!container) return;
+
+  // --- Code Quality Overview (collapsible) ---
+  let overview = document.getElementById("filesOverview");
+  if (!overview) {
+    const projectKey = state.currentProjectKey || "__default__";
+    const storageKey = `filigree_files_overview_collapsed.${projectKey}`;
+    const collapsed = localStorage.getItem(storageKey) === "1";
+
+    overview = document.createElement("details");
+    overview.id = "filesOverview";
+    overview.className = "mb-4 rounded";
+    overview.style.cssText =
+      "background:var(--surface-raised);border:1px solid var(--border-default)";
+    if (!collapsed) overview.open = true;
+    overview.innerHTML =
+      '<summary class="cursor-pointer select-none text-xs font-medium px-4 py-3" style="color:var(--text-secondary)">' +
+      "Code Quality Overview</summary>" +
+      '<div id="filesOverviewContent" class="px-4 pb-3"></div>';
+
+    const overviewCallbacks = {
+      onClickFile: (fileId) => `openFileDetail('${escJsSingle(fileId)}')`,
+      onClickScan: (source) => `filterFilesByScanSourceInline('${escJsSingle(source)}')`,
+    };
+
+    // Single helper that guards against double-render (including async race)
+    const loadOverviewOnce = (content) => {
+      if (content.dataset.loaded === "1" || content.dataset.loading === "1") return;
+      content.dataset.loading = "1";
+      renderHealthOverview(content, overviewCallbacks).then(() => {
+        content.dataset.loaded = "1";
+        content.dataset.loading = "";
+      });
+    };
+
+    overview.addEventListener("toggle", () => {
+      localStorage.setItem(storageKey, overview.open ? "0" : "1");
+      if (overview.open) {
+        const content = document.getElementById("filesOverviewContent");
+        if (content) loadOverviewOnce(content);
+      }
+    });
+
+    container.parentNode.insertBefore(overview, container);
+
+    // Load overview data if expanded
+    if (!collapsed) {
+      const content = document.getElementById("filesOverviewContent");
+      if (content) loadOverviewOnce(content);
+    }
+  }
 
   // Wire up search input (once)
   const searchInput = document.getElementById("filesSearch");
