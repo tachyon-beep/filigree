@@ -1,18 +1,20 @@
 // ---------------------------------------------------------------------------
-// Metrics view — throughput, cycle/lead time, agent workload, sparkline.
+// Insights view — throughput, cycle/lead time, agent workload, sparkline,
+// and embedded activity feed.
 // ---------------------------------------------------------------------------
 
 import { fetchActivity, fetchMetrics } from "../api.js";
 import { state, THEME_COLORS } from "../state.js";
 import { escHtml } from "../ui.js";
+import { renderActivitySection } from "./activity.js";
 
 /**
  * Load and render the metrics dashboard (throughput, cycle time, lead time,
  * per-type breakdown, and agent workload bars).
  */
 export async function loadMetrics() {
-  const days = document.getElementById("metricsDays").value;
-  const container = document.getElementById("metricsContent");
+  const days = (document.getElementById("insightsDays") || document.getElementById("metricsDays"))?.value || "30";
+  const container = document.getElementById("insightsContent") || document.getElementById("metricsContent");
   container.innerHTML = '<div style="color:var(--text-muted)">Loading...</div>';
   try {
     const m = await fetchMetrics(days);
@@ -70,7 +72,7 @@ export async function loadMetrics() {
           '<div class="font-medium mb-2" style="color:var(--text-primary)">No completed issues in this period</div>' +
           '<div style="color:var(--text-muted)">Metrics track throughput, cycle time, and lead time.</div>' +
           '<div style="color:var(--text-muted)" class="mt-1">Close issues to see flow data here.</div>' +
-          '<div class="mt-3"><button onclick="document.getElementById(\'metricsDays\').value=\'90\';loadMetrics()" style="color:var(--accent)" class="hover:underline text-xs">Try 90-day window</button></div></div>');
+          '<div class="mt-3"><button onclick="var d=document.getElementById('insightsDays')||document.getElementById('metricsDays');if(d)d.value='90';loadMetrics()" style="color:var(--accent)" class="hover:underline text-xs">Try 90-day window</button></div></div>');
 
     // Agent workload
     const agentLoad = {};
@@ -107,6 +109,29 @@ export async function loadMetrics() {
         agentHtml +
         "</div>";
     }
+    // Activity feed (collapsed by default)
+    const activityDetails = document.createElement("details");
+    activityDetails.className = "rounded mt-4";
+    activityDetails.style.cssText =
+      "background:var(--surface-raised);border:1px solid var(--border-default)";
+    activityDetails.innerHTML =
+      '<summary class="cursor-pointer select-none text-xs font-medium px-4 py-3" style="color:var(--text-secondary)">' +
+      "Recent Activity</summary>" +
+      '<div id="activityEmbedContent" class="px-4 pb-3"></div>';
+    container.appendChild(activityDetails);
+
+    activityDetails.addEventListener("toggle", async () => {
+      if (activityDetails.open) {
+        const content = document.getElementById("activityEmbedContent");
+        if (content && !content.dataset.loaded) {
+          const count = await renderActivitySection(content, 15);
+          content.dataset.loaded = "1";
+          const summary = activityDetails.querySelector("summary");
+          if (summary && count)
+            summary.textContent = `Recent Activity (${count} events)`;
+        }
+      }
+    });
   } catch (_e) {
     container.innerHTML = '<div class="text-red-400">Failed to load metrics.</div>';
   }

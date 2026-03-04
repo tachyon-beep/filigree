@@ -63,7 +63,6 @@ import {
   callbacks as uiCallbacks,
   updateBatchBar,
 } from "./ui.js";
-import { loadActivity } from "./views/activity.js";
 import {
   addComment,
   addDependency,
@@ -323,8 +322,7 @@ detailCallbacks.render = render;
 
 registerView("kanban", renderKanban);
 registerView("graph", renderGraph);
-registerView("metrics", loadMetrics);
-registerView("activity", loadActivity);
+registerView("insights", loadMetrics);
 registerView("workflow", loadWorkflow);
 registerView("files", loadFiles);
 registerView("health", loadHealth);
@@ -633,9 +631,6 @@ window.addComment = addComment;
 // Metrics
 window.loadMetrics = loadMetrics;
 window.showStaleIssues = showStaleIssues;
-
-// Activity
-window.loadActivity = loadActivity;
 
 // Workflow
 window.loadWorkflow = loadWorkflow;
