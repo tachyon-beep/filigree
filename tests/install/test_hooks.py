@@ -97,10 +97,7 @@ class TestGenerateSessionContext:
         """Smoke test that generate_session_context returns a string when a project exists."""
         # We mock find_filigree_root to return the db's directory
         db_dir = Path(db.db_path).parent
-        with (
-            patch("filigree.hooks.find_filigree_root", return_value=db_dir),
-            patch("filigree.hooks.read_config", return_value={"prefix": "test"}),
-        ):
+        with patch("filigree.hooks.find_filigree_root", return_value=db_dir):
             result = generate_session_context()
         assert result is not None
         assert "Filigree Project Snapshot" in result
@@ -332,10 +329,7 @@ class TestGenerateSessionContextFreshness:
         # Create a stale CLAUDE.md in the project root
         claude_md = project_root / "CLAUDE.md"
         claude_md.write_text("<!-- filigree:instructions:v0.0.0:00000000 -->\nold\n<!-- /filigree:instructions -->\n")
-        with (
-            patch("filigree.hooks.find_filigree_root", return_value=db_dir),
-            patch("filigree.hooks.read_config", return_value={"prefix": "test"}),
-        ):
+        with patch("filigree.hooks.find_filigree_root", return_value=db_dir):
             result = generate_session_context()
         assert result is not None
         assert "Updated filigree instructions in CLAUDE.md" in result
@@ -343,10 +337,7 @@ class TestGenerateSessionContextFreshness:
     def test_context_without_stale_instructions(self, tmp_path: Path, db: FiligreeDB) -> None:
         """generate_session_context should not include update messages when everything is fresh."""
         db_dir = Path(db.db_path).parent
-        with (
-            patch("filigree.hooks.find_filigree_root", return_value=db_dir),
-            patch("filigree.hooks.read_config", return_value={"prefix": "test"}),
-        ):
+        with patch("filigree.hooks.find_filigree_root", return_value=db_dir):
             result = generate_session_context()
         assert result is not None
         assert "Updated" not in result
@@ -518,6 +509,57 @@ class TestEnsureDashboardEthereal:
         assert "port" in result.lower()
         assert "denied" in result.lower()
 
+    def test_sandbox_permission_error_falls_back_to_compute_port(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """PermissionError from bind() in sandboxed env falls back to deterministic port."""
+        filigree_dir = tmp_path / ".filigree"
+        filigree_dir.mkdir()
+        config = {"prefix": "test", "version": 1, "mode": "ethereal"}
+        (filigree_dir / "config.json").write_text(json.dumps(config))
+        db = FiligreeDB(filigree_dir / DB_FILENAME, prefix="test")
+        db.initialize()
+        db.close()
+
+        monkeypatch.chdir(tmp_path)
+
+        # PermissionError is an OSError subclass — caught by the except clause
+        exc = PermissionError("Operation not permitted")
+        monkeypatch.setattr("filigree.ephemeral.find_available_port", lambda *_a, **_k: (_ for _ in ()).throw(exc))
+
+        popen_mock = MagicMock()
+        popen_mock.return_value.pid = 12345
+        monkeypatch.setattr("filigree.hooks.subprocess.Popen", popen_mock)
+
+        result = ensure_dashboard_running()
+        # Should NOT return an error — it should attempt to start the dashboard
+        assert "failed" not in result.lower()
+        assert popen_mock.called
+
+    def test_sandbox_wrapped_permission_error_falls_back(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """RuntimeError wrapping a PermissionError triggers sandbox fallback."""
+        filigree_dir = tmp_path / ".filigree"
+        filigree_dir.mkdir()
+        config = {"prefix": "test", "version": 1, "mode": "ethereal"}
+        (filigree_dir / "config.json").write_text(json.dumps(config))
+        db = FiligreeDB(filigree_dir / DB_FILENAME, prefix="test")
+        db.initialize()
+        db.close()
+
+        monkeypatch.chdir(tmp_path)
+
+        # RuntimeError with PermissionError as __cause__ (chained exception)
+        inner = PermissionError("Operation not permitted")
+        exc = RuntimeError("Cannot allocate a local dashboard port")
+        exc.__cause__ = inner
+        monkeypatch.setattr("filigree.ephemeral.find_available_port", lambda *_a, **_k: (_ for _ in ()).throw(exc))
+
+        popen_mock = MagicMock()
+        popen_mock.return_value.pid = 12345
+        monkeypatch.setattr("filigree.hooks.subprocess.Popen", popen_mock)
+
+        result = ensure_dashboard_running()
+        assert "failed" not in result.lower()
+        assert popen_mock.called
+
     def test_server_mode_returns_not_running(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """In server mode, reports daemon status without spawning."""
         filigree_dir = tmp_path / ".filigree"
@@ -627,7 +669,6 @@ class TestFreshnessCheckLogLevel:
 
         with (
             patch("filigree.hooks.find_filigree_root", return_value=db_dir),
-            patch("filigree.hooks.read_config", return_value={"prefix": "test"}),
             patch("filigree.hooks._check_instructions_freshness", side_effect=OSError("disk full")),
             patch("filigree.hooks.logger") as mock_logger,
         ):
@@ -646,7 +687,6 @@ class TestFreshnessCheckLogLevel:
 
         with (
             patch("filigree.hooks.find_filigree_root", return_value=db_dir),
-            patch("filigree.hooks.read_config", return_value={"prefix": "test"}),
             patch("filigree.hooks._check_instructions_freshness", side_effect=RuntimeError("boom")),
             patch("filigree.hooks.logger") as mock_logger,
         ):

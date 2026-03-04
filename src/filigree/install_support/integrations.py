@@ -104,20 +104,25 @@ def _codex_server_block(server_config: dict[str, Any]) -> str:
 
 def _upsert_toml_table(content: str, table_name: str, table_block: str) -> str:
     """Replace or append a top-level TOML table without disturbing other content."""
+    newline_match = re.search(r"\r\n|\n|\r", content)
+    newline = newline_match.group(0) if newline_match else "\n"
+    rendered_block = newline.join(table_block.splitlines())
+    if table_block.endswith(("\r\n", "\n", "\r")):
+        rendered_block += newline
     pattern = re.compile(
-        rf"(?ms)^\[{re.escape(table_name)}\]\n.*?(?=^\[|\Z)",
+        rf"(?ms)^\[{re.escape(table_name)}\](?:\r\n|\n|\r).*?(?=^\[|\Z)",
     )
     if pattern.search(content):
-        updated = pattern.sub(table_block, content, count=1)
+        updated = pattern.sub(rendered_block, content, count=1)
     else:
         updated = content
-        if updated and not updated.endswith("\n"):
-            updated += "\n"
-        if updated and not updated.endswith("\n\n"):
-            updated += "\n"
-        updated += table_block
-    if not updated.endswith("\n"):
-        updated += "\n"
+        if updated and not updated.endswith(("\r\n", "\n", "\r")):
+            updated += newline
+        if updated and not updated.endswith(newline * 2):
+            updated += newline
+        updated += rendered_block
+    if not updated.endswith(("\r\n", "\n", "\r")):
+        updated += newline
     return updated
 
 
@@ -279,7 +284,8 @@ def install_codex_mcp(
     # Read existing config if present
     existing = ""
     if config_path.exists():
-        existing = config_path.read_text()
+        with config_path.open(newline="") as handle:
+            existing = handle.read()
 
     # Check if already configured using proper TOML parsing
     if existing.strip():
@@ -293,6 +299,7 @@ def install_codex_mcp(
             return False, f"Existing {config_path} contains malformed TOML; fix or remove it before configuring"
 
     updated = _upsert_toml_table(existing, "mcp_servers.filigree", _codex_server_block(desired))
-    config_path.write_text(updated)
+    with config_path.open("w", newline="") as handle:
+        handle.write(updated)
 
     return True, f"Wrote {config_path}"

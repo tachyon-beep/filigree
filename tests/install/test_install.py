@@ -677,6 +677,36 @@ class TestInstallCodexMcp:
         parsed = tomllib.loads(config_text)
         assert "filigree" in parsed["mcp_servers"]
 
+    def test_replaces_existing_crlf_table_without_duplication(self, tmp_path: Path) -> None:
+        """CRLF-terminated Codex configs should replace filigree in place."""
+        home = tmp_path / "home"
+        codex_dir = home / ".codex"
+        config_path = codex_dir / "config.toml"
+        home.mkdir()
+        codex_dir.mkdir()
+        config_path.write_bytes(
+            (
+                b"[mcp_servers.filigree]\r\n"
+                b'command = "old-mcp"\r\n'
+                b'args = ["--project", "/tmp/old"]\r\n'
+                b"\r\n"
+                b"[mcp_servers.other]\r\n"
+                b'command = "other-mcp"\r\n'
+            )
+        )
+        with (
+            patch("filigree.install_support.integrations.Path.home", return_value=home),
+            patch("filigree.install_support.integrations.shutil.which", return_value=None),
+            patch("filigree.install_support.integrations._find_filigree_mcp_command", return_value="filigree-mcp"),
+        ):
+            ok, _msg = install_codex_mcp(tmp_path)
+        assert ok
+        raw = config_path.read_bytes()
+        assert raw.count(b"[mcp_servers.filigree]") == 1
+        assert b'command = "old-mcp"' not in raw
+        assert b'command = "filigree-mcp"\r\n' in raw
+        assert b"[mcp_servers.other]\r\n" in raw
+
 
 class TestInstallCodexMcpMalformedToml:
     """Bug filigree-d6bbbf: install_codex_mcp must fail on malformed TOML, not silently append."""

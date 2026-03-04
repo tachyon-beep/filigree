@@ -263,6 +263,7 @@ def _ensure_dashboard_ethereal_mode(filigree_dir: Path) -> str:
     from filigree.ephemeral import (
         cleanup_legacy_tmp_files,
         cleanup_stale_pid,
+        compute_port,
         find_available_port,
         read_pid_file,
         read_port_file,
@@ -315,7 +316,24 @@ def _ensure_dashboard_ethereal_mode(filigree_dir: Path) -> str:
         try:
             port = find_available_port(filigree_dir)
         except (OSError, RuntimeError) as exc:
-            return f"Failed to choose dashboard port: {exc}"
+            is_sandbox = (
+                isinstance(exc, PermissionError)
+                or isinstance(exc.__cause__, PermissionError)
+                or "Operation not permitted" in str(exc)
+            )
+            if is_sandbox:
+                # Some sandboxed environments forbid bind() during the probe.
+                # Fall back to the deterministic project port and let the
+                # subprocess startup checks decide whether it actually works.
+                port = compute_port(filigree_dir)
+                logger.warning(
+                    "Port probe failed with permission error (%s); "
+                    "falling back to deterministic port %d",
+                    exc,
+                    port,
+                )
+            else:
+                return f"Failed to choose dashboard port: {exc}"
         filigree_cmd = find_filigree_command()
 
         log_file = filigree_dir / "ephemeral.log"

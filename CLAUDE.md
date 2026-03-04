@@ -104,11 +104,6 @@ When beginning a new session, run `filigree session-context` to load the project
 snapshot (ready work, in-progress items, critical path). This provides the
 context needed to pick up where the previous session left off.
 
-### Compatibility Triage
-- Prefer the smallest practical response to backward-compatibility edge cases.
-- If an issue is one-time, operational, or easily resolved by restarting, deleting local state, rerunning a command, or another simple manual step, prefer documenting that workaround over proposing code changes.
-- Do not suggest broad rewrites or new compatibility layers for trivial legacy transitions unless the user explicitly wants a durable fix or the issue has meaningful recurring impact.
-
 ### Priority Scale
 - P0: Critical (drop everything)
 - P1: High (do next)
