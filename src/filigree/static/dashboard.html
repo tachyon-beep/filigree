@@ -71,7 +71,7 @@
   .text-secondary-hover:hover { color: var(--text-secondary); }
   body { font-family: 'JetBrains Mono', 'Fira Code', monospace; background: var(--surface-base); color: var(--text-primary); }
   #cy { width: 100%; height: 100%; }
-  #cy, #workflowCy { background: var(--surface-base); }
+  #cy, #workflowCy, #workflowModalCy { background: var(--surface-base); }
   .card { transition: all 0.15s ease; }
   .card:hover { background: var(--surface-hover) !important; }
   .card:focus { outline: 2px solid var(--accent); outline-offset: -2px; }
@@ -152,7 +152,6 @@ tailwind.config = {
       <button id="btnGraph" onclick="switchView('graph')" class="px-3 py-1 rounded text-xs font-medium" title="Dependency graph visualization">Graph</button>
       <button id="btnKanban" onclick="switchView('kanban')" class="px-3 py-1 rounded text-xs font-medium" title="Kanban board view">Kanban</button>
       <button id="btnInsights" onclick="switchView('insights')" class="px-3 py-1 rounded text-xs font-medium" title="Flow metrics — throughput, cycle time, lead time">Insights</button>
-      <button id="btnWorkflow" onclick="switchView('workflow')" class="px-3 py-1 rounded text-xs font-medium" title="Workflow state machine diagram">Workflow</button>
       <button id="btnFiles" onclick="switchView('files')" class="px-3 py-1 rounded text-xs font-medium" title="File records and scan findings">Files</button>
       <button id="btnReleases" onclick="switchView('releases')" class="px-3 py-1 rounded text-xs font-medium" title="Release roadmap and progress">Releases</button>
     </div>
@@ -210,7 +209,8 @@ tailwind.config = {
       <button onclick="toggleSettingsMenu(event)" id="settingsGear" class="text-xs px-2 py-1 rounded bg-overlay bg-overlay-hover" title="Settings" aria-label="Settings menu">&#9881;</button>
       <div id="settingsDropdown" class="hidden absolute right-0 top-full mt-1 rounded-lg shadow-xl text-xs z-50" style="background:var(--surface-base);border:1px solid var(--border-strong);min-width:160px">
         <button onclick="reloadServer()" class="w-full text-left px-3 py-2 bg-overlay-hover text-primary rounded-t-lg">&#8635; Reload server</button>
-        <button onclick="toggleTheme();closeSettingsMenu()" id="themeToggle" class="w-full text-left px-3 py-2 bg-overlay-hover text-primary rounded-b-lg">&#9788; Toggle theme</button>
+        <button onclick="toggleTheme();closeSettingsMenu()" id="themeToggle" class="w-full text-left px-3 py-2 bg-overlay-hover text-primary">&#9788; Toggle theme</button>
+        <button onclick="showWorkflowModal();closeSettingsMenu()" class="w-full text-left px-3 py-2 bg-overlay-hover text-primary rounded-b-lg">&#8862; Workflow diagram</button>
       </div>
     </div>
   </div>
@@ -424,17 +424,6 @@ tailwind.config = {
         <div id="insightsContent" class="text-secondary text-xs">Loading...</div>
       </div>
     </div>
-  </div>
-
-  <!-- Workflow view -->
-  <div id="workflowView" class="flex-1 hidden flex flex-col">
-    <div class="flex items-center gap-2 px-4 py-1 bg-raised text-xs text-secondary border-b border-default">
-      <label for="workflowType" class="text-xs text-secondary">Type:</label>
-      <select id="workflowType" onchange="loadWorkflow()" class="bg-overlay text-primary text-xs rounded px-2 py-1 border border-strong">
-        <option value="">Select type...</option>
-      </select>
-    </div>
-    <div id="workflowCy" class="flex-1"></div>
   </div>
 
   <!-- Files view -->

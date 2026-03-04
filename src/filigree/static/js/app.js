@@ -116,7 +116,12 @@ import {
   showStaleIssues,
   updateStaleBadge,
 } from "./views/metrics.js";
-import { loadPlanView, loadWorkflow } from "./views/workflow.js";
+import {
+  loadPlanView,
+  loadWorkflow,
+  loadWorkflowInModal,
+  showWorkflowModal,
+} from "./views/workflow.js";
 import {
   closeFinding,
   clearScanSourceFilter,
@@ -322,7 +327,6 @@ detailCallbacks.render = render;
 registerView("kanban", renderKanban);
 registerView("graph", renderGraph);
 registerView("insights", loadMetrics);
-registerView("workflow", loadWorkflow);
 registerView("files", loadFiles);
 registerView("releases", loadReleases);
 
@@ -633,6 +637,8 @@ window.showStaleIssues = showStaleIssues;
 // Workflow
 window.loadWorkflow = loadWorkflow;
 window.loadPlanView = loadPlanView;
+window.showWorkflowModal = showWorkflowModal;
+window.loadWorkflowInModal = loadWorkflowInModal;
 
 // Files
 window.loadFiles = loadFiles;
