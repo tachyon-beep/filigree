@@ -103,7 +103,12 @@ def _codex_server_block(server_config: dict[str, Any]) -> str:
 
 
 def _upsert_toml_table(content: str, table_name: str, table_block: str) -> str:
-    """Replace or append a top-level TOML table without disturbing other content."""
+    """Replace or append a top-level TOML table without disturbing other content.
+
+    Note: The regex-based approach assumes simple TOML structure (no multiline
+    strings containing bare ``[`` at line start). Suitable for machine-generated
+    configs like Codex MCP config.
+    """
     newline_match = re.search(r"\r\n|\n|\r", content)
     newline = newline_match.group(0) if newline_match else "\n"
     rendered_block = newline.join(table_block.splitlines())
@@ -116,10 +121,10 @@ def _upsert_toml_table(content: str, table_name: str, table_block: str) -> str:
         updated = pattern.sub(rendered_block, content, count=1)
     else:
         updated = content
+        # Ensure a blank line separates existing content from the new table
         if updated and not updated.endswith(("\r\n", "\n", "\r")):
             updated += newline
-        if updated and not updated.endswith(newline * 2):
-            updated += newline
+        updated += newline
         updated += rendered_block
     if not updated.endswith(("\r\n", "\n", "\r")):
         updated += newline
@@ -222,22 +227,10 @@ def _install_mcp_server_mode(project_root: Path, port: int) -> tuple[bool, str]:
     """Write streamable-http MCP config pointing to the daemon."""
     mcp_json_path = project_root / ".mcp.json"
     mcp_config = _read_mcp_json(mcp_json_path)
-    project_key = "filigree"
-
-    # Scope server-mode MCP requests to this project's configured key.
-    try:
-        config = read_config(project_root / FILIGREE_DIR_NAME)
-        prefix = config.get("prefix")
-        if isinstance(prefix, str) and prefix.strip():
-            project_key = prefix.strip()
-    except (json.JSONDecodeError, OSError) as exc:
-        logger.warning("Unable to read project prefix for server-mode MCP install: %s", exc)
-
-    encoded_key = quote(project_key, safe="")
 
     mcp_config["mcpServers"]["filigree"] = {
         "type": "streamable-http",
-        "url": f"http://localhost:{port}/mcp/?project={encoded_key}",
+        "url": _codex_server_mode_url(project_root, port),
     }
 
     mcp_json_path.write_text(json.dumps(mcp_config, indent=2) + "\n")

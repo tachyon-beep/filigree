@@ -4,7 +4,7 @@
 
 import { fetchFiles, fetchFileStats, fetchHotspots, fetchScanRuns } from "../api.js";
 import { SEVERITY_COLORS, state } from "../state.js";
-import { escHtml, escJsSingle } from "../ui.js";
+import { escHtml, escJsSingle, relativeTime } from "../ui.js";
 
 // --- Main loader ---
 
@@ -187,18 +187,6 @@ function renderCoverageWidget(withFindings, total) {
 // --- Widget 4: Recent Scan Activity ---
 
 /** Format an ISO timestamp as a relative time string (e.g. "2h ago"). */
-function _relativeTime(isoStr) {
-  if (!isoStr) return "";
-  const diff = Date.now() - new Date(isoStr).getTime();
-  const mins = Math.floor(diff / 60000);
-  if (mins < 1) return "just now";
-  if (mins < 60) return `${mins}m ago`;
-  const hrs = Math.floor(mins / 60);
-  if (hrs < 24) return `${hrs}h ago`;
-  const days = Math.floor(hrs / 24);
-  return `${days}d ago`;
-}
-
 /** Return a Tailwind-ish badge color class per scan_source. */
 function _sourceBadge(source) {
   const s = (source || "").toLowerCase();
@@ -235,7 +223,7 @@ function renderRecentScansWidget(scanRuns, onClickScan) {
     .map((run) => {
       const source = escHtml(run.scan_source || "unknown");
       const runId = escHtml(run.scan_run_id || "");
-      const time = _relativeTime(run.started_at);
+      const time = relativeTime(run.started_at);
       const files = run.files_scanned || 0;
       const findings = run.total_findings || 0;
 

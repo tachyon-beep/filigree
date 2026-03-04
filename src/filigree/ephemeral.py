@@ -53,7 +53,7 @@ def _matches_expected_process(tokens: list[str], *, expected_cmd: str, required_
         return False
 
     expected = expected_cmd.lower()
-    required = tuple(arg.strip().lower() for arg in required_args)
+    required_args = tuple(arg.strip().lower() for arg in required_args)
     candidates: list[list[str]] = []
 
     executable = Path(tokens[0]).name.lower()
@@ -71,7 +71,7 @@ def _matches_expected_process(tokens: list[str], *, expected_cmd: str, required_
             if first_arg == expected or first_arg.startswith(expected):
                 candidates.append(tokens[2:])
 
-    return any(_tokens_contain_args(candidate, required) for candidate in candidates)
+    return any(_tokens_contain_args(candidate, required_args) for candidate in candidates)
 
 
 def compute_port(filigree_dir: Path) -> int:

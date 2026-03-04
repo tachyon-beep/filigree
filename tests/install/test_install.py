@@ -376,9 +376,7 @@ class TestRunDoctor:
         codex_dir = home / ".codex"
         home.mkdir()
         codex_dir.mkdir()
-        (codex_dir / "config.toml").write_text(
-            '[mcp_servers.filigree]\ncommand = "filigree-mcp"\nargs = ["--project", "/tmp/other"]\n'
-        )
+        (codex_dir / "config.toml").write_text('[mcp_servers.filigree]\ncommand = "filigree-mcp"\nargs = ["--project", "/tmp/other"]\n')
         with patch("filigree.install_support.doctor.Path.home", return_value=home):
             results = run_doctor(filigree_project)
         codex_check = next((r for r in results if r.name == "Codex MCP"), None)
@@ -645,9 +643,7 @@ class TestInstallCodexMcp:
         codex_dir = home / ".codex"
         home.mkdir()
         codex_dir.mkdir()
-        (codex_dir / "config.toml").write_text(
-            f"[mcp_servers.filigree]\ncommand = 'filigree-mcp'\nargs = ['--project', '{tmp_path}']\n"
-        )
+        (codex_dir / "config.toml").write_text(f"[mcp_servers.filigree]\ncommand = 'filigree-mcp'\nargs = ['--project', '{tmp_path}']\n")
         with (
             patch("filigree.install_support.integrations._find_filigree_mcp_command", return_value="filigree-mcp"),
             patch("filigree.install_support.integrations.Path.home", return_value=home),
@@ -685,14 +681,12 @@ class TestInstallCodexMcp:
         home.mkdir()
         codex_dir.mkdir()
         config_path.write_bytes(
-            (
-                b"[mcp_servers.filigree]\r\n"
-                b'command = "old-mcp"\r\n'
-                b'args = ["--project", "/tmp/old"]\r\n'
-                b"\r\n"
-                b"[mcp_servers.other]\r\n"
-                b'command = "other-mcp"\r\n'
-            )
+            b"[mcp_servers.filigree]\r\n"
+            b'command = "old-mcp"\r\n'
+            b'args = ["--project", "/tmp/old"]\r\n'
+            b"\r\n"
+            b"[mcp_servers.other]\r\n"
+            b'command = "other-mcp"\r\n'
         )
         with (
             patch("filigree.install_support.integrations.Path.home", return_value=home),

@@ -5,7 +5,7 @@
 import { fetchTransitions, patchIssue } from "../api.js";
 import { getFilteredIssues } from "../filters.js";
 import { CATEGORY_COLORS, PRIORITY_COLORS, state, TYPE_COLORS, TYPE_ICONS } from "../state.js";
-import { escHtml, escJsSingle, issueIdChip, showToast } from "../ui.js";
+import { escHtml, escJsSingle, issueIdChip, relativeTime, showToast } from "../ui.js";
 
 // --- Callbacks for functions not yet available at import time ---
 
@@ -104,16 +104,6 @@ export function renderStandardKanban(columns) {
 // renderListMode — dense sortable table for large projects
 // ---------------------------------------------------------------------------
 
-function _relativeTime(isoStr) {
-  const diff = Date.now() - new Date(isoStr).getTime();
-  const mins = Math.floor(diff / 60000);
-  if (mins < 60) return `${mins}m ago`;
-  const hrs = Math.floor(mins / 60);
-  if (hrs < 24) return `${hrs}h ago`;
-  const days = Math.floor(hrs / 24);
-  return `${days}d ago`;
-}
-
 function renderListMode(items) {
   if (!items.length) {
     return '<div class="p-6 text-center text-xs" style="color:var(--text-muted)">No issues match filters.</div>';
@@ -144,7 +134,7 @@ function renderListMode(items) {
       const icon = TYPE_ICONS[i.type] || "";
       const cat = i.status_category || "open";
       const catColor = CATEGORY_COLORS[cat] || CATEGORY_COLORS.open;
-      const updated = i.updated_at ? _relativeTime(i.updated_at) : "\u2014";
+      const updated = i.updated_at ? relativeTime(i.updated_at) : "\u2014";
       const blocks = state.impactScores[i.id] || 0;
       const readyClass = i.is_ready ? "border-l-4 border-l-emerald-500" : "";
       const blockedClass =

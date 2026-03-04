@@ -13,8 +13,8 @@ import { renderActivitySection } from "./activity.js";
  * per-type breakdown, and agent workload bars).
  */
 export async function loadMetrics() {
-  const days = (document.getElementById("insightsDays") || document.getElementById("metricsDays"))?.value || "30";
-  const container = document.getElementById("insightsContent") || document.getElementById("metricsContent");
+  const days = document.getElementById("insightsDays")?.value || "30";
+  const container = document.getElementById("insightsContent");
   container.innerHTML = '<div style="color:var(--text-muted)">Loading...</div>';
   try {
     const m = await fetchMetrics(days);
@@ -72,7 +72,7 @@ export async function loadMetrics() {
           '<div class="font-medium mb-2" style="color:var(--text-primary)">No completed issues in this period</div>' +
           '<div style="color:var(--text-muted)">Metrics track throughput, cycle time, and lead time.</div>' +
           '<div style="color:var(--text-muted)" class="mt-1">Close issues to see flow data here.</div>' +
-          '<div class="mt-3"><button onclick="var d=document.getElementById('insightsDays')||document.getElementById('metricsDays');if(d)d.value='90';loadMetrics()" style="color:var(--accent)" class="hover:underline text-xs">Try 90-day window</button></div></div>');
+          '<div class="mt-3"><button onclick="var d=document.getElementById(\'insightsDays\');if(d)d.value=\'90\';loadMetrics()" style="color:var(--accent)" class="hover:underline text-xs">Try 90-day window</button></div></div>');
 
     // Agent workload
     const agentLoad = {};

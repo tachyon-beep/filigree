@@ -385,7 +385,8 @@ def run_doctor(project_root: Path | None = None) -> list[CheckResult]:
                     from filigree.core import get_mode
 
                     mode = get_mode(filigree_dir)
-                except (AttributeError, ValueError, json.JSONDecodeError, OSError):
+                except (AttributeError, ValueError, json.JSONDecodeError, OSError) as exc:
+                    logger.debug("Could not determine project mode for Codex check: %s", exc)
                     mode = "ethereal"
 
                 project_root = filigree_dir.parent
@@ -396,7 +397,8 @@ def run_doctor(project_root: Path | None = None) -> list[CheckResult]:
                         from filigree.server import read_server_config
 
                         expected_url = _codex_server_mode_url(project_root, read_server_config().port)
-                    except Exception:
+                    except (OSError, json.JSONDecodeError, ValueError, ImportError) as exc:
+                        logger.debug("Could not read server config for Codex doctor check: %s", exc)
                         if mode == "server":
                             expected_url = _codex_server_mode_url(project_root, 8377)
                     if isinstance(url, str) and expected_url and url == expected_url:

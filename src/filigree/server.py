@@ -20,7 +20,7 @@ from typing import TypedDict
 
 import portalocker
 
-from filigree.core import read_config, write_atomic
+from filigree.core import DB_FILENAME, read_config, write_atomic
 from filigree.db_schema import CURRENT_SCHEMA_VERSION
 from filigree.ephemeral import is_pid_alive, read_pid_file, verify_pid_ownership, write_pid_file
 
@@ -32,6 +32,10 @@ SERVER_PID_FILE = SERVER_CONFIG_DIR / "server.pid"
 
 DEFAULT_PORT = 8377
 SUPPORTED_SCHEMA_VERSION = CURRENT_SCHEMA_VERSION
+
+# Expected process identity for verify_pid_ownership calls.
+_DAEMON_CMD = "filigree"
+_DAEMON_ARGS = ("dashboard", "--server-mode")
 
 
 class ProjectEntry(TypedDict):
@@ -52,15 +56,20 @@ class ServerConfig:
 
 def _read_project_schema_version(filigree_dir: Path) -> int:
     """Return the SQLite schema version for a project, or 0 if no DB exists."""
-    db_path = filigree_dir / "filigree.db"
+    db_path = filigree_dir / DB_FILENAME
     if not db_path.exists():
         return 0
 
-    conn = sqlite3.connect(str(db_path))
     try:
-        return int(conn.execute("PRAGMA user_version").fetchone()[0])
-    finally:
-        conn.close()
+        conn = sqlite3.connect(str(db_path), timeout=5)
+        try:
+            row = conn.execute("PRAGMA user_version").fetchone()
+            return int(row[0]) if row else 0
+        finally:
+            conn.close()
+    except (sqlite3.Error, OSError) as exc:
+        logger.warning("Could not read schema version from %s: %s", db_path, exc)
+        return 0
 
 
 def _backup_corrupt_config() -> None:
@@ -217,7 +226,7 @@ def start_daemon(port: int | None = None) -> DaemonResult:
         # Check if already running — verify PID is actually a filigree process
         info = read_pid_file(SERVER_PID_FILE)
         if info and is_pid_alive(info["pid"]):
-            if verify_pid_ownership(SERVER_PID_FILE, expected_cmd="filigree", required_args=("dashboard", "--server-mode")):
+            if verify_pid_ownership(SERVER_PID_FILE, expected_cmd=_DAEMON_CMD, required_args=_DAEMON_ARGS):
                 return DaemonResult(False, f"Daemon already running (pid {info['pid']})")
             # Stale PID from a reused process — clean up and proceed
             logger.warning("Stale PID file (pid %d is not filigree); cleaning up", info["pid"])
@@ -271,7 +280,7 @@ def stop_daemon() -> DaemonResult:
         SERVER_PID_FILE.unlink(missing_ok=True)
         return DaemonResult(True, f"Daemon (pid {pid}) was not running; cleaned up PID file")
 
-    if not verify_pid_ownership(SERVER_PID_FILE, expected_cmd="filigree", required_args=("dashboard", "--server-mode")):
+    if not verify_pid_ownership(SERVER_PID_FILE, expected_cmd=_DAEMON_CMD, required_args=_DAEMON_ARGS):
         return DaemonResult(False, f"PID {pid} is not a filigree process — refusing to kill")
 
     try:
@@ -318,7 +327,7 @@ def daemon_status() -> DaemonStatus:
         return DaemonStatus(running=False)
 
     # Verify PID belongs to filigree before reporting as running
-    if not verify_pid_ownership(SERVER_PID_FILE, expected_cmd="filigree", required_args=("dashboard", "--server-mode")):
+    if not verify_pid_ownership(SERVER_PID_FILE, expected_cmd=_DAEMON_CMD, required_args=_DAEMON_ARGS):
         return DaemonStatus(running=False)
 
     config = read_server_config()

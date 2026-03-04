@@ -105,8 +105,6 @@ export function render() {
   const loader = viewLoaders[state.currentView];
   if (loader) {
     loader();
-  } else if (state.currentView === "graph" && viewLoaders.graph) {
-    viewLoaders.graph();
   } else if (viewLoaders.kanban) {
     viewLoaders.kanban();
   }

@@ -317,9 +317,7 @@ def _ensure_dashboard_ethereal_mode(filigree_dir: Path) -> str:
             port = find_available_port(filigree_dir)
         except (OSError, RuntimeError) as exc:
             is_sandbox = (
-                isinstance(exc, PermissionError)
-                or isinstance(exc.__cause__, PermissionError)
-                or "Operation not permitted" in str(exc)
+                isinstance(exc, PermissionError) or isinstance(exc.__cause__, PermissionError) or "Operation not permitted" in str(exc)
             )
             if is_sandbox:
                 # Some sandboxed environments forbid bind() during the probe.
@@ -327,8 +325,7 @@ def _ensure_dashboard_ethereal_mode(filigree_dir: Path) -> str:
                 # subprocess startup checks decide whether it actually works.
                 port = compute_port(filigree_dir)
                 logger.warning(
-                    "Port probe failed with permission error (%s); "
-                    "falling back to deterministic port %d",
+                    "Port probe failed with permission error (%s); falling back to deterministic port %d",
                     exc,
                     port,
                 )
@@ -385,7 +382,7 @@ def _ensure_dashboard_server_mode(filigree_dir: Path, port: int | None) -> str:
 
     try:
         register_project(filigree_dir)
-    except Exception as exc:
+    except (ValueError, RuntimeError, OSError) as exc:
         logger.warning("Failed to register project in server.json", exc_info=True)
         return f"Filigree server registration failed: {exc}"
 

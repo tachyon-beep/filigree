@@ -870,9 +870,7 @@ class TestBatchAPI:
         data = resp.json()
         assert len(data["updated"]) == 1
 
-    async def test_batch_update_invalid_fields_type_returns_400(
-        self, client: AsyncClient, dashboard_db: PopulatedDB
-    ) -> None:
+    async def test_batch_update_invalid_fields_type_returns_400(self, client: AsyncClient, dashboard_db: PopulatedDB) -> None:
         ids = dashboard_db.ids
         resp = await client.post(
             "/api/batch/update",

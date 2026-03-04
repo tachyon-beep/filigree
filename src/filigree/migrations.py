@@ -224,9 +224,7 @@ def _issues_parent_fk_has_set_null(conn: sqlite3.Connection) -> bool:
 
 def _recreate_issues_fts_triggers(conn: sqlite3.Connection) -> None:
     """Recreate issues FTS triggers after rebuilding the issues table."""
-    has_fts = conn.execute(
-        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'issues_fts'"
-    ).fetchone()
+    has_fts = conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'issues_fts'").fetchone()
     if has_fts is None:
         return
 
@@ -252,9 +250,7 @@ def _recreate_issues_fts_triggers(conn: sqlite3.Connection) -> None:
 
 def _rebuild_issues_fts_index(conn: sqlite3.Connection) -> None:
     """Resync the issues_fts external-content index after an issues table rebuild."""
-    has_fts = conn.execute(
-        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'issues_fts'"
-    ).fetchone()
+    has_fts = conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'issues_fts'").fetchone()
     if has_fts is None:
         return
 
@@ -270,10 +266,7 @@ def migrate_v5_to_v6(conn: sqlite3.Connection) -> None:
       - old v5 databases without the parent self-FK are rebuilt safely
       - already-correct databases simply get restamped to v6
     """
-    conn.execute(
-        "UPDATE issues SET parent_id = NULL "
-        "WHERE parent_id IS NOT NULL AND parent_id NOT IN (SELECT id FROM issues)"
-    )
+    conn.execute("UPDATE issues SET parent_id = NULL WHERE parent_id IS NOT NULL AND parent_id NOT IN (SELECT id FROM issues)")
 
     if _issues_parent_fk_has_set_null(conn):
         return
