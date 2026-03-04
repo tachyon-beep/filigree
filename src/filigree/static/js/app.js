@@ -28,6 +28,8 @@ import {
   toggleCardSelect,
   toggleMultiSelect,
   toggleReady,
+  toggleStatusPill,
+  onDoneTimeBoundChange,
   trackChanges,
   updateTypeFilterUI,
 } from "./filters.js";
@@ -98,10 +100,7 @@ import {
   setGraphPreset,
   traceGraphPath,
   clearGraphPath,
-  showBlockedHelp,
   showHealthBreakdown,
-  showHealthHelp,
-  showReadyHelp,
   toggleCriticalPath,
 } from "./views/graph.js";
 import {
@@ -563,10 +562,11 @@ window.render = render;
 window.applyFilters = applyFilters;
 window.toggleReady = toggleReady;
 window.toggleBlocked = toggleBlocked;
+window.toggleStatusPill = toggleStatusPill;
+window.onDoneTimeBoundChange = onDoneTimeBoundChange;
 window.toggleMultiSelect = toggleMultiSelect;
 window.toggleCardSelect = toggleCardSelect;
 window.debouncedSearch = debouncedSearch;
-window.savePreset = savePreset;
 window.confirmSavePreset = confirmSavePreset;
 window.loadPreset = loadPreset;
 window.applyTypeFilter = applyTypeFilter;
@@ -610,9 +610,6 @@ window.traceGraphPath = traceGraphPath;
 window.clearGraphPath = clearGraphPath;
 window.toggleCriticalPath = toggleCriticalPath;
 window.showHealthBreakdown = showHealthBreakdown;
-window.showHealthHelp = showHealthHelp;
-window.showReadyHelp = showReadyHelp;
-window.showBlockedHelp = showBlockedHelp;
 
 // Detail panel
 window.openDetail = openDetail;

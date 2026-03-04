@@ -159,29 +159,12 @@ tailwind.config = {
 
   <!-- Filter bar -->
   <div class="flex items-center gap-3">
-    <button id="btnReady" onclick="toggleReady()" class="px-2 py-1 rounded text-xs font-medium bg-emerald-900/50 text-emerald-400 border border-emerald-700" title="Toggle: sort ready (unblocked) issues first">
+    <button id="btnReady" onclick="toggleReady()" class="px-2 py-1 rounded text-xs font-medium bg-emerald-900/50 text-emerald-400 border border-emerald-700" title="Ready issues have no blockers and can be worked on immediately">
       &#9679; Ready (<span id="readyCount">0</span>)
     </button>
-    <button onclick="showReadyHelp(this)" class="help-icon bg-overlay text-secondary text-primary-hover" title="What does Ready mean?" aria-label="Explain ready filter">?</button>
-    <button id="btnBlocked" onclick="toggleBlocked()" class="px-2 py-1 rounded text-xs font-medium bg-overlay text-secondary border border-strong" title="Toggle: show only blocked issues">
+    <button id="btnBlocked" onclick="toggleBlocked()" class="px-2 py-1 rounded text-xs font-medium bg-overlay text-secondary border border-strong" title="Blocked issues are waiting on dependencies to be resolved">
       &#128279; Blocked (<span id="blockedCount">0</span>)
     </button>
-    <button onclick="showBlockedHelp(this)" class="help-icon bg-overlay text-secondary text-primary-hover" title="What does Blocked mean?" aria-label="Explain blocked filter">?</button>
-    <label for="filterPriority" class="text-xs text-secondary sr-only">Priority</label>
-    <select id="filterPriority" onchange="applyFilters()" class="bg-overlay text-primary text-xs rounded px-2 py-1 border border-strong">
-      <option value="all">Priority: All</option>
-      <option value="0-1">P0-P1</option>
-      <option value="2">P2</option>
-      <option value="3-4">P3-P4</option>
-    </select>
-    <select id="filterUpdatedDays" onchange="applyFilters()" class="bg-overlay text-primary text-xs rounded px-2 py-1 border border-strong">
-      <option value="0">Updated: Any time</option>
-      <option value="1">Last 1 day</option>
-      <option value="7">Last 7 days</option>
-      <option value="14">Last 14 days</option>
-      <option value="30">Last 30 days</option>
-      <option value="90">Last 90 days</option>
-    </select>
     <label for="filterSearch" class="text-xs text-secondary sr-only">Search</label>
     <div class="relative">
       <input id="filterSearch" type="text" placeholder="Search..." oninput="debouncedSearch()"
@@ -189,22 +172,42 @@ tailwind.config = {
       <button id="searchClear" onclick="clearSearch()"
               class="hidden absolute right-1.5 top-1/2 -translate-y-1/2 text-muted text-primary-hover text-xs leading-none" title="Clear search" aria-label="Clear search">&times;</button>
     </div>
-    <button onclick="toggleMultiSelect()" id="btnMultiSelect" class="px-2 py-1 rounded text-xs font-medium bg-overlay text-secondary border border-strong" title="Toggle multi-select mode for batch operations">Select</button>
-    <div class="flex gap-1 text-xs">
-      <label class="flex items-center gap-1 text-secondary"><input type="checkbox" id="filterOpen" checked onchange="applyFilters()" style="accent-color:var(--accent)"> Open</label>
-      <label class="flex items-center gap-1 text-secondary"><input type="checkbox" id="filterInProgress" checked onchange="applyFilters()" style="accent-color:var(--accent)"> Active</label>
-      <label class="flex items-center gap-1 text-secondary"><input type="checkbox" id="filterClosed" checked onchange="applyFilters()" style="accent-color:var(--accent)"> Closed</label>
+    <!-- Status pills -->
+    <div class="flex gap-1">
+      <button id="pillOpen" onclick="toggleStatusPill('open')" class="px-2 py-1 rounded text-xs font-medium bg-accent text-primary">Open</button>
+      <button id="pillActive" onclick="toggleStatusPill('active')" class="px-2 py-1 rounded text-xs font-medium bg-accent text-primary">Active</button>
+      <div class="relative">
+        <button id="pillDone" onclick="toggleStatusPill('done')" class="px-2 py-1 rounded text-xs font-medium bg-overlay text-secondary border border-strong">Done</button>
+        <select id="doneTimeBound" onchange="onDoneTimeBoundChange()" class="hidden absolute top-full right-0 mt-1 bg-overlay text-primary text-xs rounded px-1 py-0.5 border border-strong z-10">
+          <option value="7">7 days</option>
+          <option value="14">14 days</option>
+          <option value="30">30 days</option>
+          <option value="0">All time</option>
+        </select>
+      </div>
     </div>
-    <select id="filterPreset" onchange="loadPreset()" class="bg-overlay text-primary text-xs rounded px-2 py-1 border border-strong">
-      <option value="">Presets...</option>
-    </select>
-    <button onclick="savePreset()" class="text-xs bg-overlay text-secondary px-2 py-1 rounded border border-strong bg-overlay-hover" title="Save current filters as preset">Save</button>
+    <!-- Filters disclosure -->
+    <details class="shrink-0 relative">
+      <summary class="cursor-pointer select-none px-2 py-1 rounded text-xs font-medium bg-overlay text-secondary border border-strong">Filters</summary>
+      <div class="absolute mt-1 rounded-lg shadow-xl text-xs z-40 p-3 flex flex-col gap-2" style="background:var(--surface-raised);border:1px solid var(--border-strong)">
+        <label for="filterPriority" class="text-xs text-secondary">Priority</label>
+        <select id="filterPriority" onchange="applyFilters()" class="bg-overlay text-primary text-xs rounded px-2 py-1 border border-strong">
+          <option value="all">All</option>
+          <option value="0-1">P0-P1</option>
+          <option value="2">P2</option>
+          <option value="3-4">P3-P4</option>
+        </select>
+        <label for="filterPreset" class="text-xs text-secondary">Presets</label>
+        <select id="filterPreset" onchange="loadPreset()" class="bg-overlay text-primary text-xs rounded px-2 py-1 border border-strong">
+          <option value="">Presets...</option>
+        </select>
+      </div>
+    </details>
   </div>
 
   <div class="flex items-center gap-3 text-xs text-secondary">
     <span id="refreshIndicator" class="opacity-0 text-accent">Refreshing...</span>
     <span id="healthBadge" onclick="showHealthBreakdown()" class="cursor-pointer px-2 py-0.5 rounded text-xs font-bold" title="System Health Score — click for breakdown">--</span>
-    <button onclick="showHealthHelp(this)" class="help-icon bg-overlay text-secondary text-primary-hover" title="What is Health Score?" aria-label="Explain health score">?</button>
     <div class="relative">
       <button onclick="toggleSettingsMenu(event)" id="settingsGear" class="text-xs px-2 py-1 rounded bg-overlay bg-overlay-hover" title="Settings" aria-label="Settings menu">&#9881;</button>
       <div id="settingsDropdown" class="hidden absolute right-0 top-full mt-1 rounded-lg shadow-xl text-xs z-50" style="background:var(--surface-base);border:1px solid var(--border-strong);min-width:160px">

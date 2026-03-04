@@ -4,7 +4,7 @@
 
 import { fetchCriticalPath, fetchGraph } from "../api.js";
 import { CATEGORY_COLORS, state, THEME_COLORS } from "../state.js";
-import { showPopover, showToast } from "../ui.js";
+import { showToast } from "../ui.js";
 
 // --- Callbacks for functions not yet available at import time ---
 
@@ -1082,44 +1082,3 @@ export function showHealthBreakdown() {
       .join("");
 }
 
-// ---------------------------------------------------------------------------
-// Contextual help popovers
-// ---------------------------------------------------------------------------
-
-export function showHealthHelp(btn) {
-  showPopover(
-    btn,
-    '<div class="font-medium mb-2" style="color:var(--text-primary)">Health Score (0\u2013100)</div>' +
-      '<div style="color:var(--text-secondary)" class="space-y-1">' +
-      '<div><span class="text-emerald-400 font-medium">Blocked</span> (25 pts) \u2014 Fewer blocked issues = higher score</div>' +
-      '<div><span class="font-medium" style="color:var(--accent)">Freshness</span> (25 pts) \u2014 WIP items updated recently, not stale</div>' +
-      '<div><span class="text-amber-400 font-medium">Ready</span> (25 pts) \u2014 Enough unblocked work available</div>' +
-      '<div><span class="font-medium" style="color:var(--text-primary)">Balance</span> (25 pts) \u2014 No agent overloaded with WIP</div>' +
-      "</div>" +
-      '<div style="color:var(--text-muted);border-top:1px solid var(--border-default)" class="mt-2 pt-2">Click the badge number for a detailed breakdown.</div>',
-  );
-}
-
-export function showReadyHelp(btn) {
-  showPopover(
-    btn,
-    '<div class="font-medium mb-2" style="color:var(--text-primary)">Ready Issues</div>' +
-      '<div style="color:var(--text-secondary)" class="space-y-1">' +
-      '<div>Issues with <span class="text-emerald-400">no open blockers</span> that can be worked on immediately.</div>' +
-      '<div class="mt-1"><span class="text-emerald-400">&#9679;</span> Green left border on cards = ready</div>' +
-      '<div class="mt-1">Toggle this button to sort ready issues to the top.</div>' +
-      "</div>",
-  );
-}
-
-export function showBlockedHelp(btn) {
-  showPopover(
-    btn,
-    '<div class="font-medium mb-2" style="color:var(--text-primary)">Blocked Issues</div>' +
-      '<div style="color:var(--text-secondary)" class="space-y-1">' +
-      '<div>Issues that <span class="text-red-400">depend on other incomplete work</span>.</div>' +
-      '<div class="mt-1"><span class="text-red-400">&#128279;</span> Shows "blocked by N" on cards</div>' +
-      '<div class="mt-1">Toggle to filter to only blocked issues \u2014 useful for identifying bottlenecks.</div>' +
-      "</div>",
-  );
-}
