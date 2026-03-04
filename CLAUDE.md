@@ -1,9 +1,25 @@
-<!-- filigree:instructions:v1.3.0:6bd811c8 -->
+<!-- filigree:instructions:v1.4.1:c706f2df -->
 ## Filigree Issue Tracker
 
 Use `filigree` for all task tracking in this project. Data lives in `.filigree/`.
 
-### Quick Reference
+### MCP Tools (Preferred)
+
+When MCP is configured, prefer `mcp__filigree__*` tools over CLI commands — they're
+faster and return structured data. Key tools:
+
+- `get_ready` / `get_blocked` — find available work
+- `get_issue` / `list_issues` / `search_issues` — read issues
+- `create_issue` / `update_issue` / `close_issue` — manage issues
+- `claim_issue` / `claim_next` — atomic claiming
+- `add_comment` / `add_label` — metadata
+- `create_plan` / `get_plan` — milestone planning
+- `get_stats` / `get_metrics` — project health
+- `get_valid_transitions` — workflow navigation
+
+Fall back to CLI (`filigree <command>`) when MCP is unavailable.
+
+### CLI Quick Reference
 
 ```bash
 # Finding work
@@ -69,7 +85,6 @@ The dashboard exposes REST endpoints for file tracking and scan result ingestion
 Use `GET /api/files/_schema` for available endpoints and valid field values.
 
 Key endpoints:
-
 - `GET /api/files/_schema` — Discovery: valid enums, endpoint catalog
 - `POST /api/v1/scan-results` — Ingest scan results (SARIF-lite format)
 - `GET /api/files` — List tracked files with filtering and sorting
@@ -77,7 +92,6 @@ Key endpoints:
 - `GET /api/files/{file_id}/findings` — Findings for a specific file
 
 ### Workflow
-
 1. `filigree ready` to find available work
 2. `filigree show <id>` to review details
 3. `filigree transitions <id>` to see valid state changes
@@ -86,13 +100,16 @@ Key endpoints:
 6. `filigree close <id>` when done
 
 ### Session Start
-
 When beginning a new session, run `filigree session-context` to load the project
 snapshot (ready work, in-progress items, critical path). This provides the
 context needed to pick up where the previous session left off.
 
-### Priority Scale
+### Compatibility Triage
+- Prefer the smallest practical response to backward-compatibility edge cases.
+- If an issue is one-time, operational, or easily resolved by restarting, deleting local state, rerunning a command, or another simple manual step, prefer documenting that workaround over proposing code changes.
+- Do not suggest broad rewrites or new compatibility layers for trivial legacy transitions unless the user explicitly wants a durable fix or the issue has meaningful recurring impact.
 
+### Priority Scale
 - P0: Critical (drop everything)
 - P1: High (do next)
 - P2: Medium (default)
