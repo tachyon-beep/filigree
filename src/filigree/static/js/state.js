@@ -153,6 +153,10 @@ export const state = {
   previousIssueState: {},
   changedIds: new Set(),
 
+  // List mode sort
+  _listSortCol: "priority",
+  _listSortDir: "asc",
+
   // Popover
   _activePopover: null,
 

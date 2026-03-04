@@ -381,6 +381,7 @@ tailwind.config = {
     <div class="flex items-center gap-2 px-4 py-1 bg-raised text-xs text-secondary border-b border-default">
       <button id="btnBoard" onclick="switchKanbanMode('board')" class="px-2 py-0.5 rounded" title="Three columns: Open, In Progress, Done">Board</button>
       <button id="btnCluster" onclick="switchKanbanMode('cluster')" class="px-2 py-0.5 rounded" title="Group issues by parent epic with progress bars">Cluster</button>
+      <button id="btnList" onclick="switchKanbanMode('list')" class="px-2 py-0.5 rounded" title="Table list view for large projects">List</button>
       <span class="text-muted">|</span>
       <select id="filterType" onchange="applyTypeFilter()" class="bg-overlay text-primary text-xs rounded px-2 py-0.5 border border-strong" title="Filter to one issue type and show its workflow states as columns">
         <option value="">All types</option>

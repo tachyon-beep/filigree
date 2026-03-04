@@ -55,7 +55,9 @@ export function renderKanban() {
     if (columns[cat]) columns[cat].push(i);
   }
 
-  if (state.kanbanMode === "cluster") {
+  if (state.kanbanMode === "list") {
+    board.innerHTML = renderListMode(items);
+  } else if (state.kanbanMode === "cluster") {
     board.innerHTML = renderClusterKanban(columns);
   } else {
     board.innerHTML = renderStandardKanban(columns);
@@ -96,6 +98,91 @@ export function renderStandardKanban(columns) {
       );
     })
     .join("");
+}
+
+// ---------------------------------------------------------------------------
+// renderListMode — dense sortable table for large projects
+// ---------------------------------------------------------------------------
+
+function _relativeTime(isoStr) {
+  const diff = Date.now() - new Date(isoStr).getTime();
+  const mins = Math.floor(diff / 60000);
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  const days = Math.floor(hrs / 24);
+  return `${days}d ago`;
+}
+
+function renderListMode(items) {
+  if (!items.length) {
+    return '<div class="p-6 text-center text-xs" style="color:var(--text-muted)">No issues match filters.</div>';
+  }
+
+  const sortCol = state._listSortCol || "priority";
+  const sortDir = state._listSortDir || "asc";
+
+  const sorted = [...items].sort((a, b) => {
+    let cmp = 0;
+    switch (sortCol) {
+      case "priority": cmp = a.priority - b.priority; break;
+      case "type": cmp = (a.type || "").localeCompare(b.type || ""); break;
+      case "status": cmp = (a.status || "").localeCompare(b.status || ""); break;
+      case "title": cmp = (a.title || "").localeCompare(b.title || ""); break;
+      case "assignee": cmp = (a.assignee || "").localeCompare(b.assignee || ""); break;
+      case "updated": cmp = new Date(a.updated_at || 0) - new Date(b.updated_at || 0); break;
+      case "blocks": cmp = (state.impactScores[a.id] || 0) - (state.impactScores[b.id] || 0); break;
+    }
+    return sortDir === "desc" ? -cmp : cmp;
+  });
+
+  const headerCell = (col, label) =>
+    `<th class="text-left py-2 px-2 cursor-pointer select-none text-primary-hover" onclick="sortListMode('${col}')" style="color:var(--text-muted)">${label}${sortCol === col ? (sortDir === "asc" ? " \u25B2" : " \u25BC") : ""}</th>`;
+
+  const rows = sorted
+    .map((i) => {
+      const icon = TYPE_ICONS[i.type] || "";
+      const cat = i.status_category || "open";
+      const catColor = CATEGORY_COLORS[cat] || CATEGORY_COLORS.open;
+      const updated = i.updated_at ? _relativeTime(i.updated_at) : "\u2014";
+      const blocks = state.impactScores[i.id] || 0;
+      const readyClass = i.is_ready ? "border-l-4 border-l-emerald-500" : "";
+      const blockedClass =
+        !i.is_ready && (i.blocked_by || []).length ? "border-l-4 border-l-red-500" : "";
+      const borderClass = readyClass || blockedClass;
+      const isSelected = state.selectedCards.has(i.id);
+
+      return (
+        `<tr class="cursor-pointer bg-overlay-hover ${borderClass}" onclick="openDetail('${escJsSingle(i.id)}')" style="border-bottom:1px solid var(--border-default)">` +
+        `<td class="py-2 px-2 text-xs" style="color:${PRIORITY_COLORS[i.priority] || "#6B7280"}">${i.priority}</td>` +
+        `<td class="py-2 px-2 text-xs" style="color:var(--text-secondary)">${icon} ${escHtml(i.type || "")}</td>` +
+        `<td class="py-2 px-2"><span class="text-xs px-1.5 py-0.5 rounded" style="background:${catColor};color:#fff">${escHtml(i.status || "")}</span></td>` +
+        `<td class="py-2 px-2 text-xs truncate" style="max-width:300px;color:var(--text-primary)" title="${escHtml(i.title)}">${escHtml(i.title)}</td>` +
+        `<td class="py-2 px-2 text-xs" style="color:var(--text-secondary)">${escHtml(i.assignee || "\u2014")}</td>` +
+        `<td class="py-2 px-2 text-xs" style="color:var(--text-muted)">${escHtml(updated)}</td>` +
+        `<td class="py-2 px-2 text-xs text-right" style="color:var(--text-muted)">${blocks || ""}</td>` +
+        `<td class="py-2 px-1 text-center" onclick="event.stopPropagation();toggleCardSelect(event,'${escJsSingle(i.id)}')">` +
+        `<input type="checkbox" ${isSelected ? "checked" : ""} style="accent-color:var(--accent)" class="cursor-pointer"></td>` +
+        "</tr>"
+      );
+    })
+    .join("");
+
+  return (
+    '<div class="overflow-x-auto h-full"><table class="w-full text-xs" style="border-collapse:collapse">' +
+    "<thead><tr>" +
+    headerCell("priority", "P") +
+    headerCell("type", "Type") +
+    headerCell("status", "Status") +
+    headerCell("title", "Title") +
+    headerCell("assignee", "Assignee") +
+    headerCell("updated", "Updated") +
+    headerCell("blocks", "\u26A1") +
+    '<th class="py-2 px-1" style="color:var(--text-muted)">\u2610</th>' +
+    "</tr></thead><tbody>" +
+    rows +
+    "</tbody></table></div>"
+  );
 }
 
 // ---------------------------------------------------------------------------

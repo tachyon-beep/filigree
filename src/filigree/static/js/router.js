@@ -83,14 +83,15 @@ export function switchKanbanMode(mode) {
 
   state.kanbanMode = mode;
 
-  document.getElementById("btnBoard").className =
-    mode === "board"
-      ? "px-2 py-0.5 rounded bg-accent text-primary"
-      : "px-2 py-0.5 rounded bg-overlay bg-overlay-hover";
-  document.getElementById("btnCluster").className =
-    mode === "cluster"
-      ? "px-2 py-0.5 rounded bg-accent text-primary"
-      : "px-2 py-0.5 rounded bg-overlay bg-overlay-hover";
+  for (const m of ["Board", "Cluster", "List"]) {
+    const btn = document.getElementById(`btn${m}`);
+    if (btn) {
+      btn.className =
+        mode === m.toLowerCase()
+          ? "px-2 py-0.5 rounded bg-accent text-primary"
+          : "px-2 py-0.5 rounded bg-overlay bg-overlay-hover";
+    }
+  }
 
   updateHash();
 
@@ -116,7 +117,9 @@ export function render() {
 
 export function updateHash() {
   let hash = `#${state.currentView}`;
-  if (state.currentView === "kanban" && state.kanbanMode === "cluster") {
+  if (state.currentView === "kanban" && state.kanbanMode === "list") {
+    hash = "#kanban-list";
+  } else if (state.currentView === "kanban" && state.kanbanMode === "cluster") {
     hash = "#kanban-cluster";
   }
   if (state.currentProjectKey) {

@@ -285,6 +285,20 @@ function clearSearch() {
 }
 
 // ---------------------------------------------------------------------------
+// Sort helper for Kanban list mode (called by column header onclick)
+// ---------------------------------------------------------------------------
+
+function sortListMode(col) {
+  if (state._listSortCol === col) {
+    state._listSortDir = state._listSortDir === "asc" ? "desc" : "asc";
+  } else {
+    state._listSortCol = col;
+    state._listSortDir = "asc";
+  }
+  renderKanban();
+}
+
+// ---------------------------------------------------------------------------
 // Wire up late-bound callbacks
 // ---------------------------------------------------------------------------
 
@@ -525,6 +539,7 @@ loadProjectFilterSettings();
 })().then(() => {
   switchView(state.currentView);
   if (state.kanbanMode === "cluster") switchKanbanMode("cluster");
+  else if (state.kanbanMode === "list") switchKanbanMode("list");
   else switchKanbanMode("board");
   if (state.selectedIssue) openDetail(state.selectedIssue);
   if (!localStorage.getItem("filigree_tour_done")) setTimeout(startTour, 1500);
@@ -592,6 +607,7 @@ window.copyIssueId = copyIssueId;
 
 // Kanban
 window.toggleEpicExpand = toggleEpicExpand;
+window.sortListMode = sortListMode;
 
 // Graph
 window.renderGraph = renderGraph;
