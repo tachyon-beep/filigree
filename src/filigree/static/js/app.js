@@ -82,10 +82,9 @@ import {
   showAddBlocker,
   updateIssue,
 } from "./views/detail.js";
+import { computeHealthScore, computeImpactScores } from "./analytics.js";
 import {
   clearGraphFocus,
-  computeHealthScore,
-  computeImpactScores,
   callbacks as graphCallbacks,
   onGraphAssigneeInput,
   onGraphTimeWindowChange,
