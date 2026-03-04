@@ -52,7 +52,7 @@ export const SEVERITY_COLORS = {
 export const TOUR_STEPS = [
   {
     el: "#btnKanban",
-    text: "The dashboard has 7 views: Kanban (default), Graph, Metrics, Activity, Workflow, Files, and Code Health. Each shows your issues differently.",
+    text: "The dashboard has 5 views: Kanban (default), Graph, Releases, Insights, and Files. Each shows your project differently.",
     pos: "bottom",
   },
   {
@@ -72,12 +72,12 @@ export const TOUR_STEPS = [
   },
   {
     el: "#kanbanBoard",
-    text: "Click any card to open its detail panel. Use j/k to navigate between cards with your keyboard.",
+    text: "Click any card to open its detail panel. Use j/k to navigate between cards. Switch between Board, Cluster, and List modes.",
     pos: "top",
   },
   {
     el: null,
-    text: 'Press "?" anytime to see all keyboard shortcuts. Look for small "?" icons next to features for contextual help. Happy tracking!',
+    text: 'Press "?" anytime to see all keyboard shortcuts. Happy tracking!',
     pos: "center",
   },
 ];
