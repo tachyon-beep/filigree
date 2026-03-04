@@ -29,36 +29,24 @@ const ACTIVE_CLASS = "px-3 py-1 rounded text-xs font-medium bg-accent text-prima
 const INACTIVE_CLASS =
   "px-3 py-1 rounded text-xs font-medium bg-overlay text-secondary bg-overlay-hover";
 
+// Deprecated tab aliases — redirect old tab IDs to new destinations.
+const ALIASES = { health: "files", activity: "insights" };
+
 export function switchView(view) {
+  if (ALIASES[view]) {
+    console.warn(`[switchView] "${view}" is deprecated, redirecting to "${ALIASES[view]}"`);
+    view = ALIASES[view];
+  }
+
   state.currentView = view;
 
-  document.getElementById("graphView").classList.toggle("hidden", view !== "graph");
-  document.getElementById("kanbanView").classList.toggle("hidden", view !== "kanban");
-  document.getElementById("metricsView").classList.toggle("hidden", view !== "metrics");
-  document.getElementById("activityView").classList.toggle("hidden", view !== "activity");
-  document.getElementById("workflowView").classList.toggle("hidden", view !== "workflow");
-  const filesEl = document.getElementById("filesView");
-  if (filesEl) filesEl.classList.toggle("hidden", view !== "files");
-  const healthEl = document.getElementById("healthView");
-  if (healthEl) healthEl.classList.toggle("hidden", view !== "health");
-  const releasesEl = document.getElementById("releasesView");
-  if (releasesEl) releasesEl.classList.toggle("hidden", view !== "releases");
-
-  document.getElementById("btnGraph").className = view === "graph" ? ACTIVE_CLASS : INACTIVE_CLASS;
-  document.getElementById("btnKanban").className =
-    view === "kanban" ? ACTIVE_CLASS : INACTIVE_CLASS;
-  document.getElementById("btnMetrics").className =
-    view === "metrics" ? ACTIVE_CLASS : INACTIVE_CLASS;
-  document.getElementById("btnActivity").className =
-    view === "activity" ? ACTIVE_CLASS : INACTIVE_CLASS;
-  document.getElementById("btnWorkflow").className =
-    view === "workflow" ? ACTIVE_CLASS : INACTIVE_CLASS;
-  const btnFiles = document.getElementById("btnFiles");
-  if (btnFiles) btnFiles.className = view === "files" ? ACTIVE_CLASS : INACTIVE_CLASS;
-  const btnHealth = document.getElementById("btnHealth");
-  if (btnHealth) btnHealth.className = view === "health" ? ACTIVE_CLASS : INACTIVE_CLASS;
-  const btnReleases = document.getElementById("btnReleases");
-  if (btnReleases) btnReleases.className = view === "releases" ? ACTIVE_CLASS : INACTIVE_CLASS;
+  // Data-driven: toggle visibility for all registered views
+  for (const name of Object.keys(viewLoaders)) {
+    const el = document.getElementById(`${name}View`);
+    if (el) el.classList.toggle("hidden", name !== view);
+    const btn = document.getElementById(`btn${name[0].toUpperCase()}${name.slice(1)}`);
+    if (btn) btn.className = name === view ? ACTIVE_CLASS : INACTIVE_CLASS;
+  }
 
   updateHash();
 
@@ -84,8 +72,6 @@ export function switchView(view) {
           "</div>";
       }
     }
-  } else if (view === "kanban" && viewLoaders.kanban) {
-    viewLoaders.kanban();
   }
 }
 
@@ -145,28 +131,26 @@ export function updateHash() {
 export function parseHash() {
   const hash = location.hash.slice(1);
   const parts = hash.split("&");
-  const view = parts[0] || "kanban";
+  let view = parts[0] || "kanban";
 
-  if (view === "graph") {
-    state.currentView = "graph";
-  } else if (view === "metrics") {
-    state.currentView = "metrics";
-  } else if (view === "activity") {
-    state.currentView = "activity";
-  } else if (view === "workflow") {
-    state.currentView = "workflow";
-  } else if (view === "files") {
-    state.currentView = "files";
-  } else if (view === "health") {
-    state.currentView = "health";
-  } else if (view === "releases") {
-    state.currentView = "releases";
-  } else if (view === "kanban-cluster") {
+  // Apply deprecation aliases
+  if (ALIASES[view]) {
+    console.warn(`[parseHash] Hash "#${view}" is deprecated, redirecting to "#${ALIASES[view]}"`);
+    view = ALIASES[view];
+  }
+
+  if (view === "kanban-cluster") {
     state.currentView = "kanban";
     state.kanbanMode = "cluster";
-  } else {
+  } else if (view === "kanban-list") {
     state.currentView = "kanban";
-    state.kanbanMode = "standard";
+    state.kanbanMode = "list";
+  } else if (viewLoaders[view]) {
+    state.currentView = view;
+  } else {
+    // Unknown view falls through to default
+    state.currentView = "kanban";
+    state.kanbanMode = "board";
   }
 
   const result = { project: null, issue: null };
