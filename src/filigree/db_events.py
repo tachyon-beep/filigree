@@ -28,6 +28,7 @@ _REVERSIBLE_EVENTS = frozenset(
         "dependency_removed",
         "description_changed",
         "notes_changed",
+        "fields_changed",
     }
 )
 
@@ -209,6 +210,12 @@ class EventsMixin(DBMixinProtocol):
                     self.conn.execute(
                         "UPDATE issues SET notes = ?, updated_at = ? WHERE id = ?",
                         (row["old_value"] or "", now, issue_id),
+                    )
+
+                case "fields_changed":
+                    self.conn.execute(
+                        "UPDATE issues SET fields = ?, updated_at = ? WHERE id = ?",
+                        (row["old_value"] or "{}", now, issue_id),
                     )
 
             # Record the undo event

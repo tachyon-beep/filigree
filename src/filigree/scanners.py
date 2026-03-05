@@ -58,25 +58,25 @@ class ScannerConfig:
             "{project_root}": str(project_root),
             "{scan_run_id}": str(scan_run_id),
         }
+        # Single-pass replacement prevents double-substitution when a
+        # substituted value (e.g. a file path) contains template variables.
+        pattern = re.compile("|".join(re.escape(k) for k in subs))
+
+        def _expand(token: str) -> str:
+            return pattern.sub(lambda m: subs[m.group(0)], token)
+
         try:
             base = shlex.split(self.command)
         except (TypeError, ValueError) as e:
             msg = f"Malformed command string in scanner {self.name!r}: {e}"
             raise ValueError(msg) from e
-        expanded_base = []
-        for token in base:
-            for key, val in subs.items():
-                token = token.replace(key, val)
-            expanded_base.append(token)
+        expanded_base = [_expand(token) for token in base]
         expanded_args = []
         for raw_arg in self.args:
             if not isinstance(raw_arg, str):
                 msg = f"Malformed args in scanner {self.name!r}: expected string entries"
                 raise ValueError(msg)
-            arg = raw_arg
-            for key, val in subs.items():
-                arg = arg.replace(key, val)
-            expanded_args.append(arg)
+            expanded_args.append(_expand(raw_arg))
         return expanded_base + expanded_args
 
     def to_dict(self) -> dict[str, object]:

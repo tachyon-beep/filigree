@@ -166,6 +166,40 @@ class TestLoadScanner:
         with pytest.raises(ValueError, match=r"[Mm]alformed args"):
             cfg.build_command(file_path="x.py")
 
+    def test_build_command_no_double_substitution(self) -> None:
+        """H3: File paths containing template variables must not be re-expanded."""
+        cfg = ScannerConfig(
+            name="safe",
+            description="test",
+            command="python scanner.py",
+            args=["--file", "{file}", "--url", "{api_url}"],
+            file_types=[],
+        )
+        # File path literally contains {api_url}
+        cmd = cfg.build_command(
+            file_path="test-{api_url}.py",
+            api_url="http://localhost:8377",
+            project_root="/home/user/project",
+        )
+        # The file token should contain the literal {api_url}, NOT the expanded URL
+        assert "test-{api_url}.py" in cmd
+        assert cmd.count("http://localhost:8377") == 1  # only the --url arg
+
+    def test_build_command_no_double_substitution_in_base(self) -> None:
+        """Double-substitution also applies to the base command tokens."""
+        cfg = ScannerConfig(
+            name="safe",
+            description="test",
+            command="python scanner.py {file}",
+            args=[],
+            file_types=[],
+        )
+        cmd = cfg.build_command(
+            file_path="{project_root}/evil.py",
+            project_root="/home/user/project",
+        )
+        assert "{project_root}/evil.py" in cmd
+
 
 # ── validate_scanner_command ─────────────────────────────────────────
 

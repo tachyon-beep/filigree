@@ -369,3 +369,43 @@ class TestUndoCloseConsistency:
         assert after_undo.status == "in_progress"
         assert after_undo.closed_at is None
         assert after_undo.status_category != "done"
+
+
+class TestUndoFields:
+    """H4: Field changes must be recorded as events and be undoable."""
+
+    def test_field_change_records_event(self, db: FiligreeDB) -> None:
+        """Updating fields should produce a 'fields_changed' event."""
+        issue = db.create_issue("Test", fields={"a": "1"})
+        db.update_issue(issue.id, fields={"b": "2"}, actor="tester")
+        events = db.get_issue_events(issue.id)
+        field_events = [e for e in events if e["event_type"] == "fields_changed"]
+        assert len(field_events) == 1
+        assert field_events[0]["actor"] == "tester"
+
+    def test_field_change_no_event_when_unchanged(self, db: FiligreeDB) -> None:
+        """Setting fields to the same values should not record an event."""
+        issue = db.create_issue("Test", fields={"a": "1"})
+        db.update_issue(issue.id, fields={"a": "1"}, actor="tester")
+        events = db.get_issue_events(issue.id)
+        field_events = [e for e in events if e["event_type"] == "fields_changed"]
+        assert len(field_events) == 0
+
+    def test_undo_field_change(self, db: FiligreeDB) -> None:
+        """Undoing a field change should restore the previous fields."""
+        issue = db.create_issue("Test", fields={"a": "1", "b": "2"})
+        db.update_issue(issue.id, fields={"b": "changed", "c": "3"}, actor="t")
+        result = db.undo_last(issue.id, actor="t")
+        assert result["undone"] is True
+        assert result["event_type"] == "fields_changed"
+        restored = db.get_issue(issue.id)
+        assert restored.fields == {"a": "1", "b": "2"}
+
+    def test_undo_field_change_from_empty(self, db: FiligreeDB) -> None:
+        """Undoing fields added to an issue that started with no fields."""
+        issue = db.create_issue("Test")
+        db.update_issue(issue.id, fields={"key": "val"}, actor="t")
+        result = db.undo_last(issue.id, actor="t")
+        assert result["undone"] is True
+        restored = db.get_issue(issue.id)
+        assert restored.fields == {}

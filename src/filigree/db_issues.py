@@ -534,6 +534,14 @@ class IssuesMixin(DBMixinProtocol):
             if fields is not None:
                 # Merge into existing fields
                 merged = {**current.fields, **fields}
+                if merged != current.fields:
+                    self._record_event(
+                        issue_id,
+                        "fields_changed",
+                        actor=actor,
+                        old_value=json.dumps(current.fields),
+                        new_value=json.dumps(merged),
+                    )
                 updates.append("fields = ?")
                 params.append(json.dumps(merged))
 
