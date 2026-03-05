@@ -572,8 +572,16 @@ class TemplateRegistry:
         """
         tpl = self._types.get(type_name)
         if tpl is None:
-            # Fallback: unknown types allow all transitions
-            return TransitionResult(allowed=True, enforcement=None, missing_fields=(), warnings=())
+            return TransitionResult(
+                allowed=False,
+                enforcement=None,
+                missing_fields=(),
+                warnings=(
+                    f"Unknown type '{type_name}': no workflow template registered. "
+                    f"Transition denied (fail-closed). Register a pack containing this type "
+                    f"or check for typos.",
+                ),
+            )
 
         transition_map = self._transition_cache.get(type_name, {})
         transition = transition_map.get((from_state, to_state))

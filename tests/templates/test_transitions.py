@@ -94,11 +94,13 @@ class TestTransitionValidation:
         result = registry.validate_transition("bug", "verifying", "closed", {"fix_verification": None})
         assert result.allowed is False
 
-    def test_unknown_type_always_allowed(self, registry: TemplateRegistry) -> None:
-        """Unknown types get fallback: all transitions allowed (WFT-FR-016)."""
+    def test_unknown_type_denied_with_warning(self, registry: TemplateRegistry) -> None:
+        """Unknown types are denied (fail-closed) with a warning explaining why."""
         result = registry.validate_transition("unknown", "open", "closed", {})
-        assert result.allowed is True
+        assert result.allowed is False
         assert result.enforcement is None
+        assert len(result.warnings) == 1
+        assert "unknown" in result.warnings[0].lower()
 
     # -- get_valid_transitions tests --
 
