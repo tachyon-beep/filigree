@@ -131,7 +131,6 @@ function graphStyles() {
         "border-style": "dashed",
         "border-color": "#8FAAB8",
         "background-opacity": 0.3,
-        "cursor": "pointer",
       },
     },
     {
@@ -235,14 +234,14 @@ export function renderGraph() {
   if (scopeNodes.length === 0 && state.graphSidebarSelections.size === 0) {
     // Blank state — no selections
     if (state.cy) { state.cy.destroy(); state.cy = null; }
-    container.innerHTML = '<div class="flex items-center justify-center h-full text-secondary text-sm">Select items from the sidebar to explore their dependency graph.</div>';
+    container.innerHTML = '<div data-graph-blank class="flex items-center justify-center h-full text-secondary text-sm">Select items from the sidebar to explore their dependency graph.</div>';
     setGraphNotice("");
     updateGraphPerfState();
     return;
   }
 
-  // Restore container if it had the blank prompt
-  if (container.firstElementChild?.tagName === "DIV") {
+  // Restore container if it had the blank prompt (not Cytoscape's own DOM)
+  if (container.querySelector("[data-graph-blank]")) {
     container.innerHTML = "";
   }
 
