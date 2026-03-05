@@ -204,7 +204,6 @@ function syncPillUI() {
       if (state.statusPills.done) {
         const days = dropdown.value || "7";
         pillDone.textContent = days === "0" ? "Done: All" : `Done: ${days}d`;
-        dropdown.classList.remove("hidden");
       } else {
         pillDone.textContent = "Done";
         dropdown.classList.add("hidden");
@@ -220,6 +219,7 @@ export function toggleStatusPill(category) {
       // Phase 1: off → on + show dropdown
       state.statusPills.done = true;
       syncPillUI();
+      if (dropdown) dropdown.classList.remove("hidden");
       applyFilters();
     } else if (dropdown && !dropdown.classList.contains("hidden")) {
       // Phase 2: on + dropdown visible → on + hide dropdown
