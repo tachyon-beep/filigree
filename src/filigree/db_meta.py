@@ -14,7 +14,10 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 from filigree.db_base import DBMixinProtocol, StatusCategory, _now_iso
+from filigree.db_files import VALID_FINDING_STATUSES, VALID_SEVERITIES
 from filigree.types.planning import CommentRecord, StatsResult
+
+_logger = logging.getLogger(__name__)
 
 
 class MetaMixin(DBMixinProtocol):
@@ -140,11 +143,14 @@ class MetaMixin(DBMixinProtocol):
 
     # -- Bulk import (for migration) -----------------------------------------
 
-    def bulk_insert_issue(self, issue_data: dict[str, Any], *, validate: bool = True) -> None:
-        """Insert a pre-formed issue dict directly. For migration use only."""
+    def bulk_insert_issue(self, issue_data: dict[str, Any], *, validate: bool = True) -> bool:
+        """Insert a pre-formed issue dict directly. For migration use only.
+
+        Returns True if the row was inserted, False if skipped (duplicate).
+        """
         if validate:
             self._validate_parent_id(issue_data.get("parent_id"))
-        self.conn.execute(
+        cursor = self.conn.execute(
             "INSERT OR IGNORE INTO issues "
             "(id, title, status, priority, type, parent_id, assignee, "
             "created_at, updated_at, closed_at, description, notes, fields) "
@@ -165,15 +171,25 @@ class MetaMixin(DBMixinProtocol):
                 json.dumps(issue_data.get("fields", {})),
             ),
         )
+        inserted = cursor.rowcount > 0
+        if not inserted:
+            _logger.debug("bulk_insert_issue: skipped duplicate id=%s", issue_data.get("id"))
+        return inserted
 
-    def bulk_insert_dependency(self, issue_id: str, depends_on_id: str, dep_type: str = "blocks") -> None:
-        self.conn.execute(
+    def bulk_insert_dependency(self, issue_id: str, depends_on_id: str, dep_type: str = "blocks") -> bool:
+        """Insert a dependency. Returns True if inserted, False if skipped (duplicate)."""
+        cursor = self.conn.execute(
             "INSERT OR IGNORE INTO dependencies (issue_id, depends_on_id, type, created_at) VALUES (?, ?, ?, ?)",
             (issue_id, depends_on_id, dep_type, _now_iso()),
         )
+        inserted = cursor.rowcount > 0
+        if not inserted:
+            _logger.debug("bulk_insert_dependency: skipped duplicate %s -> %s", issue_id, depends_on_id)
+        return inserted
 
-    def bulk_insert_event(self, event_data: dict[str, Any]) -> None:
-        self.conn.execute(
+    def bulk_insert_event(self, event_data: dict[str, Any]) -> bool:
+        """Insert an event. Returns True if inserted, False if skipped (duplicate)."""
+        cursor = self.conn.execute(
             "INSERT OR IGNORE INTO events (issue_id, event_type, actor, old_value, new_value, comment, created_at) "
             "VALUES (?, ?, ?, ?, ?, ?, ?)",
             (
@@ -186,6 +202,10 @@ class MetaMixin(DBMixinProtocol):
                 event_data.get("created_at", _now_iso()),
             ),
         )
+        inserted = cursor.rowcount > 0
+        if not inserted:
+            _logger.debug("bulk_insert_event: skipped duplicate for issue=%s", event_data.get("issue_id"))
+        return inserted
 
     def bulk_commit(self) -> None:
         self.conn.commit()
@@ -492,6 +512,16 @@ class MetaMixin(DBMixinProtocol):
 
             for record in scan_findings:
                 file_id = self._remap_file_id(record["file_id"], file_id_map)
+                severity = record.get("severity", "info")
+                finding_status = record.get("status", "open")
+                rec_id = record.get("id", "?")
+                if severity not in VALID_SEVERITIES:
+                    msg = f"Invalid severity {severity!r} in scan_finding {rec_id}, expected one of {sorted(VALID_SEVERITIES)}"
+                    raise ValueError(msg)
+                if finding_status not in VALID_FINDING_STATUSES:
+                    valid = sorted(VALID_FINDING_STATUSES)
+                    msg = f"Invalid finding status {finding_status!r} in scan_finding {rec_id}, expected one of {valid}"
+                    raise ValueError(msg)
                 cursor = self.conn.execute(
                     f"INSERT {conflict} INTO scan_findings "
                     "(id, file_id, issue_id, scan_source, rule_id, severity, status, message, suggestion, scan_run_id, "
@@ -503,8 +533,8 @@ class MetaMixin(DBMixinProtocol):
                         record.get("issue_id"),
                         record.get("scan_source", ""),
                         record.get("rule_id", ""),
-                        record.get("severity", "info"),
-                        record.get("status", "open"),
+                        severity,
+                        finding_status,
                         record.get("message", ""),
                         record.get("suggestion", ""),
                         record.get("scan_run_id", ""),
@@ -644,7 +674,6 @@ class MetaMixin(DBMixinProtocol):
             self.conn.commit()
 
         if skipped_types:
-            _logger = logging.getLogger(__name__)
             for rtype, rcount in skipped_types.items():
                 _logger.warning("import_jsonl: skipped %d record(s) with unknown type %r", rcount, rtype)
 

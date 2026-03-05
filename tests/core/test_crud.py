@@ -861,6 +861,131 @@ class TestImportJsonl:
         count = db.import_jsonl(jsonl)
         assert count == 1
 
+    def test_import_rejects_invalid_scan_finding_severity(self, db: FiligreeDB, tmp_path: Path) -> None:
+        """import_jsonl must reject scan_findings with invalid severity values."""
+        fr = db.register_file("src/test.py")
+        jsonl = tmp_path / "bad_severity.jsonl"
+        lines = [
+            json.dumps({"_type": "file_record", "id": fr.id, "path": "src/test.py"}),
+            json.dumps(
+                {
+                    "_type": "scan_finding",
+                    "id": "sf-bad-sev",
+                    "file_id": fr.id,
+                    "scan_source": "test",
+                    "rule_id": "R1",
+                    "severity": "banana",
+                    "status": "open",
+                    "message": "test finding",
+                }
+            ),
+        ]
+        jsonl.write_text("\n".join(lines) + "\n")
+        with pytest.raises(ValueError, match="severity"):
+            db.import_jsonl(jsonl, merge=True)
+
+    def test_import_rejects_invalid_scan_finding_status(self, db: FiligreeDB, tmp_path: Path) -> None:
+        """import_jsonl must reject scan_findings with invalid finding status values."""
+        fr = db.register_file("src/test2.py")
+        jsonl = tmp_path / "bad_status.jsonl"
+        lines = [
+            json.dumps({"_type": "file_record", "id": fr.id, "path": "src/test2.py"}),
+            json.dumps(
+                {
+                    "_type": "scan_finding",
+                    "id": "sf-bad-status",
+                    "file_id": fr.id,
+                    "scan_source": "test",
+                    "rule_id": "R2",
+                    "severity": "info",
+                    "status": "potato",
+                    "message": "test finding",
+                }
+            ),
+        ]
+        jsonl.write_text("\n".join(lines) + "\n")
+        with pytest.raises(ValueError, match="status"):
+            db.import_jsonl(jsonl, merge=True)
+
+    def test_import_accepts_valid_scan_finding_severity_and_status(self, db: FiligreeDB, tmp_path: Path) -> None:
+        """import_jsonl must accept all valid severity and status values."""
+        fr = db.register_file("src/test3.py")
+        jsonl = tmp_path / "good_finding.jsonl"
+        lines = [
+            json.dumps({"_type": "file_record", "id": fr.id, "path": "src/test3.py"}),
+            json.dumps(
+                {
+                    "_type": "scan_finding",
+                    "id": "sf-good",
+                    "file_id": fr.id,
+                    "scan_source": "test",
+                    "rule_id": "R3",
+                    "severity": "critical",
+                    "status": "acknowledged",
+                    "message": "valid finding",
+                }
+            ),
+        ]
+        jsonl.write_text("\n".join(lines) + "\n")
+        count = db.import_jsonl(jsonl, merge=True)
+        assert count >= 1
+
+    def test_bulk_insert_issue_returns_inserted_flag(self, db: FiligreeDB) -> None:
+        """bulk_insert_issue must return True when row was inserted, False when skipped."""
+        result = db.bulk_insert_issue(
+            {
+                "id": "test-bulk-1",
+                "title": "Bulk test",
+                "status": "open",
+                "priority": 2,
+                "type": "task",
+            }
+        )
+        assert result is True
+        db.bulk_commit()
+
+        # Duplicate should return False
+        result2 = db.bulk_insert_issue(
+            {
+                "id": "test-bulk-1",
+                "title": "Bulk test duplicate",
+                "status": "open",
+                "priority": 2,
+                "type": "task",
+            }
+        )
+        assert result2 is False
+        db.bulk_commit()
+
+    def test_bulk_insert_dependency_returns_inserted_flag(self, db: FiligreeDB) -> None:
+        """bulk_insert_dependency must return True when inserted, False when skipped."""
+        db.create_issue("A", fields=None)
+        db.create_issue("B", fields=None)
+        issues = db.list_issues(limit=2)
+        a_id, b_id = issues[0].id, issues[1].id
+
+        result = db.bulk_insert_dependency(a_id, b_id)
+        assert result is True
+        db.bulk_commit()
+
+        result2 = db.bulk_insert_dependency(a_id, b_id)
+        assert result2 is False
+        db.bulk_commit()
+
+    def test_bulk_insert_event_returns_inserted_flag(self, db: FiligreeDB) -> None:
+        """bulk_insert_event must return True when inserted, False when skipped."""
+        issue = db.create_issue("Event test")
+        result = db.bulk_insert_event(
+            {
+                "issue_id": issue.id,
+                "event_type": "test_event",
+                "actor": "test",
+                "created_at": "2026-01-01T00:00:00+00:00",
+            }
+        )
+        assert result is True
+        db.bulk_commit()
+
 
 # ---------------------------------------------------------------------------
 # Archival & Compaction
