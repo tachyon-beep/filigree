@@ -301,12 +301,64 @@ def migrate_v5_to_v6(conn: sqlite3.Connection) -> None:
     _rebuild_issues_fts_index(conn)
 
 
+def migrate_v6_to_v7(conn: sqlite3.Connection) -> None:
+    """v6 → v7: Add observations and dismissed_observations tables.
+
+    Changes:
+      - new table 'observations' for lightweight agent-reported observations
+      - new table 'dismissed_observations' for dismissal audit trail
+      - new indexes on observations(priority, created_at), observations(expires_at),
+        and dedup index on (summary, file_path, line)
+
+    Rollback: DROP TABLE IF EXISTS dismissed_observations;
+              DROP TABLE IF EXISTS observations;
+              PRAGMA user_version = 6;
+    """
+    conn.execute("""\
+        CREATE TABLE IF NOT EXISTS observations (
+            id              TEXT PRIMARY KEY,
+            summary         TEXT NOT NULL,
+            detail          TEXT DEFAULT '',
+            file_id         TEXT REFERENCES file_records(id) ON DELETE SET NULL,
+            file_path       TEXT DEFAULT '',
+            line            INTEGER,
+            source_issue_id TEXT DEFAULT '',
+            priority        INTEGER DEFAULT 3 CHECK (priority BETWEEN 0 AND 4),
+            actor           TEXT DEFAULT '',
+            created_at      TEXT NOT NULL,
+            expires_at      TEXT NOT NULL
+        )""")
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_observations_priority ON observations(priority, created_at)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_observations_expires ON observations(expires_at)"
+    )
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_observations_dedup "
+        "ON observations(summary, file_path, coalesce(line, -1))"
+    )
+    conn.execute("""\
+        CREATE TABLE IF NOT EXISTS dismissed_observations (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            obs_id       TEXT NOT NULL,
+            summary      TEXT NOT NULL,
+            actor        TEXT DEFAULT '',
+            reason       TEXT DEFAULT '',
+            dismissed_at TEXT NOT NULL
+        )""")
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_dismissed_obs_id ON dismissed_observations(obs_id)"
+    )
+
+
 MIGRATIONS: dict[int, MigrationFn] = {
     1: migrate_v1_to_v2,
     2: migrate_v2_to_v3,
     3: migrate_v3_to_v4,
     4: migrate_v4_to_v5,
     5: migrate_v5_to_v6,
+    6: migrate_v6_to_v7,
 }
 
 

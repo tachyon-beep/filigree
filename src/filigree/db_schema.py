@@ -180,6 +180,41 @@ CREATE TABLE IF NOT EXISTS file_events (
 );
 
 CREATE INDEX IF NOT EXISTS idx_file_events_file ON file_events(file_id);
+
+-- ---- Observations (agent scratchpad) ------------------------------------
+
+CREATE TABLE IF NOT EXISTS observations (
+    id              TEXT PRIMARY KEY,
+    summary         TEXT NOT NULL,
+    detail          TEXT DEFAULT '',
+    file_id         TEXT REFERENCES file_records(id) ON DELETE SET NULL,
+    file_path       TEXT DEFAULT '',
+    line            INTEGER,
+    source_issue_id TEXT DEFAULT '',
+    priority        INTEGER DEFAULT 3 CHECK (priority BETWEEN 0 AND 4),
+    actor           TEXT DEFAULT '',
+    created_at      TEXT NOT NULL,
+    expires_at      TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_observations_priority ON observations(priority, created_at);
+CREATE INDEX IF NOT EXISTS idx_observations_expires ON observations(expires_at);
+-- Dedup contract: coalesce(line, -1) means NULL lines map to -1.
+-- An observation with line=NULL and line=-1 are considered duplicates.
+-- This is intentional — line=-1 is not a valid line number.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_observations_dedup
+  ON observations(summary, file_path, coalesce(line, -1));
+
+CREATE TABLE IF NOT EXISTS dismissed_observations (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    obs_id       TEXT NOT NULL,
+    summary      TEXT NOT NULL,
+    actor        TEXT DEFAULT '',
+    reason       TEXT DEFAULT '',
+    dismissed_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_dismissed_obs_id ON dismissed_observations(obs_id);
 """
 
 # V1 schema (without file tables) — kept for migration tests.
@@ -278,4 +313,4 @@ CREATE TRIGGER IF NOT EXISTS issues_fts_delete AFTER DELETE ON issues BEGIN
 END;
 """
 
-CURRENT_SCHEMA_VERSION = 6
+CURRENT_SCHEMA_VERSION = 7

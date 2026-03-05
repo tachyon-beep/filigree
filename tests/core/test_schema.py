@@ -1131,6 +1131,47 @@ class TestMigrateV4ToV5:
         assert len(comments) == 0
 
 
+class TestObservationsSchema:
+    """Verify observations tables are created."""
+
+    def test_observations_table_exists(self, db: FiligreeDB) -> None:
+        row = db.conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='observations'"
+        ).fetchone()
+        assert row is not None
+
+    def test_observations_columns(self, db: FiligreeDB) -> None:
+        cols = {row[1] for row in db.conn.execute("PRAGMA table_info(observations)").fetchall()}
+        expected = {"id", "summary", "detail", "file_id", "file_path", "line",
+                    "source_issue_id", "priority", "actor", "created_at", "expires_at"}
+        assert expected.issubset(cols)
+
+    def test_dismissed_observations_table_exists(self, db: FiligreeDB) -> None:
+        row = db.conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='dismissed_observations'"
+        ).fetchone()
+        assert row is not None
+
+    def test_dismissed_observations_columns(self, db: FiligreeDB) -> None:
+        cols = {row[1] for row in db.conn.execute("PRAGMA table_info(dismissed_observations)").fetchall()}
+        expected = {"id", "obs_id", "summary", "actor", "reason", "dismissed_at"}
+        assert expected.issubset(cols)
+
+    def test_observations_indexes(self, db: FiligreeDB) -> None:
+        indexes = {row[1] for row in db.conn.execute(
+            "SELECT * FROM sqlite_master WHERE type='index' AND tbl_name='observations'"
+        ).fetchall() if row[1]}
+        assert "idx_observations_priority" in indexes
+        assert "idx_observations_expires" in indexes
+        assert "idx_observations_dedup" in indexes
+
+    def test_dismissed_observations_index(self, db: FiligreeDB) -> None:
+        indexes = {row[1] for row in db.conn.execute(
+            "SELECT * FROM sqlite_master WHERE type='index' AND tbl_name='dismissed_observations'"
+        ).fetchall() if row[1]}
+        assert "idx_dismissed_obs_id" in indexes
+
+
 class TestMigrateV5ToV6:
     """Tests for migration v5 -> v6: parent_id self-FK with ON DELETE SET NULL."""
 
@@ -1465,3 +1506,56 @@ class TestSchemaVersioning:
         db.conn.commit()
         issue = db.get_issue("test-custom1")
         assert issue.status == "review"
+
+
+# ---------------------------------------------------------------------------
+# v6 -> v7 migration tests (observations)
+# ---------------------------------------------------------------------------
+
+
+class TestMigrateV6ToV7:
+    """Tests for migration v6 -> v7: observations and dismissed_observations tables."""
+
+    @pytest.fixture
+    def v6_db(self, tmp_path: Path) -> sqlite3.Connection:
+        """Create a v6 database using the full schema (stamped as v6)."""
+        conn = _make_db(tmp_path)
+        conn.executescript(SCHEMA_SQL)
+        conn.execute("PRAGMA user_version = 6")
+        conn.commit()
+        # Drop the new tables so migration can recreate them
+        conn.execute("DROP TABLE IF EXISTS dismissed_observations")
+        conn.execute("DROP TABLE IF EXISTS observations")
+        conn.commit()
+        return conn
+
+    def test_migration_runs(self, v6_db: sqlite3.Connection) -> None:
+        applied = apply_pending_migrations(v6_db, 7)
+        assert applied == 1
+        assert _get_schema_version(v6_db) == 7
+
+    def test_observations_table_created(self, v6_db: sqlite3.Connection) -> None:
+        apply_pending_migrations(v6_db, 7)
+        cols = _get_table_columns(v6_db, "observations")
+        expected = {"id", "summary", "detail", "file_id", "file_path", "line",
+                    "source_issue_id", "priority", "actor", "created_at", "expires_at"}
+        assert expected.issubset(cols)
+
+    def test_dismissed_observations_table_created(self, v6_db: sqlite3.Connection) -> None:
+        apply_pending_migrations(v6_db, 7)
+        cols = _get_table_columns(v6_db, "dismissed_observations")
+        expected = {"id", "obs_id", "summary", "actor", "reason", "dismissed_at"}
+        assert expected.issubset(cols)
+
+    def test_indexes_created(self, v6_db: sqlite3.Connection) -> None:
+        apply_pending_migrations(v6_db, 7)
+        indexes = _get_index_names(v6_db)
+        assert "idx_observations_priority" in indexes
+        assert "idx_observations_expires" in indexes
+        assert "idx_observations_dedup" in indexes
+        assert "idx_dismissed_obs_id" in indexes
+
+    def test_idempotent(self, v6_db: sqlite3.Connection) -> None:
+        apply_pending_migrations(v6_db, 7)
+        applied = apply_pending_migrations(v6_db, 7)
+        assert applied == 0
