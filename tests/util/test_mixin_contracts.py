@@ -33,6 +33,7 @@ _MIXIN_FILES = [
     "db_events.py",
     "db_meta.py",
     "db_workflow.py",
+    "db_observations.py",
 ]
 
 
@@ -595,10 +596,11 @@ def test_filigreedb_mro_contains_expected_bases() -> None:
     from filigree.db_files import FilesMixin
     from filigree.db_issues import IssuesMixin
     from filigree.db_meta import MetaMixin
+    from filigree.db_observations import ObservationsMixin
     from filigree.db_planning import PlanningMixin
     from filigree.db_workflow import WorkflowMixin
 
-    expected_mixins = {FilesMixin, IssuesMixin, EventsMixin, WorkflowMixin, MetaMixin, PlanningMixin}
+    expected_mixins = {FilesMixin, IssuesMixin, EventsMixin, WorkflowMixin, MetaMixin, PlanningMixin, ObservationsMixin}
     actual_bases = set(FiligreeDB.__mro__)
     for mixin in expected_mixins:
         assert mixin in actual_bases, f"{mixin.__name__} not in FiligreeDB MRO"
@@ -610,14 +612,15 @@ def test_filigreedb_mro_order() -> None:
     from filigree.db_files import FilesMixin
     from filigree.db_issues import IssuesMixin
     from filigree.db_meta import MetaMixin
+    from filigree.db_observations import ObservationsMixin
     from filigree.db_planning import PlanningMixin
     from filigree.db_workflow import WorkflowMixin
 
     mro = FiligreeDB.__mro__
-    mixin_order = [cls for cls in mro if cls in {FilesMixin, IssuesMixin, EventsMixin, WorkflowMixin, MetaMixin, PlanningMixin}]
+    mixin_order = [cls for cls in mro if cls in {FilesMixin, IssuesMixin, EventsMixin, WorkflowMixin, MetaMixin, PlanningMixin, ObservationsMixin}]
     # Must match the class definition order in core.py:
-    # class FiligreeDB(FilesMixin, IssuesMixin, EventsMixin, WorkflowMixin, MetaMixin, PlanningMixin)
-    expected_order = [FilesMixin, IssuesMixin, EventsMixin, WorkflowMixin, MetaMixin, PlanningMixin]
+    # class FiligreeDB(FilesMixin, IssuesMixin, EventsMixin, WorkflowMixin, MetaMixin, PlanningMixin, ObservationsMixin)
+    expected_order = [FilesMixin, IssuesMixin, EventsMixin, WorkflowMixin, MetaMixin, PlanningMixin, ObservationsMixin]
     assert mixin_order == expected_order, (
         f"MRO order mismatch: {[c.__name__ for c in mixin_order]} != {[c.__name__ for c in expected_order]}"
     )

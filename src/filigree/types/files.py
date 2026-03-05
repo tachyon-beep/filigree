@@ -81,6 +81,7 @@ class FileDetail(TypedDict):
     associations: list[FileAssociation]
     recent_findings: list[ScanFindingDict]
     summary: FindingsSummary
+    observation_count: int
 
 
 class ScanRunRecord(TypedDict):

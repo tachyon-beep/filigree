@@ -982,11 +982,20 @@ class FilesMixin(DBMixinProtocol):
         associations = self.get_file_associations(file_id)
         recent = self.get_findings(file_id, limit=10)
         summary = self.get_file_findings_summary(file_id)
+        # Observation count (raw, no sweep — read-only path).
+        # Guarded for pre-v7 DBs where observations table may not exist.
+        try:
+            obs_count = self.conn.execute(
+                "SELECT COUNT(*) FROM observations WHERE file_id = ?", (file_id,)
+            ).fetchone()[0]
+        except Exception:
+            obs_count = 0
         return {
             "file": f.to_dict(),
             "associations": associations,
             "recent_findings": [r.to_dict() for r in recent],
             "summary": summary,
+            "observation_count": obs_count,
         }
 
     # -- File associations ---------------------------------------------------

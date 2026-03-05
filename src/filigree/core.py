@@ -35,6 +35,7 @@ from filigree.db_files import (
 )
 from filigree.db_issues import IssuesMixin
 from filigree.db_meta import MetaMixin
+from filigree.db_observations import ObservationsMixin
 from filigree.db_planning import PlanningMixin
 from filigree.db_schema import CURRENT_SCHEMA_VERSION, SCHEMA_SQL
 from filigree.db_workflow import WorkflowMixin
@@ -327,7 +328,7 @@ class ScanFinding:
 # ---------------------------------------------------------------------------
 
 
-class FiligreeDB(FilesMixin, IssuesMixin, EventsMixin, WorkflowMixin, MetaMixin, PlanningMixin):
+class FiligreeDB(FilesMixin, IssuesMixin, EventsMixin, WorkflowMixin, MetaMixin, PlanningMixin, ObservationsMixin):
     """Direct SQLite operations. No daemon, no sync. Importable by CLI and MCP."""
 
     def __init__(
