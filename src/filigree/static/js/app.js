@@ -85,24 +85,22 @@ import {
 } from "./views/detail.js";
 import { computeHealthScore, computeImpactScores } from "./analytics.js";
 import {
-  clearGraphFocus,
   callbacks as graphCallbacks,
-  onGraphAssigneeInput,
-  onGraphTimeWindowChange,
-  onGraphFocusModeChange,
-  onGraphFocusRootInput,
-  onGraphEpicsOnlyChange,
-  onGraphPathInput,
-  graphSearchNext,
-  graphSearchPrev,
   graphFit,
   renderGraph,
   setGraphPreset,
-  traceGraphPath,
-  clearGraphPath,
   showHealthBreakdown,
   toggleCriticalPath,
 } from "./views/graph.js";
+import {
+  renderGraphSidebar,
+  toggleGraphSidebarItem,
+  toggleGraphSidebarType,
+  graphSidebarSelectAll,
+  graphSidebarClearAll,
+  rebuildTreeIndex,
+  callbacks as sidebarCallbacks,
+} from "./views/graphSidebar.js";
 import {
   initDragAndDrop,
   callbacks as kanbanCallbacks,
@@ -171,6 +169,7 @@ async function fetchData() {
     state.allIssues.forEach((i) => {
       state.issueMap[i.id] = i;
     });
+    rebuildTreeIndex();
     trackChanges(state.allIssues);
     computeImpactScores();
     computeHealthScore();
@@ -329,6 +328,9 @@ kanbanCallbacks.updateHash = updateHash;
 graphCallbacks.openDetail = openDetail;
 graphCallbacks.fetchData = fetchData;
 
+// graphSidebar.js callbacks
+sidebarCallbacks.renderGraph = renderGraph;
+
 // detail.js callbacks
 detailCallbacks.fetchData = fetchData;
 detailCallbacks.render = render;
@@ -338,7 +340,7 @@ detailCallbacks.render = render;
 // ---------------------------------------------------------------------------
 
 registerView("kanban", renderKanban);
-registerView("graph", renderGraph);
+registerView("graph", () => { renderGraphSidebar(); renderGraph(); });
 registerView("insights", loadMetrics);
 registerView("files", loadFiles);
 registerView("releases", loadReleases);
@@ -613,19 +615,14 @@ window.sortListMode = sortListMode;
 window.renderGraph = renderGraph;
 window.graphFit = graphFit;
 window.setGraphPreset = setGraphPreset;
-window.clearGraphFocus = clearGraphFocus;
-window.onGraphAssigneeInput = onGraphAssigneeInput;
-window.onGraphTimeWindowChange = onGraphTimeWindowChange;
-window.onGraphFocusModeChange = onGraphFocusModeChange;
-window.onGraphFocusRootInput = onGraphFocusRootInput;
-window.onGraphEpicsOnlyChange = onGraphEpicsOnlyChange;
-window.onGraphPathInput = onGraphPathInput;
-window.graphSearchNext = graphSearchNext;
-window.graphSearchPrev = graphSearchPrev;
-window.traceGraphPath = traceGraphPath;
-window.clearGraphPath = clearGraphPath;
 window.toggleCriticalPath = toggleCriticalPath;
 window.showHealthBreakdown = showHealthBreakdown;
+
+// Graph sidebar
+window.toggleGraphSidebarItem = toggleGraphSidebarItem;
+window.toggleGraphSidebarType = toggleGraphSidebarType;
+window.graphSidebarSelectAll = graphSidebarSelectAll;
+window.graphSidebarClearAll = graphSidebarClearAll;
 
 // Detail panel
 window.openDetail = openDetail;

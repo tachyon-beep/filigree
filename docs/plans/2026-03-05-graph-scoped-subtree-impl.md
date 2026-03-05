@@ -4,7 +4,7 @@
 
 **Goal:** Replace the graph tab's "render everything" approach with a sidebar-driven scoped subtree explorer per the design doc at `docs/plans/2026-03-05-graph-scoped-subtree-explorer.md`.
 
-**Architecture:** Left sidebar in `dashboard.html` holds type-filtered root issue list with three visual states (unselected/explicit/clicked-in). New `graphSidebar.js` module owns sidebar state, tree walking, and ghost resolution. Existing `graph.js` is refactored: `renderGraph()` receives pre-filtered node/edge arrays from the sidebar module instead of building them internally. Cytoscape rendering, styles, events, overlays (critical path, path trace, search) are preserved.
+**Architecture:** Left sidebar in `dashboard.html` holds type-filtered root issue list with three visual states (unselected/explicit/clicked-in). New `graphSidebar.js` module owns sidebar state, tree walking, and ghost resolution. Existing `graph.js` is refactored: `renderGraph()` receives pre-filtered node/edge arrays from the sidebar module instead of building them internally. Cytoscape rendering, styles, events, and the critical path overlay are preserved. Path trace and search overlays are removed (superseded by sidebar scoping).
 
 **Tech Stack:** Vanilla JS (ES modules), Tailwind CSS, Cytoscape.js, Python/FastAPI (tests only — no backend changes needed).
 
@@ -23,7 +23,6 @@ In `state.js`, add these after line 124 (`graphPathEdges: new Set(),`):
   // Graph sidebar (scoped subtree explorer)
   graphSidebarSelections: new Map(),   // Map<issueId, {state, causedBy}>
   graphSidebarTypeFilter: new Set(),   // active type filters (empty = all)
-  graphSidebarScrollTop: 0,            // preserve scroll position
 ```
 
 **Step 2: Run tests to verify no regressions**
@@ -126,6 +125,7 @@ git commit -m "feat(graph): add sidebar HTML and simplify toolbar"
 // ---------------------------------------------------------------------------
 
 import { state, TYPE_COLORS } from "../state.js";
+import { escHtml } from "../ui.js";
 
 // Type display order for sidebar groups
 const TYPE_ORDER = ["milestone", "epic", "release", "feature", "task", "bug"];
@@ -171,6 +171,13 @@ export function rebuildTreeIndex() {
       }
     }
     subtreeIndex[root.id] = subtree;
+  }
+
+  // Prune stale selections — issues deleted between data refreshes
+  for (const [id] of state.graphSidebarSelections) {
+    if (!ancestorIndex[id] && !rootIssues.some((r) => r.id === id)) {
+      state.graphSidebarSelections.delete(id);
+    }
   }
 
   // Count cross-tree deps per root
@@ -342,8 +349,8 @@ export function renderGraphSidebar() {
         onclick="toggleGraphSidebarItem('${issue.id}')"
         tabindex="0"
         onkeydown="if(event.key===' '||event.key==='Enter'){event.preventDefault();toggleGraphSidebarItem('${issue.id}')}"
-        title="${issue.title}">
-        <span class="truncate">${title}</span>
+        title="${escHtml(issue.title)}">
+        <span class="truncate">${escHtml(title)}</span>
         ${depBadge}
         ${indicator}
       </div>`);
@@ -386,10 +393,12 @@ const SOFT_NODE_CAP = 300;
 export function toggleGraphSidebarItem(issueId) {
   const existing = state.graphSidebarSelections.get(issueId);
   if (!existing) {
-    // Unselected -> explicit
+    // Unselected -> explicit (check node cap first)
+    const { exceedsCap, total } = checkNodeCap(issueId);
+    if (exceedsCap && !confirmNodeCap(total)) return;
     state.graphSidebarSelections.set(issueId, { state: "explicit", causedBy: new Set() });
   } else if (existing.state === "clicked-in") {
-    // Clicked-in -> promote to explicit
+    // Clicked-in -> promote to explicit (already rendered, no cap check needed)
     state.graphSidebarSelections.set(issueId, { state: "explicit", causedBy: new Set() });
   } else {
     // Explicit -> unselected (with cascade)
@@ -401,19 +410,36 @@ export function toggleGraphSidebarItem(issueId) {
 
 function deselectWithCascade(issueId) {
   state.graphSidebarSelections.delete(issueId);
-  // Remove clicked-in items whose causedBy set becomes empty
+  // Collect clicked-in items whose causedBy set becomes empty, then delete
+  // (mutating a Map while iterating it can skip not-yet-visited entries)
+  const toRemove = [];
   for (const [id, sel] of state.graphSidebarSelections) {
     if (sel.state === "clicked-in") {
       sel.causedBy.delete(issueId);
       if (sel.causedBy.size === 0) {
-        state.graphSidebarSelections.delete(id);
+        toRemove.push(id);
       }
     }
+  }
+  for (const id of toRemove) {
+    state.graphSidebarSelections.delete(id);
   }
 }
 
 export function graphSidebarSelectAll() {
+  // Estimate total node count if we select all visible roots
+  let estimatedTotal = 0;
+  for (const [rootId] of state.graphSidebarSelections) {
+    estimatedTotal += getSubtreeIds(rootId).size;
+  }
   const visible = getVisibleRootIssues();
+  for (const issue of visible) {
+    if (!state.graphSidebarSelections.has(issue.id)) {
+      estimatedTotal += getSubtreeIds(issue.id).size;
+    }
+  }
+  if (estimatedTotal > SOFT_NODE_CAP && !confirmNodeCap(estimatedTotal)) return;
+
   for (const issue of visible) {
     if (!state.graphSidebarSelections.has(issue.id)) {
       state.graphSidebarSelections.set(issue.id, { state: "explicit", causedBy: new Set() });
@@ -434,6 +460,10 @@ export function graphSidebarClearAll() {
 export function handleGhostClick(nodeId) {
   const ancestorId = getAncestorId(nodeId);
   if (!ancestorId || state.graphSidebarSelections.has(ancestorId)) return;
+
+  // Check node cap before expanding
+  const { exceedsCap, total } = checkNodeCap(ancestorId);
+  if (exceedsCap && !confirmNodeCap(total)) return;
 
   // Find which explicit selections reference this ghost via cross-tree deps
   const causedBy = new Set();
@@ -537,6 +567,16 @@ export function checkNodeCap(additionalRootId) {
   return { total, exceedsCap: total > SOFT_NODE_CAP };
 }
 
+function confirmNodeCap(total) {
+  const statusEl = document.getElementById("graphSidebarStatus");
+  // Use confirm() for simplicity; a toast/inline warning is a future refinement
+  const ok = confirm(`This would display ~${total} nodes. Large graphs may be slow. Continue?`);
+  if (!ok && statusEl) {
+    statusEl.textContent = `Cancelled — would have shown ${total} nodes`;
+  }
+  return ok;
+}
+
 // --- Callbacks ---
 
 export const callbacks = { renderGraph: null };
@@ -563,7 +603,7 @@ This is the largest task. The key change: `renderGraph()` no longer builds its o
 At the top of `graph.js`, add import:
 
 ```javascript
-import { resolveGraphScope, handleGhostClick, rebuildTreeIndex, renderGraphSidebar, callbacks as sidebarCallbacks } from "./graphSidebar.js";
+import { resolveGraphScope, handleGhostClick } from "./graphSidebar.js";
 ```
 
 **Step 2: Refactor renderGraph to use resolveGraphScope**
@@ -578,7 +618,6 @@ Replace the two rendering paths (v2 at lines 787-812 and legacy at lines 813-908
     // Blank state — no selections
     if (state.cy) { state.cy.destroy(); state.cy = null; }
     container.innerHTML = '<div class="flex items-center justify-center h-full text-secondary text-sm">Select items from the sidebar to explore their dependency graph.</div>';
-    updateGraphClearButtons();
     return;
   }
 
@@ -677,12 +716,24 @@ Remove:
 - `refreshGraphData()` function (~lines 510-585) — no longer needed for the sidebar-driven approach
 - The v2 rendering path (lines 787-812)
 - The legacy rendering path (lines 813-908)
+- The `refreshGraphData().then(...)` call inside `renderGraph()` (~line 745) — replaced by the scoped subtree path
 - Focus mode functions: `onGraphFocusModeChange`, `onGraphFocusRootInput`, `clearGraphFocus`
 - Epics-only handler: `onGraphEpicsOnlyChange`
 - Assignee handler: `onGraphAssigneeInput`
 - Path tracing: `traceGraphPath`, `clearGraphPath`, `onGraphPathInput`, `applyPathTraceStyles`
 - Graph search: `graphSearchNext`, `graphSearchPrev`, `applySearchFocus`
 - Node/edge limit-related code in renderGraph
+- `updateGraphClearButtons()` — references removed HTML elements (`graphFocusMode`, `graphClearFocusBtn`, `graphClearPathBtn`); becomes a no-op after toolbar simplification. Remove the function and all call sites.
+- `onGraphTimeWindowChange()` — its HTML trigger (`graphTimeWindow` select) is removed in Task 2 and it calls the deleted `refreshGraphData()`. Remove function entirely.
+
+Rewrite (do not delete):
+- `setGraphPreset(value)` — the preset selector is kept in the toolbar but it currently calls `refreshGraphData()` which is deleted. Rewrite to call `renderGraph()` directly:
+  ```javascript
+  export function setGraphPreset(value) {
+    const preset = value || "execution";
+    if (state.currentView === "graph") renderGraph();
+  }
+  ```
 
 Keep:
 - `renderGraph()` (refactored)
@@ -693,18 +744,12 @@ Keep:
 - `showHealthBreakdown()`
 - Cytoscape create/update/position-reuse logic (lines 910-1003)
 - `computeGraphMinZoom`, `enforceReadableZoomBounds`, `fitGraphWithCaps`
-- `setGraphNotice`, `updateGraphPerfState`, `updateGraphClearButtons`
-- Time window persistence functions
+- `setGraphNotice`, `updateGraphPerfState`
+- Time window persistence functions (localStorage helpers only — the `onGraphTimeWindowChange` handler is removed)
 
-**Step 6: Wire sidebar callback in renderGraph**
+> **Note:** The sidebar callback (`sidebarCallbacks.renderGraph = renderGraph`) is wired once in `app.js` (Task 6, Step 3). Do **not** also set it inside `renderGraph()` — having two assignment sites creates confusing ownership and a potential timing issue if `renderGraph()` is called before `app.js` init completes.
 
-At the top of `renderGraph()`, ensure the sidebar callback is wired:
-
-```javascript
-  sidebarCallbacks.renderGraph = renderGraph;
-```
-
-**Step 7: Commit**
+**Step 6: Commit**
 
 ```bash
 git add src/filigree/static/js/views/graph.js
@@ -777,6 +822,7 @@ Remove the window exposures for deleted functions:
 - `window.onGraphFocusRootInput`
 - `window.onGraphEpicsOnlyChange`
 - `window.onGraphPathInput`
+- `window.onGraphTimeWindowChange`
 - `window.graphSearchNext`
 - `window.graphSearchPrev`
 - `window.traceGraphPath`
@@ -800,17 +846,28 @@ git commit -m "feat(graph): wire sidebar into app initialization and routing"
 
 Tests that assert removed HTML elements or JS functions need updating. Remove tests for:
 - `test_graph_query_builder_includes_v2_filters` — v2 query builder removed
+- `test_graph_time_window_preference_contract` — time window HTML control removed
+- `test_graph_default_change_has_one_time_callout_contract` — callout references removed elements
+- `test_graph_legacy_fallback_notice_present` — asserts `traceGraphPath`/`clearGraphPath` which are removed
 - `test_focus_controls_coupled_and_tap_no_longer_mutates_root` — focus mode removed
 - `test_graph_inputs_use_debounced_render` — removed inputs
 - `test_trace_button_disabled_until_both_path_inputs_present` — path trace removed
 - `test_preset_and_epics_toggle_stay_in_sync` — epics-only removed
 - `test_graph_toolbar_progressive_disclosure_groups_present` — filters/advanced groups removed
 - `test_graph_caps_are_within_advanced_disclosure_group` — advanced group removed
-- `test_graph_clear_buttons_disable_when_inactive` — focus/path buttons removed
+- `test_graph_clear_buttons_disable_when_inactive` — focus/path buttons and `updateGraphClearButtons` removed
 - `test_hover_traversal_uses_outgoers_not_full_edge_scan` — keep if hover logic preserved
 - `test_path_tracing_uses_outgoers_not_full_edge_scan` — path tracing removed
 - `test_search_nav_buttons_have_disabled_state_logic` — search nav removed
 - `test_graph_search_idle_state_uses_plain_language` — search state removed
+
+Rewrite (not remove):
+- `test_graph_overlay_hierarchy_contract` — currently asserts `applyCriticalPathStyles()`, `applyPathTraceStyles()`, and `applySearchFocus(search)`. The latter two are removed. Rewrite to assert only `applyCriticalPathStyles()`:
+  ```python
+  def test_graph_overlay_hierarchy_contract(self) -> None:
+      graph_js = (STATIC_DIR / "js" / "views" / "graph.js").read_text()
+      assert "applyCriticalPathStyles();" in graph_js
+  ```
 
 **Step 2: Add new contract tests for the sidebar**
 
@@ -832,6 +889,13 @@ class TestGraphSidebarContracts:
         assert "export function resolveGraphScope()" in sidebar_js
         assert "export function toggleGraphSidebarItem(" in sidebar_js
         assert "export function handleGhostClick(" in sidebar_js
+
+    def test_graph_sidebar_safety_and_sanitization(self) -> None:
+        sidebar_js = (STATIC_DIR / "js" / "views" / "graphSidebar.js").read_text()
+        assert 'import { escHtml }' in sidebar_js, "Must import escHtml for XSS prevention"
+        assert "escHtml(issue.title)" in sidebar_js, "Issue titles must be HTML-escaped"
+        assert "checkNodeCap(" in sidebar_js, "Node cap must be checked before adding selections"
+        assert "confirmNodeCap(" in sidebar_js, "Node cap must trigger user confirmation"
 
     def test_graph_ghost_node_style_defined(self) -> None:
         graph_js = (STATIC_DIR / "js" / "views" / "graph.js").read_text()
@@ -885,7 +949,7 @@ Expected: All pass.
 
 **Step 2: Manual smoke test**
 
-1. Open `http://localhost:8885` → Graph tab
+1. Open `http://localhost:8377` → Graph tab
 2. Verify blank canvas with sidebar showing root issues grouped by type
 3. Click a milestone/epic → verify subtree renders with edges
 4. Look for ghost nodes (dashed border, dimmed) on cross-tree deps

@@ -123,6 +123,10 @@ export const state = {
   graphPathNodes: new Set(),
   graphPathEdges: new Set(),
 
+  // Graph sidebar (scoped subtree explorer)
+  graphSidebarSelections: new Map(),   // Map<issueId, {state, causedBy}>
+  graphSidebarTypeFilter: new Set(),   // active type filters (empty = all)
+
   // Filters
   readyFilter: true,
   blockedFilter: false,

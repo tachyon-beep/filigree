@@ -225,118 +225,44 @@ tailwind.config = {
 <div class="flex flex-1 overflow-hidden relative">
   <!-- Graph view -->
   <div id="graphView" class="flex-1 hidden flex flex-col">
-    <div class="graph-toolbar flex flex-wrap items-center gap-2 px-4 py-1 bg-raised text-xs text-secondary border-b border-default">
-      <div class="flex items-center gap-2 shrink-0">
-        <label for="graphPreset" class="text-xs text-secondary">Preset:</label>
-        <select id="graphPreset" onchange="setGraphPreset(this.value)" class="bg-overlay text-primary text-xs rounded px-2 py-0.5 border border-strong">
-          <option value="execution" selected>Execution</option>
-          <option value="roadmap">Roadmap</option>
-        </select>
-        <button onclick="graphFit()" class="px-2 py-0.5 rounded bg-overlay bg-overlay-hover" title="Reset zoom and center the graph">Fit</button>
-        <button id="btnCritPath" onclick="toggleCriticalPath()" class="px-2 py-0.5 rounded bg-overlay bg-overlay-hover" title="Highlight the longest dependency chain">Critical Path</button>
-        <button id="btnGraphLegend" onclick="toggleGraphLegend()" class="px-2 py-0.5 rounded bg-overlay bg-overlay-hover">Legend</button>
+    <div class="flex flex-1 overflow-hidden">
+      <!-- Graph Sidebar -->
+      <div id="graphSidebar" class="flex flex-col border-r border-default bg-base" style="width:280px;min-width:200px;max-width:360px;">
+        <div class="flex items-center gap-1 px-3 py-1.5 border-b border-default bg-raised text-xs">
+          <span class="font-medium text-primary">Explorer</span>
+          <span id="graphSidebarHelp" class="text-muted cursor-help ml-1" title="Blue = explicitly selected. Amber = pulled in via dependency. Click amber to pin.">?</span>
+          <span class="flex-1"></span>
+          <button onclick="graphSidebarSelectAll()" class="px-1.5 py-0.5 rounded bg-overlay bg-overlay-hover text-secondary" title="Select all visible items">All</button>
+          <button onclick="graphSidebarClearAll()" class="px-1.5 py-0.5 rounded bg-overlay bg-overlay-hover text-secondary" title="Clear all selections">Clear</button>
+          <span id="graphSidebarHiddenBadge" class="hidden text-amber-400 text-[10px]"></span>
+        </div>
+        <div class="flex flex-wrap gap-1 px-3 py-1.5 border-b border-default bg-raised text-xs" id="graphSidebarTypeFilter">
+          <!-- Type filter pills rendered by JS -->
+        </div>
+        <div id="graphSidebarList" class="flex-1 overflow-y-auto scrollbar-thin px-2 py-1 text-xs" role="listbox" aria-label="Issue tree selector">
+          <!-- Sidebar items rendered by JS -->
+        </div>
+        <div id="graphSidebarStatus" class="px-3 py-1 border-t border-default text-[10px] text-muted" aria-live="polite"></div>
       </div>
-
-      <details id="graphFiltersGroup" class="shrink-0 graph-disclosure">
-        <summary class="cursor-pointer select-none px-2 py-0.5 rounded bg-overlay bg-overlay-hover border border-strong items-center leading-none">
-          Filters
-        </summary>
-        <div class="graph-disclosure-panel mt-1 flex flex-wrap items-center gap-2 rounded border border-strong bg-overlay/40 px-2 py-1">
-          <label class="flex items-center gap-1">
-            <input type="checkbox" id="graphEpicsOnly" onchange="onGraphEpicsOnlyChange()" style="accent-color:var(--accent)"> Epics only
-          </label>
-          <label class="flex items-center gap-1">
-            <input type="checkbox" id="graphReadyOnly" onchange="renderGraph()" style="accent-color:var(--accent)"> Ready only
-          </label>
-          <label class="flex items-center gap-1">
-            <input type="checkbox" id="graphBlockedOnly" onchange="renderGraph()" style="accent-color:var(--accent)"> Blocked only
-          </label>
-          <label class="flex items-center gap-1">
-            Time window:
-            <select id="graphTimeWindow" onchange="onGraphTimeWindowChange()" aria-label="Filter graph by time window"
-                    class="bg-overlay text-primary text-xs rounded px-1 py-0.5 border border-strong">
-              <option value="1">1 day</option>
-              <option value="7" selected>7 days</option>
-              <option value="14">14 days</option>
-              <option value="30">30 days</option>
-              <option value="90">90 days</option>
-              <option value="180">180 days</option>
-              <option value="365">365 days</option>
-              <option value="0">All time</option>
+      <!-- Graph Canvas Area -->
+      <div class="flex flex-1 flex-col min-w-0">
+        <div class="graph-toolbar flex flex-wrap items-center gap-2 px-4 py-1 bg-raised text-xs text-secondary border-b border-default">
+          <div class="flex items-center gap-2 shrink-0">
+            <label for="graphPreset" class="text-xs text-secondary">Preset:</label>
+            <select id="graphPreset" onchange="setGraphPreset(this.value)" class="bg-overlay text-primary text-xs rounded px-2 py-0.5 border border-strong">
+              <option value="execution" selected>Execution</option>
+              <option value="roadmap">Roadmap</option>
             </select>
-          </label>
-          <label class="flex items-center gap-1">
-            Assignee:
-            <input id="graphAssignee" type="text" placeholder="all" aria-label="Filter graph by assignee" oninput="onGraphAssigneeInput()"
-                   class="bg-overlay text-primary text-xs rounded px-2 py-0.5 border border-strong w-28 focus:outline-none focus-accent">
-          </label>
+            <button onclick="graphFit()" class="px-2 py-0.5 rounded bg-overlay bg-overlay-hover" title="Reset zoom and center the graph">Fit</button>
+            <button id="btnCritPath" onclick="toggleCriticalPath()" class="px-2 py-0.5 rounded bg-overlay bg-overlay-hover" title="Highlight the longest dependency chain">Critical Path</button>
+            <button id="btnGraphLegend" onclick="toggleGraphLegend()" class="px-2 py-0.5 rounded bg-overlay bg-overlay-hover">Legend</button>
+          </div>
+
+          <div id="graphNotice" role="status" aria-live="polite" class="hidden px-2 py-0.5 rounded border border-amber-700 text-amber-300 bg-amber-900/30"></div>
+          <div id="graphFilterState" class="text-[11px] text-secondary"></div>
         </div>
-      </details>
-
-      <details id="graphAdvancedGroup" class="shrink-0 graph-disclosure">
-        <summary class="cursor-pointer select-none px-2 py-0.5 rounded bg-overlay bg-overlay-hover border border-strong items-center leading-none">
-          Advanced
-        </summary>
-        <div class="graph-disclosure-panel mt-1 flex flex-wrap items-center gap-2 rounded border border-strong bg-overlay/40 px-2 py-1">
-          <label class="flex items-center gap-1">
-            <input type="checkbox" id="graphFocusMode" onchange="onGraphFocusModeChange()" style="accent-color:var(--accent)"> Focus
-          </label>
-          <label class="flex items-center gap-1">
-            Root issue:
-            <input id="graphFocusRoot" type="text" placeholder="issue id (auto-enables focus)" aria-label="Focus root issue ID" oninput="onGraphFocusRootInput()"
-                   class="bg-overlay text-primary text-xs rounded px-2 py-0.5 border border-strong w-32 focus:outline-none focus-accent">
-          </label>
-          <label class="flex items-center gap-1">
-            Radius:
-            <select id="graphFocusRadius" onchange="renderGraph()" class="bg-overlay text-primary text-xs rounded px-1 py-0.5 border border-strong">
-              <option value="1">1</option>
-              <option value="2" selected>2</option>
-              <option value="3">3</option>
-              <option value="4">4</option>
-            </select>
-          </label>
-          <button id="graphClearFocusBtn" onclick="clearGraphFocus()" class="px-2 py-0.5 rounded bg-overlay bg-overlay-hover" title="Clear graph focus root/radius">Clear Focus</button>
-          <span class="text-muted">|</span>
-          <label class="graph-inline-controls">
-            Trace path between issues:
-            <input id="graphPathSource" type="text" placeholder="issue ID" aria-label="Path source issue ID" oninput="onGraphPathInput()" class="bg-overlay text-primary text-xs rounded px-2 py-0.5 border border-strong w-24 focus:outline-none focus-accent">
-            <select id="graphPathDirection" aria-label="Path traversal direction" class="bg-overlay text-primary text-xs rounded px-1 py-0.5 border border-strong" title="Path direction">
-              <option value="upstream" selected>upstream</option>
-              <option value="downstream">downstream</option>
-            </select>
-            <input id="graphPathTarget" type="text" placeholder="issue ID" aria-label="Path target issue ID" oninput="onGraphPathInput()" class="bg-overlay text-primary text-xs rounded px-2 py-0.5 border border-strong w-24 focus:outline-none focus-accent">
-          </label>
-          <button id="graphTraceBtn" onclick="traceGraphPath()" disabled class="px-2 py-0.5 rounded bg-overlay bg-overlay-hover opacity-50 cursor-not-allowed" title="Trace dependency path between source and target">Trace</button>
-          <button id="graphClearPathBtn" onclick="clearGraphPath()" class="px-2 py-0.5 rounded bg-overlay bg-overlay-hover" title="Clear active path trace">Clear Path</button>
-          <span class="text-muted">|</span>
-          <label class="flex items-center gap-1">
-            Node cap:
-            <select id="graphNodeLimit" onchange="renderGraph()" class="bg-overlay text-primary text-xs rounded px-1 py-0.5 border border-strong">
-              <option value="300">300</option>
-              <option value="600" selected>600</option>
-              <option value="1200">1200</option>
-            </select>
-          </label>
-          <label class="flex items-center gap-1">
-            Edge cap:
-            <select id="graphEdgeLimit" onchange="renderGraph()" class="bg-overlay text-primary text-xs rounded px-1 py-0.5 border border-strong">
-              <option value="1000">1000</option>
-              <option value="2000" selected>2000</option>
-              <option value="4000">4000</option>
-            </select>
-          </label>
-          <span class="text-muted">|</span>
-          <button id="graphSearchPrevBtn" onclick="graphSearchPrev()" disabled aria-label="Previous search match" class="px-2 py-0.5 rounded bg-overlay bg-overlay-hover opacity-50 cursor-not-allowed" title="Previous graph search match">Prev match</button>
-          <button id="graphSearchNextBtn" onclick="graphSearchNext()" disabled aria-label="Next search match" class="px-2 py-0.5 rounded bg-overlay bg-overlay-hover opacity-50 cursor-not-allowed" title="Next graph search match">Next match</button>
-          <span id="graphSearchState" class="text-[11px] text-secondary">No active search.</span>
-        </div>
-      </details>
-
-      <div id="graphNotice" role="status" aria-live="polite" class="hidden px-2 py-0.5 rounded border border-amber-700 text-amber-300 bg-amber-900/30"></div>
-      <div id="graphFilterState" class="text-[11px] text-secondary"></div>
-    </div>
-    <div class="relative flex-1">
-      <div id="cy" class="absolute inset-0"></div>
+        <div class="relative flex-1">
+          <div id="cy" class="absolute inset-0"></div>
       <div id="graphLegend" class="hidden absolute top-2 right-4 bg-base border border-strong rounded-lg p-3 text-xs z-10 max-w-xs shadow-xl">
         <div class="text-primary font-medium mb-2">Graph Legend</div>
         <div class="text-secondary space-y-2">
@@ -376,6 +302,8 @@ tailwind.config = {
       <div id="graphNodeEdgeCount" class="text-[11px] text-secondary"></div>
       <div id="graphPerfState" class="text-[11px] text-secondary"></div>
     </div>
+      </div><!-- /canvas area -->
+    </div><!-- /flex row -->
   </div>
 
   <!-- Kanban view -->

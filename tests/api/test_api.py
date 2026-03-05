@@ -24,49 +24,23 @@ class TestDashboardIndex:
     def test_html_file_exists(self) -> None:
         assert (STATIC_DIR / "dashboard.html").exists()
 
-    async def test_graph_v2_controls_present(self, client: AsyncClient) -> None:
+    async def test_graph_sidebar_and_toolbar_present(self, client: AsyncClient) -> None:
         resp = await client.get("/")
         assert resp.status_code == 200
         html = resp.text
         assert 'class="graph-toolbar flex flex-wrap items-center' in html
         assert 'id="graphPreset"' in html
         assert 'value="execution" selected' in html
-        assert 'id="graphFiltersGroup"' in html
-        assert 'id="graphAdvancedGroup"' in html
-        assert "Filters" in html
-        assert "Advanced" in html
-        assert 'onchange="onGraphEpicsOnlyChange()"' in html
-        assert 'id="graphReadyOnly"' in html
-        assert 'id="graphBlockedOnly"' in html
-        assert 'id="graphTimeWindow"' in html
-        assert 'onchange="onGraphTimeWindowChange()"' in html
-        assert 'aria-label="Filter graph by time window"' in html
-        assert 'id="graphAssignee"' in html
-        assert 'oninput="onGraphAssigneeInput()"' in html
+        assert 'id="graphSidebar"' in html
+        assert 'id="graphSidebarList"' in html
+        assert 'id="graphSidebarTypeFilter"' in html
+        assert 'id="graphSidebarStatus"' in html
+        assert 'id="btnCritPath"' in html
         assert 'id="graphNotice"' in html
         assert 'role="status"' in html
         assert 'aria-live="polite"' in html
         assert 'id="graphDiagnosticsBar"' in html
         assert 'id="graphPerfState"' in html
-        assert 'id="graphFocusMode"' in html
-        assert 'id="graphFocusRoot"' in html
-        assert 'id="graphFocusRadius"' in html
-        assert 'id="graphClearFocusBtn"' in html
-        assert 'id="graphClearPathBtn"' in html
-        assert 'onchange="onGraphFocusModeChange()"' in html
-        assert 'oninput="onGraphFocusRootInput()"' in html
-        assert 'id="graphPathSource"' in html
-        assert 'id="graphPathDirection"' in html
-        assert 'id="graphPathTarget"' in html
-        assert 'oninput="onGraphPathInput()"' in html
-        assert 'id="graphTraceBtn"' in html
-        assert 'graphTraceBtn" onclick="traceGraphPath()" disabled' in html
-        assert 'id="graphSearchPrevBtn"' in html
-        assert 'id="graphSearchNextBtn"' in html
-        assert 'aria-label="Previous search match"' in html
-        assert 'aria-label="Next search match"' in html
-        assert 'id="graphNodeLimit"' in html
-        assert 'id="graphEdgeLimit"' in html
 
     async def test_graph_default_not_epics_only(self, client: AsyncClient) -> None:
         resp = await client.get("/")
