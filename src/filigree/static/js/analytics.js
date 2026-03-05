@@ -62,7 +62,9 @@ export function computeHealthScore() {
   }
   const vals = Object.values(agentWip);
   const maxWip = vals.length ? Math.max(...vals) : 0;
-  const balanceScore = maxWip > 5 ? 10 : maxWip > 3 ? 18 : 25;
+  let balanceScore = 25;
+  if (maxWip > 5) balanceScore = 10;
+  else if (maxWip > 3) balanceScore = 18;
   const score = blockedScore + freshScore + readyScore + balanceScore;
 
   const badge = document.getElementById("healthBadge");

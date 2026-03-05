@@ -89,3 +89,28 @@ class ScanFindingDict(TypedDict):
     updated_at: ISOTimestamp
     last_seen_at: ISOTimestamp | None
     metadata: dict[str, Any]
+
+
+class ObservationDict(TypedDict):
+    """Shape contract for observation dict representations."""
+
+    id: str
+    summary: str
+    detail: str
+    file_id: str | None
+    file_path: str
+    line: int | None
+    source_issue_id: str
+    priority: int
+    actor: str
+    created_at: ISOTimestamp
+    expires_at: ISOTimestamp
+
+
+class ObservationStatsDict(TypedDict):
+    """Shape contract for observation_stats() return value."""
+
+    count: int
+    stale_count: int
+    oldest_hours: float
+    expiring_soon_count: int

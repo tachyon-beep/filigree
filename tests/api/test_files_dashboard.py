@@ -779,3 +779,25 @@ class TestFileStatsEndpoint:
         data = resp.json()
         for key in ("critical", "high", "medium", "low", "info", "total_findings", "open_findings", "files_with_findings"):
             assert key in data, f"Missing key: {key}"
+
+
+class TestObservationStatsEndpoint:
+    """Tests for GET /api/observations/stats."""
+
+    async def test_stats_empty(self, client: AsyncClient) -> None:
+        resp = await client.get("/api/observations/stats")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["count"] == 0
+        assert data["stale_count"] == 0
+        assert data["expiring_soon_count"] == 0
+
+    async def test_stats_with_observations(self, client: AsyncClient, api_db: FiligreeDB) -> None:
+        api_db.create_observation("test obs 1")
+        api_db.create_observation("test obs 2", file_path="src/foo.py")
+        resp = await client.get("/api/observations/stats")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["count"] == 2
+        for key in ("count", "stale_count", "oldest_hours", "expiring_soon_count"):
+            assert key in data, f"Missing key: {key}"

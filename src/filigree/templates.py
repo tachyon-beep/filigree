@@ -15,6 +15,8 @@ from dataclasses import replace as _dc_replace
 from pathlib import Path
 from typing import Any, Literal
 
+from filigree.types.core import StatusCategory as StateCategory
+
 # ---------------------------------------------------------------------------
 # Logging (review B4)
 # ---------------------------------------------------------------------------
@@ -30,7 +32,6 @@ _VALID_CATEGORIES: frozenset[str] = frozenset({"open", "wip", "done"})
 # Type aliases
 # ---------------------------------------------------------------------------
 
-StateCategory = Literal["open", "wip", "done"]
 EnforcementLevel = Literal["hard", "soft"]
 FieldType = Literal["text", "enum", "number", "date", "list", "boolean"]
 

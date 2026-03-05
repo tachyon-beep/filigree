@@ -53,6 +53,44 @@ class TestCreateObservation:
         assert db.observation_count() == 1
         assert result2["id"] == result1["id"]
 
+    def test_create_dedup_raises_when_existing_vanishes(self, db: FiligreeDB) -> None:
+        """If INSERT OR IGNORE fires but SELECT-back returns None, raise instead of returning a ghost ID.
+
+        Simulates a race condition: between INSERT OR IGNORE (dedup conflict) and
+        the SELECT-back, a concurrent process deletes the matching row. Uses a
+        connection wrapper to inject the deletion after the INSERT.
+        """
+        import sqlite3
+
+        # First, create the observation that will trigger dedup
+        db.create_observation("race condition", file_path="src/bar.py", line=5)
+
+        # Wrap the connection to intercept and inject a delete after INSERT OR IGNORE
+        real_conn = db._conn
+
+        class InterceptingConnection:
+            """Thin wrapper that deletes the matching obs after INSERT OR IGNORE."""
+
+            def __init__(self, real: sqlite3.Connection):
+                self._real = real
+
+            def execute(self, sql: str, params: tuple = ()):
+                result = self._real.execute(sql, params)
+                if "INSERT OR IGNORE INTO observations" in sql and result.rowcount == 0:
+                    # Simulate race: delete the row before SELECT can find it
+                    self._real.execute("DELETE FROM observations WHERE summary = ?", (params[1],))
+                return result
+
+            def __getattr__(self, name: str):
+                return getattr(self._real, name)
+
+        db._conn = InterceptingConnection(real_conn)  # type: ignore[assignment]
+        try:
+            with pytest.raises(RuntimeError, match="could not be located"):
+                db.create_observation("race condition", file_path="src/bar.py", line=5)
+        finally:
+            db._conn = real_conn
+
     def test_create_different_summary_same_location_allowed(self, db: FiligreeDB) -> None:
         db.create_observation("null deref", file_path="src/foo.py", line=10)
         db.create_observation("type error", file_path="src/foo.py", line=10)
@@ -292,17 +330,17 @@ class TestPromoteObservation:
         assert row is None
 
     def test_promote_label_failure_still_creates_issue(self, db: FiligreeDB) -> None:
-        """Known v1 limitation: if add_label raises after create_issue succeeds,
-        the issue exists without the from-observation label."""
+        """Enrichment failures are best-effort: issue is still returned even if
+        add_label raises."""
         from unittest.mock import patch
 
         count_before = db.conn.execute("SELECT COUNT(*) FROM issues").fetchone()[0]
         obs = db.create_observation("will partially fail")
-        with patch.object(db, "add_label", side_effect=RuntimeError("label boom")), pytest.raises(RuntimeError, match="label boom"):
-            db.promote_observation(obs["id"])
-        # Observation is gone
+        with patch.object(db, "add_label", side_effect=RuntimeError("label boom")):
+            result = db.promote_observation(obs["id"])
+        # Issue was created and returned successfully
+        assert result["issue"] is not None
         assert db.observation_count() == 0
-        # Issue WAS created (known partial-success state)
         count_after = db.conn.execute("SELECT COUNT(*) FROM issues").fetchone()[0]
         assert count_after == count_before + 1
 
@@ -333,6 +371,57 @@ class TestObservationStats:
         db.conn.commit()
         stats = db.observation_stats()
         assert stats["stale_count"] == 1
+
+
+class TestObservationStatsNoSweep:
+    """Verify observation_stats(sweep=False) excludes expired rows via WHERE filter."""
+
+    def test_stats_sweep_false_excludes_expired(self, db: FiligreeDB) -> None:
+        db.create_observation("active obs")
+        expired = db.create_observation("expired obs", file_path="src/old.py")
+        # Backdate expiry to the past
+        db.conn.execute(
+            "UPDATE observations SET expires_at = '2020-01-01T00:00:00+00:00' WHERE id = ?",
+            (expired["id"],),
+        )
+        db.conn.commit()
+
+        stats = db.observation_stats(sweep=False)
+        assert stats["count"] == 1, "sweep=False should exclude expired rows"
+        # Verify the expired row is still in the database (no sweep happened)
+        raw_count = db.conn.execute("SELECT COUNT(*) FROM observations").fetchone()[0]
+        assert raw_count == 2, "Expired row should still exist in DB"
+
+    def test_stats_sweep_false_stale_excludes_expired(self, db: FiligreeDB) -> None:
+        """Stale count should also exclude expired rows when sweep=False."""
+        stale = db.create_observation("stale but alive")
+        expired_stale = db.create_observation("stale and expired", file_path="src/x.py")
+        # Backdate both to 3 days ago (stale), but only expire one
+        db.conn.execute(
+            "UPDATE observations SET created_at = '2020-01-01T00:00:00+00:00' WHERE id IN (?, ?)",
+            (stale["id"], expired_stale["id"]),
+        )
+        db.conn.execute(
+            "UPDATE observations SET expires_at = '2020-01-02T00:00:00+00:00' WHERE id = ?",
+            (expired_stale["id"],),
+        )
+        db.conn.commit()
+
+        stats = db.observation_stats(sweep=False)
+        assert stats["stale_count"] == 1, "Only non-expired stale obs should be counted"
+
+    def test_stats_sweep_false_empty_when_all_expired(self, db: FiligreeDB) -> None:
+        obs = db.create_observation("will expire")
+        db.conn.execute(
+            "UPDATE observations SET expires_at = '2020-01-01T00:00:00+00:00' WHERE id = ?",
+            (obs["id"],),
+        )
+        db.conn.commit()
+
+        stats = db.observation_stats(sweep=False)
+        assert stats["count"] == 0
+        assert stats["stale_count"] == 0
+        assert stats["expiring_soon_count"] == 0
 
 
 class TestObservationCountDocumentation:

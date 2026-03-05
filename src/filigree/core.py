@@ -298,6 +298,14 @@ class ScanFinding:
     last_seen_at: ISOTimestamp | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
+    def __post_init__(self) -> None:
+        from filigree.db_files import VALID_FINDING_STATUSES, VALID_SEVERITIES
+
+        if self.severity not in VALID_SEVERITIES:
+            raise ValueError(f"Invalid severity {self.severity!r}, expected one of {sorted(VALID_SEVERITIES)}")
+        if self.status not in VALID_FINDING_STATUSES:
+            raise ValueError(f"Invalid finding status {self.status!r}, expected one of {sorted(VALID_FINDING_STATUSES)}")
+
     def to_dict(self) -> ScanFindingDict:
         return ScanFindingDict(
             id=self.id,

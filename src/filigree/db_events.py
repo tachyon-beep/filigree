@@ -281,21 +281,25 @@ class EventsMixin(DBMixinProtocol):
             return 0
 
         total_deleted = 0
-        for row in archived:
-            issue_id = row["id"]
-            event_count = self.conn.execute("SELECT COUNT(*) as cnt FROM events WHERE issue_id = ?", (issue_id,)).fetchone()["cnt"]
+        try:
+            for row in archived:
+                issue_id = row["id"]
+                event_count = self.conn.execute("SELECT COUNT(*) as cnt FROM events WHERE issue_id = ?", (issue_id,)).fetchone()["cnt"]
 
-            if event_count <= keep_recent:
-                continue
+                if event_count <= keep_recent:
+                    continue
 
-            self.conn.execute(
-                "DELETE FROM events WHERE id IN (SELECT id FROM events WHERE issue_id = ? ORDER BY created_at ASC, id ASC LIMIT ?)",
-                (issue_id, event_count - keep_recent),
-            )
-            total_deleted += event_count - keep_recent
+                self.conn.execute(
+                    "DELETE FROM events WHERE id IN (SELECT id FROM events WHERE issue_id = ? ORDER BY created_at ASC, id ASC LIMIT ?)",
+                    (issue_id, event_count - keep_recent),
+                )
+                total_deleted += event_count - keep_recent
 
-        if total_deleted > 0:
-            self.conn.commit()
+            if total_deleted > 0:
+                self.conn.commit()
+        except Exception:
+            self.conn.rollback()
+            raise
 
         return total_deleted
 

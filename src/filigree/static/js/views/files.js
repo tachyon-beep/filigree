@@ -13,6 +13,12 @@ import {
 import { updateHash } from "../router.js";
 import { SEVERITY_COLORS, state } from "../state.js";
 import { escHtml, escJsSingle, showCreateForm, showToast } from "../ui.js";
+
+function formatLineRange(f, prefix = "L") {
+  if (!f.line_start) return "";
+  if (f.line_end && f.line_end !== f.line_start) return `${prefix}${f.line_start}\u2013${f.line_end}`;
+  return `${prefix}${f.line_start}`;
+}
 import { renderHealthOverview } from "./health.js";
 
 // --- Accumulated page state for "load more" ---
@@ -420,11 +426,7 @@ function renderFileDetail(data) {
 
 function renderFindingListItem(f) {
   const c = SEVERITY_COLORS[f.severity] || SEVERITY_COLORS.info;
-  const lines = f.line_start
-    ? f.line_end && f.line_end !== f.line_start
-      ? `L${f.line_start}-${f.line_end}`
-      : `L${f.line_start}`
-    : "";
+  const lines = formatLineRange(f);
   const selected = _selectedFinding && _selectedFinding.id === f.id;
   const selClass = selected ? "border-l-2 border-l-sky-400" : "";
   const safeFindingId = escJsSingle(f.id);
@@ -442,11 +444,7 @@ function renderFindingDetail(f) {
     return '<div class="flex items-center justify-center h-full text-xs" style="color:var(--text-muted)">Select a finding to view details</div>';
   }
   const c = SEVERITY_COLORS[f.severity] || SEVERITY_COLORS.info;
-  const lines = f.line_start
-    ? f.line_end && f.line_end !== f.line_start
-      ? `Lines ${f.line_start}\u2013${f.line_end}`
-      : `Line ${f.line_start}`
-    : "";
+  const lines = formatLineRange(f, "Line ");
   return (
     '<div class="text-xs space-y-2">' +
     `<div class="flex items-center gap-2"><span class="px-1.5 py-0.5 rounded ${c.bg} ${c.text}" style="border:1px solid;${c.border}">${escHtml(f.severity)}</span>` +
@@ -586,11 +584,7 @@ export async function createIssueFromFinding() {
   const prioEl = document.getElementById("createPriority");
   if (titleEl) titleEl.value = `[${f.severity}] ${f.rule_id}`;
   if (descEl) {
-    const lines = f.line_start
-      ? f.line_end && f.line_end !== f.line_start
-        ? `Lines ${f.line_start}\u2013${f.line_end}`
-        : `Line ${f.line_start}`
-      : "";
+    const lines = formatLineRange(f, "Line ");
     const filePath = state.fileDetailData?.file?.path || "";
     descEl.value = [
       f.message,
@@ -689,14 +683,8 @@ const EVENT_TYPE_LABELS = {
 function renderTimelineEvents(events) {
   let html = "";
   for (const ev of events) {
-    const dotColor =
-      ev.type === "finding_created"
-        ? "#EF4444"
-        : ev.type === "finding_updated"
-          ? "#3B82F6"
-          : ev.type === "file_metadata_update"
-            ? "#A855F7"
-            : "#10B981";
+    const DOT_COLORS = { finding_created: "#EF4444", finding_updated: "#3B82F6", file_metadata_update: "#A855F7" };
+    const dotColor = DOT_COLORS[ev.type] || "#10B981";
     const time = ev.timestamp
       ? new Date(ev.timestamp).toLocaleString()
       : "";

@@ -16,6 +16,20 @@ export const callbacks = {
   updateHash: null,
 };
 
+function renderColumnShell(label, color, count, innerHtml, extraAttrs = "") {
+  return (
+    `<div class="kanban-col flex flex-col"${extraAttrs}>` +
+    '<div class="flex items-center gap-2 mb-2 px-1">' +
+    `<span class="w-2 h-2 rounded-full" style="background:${color}"></span>` +
+    `<span class="font-medium text-xs" style="color:var(--text-primary)">${escHtml(label)}</span>` +
+    `<span class="text-xs" style="color:var(--text-muted)">${count}</span>` +
+    "</div>" +
+    '<div class="flex flex-col gap-2 overflow-y-auto scrollbar-thin pr-1 min-h-[200px]" style="max-height: calc(100vh - 160px);">' +
+    innerHtml +
+    "</div></div>"
+  );
+}
+
 // ---------------------------------------------------------------------------
 // renderKanban — main dispatcher based on kanbanMode / typeTemplate
 // ---------------------------------------------------------------------------
@@ -74,28 +88,18 @@ export function renderStandardKanban(columns) {
     { key: "wip", label: "In Progress", color: CATEGORY_COLORS.wip },
     { key: "done", label: "Done", color: CATEGORY_COLORS.done },
   ];
+  const EMPTY_STATES = {
+    open: '<div class="mb-2">No open issues</div><button onclick="showCreateForm()" style="color:var(--accent)" class="hover:underline">+ Create an issue</button>',
+    wip: '<div>No work in progress</div><div style="color:var(--text-muted)" class="mt-1">Move an open issue to in-progress to start</div>',
+    done: "<div>No completed issues yet</div>",
+  };
   return colDefs
     .map((col) => {
       const issues = columns[col.key] || [];
-      return (
-        `<div class="kanban-col flex flex-col" data-status-category="${col.key}">` +
-        '<div class="flex items-center gap-2 mb-2 px-1">' +
-        `<span class="w-2 h-2 rounded-full" style="background:${col.color}"></span>` +
-        `<span class="font-medium text-xs" style="color:var(--text-primary)">${col.label}</span>` +
-        `<span class="text-xs" style="color:var(--text-muted)">${issues.length}</span>` +
-        "</div>" +
-        '<div class="flex flex-col gap-2 overflow-y-auto scrollbar-thin pr-1 min-h-[200px]" style="max-height: calc(100vh - 160px);">' +
-        (issues.length
-          ? issues.map((i) => renderCard(i)).join("")
-          : '<div class="text-xs p-4 text-center" style="color:var(--text-muted)">' +
-            (col.key === "open"
-              ? '<div class="mb-2">No open issues</div><button onclick="showCreateForm()" style="color:var(--accent)" class="hover:underline">+ Create an issue</button>'
-              : col.key === "wip"
-                ? '<div>No work in progress</div><div style="color:var(--text-muted)" class="mt-1">Move an open issue to in-progress to start</div>'
-                : "<div>No completed issues yet</div>") +
-            "</div>") +
-        "</div></div>"
-      );
+      const inner = issues.length
+        ? issues.map((i) => renderCard(i)).join("")
+        : '<div class="text-xs p-4 text-center" style="color:var(--text-muted)">' + (EMPTY_STATES[col.key] || "") + "</div>";
+      return renderColumnShell(col.label, col.color, issues.length, inner, ` data-status-category="${col.key}"`);
     })
     .join("");
 }
@@ -203,19 +207,10 @@ export function renderClusterKanban(columns) {
       const epicCards = epicIssues.map((epic) => renderClusterCard(epic)).join("");
       const orphanCards = orphans.map((i) => renderCard(i)).join("");
 
-      return (
-        `<div class="kanban-col flex flex-col" data-status-category="${col.key}">` +
-        '<div class="flex items-center gap-2 mb-2 px-1">' +
-        `<span class="w-2 h-2 rounded-full" style="background:${col.color}"></span>` +
-        `<span class="font-medium text-xs" style="color:var(--text-primary)">${col.label}</span>` +
-        `<span class="text-xs" style="color:var(--text-muted)">${issues.length}</span>` +
-        "</div>" +
-        '<div class="flex flex-col gap-2 overflow-y-auto scrollbar-thin pr-1 min-h-[200px]" style="max-height: calc(100vh - 160px);">' +
-        (issues.length
-          ? epicCards + orphanCards
-          : '<div class="text-xs italic p-2" style="color:var(--text-muted)">No issues</div>') +
-        "</div></div>"
-      );
+      const inner = issues.length
+        ? epicCards + orphanCards
+        : '<div class="text-xs italic p-2" style="color:var(--text-muted)">No issues</div>';
+      return renderColumnShell(col.label, col.color, issues.length, inner, ` data-status-category="${col.key}"`);
     })
     .join("");
 }
@@ -387,19 +382,11 @@ export function renderTypeKanban(stateColumns, template) {
         (a, b) => a.priority - b.priority || compareVersions(a, b)
       );
       const catColor = CATEGORY_COLORS[s.category] || "#64748B";
-      return (
-        `<div class="kanban-col flex flex-col" data-status="${escHtml(s.name)}" data-status-category="${escHtml(s.category)}">` +
-        '<div class="flex items-center gap-2 mb-2 px-1">' +
-        `<span class="w-2 h-2 rounded-full" style="background:${catColor}"></span>` +
-        `<span class="font-medium text-xs" style="color:var(--text-primary)">${escHtml(s.name)}</span>` +
-        `<span class="text-xs" style="color:var(--text-muted)">${issues.length}</span>` +
-        "</div>" +
-        '<div class="flex flex-col gap-2 overflow-y-auto scrollbar-thin pr-1 min-h-[200px]" style="max-height: calc(100vh - 160px);">' +
-        (issues.length
-          ? issues.map((i) => renderCard(i)).join("")
-          : '<div class="text-xs italic p-2" style="color:var(--text-muted)">No issues</div>') +
-        "</div></div>"
-      );
+      const inner = issues.length
+        ? issues.map((i) => renderCard(i)).join("")
+        : '<div class="text-xs italic p-2" style="color:var(--text-muted)">No issues</div>';
+      return renderColumnShell(s.name, catColor, issues.length, inner, ` data-status="${escHtml(s.name)}" data-status-category="${escHtml(s.category)}"`);
+
     })
     .join("");
 }

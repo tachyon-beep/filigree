@@ -8,7 +8,9 @@ from pathlib import Path
 import pytest
 
 from filigree.ephemeral import (
+    _matches_expected_process,
     _read_os_command_line,
+    _tokens_contain_args,
     cleanup_legacy_tmp_files,
     cleanup_stale_pid,
     compute_port,
@@ -20,6 +22,78 @@ from filigree.ephemeral import (
     write_pid_file,
     write_port_file,
 )
+
+
+class TestTokensContainArgs:
+    def test_empty_required_args(self) -> None:
+        assert _tokens_contain_args(["foo", "bar"], ()) is True
+
+    def test_single_match(self) -> None:
+        assert _tokens_contain_args(["dashboard", "--port", "8400"], ("dashboard",)) is True
+
+    def test_in_order_match(self) -> None:
+        assert _tokens_contain_args(["dashboard", "--server-mode"], ("dashboard", "--server-mode")) is True
+
+    def test_out_of_order_rejects(self) -> None:
+        assert _tokens_contain_args(["--server-mode", "dashboard"], ("dashboard", "--server-mode")) is False
+
+    def test_missing_token_rejects(self) -> None:
+        assert _tokens_contain_args(["dashboard"], ("dashboard", "--server-mode")) is False
+
+    def test_empty_tokens(self) -> None:
+        assert _tokens_contain_args([], ("dashboard",)) is False
+
+    def test_case_insensitive(self) -> None:
+        assert _tokens_contain_args(["Dashboard", "--Server-Mode"], ("dashboard", "--server-mode")) is True
+
+
+class TestMatchesExpectedProcess:
+    def test_empty_tokens(self) -> None:
+        assert _matches_expected_process([], expected_cmd="filigree") is False
+
+    def test_direct_executable(self) -> None:
+        assert _matches_expected_process(["/usr/bin/filigree", "dashboard"], expected_cmd="filigree") is True
+
+    def test_executable_prefix_match(self) -> None:
+        assert _matches_expected_process(["filigree-dashboard", "serve"], expected_cmd="filigree") is True
+
+    def test_python_module_invocation(self) -> None:
+        assert _matches_expected_process(["python", "-m", "filigree", "dashboard"], expected_cmd="filigree") is True
+
+    def test_python_module_dotted(self) -> None:
+        assert _matches_expected_process(["python", "-m", "filigree.cli", "serve"], expected_cmd="filigree") is True
+
+    def test_unrelated_module_rejects(self) -> None:
+        assert _matches_expected_process(["python", "-m", "other_tool", "serve"], expected_cmd="filigree") is False
+
+    def test_required_args_checked(self) -> None:
+        assert (
+            _matches_expected_process(
+                ["/usr/bin/filigree", "dashboard", "--server-mode"],
+                expected_cmd="filigree",
+                required_args=("dashboard",),
+            )
+            is True
+        )
+
+    def test_required_args_missing(self) -> None:
+        assert (
+            _matches_expected_process(
+                ["/usr/bin/filigree", "session-context"],
+                expected_cmd="filigree",
+                required_args=("dashboard",),
+            )
+            is False
+        )
+
+    def test_second_arg_as_script_path(self) -> None:
+        assert (
+            _matches_expected_process(
+                ["python", "/usr/local/bin/filigree", "serve"],
+                expected_cmd="filigree",
+            )
+            is True
+        )
 
 
 class TestComputePort:

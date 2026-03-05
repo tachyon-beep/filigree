@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sqlite3
 from collections.abc import Callable
 from typing import Any
 
@@ -37,7 +38,7 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
                     "summary": {"type": "string", "description": "Short description of the observation"},
                     "detail": {"type": "string", "description": "Longer explanation or context"},
                     "file_path": {"type": "string", "description": "File path (relative to project root)"},
-                    "line": {"type": "integer", "description": "Line number in file (0-indexed)"},
+                    "line": {"type": "integer", "description": "Line number in file (1-indexed, 0 accepted for unknown)"},
                     "source_issue_id": {"type": "string", "description": "Issue ID that prompted this observation"},
                     "priority": {
                         "type": "integer",
@@ -140,30 +141,15 @@ async def _handle_observe(arguments: dict[str, Any]) -> list[TextContent]:
     if actor_err:
         return actor_err
 
-    summary = args.get("summary", "")
-    if not summary or not summary.strip():
-        return _text(ErrorResponse(error="summary cannot be empty", code="validation_error"))
-
-    priority = args.get("priority", 3)
-    priority_err = _validate_int_range(priority, "priority", min_val=0, max_val=4)
-    if priority_err:
-        return priority_err
-
-    line = args.get("line")
-    if line is not None:
-        line_err = _validate_int_range(line, "line", min_val=0)
-        if line_err:
-            return line_err
-
     tracker = _get_db()
     try:
         obs = tracker.create_observation(
-            summary,
+            args.get("summary", ""),
             detail=args.get("detail", ""),
             file_path=args.get("file_path", ""),
-            line=line,
+            line=args.get("line"),
             source_issue_id=args.get("source_issue_id", ""),
-            priority=priority,
+            priority=args.get("priority", 3),
             actor=actor,
         )
     except ValueError as e:
@@ -177,12 +163,15 @@ async def _handle_list_observations(arguments: dict[str, Any]) -> list[TextConte
     args = _parse_args(arguments, ListObservationsArgs)
     effective_limit, offset = _resolve_pagination(arguments)
     tracker = _get_db()
-    observations = tracker.list_observations(
-        limit=effective_limit + 1,
-        offset=offset,
-        file_path=args.get("file_path", ""),
-        file_id=args.get("file_id", ""),
-    )
+    try:
+        observations = tracker.list_observations(
+            limit=effective_limit + 1,
+            offset=offset,
+            file_path=args.get("file_path", ""),
+            file_id=args.get("file_id", ""),
+        )
+    except sqlite3.OperationalError as e:
+        return _text(ErrorResponse(error=f"Database error: {e}", code="database_error"))
     observations, has_more = _apply_has_more(observations, effective_limit)
     stats = tracker.observation_stats(sweep=False)
     return _text({"observations": observations, "stats": stats, "has_more": has_more})
@@ -217,11 +206,14 @@ async def _handle_batch_dismiss_observations(arguments: dict[str, Any]) -> list[
         return actor_err
 
     tracker = _get_db()
-    count = tracker.batch_dismiss_observations(
-        args.get("ids", []),
-        actor=actor,
-        reason=args.get("reason", ""),
-    )
+    try:
+        count = tracker.batch_dismiss_observations(
+            args.get("ids", []),
+            actor=actor,
+            reason=args.get("reason", ""),
+        )
+    except sqlite3.OperationalError as e:
+        return _text(ErrorResponse(error=f"Database error: {e}", code="database_error"))
     return _text({"dismissed": count, "ok": True})
 
 

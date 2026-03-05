@@ -153,7 +153,7 @@ def migrate_v3_to_v4(conn: sqlite3.Connection) -> None:
 
 
 def _now_iso() -> str:
-    """ISO timestamp for migration comments."""
+    """ISO timestamp for migration comments (Z-suffix, no microseconds — distinct from db_base._now_iso)."""
     from datetime import UTC, datetime
 
     return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")

@@ -523,8 +523,10 @@ class TestObservationsInSummary:
         assert "expiring within 24h" in summary
 
     def test_observation_stats_failure_is_silent(self, db: FiligreeDB) -> None:
-        """If observation_stats() raises, summary still generates."""
-        with patch.object(db, "observation_stats", side_effect=Exception("boom")):
+        """If observation_stats() raises OperationalError (pre-v7 DB), summary still generates."""
+        import sqlite3
+
+        with patch.object(db, "observation_stats", side_effect=sqlite3.OperationalError("no such table: observations")):
             summary = generate_summary(db)
         assert "Project Pulse" in summary
         assert "OBSERVATION" not in summary.upper()

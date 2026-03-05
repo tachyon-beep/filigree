@@ -74,97 +74,93 @@ export async function loadMetrics() {
           '<div style="color:var(--text-muted)" class="mt-1">Close issues to see flow data here.</div>' +
           '<div class="mt-3"><button onclick="var d=document.getElementById(\'insightsDays\');if(d)d.value=\'90\';loadMetrics()" style="color:var(--accent)" class="hover:underline text-xs">Try 90-day window</button></div></div>');
 
-    // Agent workload
-    const agentLoad = {};
-    for (const i of state.allIssues) {
-      if (i.assignee && (i.status_category || "open") === "wip") {
-        agentLoad[i.assignee] = (agentLoad[i.assignee] || 0) + 1;
-      }
-    }
-    const agents = Object.keys(agentLoad).sort((a, b) => agentLoad[b] - agentLoad[a]);
-    if (agents.length) {
-      const maxLoad = Math.max(...agents.map((a) => agentLoad[a]));
-      const agentHtml = agents
-        .map((a) => {
-          const pct = (agentLoad[a] / maxLoad) * 100;
-          return (
-            '<div class="flex items-center gap-2 mb-1">' +
-            '<span class="text-xs w-24 truncate" style="color:var(--text-primary)">' +
-            escHtml(a) +
-            "</span>" +
-            '<div class="flex-1 h-4 rounded overflow-hidden" style="background:var(--surface-base)">' +
-            '<div class="h-full rounded" style="width:' +
-            pct +
-            '%;background:var(--accent)"></div>' +
-            "</div>" +
-            '<span class="text-xs w-6 text-right" style="color:var(--text-secondary)">' +
-            agentLoad[a] +
-            "</span></div>"
-          );
-        })
-        .join("");
-      container.innerHTML +=
-        '<div class="rounded p-4 mt-4" style="background:var(--surface-raised);border:1px solid var(--border-default)">' +
-        '<div class="text-xs font-medium mb-2" style="color:var(--text-secondary)">Agent Workload (Active WIP)</div>' +
-        agentHtml +
-        "</div>";
-    }
-    // Observations stats
-    if (obsStats && obsStats.count > 0) {
-      const staleColor = obsStats.stale_count > 0 ? "text-amber-400" : "text-emerald-400";
-      const expiringColor = obsStats.expiring_soon_count > 0 ? "text-red-400" : "text-emerald-400";
-      container.innerHTML +=
-        '<div class="rounded p-4 mt-4" style="background:var(--surface-raised);border:1px solid var(--border-default)">' +
-        '<div class="text-xs font-medium mb-3" style="color:var(--text-secondary)">Observations</div>' +
-        '<div class="grid grid-cols-4 gap-3">' +
-        '<div><div class="text-lg font-bold" style="color:var(--accent)">' + obsStats.count + '</div>' +
-        '<div class="text-[10px]" style="color:var(--text-muted)">pending</div></div>' +
-        '<div><div class="text-lg font-bold ' + staleColor + '">' + obsStats.stale_count + '</div>' +
-        '<div class="text-[10px]" style="color:var(--text-muted)">stale (&gt;48h)</div></div>' +
-        '<div><div class="text-lg font-bold ' + expiringColor + '">' + obsStats.expiring_soon_count + '</div>' +
-        '<div class="text-[10px]" style="color:var(--text-muted)">expiring &lt;24h</div></div>' +
-        '<div><div class="text-lg font-bold" style="color:var(--text-primary)">' + obsStats.oldest_hours + 'h</div>' +
-        '<div class="text-[10px]" style="color:var(--text-muted)">oldest</div></div>' +
-        '</div></div>';
-    }
-
-    // Activity feed — show 4 preview lines, expand for more
-    const activityBox = document.createElement("div");
-    activityBox.className = "rounded mt-4";
-    activityBox.style.cssText =
-      "background:var(--surface-raised);border:1px solid var(--border-default)";
-    activityBox.innerHTML =
-      '<div class="text-xs font-medium px-4 py-3" style="color:var(--text-secondary)">Recent Activity</div>' +
-      '<div id="activityEmbedContent" class="px-4 pb-3"></div>';
-    container.appendChild(activityBox);
-
-    const actContent = document.getElementById("activityEmbedContent");
-    if (actContent) {
-      const count = await renderActivitySection(actContent, 15);
-      if (count > 4) {
-        const rows = actContent.querySelectorAll(":scope > div");
-        let visible = 0;
-        rows.forEach((row) => {
-          if (row.querySelector("[style*='border-top']")) return; // day separator
-          visible++;
-          if (visible > 4) row.classList.add("hidden");
-        });
-        const more = document.createElement("button");
-        more.className = "text-xs mt-2 hover:underline";
-        more.style.color = "var(--accent)";
-        more.textContent = `Show ${count - 4} more events`;
-        more.onclick = () => {
-          actContent.querySelectorAll(".hidden").forEach((el) => el.classList.remove("hidden"));
-          more.remove();
-        };
-        actContent.appendChild(more);
-      }
-      const header = activityBox.querySelector(".text-xs.font-medium");
-      if (header && count) header.textContent = `Recent Activity (${count} events)`;
-    }
+    renderAgentWorkload(container);
+    renderObservationStats(container, obsStats);
+    await renderActivityEmbed(container);
   } catch (_e) {
     container.innerHTML = '<div class="text-red-400">Failed to load metrics.</div>';
   }
+}
+
+function renderAgentWorkload(container) {
+  const agentLoad = {};
+  for (const i of state.allIssues) {
+    if (i.assignee && (i.status_category || "open") === "wip") {
+      agentLoad[i.assignee] = (agentLoad[i.assignee] || 0) + 1;
+    }
+  }
+  const agents = Object.keys(agentLoad).sort((a, b) => agentLoad[b] - agentLoad[a]);
+  if (!agents.length) return;
+  const maxLoad = Math.max(...agents.map((a) => agentLoad[a]));
+  const agentHtml = agents
+    .map((a) => {
+      const pct = (agentLoad[a] / maxLoad) * 100;
+      return (
+        '<div class="flex items-center gap-2 mb-1">' +
+        '<span class="text-xs w-24 truncate" style="color:var(--text-primary)">' + escHtml(a) + "</span>" +
+        '<div class="flex-1 h-4 rounded overflow-hidden" style="background:var(--surface-base)">' +
+        '<div class="h-full rounded" style="width:' + pct + '%;background:var(--accent)"></div></div>' +
+        '<span class="text-xs w-6 text-right" style="color:var(--text-secondary)">' + agentLoad[a] + "</span></div>"
+      );
+    })
+    .join("");
+  container.innerHTML +=
+    '<div class="rounded p-4 mt-4" style="background:var(--surface-raised);border:1px solid var(--border-default)">' +
+    '<div class="text-xs font-medium mb-2" style="color:var(--text-secondary)">Agent Workload (Active WIP)</div>' +
+    agentHtml + "</div>";
+}
+
+function renderObservationStats(container, obsStats) {
+  if (!obsStats || obsStats.count <= 0) return;
+  const staleColor = obsStats.stale_count > 0 ? "text-amber-400" : "text-emerald-400";
+  const expiringColor = obsStats.expiring_soon_count > 0 ? "text-red-400" : "text-emerald-400";
+  container.innerHTML +=
+    '<div class="rounded p-4 mt-4" style="background:var(--surface-raised);border:1px solid var(--border-default)">' +
+    '<div class="text-xs font-medium mb-3" style="color:var(--text-secondary)">Observations</div>' +
+    '<div class="grid grid-cols-4 gap-3">' +
+    '<div><div class="text-lg font-bold" style="color:var(--accent)">' + obsStats.count + '</div>' +
+    '<div class="text-[10px]" style="color:var(--text-muted)">pending</div></div>' +
+    '<div><div class="text-lg font-bold ' + staleColor + '">' + obsStats.stale_count + '</div>' +
+    '<div class="text-[10px]" style="color:var(--text-muted)">stale (&gt;48h)</div></div>' +
+    '<div><div class="text-lg font-bold ' + expiringColor + '">' + obsStats.expiring_soon_count + '</div>' +
+    '<div class="text-[10px]" style="color:var(--text-muted)">expiring &lt;24h</div></div>' +
+    '<div><div class="text-lg font-bold" style="color:var(--text-primary)">' + obsStats.oldest_hours + 'h</div>' +
+    '<div class="text-[10px]" style="color:var(--text-muted)">oldest</div></div>' +
+    '</div></div>';
+}
+
+async function renderActivityEmbed(container) {
+  const activityBox = document.createElement("div");
+  activityBox.className = "rounded mt-4";
+  activityBox.style.cssText = "background:var(--surface-raised);border:1px solid var(--border-default)";
+  activityBox.innerHTML =
+    '<div class="text-xs font-medium px-4 py-3" style="color:var(--text-secondary)">Recent Activity</div>' +
+    '<div id="activityEmbedContent" class="px-4 pb-3"></div>';
+  container.appendChild(activityBox);
+
+  const actContent = document.getElementById("activityEmbedContent");
+  if (!actContent) return;
+  const count = await renderActivitySection(actContent, 15);
+  if (count > 4) {
+    const rows = actContent.querySelectorAll(":scope > div");
+    let visible = 0;
+    rows.forEach((row) => {
+      if (row.querySelector("[style*='border-top']")) return;
+      visible++;
+      if (visible > 4) row.classList.add("hidden");
+    });
+    const more = document.createElement("button");
+    more.className = "text-xs mt-2 hover:underline";
+    more.style.color = "var(--accent)";
+    more.textContent = `Show ${count - 4} more events`;
+    more.onclick = () => {
+      actContent.querySelectorAll(".hidden").forEach((el) => el.classList.remove("hidden"));
+      more.remove();
+    };
+    actContent.appendChild(more);
+  }
+  const header = activityBox.querySelector(".text-xs.font-medium");
+  if (header && count) header.textContent = `Recent Activity (${count} events)`;
 }
 
 /**

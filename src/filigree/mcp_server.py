@@ -247,7 +247,7 @@ def _build_workflow_text() -> str:
                     lines.append(f"- {obs_stats['stale_count']} stale observation(s) (>48h old). Run `list_observations` to triage.")
                 else:
                     lines.append(f"- {obs_stats['count']} pending observation(s). Use `list_observations` to review.")
-        except Exception:
+        except sqlite3.OperationalError:
             logging.getLogger(__name__).debug("observation stats unavailable in MCP prompt", exc_info=True)
 
         return "\n".join(lines) + "\n"

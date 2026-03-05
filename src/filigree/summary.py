@@ -10,6 +10,7 @@ import contextlib
 import logging
 import os
 import re
+import sqlite3
 import tempfile
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -309,7 +310,7 @@ def generate_summary(db: FiligreeDB) -> str:
             if obs_stats["expiring_soon_count"] > 0:
                 lines.append(f"  ({obs_stats['expiring_soon_count']} expiring within 24h)")
             lines.append("")
-    except Exception:
+    except sqlite3.OperationalError:
         logger.debug("observation stats unavailable in summary", exc_info=True)
 
     return "\n".join(lines)

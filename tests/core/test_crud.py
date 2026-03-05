@@ -1004,6 +1004,53 @@ class TestCompaction:
         deleted = db.compact_events(keep_recent=5)
         assert deleted == 0
 
+    def test_compact_rollback_on_failure(self, db: FiligreeDB) -> None:
+        """compact_events must rollback on mid-loop failure, not leave partial deletes.
+
+        Creates two archived issues with many events. A trigger causes the
+        second DELETE to fail. Without a rollback guard, the first issue's
+        events would be silently deleted while the second's remain.
+        """
+        # Create two archived issues, each with 20 events
+        issues = []
+        for label in ("first", "second"):
+            issue = db.create_issue(f"Compact {label}")
+            for i in range(20):
+                db.conn.execute(
+                    "INSERT INTO events (issue_id, event_type, actor, created_at) VALUES (?, ?, ?, ?)",
+                    (issue.id, "test_event", "tester", f"2026-01-01T00:{i:02d}:00+00:00"),
+                )
+            db.conn.commit()
+            db.close_issue(issue.id)
+            old_date = (datetime.now(UTC) - timedelta(days=60)).isoformat()
+            db.conn.execute("UPDATE issues SET closed_at = ? WHERE id = ?", (old_date, issue.id))
+            db.conn.commit()
+            issues.append(issue)
+        db.archive_closed(days_old=30)
+
+        counts_before = {}
+        for issue in issues:
+            cnt = db.conn.execute("SELECT COUNT(*) as cnt FROM events WHERE issue_id = ?", (issue.id,)).fetchone()["cnt"]
+            counts_before[issue.id] = cnt
+            assert cnt > 10
+
+        # Trigger fails on DELETE for the second archived issue only
+        db.conn.execute(
+            f"CREATE TRIGGER fail_delete BEFORE DELETE ON events "
+            f"WHEN OLD.issue_id = '{issues[1].id}' BEGIN "
+            f"SELECT RAISE(ABORT, 'simulated failure'); END"
+        )
+        with pytest.raises(Exception, match="simulated failure"):
+            db.compact_events(keep_recent=5)
+
+        # Remove the trigger and verify ALL events are intact (rollback worked)
+        db.conn.execute("DROP TRIGGER fail_delete")
+        for issue in issues:
+            after = db.conn.execute("SELECT COUNT(*) as cnt FROM events WHERE issue_id = ?", (issue.id,)).fetchone()["cnt"]
+            assert after == counts_before[issue.id], (
+                f"Issue {issue.id}: expected {counts_before[issue.id]} events after rollback, got {after}"
+            )
+
     def test_vacuum(self, db: FiligreeDB) -> None:
         # vacuum() returns None; verify it completes without error
         db.vacuum()

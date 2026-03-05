@@ -6,7 +6,7 @@ They live in their own table and are promoted to issues or dismissed.
 Includes:
 - 14-day TTL with piggyback sweep on reads (in savepoint)
 - Dismissal audit trail via dismissed_observations table
-- Atomic promotion via DELETE...RETURNING
+- Safe promotion with rollback on failure
 - Age stats for session context prompting
 """
 
@@ -14,9 +14,10 @@ from __future__ import annotations
 
 import logging
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from filigree.db_base import DBMixinProtocol, _now_iso
+from filigree.types.core import ISOTimestamp, ObservationDict, ObservationStatsDict
 
 if TYPE_CHECKING:
     from filigree.core import FileRecord, Issue
@@ -110,7 +111,7 @@ class ObservationsMixin(DBMixinProtocol):
         except Exception:
             logger.warning("Observation sweep failed, rolled back", exc_info=True)
             self.conn.execute("ROLLBACK TO SAVEPOINT sweep_obs")
-            raise
+            return 0  # Sweep is best-effort — don't block reads
 
     def create_observation(
         self,
@@ -122,7 +123,7 @@ class ObservationsMixin(DBMixinProtocol):
         source_issue_id: str = "",
         priority: int = 3,
         actor: str = "",
-    ) -> dict[str, Any]:
+    ) -> ObservationDict:
         if not summary or not summary.strip():
             raise ValueError("Observation summary cannot be empty")
         if not (0 <= priority <= 4):
@@ -160,7 +161,12 @@ class ObservationsMixin(DBMixinProtocol):
                 (summary.strip(), file_path, line if line is not None else -1),
             ).fetchone()
             if existing:
-                return dict(existing)
+                return cast(ObservationDict, dict(existing))
+            # Race condition: dedup index fired but row vanished before SELECT.
+            raise RuntimeError(
+                f"Observation insert conflict but existing record could not be located "
+                f"(summary={summary.strip()!r}, file_path={file_path!r}, line={line!r})"
+            )
         return {
             "id": obs_id,
             "summary": summary.strip(),
@@ -172,7 +178,7 @@ class ObservationsMixin(DBMixinProtocol):
             "priority": priority,
             "actor": actor,
             "created_at": now,
-            "expires_at": expires,
+            "expires_at": ISOTimestamp(expires),
         }
 
     def list_observations(
@@ -182,7 +188,7 @@ class ObservationsMixin(DBMixinProtocol):
         offset: int = 0,
         file_path: str = "",
         file_id: str = "",
-    ) -> list[dict[str, Any]]:
+    ) -> list[ObservationDict]:
         self._sweep_expired_observations()
         if file_id:
             # Direct FK query — more precise than path LIKE.
@@ -203,7 +209,7 @@ class ObservationsMixin(DBMixinProtocol):
                 "SELECT * FROM observations ORDER BY priority ASC, created_at ASC LIMIT ? OFFSET ?",
                 (limit, offset),
             ).fetchall()
-        return [dict(row) for row in rows]
+        return [cast(ObservationDict, dict(row)) for row in rows]
 
     def observation_count(self) -> int:
         """Return total observation count WITHOUT sweeping expired rows.
@@ -216,7 +222,7 @@ class ObservationsMixin(DBMixinProtocol):
         row = self.conn.execute("SELECT COUNT(*) FROM observations").fetchone()
         return int(row[0])
 
-    def observation_stats(self, *, sweep: bool = True) -> dict[str, Any]:
+    def observation_stats(self, *, sweep: bool = True) -> ObservationStatsDict:
         """Return observation count + age stats for session context prompting.
 
         Args:
@@ -359,7 +365,10 @@ class ObservationsMixin(DBMixinProtocol):
             actor=actor or obs["actor"],
         )
 
-        # 4. Issue created successfully — now delete observation and write audit trail
+        # 4. Issue created successfully — now delete observation and write audit trail.
+        #    Best-effort: if this fails, the issue still exists and the observation
+        #    will be swept on TTL expiry. Log and continue rather than raising,
+        #    because the caller must know the issue was created.
         now = _now_iso()
         try:
             self.conn.execute(
@@ -370,12 +379,23 @@ class ObservationsMixin(DBMixinProtocol):
             self.conn.commit()
         except Exception:
             self.conn.rollback()
-            raise
+            logger.warning(
+                "Failed to clean up observation %s after promotion (issue %s created)",
+                obs_id,
+                issue.id,
+                exc_info=True,
+            )
 
-        # 5. Enrichments (non-critical)
-        self.add_label(issue.id, "from-observation")
+        # 5. Enrichments (non-critical — failure should not undo the promotion)
+        try:
+            self.add_label(issue.id, "from-observation")
+        except Exception:
+            logger.warning("Failed to add from-observation label to %s", issue.id, exc_info=True)
 
-        if obs["file_id"]:
-            self.add_file_association(obs["file_id"], issue.id, "mentioned_in")
+        try:
+            if obs["file_id"]:
+                self.add_file_association(obs["file_id"], issue.id, "mentioned_in")
+        except Exception:
+            logger.warning("Failed to add file association for promoted observation %s", obs_id, exc_info=True)
 
         return {"issue": issue}
