@@ -214,6 +214,24 @@ function syncPillUI() {
 }
 
 export function toggleStatusPill(category) {
+  if (category === "done") {
+    const dropdown = document.getElementById("doneTimeBound");
+    if (!state.statusPills.done) {
+      // Phase 1: off → on + show dropdown
+      state.statusPills.done = true;
+      syncPillUI();
+      applyFilters();
+    } else if (dropdown && !dropdown.classList.contains("hidden")) {
+      // Phase 2: on + dropdown visible → on + hide dropdown
+      dropdown.classList.add("hidden");
+    } else {
+      // Phase 3: on + dropdown hidden → off
+      state.statusPills.done = false;
+      syncPillUI();
+      applyFilters();
+    }
+    return;
+  }
   state.statusPills[category] = !state.statusPills[category];
   syncPillUI();
   applyFilters();
@@ -222,6 +240,8 @@ export function toggleStatusPill(category) {
 export function onDoneTimeBoundChange() {
   syncPillUI();
   applyFilters();
+  const dropdown = document.getElementById("doneTimeBound");
+  if (dropdown) dropdown.classList.add("hidden");
 }
 
 export function toggleMultiSelect() {
