@@ -22,7 +22,7 @@ import sys
 import uuid as _uuid
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any
 
 from filigree.db_base import StatusCategory, _now_iso
 from filigree.db_events import EventsMixin
@@ -41,11 +41,13 @@ from filigree.db_schema import CURRENT_SCHEMA_VERSION, SCHEMA_SQL
 from filigree.db_workflow import WorkflowMixin
 from filigree.types.core import (
     FileRecordDict,
+    FindingStatus,
     ISOTimestamp,
     IssueDict,
     PaginatedResult,
     ProjectConfig,
     ScanFindingDict,
+    Severity,
 )
 
 if TYPE_CHECKING:
@@ -60,20 +62,15 @@ __all__ = [
     "VALID_FINDING_STATUSES",
     "VALID_SEVERITIES",
     "FileRecordDict",
+    "FindingStatus",
     "ISOTimestamp",
     "IssueDict",
     "PaginatedResult",
     "ProjectConfig",
     "ScanFindingDict",
+    "Severity",
     "_normalize_scan_path",
 ]
-
-# ---------------------------------------------------------------------------
-# Constrained-string Literal types
-# ---------------------------------------------------------------------------
-
-Severity = Literal["critical", "high", "medium", "low", "info"]
-FindingStatus = Literal["open", "acknowledged", "fixed", "false_positive", "unseen_in_latest"]
 
 
 # ProjectConfig and PaginatedResult moved to filigree.types.core (re-exported above)
@@ -286,7 +283,7 @@ class ScanFinding:
     id: str
     file_id: str
     severity: Severity = "info"
-    status: str = "open"
+    status: FindingStatus = "open"
     scan_source: str = ""
     rule_id: str = ""
     message: str = ""

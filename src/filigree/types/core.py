@@ -1,10 +1,16 @@
-"""Foundational TypedDicts for dataclass to_dict() returns."""
+"""Foundational TypedDicts and Literal types for dataclass to_dict() returns."""
 
 from __future__ import annotations
 
-from typing import Any, NewType, TypedDict
+from typing import Any, Literal, NewType, TypedDict
 
 ISOTimestamp = NewType("ISOTimestamp", str)
+
+# Constrained-string Literal types — canonical definitions.
+# core.py re-exports these; db_files.py derives frozensets via get_args().
+Severity = Literal["critical", "high", "medium", "low", "info"]
+FindingStatus = Literal["open", "acknowledged", "fixed", "false_positive", "unseen_in_latest"]
+StatusCategory = Literal["open", "wip", "done"]
 
 
 class ProjectConfig(TypedDict, total=False):
@@ -33,7 +39,7 @@ class IssueDict(TypedDict):
     id: str
     title: str
     status: str
-    status_category: str
+    status_category: StatusCategory
     priority: int
     type: str
     parent_id: str | None
@@ -68,8 +74,8 @@ class ScanFindingDict(TypedDict):
 
     id: str
     file_id: str
-    severity: str
-    status: str
+    severity: Severity
+    status: FindingStatus
     scan_source: str
     rule_id: str
     message: str

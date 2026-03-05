@@ -5,18 +5,20 @@ from __future__ import annotations
 import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal, Protocol
+from typing import TYPE_CHECKING, Protocol
+
+from filigree.types.core import ISOTimestamp, StatusCategory
 
 if TYPE_CHECKING:
     from filigree.core import Issue
     from filigree.templates import TemplateRegistry
 
-# Type alias used by WorkflowMixin and core.py
-StatusCategory = Literal["open", "wip", "done"]
+# Re-export for backward compat
+__all__ = ["DBMixinProtocol", "StatusCategory", "_now_iso"]
 
 
-def _now_iso() -> str:
-    return datetime.now(UTC).isoformat()
+def _now_iso() -> ISOTimestamp:
+    return ISOTimestamp(datetime.now(UTC).isoformat())
 
 
 class DBMixinProtocol(Protocol):

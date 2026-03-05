@@ -13,9 +13,10 @@ import logging
 import os
 import sqlite3
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, get_args
 
 from filigree.db_base import DBMixinProtocol, _now_iso
+from filigree.types.core import FindingStatus, Severity
 from filigree.types.files import ScanIngestResult
 
 if TYPE_CHECKING:
@@ -38,8 +39,8 @@ logger = logging.getLogger(__name__)
 # Constants (originally in core.py, only used by file-domain methods)
 # ---------------------------------------------------------------------------
 
-VALID_SEVERITIES = frozenset({"critical", "high", "medium", "low", "info"})
-VALID_FINDING_STATUSES = frozenset({"open", "acknowledged", "fixed", "false_positive", "unseen_in_latest"})
+VALID_SEVERITIES: frozenset[str] = frozenset(get_args(Severity))
+VALID_FINDING_STATUSES: frozenset[str] = frozenset(get_args(FindingStatus))
 VALID_ASSOC_TYPES = frozenset({"bug_in", "task_for", "scan_finding", "mentioned_in"})
 
 
