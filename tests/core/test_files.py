@@ -1167,7 +1167,7 @@ class TestFileDetailCore:
     def test_get_file_detail_structure(self, db: FiligreeDB) -> None:
         f = db.register_file("src/main.py", language="python")
         detail = db.get_file_detail(f.id)
-        assert set(detail.keys()) == {"file", "associations", "recent_findings", "summary"}
+        assert set(detail.keys()) == {"file", "associations", "recent_findings", "summary", "observation_count"}
         assert detail["file"]["path"] == "src/main.py"
         assert detail["associations"] == []
         assert detail["recent_findings"] == []

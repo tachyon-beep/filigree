@@ -87,7 +87,6 @@ class TestBuildContext:
         assert "\t" not in issue_lines[0]
         assert "\x00" not in issue_lines[0]
 
-
     def test_no_observations_no_mention(self, db: FiligreeDB) -> None:
         result = _build_context(db)
         assert "OBSERVATION" not in result.upper()

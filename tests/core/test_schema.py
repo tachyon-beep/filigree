@@ -1135,21 +1135,28 @@ class TestObservationsSchema:
     """Verify observations tables are created."""
 
     def test_observations_table_exists(self, db: FiligreeDB) -> None:
-        row = db.conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='observations'"
-        ).fetchone()
+        row = db.conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='observations'").fetchone()
         assert row is not None
 
     def test_observations_columns(self, db: FiligreeDB) -> None:
         cols = {row[1] for row in db.conn.execute("PRAGMA table_info(observations)").fetchall()}
-        expected = {"id", "summary", "detail", "file_id", "file_path", "line",
-                    "source_issue_id", "priority", "actor", "created_at", "expires_at"}
+        expected = {
+            "id",
+            "summary",
+            "detail",
+            "file_id",
+            "file_path",
+            "line",
+            "source_issue_id",
+            "priority",
+            "actor",
+            "created_at",
+            "expires_at",
+        }
         assert expected.issubset(cols)
 
     def test_dismissed_observations_table_exists(self, db: FiligreeDB) -> None:
-        row = db.conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='dismissed_observations'"
-        ).fetchone()
+        row = db.conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='dismissed_observations'").fetchone()
         assert row is not None
 
     def test_dismissed_observations_columns(self, db: FiligreeDB) -> None:
@@ -1158,17 +1165,21 @@ class TestObservationsSchema:
         assert expected.issubset(cols)
 
     def test_observations_indexes(self, db: FiligreeDB) -> None:
-        indexes = {row[1] for row in db.conn.execute(
-            "SELECT * FROM sqlite_master WHERE type='index' AND tbl_name='observations'"
-        ).fetchall() if row[1]}
+        indexes = {
+            row[1]
+            for row in db.conn.execute("SELECT * FROM sqlite_master WHERE type='index' AND tbl_name='observations'").fetchall()
+            if row[1]
+        }
         assert "idx_observations_priority" in indexes
         assert "idx_observations_expires" in indexes
         assert "idx_observations_dedup" in indexes
 
     def test_dismissed_observations_index(self, db: FiligreeDB) -> None:
-        indexes = {row[1] for row in db.conn.execute(
-            "SELECT * FROM sqlite_master WHERE type='index' AND tbl_name='dismissed_observations'"
-        ).fetchall() if row[1]}
+        indexes = {
+            row[1]
+            for row in db.conn.execute("SELECT * FROM sqlite_master WHERE type='index' AND tbl_name='dismissed_observations'").fetchall()
+            if row[1]
+        }
         assert "idx_dismissed_obs_id" in indexes
 
 
@@ -1537,8 +1548,19 @@ class TestMigrateV6ToV7:
     def test_observations_table_created(self, v6_db: sqlite3.Connection) -> None:
         apply_pending_migrations(v6_db, 7)
         cols = _get_table_columns(v6_db, "observations")
-        expected = {"id", "summary", "detail", "file_id", "file_path", "line",
-                    "source_issue_id", "priority", "actor", "created_at", "expires_at"}
+        expected = {
+            "id",
+            "summary",
+            "detail",
+            "file_id",
+            "file_path",
+            "line",
+            "source_issue_id",
+            "priority",
+            "actor",
+            "created_at",
+            "expires_at",
+        }
         assert expected.issubset(cols)
 
     def test_dismissed_observations_table_created(self, v6_db: sqlite3.Connection) -> None:

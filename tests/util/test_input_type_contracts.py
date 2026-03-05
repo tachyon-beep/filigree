@@ -29,6 +29,7 @@ _MCP_MODULES = [
     "filigree.mcp_tools.meta",
     "filigree.mcp_tools.workflow",
     "filigree.mcp_tools.files",
+    "filigree.mcp_tools.observations",
 ]
 
 

@@ -9,6 +9,7 @@ Includes:
 - Atomic promotion via DELETE...RETURNING
 - Age stats for session context prompting
 """
+
 from __future__ import annotations
 
 import logging
@@ -42,7 +43,11 @@ class ObservationsMixin(DBMixinProtocol):
     if TYPE_CHECKING:
         # From FilesMixin
         def register_file(
-            self, path: str, *, language: str = "", file_type: str = "",
+            self,
+            path: str,
+            *,
+            language: str = "",
+            file_type: str = "",
             metadata: dict[str, Any] | None = None,
         ) -> FileRecord: ...
         def add_file_association(self, file_id: str, issue_id: str, assoc_type: str) -> None: ...
@@ -50,9 +55,15 @@ class ObservationsMixin(DBMixinProtocol):
         # From IssuesMixin — stub must match real signature exactly
         # (test_stub_signature_matches enforces parameter count)
         def create_issue(
-            self, title: str, *, type: str = "task", priority: int = 2,
-            parent_id: str | None = None, assignee: str = "",
-            description: str = "", notes: str = "",
+            self,
+            title: str,
+            *,
+            type: str = "task",
+            priority: int = 2,
+            parent_id: str | None = None,
+            assignee: str = "",
+            description: str = "",
+            notes: str = "",
             fields: dict[str, Any] | None = None,
             labels: list[str] | None = None,
             deps: list[str] | None = None,
@@ -135,36 +146,44 @@ class ObservationsMixin(DBMixinProtocol):
             "INSERT OR IGNORE INTO observations (id, summary, detail, file_id, file_path, line, "
             "source_issue_id, priority, actor, created_at, expires_at) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (obs_id, summary.strip(), detail, file_id, file_path, line,
-             source_issue_id, priority, actor, now, expires),
+            (obs_id, summary.strip(), detail, file_id, file_path, line, source_issue_id, priority, actor, now, expires),
         )
         self.conn.commit()
         if cursor.rowcount == 0:
             # Duplicate — return the existing observation
             existing = self.conn.execute(
-                "SELECT * FROM observations WHERE summary = ? AND file_path = ? "
-                "AND coalesce(line, -1) = ?",
+                "SELECT * FROM observations WHERE summary = ? AND file_path = ? AND coalesce(line, -1) = ?",
                 (summary.strip(), file_path, line if line is not None else -1),
             ).fetchone()
             if existing:
                 return dict(existing)
         return {
-            "id": obs_id, "summary": summary.strip(), "detail": detail,
-            "file_id": file_id, "file_path": file_path, "line": line,
-            "source_issue_id": source_issue_id, "priority": priority, "actor": actor,
-            "created_at": now, "expires_at": expires,
+            "id": obs_id,
+            "summary": summary.strip(),
+            "detail": detail,
+            "file_id": file_id,
+            "file_path": file_path,
+            "line": line,
+            "source_issue_id": source_issue_id,
+            "priority": priority,
+            "actor": actor,
+            "created_at": now,
+            "expires_at": expires,
         }
 
     def list_observations(
-        self, *, limit: int = 100, offset: int = 0,
-        file_path: str = "", file_id: str = "",
+        self,
+        *,
+        limit: int = 100,
+        offset: int = 0,
+        file_path: str = "",
+        file_id: str = "",
     ) -> list[dict[str, Any]]:
         self._sweep_expired_observations()
         if file_id:
             # Direct FK query — more precise than path LIKE.
             rows = self.conn.execute(
-                "SELECT * FROM observations WHERE file_id = ? "
-                "ORDER BY priority ASC, created_at ASC LIMIT ? OFFSET ?",
+                "SELECT * FROM observations WHERE file_id = ? ORDER BY priority ASC, created_at ASC LIMIT ? OFFSET ?",
                 (file_id, limit, offset),
             ).fetchall()
         elif file_path:
@@ -172,8 +191,7 @@ class ObservationsMixin(DBMixinProtocol):
             # from being interpreted as SQL wildcards.
             escaped = file_path.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
             rows = self.conn.execute(
-                "SELECT * FROM observations WHERE file_path LIKE ? ESCAPE '\\' "
-                "ORDER BY priority ASC, created_at ASC LIMIT ? OFFSET ?",
+                "SELECT * FROM observations WHERE file_path LIKE ? ESCAPE '\\' ORDER BY priority ASC, created_at ASC LIMIT ? OFFSET ?",
                 (f"%{escaped}%", limit, offset),
             ).fetchall()
         else:
@@ -192,7 +210,7 @@ class ObservationsMixin(DBMixinProtocol):
         explicitly if an accurate count is needed.
         """
         row = self.conn.execute("SELECT COUNT(*) FROM observations").fetchone()
-        return row[0]
+        return int(row[0])
 
     def observation_stats(self, *, sweep: bool = True) -> dict[str, Any]:
         """Return observation count + age stats for session context prompting.
@@ -212,15 +230,9 @@ class ObservationsMixin(DBMixinProtocol):
         stale_cutoff = (now - timedelta(hours=STALE_THRESHOLD_HOURS)).isoformat()
         expiring_cutoff = (now + timedelta(hours=24)).isoformat()
 
-        stale = self.conn.execute(
-            "SELECT COUNT(*) FROM observations WHERE created_at <= ?", (stale_cutoff,)
-        ).fetchone()[0]
-        expiring = self.conn.execute(
-            "SELECT COUNT(*) FROM observations WHERE expires_at <= ?", (expiring_cutoff,)
-        ).fetchone()[0]
-        oldest_row = self.conn.execute(
-            "SELECT MIN(created_at) FROM observations"
-        ).fetchone()
+        stale = self.conn.execute("SELECT COUNT(*) FROM observations WHERE created_at <= ?", (stale_cutoff,)).fetchone()[0]
+        expiring = self.conn.execute("SELECT COUNT(*) FROM observations WHERE expires_at <= ?", (expiring_cutoff,)).fetchone()[0]
+        oldest_row = self.conn.execute("SELECT MIN(created_at) FROM observations").fetchone()
         oldest_hours = 0.0
         if oldest_row and oldest_row[0]:
             oldest_dt = datetime.fromisoformat(oldest_row[0])
@@ -234,22 +246,29 @@ class ObservationsMixin(DBMixinProtocol):
         }
 
     def dismiss_observation(
-        self, obs_id: str, *, actor: str = "", reason: str = "",
+        self,
+        obs_id: str,
+        *,
+        actor: str = "",
+        reason: str = "",
     ) -> None:
         row = self.conn.execute("SELECT id, summary FROM observations WHERE id = ?", (obs_id,)).fetchone()
         if row is None:
             raise ValueError(f"Observation not found: {obs_id}")
         now = _now_iso()
         self.conn.execute(
-            "INSERT INTO dismissed_observations (obs_id, summary, actor, reason, dismissed_at) "
-            "VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO dismissed_observations (obs_id, summary, actor, reason, dismissed_at) VALUES (?, ?, ?, ?, ?)",
             (obs_id, row["summary"], actor, reason, now),
         )
         self.conn.execute("DELETE FROM observations WHERE id = ?", (obs_id,))
         self.conn.commit()
 
     def batch_dismiss_observations(
-        self, obs_ids: list[str], *, actor: str = "", reason: str = "",
+        self,
+        obs_ids: list[str],
+        *,
+        actor: str = "",
+        reason: str = "",
     ) -> int:
         if not obs_ids:
             return 0
@@ -257,12 +276,13 @@ class ObservationsMixin(DBMixinProtocol):
         placeholders = ",".join("?" for _ in obs_ids)
         # Log all to audit trail before deletion
         self.conn.execute(
-            f"INSERT INTO dismissed_observations (obs_id, summary, actor, reason, dismissed_at) "  # noqa: S608
+            f"INSERT INTO dismissed_observations (obs_id, summary, actor, reason, dismissed_at) "
             f"SELECT id, summary, ?, ?, ? FROM observations WHERE id IN ({placeholders})",
             [actor, reason, now, *obs_ids],
         )
         cursor = self.conn.execute(
-            f"DELETE FROM observations WHERE id IN ({placeholders})", obs_ids  # noqa: S608
+            f"DELETE FROM observations WHERE id IN ({placeholders})",
+            obs_ids,
         )
         self.conn.commit()
         return cursor.rowcount
@@ -282,9 +302,7 @@ class ObservationsMixin(DBMixinProtocol):
         # observation is restored via rollback — no data loss.
         self.conn.execute("SAVEPOINT promote_obs")
         try:
-            row = self.conn.execute(
-                "DELETE FROM observations WHERE id = ? RETURNING *", (obs_id,)
-            ).fetchone()
+            row = self.conn.execute("DELETE FROM observations WHERE id = ? RETURNING *", (obs_id,)).fetchone()
             if row is None:
                 self.conn.execute("RELEASE SAVEPOINT promote_obs")
                 raise ValueError(f"Observation not found: {obs_id}")
@@ -316,8 +334,7 @@ class ObservationsMixin(DBMixinProtocol):
             # preserved in the audit trail.
             now = _now_iso()
             self.conn.execute(
-                "INSERT INTO dismissed_observations (obs_id, summary, actor, reason, dismissed_at) "
-                "VALUES (?, ?, ?, 'promoted', ?)",
+                "INSERT INTO dismissed_observations (obs_id, summary, actor, reason, dismissed_at) VALUES (?, ?, ?, 'promoted', ?)",
                 (obs_id, obs["summary"], actor or obs["actor"], now),
             )
 
@@ -350,6 +367,6 @@ class ObservationsMixin(DBMixinProtocol):
             try:
                 self.conn.execute("ROLLBACK TO SAVEPOINT promote_obs")
                 self.conn.execute("RELEASE SAVEPOINT promote_obs")
-            except Exception:
+            except Exception:  # noqa: S110
                 pass  # Savepoint already released — see comment above
             raise

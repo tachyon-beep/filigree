@@ -1,7 +1,9 @@
 """Tests for observation CRUD operations."""
+
 from __future__ import annotations
 
 import pytest
+
 from filigree.core import FiligreeDB
 
 
@@ -160,9 +162,7 @@ class TestListObservations:
         result = db.list_observations()
         assert len(result) == 0
         # Verify audit trail
-        row = db.conn.execute(
-            "SELECT * FROM dismissed_observations WHERE obs_id = ?", (obs["id"],)
-        ).fetchone()
+        row = db.conn.execute("SELECT * FROM dismissed_observations WHERE obs_id = ?", (obs["id"],)).fetchone()
         assert row is not None
         assert row["reason"] == "expired (TTL)"
         assert row["actor"] == "system"
@@ -174,9 +174,7 @@ class TestDismissObservation:
         db.dismiss_observation(obs["id"], actor="tester", reason="not a real bug")
         assert db.list_observations() == []
         # Check audit trail
-        row = db.conn.execute(
-            "SELECT * FROM dismissed_observations WHERE obs_id = ?", (obs["id"],)
-        ).fetchone()
+        row = db.conn.execute("SELECT * FROM dismissed_observations WHERE obs_id = ?", (obs["id"],)).fetchone()
         assert row is not None
         assert row["summary"] == "To dismiss"
         assert row["actor"] == "tester"
@@ -204,12 +202,10 @@ class TestDismissObservation:
 
     def test_batch_dismiss_duplicate_ids(self, db: FiligreeDB) -> None:
         o1 = db.create_observation("Only one")
-        result = db.batch_dismiss_observations([o1["id"], o1["id"]])
+        db.batch_dismiss_observations([o1["id"], o1["id"]])
         assert db.observation_count() == 0
         # Audit trail should have exactly one entry (SQL IN deduplicates)
-        count = db.conn.execute(
-            "SELECT COUNT(*) FROM dismissed_observations WHERE obs_id = ?", (o1["id"],)
-        ).fetchone()[0]
+        count = db.conn.execute("SELECT COUNT(*) FROM dismissed_observations WHERE obs_id = ?", (o1["id"],)).fetchone()[0]
         assert count == 1
 
     def test_batch_dismiss_partial_invalid_ids(self, db: FiligreeDB) -> None:
@@ -240,9 +236,7 @@ class TestPromoteObservation:
     def test_promote_adds_from_observation_label(self, db: FiligreeDB) -> None:
         obs = db.create_observation("bug")
         result = db.promote_observation(obs["id"])
-        labels = db.conn.execute(
-            "SELECT label FROM labels WHERE issue_id = ?", (result["issue"].id,)
-        ).fetchall()
+        labels = db.conn.execute("SELECT label FROM labels WHERE issue_id = ?", (result["issue"].id,)).fetchall()
         assert any(row["label"] == "from-observation" for row in labels)
 
     def test_promote_with_file_creates_association(self, db: FiligreeDB) -> None:
@@ -255,9 +249,7 @@ class TestPromoteObservation:
         """Promoted observations are logged to audit trail with reason='promoted'."""
         obs = db.create_observation("will promote")
         db.promote_observation(obs["id"])
-        row = db.conn.execute(
-            "SELECT * FROM dismissed_observations WHERE obs_id = ?", (obs["id"],)
-        ).fetchone()
+        row = db.conn.execute("SELECT * FROM dismissed_observations WHERE obs_id = ?", (obs["id"],)).fetchone()
         assert row is not None
         assert row["reason"] == "promoted"
 
@@ -287,14 +279,12 @@ class TestPromoteObservation:
     def test_promote_safety_net_on_create_issue_failure(self, db: FiligreeDB) -> None:
         """If create_issue raises, the audit trail entry still exists as a safety net."""
         from unittest.mock import patch
+
         obs = db.create_observation("will fail promote")
-        with patch.object(db, "create_issue", side_effect=RuntimeError("boom")):
-            with pytest.raises(RuntimeError, match="boom"):
-                db.promote_observation(obs["id"])
+        with patch.object(db, "create_issue", side_effect=RuntimeError("boom")), pytest.raises(RuntimeError, match="boom"):
+            db.promote_observation(obs["id"])
         # Audit trail should have the safety-net entry
-        row = db.conn.execute(
-            "SELECT * FROM dismissed_observations WHERE obs_id = ?", (obs["id"],)
-        ).fetchone()
+        row = db.conn.execute("SELECT * FROM dismissed_observations WHERE obs_id = ?", (obs["id"],)).fetchone()
         assert row is not None
         assert row["reason"] == "promoted"
 
@@ -302,11 +292,11 @@ class TestPromoteObservation:
         """Known v1 limitation: if add_label raises after create_issue succeeds,
         the issue exists without the from-observation label."""
         from unittest.mock import patch
+
         count_before = db.conn.execute("SELECT COUNT(*) FROM issues").fetchone()[0]
         obs = db.create_observation("will partially fail")
-        with patch.object(db, "add_label", side_effect=RuntimeError("label boom")):
-            with pytest.raises(RuntimeError, match="label boom"):
-                db.promote_observation(obs["id"])
+        with patch.object(db, "add_label", side_effect=RuntimeError("label boom")), pytest.raises(RuntimeError, match="label boom"):
+            db.promote_observation(obs["id"])
         # Observation is gone
         assert db.observation_count() == 0
         # Issue WAS created (known partial-success state)

@@ -75,7 +75,7 @@ class TestFileEndpoints:
         assert resp.status_code == 200
         data = resp.json()
         # Top-level keys are separated data layers
-        assert set(data.keys()) == {"file", "associations", "recent_findings", "summary"}
+        assert set(data.keys()) == {"file", "associations", "recent_findings", "summary", "observation_count"}
         assert data["file"]["path"] == "src/main.py"
         assert data["file"]["language"] == "python"
         assert data["associations"] == []

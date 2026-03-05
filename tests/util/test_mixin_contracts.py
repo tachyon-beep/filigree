@@ -617,7 +617,9 @@ def test_filigreedb_mro_order() -> None:
     from filigree.db_workflow import WorkflowMixin
 
     mro = FiligreeDB.__mro__
-    mixin_order = [cls for cls in mro if cls in {FilesMixin, IssuesMixin, EventsMixin, WorkflowMixin, MetaMixin, PlanningMixin, ObservationsMixin}]
+    mixin_order = [
+        cls for cls in mro if cls in {FilesMixin, IssuesMixin, EventsMixin, WorkflowMixin, MetaMixin, PlanningMixin, ObservationsMixin}
+    ]
     # Must match the class definition order in core.py:
     # class FiligreeDB(FilesMixin, IssuesMixin, EventsMixin, WorkflowMixin, MetaMixin, PlanningMixin, ObservationsMixin)
     expected_order = [FilesMixin, IssuesMixin, EventsMixin, WorkflowMixin, MetaMixin, PlanningMixin, ObservationsMixin]

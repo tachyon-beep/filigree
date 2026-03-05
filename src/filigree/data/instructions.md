@@ -15,6 +15,9 @@ faster and return structured data. Key tools:
 - `create_plan` / `get_plan` — milestone planning
 - `get_stats` / `get_metrics` — project health
 - `get_valid_transitions` — workflow navigation
+- `observe` / `list_observations` / `dismiss_observation` / `promote_observation` — agent scratchpad
+
+Observations are fire-and-forget notes that expire after 14 days. Use `list_issues --label=from-observation` to find promoted observations.
 
 Fall back to CLI (`filigree <command>`) when MCP is unavailable.
 

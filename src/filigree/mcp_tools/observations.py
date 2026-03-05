@@ -1,4 +1,5 @@
 """MCP tools for observation CRUD — agent scratchpad."""
+
 from __future__ import annotations
 
 from collections.abc import Callable

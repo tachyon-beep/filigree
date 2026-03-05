@@ -328,16 +328,9 @@ def migrate_v6_to_v7(conn: sqlite3.Connection) -> None:
             created_at      TEXT NOT NULL,
             expires_at      TEXT NOT NULL
         )""")
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_observations_priority ON observations(priority, created_at)"
-    )
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_observations_expires ON observations(expires_at)"
-    )
-    conn.execute(
-        "CREATE UNIQUE INDEX IF NOT EXISTS idx_observations_dedup "
-        "ON observations(summary, file_path, coalesce(line, -1))"
-    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_observations_priority ON observations(priority, created_at)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_observations_expires ON observations(expires_at)")
+    conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_observations_dedup ON observations(summary, file_path, coalesce(line, -1))")
     conn.execute("""\
         CREATE TABLE IF NOT EXISTS dismissed_observations (
             id           INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -347,9 +340,7 @@ def migrate_v6_to_v7(conn: sqlite3.Connection) -> None:
             reason       TEXT DEFAULT '',
             dismissed_at TEXT NOT NULL
         )""")
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_dismissed_obs_id ON dismissed_observations(obs_id)"
-    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_dismissed_obs_id ON dismissed_observations(obs_id)")
 
 
 MIGRATIONS: dict[int, MigrationFn] = {

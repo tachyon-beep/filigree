@@ -989,9 +989,7 @@ class FilesMixin(DBMixinProtocol):
         # Observation count (raw, no sweep — read-only path).
         # Guarded for pre-v7 DBs where observations table may not exist.
         try:
-            obs_count = self.conn.execute(
-                "SELECT COUNT(*) FROM observations WHERE file_id = ?", (file_id,)
-            ).fetchone()[0]
+            obs_count = self.conn.execute("SELECT COUNT(*) FROM observations WHERE file_id = ?", (file_id,)).fetchone()[0]
         except Exception:
             obs_count = 0
         return {

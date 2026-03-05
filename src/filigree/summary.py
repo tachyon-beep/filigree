@@ -298,7 +298,9 @@ def generate_summary(db: FiligreeDB) -> str:
         obs_stats = db.observation_stats(sweep=False)
         if obs_stats["count"] > 0:
             if obs_stats["stale_count"] > 0:
-                lines.append(f"STALE OBSERVATIONS: {obs_stats['stale_count']} observation(s) older than 48 hours (oldest: {obs_stats['oldest_hours']:.0f}h ago)")
+                stale_n = obs_stats["stale_count"]
+                oldest_h = obs_stats["oldest_hours"]
+                lines.append(f"STALE OBSERVATIONS: {stale_n} observation(s) older than 48 hours (oldest: {oldest_h:.0f}h ago)")
                 lines.append(f"  Total pending: {obs_stats['count']}. Run `list_observations` to review.")
             else:
                 lines.append(f"OBSERVATIONS: {obs_stats['count']} pending (oldest: {obs_stats['oldest_hours']:.0f}h ago)")

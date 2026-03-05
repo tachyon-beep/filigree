@@ -1,4 +1,5 @@
 """MCP tool tests for observation tools."""
+
 from __future__ import annotations
 
 from filigree.core import FiligreeDB
@@ -15,14 +16,17 @@ class TestObserveTool:
         assert data["priority"] == 3
 
     async def test_observe_with_all_fields(self, mcp_db: FiligreeDB) -> None:
-        result = await call_tool("observe", {
-            "summary": "Null deref risk",
-            "detail": "result.data used without check",
-            "file_path": "src/core.py",
-            "line": 42,
-            "priority": 1,
-            "actor": "claude",
-        })
+        result = await call_tool(
+            "observe",
+            {
+                "summary": "Null deref risk",
+                "detail": "result.data used without check",
+                "file_path": "src/core.py",
+                "line": 42,
+                "priority": 1,
+                "actor": "claude",
+            },
+        )
         data = _parse(result)
         assert data["summary"] == "Null deref risk"
         assert data["priority"] == 1
@@ -43,10 +47,13 @@ class TestObserveTool:
         assert data["priority"] == 4
 
     async def test_observe_with_source_issue(self, mcp_db: FiligreeDB) -> None:
-        result = await call_tool("observe", {
-            "summary": "side note",
-            "source_issue_id": "mcp-abc123",
-        })
+        result = await call_tool(
+            "observe",
+            {
+                "summary": "side note",
+                "source_issue_id": "mcp-abc123",
+            },
+        )
         data = _parse(result)
         assert data["source_issue_id"] == "mcp-abc123"
 
@@ -98,15 +105,16 @@ class TestDismissObservationTool:
 
     async def test_dismiss_with_reason(self, mcp_db: FiligreeDB) -> None:
         obs = mcp_db.create_observation("Not a bug")
-        result = await call_tool("dismiss_observation", {
-            "id": obs["id"],
-            "reason": "false positive",
-            "actor": "tester",
-        })
+        result = await call_tool(
+            "dismiss_observation",
+            {
+                "id": obs["id"],
+                "reason": "false positive",
+                "actor": "tester",
+            },
+        )
         _parse(result)
-        row = mcp_db.conn.execute(
-            "SELECT reason FROM dismissed_observations WHERE obs_id = ?", (obs["id"],)
-        ).fetchone()
+        row = mcp_db.conn.execute("SELECT reason FROM dismissed_observations WHERE obs_id = ?", (obs["id"],)).fetchone()
         assert row["reason"] == "false positive"
 
     async def test_dismiss_nonexistent_fails(self, mcp_db: FiligreeDB) -> None:
@@ -120,9 +128,12 @@ class TestBatchDismissTool:
         o1 = mcp_db.create_observation("One")
         o2 = mcp_db.create_observation("Two")
         mcp_db.create_observation("Three")
-        result = await call_tool("batch_dismiss_observations", {
-            "ids": [o1["id"], o2["id"]],
-        })
+        result = await call_tool(
+            "batch_dismiss_observations",
+            {
+                "ids": [o1["id"], o2["id"]],
+            },
+        )
         data = _parse(result)
         remaining = mcp_db.list_observations()
         assert len(remaining) == 1
@@ -148,10 +159,13 @@ class TestPromoteObservationTool:
             file_path="src/api.py",
             priority=2,
         )
-        result = await call_tool("promote_observation", {
-            "id": obs["id"],
-            "type": "bug",
-        })
+        result = await call_tool(
+            "promote_observation",
+            {
+                "id": obs["id"],
+                "type": "bug",
+            },
+        )
         data = _parse(result)
         assert "issue" in data
         assert data["issue"]["title"] == "Null pointer risk"
