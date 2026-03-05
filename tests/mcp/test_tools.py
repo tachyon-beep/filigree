@@ -792,6 +792,10 @@ class TestWorkflowTemplateTools:
             assert "category" in t
             assert "ready" in t
             assert "missing_fields" in t
+            # H1 regression: missing_fields must always be list[str], never list[dict]
+            assert isinstance(t["missing_fields"], list)
+            for mf in t["missing_fields"]:
+                assert isinstance(mf, str), f"missing_fields element should be str, got {type(mf)}"
 
     async def test_get_valid_transitions_not_found(self, mcp_db: FiligreeDB) -> None:
         result = await call_tool("get_valid_transitions", {"issue_id": "nonexistent-xyz"})
@@ -865,6 +869,10 @@ class TestMCPMutationEnhancements:
         assert "valid_transitions" in data
         assert isinstance(data["valid_transitions"], list)
         assert len(data["valid_transitions"]) >= 1
+        # H1 regression: missing_fields shape must be list[str] in both MCP paths
+        for t in data["valid_transitions"]:
+            for mf in t.get("missing_fields", []):
+                assert isinstance(mf, str), f"missing_fields element should be str, got {type(mf)}"
 
     async def test_get_issue_without_transitions(self, mcp_db: FiligreeDB) -> None:
         issue = mcp_db.create_issue("No transitions")

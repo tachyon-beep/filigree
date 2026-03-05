@@ -19,7 +19,7 @@ class TransitionDetail(TypedDict):
     category: str
     enforcement: str | None
     requires_fields: list[str]
-    missing_fields: list[str] | list[dict[str, Any]]
+    missing_fields: list[str]
     ready: bool
 
 

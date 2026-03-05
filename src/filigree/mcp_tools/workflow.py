@@ -262,9 +262,6 @@ async def _handle_get_valid_transitions(arguments: dict[str, Any]) -> list[TextC
     tracker = _get_db()
     try:
         transitions = tracker.get_valid_transitions(args["issue_id"])
-        issue = tracker.get_issue(args["issue_id"])
-        tpl_data = tracker.get_template(issue.type)
-        field_schemas = {f["name"]: f for f in tpl_data["fields_schema"]} if tpl_data else {}
         return _text(
             [
                 {
@@ -272,13 +269,7 @@ async def _handle_get_valid_transitions(arguments: dict[str, Any]) -> list[TextC
                     "category": t.category,
                     "enforcement": t.enforcement,
                     "requires_fields": list(t.requires_fields),
-                    "missing_fields": [
-                        {
-                            "name": f,
-                            **{k: v for k, v in field_schemas.get(f, {}).items() if k != "name"},
-                        }
-                        for f in t.missing_fields
-                    ],
+                    "missing_fields": list(t.missing_fields),
                     "ready": t.ready,
                 }
                 for t in transitions

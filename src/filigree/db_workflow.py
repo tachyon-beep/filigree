@@ -22,7 +22,7 @@ from filigree.types.workflow import (
 )
 
 if TYPE_CHECKING:
-    from filigree.templates import TemplateRegistry, TransitionOption, ValidationResult
+    from filigree.templates import FieldSchema, TemplateRegistry, TransitionOption, ValidationResult
 
 
 class WorkflowMixin(DBMixinProtocol):
@@ -52,6 +52,22 @@ class WorkflowMixin(DBMixinProtocol):
 
     # -- Templates -----------------------------------------------------------
 
+    @staticmethod
+    def _field_schema_to_info(f: FieldSchema) -> FieldSchemaInfo:
+        """Convert a FieldSchema dataclass to a FieldSchemaInfo TypedDict."""
+        info: FieldSchemaInfo = FieldSchemaInfo(name=f.name, type=f.type, description=f.description)
+        if f.options:
+            info["options"] = list(f.options)
+        if f.default is not None:
+            info["default"] = f.default
+        if f.required_at:
+            info["required_at"] = list(f.required_at)
+        if f.pattern:
+            info["pattern"] = f.pattern
+        if f.unique:
+            info["unique"] = f.unique
+        return info
+
     def _seed_templates(self) -> None:
         """Seed built-in packs and type templates into the database."""
         from filigree.core import _seed_builtin_packs
@@ -68,20 +84,7 @@ class WorkflowMixin(DBMixinProtocol):
         tpl = self.templates.get_type(issue_type)
         if tpl is None:
             return None
-        fields_schema: list[FieldSchemaInfo] = []
-        for f in tpl.fields_schema:
-            field_info: FieldSchemaInfo = FieldSchemaInfo(name=f.name, type=f.type, description=f.description)
-            if f.options:
-                field_info["options"] = list(f.options)
-            if f.default is not None:
-                field_info["default"] = f.default
-            if f.required_at:
-                field_info["required_at"] = list(f.required_at)
-            if f.pattern:
-                field_info["pattern"] = f.pattern
-            if f.unique:
-                field_info["unique"] = f.unique
-            fields_schema.append(field_info)
+        fields_schema = [self._field_schema_to_info(f) for f in tpl.fields_schema]
         return TemplateInfo(
             type=tpl.type,
             display_name=tpl.display_name,
@@ -106,20 +109,7 @@ class WorkflowMixin(DBMixinProtocol):
         """List all registered templates via the registry (respects enabled_packs)."""
         result: list[TemplateListItem] = []
         for tpl in self.templates.list_types():
-            fields: list[FieldSchemaInfo] = []
-            for f in tpl.fields_schema:
-                fi: FieldSchemaInfo = FieldSchemaInfo(name=f.name, type=f.type, description=f.description)
-                if f.options:
-                    fi["options"] = list(f.options)
-                if f.default is not None:
-                    fi["default"] = f.default
-                if f.required_at:
-                    fi["required_at"] = list(f.required_at)
-                if f.pattern:
-                    fi["pattern"] = f.pattern
-                if f.unique:
-                    fi["unique"] = f.unique
-                fields.append(fi)
+            fields = [self._field_schema_to_info(f) for f in tpl.fields_schema]
             result.append(
                 TemplateListItem(
                     type=tpl.type,

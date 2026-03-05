@@ -1928,6 +1928,18 @@ class TestGetTemplateEnriched:
         assert len(tpl["states"]) >= 3
         assert len(tpl["transitions"]) >= 2
 
+    def test_field_schema_parity_between_get_and_list(self, db: FiligreeDB) -> None:
+        """H6 regression: get_template and list_templates must produce identical field schemas."""
+        get_tpl = db.get_template("bug")
+        assert get_tpl is not None
+        list_tpls = db.list_templates()
+        list_bug = next(t for t in list_tpls if t["type"] == "bug")
+        get_fields = {f["name"]: f for f in get_tpl["fields_schema"]}
+        list_fields = {f["name"]: f for f in list_bug["fields_schema"]}
+        assert get_fields.keys() == list_fields.keys()
+        for name in get_fields:
+            assert get_fields[name] == list_fields[name], f"Field {name} differs between get_template and list_templates"
+
 
 # ---------------------------------------------------------------------------
 # TestFieldSchemaPattern — pattern and unique field validation
