@@ -12,6 +12,7 @@ export const THEME_COLORS = {
   textSecondary: "#8FAAB8",
   graphOutline: "#0B1215",
   graphEdge: "#2A4454",
+  graphEdgeHierarchy: "#3B5C6E",
   accent: "#38BDF8",
 };
 

@@ -380,19 +380,28 @@ export function resolveGraphScope() {
     nodes.push(issue);
   }
 
-  // Build edge list from deps where both ends are visible
+  // Build edge list from deps and parent-child hierarchy
   const edges = [];
   const edgeSeen = new Set();
   for (const id of allVisibleIds) {
     const issue = state.issueMap[id];
     if (!issue) continue;
+    // Dependency edges (blocks -> blocked)
     for (const blockedId of (issue.blocks || [])) {
       if (allVisibleIds.has(blockedId)) {
         const key = `${id}->${blockedId}`;
         if (!edgeSeen.has(key)) {
           edgeSeen.add(key);
-          edges.push({ source: id, target: blockedId });
+          edges.push({ source: id, target: blockedId, edgeType: "dependency" });
         }
+      }
+    }
+    // Parent-child edges (parent -> child)
+    if (issue.parent_id && allVisibleIds.has(issue.parent_id)) {
+      const key = `${issue.parent_id}->${id}`;
+      if (!edgeSeen.has(key)) {
+        edgeSeen.add(key);
+        edges.push({ source: issue.parent_id, target: id, edgeType: "hierarchy" });
       }
     }
   }

@@ -121,6 +121,17 @@ function graphStyles() {
       },
     },
     {
+      selector: "edge[edgeType='hierarchy']",
+      style: {
+        "line-style": "dashed",
+        "line-dash-pattern": [6, 3],
+        "line-color": THEME_COLORS.graphEdgeHierarchy || THEME_COLORS.graphEdge,
+        "target-arrow-color": THEME_COLORS.graphEdgeHierarchy || THEME_COLORS.graphEdge,
+        "target-arrow-shape": "triangle",
+        opacity: 0.6,
+      },
+    },
+    {
       selector: "node:selected",
       style: { "border-width": 3, "border-color": THEME_COLORS.accent },
     },
@@ -166,12 +177,23 @@ function applyCriticalPathStyles() {
   } else {
     state.cy.nodes().forEach((n) => n.style("opacity", n.data("opacity")));
     state.cy.edges().forEach((e) => {
-      e.style({
-        width: 1.5,
-        "line-color": THEME_COLORS.graphEdge,
-        "target-arrow-color": THEME_COLORS.graphEdge,
-        opacity: 1,
-      });
+      if (e.data("edgeType") === "hierarchy") {
+        e.style({
+          width: 1.5,
+          "line-style": "dashed",
+          "line-color": THEME_COLORS.graphEdgeHierarchy || THEME_COLORS.graphEdge,
+          "target-arrow-color": THEME_COLORS.graphEdgeHierarchy || THEME_COLORS.graphEdge,
+          opacity: 0.6,
+        });
+      } else {
+        e.style({
+          width: 1.5,
+          "line-style": "solid",
+          "line-color": THEME_COLORS.graphEdge,
+          "target-arrow-color": THEME_COLORS.graphEdge,
+          opacity: 1,
+        });
+      }
     });
   }
 }
@@ -284,7 +306,12 @@ export function renderGraph() {
   let cyEdges = scopeEdges
     .filter((e) => filteredIds.has(e.source) && filteredIds.has(e.target))
     .map((e) => ({
-      data: { id: `e-${e.source}-${e.target}`, source: e.source, target: e.target },
+      data: {
+        id: `e-${e.source}-${e.target}`,
+        source: e.source,
+        target: e.target,
+        edgeType: e.edgeType || "dependency",
+      },
     }));
 
   const nextNodesById = new Map(cyNodes.map((n) => [n.data.id, n]));
