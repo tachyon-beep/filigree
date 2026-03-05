@@ -142,13 +142,17 @@ class ObservationsMixin(DBMixinProtocol):
         # On conflict, rowcount == 0 and we return the existing row instead
         # of the rejected candidate — avoids returning a stale obs_id that
         # doesn't exist in the DB.
-        cursor = self.conn.execute(
-            "INSERT OR IGNORE INTO observations (id, summary, detail, file_id, file_path, line, "
-            "source_issue_id, priority, actor, created_at, expires_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (obs_id, summary.strip(), detail, file_id, file_path, line, source_issue_id, priority, actor, now, expires),
-        )
-        self.conn.commit()
+        try:
+            cursor = self.conn.execute(
+                "INSERT OR IGNORE INTO observations (id, summary, detail, file_id, file_path, line, "
+                "source_issue_id, priority, actor, created_at, expires_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (obs_id, summary.strip(), detail, file_id, file_path, line, source_issue_id, priority, actor, now, expires),
+            )
+            self.conn.commit()
+        except Exception:
+            self.conn.rollback()
+            raise
         if cursor.rowcount == 0:
             # Duplicate — return the existing observation
             existing = self.conn.execute(
@@ -273,12 +277,16 @@ class ObservationsMixin(DBMixinProtocol):
         if row is None:
             raise ValueError(f"Observation not found: {obs_id}")
         now = _now_iso()
-        self.conn.execute(
-            "INSERT INTO dismissed_observations (obs_id, summary, actor, reason, dismissed_at) VALUES (?, ?, ?, ?, ?)",
-            (obs_id, row["summary"], actor, reason, now),
-        )
-        self.conn.execute("DELETE FROM observations WHERE id = ?", (obs_id,))
-        self.conn.commit()
+        try:
+            self.conn.execute(
+                "INSERT INTO dismissed_observations (obs_id, summary, actor, reason, dismissed_at) VALUES (?, ?, ?, ?, ?)",
+                (obs_id, row["summary"], actor, reason, now),
+            )
+            self.conn.execute("DELETE FROM observations WHERE id = ?", (obs_id,))
+            self.conn.commit()
+        except Exception:
+            self.conn.rollback()
+            raise
 
     def batch_dismiss_observations(
         self,
@@ -294,16 +302,20 @@ class ObservationsMixin(DBMixinProtocol):
         now = _now_iso()
         placeholders = ",".join("?" for _ in unique_ids)
         # Log all to audit trail before deletion
-        self.conn.execute(
-            f"INSERT INTO dismissed_observations (obs_id, summary, actor, reason, dismissed_at) "
-            f"SELECT id, summary, ?, ?, ? FROM observations WHERE id IN ({placeholders})",
-            [actor, reason, now, *unique_ids],
-        )
-        cursor = self.conn.execute(
-            f"DELETE FROM observations WHERE id IN ({placeholders})",
-            unique_ids,
-        )
-        self.conn.commit()
+        try:
+            self.conn.execute(
+                f"INSERT INTO dismissed_observations (obs_id, summary, actor, reason, dismissed_at) "
+                f"SELECT id, summary, ?, ?, ? FROM observations WHERE id IN ({placeholders})",
+                [actor, reason, now, *unique_ids],
+            )
+            cursor = self.conn.execute(
+                f"DELETE FROM observations WHERE id IN ({placeholders})",
+                unique_ids,
+            )
+            self.conn.commit()
+        except Exception:
+            self.conn.rollback()
+            raise
         return cursor.rowcount
 
     def promote_observation(
@@ -316,76 +328,54 @@ class ObservationsMixin(DBMixinProtocol):
         extra_description: str = "",
         actor: str = "",
     ) -> dict[str, Any]:
-        # Wrap the entire promote in a savepoint so the observation DELETE
-        # and issue creation are atomic. If issue creation fails, the
-        # observation is restored via rollback — no data loss.
-        self.conn.execute("SAVEPOINT promote_obs")
+        # 1. Read observation (don't delete yet)
+        row = self.conn.execute("SELECT * FROM observations WHERE id = ?", (obs_id,)).fetchone()
+        if row is None:
+            raise ValueError(f"Observation not found: {obs_id}")
+        obs = dict(row)
+
+        # 2. Build issue fields
+        issue_title = title or obs["summary"]
+        desc_parts = []
+        if extra_description:
+            desc_parts.append(extra_description)
+        if obs["detail"]:
+            desc_parts.append(obs["detail"])
+        if obs["file_path"]:
+            loc = f"`{obs['file_path']}`"
+            if obs["line"] is not None:
+                loc += f":{obs['line']}"
+            desc_parts.append(f"Observed in: {loc}")
+        if obs.get("source_issue_id"):
+            desc_parts.append(f"Observed while working on: {obs['source_issue_id']}")
+        description = "\n\n".join(desc_parts)
+
+        # 3. Create issue first — if this fails, observation is untouched
+        issue = self.create_issue(
+            issue_title,
+            type=issue_type,
+            priority=priority if priority is not None else obs["priority"],
+            description=description,
+            actor=actor or obs["actor"],
+        )
+
+        # 4. Issue created successfully — now delete observation and write audit trail
+        now = _now_iso()
         try:
-            row = self.conn.execute("DELETE FROM observations WHERE id = ? RETURNING *", (obs_id,)).fetchone()
-            if row is None:
-                self.conn.execute("RELEASE SAVEPOINT promote_obs")
-                raise ValueError(f"Observation not found: {obs_id}")
-            obs = dict(row)
-
-            issue_title = title or obs["summary"]
-            desc_parts = []
-            if extra_description:
-                desc_parts.append(extra_description)
-            if obs["detail"]:
-                desc_parts.append(obs["detail"])
-            if obs["file_path"]:
-                loc = f"`{obs['file_path']}`"
-                if obs["line"] is not None:
-                    loc += f":{obs['line']}"
-                desc_parts.append(f"Observed in: {loc}")
-            if obs.get("source_issue_id"):
-                desc_parts.append(f"Observed while working on: {obs['source_issue_id']}")
-            description = "\n\n".join(desc_parts)
-
-            # NOTE: create_issue calls conn.commit() internally, which releases
-            # all savepoints. We must accept that the savepoint boundary is the
-            # DELETE only. Since create_issue() commits, we structure it so the
-            # DELETE is inside the savepoint and we log to dismissed_observations
-            # as a safety net before attempting create_issue.
-            #
-            # Safety net: log the observation to dismissed_observations BEFORE
-            # attempting issue creation, so if create_issue fails the data is
-            # preserved in the audit trail.
-            now = _now_iso()
             self.conn.execute(
                 "INSERT INTO dismissed_observations (obs_id, summary, actor, reason, dismissed_at) VALUES (?, ?, ?, 'promoted', ?)",
                 (obs_id, obs["summary"], actor or obs["actor"], now),
             )
-
-            self.conn.execute("RELEASE SAVEPOINT promote_obs")
-
-            issue = self.create_issue(
-                issue_title,
-                type=issue_type,
-                priority=priority if priority is not None else obs["priority"],
-                description=description,
-                actor=actor or obs["actor"],
-            )
-
-            # Label for measuring pipeline output
-            self.add_label(issue.id, "from-observation")
-
-            if obs["file_id"]:
-                self.add_file_association(obs["file_id"], issue.id, "mentioned_in")
-
+            self.conn.execute("DELETE FROM observations WHERE id = ?", (obs_id,))
             self.conn.commit()
-            return {"issue": issue}
-
         except Exception:
-            # The savepoint was released at "RELEASE SAVEPOINT promote_obs"
-            # above, before calling create_issue. If create_issue (or add_label /
-            # add_file_association) raises, the savepoint no longer exists and
-            # this ROLLBACK will fail silently. This is expected — the observation
-            # DELETE has already been committed as part of the savepoint release,
-            # and the safety-net audit trail entry preserves the data.
-            try:
-                self.conn.execute("ROLLBACK TO SAVEPOINT promote_obs")
-                self.conn.execute("RELEASE SAVEPOINT promote_obs")
-            except Exception:  # noqa: S110
-                pass  # Savepoint already released — see comment above
+            self.conn.rollback()
             raise
+
+        # 5. Enrichments (non-critical)
+        self.add_label(issue.id, "from-observation")
+
+        if obs["file_id"]:
+            self.add_file_association(obs["file_id"], issue.id, "mentioned_in")
+
+        return {"issue": issue}

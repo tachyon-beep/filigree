@@ -154,8 +154,12 @@ class PlanningMixin(DBMixinProtocol):
         )
         if cursor.rowcount == 0:
             return False  # Nothing to remove
-        self._record_event(issue_id, "dependency_removed", actor=actor, old_value=depends_on_id)
-        self.conn.commit()
+        try:
+            self._record_event(issue_id, "dependency_removed", actor=actor, old_value=depends_on_id)
+            self.conn.commit()
+        except Exception:
+            self.conn.rollback()
+            raise
         return True
 
     def get_all_dependencies(self) -> list[DependencyRecord]:

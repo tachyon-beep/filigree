@@ -471,5 +471,8 @@ class FiligreeDB(FilesMixin, IssuesMixin, EventsMixin, WorkflowMixin, MetaMixin,
 
     def close(self) -> None:
         if self._conn is not None:
-            self._conn.close()
-            self._conn = None
+            try:
+                self._conn.commit()
+            finally:
+                self._conn.close()
+                self._conn = None

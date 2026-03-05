@@ -276,17 +276,20 @@ class TestPromoteObservation:
         result = db.promote_observation(obs["id"])
         assert "test-abc" in result["issue"].description
 
-    def test_promote_safety_net_on_create_issue_failure(self, db: FiligreeDB) -> None:
-        """If create_issue raises, the audit trail entry still exists as a safety net."""
+    def test_promote_preserves_observation_on_create_issue_failure(self, db: FiligreeDB) -> None:
+        """If create_issue raises, the observation is NOT deleted — no data loss."""
         from unittest.mock import patch
 
         obs = db.create_observation("will fail promote")
         with patch.object(db, "create_issue", side_effect=RuntimeError("boom")), pytest.raises(RuntimeError, match="boom"):
             db.promote_observation(obs["id"])
-        # Audit trail should have the safety-net entry
+        # Observation must still exist
+        assert db.observation_count() == 1
+        remaining = db.list_observations()
+        assert remaining[0]["id"] == obs["id"]
+        # No audit trail entry — nothing was dismissed
         row = db.conn.execute("SELECT * FROM dismissed_observations WHERE obs_id = ?", (obs["id"],)).fetchone()
-        assert row is not None
-        assert row["reason"] == "promoted"
+        assert row is None
 
     def test_promote_label_failure_still_creates_issue(self, db: FiligreeDB) -> None:
         """Known v1 limitation: if add_label raises after create_issue succeeds,

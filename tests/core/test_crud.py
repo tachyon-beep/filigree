@@ -1010,3 +1010,36 @@ class TestCompaction:
 
     def test_analyze(self, db: FiligreeDB) -> None:
         db.analyze()
+
+
+class TestCloseCommitsPending:
+    """close() must commit pending transactions so writes are not lost."""
+
+    def test_close_commits_pending_writes(self, tmp_path: Path) -> None:
+        db = FiligreeDB(tmp_path / "commit-on-close.db", prefix="test")
+        db.initialize()
+        issue = db.create_issue(title="will survive close", type="task")
+
+        # No explicit commit — close() should handle it.
+        db.close()
+
+        # Reopen and verify the issue persists.
+        db2 = FiligreeDB(tmp_path / "commit-on-close.db", prefix="test")
+        found = db2.get_issue(issue.id)
+        assert found is not None
+        assert found.title == "will survive close"
+        db2.close()
+
+    def test_context_manager_commits_on_exit(self, tmp_path: Path) -> None:
+        db_path = tmp_path / "ctx-commit.db"
+        with FiligreeDB(db_path, prefix="test") as db:
+            db.initialize()
+            issue = db.create_issue(title="ctx write", type="task")
+            issue_id = issue.id
+
+        # Reopen after context manager exit.
+        db2 = FiligreeDB(db_path, prefix="test")
+        found = db2.get_issue(issue_id)
+        assert found is not None
+        assert found.title == "ctx write"
+        db2.close()

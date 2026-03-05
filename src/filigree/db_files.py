@@ -195,26 +195,34 @@ class FilesMixin(DBMixinProtocol):
             updates.append("updated_at = ?")
             params.append(now)
             params.append(existing["id"])
-            self.conn.execute(
-                f"UPDATE file_records SET {', '.join(updates)} WHERE id = ?",
-                params,
-            )
-            for field, old_val, new_val in changes:
+            try:
                 self.conn.execute(
-                    "INSERT INTO file_events "
-                    "(file_id, event_type, field, old_value, new_value, created_at) "
-                    "VALUES (?, 'file_metadata_update', ?, ?, ?, ?)",
-                    (existing["id"], field, old_val, new_val, now),
+                    f"UPDATE file_records SET {', '.join(updates)} WHERE id = ?",
+                    params,
                 )
-            self.conn.commit()
+                for field, old_val, new_val in changes:
+                    self.conn.execute(
+                        "INSERT INTO file_events "
+                        "(file_id, event_type, field, old_value, new_value, created_at) "
+                        "VALUES (?, 'file_metadata_update', ?, ?, ?, ?)",
+                        (existing["id"], field, old_val, new_val, now),
+                    )
+                self.conn.commit()
+            except Exception:
+                self.conn.rollback()
+                raise
             return self.get_file(existing["id"])
 
         file_id = self._generate_unique_id("file_records", "f")
-        self.conn.execute(
-            "INSERT INTO file_records (id, path, language, file_type, first_seen, updated_at, metadata) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (file_id, path, language, file_type, now, now, json.dumps(metadata or {})),
-        )
-        self.conn.commit()
+        try:
+            self.conn.execute(
+                "INSERT INTO file_records (id, path, language, file_type, first_seen, updated_at, metadata) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (file_id, path, language, file_type, now, now, json.dumps(metadata or {})),
+            )
+            self.conn.commit()
+        except Exception:
+            self.conn.rollback()
+            raise
         return self.get_file(file_id)
 
     def get_file(self, file_id: str) -> FileRecord:
@@ -797,18 +805,22 @@ class FilesMixin(DBMixinProtocol):
         params.append(now)
         params.extend([finding_id, file_id])
 
-        self.conn.execute(
-            f"UPDATE scan_findings SET {', '.join(updates)} WHERE id = ? AND file_id = ?",
-            params,
-        )
-
-        if normalized_issue_id:
+        try:
             self.conn.execute(
-                "INSERT OR IGNORE INTO file_associations (file_id, issue_id, assoc_type, created_at) VALUES (?, ?, 'bug_in', ?)",
-                (file_id, normalized_issue_id, now),
+                f"UPDATE scan_findings SET {', '.join(updates)} WHERE id = ? AND file_id = ?",
+                params,
             )
 
-        self.conn.commit()
+            if normalized_issue_id:
+                self.conn.execute(
+                    "INSERT OR IGNORE INTO file_associations (file_id, issue_id, assoc_type, created_at) VALUES (?, ?, 'bug_in', ?)",
+                    (file_id, normalized_issue_id, now),
+                )
+
+            self.conn.commit()
+        except Exception:
+            self.conn.rollback()
+            raise
         updated = self.conn.execute("SELECT * FROM scan_findings WHERE id = ?", (finding_id,)).fetchone()
         if updated is None:
             msg = f"Finding not found after update: {finding_id}"
@@ -843,11 +855,15 @@ class FilesMixin(DBMixinProtocol):
 
         now = _now_iso()
         where = " AND ".join(clauses)
-        cursor = self.conn.execute(
-            f"UPDATE scan_findings SET status = 'fixed', updated_at = ? WHERE {where}",
-            [now, *params],
-        )
-        self.conn.commit()
+        try:
+            cursor = self.conn.execute(
+                f"UPDATE scan_findings SET status = 'fixed', updated_at = ? WHERE {where}",
+                [now, *params],
+            )
+            self.conn.commit()
+        except Exception:
+            self.conn.rollback()
+            raise
         return {"findings_fixed": cursor.rowcount}
 
     @staticmethod
@@ -1021,11 +1037,15 @@ class FilesMixin(DBMixinProtocol):
             msg = f'Issue not found: "{issue_id}". Verify the issue exists before creating an association.'
             raise ValueError(msg)
         now = _now_iso()
-        self.conn.execute(
-            "INSERT OR IGNORE INTO file_associations (file_id, issue_id, assoc_type, created_at) VALUES (?, ?, ?, ?)",
-            (file_id, issue_id, assoc_type, now),
-        )
-        self.conn.commit()
+        try:
+            self.conn.execute(
+                "INSERT OR IGNORE INTO file_associations (file_id, issue_id, assoc_type, created_at) VALUES (?, ?, ?, ?)",
+                (file_id, issue_id, assoc_type, now),
+            )
+            self.conn.commit()
+        except Exception:
+            self.conn.rollback()
+            raise
 
     def get_file_associations(self, file_id: str) -> list[FileAssociation]:
         """Get all issue associations for a file."""
