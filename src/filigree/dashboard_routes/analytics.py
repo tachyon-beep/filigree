@@ -441,6 +441,12 @@ def create_router() -> APIRouter:
         metrics = get_flow_metrics(db, days=days)
         return JSONResponse(metrics)
 
+    @router.get("/observations/stats")
+    async def api_observation_stats(db: FiligreeDB = Depends(_get_db)) -> JSONResponse:
+        """Observation count and age stats for dashboard display."""
+        stats = db.observation_stats(sweep=False)
+        return JSONResponse(stats)
+
     @router.get("/critical-path")
     async def api_critical_path(db: FiligreeDB = Depends(_get_db)) -> JSONResponse:
         """Longest dependency chain among open issues."""

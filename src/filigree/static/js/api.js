@@ -137,6 +137,12 @@ export async function fetchMetrics(days) {
   return resp.json();
 }
 
+export async function fetchObservationStats() {
+  const resp = await fetch(apiUrl("/observations/stats"));
+  if (!resp.ok) return null;
+  return resp.json();
+}
+
 export async function fetchActivity(limit, since) {
   let url = apiUrl("/activity");
   const params = [];

@@ -3,7 +3,7 @@
 // and embedded activity feed.
 // ---------------------------------------------------------------------------
 
-import { fetchActivity, fetchMetrics } from "../api.js";
+import { fetchActivity, fetchMetrics, fetchObservationStats } from "../api.js";
 import { state, THEME_COLORS } from "../state.js";
 import { escHtml } from "../ui.js";
 import { renderActivitySection } from "./activity.js";
@@ -17,7 +17,7 @@ export async function loadMetrics() {
   const container = document.getElementById("insightsContent");
   container.innerHTML = '<div style="color:var(--text-muted)">Loading...</div>';
   try {
-    const m = await fetchMetrics(days);
+    const [m, obsStats] = await Promise.all([fetchMetrics(days), fetchObservationStats()]);
     if (!m) {
       container.innerHTML = '<div class="text-red-400">Failed to load metrics.</div>';
       return;
@@ -109,6 +109,25 @@ export async function loadMetrics() {
         agentHtml +
         "</div>";
     }
+    // Observations stats
+    if (obsStats && obsStats.count > 0) {
+      const staleColor = obsStats.stale_count > 0 ? "text-amber-400" : "text-emerald-400";
+      const expiringColor = obsStats.expiring_soon_count > 0 ? "text-red-400" : "text-emerald-400";
+      container.innerHTML +=
+        '<div class="rounded p-4 mt-4" style="background:var(--surface-raised);border:1px solid var(--border-default)">' +
+        '<div class="text-xs font-medium mb-3" style="color:var(--text-secondary)">Observations</div>' +
+        '<div class="grid grid-cols-4 gap-3">' +
+        '<div><div class="text-lg font-bold" style="color:var(--accent)">' + obsStats.count + '</div>' +
+        '<div class="text-[10px]" style="color:var(--text-muted)">pending</div></div>' +
+        '<div><div class="text-lg font-bold ' + staleColor + '">' + obsStats.stale_count + '</div>' +
+        '<div class="text-[10px]" style="color:var(--text-muted)">stale (&gt;48h)</div></div>' +
+        '<div><div class="text-lg font-bold ' + expiringColor + '">' + obsStats.expiring_soon_count + '</div>' +
+        '<div class="text-[10px]" style="color:var(--text-muted)">expiring &lt;24h</div></div>' +
+        '<div><div class="text-lg font-bold" style="color:var(--text-primary)">' + obsStats.oldest_hours + 'h</div>' +
+        '<div class="text-[10px]" style="color:var(--text-muted)">oldest</div></div>' +
+        '</div></div>';
+    }
+
     // Activity feed (collapsed by default)
     const activityDetails = document.createElement("details");
     activityDetails.className = "rounded mt-4";
