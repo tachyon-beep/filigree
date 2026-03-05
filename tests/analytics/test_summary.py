@@ -486,3 +486,45 @@ class TestSanitizeTitle:
     )
     def test_sanitize_title(self, raw: str, expected: str) -> None:
         assert _sanitize_title(raw) == expected
+
+
+class TestObservationsInSummary:
+    def test_no_observations_no_mention(self, db: FiligreeDB) -> None:
+        summary = generate_summary(db)
+        assert "OBSERVATION" not in summary.upper()
+
+    def test_fresh_observations_gentle_nudge(self, db: FiligreeDB) -> None:
+        db.create_observation("Something to check")
+        summary = generate_summary(db)
+        assert "OBSERVATIONS:" in summary
+        assert "1 pending" in summary
+        assert "list_observations" in summary
+
+    def test_stale_observations_warning(self, db: FiligreeDB) -> None:
+        obs = db.create_observation("Old thing")
+        db.conn.execute(
+            "UPDATE observations SET created_at = '2020-01-01T00:00:00+00:00' WHERE id = ?",
+            (obs["id"],),
+        )
+        db.conn.commit()
+        summary = generate_summary(db)
+        assert "STALE OBSERVATIONS" in summary
+        assert "1 observation(s) older than 48 hours" in summary
+
+    def test_expiring_soon_mention(self, db: FiligreeDB) -> None:
+        obs = db.create_observation("About to expire")
+        soon = (datetime.now(UTC) + timedelta(hours=12)).isoformat()
+        db.conn.execute(
+            "UPDATE observations SET expires_at = ? WHERE id = ?",
+            (soon, obs["id"]),
+        )
+        db.conn.commit()
+        summary = generate_summary(db)
+        assert "expiring within 24h" in summary
+
+    def test_observation_stats_failure_is_silent(self, db: FiligreeDB) -> None:
+        """If observation_stats() raises, summary still generates."""
+        with patch.object(db, "observation_stats", side_effect=Exception("boom")):
+            summary = generate_summary(db)
+        assert "Project Pulse" in summary
+        assert "OBSERVATION" not in summary.upper()

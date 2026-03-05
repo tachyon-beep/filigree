@@ -88,6 +88,34 @@ class TestBuildContext:
         assert "\x00" not in issue_lines[0]
 
 
+    def test_no_observations_no_mention(self, db: FiligreeDB) -> None:
+        result = _build_context(db)
+        assert "OBSERVATION" not in result.upper()
+
+    def test_observations_shown_in_context(self, db: FiligreeDB) -> None:
+        db.create_observation("Something to triage")
+        result = _build_context(db)
+        assert "OBSERVATION" in result.upper()
+        assert "list_observations" in result
+
+    def test_stale_observations_warning_in_context(self, db: FiligreeDB) -> None:
+        obs = db.create_observation("Old thing")
+        db.conn.execute(
+            "UPDATE observations SET created_at = '2020-01-01T00:00:00+00:00' WHERE id = ?",
+            (obs["id"],),
+        )
+        db.conn.commit()
+        result = _build_context(db)
+        assert "STALE OBSERVATION" in result.upper()
+
+    def test_observation_stats_failure_silent_in_context(self, db: FiligreeDB) -> None:
+        """If observation_stats() raises, context still generates."""
+        with patch.object(db, "observation_stats", side_effect=Exception("boom")):
+            result = _build_context(db)
+        assert "Filigree Project Snapshot" in result
+        assert "OBSERVATION" not in result.upper()
+
+
 class TestGenerateSessionContext:
     def test_returns_none_without_filigree_dir(self, tmp_path: Path) -> None:
         with patch("filigree.hooks.find_filigree_root", side_effect=FileNotFoundError):

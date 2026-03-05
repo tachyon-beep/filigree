@@ -108,6 +108,18 @@ def _build_context(db: FiligreeDB, filigree_dir: Path | None = None) -> str:
     blocked_count = stats.get("blocked_count", 0)
     lines.append(f"STATS: {ready_count} ready, {blocked_count} blocked")
 
+    # Observation awareness (read-only, guarded for pre-v7 DBs)
+    try:
+        obs_stats = db.observation_stats(sweep=False)
+        if obs_stats["count"] > 0:
+            lines.append("")
+            if obs_stats["stale_count"] > 0:
+                lines.append(f"STALE OBSERVATIONS: {obs_stats['stale_count']} older than 48h — run `list_observations` to triage")
+            else:
+                lines.append(f"OBSERVATIONS: {obs_stats['count']} pending — run `list_observations` to review")
+    except Exception:
+        logging.getLogger(__name__).debug("observation stats unavailable in session context", exc_info=True)
+
     return "\n".join(lines)
 
 

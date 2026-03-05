@@ -238,6 +238,18 @@ def _build_workflow_text() -> str:
                 type_names = ", ".join(sorted(pack.types.keys()))
                 lines.append(f"- **{pack.pack}** v{pack.version}: {type_names}")
 
+        # Observation awareness (read-only, guarded for pre-v7 DBs)
+        try:
+            obs_stats = tracker.observation_stats(sweep=False)
+            if obs_stats["count"] > 0:
+                lines.append("\n## Observations\n")
+                if obs_stats["stale_count"] > 0:
+                    lines.append(f"- {obs_stats['stale_count']} stale observation(s) (>48h old). Run `list_observations` to triage.")
+                else:
+                    lines.append(f"- {obs_stats['count']} pending observation(s). Use `list_observations` to review.")
+        except Exception:
+            logging.getLogger(__name__).debug("observation stats unavailable in MCP prompt", exc_info=True)
+
         return "\n".join(lines) + "\n"
     except sqlite3.Error:
         logging.getLogger(__name__).error(
