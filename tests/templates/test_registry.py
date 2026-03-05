@@ -227,8 +227,10 @@ class TestTemplateRegistry:
         assert registry.get_initial_state("bug") == "triage"
         assert registry.get_initial_state("task") == "open"
 
-    def test_get_initial_state_fallback(self, registry: TemplateRegistry) -> None:
-        assert registry.get_initial_state("unknown_type") == "open"
+    def test_get_initial_state_unknown_type_raises(self, registry: TemplateRegistry) -> None:
+        """Unknown types raise ValueError (fail-closed) instead of silently returning 'open'."""
+        with pytest.raises(ValueError, match="unknown_type"):
+            registry.get_initial_state("unknown_type")
 
     def test_get_category(self, registry: TemplateRegistry) -> None:
         assert registry.get_category("bug", "triage") == "open"

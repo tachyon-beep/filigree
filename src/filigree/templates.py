@@ -508,11 +508,15 @@ class TemplateRegistry:
         return list(self._packs.values())
 
     def get_initial_state(self, type_name: str) -> str:
-        """Initial state for a type. Falls back to 'open' if no template."""
+        """Initial state for a type. Raises ValueError if type is unknown."""
         tpl = self._types.get(type_name)
         if tpl is None:
-            logger.warning("Unknown type '%s' -- falling back to initial state 'open'", type_name)
-            return "open"
+            msg = (
+                f"Unknown type '{type_name}': no workflow template registered. "
+                f"Cannot determine initial state. Register a pack containing "
+                f"this type or check for typos."
+            )
+            raise ValueError(msg)
         return tpl.initial_state
 
     def get_category(self, type_name: str, state: str) -> StateCategory | None:

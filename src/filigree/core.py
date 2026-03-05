@@ -429,6 +429,10 @@ class FiligreeDB(FilesMixin, IssuesMixin, EventsMixin, WorkflowMixin, MetaMixin,
         if "release" not in self.enabled_packs:
             return
 
+        if self.templates.get_type("release") is None:
+            logger.warning("Release pack enabled but 'release' type not registered — skipping Future release seed")
+            return
+
         existing = self.conn.execute(
             "SELECT id FROM issues WHERE type = 'release' AND json_extract(fields, '$.version') = 'Future'"
         ).fetchone()
