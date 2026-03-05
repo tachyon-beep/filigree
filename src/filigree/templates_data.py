@@ -1381,7 +1381,7 @@ _SPIKE_PACK: dict[str, Any] = {
             "states": [
                 {"name": "proposed", "category": "open"},
                 {"name": "investigating", "category": "wip"},
-                {"name": "concluded", "category": "done"},
+                {"name": "concluded", "category": "wip"},
                 {"name": "actioned", "category": "done"},
                 {"name": "abandoned", "category": "done"},
             ],

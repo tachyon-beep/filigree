@@ -13,6 +13,7 @@ import re
 from dataclasses import dataclass
 from dataclasses import replace as _dc_replace
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any, Literal
 
 from filigree.types.core import StatusCategory as StateCategory
@@ -70,6 +71,21 @@ class TransitionDefinition:
     to_state: str
     enforcement: EnforcementLevel
     requires_fields: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        if not _NAME_PATTERN.match(self.from_state):
+            msg = f"Invalid from_state '{self.from_state}': must match ^[a-z][a-z0-9_]{{0,63}}$"
+            raise ValueError(msg)
+        if not _NAME_PATTERN.match(self.to_state):
+            msg = f"Invalid to_state '{self.to_state}': must match ^[a-z][a-z0-9_]{{0,63}}$"
+            raise ValueError(msg)
+        if self.enforcement not in ("hard", "soft"):
+            msg = f"Invalid enforcement '{self.enforcement}': must be 'hard' or 'soft'"
+            raise ValueError(msg)
+        for field_name in self.requires_fields:
+            if not _NAME_PATTERN.match(field_name):
+                msg = f"Invalid requires_fields entry '{field_name}': must match ^[a-z][a-z0-9_]{{0,63}}$"
+                raise ValueError(msg)
 
 
 _VALID_FIELD_TYPES: frozenset[str] = frozenset({"text", "enum", "number", "date", "list", "boolean"})
@@ -136,17 +152,37 @@ class TypeTemplate:
 
 @dataclass(frozen=True)
 class WorkflowPack:
-    """A bundle of related type templates with relationships and guidance."""
+    """A bundle of related type templates with relationships and guidance.
+
+    All container fields are immutable: types and guide use MappingProxyType,
+    relationships use tuples of MappingProxyType.
+    """
 
     pack: str
     version: str
     display_name: str
     description: str
-    types: dict[str, TypeTemplate]
+    types: MappingProxyType[str, TypeTemplate]
     requires_packs: tuple[str, ...]
-    relationships: tuple[dict[str, Any], ...]
-    cross_pack_relationships: tuple[dict[str, Any], ...]
-    guide: dict[str, Any] | None
+    relationships: tuple[MappingProxyType[str, Any], ...]
+    cross_pack_relationships: tuple[MappingProxyType[str, Any], ...]
+    guide: MappingProxyType[str, Any] | None
+
+    def __post_init__(self) -> None:
+        # Auto-wrap plain dicts for callers that don't use MappingProxyType
+        if isinstance(self.types, dict) and not isinstance(self.types, MappingProxyType):
+            object.__setattr__(self, "types", MappingProxyType(self.types))
+        if isinstance(self.guide, dict) and not isinstance(self.guide, MappingProxyType):
+            object.__setattr__(self, "guide", MappingProxyType(self.guide))
+
+        # Wrap relationship dicts inside tuples
+        def _freeze_rels(rels: tuple[Any, ...]) -> tuple[MappingProxyType[str, Any], ...]:
+            return tuple(MappingProxyType(r) if isinstance(r, dict) and not isinstance(r, MappingProxyType) else r for r in rels)
+
+        if self.relationships and any(not isinstance(r, MappingProxyType) for r in self.relationships):
+            object.__setattr__(self, "relationships", _freeze_rels(self.relationships))
+        if self.cross_pack_relationships and any(not isinstance(r, MappingProxyType) for r in self.cross_pack_relationships):
+            object.__setattr__(self, "cross_pack_relationships", _freeze_rels(self.cross_pack_relationships))
 
 
 @dataclass(frozen=True)
@@ -796,10 +832,15 @@ class TemplateRegistry:
         logger.info("Template loading complete: %d types from %d packs", len(self._types), len(self._packs))
 
     def _load_pack_data(self, pack_data: dict[str, Any]) -> None:
-        """Load a pack dict: register its types and the pack itself."""
+        """Load a pack dict: register its types and the pack itself.
+
+        Types are parsed into a staging dict first. Only after all parseable
+        types succeed validation are they registered, ensuring pack.types and
+        registry._types stay consistent.
+        """
         pack_name = pack_data["pack"]
 
-        # Parse and register each type in the pack
+        # Phase 1: Parse all types into staging dict (no side effects)
         types_dict: dict[str, TypeTemplate] = {}
         for type_name, type_data in pack_data.get("types", {}).items():
             try:
@@ -815,22 +856,26 @@ class TemplateRegistry:
                 quality_warnings = self.check_type_template_quality(tpl)
                 for qw in quality_warnings:
                     logger.warning("Quality: %s/%s: %s", pack_name, type_name, qw)
-                self._register_type(tpl)
                 types_dict[type_name] = tpl
             except (ValueError, KeyError) as exc:
                 logger.warning("Skipping unparseable type %s in pack %s: %s", type_name, pack_name, exc)
 
-        # Register the pack itself
+        # Phase 2: Register all staged types atomically
+        for tpl in types_dict.values():
+            self._register_type(tpl)
+
+        # Register the pack itself — wrap mutable containers for immutability
+        raw_guide = pack_data.get("guide")
         pack = WorkflowPack(
             pack=pack_name,
             version=pack_data.get("version", "1.0"),
             display_name=pack_data.get("display_name", pack_name),
             description=pack_data.get("description", ""),
-            types=types_dict,
+            types=MappingProxyType(types_dict),
             requires_packs=tuple(pack_data.get("requires_packs", [])),
-            relationships=tuple(pack_data.get("relationships", [])),
-            cross_pack_relationships=tuple(pack_data.get("cross_pack_relationships", [])),
-            guide=pack_data.get("guide"),
+            relationships=tuple(MappingProxyType(r) for r in pack_data.get("relationships", [])),
+            cross_pack_relationships=tuple(MappingProxyType(r) for r in pack_data.get("cross_pack_relationships", [])),
+            guide=MappingProxyType(raw_guide) if raw_guide is not None else None,
         )
         self._register_pack(pack)
         logger.debug("Registered pack: %s (%d types)", pack_name, len(types_dict))

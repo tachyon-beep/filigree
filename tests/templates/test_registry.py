@@ -1606,13 +1606,13 @@ class TestQualityCheckDoneOutgoing:
         done_outgoing = [w for w in warnings if "done" in w.lower() and "outgoing" in w]
         assert done_outgoing == []
 
-    def test_builtin_spike_concluded_warned(self) -> None:
-        """spike.concluded (done) has outgoing transition to actioned — should warn."""
+    def test_builtin_spike_concluded_no_done_warning(self) -> None:
+        """spike.concluded is now wip (checkpoint), so no done→done warning."""
         raw = BUILT_IN_PACKS["spike"]["types"]["spike"]
         tpl = TemplateRegistry.parse_type_template(raw)
         warnings = TemplateRegistry.check_type_template_quality(tpl)
-        concluded_warnings = [w for w in warnings if "concluded" in w]
-        assert len(concluded_warnings) == 1
+        concluded_warnings = [w for w in warnings if "concluded" in w and "done" in w.lower()]
+        assert concluded_warnings == []
 
     def test_builtin_release_no_done_outgoing_warnings(self) -> None:
         """released->rolled_back is done->wip, which is allowed (reachable via update_issue).
@@ -2001,3 +2001,137 @@ class TestFieldSchemaPattern:
         tpl = TemplateRegistry.parse_type_template(raw)
         assert tpl.fields_schema[0].pattern == r"^[A-Z]{3}$"
         assert tpl.fields_schema[0].unique is True
+
+
+# ---------------------------------------------------------------------------
+# Bug cluster: Template/Workflow type system integrity (H2, H3, H6, H7)
+# ---------------------------------------------------------------------------
+
+
+class TestTransitionDefinitionValidation:
+    """H7: TransitionDefinition should validate its inputs in __post_init__."""
+
+    def test_rejects_invalid_from_state(self) -> None:
+        with pytest.raises(ValueError, match=r"Invalid.*from_state"):
+            TransitionDefinition(from_state="UPPER", to_state="closed", enforcement="soft")
+
+    def test_rejects_invalid_to_state(self) -> None:
+        with pytest.raises(ValueError, match=r"Invalid.*to_state"):
+            TransitionDefinition(from_state="open", to_state="has-dash", enforcement="soft")
+
+    def test_rejects_invalid_enforcement(self) -> None:
+        with pytest.raises(ValueError, match="enforcement"):
+            TransitionDefinition(from_state="open", to_state="closed", enforcement="banana")  # type: ignore[arg-type]
+
+    def test_rejects_invalid_requires_fields_entry(self) -> None:
+        with pytest.raises(ValueError, match="requires_fields"):
+            TransitionDefinition(
+                from_state="open",
+                to_state="closed",
+                enforcement="soft",
+                requires_fields=("DROP TABLE",),
+            )
+
+    def test_accepts_valid_transition(self) -> None:
+        td = TransitionDefinition(from_state="open", to_state="closed", enforcement="hard", requires_fields=("notes",))
+        assert td.from_state == "open"
+        assert td.enforcement == "hard"
+
+
+class TestWorkflowPackImmutability:
+    """H3: WorkflowPack mutable dict fields should be immutable."""
+
+    def _make_pack(self) -> WorkflowPack:
+        tpl = TypeTemplate(
+            type="task",
+            display_name="Task",
+            description="",
+            pack="test",
+            states=(StateDefinition("open", "open"), StateDefinition("closed", "done")),
+            initial_state="open",
+            transitions=(TransitionDefinition("open", "closed", "soft"),),
+            fields_schema=(),
+        )
+        return WorkflowPack(
+            pack="test",
+            version="1.0",
+            display_name="Test",
+            description="",
+            types={"task": tpl},
+            requires_packs=(),
+            relationships=(),
+            cross_pack_relationships=(),
+            guide={"overview": "Test guide"},
+        )
+
+    def test_types_dict_not_mutatable(self) -> None:
+        """External code should not be able to add/remove types from pack.types."""
+        pack = self._make_pack()
+        with pytest.raises(TypeError):
+            pack.types["injected"] = pack.types["task"]  # type: ignore[index]
+
+    def test_guide_dict_not_mutatable(self) -> None:
+        """External code should not be able to mutate pack.guide."""
+        pack = self._make_pack()
+        assert pack.guide is not None
+        with pytest.raises(TypeError):
+            pack.guide["injected"] = "evil"  # type: ignore[index]
+
+
+class TestLoadPackDataAtomicity:
+    """H6: _load_pack_data should not leave partial state when types fail."""
+
+    def test_failed_type_does_not_pollute_registry(self) -> None:
+        """If one type in a pack fails parsing, no types from that pack should be registered."""
+        reg = TemplateRegistry()
+        pack_data: dict[str, Any] = {
+            "pack": "testpack",
+            "version": "1.0",
+            "types": {
+                "good_type": {
+                    "type": "good_type",
+                    "display_name": "Good",
+                    "states": [
+                        {"name": "open", "category": "open"},
+                        {"name": "closed", "category": "done"},
+                    ],
+                    "initial_state": "open",
+                    "transitions": [{"from": "open", "to": "closed", "enforcement": "soft"}],
+                },
+                "bad_type": {
+                    "type": "bad_type",
+                    "display_name": "Bad",
+                    "states": "not_a_list",  # Will fail parsing
+                    "initial_state": "open",
+                    "transitions": [],
+                },
+            },
+        }
+        reg._load_pack_data(pack_data)
+        registered_pack = reg.get_pack("testpack")
+        assert registered_pack is not None
+        # Pack.types and registry._types should agree
+        for type_name in registered_pack.types:
+            assert reg.get_type(type_name) is not None, f"Pack references {type_name} but registry doesn't have it"
+        for type_name, tpl in reg._types.items():
+            if tpl.pack == "testpack":
+                assert type_name in registered_pack.types, f"Registry has {type_name} from testpack but pack.types doesn't"
+
+
+class TestSpikeWorkflowDesign:
+    """H2: Spike pack concluded→actioned should be reachable."""
+
+    def test_concluded_is_not_done_category(self) -> None:
+        """concluded should be wip (checkpoint), not done, so close_issue doesn't block it."""
+        raw = BUILT_IN_PACKS["spike"]["types"]["spike"]
+        tpl = TemplateRegistry.parse_type_template(raw)
+        concluded = next(s for s in tpl.states if s.name == "concluded")
+        assert concluded.category == "wip", f"concluded should be 'wip' (checkpoint before actioned/abandoned), got '{concluded.category}'"
+
+    def test_no_done_to_done_quality_warnings(self) -> None:
+        """After fixing concluded, spike should have no done→done quality warnings."""
+        raw = BUILT_IN_PACKS["spike"]["types"]["spike"]
+        tpl = TemplateRegistry.parse_type_template(raw)
+        warnings = TemplateRegistry.check_type_template_quality(tpl)
+        done_warnings = [w for w in warnings if "done" in w.lower() and "unreachable" in w.lower()]
+        assert done_warnings == [], f"Unexpected done→done warnings: {done_warnings}"

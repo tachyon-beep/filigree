@@ -322,7 +322,7 @@ async def _handle_get_workflow_guide(arguments: dict[str, Any]) -> list[TextCont
                 return _text(
                     WorkflowGuideResponse(
                         pack=wf_pack.pack,
-                        guide=wf_pack.guide,
+                        guide=dict(wf_pack.guide),
                         note=f"Resolved type '{args['pack']}' to pack '{wf_pack.pack}'",
                     )
                 )
@@ -334,7 +334,7 @@ async def _handle_get_workflow_guide(arguments: dict[str, Any]) -> list[TextCont
         )
     if wf_pack.guide is None:
         return _text(WorkflowGuideResponse(pack=wf_pack.pack, guide=None, message="No guide available for this pack"))
-    return _text(WorkflowGuideResponse(pack=wf_pack.pack, guide=wf_pack.guide))
+    return _text(WorkflowGuideResponse(pack=wf_pack.pack, guide=dict(wf_pack.guide)))
 
 
 async def _handle_explain_state(arguments: dict[str, Any]) -> list[TextContent]:
