@@ -28,9 +28,10 @@ function renderEventList(events) {
       let detail = "";
       if (e.event_type === "status_changed") detail = `${e.old_value} \u2192 ${e.new_value}`;
       else if (e.new_value) detail = e.new_value;
+      const fullTitle = e.issue_title ? escHtml(e.issue_title) : escHtml(e.issue_id);
       return (
         separator +
-        '<div class="flex items-start gap-3 py-2 cursor-pointer bg-overlay-hover" style="border-bottom:1px solid var(--surface-raised)" onclick="openDetail(\'' +
+        '<div class="flex items-center gap-3 py-2 cursor-pointer bg-overlay-hover overflow-hidden" style="border-bottom:1px solid var(--surface-raised);flex-wrap:nowrap" onclick="openDetail(\'' +
         escJsSingle(e.issue_id) +
         "')" +
         ">" +
@@ -40,7 +41,9 @@ function renderEventList(events) {
         '<span class="shrink-0 w-32" style="color:var(--text-secondary)">' +
         escHtml(e.event_type) +
         "</span>" +
-        '<span class="truncate" style="color:var(--text-primary)">' +
+        '<span class="truncate min-w-0" style="color:var(--text-primary)" title="' +
+        fullTitle +
+        '">' +
         title +
         "</span>" +
         (detail

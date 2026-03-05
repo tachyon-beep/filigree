@@ -128,29 +128,40 @@ export async function loadMetrics() {
         '</div></div>';
     }
 
-    // Activity feed (collapsed by default)
-    const activityDetails = document.createElement("details");
-    activityDetails.className = "rounded mt-4";
-    activityDetails.style.cssText =
+    // Activity feed — show 4 preview lines, expand for more
+    const activityBox = document.createElement("div");
+    activityBox.className = "rounded mt-4";
+    activityBox.style.cssText =
       "background:var(--surface-raised);border:1px solid var(--border-default)";
-    activityDetails.innerHTML =
-      '<summary class="cursor-pointer select-none text-xs font-medium px-4 py-3" style="color:var(--text-secondary)">' +
-      "Recent Activity</summary>" +
+    activityBox.innerHTML =
+      '<div class="text-xs font-medium px-4 py-3" style="color:var(--text-secondary)">Recent Activity</div>' +
       '<div id="activityEmbedContent" class="px-4 pb-3"></div>';
-    container.appendChild(activityDetails);
+    container.appendChild(activityBox);
 
-    activityDetails.addEventListener("toggle", async () => {
-      if (activityDetails.open) {
-        const content = document.getElementById("activityEmbedContent");
-        if (content && !content.dataset.loaded) {
-          const count = await renderActivitySection(content, 15);
-          content.dataset.loaded = "1";
-          const summary = activityDetails.querySelector("summary");
-          if (summary && count)
-            summary.textContent = `Recent Activity (${count} events)`;
-        }
+    const actContent = document.getElementById("activityEmbedContent");
+    if (actContent) {
+      const count = await renderActivitySection(actContent, 15);
+      if (count > 4) {
+        const rows = actContent.querySelectorAll(":scope > div");
+        let visible = 0;
+        rows.forEach((row) => {
+          if (row.querySelector("[style*='border-top']")) return; // day separator
+          visible++;
+          if (visible > 4) row.classList.add("hidden");
+        });
+        const more = document.createElement("button");
+        more.className = "text-xs mt-2 hover:underline";
+        more.style.color = "var(--accent)";
+        more.textContent = `Show ${count - 4} more events`;
+        more.onclick = () => {
+          actContent.querySelectorAll(".hidden").forEach((el) => el.classList.remove("hidden"));
+          more.remove();
+        };
+        actContent.appendChild(more);
       }
-    });
+      const header = activityBox.querySelector(".text-xs.font-medium");
+      if (header && count) header.textContent = `Recent Activity (${count} events)`;
+    }
   } catch (_e) {
     container.innerHTML = '<div class="text-red-400">Failed to load metrics.</div>';
   }
