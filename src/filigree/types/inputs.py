@@ -325,6 +325,49 @@ class TriggerScanArgs(TypedDict):
     api_url: NotRequired[str]
 
 
+# ---------------------------------------------------------------------------
+# observations.py handlers
+# ---------------------------------------------------------------------------
+
+
+class ObserveArgs(TypedDict):
+    summary: str
+    detail: NotRequired[str]
+    file_path: NotRequired[str]
+    line: NotRequired[int]
+    source_issue_id: NotRequired[str]
+    priority: NotRequired[int]
+    actor: NotRequired[str]
+
+
+class ListObservationsArgs(TypedDict):
+    limit: NotRequired[int]
+    offset: NotRequired[int]
+    file_path: NotRequired[str]
+    file_id: NotRequired[str]
+
+
+class DismissObservationArgs(TypedDict):
+    id: str
+    reason: NotRequired[str]
+    actor: NotRequired[str]
+
+
+class BatchDismissObservationsArgs(TypedDict):
+    ids: list[str]
+    reason: NotRequired[str]
+    actor: NotRequired[str]
+
+
+class PromoteObservationArgs(TypedDict):
+    id: str
+    type: NotRequired[str]
+    priority: NotRequired[int]
+    title: NotRequired[str]
+    description: NotRequired[str]
+    actor: NotRequired[str]
+
+
 # Registry: tool_name -> TypedDict class.
 # Populated as TypedDicts are defined below.
 # No-argument tools (empty inputSchema properties) are intentionally excluded.
@@ -377,4 +420,10 @@ TOOL_ARGS_MAP: dict[str, type] = {
     "add_file_association": AddFileAssociationArgs,
     "register_file": RegisterFileArgs,
     "trigger_scan": TriggerScanArgs,
+    # observations.py
+    "observe": ObserveArgs,
+    "list_observations": ListObservationsArgs,
+    "dismiss_observation": DismissObservationArgs,
+    "batch_dismiss_observations": BatchDismissObservationsArgs,
+    "promote_observation": PromoteObservationArgs,
 }

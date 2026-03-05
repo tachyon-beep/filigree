@@ -1,0 +1,246 @@
+"""MCP tools for observation CRUD — agent scratchpad."""
+from __future__ import annotations
+
+from collections.abc import Callable
+from typing import Any
+
+from mcp.types import TextContent, Tool
+
+from filigree.mcp_tools.common import (
+    _parse_args,
+    _text,
+    _validate_actor,
+    _validate_int_range,
+)
+from filigree.types.api import ErrorResponse
+from filigree.types.inputs import (
+    BatchDismissObservationsArgs,
+    DismissObservationArgs,
+    ListObservationsArgs,
+    ObserveArgs,
+    PromoteObservationArgs,
+)
+
+
+def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
+    """Return (tool_definitions, handler_map) for observation tools."""
+    tools = [
+        Tool(
+            name="observe",
+            description="Record an observation — something you noticed in passing. Fire-and-forget: observations are not issues. They expire after 14 days unless promoted or dismissed.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "summary": {"type": "string", "description": "Short description of the observation"},
+                    "detail": {"type": "string", "description": "Longer explanation or context"},
+                    "file_path": {"type": "string", "description": "File path (relative to project root)"},
+                    "line": {"type": "integer", "description": "Line number in file (0-indexed)"},
+                    "source_issue_id": {"type": "string", "description": "Issue ID that prompted this observation"},
+                    "priority": {
+                        "type": "integer",
+                        "description": "Priority 0-4 (0=critical)",
+                        "default": 3,
+                        "minimum": 0,
+                        "maximum": 4,
+                    },
+                    "actor": {"type": "string", "description": "Agent/user identity for audit trail"},
+                },
+                "required": ["summary"],
+            },
+        ),
+        Tool(
+            name="list_observations",
+            description="List pending observations with optional filtering by file path or file ID. Automatically sweeps expired observations.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "limit": {"type": "integer", "default": 100, "description": "Max results", "minimum": 1},
+                    "offset": {"type": "integer", "default": 0, "description": "Skip first N results", "minimum": 0},
+                    "file_path": {"type": "string", "description": "Filter by substring in file path"},
+                    "file_id": {"type": "string", "description": "Filter by exact file ID"},
+                },
+            },
+        ),
+        Tool(
+            name="dismiss_observation",
+            description="Dismiss a single observation (logs to audit trail).",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string", "description": "Observation ID"},
+                    "reason": {"type": "string", "description": "Reason for dismissal"},
+                    "actor": {"type": "string", "description": "Agent/user identity for audit trail"},
+                },
+                "required": ["id"],
+            },
+        ),
+        Tool(
+            name="batch_dismiss_observations",
+            description="Dismiss multiple observations in one call.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Observation IDs to dismiss",
+                    },
+                    "reason": {"type": "string", "default": "", "description": "Reason for dismissal"},
+                    "actor": {"type": "string", "description": "Agent/user identity for audit trail"},
+                },
+                "required": ["ids"],
+            },
+        ),
+        Tool(
+            name="promote_observation",
+            description="Promote an observation to a real issue. Deletes the observation, creates an issue with the from-observation label.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string", "description": "Observation ID"},
+                    "type": {"type": "string", "default": "bug", "description": "Issue type to create"},
+                    "priority": {
+                        "type": "integer",
+                        "description": "Override priority (default: observation priority)",
+                        "minimum": 0,
+                        "maximum": 4,
+                    },
+                    "title": {"type": "string", "description": "Override title (default: observation summary)"},
+                    "description": {"type": "string", "description": "Extra description to prepend"},
+                    "actor": {"type": "string", "description": "Agent/user identity for audit trail"},
+                },
+                "required": ["id"],
+            },
+        ),
+    ]
+
+    handlers: dict[str, Callable[..., Any]] = {
+        "observe": _handle_observe,
+        "list_observations": _handle_list_observations,
+        "dismiss_observation": _handle_dismiss_observation,
+        "batch_dismiss_observations": _handle_batch_dismiss_observations,
+        "promote_observation": _handle_promote_observation,
+    }
+
+    return tools, handlers
+
+
+async def _handle_observe(arguments: dict[str, Any]) -> list[TextContent]:
+    from filigree.mcp_server import _get_db
+
+    args = _parse_args(arguments, ObserveArgs)
+    actor, actor_err = _validate_actor(args.get("actor", "mcp"))
+    if actor_err:
+        return actor_err
+
+    summary = args.get("summary", "")
+    if not summary or not summary.strip():
+        return _text(ErrorResponse(error="summary cannot be empty", code="validation_error"))
+
+    priority = args.get("priority", 3)
+    priority_err = _validate_int_range(priority, "priority", min_val=0, max_val=4)
+    if priority_err:
+        return priority_err
+
+    line = args.get("line")
+    if line is not None:
+        line_err = _validate_int_range(line, "line", min_val=0)
+        if line_err:
+            return line_err
+
+    tracker = _get_db()
+    try:
+        obs = tracker.create_observation(
+            summary,
+            detail=args.get("detail", ""),
+            file_path=args.get("file_path", ""),
+            line=line,
+            source_issue_id=args.get("source_issue_id", ""),
+            priority=priority,
+            actor=actor,
+        )
+    except ValueError as e:
+        return _text(ErrorResponse(error=str(e), code="validation_error"))
+    return _text(obs)
+
+
+async def _handle_list_observations(arguments: dict[str, Any]) -> list[TextContent]:
+    from filigree.mcp_server import _get_db
+
+    args = _parse_args(arguments, ListObservationsArgs)
+    tracker = _get_db()
+    observations = tracker.list_observations(
+        limit=args.get("limit", 100),
+        offset=args.get("offset", 0),
+        file_path=args.get("file_path", ""),
+        file_id=args.get("file_id", ""),
+    )
+    stats = tracker.observation_stats(sweep=False)
+    return _text({"observations": observations, "stats": stats})
+
+
+async def _handle_dismiss_observation(arguments: dict[str, Any]) -> list[TextContent]:
+    from filigree.mcp_server import _get_db
+
+    args = _parse_args(arguments, DismissObservationArgs)
+    actor, actor_err = _validate_actor(args.get("actor", "mcp"))
+    if actor_err:
+        return actor_err
+
+    tracker = _get_db()
+    try:
+        tracker.dismiss_observation(
+            args["id"],
+            actor=actor,
+            reason=args.get("reason", ""),
+        )
+    except ValueError as e:
+        return _text(ErrorResponse(error=str(e), code="not_found"))
+    return _text({"status": "dismissed", "id": args["id"]})
+
+
+async def _handle_batch_dismiss_observations(arguments: dict[str, Any]) -> list[TextContent]:
+    from filigree.mcp_server import _get_db
+
+    args = _parse_args(arguments, BatchDismissObservationsArgs)
+    actor, actor_err = _validate_actor(args.get("actor", "mcp"))
+    if actor_err:
+        return actor_err
+
+    tracker = _get_db()
+    count = tracker.batch_dismiss_observations(
+        args.get("ids", []),
+        actor=actor,
+        reason=args.get("reason", ""),
+    )
+    return _text({"dismissed": count, "ok": True})
+
+
+async def _handle_promote_observation(arguments: dict[str, Any]) -> list[TextContent]:
+    from filigree.mcp_server import _get_db, _refresh_summary
+
+    args = _parse_args(arguments, PromoteObservationArgs)
+    actor, actor_err = _validate_actor(args.get("actor", "mcp"))
+    if actor_err:
+        return actor_err
+
+    priority = args.get("priority")
+    if priority is not None:
+        priority_err = _validate_int_range(priority, "priority", min_val=0, max_val=4)
+        if priority_err:
+            return priority_err
+
+    tracker = _get_db()
+    try:
+        result = tracker.promote_observation(
+            args["id"],
+            issue_type=args.get("type", "bug"),
+            priority=priority,
+            title=args.get("title"),
+            extra_description=args.get("description", ""),
+            actor=actor,
+        )
+    except ValueError as e:
+        return _text(ErrorResponse(error=str(e), code="not_found"))
+    _refresh_summary()
+    return _text({"issue": result["issue"].to_dict()})
