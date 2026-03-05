@@ -1195,6 +1195,34 @@ class TestFileDetailCore:
         with pytest.raises(KeyError):
             db.get_file_detail("nonexistent")
 
+    def test_get_file_detail_propagates_non_table_operational_error(self, db: FiligreeDB) -> None:
+        """Non-'no such table' OperationalErrors must propagate, not be swallowed."""
+        import sqlite3
+
+        db.process_scan_results(scan_source="ruff", findings=[{"path": "err.py", "rule_id": "E001", "severity": "low", "message": "x"}])
+        f = db.get_file_by_path("err.py")
+        assert f is not None
+
+        real_conn = db.conn
+
+        class _ConnProxy:
+            """Proxy that raises 'database is locked' for observation queries."""
+
+            def execute(self, sql: str, params: object = ()) -> object:
+                if "observations" in sql:
+                    raise sqlite3.OperationalError("database is locked")
+                return real_conn.execute(sql, params)
+
+            def __getattr__(self, name: str) -> object:
+                return getattr(real_conn, name)
+
+        db._conn = _ConnProxy()  # type: ignore[assignment]
+        try:
+            with pytest.raises(sqlite3.OperationalError, match="database is locked"):
+                db.get_file_detail(f.id)
+        finally:
+            db._conn = real_conn
+
     def test_recent_findings_capped_at_10(self, db: FiligreeDB) -> None:
         findings = [{"path": "big.py", "rule_id": f"E{i:03d}", "severity": "low", "message": f"Finding {i}"} for i in range(15)]
         db.process_scan_results(scan_source="ruff", findings=findings)

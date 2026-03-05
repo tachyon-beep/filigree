@@ -769,7 +769,7 @@ class TemplateRegistry:
                         continue
                     self._load_pack_data(pack_data)
                     logger.info("Loaded installed pack: %s from %s", pack_name, pack_file.name)
-                except (ValueError, KeyError, TypeError, AttributeError) as exc:
+                except (ValueError, KeyError) as exc:
                     logger.warning("Skipping invalid pack file %s: %s", pack_file.name, exc)
 
         # Layer 3: Project-local overrides from .filigree/templates/*.json
@@ -788,7 +788,7 @@ class TemplateRegistry:
                         logger.warning("Quality: %s (local override): %s", tpl.type, qw)
                     self._register_type(tpl)  # Overwrites built-in with same name
                     logger.info("Loaded project-local template override: %s", tpl.type)
-                except (ValueError, KeyError, TypeError, AttributeError) as exc:
+                except (ValueError, KeyError) as exc:
                     logger.warning("Skipping invalid template file %s: %s", tpl_file.name, exc)
 
         self._loaded = True
@@ -816,7 +816,7 @@ class TemplateRegistry:
                     logger.warning("Quality: %s/%s: %s", pack_name, type_name, qw)
                 self._register_type(tpl)
                 types_dict[type_name] = tpl
-            except (ValueError, KeyError, TypeError, AttributeError) as exc:
+            except (ValueError, KeyError) as exc:
                 logger.warning("Skipping unparseable type %s in pack %s: %s", type_name, pack_name, exc)
 
         # Register the pack itself

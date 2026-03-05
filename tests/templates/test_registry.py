@@ -1762,6 +1762,27 @@ class TestTemplateMalformedShape:
         assert reg.get_type("task") is not None  # Built-ins still loaded
         assert reg.get_type("crasher") is None  # Bad template was skipped
 
+    def test_type_error_in_pack_loading_propagates(self, tmp_path: object, monkeypatch: pytest.MonkeyPatch) -> None:
+        """TypeError from parse_type_template must propagate, not be swallowed."""
+        filigree_dir = Path(str(tmp_path)) / ".filigree"
+        filigree_dir.mkdir()
+
+        config = {"prefix": "test", "version": 1, "enabled_packs": ["core"]}
+        (filigree_dir / "config.json").write_text(json.dumps(config))
+
+        original_parse = TemplateRegistry.parse_type_template
+
+        def exploding_parse(raw: Any) -> Any:
+            if isinstance(raw, dict) and raw.get("type") == "task":
+                raise TypeError("simulated code bug")
+            return original_parse(raw)
+
+        monkeypatch.setattr(TemplateRegistry, "parse_type_template", staticmethod(exploding_parse))
+
+        reg = TemplateRegistry()
+        with pytest.raises(TypeError, match="simulated code bug"):
+            reg.load(filigree_dir)
+
 
 class TestRolledBackTransition:
     def test_rolled_back_has_outbound_transition(self) -> None:

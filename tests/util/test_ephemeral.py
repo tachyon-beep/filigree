@@ -135,6 +135,29 @@ class TestPidLifecycle:
             "read_pid_file must log a warning when PID file exists but can't be parsed"
         )
 
+    def test_read_pid_json_array_returns_none(self, tmp_path: Path) -> None:
+        """Non-dict JSON (array) should return None with a warning, not fall through."""
+        pid_file = tmp_path / "ephemeral.pid"
+        pid_file.write_text("[12345]")
+        assert read_pid_file(pid_file) is None
+
+    def test_read_pid_json_string_returns_none(self, tmp_path: Path) -> None:
+        """Non-dict JSON (string) should return None with a warning, not fall through."""
+        pid_file = tmp_path / "ephemeral.pid"
+        pid_file.write_text('"12345"')
+        assert read_pid_file(pid_file) is None
+
+    def test_read_pid_json_dict_without_pid_returns_none(self, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+        """JSON dict missing 'pid' key should return None with a specific warning."""
+        import logging
+
+        pid_file = tmp_path / "ephemeral.pid"
+        pid_file.write_text('{"cmd": "foo"}')
+        with caplog.at_level(logging.WARNING):
+            result = read_pid_file(pid_file)
+        assert result is None
+        assert any("missing 'pid' key" in r.message for r in caplog.records)
+
     def test_is_pid_alive_for_self(self) -> None:
         assert is_pid_alive(os.getpid()) is True
 

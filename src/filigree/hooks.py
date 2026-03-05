@@ -10,9 +10,11 @@ from __future__ import annotations
 
 import logging
 import socket
+import sqlite3
 import subprocess
 import time
 from pathlib import Path
+from urllib.error import URLError
 
 import portalocker
 
@@ -117,7 +119,7 @@ def _build_context(db: FiligreeDB, filigree_dir: Path | None = None) -> str:
                 lines.append(f"STALE OBSERVATIONS: {obs_stats['stale_count']} older than 48h — run `list_observations` to triage")
             else:
                 lines.append(f"OBSERVATIONS: {obs_stats['count']} pending — run `list_observations` to review")
-    except Exception:
+    except sqlite3.OperationalError:
         logger.debug("observation stats unavailable in session context", exc_info=True)
 
     return "\n".join(lines)
@@ -214,8 +216,6 @@ def generate_session_context() -> str | None:
         freshness_messages = _check_instructions_freshness(project_root)
     except (OSError, UnicodeDecodeError, ValueError):
         logger.warning("Instructions freshness check failed for %s", project_root, exc_info=True)
-    except Exception:
-        logger.error("Unexpected error in instructions freshness check for %s", project_root, exc_info=True)
 
     db = FiligreeDB.from_filigree_dir(filigree_dir)
     try:
@@ -414,7 +414,7 @@ def _ensure_dashboard_server_mode(filigree_dir: Path, port: int | None) -> str:
         )
         with urllib.request.urlopen(req, timeout=2):  # noqa: S310
             pass
-    except Exception as exc:
+    except (URLError, TimeoutError, OSError) as exc:
         logger.warning("Failed to POST /api/reload to daemon: %s", exc, exc_info=True)
         reload_warning = f" (reload failed: {type(exc).__name__})"
 

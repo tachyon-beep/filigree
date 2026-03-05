@@ -107,12 +107,19 @@ class TestBuildContext:
         result = _build_context(db)
         assert "STALE OBSERVATION" in result.upper()
 
-    def test_observation_stats_failure_silent_in_context(self, db: FiligreeDB) -> None:
-        """If observation_stats() raises, context still generates."""
-        with patch.object(db, "observation_stats", side_effect=Exception("boom")):
+    def test_observation_stats_operational_error_silent_in_context(self, db: FiligreeDB) -> None:
+        """If observation_stats() raises OperationalError, context still generates."""
+        import sqlite3
+
+        with patch.object(db, "observation_stats", side_effect=sqlite3.OperationalError("no such table")):
             result = _build_context(db)
         assert "Filigree Project Snapshot" in result
         assert "OBSERVATION" not in result.upper()
+
+    def test_observation_stats_non_operational_error_propagates(self, db: FiligreeDB) -> None:
+        """Non-OperationalError from observation_stats() must propagate."""
+        with patch.object(db, "observation_stats", side_effect=TypeError("bad type")), pytest.raises(TypeError, match="bad type"):
+            _build_context(db)
 
 
 class TestGenerateSessionContext:
@@ -682,6 +689,26 @@ class TestEnsureDashboardEthereal:
         mock_logger.warning.assert_called_once()
         assert "ConnectionRefusedError" in result
 
+    def test_server_mode_reload_propagates_non_network_errors(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Non-network errors (e.g. TypeError) during reload POST must propagate."""
+        from filigree.server import ServerConfig
+
+        filigree_dir = tmp_path / ".filigree"
+        filigree_dir.mkdir()
+        (filigree_dir / "config.json").write_text(json.dumps({"prefix": "test", "version": 1, "mode": "server"}))
+        db = FiligreeDB(filigree_dir / DB_FILENAME, prefix="test")
+        db.initialize()
+        db.close()
+
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr("filigree.server.register_project", lambda _p: None)
+        monkeypatch.setattr("filigree.server.read_server_config", lambda: ServerConfig(port=9911))
+        monkeypatch.setattr("filigree.hooks._is_port_listening", lambda *a: True)
+        monkeypatch.setattr("urllib.request.urlopen", lambda *a, **kw: (_ for _ in ()).throw(TypeError("bad type")))
+
+        with pytest.raises(TypeError, match="bad type"):
+            ensure_dashboard_running()
+
 
 class TestFreshnessCheckLogLevel:
     """Bug filigree-ff0974: freshness check failure must log at warning, not debug."""
@@ -704,7 +731,8 @@ class TestFreshnessCheckLogLevel:
         assert result is not None
         mock_logger.warning.assert_called_once()
 
-    def test_freshness_check_unexpected_error_logs_at_error(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_freshness_check_unexpected_error_propagates(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Programming errors in freshness check must propagate, not be swallowed."""
         db_dir = tmp_path / ".filigree"
         db_dir.mkdir()
         (db_dir / "config.json").write_text(json.dumps({"prefix": "test", "version": 1}))
@@ -715,9 +743,6 @@ class TestFreshnessCheckLogLevel:
         with (
             patch("filigree.hooks.find_filigree_root", return_value=db_dir),
             patch("filigree.hooks._check_instructions_freshness", side_effect=RuntimeError("boom")),
-            patch("filigree.hooks.logger") as mock_logger,
+            pytest.raises(RuntimeError, match="boom"),
         ):
-            result = generate_session_context()
-
-        assert result is not None
-        mock_logger.error.assert_called_once()
+            generate_session_context()

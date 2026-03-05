@@ -101,7 +101,11 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
                 "type": "object",
                 "properties": {
                     "id": {"type": "string", "description": "Observation ID"},
-                    "type": {"type": "string", "default": "task", "description": "Issue type: 'bug' for defects, 'task' for improvements/cleanup, 'feature' for new capability, 'requirement' for formal requirements"},
+                    "type": {
+                        "type": "string",
+                        "default": "task",
+                        "description": "Issue type: 'bug' for defects, 'task' for improvements/cleanup, 'feature' for new capability, 'requirement' for formal requirements",
+                    },
                     "priority": {
                         "type": "integer",
                         "description": "Override priority (default: observation priority)",

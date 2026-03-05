@@ -156,8 +156,19 @@ def read_pid_file(pid_file: Path) -> PidInfo | None:
                 if pid <= 0:
                     return None
                 return {"pid": pid, "cmd": data.get("cmd", "unknown")}
-        except (_json.JSONDecodeError, TypeError):
-            pass
+            # Valid JSON but wrong shape — don't fall through to legacy parser
+            if isinstance(data, dict):
+                logger.warning("PID file %s: JSON dict missing 'pid' key", pid_file)
+                return None
+            if not isinstance(data, (int, float)):
+                # Non-numeric, non-dict JSON (string, array, etc.)
+                logger.warning("PID file %s: unexpected JSON shape: %s", pid_file, type(data).__name__)
+                return None
+            # Bare numeric JSON — fall through to legacy integer parse
+        except _json.JSONDecodeError:
+            pass  # Not JSON — try legacy integer format
+        except TypeError:
+            pass  # json.loads returned something weird — try legacy
         # Fall back to plain integer (legacy format)
         pid = int(text)
         if pid <= 0:

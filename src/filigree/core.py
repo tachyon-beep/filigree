@@ -120,7 +120,7 @@ def read_config(filigree_dir: Path) -> ProjectConfig:
 def write_config(filigree_dir: Path, config: dict[str, Any] | ProjectConfig) -> None:
     """Write .filigree/config.json."""
     config_path = filigree_dir / CONFIG_FILENAME
-    config_path.write_text(json.dumps(config, indent=2) + "\n")
+    write_atomic(config_path, json.dumps(config, indent=2) + "\n")
 
 
 VALID_MODES: frozenset[str] = frozenset({"ethereal", "server"})

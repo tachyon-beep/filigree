@@ -990,7 +990,9 @@ class FilesMixin(DBMixinProtocol):
         # Guarded for pre-v7 DBs where observations table may not exist.
         try:
             obs_count = self.conn.execute("SELECT COUNT(*) FROM observations WHERE file_id = ?", (file_id,)).fetchone()[0]
-        except sqlite3.OperationalError:
+        except sqlite3.OperationalError as exc:
+            if "no such table" not in str(exc):
+                raise
             obs_count = 0
         return {
             "file": f.to_dict(),
