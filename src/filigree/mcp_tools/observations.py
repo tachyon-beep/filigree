@@ -96,12 +96,12 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
         ),
         Tool(
             name="promote_observation",
-            description="Promote an observation to a real issue. Deletes the observation, creates an issue with the from-observation label.",
+            description="Promote an observation to a real issue. Deletes the observation, creates an issue with the from-observation label. Use type='bug' for defects, type='task' for improvements/cleanup.",
             inputSchema={
                 "type": "object",
                 "properties": {
                     "id": {"type": "string", "description": "Observation ID"},
-                    "type": {"type": "string", "default": "bug", "description": "Issue type to create"},
+                    "type": {"type": "string", "default": "task", "description": "Issue type: 'bug' for defects, 'task' for improvements/cleanup, 'feature' for new capability, 'requirement' for formal requirements"},
                     "priority": {
                         "type": "integer",
                         "description": "Override priority (default: observation priority)",
@@ -239,7 +239,7 @@ async def _handle_promote_observation(arguments: dict[str, Any]) -> list[TextCon
     try:
         result = tracker.promote_observation(
             args["id"],
-            issue_type=args.get("type", "bug"),
+            issue_type=args.get("type", "task"),
             priority=priority,
             title=args.get("title"),
             extra_description=args.get("description", ""),

@@ -310,7 +310,7 @@ class ObservationsMixin(DBMixinProtocol):
         self,
         obs_id: str,
         *,
-        issue_type: str = "bug",
+        issue_type: str = "task",
         priority: int | None = None,
         title: str | None = None,
         extra_description: str = "",
