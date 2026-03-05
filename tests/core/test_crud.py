@@ -914,6 +914,38 @@ class TestArchival:
         assert len(archived_events) == 1
         assert archived_events[0]["actor"] == "janitor"
 
+    def test_archive_rolls_back_on_failure(self, db: FiligreeDB, monkeypatch: pytest.MonkeyPatch) -> None:
+        """H3: If _record_event fails mid-loop, no issues should be archived."""
+        # Create two issues and backdate their closed_at
+        a = db.create_issue("Archive A")
+        b = db.create_issue("Archive B")
+        db.close_issue(a.id)
+        db.close_issue(b.id)
+        old_date = (datetime.now(UTC) - timedelta(days=60)).isoformat()
+        db.conn.execute("UPDATE issues SET closed_at = ? WHERE id = ?", (old_date, a.id))
+        db.conn.execute("UPDATE issues SET closed_at = ? WHERE id = ?", (old_date, b.id))
+        db.conn.commit()
+
+        call_count = 0
+        original = db._record_event
+
+        def failing_on_second_archive(*args: object, **kwargs: object) -> None:
+            nonlocal call_count
+            if len(args) >= 2 and args[1] == "archived":
+                call_count += 1
+                if call_count == 2:
+                    raise RuntimeError("Simulated failure on second archive")
+            original(*args, **kwargs)
+
+        monkeypatch.setattr(db, "_record_event", failing_on_second_archive)
+
+        with pytest.raises(RuntimeError, match="Simulated"):
+            db.archive_closed(days_old=30)
+
+        # Neither issue should be archived — rollback should have reverted both
+        assert db.get_issue(a.id).status != "archived", "First issue should not be archived after rollback"
+        assert db.get_issue(b.id).status != "archived", "Second issue should not be archived after rollback"
+
 
 class TestCompaction:
     def test_compact_archived_events(self, db: FiligreeDB) -> None:

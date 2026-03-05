@@ -245,6 +245,65 @@ class TestGetIssueEvents:
             db.get_issue_events("nonexistent-abc123")
 
 
+class TestUndoRollback:
+    """H1: undo_last must rollback on exception, not leave partial writes."""
+
+    def test_undo_rolls_back_on_record_event_failure(self, db: FiligreeDB, monkeypatch: pytest.MonkeyPatch) -> None:
+        """If _record_event raises, the status change should be rolled back."""
+        issue = db.create_issue("Test")
+        db.update_issue(issue.id, status="in_progress", actor="t")
+
+        original = db._record_event
+
+        def failing_record_event(*args: object, **kwargs: object) -> None:
+            if kwargs.get("old_value") == "status_changed" or (args and len(args) >= 2 and args[1] == "undone"):
+                raise RuntimeError("Simulated _record_event failure")
+            original(*args, **kwargs)
+
+        monkeypatch.setattr(db, "_record_event", failing_record_event)
+
+        with pytest.raises(RuntimeError, match="Simulated"):
+            db.undo_last(issue.id, actor="t")
+
+        # The status should NOT have been changed — rollback should have reverted it
+        after = db.get_issue(issue.id)
+        assert after.status == "in_progress", "Status should be unchanged after failed undo (rollback)"
+
+
+class TestUndoNullGuards:
+    """H2: undo_last must handle NULL old_value/new_value gracefully."""
+
+    def test_undo_status_changed_null_old_value(self, db: FiligreeDB) -> None:
+        """status_changed with NULL old_value should return undone=False, not crash."""
+        issue = db.create_issue("Test")
+        # Inject a status_changed event with NULL old_value directly
+        db.conn.execute(
+            "INSERT INTO events (issue_id, event_type, actor, old_value, new_value, comment, created_at) "
+            "VALUES (?, 'status_changed', 'test', NULL, 'in_progress', '', '2099-01-01T00:00:00+00:00')",
+            (issue.id,),
+        )
+        db.conn.commit()
+
+        result = db.undo_last(issue.id)
+        assert result["undone"] is False
+        assert "no old_value" in result["reason"].lower()
+
+    def test_undo_dependency_removed_null_old_value(self, db: FiligreeDB) -> None:
+        """dependency_removed with NULL old_value should return undone=False, not silently no-op."""
+        issue = db.create_issue("Test")
+        # Inject a dependency_removed event with NULL old_value
+        db.conn.execute(
+            "INSERT INTO events (issue_id, event_type, actor, old_value, new_value, comment, created_at) "
+            "VALUES (?, 'dependency_removed', 'test', NULL, NULL, '', '2099-01-01T00:00:00+00:00')",
+            (issue.id,),
+        )
+        db.conn.commit()
+
+        result = db.undo_last(issue.id)
+        assert result["undone"] is False
+        assert "no old_value" in result["reason"].lower()
+
+
 class TestUndoCloseConsistency:
     """Bug fix: keel-3e899d — undo_last closed_at consistency."""
 

@@ -125,96 +125,104 @@ class EventsMixin(DBMixinProtocol):
         if already_undone:
             return {"undone": False, "reason": "Most recent reversible event already undone"}
 
-        # Apply reverse action
-        match event_type:
-            case "status_changed":
-                old_status = row["old_value"]
-                # Direct SQL update — bypasses transition validation for undo
-                self.conn.execute(
-                    "UPDATE issues SET status = ?, updated_at = ? WHERE id = ?",
-                    (old_status, now, issue_id),
-                )
-                # Maintain closed_at consistency with the restored status
-                old_cat = self._resolve_status_category(current.type, old_status)
-                if old_cat == "done":
-                    # Restoring to a done state — set closed_at
+        # Apply reverse action — wrapped in try/except for rollback safety
+        try:
+            match event_type:
+                case "status_changed":
+                    old_status = row["old_value"]
+                    if old_status is None:
+                        return {"undone": False, "reason": "Cannot undo: event has no old_value"}
+                    # Direct SQL update — bypasses transition validation for undo
                     self.conn.execute(
-                        "UPDATE issues SET closed_at = ? WHERE id = ?",
-                        (now, issue_id),
+                        "UPDATE issues SET status = ?, updated_at = ? WHERE id = ?",
+                        (old_status, now, issue_id),
                     )
-                else:
-                    # Restoring to a non-done state — clear closed_at
+                    # Maintain closed_at consistency with the restored status
+                    old_cat = self._resolve_status_category(current.type, old_status)
+                    if old_cat == "done":
+                        # Restoring to a done state — set closed_at
+                        self.conn.execute(
+                            "UPDATE issues SET closed_at = ? WHERE id = ?",
+                            (now, issue_id),
+                        )
+                    else:
+                        # Restoring to a non-done state — clear closed_at
+                        self.conn.execute(
+                            "UPDATE issues SET closed_at = NULL WHERE id = ?",
+                            (issue_id,),
+                        )
+
+                case "title_changed":
                     self.conn.execute(
-                        "UPDATE issues SET closed_at = NULL WHERE id = ?",
-                        (issue_id,),
+                        "UPDATE issues SET title = ?, updated_at = ? WHERE id = ?",
+                        (row["old_value"], now, issue_id),
                     )
 
-            case "title_changed":
-                self.conn.execute(
-                    "UPDATE issues SET title = ?, updated_at = ? WHERE id = ?",
-                    (row["old_value"], now, issue_id),
-                )
+                case "priority_changed":
+                    if row["old_value"] is None:
+                        return {"undone": False, "reason": "Cannot undo: event has no old_value"}
+                    self.conn.execute(
+                        "UPDATE issues SET priority = ?, updated_at = ? WHERE id = ?",
+                        (int(row["old_value"]), now, issue_id),
+                    )
 
-            case "priority_changed":
-                if row["old_value"] is None:
-                    return {"undone": False, "reason": "Cannot undo: event has no old_value"}
-                self.conn.execute(
-                    "UPDATE issues SET priority = ?, updated_at = ? WHERE id = ?",
-                    (int(row["old_value"]), now, issue_id),
-                )
+                case "assignee_changed":
+                    self.conn.execute(
+                        "UPDATE issues SET assignee = ?, updated_at = ? WHERE id = ?",
+                        (row["old_value"] or "", now, issue_id),
+                    )
 
-            case "assignee_changed":
-                self.conn.execute(
-                    "UPDATE issues SET assignee = ?, updated_at = ? WHERE id = ?",
-                    (row["old_value"] or "", now, issue_id),
-                )
+                case "claimed":
+                    # Restore: revert to the assignee before the claim (usually '' but
+                    # preserves prior assignee if the claim re-assigned from another agent)
+                    self.conn.execute(
+                        "UPDATE issues SET assignee = ?, updated_at = ? WHERE id = ?",
+                        (row["old_value"] if row["old_value"] is not None else "", now, issue_id),
+                    )
 
-            case "claimed":
-                # Restore: revert to the assignee before the claim (usually '' but
-                # preserves prior assignee if the claim re-assigned from another agent)
-                self.conn.execute(
-                    "UPDATE issues SET assignee = ?, updated_at = ? WHERE id = ?",
-                    (row["old_value"] if row["old_value"] is not None else "", now, issue_id),
-                )
+                case "dependency_added":
+                    # Event: issue_id=from_id, new_value="type:depends_on_id"
+                    if row["new_value"] is None:
+                        return {"undone": False, "reason": "Cannot undo: event has no new_value"}
+                    dep_target = row["new_value"].split(":", 1)[-1] if ":" in row["new_value"] else row["new_value"]
+                    self.conn.execute(
+                        "DELETE FROM dependencies WHERE issue_id = ? AND depends_on_id = ?",
+                        (issue_id, dep_target),
+                    )
 
-            case "dependency_added":
-                # Event: issue_id=from_id, new_value="type:depends_on_id"
-                if row["new_value"] is None:
-                    return {"undone": False, "reason": "Cannot undo: event has no new_value"}
-                dep_target = row["new_value"].split(":", 1)[-1] if ":" in row["new_value"] else row["new_value"]
-                self.conn.execute(
-                    "DELETE FROM dependencies WHERE issue_id = ? AND depends_on_id = ?",
-                    (issue_id, dep_target),
-                )
+                case "dependency_removed":
+                    # Event: issue_id=from_id, old_value=depends_on_id
+                    if row["old_value"] is None:
+                        return {"undone": False, "reason": "Cannot undo: event has no old_value"}
+                    self.conn.execute(
+                        "INSERT OR IGNORE INTO dependencies (issue_id, depends_on_id, type, created_at) VALUES (?, ?, 'blocks', ?)",
+                        (issue_id, row["old_value"], now),
+                    )
 
-            case "dependency_removed":
-                # Event: issue_id=from_id, old_value=depends_on_id
-                self.conn.execute(
-                    "INSERT OR IGNORE INTO dependencies (issue_id, depends_on_id, type, created_at) VALUES (?, ?, 'blocks', ?)",
-                    (issue_id, row["old_value"], now),
-                )
+                case "description_changed":
+                    self.conn.execute(
+                        "UPDATE issues SET description = ?, updated_at = ? WHERE id = ?",
+                        (row["old_value"] or "", now, issue_id),
+                    )
 
-            case "description_changed":
-                self.conn.execute(
-                    "UPDATE issues SET description = ?, updated_at = ? WHERE id = ?",
-                    (row["old_value"] or "", now, issue_id),
-                )
+                case "notes_changed":
+                    self.conn.execute(
+                        "UPDATE issues SET notes = ?, updated_at = ? WHERE id = ?",
+                        (row["old_value"] or "", now, issue_id),
+                    )
 
-            case "notes_changed":
-                self.conn.execute(
-                    "UPDATE issues SET notes = ?, updated_at = ? WHERE id = ?",
-                    (row["old_value"] or "", now, issue_id),
-                )
-
-        # Record the undo event
-        self._record_event(
-            issue_id,
-            "undone",
-            actor=actor,
-            old_value=event_type,
-            new_value=str(event_id),
-        )
-        self.conn.commit()
+            # Record the undo event
+            self._record_event(
+                issue_id,
+                "undone",
+                actor=actor,
+                old_value=event_type,
+                new_value=str(event_id),
+            )
+            self.conn.commit()
+        except Exception:
+            self.conn.rollback()
+            raise
 
         return {
             "undone": True,
@@ -249,14 +257,18 @@ class EventsMixin(DBMixinProtocol):
             return []
 
         now = _now_iso()
-        for issue_id in archived_ids:
-            self.conn.execute(
-                "UPDATE issues SET status = 'archived', updated_at = ? WHERE id = ?",
-                (now, issue_id),
-            )
-            self._record_event(issue_id, "archived", actor=actor)
+        try:
+            for issue_id in archived_ids:
+                self.conn.execute(
+                    "UPDATE issues SET status = 'archived', updated_at = ? WHERE id = ?",
+                    (now, issue_id),
+                )
+                self._record_event(issue_id, "archived", actor=actor)
 
-        self.conn.commit()
+            self.conn.commit()
+        except Exception:
+            self.conn.rollback()
+            raise
         return archived_ids
 
     def compact_events(self, *, keep_recent: int = 50, actor: str = "") -> int:
