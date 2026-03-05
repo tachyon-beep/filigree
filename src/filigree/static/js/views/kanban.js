@@ -364,10 +364,28 @@ export function toggleEpicExpand(epicId) {
 // renderTypeKanban — type-filtered kanban
 // ---------------------------------------------------------------------------
 
+function parseVersion(issue) {
+  const v = issue.fields?.version || issue.title || "";
+  const m = v.match(/(\d+)\.(\d+)(?:\.(\d+))?/);
+  if (m) return [parseInt(m[1]), parseInt(m[2]), parseInt(m[3] || "0")];
+  return [Infinity, 0, 0]; // non-versioned (e.g. "Future") sort last
+}
+
+function compareVersions(a, b) {
+  const va = parseVersion(a);
+  const vb = parseVersion(b);
+  for (let i = 0; i < 3; i++) {
+    if (va[i] !== vb[i]) return va[i] - vb[i];
+  }
+  return 0;
+}
+
 export function renderTypeKanban(stateColumns, template) {
   return template.states
     .map((s) => {
-      const issues = stateColumns[s.name] || [];
+      const issues = (stateColumns[s.name] || []).slice().sort(
+        (a, b) => a.priority - b.priority || compareVersions(a, b)
+      );
       const catColor = CATEGORY_COLORS[s.category] || "#64748B";
       return (
         `<div class="kanban-col flex flex-col" data-status="${escHtml(s.name)}" data-status-category="${escHtml(s.category)}">` +

@@ -47,12 +47,16 @@ function renderEventList(events) {
         title +
         "</span>" +
         (detail
-          ? '<span class="shrink-0" style="color:var(--text-muted)">' +
+          ? '<span class="shrink-0 max-w-[10rem] truncate" style="color:var(--text-muted)" title="' +
+            escHtml(detail) +
+            '">' +
             escHtml(detail) +
             "</span>"
           : "") +
         (e.actor
-          ? '<span class="shrink-0" style="color:var(--text-muted)">' +
+          ? '<span class="shrink-0 max-w-[8rem] truncate" style="color:var(--text-muted)" title="' +
+            escHtml(e.actor) +
+            '">' +
             escHtml(e.actor) +
             "</span>"
           : "") +
