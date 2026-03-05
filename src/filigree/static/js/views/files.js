@@ -185,6 +185,7 @@ export async function loadFiles() {
       { key: null, label: "Low", cls: "text-center" },
       { key: null, label: "Closed", cls: "text-center" },
       { key: null, label: "Issues", cls: "text-center" },
+      { key: null, label: "Obs", cls: "text-center" },
       { key: "updated_at", label: "Last Update", cls: "text-right" },
     ];
 
@@ -217,6 +218,7 @@ export async function loadFiles() {
           `<td class="py-2 px-3 text-center">${severityBadge("low", s.low)}</td>` +
           `<td class="py-2 px-3 text-center">${closedCount ? `<span class="text-xs" style="color:var(--status-done)">${closedCount}</span>` : "\u2014"}</td>` +
           `<td class="py-2 px-3 text-center">${assocCount || "\u2014"}</td>` +
+          `<td class="py-2 px-3 text-center">${f.observation_count ? `<span class="text-xs px-1.5 py-0.5 rounded" style="color:var(--text-secondary);border:1px dashed var(--border-strong)">${f.observation_count}</span>` : "\u2014"}</td>` +
           `<td class="py-2 px-3 text-right" style="color:var(--text-muted)">${updated}</td>` +
           "</tr>"
         );
@@ -353,6 +355,15 @@ function renderFileDetail(data) {
     severityBadge("low", s.low) +
     severityBadge("info", s.info) +
     "</div>";
+
+  // Observations badge (shown only if observations exist)
+  if (data.observation_count > 0) {
+    html +=
+      '<div class="flex items-center gap-2 mb-4 px-3 py-2 rounded" style="background:var(--surface-overlay);border:1px dashed var(--border-strong)">' +
+      `<span class="text-xs" style="color:var(--text-secondary)">${data.observation_count} pending observation(s)</span>` +
+      '<span class="text-xs" style="color:var(--text-muted)">\u2014 use <code>list_observations</code> to triage</span>' +
+      '</div>';
+  }
 
   // Tab buttons
   const findingsActive = state.fileDetailTab === "findings";

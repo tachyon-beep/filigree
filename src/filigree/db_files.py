@@ -341,7 +341,10 @@ class FilesMixin(DBMixinProtocol):
             f"{_sev_cols} "
             f"(SELECT COUNT(*) FROM file_associations fa"
             f" WHERE fa.file_id = fr.id"
-            f") AS associations_count"
+            f") AS associations_count, "
+            f"(SELECT COUNT(*) FROM observations o"
+            f" WHERE o.file_id = fr.id"
+            f") AS observation_count"
             f" FROM file_records fr{where}"
             f" ORDER BY {sort_col} {order}"
             f" LIMIT ? OFFSET ?"
@@ -361,6 +364,7 @@ class FilesMixin(DBMixinProtocol):
                 "info": r["cnt_info"],
             }
             d["associations_count"] = r["associations_count"]
+            d["observation_count"] = r["observation_count"]
             results.append(d)
         return {
             "results": results,
