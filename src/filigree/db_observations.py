@@ -219,20 +219,37 @@ class ObservationsMixin(DBMixinProtocol):
             sweep: If True (default), sweep expired observations first.
                    Pass False when calling from read-only context paths
                    (summary generation, MCP prompt) to avoid write side effects.
+                   When False, expired rows are excluded via WHERE filter
+                   to keep counts consistent with what list_observations returns.
         """
         if sweep:
             self._sweep_expired_observations()
-        count = self.observation_count()
+
+        now = datetime.now(UTC)
+        now_iso = now.isoformat()
+
+        # When sweep=False, filter out expired rows so counts stay consistent
+        # with list_observations (which sweeps before returning).
+        alive_filter = " WHERE expires_at > ?" if not sweep else ""
+        alive_params: tuple[str, ...] = (now_iso,) if not sweep else ()
+
+        count = self.conn.execute(f"SELECT COUNT(*) FROM observations{alive_filter}", alive_params).fetchone()[0]
         if count == 0:
             return {"count": 0, "stale_count": 0, "oldest_hours": 0, "expiring_soon_count": 0}
 
-        now = datetime.now(UTC)
         stale_cutoff = (now - timedelta(hours=STALE_THRESHOLD_HOURS)).isoformat()
         expiring_cutoff = (now + timedelta(hours=24)).isoformat()
 
-        stale = self.conn.execute("SELECT COUNT(*) FROM observations WHERE created_at <= ?", (stale_cutoff,)).fetchone()[0]
-        expiring = self.conn.execute("SELECT COUNT(*) FROM observations WHERE expires_at <= ?", (expiring_cutoff,)).fetchone()[0]
-        oldest_row = self.conn.execute("SELECT MIN(created_at) FROM observations").fetchone()
+        stale_where = f"created_at <= ?{' AND expires_at > ?' if not sweep else ''}"
+        stale_params = (stale_cutoff, now_iso) if not sweep else (stale_cutoff,)
+        stale = self.conn.execute(f"SELECT COUNT(*) FROM observations WHERE {stale_where}", stale_params).fetchone()[0]
+
+        expiring_where = f"expires_at <= ?{' AND expires_at > ?' if not sweep else ''}"
+        expiring_params = (expiring_cutoff, now_iso) if not sweep else (expiring_cutoff,)
+        expiring = self.conn.execute(f"SELECT COUNT(*) FROM observations WHERE {expiring_where}", expiring_params).fetchone()[0]
+
+        oldest_where = " WHERE expires_at > ?" if not sweep else ""
+        oldest_row = self.conn.execute(f"SELECT MIN(created_at) FROM observations{oldest_where}", alive_params).fetchone()
         oldest_hours = 0.0
         if oldest_row and oldest_row[0]:
             oldest_dt = datetime.fromisoformat(oldest_row[0])
@@ -272,17 +289,19 @@ class ObservationsMixin(DBMixinProtocol):
     ) -> int:
         if not obs_ids:
             return 0
+        # Deduplicate in Python to avoid relying on SQL IN dedup behavior
+        unique_ids = list(dict.fromkeys(obs_ids))
         now = _now_iso()
-        placeholders = ",".join("?" for _ in obs_ids)
+        placeholders = ",".join("?" for _ in unique_ids)
         # Log all to audit trail before deletion
         self.conn.execute(
             f"INSERT INTO dismissed_observations (obs_id, summary, actor, reason, dismissed_at) "
             f"SELECT id, summary, ?, ?, ? FROM observations WHERE id IN ({placeholders})",
-            [actor, reason, now, *obs_ids],
+            [actor, reason, now, *unique_ids],
         )
         cursor = self.conn.execute(
             f"DELETE FROM observations WHERE id IN ({placeholders})",
-            obs_ids,
+            unique_ids,
         )
         self.conn.commit()
         return cursor.rowcount

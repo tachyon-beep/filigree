@@ -365,13 +365,15 @@ class TestFileDetailObservations:
         detail = db.get_file_detail(file_id)
         assert detail["observation_count"] == 2
 
-    def test_file_detail_excludes_expired_observations(self, db: FiligreeDB) -> None:
-        obs = db.create_observation("will expire", file_path="src/temp.py")
+    def test_file_detail_includes_expired_in_raw_count(self, db: FiligreeDB) -> None:
+        """get_file_detail uses a raw COUNT (no sweep) — expired rows are included."""
+        db.create_observation("active obs", file_path="src/temp.py")
+        obs2 = db.create_observation("will expire", file_path="src/temp.py", line=1)
         db.conn.execute(
             "UPDATE observations SET expires_at = '2020-01-01T00:00:00+00:00' WHERE id = ?",
-            (obs["id"],),
+            (obs2["id"],),
         )
         db.conn.commit()
-        detail = db.get_file_detail(obs["file_id"])
-        # Count is raw (no sweep) — but this is acceptable for a read path
-        assert detail["observation_count"] >= 0
+        detail = db.get_file_detail(obs2["file_id"])
+        # Raw count includes both active and expired observations
+        assert detail["observation_count"] == 2

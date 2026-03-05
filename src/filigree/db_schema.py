@@ -199,6 +199,7 @@ CREATE TABLE IF NOT EXISTS observations (
 
 CREATE INDEX IF NOT EXISTS idx_observations_priority ON observations(priority, created_at);
 CREATE INDEX IF NOT EXISTS idx_observations_expires ON observations(expires_at);
+CREATE INDEX IF NOT EXISTS idx_observations_file_id ON observations(file_id);
 -- Dedup contract: coalesce(line, -1) means NULL lines map to -1.
 -- An observation with line=NULL and line=-1 are considered duplicates.
 -- This is intentional — line=-1 is not a valid line number.

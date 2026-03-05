@@ -118,7 +118,7 @@ def _build_context(db: FiligreeDB, filigree_dir: Path | None = None) -> str:
             else:
                 lines.append(f"OBSERVATIONS: {obs_stats['count']} pending — run `list_observations` to review")
     except Exception:
-        logging.getLogger(__name__).debug("observation stats unavailable in session context", exc_info=True)
+        logger.debug("observation stats unavailable in session context", exc_info=True)
 
     return "\n".join(lines)
 

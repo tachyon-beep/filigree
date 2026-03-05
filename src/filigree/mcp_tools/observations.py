@@ -8,7 +8,9 @@ from typing import Any
 from mcp.types import TextContent, Tool
 
 from filigree.mcp_tools.common import (
+    _apply_has_more,
     _parse_args,
+    _resolve_pagination,
     _text,
     _validate_actor,
     _validate_int_range,
@@ -169,15 +171,17 @@ async def _handle_list_observations(arguments: dict[str, Any]) -> list[TextConte
     from filigree.mcp_server import _get_db
 
     args = _parse_args(arguments, ListObservationsArgs)
+    effective_limit, offset = _resolve_pagination(arguments)
     tracker = _get_db()
     observations = tracker.list_observations(
-        limit=args.get("limit", 100),
-        offset=args.get("offset", 0),
+        limit=effective_limit + 1,
+        offset=offset,
         file_path=args.get("file_path", ""),
         file_id=args.get("file_id", ""),
     )
+    observations, has_more = _apply_has_more(observations, effective_limit)
     stats = tracker.observation_stats(sweep=False)
-    return _text({"observations": observations, "stats": stats})
+    return _text({"observations": observations, "stats": stats, "has_more": has_more})
 
 
 async def _handle_dismiss_observation(arguments: dict[str, Any]) -> list[TextContent]:
