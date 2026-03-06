@@ -270,40 +270,52 @@ def verify_pid_ownership(
     expected_cmd: str = "filigree",
     required_args: tuple[str, ...] = (),
 ) -> bool:
-    """Verify PID file refers to a live process with expected identity."""
+    """Verify PID file refers to a live process with expected identity.
+
+    Checks OS-level process identity first to avoid TOCTOU races — on Linux,
+    reading /proc/{pid}/cmdline atomically confirms alive + identity.
+    Falls back to is_pid_alive + PID-file metadata only when cmdline is unreadable.
+    """
     info = read_pid_file(pid_file)
     if info is None:
         return False
+
+    # Try OS-level identity first — avoids the TOCTOU race of checking
+    # is_pid_alive() then reading cmdline in separate steps.
+    tokens = _read_os_command_line(info["pid"])
+    if tokens:
+        return _matches_expected_process(tokens, expected_cmd=expected_cmd, required_args=required_args)
+
+    # Cmdline unreadable — process may be dead or in a constrained environment.
+    # Check aliveness, then fall back to PID-file metadata.
     if not is_pid_alive(info["pid"]):
         return False
 
-    # PID file metadata is advisory; trust the OS process identity.
-    tokens = _read_os_command_line(info["pid"])
-    if not tokens:
-        # Constrained environments may not expose process command lines.
-        # Fall back to PID-file identity as a best-effort portability path.
-        pid_cmd = str(info.get("cmd", "")).strip().lower()
-        if not pid_cmd or pid_cmd == "unknown":
-            return False
-        try:
-            pid_tokens = shlex.split(pid_cmd, posix=os.name != "nt")
-        except ValueError:
-            pid_tokens = [pid_cmd]
-        return _matches_expected_process(pid_tokens, expected_cmd=expected_cmd, required_args=required_args)
-
-    return _matches_expected_process(tokens, expected_cmd=expected_cmd, required_args=required_args)
+    pid_cmd = str(info.get("cmd", "")).strip().lower()
+    if not pid_cmd or pid_cmd == "unknown":
+        return False
+    try:
+        pid_tokens = shlex.split(pid_cmd, posix=os.name != "nt")
+    except ValueError:
+        pid_tokens = [pid_cmd]
+    return _matches_expected_process(pid_tokens, expected_cmd=expected_cmd, required_args=required_args)
 
 
 def cleanup_stale_pid(pid_file: Path) -> bool:
-    """Remove PID file if the process is dead. Returns True if cleaned."""
+    """Remove PID file if the process is dead or not ours (PID recycled).
+
+    Uses verify_pid_ownership to check both aliveness and identity,
+    preventing stale PID files from persisting when the PID is recycled
+    to an unrelated process.
+    """
     info = read_pid_file(pid_file)
     if info is None:
         return False
-    if not is_pid_alive(info["pid"]):
-        pid_file.unlink(missing_ok=True)
-        logger.info("Cleaned stale PID file %s (pid %d)", pid_file, info["pid"])
-        return True
-    return False
+    if verify_pid_ownership(pid_file, expected_cmd="filigree", required_args=("dashboard",)):
+        return False  # Process is alive and ours — not stale
+    pid_file.unlink(missing_ok=True)
+    logger.info("Cleaned stale PID file %s (pid %d)", pid_file, info["pid"])
+    return True
 
 
 # ---------------------------------------------------------------------------

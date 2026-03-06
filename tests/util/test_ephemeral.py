@@ -339,17 +339,64 @@ class TestPidLifecycle:
         # Should return False because cmd="unknown" is not trustworthy
         assert verify_pid_ownership(pid_file, expected_cmd="filigree") is False
 
+    def test_verify_pid_ownership_uses_cmdline_before_alive_check(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """TOCTOU fix: cmdline should be checked first, not is_pid_alive.
+
+        If _read_os_command_line returns valid tokens, is_pid_alive should not
+        be called (it creates a race window on PID recycling).
+        """
+        pid_file = tmp_path / "ephemeral.pid"
+        write_pid_file(pid_file, os.getpid(), cmd="filigree")
+
+        alive_called = []
+        orig_alive = is_pid_alive
+
+        def _tracking_alive(pid: int) -> bool:
+            alive_called.append(pid)
+            return orig_alive(pid)
+
+        monkeypatch.setattr("filigree.ephemeral.is_pid_alive", _tracking_alive)
+        monkeypatch.setattr(
+            "filigree.ephemeral._read_os_command_line",
+            lambda _pid: ["/usr/bin/filigree", "dashboard"],
+        )
+
+        result = verify_pid_ownership(pid_file, expected_cmd="filigree")
+        assert result is True
+        # is_pid_alive should NOT have been called when cmdline is available
+        assert alive_called == [], f"is_pid_alive was called unnecessarily: {alive_called}"
+
     def test_cleanup_stale_pid_removes_dead(self, tmp_path: Path) -> None:
         pid_file = tmp_path / "ephemeral.pid"
         write_pid_file(pid_file, 99999999, cmd="filigree")
         cleanup_stale_pid(pid_file)
         assert not pid_file.exists()
 
-    def test_cleanup_stale_pid_keeps_alive(self, tmp_path: Path) -> None:
+    def test_cleanup_stale_pid_keeps_alive_filigree(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """PID file should be kept if the process is alive and is filigree dashboard."""
         pid_file = tmp_path / "ephemeral.pid"
-        write_pid_file(pid_file, os.getpid(), cmd="python")
+        write_pid_file(pid_file, os.getpid(), cmd="filigree dashboard")
+        monkeypatch.setattr(
+            "filigree.ephemeral._read_os_command_line",
+            lambda _pid: ["/usr/bin/filigree", "dashboard"],
+        )
         cleanup_stale_pid(pid_file)
         assert pid_file.exists()
+
+    def test_cleanup_stale_pid_removes_recycled_pid(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """TOCTOU fix: cleanup should remove PID file when PID is alive but not our process."""
+        pid_file = tmp_path / "ephemeral.pid"
+        write_pid_file(pid_file, os.getpid(), cmd="filigree dashboard")
+
+        # PID is alive (it's our test process), but cmdline doesn't match filigree
+        monkeypatch.setattr(
+            "filigree.ephemeral._read_os_command_line",
+            lambda _pid: ["/usr/bin/some-other-app", "serve"],
+        )
+
+        result = cleanup_stale_pid(pid_file)
+        assert result is True
+        assert not pid_file.exists()
 
 
 class TestPortFile:
