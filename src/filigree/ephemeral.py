@@ -230,6 +230,8 @@ def _read_os_command_line(pid: int) -> list[str] | None:
             )
         except (OSError, subprocess.SubprocessError):
             return None
+        if result.returncode != 0:
+            return None
         cmdline = result.stdout.strip()
         if not cmdline:
             return None
@@ -248,6 +250,8 @@ def _read_os_command_line(pid: int) -> list[str] | None:
             check=False,
         )
     except (OSError, subprocess.SubprocessError):
+        return None
+    if result.returncode != 0:
         return None
     for line in result.stdout.splitlines():
         if line.startswith("CommandLine="):

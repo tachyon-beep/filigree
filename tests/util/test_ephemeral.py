@@ -468,6 +468,23 @@ class TestReadOsCommandLine:
         result = _read_os_command_line(12345)
         assert result is None
 
+    def test_ps_nonzero_returncode_returns_none(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """ps returning non-zero exit code should be treated as failure, even with stdout."""
+        import subprocess as _subprocess
+
+        monkeypatch.setattr("filigree.ephemeral.Path", self._make_noproc_path_factory(tmp_path))
+
+        fake_result = _subprocess.CompletedProcess(
+            args=["ps", "-p", "12345", "-o", "command="],
+            returncode=1,
+            stdout="some garbage output\n",
+            stderr="",
+        )
+        monkeypatch.setattr("filigree.ephemeral.subprocess.run", lambda *a, **kw: fake_result)
+
+        result = _read_os_command_line(12345)
+        assert result is None
+
     def test_both_proc_and_ps_fail_returns_none(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """When both /proc and ps are unavailable, returns None."""
         monkeypatch.setattr("filigree.ephemeral.Path", self._make_noproc_path_factory(tmp_path))

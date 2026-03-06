@@ -270,13 +270,33 @@ def ensure_dashboard_running(port: int | None = None) -> str:
     return _ensure_dashboard_ethereal_mode(filigree_dir)
 
 
+def _acquire_port(filigree_dir: Path) -> int | str:
+    """Find an available port, falling back to deterministic port in sandboxed environments.
+
+    Returns the port number on success, or an error message string on failure.
+    """
+    from filigree.ephemeral import compute_port, find_available_port
+
+    try:
+        return find_available_port(filigree_dir)
+    except (OSError, RuntimeError) as exc:
+        is_sandbox = isinstance(exc, PermissionError) or isinstance(exc.__cause__, PermissionError) or "Operation not permitted" in str(exc)
+        if is_sandbox:
+            port = compute_port(filigree_dir)
+            logger.warning(
+                "Port probe failed with permission error (%s); falling back to deterministic port %d",
+                exc,
+                port,
+            )
+            return port
+        return f"Failed to choose dashboard port: {exc}"
+
+
 def _ensure_dashboard_ethereal_mode(filigree_dir: Path) -> str:
     """Ethereal mode: session-scoped dashboard on a deterministic port."""
     from filigree.ephemeral import (
         cleanup_legacy_tmp_files,
         cleanup_stale_pid,
-        compute_port,
-        find_available_port,
         read_pid_file,
         read_port_file,
         verify_pid_ownership,
@@ -325,24 +345,10 @@ def _ensure_dashboard_ethereal_mode(filigree_dir: Path) -> str:
         if running_message:
             return running_message
 
-        try:
-            port = find_available_port(filigree_dir)
-        except (OSError, RuntimeError) as exc:
-            is_sandbox = (
-                isinstance(exc, PermissionError) or isinstance(exc.__cause__, PermissionError) or "Operation not permitted" in str(exc)
-            )
-            if is_sandbox:
-                # Some sandboxed environments forbid bind() during the probe.
-                # Fall back to the deterministic project port and let the
-                # subprocess startup checks decide whether it actually works.
-                port = compute_port(filigree_dir)
-                logger.warning(
-                    "Port probe failed with permission error (%s); falling back to deterministic port %d",
-                    exc,
-                    port,
-                )
-            else:
-                return f"Failed to choose dashboard port: {exc}"
+        port_or_err = _acquire_port(filigree_dir)
+        if isinstance(port_or_err, str):
+            return port_or_err
+        port = port_or_err
         filigree_cmd = find_filigree_command()
 
         log_file = filigree_dir / "ephemeral.log"
