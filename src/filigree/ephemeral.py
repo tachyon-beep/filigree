@@ -57,7 +57,8 @@ def _matches_expected_process(tokens: list[str], *, expected_cmd: str, required_
     candidates: list[list[str]] = []
 
     executable = Path(tokens[0]).name.lower()
-    if executable == expected or executable.startswith(expected):
+    exe_stem = Path(executable).stem  # strip .exe / .cmd / .bat
+    if executable == expected or exe_stem == expected:
         candidates.append(tokens[1:])
 
     if len(tokens) > 1:
@@ -68,7 +69,8 @@ def _matches_expected_process(tokens: list[str], *, expected_cmd: str, required_
                 candidates.append(tokens[3:])
         else:
             first_arg = Path(tokens[1]).name.lower()
-            if first_arg == expected or first_arg.startswith(expected):
+            first_arg_stem = Path(first_arg).stem
+            if first_arg == expected or first_arg_stem == expected:
                 candidates.append(tokens[2:])
 
     return any(_tokens_contain_args(candidate, required_args) for candidate in candidates)

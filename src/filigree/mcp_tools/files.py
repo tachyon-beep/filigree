@@ -369,8 +369,11 @@ async def _handle_list_scanners(arguments: dict[str, Any]) -> list[TextContent]:
     scanners_dir = filigree_dir / "scanners" if filigree_dir else None
     if scanners_dir is None:
         return _text({"scanners": [], "hint": "Project directory not initialized"})
-    scanners = _list_scanners(scanners_dir)
+    load_errors: list[str] = []
+    scanners = _list_scanners(scanners_dir, errors=load_errors)
     result_data: dict[str, Any] = {"scanners": [s.to_dict() for s in scanners]}
+    if load_errors:
+        result_data["errors"] = load_errors
     if not scanners:
         result_data["hint"] = "No scanners registered. Add TOML files to .filigree/scanners/"
     return _text(result_data)

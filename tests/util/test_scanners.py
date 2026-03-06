@@ -35,7 +35,19 @@ class TestListScanners:
         assert len(result) == 1
         assert result[0].name == "claude"
         assert result[0].description == "Bug hunt"
-        assert result[0].file_types == ["py"]
+        assert result[0].file_types == ("py",)
+
+    def test_fields_are_immutable_tuples(self, tmp_path: Path) -> None:
+        """L1: Frozen dataclass fields must be truly immutable (tuples, not lists)."""
+        scanners_dir = tmp_path / "scanners"
+        scanners_dir.mkdir()
+        (scanners_dir / "claude.toml").write_text(
+            '[scanner]\nname = "claude"\ndescription = "d"\ncommand = "python x.py"\nargs = ["--root"]\nfile_types = ["py"]\n'
+        )
+        result = list_scanners(scanners_dir)
+        cfg = result[0]
+        assert isinstance(cfg.args, tuple)
+        assert isinstance(cfg.file_types, tuple)
 
     def test_skips_non_toml(self, tmp_path: Path) -> None:
         scanners_dir = tmp_path / "scanners"
@@ -80,6 +92,21 @@ class TestListScanners:
         )
         result = list_scanners(scanners_dir)
         assert result == []
+
+    def test_errors_collected_for_malformed_files(self, tmp_path: Path) -> None:
+        """M3: errors list collects human-readable descriptions of skipped files."""
+        scanners_dir = tmp_path / "scanners"
+        scanners_dir.mkdir()
+        (scanners_dir / "bad-syntax.toml").write_text("not valid toml [[")
+        (scanners_dir / "no-table.toml").write_text('key = "value"\n')
+        (scanners_dir / "good.toml").write_text('[scanner]\nname = "good"\ndescription = "d"\ncommand = "python x.py"\n')
+        errors: list[str] = []
+        result = list_scanners(scanners_dir, errors=errors)
+        assert len(result) == 1
+        assert result[0].name == "good"
+        assert len(errors) == 2
+        assert any("bad-syntax.toml" in e for e in errors)
+        assert any("no-table.toml" in e for e in errors)
 
 
 # ── load_scanner ─────────────────────────────────────────────────────
@@ -148,8 +175,6 @@ class TestLoadScanner:
             name="bad",
             description="bad command",
             command="python 'unclosed",
-            args=[],
-            file_types=[],
         )
         with pytest.raises(ValueError, match=r"[Mm]alformed"):
             cfg.build_command(file_path="x.py")
@@ -160,8 +185,7 @@ class TestLoadScanner:
             name="bad",
             description="bad args",
             command="python scanner.py",
-            args=["--file", "ok", 42],  # type: ignore[list-item]
-            file_types=[],
+            args=("--file", "ok", 42),  # type: ignore[arg-type]
         )
         with pytest.raises(ValueError, match=r"[Mm]alformed args"):
             cfg.build_command(file_path="x.py")
@@ -172,8 +196,7 @@ class TestLoadScanner:
             name="safe",
             description="test",
             command="python scanner.py",
-            args=["--file", "{file}", "--url", "{api_url}"],
-            file_types=[],
+            args=("--file", "{file}", "--url", "{api_url}"),
         )
         # File path literally contains {api_url}
         cmd = cfg.build_command(
@@ -191,8 +214,6 @@ class TestLoadScanner:
             name="safe",
             description="test",
             command="python scanner.py {file}",
-            args=[],
-            file_types=[],
         )
         cmd = cfg.build_command(
             file_path="{project_root}/evil.py",

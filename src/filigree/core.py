@@ -124,12 +124,14 @@ VALID_MODES: frozenset[str] = frozenset({"ethereal", "server"})
 
 
 def get_mode(filigree_dir: Path) -> str:
-    """Return the installation mode for a project. Defaults to 'ethereal'."""
+    """Return the installation mode for a project. Defaults to 'ethereal'.
+
+    Raises ValueError if the config contains an explicit but invalid mode string.
+    """
     config = read_config(filigree_dir)
     mode: str = config.get("mode", "ethereal")
     if mode not in VALID_MODES:
-        logger.warning("Unknown mode '%s' in config, falling back to 'ethereal'", mode)
-        return "ethereal"
+        raise ValueError(f"Unknown mode {mode!r} in config. Valid modes: {sorted(VALID_MODES)}")
     return mode
 
 

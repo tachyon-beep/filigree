@@ -18,7 +18,7 @@ import re
 import shlex
 import shutil
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -33,8 +33,8 @@ class ScannerConfig:
     name: str
     description: str
     command: str
-    args: list[str] = field(default_factory=list)
-    file_types: list[str] = field(default_factory=list)
+    args: tuple[str, ...] = ()
+    file_types: tuple[str, ...] = ()
 
     def build_command(
         self,
@@ -83,29 +83,40 @@ class ScannerConfig:
         return {
             "name": self.name,
             "description": self.description,
-            "file_types": self.file_types,
+            "file_types": list(self.file_types),
         }
 
 
-def _parse_toml(path: Path) -> ScannerConfig | None:
-    """Parse a single scanner TOML file. Returns None on error."""
+def _parse_toml(path: Path, *, errors: list[str] | None = None) -> ScannerConfig | None:
+    """Parse a single scanner TOML file. Returns None on error.
+
+    When *errors* is provided, human-readable error descriptions are appended
+    so callers can surface them (CLI output, MCP responses, etc.).
+    """
     import tomllib
+
+    def _fail(msg: str) -> None:
+        logger.warning("%s: %s", msg, path)
+        if errors is not None:
+            errors.append(f"{path.name}: {msg}")
 
     try:
         raw = path.read_text(encoding="utf-8")
     except OSError:
         logger.warning("Failed to read scanner TOML: %s", path, exc_info=True)
+        if errors is not None:
+            errors.append(f"{path.name}: failed to read file (permission denied or I/O error)")
         return None
 
     try:
         data = tomllib.loads(raw)
     except tomllib.TOMLDecodeError:
-        logger.warning("Failed to parse scanner TOML: %s", path, exc_info=True)
+        _fail("failed to parse TOML syntax")
         return None
 
     scanner = data.get("scanner")
     if not isinstance(scanner, dict):
-        logger.warning("Invalid scanner TOML (missing [scanner] table): %s", path)
+        _fail("missing [scanner] table")
         return None
 
     name = scanner.get("name")
@@ -115,42 +126,41 @@ def _parse_toml(path: Path) -> ScannerConfig | None:
     file_types = scanner.get("file_types", [])
 
     if not isinstance(name, str) or not isinstance(command, str):
-        logger.warning("Invalid scanner TOML ([scanner] name/command must be strings): %s", path)
+        _fail("[scanner] name and command must be strings")
         return None
     if not isinstance(description, str):
-        logger.warning("Invalid scanner TOML ([scanner] description must be a string): %s", path)
+        _fail("[scanner] description must be a string")
         return None
     if not isinstance(args, list) or not all(isinstance(arg, str) for arg in args):
-        logger.warning("Invalid scanner TOML ([scanner] args must be list[str]): %s", path)
+        _fail("[scanner] args must be a list of strings")
         return None
     if not isinstance(file_types, list) or not all(isinstance(ext, str) for ext in file_types):
-        logger.warning("Invalid scanner TOML ([scanner] file_types must be list[str]): %s", path)
+        _fail("[scanner] file_types must be a list of strings")
         return None
     if name != path.stem:
-        logger.warning(
-            "Invalid scanner TOML ([scanner] name must match filename stem %r): %s",
-            path.stem,
-            path,
-        )
+        _fail(f"[scanner] name {name!r} must match filename stem {path.stem!r}")
         return None
     if not _SAFE_NAME_RE.match(name):
-        logger.warning("Invalid scanner TOML ([scanner] name contains unsafe characters): %s", path)
+        _fail("[scanner] name contains unsafe characters")
         return None
 
     return ScannerConfig(
         name=name,
         description=description,
         command=command,
-        args=args,
-        file_types=file_types,
+        args=tuple(args),
+        file_types=tuple(file_types),
     )
 
 
-def list_scanners(scanners_dir: Path) -> list[ScannerConfig]:
+def list_scanners(scanners_dir: Path, *, errors: list[str] | None = None) -> list[ScannerConfig]:
     """Read all *.toml files from the scanners directory.
 
     Skips .toml.example files, malformed files, and non-TOML files.
     Returns an empty list if the directory doesn't exist.
+
+    When *errors* is provided, human-readable descriptions of skipped files
+    are appended so callers can surface them to users.
     """
     if not scanners_dir.is_dir():
         return []
@@ -158,7 +168,7 @@ def list_scanners(scanners_dir: Path) -> list[ScannerConfig]:
     for p in sorted(scanners_dir.iterdir()):
         if p.suffix != ".toml" or p.name.endswith(".toml.example"):
             continue
-        cfg = _parse_toml(p)
+        cfg = _parse_toml(p, errors=errors)
         if cfg is not None:
             results.append(cfg)
     return results

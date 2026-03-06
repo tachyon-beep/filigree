@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import json
-import logging
 from pathlib import Path
 from typing import Any
 
@@ -161,16 +160,14 @@ class TestGetMode:
         filigree_dir.mkdir()
         assert get_mode(filigree_dir) == "ethereal"
 
-    def test_unknown_mode_falls_back_to_ethereal(self, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
-        """Unknown mode values fall back to ethereal with a warning."""
+    def test_unknown_mode_raises_value_error(self, tmp_path: Path) -> None:
+        """Unknown mode values raise ValueError instead of silently falling back."""
         filigree_dir = tmp_path / ".filigree"
         filigree_dir.mkdir()
         config = {"prefix": "test", "version": 1, "mode": "bogus"}
         (filigree_dir / "config.json").write_text(json.dumps(config))
-        with caplog.at_level(logging.WARNING, logger="filigree.core"):
-            result = get_mode(filigree_dir)
-        assert result == "ethereal"
-        assert "bogus" in caplog.text
+        with pytest.raises(ValueError, match="bogus"):
+            get_mode(filigree_dir)
 
 
 class TestFindFiligreeCommand:

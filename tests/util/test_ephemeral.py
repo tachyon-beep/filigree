@@ -54,8 +54,14 @@ class TestMatchesExpectedProcess:
     def test_direct_executable(self) -> None:
         assert _matches_expected_process(["/usr/bin/filigree", "dashboard"], expected_cmd="filigree") is True
 
-    def test_executable_prefix_match(self) -> None:
-        assert _matches_expected_process(["filigree-dashboard", "serve"], expected_cmd="filigree") is True
+    def test_unrelated_executable_with_prefix_rejected(self) -> None:
+        """M3: filigree-unrelated-tool must NOT match 'filigree'."""
+        assert _matches_expected_process(["filigree-dashboard", "serve"], expected_cmd="filigree") is False
+        assert _matches_expected_process(["filigree-unrelated-tool"], expected_cmd="filigree") is False
+
+    def test_executable_with_exe_suffix(self) -> None:
+        """Windows .exe suffix should match after stripping."""
+        assert _matches_expected_process(["filigree.exe", "dashboard"], expected_cmd="filigree") is True
 
     def test_python_module_invocation(self) -> None:
         assert _matches_expected_process(["python", "-m", "filigree", "dashboard"], expected_cmd="filigree") is True
