@@ -17,7 +17,7 @@ from filigree.db_base import DBMixinProtocol, _now_iso
 from filigree.db_files import VALID_FINDING_STATUSES, VALID_SEVERITIES
 from filigree.types.planning import CommentRecord, StatsResult
 
-_logger = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 
 class MetaMixin(DBMixinProtocol):
@@ -166,7 +166,7 @@ class MetaMixin(DBMixinProtocol):
         )
         inserted = cursor.rowcount > 0
         if not inserted:
-            _logger.debug("bulk_insert_issue: skipped duplicate id=%s", issue_data.get("id"))
+            logger.debug("bulk_insert_issue: skipped duplicate id=%s", issue_data.get("id"))
         return inserted
 
     def bulk_insert_dependency(self, issue_id: str, depends_on_id: str, dep_type: str = "blocks") -> bool:
@@ -177,7 +177,7 @@ class MetaMixin(DBMixinProtocol):
         )
         inserted = cursor.rowcount > 0
         if not inserted:
-            _logger.debug("bulk_insert_dependency: skipped duplicate %s -> %s", issue_id, depends_on_id)
+            logger.debug("bulk_insert_dependency: skipped duplicate %s -> %s", issue_id, depends_on_id)
         return inserted
 
     def bulk_insert_event(self, event_data: dict[str, Any]) -> bool:
@@ -197,7 +197,7 @@ class MetaMixin(DBMixinProtocol):
         )
         inserted = cursor.rowcount > 0
         if not inserted:
-            _logger.debug("bulk_insert_event: skipped duplicate for issue=%s", event_data.get("issue_id"))
+            logger.debug("bulk_insert_event: skipped duplicate for issue=%s", event_data.get("issue_id"))
         return inserted
 
     def bulk_commit(self) -> None:
@@ -668,6 +668,6 @@ class MetaMixin(DBMixinProtocol):
 
         if skipped_types:
             for rtype, rcount in skipped_types.items():
-                _logger.warning("import_jsonl: skipped %d record(s) with unknown type %r", rcount, rtype)
+                logger.warning("import_jsonl: skipped %d record(s) with unknown type %r", rcount, rtype)
 
         return count

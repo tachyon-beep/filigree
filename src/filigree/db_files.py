@@ -41,6 +41,7 @@ logger = logging.getLogger(__name__)
 
 VALID_SEVERITIES: frozenset[str] = frozenset(get_args(Severity))
 VALID_FINDING_STATUSES: frozenset[str] = frozenset(get_args(FindingStatus))
+TERMINAL_FINDING_STATUSES: frozenset[str] = frozenset({"fixed", "false_positive"})
 VALID_ASSOC_TYPES = frozenset({"bug_in", "task_for", "scan_finding", "mentioned_in"})
 
 
@@ -57,9 +58,9 @@ class FilesMixin(DBMixinProtocol):
     Actual implementations provided by ``FiligreeDB`` at composition time via MRO.
     """
 
-    # SQL fragment for filtering open (non-terminal) findings.
-    _OPEN_FINDINGS_FILTER = "status NOT IN ('fixed', 'false_positive')"
-    _OPEN_FINDINGS_FILTER_SF = "sf.status NOT IN ('fixed', 'false_positive')"
+    # SQL fragment for filtering open (non-terminal) findings — derived from TERMINAL_FINDING_STATUSES.
+    _OPEN_FINDINGS_FILTER = "status NOT IN ({})".format(", ".join(f"'{s}'" for s in sorted(TERMINAL_FINDING_STATUSES)))
+    _OPEN_FINDINGS_FILTER_SF = "sf.status NOT IN ({})".format(", ".join(f"'{s}'" for s in sorted(TERMINAL_FINDING_STATUSES)))
 
     # Severity ordering for SQL sort: lower number = more severe.
     _SEVERITY_ORDER_SQL = (
@@ -99,7 +100,7 @@ class FilesMixin(DBMixinProtocol):
                 row["file_id"],
                 meta_raw[:200] if meta_raw else meta_raw,
             )
-            parsed_meta = {}
+            parsed_meta = {"_metadata_error": True}
         meta = parsed_meta if isinstance(parsed_meta, dict) else {}
         return ScanFinding(
             id=row["id"],
@@ -691,7 +692,7 @@ class FilesMixin(DBMixinProtocol):
 
             # Mark unseen findings as unseen_in_latest (atomic per file+source)
             if mark_unseen:
-                terminal = ("fixed", "false_positive")
+                terminal = tuple(TERMINAL_FINDING_STATUSES)
                 for fid, fids in seen_finding_ids.items():
                     placeholders = ",".join("?" * len(fids))
                     self.conn.execute(
@@ -1094,7 +1095,7 @@ class FilesMixin(DBMixinProtocol):
     def get_file_hotspots(self, *, limit: int = 10) -> list[FileHotspot]:
         """Get files ranked by weighted finding severity score."""
         rows = self.conn.execute(
-            """
+            f"""
             SELECT
                 fr.id, fr.path, fr.language,
                 SUM(CASE WHEN sf.severity = 'critical' THEN 1 ELSE 0 END) as cnt_critical,
@@ -1113,7 +1114,7 @@ class FilesMixin(DBMixinProtocol):
                 ) as score
             FROM file_records fr
             JOIN scan_findings sf ON sf.file_id = fr.id
-            WHERE sf.status = 'open'
+            WHERE {self._OPEN_FINDINGS_FILTER_SF}
             GROUP BY fr.id
             HAVING score > 0
             ORDER BY score DESC

@@ -1346,6 +1346,100 @@ class TestHotspots:
         assert result == []
 
 
+class TestHotspotsIncludesAcknowledgedFindings:
+    """L3 bugfix: hotspots should count all non-terminal findings, not just 'open'."""
+
+    def test_acknowledged_findings_count_in_hotspots(self, db: FiligreeDB) -> None:
+        """Acknowledged findings should contribute to hotspot score."""
+        db.process_scan_results(
+            scan_source="ruff",
+            findings=[
+                {"path": "a.py", "rule_id": "S001", "severity": "high", "message": "Vuln"},
+            ],
+        )
+        f = db.get_file_by_path("a.py")
+        assert f is not None
+        findings = db.get_findings(f.id)
+        db.update_finding(f.id, findings[0].id, status="acknowledged")
+        result = db.get_file_hotspots()
+        assert len(result) == 1, "Acknowledged finding should still appear in hotspots"
+        assert result[0]["score"] > 0
+
+
+class TestTerminalFindingStatusesConstant:
+    """L3 bugfix: single source of truth for terminal statuses."""
+
+    def test_terminal_statuses_constant_exists(self) -> None:
+        from filigree.db_files import TERMINAL_FINDING_STATUSES
+
+        assert isinstance(TERMINAL_FINDING_STATUSES, frozenset)
+        assert frozenset({"fixed", "false_positive"}) == TERMINAL_FINDING_STATUSES
+
+    def test_open_findings_filter_uses_terminal_constant(self) -> None:
+        """SQL filters should be derived from the constant, not hardcoded."""
+        from filigree.db_files import TERMINAL_FINDING_STATUSES, FilesMixin
+
+        for status in TERMINAL_FINDING_STATUSES:
+            assert status in FilesMixin._OPEN_FINDINGS_FILTER
+
+    def test_mark_unseen_preserves_false_positive(self, db: FiligreeDB) -> None:
+        """false_positive findings must survive mark_unseen (not just fixed)."""
+        db.process_scan_results(
+            scan_source="ruff",
+            findings=[
+                {"path": "a.py", "rule_id": "E501", "severity": "low", "message": "m1"},
+                {"path": "a.py", "rule_id": "E502", "severity": "low", "message": "m2"},
+            ],
+        )
+        f = db.get_file_by_path("a.py")
+        assert f is not None
+        findings = db.get_findings(f.id)
+        e502 = next(fi for fi in findings if fi.rule_id == "E502")
+        db.conn.execute("UPDATE scan_findings SET status = 'false_positive' WHERE id = ?", (e502.id,))
+        db.conn.commit()
+
+        db.process_scan_results(
+            scan_source="ruff",
+            findings=[{"path": "a.py", "rule_id": "E501", "severity": "low", "message": "m1"}],
+            mark_unseen=True,
+        )
+        findings = db.get_findings(f.id)
+        statuses = {fi.rule_id: fi.status for fi in findings}
+        assert statuses["E502"] == "false_positive"
+
+
+class TestCorruptFindingMetadata:
+    """L2 bugfix: corrupt metadata should include programmatic indicator."""
+
+    def test_corrupt_metadata_includes_error_key(self, db: FiligreeDB) -> None:
+        """When finding metadata is corrupt JSON, result should include _metadata_error."""
+        db.process_scan_results(
+            scan_source="ruff",
+            findings=[{"path": "a.py", "rule_id": "E501", "severity": "low", "message": "m"}],
+        )
+        f = db.get_file_by_path("a.py")
+        assert f is not None
+        findings = db.get_findings(f.id)
+        # Corrupt the metadata in the DB directly
+        db.conn.execute(
+            "UPDATE scan_findings SET metadata = '{bad json' WHERE id = ?",
+            (findings[0].id,),
+        )
+        db.conn.commit()
+
+        findings = db.get_findings(f.id)
+        assert findings[0].metadata.get("_metadata_error") is True
+
+
+class TestMetaModuleLogger:
+    """L4 bugfix: db_meta.py should use 'logger' not '_logger' for consistency."""
+
+    def test_db_meta_uses_standard_logger_name(self) -> None:
+        import filigree.db_meta as db_meta
+
+        assert hasattr(db_meta, "logger"), "db_meta should export 'logger' like other db_* modules"
+
+
 class TestSortBySeverity:
     """Tests for sort=severity on findings."""
 
