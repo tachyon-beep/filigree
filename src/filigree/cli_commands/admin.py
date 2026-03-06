@@ -468,12 +468,15 @@ def import_data(input_file: str, merge: bool) -> None:
     """Import full project data from a JSONL file."""
     with get_db() as db:
         try:
-            count = db.import_jsonl(input_file, merge=merge)
+            result = db.import_jsonl(input_file, merge=merge)
         except (json_mod.JSONDecodeError, KeyError, ValueError, sqlite3.IntegrityError, OSError) as e:
             click.echo(f"Import failed: {e}", err=True)
             sys.exit(1)
         refresh_summary(db)
-        click.echo(f"Imported {count} records from {input_file}")
+        click.echo(f"Imported {result['count']} records from {input_file}")
+        if result["skipped_types"]:
+            for rtype, rcount in result["skipped_types"].items():
+                click.echo(f"  Warning: skipped {rcount} record(s) with unknown type {rtype!r}", err=True)
 
 
 @click.command("archive")

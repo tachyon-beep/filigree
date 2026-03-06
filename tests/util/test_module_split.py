@@ -149,8 +149,8 @@ def test_import_merge_returns_zero_for_duplicates(db: FiligreeDB, tmp_path: Path
     first_count = db.export_jsonl(str(out))
     assert first_count > 0
     # Import the same data again — all records are duplicates
-    dup_count = db.import_jsonl(str(out), merge=True)
-    assert dup_count == 0, f"Expected 0 for duplicate import, got {dup_count}"
+    dup_result = db.import_jsonl(str(out), merge=True)
+    assert dup_result["count"] == 0, f"Expected 0 for duplicate import, got {dup_result['count']}"
 
 
 def test_export_import_roundtrip_with_files(db: FiligreeDB, tmp_path: Path) -> None:
@@ -198,8 +198,8 @@ def test_export_import_roundtrip_with_files(db: FiligreeDB, tmp_path: Path) -> N
 
     fresh = FiligreeDB(tmp_path / "fresh.db", prefix="test")
     fresh.initialize()
-    import_count = fresh.import_jsonl(str(out))
-    assert import_count == count
+    import_result = fresh.import_jsonl(str(out))
+    assert import_result["count"] == count
     assert fresh.conn.execute("SELECT COUNT(*) FROM file_records").fetchone()[0] == 1
     assert fresh.conn.execute("SELECT COUNT(*) FROM scan_findings").fetchone()[0] == 1
 

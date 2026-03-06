@@ -465,9 +465,12 @@ async def _handle_import_jsonl(arguments: dict[str, Any]) -> list[TextContent]:
     except ValueError as e:
         return _text(ErrorResponse(error=str(e), code="invalid_path"))
     try:
-        count = tracker.import_jsonl(safe, merge=args.get("merge", False))
+        result = tracker.import_jsonl(safe, merge=args.get("merge", False))
         _refresh_summary()
-        return _text(JsonlTransferResponse(status="ok", records=count, path=str(safe)))
+        resp = JsonlTransferResponse(status="ok", records=result["count"], path=str(safe))
+        if result["skipped_types"]:
+            resp["skipped_types"] = result["skipped_types"]
+        return _text(resp)
     except (ValueError, OSError, sqlite3.Error) as e:
         logging.getLogger(__name__).warning("import_jsonl failed: %s", e, exc_info=True)
         return _text(ErrorResponse(error=str(e), code="import_error"))

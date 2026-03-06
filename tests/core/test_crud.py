@@ -672,8 +672,9 @@ class TestImportJsonl:
 
         fresh = FiligreeDB(tmp_path / "fresh.db", prefix="test")
         fresh.initialize()
-        import_count = fresh.import_jsonl(out)
-        assert import_count == export_count
+        result = fresh.import_jsonl(out)
+        assert result["count"] == export_count
+        assert result["skipped_types"] == {}
         fresh.close()
 
     def test_import_issues_arrive(self, populated_db: PopulatedDB, tmp_path: Path) -> None:
@@ -698,9 +699,9 @@ class TestImportJsonl:
 
         fresh = FiligreeDB(tmp_path / "fresh-file.db", prefix="test")
         fresh.initialize()
-        import_count = fresh.import_jsonl(out)
+        result = fresh.import_jsonl(out)
 
-        assert import_count == export_count
+        assert result["count"] == export_count
         assert fresh.get_file(file_rec.id).path == "src/example.py"
         finding = fresh.conn.execute("SELECT file_id, issue_id FROM scan_findings WHERE id = ?", ("test-sf-1",)).fetchone()
         assert finding["file_id"] == file_rec.id
@@ -757,9 +758,9 @@ class TestImportJsonl:
 
         fresh = FiligreeDB(tmp_path / "fresh-late-parent.db", prefix="test")
         fresh.initialize()
-        import_count = fresh.import_jsonl(out)
+        result = fresh.import_jsonl(out)
 
-        assert import_count == export_count
+        assert result["count"] == export_count
         assert fresh.get_issue(child.id).parent_id == parent.id
         assert any(comment["text"] == "linked after creation" for comment in fresh.get_comments(child.id))
         assert any(dep["from"] == dependent.id and dep["to"] == child.id for dep in fresh.get_all_dependencies())
@@ -769,10 +770,10 @@ class TestImportJsonl:
         out = tmp_path / "merge.jsonl"
         populated_db.db.export_jsonl(out)
         # Import twice with merge — second import should not fail
-        count2 = populated_db.db.import_jsonl(out, merge=True)
+        result2 = populated_db.db.import_jsonl(out, merge=True)
         # All records skipped since they already exist (issues by PK, deps by PK, labels by PK)
         # Events don't have PK constraint so they get duplicated
-        assert count2 >= 0
+        assert result2["count"] >= 0
 
     def test_import_without_merge_fails_on_conflict(self, populated_db: PopulatedDB, tmp_path: Path) -> None:
         out = tmp_path / "conflict.jsonl"
@@ -802,8 +803,8 @@ class TestImportJsonl:
         jsonl.write_text(event_line + "\n")
 
         # First import succeeds
-        count1 = db.import_jsonl(jsonl)
-        assert count1 == 1
+        result1 = db.import_jsonl(jsonl)
+        assert result1["count"] == 1
 
         # Second import with merge=False should ABORT on the duplicate event
         with pytest.raises(sqlite3.IntegrityError):
@@ -832,8 +833,8 @@ class TestImportJsonl:
         db.import_jsonl(jsonl, merge=True)
 
         # Import again with merge — duplicate event should be skipped, count=0
-        count2 = db.import_jsonl(jsonl, merge=True)
-        assert count2 == 0, f"Expected 0 (duplicate skipped), got {count2}"
+        result2 = db.import_jsonl(jsonl, merge=True)
+        assert result2["count"] == 0, f"Expected 0 (duplicate skipped), got {result2['count']}"
 
     def test_import_merge_comment_count_accurate(self, db: FiligreeDB, tmp_path: Path) -> None:
         issue = db.create_issue("Comment count test")
@@ -851,8 +852,8 @@ class TestImportJsonl:
         jsonl.write_text(comment_line + "\n")
 
         db.import_jsonl(jsonl, merge=True)
-        count2 = db.import_jsonl(jsonl, merge=True)
-        assert count2 == 0
+        result2 = db.import_jsonl(jsonl, merge=True)
+        assert result2["count"] == 0
         assert len(db.get_comments(issue.id)) == 1
 
     def test_import_merge_file_domain_count_accurate(self, db: FiligreeDB, tmp_path: Path) -> None:
@@ -860,8 +861,8 @@ class TestImportJsonl:
         out = tmp_path / "file-merge.jsonl"
         db.export_jsonl(out)
 
-        count2 = db.import_jsonl(out, merge=True)
-        assert count2 == 0
+        result2 = db.import_jsonl(out, merge=True)
+        assert result2["count"] == 0
         assert db.conn.execute("SELECT COUNT(*) FROM file_records").fetchone()[0] == 1
         assert db.conn.execute("SELECT COUNT(*) FROM scan_findings").fetchone()[0] == 1
         assert db.conn.execute("SELECT COUNT(*) FROM file_associations").fetchone()[0] == 1
@@ -895,17 +896,31 @@ class TestImportJsonl:
         assert file_event["file_id"] == dst_file.id
         fresh.close()
 
-    def test_import_skips_unknown_types(self, db: FiligreeDB, tmp_path: Path) -> None:
+    def test_import_skips_unknown_types_and_reports_them(self, db: FiligreeDB, tmp_path: Path) -> None:
         jsonl = tmp_path / "unknown.jsonl"
         jsonl.write_text('{"_type": "alien", "data": "hello"}\n')
-        count = db.import_jsonl(jsonl)
-        assert count == 0
+        result = db.import_jsonl(jsonl)
+        assert result["count"] == 0
+        assert result["skipped_types"] == {"alien": 1}
+
+    def test_import_reports_multiple_unknown_types(self, db: FiligreeDB, tmp_path: Path) -> None:
+        jsonl = tmp_path / "multi-unknown.jsonl"
+        lines = [
+            '{"_type": "alien", "data": "a"}',
+            '{"_type": "alien", "data": "b"}',
+            '{"_type": "ghost", "data": "c"}',
+            '{"data": "no type field"}',
+        ]
+        jsonl.write_text("\n".join(lines) + "\n")
+        result = db.import_jsonl(jsonl)
+        assert result["count"] == 0
+        assert result["skipped_types"] == {"alien": 2, "ghost": 1, "<missing>": 1}
 
     def test_import_skips_blank_lines(self, db: FiligreeDB, tmp_path: Path) -> None:
         jsonl = tmp_path / "blanks.jsonl"
         jsonl.write_text('\n\n{"_type": "issue", "id": "test-aaa111", "title": "Blank test"}\n\n')
-        count = db.import_jsonl(jsonl)
-        assert count == 1
+        result = db.import_jsonl(jsonl)
+        assert result["count"] == 1
 
     def test_import_rejects_invalid_scan_finding_severity(self, db: FiligreeDB, tmp_path: Path) -> None:
         """import_jsonl must reject scan_findings with invalid severity values."""
@@ -973,8 +988,8 @@ class TestImportJsonl:
             ),
         ]
         jsonl.write_text("\n".join(lines) + "\n")
-        count = db.import_jsonl(jsonl, merge=True)
-        assert count >= 1
+        result = db.import_jsonl(jsonl, merge=True)
+        assert result["count"] >= 1
 
     def test_bulk_insert_issue_returns_inserted_flag(self, db: FiligreeDB) -> None:
         """bulk_insert_issue must return True when row was inserted, False when skipped."""

@@ -145,10 +145,11 @@ class TestBatchDismissTool:
         data = _parse(result)
         assert data.get("dismissed", 0) == 0
 
-    async def test_batch_dismiss_invalid_ids(self, mcp_db: FiligreeDB) -> None:
+    async def test_batch_dismiss_invalid_ids_reports_not_found(self, mcp_db: FiligreeDB) -> None:
         result = await call_tool("batch_dismiss_observations", {"ids": ["nope-1", "nope-2"]})
         data = _parse(result)
         assert data.get("dismissed", 0) == 0
+        assert set(data.get("not_found", [])) == {"nope-1", "nope-2"}
 
 
 class TestPromoteObservationTool:

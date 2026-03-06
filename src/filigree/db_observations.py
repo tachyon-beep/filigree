@@ -261,15 +261,23 @@ class ObservationsMixin(DBMixinProtocol):
         *,
         actor: str = "",
         reason: str = "",
-    ) -> int:
+    ) -> dict[str, Any]:
         if not obs_ids:
-            return 0
+            return {"dismissed": 0, "not_found": []}
         # Deduplicate in Python to avoid relying on SQL IN dedup behavior
         unique_ids = list(dict.fromkeys(obs_ids))
         now = _now_iso()
         placeholders = ",".join("?" for _ in unique_ids)
         # Log all to audit trail before deletion
         try:
+            # Find which IDs actually exist before deleting
+            found_rows = self.conn.execute(
+                f"SELECT id FROM observations WHERE id IN ({placeholders})",
+                unique_ids,
+            ).fetchall()
+            found_ids = {row["id"] for row in found_rows}
+            not_found = [oid for oid in unique_ids if oid not in found_ids]
+
             self.conn.execute(
                 f"INSERT INTO dismissed_observations (obs_id, summary, actor, reason, dismissed_at) "
                 f"SELECT id, summary, ?, ?, ? FROM observations WHERE id IN ({placeholders})",
@@ -283,7 +291,7 @@ class ObservationsMixin(DBMixinProtocol):
         except Exception:
             self.conn.rollback()
             raise
-        return cursor.rowcount
+        return {"dismissed": cursor.rowcount, "not_found": not_found}
 
     def promote_observation(
         self,

@@ -409,14 +409,15 @@ class MetaMixin(DBMixinProtocol):
 
         return count
 
-    def import_jsonl(self, input_path: str | Path, *, merge: bool = False) -> int:
+    def import_jsonl(self, input_path: str | Path, *, merge: bool = False) -> dict[str, Any]:
         """Import full project data from a JSONL file.
 
         Args:
             input_path: Path to JSONL file
             merge: If True, skip existing records (OR IGNORE). If False, raise on conflict.
 
-        Returns the number of records actually inserted (merge=True skips are not counted).
+        Returns dict with ``count`` (records inserted) and ``skipped_types``
+        (mapping of unknown _type values to their occurrence counts, empty if none).
         """
         count = 0
         skipped_types: dict[str, int] = {}
@@ -670,4 +671,4 @@ class MetaMixin(DBMixinProtocol):
             for rtype, rcount in skipped_types.items():
                 logger.warning("import_jsonl: skipped %d record(s) with unknown type %r", rcount, rtype)
 
-        return count
+        return {"count": count, "skipped_types": dict(skipped_types)}

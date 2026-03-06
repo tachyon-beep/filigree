@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 import logging
 from collections import deque
-from typing import TYPE_CHECKING, Any, TypedDict
+from typing import TYPE_CHECKING, Any, NotRequired, TypedDict
 
 from filigree.db_base import DBMixinProtocol, _now_iso
 from filigree.types.planning import CriticalPathNode, DependencyRecord, PlanPhase, PlanTree
@@ -42,12 +42,14 @@ class IssueRef(TypedDict):
     id: str
     title: str
     type: str
+    dangling: NotRequired[bool]
 
 
 class TreeNode(TypedDict):
     issue: dict[str, Any]
     progress: ProgressDict | None
     children: list[TreeNode]
+    truncated: NotRequired[bool]
 
 
 _MAX_TREE_DEPTH = 10
@@ -484,7 +486,7 @@ class PlanningMixin(DBMixinProtocol):
     def _build_tree(self, parent_id: str, *, _depth: int = 0) -> list[TreeNode]:
         if _depth > _MAX_TREE_DEPTH:
             logger.warning("_build_tree: depth limit reached at parent_id=%s", parent_id)
-            return []
+            return [TreeNode(issue={"id": parent_id}, progress=None, children=[], truncated=True)]
 
         children = self.list_issues(parent_id=parent_id)
         nodes: list[TreeNode] = []
@@ -539,5 +541,5 @@ class PlanningMixin(DBMixinProtocol):
                 refs.append({"id": issue.id, "title": issue.title, "type": issue.type})
             except KeyError:
                 logger.warning("_resolve_issue_refs: dangling reference %s", issue_id)
-                refs.append({"id": issue_id, "title": "(deleted)", "type": "unknown"})
+                refs.append({"id": issue_id, "title": "(deleted)", "type": "unknown", "dangling": True})
         return refs

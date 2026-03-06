@@ -308,6 +308,7 @@ class JsonlTransferResponse(TypedDict):
     status: str
     records: int
     path: str
+    skipped_types: NotRequired[dict[str, int]]
 
 
 class ArchiveClosedResponse(TypedDict):

@@ -207,14 +207,17 @@ async def _handle_batch_dismiss_observations(arguments: dict[str, Any]) -> list[
 
     tracker = _get_db()
     try:
-        count = tracker.batch_dismiss_observations(
+        result = tracker.batch_dismiss_observations(
             args.get("ids", []),
             actor=actor,
             reason=args.get("reason", ""),
         )
     except sqlite3.OperationalError as e:
         return _text(ErrorResponse(error=f"Database error: {e}", code="database_error"))
-    return _text({"dismissed": count, "ok": True})
+    resp: dict[str, object] = {"dismissed": result["dismissed"], "ok": True}
+    if result["not_found"]:
+        resp["not_found"] = result["not_found"]
+    return _text(resp)
 
 
 async def _handle_promote_observation(arguments: dict[str, Any]) -> list[TextContent]:

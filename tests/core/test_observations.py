@@ -226,7 +226,9 @@ class TestDismissObservation:
         o1 = db.create_observation("One")
         o2 = db.create_observation("Two")
         db.create_observation("Three")
-        db.batch_dismiss_observations([o1["id"], o2["id"]])
+        result = db.batch_dismiss_observations([o1["id"], o2["id"]])
+        assert result["dismissed"] == 2
+        assert result["not_found"] == []
         remaining = db.list_observations()
         assert len(remaining) == 1
         assert remaining[0]["summary"] == "Three"
@@ -236,21 +238,24 @@ class TestDismissObservation:
 
     def test_batch_dismiss_empty_list(self, db: FiligreeDB) -> None:
         result = db.batch_dismiss_observations([])
-        assert result == 0
+        assert result == {"dismissed": 0, "not_found": []}
 
     def test_batch_dismiss_duplicate_ids(self, db: FiligreeDB) -> None:
         o1 = db.create_observation("Only one")
-        db.batch_dismiss_observations([o1["id"], o1["id"]])
+        result = db.batch_dismiss_observations([o1["id"], o1["id"]])
+        assert result["dismissed"] == 1
+        assert result["not_found"] == []
         assert db.observation_count() == 0
         # Audit trail should have exactly one entry (SQL IN deduplicates)
         count = db.conn.execute("SELECT COUNT(*) FROM dismissed_observations WHERE obs_id = ?", (o1["id"],)).fetchone()[0]
         assert count == 1
 
-    def test_batch_dismiss_partial_invalid_ids(self, db: FiligreeDB) -> None:
-        """Non-existent IDs are silently skipped; return count reflects actual deletes."""
+    def test_batch_dismiss_partial_invalid_ids_reports_not_found(self, db: FiligreeDB) -> None:
+        """Non-existent IDs reported in not_found; dismissed count reflects actual deletes."""
         o1 = db.create_observation("Real one")
         result = db.batch_dismiss_observations([o1["id"], "does-not-exist"])
-        assert result == 1
+        assert result["dismissed"] == 1
+        assert result["not_found"] == ["does-not-exist"]
         assert db.observation_count() == 0
 
 

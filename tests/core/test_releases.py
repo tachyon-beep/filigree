@@ -199,7 +199,7 @@ class TestGetReleasesSummary:
         entry_r1 = next(e for e in result if e["id"] == r1.id)
         assert entry_r1["blocks"] == [{"id": r2.id, "title": "Blocked", "type": "release"}]
 
-    def test_resolve_refs_handles_deleted_issue(self, release_db: FiligreeDB) -> None:
+    def test_resolve_refs_handles_deleted_issue_with_dangling_flag(self, release_db: FiligreeDB) -> None:
         db = release_db
         # Call _resolve_issue_refs directly with a bogus ID
         refs = db._resolve_issue_refs(["nonexistent-id-12345"])
@@ -207,6 +207,14 @@ class TestGetReleasesSummary:
         assert refs[0]["id"] == "nonexistent-id-12345"
         assert refs[0]["title"] == "(deleted)"
         assert refs[0]["type"] == "unknown"
+        assert refs[0]["dangling"] is True
+
+    def test_resolve_refs_valid_issue_has_no_dangling_flag(self, release_db: FiligreeDB) -> None:
+        db = release_db
+        r1 = db.create_issue("Real issue", type="release")
+        refs = db._resolve_issue_refs([r1.id])
+        assert len(refs) == 1
+        assert "dangling" not in refs[0]
 
     def test_version_and_target_date_from_fields(self, release_db: FiligreeDB) -> None:
         db = release_db
@@ -485,11 +493,10 @@ class TestVersionValidation:
 
 
 class TestBuildTree:
-    def test_depth_guard_at_10_levels(self, release_db: FiligreeDB) -> None:
+    def test_depth_guard_at_10_levels_sets_truncated_flag(self, release_db: FiligreeDB) -> None:
         db = release_db
         # Build a chain: release -> t0 -> t1 -> ... -> t11 (12 children, 13 levels total)
-        # _build_tree starts at _depth=0. At _depth > 10 it returns [].
-        # So we need 12 levels of children to reach _depth=11 on the last one.
+        # _build_tree starts at _depth=0. At _depth > 10 it returns a truncated sentinel.
         release = db.create_issue("R", type="release")
         parent_id = release.id
         last_id = None
@@ -506,11 +513,14 @@ class TestBuildTree:
         node = tree[0]
         for _ in range(10):
             assert len(node["children"]) == 1, "Expected child at this depth"
+            assert node.get("truncated") is not True
             node = node["children"][0]
 
-        # At depth 11, _build_tree returned [] so this node has no children
-        # even though it has a child in the DB
-        assert node["children"] == []
+        # At depth 11, _build_tree returns a sentinel with truncated=True
+        assert len(node["children"]) == 1
+        sentinel = node["children"][0]
+        assert sentinel["truncated"] is True
+        assert sentinel["children"] == []
 
     def test_returns_empty_for_no_children(self, release_db: FiligreeDB) -> None:
         db = release_db
