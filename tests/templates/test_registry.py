@@ -11,6 +11,9 @@ import pytest
 
 from filigree.core import FiligreeDB
 from filigree.templates import (
+    _MAX_PATTERN_VALUE_LENGTH,
+    _VALID_CATEGORIES,
+    _VALID_FIELD_TYPES,
     FieldSchema,
     HardEnforcementError,
     StateDefinition,
@@ -22,6 +25,7 @@ from filigree.templates import (
     TypeTemplate,
     ValidationResult,
     WorkflowPack,
+    validate_field_pattern,
 )
 from filigree.templates_data import BUILT_IN_PACKS
 
@@ -138,7 +142,7 @@ class TestExceptions:
         err = HardEnforcementError("fixing", "verifying", "bug", ["fix_verification"])
         assert isinstance(err, ValueError)
         assert "fix_verification" in str(err)
-        assert err.missing_fields == ["fix_verification"]
+        assert err.missing_fields == ("fix_verification",)
         assert err.from_state == "fixing"
         assert err.to_state == "verifying"
         assert err.type_name == "bug"
@@ -151,7 +155,12 @@ class TestExceptions:
         err = HardEnforcementError("assessing", "assessed", "risk", ["risk_score", "impact"])
         assert "risk_score" in str(err)
         assert "impact" in str(err)
-        assert err.missing_fields == ["risk_score", "impact"]
+        assert err.missing_fields == ("risk_score", "impact")
+
+    def test_hard_enforcement_missing_fields_is_immutable(self) -> None:
+        """M8: missing_fields should be a tuple, not a mutable list."""
+        err = HardEnforcementError("fixing", "verifying", "bug", ["field_a", "field_b"])
+        assert isinstance(err.missing_fields, tuple)
 
 
 class TestTemplateRegistry:
@@ -2147,3 +2156,115 @@ class TestSpikeWorkflowDesign:
         warnings = TemplateRegistry.check_type_template_quality(tpl)
         done_warnings = [w for w in warnings if "done" in w.lower() and "unreachable" in w.lower()]
         assert done_warnings == [], f"Unexpected done→done warnings: {done_warnings}"
+
+
+class TestTemplateEngineValidationCluster:
+    """Bug cluster S2: Template engine validation gaps (M1, M3, M4, M5, M6, M7)."""
+
+    # -- M7: _VALID_CATEGORIES / _VALID_FIELD_TYPES derived from Literals ------
+
+    def test_valid_categories_derived_from_state_category(self) -> None:
+        """_VALID_CATEGORIES must match the StateCategory Literal members."""
+        assert frozenset({"open", "wip", "done"}) == _VALID_CATEGORIES
+
+    def test_valid_field_types_derived_from_field_type(self) -> None:
+        """_VALID_FIELD_TYPES must match the FieldType Literal members."""
+        assert frozenset({"text", "enum", "number", "date", "list", "boolean"}) == _VALID_FIELD_TYPES
+
+    # -- M5: FieldSchema.name validated against _NAME_PATTERN ------------------
+
+    def test_field_schema_rejects_invalid_name(self) -> None:
+        """Field names with special chars must be rejected like state names."""
+        with pytest.raises(ValueError, match="Invalid field name"):
+            FieldSchema(name="has-dash", type="text")
+        with pytest.raises(ValueError, match="Invalid field name"):
+            FieldSchema(name="UPPER", type="text")
+        with pytest.raises(ValueError, match="Invalid field name"):
+            FieldSchema(name="has space", type="text")
+        with pytest.raises(ValueError, match="Invalid field name"):
+            FieldSchema(name="", type="text")
+
+    def test_field_schema_accepts_valid_name(self) -> None:
+        """Lowercase underscore-separated names should be accepted."""
+        fs = FieldSchema(name="fix_verification", type="text")
+        assert fs.name == "fix_verification"
+
+    # -- M4: _is_field_populated rejects empty collections ---------------------
+
+    def test_empty_list_is_not_populated(self) -> None:
+        """An empty list should not satisfy required_at."""
+        assert TemplateRegistry._is_field_populated([]) is False
+
+    def test_empty_dict_is_not_populated(self) -> None:
+        """An empty dict should not satisfy required_at."""
+        assert TemplateRegistry._is_field_populated({}) is False
+
+    def test_nonempty_list_is_populated(self) -> None:
+        assert TemplateRegistry._is_field_populated(["item"]) is True
+
+    def test_nonempty_dict_is_populated(self) -> None:
+        assert TemplateRegistry._is_field_populated({"k": "v"}) is True
+
+    def test_none_is_not_populated(self) -> None:
+        assert TemplateRegistry._is_field_populated(None) is False
+
+    def test_whitespace_string_is_not_populated(self) -> None:
+        assert TemplateRegistry._is_field_populated("   ") is False
+
+    def test_zero_is_populated(self) -> None:
+        """Numeric zero is a valid populated value (not empty)."""
+        assert TemplateRegistry._is_field_populated(0) is True
+
+    def test_false_is_populated(self) -> None:
+        """Boolean False is a valid populated value."""
+        assert TemplateRegistry._is_field_populated(False) is True
+
+    # -- M3: Pattern value length limit ----------------------------------------
+
+    def test_pattern_rejects_oversized_value(self) -> None:
+        """Values exceeding length limit should be rejected before regex runs."""
+        field = FieldSchema(name="test_field", type="text", pattern=r".*")
+        oversized = "a" * (_MAX_PATTERN_VALUE_LENGTH + 1)
+        result = validate_field_pattern(field, oversized)
+        assert result is not None
+        assert "exceeds maximum" in result
+
+    def test_pattern_accepts_value_at_limit(self) -> None:
+        """Values at exactly the limit should be allowed."""
+        field = FieldSchema(name="test_field", type="text", pattern=r"a+")
+        at_limit = "a" * _MAX_PATTERN_VALUE_LENGTH
+        result = validate_field_pattern(field, at_limit)
+        assert result is None
+
+    # -- M1: config.json parse errors logged with detail -----------------------
+
+    def test_malformed_config_json_logs_exception(self, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+        """A malformed config.json should log the parse error, not a generic message."""
+        filigree_dir = tmp_path / ".filigree"
+        filigree_dir.mkdir()
+        (filigree_dir / "config.json").write_text("{bad json,}")
+        reg = TemplateRegistry()
+        with caplog.at_level(logging.WARNING, logger="filigree.templates"):
+            reg.load(filigree_dir)
+        warning_msgs = [r.message for r in caplog.records if r.levelno >= logging.WARNING]
+        assert any("config.json" in m for m in warning_msgs)
+        # The warning should include the actual exception detail, not just a generic message
+        assert any("Expecting" in m or "JSONDecodeError" in m or "json" in m.lower() for m in warning_msgs), (
+            f"Warning should include exception detail, got: {warning_msgs}"
+        )
+
+    # -- M6: Non-string entries in enabled_packs logged -----------------------
+
+    def test_non_string_enabled_packs_logged(self, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+        """Non-string entries should be logged before being dropped."""
+        filigree_dir = tmp_path / ".filigree"
+        filigree_dir.mkdir()
+        config = {"enabled_packs": ["core", 42, None]}
+        (filigree_dir / "config.json").write_text(json.dumps(config))
+        reg = TemplateRegistry()
+        with caplog.at_level(logging.WARNING, logger="filigree.templates"):
+            reg.load(filigree_dir)
+        warning_msgs = [r.message for r in caplog.records if r.levelno >= logging.WARNING]
+        assert any("non-string" in m.lower() or "42" in m for m in warning_msgs), (
+            f"Expected warning about dropped non-string entries, got: {warning_msgs}"
+        )

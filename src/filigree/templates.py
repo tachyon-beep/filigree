@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from dataclasses import replace as _dc_replace
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any, Literal
+from typing import Any, Literal, get_args
 
 from filigree.types.core import StatusCategory as StateCategory
 
@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 # State/type names must match this pattern to be safe for use in SQL queries
 # and filesystem paths. Validated at parse time (review B1, B5).
 _NAME_PATTERN = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
-_VALID_CATEGORIES: frozenset[str] = frozenset({"open", "wip", "done"})
+_VALID_CATEGORIES: frozenset[str] = frozenset(get_args(StateCategory))
 
 # ---------------------------------------------------------------------------
 # Type aliases
@@ -88,7 +88,7 @@ class TransitionDefinition:
                 raise ValueError(msg)
 
 
-_VALID_FIELD_TYPES: frozenset[str] = frozenset({"text", "enum", "number", "date", "list", "boolean"})
+_VALID_FIELD_TYPES: frozenset[str] = frozenset(get_args(FieldType))
 
 
 @dataclass(frozen=True)
@@ -105,6 +105,9 @@ class FieldSchema:
     unique: bool = False
 
     def __post_init__(self) -> None:
+        if not _NAME_PATTERN.match(self.name):
+            msg = f"Invalid field name '{self.name}': must match ^[a-z][a-z0-9_]{{0,63}}$"
+            raise ValueError(msg)
         if self.type not in _VALID_FIELD_TYPES:
             allowed = sorted(_VALID_FIELD_TYPES)
             msg = f"Invalid field type '{self.type}' for field '{self.name}': must be one of {allowed}"
@@ -117,11 +120,16 @@ class FieldSchema:
                 raise ValueError(msg) from exc
 
 
+_MAX_PATTERN_VALUE_LENGTH = 10_000
+
+
 def validate_field_pattern(field: FieldSchema, value: Any) -> str | None:
     """Return an error message if *value* doesn't match *field.pattern*, else None.
 
     Skips None and empty strings (let ``required_at`` handle presence).
     Uses ``re.fullmatch`` so the pattern must match the entire value.
+    Values exceeding _MAX_PATTERN_VALUE_LENGTH are rejected to prevent
+    catastrophic backtracking on complex patterns.
     """
     if field.pattern is None:
         return None
@@ -129,6 +137,8 @@ def validate_field_pattern(field: FieldSchema, value: Any) -> str | None:
         return None
     if not isinstance(value, str):
         return f"Field '{field.name}' pattern requires a string value, got {type(value).__name__}"
+    if len(value) > _MAX_PATTERN_VALUE_LENGTH:
+        return f"Field '{field.name}' value length {len(value)} exceeds maximum {_MAX_PATTERN_VALUE_LENGTH} for pattern matching"
     if not re.fullmatch(field.pattern, value):
         return f"Field '{field.name}' value '{value}' does not match required pattern: {field.pattern}"
     return None
@@ -241,7 +251,7 @@ class HardEnforcementError(ValueError):
         self.from_state = from_state
         self.to_state = to_state
         self.type_name = type_name
-        self.missing_fields = missing_fields
+        self.missing_fields = tuple(missing_fields)
         fields_str = ", ".join(missing_fields)
         super().__init__(
             f"Cannot transition '{from_state}' -> '{to_state}' for type '{type_name}': "
@@ -586,11 +596,16 @@ class TemplateRegistry:
     def _is_field_populated(value: Any) -> bool:
         """Check if a field value is considered populated.
 
-        None, empty strings, and whitespace-only strings are unpopulated.
+        None, empty strings, whitespace-only strings, and empty
+        collections (list, dict) are unpopulated.
         """
         if value is None:
             return False
-        return not (isinstance(value, str) and value.strip() == "")
+        if isinstance(value, str):
+            return value.strip() != ""
+        if isinstance(value, (list, dict)):
+            return len(value) > 0
+        return True
 
     def validate_transition(
         self,
@@ -772,8 +787,8 @@ class TemplateRegistry:
                     if not isinstance(config, dict):
                         raise ValueError("config.json must contain a JSON object")
                     enabled_packs = config.get("enabled_packs", _default_packs)
-                except (ValueError, KeyError):
-                    logger.warning("Could not read config.json — using default enabled_packs")
+                except (_json.JSONDecodeError, ValueError) as exc:
+                    logger.warning("Could not read config.json (%s) — using default enabled_packs", exc)
 
         # Validate enabled_packs is list[str] — strings would be split into chars
         if isinstance(enabled_packs, str):
@@ -783,6 +798,9 @@ class TemplateRegistry:
             logger.warning("enabled_packs has invalid type %s — using defaults", type(enabled_packs).__name__)
             enabled_packs = _default_packs
         else:
+            non_str = [p for p in enabled_packs if not isinstance(p, str)]
+            if non_str:
+                logger.warning("Dropped non-string entries from enabled_packs: %s", non_str)
             enabled_packs = [p for p in enabled_packs if isinstance(p, str)]
 
         logger.info("Loading templates: enabled_packs=%s", enabled_packs)
