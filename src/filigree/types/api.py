@@ -13,11 +13,15 @@ from filigree.types.planning import CommentRecord, CriticalPathNode, PlanPhase, 
 
 
 class TransitionDetail(TypedDict):
-    """Full transition info returned by get_issue and get_valid_transitions."""
+    """Full transition info returned by get_issue and get_valid_transitions.
+
+    ``enforcement`` is always set because TransitionDetail is built from
+    TransitionOption which sources enforcement from TypeTransition (non-nullable).
+    """
 
     to: str
     category: str
-    enforcement: str | None
+    enforcement: str
     requires_fields: list[str]
     missing_fields: list[str]
     ready: bool
@@ -29,6 +33,11 @@ class TransitionHint(TypedDict):
     to: str
     category: str
     ready: NotRequired[bool]
+
+
+# InboundTransitionInfo uses "from" as a key at runtime (a Python keyword).
+# TypedDict cannot express this with class syntax; we use functional form.
+InboundTransitionInfo = TypedDict("InboundTransitionInfo", {"from": str, "enforcement": str})
 
 
 class OutboundTransitionInfo(TypedDict):
@@ -190,11 +199,24 @@ class SearchResponse(TypedDict):
     has_more: bool
 
 
+class BatchFailureDetail(TypedDict):
+    """Error detail for a single failed item in a batch operation.
+
+    All batch failures share this {id, error, code} shape.  Batch update/close
+    may also include valid_transitions when the failure is an invalid transition.
+    """
+
+    id: str
+    error: str
+    code: str
+    valid_transitions: NotRequired[list[TransitionHint]]
+
+
 class BatchUpdateResponse(TypedDict):
     """Batch update result with succeeded IDs and failures."""
 
     succeeded: list[str]
-    failed: list[dict[str, Any]]
+    failed: list[BatchFailureDetail]
     count: int
 
 
@@ -202,7 +224,7 @@ class _BatchCloseRequired(TypedDict):
     """Required keys for BatchCloseResponse (always present)."""
 
     succeeded: list[str]
-    failed: list[dict[str, Any]]
+    failed: list[BatchFailureDetail]
     count: int
 
 
@@ -248,11 +270,15 @@ class CriticalPathResponse(TypedDict):
 
 
 class BatchActionResponse(TypedDict):
-    """Shared response shape for batch_add_label / batch_add_comment."""
+    """Shared response shape for batch_add_label / batch_add_comment.
+
+    ``results`` varies by operation (label adds: {id, status}, comment adds:
+    {id, comment_id}), so it remains list[dict[str, Any]].
+    """
 
     succeeded: list[str]
     results: list[dict[str, Any]]
-    failed: list[dict[str, Any]]
+    failed: list[BatchFailureDetail]
     count: int
 
 
@@ -361,6 +387,6 @@ class StateExplanation(TypedDict):
     state: str
     category: str
     type: str
-    inbound_transitions: list[dict[str, str]]
+    inbound_transitions: list[InboundTransitionInfo]
     outbound_transitions: list[OutboundTransitionInfo]
     required_fields: list[str]

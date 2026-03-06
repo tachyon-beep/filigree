@@ -391,7 +391,8 @@ class TestScanIngestResultShape:
             scan_source="test",
             findings=[{"path": "/src/main.py", "rule_id": "R1", "message": "m", "severity": "high"}],
         )
-        assert isinstance(result["files_created"], int) or isinstance(result["files_updated"], int)
+        assert isinstance(result["files_created"], int)
+        assert isinstance(result["files_updated"], int)
         assert isinstance(result["findings_created"], int)
         assert isinstance(result["new_finding_ids"], list)
         assert isinstance(result["warnings"], list)

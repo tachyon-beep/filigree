@@ -13,12 +13,21 @@ FindingStatus = Literal["open", "acknowledged", "fixed", "false_positive", "unse
 StatusCategory = Literal["open", "wip", "done"]
 
 
-class ProjectConfig(TypedDict, total=False):
-    """Shape of .filigree/config.json."""
+class _ProjectConfigRequired(TypedDict):
+    """Required keys for ProjectConfig (needed for ID generation and migrations)."""
 
     prefix: str
-    name: str
     version: int
+
+
+class ProjectConfig(_ProjectConfigRequired, total=False):
+    """Shape of .filigree/config.json.
+
+    ``prefix`` (issue ID generation) and ``version`` (schema migrations) are
+    always required.  Other keys are optional.
+    """
+
+    name: str
     enabled_packs: list[str]
     mode: str
 

@@ -29,6 +29,7 @@ from filigree.types.api import (
     IssueWithTransitions,
     IssueWithUnblocked,
     SearchResponse,
+    TransitionDetail,
 )
 from filigree.types.core import IssueDict
 from filigree.types.inputs import (
@@ -340,14 +341,14 @@ async def _handle_get_issue(arguments: dict[str, Any]) -> list[TextContent]:
             result = IssueWithTransitions(
                 **issue.to_dict(),
                 valid_transitions=[
-                    {
-                        "to": t.to,
-                        "category": t.category,
-                        "enforcement": t.enforcement,
-                        "requires_fields": list(t.requires_fields),
-                        "missing_fields": list(t.missing_fields),
-                        "ready": t.ready,
-                    }
+                    TransitionDetail(
+                        to=t.to,
+                        category=t.category,
+                        enforcement=t.enforcement or "",
+                        requires_fields=list(t.requires_fields),
+                        missing_fields=list(t.missing_fields),
+                        ready=t.ready,
+                    )
                     for t in transitions
                 ],
             )

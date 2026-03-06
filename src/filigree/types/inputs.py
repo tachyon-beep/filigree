@@ -21,6 +21,8 @@ Safety note on cast():
 
 from typing import Any, NotRequired, TypedDict
 
+from filigree.types.core import ISOTimestamp
+
 # ---------------------------------------------------------------------------
 # issues.py handlers
 # ---------------------------------------------------------------------------
@@ -161,7 +163,7 @@ class BatchAddCommentArgs(TypedDict):
 
 
 class GetChangesArgs(TypedDict):
-    since: str
+    since: ISOTimestamp
     limit: NotRequired[int]
 
 
