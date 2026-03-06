@@ -916,6 +916,69 @@ class TestImportJsonl:
         assert result["count"] == 0
         assert result["skipped_types"] == {"alien": 2, "ghost": 1, "<missing>": 1}
 
+    def test_import_rejects_dangling_parent_id(self, db: FiligreeDB, tmp_path: Path) -> None:
+        """Bug filigree-832676c507: import_jsonl must reject parent_id referencing non-existent issue."""
+        jsonl = tmp_path / "dangling_parent.jsonl"
+        lines = [
+            json.dumps(
+                {
+                    "_type": "issue",
+                    "id": "child-001",
+                    "title": "Child with bad parent",
+                    "parent_id": "nonexistent-parent-999",
+                }
+            ),
+        ]
+        jsonl.write_text("\n".join(lines) + "\n")
+        with pytest.raises(ValueError, match="parent_id"):
+            db.import_jsonl(jsonl)
+
+    def test_import_valid_parent_id_succeeds(self, db: FiligreeDB, tmp_path: Path) -> None:
+        """Parent references to issues in the same import should work."""
+        jsonl = tmp_path / "valid_parent.jsonl"
+        lines = [
+            json.dumps(
+                {
+                    "_type": "issue",
+                    "id": "parent-001",
+                    "title": "Parent",
+                }
+            ),
+            json.dumps(
+                {
+                    "_type": "issue",
+                    "id": "child-001",
+                    "title": "Child",
+                    "parent_id": "parent-001",
+                }
+            ),
+        ]
+        jsonl.write_text("\n".join(lines) + "\n")
+        result = db.import_jsonl(jsonl)
+        assert result["count"] == 2
+        child = db.get_issue("child-001")
+        assert child.parent_id == "parent-001"
+
+    def test_import_parent_id_referencing_existing_db_issue(self, db: FiligreeDB, tmp_path: Path) -> None:
+        """Parent references to issues already in the DB should work."""
+        parent = db.create_issue("Existing parent")
+        jsonl = tmp_path / "existing_parent.jsonl"
+        lines = [
+            json.dumps(
+                {
+                    "_type": "issue",
+                    "id": "child-002",
+                    "title": "Child referencing existing parent",
+                    "parent_id": parent.id,
+                }
+            ),
+        ]
+        jsonl.write_text("\n".join(lines) + "\n")
+        result = db.import_jsonl(jsonl)
+        assert result["count"] == 1
+        child = db.get_issue("child-002")
+        assert child.parent_id == parent.id
+
     def test_import_skips_blank_lines(self, db: FiligreeDB, tmp_path: Path) -> None:
         jsonl = tmp_path / "blanks.jsonl"
         jsonl.write_text('\n\n{"_type": "issue", "id": "test-aaa111", "title": "Blank test"}\n\n')

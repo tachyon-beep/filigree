@@ -499,6 +499,12 @@ class MetaMixin(DBMixinProtocol):
 
             for issue_id, parent_id in parent_map.items():
                 if issue_id in inserted_issue_ids:
+                    # Validate parent_id references an existing issue (in DB or just imported)
+                    if parent_id not in inserted_issue_ids:
+                        exists = self.conn.execute("SELECT 1 FROM issues WHERE id = ?", (parent_id,)).fetchone()
+                        if not exists:
+                            msg = f"import_jsonl: parent_id {parent_id!r} for issue {issue_id!r} references non-existent issue"
+                            raise ValueError(msg)
                     self.conn.execute("UPDATE issues SET parent_id = ? WHERE id = ?", (parent_id, issue_id))
 
             for record in file_records:

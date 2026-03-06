@@ -98,7 +98,14 @@ class PlanningMixin(DBMixinProtocol):
 
         Uses BFS from depends_on_id following existing dependency edges.
         If issue_id is reachable, adding the new edge would close a cycle.
+
+        Loads all edges in a single query to avoid N+1 per-node queries.
         """
+        # Build adjacency list from all edges in one query
+        adj: dict[str, list[str]] = {}
+        for r in self.conn.execute("SELECT issue_id, depends_on_id FROM dependencies").fetchall():
+            adj.setdefault(r["issue_id"], []).append(r["depends_on_id"])
+
         visited: set[str] = set()
         queue = deque([depends_on_id])
         while queue:
@@ -108,9 +115,8 @@ class PlanningMixin(DBMixinProtocol):
             if current in visited:
                 continue
             visited.add(current)
-            # Follow existing dependencies: current depends_on X means current -> X
-            for r in self.conn.execute("SELECT depends_on_id FROM dependencies WHERE issue_id = ?", (current,)).fetchall():
-                queue.append(r["depends_on_id"])
+            for neighbor in adj.get(current, ()):
+                queue.append(neighbor)
         return False
 
     def remove_dependency(self, issue_id: str, depends_on_id: str, *, actor: str = "") -> bool:

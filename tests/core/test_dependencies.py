@@ -182,6 +182,34 @@ class TestInvalidDepValidation:
         assert dep_issue.id in issue.blocked_by
 
 
+class TestCycleDetectionDepthLimit:
+    """Bug fix: filigree-832676c507 — BFS has no depth limit."""
+
+    def test_cycle_detection_respects_depth_limit(self, db: FiligreeDB) -> None:
+        """BFS should not traverse beyond _MAX_TREE_DEPTH nodes."""
+        # Build a chain longer than the depth limit: N0→N1→N2→...→N(depth+2)
+        from filigree.db_planning import _MAX_TREE_DEPTH
+
+        chain_len = _MAX_TREE_DEPTH + 3
+        nodes = [db.create_issue(f"Node-{i}") for i in range(chain_len)]
+        for i in range(chain_len - 1):
+            db.add_dependency(nodes[i].id, nodes[i + 1].id)
+
+        # Trying to add a dependency from the last node back to the first
+        # would create a cycle, but the BFS should stop at depth limit
+        # and raise ValueError (for depth exceeded), not silently miss the cycle
+        with pytest.raises(ValueError, match="cycle"):
+            db.add_dependency(nodes[-1].id, nodes[0].id)
+
+    def test_normal_depth_cycle_still_detected(self, db: FiligreeDB) -> None:
+        """Cycles within the depth limit should still be caught."""
+        nodes = [db.create_issue(f"N-{i}") for i in range(5)]
+        for i in range(4):
+            db.add_dependency(nodes[i].id, nodes[i + 1].id)
+        with pytest.raises(ValueError, match="cycle"):
+            db.add_dependency(nodes[4].id, nodes[0].id)
+
+
 class TestClosedDepFiltering:
     """Bug fix: keel-326c2f — Dep persists after close."""
 
