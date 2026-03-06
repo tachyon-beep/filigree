@@ -91,7 +91,17 @@ class IssuesMixin(DBMixinProtocol):
             candidate = f"{self.prefix}{sep}{uuid.uuid4().hex[:10]}"
             if self.conn.execute(f"SELECT 1 FROM {table} WHERE id = ?", (candidate,)).fetchone() is None:
                 return candidate
-        return f"{self.prefix}{sep}{uuid.uuid4().hex[:16]}"
+        # 10 consecutive collisions is near-impossible — likely a systemic bug
+        logger.error(
+            "10 consecutive ID collisions in table %s (prefix=%s). Possible corrupted DB, broken RNG, or wrong table.",
+            table,
+            self.prefix,
+        )
+        candidate = f"{self.prefix}{sep}{uuid.uuid4().hex[:16]}"
+        if self.conn.execute(f"SELECT 1 FROM {table} WHERE id = ?", (candidate,)).fetchone() is not None:
+            msg = f"ID generation failed: fallback ID also collided in table {table}"
+            raise RuntimeError(msg)
+        return candidate
 
     # -- Issue CRUD ----------------------------------------------------------
 
@@ -203,10 +213,6 @@ class IssuesMixin(DBMixinProtocol):
         return self.get_issue(issue_id)
 
     def get_issue(self, issue_id: str) -> Issue:
-        row = self.conn.execute("SELECT * FROM issues WHERE id = ?", (issue_id,)).fetchone()
-        if row is None:
-            msg = f"Issue not found: {issue_id}"
-            raise KeyError(msg)
         return self._build_issue(issue_id)
 
     def _build_issue(self, issue_id: str) -> Issue:

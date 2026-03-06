@@ -290,11 +290,11 @@ class EventsMixin(DBMixinProtocol):
                 if event_count <= keep_recent:
                     continue
 
-                self.conn.execute(
+                cursor = self.conn.execute(
                     "DELETE FROM events WHERE id IN (SELECT id FROM events WHERE issue_id = ? ORDER BY created_at ASC, id ASC LIMIT ?)",
                     (issue_id, event_count - keep_recent),
                 )
-                total_deleted += event_count - keep_recent
+                total_deleted += cursor.rowcount
 
             if total_deleted > 0:
                 self.conn.commit()

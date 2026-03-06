@@ -102,6 +102,52 @@ class TestGenerateId:
         assert "SELECT 1 FROM {table} WHERE id = ?" in source
         assert "SELECT id FROM issues" not in source
 
+    def test_generate_id_fallback_logs_error(self, db: FiligreeDB, caplog: pytest.LogCaptureFixture) -> None:
+        """After 10 collisions the fallback must log an error and verify uniqueness."""
+        import logging
+        from unittest.mock import MagicMock, patch
+
+        # Return predictable UUIDs: first 10 produce the same 10-char hex, 11th is unique
+        collision_hex = "a" * 32
+        unique_hex = "b" * 32
+        mock_uuids = [MagicMock(hex=collision_hex)] * 10 + [MagicMock(hex=unique_hex)]
+
+        # Pre-insert a row with the colliding ID
+        colliding_id = f"test-{collision_hex[:10]}"
+        db.conn.execute(
+            "INSERT INTO issues (id, title, status, priority, type, assignee, created_at, updated_at, description, notes, fields) "
+            "VALUES (?, 'collision', 'open', 2, 'task', '', '', '', '', '', '{}')",
+            (colliding_id,),
+        )
+        db.conn.commit()
+
+        with patch("filigree.db_issues.uuid.uuid4", side_effect=mock_uuids), caplog.at_level(logging.ERROR, logger="filigree.db_issues"):
+            result = db._generate_unique_id("issues")
+
+        # Fallback uses 16-char hex from the unique UUID
+        assert result == f"test-{unique_hex[:16]}"
+        assert "10 consecutive ID collisions" in caplog.text
+
+    def test_generate_id_fallback_collision_raises(self, db: FiligreeDB) -> None:
+        """If even the 16-char fallback collides, RuntimeError must be raised."""
+        from unittest.mock import MagicMock, patch
+
+        collision_hex = "c" * 32
+        mock_uuids = [MagicMock(hex=collision_hex)] * 11
+
+        # Pre-insert rows matching both the 10-char and 16-char candidates
+        for length in (10, 16):
+            cid = f"test-{collision_hex[:length]}"
+            db.conn.execute(
+                "INSERT INTO issues (id, title, status, priority, type, assignee, created_at, updated_at, description, notes, fields) "
+                "VALUES (?, 'collision', 'open', 2, 'task', '', '', '', '', '', '{}')",
+                (cid,),
+            )
+        db.conn.commit()
+
+        with patch("filigree.db_issues.uuid.uuid4", side_effect=mock_uuids), pytest.raises(RuntimeError, match="fallback ID also collided"):
+            db._generate_unique_id("issues")
+
 
 class TestDescriptionNotesAuditTrail:
     """Verify description and notes changes produce audit events."""
@@ -1100,6 +1146,28 @@ class TestCompaction:
         # Count events after
         after = db.conn.execute("SELECT COUNT(*) as cnt FROM events WHERE issue_id = ?", (issue.id,)).fetchone()["cnt"]
         assert after == 10
+
+    def test_compact_returns_actual_rowcount(self, db: FiligreeDB) -> None:
+        """compact_events must return actual rows deleted, not pre-computed estimate."""
+        issue = db.create_issue("Rowcount test")
+        for i in range(30):
+            db.conn.execute(
+                "INSERT INTO events (issue_id, event_type, actor, created_at) VALUES (?, ?, ?, ?)",
+                (issue.id, "test_event", "tester", f"2026-01-01T00:{i:02d}:00+00:00"),
+            )
+        db.conn.commit()
+        db.close_issue(issue.id)
+        old_date = (datetime.now(UTC) - timedelta(days=60)).isoformat()
+        db.conn.execute("UPDATE issues SET closed_at = ? WHERE id = ?", (old_date, issue.id))
+        db.conn.commit()
+        db.archive_closed(days_old=30)
+
+        before = db.conn.execute("SELECT COUNT(*) as cnt FROM events WHERE issue_id = ?", (issue.id,)).fetchone()["cnt"]
+        deleted = db.compact_events(keep_recent=5)
+        after = db.conn.execute("SELECT COUNT(*) as cnt FROM events WHERE issue_id = ?", (issue.id,)).fetchone()["cnt"]
+
+        # Returned count must match actual rows removed
+        assert deleted == before - after
 
     def test_compact_with_keep_recent_zero(self, db: FiligreeDB) -> None:
         """keep_recent=0 should delete ALL events for archived issues."""
