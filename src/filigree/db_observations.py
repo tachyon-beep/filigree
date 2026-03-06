@@ -14,13 +14,10 @@ from __future__ import annotations
 
 import logging
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING, Any, cast
+from typing import Any, cast
 
 from filigree.db_base import DBMixinProtocol, _now_iso
 from filigree.types.core import ISOTimestamp, ObservationDict, ObservationStatsDict
-
-if TYPE_CHECKING:
-    from filigree.core import FileRecord, Issue
 
 logger = logging.getLogger(__name__)
 
@@ -40,42 +37,6 @@ class ObservationsMixin(DBMixinProtocol):
     Inherits ``DBMixinProtocol`` for type-safe access to shared attributes.
     Actual implementations provided by ``FiligreeDB`` at composition time via MRO.
     """
-
-    if TYPE_CHECKING:
-        # From FilesMixin
-        def register_file(
-            self,
-            path: str,
-            *,
-            language: str = "",
-            file_type: str = "",
-            metadata: dict[str, Any] | None = None,
-        ) -> FileRecord: ...
-        def add_file_association(self, file_id: str, issue_id: str, assoc_type: str) -> None: ...
-
-        # From IssuesMixin — stub must match real signature exactly
-        # (test_stub_signature_matches enforces parameter count)
-        def create_issue(
-            self,
-            title: str,
-            *,
-            type: str = "task",
-            priority: int = 2,
-            parent_id: str | None = None,
-            assignee: str = "",
-            description: str = "",
-            notes: str = "",
-            fields: dict[str, Any] | None = None,
-            labels: list[str] | None = None,
-            deps: list[str] | None = None,
-            actor: str = "",
-        ) -> Issue: ...
-
-        # From MetaMixin
-        def add_label(self, issue_id: str, label: str) -> bool: ...
-
-        # From core
-        def _generate_unique_id(self, table: str, infix: str = "") -> str: ...
 
     def _sweep_expired_observations(self) -> int:
         """Delete expired observations in a savepoint (piggyback cleanup).

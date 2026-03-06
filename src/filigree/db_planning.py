@@ -17,7 +17,6 @@ from filigree.types.planning import CriticalPathNode, DependencyRecord, PlanPhas
 
 if TYPE_CHECKING:
     from filigree.core import Issue
-    from filigree.templates import TemplateRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -60,41 +59,6 @@ class PlanningMixin(DBMixinProtocol):
     Inherits ``DBMixinProtocol`` for type-safe access to shared attributes.
     Actual implementations provided by ``FiligreeDB`` at composition time via MRO.
     """
-
-    if TYPE_CHECKING:
-        # From EventsMixin
-        def _record_event(
-            self,
-            issue_id: str,
-            event_type: str,
-            *,
-            actor: str = "",
-            old_value: str | None = None,
-            new_value: str | None = None,
-            comment: str = "",
-        ) -> None: ...
-
-        # From WorkflowMixin
-        def _get_states_for_category(self, category: str) -> list[str]: ...
-
-        @property
-        def templates(self) -> TemplateRegistry: ...
-
-        # From IssuesMixin
-        def _generate_unique_id(self, table: str, infix: str = "") -> str: ...
-        def _build_issues_batch(self, issue_ids: list[str]) -> list[Issue]: ...
-        def list_issues(
-            self,
-            *,
-            status: str | None = None,
-            type: str | None = None,
-            priority: int | None = None,
-            parent_id: str | None = None,
-            assignee: str | None = None,
-            label: str | None = None,
-            limit: int = 100,
-            offset: int = 0,
-        ) -> list[Issue]: ...
 
     # -- Dependencies --------------------------------------------------------
 

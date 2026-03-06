@@ -5,13 +5,13 @@ from __future__ import annotations
 import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 from filigree.types.core import ISOTimestamp, StatusCategory
 
 if TYPE_CHECKING:
-    from filigree.core import Issue
-    from filigree.templates import TemplateRegistry
+    from filigree.core import FileRecord, Issue
+    from filigree.templates import TemplateRegistry, TransitionOption
 
 # Re-export for backward compat
 __all__ = ["DBMixinProtocol", "StatusCategory", "_now_iso"]
@@ -24,10 +24,16 @@ def _now_iso() -> ISOTimestamp:
 class DBMixinProtocol(Protocol):
     """Shared attributes and methods that DB mixins access via self.
 
-    Mixins inherit this Protocol so mypy can type-check self.conn,
-    self.get_issue(), etc. without ``type: ignore`` on every call.
-    Actual implementations are provided by FiligreeDB at composition time.
+    Mixins inherit this Protocol so mypy can type-check cross-mixin calls
+    without ``type: ignore`` on every call.  Individual mixins implement a
+    *subset* of these methods; the full contract is satisfied by FiligreeDB
+    at composition time via MRO.
+
+    **Single source of truth** — do NOT redeclare these methods in per-mixin
+    ``TYPE_CHECKING`` blocks.  Add new cross-mixin methods here instead.
     """
+
+    # -- Shared attributes ---------------------------------------------------
 
     db_path: Path
     prefix: str
@@ -38,4 +44,91 @@ class DBMixinProtocol(Protocol):
     @property
     def conn(self) -> sqlite3.Connection: ...
 
+    # -- Core (FiligreeDB) ---------------------------------------------------
+
     def get_issue(self, issue_id: str) -> Issue: ...
+
+    # -- WorkflowMixin -------------------------------------------------------
+
+    @property
+    def templates(self) -> TemplateRegistry: ...
+
+    def _validate_status(self, status: str, issue_type: str = "task") -> None: ...
+    def _validate_parent_id(self, parent_id: str | None) -> None: ...
+    def _validate_label_name(self, label: str) -> str: ...
+    def _get_states_for_category(self, category: str) -> list[str]: ...
+    def _resolve_status_category(self, issue_type: str, status: str) -> StatusCategory: ...
+    def get_valid_transitions(self, issue_id: str) -> list[TransitionOption]: ...
+
+    @staticmethod
+    def _infer_status_category(status: str) -> StatusCategory: ...
+
+    # -- EventsMixin ---------------------------------------------------------
+
+    def _record_event(
+        self,
+        issue_id: str,
+        event_type: str,
+        *,
+        actor: str = "",
+        old_value: str | None = None,
+        new_value: str | None = None,
+        comment: str = "",
+    ) -> None: ...
+
+    # -- IssuesMixin ---------------------------------------------------------
+
+    def _generate_unique_id(self, table: str, infix: str = "") -> str: ...
+    def _build_issues_batch(self, issue_ids: list[str]) -> list[Issue]: ...
+
+    def create_issue(
+        self,
+        title: str,
+        *,
+        type: str = "task",
+        priority: int = 2,
+        parent_id: str | None = None,
+        assignee: str = "",
+        description: str = "",
+        notes: str = "",
+        fields: dict[str, Any] | None = None,
+        labels: list[str] | None = None,
+        deps: list[str] | None = None,
+        actor: str = "",
+    ) -> Issue: ...
+
+    def list_issues(
+        self,
+        *,
+        status: str | None = None,
+        type: str | None = None,
+        priority: int | None = None,
+        parent_id: str | None = None,
+        assignee: str | None = None,
+        label: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[Issue]: ...
+
+    # -- MetaMixin -----------------------------------------------------------
+
+    def add_label(self, issue_id: str, label: str) -> bool: ...
+    def add_comment(self, issue_id: str, text: str, *, author: str = "") -> int: ...
+
+    # -- PlanningMixin -------------------------------------------------------
+
+    def get_ready(self) -> list[Issue]: ...
+    def _resolve_open_done_states(self) -> tuple[list[str], list[str], str, str]: ...
+
+    # -- FilesMixin ----------------------------------------------------------
+
+    def register_file(
+        self,
+        path: str,
+        *,
+        language: str = "",
+        file_type: str = "",
+        metadata: dict[str, Any] | None = None,
+    ) -> FileRecord: ...
+
+    def add_file_association(self, file_id: str, issue_id: str, assoc_type: str) -> None: ...

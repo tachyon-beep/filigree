@@ -585,9 +585,9 @@ def test_all_mixin_files_scanned() -> None:
 
 def test_stubs_discovered() -> None:
     """Sanity check: we should discover a meaningful number of stubs."""
-    # 28 stubs as of 2026-02-28.  Keep threshold within ~10% so regressions
-    # in the AST extraction logic are caught quickly.
-    assert len(_ALL_STUBS) >= 25, f"Expected at least 25 stubs, found {len(_ALL_STUBS)}. AST extraction may be broken."
+    # 21 stubs as of 2026-03-06 (consolidated per-mixin TYPE_CHECKING stubs
+    # into DBMixinProtocol).  Keep threshold within ~10%.
+    assert len(_ALL_STUBS) >= 18, f"Expected at least 18 stubs, found {len(_ALL_STUBS)}. AST extraction may be broken."
 
 
 def test_filigreedb_mro_contains_expected_bases() -> None:

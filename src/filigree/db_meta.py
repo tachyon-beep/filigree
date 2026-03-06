@@ -11,9 +11,9 @@ import json
 import logging
 import sqlite3
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, cast
+from typing import Any, cast
 
-from filigree.db_base import DBMixinProtocol, StatusCategory, _now_iso
+from filigree.db_base import DBMixinProtocol, _now_iso
 from filigree.db_files import VALID_FINDING_STATUSES, VALID_SEVERITIES
 from filigree.types.planning import CommentRecord, StatsResult
 
@@ -26,13 +26,6 @@ class MetaMixin(DBMixinProtocol):
     Inherits ``DBMixinProtocol`` for type-safe access to shared attributes.
     Actual implementations provided by ``FiligreeDB`` at composition time via MRO.
     """
-
-    if TYPE_CHECKING:
-
-        def _validate_label_name(self, label: str) -> str: ...
-        def _validate_parent_id(self, parent_id: str | None) -> None: ...
-        def _resolve_status_category(self, issue_type: str, status: str) -> StatusCategory: ...
-        def _resolve_open_done_states(self) -> tuple[list[str], list[str], str, str]: ...
 
     # -- Comments ------------------------------------------------------------
 

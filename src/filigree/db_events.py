@@ -8,9 +8,9 @@ Python's MRO when composed into ``FiligreeDB``.
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, cast
+from typing import cast
 
-from filigree.db_base import DBMixinProtocol, StatusCategory, _now_iso
+from filigree.db_base import DBMixinProtocol, _now_iso
 from filigree.types.events import EventRecord, EventRecordWithTitle, UndoResult
 
 # ---------------------------------------------------------------------------
@@ -40,12 +40,6 @@ class EventsMixin(DBMixinProtocol):
     (``self.conn``, ``self.get_issue()``, etc.). Actual implementations
     provided by ``FiligreeDB`` at composition time via MRO.
     """
-
-    if TYPE_CHECKING:
-
-        def _resolve_status_category(self, issue_type: str, status: str) -> StatusCategory: ...
-
-        def _get_states_for_category(self, category: str) -> list[str]: ...
 
     # -- Events (private) ----------------------------------------------------
 

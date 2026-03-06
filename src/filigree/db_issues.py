@@ -14,12 +14,11 @@ import sqlite3
 import uuid
 from typing import TYPE_CHECKING, Any
 
-from filigree.db_base import DBMixinProtocol, StatusCategory, _now_iso
+from filigree.db_base import DBMixinProtocol, _now_iso
 from filigree.templates import validate_field_pattern
 
 if TYPE_CHECKING:
     from filigree.core import Issue
-    from filigree.templates import TemplateRegistry, TransitionOption
 
 logger = logging.getLogger(__name__)
 
@@ -37,40 +36,6 @@ class IssuesMixin(DBMixinProtocol):
     Inherits ``DBMixinProtocol`` for type-safe access to shared attributes.
     Actual implementations provided by ``FiligreeDB`` at composition time via MRO.
     """
-
-    if TYPE_CHECKING:
-        # From EventsMixin
-        def _record_event(
-            self,
-            issue_id: str,
-            event_type: str,
-            *,
-            actor: str = "",
-            old_value: str | None = None,
-            new_value: str | None = None,
-            comment: str = "",
-        ) -> None: ...
-
-        # From WorkflowMixin
-        @property
-        def templates(self) -> TemplateRegistry: ...
-
-        def _validate_status(self, status: str, issue_type: str = "task") -> None: ...
-        def _validate_parent_id(self, parent_id: str | None) -> None: ...
-        def _validate_label_name(self, label: str) -> str: ...
-        def _get_states_for_category(self, category: str) -> list[str]: ...
-        def _resolve_status_category(self, issue_type: str, status: str) -> StatusCategory: ...
-
-        @staticmethod
-        def _infer_status_category(status: str) -> StatusCategory: ...
-
-        # From MetaMixin
-        def add_label(self, issue_id: str, label: str) -> bool: ...
-        def add_comment(self, issue_id: str, text: str, *, author: str = "") -> int: ...
-
-        # From PlanningMixin
-        def get_ready(self) -> list[Issue]: ...
-        def get_valid_transitions(self, issue_id: str) -> list[TransitionOption]: ...
 
     # -- Field validation ----------------------------------------------------
 

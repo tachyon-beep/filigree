@@ -20,7 +20,7 @@ from filigree.types.core import FindingStatus, Severity
 from filigree.types.files import ScanIngestResult
 
 if TYPE_CHECKING:
-    from filigree.core import FileRecord, Issue, ScanFinding
+    from filigree.core import FileRecord, ScanFinding
     from filigree.types.core import PaginatedResult
     from filigree.types.files import (
         CleanStaleResult,
@@ -67,25 +67,6 @@ class FilesMixin(DBMixinProtocol):
     )
 
     _VALID_FINDING_SORTS = frozenset({"updated_at", "severity"})
-
-    if TYPE_CHECKING:
-        # From IssuesMixin
-        def _generate_unique_id(self, table: str, infix: str = "") -> str: ...
-        def create_issue(
-            self,
-            title: str,
-            *,
-            type: str = "task",
-            priority: int = 2,
-            parent_id: str | None = None,
-            assignee: str = "",
-            description: str = "",
-            notes: str = "",
-            fields: dict[str, Any] | None = None,
-            labels: list[str] | None = None,
-            deps: list[str] | None = None,
-            actor: str = "",
-        ) -> Issue: ...
 
     # -- Build helpers -------------------------------------------------------
 
