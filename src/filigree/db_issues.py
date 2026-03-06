@@ -193,9 +193,10 @@ class IssuesMixin(DBMixinProtocol):
             self._record_event(issue_id, "created", actor=actor, new_value=title)
 
             if labels:
+                labels = list(dict.fromkeys(labels))  # explicit dedup, preserve order
                 for label in labels:
                     self.conn.execute(
-                        "INSERT OR IGNORE INTO labels (issue_id, label) VALUES (?, ?)",
+                        "INSERT INTO labels (issue_id, label) VALUES (?, ?)",
                         (issue_id, label),
                     )
 
@@ -727,20 +728,18 @@ class IssuesMixin(DBMixinProtocol):
             logger.warning("claim_next: all %d candidate(s) failed to claim for '%s'", skipped, assignee)
         return None
 
-    def batch_close(
+    def _batch_with_transition_errors(
         self,
         issue_ids: list[str],
-        *,
-        reason: str = "",
-        actor: str = "",
+        action: Any,
     ) -> tuple[list[Issue], list[BatchFailureDetail]]:
-        """Close multiple issues with per-item error handling. Returns (closed, errors)."""
+        """Run *action(issue_id)* per item with transition-enriched error handling."""
         _validate_string_list(issue_ids, "issue_ids")
         results: list[Issue] = []
         errors: list[BatchFailureDetail] = []
         for issue_id in issue_ids:
             try:
-                results.append(self.close_issue(issue_id, reason=reason, actor=actor))
+                results.append(action(issue_id))
             except KeyError:
                 errors.append(BatchFailureDetail(id=issue_id, error=f"Not found: {issue_id}", code="not_found"))
             except ValueError as e:
@@ -749,9 +748,22 @@ class IssuesMixin(DBMixinProtocol):
                     transitions = self.get_valid_transitions(issue_id)
                     err["valid_transitions"] = [{"to": t.to, "category": t.category} for t in transitions]
                 except KeyError:
-                    pass
+                    logger.debug("batch: could not enrich error with transitions for %s", issue_id)
                 errors.append(err)
         return results, errors
+
+    def batch_close(
+        self,
+        issue_ids: list[str],
+        *,
+        reason: str = "",
+        actor: str = "",
+    ) -> tuple[list[Issue], list[BatchFailureDetail]]:
+        """Close multiple issues with per-item error handling. Returns (closed, errors)."""
+        return self._batch_with_transition_errors(
+            issue_ids,
+            lambda iid: self.close_issue(iid, reason=reason, actor=actor),
+        )
 
     def batch_update(
         self,
@@ -764,32 +776,17 @@ class IssuesMixin(DBMixinProtocol):
         actor: str = "",
     ) -> tuple[list[Issue], list[BatchFailureDetail]]:
         """Update multiple issues with the same changes. Returns (updated, errors)."""
-        _validate_string_list(issue_ids, "issue_ids")
-        results: list[Issue] = []
-        errors: list[BatchFailureDetail] = []
-        for issue_id in issue_ids:
-            try:
-                results.append(
-                    self.update_issue(
-                        issue_id,
-                        status=status,
-                        priority=priority,
-                        assignee=assignee,
-                        fields=fields,
-                        actor=actor,
-                    )
-                )
-            except KeyError:
-                errors.append(BatchFailureDetail(id=issue_id, error=f"Not found: {issue_id}", code="not_found"))
-            except ValueError as e:
-                err = BatchFailureDetail(id=issue_id, error=str(e), code="invalid_transition")
-                try:
-                    transitions = self.get_valid_transitions(issue_id)
-                    err["valid_transitions"] = [{"to": t.to, "category": t.category} for t in transitions]
-                except KeyError:
-                    pass
-                errors.append(err)
-        return results, errors
+        return self._batch_with_transition_errors(
+            issue_ids,
+            lambda iid: self.update_issue(
+                iid,
+                status=status,
+                priority=priority,
+                assignee=assignee,
+                fields=fields,
+                actor=actor,
+            ),
+        )
 
     def batch_add_label(
         self,
@@ -858,9 +855,9 @@ class IssuesMixin(DBMixinProtocol):
         offset: int = 0,
     ) -> list[Issue]:
         if limit < 0:
-            limit = 100
+            raise ValueError(f"limit must be non-negative, got {limit}")
         if offset < 0:
-            offset = 0
+            raise ValueError(f"offset must be non-negative, got {offset}")
         conditions: list[str] = []
         params: list[Any] = []
 

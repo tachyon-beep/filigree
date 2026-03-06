@@ -169,10 +169,12 @@ class WorkflowMixin(DBMixinProtocol):
 
         Returns deduplicated list. Empty if no types are registered.
         """
+        seen: set[str] = set()
         states: list[str] = []
         for tpl in self.templates.list_types():
             for s in tpl.states:
-                if s.category == category and s.name not in states:
+                if s.category == category and s.name not in seen:
+                    seen.add(s.name)
                     states.append(s.name)
         return states
 
