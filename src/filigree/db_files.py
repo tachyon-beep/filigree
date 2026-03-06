@@ -244,11 +244,13 @@ class FilesMixin(DBMixinProtocol):
 
         where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
         valid_sorts = {"updated_at", "first_seen", "path", "language"}
-        sort_col = sort if sort in valid_sorts else "updated_at"
-        order = "ASC" if sort_col == "path" else "DESC"
+        if sort not in valid_sorts:
+            valid = ", ".join(sorted(valid_sorts))
+            raise ValueError(f'Invalid sort field "{sort}". Must be one of: {valid}')
+        order = "ASC" if sort == "path" else "DESC"
 
         rows = self.conn.execute(
-            f"SELECT * FROM file_records{where} ORDER BY {sort_col} {order} LIMIT ? OFFSET ?",
+            f"SELECT * FROM file_records{where} ORDER BY {sort} {order} LIMIT ? OFFSET ?",
             [*params, limit, offset],
         ).fetchall()
         return [self._build_file_record(r) for r in rows]
@@ -291,7 +293,10 @@ class FilesMixin(DBMixinProtocol):
         if min_findings is not None and min_findings > 0:
             clauses.append(f"(SELECT COUNT(*) FROM scan_findings sf WHERE sf.file_id = fr.id AND {self._OPEN_FINDINGS_FILTER_SF}) >= ?")
             params.append(min_findings)
-        if has_severity and has_severity in VALID_SEVERITIES:
+        if has_severity is not None:
+            if has_severity not in VALID_SEVERITIES:
+                valid = ", ".join(sorted(VALID_SEVERITIES))
+                raise ValueError(f'Invalid severity filter "{has_severity}". Must be one of: {valid}')
             clauses.append(
                 "(SELECT COUNT(*) FROM scan_findings sf"
                 " WHERE sf.file_id = fr.id"
@@ -311,8 +316,10 @@ class FilesMixin(DBMixinProtocol):
         ).fetchone()[0]
 
         valid_sorts = {"updated_at", "first_seen", "path", "language"}
-        sort_col = sort if sort in valid_sorts else "updated_at"
-        default_order = "ASC" if sort_col == "path" else "DESC"
+        if sort not in valid_sorts:
+            valid = ", ".join(sorted(valid_sorts))
+            raise ValueError(f'Invalid sort field "{sort}". Must be one of: {valid}')
+        default_order = "ASC" if sort == "path" else "DESC"
         order = direction.upper() if direction and direction.upper() in ("ASC", "DESC") else default_order
 
         _open = self._OPEN_FINDINGS_FILTER_SF
@@ -336,7 +343,7 @@ class FilesMixin(DBMixinProtocol):
             f" WHERE o.file_id = fr.id"
             f") AS observation_count"
             f" FROM file_records fr{where}"
-            f" ORDER BY {sort_col} {order}"
+            f" ORDER BY {sort} {order}"
             f" LIMIT ? OFFSET ?"
         )
         rows = self.conn.execute(enriched_sql, [*params, limit, offset]).fetchall()
@@ -1237,7 +1244,8 @@ class FilesMixin(DBMixinProtocol):
         elif event_type == "file_metadata_update":
             entries = [e for e in entries if e["type"] == "file_metadata_update"]
         elif event_type is not None:
-            entries = []  # Unknown filter type -> empty results
+            valid_types = ("finding", "association", "file_metadata_update")
+            raise ValueError(f'Invalid event_type "{event_type}". Must be one of: {", ".join(valid_types)}')
 
         # Add deterministic IDs and sort newest-first
         for entry in entries:

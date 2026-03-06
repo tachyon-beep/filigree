@@ -160,6 +160,12 @@ class TestListFiles:
         assert files[0].path == "a.py"
         assert files[1].path == "z.py"
 
+    def test_list_files_invalid_sort_raises(self, db: FiligreeDB) -> None:
+        """Invalid sort parameter must raise ValueError, not silently fall back."""
+        db.register_file("a.py")
+        with pytest.raises(ValueError, match="Invalid sort"):
+            db.list_files(sort="nonexistent_column")
+
 
 # ---------------------------------------------------------------------------
 # Scan findings tests
@@ -1533,10 +1539,10 @@ class TestHasSeverityFilter:
         result = db.list_files_paginated(has_severity=None)
         assert result["total"] == 3
 
-    def test_has_severity_invalid_is_ignored(self, db: FiligreeDB) -> None:
+    def test_has_severity_invalid_raises(self, db: FiligreeDB) -> None:
         db.register_file("a.py")
-        result = db.list_files_paginated(has_severity="bogus")
-        assert result["total"] == 1
+        with pytest.raises(ValueError, match="Invalid severity"):
+            db.list_files_paginated(has_severity="bogus")
 
 
 class TestListFilesScanSourceFilter:
@@ -1771,6 +1777,12 @@ class TestFileTimeline:
             assert e["type"].startswith("finding_")
         assert findings_only["total"] < all_events["total"]
 
+    def test_timeline_invalid_event_type_raises(self, db: FiligreeDB) -> None:
+        """Unknown event_type must raise ValueError, not return empty results."""
+        f = db.register_file("a.py")
+        with pytest.raises(ValueError, match="Invalid event_type"):
+            db.get_file_timeline(f.id, event_type="bogus_type")
+
 
 class TestFileMetadataEvents:
     """register_file should emit file_metadata_update events on field changes."""
@@ -1832,15 +1844,14 @@ class TestFileMetadataEvents:
         assert meta_tl["total"] == 1
         assert all(e["type"] == "file_metadata_update" for e in meta_tl["results"])
 
-    def test_unknown_event_type_returns_empty(self, db: FiligreeDB) -> None:
+    def test_unknown_event_type_raises(self, db: FiligreeDB) -> None:
         f = db.register_file("a.py")
         db.process_scan_results(
             scan_source="ruff",
             findings=[{"path": "a.py", "rule_id": "E1", "severity": "low", "message": "m"}],
         )
-        result = db.get_file_timeline(f.id, event_type="bogus_type")
-        assert result["total"] == 0
-        assert result["results"] == []
+        with pytest.raises(ValueError, match="Invalid event_type"):
+            db.get_file_timeline(f.id, event_type="bogus_type")
 
 
 class TestGlobalFindingsStats:
@@ -1964,6 +1975,17 @@ class TestPaginationMetadata:
         result = db.list_files_paginated(path_prefix="file%test")
         assert result["total"] == 1
         assert result["results"][0]["path"] == "src/file%test.py"
+
+    def test_list_files_paginated_invalid_sort_raises(self, db: FiligreeDB) -> None:
+        """Invalid sort parameter must raise ValueError, not silently fall back."""
+        with pytest.raises(ValueError, match="Invalid sort"):
+            db.list_files_paginated(sort="bogus")
+
+    def test_list_files_paginated_invalid_has_severity_raises(self, db: FiligreeDB) -> None:
+        """Invalid has_severity must raise ValueError, not silently skip the filter."""
+        db.register_file("a.py")
+        with pytest.raises(ValueError, match="Invalid severity"):
+            db.list_files_paginated(has_severity="ultra_critical")
 
 
 # ---------------------------------------------------------------------------

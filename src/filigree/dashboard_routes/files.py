@@ -59,17 +59,20 @@ def create_router() -> APIRouter:
         min_findings = _safe_int(params.get("min_findings", "0"), "min_findings", min_value=0)
         if isinstance(min_findings, JSONResponse):
             return min_findings
-        result = db.list_files_paginated(
-            limit=limit,
-            offset=offset,
-            language=params.get("language"),
-            path_prefix=params.get("path_prefix"),
-            min_findings=min_findings if min_findings > 0 else None,
-            has_severity=params.get("has_severity"),
-            scan_source=params.get("scan_source"),
-            sort=params.get("sort", "updated_at"),
-            direction=params.get("direction"),
-        )
+        try:
+            result = db.list_files_paginated(
+                limit=limit,
+                offset=offset,
+                language=params.get("language"),
+                path_prefix=params.get("path_prefix"),
+                min_findings=min_findings if min_findings > 0 else None,
+                has_severity=params.get("has_severity"),
+                scan_source=params.get("scan_source"),
+                sort=params.get("sort", "updated_at"),
+                direction=params.get("direction"),
+            )
+        except ValueError as e:
+            return _error_response(str(e), "VALIDATION_ERROR", 400)
         return JSONResponse(result, headers={"Cache-Control": "no-cache"})
 
     @router.get("/files/hotspots")
@@ -247,6 +250,8 @@ def create_router() -> APIRouter:
             result = db.get_file_timeline(file_id, limit=limit, offset=offset, event_type=event_type)
         except KeyError:
             return _error_response(f"File not found: {file_id}", "FILE_NOT_FOUND", 404)
+        except ValueError as e:
+            return _error_response(str(e), "VALIDATION_ERROR", 400)
         return JSONResponse(result)
 
     @router.post("/files/{file_id}/associations")

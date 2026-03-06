@@ -505,11 +505,11 @@ class TestHasSeverityEndpoint:
         assert data["total"] == 1
         assert data["results"][0]["path"] == "critical.py"
 
-    async def test_has_severity_invalid_ignored(self, client: AsyncClient, api_db: FiligreeDB) -> None:
+    async def test_has_severity_invalid_returns_400(self, client: AsyncClient, api_db: FiligreeDB) -> None:
         api_db.register_file("a.py")
         resp = await client.get("/api/files?has_severity=bogus")
-        assert resp.status_code == 200
-        assert resp.json()["total"] == 1  # invalid severity = no filter applied
+        assert resp.status_code == 400
+        assert resp.json()["error"]["code"] == "VALIDATION_ERROR"
 
 
 class TestTimelineEndpoint:
