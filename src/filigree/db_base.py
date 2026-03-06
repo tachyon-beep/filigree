@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
 
 from filigree.types.core import ISOTimestamp, StatusCategory
+from filigree.types.events import EventType
 
 if TYPE_CHECKING:
     from filigree.core import FileRecord, Issue
@@ -68,7 +69,7 @@ class DBMixinProtocol(Protocol):
     def _record_event(
         self,
         issue_id: str,
-        event_type: str,
+        event_type: EventType,
         *,
         actor: str = "",
         old_value: str | None = None,

@@ -7,11 +7,11 @@ Python's MRO when composed into ``FiligreeDB``.
 
 from __future__ import annotations
 
+import sqlite3
 from datetime import UTC, datetime
-from typing import cast
 
 from filigree.db_base import DBMixinProtocol, _now_iso
-from filigree.types.events import EventRecord, EventRecordWithTitle, UndoResult
+from filigree.types.events import EventRecord, EventRecordWithTitle, EventType, UndoResult
 
 # ---------------------------------------------------------------------------
 # Undo constants (moved from core.py — only used by undo_last)
@@ -43,10 +43,43 @@ class EventsMixin(DBMixinProtocol):
 
     # -- Events (private) ----------------------------------------------------
 
+    # -- Build helpers (replace cast() at SQL boundary) -----------------------
+
+    @staticmethod
+    def _build_event_record(row: sqlite3.Row) -> EventRecord:
+        """Build an EventRecord from a database row with explicit key mapping."""
+        return EventRecord(
+            id=row["id"],
+            issue_id=row["issue_id"],
+            event_type=row["event_type"],
+            actor=row["actor"],
+            old_value=row["old_value"],
+            new_value=row["new_value"],
+            comment=row["comment"],
+            created_at=row["created_at"],
+        )
+
+    @staticmethod
+    def _build_event_record_with_title(row: sqlite3.Row) -> EventRecordWithTitle:
+        """Build an EventRecordWithTitle from a joined database row."""
+        return EventRecordWithTitle(
+            id=row["id"],
+            issue_id=row["issue_id"],
+            event_type=row["event_type"],
+            actor=row["actor"],
+            old_value=row["old_value"],
+            new_value=row["new_value"],
+            comment=row["comment"],
+            created_at=row["created_at"],
+            issue_title=row["issue_title"],
+        )
+
+    # -- Events (private) ----------------------------------------------------
+
     def _record_event(
         self,
         issue_id: str,
-        event_type: str,
+        event_type: EventType,
         *,
         actor: str = "",
         old_value: str | None = None,
@@ -66,7 +99,7 @@ class EventsMixin(DBMixinProtocol):
             "ORDER BY e.created_at DESC, e.id DESC LIMIT ?",
             (limit,),
         ).fetchall()
-        return cast(list[EventRecordWithTitle], [dict(r) for r in rows])
+        return [self._build_event_record_with_title(r) for r in rows]
 
     def get_events_since(self, since: str, *, limit: int = 100) -> list[EventRecordWithTitle]:
         """Get events since a given ISO timestamp, ordered chronologically."""
@@ -77,7 +110,7 @@ class EventsMixin(DBMixinProtocol):
             "ORDER BY e.created_at ASC, e.id ASC LIMIT ?",
             (since, limit),
         ).fetchall()
-        return cast(list[EventRecordWithTitle], [dict(r) for r in rows])
+        return [self._build_event_record_with_title(r) for r in rows]
 
     def get_issue_events(self, issue_id: str, *, limit: int = 50) -> list[EventRecord]:
         """Get events for a specific issue, newest first."""
@@ -86,7 +119,7 @@ class EventsMixin(DBMixinProtocol):
             "SELECT * FROM events WHERE issue_id = ? ORDER BY created_at DESC, id DESC LIMIT ?",
             (issue_id, limit),
         ).fetchall()
-        return cast(list[EventRecord], [dict(r) for r in rows])
+        return [self._build_event_record(r) for r in rows]
 
     def undo_last(self, issue_id: str, *, actor: str = "") -> UndoResult:
         """Undo the most recent reversible event for an issue.
