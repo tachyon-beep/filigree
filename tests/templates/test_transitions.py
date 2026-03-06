@@ -135,6 +135,19 @@ class TestTransitionValidation:
         wont_fix_opt = next(o for o in options if o.to == "wont_fix")
         assert wont_fix_opt.category == "done"
 
+    def test_get_valid_transitions_category_uses_direct_lookup(self, registry: TemplateRegistry) -> None:
+        """Bug filigree-2a9c6009b9: category must come from direct cache lookup,
+        not a silent fallback to 'open'. A corrupted cache should raise KeyError."""
+        # Verify all transition options have correct categories from the cache
+        options = registry.get_valid_transitions("bug", "fixing", {"fix_verification": "ok"})
+        verifying_opt = next(o for o in options if o.to == "verifying")
+        assert verifying_opt.category == "wip"  # NOT "open" from silent fallback
+
+        # Corrupt the category cache to simulate internal inconsistency
+        registry._category_cache["bug"].pop("verifying")
+        with pytest.raises(KeyError):
+            registry.get_valid_transitions("bug", "fixing", {"fix_verification": "ok"})
+
     # -- validate_fields_for_state tests --
 
     def test_validate_fields_for_state(self, registry: TemplateRegistry) -> None:

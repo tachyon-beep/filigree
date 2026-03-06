@@ -966,6 +966,47 @@ class TestCoreReloadTemplates:
         types = mcp_db.templates.list_types()
         assert len(types) >= 2
 
+    def test_reload_updates_enabled_packs_from_config(self, mcp_db: FiligreeDB) -> None:
+        """Bug filigree-8fc86587f1: reload_templates must update enabled_packs
+        from config.json, not keep stale constructor value."""
+        import json
+
+        # Initial state: default packs
+        _ = mcp_db.templates.list_types()
+        original_packs = mcp_db.enabled_packs[:]
+
+        # Write new config with incident pack added
+        config_path = mcp_db.db_path.parent / "config.json"
+        config = json.loads(config_path.read_text())
+        config["enabled_packs"] = ["core", "planning", "release", "incident"]
+        config_path.write_text(json.dumps(config))
+
+        # Reload templates
+        mcp_db.reload_templates()
+        _ = mcp_db.templates.list_types()
+
+        # enabled_packs should reflect the updated config
+        assert "incident" in mcp_db.enabled_packs
+        assert mcp_db.enabled_packs != original_packs
+
+    def test_reload_with_explicit_override_keeps_override(self, tmp_path: Path) -> None:
+        """When enabled_packs was explicitly set in constructor, reload should
+        still honour the override (not fall back to config.json)."""
+        filigree_dir = tmp_path / FILIGREE_DIR_NAME
+        filigree_dir.mkdir()
+        write_config(filigree_dir, {"prefix": "test", "version": 1, "enabled_packs": ["core", "planning", "release"]})
+        d = FiligreeDB(filigree_dir / DB_FILENAME, prefix="test", enabled_packs=["core"])
+        d.initialize()
+        try:
+            _ = d.templates.list_types()
+            assert d.enabled_packs == ["core"]
+            d.reload_templates()
+            _ = d.templates.list_types()
+            # Should still be the explicit override, not config.json
+            assert d.enabled_packs == ["core"]
+        finally:
+            d.close()
+
 
 class TestDynamicWorkflowPrompt:
     """Test the dynamic workflow prompt builder."""

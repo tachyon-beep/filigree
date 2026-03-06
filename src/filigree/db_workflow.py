@@ -76,8 +76,33 @@ class WorkflowMixin(DBMixinProtocol):
         _seed_builtin_packs(self.conn, now)
 
     def reload_templates(self) -> None:
-        """Clear the cached template registry so it reloads on next access."""
+        """Clear the cached template registry so it reloads on next access.
+
+        Also refreshes ``self.enabled_packs`` from config.json when no
+        explicit override was provided at construction time.
+        """
         self._template_registry = None
+        if self._enabled_packs_override is None:
+            self._refresh_enabled_packs()
+
+    def _refresh_enabled_packs(self) -> None:
+        """Re-read enabled_packs from config.json and update self.enabled_packs."""
+        import json as _json
+        import logging
+
+        _default_packs = ["core", "planning", "release"]
+        config_path = self.db_path.parent / "config.json"
+        if config_path.exists():
+            try:
+                config = _json.loads(config_path.read_text())
+                if isinstance(config, dict):
+                    packs = config.get("enabled_packs", _default_packs)
+                    if isinstance(packs, list):
+                        self.enabled_packs = [p for p in packs if isinstance(p, str)]
+                        return
+            except (ValueError, KeyError, OSError):
+                logging.getLogger(__name__).warning("Could not read config.json — keeping current enabled_packs")
+        self.enabled_packs = _default_packs
 
     def get_template(self, issue_type: str) -> TemplateInfo | None:
         """Get a template by type name from the registry."""

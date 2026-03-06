@@ -696,7 +696,7 @@ class TemplateRegistry:
             missing_state = self.validate_fields_for_state(type_name, t.to_state, fields)
             all_missing = list(dict.fromkeys(missing_trans + missing_state))
 
-            target_category = self._category_cache.get(type_name, {}).get(t.to_state, "open")
+            target_category = self._category_cache[type_name][t.to_state]
             # ready = True when all required fields are populated
             ready = len(all_missing) == 0
 
