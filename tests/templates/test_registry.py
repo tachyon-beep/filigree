@@ -15,11 +15,9 @@ from filigree.templates import (
     _VALID_CATEGORIES,
     _VALID_FIELD_TYPES,
     FieldSchema,
-    HardEnforcementError,
     StateDefinition,
     TemplateRegistry,
     TransitionDefinition,
-    TransitionNotAllowedError,
     TransitionOption,
     TransitionResult,
     TypeTemplate,
@@ -82,9 +80,11 @@ class TestDataclasses:
         to = TransitionOption(to="closed", category="done", enforcement="soft", requires_fields=(), missing_fields=(), ready=True)
         assert to.ready is True
 
-    def test_validation_result(self) -> None:
-        vr = ValidationResult(valid=True, warnings=(), errors=())
+    def test_validation_result_valid_derived_from_errors(self) -> None:
+        vr = ValidationResult(warnings=(), errors=())
         assert vr.valid is True
+        vr_invalid = ValidationResult(warnings=(), errors=("missing field",))
+        assert vr_invalid.valid is False
 
     def test_state_definition_rejects_invalid_name(self) -> None:
         with pytest.raises(ValueError, match="Invalid state name"):
@@ -119,48 +119,6 @@ class TestDataclasses:
             guide=None,
         )
         assert wp.pack == "core"
-
-
-class TestExceptions:
-    """Verify exception types carry structured data and remediation hints."""
-
-    def test_transition_not_allowed_is_value_error(self) -> None:
-        err = TransitionNotAllowedError("triage", "closed", "bug")
-        assert isinstance(err, ValueError)
-        assert "triage" in str(err)
-        assert "closed" in str(err)
-        assert "bug" in str(err)
-        assert err.from_state == "triage"
-        assert err.to_state == "closed"
-        assert err.type_name == "bug"
-
-    def test_transition_not_allowed_has_remediation(self) -> None:
-        err = TransitionNotAllowedError("triage", "closed", "bug")
-        assert "get_valid_transitions" in str(err)
-
-    def test_hard_enforcement_is_value_error(self) -> None:
-        err = HardEnforcementError("fixing", "verifying", "bug", ["fix_verification"])
-        assert isinstance(err, ValueError)
-        assert "fix_verification" in str(err)
-        assert err.missing_fields == ("fix_verification",)
-        assert err.from_state == "fixing"
-        assert err.to_state == "verifying"
-        assert err.type_name == "bug"
-
-    def test_hard_enforcement_has_remediation(self) -> None:
-        err = HardEnforcementError("verifying", "closed", "bug", ["fix_verification"])
-        assert "get_type_info" in str(err)
-
-    def test_hard_enforcement_multiple_fields(self) -> None:
-        err = HardEnforcementError("assessing", "assessed", "risk", ["risk_score", "impact"])
-        assert "risk_score" in str(err)
-        assert "impact" in str(err)
-        assert err.missing_fields == ("risk_score", "impact")
-
-    def test_hard_enforcement_missing_fields_is_immutable(self) -> None:
-        """M8: missing_fields should be a tuple, not a mutable list."""
-        err = HardEnforcementError("fixing", "verifying", "bug", ["field_a", "field_b"])
-        assert isinstance(err.missing_fields, tuple)
 
 
 class TestTemplateRegistry:

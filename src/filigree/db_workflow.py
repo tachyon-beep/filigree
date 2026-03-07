@@ -239,7 +239,7 @@ class WorkflowMixin(DBMixinProtocol):
         issue = self.get_issue(issue_id)
         tpl = self.templates.get_type(issue.type)
         if tpl is None:
-            return ValidationResult(valid=True, warnings=(), errors=())
+            return ValidationResult(warnings=(), errors=())
 
         warnings: list[str] = []
 
@@ -264,4 +264,4 @@ class WorkflowMixin(DBMixinProtocol):
                 fields_str = ", ".join(t.missing_fields)
                 warnings.append(f"Transition to '{t.to}' requires: {fields_str}")
 
-        return ValidationResult(valid=True, warnings=tuple(warnings), errors=())
+        return ValidationResult(warnings=tuple(warnings), errors=())

@@ -8,7 +8,7 @@ filigree's workflow template system:
   - Checking valid transitions before each status change
   - Setting fields at the right time (severity, root_cause, fix_verification)
   - Soft vs. hard enforcement of required fields
-  - Catching HardEnforcementError when a hard-enforced transition fails
+  - Catching ValueError when a hard-enforced transition fails
 
 The bug workflow has both soft and hard enforcement:
   - triage -> confirmed: soft (warns if severity is missing)

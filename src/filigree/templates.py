@@ -221,43 +221,13 @@ class TransitionOption:
 class ValidationResult:
     """Result of validating an issue against its template."""
 
-    valid: bool
     warnings: tuple[str, ...]
     errors: tuple[str, ...]
 
-
-# ---------------------------------------------------------------------------
-# Custom exceptions
-# ---------------------------------------------------------------------------
-
-
-class TransitionNotAllowedError(ValueError):
-    """Raised when a transition is not defined in the type's transition table."""
-
-    def __init__(self, from_state: str, to_state: str, type_name: str) -> None:
-        self.from_state = from_state
-        self.to_state = to_state
-        self.type_name = type_name
-        super().__init__(
-            f"Transition '{from_state}' -> '{to_state}' is not defined for type '{type_name}'. "
-            f"Use get_valid_transitions() to see available transitions."
-        )
-
-
-class HardEnforcementError(ValueError):
-    """Raised when a hard-enforced transition fails field validation."""
-
-    def __init__(self, from_state: str, to_state: str, type_name: str, missing_fields: list[str]) -> None:
-        self.from_state = from_state
-        self.to_state = to_state
-        self.type_name = type_name
-        self.missing_fields = tuple(missing_fields)
-        fields_str = ", ".join(missing_fields)
-        super().__init__(
-            f"Cannot transition '{from_state}' -> '{to_state}' for type '{type_name}': "
-            f"missing required fields: {fields_str}. "
-            f"Populate these fields before transitioning, or call get_type_info('{type_name}') for field details."
-        )
+    @property
+    def valid(self) -> bool:
+        """Derived from errors — impossible to construct inconsistent state."""
+        return len(self.errors) == 0
 
 
 # ---------------------------------------------------------------------------
