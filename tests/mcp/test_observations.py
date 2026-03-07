@@ -176,3 +176,41 @@ class TestPromoteObservationTool:
         result = await call_tool("promote_observation", {"id": "nope-123"})
         data = _parse(result)
         assert data["code"] == "not_found"
+
+    async def test_promote_surfaces_warnings(self, mcp_db: FiligreeDB) -> None:
+        """MCP handler surfaces warnings from promote_observation on enrichment failure."""
+        from unittest.mock import patch
+
+        obs = mcp_db.create_observation("will warn")
+        with patch.object(mcp_db, "add_label", side_effect=RuntimeError("label boom")):
+            result = await call_tool("promote_observation", {"id": obs["id"]})
+        data = _parse(result)
+        assert "issue" in data
+        assert "warnings" in data
+        assert any("label" in w for w in data["warnings"])
+
+
+class TestListObservationsStatsGuard:
+    """Verify _handle_list_observations handles observation_stats() failures."""
+
+    async def test_list_observations_stats_failure_returns_fallback(self, mcp_db: FiligreeDB) -> None:
+        """If observation_stats() raises sqlite3.Error, list still returns with fallback stats."""
+        import sqlite3
+        from unittest.mock import patch
+
+        mcp_db.create_observation("test obs")
+        with patch.object(mcp_db, "observation_stats", side_effect=sqlite3.OperationalError("no such table")):
+            result = await call_tool("list_observations", {})
+        data = _parse(result)
+        assert len(data["observations"]) == 1
+        assert data["stats"]["count"] == 1  # Falls back to len(observations)
+
+    async def test_list_observations_catches_sqlite_error(self, mcp_db: FiligreeDB) -> None:
+        """sqlite3.Error from list_observations itself returns error response."""
+        import sqlite3
+        from unittest.mock import patch
+
+        with patch.object(mcp_db, "list_observations", side_effect=sqlite3.InterfaceError("connection closed")):
+            result = await call_tool("list_observations", {})
+        data = _parse(result)
+        assert data["code"] == "database_error"

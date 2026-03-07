@@ -170,10 +170,13 @@ async def _handle_list_observations(arguments: dict[str, Any]) -> list[TextConte
             file_path=args.get("file_path", ""),
             file_id=args.get("file_id", ""),
         )
-    except sqlite3.OperationalError as e:
+    except sqlite3.Error as e:
         return _text(ErrorResponse(error=f"Database error: {e}", code="database_error"))
     observations, has_more = _apply_has_more(observations, effective_limit)
-    stats = tracker.observation_stats(sweep=False)
+    try:
+        stats = tracker.observation_stats(sweep=False)
+    except sqlite3.Error:
+        stats = {"count": len(observations), "stale_count": 0, "oldest_hours": 0, "expiring_soon_count": 0}
     return _text({"observations": observations, "stats": stats, "has_more": has_more})
 
 
@@ -247,4 +250,7 @@ async def _handle_promote_observation(arguments: dict[str, Any]) -> list[TextCon
     except ValueError as e:
         return _text(ErrorResponse(error=str(e), code="not_found"))
     _refresh_summary()
-    return _text({"issue": result["issue"].to_dict()})
+    resp: dict[str, object] = {"issue": result["issue"].to_dict()}
+    if result.get("warnings"):
+        resp["warnings"] = result["warnings"]
+    return _text(resp)

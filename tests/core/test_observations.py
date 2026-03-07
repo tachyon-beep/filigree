@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 
 from filigree.core import FiligreeDB
@@ -206,6 +208,62 @@ class TestListObservations:
         assert row["actor"] == "system"
 
 
+class _InterceptingConn:
+    """Thin wrapper around a sqlite3.Connection that intercepts execute calls."""
+
+    def __init__(self, real: Any, intercept: Any) -> None:
+        self._real = real
+        self._intercept = intercept
+
+    def execute(self, sql: str, params: Any = ()) -> Any:
+        return self._intercept(self._real, sql, params)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._real, name)
+
+
+class TestSweepExceptionNarrowing:
+    """Verify _sweep_expired_observations catches sqlite3.Error but not non-DB errors."""
+
+    def test_sweep_catches_sqlite_error(self, db: FiligreeDB) -> None:
+        """sqlite3.Error during sweep is caught — list_observations still returns results."""
+        import sqlite3
+
+        db.create_observation("survives sweep failure")
+
+        real_conn = db._conn
+
+        def _fail_on_delete(real: Any, sql: str, params: Any = ()) -> Any:
+            if "DELETE FROM observations WHERE expires_at" in sql:
+                raise sqlite3.OperationalError("disk I/O error")
+            return real.execute(sql, params)
+
+        db._conn = _InterceptingConn(real_conn, _fail_on_delete)  # type: ignore[assignment]
+        try:
+            result = db.list_observations()
+        finally:
+            db._conn = real_conn
+        assert len(result) == 1
+
+    def test_sweep_propagates_non_sqlite_error(self, db: FiligreeDB) -> None:
+        """Non-sqlite3.Error (e.g. RuntimeError) propagates through sweep."""
+        db.create_observation("irrelevant")
+
+        real_conn = db._conn
+
+        def _fail_with_runtime(real: Any, sql: str, params: Any = ()) -> Any:
+            if "DELETE FROM observations WHERE expires_at" in sql:
+                raise RuntimeError("thread safety violation")
+            return real.execute(sql, params)
+
+        db._conn = _InterceptingConn(real_conn, _fail_with_runtime)  # type: ignore[assignment]
+        try:
+            with pytest.raises(RuntimeError, match="thread safety"):
+                db.list_observations()
+        finally:
+            db._conn = real_conn
+
+
 class TestDismissObservation:
     def test_dismiss_deletes_and_logs(self, db: FiligreeDB) -> None:
         obs = db.create_observation("To dismiss")
@@ -348,6 +406,43 @@ class TestPromoteObservation:
         assert db.observation_count() == 0
         count_after = db.conn.execute("SELECT COUNT(*) FROM issues").fetchone()[0]
         assert count_after == count_before + 1
+
+    def test_promote_label_failure_returns_warnings(self, db: FiligreeDB) -> None:
+        """Enrichment failures surface in warnings list."""
+        from unittest.mock import patch
+
+        obs = db.create_observation("will warn")
+        with patch.object(db, "add_label", side_effect=RuntimeError("label boom")):
+            result = db.promote_observation(obs["id"])
+        assert "warnings" in result
+        assert any("label" in w for w in result["warnings"])
+
+    def test_promote_cleanup_failure_returns_warnings(self, db: FiligreeDB) -> None:
+        """If audit trail + observation delete fails, warning is surfaced."""
+        import sqlite3
+
+        obs = db.create_observation("cleanup will fail")
+        real_conn = db._conn
+
+        def _fail_on_dismissed_insert(real: Any, sql: str, params: Any = ()) -> Any:
+            if "INSERT INTO dismissed_observations" in sql:
+                raise sqlite3.OperationalError("disk I/O error")
+            return real.execute(sql, params)
+
+        db._conn = _InterceptingConn(real_conn, _fail_on_dismissed_insert)  # type: ignore[assignment]
+        try:
+            result = db.promote_observation(obs["id"])
+        finally:
+            db._conn = real_conn
+        assert result["issue"] is not None
+        assert "warnings" in result
+        assert any("clean up" in w.lower() for w in result["warnings"])
+
+    def test_promote_no_warnings_on_success(self, db: FiligreeDB) -> None:
+        """No warnings key when everything succeeds."""
+        obs = db.create_observation("all good")
+        result = db.promote_observation(obs["id"])
+        assert "warnings" not in result
 
 
 class TestObservationStats:

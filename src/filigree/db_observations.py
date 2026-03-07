@@ -13,6 +13,7 @@ Includes:
 from __future__ import annotations
 
 import logging
+import sqlite3
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
@@ -69,7 +70,7 @@ class ObservationsMixin(DBMixinProtocol):
             if cursor.rowcount > 0:
                 logger.info("Swept %d expired observations", cursor.rowcount)
             return cursor.rowcount
-        except Exception:
+        except sqlite3.Error:
             logger.warning("Observation sweep failed, rolled back", exc_info=True)
             self.conn.execute("ROLLBACK TO SAVEPOINT sweep_obs")
             return 0  # Sweep is best-effort — don't block reads
@@ -338,6 +339,7 @@ class ObservationsMixin(DBMixinProtocol):
         #    Best-effort: if this fails, the issue still exists and the observation
         #    will be swept on TTL expiry. Log and continue rather than raising,
         #    because the caller must know the issue was created.
+        warnings: list[str] = []
         now = _now_iso()
         try:
             self.conn.execute(
@@ -348,23 +350,27 @@ class ObservationsMixin(DBMixinProtocol):
             self.conn.commit()
         except Exception:
             self.conn.rollback()
-            logger.warning(
-                "Failed to clean up observation %s after promotion (issue %s created)",
-                obs_id,
-                issue.id,
-                exc_info=True,
-            )
+            msg = f"Failed to clean up observation {obs_id} after promotion (issue {issue.id} created)"
+            logger.warning(msg, exc_info=True)
+            warnings.append(msg)
 
         # 5. Enrichments (non-critical — failure should not undo the promotion)
         try:
             self.add_label(issue.id, "from-observation")
         except Exception:
-            logger.warning("Failed to add from-observation label to %s", issue.id, exc_info=True)
+            msg = f"Failed to add from-observation label to {issue.id}"
+            logger.warning(msg, exc_info=True)
+            warnings.append(msg)
 
         try:
             if obs["file_id"]:
                 self.add_file_association(obs["file_id"], issue.id, "mentioned_in")
         except Exception:
-            logger.warning("Failed to add file association for promoted observation %s", obs_id, exc_info=True)
+            msg = f"Failed to add file association for promoted observation {obs_id}"
+            logger.warning(msg, exc_info=True)
+            warnings.append(msg)
 
-        return {"issue": issue}
+        result: dict[str, Any] = {"issue": issue}
+        if warnings:
+            result["warnings"] = warnings
+        return result

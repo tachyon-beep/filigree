@@ -444,7 +444,12 @@ def create_router() -> APIRouter:
     @router.get("/observations/stats")
     async def api_observation_stats(db: FiligreeDB = Depends(_get_db)) -> JSONResponse:
         """Observation count and age stats for dashboard display."""
-        stats = db.observation_stats(sweep=False)
+        import sqlite3
+
+        try:
+            stats = db.observation_stats(sweep=False)
+        except sqlite3.OperationalError:
+            stats = {"count": 0, "stale_count": 0, "oldest_hours": 0, "expiring_soon_count": 0}
         return JSONResponse(stats)
 
     @router.get("/critical-path")
