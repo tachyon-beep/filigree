@@ -89,6 +89,27 @@ class TestConfigEnabledPacks:
         assert db.enabled_packs == ["core", "planning", "risk"]
         db.close()
 
+    def test_refresh_enabled_packs_bad_json_logs_with_exc_info(self, tmp_path: Path) -> None:
+        """Bug filigree-9b30ee0393: _refresh_enabled_packs must log with exc_info=True."""
+        import logging
+        from unittest.mock import patch
+
+        filigree_dir = tmp_path / ".filigree"
+        filigree_dir.mkdir()
+        config_path = filigree_dir / "config.json"
+        config_path.write_text("{invalid json")
+
+        db = FiligreeDB(filigree_dir / "filigree.db", prefix="test")
+        db.initialize()
+
+        logger = logging.getLogger("filigree.db_workflow")
+        with patch.object(logger, "warning") as mock_warn:
+            db._refresh_enabled_packs()
+            mock_warn.assert_called_once()
+            _, kwargs = mock_warn.call_args
+            assert kwargs.get("exc_info") is True, "exc_info=True must be passed to preserve exception details"
+        db.close()
+
     def test_from_project_default_enabled_packs(self, tmp_path: Path) -> None:
         """FiligreeDB.from_project() with no enabled_packs in config gets default."""
         filigree_dir = tmp_path / ".filigree"

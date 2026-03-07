@@ -19,6 +19,8 @@ from filigree.templates import validate_field_pattern
 from filigree.types.api import BatchFailureDetail
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from filigree.core import Issue
 
 logger = logging.getLogger(__name__)
@@ -731,7 +733,7 @@ class IssuesMixin(DBMixinProtocol):
     def _batch_with_transition_errors(
         self,
         issue_ids: list[str],
-        action: Any,
+        action: Callable[[str], Issue],
     ) -> tuple[list[Issue], list[BatchFailureDetail]]:
         """Run *action(issue_id)* per item with transition-enriched error handling."""
         _validate_string_list(issue_ids, "issue_ids")

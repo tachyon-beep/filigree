@@ -101,7 +101,7 @@ class WorkflowMixin(DBMixinProtocol):
                         self.enabled_packs = [p for p in packs if isinstance(p, str)]
                         return
             except (ValueError, KeyError, OSError):
-                logging.getLogger(__name__).warning("Could not read config.json — keeping current enabled_packs")
+                logging.getLogger(__name__).warning("Could not read config.json — keeping current enabled_packs", exc_info=True)
         self.enabled_packs = _default_packs
 
     def get_template(self, issue_type: str) -> TemplateInfo | None:

@@ -871,6 +871,70 @@ class TestImportJsonl:
         assert result2["count"] == 0
         assert len(db.get_comments(issue.id)) == 1
 
+    def test_import_merge_comment_no_created_at_consistent_timestamp(self, db: FiligreeDB, tmp_path: Path) -> None:
+        """Bug filigree-ed8962ce80: _now_iso() default must be called once per record so
+        the INSERT value matches the WHERE NOT EXISTS check."""
+        from unittest.mock import patch
+
+        issue = db.create_issue("Timestamp dedup test")
+
+        jsonl = tmp_path / "comments-no-ts.jsonl"
+        comment_line = json.dumps({"_type": "comment", "issue_id": issue.id, "author": "bob", "text": "hi"})
+        jsonl.write_text(comment_line + "\n")
+
+        # Mock _now_iso to return different values on each call — simulates the
+        # clock advancing between the two record.get() defaults in old code
+        call_count = 0
+
+        def _advancing_clock() -> str:
+            nonlocal call_count
+            call_count += 1
+            return f"2026-01-01T00:00:{call_count:02d}+00:00"
+
+        with patch("filigree.db_meta._now_iso", side_effect=_advancing_clock):
+            db.import_jsonl(jsonl, merge=True)
+
+        # With the fix, _now_iso is called exactly once per record (not twice)
+        assert call_count == 1, f"Expected 1 _now_iso call (fix applied), got {call_count}"
+
+        comments = db.get_comments(issue.id)
+        assert len(comments) == 1
+
+    def test_import_merge_file_event_no_created_at_consistent_timestamp(self, db: FiligreeDB, tmp_path: Path) -> None:
+        """Bug filigree-ed8962ce80: same _now_iso() single-call fix for file_events merge path."""
+        from unittest.mock import patch
+
+        frec = db.register_file("src/test.py", language="python")
+
+        jsonl = tmp_path / "file-events-no-ts.jsonl"
+        # Include the file_record so import can build the file_id_map
+        file_line = json.dumps({"_type": "file_record", "id": frec.id, "path": "src/test.py", "language": "python"})
+        event_line = json.dumps(
+            {
+                "_type": "file_event",
+                "file_id": frec.id,
+                "event_type": "file_metadata_update",
+                "field": "language",
+                "old_value": "",
+                "new_value": "python",
+            }
+        )
+        jsonl.write_text(file_line + "\n" + event_line + "\n")
+
+        total_calls = 0
+
+        def _advancing_clock() -> str:
+            nonlocal total_calls
+            total_calls += 1
+            return f"2026-01-01T00:00:{total_calls:02d}+00:00"
+
+        with patch("filigree.db_meta._now_iso", side_effect=_advancing_clock):
+            db.import_jsonl(jsonl, merge=True)
+
+        # file_record merge uses _now_iso for first_seen and updated_at (2 calls),
+        # file_event merge should use exactly 1 call (the fix)
+        assert total_calls == 3, f"Expected 3 _now_iso calls (2 for file_record + 1 for file_event), got {total_calls}"
+
     def test_import_merge_file_domain_count_accurate(self, db: FiligreeDB, tmp_path: Path) -> None:
         self._seed_file_domain(db)
         out = tmp_path / "file-merge.jsonl"

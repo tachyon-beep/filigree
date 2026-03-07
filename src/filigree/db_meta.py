@@ -570,6 +570,7 @@ class MetaMixin(DBMixinProtocol):
 
             for record in comments:
                 if merge:
+                    created = record.get("created_at", _now_iso())
                     cursor = self.conn.execute(
                         "INSERT INTO comments (issue_id, author, text, created_at) "
                         "SELECT ?, ?, ?, ? "
@@ -580,11 +581,11 @@ class MetaMixin(DBMixinProtocol):
                             record.get("issue_id", ""),
                             record.get("author", ""),
                             record.get("text", ""),
-                            record.get("created_at", _now_iso()),
+                            created,
                             record.get("issue_id", ""),
                             record.get("author", ""),
                             record.get("text", ""),
-                            record.get("created_at", _now_iso()),
+                            created,
                         ),
                     )
                 else:
@@ -632,6 +633,7 @@ class MetaMixin(DBMixinProtocol):
             for record in file_events:
                 file_id = self._remap_file_id(record["file_id"], file_id_map)
                 if merge:
+                    created = record.get("created_at", _now_iso())
                     cursor = self.conn.execute(
                         "INSERT INTO file_events (file_id, event_type, field, old_value, new_value, created_at) "
                         "SELECT ?, ?, ?, ?, ?, ? "
@@ -645,13 +647,13 @@ class MetaMixin(DBMixinProtocol):
                             record.get("field", ""),
                             record.get("old_value", ""),
                             record.get("new_value", ""),
-                            record.get("created_at", _now_iso()),
+                            created,
                             file_id,
                             record.get("event_type", "file_metadata_update"),
                             record.get("field", ""),
                             record.get("old_value", ""),
                             record.get("new_value", ""),
-                            record.get("created_at", _now_iso()),
+                            created,
                         ),
                     )
                 else:
