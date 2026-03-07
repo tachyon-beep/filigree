@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any, Literal, NotRequired, TypedDict
 
 from filigree.types.core import ISOTimestamp, IssueDict
-from filigree.types.planning import CommentRecord, CriticalPathNode, PlanPhase, StatsResult
+from filigree.types.planning import CommentRecord, CriticalPathNode, PlanTree, StatsResult
 
 # ---------------------------------------------------------------------------
 # Shared types
@@ -175,9 +175,6 @@ class EnrichedIssueDetail(IssueDict):
 
 # ---------------------------------------------------------------------------
 # True envelopes — list / search / batch wrappers
-#
-# For types with mixed required/optional keys, use the split-base pattern
-# matching the convention in types/workflow.py (FieldSchemaInfo).
 # ---------------------------------------------------------------------------
 
 
@@ -220,32 +217,22 @@ class BatchUpdateResponse(TypedDict):
     count: int
 
 
-class _BatchCloseRequired(TypedDict):
-    """Required keys for BatchCloseResponse (always present)."""
+class BatchCloseResponse(TypedDict):
+    """Batch close result with optional newly-unblocked list.
+
+    ``succeeded``, ``failed``, and ``count`` are always present.
+    ``newly_unblocked`` is only included when issues were actually unblocked.
+    """
 
     succeeded: list[str]
     failed: list[BatchFailureDetail]
     count: int
+    newly_unblocked: NotRequired[list[SlimIssue]]
 
 
-class BatchCloseResponse(_BatchCloseRequired, total=False):
-    """Batch close result with optional newly-unblocked list.
-
-    ``succeeded``, ``failed``, and ``count`` are always present (enforced
-    by ``_BatchCloseRequired``). ``newly_unblocked`` is only included when
-    issues were actually unblocked.
-    """
-
-    newly_unblocked: list[SlimIssue]
-
-
-class PlanResponse(TypedDict):
+class PlanResponse(PlanTree):
     """Plan tree with computed progress percentage (MCP get_plan)."""
 
-    milestone: IssueDict
-    phases: list[PlanPhase]
-    total_steps: int
-    completed_steps: int
     progress_pct: float
 
 
@@ -363,14 +350,7 @@ class ValidationResult(TypedDict):
     errors: list[str]
 
 
-class _WorkflowGuideRequired(TypedDict):
-    """Required keys for WorkflowGuideResponse."""
-
-    pack: str
-    guide: dict[str, Any] | None
-
-
-class WorkflowGuideResponse(_WorkflowGuideRequired, total=False):
+class WorkflowGuideResponse(TypedDict):
     """Response for get_workflow_guide MCP tool.
 
     ``pack`` and ``guide`` are always present.  ``message`` appears when
@@ -378,8 +358,10 @@ class WorkflowGuideResponse(_WorkflowGuideRequired, total=False):
     from a type name.
     """
 
-    message: str
-    note: str
+    pack: str
+    guide: dict[str, Any] | None
+    message: NotRequired[str]
+    note: NotRequired[str]
 
 
 class StateExplanation(TypedDict):
