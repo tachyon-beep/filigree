@@ -193,11 +193,25 @@ def create_router() -> APIRouter:
         if isinstance(pagination, JSONResponse):
             return pagination
         limit, offset = pagination
+        severity_raw = params.get("severity")
+        if severity_raw is not None and severity_raw not in VALID_SEVERITIES:
+            return _error_response(
+                f"Invalid severity '{severity_raw}'. Must be one of: {', '.join(sorted(VALID_SEVERITIES))}",
+                "VALIDATION_ERROR",
+                400,
+            )
+        status_raw = params.get("status")
+        if status_raw is not None and status_raw not in VALID_FINDING_STATUSES:
+            return _error_response(
+                f"Invalid status '{status_raw}'. Must be one of: {', '.join(sorted(VALID_FINDING_STATUSES))}",
+                "VALIDATION_ERROR",
+                400,
+            )
         try:
             result = db.get_findings_paginated(
                 file_id,
-                severity=cast(Severity | None, params.get("severity")),
-                status=cast(FindingStatus | None, params.get("status")),
+                severity=cast(Severity | None, severity_raw),
+                status=cast(FindingStatus | None, status_raw),
                 sort=params.get("sort", "updated_at"),
                 limit=limit,
                 offset=offset,
@@ -294,7 +308,7 @@ def create_router() -> APIRouter:
         mark_unseen = body.get("mark_unseen", False)
         if not isinstance(mark_unseen, bool):
             return _error_response("mark_unseen must be a boolean", "VALIDATION_ERROR", 400)
-        status_code = 202 if not findings else 200
+        status_code = 200
         try:
             result = db.process_scan_results(
                 scan_source=scan_source,

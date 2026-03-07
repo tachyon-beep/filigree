@@ -353,14 +353,14 @@ class TestPaginatedEndpoints:
 
 
 class TestScanResultsEndpointEnhancements:
-    """Tests for enhanced scan results endpoint (202, mark_unseen, new_finding_ids)."""
+    """Tests for enhanced scan results endpoint (mark_unseen, new_finding_ids)."""
 
-    async def test_empty_findings_returns_202(self, client: AsyncClient) -> None:
+    async def test_empty_findings_returns_200(self, client: AsyncClient) -> None:
         resp = await client.post(
             "/api/v1/scan-results",
             json={"scan_source": "ruff", "findings": []},
         )
-        assert resp.status_code == 202
+        assert resp.status_code == 200
         data = resp.json()
         assert data["new_finding_ids"] == []
 

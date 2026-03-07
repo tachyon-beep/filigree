@@ -276,8 +276,12 @@ def create_router() -> APIRouter:
         offset = max(offset, 0)
         if not q.strip():
             return JSONResponse({"results": [], "total": 0})
-        issues = db.search_issues(q, limit=limit, offset=offset)
-        return JSONResponse({"results": [i.to_dict() for i in issues], "total": len(issues)})
+        # Fetch all matches to get accurate total, then slice for the page.
+        # search_issues is fast (FTS5 index) and issue trackers are typically < 10K issues.
+        all_matches = db.search_issues(q, limit=100_000, offset=0)
+        total = len(all_matches)
+        page = all_matches[offset : offset + limit]
+        return JSONResponse({"results": [i.to_dict() for i in page], "total": total})
 
     @router.get("/plan/{milestone_id}")
     async def api_plan(milestone_id: str, db: FiligreeDB = Depends(_get_db)) -> JSONResponse:
@@ -461,6 +465,8 @@ def create_router() -> APIRouter:
         if isinstance(body, JSONResponse):
             return body
         depends_on = body.get("depends_on", "")
+        if not depends_on or not isinstance(depends_on, str) or not depends_on.strip():
+            return _error_response("depends_on is required and must be a non-empty string", "VALIDATION_ERROR", 400)
         actor, actor_err = _validate_actor(body.get("actor", "dashboard"))
         if actor_err:
             return actor_err

@@ -269,7 +269,7 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
 
 
 async def _handle_add_comment(arguments: dict[str, Any]) -> list[TextContent]:
-    from filigree.mcp_server import _get_db
+    from filigree.mcp_server import _get_db, _refresh_summary
 
     args = _parse_args(arguments, AddCommentArgs)
     actor, actor_err = _validate_actor(args.get("actor", "mcp"))
@@ -288,6 +288,7 @@ async def _handle_add_comment(arguments: dict[str, Any]) -> list[TextContent]:
         )
     except ValueError as e:
         return _text(ErrorResponse(error=str(e), code="validation_error"))
+    _refresh_summary()
     return _text(AddCommentResult(status="ok", comment_id=comment_id))
 
 
