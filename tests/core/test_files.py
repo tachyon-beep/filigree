@@ -353,6 +353,30 @@ class TestProcessScanResults:
         associations = db.get_file_associations(file_record.id)
         assert any(a["issue_id"] == issue.id and a["assoc_type"] == "bug_in" for a in associations)
 
+    def test_update_finding_rejects_no_kwargs(self, db: FiligreeDB) -> None:
+        """Calling update_finding with no status or issue_id must raise ValueError."""
+        db.process_scan_results(
+            scan_source="ruff",
+            findings=[{"path": "a.py", "rule_id": "E501", "severity": "low", "message": "m"}],
+        )
+        f = db.get_file_by_path("a.py")
+        assert f is not None
+        finding = db.get_findings(f.id)[0]
+        with pytest.raises(ValueError, match="At least one of"):
+            db.update_finding(f.id, finding.id)
+
+    def test_update_finding_rejects_invalid_status(self, db: FiligreeDB) -> None:
+        """Passing an invalid status to update_finding must raise ValueError."""
+        db.process_scan_results(
+            scan_source="ruff",
+            findings=[{"path": "a.py", "rule_id": "E501", "severity": "low", "message": "m"}],
+        )
+        f = db.get_file_by_path("a.py")
+        assert f is not None
+        finding = db.get_findings(f.id)[0]
+        with pytest.raises(ValueError, match="Invalid finding status"):
+            db.update_finding(f.id, finding.id, status="bogus")
+
     def test_ingest_finding_missing_path(self, db: FiligreeDB) -> None:
         with pytest.raises(ValueError, match="path"):
             db.process_scan_results(

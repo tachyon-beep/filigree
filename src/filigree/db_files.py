@@ -693,12 +693,13 @@ class FilesMixin(DBMixinProtocol):
             # Mark unseen findings as unseen_in_latest (atomic per file+source)
             if mark_unseen:
                 terminal = tuple(TERMINAL_FINDING_STATUSES)
+                terminal_ph = ",".join("?" * len(terminal))
                 for fid, fids in seen_finding_ids.items():
                     placeholders = ",".join("?" * len(fids))
                     self.conn.execute(
                         f"UPDATE scan_findings SET status = 'unseen_in_latest', updated_at = ? "
                         f"WHERE file_id = ? AND scan_source = ? "
-                        f"AND status NOT IN (?, ?) "
+                        f"AND status NOT IN ({terminal_ph}) "
                         f"AND id NOT IN ({placeholders})",
                         [now, fid, scan_source, *terminal, *fids],
                     )
