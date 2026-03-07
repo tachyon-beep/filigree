@@ -10,46 +10,27 @@ from __future__ import annotations
 import json
 import logging
 from collections import deque
-from typing import TYPE_CHECKING, Any, NotRequired, TypedDict
+from typing import TYPE_CHECKING, Any
 
 from filigree.db_base import DBMixinProtocol, _now_iso
-from filigree.types.planning import CriticalPathNode, DependencyRecord, PlanPhase, PlanTree
+from filigree.types.planning import (
+    ChildSummary,
+    CriticalPathNode,
+    DependencyRecord,
+    IssueRef,
+    PlanPhase,
+    PlanTree,
+    ProgressDict,
+    ReleaseSummaryItem,
+    ReleaseTree,
+    TreeNode,
+)
 
 if TYPE_CHECKING:
     from filigree.core import Issue
+    from filigree.types.inputs import MilestoneInput, PhaseInput
 
 logger = logging.getLogger(__name__)
-
-
-class ProgressDict(TypedDict):
-    total: int
-    completed: int
-    in_progress: int
-    open: int
-    pct: int
-
-
-class ChildSummary(TypedDict):
-    epics: int
-    milestones: int
-    tasks: int
-    bugs: int
-    other: int
-    total: int
-
-
-class IssueRef(TypedDict):
-    id: str
-    title: str
-    type: str
-    dangling: NotRequired[bool]
-
-
-class TreeNode(TypedDict):
-    issue: dict[str, Any]
-    progress: ProgressDict | None
-    children: list[TreeNode]
-    truncated: NotRequired[bool]
 
 
 _MAX_TREE_DEPTH = 10
@@ -295,8 +276,8 @@ class PlanningMixin(DBMixinProtocol):
 
     def create_plan(
         self,
-        milestone: dict[str, Any],
-        phases: list[dict[str, Any]],
+        milestone: MilestoneInput,
+        phases: list[PhaseInput],
         *,
         actor: str = "",
     ) -> PlanTree:
@@ -358,7 +339,7 @@ class PlanningMixin(DBMixinProtocol):
             for phase_idx, phase_data in enumerate(phases):
                 # Create phase
                 phase_id = self._generate_unique_id("issues")
-                phase_fields = phase_data.get("fields") or {}
+                phase_fields: dict[str, Any] = dict(phase_data.get("fields") or {})  # type: ignore[call-overload]
                 phase_fields["sequence"] = phase_idx + 1
                 self.conn.execute(
                     "INSERT INTO issues (id, title, status, priority, type, parent_id, assignee, "
@@ -383,7 +364,7 @@ class PlanningMixin(DBMixinProtocol):
                 steps = phase_data.get("steps") or []
                 for step_idx, step_data in enumerate(steps):
                     step_id = self._generate_unique_id("issues")
-                    step_fields = step_data.get("fields") or {}
+                    step_fields: dict[str, Any] = dict(step_data.get("fields") or {})  # type: ignore[call-overload]
                     step_fields["sequence"] = step_idx + 1
                     self.conn.execute(
                         "INSERT INTO issues (id, title, status, priority, type, parent_id, assignee, "
@@ -450,14 +431,14 @@ class PlanningMixin(DBMixinProtocol):
 
     # -- Release tree --------------------------------------------------------
 
-    def get_releases_summary(self, *, include_released: bool = False) -> list[dict[str, Any]]:
+    def get_releases_summary(self, *, include_released: bool = False) -> list[ReleaseSummaryItem]:
         releases = self.list_issues(type="release")
         if not include_released:
             # Note: rolled_back is category "wip", so it IS included (intentional —
             # a rolled-back release needs attention, it is not "finished")
             releases = [r for r in releases if r.status_category != "done"]
 
-        result: list[dict[str, Any]] = []
+        result: list[ReleaseSummaryItem] = []
         for release in releases:
             # Build the full tree once; extract progress from it
             subtree = self._build_tree(release.id)
@@ -476,11 +457,11 @@ class PlanningMixin(DBMixinProtocol):
             data["blocked_by"] = blocked_by_resolved
             data["progress"] = progress
             data["child_summary"] = child_summary
-            result.append(data)
+            result.append(data)  # type: ignore[arg-type]  # dict built incrementally
 
         return result
 
-    def get_release_tree(self, release_id: str) -> dict[str, Any]:
+    def get_release_tree(self, release_id: str) -> ReleaseTree:
         release = self.get_issue(release_id)  # raises KeyError if not found
         if release.type != "release":
             raise ValueError(f"Issue {release_id} is not a release")

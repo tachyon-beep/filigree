@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TypedDict
+from typing import Any, NotRequired, TypedDict
 
 from filigree.types.core import ISOTimestamp, IssueDict
 
@@ -42,6 +42,81 @@ class PlanTree(TypedDict):
     phases: list[PlanPhase]
     total_steps: int
     completed_steps: int
+
+
+class ProgressDict(TypedDict):
+    """Progress summary for a release or plan subtree."""
+
+    total: int
+    completed: int
+    in_progress: int
+    open: int
+    pct: int
+
+
+class ChildSummary(TypedDict):
+    """Type breakdown of direct children in a release tree."""
+
+    epics: int
+    milestones: int
+    tasks: int
+    bugs: int
+    other: int
+    total: int
+
+
+class IssueRef(TypedDict):
+    """Minimal issue reference used in release summaries."""
+
+    id: str
+    title: str
+    type: str
+    dangling: NotRequired[bool]
+
+
+class TreeNode(TypedDict):
+    """A node in the recursive release/plan tree."""
+
+    issue: dict[str, Any]
+    progress: ProgressDict | None
+    children: list[TreeNode]
+    truncated: NotRequired[bool]
+
+
+class ReleaseSummaryItem(TypedDict):
+    """Shape of each item returned by ``get_releases_summary()``."""
+
+    # Spreads all IssueDict keys plus release-specific enrichments
+    id: str
+    title: str
+    status: str
+    status_category: str
+    priority: int
+    type: str
+    parent_id: str | None
+    assignee: str
+    created_at: ISOTimestamp
+    updated_at: ISOTimestamp
+    closed_at: ISOTimestamp | None
+    description: str
+    notes: str
+    fields: dict[str, Any]
+    labels: list[str]
+    blocks: list[IssueRef]
+    blocked_by: list[IssueRef]
+    is_ready: bool
+    children: list[str]
+    version: str | None
+    target_date: str | None
+    progress: ProgressDict
+    child_summary: ChildSummary
+
+
+class ReleaseTree(TypedDict):
+    """Shape returned by ``get_release_tree()``."""
+
+    release: IssueDict
+    children: list[TreeNode]
 
 
 # ---------------------------------------------------------------------------

@@ -31,10 +31,20 @@ from filigree.types.api import (
     StatsWithPrefix,
     TransitionError,
 )
-from filigree.types.core import FileRecordDict, IssueDict, PaginatedResult, ScanFindingDict
+from filigree.types.core import (
+    BatchDismissResult,
+    FileRecordDict,
+    IssueDict,
+    ObservationDict,
+    ObservationStatsDict,
+    PaginatedResult,
+    PromoteObservationResult,
+    ScanFindingDict,
+)
 from filigree.types.events import EventRecord, EventRecordWithTitle, UndoFailure, UndoSuccess
 from filigree.types.files import (
     CleanStaleResult,
+    EnrichedFileItem,
     FileAssociation,
     FileDetail,
     FileHotspot,
@@ -43,12 +53,15 @@ from filigree.types.files import (
     IssueFileAssociation,
     ScanIngestResult,
     ScanRunRecord,
+    TimelineEntry,
 )
 from filigree.types.planning import (
     CommentRecord,
     CriticalPathNode,
     FlowMetrics,
     PlanTree,
+    ReleaseSummaryItem,
+    ReleaseTree,
     StatsResult,
 )
 from filigree.types.workflow import TemplateInfo, TemplateListItem
@@ -409,6 +422,116 @@ class TestCleanStaleResultShape:
     def test_value_types(self, db: FiligreeDB) -> None:
         result = db.clean_stale_findings(days=30)
         assert isinstance(result["findings_fixed"], int)
+
+
+# ---------------------------------------------------------------------------
+# 1B-2. Observation shape tests
+# ---------------------------------------------------------------------------
+
+
+class TestObservationDictShape:
+    def test_keys_match(self, db: FiligreeDB) -> None:
+        result = db.create_observation("Test obs")
+        hints = get_type_hints(ObservationDict)
+        assert set(result.keys()) == set(hints.keys())
+
+    def test_value_types(self, db: FiligreeDB) -> None:
+        result = db.create_observation("Test obs", file_path="/foo.py", line=10, priority=2)
+        assert isinstance(result["id"], str)
+        assert isinstance(result["summary"], str)
+        assert isinstance(result["priority"], int)
+        assert isinstance(result["created_at"], str)
+
+
+class TestObservationStatsDictShape:
+    def test_keys_match(self, db: FiligreeDB) -> None:
+        result = db.observation_stats()
+        hints = get_type_hints(ObservationStatsDict)
+        assert set(result.keys()) == set(hints.keys())
+
+    def test_value_types(self, db: FiligreeDB) -> None:
+        db.create_observation("Test obs")
+        result = db.observation_stats()
+        assert isinstance(result["count"], int)
+        assert isinstance(result["stale_count"], int)
+        assert isinstance(result["oldest_hours"], float)
+        assert isinstance(result["expiring_soon_count"], int)
+
+
+class TestBatchDismissResultShape:
+    def test_keys_match(self, db: FiligreeDB) -> None:
+        result = db.batch_dismiss_observations([])
+        hints = get_type_hints(BatchDismissResult)
+        assert set(result.keys()) == set(hints.keys())
+
+    def test_value_types(self, db: FiligreeDB) -> None:
+        obs = db.create_observation("Test obs")
+        result = db.batch_dismiss_observations([obs["id"]])
+        assert isinstance(result["dismissed"], int)
+        assert isinstance(result["not_found"], list)
+
+
+class TestPromoteObservationResultShape:
+    def test_keys_match(self, db: FiligreeDB) -> None:
+        obs = db.create_observation("Test obs")
+        result = db.promote_observation(obs["id"])
+        # warnings key is NotRequired — only check required keys
+        assert "issue" in result
+        hints = get_type_hints(PromoteObservationResult)
+        assert set(result.keys()) <= set(hints.keys())
+
+
+# ---------------------------------------------------------------------------
+# 1B-3. Enriched file/timeline shape tests
+# ---------------------------------------------------------------------------
+
+
+class TestEnrichedFileItemShape:
+    def test_keys_match(self, db: FiligreeDB) -> None:
+        db.register_file("/src/main.py", language="python", file_type="source")
+        paginated = db.list_files_paginated(limit=1)
+        assert len(paginated["results"]) >= 1
+        item = paginated["results"][0]
+        hints = get_type_hints(EnrichedFileItem)
+        assert set(item.keys()) == set(hints.keys())
+
+
+class TestTimelineEntryShape:
+    def test_keys_match(self, db: FiligreeDB) -> None:
+        db.register_file("/src/main.py", language="python", file_type="source")
+        db.process_scan_results(
+            scan_source="test",
+            findings=[{"path": "/src/main.py", "rule_id": "R1", "message": "m", "severity": "high"}],
+        )
+        files = db.list_files_paginated(limit=1)
+        file_id = files["results"][0]["id"]
+        timeline = db.get_file_timeline(file_id, limit=1)
+        assert len(timeline["results"]) >= 1
+        entry = timeline["results"][0]
+        hints = get_type_hints(TimelineEntry)
+        assert set(entry.keys()) == set(hints.keys())
+
+
+# ---------------------------------------------------------------------------
+# 1B-4. Release summary shape tests
+# ---------------------------------------------------------------------------
+
+
+class TestReleaseSummaryItemShape:
+    def test_keys_match(self, db: FiligreeDB) -> None:
+        db.create_issue("v1.0.0", type="release", fields={"version": "v1.0.0"})
+        results = db.get_releases_summary()
+        assert len(results) >= 1
+        hints = get_type_hints(ReleaseSummaryItem)
+        assert set(results[0].keys()) == set(hints.keys())
+
+
+class TestReleaseTreeShape:
+    def test_keys_match(self, db: FiligreeDB) -> None:
+        release = db.create_issue("v1.0.0", type="release", fields={"version": "v1.0.0"})
+        result = db.get_release_tree(release.id)
+        hints = get_type_hints(ReleaseTree)
+        assert set(result.keys()) == set(hints.keys())
 
 
 # ---------------------------------------------------------------------------

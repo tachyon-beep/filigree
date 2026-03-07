@@ -15,10 +15,10 @@ from __future__ import annotations
 import logging
 import sqlite3
 from datetime import UTC, datetime, timedelta
-from typing import Any, cast
+from typing import cast
 
 from filigree.db_base import DBMixinProtocol, _now_iso
-from filigree.types.core import ISOTimestamp, ObservationDict, ObservationStatsDict
+from filigree.types.core import BatchDismissResult, ISOTimestamp, ObservationDict, ObservationStatsDict, PromoteObservationResult
 
 logger = logging.getLogger(__name__)
 
@@ -262,7 +262,7 @@ class ObservationsMixin(DBMixinProtocol):
         *,
         actor: str = "",
         reason: str = "",
-    ) -> dict[str, Any]:
+    ) -> BatchDismissResult:
         if not obs_ids:
             return {"dismissed": 0, "not_found": []}
         # Deduplicate in Python to avoid relying on SQL IN dedup behavior
@@ -303,7 +303,7 @@ class ObservationsMixin(DBMixinProtocol):
         title: str | None = None,
         extra_description: str = "",
         actor: str = "",
-    ) -> dict[str, Any]:
+    ) -> PromoteObservationResult:
         # 1. Read observation (don't delete yet)
         row = self.conn.execute("SELECT * FROM observations WHERE id = ?", (obs_id,)).fetchone()
         if row is None:
@@ -370,7 +370,7 @@ class ObservationsMixin(DBMixinProtocol):
             logger.warning(msg, exc_info=True)
             warnings.append(msg)
 
-        result: dict[str, Any] = {"issue": issue}
+        result: PromoteObservationResult = {"issue": issue}
         if warnings:
             result["warnings"] = warnings
         return result

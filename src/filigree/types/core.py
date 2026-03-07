@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Literal, NewType, TypedDict
+from typing import Any, Generic, Literal, NewType, NotRequired, TypedDict, TypeVar
 
 ISOTimestamp = NewType("ISOTimestamp", str)
 
@@ -33,10 +33,18 @@ class ProjectConfig(_ProjectConfigRequired, total=False):
     mode: str
 
 
-class PaginatedResult(TypedDict):
-    """Envelope returned by paginated query methods."""
+_T = TypeVar("_T")
 
-    results: list[dict[str, Any]]
+
+class PaginatedResult(TypedDict, Generic[_T]):
+    """Envelope returned by paginated query methods.
+
+    Generic over the item type: ``PaginatedResult[FileRecordDict]`` etc.
+    Un-parameterised ``PaginatedResult`` is equivalent to ``PaginatedResult[dict[str, Any]]``
+    for backward compatibility.
+    """
+
+    results: list[_T]
     total: int
     limit: int
     offset: int
@@ -115,6 +123,20 @@ class ObservationDict(TypedDict):
     actor: str
     created_at: ISOTimestamp
     expires_at: ISOTimestamp
+
+
+class BatchDismissResult(TypedDict):
+    """Shape contract for batch_dismiss_observations() return value."""
+
+    dismissed: int
+    not_found: list[str]
+
+
+class PromoteObservationResult(TypedDict):
+    """Shape contract for promote_observation() return value."""
+
+    issue: Any  # Issue dataclass — typed as Any to avoid circular import
+    warnings: NotRequired[list[str]]
 
 
 class ObservationStatsDict(TypedDict):

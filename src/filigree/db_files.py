@@ -21,9 +21,10 @@ from filigree.types.files import ScanIngestResult
 
 if TYPE_CHECKING:
     from filigree.core import FileRecord, ScanFinding
-    from filigree.types.core import PaginatedResult
+    from filigree.types.core import PaginatedResult, ScanFindingDict
     from filigree.types.files import (
         CleanStaleResult,
+        EnrichedFileItem,
         FileAssociation,
         FileDetail,
         FileHotspot,
@@ -31,6 +32,7 @@ if TYPE_CHECKING:
         GlobalFindingsStats,
         IssueFileAssociation,
         ScanRunRecord,
+        TimelineEntry,
     )
 
 logger = logging.getLogger(__name__)
@@ -268,7 +270,7 @@ class FilesMixin(DBMixinProtocol):
         scan_source: str | None = None,
         sort: str = "updated_at",
         direction: str | None = None,
-    ) -> PaginatedResult:
+    ) -> PaginatedResult[EnrichedFileItem]:
         """List file records with pagination metadata.
 
         Returns ``{results, total, limit, offset, has_more}``.
@@ -349,7 +351,7 @@ class FilesMixin(DBMixinProtocol):
         )
         rows = self.conn.execute(enriched_sql, [*params, limit, offset]).fetchall()
 
-        results = []
+        results: list[EnrichedFileItem] = []
         for r in rows:
             d: dict[str, Any] = dict(self._build_file_record(r).to_dict())
             d["summary"] = {
@@ -363,7 +365,7 @@ class FilesMixin(DBMixinProtocol):
             }
             d["associations_count"] = r["associations_count"]
             d["observation_count"] = r["observation_count"]
-            results.append(d)
+            results.append(d)  # type: ignore[arg-type]  # dict built incrementally
         return {
             "results": results,
             "total": total,
@@ -922,7 +924,7 @@ class FilesMixin(DBMixinProtocol):
         sort: str = "updated_at",
         limit: int = 100,
         offset: int = 0,
-    ) -> PaginatedResult:
+    ) -> PaginatedResult[ScanFindingDict]:
         """Get scan findings with pagination metadata.
 
         Returns ``{results, total, limit, offset, has_more}``.
@@ -935,7 +937,7 @@ class FilesMixin(DBMixinProtocol):
         ).fetchone()[0]
 
         findings = self.get_findings(file_id, severity=severity, status=status, sort=sort, limit=limit, offset=offset)
-        results: list[dict[str, Any]] = [dict(f.to_dict()) for f in findings]
+        results: list[ScanFindingDict] = [f.to_dict() for f in findings]
         return {
             "results": results,
             "total": total,
@@ -1185,7 +1187,7 @@ class FilesMixin(DBMixinProtocol):
         limit: int = 50,
         offset: int = 0,
         event_type: str | None = None,
-    ) -> PaginatedResult:
+    ) -> PaginatedResult[TimelineEntry]:
         """Build a merged timeline of events for a file.
 
         Assembles entries from scan findings and file associations, sorted
@@ -1218,7 +1220,7 @@ class FilesMixin(DBMixinProtocol):
             [*base_params, limit, offset],
         ).fetchall()
 
-        entries: list[dict[str, Any]] = []
+        entries: list[TimelineEntry] = []
         for r in rows:
             raw = f"{r['type']}:{r['timestamp']}:{r['source_id']}"
             entries.append(

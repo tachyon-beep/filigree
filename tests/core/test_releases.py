@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from filigree.core import FiligreeDB, Issue
-from filigree.db_planning import TreeNode
+from filigree.types.planning import TreeNode
 
 
 def make_release_hierarchy(db: FiligreeDB, *, include_done: bool = False) -> tuple[Issue, Issue, Issue]:
