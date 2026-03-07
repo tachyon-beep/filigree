@@ -977,6 +977,47 @@ class TestCleanStaleFindings:
         eslint = next(fi for fi in findings if fi.scan_source == "eslint")
         assert eslint.status == "unseen_in_latest"
 
+    def test_cleans_when_last_seen_at_is_null(self, db: FiligreeDB) -> None:
+        """coalesce(last_seen_at, updated_at) fallback when last_seen_at is NULL (M13)."""
+        db.process_scan_results(
+            scan_source="ruff",
+            findings=[{"path": "a.py", "rule_id": "E501", "severity": "low", "message": "m"}],
+        )
+        f = db.get_file_by_path("a.py")
+        assert f is not None
+        finding = db.get_findings(f.id)[0]
+        # Set last_seen_at to NULL and updated_at to old date
+        db.conn.execute(
+            "UPDATE scan_findings SET status = 'unseen_in_latest', "
+            "last_seen_at = NULL, updated_at = '2020-01-01T00:00:00+00:00' WHERE id = ?",
+            (finding.id,),
+        )
+        db.conn.commit()
+
+        result = db.clean_stale_findings(days=30)
+        assert result["findings_fixed"] == 1
+        updated = db.get_findings(f.id)[0]
+        assert updated.status == "fixed"
+
+    def test_null_last_seen_at_recent_updated_at_not_cleaned(self, db: FiligreeDB) -> None:
+        """NULL last_seen_at with recent updated_at should NOT be cleaned."""
+        db.process_scan_results(
+            scan_source="ruff",
+            findings=[{"path": "a.py", "rule_id": "E501", "severity": "low", "message": "m"}],
+        )
+        f = db.get_file_by_path("a.py")
+        assert f is not None
+        finding = db.get_findings(f.id)[0]
+        # Set last_seen_at to NULL but keep updated_at recent
+        db.conn.execute(
+            "UPDATE scan_findings SET status = 'unseen_in_latest', last_seen_at = NULL WHERE id = ?",
+            (finding.id,),
+        )
+        db.conn.commit()
+
+        result = db.clean_stale_findings(days=30)
+        assert result["findings_fixed"] == 0
+
 
 class TestGetFindings:
     """Tests for retrieving findings for a file."""

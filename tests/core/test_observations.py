@@ -569,3 +569,49 @@ class TestFileDetailObservations:
         detail = db.get_file_detail(obs2["file_id"])
         # Raw count includes both active and expired observations
         assert detail["observation_count"] == 2
+
+
+# ── M13: observation_stats sweep=False oldest_hours ────────────────────
+
+
+class TestObservationStatsNoSweepOldest:
+    """Verify sweep=False correctly filters the oldest_hours query."""
+
+    def test_oldest_hours_excludes_expired(self, db: FiligreeDB) -> None:
+        """oldest_hours should reflect only non-expired observations when sweep=False."""
+        # Create a very old observation that is expired
+        old_expired = db.create_observation("ancient expired")
+        db.conn.execute(
+            "UPDATE observations SET created_at = '2020-01-01T00:00:00+00:00', expires_at = '2020-02-01T00:00:00+00:00' WHERE id = ?",
+            (old_expired["id"],),
+        )
+        # Create a recent observation that is alive
+        db.create_observation("recent alive")
+        db.conn.commit()
+
+        stats = db.observation_stats(sweep=False)
+        assert stats["count"] == 1
+        # oldest_hours should reflect the recent obs, not the ancient expired one
+        assert stats["oldest_hours"] < 24  # created just now
+
+    def test_expiring_soon_excludes_already_expired(self, db: FiligreeDB) -> None:
+        """expiring_soon_count should not include already-expired observations."""
+        from datetime import UTC, datetime, timedelta
+
+        # Create an obs that expires in 12 hours (expiring soon, alive)
+        soon = db.create_observation("expires soon")
+        soon_expiry = (datetime.now(UTC) + timedelta(hours=12)).isoformat()
+        db.conn.execute(
+            "UPDATE observations SET expires_at = ? WHERE id = ?",
+            (soon_expiry, soon["id"]),
+        )
+        # Create an obs that already expired (should NOT count)
+        expired = db.create_observation("already expired")
+        db.conn.execute(
+            "UPDATE observations SET expires_at = '2020-01-01T00:00:00+00:00' WHERE id = ?",
+            (expired["id"],),
+        )
+        db.conn.commit()
+
+        stats = db.observation_stats(sweep=False)
+        assert stats["expiring_soon_count"] == 1  # only the soon-expiring one

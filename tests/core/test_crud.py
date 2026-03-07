@@ -1573,3 +1573,304 @@ class TestReconnect:
         db.reconnect(check_same_thread=False)
         assert db._conn is None
         assert db._check_same_thread is False
+
+
+# ── M12: import_jsonl error paths ──────────────────────────────────────
+
+
+class TestImportJsonlErrorPaths:
+    """Cover untested import_jsonl error branches (M12)."""
+
+    def test_file_id_conflict_same_id_different_path(self, db: FiligreeDB, tmp_path: Path) -> None:
+        """_resolve_imported_file_id raises ValueError when same ID maps to different path."""
+        # Register a file in the DB
+        fr = db.register_file("src/original.py")
+        file_id = fr.id
+
+        # Build JSONL with same file ID but different path
+        jsonl = tmp_path / "conflict.jsonl"
+        lines = [
+            json.dumps(
+                {
+                    "_type": "file_record",
+                    "id": file_id,
+                    "path": "src/different.py",
+                    "language": "",
+                    "first_seen": "2026-01-01T00:00:00+00:00",
+                    "updated_at": "2026-01-01T00:00:00+00:00",
+                }
+            ),
+        ]
+        jsonl.write_text("\n".join(lines) + "\n")
+
+        with pytest.raises(ValueError, match="Import conflict for file id"):
+            db.import_jsonl(jsonl, merge=True)
+
+    def test_multiple_future_releases_in_import(self, db: FiligreeDB, tmp_path: Path) -> None:
+        """Import with two Future release records raises ValueError."""
+        jsonl = tmp_path / "multi_future.jsonl"
+        lines = [
+            json.dumps(
+                {
+                    "_type": "issue",
+                    "id": "future-1",
+                    "title": "Future",
+                    "type": "release",
+                    "status": "open",
+                    "priority": 4,
+                    "fields": '{"version": "Future"}',
+                }
+            ),
+            json.dumps(
+                {
+                    "_type": "issue",
+                    "id": "future-2",
+                    "title": "Future",
+                    "type": "release",
+                    "status": "open",
+                    "priority": 4,
+                    "fields": '{"version": "Future"}',
+                }
+            ),
+        ]
+        jsonl.write_text("\n".join(lines) + "\n")
+
+        with pytest.raises(ValueError, match="multiple Future release"):
+            db.import_jsonl(jsonl)
+
+    def test_non_reconcilable_future_with_labels(self, db: FiligreeDB, tmp_path: Path) -> None:
+        """Import fails when existing Future has labels (non-reconcilable)."""
+        # Create a Future release in the DB and add a label
+        db.conn.execute(
+            "INSERT INTO issues (id, title, status, priority, type, assignee, "
+            "created_at, updated_at, description, notes, fields) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                "existing-future",
+                "Future",
+                "open",
+                4,
+                "release",
+                "",
+                "2026-01-01T00:00:00+00:00",
+                "2026-01-01T00:00:00+00:00",
+                "",
+                "",
+                '{"version": "Future"}',
+            ),
+        )
+        db.conn.execute("INSERT INTO labels (issue_id, label) VALUES (?, ?)", ("existing-future", "important"))
+        db.conn.commit()
+
+        # Import a different Future release
+        jsonl = tmp_path / "new_future.jsonl"
+        lines = [
+            json.dumps(
+                {
+                    "_type": "issue",
+                    "id": "imported-future",
+                    "title": "Future",
+                    "type": "release",
+                    "status": "open",
+                    "priority": 4,
+                    "fields": '{"version": "Future"}',
+                }
+            ),
+        ]
+        jsonl.write_text("\n".join(lines) + "\n")
+
+        with pytest.raises(ValueError, match="Cannot import Future release"):
+            db.import_jsonl(jsonl)
+
+    def test_non_reconcilable_future_with_comments(self, db: FiligreeDB, tmp_path: Path) -> None:
+        """Import fails when existing Future has comments."""
+        db.conn.execute(
+            "INSERT INTO issues (id, title, status, priority, type, assignee, "
+            "created_at, updated_at, description, notes, fields) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                "existing-future",
+                "Future",
+                "open",
+                4,
+                "release",
+                "",
+                "2026-01-01T00:00:00+00:00",
+                "2026-01-01T00:00:00+00:00",
+                "",
+                "",
+                '{"version": "Future"}',
+            ),
+        )
+        db.conn.execute(
+            "INSERT INTO comments (issue_id, author, text, created_at) VALUES (?, ?, ?, ?)",
+            ("existing-future", "dev", "planning note", "2026-01-01T00:00:00+00:00"),
+        )
+        db.conn.commit()
+
+        jsonl = tmp_path / "new_future.jsonl"
+        lines = [
+            json.dumps(
+                {
+                    "_type": "issue",
+                    "id": "imported-future",
+                    "title": "Future",
+                    "type": "release",
+                    "status": "open",
+                    "priority": 4,
+                    "fields": '{"version": "Future"}',
+                }
+            ),
+        ]
+        jsonl.write_text("\n".join(lines) + "\n")
+
+        with pytest.raises(ValueError, match="Cannot import Future release"):
+            db.import_jsonl(jsonl)
+
+    def test_non_reconcilable_future_with_children(self, db: FiligreeDB, tmp_path: Path) -> None:
+        """Import fails when existing Future has child issues."""
+        db.conn.execute(
+            "INSERT INTO issues (id, title, status, priority, type, assignee, "
+            "created_at, updated_at, description, notes, fields) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                "existing-future",
+                "Future",
+                "open",
+                4,
+                "release",
+                "",
+                "2026-01-01T00:00:00+00:00",
+                "2026-01-01T00:00:00+00:00",
+                "",
+                "",
+                '{"version": "Future"}',
+            ),
+        )
+        # Add a child issue
+        db.conn.execute(
+            "INSERT INTO issues (id, title, status, priority, type, parent_id, assignee, "
+            "created_at, updated_at, description, notes, fields) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                "child-1",
+                "Child task",
+                "open",
+                2,
+                "task",
+                "existing-future",
+                "",
+                "2026-01-01T00:00:00+00:00",
+                "2026-01-01T00:00:00+00:00",
+                "",
+                "",
+                "{}",
+            ),
+        )
+        db.conn.commit()
+
+        jsonl = tmp_path / "new_future.jsonl"
+        lines = [
+            json.dumps(
+                {
+                    "_type": "issue",
+                    "id": "imported-future",
+                    "title": "Future",
+                    "type": "release",
+                    "status": "open",
+                    "priority": 4,
+                    "fields": '{"version": "Future"}',
+                }
+            ),
+        ]
+        jsonl.write_text("\n".join(lines) + "\n")
+
+        with pytest.raises(ValueError, match="Cannot import Future release"):
+            db.import_jsonl(jsonl)
+
+    def test_non_reconcilable_future_with_dependencies(self, db: FiligreeDB, tmp_path: Path) -> None:
+        """Import fails when existing Future has dependencies."""
+        db.conn.execute(
+            "INSERT INTO issues (id, title, status, priority, type, assignee, "
+            "created_at, updated_at, description, notes, fields) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                "existing-future",
+                "Future",
+                "open",
+                4,
+                "release",
+                "",
+                "2026-01-01T00:00:00+00:00",
+                "2026-01-01T00:00:00+00:00",
+                "",
+                "",
+                '{"version": "Future"}',
+            ),
+        )
+        other = db.create_issue("Other task")
+        db.conn.execute(
+            "INSERT INTO dependencies (issue_id, depends_on_id, type, created_at) VALUES (?, ?, ?, ?)",
+            ("existing-future", other.id, "blocks", "2026-01-01T00:00:00+00:00"),
+        )
+        db.conn.commit()
+
+        jsonl = tmp_path / "new_future.jsonl"
+        lines = [
+            json.dumps(
+                {
+                    "_type": "issue",
+                    "id": "imported-future",
+                    "title": "Future",
+                    "type": "release",
+                    "status": "open",
+                    "priority": 4,
+                    "fields": '{"version": "Future"}',
+                }
+            ),
+        ]
+        jsonl.write_text("\n".join(lines) + "\n")
+
+        with pytest.raises(ValueError, match="Cannot import Future release"):
+            db.import_jsonl(jsonl)
+
+    def test_non_reconcilable_future_modified_title(self, db: FiligreeDB, tmp_path: Path) -> None:
+        """Import fails when existing Future has modified title (not 'Future')."""
+        db.conn.execute(
+            "INSERT INTO issues (id, title, status, priority, type, assignee, "
+            "created_at, updated_at, description, notes, fields) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                "existing-future",
+                "Modified Future",
+                "open",
+                4,
+                "release",
+                "",
+                "2026-01-01T00:00:00+00:00",
+                "2026-01-01T00:00:00+00:00",
+                "",
+                "",
+                '{"version": "Future"}',
+            ),
+        )
+        db.conn.commit()
+
+        jsonl = tmp_path / "new_future.jsonl"
+        lines = [
+            json.dumps(
+                {
+                    "_type": "issue",
+                    "id": "imported-future",
+                    "title": "Future",
+                    "type": "release",
+                    "status": "open",
+                    "priority": 4,
+                    "fields": '{"version": "Future"}',
+                }
+            ),
+        ]
+        jsonl.write_text("\n".join(lines) + "\n")
+
+        with pytest.raises(ValueError, match="Cannot import Future release"):
+            db.import_jsonl(jsonl)

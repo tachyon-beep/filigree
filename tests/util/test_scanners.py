@@ -273,6 +273,65 @@ class TestValidateScannerCommand:
         err = validate_scanner_command([BadToken()])  # type: ignore[list-item]
         assert err == "Malformed command token list"
 
+    def test_absolute_executable_valid(self, tmp_path: Path) -> None:
+        """Absolute path to an executable file validates successfully (M6)."""
+        scanner_exec = tmp_path / "my_scanner"
+        scanner_exec.write_text("#!/usr/bin/env bash\nexit 0\n")
+        scanner_exec.chmod(0o755)
+        assert validate_scanner_command(str(scanner_exec)) is None
+
+    def test_absolute_executable_not_executable(self, tmp_path: Path) -> None:
+        """Absolute path to a file without execute bit fails validation (M6)."""
+        scanner_file = tmp_path / "my_scanner"
+        scanner_file.write_text("#!/usr/bin/env bash\nexit 0\n")
+        scanner_file.chmod(0o644)
+        err = validate_scanner_command(str(scanner_file))
+        assert err is not None
+        assert "not found" in err
+
+    def test_absolute_nonexistent_path(self, tmp_path: Path) -> None:
+        """Absolute path to nonexistent file fails validation."""
+        err = validate_scanner_command(str(tmp_path / "nonexistent_scanner"))
+        assert err is not None
+        assert "not found" in err
+
+    def test_malformed_shlex_string(self) -> None:
+        """Malformed shell string (unclosed quote) returns error."""
+        err = validate_scanner_command("echo 'unclosed")
+        assert err is not None
+        assert "Malformed" in err
+
+
+class TestParseTomlOSError:
+    """Tests for _parse_toml OSError handling (M6)."""
+
+    def test_unreadable_file(self, tmp_path: Path) -> None:
+        """_parse_toml returns None and appends error for unreadable file."""
+        from filigree.scanners import _parse_toml
+
+        scanner_file = tmp_path / "broken.toml"
+        scanner_file.write_text("[scanner]\ncommand = 'echo'\n")
+        scanner_file.chmod(0o000)
+
+        errors: list[str] = []
+        result = _parse_toml(scanner_file, errors=errors)
+        assert result is None
+        assert len(errors) == 1
+        assert "failed to read file" in errors[0]
+
+        # Restore permissions for cleanup
+        scanner_file.chmod(0o644)
+
+    def test_nonexistent_file(self, tmp_path: Path) -> None:
+        """_parse_toml returns None for nonexistent file."""
+        from filigree.scanners import _parse_toml
+
+        errors: list[str] = []
+        result = _parse_toml(tmp_path / "does_not_exist.toml", errors=errors)
+        assert result is None
+        assert len(errors) == 1
+        assert "failed to read file" in errors[0]
+
 
 class TestScannerExamples:
     @staticmethod

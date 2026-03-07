@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
-from filigree.core import FiligreeDB, Issue
+from filigree.core import FiligreeDB, Issue, _seed_builtin_packs
 from filigree.types.planning import TreeNode
 
 
@@ -540,3 +542,63 @@ class TestBuildTree:
         tree = db._build_tree(release.id)
         titles = [node["issue"]["title"] for node in tree]
         assert titles == ["High", "Med", "Low"]
+
+
+# ── M6: _seed_future_release and _seed_builtin_packs edge cases ────────
+
+
+class TestSeedFutureReleaseEdgeCases:
+    """Cover untested _seed_future_release paths (M6)."""
+
+    def test_missing_release_type_template_logs_warning(self, release_db: FiligreeDB, caplog: pytest.LogCaptureFixture) -> None:
+        """When release type template is missing, _seed_future_release logs warning and skips."""
+        # Remove the release type template so get_type("release") returns None
+        with (
+            patch.object(release_db.templates, "get_type", return_value=None),
+            caplog.at_level(logging.WARNING, logger="filigree.core"),
+        ):
+            release_db._seed_future_release()
+
+        assert any("Release pack enabled but 'release' type not registered" in r.message for r in caplog.records)
+
+    def test_seed_builtin_packs_returns_type_count(self, tmp_path: Path) -> None:
+        """_seed_builtin_packs returns count of type templates seeded."""
+        import sqlite3
+
+        from filigree.db_base import _now_iso
+        from filigree.db_schema import SCHEMA_SQL
+
+        db_path = tmp_path / "count_test.db"
+        conn = sqlite3.connect(str(db_path))
+        conn.row_factory = sqlite3.Row
+        conn.executescript(SCHEMA_SQL)
+
+        count = _seed_builtin_packs(conn, _now_iso())
+        assert isinstance(count, int)
+        assert count > 0  # should seed at least the core types
+
+        # Verify the count matches actual rows inserted
+        actual = conn.execute("SELECT COUNT(*) FROM type_templates").fetchone()[0]
+        assert count == actual
+        conn.close()
+
+    def test_seed_builtin_packs_idempotent(self, tmp_path: Path) -> None:
+        """Calling _seed_builtin_packs twice returns same count (INSERT OR REPLACE)."""
+        import sqlite3
+
+        from filigree.db_base import _now_iso
+        from filigree.db_schema import SCHEMA_SQL
+
+        db_path = tmp_path / "idempotent_test.db"
+        conn = sqlite3.connect(str(db_path))
+        conn.row_factory = sqlite3.Row
+        conn.executescript(SCHEMA_SQL)
+
+        now = _now_iso()
+        count1 = _seed_builtin_packs(conn, now)
+        count2 = _seed_builtin_packs(conn, now)
+        assert count1 == count2
+
+        actual = conn.execute("SELECT COUNT(*) FROM type_templates").fetchone()[0]
+        assert actual == count1
+        conn.close()

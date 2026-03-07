@@ -13,11 +13,13 @@ import pytest
 
 from filigree.core import DB_FILENAME, FiligreeDB
 from filigree.hooks import (
+    CONTEXT_TITLE_MAX_LEN,
     READY_CAP,
     _build_context,
     _check_instructions_freshness,
     _extract_marker_hash,
     _is_port_listening,
+    _sanitize_context_title,
     ensure_dashboard_running,
     generate_session_context,
 )
@@ -792,3 +794,61 @@ class TestFreshnessCheckLogLevel:
             pytest.raises(RuntimeError, match="boom"),
         ):
             generate_session_context()
+
+
+# ── M6: _sanitize_context_title ────────────────────────────────────────
+
+
+class TestSanitizeContextTitle:
+    """Direct tests for _sanitize_context_title (M6)."""
+
+    def test_normal_string_passes_through(self) -> None:
+        assert _sanitize_context_title("Fix the bug") == "Fix the bug"
+
+    def test_empty_string_returns_untitled(self) -> None:
+        assert _sanitize_context_title("") == "(untitled)"
+
+    def test_none_returns_untitled(self) -> None:
+        assert _sanitize_context_title(None) == "(untitled)"  # type: ignore[arg-type]
+
+    def test_whitespace_only_returns_untitled(self) -> None:
+        assert _sanitize_context_title("   \t\n  ") == "(untitled)"
+
+    def test_newlines_collapsed(self) -> None:
+        assert _sanitize_context_title("line1\nline2\nline3") == "line1 line2 line3"
+
+    def test_tabs_collapsed(self) -> None:
+        assert _sanitize_context_title("col1\tcol2\tcol3") == "col1 col2 col3"
+
+    def test_carriage_return_collapsed(self) -> None:
+        assert _sanitize_context_title("a\r\nb") == "a b"
+
+    def test_multiple_spaces_collapsed(self) -> None:
+        assert _sanitize_context_title("too    many     spaces") == "too many spaces"
+
+    def test_control_characters_removed(self) -> None:
+        assert (
+            _sanitize_context_title("hello\x00world\x07test") == "helloworld test"
+            or _sanitize_context_title("hello\x00world\x07test") == "helloworldtest"
+        )
+        # Just verify no control chars remain
+        result = _sanitize_context_title("hello\x00world")
+        assert all(ch.isprintable() for ch in result)
+
+    def test_truncation_at_160_chars(self) -> None:
+        long_title = "A" * 200
+        result = _sanitize_context_title(long_title)
+        assert len(result) == CONTEXT_TITLE_MAX_LEN
+        assert result.endswith("...")
+
+    def test_exactly_160_chars_not_truncated(self) -> None:
+        exact_title = "B" * CONTEXT_TITLE_MAX_LEN
+        result = _sanitize_context_title(exact_title)
+        assert result == exact_title
+        assert len(result) == CONTEXT_TITLE_MAX_LEN
+
+    def test_161_chars_truncated(self) -> None:
+        title = "C" * (CONTEXT_TITLE_MAX_LEN + 1)
+        result = _sanitize_context_title(title)
+        assert len(result) == CONTEXT_TITLE_MAX_LEN
+        assert result == "C" * (CONTEXT_TITLE_MAX_LEN - 3) + "..."

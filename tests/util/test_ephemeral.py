@@ -545,6 +545,98 @@ class TestReadOsCommandLine:
         assert result is None
 
 
+class TestReadOsCommandLineWmic:
+    """M6: tests for _read_os_command_line Windows wmic branch."""
+
+    @staticmethod
+    def _make_noproc_path_factory(tmp_path: Path) -> object:
+        _orig_path = Path
+
+        def _factory(*args: object, **kwargs: object) -> Path:
+            if args == ("/proc",):
+                return _orig_path(str(tmp_path / "no-proc"))
+            return _orig_path(*args, **kwargs)  # type: ignore[arg-type]
+
+        return _factory
+
+    def test_wmic_success_parses_command_line(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """wmic output with CommandLine= line is parsed correctly."""
+        import subprocess as _subprocess
+
+        monkeypatch.setattr("filigree.ephemeral.Path", self._make_noproc_path_factory(tmp_path))
+        monkeypatch.setattr("filigree.ephemeral.sys.platform", "win32")
+
+        fake_result = _subprocess.CompletedProcess(
+            args=["wmic"],
+            returncode=0,
+            stdout="\r\nCommandLine=python -m filigree dashboard --port 8377\r\n\r\n",
+            stderr="",
+        )
+        monkeypatch.setattr("filigree.ephemeral.subprocess.run", lambda *a, **kw: fake_result)
+
+        result = _read_os_command_line(12345)
+        assert result == ["python", "-m", "filigree", "dashboard", "--port", "8377"]
+
+    def test_wmic_nonzero_returncode_returns_none(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """wmic returning non-zero exit code returns None."""
+        import subprocess as _subprocess
+
+        monkeypatch.setattr("filigree.ephemeral.Path", self._make_noproc_path_factory(tmp_path))
+        monkeypatch.setattr("filigree.ephemeral.sys.platform", "win32")
+
+        fake_result = _subprocess.CompletedProcess(args=["wmic"], returncode=1, stdout="", stderr="error")
+        monkeypatch.setattr("filigree.ephemeral.subprocess.run", lambda *a, **kw: fake_result)
+
+        result = _read_os_command_line(12345)
+        assert result is None
+
+    def test_wmic_oserror_returns_none(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """OSError from wmic subprocess returns None."""
+        monkeypatch.setattr("filigree.ephemeral.Path", self._make_noproc_path_factory(tmp_path))
+        monkeypatch.setattr("filigree.ephemeral.sys.platform", "win32")
+
+        def _raise_oserror(*args: object, **kwargs: object) -> None:
+            raise OSError("wmic not found")
+
+        monkeypatch.setattr("filigree.ephemeral.subprocess.run", _raise_oserror)
+
+        result = _read_os_command_line(12345)
+        assert result is None
+
+    def test_wmic_no_commandline_in_output_returns_none(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """wmic output without CommandLine= prefix returns None."""
+        import subprocess as _subprocess
+
+        monkeypatch.setattr("filigree.ephemeral.Path", self._make_noproc_path_factory(tmp_path))
+        monkeypatch.setattr("filigree.ephemeral.sys.platform", "win32")
+
+        fake_result = _subprocess.CompletedProcess(args=["wmic"], returncode=0, stdout="No Instance(s) Available.\r\n", stderr="")
+        monkeypatch.setattr("filigree.ephemeral.subprocess.run", lambda *a, **kw: fake_result)
+
+        result = _read_os_command_line(12345)
+        assert result is None
+
+    def test_wmic_shlex_error_returns_raw(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """wmic CommandLine= with unparseable value falls back to raw string."""
+        import subprocess as _subprocess
+
+        monkeypatch.setattr("filigree.ephemeral.Path", self._make_noproc_path_factory(tmp_path))
+        monkeypatch.setattr("filigree.ephemeral.sys.platform", "win32")
+
+        # Unclosed quote triggers shlex.split ValueError
+        fake_result = _subprocess.CompletedProcess(
+            args=["wmic"],
+            returncode=0,
+            stdout='CommandLine=python -c "unclosed\r\n',
+            stderr="",
+        )
+        monkeypatch.setattr("filigree.ephemeral.subprocess.run", lambda *a, **kw: fake_result)
+
+        result = _read_os_command_line(12345)
+        assert result is not None
+        assert len(result) == 1  # raw string in a list
+
+
 class TestLegacyCleanup:
     def test_cleanup_legacy_tmp_files_ignores_permission_errors(self, monkeypatch: pytest.MonkeyPatch) -> None:
         calls: list[str] = []
