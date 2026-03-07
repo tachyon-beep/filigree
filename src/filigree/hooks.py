@@ -262,7 +262,11 @@ def ensure_dashboard_running(port: int | None = None) -> str:
     except FileNotFoundError:
         return ""
 
-    mode = get_mode(filigree_dir)
+    try:
+        mode = get_mode(filigree_dir)
+    except ValueError:
+        logger.warning("Invalid mode in config, falling back to ethereal", exc_info=True)
+        mode = "ethereal"
 
     if mode == "server":
         return _ensure_dashboard_server_mode(filigree_dir, port)

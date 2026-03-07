@@ -455,6 +455,21 @@ class TestClaimNextExhaustion:
         mock_logger.warning.assert_called_once()
         assert "failed to claim" in str(mock_logger.warning.call_args)
 
+    def test_claim_next_skips_deleted_issue(self, db: FiligreeDB) -> None:
+        """Bug filigree-e55da01144: KeyError from deleted issue must be caught, not propagated."""
+        db.create_issue("Target")
+
+        # Simulate claim_issue raising KeyError (issue deleted between get_ready and claim)
+        with (
+            patch.object(db, "claim_issue", side_effect=KeyError("Issue not found: test-abc")),
+            patch("filigree.db_issues.logger") as mock_logger,
+        ):
+            result = db.claim_next("agent2")
+
+        assert result is None
+        mock_logger.warning.assert_called_once()
+        assert "failed to claim" in str(mock_logger.warning.call_args)
+
 
 class TestClaimRaceCondition:
     """Bug fix: filigree-be24de — claim_issue race condition."""
@@ -1392,6 +1407,52 @@ class TestCloseCommitsPending:
             db.__exit__(None, None, None)
 
         assert db._conn is None
+
+    def test_context_manager_rolls_back_on_exception(self, tmp_path: Path) -> None:
+        """Bug filigree-c4bc03b6ba: __exit__ must rollback, not commit, when with-block raised.
+
+        Simulates a future code path that does writes without explicit commit.
+        Without the fix, close() would commit partial state on exception exit.
+        """
+        db_path = tmp_path / "ctx-rollback.db"
+
+        with FiligreeDB(db_path, prefix="test") as db:
+            db.initialize()
+            db.create_issue(title="baseline", type="task")
+
+        # Simulate uncommitted writes followed by an exception
+        db2 = FiligreeDB(db_path, prefix="test")
+        try:
+            with db2:
+                # Raw INSERT without commit — simulates a future code path
+                # that does partial writes before an error
+                db2.conn.execute(
+                    "INSERT INTO issues (id, title, status, priority, type, assignee,"
+                    " created_at, updated_at, description, notes, fields)"
+                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        "test-uncommitted",
+                        "uncommitted write",
+                        "open",
+                        2,
+                        "task",
+                        "",
+                        "2026-01-01T00:00:00",
+                        "2026-01-01T00:00:00",
+                        "",
+                        "",
+                        "{}",
+                    ),
+                )
+                raise RuntimeError("simulated failure mid-operation")
+        except RuntimeError:
+            pass
+
+        # The uncommitted row should NOT be persisted
+        db3 = FiligreeDB(db_path, prefix="test")
+        row = db3.conn.execute("SELECT id FROM issues WHERE id = 'test-uncommitted'").fetchone()
+        assert row is None, "uncommitted write was persisted — __exit__ should have rolled back"
+        db3.close()
 
 
 class TestReconnect:

@@ -254,6 +254,52 @@ class TestEnsureDashboardSubprocessVerification:
         assert "started" not in result.lower()
 
 
+class TestEnsureDashboardGetModeError:
+    """Bug filigree-c765b98e9c: ensure_dashboard_running must catch ValueError from get_mode()."""
+
+    def test_invalid_mode_falls_back_to_ethereal(self, tmp_path: Path) -> None:
+        """Corrupt config.json with invalid mode should not crash the hook lifecycle."""
+        mock_proc = MagicMock()
+        mock_proc.poll.return_value = None
+        mock_proc.pid = 11111
+
+        with (
+            patch("filigree.hooks.find_filigree_root", return_value=tmp_path),
+            patch("filigree.hooks.get_mode", side_effect=ValueError("Unknown mode 'bogus'")),
+            patch("filigree.hooks._is_port_listening", return_value=False),
+            patch("filigree.hooks.subprocess.Popen", return_value=mock_proc),
+            patch("filigree.hooks.find_filigree_command", return_value=["/usr/bin/filigree"]),
+            patch("filigree.hooks.time.sleep"),
+            patch.dict(os.environ, {"TMPDIR": str(tmp_path)}),
+        ):
+            result = ensure_dashboard_running()
+
+        # Should not crash — falls back to ethereal mode and spawns
+        assert result != ""
+
+    def test_invalid_mode_logs_warning(self, tmp_path: Path) -> None:
+        """Invalid mode should produce a warning log."""
+        mock_proc = MagicMock()
+        mock_proc.poll.return_value = None
+        mock_proc.pid = 11111
+
+        with (
+            patch("filigree.hooks.find_filigree_root", return_value=tmp_path),
+            patch("filigree.hooks.get_mode", side_effect=ValueError("Unknown mode 'bogus'")),
+            patch("filigree.hooks._is_port_listening", return_value=False),
+            patch("filigree.hooks.subprocess.Popen", return_value=mock_proc),
+            patch("filigree.hooks.find_filigree_command", return_value=["/usr/bin/filigree"]),
+            patch("filigree.hooks.time.sleep"),
+            patch("filigree.hooks.logger") as mock_logger,
+            patch.dict(os.environ, {"TMPDIR": str(tmp_path)}),
+        ):
+            ensure_dashboard_running()
+
+        mock_logger.warning.assert_called_once()
+        # exc_info=True ensures the actual ValueError is logged for diagnosis
+        assert mock_logger.warning.call_args.kwargs.get("exc_info") is True
+
+
 class TestExtractMarkerHash:
     def test_extracts_hash_from_versioned_marker(self) -> None:
         content = "before\n<!-- filigree:instructions:v1.2.0:abc12345 -->\nstuff\n<!-- /filigree:instructions -->"

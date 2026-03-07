@@ -380,7 +380,10 @@ class FiligreeDB(FilesMixin, IssuesMixin, EventsMixin, WorkflowMixin, MetaMixin,
     def __enter__(self) -> FiligreeDB:
         return self
 
-    def __exit__(self, *exc: object) -> None:
+    def __exit__(self, exc_type: type[BaseException] | None, *exc: object) -> None:
+        if exc_type is not None and self._conn is not None:
+            with contextlib.suppress(Exception):
+                self._conn.rollback()
         self.close()
 
     @property

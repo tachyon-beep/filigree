@@ -720,10 +720,10 @@ class IssuesMixin(DBMixinProtocol):
                 continue
             try:
                 return self.claim_issue(issue.id, assignee=assignee, actor=actor or assignee)
-            except ValueError as exc:
+            except (ValueError, KeyError) as exc:
                 skipped += 1
                 logger.debug("claim_next: skipping %s: %s", issue.id, exc)
-                continue  # Race condition or status mismatch
+                continue  # Race condition, status mismatch, or deleted issue
         if skipped:
             logger.warning("claim_next: all %d candidate(s) failed to claim for '%s'", skipped, assignee)
         return None
