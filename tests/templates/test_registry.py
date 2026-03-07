@@ -2226,3 +2226,262 @@ class TestTemplateEngineValidationCluster:
         assert any("non-string" in m.lower() or "42" in m for m in warning_msgs), (
             f"Expected warning about dropped non-string entries, got: {warning_msgs}"
         )
+
+
+# ===========================================================================
+# H8: BFS unreachable state detection + MAX_TRANSITIONS/MAX_FIELDS limits
+# (filigree-9c1f0ae66c)
+# ===========================================================================
+
+
+class TestBFSUnreachableStateDetection:
+    """validate_type_template BFS must catch states unreachable from initial_state."""
+
+    def test_unreachable_state_detected(self) -> None:
+        """A state with no incoming transitions from the reachable graph is caught."""
+        tpl = TypeTemplate(
+            type="test_type",
+            display_name="Test",
+            description="",
+            pack="test",
+            states=(
+                StateDefinition(name="open", category="open"),
+                StateDefinition(name="in_progress", category="wip"),
+                StateDefinition(name="island", category="wip"),  # unreachable
+                StateDefinition(name="closed", category="done"),
+            ),
+            initial_state="open",
+            transitions=(
+                TransitionDefinition(from_state="open", to_state="in_progress", enforcement="soft"),
+                TransitionDefinition(from_state="in_progress", to_state="closed", enforcement="soft"),
+                # island has no incoming transition
+                TransitionDefinition(from_state="island", to_state="closed", enforcement="soft"),
+            ),
+            fields_schema=(),
+        )
+        errors = TemplateRegistry.validate_type_template(tpl)
+        assert any("island" in e and "unreachable" in e for e in errors)
+
+    def test_multiple_unreachable_states_all_reported(self) -> None:
+        """All unreachable states should appear in errors, not just the first."""
+        tpl = TypeTemplate(
+            type="test_type",
+            display_name="Test",
+            description="",
+            pack="test",
+            states=(
+                StateDefinition(name="open", category="open"),
+                StateDefinition(name="orphan_a", category="wip"),
+                StateDefinition(name="orphan_b", category="wip"),
+                StateDefinition(name="closed", category="done"),
+            ),
+            initial_state="open",
+            transitions=(
+                TransitionDefinition(from_state="open", to_state="closed", enforcement="soft"),
+                TransitionDefinition(from_state="orphan_a", to_state="orphan_b", enforcement="soft"),
+            ),
+            fields_schema=(),
+        )
+        errors = TemplateRegistry.validate_type_template(tpl)
+        unreachable_errors = [e for e in errors if "unreachable" in e]
+        unreachable_names = {e.split("'")[1] for e in unreachable_errors}
+        assert unreachable_names == {"orphan_a", "orphan_b"}
+
+    def test_all_reachable_no_error(self) -> None:
+        """A fully connected graph should produce no unreachable errors."""
+        tpl = TypeTemplate(
+            type="test_type",
+            display_name="Test",
+            description="",
+            pack="test",
+            states=(
+                StateDefinition(name="open", category="open"),
+                StateDefinition(name="review", category="wip"),
+                StateDefinition(name="closed", category="done"),
+            ),
+            initial_state="open",
+            transitions=(
+                TransitionDefinition(from_state="open", to_state="review", enforcement="soft"),
+                TransitionDefinition(from_state="review", to_state="closed", enforcement="soft"),
+            ),
+            fields_schema=(),
+        )
+        errors = TemplateRegistry.validate_type_template(tpl)
+        assert not any("unreachable" in e for e in errors)
+
+
+class TestDoSLimits:
+    """MAX_TRANSITIONS and MAX_FIELDS DoS prevention limits must be enforced at parse time."""
+
+    def test_parse_rejects_too_many_transitions(self) -> None:
+        """Templates exceeding MAX_TRANSITIONS (200) should be rejected."""
+        # Use a small set of states with many transitions between them
+        states = [{"name": f"s{i}", "category": "wip"} for i in range(15)]
+        states[0]["category"] = "open"
+        # 15 states => 15*14=210 possible directed pairs, generate 201
+        transitions = []
+        for i in range(15):
+            for j in range(15):
+                if i != j and len(transitions) < 201:
+                    transitions.append({"from": f"s{i}", "to": f"s{j}", "enforcement": "soft"})
+        raw = {
+            "type": "huge",
+            "display_name": "Huge",
+            "description": "Too many transitions",
+            "states": states,
+            "initial_state": "s0",
+            "transitions": transitions,
+            "fields_schema": [],
+        }
+        with pytest.raises(ValueError, match="201 transitions"):
+            TemplateRegistry.parse_type_template(raw)
+
+    def test_parse_accepts_transitions_at_limit(self) -> None:
+        """Exactly MAX_TRANSITIONS (200) should be accepted."""
+        states = [{"name": f"s{i}", "category": "wip"} for i in range(15)]
+        states[0]["category"] = "open"
+        transitions = []
+        for i in range(15):
+            for j in range(15):
+                if i != j and len(transitions) < 200:
+                    transitions.append({"from": f"s{i}", "to": f"s{j}", "enforcement": "soft"})
+        raw = {
+            "type": "big",
+            "display_name": "Big",
+            "description": "At limit",
+            "states": states,
+            "initial_state": "s0",
+            "transitions": transitions,
+            "fields_schema": [],
+        }
+        # Should not raise — 200 is exactly at the limit
+        tpl = TemplateRegistry.parse_type_template(raw)
+        assert len(tpl.transitions) == 200
+
+    def test_parse_rejects_too_many_fields(self) -> None:
+        """Templates exceeding MAX_FIELDS (50) should be rejected."""
+        raw = {
+            "type": "huge",
+            "display_name": "Huge",
+            "description": "Too many fields",
+            "states": [
+                {"name": "open", "category": "open"},
+                {"name": "closed", "category": "done"},
+            ],
+            "initial_state": "open",
+            "transitions": [],
+            "fields_schema": [{"name": f"f{i}", "type": "text"} for i in range(51)],
+        }
+        with pytest.raises(ValueError, match="51 fields"):
+            TemplateRegistry.parse_type_template(raw)
+
+    def test_parse_accepts_fields_at_limit(self) -> None:
+        """Exactly MAX_FIELDS (50) should be accepted."""
+        raw = {
+            "type": "big",
+            "display_name": "Big",
+            "description": "At limit",
+            "states": [
+                {"name": "open", "category": "open"},
+                {"name": "closed", "category": "done"},
+            ],
+            "initial_state": "open",
+            "transitions": [],
+            "fields_schema": [{"name": f"f{i}", "type": "text"} for i in range(50)],
+        }
+        tpl = TemplateRegistry.parse_type_template(raw)
+        assert len(tpl.fields_schema) == 50
+
+
+# ===========================================================================
+# L2: Reverse-reachability — states must be able to reach a done state
+# (filigree-d6ade2d45b)
+# ===========================================================================
+
+
+class TestReverseReachability:
+    """check_type_template_quality should warn if reachable states cannot reach done."""
+
+    def test_cycle_without_exit_to_done_warned(self) -> None:
+        """States stuck in a cycle (review<->revise) with no path to done produce a warning."""
+        tpl = TypeTemplate(
+            type="test_type",
+            display_name="Test",
+            description="",
+            pack="test",
+            states=(
+                StateDefinition(name="open", category="open"),
+                StateDefinition(name="review", category="wip"),
+                StateDefinition(name="revise", category="wip"),
+                StateDefinition(name="closed", category="done"),
+            ),
+            initial_state="open",
+            transitions=(
+                TransitionDefinition(from_state="open", to_state="review", enforcement="soft"),
+                TransitionDefinition(from_state="review", to_state="revise", enforcement="soft"),
+                TransitionDefinition(from_state="revise", to_state="review", enforcement="soft"),
+                # open->closed exists, but review/revise cannot reach closed
+                TransitionDefinition(from_state="open", to_state="closed", enforcement="soft"),
+            ),
+            fields_schema=(),
+        )
+        warnings = TemplateRegistry.check_type_template_quality(tpl)
+        stuck = [w for w in warnings if "cannot reach" in w and "done" in w]
+        assert len(stuck) >= 1
+        stuck_names = {w.split("'")[1] for w in stuck}
+        assert stuck_names == {"review", "revise"}
+
+    def test_all_states_can_reach_done_no_warning(self) -> None:
+        """A well-formed workflow where all states can reach done produces no warning."""
+        tpl = TypeTemplate(
+            type="test_type",
+            display_name="Test",
+            description="",
+            pack="test",
+            states=(
+                StateDefinition(name="open", category="open"),
+                StateDefinition(name="review", category="wip"),
+                StateDefinition(name="closed", category="done"),
+            ),
+            initial_state="open",
+            transitions=(
+                TransitionDefinition(from_state="open", to_state="review", enforcement="soft"),
+                TransitionDefinition(from_state="review", to_state="closed", enforcement="soft"),
+            ),
+            fields_schema=(),
+        )
+        warnings = TemplateRegistry.check_type_template_quality(tpl)
+        stuck = [w for w in warnings if "cannot reach" in w and "done" in w]
+        assert stuck == []
+
+    def test_done_states_themselves_not_flagged(self) -> None:
+        """Done-category states should not be flagged as unable to reach done."""
+        tpl = TypeTemplate(
+            type="test_type",
+            display_name="Test",
+            description="",
+            pack="test",
+            states=(
+                StateDefinition(name="open", category="open"),
+                StateDefinition(name="closed", category="done"),
+                StateDefinition(name="wont_fix", category="done"),
+            ),
+            initial_state="open",
+            transitions=(
+                TransitionDefinition(from_state="open", to_state="closed", enforcement="soft"),
+                TransitionDefinition(from_state="open", to_state="wont_fix", enforcement="soft"),
+            ),
+            fields_schema=(),
+        )
+        warnings = TemplateRegistry.check_type_template_quality(tpl)
+        stuck = [w for w in warnings if "cannot reach" in w and "done" in w]
+        assert stuck == []
+
+    def test_builtin_types_all_reach_done(self) -> None:
+        """All built-in pack types should have full reverse-reachability to done."""
+        for pack_name, pack_data in BUILT_IN_PACKS.items():
+            for type_name, type_raw in pack_data["types"].items():
+                tpl = TemplateRegistry.parse_type_template(type_raw)
+                warnings = TemplateRegistry.check_type_template_quality(tpl)
+                stuck = [w for w in warnings if "cannot reach" in w and "done" in w]
+                assert stuck == [], f"Built-in {pack_name}/{type_name} has states that cannot reach done: {stuck}"

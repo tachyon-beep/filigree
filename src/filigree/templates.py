@@ -474,6 +474,36 @@ class TemplateRegistry:
                 cat = next(st.category for st in tpl.states if st.name == s)
                 warnings.append(f"state '{s}' (category={cat}) has no outgoing transitions (dead end)")
 
+        # Reverse-reachability: all non-done reachable states should be able
+        # to reach at least one done-category state (filigree-d6ade2d45b).
+        # Without this, states can be reachable from initial_state but stuck
+        # in cycles (e.g. review⇄revise) with no exit to completion.
+        if done_states:
+            # BFS backwards from all done states
+            can_reach_done: set[str] = set(done_states)
+            queue_rev = list(done_states)
+            while queue_rev:
+                current = queue_rev.pop(0)
+                for t in tpl.transitions:
+                    if t.to_state == current and t.from_state not in can_reach_done:
+                        can_reach_done.add(t.from_state)
+                        queue_rev.append(t.from_state)
+            # Only warn about non-done states that are reachable from initial
+            # but cannot reach any done state
+            reachable_fwd: set[str] = set()
+            queue_fwd = [tpl.initial_state] if tpl.initial_state in state_names else []
+            while queue_fwd:
+                current = queue_fwd.pop(0)
+                if current in reachable_fwd:
+                    continue
+                reachable_fwd.add(current)
+                for t in tpl.transitions:
+                    if t.from_state == current and t.to_state not in reachable_fwd:
+                        queue_fwd.append(t.to_state)
+            stuck = (reachable_fwd - done_states) - can_reach_done
+            for s in sorted(stuck):
+                warnings.append(f"state '{s}' cannot reach any done-category state (stuck in cycle)")
+
         # Done-states with outgoing transitions to other done states are
         # unreachable: close_issue() treats done-category as "already closed",
         # so done→done transitions can never fire.  Done→non-done transitions
