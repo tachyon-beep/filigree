@@ -145,10 +145,10 @@ class EventsMixin(DBMixinProtocol):
         event_type = row["event_type"]
         event_id = row["id"]
 
-        # Check if this event was already undone (a newer 'undone' event exists)
+        # Check if this event was already undone (an 'undone' event references it)
         already_undone = self.conn.execute(
-            "SELECT 1 FROM events WHERE issue_id = ? AND event_type = 'undone' AND (created_at > ? OR (created_at = ? AND id > ?))",
-            (issue_id, row["created_at"], row["created_at"], event_id),
+            "SELECT 1 FROM events WHERE issue_id = ? AND event_type = 'undone' AND new_value = ?",
+            (issue_id, str(event_id)),
         ).fetchone()
         if already_undone:
             return {"undone": False, "reason": "Most recent reversible event already undone"}

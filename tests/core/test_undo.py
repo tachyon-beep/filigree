@@ -409,3 +409,25 @@ class TestUndoFields:
         assert result["undone"] is True
         restored = db.get_issue(issue.id)
         assert restored.fields == {}
+
+    def test_double_undo_same_event_by_event_id(self, db: FiligreeDB) -> None:
+        """Two rapid undo calls must not both succeed for the same event.
+
+        Regression: old check used timestamp comparison which was racy.
+        New check uses event ID linkage (undone event's new_value = target event ID).
+        """
+        issue = db.create_issue("Test")
+        db.update_issue(issue.id, status="in_progress", actor="t")
+        first = db.undo_last(issue.id, actor="t")
+        assert first["undone"] is True
+        # The undone event's new_value should be the event_id of the status_changed event
+        undone_events = db.conn.execute(
+            "SELECT new_value FROM events WHERE issue_id = ? AND event_type = 'undone'",
+            (issue.id,),
+        ).fetchall()
+        assert len(undone_events) == 1
+        assert undone_events[0]["new_value"] == str(first["event_id"])
+        # Second undo must be blocked
+        second = db.undo_last(issue.id, actor="t")
+        assert second["undone"] is False
+        assert "already undone" in second["reason"]

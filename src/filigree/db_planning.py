@@ -101,13 +101,13 @@ class PlanningMixin(DBMixinProtocol):
         return False
 
     def remove_dependency(self, issue_id: str, depends_on_id: str, *, actor: str = "") -> bool:
-        cursor = self.conn.execute(
-            "DELETE FROM dependencies WHERE issue_id = ? AND depends_on_id = ?",
-            (issue_id, depends_on_id),
-        )
-        if cursor.rowcount == 0:
-            return False  # Nothing to remove
         try:
+            cursor = self.conn.execute(
+                "DELETE FROM dependencies WHERE issue_id = ? AND depends_on_id = ?",
+                (issue_id, depends_on_id),
+            )
+            if cursor.rowcount == 0:
+                return False  # Nothing to remove
             self._record_event(issue_id, "dependency_removed", actor=actor, old_value=depends_on_id)
             self.conn.commit()
         except Exception:

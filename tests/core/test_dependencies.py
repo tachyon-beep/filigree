@@ -317,3 +317,20 @@ class TestDependencyEdgeCases:
             (a.id,),
         ).fetchone()[0]
         assert events_after == events_before
+
+    def test_remove_dependency_rolls_back_on_event_failure(self, db: FiligreeDB, monkeypatch: pytest.MonkeyPatch) -> None:
+        """If _record_event fails, the DELETE must also be rolled back."""
+        a = db.create_issue("A")
+        b = db.create_issue("B")
+        db.add_dependency(a.id, b.id)
+
+        def _boom(*args: object, **kwargs: object) -> None:
+            raise RuntimeError("event recording failed")
+
+        monkeypatch.setattr(db, "_record_event", _boom)
+        with pytest.raises(RuntimeError, match="event recording failed"):
+            db.remove_dependency(a.id, b.id)
+
+        # Dependency must still exist — DELETE was rolled back
+        deps = db.get_all_dependencies()
+        assert any(d["from"] == a.id and d["to"] == b.id for d in deps)

@@ -517,8 +517,8 @@ class IssuesMixin(DBMixinProtocol):
                         old_value=json.dumps(current.fields),
                         new_value=json.dumps(merged),
                     )
-                updates.append("fields = ?")
-                params.append(json.dumps(merged))
+                    updates.append("fields = ?")
+                    params.append(json.dumps(merged))
 
             if updates:
                 updates.append("updated_at = ?")

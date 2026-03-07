@@ -51,6 +51,16 @@ class TestRegisterFile:
         f2 = db.register_file("src/main.py", language="python")
         assert f2.language == "python"
 
+    def test_register_duplicate_no_changes_preserves_updated_at(self, db: FiligreeDB) -> None:
+        """Re-registering with no new data must not bump updated_at.
+
+        Regression: unconditional updated_at write caused phantom updates.
+        """
+        f1 = db.register_file("src/stable.py", language="python")
+        original_updated = f1.updated_at
+        f2 = db.register_file("src/stable.py")
+        assert f2.updated_at == original_updated
+
     def test_get_file_by_id(self, db: FiligreeDB) -> None:
         created = db.register_file("src/main.py", language="python")
         fetched = db.get_file(created.id)

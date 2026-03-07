@@ -262,6 +262,23 @@ class TestUpdateIssuePaths:
         updated = db.update_issue(issue.id)
         assert updated.title == "No change"
 
+    def test_update_fields_identical_no_event(self, db: FiligreeDB) -> None:
+        """Passing identical fields should not record an event or bump updated_at.
+
+        Regression: fields update was always appended outside the change guard.
+        """
+        issue = db.create_issue("Fields stable", fields={"a": "1"})
+        events_before = db.conn.execute(
+            "SELECT COUNT(*) FROM events WHERE issue_id = ? AND event_type = 'fields_changed'",
+            (issue.id,),
+        ).fetchone()[0]
+        db.update_issue(issue.id, fields={"a": "1"})
+        events_after = db.conn.execute(
+            "SELECT COUNT(*) FROM events WHERE issue_id = ? AND event_type = 'fields_changed'",
+            (issue.id,),
+        ).fetchone()[0]
+        assert events_after == events_before
+
     def test_update_nonexistent_raises(self, db: FiligreeDB) -> None:
         with pytest.raises(KeyError):
             db.update_issue("nonexistent-abc123", title="nope")

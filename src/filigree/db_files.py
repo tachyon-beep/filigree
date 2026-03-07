@@ -176,6 +176,9 @@ class FilesMixin(DBMixinProtocol):
                     updates.append("metadata = ?")
                     params.append(new_meta)
                     changes.append(("metadata", old_meta_raw, new_meta))
+            if not updates:
+                # No actual changes — return existing record without phantom update
+                return self.get_file(existing["id"])
             updates.append("updated_at = ?")
             params.append(now)
             params.append(existing["id"])
