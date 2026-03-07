@@ -13,7 +13,7 @@ import logging
 import os
 import sqlite3
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any, get_args
+from typing import TYPE_CHECKING, Any, ClassVar, get_args
 
 from filigree.db_base import DBMixinProtocol, _now_iso
 from filigree.types.core import FindingStatus, Severity
@@ -1141,6 +1141,43 @@ class FilesMixin(DBMixinProtocol):
 
     # -- File Timeline -------------------------------------------------------
 
+    _TIMELINE_CTE = """
+    WITH timeline AS (
+        SELECT 'finding_created' AS type, first_seen AS timestamp,
+               id AS source_id,
+               json_object('scan_source', scan_source, 'rule_id', rule_id,
+                           'severity', severity, 'message', message) AS data_json
+        FROM scan_findings WHERE file_id = ?
+        UNION ALL
+        SELECT 'finding_updated' AS type, updated_at AS timestamp,
+               id AS source_id,
+               json_object('scan_source', scan_source, 'rule_id', rule_id,
+                           'severity', severity, 'status', status) AS data_json
+        FROM scan_findings WHERE file_id = ? AND updated_at != first_seen
+        UNION ALL
+        SELECT 'association_created' AS type, fa.created_at AS timestamp,
+               CAST(fa.id AS TEXT) AS source_id,
+               json_object('issue_id', fa.issue_id,
+                           'issue_title', COALESCE(i.title, ''),
+                           'assoc_type', fa.assoc_type) AS data_json
+        FROM file_associations fa
+        LEFT JOIN issues i ON fa.issue_id = i.id
+        WHERE fa.file_id = ?
+        UNION ALL
+        SELECT 'file_metadata_update' AS type, created_at AS timestamp,
+               CAST(id AS TEXT) AS source_id,
+               json_object('field', field, 'old_value', old_value,
+                           'new_value', new_value) AS data_json
+        FROM file_events WHERE file_id = ?
+    )
+    """
+
+    _TIMELINE_TYPE_FILTERS: ClassVar[dict[str, str]] = {
+        "finding": "WHERE type IN ('finding_created', 'finding_updated')",
+        "association": "WHERE type = 'association_created'",
+        "file_metadata_update": "WHERE type = 'file_metadata_update'",
+    }
+
     def get_file_timeline(
         self,
         file_id: str,
@@ -1155,111 +1192,47 @@ class FilesMixin(DBMixinProtocol):
         newest-first.  Each entry carries a deterministic ``id`` derived from
         ``sha256(type + timestamp + source_id)[:12]`` so clients can
         cache/deduplicate without server coordination.
+
+        Pagination is pushed to SQL via UNION ALL + ORDER BY + LIMIT/OFFSET
+        so only the requested page is materialized in Python.
         """
         self.get_file(file_id)  # validate existence
 
-        entries: list[dict[str, Any]] = []
-
-        # 1. Finding events (created + status changes inferred from updated_at)
-        findings = self.conn.execute(
-            "SELECT id, scan_source, rule_id, severity, status, message, "
-            "first_seen, updated_at FROM scan_findings WHERE file_id = ? "
-            "ORDER BY first_seen DESC",
-            (file_id,),
-        ).fetchall()
-        for f in findings:
-            entries.append(
-                {
-                    "type": "finding_created",
-                    "timestamp": f["first_seen"],
-                    "source_id": f["id"],
-                    "data": {
-                        "scan_source": f["scan_source"],
-                        "rule_id": f["rule_id"],
-                        "severity": f["severity"],
-                        "message": f["message"],
-                    },
-                }
-            )
-            if f["updated_at"] != f["first_seen"]:
-                entries.append(
-                    {
-                        "type": "finding_updated",
-                        "timestamp": f["updated_at"],
-                        "source_id": f["id"],
-                        "data": {
-                            "scan_source": f["scan_source"],
-                            "rule_id": f["rule_id"],
-                            "severity": f["severity"],
-                            "status": f["status"],
-                        },
-                    }
-                )
-
-        # 2. Association events
-        assocs = self.conn.execute(
-            "SELECT fa.id, fa.issue_id, fa.assoc_type, fa.created_at, "
-            "i.title as issue_title "
-            "FROM file_associations fa "
-            "LEFT JOIN issues i ON fa.issue_id = i.id "
-            "WHERE fa.file_id = ? ORDER BY fa.created_at DESC",
-            (file_id,),
-        ).fetchall()
-        for a in assocs:
-            entries.append(
-                {
-                    "type": "association_created",
-                    "timestamp": a["created_at"],
-                    "source_id": str(a["id"]),
-                    "data": {
-                        "issue_id": a["issue_id"],
-                        "issue_title": a["issue_title"],
-                        "assoc_type": a["assoc_type"],
-                    },
-                }
-            )
-
-        # 3. File metadata events
-        meta_events = self.conn.execute(
-            "SELECT id, field, old_value, new_value, created_at FROM file_events WHERE file_id = ? ORDER BY created_at DESC",
-            (file_id,),
-        ).fetchall()
-        for m in meta_events:
-            entries.append(
-                {
-                    "type": "file_metadata_update",
-                    "timestamp": m["created_at"],
-                    "source_id": str(m["id"]),
-                    "data": {
-                        "field": m["field"],
-                        "old_value": m["old_value"],
-                        "new_value": m["new_value"],
-                    },
-                }
-            )
-
-        # Filter by event type before sorting/paginating
-        if event_type == "finding":
-            entries = [e for e in entries if e["type"].startswith("finding_")]
-        elif event_type == "association":
-            entries = [e for e in entries if e["type"].startswith("association_")]
-        elif event_type == "file_metadata_update":
-            entries = [e for e in entries if e["type"] == "file_metadata_update"]
-        elif event_type is not None:
-            valid_types = ("finding", "association", "file_metadata_update")
+        if event_type is not None and event_type not in self._TIMELINE_TYPE_FILTERS:
+            valid_types = tuple(self._TIMELINE_TYPE_FILTERS)
             raise ValueError(f'Invalid event_type "{event_type}". Must be one of: {", ".join(valid_types)}')
 
-        # Add deterministic IDs and sort newest-first
-        for entry in entries:
-            raw = f"{entry['type']}:{entry['timestamp']}:{entry['source_id']}"
-            entry["id"] = hashlib.sha256(raw.encode()).hexdigest()[:12]
+        type_filter = self._TIMELINE_TYPE_FILTERS[event_type] if event_type else ""
+        base_params: list[Any] = [file_id, file_id, file_id, file_id]
 
-        entries.sort(key=lambda e: e["timestamp"], reverse=True)
+        total_row = self.conn.execute(
+            f"{self._TIMELINE_CTE} SELECT COUNT(*) FROM timeline {type_filter}",
+            base_params,
+        ).fetchone()
+        total: int = total_row[0]
 
-        total = len(entries)
-        page = entries[offset : offset + limit]
+        rows = self.conn.execute(
+            f"{self._TIMELINE_CTE} SELECT type, timestamp, source_id, data_json "
+            f"FROM timeline {type_filter} "
+            f"ORDER BY timestamp DESC LIMIT ? OFFSET ?",
+            [*base_params, limit, offset],
+        ).fetchall()
+
+        entries: list[dict[str, Any]] = []
+        for r in rows:
+            raw = f"{r['type']}:{r['timestamp']}:{r['source_id']}"
+            entries.append(
+                {
+                    "id": hashlib.sha256(raw.encode()).hexdigest()[:12],
+                    "type": r["type"],
+                    "timestamp": r["timestamp"],
+                    "source_id": r["source_id"],
+                    "data": json.loads(r["data_json"]),
+                }
+            )
+
         return {
-            "results": page,
+            "results": entries,
             "total": total,
             "limit": limit,
             "offset": offset,
