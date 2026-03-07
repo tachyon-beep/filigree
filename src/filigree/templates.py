@@ -884,6 +884,9 @@ class TemplateRegistry:
 
         # Register the pack itself — wrap mutable containers for immutability
         raw_guide = pack_data.get("guide")
+        if raw_guide is not None and not isinstance(raw_guide, dict):
+            logger.warning("Pack %s has non-mapping guide (got %s), ignoring", pack_name, type(raw_guide).__name__)
+            raw_guide = None
         pack = WorkflowPack(
             pack=pack_name,
             version=pack_data.get("version", "1.0"),

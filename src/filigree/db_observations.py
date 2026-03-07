@@ -18,6 +18,7 @@ from datetime import UTC, datetime, timedelta
 from typing import cast
 
 from filigree.db_base import DBMixinProtocol, _now_iso
+from filigree.db_files import _normalize_scan_path
 from filigree.types.core import BatchDismissResult, ISOTimestamp, ObservationDict, ObservationStatsDict, PromoteObservationResult
 
 logger = logging.getLogger(__name__)
@@ -96,6 +97,7 @@ class ObservationsMixin(DBMixinProtocol):
 
         file_id: str | None = None
         if file_path:
+            file_path = _normalize_scan_path(file_path)
             fr = self.register_file(file_path)
             file_id = fr.id
 
@@ -160,6 +162,7 @@ class ObservationsMixin(DBMixinProtocol):
                 (file_id, limit, offset),
             ).fetchall()
         elif file_path:
+            file_path = _normalize_scan_path(file_path) or file_path
             # Escape LIKE wildcards in user-provided path to prevent % and _
             # from being interpreted as SQL wildcards.
             escaped = file_path.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")

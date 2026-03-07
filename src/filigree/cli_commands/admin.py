@@ -147,7 +147,12 @@ def install(
         write_config(filigree_dir, config)
 
     # Resolve effective mode (explicit flag > config > default)
-    mode = mode or get_mode(filigree_dir)
+    if not mode:
+        try:
+            mode = get_mode(filigree_dir)
+        except ValueError as exc:
+            click.echo(f"⚠ {exc}. Falling back to 'ethereal'.", err=True)
+            mode = "ethereal"
 
     project_root = filigree_dir.parent
     install_all = not any([claude_code, codex, claude_md, agents_md, gitignore, hooks_only, skills_only, codex_skills_only])
@@ -259,7 +264,11 @@ def doctor(fix: bool, verbose: bool) -> None:
         )
 
         project_root = filigree_dir.parent
-        mode = get_mode(filigree_dir)
+        try:
+            mode = get_mode(filigree_dir)
+        except ValueError as exc:
+            click.echo(f"⚠ {exc}. Falling back to 'ethereal'.", err=True)
+            mode = "ethereal"
         server_port = 8377
         if mode == "server":
             try:
