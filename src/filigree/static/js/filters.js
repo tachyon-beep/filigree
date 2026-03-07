@@ -142,6 +142,10 @@ export function getFilteredIssues() {
   else if (prio === "2") items = items.filter((i) => i.priority === 2);
   else if (prio === "3-4") items = items.filter((i) => i.priority >= 3);
 
+  if (state.typeTemplate) {
+    items = items.filter((i) => i.type === state.typeTemplate.type);
+  }
+
   if (state.searchResults !== null) {
     items = items.filter((i) => state.searchResults.has(i.id));
   }

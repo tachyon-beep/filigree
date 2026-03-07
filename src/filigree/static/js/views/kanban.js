@@ -47,14 +47,16 @@ export function renderKanban() {
     return;
   }
 
-  // Type-filtered kanban: one column per type state, restricted to matching type
-  if (state.typeTemplate) {
+  // Type-filtered kanban with workflow columns (standard mode only).
+  // In cluster/list modes, type filtering is handled by getFilteredIssues()
+  // and the items flow through normally into those renderers.
+  if (state.typeTemplate && state.kanbanMode !== "cluster" && state.kanbanMode !== "list") {
     const stateColumns = {};
     for (const s of state.typeTemplate.states) {
       stateColumns[s.name] = [];
     }
     for (const i of items) {
-      if (i.type === state.typeTemplate.type && stateColumns[i.status]) {
+      if (stateColumns[i.status]) {
         stateColumns[i.status].push(i);
       }
     }
@@ -192,23 +194,43 @@ export function renderClusterKanban(columns) {
   return colDefs
     .map((col) => {
       const issues = columns[col.key] || [];
-      const epicIssues = issues.filter(
-        (i) => (i.type === "epic" || i.type === "milestone") && i.children && i.children.length > 0,
-      );
-      const epicIds = new Set(epicIssues.map((i) => i.id));
-      const childIds = new Set();
-      for (const i of epicIssues) {
-        for (const c of i.children || []) {
-          childIds.add(c);
-        }
-      }
-      const orphans = issues.filter((i) => !epicIds.has(i.id) && !childIds.has(i.id));
+      let groupCards, orphanCards;
 
-      const epicCards = epicIssues.map((epic) => renderClusterCard(epic)).join("");
-      const orphanCards = orphans.map((i) => renderCard(i)).join("");
+      if (state.typeTemplate) {
+        // Type-filtered cluster: group items by their parent issue
+        const byParent = new Map();
+        const orphans = [];
+        for (const i of issues) {
+          if (i.parent_id && state.issueMap[i.parent_id]) {
+            if (!byParent.has(i.parent_id)) byParent.set(i.parent_id, []);
+            byParent.get(i.parent_id).push(i);
+          } else {
+            orphans.push(i);
+          }
+        }
+        groupCards = Array.from(byParent.entries())
+          .map(([pid, children]) => renderFilteredClusterCard(state.issueMap[pid], children))
+          .join("");
+        orphanCards = orphans.map((i) => renderCard(i)).join("");
+      } else {
+        // Normal cluster: group by parent epics/milestones in the column
+        const epicIssues = issues.filter(
+          (i) => (i.type === "epic" || i.type === "milestone") && i.children && i.children.length > 0,
+        );
+        const epicIds = new Set(epicIssues.map((i) => i.id));
+        const childIds = new Set();
+        for (const i of epicIssues) {
+          for (const c of i.children || []) {
+            childIds.add(c);
+          }
+        }
+        const orphans = issues.filter((i) => !epicIds.has(i.id) && !childIds.has(i.id));
+        groupCards = epicIssues.map((epic) => renderClusterCard(epic)).join("");
+        orphanCards = orphans.map((i) => renderCard(i)).join("");
+      }
 
       const inner = issues.length
-        ? epicCards + orphanCards
+        ? groupCards + orphanCards
         : '<div class="text-xs italic p-2" style="color:var(--text-muted)">No issues</div>';
       return renderColumnShell(col.label, col.color, issues.length, inner, ` data-status-category="${col.key}"`);
     })
@@ -245,6 +267,51 @@ export function renderClusterCard(epic) {
     `<div class="rounded p-3 cursor-pointer ${epic.is_ready ? "ready-border" : ""}" style="background:var(--surface-raised);border:1px solid var(--border-default)" aria-expanded="${expanded}" onclick="toggleEpicExpand('${epic.id}')">` +
     '<div class="flex items-center justify-between mb-1">' +
     `<span class="text-xs">${TYPE_ICONS[epic.type] || ""} <span class="font-medium" style="color:var(--text-primary)">${escHtml(epic.title.slice(0, 40))}</span></span>` +
+    `<span class="text-xs" style="color:var(--text-muted)">[${total}]</span>` +
+    "</div>" +
+    '<div class="w-full h-2 rounded-full flex overflow-hidden mb-1" style="background:var(--surface-base)">' +
+    `<div style="width:${pctClosed}%;background:${CATEGORY_COLORS.done}"></div>` +
+    `<div style="width:${pctActive}%;background:${CATEGORY_COLORS.wip}"></div>` +
+    `<div style="width:${pctOpen}%;background:${CATEGORY_COLORS.open}"></div>` +
+    "</div>" +
+    `<div class="text-xs" style="color:var(--text-muted)">${counts.open} open &middot; ${counts.wip} active &middot; ${counts.done} done</div>` +
+    (expanded
+      ? '<div class="text-xs mt-1" style="color:var(--accent)">&#9660; expanded</div>'
+      : '<div class="text-xs mt-1" style="color:var(--text-muted)">&#9654; click to expand</div>') +
+    childHtml +
+    "</div>"
+  );
+}
+
+// ---------------------------------------------------------------------------
+// renderFilteredClusterCard — parent group card for type-filtered cluster view
+// ---------------------------------------------------------------------------
+
+function renderFilteredClusterCard(parent, children) {
+  const counts = { open: 0, wip: 0, done: 0 };
+  for (const c of children) {
+    const cat = c.status_category || "open";
+    if (counts[cat] !== undefined) counts[cat]++;
+  }
+  const total = children.length;
+  const expanded = state.expandedEpics.has(parent.id);
+
+  const pctOpen = total ? (counts.open / total) * 100 : 0;
+  const pctActive = total ? (counts.wip / total) * 100 : 0;
+  const pctClosed = total ? (counts.done / total) * 100 : 0;
+
+  let childHtml = "";
+  if (expanded) {
+    childHtml =
+      '<div class="mt-2 ml-4 flex flex-col gap-1">' +
+      children.map((c) => renderCard(c)).join("") +
+      "</div>";
+  }
+
+  return (
+    `<div class="rounded p-3 cursor-pointer" style="background:var(--surface-raised);border:1px solid var(--border-default)" aria-expanded="${expanded}" onclick="toggleEpicExpand('${escJsSingle(parent.id)}')">` +
+    '<div class="flex items-center justify-between mb-1">' +
+    `<span class="text-xs">${TYPE_ICONS[parent.type] || ""} <span class="font-medium" style="color:var(--text-primary)">${escHtml(parent.title.slice(0, 40))}</span></span>` +
     `<span class="text-xs" style="color:var(--text-muted)">[${total}]</span>` +
     "</div>" +
     '<div class="w-full h-2 rounded-full flex overflow-hidden mb-1" style="background:var(--surface-base)">' +
