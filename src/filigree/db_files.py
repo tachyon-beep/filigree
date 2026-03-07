@@ -376,33 +376,13 @@ class FilesMixin(DBMixinProtocol):
 
     # -- Scan ingestion ------------------------------------------------------
 
-    def process_scan_results(
-        self,
-        *,
-        scan_source: str,
-        findings: list[dict[str, Any]],
-        scan_run_id: str = "",
-        mark_unseen: bool = False,
-        create_issues: bool = False,
-    ) -> ScanIngestResult:
-        """Ingest scan results: create/update file records and findings.
+    @staticmethod
+    def _validate_scan_findings(findings: list[dict[str, Any]], scan_source: str) -> list[str]:
+        """Validate and normalize all findings upfront before any writes.
 
-        Each finding dict must have at minimum: path, rule_id, severity, message.
-        Optional: language, line_start, line_end, metadata.
-
-        When *mark_unseen* is ``True``, findings in the same (file, scan_source)
-        that are NOT in this batch are set to ``unseen_in_latest`` status.
-        Only findings with a non-terminal status are affected (``fixed`` and
-        ``false_positive`` are left alone).
-
-        When *create_issues* is ``True``, each finding without an ``issue_id``
-        is promoted to a new candidate ``bug`` issue and linked to its file via
-        ``file_associations(assoc_type='bug_in')``.
-
-        Returns summary stats including ``new_finding_ids``.
+        Mutates findings in-place (normalizes paths and severities).
+        Returns a list of warning messages for unknown severities.
         """
-        # Validate all findings upfront before any writes, so a bad entry
-        # at index N cannot leave writes from 0..N-1 pending.
         warnings: list[str] = []
         for i, f in enumerate(findings):
             if not isinstance(f, dict):
@@ -454,6 +434,316 @@ class FilesMixin(DBMixinProtocol):
                     scan_source,
                 )
                 f["severity"] = "info"
+        return warnings
+
+    def _upsert_file_record(self, *, path: str, language: str, now: str, stats: ScanIngestResult) -> str:
+        """Create or update a file record, returning its id."""
+        existing_file = self.conn.execute("SELECT id FROM file_records WHERE path = ?", (path,)).fetchone()
+        if existing_file is not None:
+            file_id: str = existing_file["id"]
+            update_parts = ["updated_at = ?"]
+            update_params: list[Any] = [now]
+            if language:
+                update_parts.append("language = ?")
+                update_params.append(language)
+            update_params.append(file_id)
+            self.conn.execute(
+                f"UPDATE file_records SET {', '.join(update_parts)} WHERE id = ?",
+                update_params,
+            )
+            stats["files_updated"] += 1
+        else:
+            file_id = self._generate_unique_id("file_records", "f")
+            self.conn.execute(
+                "INSERT INTO file_records (id, path, language, first_seen, updated_at) VALUES (?, ?, ?, ?, ?)",
+                (file_id, path, language, now, now),
+            )
+            stats["files_created"] += 1
+        return file_id
+
+    def _upsert_finding(
+        self,
+        *,
+        f: dict[str, Any],
+        file_id: str,
+        scan_source: str,
+        scan_run_id: str,
+        now: str,
+        stats: ScanIngestResult,
+        seen_finding_ids: dict[str, list[str]],
+        create_issues: bool,
+    ) -> None:
+        """Upsert a single finding (dedup on file_id + scan_source + rule_id + line_start)."""
+        severity = f.get("severity", "info")
+        path = f["path"]
+        rule_id = f.get("rule_id", "")
+        line_start = f.get("line_start")
+        dedup_line = line_start if line_start is not None else -1
+
+        suggestion = f.get("suggestion", "")
+        if len(suggestion) > 10_000:
+            logger.warning(
+                "Suggestion truncated for %s (rule_id=%s): %d chars → 10000",
+                path,
+                rule_id,
+                len(suggestion),
+            )
+            suggestion = suggestion[:10_000] + "\n[truncated]"
+
+        existing_finding = self.conn.execute(
+            "SELECT id, seen_count, scan_run_id, issue_id FROM scan_findings "
+            "WHERE file_id = ? AND scan_source = ? AND rule_id = ? AND coalesce(line_start, -1) = ?",
+            (file_id, scan_source, rule_id, dedup_line),
+        ).fetchone()
+
+        if existing_finding is not None:
+            self._update_existing_finding(
+                existing_finding=existing_finding,
+                f=f,
+                severity=severity,
+                suggestion=suggestion,
+                scan_run_id=scan_run_id,
+                now=now,
+                stats=stats,
+            )
+            seen_finding_ids.setdefault(file_id, []).append(existing_finding["id"])
+            existing_issue_id = existing_finding["issue_id"] or ""
+            if create_issues and not existing_issue_id:
+                self._create_issue_for_finding(
+                    finding_id=existing_finding["id"],
+                    file_id=file_id,
+                    path=path,
+                    rule_id=rule_id,
+                    severity=severity,
+                    message=f.get("message", ""),
+                    suggestion=suggestion,
+                    line_start=line_start,
+                    line_end=f.get("line_end"),
+                    scan_source=scan_source,
+                    now=now,
+                    stats=stats,
+                )
+            elif create_issues and existing_issue_id:
+                self.conn.execute(
+                    "INSERT OR IGNORE INTO file_associations (file_id, issue_id, assoc_type, created_at) VALUES (?, ?, 'bug_in', ?)",
+                    (file_id, existing_issue_id, now),
+                )
+        else:
+            finding_id = self._generate_unique_id("scan_findings", "sf")
+            self.conn.execute(
+                "INSERT INTO scan_findings "
+                "(id, file_id, scan_source, rule_id, severity, status, message, "
+                "suggestion, scan_run_id, "
+                "line_start, line_end, first_seen, updated_at, last_seen_at, metadata) "
+                "VALUES (?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    finding_id,
+                    file_id,
+                    scan_source,
+                    rule_id,
+                    severity,
+                    f.get("message", ""),
+                    suggestion,
+                    scan_run_id,
+                    line_start,
+                    f.get("line_end"),
+                    now,
+                    now,
+                    now,
+                    json.dumps(f.get("metadata") or {}),
+                ),
+            )
+            stats["findings_created"] += 1
+            stats["new_finding_ids"].append(finding_id)
+            seen_finding_ids.setdefault(file_id, []).append(finding_id)
+            if create_issues:
+                self._create_issue_for_finding(
+                    finding_id=finding_id,
+                    file_id=file_id,
+                    path=path,
+                    rule_id=rule_id,
+                    severity=severity,
+                    message=f.get("message", ""),
+                    suggestion=suggestion,
+                    line_start=line_start,
+                    line_end=f.get("line_end"),
+                    scan_source=scan_source,
+                    now=now,
+                    stats=stats,
+                )
+
+    def _update_existing_finding(
+        self,
+        *,
+        existing_finding: Any,
+        f: dict[str, Any],
+        severity: str,
+        suggestion: str,
+        scan_run_id: str,
+        now: str,
+        stats: ScanIngestResult,
+    ) -> None:
+        """Update an already-existing finding with new scan data."""
+        existing_run_id = existing_finding["scan_run_id"] or ""
+        run_id_update = existing_run_id
+        if scan_run_id and not existing_run_id:
+            run_id_update = scan_run_id
+
+        self.conn.execute(
+            "UPDATE scan_findings SET message = ?, severity = ?, line_end = ?, "
+            "suggestion = ?, scan_run_id = ?, metadata = ?, "
+            "seen_count = seen_count + 1, updated_at = ?, last_seen_at = ?, "
+            "status = CASE WHEN status IN ('fixed', 'unseen_in_latest') THEN 'open' ELSE status END "
+            "WHERE id = ?",
+            (
+                f.get("message", ""),
+                severity,
+                f.get("line_end"),
+                suggestion,
+                run_id_update,
+                json.dumps(f.get("metadata") or {}),
+                now,
+                now,
+                existing_finding["id"],
+            ),
+        )
+        stats["findings_updated"] += 1
+
+    @staticmethod
+    def _priority_for_severity(severity: str) -> int:
+        return {
+            "critical": 0,
+            "high": 1,
+            "medium": 2,
+            "low": 3,
+            "info": 3,
+        }.get(severity, 2)
+
+    def _create_issue_for_finding(
+        self,
+        *,
+        finding_id: str,
+        file_id: str,
+        path: str,
+        rule_id: str,
+        severity: str,
+        message: str,
+        suggestion: str,
+        line_start: int | None,
+        line_end: int | None,
+        scan_source: str,
+        now: str,
+        stats: ScanIngestResult,
+    ) -> str:
+        """Promote a scan finding to a triage bug issue."""
+        summary = message.strip().splitlines()[0].strip() if message and message.strip() else "Scanner finding"
+        location = f"{path}:{line_start}" if line_start is not None else path
+        title = f"[{scan_source}] {location} {summary}"
+        if len(title) > 200:
+            title = f"{title[:197]}..."
+
+        description_lines = [
+            "Automated finding promoted for triage.",
+            "",
+            f"- Scanner: `{scan_source}`",
+            f"- Rule ID: `{rule_id}`",
+            f"- Severity: `{severity}`",
+            f"- File: `{path}`",
+        ]
+        if line_start is not None:
+            if line_end is not None and line_end != line_start:
+                description_lines.append(f"- Lines: `{line_start}`-`{line_end}`")
+            else:
+                description_lines.append(f"- Line: `{line_start}`")
+        description_lines.extend(
+            [
+                "",
+                "Message:",
+                message or "(empty)",
+            ]
+        )
+        if suggestion:
+            description_lines.extend(["", "Suggested fix:", suggestion])
+        description = "\n".join(description_lines)
+
+        issue = self.create_issue(
+            title,
+            type="bug",
+            priority=self._priority_for_severity(severity),
+            description=description,
+            fields={
+                "source": "scan",
+                "scan_source": scan_source,
+                "scan_finding_id": finding_id,
+                "scan_rule_id": rule_id,
+                "scan_severity": severity,
+                "file_id": file_id,
+                "file_path": path,
+                "line_start": line_start,
+                "line_end": line_end,
+            },
+            labels=["candidate", "scan_finding"],
+            actor=f"scanner:{scan_source}",
+        )
+        self.conn.execute(
+            "UPDATE scan_findings SET issue_id = ?, updated_at = ? WHERE id = ?",
+            (issue.id, now, finding_id),
+        )
+        self.conn.execute(
+            "INSERT OR IGNORE INTO file_associations (file_id, issue_id, assoc_type, created_at) VALUES (?, ?, 'bug_in', ?)",
+            (file_id, issue.id, now),
+        )
+        stats["issues_created"] += 1
+        stats["issue_ids"].append(issue.id)
+        return issue.id
+
+    @staticmethod
+    def _mark_unseen_findings(
+        conn: Any,
+        *,
+        scan_source: str,
+        seen_finding_ids: dict[str, list[str]],
+        now: str,
+    ) -> None:
+        """Mark findings not in current batch as unseen_in_latest."""
+        terminal = tuple(TERMINAL_FINDING_STATUSES)
+        terminal_ph = ",".join("?" * len(terminal))
+        for fid, fids in seen_finding_ids.items():
+            placeholders = ",".join("?" * len(fids))
+            conn.execute(
+                f"UPDATE scan_findings SET status = 'unseen_in_latest', updated_at = ? "
+                f"WHERE file_id = ? AND scan_source = ? "
+                f"AND status NOT IN ({terminal_ph}) "
+                f"AND id NOT IN ({placeholders})",
+                [now, fid, scan_source, *terminal, *fids],
+            )
+
+    def process_scan_results(
+        self,
+        *,
+        scan_source: str,
+        findings: list[dict[str, Any]],
+        scan_run_id: str = "",
+        mark_unseen: bool = False,
+        create_issues: bool = False,
+    ) -> ScanIngestResult:
+        """Ingest scan results: create/update file records and findings.
+
+        Each finding dict must have at minimum: path, rule_id, severity, message.
+        Optional: language, line_start, line_end, metadata.
+
+        When *mark_unseen* is ``True``, findings in the same (file, scan_source)
+        that are NOT in this batch are set to ``unseen_in_latest`` status.
+        Only findings with a non-terminal status are affected (``fixed`` and
+        ``false_positive`` are left alone).
+
+        When *create_issues* is ``True``, each finding without an ``issue_id``
+        is promoted to a new candidate ``bug`` issue and linked to its file via
+        ``file_associations(assoc_type='bug_in')``.
+
+        Returns summary stats including ``new_finding_ids``.
+        """
+        warnings = self._validate_scan_findings(findings, scan_source)
 
         now = _now_iso()
         stats = ScanIngestResult(
@@ -467,244 +757,34 @@ class FilesMixin(DBMixinProtocol):
             warnings=warnings,
         )
 
-        def _priority_for_severity(severity: str) -> int:
-            return {
-                "critical": 0,
-                "high": 1,
-                "medium": 2,
-                "low": 3,
-                "info": 3,
-            }.get(severity, 2)
-
-        def _create_issue_for_finding(
-            *,
-            finding_id: str,
-            file_id: str,
-            path: str,
-            rule_id: str,
-            severity: str,
-            message: str,
-            suggestion: str,
-            line_start: int | None,
-            line_end: int | None,
-        ) -> str:
-            summary = message.strip().splitlines()[0].strip() if message and message.strip() else "Scanner finding"
-            location = f"{path}:{line_start}" if line_start is not None else path
-            title = f"[{scan_source}] {location} {summary}"
-            if len(title) > 200:
-                title = f"{title[:197]}..."
-
-            description_lines = [
-                "Automated finding promoted for triage.",
-                "",
-                f"- Scanner: `{scan_source}`",
-                f"- Rule ID: `{rule_id}`",
-                f"- Severity: `{severity}`",
-                f"- File: `{path}`",
-            ]
-            if line_start is not None:
-                if line_end is not None and line_end != line_start:
-                    description_lines.append(f"- Lines: `{line_start}`-`{line_end}`")
-                else:
-                    description_lines.append(f"- Line: `{line_start}`")
-            description_lines.extend(
-                [
-                    "",
-                    "Message:",
-                    message or "(empty)",
-                ]
-            )
-            if suggestion:
-                description_lines.extend(["", "Suggested fix:", suggestion])
-            description = "\n".join(description_lines)
-
-            issue = self.create_issue(
-                title,
-                type="bug",
-                priority=_priority_for_severity(severity),
-                description=description,
-                fields={
-                    "source": "scan",
-                    "scan_source": scan_source,
-                    "scan_finding_id": finding_id,
-                    "scan_rule_id": rule_id,
-                    "scan_severity": severity,
-                    "file_id": file_id,
-                    "file_path": path,
-                    "line_start": line_start,
-                    "line_end": line_end,
-                },
-                labels=["candidate", "scan_finding"],
-                actor=f"scanner:{scan_source}",
-            )
-            self.conn.execute(
-                "UPDATE scan_findings SET issue_id = ?, updated_at = ? WHERE id = ?",
-                (issue.id, now, finding_id),
-            )
-            self.conn.execute(
-                "INSERT OR IGNORE INTO file_associations (file_id, issue_id, assoc_type, created_at) VALUES (?, ?, 'bug_in', ?)",
-                (file_id, issue.id, now),
-            )
-            stats["issues_created"] += 1
-            stats["issue_ids"].append(issue.id)
-            return issue.id
-
-        # Track which finding IDs were seen, keyed by file_id, for mark_unseen
         seen_finding_ids: dict[str, list[str]] = {}
 
         try:
             for f in findings:
-                severity = f.get("severity", "info")
-                path = f["path"]
-                language = f.get("language", "")
+                file_id = self._upsert_file_record(
+                    path=f["path"],
+                    language=f.get("language", ""),
+                    now=now,
+                    stats=stats,
+                )
+                self._upsert_finding(
+                    f=f,
+                    file_id=file_id,
+                    scan_source=scan_source,
+                    scan_run_id=scan_run_id,
+                    now=now,
+                    stats=stats,
+                    seen_finding_ids=seen_finding_ids,
+                    create_issues=create_issues,
+                )
 
-                # Upsert file record
-                existing_file = self.conn.execute("SELECT id FROM file_records WHERE path = ?", (path,)).fetchone()
-                if existing_file is not None:
-                    file_id = existing_file["id"]
-                    update_parts = ["updated_at = ?"]
-                    update_params: list[Any] = [now]
-                    if language:
-                        update_parts.append("language = ?")
-                        update_params.append(language)
-                    update_params.append(file_id)
-                    self.conn.execute(
-                        f"UPDATE file_records SET {', '.join(update_parts)} WHERE id = ?",
-                        update_params,
-                    )
-                    stats["files_updated"] += 1
-                else:
-                    file_id = self._generate_unique_id("file_records", "f")
-                    self.conn.execute(
-                        "INSERT INTO file_records (id, path, language, first_seen, updated_at) VALUES (?, ?, ?, ?, ?)",
-                        (file_id, path, language, now, now),
-                    )
-                    stats["files_created"] += 1
-
-                # Upsert finding (dedup on file_id + scan_source + rule_id + line_start)
-                rule_id = f.get("rule_id", "")
-                line_start = f.get("line_start")
-                dedup_line = line_start if line_start is not None else -1
-
-                # Suggestion size cap (10,000 chars)
-                suggestion = f.get("suggestion", "")
-                if len(suggestion) > 10_000:
-                    logger.warning(
-                        "Suggestion truncated for %s (rule_id=%s): %d chars → 10000",
-                        path,
-                        rule_id,
-                        len(suggestion),
-                    )
-                    suggestion = suggestion[:10_000] + "\n[truncated]"
-
-                existing_finding = self.conn.execute(
-                    "SELECT id, seen_count, scan_run_id, issue_id FROM scan_findings "
-                    "WHERE file_id = ? AND scan_source = ? AND rule_id = ? AND coalesce(line_start, -1) = ?",
-                    (file_id, scan_source, rule_id, dedup_line),
-                ).fetchone()
-
-                if existing_finding is not None:
-                    # scan_run_id attribution: keep original if non-empty, allow
-                    # late attribution for previously-unattributed findings
-                    existing_run_id = existing_finding["scan_run_id"] or ""
-                    run_id_update = existing_run_id
-                    if scan_run_id and not existing_run_id:
-                        run_id_update = scan_run_id
-
-                    self.conn.execute(
-                        "UPDATE scan_findings SET message = ?, severity = ?, line_end = ?, "
-                        "suggestion = ?, scan_run_id = ?, metadata = ?, "
-                        "seen_count = seen_count + 1, updated_at = ?, last_seen_at = ?, "
-                        "status = CASE WHEN status IN ('fixed', 'unseen_in_latest') THEN 'open' ELSE status END "
-                        "WHERE id = ?",
-                        (
-                            f.get("message", ""),
-                            severity,
-                            f.get("line_end"),
-                            suggestion,
-                            run_id_update,
-                            json.dumps(f.get("metadata") or {}),
-                            now,
-                            now,
-                            existing_finding["id"],
-                        ),
-                    )
-                    stats["findings_updated"] += 1
-                    seen_finding_ids.setdefault(file_id, []).append(existing_finding["id"])
-                    existing_issue_id = existing_finding["issue_id"] or ""
-                    if create_issues and not existing_issue_id:
-                        _create_issue_for_finding(
-                            finding_id=existing_finding["id"],
-                            file_id=file_id,
-                            path=path,
-                            rule_id=rule_id,
-                            severity=severity,
-                            message=f.get("message", ""),
-                            suggestion=suggestion,
-                            line_start=line_start,
-                            line_end=f.get("line_end"),
-                        )
-                    elif create_issues and existing_issue_id:
-                        self.conn.execute(
-                            "INSERT OR IGNORE INTO file_associations"
-                            " (file_id, issue_id, assoc_type, created_at)"
-                            " VALUES (?, ?, 'bug_in', ?)",
-                            (file_id, existing_issue_id, now),
-                        )
-                else:
-                    finding_id = self._generate_unique_id("scan_findings", "sf")
-                    self.conn.execute(
-                        "INSERT INTO scan_findings "
-                        "(id, file_id, scan_source, rule_id, severity, status, message, "
-                        "suggestion, scan_run_id, "
-                        "line_start, line_end, first_seen, updated_at, last_seen_at, metadata) "
-                        "VALUES (?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                        (
-                            finding_id,
-                            file_id,
-                            scan_source,
-                            rule_id,
-                            severity,
-                            f.get("message", ""),
-                            suggestion,
-                            scan_run_id,
-                            line_start,
-                            f.get("line_end"),
-                            now,
-                            now,
-                            now,
-                            json.dumps(f.get("metadata") or {}),
-                        ),
-                    )
-                    stats["findings_created"] += 1
-                    stats["new_finding_ids"].append(finding_id)
-                    seen_finding_ids.setdefault(file_id, []).append(finding_id)
-                    if create_issues:
-                        _create_issue_for_finding(
-                            finding_id=finding_id,
-                            file_id=file_id,
-                            path=path,
-                            rule_id=rule_id,
-                            severity=severity,
-                            message=f.get("message", ""),
-                            suggestion=suggestion,
-                            line_start=line_start,
-                            line_end=f.get("line_end"),
-                        )
-
-            # Mark unseen findings as unseen_in_latest (atomic per file+source)
             if mark_unseen:
-                terminal = tuple(TERMINAL_FINDING_STATUSES)
-                terminal_ph = ",".join("?" * len(terminal))
-                for fid, fids in seen_finding_ids.items():
-                    placeholders = ",".join("?" * len(fids))
-                    self.conn.execute(
-                        f"UPDATE scan_findings SET status = 'unseen_in_latest', updated_at = ? "
-                        f"WHERE file_id = ? AND scan_source = ? "
-                        f"AND status NOT IN ({terminal_ph}) "
-                        f"AND id NOT IN ({placeholders})",
-                        [now, fid, scan_source, *terminal, *fids],
-                    )
+                self._mark_unseen_findings(
+                    self.conn,
+                    scan_source=scan_source,
+                    seen_finding_ids=seen_finding_ids,
+                    now=now,
+                )
 
             self.conn.commit()
         except Exception:

@@ -11,7 +11,7 @@ import json
 import logging
 import sqlite3
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 from filigree.db_base import DBMixinProtocol, _now_iso
 from filigree.db_files import VALID_FINDING_STATUSES, VALID_SEVERITIES
@@ -336,77 +336,33 @@ class MetaMixin(DBMixinProtocol):
             msg = f"Import references unknown file_id {source_file_id!r}"
             raise ValueError(msg) from exc
 
+    # Table export definitions: (record_type_tag, SQL query)
+    _EXPORT_TABLES: ClassVar[list[tuple[str, str]]] = [
+        ("issue", "SELECT * FROM issues ORDER BY created_at"),
+        ("file_record", "SELECT * FROM file_records ORDER BY path"),
+        ("scan_finding", "SELECT * FROM scan_findings ORDER BY first_seen, file_id, scan_source, rule_id"),
+        ("dependency", "SELECT * FROM dependencies ORDER BY issue_id"),
+        ("label", "SELECT * FROM labels ORDER BY issue_id"),
+        ("comment", "SELECT * FROM comments ORDER BY created_at"),
+        ("event", "SELECT * FROM events ORDER BY created_at"),
+        ("file_association", "SELECT * FROM file_associations ORDER BY created_at, file_id, issue_id"),
+        ("file_event", "SELECT * FROM file_events ORDER BY created_at, file_id"),
+    ]
+
     def export_jsonl(self, output_path: str | Path) -> int:
         """Export full project data to JSONL.
 
-        Each line is a JSON object with a "type" field indicating the record type.
+        Each line is a JSON object with a "_type" field indicating the record type.
         Returns the total number of records written.
         """
         count = 0
         with Path(output_path).open("w") as f:
-            # Issues
-            for row in self.conn.execute("SELECT * FROM issues ORDER BY created_at").fetchall():
-                record = dict(row)
-                record["_type"] = "issue"
-                f.write(json.dumps(record, default=str) + "\n")
-                count += 1
-
-            # Files
-            for row in self.conn.execute("SELECT * FROM file_records ORDER BY path").fetchall():
-                record = dict(row)
-                record["_type"] = "file_record"
-                f.write(json.dumps(record, default=str) + "\n")
-                count += 1
-
-            # Scan findings
-            for row in self.conn.execute("SELECT * FROM scan_findings ORDER BY first_seen, file_id, scan_source, rule_id").fetchall():
-                record = dict(row)
-                record["_type"] = "scan_finding"
-                f.write(json.dumps(record, default=str) + "\n")
-                count += 1
-
-            # Dependencies
-            for row in self.conn.execute("SELECT * FROM dependencies ORDER BY issue_id").fetchall():
-                record = dict(row)
-                record["_type"] = "dependency"
-                f.write(json.dumps(record, default=str) + "\n")
-                count += 1
-
-            # Labels
-            for row in self.conn.execute("SELECT * FROM labels ORDER BY issue_id").fetchall():
-                record = dict(row)
-                record["_type"] = "label"
-                f.write(json.dumps(record, default=str) + "\n")
-                count += 1
-
-            # Comments
-            for row in self.conn.execute("SELECT * FROM comments ORDER BY created_at").fetchall():
-                record = dict(row)
-                record["_type"] = "comment"
-                f.write(json.dumps(record, default=str) + "\n")
-                count += 1
-
-            # Events
-            for row in self.conn.execute("SELECT * FROM events ORDER BY created_at").fetchall():
-                record = dict(row)
-                record["_type"] = "event"
-                f.write(json.dumps(record, default=str) + "\n")
-                count += 1
-
-            # File associations
-            for row in self.conn.execute("SELECT * FROM file_associations ORDER BY created_at, file_id, issue_id").fetchall():
-                record = dict(row)
-                record["_type"] = "file_association"
-                f.write(json.dumps(record, default=str) + "\n")
-                count += 1
-
-            # File events
-            for row in self.conn.execute("SELECT * FROM file_events ORDER BY created_at, file_id").fetchall():
-                record = dict(row)
-                record["_type"] = "file_event"
-                f.write(json.dumps(record, default=str) + "\n")
-                count += 1
-
+            for type_tag, query in self._EXPORT_TABLES:
+                for row in self.conn.execute(query).fetchall():
+                    record = dict(row)
+                    record["_type"] = type_tag
+                    f.write(json.dumps(record, default=str) + "\n")
+                    count += 1
         return count
 
     def import_jsonl(self, input_path: str | Path, *, merge: bool = False) -> dict[str, Any]:
