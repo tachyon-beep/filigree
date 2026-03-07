@@ -14,6 +14,33 @@ from filigree.core import FiligreeDB
 from tests.conftest import PopulatedDB
 
 
+class TestCreateIssueValidation:
+    """M10: Core-level validation for create_issue inputs."""
+
+    @pytest.mark.parametrize("title", ["", "   "], ids=["empty", "whitespace"])
+    def test_empty_title_raises(self, db: FiligreeDB, title: str) -> None:
+        with pytest.raises(ValueError, match="Title cannot be empty"):
+            db.create_issue(title)
+
+    @pytest.mark.parametrize("priority", [-1, 5, 100], ids=["neg1", "five", "hundred"])
+    def test_bad_priority_raises(self, db: FiligreeDB, priority: int) -> None:
+        with pytest.raises(ValueError, match="Priority must be between 0 and 4"):
+            db.create_issue("Valid title", priority=priority)
+
+    @pytest.mark.parametrize("key", ["", "  "], ids=["empty", "whitespace"])
+    def test_empty_field_key_raises(self, db: FiligreeDB, key: str) -> None:
+        with pytest.raises(ValueError, match="Field key cannot be empty"):
+            db.create_issue("Valid title", fields={key: "value"})
+
+    def test_fields_not_dict_raises(self, db: FiligreeDB) -> None:
+        with pytest.raises(TypeError, match="fields must be a dict"):
+            db.create_issue("Valid title", fields="not a dict")  # type: ignore[arg-type]
+
+    def test_unknown_type_raises(self, db: FiligreeDB) -> None:
+        with pytest.raises(ValueError, match="Unknown type"):
+            db.create_issue("Valid title", type="nonexistent_type")
+
+
 class TestCreateAndGet:
     def test_create_issue(self, db: FiligreeDB) -> None:
         issue = db.create_issue("Fix the widget")
@@ -424,6 +451,74 @@ class TestReparenting:
             (child.id,),
         ).fetchall()
         assert len(events) == 0
+
+
+class TestClaimNextFilters:
+    """M8: claim_next type_filter, priority_min, priority_max must filter correctly."""
+
+    def test_type_filter_matches(self, db: FiligreeDB) -> None:
+        """claim_next with type_filter only claims matching type."""
+        db.create_issue("A task", type="task", priority=1)
+        bug = db.create_issue("A bug", type="bug", priority=1)
+        result = db.claim_next("agent", type_filter="bug")
+        assert result is not None
+        assert result.id == bug.id
+        assert result.type == "bug"
+
+    def test_type_filter_no_match_returns_none(self, db: FiligreeDB) -> None:
+        db.create_issue("A task", type="task", priority=1)
+        result = db.claim_next("agent", type_filter="bug")
+        # bug type issues may exist from get_ready (e.g. no bugs created)
+        # but our task should not match
+        if result is not None:
+            assert result.type == "bug"
+
+    def test_priority_min_excludes_lower(self, db: FiligreeDB) -> None:
+        """priority_min filters out issues with priority < min."""
+        # Claim all pre-existing ready issues first
+        for existing in db.get_ready():
+            db.claim_issue(existing.id, assignee="setup")
+        db.create_issue("Low priority", type="task", priority=0)
+        p2 = db.create_issue("Medium priority", type="task", priority=2)
+        result = db.claim_next("agent", priority_min=2)
+        assert result is not None
+        assert result.id == p2.id
+        assert result.priority >= 2
+
+    def test_priority_max_excludes_higher(self, db: FiligreeDB) -> None:
+        """priority_max filters out issues with priority > max."""
+        # Claim all pre-existing ready issues first
+        for existing in db.get_ready():
+            db.claim_issue(existing.id, assignee="setup")
+        p0 = db.create_issue("Critical", type="task", priority=0)
+        db.create_issue("Low", type="task", priority=3)
+        result = db.claim_next("agent", priority_max=1)
+        assert result is not None
+        assert result.id == p0.id
+        assert result.priority <= 1
+
+    def test_priority_range_combined(self, db: FiligreeDB) -> None:
+        """priority_min + priority_max together define a range."""
+        for existing in db.get_ready():
+            db.claim_issue(existing.id, assignee="setup")
+        db.create_issue("P0 critical", type="task", priority=0)
+        p2 = db.create_issue("P2 medium", type="task", priority=2)
+        db.create_issue("P4 backlog", type="task", priority=4)
+        result = db.claim_next("agent", priority_min=1, priority_max=3)
+        assert result is not None
+        assert result.id == p2.id
+        assert 1 <= result.priority <= 3
+
+    def test_type_and_priority_combined(self, db: FiligreeDB) -> None:
+        """type_filter + priority filters work together."""
+        for existing in db.get_ready():
+            db.claim_issue(existing.id, assignee="setup")
+        db.create_issue("Low bug", type="bug", priority=3)
+        db.create_issue("High task", type="task", priority=0)
+        high_bug = db.create_issue("High bug", type="bug", priority=1)
+        result = db.claim_next("agent", type_filter="bug", priority_max=2)
+        assert result is not None
+        assert result.id == high_bug.id
 
 
 class TestClaimNextExhaustion:

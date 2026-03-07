@@ -34,6 +34,110 @@ class TestListAndSearch:
         assert "auth" in results[0].title.lower()
 
 
+class TestListIssuesCategoryAliases:
+    """M9: list_issues category aliases 'in_progress'→'wip' and 'closed'→'done'."""
+
+    def test_in_progress_alias(self, db: FiligreeDB) -> None:
+        """status='in_progress' should expand to wip-category states."""
+        issue = db.create_issue("WIP task")
+        db.update_issue(issue.id, status="in_progress")
+        results = db.list_issues(status="in_progress")
+        assert any(i.id == issue.id for i in results)
+
+    def test_closed_alias(self, db: FiligreeDB) -> None:
+        """status='closed' should expand to done-category states."""
+        issue = db.create_issue("Done task")
+        db.close_issue(issue.id)
+        results = db.list_issues(status="closed")
+        assert any(i.id == issue.id for i in results)
+
+    def test_wip_category_direct(self, db: FiligreeDB) -> None:
+        """status='wip' should also work directly."""
+        issue = db.create_issue("WIP direct")
+        db.update_issue(issue.id, status="in_progress")
+        results = db.list_issues(status="wip")
+        assert any(i.id == issue.id for i in results)
+
+    def test_done_category_direct(self, db: FiligreeDB) -> None:
+        """status='done' should also work directly."""
+        issue = db.create_issue("Done direct")
+        db.close_issue(issue.id)
+        results = db.list_issues(status="done")
+        assert any(i.id == issue.id for i in results)
+
+
+class TestListIssuesFilters:
+    """M9: list_issues filter parameters beyond status."""
+
+    def test_filter_by_label(self, db: FiligreeDB) -> None:
+        a = db.create_issue("Labeled", labels=["urgent"])
+        db.create_issue("Unlabeled")
+        results = db.list_issues(label="urgent")
+        assert len(results) >= 1
+        assert any(i.id == a.id for i in results)
+        assert all("urgent" in i.labels for i in results)
+
+    def test_filter_by_assignee(self, db: FiligreeDB) -> None:
+        issue = db.create_issue("Assigned")
+        db.claim_issue(issue.id, assignee="alice")
+        db.create_issue("Unassigned")
+        results = db.list_issues(assignee="alice")
+        assert any(i.id == issue.id for i in results)
+        assert all(i.assignee == "alice" for i in results)
+
+    def test_filter_by_type(self, db: FiligreeDB) -> None:
+        bug = db.create_issue("A bug", type="bug")
+        db.create_issue("A task", type="task")
+        results = db.list_issues(type="bug")
+        assert any(i.id == bug.id for i in results)
+        assert all(i.type == "bug" for i in results)
+
+    def test_filter_by_priority(self, db: FiligreeDB) -> None:
+        p0 = db.create_issue("Critical", priority=0)
+        db.create_issue("Normal", priority=2)
+        results = db.list_issues(priority=0)
+        assert any(i.id == p0.id for i in results)
+        assert all(i.priority == 0 for i in results)
+
+    def test_filter_by_parent_id(self, db: FiligreeDB) -> None:
+        parent = db.create_issue("Parent", type="epic")
+        child = db.create_issue("Child", parent_id=parent.id)
+        db.create_issue("Orphan")
+        results = db.list_issues(parent_id=parent.id)
+        assert any(i.id == child.id for i in results)
+        assert all(i.parent_id == parent.id for i in results)
+
+    def test_combined_filters(self, db: FiligreeDB) -> None:
+        """Multiple filters are ANDed together."""
+        db.create_issue("Bug P0", type="bug", priority=0)
+        db.create_issue("Task P0", type="task", priority=0)
+        db.create_issue("Bug P2", type="bug", priority=2)
+        results = db.list_issues(type="bug", priority=0)
+        assert all(i.type == "bug" and i.priority == 0 for i in results)
+
+
+class TestListIssuesBoundaries:
+    """M9: list_issues negative limit/offset guards."""
+
+    def test_negative_limit_raises(self, db: FiligreeDB) -> None:
+        with pytest.raises(ValueError, match="limit must be non-negative"):
+            db.list_issues(limit=-1)
+
+    def test_negative_offset_raises(self, db: FiligreeDB) -> None:
+        with pytest.raises(ValueError, match="offset must be non-negative"):
+            db.list_issues(offset=-1)
+
+    def test_zero_limit_returns_empty(self, db: FiligreeDB) -> None:
+        db.create_issue("Something")
+        results = db.list_issues(limit=0)
+        assert results == []
+
+    def test_offset_beyond_results(self, db: FiligreeDB) -> None:
+        db.create_issue("Only one")
+        results = db.list_issues(offset=9999)
+        assert results == []
+
+
 class TestSearchFTSFallback:
     """Bug filigree-35ef38: FTS fallback must only catch missing-table errors."""
 
