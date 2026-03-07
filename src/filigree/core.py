@@ -469,6 +469,19 @@ class FiligreeDB(FilesMixin, IssuesMixin, EventsMixin, WorkflowMixin, MetaMixin,
         ``check_same_thread=True`` needs to be shared across threads
         (e.g. async FastAPI test clients).
         """
+        try:
+            if self._conn is not None:
+                try:
+                    self._conn.commit()
+                finally:
+                    try:
+                        self._conn.close()
+                    finally:
+                        self._conn = None
+        finally:
+            self._check_same_thread = check_same_thread
+
+    def close(self) -> None:
         if self._conn is not None:
             try:
                 self._conn.commit()
@@ -477,12 +490,3 @@ class FiligreeDB(FilesMixin, IssuesMixin, EventsMixin, WorkflowMixin, MetaMixin,
                     self._conn.close()
                 finally:
                     self._conn = None
-        self._check_same_thread = check_same_thread
-
-    def close(self) -> None:
-        if self._conn is not None:
-            try:
-                self._conn.commit()
-            finally:
-                self._conn.close()
-                self._conn = None

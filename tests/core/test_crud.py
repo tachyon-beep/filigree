@@ -6,7 +6,7 @@ import json
 import sqlite3
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -1361,3 +1361,90 @@ class TestCloseCommitsPending:
         assert found is not None
         assert found.title == "ctx write"
         db2.close()
+
+    def test_close_clears_conn_even_when_sqlite_close_raises(self, tmp_path: Path) -> None:
+        """_conn must be None after close() even if Connection.close() raises."""
+        db = FiligreeDB(tmp_path / "close-err.db", prefix="test")
+        db.initialize()
+
+        # Replace _conn with a mock whose close() raises
+        mock_conn = MagicMock(wraps=db._conn)
+        mock_conn.close.side_effect = sqlite3.ProgrammingError("simulated close failure")
+        db._conn = mock_conn
+
+        with pytest.raises(sqlite3.ProgrammingError, match="simulated close failure"):
+            db.close()
+
+        # _conn must be cleared despite the exception
+        assert db._conn is None
+
+    def test_context_manager_clears_conn_on_close_error(self, tmp_path: Path) -> None:
+        """Context manager must clear _conn even if close() raises internally."""
+        db_path = tmp_path / "ctx-err.db"
+        db = FiligreeDB(db_path, prefix="test")
+        db.initialize()
+
+        mock_conn = MagicMock(wraps=db._conn)
+        mock_conn.close.side_effect = sqlite3.ProgrammingError("simulated close failure")
+        db._conn = mock_conn
+
+        with pytest.raises(sqlite3.ProgrammingError, match="simulated close failure"):
+            db.__exit__(None, None, None)
+
+        assert db._conn is None
+
+
+class TestReconnect:
+    """reconnect() closes and reopens the connection with new settings."""
+
+    def test_reconnect_changes_check_same_thread(self, tmp_path: Path) -> None:
+        db = FiligreeDB(tmp_path / "reconnect.db", prefix="test")
+        db.initialize()
+        assert db._check_same_thread is True
+
+        db.reconnect(check_same_thread=False)
+        assert db._check_same_thread is False
+        assert db._conn is None  # connection cleared, will lazily reopen
+
+        # Accessing conn should create a new connection that works
+        _ = db.conn
+        assert db._conn is not None
+
+    def test_reconnect_commits_pending_writes(self, tmp_path: Path) -> None:
+        db_path = tmp_path / "reconnect-commit.db"
+        db = FiligreeDB(db_path, prefix="test")
+        db.initialize()
+        issue = db.create_issue(title="survive reconnect", type="task")
+
+        db.reconnect(check_same_thread=False)
+
+        # Re-initialize and verify data persisted
+        db.initialize()
+        found = db.get_issue(issue.id)
+        assert found.title == "survive reconnect"
+        db.close()
+
+    def test_reconnect_clears_conn_even_when_close_raises(self, tmp_path: Path) -> None:
+        """_conn must be None after reconnect() even if Connection.close() raises."""
+        db = FiligreeDB(tmp_path / "reconnect-err.db", prefix="test")
+        db.initialize()
+
+        mock_conn = MagicMock(wraps=db._conn)
+        mock_conn.close.side_effect = sqlite3.ProgrammingError("simulated close failure")
+        db._conn = mock_conn
+
+        with pytest.raises(sqlite3.ProgrammingError, match="simulated close failure"):
+            db.reconnect(check_same_thread=False)
+
+        assert db._conn is None
+        assert db._check_same_thread is False
+
+    def test_reconnect_noop_when_no_connection(self, tmp_path: Path) -> None:
+        """reconnect() on a fresh DB (no conn yet) just updates the setting."""
+        db = FiligreeDB(tmp_path / "reconnect-noop.db", prefix="test")
+        # Don't call initialize — no connection opened yet
+        assert db._conn is None
+
+        db.reconnect(check_same_thread=False)
+        assert db._conn is None
+        assert db._check_same_thread is False
