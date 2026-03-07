@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
 
-from filigree.types.core import ISOTimestamp, StatusCategory
+from filigree.types.core import AssocType, ISOTimestamp, StatusCategory
 from filigree.types.events import EventType
 
 if TYPE_CHECKING:
@@ -132,4 +132,4 @@ class DBMixinProtocol(Protocol):
         metadata: dict[str, Any] | None = None,
     ) -> FileRecord: ...
 
-    def add_file_association(self, file_id: str, issue_id: str, assoc_type: str) -> None: ...
+    def add_file_association(self, file_id: str, issue_id: str, assoc_type: AssocType) -> None: ...

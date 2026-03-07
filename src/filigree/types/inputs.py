@@ -21,7 +21,7 @@ Safety note on cast():
 
 from typing import Any, NotRequired, TypedDict
 
-from filigree.types.core import ISOTimestamp
+from filigree.types.core import AssocType, ISOTimestamp
 
 # ---------------------------------------------------------------------------
 # issues.py handlers
@@ -311,7 +311,7 @@ class GetIssueFilesArgs(TypedDict):
 class AddFileAssociationArgs(TypedDict):
     file_id: str
     issue_id: str
-    assoc_type: str
+    assoc_type: AssocType
 
 
 class RegisterFileArgs(TypedDict):

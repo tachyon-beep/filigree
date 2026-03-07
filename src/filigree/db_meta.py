@@ -11,7 +11,7 @@ import json
 import logging
 import sqlite3
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 from filigree.db_base import DBMixinProtocol, _now_iso
 from filigree.db_files import VALID_FINDING_STATUSES, VALID_SEVERITIES
@@ -54,7 +54,7 @@ class MetaMixin(DBMixinProtocol):
             "SELECT id, author, text, created_at FROM comments WHERE issue_id = ? ORDER BY created_at",
             (issue_id,),
         ).fetchall()
-        return cast(list[CommentRecord], [dict(r) for r in rows])
+        return [CommentRecord(id=r["id"], author=r["author"], text=r["text"], created_at=r["created_at"]) for r in rows]
 
     # -- Labels --------------------------------------------------------------
 

@@ -10,6 +10,7 @@ ISOTimestamp = NewType("ISOTimestamp", str)
 # core.py re-exports these; db_files.py derives frozensets via get_args().
 Severity = Literal["critical", "high", "medium", "low", "info"]
 FindingStatus = Literal["open", "acknowledged", "fixed", "false_positive", "unseen_in_latest"]
+AssocType = Literal["bug_in", "task_for", "scan_finding", "mentioned_in"]
 StatusCategory = Literal["open", "wip", "done"]
 
 

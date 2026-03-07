@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import TypedDict
 
 from filigree.types.core import (
+    AssocType,
     FileRecordDict,
     ISOTimestamp,
     ScanFindingDict,
@@ -17,7 +18,7 @@ class FileAssociation(TypedDict):
     id: int
     file_id: str
     issue_id: str
-    assoc_type: str
+    assoc_type: AssocType
     created_at: ISOTimestamp
     issue_title: str | None
     issue_status: str | None
@@ -29,7 +30,7 @@ class IssueFileAssociation(TypedDict):
     id: int
     file_id: str
     issue_id: str
-    assoc_type: str
+    assoc_type: AssocType
     created_at: ISOTimestamp
     file_path: str
     file_language: str | None

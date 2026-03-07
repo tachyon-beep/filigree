@@ -16,7 +16,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, ClassVar, get_args
 
 from filigree.db_base import DBMixinProtocol, _now_iso
-from filigree.types.core import FindingStatus, Severity
+from filigree.types.core import AssocType, FindingStatus, Severity
 from filigree.types.files import ScanIngestResult
 
 if TYPE_CHECKING:
@@ -42,7 +42,7 @@ logger = logging.getLogger(__name__)
 VALID_SEVERITIES: frozenset[str] = frozenset(get_args(Severity))
 VALID_FINDING_STATUSES: frozenset[str] = frozenset(get_args(FindingStatus))
 TERMINAL_FINDING_STATUSES: frozenset[str] = frozenset({"fixed", "false_positive"})
-VALID_ASSOC_TYPES = frozenset({"bug_in", "task_for", "scan_finding", "mentioned_in"})
+VALID_ASSOC_TYPES: frozenset[str] = frozenset(get_args(AssocType))
 
 
 def _normalize_scan_path(path: str) -> str:
@@ -747,7 +747,7 @@ class FilesMixin(DBMixinProtocol):
         file_id: str,
         finding_id: str,
         *,
-        status: str | None = None,
+        status: FindingStatus | None = None,
         issue_id: str | None = None,
     ) -> ScanFinding:
         """Update finding status and/or linked issue for a specific file finding."""
@@ -868,8 +868,8 @@ class FilesMixin(DBMixinProtocol):
         self,
         file_id: str,
         *,
-        severity: str | None = None,
-        status: str | None = None,
+        severity: Severity | None = None,
+        status: FindingStatus | None = None,
         sort: str = "updated_at",
     ) -> tuple[str, list[Any], str]:
         """Build WHERE clause, params, and ORDER clause for findings queries.
@@ -899,8 +899,8 @@ class FilesMixin(DBMixinProtocol):
         self,
         file_id: str,
         *,
-        severity: str | None = None,
-        status: str | None = None,
+        severity: Severity | None = None,
+        status: FindingStatus | None = None,
         sort: str = "updated_at",
         limit: int = 100,
         offset: int = 0,
@@ -917,8 +917,8 @@ class FilesMixin(DBMixinProtocol):
         self,
         file_id: str,
         *,
-        severity: str | None = None,
-        status: str | None = None,
+        severity: Severity | None = None,
+        status: FindingStatus | None = None,
         sort: str = "updated_at",
         limit: int = 100,
         offset: int = 0,
@@ -1015,7 +1015,7 @@ class FilesMixin(DBMixinProtocol):
         self,
         file_id: str,
         issue_id: str,
-        assoc_type: str,
+        assoc_type: AssocType,
     ) -> None:
         """Link a file to an issue. Idempotent (duplicates ignored)."""
         if assoc_type not in VALID_ASSOC_TYPES:

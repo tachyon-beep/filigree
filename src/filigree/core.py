@@ -40,6 +40,7 @@ from filigree.db_planning import PlanningMixin
 from filigree.db_schema import CURRENT_SCHEMA_VERSION, SCHEMA_SQL
 from filigree.db_workflow import WorkflowMixin
 from filigree.types.core import (
+    AssocType,
     FileRecordDict,
     FindingStatus,
     ISOTimestamp,
@@ -61,6 +62,7 @@ __all__ = [
     "VALID_ASSOC_TYPES",
     "VALID_FINDING_STATUSES",
     "VALID_SEVERITIES",
+    "AssocType",
     "FileRecordDict",
     "FindingStatus",
     "ISOTimestamp",

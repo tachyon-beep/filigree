@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import sqlite3
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 if TYPE_CHECKING:
     from fastapi import APIRouter
@@ -23,6 +23,7 @@ from filigree.dashboard_routes.common import (
     _parse_pagination,
     _safe_int,
 )
+from filigree.types.core import FindingStatus, Severity
 
 logger = logging.getLogger(__name__)
 
@@ -195,8 +196,8 @@ def create_router() -> APIRouter:
         try:
             result = db.get_findings_paginated(
                 file_id,
-                severity=params.get("severity"),
-                status=params.get("status"),
+                severity=cast(Severity | None, params.get("severity")),
+                status=cast(FindingStatus | None, params.get("status")),
                 sort=params.get("sort", "updated_at"),
                 limit=limit,
                 offset=offset,
@@ -228,7 +229,7 @@ def create_router() -> APIRouter:
             finding = db.update_finding(
                 file_id,
                 finding_id,
-                status=status,
+                status=cast(FindingStatus | None, status),
                 issue_id=issue_id,
             )
         except KeyError:
