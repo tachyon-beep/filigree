@@ -375,6 +375,16 @@ class TestBatchCli:
         data = json.loads(result.output)
         assert "error" in data
 
+    def test_batch_update_partial_failure_exits_nonzero(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        runner, _ = cli_in_project
+        r1 = runner.invoke(cli, ["create", "A"])
+        id1 = _extract_id(r1.output)
+        result = runner.invoke(cli, ["batch-update", id1, "nonexistent-abc", "--priority", "1", "--json"])
+        assert result.exit_code == 1
+        data = json.loads(result.output)
+        assert len(data["updated"]) == 1
+        assert len(data["errors"]) == 1
+
     def test_batch_close(self, cli_in_project: tuple[CliRunner, Path]) -> None:
         runner, _ = cli_in_project
         r1 = runner.invoke(cli, ["create", "A"])
@@ -400,7 +410,7 @@ class TestBatchCli:
         r1 = runner.invoke(cli, ["create", "A"])
         id1 = _extract_id(r1.output)
         result = runner.invoke(cli, ["batch-close", id1, "nonexistent-abc", "--json"])
-        assert result.exit_code == 0
+        assert result.exit_code == 1
         data = json.loads(result.output)
         assert len(data["closed"]) == 1
         assert len(data["errors"]) == 1
@@ -429,7 +439,7 @@ class TestBatchCli:
         r1 = runner.invoke(cli, ["create", "A"])
         id1 = _extract_id(r1.output)
         result = runner.invoke(cli, ["batch-add-label", "security", id1, "nonexistent-abc", "--json"])
-        assert result.exit_code == 0
+        assert result.exit_code == 1
         data = json.loads(result.output)
         assert len(data["labeled"]) == 1
         assert len(data["errors"]) == 1
@@ -457,7 +467,7 @@ class TestBatchCli:
         r1 = runner.invoke(cli, ["create", "A"])
         id1 = _extract_id(r1.output)
         result = runner.invoke(cli, ["batch-add-comment", "triage-complete", id1, "nonexistent-abc", "--json"])
-        assert result.exit_code == 0
+        assert result.exit_code == 1
         data = json.loads(result.output)
         assert len(data["commented"]) == 1
         assert len(data["errors"]) == 1

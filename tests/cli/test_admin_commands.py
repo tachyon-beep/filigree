@@ -95,7 +95,9 @@ class TestJsonRetrofit:
         result = runner.invoke(cli, ["reopen", issue_id, "--json"])
         assert result.exit_code == 0
         data = json.loads(result.output)
-        assert isinstance(data, list)
+        assert isinstance(data, dict)
+        assert "reopened" in data
+        assert isinstance(data["reopened"], list)
 
     def test_comment_json(self, cli_in_project: tuple[CliRunner, Path]) -> None:
         runner, _ = cli_in_project

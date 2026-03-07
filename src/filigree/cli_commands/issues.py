@@ -263,6 +263,7 @@ def close(ctx: click.Context, issue_ids: tuple[str, ...], reason: str, as_json: 
     """Close one or more issues."""
     with get_db() as db:
         closed: list[dict[str, Any]] = []
+        errors: list[dict[str, str]] = []
         for issue_id in issue_ids:
             try:
                 issue = db.close_issue(issue_id, reason=reason, actor=ctx.obj["actor"])
@@ -271,24 +272,25 @@ def close(ctx: click.Context, issue_ids: tuple[str, ...], reason: str, as_json: 
                 else:
                     click.echo(f"Closed {issue.id}: {issue.title}")
             except KeyError:
-                if as_json:
-                    click.echo(json_mod.dumps({"error": f"Not found: {issue_id}"}))
-                else:
+                errors.append({"id": issue_id, "error": f"Not found: {issue_id}"})
+                if not as_json:
                     click.echo(f"Not found: {issue_id}", err=True)
-                sys.exit(1)
             except ValueError as e:
-                if as_json:
-                    click.echo(json_mod.dumps({"error": str(e)}))
-                else:
+                errors.append({"id": issue_id, "error": str(e)})
+                if not as_json:
                     click.echo(str(e), err=True)
-                sys.exit(1)
         if as_json:
             # Include newly-unblocked issues (minimal fields to save tokens)
             closed_ids = {d["id"] for d in closed}
             ready = db.get_ready()
             unblocked = [{"id": i.id, "title": i.title, "priority": i.priority, "type": i.type} for i in ready if i.id not in closed_ids]
-            click.echo(json_mod.dumps({"closed": closed, "unblocked": unblocked}, indent=2, default=str))
+            payload: dict[str, Any] = {"closed": closed, "unblocked": unblocked}
+            if errors:
+                payload["errors"] = errors
+            click.echo(json_mod.dumps(payload, indent=2, default=str))
         refresh_summary(db)
+        if errors:
+            sys.exit(1)
 
 
 @click.command()
@@ -299,6 +301,7 @@ def reopen(ctx: click.Context, issue_ids: tuple[str, ...], as_json: bool) -> Non
     """Reopen one or more closed issues."""
     with get_db() as db:
         reopened: list[dict[str, Any]] = []
+        errors: list[dict[str, str]] = []
         for issue_id in issue_ids:
             try:
                 issue = db.reopen_issue(issue_id, actor=ctx.obj["actor"])
@@ -307,20 +310,21 @@ def reopen(ctx: click.Context, issue_ids: tuple[str, ...], as_json: bool) -> Non
                 else:
                     click.echo(f"Reopened {issue.id}: {issue.title} [{issue.status}]")
             except KeyError:
-                if as_json:
-                    click.echo(json_mod.dumps({"error": f"Not found: {issue_id}"}))
-                else:
+                errors.append({"id": issue_id, "error": f"Not found: {issue_id}"})
+                if not as_json:
                     click.echo(f"Not found: {issue_id}", err=True)
-                sys.exit(1)
             except ValueError as e:
-                if as_json:
-                    click.echo(json_mod.dumps({"error": str(e)}))
-                else:
+                errors.append({"id": issue_id, "error": str(e)})
+                if not as_json:
                     click.echo(f"Error reopening {issue_id}: {e}", err=True)
-                sys.exit(1)
         if as_json:
-            click.echo(json_mod.dumps(reopened, indent=2, default=str))
+            payload: dict[str, Any] = {"reopened": reopened}
+            if errors:
+                payload["errors"] = errors
+            click.echo(json_mod.dumps(payload, indent=2, default=str))
         refresh_summary(db)
+        if errors:
+            sys.exit(1)
 
 
 @click.command()
@@ -399,18 +403,28 @@ def claim_next(
 
 @click.command("release")
 @click.argument("issue_id")
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
 @click.pass_context
-def release(ctx: click.Context, issue_id: str) -> None:
+def release(ctx: click.Context, issue_id: str, as_json: bool) -> None:
     """Release a claimed issue by clearing its assignee."""
     with get_db() as db:
         try:
             issue = db.release_claim(issue_id, actor=ctx.obj["actor"])
-            click.echo(f"Released {issue.id}: {issue.title} [{issue.status}]")
+            if as_json:
+                click.echo(json_mod.dumps(issue.to_dict(), indent=2, default=str))
+            else:
+                click.echo(f"Released {issue.id}: {issue.title} [{issue.status}]")
         except KeyError:
-            click.echo(f"Not found: {issue_id}", err=True)
+            if as_json:
+                click.echo(json_mod.dumps({"error": f"Not found: {issue_id}"}))
+            else:
+                click.echo(f"Not found: {issue_id}", err=True)
             sys.exit(1)
         except ValueError as e:
-            click.echo(f"Error: {e}", err=True)
+            if as_json:
+                click.echo(json_mod.dumps({"error": str(e)}))
+            else:
+                click.echo(f"Error: {e}", err=True)
             sys.exit(1)
         refresh_summary(db)
 

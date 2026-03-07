@@ -260,6 +260,8 @@ def batch_update(
                     click.echo(f"    Valid transitions: {valid}", err=True)
             click.echo(f"Updated {len(results)} issues")
         refresh_summary(db)
+        if errors:
+            sys.exit(1)
 
 
 @click.command("batch-close")
@@ -297,6 +299,8 @@ def batch_close(ctx: click.Context, issue_ids: tuple[str, ...], reason: str, as_
                     click.echo(f"    Valid transitions: {valid}", err=True)
             click.echo(f"Closed {len(closed)}/{len(issue_ids)} issues")
         refresh_summary(db)
+        if errors:
+            sys.exit(1)
 
 
 @click.command("batch-add-label")
@@ -329,6 +333,8 @@ def batch_add_label(label_name: str, issue_ids: tuple[str, ...], as_json: bool) 
                 click.echo(f"  Error {err['id']}: {err['error']}", err=True)
             click.echo(f"Labeled {len(labeled)}/{len(issue_ids)} issues")
         refresh_summary(db)
+        if errors:
+            sys.exit(1)
 
 
 @click.command("batch-add-comment")
@@ -363,6 +369,8 @@ def batch_add_comment(ctx: click.Context, text: str, issue_ids: tuple[str, ...],
                 click.echo(f"  Error {err['id']}: {err['error']}", err=True)
             click.echo(f"Commented on {len(commented)}/{len(issue_ids)} issues")
         refresh_summary(db)
+        if errors:
+            sys.exit(1)
 
 
 def register(cli: click.Group) -> None:
