@@ -308,7 +308,7 @@ def create_app(*, server_mode: bool = False) -> ASGIApp:
                 # Match /api/p/{key}/… — extract the key segment
                 if path.startswith("/api/p/"):
                     parts = path.split("/", 5)  # ['', 'api', 'p', key, ...]
-                    if len(parts) >= 4:
+                    if len(parts) >= 4 and parts[3]:
                         token = _current_project_key.set(parts[3])
                         try:
                             return await call_next(request)

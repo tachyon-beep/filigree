@@ -431,10 +431,12 @@ def create_mcp_app(
             )
             await resp(scope, receive, send)
         finally:
-            if dir_token is not None:
-                _request_filigree_dir.reset(dir_token)
-            if db_token is not None:
-                _request_db.reset(db_token)
+            try:
+                if dir_token is not None:
+                    _request_filigree_dir.reset(dir_token)
+            finally:
+                if db_token is not None:
+                    _request_db.reset(db_token)
 
     return _handle_mcp, session_manager.run
 
