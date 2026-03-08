@@ -164,8 +164,17 @@ export function showWorkflowModal(type) {
   const modal = document.createElement("div");
   modal.id = "workflowModal";
   modal.className = "fixed inset-0 bg-black/50 flex items-center justify-center z-50";
+  // Shared cleanup: remove modal and keydown listener from all dismissal paths.
+  const onKey = (ev) => {
+    if (ev.key === "Escape") closeModal();
+  };
+  const closeModal = () => {
+    modal.remove();
+    document.removeEventListener("keydown", onKey);
+  };
+
   modal.onclick = (ev) => {
-    if (ev.target === modal) modal.remove();
+    if (ev.target === modal) closeModal();
   };
 
   modal.innerHTML =
@@ -176,20 +185,14 @@ export function showWorkflowModal(type) {
     '<select id="workflowModalType" onchange="loadWorkflowInModal()" class="bg-overlay text-primary text-xs rounded px-2 py-1 border border-strong">' +
     '<option value="">Select type...</option></select>' +
     "</div>" +
-    '<button onclick="document.getElementById(\'workflowModal\').remove()" class="text-muted text-primary-hover text-lg">&times;</button>' +
+    '<button id="workflowModalClose" class="text-muted text-primary-hover text-lg">&times;</button>' +
     "</div>" +
     '<div id="workflowModalCy" class="flex-1" style="min-height:0"></div>' +
     "</div>";
 
   document.body.appendChild(modal);
 
-  // Close on Escape
-  const onKey = (ev) => {
-    if (ev.key === "Escape") {
-      modal.remove();
-      document.removeEventListener("keydown", onKey);
-    }
-  };
+  document.getElementById("workflowModalClose").onclick = closeModal;
   document.addEventListener("keydown", onKey);
 
   populateWorkflowModalTypes(type);

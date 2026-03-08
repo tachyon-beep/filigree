@@ -24,7 +24,7 @@ const DEFAULT_PROJECT_FILTERS = Object.freeze({
   blocked: false,
 });
 const VALID_PRIORITY_FILTERS = new Set(["all", "0-1", "2", "3-4"]);
-const VALID_DONE_TIME_BOUNDS = new Set(["0", "7", "14", "30"]);
+const VALID_DONE_TIME_BOUNDS = new Set(["0", "1", "3", "7", "14", "30"]);
 
 function getProjectStorageKey() {
   return state.currentProjectKey || "__default__";

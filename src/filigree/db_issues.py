@@ -131,7 +131,7 @@ class IssuesMixin(DBMixinProtocol):
             raise ValueError(msg)
         if fields is not None and not isinstance(fields, dict):
             msg = "fields must be a dict"
-            raise ValueError(msg)
+            raise TypeError(msg)
         if fields:
             for k in fields:
                 if not k or not k.strip():
@@ -337,7 +337,7 @@ class IssuesMixin(DBMixinProtocol):
         # --- Validate all inputs BEFORE any writes to prevent partial commits ---
         if fields is not None and not isinstance(fields, dict):
             msg = "fields must be a dict"
-            raise ValueError(msg)
+            raise TypeError(msg)
         if priority is not None and priority != current.priority and not (0 <= priority <= 4):
             msg = f"Priority must be between 0 and 4, got {priority}"
             raise ValueError(msg)
