@@ -14,6 +14,7 @@ from filigree.types.api import (
     OutboundTransitionInfo,
     PackListItem,
     StateExplanation,
+    TransitionDetail,
     ValidationResult,
     WorkflowGuideResponse,
     WorkflowStatesResponse,
@@ -265,14 +266,14 @@ async def _handle_get_valid_transitions(arguments: dict[str, Any]) -> list[TextC
         transitions = tracker.get_valid_transitions(args["issue_id"])
         return _text(
             [
-                {
-                    "to": t.to,
-                    "category": t.category,
-                    "enforcement": t.enforcement,
-                    "requires_fields": list(t.requires_fields),
-                    "missing_fields": list(t.missing_fields),
-                    "ready": t.ready,
-                }
+                TransitionDetail(
+                    to=t.to,
+                    category=t.category,
+                    enforcement=t.enforcement or "",
+                    requires_fields=list(t.requires_fields),
+                    missing_fields=list(t.missing_fields),
+                    ready=t.ready,
+                )
                 for t in transitions
             ]
         )

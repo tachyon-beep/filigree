@@ -248,7 +248,9 @@ async def _handle_promote_observation(arguments: dict[str, Any]) -> list[TextCon
             actor=actor,
         )
     except ValueError as e:
-        return _text(ErrorResponse(error=str(e), code="not_found"))
+        msg = str(e)
+        code = "not_found" if "not found" in msg.lower() else "validation_error"
+        return _text(ErrorResponse(error=msg, code=code))
     _refresh_summary()
     resp: dict[str, object] = {"issue": result["issue"].to_dict()}
     if result.get("warnings"):

@@ -177,6 +177,17 @@ class TestPromoteObservationTool:
         data = _parse(result)
         assert data["code"] == "not_found"
 
+    async def test_promote_invalid_type_returns_validation_error(self, mcp_db: FiligreeDB) -> None:
+        """Invalid issue_type should return 'validation_error', not 'not_found'."""
+        obs = mcp_db.create_observation("test obs for type validation")
+        result = await call_tool(
+            "promote_observation",
+            {"id": obs["id"], "type": "nonexistent_type"},
+        )
+        data = _parse(result)
+        assert data["code"] == "validation_error"
+        assert "nonexistent_type" in data["error"]
+
     async def test_promote_surfaces_warnings(self, mcp_db: FiligreeDB) -> None:
         """MCP handler surfaces warnings from promote_observation on enrichment failure."""
         from unittest.mock import patch

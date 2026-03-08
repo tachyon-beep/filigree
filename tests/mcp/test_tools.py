@@ -797,6 +797,21 @@ class TestWorkflowTemplateTools:
             for mf in t["missing_fields"]:
                 assert isinstance(mf, str), f"missing_fields element should be str, got {type(mf)}"
 
+    async def test_get_valid_transitions_enforcement_always_str(self, mcp_db: FiligreeDB) -> None:
+        """enforcement field must always be str, never None — even when source is None."""
+        from dataclasses import replace
+        from unittest.mock import patch
+
+        issue = mcp_db.create_issue("Enforcement coercion test", type="task")
+        real_transitions = mcp_db.get_valid_transitions(issue.id)
+        # Inject a None enforcement to simulate the edge case
+        patched = [replace(t, enforcement=None) for t in real_transitions]
+        with patch.object(mcp_db, "get_valid_transitions", return_value=patched):
+            result = await call_tool("get_valid_transitions", {"issue_id": issue.id})
+        data = _parse(result)
+        for t in data:
+            assert isinstance(t["enforcement"], str), f"enforcement should be str, got {type(t['enforcement'])}: {t['enforcement']}"
+
     async def test_get_valid_transitions_not_found(self, mcp_db: FiligreeDB) -> None:
         result = await call_tool("get_valid_transitions", {"issue_id": "nonexistent-xyz"})
         data = _parse(result)
