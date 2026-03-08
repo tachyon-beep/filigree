@@ -599,8 +599,8 @@ class TestScanRunId:
         row = db.conn.execute("SELECT scan_run_id FROM scan_findings").fetchone()
         assert row["scan_run_id"] == "run-001"
 
-    def test_scan_run_id_updates_to_latest(self, db: FiligreeDB) -> None:
-        """Re-seen findings update scan_run_id to the latest scan run."""
+    def test_scan_run_id_first_attribution_wins(self, db: FiligreeDB) -> None:
+        """First-attribution-wins: re-scan must NOT overwrite the original scan_run_id."""
         db.process_scan_results(
             scan_source="codex",
             scan_run_id="run-001",
@@ -612,7 +612,7 @@ class TestScanRunId:
             findings=[{"path": "a.py", "rule_id": "R1", "severity": "low", "message": "m2"}],
         )
         row = db.conn.execute("SELECT scan_run_id FROM scan_findings").fetchone()
-        assert row["scan_run_id"] == "run-002"
+        assert row["scan_run_id"] == "run-001"
 
     def test_scan_run_id_late_attribution(self, db: FiligreeDB) -> None:
         """Empty scan_run_id can be updated to non-empty on re-ingest."""

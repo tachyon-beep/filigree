@@ -589,7 +589,7 @@ class FilesMixin(DBMixinProtocol):
         """Update an already-existing finding with new scan data."""
         existing_run_id = existing_finding["scan_run_id"] or ""
         run_id_update = existing_run_id
-        if scan_run_id:
+        if scan_run_id and not existing_run_id:  # first-attribution-wins
             run_id_update = scan_run_id
 
         self.conn.execute(
