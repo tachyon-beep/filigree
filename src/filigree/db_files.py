@@ -46,9 +46,9 @@ VALID_FINDING_STATUSES: frozenset[str] = frozenset(get_args(FindingStatus))
 TERMINAL_FINDING_STATUSES: frozenset[str] = frozenset({"fixed", "false_positive"})
 # Safety: these values are interpolated into SQL string literals below.
 # Assert none contain characters that could break the SQL.
-assert all(
-    s.isalpha() or s.replace("_", "").isalpha() for s in TERMINAL_FINDING_STATUSES
-), f"TERMINAL_FINDING_STATUSES values must be simple identifiers, got: {TERMINAL_FINDING_STATUSES}"
+assert all(s.isalpha() or s.replace("_", "").isalpha() for s in TERMINAL_FINDING_STATUSES), (
+    f"TERMINAL_FINDING_STATUSES values must be simple identifiers, got: {TERMINAL_FINDING_STATUSES}"
+)
 VALID_ASSOC_TYPES: frozenset[str] = frozenset(get_args(AssocType))
 
 
@@ -351,13 +351,14 @@ class FilesMixin(DBMixinProtocol):
             f" WHERE fa.file_id = fr.id"
             f") AS associations_count, "
             f"(SELECT COUNT(*) FROM observations o"
-            f" WHERE o.file_id = fr.id"
+            f" WHERE o.file_id = fr.id AND o.expires_at > ?"
             f") AS observation_count"
             f" FROM file_records fr{where}"
             f" ORDER BY {sort} {order}"
             f" LIMIT ? OFFSET ?"
         )
-        rows = self.conn.execute(enriched_sql, [*params, limit, offset]).fetchall()
+        now_iso = _now_iso()
+        rows = self.conn.execute(enriched_sql, [now_iso, *params, limit, offset]).fetchall()
 
         results: list[EnrichedFileItem] = []
         for r in rows:
@@ -1083,10 +1084,13 @@ class FilesMixin(DBMixinProtocol):
         associations = self.get_file_associations(file_id)
         recent = self.get_findings(file_id, limit=10)
         summary = self.get_file_findings_summary(file_id)
-        # Observation count (raw, no sweep — read-only path).
+        # Observation count (no sweep, but filter expired — read-only path).
         # Guarded for pre-v7 DBs where observations table may not exist.
         try:
-            obs_count = self.conn.execute("SELECT COUNT(*) FROM observations WHERE file_id = ?", (file_id,)).fetchone()[0]
+            obs_count = self.conn.execute(
+                "SELECT COUNT(*) FROM observations WHERE file_id = ? AND expires_at > ?",
+                (file_id, _now_iso()),
+            ).fetchone()[0]
         except sqlite3.OperationalError as exc:
             if "no such table" not in str(exc):
                 raise

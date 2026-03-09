@@ -314,6 +314,10 @@ class ObservationsMixin(DBMixinProtocol):
             raise ValueError(f"Observation not found: {obs_id}")
         obs = dict(row)
 
+        # Reject expired observations — consistent with TTL enforcement elsewhere.
+        if obs["expires_at"] <= _now_iso():
+            raise ValueError(f"Observation {obs_id} has expired and cannot be promoted")
+
         # 2. Build issue fields
         issue_title = title or obs["summary"]
         desc_parts = []

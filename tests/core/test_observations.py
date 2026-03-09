@@ -465,6 +465,17 @@ class TestPromoteObservation:
         result = db.promote_observation(obs["id"])
         assert "warnings" not in result
 
+    def test_promote_expired_observation_raises(self, db: FiligreeDB) -> None:
+        """Promoting an expired observation should fail, not create a stale issue."""
+        obs = db.create_observation("stale finding")
+        db.conn.execute(
+            "UPDATE observations SET expires_at = '2020-01-01T00:00:00+00:00' WHERE id = ?",
+            (obs["id"],),
+        )
+        db.conn.commit()
+        with pytest.raises(ValueError, match="expired"):
+            db.promote_observation(obs["id"])
+
 
 class TestObservationStats:
     def test_count_empty(self, db: FiligreeDB) -> None:
@@ -578,8 +589,21 @@ class TestFileDetailObservations:
         detail = db.get_file_detail(file_id)
         assert detail["observation_count"] == 2
 
-    def test_file_detail_includes_expired_in_raw_count(self, db: FiligreeDB) -> None:
-        """get_file_detail uses a raw COUNT (no sweep) — expired rows are included."""
+    def test_list_files_excludes_expired_observations(self, db: FiligreeDB) -> None:
+        """list_files_paginated should exclude expired observations from the count."""
+        db.create_observation("active obs", file_path="src/listed.py")
+        obs2 = db.create_observation("will expire", file_path="src/listed.py", line=1)
+        db.conn.execute(
+            "UPDATE observations SET expires_at = '2020-01-01T00:00:00+00:00' WHERE id = ?",
+            (obs2["id"],),
+        )
+        db.conn.commit()
+        result = db.list_files_paginated(path_prefix="src/listed")
+        assert len(result["results"]) == 1
+        assert result["results"][0]["observation_count"] == 1
+
+    def test_file_detail_excludes_expired_observations(self, db: FiligreeDB) -> None:
+        """get_file_detail should exclude expired observations from the count."""
         db.create_observation("active obs", file_path="src/temp.py")
         obs2 = db.create_observation("will expire", file_path="src/temp.py", line=1)
         db.conn.execute(
@@ -588,8 +612,8 @@ class TestFileDetailObservations:
         )
         db.conn.commit()
         detail = db.get_file_detail(obs2["file_id"])
-        # Raw count includes both active and expired observations
-        assert detail["observation_count"] == 2
+        # Expired observations should not be counted
+        assert detail["observation_count"] == 1
 
 
 # ── M13: observation_stats sweep=False oldest_hours ────────────────────
