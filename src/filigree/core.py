@@ -20,11 +20,11 @@ import shutil
 import sqlite3
 import sys
 import uuid as _uuid
-from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from filigree.db_base import StatusCategory, _now_iso
+from filigree.models import FileRecord, Issue, ScanFinding, _EMPTY_TS
 from filigree.db_events import EventsMixin
 from filigree.db_files import (
     VALID_ASSOC_TYPES,
@@ -63,14 +63,18 @@ __all__ = [
     "VALID_FINDING_STATUSES",
     "VALID_SEVERITIES",
     "AssocType",
+    "FileRecord",
     "FileRecordDict",
     "FindingStatus",
     "ISOTimestamp",
+    "Issue",
     "IssueDict",
     "PaginatedResult",
     "ProjectConfig",
+    "ScanFinding",
     "ScanFindingDict",
     "Severity",
+    "_EMPTY_TS",
     "_normalize_scan_path",
 ]
 
@@ -205,131 +209,7 @@ def _seed_builtin_packs(conn: sqlite3.Connection, now: str) -> int:
     return count
 
 
-# ---------------------------------------------------------------------------
-# Data classes
-# ---------------------------------------------------------------------------
-
-# ISOTimestamp moved to filigree.types.core (re-exported above)
-_EMPTY_TS: ISOTimestamp = ISOTimestamp("")
-
-
-@dataclass
-class Issue:
-    id: str
-    title: str
-    status: str = "open"
-    priority: int = 2
-    type: str = "task"
-    parent_id: str | None = None
-    assignee: str = ""
-    created_at: ISOTimestamp = _EMPTY_TS
-    updated_at: ISOTimestamp = _EMPTY_TS
-    closed_at: ISOTimestamp | None = None
-    description: str = ""
-    notes: str = ""
-    fields: dict[str, Any] = field(default_factory=dict)
-    # Computed (not stored directly)
-    labels: list[str] = field(default_factory=list)
-    blocks: list[str] = field(default_factory=list)
-    blocked_by: list[str] = field(default_factory=list)
-    is_ready: bool = False
-    children: list[str] = field(default_factory=list)
-    status_category: StatusCategory = "open"
-
-    def to_dict(self) -> IssueDict:
-        return IssueDict(
-            id=self.id,
-            title=self.title,
-            status=self.status,
-            status_category=self.status_category,
-            priority=self.priority,
-            type=self.type,
-            parent_id=self.parent_id,
-            assignee=self.assignee,
-            created_at=self.created_at,
-            updated_at=self.updated_at,
-            closed_at=self.closed_at,
-            description=self.description,
-            notes=self.notes,
-            fields=self.fields,
-            labels=self.labels,
-            blocks=self.blocks,
-            blocked_by=self.blocked_by,
-            is_ready=self.is_ready,
-            children=self.children,
-        )
-
-
-@dataclass
-class FileRecord:
-    id: str
-    path: str
-    language: str = ""
-    file_type: str = ""
-    first_seen: ISOTimestamp = _EMPTY_TS
-    updated_at: ISOTimestamp = _EMPTY_TS
-    metadata: dict[str, Any] = field(default_factory=dict)
-
-    def to_dict(self) -> FileRecordDict:
-        return FileRecordDict(
-            id=self.id,
-            path=self.path,
-            language=self.language,
-            file_type=self.file_type,
-            first_seen=self.first_seen,
-            updated_at=self.updated_at,
-            metadata=self.metadata,
-        )
-
-
-@dataclass
-class ScanFinding:
-    id: str
-    file_id: str
-    severity: Severity = "info"
-    status: FindingStatus = "open"
-    scan_source: str = ""
-    rule_id: str = ""
-    message: str = ""
-    suggestion: str = ""
-    scan_run_id: str = ""
-    line_start: int | None = None
-    line_end: int | None = None
-    issue_id: str | None = None
-    seen_count: int = 1
-    first_seen: ISOTimestamp = _EMPTY_TS
-    updated_at: ISOTimestamp = _EMPTY_TS
-    last_seen_at: ISOTimestamp | None = None
-    metadata: dict[str, Any] = field(default_factory=dict)
-
-    def __post_init__(self) -> None:
-        from filigree.db_files import VALID_FINDING_STATUSES, VALID_SEVERITIES
-
-        if self.severity not in VALID_SEVERITIES:
-            raise ValueError(f"Invalid severity {self.severity!r}, expected one of {sorted(VALID_SEVERITIES)}")
-        if self.status not in VALID_FINDING_STATUSES:
-            raise ValueError(f"Invalid finding status {self.status!r}, expected one of {sorted(VALID_FINDING_STATUSES)}")
-
-    def to_dict(self) -> ScanFindingDict:
-        return ScanFindingDict(
-            id=self.id,
-            file_id=self.file_id,
-            severity=self.severity,
-            status=self.status,
-            scan_source=self.scan_source,
-            rule_id=self.rule_id,
-            message=self.message,
-            suggestion=self.suggestion,
-            scan_run_id=self.scan_run_id,
-            line_start=self.line_start,
-            line_end=self.line_end,
-            issue_id=self.issue_id,
-            seen_count=self.seen_count,
-            first_seen=self.first_seen,
-            updated_at=self.updated_at,
-            last_seen_at=self.last_seen_at,
-            metadata=self.metadata,
-        )
+# Issue, FileRecord, ScanFinding moved to filigree.models (re-exported above)
 
 
 # ---------------------------------------------------------------------------
