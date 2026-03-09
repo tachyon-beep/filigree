@@ -3,7 +3,7 @@
 // ---------------------------------------------------------------------------
 
 import { state, TYPE_COLORS } from "../state.js";
-import { escHtml } from "../ui.js";
+import { escHtml, escJsSingle } from "../ui.js";
 
 // Type display order for sidebar groups
 const TYPE_ORDER = ["milestone", "epic", "release", "feature", "task", "bug"];
@@ -100,10 +100,10 @@ export function renderTypeFilter() {
     .map((t) => {
       const active = state.graphSidebarTypeFilter.size === 0 || state.graphSidebarTypeFilter.has(t);
       const color = TYPE_COLORS[t] || "#6B7280";
-      return `<button onclick="toggleGraphSidebarType('${t}')"
+      return `<button onclick="toggleGraphSidebarType('${escJsSingle(t)}')"
         class="px-1.5 py-0.5 rounded text-[10px] font-medium ${active ? "text-primary" : "text-muted opacity-50"}"
         style="border:1px solid ${active ? color : "var(--border-default)"};${active ? `background:${color}22` : ""}"
-        aria-pressed="${active}">${t}</button>`;
+        aria-pressed="${active}">${escHtml(t)}</button>`;
     })
     .join("");
 }
@@ -197,7 +197,7 @@ export function renderGraphSidebar() {
     const color = TYPE_COLORS[type] || "#6B7280";
     html.push(`<div class="mt-2 mb-1 flex items-center gap-1">
       <span class="inline-block w-2 h-2 rounded-full" style="background:${color}"></span>
-      <span class="font-medium text-secondary uppercase tracking-wider text-[10px]">${type}s (${items.length})</span>
+      <span class="font-medium text-secondary uppercase tracking-wider text-[10px]">${escHtml(type)}s (${items.length})</span>
     </div>`);
     for (const issue of items) {
       const sel = state.graphSidebarSelections.get(issue.id);
@@ -224,9 +224,9 @@ export function renderGraphSidebar() {
 
       html.push(`<div role="option" aria-selected="${!!selState}"
         class="flex items-center gap-1.5 px-2 py-1 rounded cursor-pointer ${bgClass} ${textClass}"
-        onclick="toggleGraphSidebarItem('${issue.id}')"
+        onclick="toggleGraphSidebarItem('${escJsSingle(issue.id)}')"
         tabindex="0"
-        onkeydown="if(event.key===' '||event.key==='Enter'){event.preventDefault();toggleGraphSidebarItem('${issue.id}')}"
+        onkeydown="if(event.key===' '||event.key==='Enter'){event.preventDefault();toggleGraphSidebarItem('${escJsSingle(issue.id)}')}"
         title="${escHtml(issue.title)}">
         <span class="truncate">${escHtml(title)}</span>
         ${depBadge}

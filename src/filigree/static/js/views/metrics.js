@@ -5,7 +5,7 @@
 
 import { fetchActivity, fetchMetrics, fetchObservationStats } from "../api.js";
 import { state, THEME_COLORS } from "../state.js";
-import { escHtml } from "../ui.js";
+import { escHtml, escJsSingle } from "../ui.js";
 import { renderActivitySection } from "./activity.js";
 
 /**
@@ -118,13 +118,13 @@ function renderObservationStats(container, obsStats) {
     '<div class="rounded p-4 mt-4" style="background:var(--surface-raised);border:1px solid var(--border-default)">' +
     '<div class="text-xs font-medium mb-3" style="color:var(--text-secondary)">Observations</div>' +
     '<div class="grid grid-cols-4 gap-3">' +
-    '<div><div class="text-lg font-bold" style="color:var(--accent)">' + obsStats.count + '</div>' +
+    '<div><div class="text-lg font-bold" style="color:var(--accent)">' + escHtml(obsStats.count) + '</div>' +
     '<div class="text-[10px]" style="color:var(--text-muted)">pending</div></div>' +
-    '<div><div class="text-lg font-bold ' + staleColor + '">' + obsStats.stale_count + '</div>' +
+    '<div><div class="text-lg font-bold ' + staleColor + '">' + escHtml(obsStats.stale_count) + '</div>' +
     '<div class="text-[10px]" style="color:var(--text-muted)">stale (&gt;48h)</div></div>' +
-    '<div><div class="text-lg font-bold ' + expiringColor + '">' + obsStats.expiring_soon_count + '</div>' +
+    '<div><div class="text-lg font-bold ' + expiringColor + '">' + escHtml(obsStats.expiring_soon_count) + '</div>' +
     '<div class="text-[10px]" style="color:var(--text-muted)">expiring &lt;24h</div></div>' +
-    '<div><div class="text-lg font-bold" style="color:var(--text-primary)">' + obsStats.oldest_hours + 'h</div>' +
+    '<div><div class="text-lg font-bold" style="color:var(--text-primary)">' + escHtml(obsStats.oldest_hours) + 'h</div>' +
     '<div class="text-[10px]" style="color:var(--text-muted)">oldest</div></div>' +
     '</div></div>';
 }
@@ -257,7 +257,7 @@ export function showStaleIssues() {
         const hrs = Math.floor((Date.now() - new Date(i.updated_at).getTime()) / 3600000);
         return (
           "<button onclick=\"document.getElementById('staleModal').remove();openDetail('" +
-          i.id +
+          escJsSingle(i.id) +
           "')\" " +
           'class="text-xs text-left bg-overlay bg-overlay-hover px-3 py-2 rounded" style="color:var(--text-primary)">' +
           escHtml(i.title.slice(0, 40)) +

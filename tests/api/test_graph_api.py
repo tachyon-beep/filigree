@@ -117,7 +117,8 @@ class TestGraphSidebarContracts:
 
     def test_graph_sidebar_safety_and_sanitization(self) -> None:
         sidebar_js = (STATIC_DIR / "js" / "views" / "graphSidebar.js").read_text()
-        assert "import { escHtml }" in sidebar_js, "Must import escHtml for XSS prevention"
+        assert "escHtml" in sidebar_js, "Must import escHtml for XSS prevention"
+        assert "escJsSingle" in sidebar_js, "Must import escJsSingle for onclick attribute escaping"
         assert "escHtml(issue.title)" in sidebar_js, "Issue titles must be HTML-escaped"
         assert "checkNodeCap(" in sidebar_js, "Node cap must be checked before adding selections"
         assert "confirmNodeCap(" in sidebar_js, "Node cap must trigger user confirmation"
