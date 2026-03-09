@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from typing import Any, Generic, Literal, NewType, NotRequired, TypedDict, TypeVar
+from typing import TYPE_CHECKING, Any, Generic, Literal, NewType, NotRequired, TypedDict, TypeVar
+
+if TYPE_CHECKING:
+    from filigree.models import Issue
 
 ISOTimestamp = NewType("ISOTimestamp", str)
 
@@ -135,7 +138,7 @@ class BatchDismissResult(TypedDict):
 class PromoteObservationResult(TypedDict):
     """Shape contract for promote_observation() return value."""
 
-    issue: Any  # Issue dataclass — typed as Any to avoid circular import
+    issue: Issue
     warnings: NotRequired[list[str]]
 
 
