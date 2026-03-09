@@ -252,9 +252,11 @@ export function toggleMultiSelect() {
   state.multiSelectMode = !state.multiSelectMode;
   if (!state.multiSelectMode) state.selectedCards.clear();
   const btn = document.getElementById("btnMultiSelect");
-  btn.className = state.multiSelectMode
-    ? "px-2 py-1 rounded text-xs font-medium bg-accent text-primary"
-    : "px-2 py-1 rounded text-xs font-medium bg-overlay text-secondary border border-strong";
+  if (btn) {
+    btn.className = state.multiSelectMode
+      ? "px-2 py-1 rounded text-xs font-medium bg-accent text-primary"
+      : "px-2 py-1 rounded text-xs font-medium bg-overlay text-secondary border border-strong";
+  }
   render();
 }
 

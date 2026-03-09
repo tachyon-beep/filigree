@@ -23,7 +23,6 @@ import {
   loadProjectFilterSettings,
   populatePresets,
   populateTypeFilter,
-  savePreset,
   toggleBlocked,
   toggleCardSelect,
   toggleMultiSelect,
@@ -88,7 +87,6 @@ import {
   callbacks as graphCallbacks,
   graphFit,
   renderGraph,
-  setGraphPreset,
   showHealthBreakdown,
   toggleCriticalPath,
 } from "./views/graph.js";
@@ -614,7 +612,6 @@ window.sortListMode = sortListMode;
 // Graph
 window.renderGraph = renderGraph;
 window.graphFit = graphFit;
-window.setGraphPreset = setGraphPreset;
 window.toggleCriticalPath = toggleCriticalPath;
 window.showHealthBreakdown = showHealthBreakdown;
 

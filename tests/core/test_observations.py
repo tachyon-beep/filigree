@@ -154,6 +154,27 @@ class TestListObservations:
             db.create_observation(f"Obs {i}")
         assert len(db.list_observations(limit=2)) == 2
 
+    def test_list_with_offset(self, db: FiligreeDB) -> None:
+        for i in range(5):
+            db.create_observation(f"Obs {i}", priority=i % 5)
+        all_obs = db.list_observations()
+        offset_obs = db.list_observations(offset=2)
+        assert len(offset_obs) == 3
+        assert offset_obs[0]["id"] == all_obs[2]["id"]
+
+    def test_list_with_limit_and_offset(self, db: FiligreeDB) -> None:
+        for i in range(5):
+            db.create_observation(f"Obs {i}", priority=i % 5)
+        all_obs = db.list_observations()
+        page = db.list_observations(limit=2, offset=1)
+        assert len(page) == 2
+        assert page[0]["id"] == all_obs[1]["id"]
+        assert page[1]["id"] == all_obs[2]["id"]
+
+    def test_list_offset_beyond_results(self, db: FiligreeDB) -> None:
+        db.create_observation("Only one")
+        assert db.list_observations(offset=10) == []
+
     def test_list_filter_by_file_path(self, db: FiligreeDB) -> None:
         db.create_observation("api bug", file_path="src/api/routes.py")
         db.create_observation("core bug", file_path="src/core.py")

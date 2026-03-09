@@ -386,7 +386,12 @@ class FiligreeDB(FilesMixin, IssuesMixin, EventsMixin, WorkflowMixin, MetaMixin,
         if exc_type is not None and self._conn is not None:
             with contextlib.suppress(Exception):
                 self._conn.rollback()
-        self.close()
+            # After rollback, skip the commit in close() — the transaction is
+            # already ended and a commit would be a no-op in SQLite, but
+            # skipping it makes the intent explicit.
+            self._close_no_commit()
+        else:
+            self.close()
 
     @property
     def conn(self) -> sqlite3.Connection:
@@ -495,3 +500,11 @@ class FiligreeDB(FilesMixin, IssuesMixin, EventsMixin, WorkflowMixin, MetaMixin,
                     self._conn.close()
                 finally:
                     self._conn = None
+
+    def _close_no_commit(self) -> None:
+        """Close the connection without committing (used after rollback)."""
+        if self._conn is not None:
+            try:
+                self._conn.close()
+            finally:
+                self._conn = None

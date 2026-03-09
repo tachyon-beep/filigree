@@ -29,8 +29,6 @@ class TestDashboardIndex:
         assert resp.status_code == 200
         html = resp.text
         assert 'class="graph-toolbar flex flex-wrap items-center' in html
-        assert 'id="graphPreset"' in html
-        assert 'value="execution" selected' in html
         assert 'id="graphSidebar"' in html
         assert 'id="graphSidebarList"' in html
         assert 'id="graphSidebarTypeFilter"' in html
@@ -47,7 +45,6 @@ class TestDashboardIndex:
         assert resp.status_code == 200
         html = resp.text
         assert 'id="graphEpicsOnly" checked' not in html
-        assert 'value="execution" selected' in html
 
 
 class TestDashboardConfigAPI:

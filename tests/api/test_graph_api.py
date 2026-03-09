@@ -141,6 +141,109 @@ class TestGraphSidebarContracts:
         assert "graphSidebarTypeFilter" in state_js
 
 
+class TestAnalyticsContracts:
+    """Contract tests for analytics.js — health score and impact score computation."""
+
+    def test_analytics_module_exports(self) -> None:
+        analytics_js = (STATIC_DIR / "js" / "analytics.js").read_text()
+        assert "export function computeImpactScores()" in analytics_js
+        assert "export function computeHealthScore()" in analytics_js
+
+    def test_impact_scores_uses_bfs_traversal(self) -> None:
+        analytics_js = (STATIC_DIR / "js" / "analytics.js").read_text()
+        assert "const visited = new Set();" in analytics_js
+        assert "const queue = [" in analytics_js
+        assert "queue.shift()" in analytics_js
+        assert "visited.has(" in analytics_js
+        assert "state.impactScores" in analytics_js
+
+    def test_health_score_has_four_weighted_components(self) -> None:
+        analytics_js = (STATIC_DIR / "js" / "analytics.js").read_text()
+        assert "blockedScore" in analytics_js
+        assert "freshScore" in analytics_js
+        assert "readyScore" in analytics_js
+        assert "balanceScore" in analytics_js
+        assert "blockedScore + freshScore + readyScore + balanceScore" in analytics_js
+
+    def test_health_score_division_by_zero_guards(self) -> None:
+        analytics_js = (STATIC_DIR / "js" / "analytics.js").read_text()
+        assert "openIssues.length ?" in analytics_js
+        assert "wipIssues.length ?" in analytics_js
+
+    def test_health_score_stores_breakdown_in_state(self) -> None:
+        analytics_js = (STATIC_DIR / "js" / "analytics.js").read_text()
+        assert "state._healthBreakdown = {" in analytics_js
+        for key in ["blocked", "freshness", "ready", "balance"]:
+            assert f'"{key}"' in analytics_js or f"{key}:" in analytics_js
+
+    def test_analytics_wired_in_app(self) -> None:
+        app_js = (STATIC_DIR / "js" / "app.js").read_text()
+        assert "computeImpactScores" in app_js
+        assert "computeHealthScore" in app_js
+
+
+class TestRouterAliasContracts:
+    """Contract tests for router.js deprecated tab aliases."""
+
+    def test_aliases_map_exists(self) -> None:
+        router_js = (STATIC_DIR / "js" / "router.js").read_text()
+        assert "const ALIASES = {" in router_js
+        assert 'health: "files"' in router_js
+        assert 'activity: "insights"' in router_js
+        assert 'workflow: "kanban"' in router_js
+
+    def test_switch_view_applies_aliases(self) -> None:
+        router_js = (STATIC_DIR / "js" / "router.js").read_text()
+        fn_start = router_js.index("export function switchView(")
+        fn_end = router_js.index("export function switchKanbanMode(")
+        switch_block = router_js[fn_start:fn_end]
+        assert "ALIASES[view]" in switch_block
+
+    def test_parse_hash_applies_aliases(self) -> None:
+        router_js = (STATIC_DIR / "js" / "router.js").read_text()
+        fn_start = router_js.index("export function parseHash()")
+        parse_block = router_js[fn_start:]
+        assert "ALIASES[view]" in parse_block
+
+
+class TestGraphSidebarRenderingContracts:
+    """Contract tests for sidebar-scoped graph rendering model."""
+
+    def test_resolve_graph_scope_returns_nodes_edges_ghosts(self) -> None:
+        sidebar_js = (STATIC_DIR / "js" / "views" / "graphSidebar.js").read_text()
+        fn_start = sidebar_js.index("export function resolveGraphScope()")
+        scope_block = sidebar_js[fn_start:]
+        assert "nodes:" in scope_block
+        assert "edges:" in scope_block
+        assert "ghostIds" in scope_block
+
+    def test_render_graph_uses_resolve_graph_scope(self) -> None:
+        graph_js = (STATIC_DIR / "js" / "views" / "graph.js").read_text()
+        assert "resolveGraphScope()" in graph_js
+        assert "ghostIds" in graph_js
+
+    def test_sidebar_type_filter_exported(self) -> None:
+        sidebar_js = (STATIC_DIR / "js" / "views" / "graphSidebar.js").read_text()
+        assert "export function toggleGraphSidebarType(" in sidebar_js
+
+    def test_graph_renders_blank_state_when_no_selections(self) -> None:
+        graph_js = (STATIC_DIR / "js" / "views" / "graph.js").read_text()
+        assert "data-graph-blank" in graph_js
+        assert "graphSidebarSelections.size === 0" in graph_js
+
+    def test_graph_applies_status_pill_filters_to_scoped_nodes(self) -> None:
+        graph_js = (STATIC_DIR / "js" / "views" / "graph.js").read_text()
+        render_start = graph_js.index("export function renderGraph()")
+        render_block = graph_js[render_start:]
+        assert "statusPills.open" in render_block
+        assert "statusPills.active" in render_block
+        assert "statusPills.done" in render_block
+
+    def test_graph_ghost_nodes_have_reduced_opacity(self) -> None:
+        graph_js = (STATIC_DIR / "js" / "views" / "graph.js").read_text()
+        assert "isGhost ? 0.45" in graph_js or "isGhost: isGhost" in graph_js
+
+
 class TestSafeBoundedInt:
     """Bug filigree-2c3119: _safe_bounded_int must pass through _safe_int's error response."""
 

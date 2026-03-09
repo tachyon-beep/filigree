@@ -4,11 +4,39 @@
 
 **Goal:** Close all scanner system usability gaps so AI agents can trigger scans, poll status, triage findings, and manage the full lifecycle through MCP tools without REST/Bash fallback.
 
-**Architecture:** New `ScansMixin` (db_scans.py) owns scan_runs lifecycle. New `mcp_tools/scanners.py` handles scanner-domain tools. Finding triage tools added to `mcp_tools/files.py`. `process_scan_results` reworked to create observations instead of issues. Shared scanner pipeline extracted into `scan_utils.py`.
+**Architecture:** New `ScansMixin` (db_scans.py) owns scan_runs lifecycle. New `mcp_tools/scanners.py` handles scanner-domain tools. Finding triage tools added to `mcp_tools/files.py`. `process_scan_results` reworked to create observations instead of issues. Shared scanner pipeline extracted into `scripts/scan_utils.py` (existing CLI utils file — extended, not newly created).
 
 **Tech Stack:** Python 3.11+, SQLite, MCP SDK, pytest, FastAPI (dashboard routes)
 
+**Module layout (current state):**
+- Scan methods: `FilesMixin` in `db_files.py` (`process_scan_results` at line 724, `get_scan_runs` at line 799, `update_finding` at line 830)
+- Scanner registry: `src/filigree/scanners.py` (ScannerConfig, TOML definitions)
+- Scanner MCP tools: `mcp_tools/files.py` (`list_scanners` def at line 135/handler 365, `trigger_scan` def at line 143/handler 382)
+- Scan cooldown: IN-MEMORY dict at `mcp_server.py:60-62`, logic at `mcp_tools/files.py:447-505`
+- Dashboard routes: `dashboard_routes/files.py` (POST /v1/scan-results at line 292, GET /scan-runs at line 323)
+- Types: `types/files.py` (`ScanRunRecord` at line 88, `ScanIngestResult` at line 105)
+- CLI scanner utils: `scripts/scan_utils.py` (NOT in src/ — CLI pipeline utilities)
+- FiligreeDB class: `core.py:340` — MRO: FilesMixin, IssuesMixin, EventsMixin, WorkflowMixin, MetaMixin, PlanningMixin, ObservationsMixin
+- Schema version: 7 (at `db_schema.py:317`)
+- Note: `db_scans.py` and `mcp_tools/scanners.py` do NOT exist yet — they are created by this plan
+
 **Design doc:** `docs/plans/2026-03-06-scanner-remediation-design.md`
+
+---
+
+## Review Callouts (2026-03-06)
+
+These were identified during plan review and verified against the codebase:
+
+1. **`ScanRunDict` vs `ScanRunRecord`** — `types/files.py` already has `ScanRunRecord` (line 88, runs to ~line 103), which is a GROUP BY shape from scan_findings. The new `ScanRunDict` is a proper scan_runs table shape. Add a docstring to `ScanRunDict` clarifying the distinction: _"Shape for scan_runs table rows. Not to be confused with ScanRunRecord, which is a GROUP BY projection from scan_findings."_
+
+2. **`check_scan_cooldown` LIKE query** — The `json_extract(file_paths, '$') LIKE '%"path"%'` pattern is fragile for paths containing JSON-special characters. Acceptable for MVP. Add a `# TODO: replace LIKE with json_each() for robustness` comment in the implementation.
+
+3. **Task 7 / Task 10 overlap** — Both modify `dashboard_routes/files.py` for scan_run completion tracking. The executing agent MUST check whether Task 7's Step 6 already handled the scan_runs update before applying Task 10's Step 1. If it did, skip the duplicate code in Task 10.
+
+4. **Task 6 extraction ordering** — When moving tools from `files.py` to `scanners.py`, do additive changes first: create `scanners.py`, register it in `mcp_server.py`, verify tests pass with both modules registering the tools, THEN remove from `files.py`. This avoids a window where tools vanish if something breaks mid-task.
+
+5. **No FK on `scan_run_id`** — The `scan_findings.scan_run_id` column is a plain TEXT field with no foreign key to `scan_runs`. This is intentional (results can be POSTed without `trigger_scan`), but means orphaned references are possible. No action needed for MVP.
 
 ---
 
@@ -17,7 +45,7 @@
 ### Task 1: Schema — add `scan_runs` table DDL
 
 **Files:**
-- Modify: `src/filigree/db_schema.py` (after line 167, after `file_associations` block)
+- Modify: `src/filigree/db_schema.py` (after line 170, after the `file_associations` index block)
 - Test: `tests/core/test_files.py` (add schema test)
 
 **Step 1: Write the failing test**
@@ -39,7 +67,7 @@ Expected: FAIL — table does not exist
 
 **Step 3: Add the DDL**
 
-In `src/filigree/db_schema.py`, after the `file_associations` index block (after line ~169), add:
+In `src/filigree/db_schema.py`, after the `file_associations` index block (after line 170 — the `file_associations` table is at lines 159-167, indexes at lines 169-170), add:
 
 ```sql
 -- ---- Scan run lifecycle tracking ------------------------------------------
@@ -89,11 +117,15 @@ git commit -m "feat(schema): add scan_runs table for scan lifecycle tracking"
 
 **Step 1: Add `ScanRunDict` to `src/filigree/types/files.py`**
 
-After the existing `ScanRunRecord` class (~line 101), add:
+After the existing `ScanRunRecord` class (lines 88-103), add:
 
 ```python
 class ScanRunDict(TypedDict):
-    """Shape for scan_runs table rows returned by ScansMixin."""
+    """Shape for scan_runs table rows returned by ScansMixin.
+
+    Not to be confused with ScanRunRecord (line 88), which is a GROUP BY
+    projection from scan_findings for legacy scan history queries.
+    """
 
     id: str
     scanner_name: str
@@ -425,6 +457,8 @@ class ScansMixin(DBMixinProtocol):
         Returns the blocking scan run dict, or None if trigger is allowed.
         Only 'running' and recently-'completed' scans block.
         """
+        # TODO: replace LIKE with json_each() for robustness against
+        # paths containing JSON-special characters (quotes, backslashes)
         row = self.conn.execute(
             "SELECT * FROM scan_runs "
             "WHERE scanner_name = ? "
@@ -491,7 +525,7 @@ class ScansMixin(DBMixinProtocol):
 
 In `src/filigree/core.py`:
 - Add import: `from filigree.db_scans import ScansMixin`
-- Change class definition at line 336:
+- Change class definition at line 340:
 ```python
 class FiligreeDB(FilesMixin, ScansMixin, IssuesMixin, EventsMixin, WorkflowMixin, MetaMixin, PlanningMixin, ObservationsMixin):
 ```
@@ -655,7 +689,7 @@ class TestPromoteFindingToObservation:
 **Step 2: Run tests to verify they fail**
 
 Run: `uv run pytest tests/core/test_finding_triage.py -v`
-Expected: FAIL — `FiligreeDB` has no `get_finding` / `list_findings_global` / `update_finding` / `promote_finding_to_observation`
+Expected: FAIL — `FiligreeDB` has no `get_finding` / `list_findings_global` / `promote_finding_to_observation` (note: `update_finding` exists but has a different signature — see below)
 
 **Step 3: Implement the DB methods**
 
@@ -663,7 +697,7 @@ Add to `src/filigree/db_files.py` (after the existing `get_findings_paginated` m
 
 - `get_finding(finding_id)` — SELECT from scan_findings by ID, raise KeyError if not found
 - `list_findings_global(severity?, status?, scan_source?, scan_run_id?, file_id?, issue_id?, limit=100, offset=0)` — project-wide query, returns `{"findings": [...], "total": N, "limit": ..., "offset": ...}`
-- `update_finding(finding_id, status?, issue_id?)` — UPDATE with validation, return updated finding dict
+- `update_finding` — **IMPORTANT:** This method ALREADY EXISTS at `db_files.py:830` with signature `(self, file_id, finding_id, *, status, issue_id) -> ScanFinding`. The existing implementation handles status validation and issue_id linking. Extend the existing `update_finding` at line 830 to make `file_id` optional (the plan's tests call it with just `finding_id`). Change the signature to `(self, finding_id, *, file_id=None, status, issue_id)` and look up `file_id` from the finding record when not provided. Do NOT create a second `update_finding` method.
 - `promote_finding_to_observation(finding_id, priority?, actor?)` — read finding, call `self.create_observation(...)`, return observation dict
 
 For `promote_finding_to_observation`, priority mapping from severity:
@@ -843,23 +877,54 @@ Key changes to `trigger_scan`:
 - On spawn failure: `db.update_scan_run_status(run_id, "failed", error_message=...)`
 - Update tool description to document the polling workflow
 
-**Step 3: Remove from `files.py`**
+> **Current cooldown implementation being replaced:**
+> The existing cooldown is IN-MEMORY, not DB-persisted:
+> - `mcp_server.py:60-62`: `_scan_cooldowns: dict[tuple[str, str, str], float] = {}` (module-level dict) and `_SCAN_COOLDOWN_SECONDS = 30` (line 63)
+> - `mcp_tools/files.py:447-505`: Full cooldown logic using `time.monotonic()`
+> - Key structure: `(project_scope, scanner_name, canonical_path)` -> `float` (monotonic timestamp)
+> - Cooldown cleanup: stale entries purged on each trigger check (lines 449-451)
+> - Cooldown reservation: set BEFORE await points to prevent concurrent triggers (lines 463-465)
+> - Cooldown release: deleted on subprocess failure (lines 478, 483, 505)
+>
+> The plan's `check_scan_cooldown` in `ScansMixin` replaces this with DB-persisted cooldown via the `scan_runs` table.
 
-Remove `list_scanners` and `trigger_scan` Tool definitions, handler functions, and their entries in `handlers` dict from `mcp_tools/files.py`. Remove scanner-related imports (`list_scanners as _list_scanners`, `load_scanner`, `validate_scanner_command`).
+**Step 3: Register in `mcp_server.py` (additive — only NEW tools first)**
 
-**Step 4: Register in `mcp_server.py`**
+> **IMPORTANT (review callout #4):** Do NOT remove tools from `files.py` yet, and do NOT
+> register overlapping tools from `scanners.py`. In this step, `scanners.py`'s `register()`
+> must only return the 3 tools that don't exist in `files.py`: `trigger_scan_batch`,
+> `get_scan_status`, and `preview_scan`. Guard the overlapping tools (`list_scanners`,
+> `trigger_scan`) behind an `include_legacy=False` flag or simply don't add them to the
+> returned `tools` list yet. They will be moved in Step 5.
+>
+> The MCP server will raise on duplicate tool names if both modules register
+> `list_scanners` / `trigger_scan` simultaneously.
 
 In `src/filigree/mcp_server.py`:
 - Add to imports: `scanners as _scanners_mod,`
 - Add to the `for _mod in (...)` tuple: `_scanners_mod`
-- Remove `_scan_cooldowns` dict and `_SCAN_COOLDOWN_SECONDS` constant
 
-**Step 5: Run tests**
+In `src/filigree/mcp_tools/scanners.py`:
+- The `register()` function returns only 3 tools: `trigger_scan_batch`, `get_scan_status`, `preview_scan`
+- The handler implementations for `list_scanners` and `trigger_scan` should exist in the file (ready for Step 5) but NOT be included in the returned tools/handlers yet
+
+**Step 4: Run tests to verify new tools work alongside old ones**
+
+Run: `uv run pytest --tb=short -q`
+Expected: ALL PASS (no tool name collisions because only the 3 new tools are registered from `scanners.py`)
+
+**Step 5: Remove from `files.py` and clean up `mcp_server.py`**
+
+Now that `scanners.py` is verified:
+- Remove `list_scanners` and `trigger_scan` Tool definitions, handler functions, and their entries in `handlers` dict from `mcp_tools/files.py`. Remove scanner-related imports (`list_scanners as _list_scanners`, `load_scanner`, `validate_scanner_command`).
+- In `mcp_server.py`: remove `_scan_cooldowns` dict (line 62) and `_SCAN_COOLDOWN_SECONDS` constant (line 63). This replaces the in-memory cooldown at `mcp_server.py:60-63` and the monotonic clock cooldown logic at `mcp_tools/files.py:447-505`. After implementing, also remove all `_scan_cooldowns` references and `time.monotonic()` cooldown logic from `mcp_tools/files.py`.
+
+**Step 6: Run tests again**
 
 Run: `uv run pytest --tb=short -q`
 Expected: ALL PASS
 
-**Step 6: Commit**
+**Step 7: Commit**
 
 ```bash
 git add src/filigree/mcp_tools/scanners.py src/filigree/mcp_tools/files.py \
@@ -873,10 +938,22 @@ git commit -m "feat(mcp): extract scanner lifecycle tools into mcp_tools/scanner
 
 ### Task 7: Replace `create_issues` with `create_observations`
 
+> **Atomicity note:** This task changes the `process_scan_results` signature (a breaking
+> change). If any step fails after Step 3, revert ALL changes in this task before retrying.
+> Do not leave a half-migrated signature where `create_issues` is removed but
+> `create_observations` is not yet wired up.
+
+> **CHANGELOG note:** Removing `issues_created` and `issue_ids` from the `POST /api/v1/scan-results`
+> response body is a breaking change for external consumers. Add an entry to `CHANGELOG.md`
+> under `[Unreleased]` → `Changed`: _"`POST /api/v1/scan-results` response replaces
+> `issues_created`/`issue_ids` with `observations_created` count."_
+
 **Files:**
 - Modify: `src/filigree/db_files.py` (change `process_scan_results` signature and internals)
 - Modify: `src/filigree/dashboard_routes/files.py` (update REST endpoint)
+- Modify: `src/filigree/types/files.py` (update `ScanIngestResult`)
 - Modify: `tests/core/test_files.py` (update existing tests, add new ones)
+- Modify: `CHANGELOG.md` (breaking change entry)
 
 **Step 1: Write failing test for `create_observations`**
 
@@ -919,9 +996,24 @@ Expected: FAIL — unexpected keyword argument `create_observations`
 
 **Step 3: Modify `process_scan_results`**
 
+> **Current state of `process_scan_results` (at `db_files.py:724`):**
+> ```python
+> def process_scan_results(
+>     self,
+>     *,
+>     scan_source: str,
+>     findings: list[dict[str, Any]],
+>     scan_run_id: str = "",
+>     mark_unseen: bool = False,
+>     create_issues: bool = False,
+> ) -> ScanIngestResult:
+> ```
+> The `create_issues` parameter is currently functional — it calls `_create_issue_for_finding()` (at line 625-702).
+> `_mark_unseen_findings()` is at lines 704-723. These are separate methods, not lambdas.
+
 In `src/filigree/db_files.py`:
 1. Change parameter: `create_issues: bool = False` → `create_observations: bool = False`
-2. Remove the entire `_create_issue_for_finding` inner function
+2. Remove the entire `_create_issue_for_finding` method (lines 625-702)
 3. Remove the `if create_issues:` block that called it
 4. Add observation creation logic after finding insert (inside the `for f in findings:` loop, after a new finding is created):
 
@@ -982,8 +1074,8 @@ Expected: ALL PASS
 
 ```bash
 git add src/filigree/db_files.py src/filigree/dashboard_routes/files.py \
-    src/filigree/types/files.py tests/
-git commit -m "feat(core): replace create_issues with create_observations in process_scan_results"
+    src/filigree/types/files.py tests/ CHANGELOG.md
+git commit -m "feat(core)!: replace create_issues with create_observations in process_scan_results"
 ```
 
 ---
@@ -991,6 +1083,12 @@ git commit -m "feat(core): replace create_issues with create_observations in pro
 ## Phase 5: Claude Code Scanner
 
 ### Task 8: Refactor `scan_utils.py` — extract shared pipeline
+
+> **IMPORTANT:** `scripts/scan_utils.py` already exists and contains CLI scanner pipeline utilities
+> (find_files, parse_findings, post_to_api, severity_map, estimate_tokens, load_context). This task
+> MODIFIES that existing file to add `run_scanner_pipeline`. Do NOT confuse this with any future
+> `src/filigree/scan_utils.py` — if the architecture ever introduces a DB-layer scan utilities
+> module in `src/`, it is a DIFFERENT file from this CLI-layer `scripts/scan_utils.py`.
 
 **Files:**
 - Modify: `scripts/scan_utils.py` (add `run_scanner_pipeline`)
@@ -1211,6 +1309,11 @@ git commit -m "feat(scanners): add Claude Code scanner script and TOML config"
 - Test: `tests/api/test_files_dashboard.py`
 
 This task's changes were partially covered in Task 7 (the `create_observations` flag). What remains:
+
+> **IMPORTANT (review callout #3):** Before applying Step 1, check whether Task 7's
+> Step 6 already added `update_scan_run_status` to `process_scan_results`. If it did,
+> the DB-layer update already fires on ingestion and this REST-layer duplicate is
+> unnecessary. Only add the REST-layer call if `process_scan_results` does NOT handle it.
 
 **Step 1: Update `api_scan_results` to mark scan_runs completed**
 

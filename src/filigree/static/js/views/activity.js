@@ -67,33 +67,6 @@ function renderEventList(events) {
 }
 
 /**
- * Fetch recent activity events and render them as a day-grouped timeline
- * inside #activityContent.
- */
-export async function loadActivity() {
-  const container = document.getElementById("activityContent");
-  container.innerHTML = '<div style="color:var(--text-muted)">Loading...</div>';
-  try {
-    const events = await fetchActivity(50);
-    if (!events || !events.length) {
-      container.innerHTML =
-        '<div class="p-6 text-center" style="color:var(--text-muted)">' +
-        '<div class="font-medium mb-2" style="color:var(--text-primary)">No recent activity</div>' +
-        "<div>Events appear here when issues are created, updated, or closed.</div></div>";
-      return;
-    }
-    container.innerHTML = renderEventList(events);
-  } catch (err) {
-    console.error("[loadActivity] Failed:", err);
-    container.innerHTML =
-      '<div class="p-4 text-xs text-red-400">' +
-      "Failed to load activity. " +
-      '<button class="underline" style="color:var(--accent)" onclick="loadActivity()">Retry</button>' +
-      "</div>";
-  }
-}
-
-/**
  * Render activity events into any container (for embedding in Insights view).
  * Returns the number of events rendered.
  */

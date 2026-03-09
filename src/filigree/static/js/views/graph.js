@@ -418,15 +418,6 @@ export function renderGraph() {
 }
 
 // ---------------------------------------------------------------------------
-// setGraphPreset — kept in toolbar, now just triggers re-render
-// ---------------------------------------------------------------------------
-
-export function setGraphPreset(value) {
-  const preset = value || "execution";
-  if (state.currentView === "graph") renderGraph();
-}
-
-// ---------------------------------------------------------------------------
 // graphFit — reset zoom and center
 // ---------------------------------------------------------------------------
 

@@ -44,6 +44,11 @@ logger = logging.getLogger(__name__)
 VALID_SEVERITIES: frozenset[str] = frozenset(get_args(Severity))
 VALID_FINDING_STATUSES: frozenset[str] = frozenset(get_args(FindingStatus))
 TERMINAL_FINDING_STATUSES: frozenset[str] = frozenset({"fixed", "false_positive"})
+# Safety: these values are interpolated into SQL string literals below.
+# Assert none contain characters that could break the SQL.
+assert all(
+    s.isalpha() or s.replace("_", "").isalpha() for s in TERMINAL_FINDING_STATUSES
+), f"TERMINAL_FINDING_STATUSES values must be simple identifiers, got: {TERMINAL_FINDING_STATUSES}"
 VALID_ASSOC_TYPES: frozenset[str] = frozenset(get_args(AssocType))
 
 

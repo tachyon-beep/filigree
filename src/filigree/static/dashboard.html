@@ -248,11 +248,6 @@ tailwind.config = {
       <div class="flex flex-1 flex-col min-w-0">
         <div class="graph-toolbar flex flex-wrap items-center gap-2 px-4 py-1 bg-raised text-xs text-secondary border-b border-default">
           <div class="flex items-center gap-2 shrink-0">
-            <label for="graphPreset" class="text-xs text-secondary">Preset:</label>
-            <select id="graphPreset" onchange="setGraphPreset(this.value)" class="bg-overlay text-primary text-xs rounded px-2 py-0.5 border border-strong">
-              <option value="execution" selected>Execution</option>
-              <option value="roadmap">Roadmap</option>
-            </select>
             <button onclick="graphFit()" class="px-2 py-0.5 rounded bg-overlay bg-overlay-hover" title="Reset zoom and center the graph">Fit</button>
             <button id="btnCritPath" onclick="toggleCriticalPath()" class="px-2 py-0.5 rounded bg-overlay bg-overlay-hover" title="Highlight the longest dependency chain">Critical Path</button>
             <button id="btnGraphLegend" onclick="toggleGraphLegend()" class="px-2 py-0.5 rounded bg-overlay bg-overlay-hover">Legend</button>

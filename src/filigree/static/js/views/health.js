@@ -6,14 +6,6 @@ import { fetchFiles, fetchFileStats, fetchHotspots, fetchScanRuns } from "../api
 import { SEVERITY_COLORS, state } from "../state.js";
 import { escHtml, escJsSingle, relativeTime } from "../ui.js";
 
-// --- Main loader ---
-
-export async function loadHealth() {
-  const container = document.getElementById("healthContent");
-  if (!container) return;
-  await renderHealthOverview(container);
-}
-
 /**
  * Render the full health overview into any container (for embedding in Files view).
  * @param {HTMLElement} container - Target container element
@@ -228,7 +220,7 @@ function renderRecentScansWidget(scanRuns, onClickScan) {
       const findings = run.total_findings || 0;
 
       return (
-        `<div class="flex items-center gap-2 mb-2 rounded px-2 py-1.5 cursor-pointer bg-overlay-hover" onclick="${onClickScan ? onClickScan(run.scan_source || '') : `filterFilesByScanSource('${escJsSingle(run.scan_source || '')}')`}" role="button" tabindex="0">` +
+        `<div class="flex items-center gap-2 mb-2 rounded px-2 py-1.5 cursor-pointer bg-overlay-hover"${onClickScan ? ` onclick="${onClickScan(run.scan_source || '')}"` : ''} role="button" tabindex="0">` +
         `<span class="text-xs font-medium rounded px-1.5 py-0.5 shrink-0" style="${_sourceBadge(run.scan_source)}">${source}</span>` +
         `<span class="text-xs truncate flex-1" style="color:var(--text-primary)" title="${runId}">${runId}</span>` +
         `<span class="text-xs shrink-0" style="color:var(--text-muted)">${escHtml(String(files))} files</span>` +
@@ -242,9 +234,3 @@ function renderRecentScansWidget(scanRuns, onClickScan) {
   return wrapper + header + rows + "</div>";
 }
 
-/** Switch to Files view filtered by a scan source. */
-export function filterFilesByScanSource(source) {
-  state.filesScanSource = source || "";
-  state.filesPage.offset = 0;
-  window.switchView("files");
-}
