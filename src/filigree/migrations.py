@@ -175,7 +175,10 @@ def migrate_v4_to_v5(conn: sqlite3.Connection) -> None:
     rows = conn.execute("SELECT id, title, fields FROM issues WHERE type = 'release'").fetchall()
 
     for row in rows:
-        fields = json.loads(row["fields"] or "{}")
+        try:
+            fields = json.loads(row["fields"] or "{}")
+        except (json.JSONDecodeError, TypeError):
+            continue
         version = fields.get("version", "")
         if not version:
             continue

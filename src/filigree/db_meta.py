@@ -208,6 +208,16 @@ class MetaMixin(DBMixinProtocol):
     @staticmethod
     def _issue_fields_json(fields: Any) -> str:
         if isinstance(fields, str):
+            # Validate that string is actually valid JSON before passing through
+            try:
+                obj = json.loads(fields)
+            except (json.JSONDecodeError, TypeError):
+                logger.warning("Invalid JSON fields string, replacing with empty: %r", fields[:200] if fields else fields)
+                return "{}"
+            # Ensure the decoded value is a dict (not a bare string/list/number)
+            if not isinstance(obj, dict):
+                logger.warning("Fields JSON is not a dict, replacing with empty: %r", fields[:80])
+                return "{}"
             return fields
         return json.dumps(fields or {})
 
@@ -397,7 +407,11 @@ class MetaMixin(DBMixinProtocol):
                 line = line.strip()
                 if not line:
                     continue
-                record = json.loads(line)
+                try:
+                    record = json.loads(line)
+                except json.JSONDecodeError:
+                    skipped_types["<corrupt_json>"] = skipped_types.get("<corrupt_json>", 0) + 1
+                    continue
                 record_type = record.pop("_type", None)
 
                 if record_type == "issue":

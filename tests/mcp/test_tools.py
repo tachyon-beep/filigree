@@ -1222,15 +1222,16 @@ class TestExportImportPathTraversal:
         assert "error" in data
         assert data["code"] == "io_error"
 
-    async def test_import_malformed_jsonl_returns_parse_error_not_invalid_path(self, mcp_db: FiligreeDB) -> None:
-        """import_jsonl with malformed JSONL must not report 'invalid_path'."""
+    async def test_import_malformed_jsonl_skips_corrupt_lines(self, mcp_db: FiligreeDB) -> None:
+        """import_jsonl with malformed JSONL should skip corrupt lines, not crash."""
         project_root = mcp_db.db_path.parent.parent
         bad_file = project_root / "bad.jsonl"
         bad_file.write_text("this is not valid json\n")
         result = await call_tool("import_jsonl", {"input_path": "bad.jsonl"})
         data = _parse(result)
-        assert "error" in data
-        assert data["code"] != "invalid_path"
+        assert data["status"] == "ok"
+        assert data["records"] == 0
+        assert data["skipped_types"]["<corrupt_json>"] == 1
 
     async def test_import_jsonl_unexpected_exception_propagates(self, mcp_db: FiligreeDB) -> None:
         """Unexpected exceptions (not ValueError/OSError/sqlite3.Error) must propagate."""

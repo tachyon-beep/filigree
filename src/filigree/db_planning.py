@@ -399,12 +399,19 @@ class PlanningMixin(DBMixinProtocol):
                             if p_idx_int < 0 or s_idx_int < 0:
                                 msg = f"Negative dep index not allowed: {dep_ref_str}"
                                 raise ValueError(msg)
+                            if p_idx_int >= len(step_ids) or s_idx_int >= len(step_ids[p_idx_int]):
+                                n_steps = len(step_ids[p_idx_int]) if p_idx_int < len(step_ids) else "?"
+                                msg = f"Dep index out of range: {dep_ref_str} (phases={len(step_ids)}, steps={n_steps})"
+                                raise ValueError(msg)
                             dep_issue_id = step_ids[p_idx_int][s_idx_int]
                         else:
                             # Same phase: step index
                             same_idx = int(dep_ref_str)
                             if same_idx < 0:
                                 msg = f"Negative dep index not allowed: {dep_ref_str}"
+                                raise ValueError(msg)
+                            if same_idx >= len(step_ids[phase_idx]):
+                                msg = f"Dep index out of range: step {same_idx} in phase {phase_idx} (max={len(step_ids[phase_idx]) - 1})"
                                 raise ValueError(msg)
                             dep_issue_id = step_ids[phase_idx][same_idx]
 

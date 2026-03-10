@@ -7,6 +7,7 @@ Python's MRO when composed into ``FiligreeDB``.
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from datetime import UTC, datetime
 
@@ -181,6 +182,8 @@ class EventsMixin(DBMixinProtocol):
                         )
 
                 case "title_changed":
+                    if row["old_value"] is None:
+                        return {"undone": False, "reason": "Cannot undo: event has no old_value"}
                     self.conn.execute(
                         "UPDATE issues SET title = ?, updated_at = ? WHERE id = ?",
                         (row["old_value"], now, issue_id),
@@ -240,9 +243,14 @@ class EventsMixin(DBMixinProtocol):
                     )
 
                 case "fields_changed":
+                    old_fields = row["old_value"] or "{}"
+                    try:
+                        json.loads(old_fields)
+                    except (json.JSONDecodeError, TypeError):
+                        return {"undone": False, "reason": "Cannot undo: stored fields JSON is corrupt"}
                     self.conn.execute(
                         "UPDATE issues SET fields = ?, updated_at = ? WHERE id = ?",
-                        (row["old_value"] or "{}", now, issue_id),
+                        (old_fields, now, issue_id),
                     )
 
             # Record the undo event
