@@ -313,6 +313,21 @@ class TestIssueToDictRoundTrip:
         assert d["labels"] == ["a"]
         assert d["fields"] == {"x": "1"}
 
+    def test_corrupt_fields_json_does_not_crash(self, db: FiligreeDB) -> None:
+        """When issues.fields is corrupt JSON, get_issue should not crash."""
+        issue = db.create_issue("Corrupt fields test")
+        # Corrupt the fields column directly
+        db.conn.execute(
+            "UPDATE issues SET fields = '{bad json' WHERE id = ?",
+            (issue.id,),
+        )
+        db.conn.commit()
+
+        # Should not raise — gracefully degrade with empty fields
+        result = db.get_issue(issue.id)
+        assert result is not None
+        assert result.fields == {}
+
 
 class TestChildren:
     def test_children_populated(self, db: FiligreeDB) -> None:

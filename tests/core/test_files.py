@@ -1505,6 +1505,41 @@ class TestCorruptFindingMetadata:
         findings = db.get_findings(f.id)
         assert findings[0].metadata.get("_metadata_error") is True
 
+    def test_corrupt_file_record_metadata_does_not_crash(self, db: FiligreeDB) -> None:
+        """When file_records.metadata is corrupt JSON, _build_file_record should not crash."""
+        fr = db.register_file("corrupt_meta.py")
+        # Corrupt the metadata in the DB directly
+        db.conn.execute(
+            "UPDATE file_records SET metadata = '{bad json' WHERE id = ?",
+            (fr.id,),
+        )
+        db.conn.commit()
+
+        result = db.get_file_by_path("corrupt_meta.py")
+        assert result is not None
+        assert result.metadata.get("_metadata_error") is True
+
+    def test_corrupt_timeline_data_json_does_not_crash(self, db: FiligreeDB) -> None:
+        """When timeline data_json is corrupt, get_file_timeline should not crash."""
+        db.process_scan_results(
+            scan_source="ruff",
+            findings=[{"path": "tl.py", "rule_id": "E501", "severity": "low", "message": "m"}],
+        )
+        f = db.get_file_by_path("tl.py")
+        assert f is not None
+        findings = db.get_findings(f.id)
+        assert findings
+        # Corrupt the scan_findings metadata so the timeline CTE produces bad JSON
+        db.conn.execute(
+            "UPDATE scan_findings SET metadata = '{bad' WHERE id = ?",
+            (findings[0].id,),
+        )
+        db.conn.commit()
+
+        # Should not raise — gracefully degrade
+        timeline = db.get_file_timeline(f.id)
+        assert isinstance(timeline["results"], list)
+
 
 class TestMetaModuleLogger:
     """L4 bugfix: db_meta.py should use 'logger' not '_logger' for consistency."""

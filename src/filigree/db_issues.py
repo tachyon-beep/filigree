@@ -25,6 +25,16 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _safe_fields_json(raw: str | None, issue_id: str) -> dict[str, Any]:
+    """Parse issue fields JSON, returning empty dict on corrupt data."""
+    try:
+        result = json.loads(raw) if raw else {}
+    except (json.JSONDecodeError, TypeError):
+        logger.warning("Corrupt fields JSON for issue %s: %r", issue_id, raw[:200] if raw else raw)
+        return {}
+    return result if isinstance(result, dict) else {}
+
+
 def _validate_string_list(value: object, name: str) -> None:
     """Raise TypeError if *value* is not a list of strings."""
     if not isinstance(value, list) or not all(isinstance(i, str) for i in value):
@@ -302,7 +312,7 @@ class IssuesMixin(DBMixinProtocol):
                     closed_at=row["closed_at"],
                     description=row["description"],
                     notes=row["notes"],
-                    fields=json.loads(row["fields"]) if row["fields"] else {},
+                    fields=_safe_fields_json(row["fields"], iid),
                     labels=labels_by_id.get(iid, []),
                     blocks=blocks_by_id.get(iid, []),
                     blocked_by=blocked_by_id.get(iid, []),
@@ -909,9 +919,7 @@ class IssuesMixin(DBMixinProtocol):
             tokens = [t for t in tokens if t]
             fts_query = " AND ".join(f'"{t}"*' for t in tokens) if tokens else '""'
             row = self.conn.execute(
-                "SELECT COUNT(*) AS cnt FROM issues i "
-                "JOIN issues_fts ON issues_fts.rowid = i.rowid "
-                "WHERE issues_fts MATCH ?",
+                "SELECT COUNT(*) AS cnt FROM issues i JOIN issues_fts ON issues_fts.rowid = i.rowid WHERE issues_fts MATCH ?",
                 (fts_query,),
             ).fetchone()
         except sqlite3.OperationalError as exc:

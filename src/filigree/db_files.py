@@ -58,6 +58,16 @@ def _normalize_scan_path(path: str) -> str:
     return "" if normalized == "." else normalized
 
 
+def _safe_json_loads(raw: str | None, context: str) -> dict[str, Any]:
+    """Parse JSON from a database column, returning an error marker on corrupt data."""
+    try:
+        result = json.loads(raw) if raw else {}
+    except (json.JSONDecodeError, TypeError):
+        logger.warning("Corrupt JSON (%s): %r", context, raw[:200] if raw else raw)
+        return {"_metadata_error": True}
+    return result if isinstance(result, dict) else {}
+
+
 class FilesMixin(DBMixinProtocol):
     """File records, scan findings, associations, and timeline.
 
@@ -81,7 +91,15 @@ class FilesMixin(DBMixinProtocol):
     def _build_file_record(self, row: sqlite3.Row) -> FileRecord:
         """Build a FileRecord from a database row."""
         meta_raw = row["metadata"]
-        meta = json.loads(meta_raw) if meta_raw else {}
+        try:
+            meta = json.loads(meta_raw) if meta_raw else {}
+        except (json.JSONDecodeError, TypeError):
+            logger.warning(
+                "Corrupt metadata in file record (id=%s): %r",
+                row["id"],
+                meta_raw[:200] if meta_raw else meta_raw,
+            )
+            meta = {"_metadata_error": True}
         return FileRecord(
             id=row["id"],
             path=row["path"],
@@ -1317,7 +1335,7 @@ class FilesMixin(DBMixinProtocol):
                     "type": r["type"],
                     "timestamp": r["timestamp"],
                     "source_id": r["source_id"],
-                    "data": json.loads(r["data_json"]),
+                    "data": _safe_json_loads(r["data_json"], f"timeline:{r['source_id']}"),
                 }
             )
 
