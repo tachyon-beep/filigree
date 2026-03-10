@@ -15,7 +15,8 @@ import tempfile
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from filigree.core import FiligreeDB, Issue
+from filigree.core import FiligreeDB
+from filigree.models import Issue
 
 logger = logging.getLogger(__name__)
 

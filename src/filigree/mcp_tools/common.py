@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any, TypeVar, cast
 
 from mcp.types import TextContent
 
-from filigree.core import Issue
+from filigree.models import Issue
 
 if TYPE_CHECKING:
     from filigree.core import FiligreeDB

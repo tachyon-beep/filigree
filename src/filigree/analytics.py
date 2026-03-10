@@ -10,7 +10,8 @@ import sqlite3
 from collections.abc import Callable
 from datetime import UTC, datetime
 
-from filigree.core import FiligreeDB, Issue
+from filigree.core import FiligreeDB
+from filigree.models import Issue
 from filigree.types.planning import FlowMetrics, TypeMetrics
 
 
