@@ -347,6 +347,8 @@ class MetaMixin(DBMixinProtocol):
         ("event", "SELECT * FROM events ORDER BY created_at"),
         ("file_association", "SELECT * FROM file_associations ORDER BY created_at, file_id, issue_id"),
         ("file_event", "SELECT * FROM file_events ORDER BY created_at, file_id"),
+        ("observation", "SELECT * FROM observations ORDER BY created_at"),
+        ("dismissed_observation", "SELECT * FROM dismissed_observations ORDER BY dismissed_at"),
     ]
 
     def export_jsonl(self, output_path: str | Path) -> int:
@@ -387,6 +389,8 @@ class MetaMixin(DBMixinProtocol):
         events: list[dict[str, Any]] = []
         file_associations: list[dict[str, Any]] = []
         file_events: list[dict[str, Any]] = []
+        observations: list[dict[str, Any]] = []
+        dismissed_observations: list[dict[str, Any]] = []
 
         with Path(input_path).open() as f:
             for line in f:
@@ -414,6 +418,10 @@ class MetaMixin(DBMixinProtocol):
                     file_associations.append(record)
                 elif record_type == "file_event":
                     file_events.append(record)
+                elif record_type == "observation":
+                    observations.append(record)
+                elif record_type == "dismissed_observation":
+                    dismissed_observations.append(record)
                 else:
                     skipped_types[record_type or "<missing>"] = skipped_types.get(record_type or "<missing>", 0) + 1
 
@@ -624,6 +632,46 @@ class MetaMixin(DBMixinProtocol):
                             record.get("created_at", _now_iso()),
                         ),
                     )
+                count += cursor.rowcount
+
+            for record in observations:
+                obs_file_id: str | None = record.get("file_id")
+                if obs_file_id and obs_file_id in file_id_map:
+                    obs_file_id = file_id_map[obs_file_id]
+                cursor = self.conn.execute(
+                    f"INSERT {conflict} INTO observations "
+                    "(id, summary, detail, file_id, file_path, line, source_issue_id, "
+                    "priority, actor, created_at, expires_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        record["id"],
+                        record["summary"],
+                        record.get("detail", ""),
+                        obs_file_id,
+                        record.get("file_path", ""),
+                        record.get("line"),
+                        record.get("source_issue_id", ""),
+                        record.get("priority", 3),
+                        record.get("actor", ""),
+                        record.get("created_at", _now_iso()),
+                        record.get("expires_at", _now_iso()),
+                    ),
+                )
+                count += cursor.rowcount
+
+            for record in dismissed_observations:
+                cursor = self.conn.execute(
+                    f"INSERT {conflict} INTO dismissed_observations "
+                    "(obs_id, summary, actor, reason, dismissed_at) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    (
+                        record["obs_id"],
+                        record["summary"],
+                        record.get("actor", ""),
+                        record.get("reason", ""),
+                        record.get("dismissed_at", _now_iso()),
+                    ),
+                )
                 count += cursor.rowcount
         except Exception:
             self.conn.rollback()

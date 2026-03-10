@@ -901,6 +901,30 @@ class IssuesMixin(DBMixinProtocol):
 
         return self._build_issues_batch([r["id"] for r in rows])
 
+    def count_search_results(self, query: str) -> int:
+        """Return the total number of issues matching a search query."""
+        try:
+            sanitized = _re.sub(r'[^\w\s*"]', "", query)
+            tokens = [t.replace('"', "") for t in sanitized.strip().split()]
+            tokens = [t for t in tokens if t]
+            fts_query = " AND ".join(f'"{t}"*' for t in tokens) if tokens else '""'
+            row = self.conn.execute(
+                "SELECT COUNT(*) AS cnt FROM issues i "
+                "JOIN issues_fts ON issues_fts.rowid = i.rowid "
+                "WHERE issues_fts MATCH ?",
+                (fts_query,),
+            ).fetchone()
+        except sqlite3.OperationalError as exc:
+            if "no such table" not in str(exc) and "no such module" not in str(exc):
+                raise
+            escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            pattern = f"%{escaped}%"
+            row = self.conn.execute(
+                "SELECT COUNT(*) AS cnt FROM issues WHERE title LIKE ? ESCAPE '\\' OR description LIKE ? ESCAPE '\\'",
+                (pattern, pattern),
+            ).fetchone()
+        return int(row["cnt"]) if row else 0
+
     def search_issues(self, query: str, *, limit: int = 100, offset: int = 0) -> list[Issue]:
         # Try FTS5 first, fall back to LIKE if FTS table doesn't exist
         try:

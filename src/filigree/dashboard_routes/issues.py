@@ -276,11 +276,8 @@ def create_router() -> APIRouter:
         offset = max(offset, 0)
         if not q.strip():
             return JSONResponse({"results": [], "total": 0})
-        # Fetch all matches to get accurate total, then slice for the page.
-        # search_issues is fast (FTS5 index) and issue trackers are typically < 10K issues.
-        all_matches = db.search_issues(q, limit=100_000, offset=0)
-        total = len(all_matches)
-        page = all_matches[offset : offset + limit]
+        total = db.count_search_results(q)
+        page = db.search_issues(q, limit=limit, offset=offset)
         return JSONResponse({"results": [i.to_dict() for i in page], "total": total})
 
     @router.get("/plan/{milestone_id}")

@@ -139,8 +139,8 @@ def show(issue_id: str, as_json: bool) -> None:
 @click.option("--parent", default=None, help="Filter by parent ID")
 @click.option("--assignee", default=None, help="Filter by assignee")
 @click.option("--label", default=None, help="Filter by label")
-@click.option("--limit", default=100, type=int, help="Max results (default 100)")
-@click.option("--offset", default=0, type=int, help="Skip first N results")
+@click.option("--limit", default=100, type=click.IntRange(min=0), help="Max results (default 100)")
+@click.option("--offset", default=0, type=click.IntRange(min=0), help="Skip first N results")
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON")
 def list_issues(
     status: str | None,
