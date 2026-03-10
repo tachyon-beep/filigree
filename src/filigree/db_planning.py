@@ -13,6 +13,7 @@ from collections import deque
 from typing import TYPE_CHECKING, Any
 
 from filigree.db_base import DBMixinProtocol, _now_iso
+from filigree.models import Issue
 from filigree.types.planning import (
     ChildSummary,
     CriticalPathNode,
@@ -27,7 +28,6 @@ from filigree.types.planning import (
 )
 
 if TYPE_CHECKING:
-    from filigree.core import Issue
     from filigree.types.inputs import MilestoneInput, PhaseInput
 
 logger = logging.getLogger(__name__)

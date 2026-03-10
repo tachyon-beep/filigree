@@ -16,11 +16,11 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, ClassVar, get_args
 
 from filigree.db_base import DBMixinProtocol, _now_iso
+from filigree.models import FileRecord, ScanFinding
 from filigree.types.core import AssocType, FindingStatus, Severity
 from filigree.types.files import ScanIngestResult
 
 if TYPE_CHECKING:
-    from filigree.core import FileRecord, ScanFinding
     from filigree.types.core import PaginatedResult, ScanFindingDict
     from filigree.types.files import (
         CleanStaleResult,
@@ -80,8 +80,6 @@ class FilesMixin(DBMixinProtocol):
 
     def _build_file_record(self, row: sqlite3.Row) -> FileRecord:
         """Build a FileRecord from a database row."""
-        from filigree.core import FileRecord
-
         meta_raw = row["metadata"]
         meta = json.loads(meta_raw) if meta_raw else {}
         return FileRecord(
@@ -96,8 +94,6 @@ class FilesMixin(DBMixinProtocol):
 
     def _build_scan_finding(self, row: sqlite3.Row) -> ScanFinding:
         """Build a ScanFinding from a database row."""
-        from filigree.core import ScanFinding
-
         meta_raw = row["metadata"]
         try:
             parsed_meta = json.loads(meta_raw) if meta_raw else {}

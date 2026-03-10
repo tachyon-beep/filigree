@@ -7,11 +7,11 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
 
+from filigree.models import FileRecord, Issue
 from filigree.types.core import AssocType, ISOTimestamp, StatusCategory
 from filigree.types.events import EventType
 
 if TYPE_CHECKING:
-    from filigree.core import FileRecord, Issue
     from filigree.templates import TemplateRegistry, TransitionOption
 
 # Re-export for backward compat

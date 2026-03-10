@@ -522,7 +522,9 @@ class TestPromoteObservationResultShape:
         result = db.promote_observation(obs["id"])
         # warnings key is NotRequired — only check required keys
         assert "issue" in result
-        hints = get_type_hints(PromoteObservationResult)
+        from filigree.models import Issue
+
+        hints = get_type_hints(PromoteObservationResult, localns={"Issue": Issue})
         assert set(result.keys()) <= set(hints.keys())
 
 

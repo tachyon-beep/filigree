@@ -15,13 +15,12 @@ import uuid
 from typing import TYPE_CHECKING, Any
 
 from filigree.db_base import DBMixinProtocol, _now_iso
+from filigree.models import Issue
 from filigree.templates import validate_field_pattern
 from filigree.types.api import BatchFailureDetail
 
 if TYPE_CHECKING:
     from collections.abc import Callable
-
-    from filigree.core import Issue
 
 logger = logging.getLogger(__name__)
 
@@ -229,8 +228,6 @@ class IssuesMixin(DBMixinProtocol):
 
     def _build_issues_batch(self, issue_ids: list[str]) -> list[Issue]:
         """Build multiple Issues efficiently with batched queries (eliminates N+1)."""
-        from filigree.core import Issue
-
         if not issue_ids:
             return []
 
