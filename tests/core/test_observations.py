@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sqlite3
 from typing import Any
 
 import pytest
@@ -442,7 +443,7 @@ class TestPromoteObservation:
 
         count_before = db.conn.execute("SELECT COUNT(*) FROM issues").fetchone()[0]
         obs = db.create_observation("will partially fail")
-        with patch.object(db, "add_label", side_effect=RuntimeError("label boom")):
+        with patch.object(db, "add_label", side_effect=sqlite3.OperationalError("label boom")):
             result = db.promote_observation(obs["id"])
         # Issue was created and returned successfully
         assert result["issue"] is not None
@@ -455,7 +456,7 @@ class TestPromoteObservation:
         from unittest.mock import patch
 
         obs = db.create_observation("will warn")
-        with patch.object(db, "add_label", side_effect=RuntimeError("label boom")):
+        with patch.object(db, "add_label", side_effect=sqlite3.OperationalError("label boom")):
             result = db.promote_observation(obs["id"])
         assert "warnings" in result
         assert any("label" in w for w in result["warnings"])

@@ -41,6 +41,33 @@ class TestCreateIssueValidation:
             db.create_issue("Valid title", type="nonexistent_type")
 
 
+class TestSafeFieldsJson:
+    """Bug filigree-58ce3d9da4: _safe_fields_json must handle non-string raw values."""
+
+    def test_non_string_raw_does_not_raise(self, db: FiligreeDB) -> None:
+        """When raw is a non-string (e.g. int from DB corruption), log should not TypeError."""
+        from filigree.db_issues import _safe_fields_json
+
+        # Should return {} without raising TypeError on the log truncation
+        result = _safe_fields_json(42, "test-issue-001")  # type: ignore[arg-type]
+        assert result == {}
+
+    def test_corrupt_json_returns_empty_dict(self) -> None:
+        from filigree.db_issues import _safe_fields_json
+
+        assert _safe_fields_json("{bad json", "test-issue-002") == {}
+
+    def test_valid_json_returns_dict(self) -> None:
+        from filigree.db_issues import _safe_fields_json
+
+        assert _safe_fields_json('{"key": "val"}', "test-issue-003") == {"key": "val"}
+
+    def test_none_returns_empty_dict(self) -> None:
+        from filigree.db_issues import _safe_fields_json
+
+        assert _safe_fields_json(None, "test-issue-004") == {}
+
+
 class TestCreateAndGet:
     def test_create_issue(self, db: FiligreeDB) -> None:
         issue = db.create_issue("Fix the widget")

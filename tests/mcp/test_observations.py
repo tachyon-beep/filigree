@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import sqlite3
+
 from filigree.core import FiligreeDB
 from filigree.mcp_server import call_tool
 from tests.mcp._helpers import _parse
@@ -229,7 +231,7 @@ class TestPromoteObservationTool:
         from unittest.mock import patch
 
         obs = mcp_db.create_observation("will warn")
-        with patch.object(mcp_db, "add_label", side_effect=RuntimeError("label boom")):
+        with patch.object(mcp_db, "add_label", side_effect=sqlite3.OperationalError("label boom")):
             result = await call_tool("promote_observation", {"id": obs["id"]})
         data = _parse(result)
         assert "issue" in data

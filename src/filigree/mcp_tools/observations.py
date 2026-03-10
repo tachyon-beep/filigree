@@ -154,6 +154,8 @@ async def _handle_observe(arguments: dict[str, Any]) -> list[TextContent]:
         )
     except ValueError as e:
         return _text(ErrorResponse(error=str(e), code="validation_error"))
+    except sqlite3.Error as e:
+        return _text(ErrorResponse(error=f"Database error: {e}", code="database_error"))
     return _text(obs)
 
 

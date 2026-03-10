@@ -145,7 +145,7 @@ class ObservationsMixin(DBMixinProtocol):
                 (obs_id, summary_stripped, detail, file_id, file_path, line, source_issue_id, priority, actor, now, expires),
             )
             self.conn.commit()
-        except Exception:
+        except sqlite3.Error:
             self.conn.rollback()
             raise
         return {
@@ -272,7 +272,7 @@ class ObservationsMixin(DBMixinProtocol):
             )
             self.conn.execute("DELETE FROM observations WHERE id = ?", (obs_id,))
             self.conn.commit()
-        except Exception:
+        except sqlite3.Error:
             self.conn.rollback()
             raise
 
@@ -309,7 +309,7 @@ class ObservationsMixin(DBMixinProtocol):
                 unique_ids,
             )
             self.conn.commit()
-        except Exception:
+        except sqlite3.Error:
             self.conn.rollback()
             raise
         return {"dismissed": cursor.rowcount, "not_found": not_found}
@@ -379,7 +379,7 @@ class ObservationsMixin(DBMixinProtocol):
                 msg = f"Observation {obs_id} was already swept before cleanup (issue {issue.id} created successfully)"
                 logger.info(msg)
                 warnings.append(msg)
-        except Exception:
+        except sqlite3.Error:
             self.conn.rollback()
             msg = f"Failed to clean up observation {obs_id} after promotion (issue {issue.id} created)"
             logger.warning(msg, exc_info=True)
@@ -388,7 +388,7 @@ class ObservationsMixin(DBMixinProtocol):
         # 5. Enrichments (non-critical — failure should not undo the promotion)
         try:
             self.add_label(issue.id, "from-observation")
-        except Exception:
+        except (sqlite3.Error, ValueError):
             msg = f"Failed to add from-observation label to {issue.id}"
             logger.warning(msg, exc_info=True)
             warnings.append(msg)
@@ -396,7 +396,7 @@ class ObservationsMixin(DBMixinProtocol):
         try:
             if obs["file_id"]:
                 self.add_file_association(obs["file_id"], issue.id, "mentioned_in")
-        except Exception:
+        except (sqlite3.Error, ValueError):
             msg = f"Failed to add file association for promoted observation {obs_id}"
             logger.warning(msg, exc_info=True)
             warnings.append(msg)

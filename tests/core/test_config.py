@@ -89,11 +89,8 @@ class TestConfigEnabledPacks:
         assert db.enabled_packs == ["core", "planning", "risk"]
         db.close()
 
-    def test_refresh_enabled_packs_bad_json_logs_with_exc_info(self, tmp_path: Path) -> None:
-        """Bug filigree-9b30ee0393: _refresh_enabled_packs must log with exc_info=True."""
-        import logging
-        from unittest.mock import patch
-
+    def test_refresh_enabled_packs_bad_json_raises(self, tmp_path: Path) -> None:
+        """Bug filigree-996a574447: _refresh_enabled_packs must raise on corrupt config.json."""
         filigree_dir = tmp_path / ".filigree"
         filigree_dir.mkdir()
         config_path = filigree_dir / "config.json"
@@ -102,12 +99,20 @@ class TestConfigEnabledPacks:
         db = FiligreeDB(filigree_dir / "filigree.db", prefix="test")
         db.initialize()
 
-        logger = logging.getLogger("filigree.db_workflow")
-        with patch.object(logger, "warning") as mock_warn:
+        with pytest.raises(ValueError, match="could not be parsed"):
             db._refresh_enabled_packs()
-            mock_warn.assert_called_once()
-            _, kwargs = mock_warn.call_args
-            assert kwargs.get("exc_info") is True, "exc_info=True must be passed to preserve exception details"
+        db.close()
+
+    def test_refresh_enabled_packs_no_file_uses_defaults(self, tmp_path: Path) -> None:
+        """When config.json does not exist, _refresh_enabled_packs uses defaults (no error)."""
+        filigree_dir = tmp_path / ".filigree"
+        filigree_dir.mkdir()
+        # No config.json written
+
+        db = FiligreeDB(filigree_dir / "filigree.db", prefix="test")
+        db.initialize()
+        db._refresh_enabled_packs()
+        assert db.enabled_packs == ["core", "planning", "release"]
         db.close()
 
     def test_from_project_default_enabled_packs(self, tmp_path: Path) -> None:

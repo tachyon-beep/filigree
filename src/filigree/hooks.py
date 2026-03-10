@@ -220,6 +220,13 @@ def generate_session_context() -> str | None:
     db = FiligreeDB.from_filigree_dir(filigree_dir)
     try:
         context = _build_context(db, filigree_dir)
+    except sqlite3.Error:
+        logger.warning("Database error building session context for %s", filigree_dir, exc_info=True)
+        context = (
+            f"=== Filigree Project Snapshot ===\n\n"
+            f"WARNING: Could not read project database. Run `filigree doctor` to diagnose.\n"
+            f"Project directory: {filigree_dir.parent}"
+        )
     finally:
         db.close()
 

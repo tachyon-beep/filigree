@@ -88,20 +88,22 @@ class WorkflowMixin(DBMixinProtocol):
     def _refresh_enabled_packs(self) -> None:
         """Re-read enabled_packs from config.json and update self.enabled_packs."""
         import json as _json
-        import logging
 
         _default_packs = ["core", "planning", "release"]
         config_path = self.db_path.parent / "config.json"
-        if config_path.exists():
-            try:
-                config = _json.loads(config_path.read_text())
-                if isinstance(config, dict):
-                    packs = config.get("enabled_packs", _default_packs)
-                    if isinstance(packs, list):
-                        self.enabled_packs = [p for p in packs if isinstance(p, str)]
-                        return
-            except (ValueError, KeyError, OSError):
-                logging.getLogger(__name__).warning("Could not read config.json — keeping current enabled_packs", exc_info=True)
+        if not config_path.exists():
+            self.enabled_packs = _default_packs
+            return
+        try:
+            config = _json.loads(config_path.read_text())
+        except (ValueError, OSError) as exc:
+            msg = f"config.json exists but could not be parsed: {exc}"
+            raise ValueError(msg) from exc
+        if isinstance(config, dict):
+            packs = config.get("enabled_packs", _default_packs)
+            if isinstance(packs, list):
+                self.enabled_packs = [p for p in packs if isinstance(p, str)]
+                return
         self.enabled_packs = _default_packs
 
     def get_template(self, issue_type: str) -> TemplateInfo | None:

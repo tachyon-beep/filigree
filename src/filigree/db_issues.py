@@ -30,7 +30,7 @@ def _safe_fields_json(raw: str | None, issue_id: str) -> dict[str, Any]:
     try:
         result = json.loads(raw) if raw else {}
     except (json.JSONDecodeError, TypeError):
-        logger.warning("Corrupt fields JSON for issue %s: %r", issue_id, raw[:200] if raw else raw)
+        logger.warning("Corrupt fields JSON for issue %s: %r", issue_id, str(raw)[:200] if raw else raw)
         return {}
     return result if isinstance(result, dict) else {}
 
