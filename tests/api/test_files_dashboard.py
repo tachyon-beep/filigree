@@ -802,13 +802,13 @@ class TestObservationStatsEndpoint:
         for key in ("count", "stale_count", "oldest_hours", "expiring_soon_count"):
             assert key in data, f"Missing key: {key}"
 
-    async def test_stats_pre_v7_database_returns_defaults(self, client: AsyncClient, api_db: FiligreeDB) -> None:
-        """Pre-v7 databases (missing observations table) return safe defaults instead of 500."""
+    async def test_stats_pre_v7_database_returns_503(self, client: AsyncClient, api_db: FiligreeDB) -> None:
+        """Pre-v7 databases (missing observations table) return 503 instead of fabricated zeros."""
         import sqlite3
         from unittest.mock import patch
 
         with patch.object(api_db, "observation_stats", side_effect=sqlite3.OperationalError("no such table: observations")):
             resp = await client.get("/api/observations/stats")
-        assert resp.status_code == 200
+        assert resp.status_code == 503
         data = resp.json()
-        assert data == {"count": 0, "stale_count": 0, "oldest_hours": 0, "expiring_soon_count": 0}
+        assert data["status"] == "unavailable"

@@ -73,8 +73,11 @@ class ObservationsMixin(DBMixinProtocol):
             if cursor.rowcount > 0:
                 logger.debug("Swept %d expired observations", cursor.rowcount)
             return cursor.rowcount
-        except sqlite3.Error:
-            logger.warning("Observation sweep failed, rolled back", exc_info=True)
+        except sqlite3.OperationalError:
+            # Suppress transient errors (DB locked, busy) — sweep is best-effort.
+            # Structural errors (IntegrityError, ProgrammingError, etc.) propagate
+            # so persistent DB problems are not silently ignored on every list call.
+            logger.warning("Observation sweep failed (transient), rolled back", exc_info=True)
             self.conn.execute("ROLLBACK TO SAVEPOINT sweep_obs")
             self.conn.execute("RELEASE SAVEPOINT sweep_obs")
             return 0  # Sweep is best-effort — don't block reads
@@ -116,18 +119,18 @@ class ObservationsMixin(DBMixinProtocol):
         ).fetchone()
         if existing:
             if existing["expires_at"] <= now:
-                # Expired duplicate — sweep it and fall through to insert
-                try:
-                    self.conn.execute(
-                        "INSERT INTO dismissed_observations (obs_id, summary, actor, reason, dismissed_at) "
-                        "VALUES (?, ?, 'system', 'expired (replaced)', ?)",
-                        (existing["id"], existing["summary"], now),
-                    )
-                    self.conn.execute("DELETE FROM observations WHERE id = ?", (existing["id"],))
-                    self.conn.commit()
-                except Exception:
-                    self.conn.rollback()
-                    raise
+                # Expired duplicate — delete and fall through to insert.
+                # Both operations share a single transaction to avoid a TOCTOU
+                # window where a concurrent caller could insert the same dedup key
+                # between the delete-commit and the insert-commit.
+                self.conn.execute(
+                    "INSERT INTO dismissed_observations (obs_id, summary, actor, reason, dismissed_at) "
+                    "VALUES (?, ?, 'system', 'expired (replaced)', ?)",
+                    (existing["id"], existing["summary"], now),
+                )
+                self.conn.execute("DELETE FROM observations WHERE id = ?", (existing["id"],))
+                # No commit here — fall through to INSERT below so both
+                # the deletion and insertion are committed atomically.
             else:
                 # Live duplicate — return existing row
                 return cast(ObservationDict, dict(existing))
@@ -367,8 +370,15 @@ class ObservationsMixin(DBMixinProtocol):
                 "INSERT INTO dismissed_observations (obs_id, summary, actor, reason, dismissed_at) VALUES (?, ?, ?, 'promoted', ?)",
                 (obs_id, obs["summary"], actor or obs["actor"], now),
             )
-            self.conn.execute("DELETE FROM observations WHERE id = ?", (obs_id,))
+            cursor = self.conn.execute("DELETE FROM observations WHERE id = ?", (obs_id,))
             self.conn.commit()
+            if cursor.rowcount == 0:
+                # Observation was swept by a concurrent TTL cleanup between our
+                # SELECT and this DELETE.  The issue is already created, so this
+                # is harmless — but surface a warning so callers know.
+                msg = f"Observation {obs_id} was already swept before cleanup (issue {issue.id} created successfully)"
+                logger.info(msg)
+                warnings.append(msg)
         except Exception:
             self.conn.rollback()
             msg = f"Failed to clean up observation {obs_id} after promotion (issue {issue.id} created)"

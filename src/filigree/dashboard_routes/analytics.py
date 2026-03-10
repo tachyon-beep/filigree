@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections import deque
 from datetime import UTC, datetime, timedelta
 from time import perf_counter
@@ -27,6 +28,8 @@ from filigree.dashboard_routes.common import (
 )
 from filigree.models import Issue
 from filigree.types.api import StatsWithPrefix
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Graph v2 helpers
@@ -450,7 +453,11 @@ def create_router() -> APIRouter:
         try:
             stats = db.observation_stats(sweep=False)
         except sqlite3.OperationalError:
-            stats = {"count": 0, "stale_count": 0, "oldest_hours": 0, "expiring_soon_count": 0}
+            logger.warning("observation_stats unavailable", exc_info=True)
+            return JSONResponse(
+                {"error": "observation stats unavailable", "status": "unavailable"},
+                status_code=503,
+            )
         return JSONResponse(stats)
 
     @router.get("/critical-path")

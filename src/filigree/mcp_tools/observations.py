@@ -173,10 +173,17 @@ async def _handle_list_observations(arguments: dict[str, Any]) -> list[TextConte
     except sqlite3.Error as e:
         return _text(ErrorResponse(error=f"Database error: {e}", code="database_error"))
     observations, has_more = _apply_has_more(observations, effective_limit)
+    stats: dict[str, object]
     try:
-        stats = tracker.observation_stats(sweep=False)
-    except sqlite3.Error:
-        stats = {"count": len(observations), "stale_count": 0, "oldest_hours": 0, "expiring_soon_count": 0}
+        stats = dict(tracker.observation_stats(sweep=False))
+    except sqlite3.Error as e:
+        stats = {
+            "count": len(observations),
+            "stale_count": None,
+            "oldest_hours": None,
+            "expiring_soon_count": None,
+            "stats_error": f"database error: {e}",
+        }
     return _text({"observations": observations, "stats": stats, "has_more": has_more})
 
 

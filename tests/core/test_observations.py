@@ -76,6 +76,25 @@ class TestCreateObservation:
         assert row is not None
         assert row["reason"] == "expired (replaced)"
 
+    def test_create_duplicate_replaces_expired_atomically(self, db: FiligreeDB) -> None:
+        """Delete-expired + insert happen in one transaction — no intermediate commit."""
+        obs1 = db.create_observation("atomic check", file_path="src/x.py", line=1)
+        # Expire the observation
+        db.conn.execute(
+            "UPDATE observations SET expires_at = '2020-01-01T00:00:00+00:00' WHERE id = ?",
+            (obs1["id"],),
+        )
+        db.conn.commit()
+
+        # After replacement, exactly 1 observation should exist
+        obs2 = db.create_observation("atomic check", file_path="src/x.py", line=1)
+        assert obs2["id"] != obs1["id"]
+        assert db.observation_count() == 1
+        # Audit trail has the expired original
+        row = db.conn.execute("SELECT * FROM dismissed_observations WHERE obs_id = ?", (obs1["id"],)).fetchone()
+        assert row is not None
+        assert row["reason"] == "expired (replaced)"
+
     def test_create_different_summary_same_location_allowed(self, db: FiligreeDB) -> None:
         db.create_observation("null deref", file_path="src/foo.py", line=10)
         db.create_observation("type error", file_path="src/foo.py", line=10)
@@ -227,10 +246,10 @@ class _InterceptingConn:
 
 
 class TestSweepExceptionNarrowing:
-    """Verify _sweep_expired_observations catches sqlite3.Error but not non-DB errors."""
+    """Verify _sweep_expired_observations only catches OperationalError, not all sqlite3.Error."""
 
-    def test_sweep_catches_sqlite_error(self, db: FiligreeDB) -> None:
-        """sqlite3.Error during sweep is caught — list_observations still returns results."""
+    def test_sweep_catches_operational_error(self, db: FiligreeDB) -> None:
+        """OperationalError during sweep is caught — list_observations still returns results."""
         import sqlite3
 
         db.create_observation("survives sweep failure")
@@ -248,6 +267,26 @@ class TestSweepExceptionNarrowing:
         finally:
             db._conn = real_conn
         assert len(result) == 1
+
+    def test_sweep_propagates_integrity_error(self, db: FiligreeDB) -> None:
+        """Structural errors (IntegrityError) propagate — not silently swallowed."""
+        import sqlite3
+
+        db.create_observation("will see propagation")
+
+        real_conn = db._conn
+
+        def _fail_with_integrity(real: Any, sql: str, params: Any = ()) -> Any:
+            if "DELETE FROM observations WHERE expires_at" in sql:
+                raise sqlite3.IntegrityError("UNIQUE constraint failed")
+            return real.execute(sql, params)
+
+        db._conn = _InterceptingConn(real_conn, _fail_with_integrity)  # type: ignore[assignment]
+        try:
+            with pytest.raises(sqlite3.IntegrityError, match="UNIQUE constraint"):
+                db.list_observations()
+        finally:
+            db._conn = real_conn
 
     def test_sweep_propagates_non_sqlite_error(self, db: FiligreeDB) -> None:
         """Non-sqlite3.Error (e.g. RuntimeError) propagates through sweep."""
@@ -441,6 +480,30 @@ class TestPromoteObservation:
         assert result["issue"] is not None
         assert "warnings" in result
         assert any("clean up" in w.lower() for w in result["warnings"])
+
+    def test_promote_warns_when_observation_already_swept(self, db: FiligreeDB) -> None:
+        """If a concurrent sweep deletes the observation between SELECT and DELETE,
+        promote succeeds but returns a warning about the race."""
+        obs = db.create_observation("will be swept mid-promote")
+        real_conn = db._conn
+
+        def _sweep_on_delete(real: Any, sql: str, params: Any = ()) -> Any:
+            """Simulate concurrent sweep: delete the obs right before the cleanup DELETE."""
+            if "DELETE FROM observations WHERE id" in sql and "expires_at" not in sql:
+                # Simulate the sweep deleting this row first
+                real.execute("DELETE FROM observations WHERE id = ?", (obs["id"],))
+            return real.execute(sql, params)
+
+        db._conn = _InterceptingConn(real_conn, _sweep_on_delete)  # type: ignore[assignment]
+        try:
+            result = db.promote_observation(obs["id"])
+        finally:
+            db._conn = real_conn
+        # Issue was created
+        assert result["issue"] is not None
+        # Warning about the race
+        assert "warnings" in result
+        assert any("already swept" in w for w in result["warnings"])
 
     def test_promote_no_warnings_on_success(self, db: FiligreeDB) -> None:
         """No warnings key when everything succeeds."""
