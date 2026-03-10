@@ -23,8 +23,7 @@ import uuid as _uuid
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from filigree.db_base import StatusCategory, _now_iso
-from filigree.models import FileRecord, Issue, ScanFinding, _EMPTY_TS
+from filigree.db_base import _now_iso
 from filigree.db_events import EventsMixin
 from filigree.db_files import (
     VALID_ASSOC_TYPES,
@@ -39,6 +38,7 @@ from filigree.db_observations import ObservationsMixin
 from filigree.db_planning import PlanningMixin
 from filigree.db_schema import CURRENT_SCHEMA_VERSION, SCHEMA_SQL
 from filigree.db_workflow import WorkflowMixin
+from filigree.models import _EMPTY_TS, FileRecord, Issue, ScanFinding
 from filigree.types.core import (
     AssocType,
     FileRecordDict,
@@ -62,6 +62,7 @@ __all__ = [
     "VALID_ASSOC_TYPES",
     "VALID_FINDING_STATUSES",
     "VALID_SEVERITIES",
+    "_EMPTY_TS",
     "AssocType",
     "FileRecord",
     "FileRecordDict",
@@ -74,7 +75,6 @@ __all__ = [
     "ScanFinding",
     "ScanFindingDict",
     "Severity",
-    "_EMPTY_TS",
     "_normalize_scan_path",
 ]
 

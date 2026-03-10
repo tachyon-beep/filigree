@@ -16,7 +16,6 @@ if TYPE_CHECKING:
 from starlette.requests import Request
 
 from filigree.core import FiligreeDB
-from filigree.models import Issue
 from filigree.dashboard_routes.common import (
     _GRAPH_STATUS_CATEGORIES,
     _coerce_graph_mode,
@@ -26,6 +25,7 @@ from filigree.dashboard_routes.common import (
     _resolve_graph_runtime,
     _safe_bounded_int,
 )
+from filigree.models import Issue
 from filigree.types.api import StatsWithPrefix
 
 # ---------------------------------------------------------------------------
