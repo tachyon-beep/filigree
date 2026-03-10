@@ -91,11 +91,10 @@ import {
 } from "./views/graph.js";
 import {
   renderGraphSidebar,
-  toggleGraphSidebarItem,
-  toggleGraphSidebarType,
   graphSidebarSelectAll,
   graphSidebarClearAll,
   rebuildTreeIndex,
+  attachSidebarListeners,
   callbacks as sidebarCallbacks,
 } from "./views/graphSidebar.js";
 import {
@@ -543,6 +542,7 @@ loadProjectFilterSettings();
   if (state.selectedIssue) openDetail(state.selectedIssue);
   if (!localStorage.getItem("filigree_tour_done")) setTimeout(startTour, 1500);
   initDragAndDrop();
+  attachSidebarListeners();
   fetch("/api/health")
     .then((r) => r.json())
     .then((d) => {
@@ -614,8 +614,6 @@ window.toggleCriticalPath = toggleCriticalPath;
 window.showHealthBreakdown = showHealthBreakdown;
 
 // Graph sidebar
-window.toggleGraphSidebarItem = toggleGraphSidebarItem;
-window.toggleGraphSidebarType = toggleGraphSidebarType;
 window.graphSidebarSelectAll = graphSidebarSelectAll;
 window.graphSidebarClearAll = graphSidebarClearAll;
 

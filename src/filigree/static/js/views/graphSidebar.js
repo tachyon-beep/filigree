@@ -3,7 +3,7 @@
 // ---------------------------------------------------------------------------
 
 import { state, TYPE_COLORS } from "../state.js";
-import { escHtml, escJsSingle } from "../ui.js";
+import { escHtml } from "../ui.js";
 
 // Type display order for sidebar groups
 const TYPE_ORDER = ["milestone", "epic", "release", "feature", "task", "bug"];
@@ -100,7 +100,7 @@ export function renderTypeFilter() {
     .map((t) => {
       const active = state.graphSidebarTypeFilter.size === 0 || state.graphSidebarTypeFilter.has(t);
       const color = TYPE_COLORS[t] || "#6B7280";
-      return `<button onclick="toggleGraphSidebarType('${escJsSingle(t)}')"
+      return `<button data-sidebar-type="${escHtml(t)}"
         class="px-1.5 py-0.5 rounded text-[10px] font-medium ${active ? "text-primary" : "text-muted opacity-50"}"
         style="border:1px solid ${active ? color : "var(--border-default)"};${active ? `background:${color}22` : ""}"
         aria-pressed="${active}">${escHtml(t)}</button>`;
@@ -224,9 +224,8 @@ export function renderGraphSidebar() {
 
       html.push(`<div role="option" aria-selected="${!!selState}"
         class="flex items-center gap-1.5 px-2 py-1 rounded cursor-pointer ${bgClass} ${textClass}"
-        onclick="toggleGraphSidebarItem('${escJsSingle(issue.id)}')"
+        data-sidebar-item="${escHtml(issue.id)}"
         tabindex="0"
-        onkeydown="if(event.key===' '||event.key==='Enter'){event.preventDefault();toggleGraphSidebarItem('${escJsSingle(issue.id)}')}"
         title="${escHtml(issue.title)}">
         <span class="truncate">${escHtml(title)}</span>
         ${depBadge}
@@ -430,6 +429,42 @@ function confirmNodeCap(total) {
     statusEl.textContent = `Cancelled — would have shown ${total} nodes`;
   }
   return ok;
+}
+
+// --- Delegated event listeners ---
+
+let listenersAttached = false;
+
+export function attachSidebarListeners() {
+  if (listenersAttached) return;
+  listenersAttached = true;
+
+  // Type filter buttons (delegated on container)
+  const typeContainer = document.getElementById("graphSidebarTypeFilter");
+  if (typeContainer) {
+    typeContainer.addEventListener("click", (e) => {
+      const btn = e.target.closest("[data-sidebar-type]");
+      if (btn) toggleGraphSidebarType(btn.dataset.sidebarType);
+    });
+  }
+
+  // Sidebar item click + keyboard (delegated on list)
+  const list = document.getElementById("graphSidebarList");
+  if (list) {
+    list.addEventListener("click", (e) => {
+      const el = e.target.closest("[data-sidebar-item]");
+      if (el) toggleGraphSidebarItem(el.dataset.sidebarItem);
+    });
+    list.addEventListener("keydown", (e) => {
+      if (e.key === " " || e.key === "Enter") {
+        const el = e.target.closest("[data-sidebar-item]");
+        if (el) {
+          e.preventDefault();
+          toggleGraphSidebarItem(el.dataset.sidebarItem);
+        }
+      }
+    });
+  }
 }
 
 // --- Callbacks ---

@@ -6,7 +6,9 @@ They live in their own table and are promoted to issues or dismissed.
 Includes:
 - 14-day TTL with piggyback sweep on reads (in savepoint)
 - Dismissal audit trail via dismissed_observations table
-- Safe promotion with rollback on failure
+- Promotion to issue (best-effort cleanup — issue creation commits
+  independently, so observation deletion is non-atomic but safe:
+  orphaned observations are swept on TTL expiry)
 - Age stats for session context prompting
 """
 
@@ -101,37 +103,48 @@ class ObservationsMixin(DBMixinProtocol):
             fr = self.register_file(file_path)
             file_id = fr.id
 
-        obs_id = self._generate_unique_id("observations", "obs")
         now = _now_iso()
+        summary_stripped = summary.strip()
+        line_cmp = line if line is not None else -1
+
+        # Check for existing duplicate (dedup key: summary + file_path + line).
+        # If the duplicate is expired, delete it so re-creation succeeds —
+        # otherwise INSERT OR IGNORE would silently return the stale row.
+        existing = self.conn.execute(
+            "SELECT * FROM observations WHERE summary = ? AND file_path = ? AND coalesce(line, -1) = ?",
+            (summary_stripped, file_path, line_cmp),
+        ).fetchone()
+        if existing:
+            if existing["expires_at"] <= now:
+                # Expired duplicate — sweep it and fall through to insert
+                try:
+                    self.conn.execute(
+                        "INSERT INTO dismissed_observations (obs_id, summary, actor, reason, dismissed_at) "
+                        "VALUES (?, ?, 'system', 'expired (replaced)', ?)",
+                        (existing["id"], existing["summary"], now),
+                    )
+                    self.conn.execute("DELETE FROM observations WHERE id = ?", (existing["id"],))
+                    self.conn.commit()
+                except Exception:
+                    self.conn.rollback()
+                    raise
+            else:
+                # Live duplicate — return existing row
+                return cast(ObservationDict, dict(existing))
+
+        obs_id = self._generate_unique_id("observations", "obs")
         expires = _expires_iso()
-        # INSERT OR IGNORE: dedup index silently drops exact duplicates.
-        # On conflict, rowcount == 0 and we return the existing row instead
-        # of the rejected candidate — avoids returning a stale obs_id that
-        # doesn't exist in the DB.
         try:
-            cursor = self.conn.execute(
-                "INSERT OR IGNORE INTO observations (id, summary, detail, file_id, file_path, line, "
+            self.conn.execute(
+                "INSERT INTO observations (id, summary, detail, file_id, file_path, line, "
                 "source_issue_id, priority, actor, created_at, expires_at) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (obs_id, summary.strip(), detail, file_id, file_path, line, source_issue_id, priority, actor, now, expires),
+                (obs_id, summary_stripped, detail, file_id, file_path, line, source_issue_id, priority, actor, now, expires),
             )
             self.conn.commit()
         except Exception:
             self.conn.rollback()
             raise
-        if cursor.rowcount == 0:
-            # Duplicate — return the existing observation
-            existing = self.conn.execute(
-                "SELECT * FROM observations WHERE summary = ? AND file_path = ? AND coalesce(line, -1) = ?",
-                (summary.strip(), file_path, line if line is not None else -1),
-            ).fetchone()
-            if existing:
-                return cast(ObservationDict, dict(existing))
-            # Race condition: dedup index fired but row vanished before SELECT.
-            raise RuntimeError(
-                f"Observation insert conflict but existing record could not be located "
-                f"(summary={summary.strip()!r}, file_path={file_path!r}, line={line!r})"
-            )
         return {
             "id": obs_id,
             "summary": summary.strip(),

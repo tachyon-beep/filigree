@@ -55,43 +55,26 @@ class TestCreateObservation:
         assert db.observation_count() == 1
         assert result2["id"] == result1["id"]
 
-    def test_create_dedup_raises_when_existing_vanishes(self, db: FiligreeDB) -> None:
-        """If INSERT OR IGNORE fires but SELECT-back returns None, raise instead of returning a ghost ID.
+    def test_create_duplicate_replaces_expired(self, db: FiligreeDB) -> None:
+        """An expired duplicate is swept and replaced with a fresh observation."""
+        obs1 = db.create_observation("stale finding", file_path="src/bar.py", line=5)
+        original_id = obs1["id"]
+        # Expire the observation
+        db.conn.execute(
+            "UPDATE observations SET expires_at = '2020-01-01T00:00:00+00:00' WHERE id = ?",
+            (original_id,),
+        )
+        db.conn.commit()
 
-        Simulates a race condition: between INSERT OR IGNORE (dedup conflict) and
-        the SELECT-back, a concurrent process deletes the matching row. Uses a
-        connection wrapper to inject the deletion after the INSERT.
-        """
-        import sqlite3
+        # Re-creating the same observation should succeed with a new ID
+        obs2 = db.create_observation("stale finding", file_path="src/bar.py", line=5)
+        assert obs2["id"] != original_id
+        assert db.observation_count() == 1
 
-        # First, create the observation that will trigger dedup
-        db.create_observation("race condition", file_path="src/bar.py", line=5)
-
-        # Wrap the connection to intercept and inject a delete after INSERT OR IGNORE
-        real_conn = db._conn
-
-        class InterceptingConnection:
-            """Thin wrapper that deletes the matching obs after INSERT OR IGNORE."""
-
-            def __init__(self, real: sqlite3.Connection):
-                self._real = real
-
-            def execute(self, sql: str, params: tuple = ()):
-                result = self._real.execute(sql, params)
-                if "INSERT OR IGNORE INTO observations" in sql and result.rowcount == 0:
-                    # Simulate race: delete the row before SELECT can find it
-                    self._real.execute("DELETE FROM observations WHERE summary = ?", (params[1],))
-                return result
-
-            def __getattr__(self, name: str):
-                return getattr(self._real, name)
-
-        db._conn = InterceptingConnection(real_conn)  # type: ignore[assignment]
-        try:
-            with pytest.raises(RuntimeError, match="could not be located"):
-                db.create_observation("race condition", file_path="src/bar.py", line=5)
-        finally:
-            db._conn = real_conn
+        # Original should be in audit trail
+        row = db.conn.execute("SELECT * FROM dismissed_observations WHERE obs_id = ?", (original_id,)).fetchone()
+        assert row is not None
+        assert row["reason"] == "expired (replaced)"
 
     def test_create_different_summary_same_location_allowed(self, db: FiligreeDB) -> None:
         db.create_observation("null deref", file_path="src/foo.py", line=10)

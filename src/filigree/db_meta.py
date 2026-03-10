@@ -661,9 +661,7 @@ class MetaMixin(DBMixinProtocol):
 
             for record in dismissed_observations:
                 cursor = self.conn.execute(
-                    f"INSERT {conflict} INTO dismissed_observations "
-                    "(obs_id, summary, actor, reason, dismissed_at) "
-                    "VALUES (?, ?, ?, ?, ?)",
+                    f"INSERT {conflict} INTO dismissed_observations (obs_id, summary, actor, reason, dismissed_at) VALUES (?, ?, ?, ?, ?)",
                     (
                         record["obs_id"],
                         record["summary"],

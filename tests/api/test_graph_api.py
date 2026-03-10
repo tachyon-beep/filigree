@@ -118,7 +118,10 @@ class TestGraphSidebarContracts:
     def test_graph_sidebar_safety_and_sanitization(self) -> None:
         sidebar_js = (STATIC_DIR / "js" / "views" / "graphSidebar.js").read_text()
         assert "escHtml" in sidebar_js, "Must import escHtml for XSS prevention"
-        assert "escJsSingle" in sidebar_js, "Must import escJsSingle for onclick attribute escaping"
+        assert "data-sidebar-item" in sidebar_js, "Must use data attributes instead of inline onclick"
+        assert "data-sidebar-type" in sidebar_js, "Must use data attributes for type filter"
+        assert "addEventListener" in sidebar_js, "Must use delegated event listeners"
+        assert "onclick" not in sidebar_js, "Must not use inline onclick handlers"
         assert "escHtml(issue.title)" in sidebar_js, "Issue titles must be HTML-escaped"
         assert "checkNodeCap(" in sidebar_js, "Node cap must be checked before adding selections"
         assert "confirmNodeCap(" in sidebar_js, "Node cap must trigger user confirmation"
@@ -132,7 +135,7 @@ class TestGraphSidebarContracts:
         app_js = (STATIC_DIR / "js" / "app.js").read_text()
         assert "rebuildTreeIndex" in app_js
         assert "renderGraphSidebar" in app_js
-        assert "toggleGraphSidebarItem" in app_js
+        assert "attachSidebarListeners" in app_js, "Must call attachSidebarListeners during init"
         assert "graphSidebarSelectAll" in app_js
         assert "graphSidebarClearAll" in app_js
 
