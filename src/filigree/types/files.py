@@ -115,19 +115,12 @@ class ScanIngestResult(TypedDict):
     warnings: list[str]
 
 
-class EnrichedFileItem(TypedDict):
+class EnrichedFileItem(FileRecordDict):
     """Shape of each item in ``list_files_paginated()`` results.
 
     Extends FileRecordDict with inline summary and counts.
     """
 
-    id: str
-    path: str
-    language: str
-    file_type: str
-    first_seen: ISOTimestamp
-    updated_at: ISOTimestamp
-    metadata: dict[str, Any]
     summary: FindingsSummary
     associations_count: int
     observation_count: int

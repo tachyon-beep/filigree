@@ -58,39 +58,6 @@ export function escJsSingle(str) {
 }
 
 // ---------------------------------------------------------------------------
-// Contextual popovers
-// ---------------------------------------------------------------------------
-/** Show a contextual popover. The html parameter must be trusted (hardcoded) content. */
-export function showPopover(anchorEl, html) {
-  closePopover();
-  const pop = document.createElement("div");
-  pop.id = "activePopover";
-  pop.className = "popover rounded-lg shadow-xl p-3 text-xs";
-  pop.style.cssText = "background:var(--surface-base);border:1px solid var(--border-strong)";
-  pop.innerHTML = `${html}<div class="flex justify-end mt-2"><button onclick="closePopover()" class="text-xs text-muted text-primary-hover">Dismiss</button></div>`;
-  document.body.appendChild(pop);
-  const rect = anchorEl.getBoundingClientRect();
-  pop.style.top = `${rect.bottom + window.scrollY + 8}px`;
-  pop.style.left = `${Math.max(8, Math.min(rect.left + window.scrollX, window.innerWidth - 340))}px`;
-  state._activePopover = pop;
-  setTimeout(() => {
-    document.addEventListener("click", _popoverOutsideClick);
-  }, 0);
-}
-
-export function _popoverOutsideClick(e) {
-  if (state._activePopover && !state._activePopover.contains(e.target)) closePopover();
-}
-
-export function closePopover() {
-  if (state._activePopover) {
-    state._activePopover.remove();
-    state._activePopover = null;
-  }
-  document.removeEventListener("click", _popoverOutsideClick);
-}
-
-// ---------------------------------------------------------------------------
 // Onboarding tour
 // ---------------------------------------------------------------------------
 export function startTour() {

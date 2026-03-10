@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any, Literal, NotRequired, TypedDict
 
 from filigree.types.core import ISOTimestamp, IssueDict
+from filigree.types.events import EventType
 from filigree.types.planning import CommentRecord, CriticalPathNode, PlanTree, StatsResult
 
 # ---------------------------------------------------------------------------
@@ -158,7 +159,7 @@ class IssueDetailEvent(TypedDict):
     api_issue_detail's SQL query. Do NOT extend to full EventRecord; that is
     a separate type in types/events.py."""
 
-    event_type: str
+    event_type: EventType
     actor: str
     old_value: str | None
     new_value: str | None

@@ -25,6 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Redesigned header filter bar with status pills, Done time-bound dropdown, and cleaner layout
 - Decomposed `process_scan_results` monolith into focused helpers with table-driven `export_jsonl`
 - Simplified TypedDict patterns using `PlanResponse` inheritance and `NotRequired`
+- **Breaking (MCP):** `get_valid_transitions` and `get_issue` `missing_fields` now returns bare field name strings instead of full schema objects — consumers expecting `{name, type, description}` dicts must update to plain `list[str]`
 - Threaded `Severity`/`FindingStatus`/`AssocType` Literal types through API signatures
 
 ### Fixed

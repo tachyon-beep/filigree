@@ -145,7 +145,7 @@ async function renderActivityEmbed(container) {
     const rows = actContent.querySelectorAll(":scope > div");
     let visible = 0;
     rows.forEach((row) => {
-      if (row.querySelector("[style*='border-top']")) return;
+      if (row.hasAttribute("data-day-separator")) return;
       visible++;
       if (visible > 4) row.classList.add("hidden");
     });

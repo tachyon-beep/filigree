@@ -45,7 +45,6 @@ import { CATEGORY_COLORS, REFRESH_INTERVAL, state, THEME_COLORS } from "./state.
 import {
   batchCloseSelected,
   batchSetPriority,
-  closePopover,
   closeSettingsMenu,
   copyIssueId,
   escHtml,
@@ -590,7 +589,6 @@ window.clearTypeFilter = clearTypeFilter;
 // UI utilities
 window.showCreateForm = showCreateForm;
 window.submitCreateForm = submitCreateForm;
-window.closePopover = closePopover;
 window.startTour = startTour;
 window.showTourStep = showTourStep;
 window.endTour = endTour;

@@ -87,12 +87,11 @@ export async function loadFiles() {
       onClickScan: (source) => `filterFilesByScanSourceInline('${escJsSingle(source)}')`,
     };
 
-    // Single helper that guards against double-render (including async race)
-    const loadOverviewOnce = (content) => {
-      if (content.dataset.loaded === "1" || content.dataset.loading === "1") return;
+    // Guard against concurrent loads but allow re-render on subsequent loadFiles()
+    const loadOverview = (content) => {
+      if (content.dataset.loading === "1") return;
       content.dataset.loading = "1";
       renderHealthOverview(content, overviewCallbacks).then(() => {
-        content.dataset.loaded = "1";
         content.dataset.loading = "";
       });
     };
@@ -101,7 +100,7 @@ export async function loadFiles() {
       localStorage.setItem(storageKey, overview.open ? "0" : "1");
       if (overview.open) {
         const content = document.getElementById("filesOverviewContent");
-        if (content) loadOverviewOnce(content);
+        if (content) loadOverview(content);
       }
     });
 
@@ -110,7 +109,7 @@ export async function loadFiles() {
     // Load overview data if expanded
     if (!collapsed) {
       const content = document.getElementById("filesOverviewContent");
-      if (content) loadOverviewOnce(content);
+      if (content) loadOverview(content);
     }
   }
 

@@ -162,9 +162,6 @@ export const state = {
   _listSortCol: "priority",
   _listSortDir: "asc",
 
-  // Popover
-  _activePopover: null,
-
   // Cached view data (previously on window._)
   _staleIssues: [],
   _healthBreakdown: null,

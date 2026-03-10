@@ -69,7 +69,7 @@ class ObservationsMixin(DBMixinProtocol):
             )
             self.conn.execute("RELEASE SAVEPOINT sweep_obs")
             if cursor.rowcount > 0:
-                logger.info("Swept %d expired observations", cursor.rowcount)
+                logger.debug("Swept %d expired observations", cursor.rowcount)
             return cursor.rowcount
         except sqlite3.Error:
             logger.warning("Observation sweep failed, rolled back", exc_info=True)

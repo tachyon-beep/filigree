@@ -16,7 +16,7 @@ function renderEventList(events) {
       if (day && day !== lastDay) {
         lastDay = day;
         separator =
-          '<div class="flex items-center gap-2 py-2 mt-2 first:mt-0">' +
+          '<div data-day-separator class="flex items-center gap-2 py-2 mt-2 first:mt-0">' +
           '<div class="flex-1" style="border-top:1px solid var(--border-default)"></div>' +
           '<span class="text-xs font-medium shrink-0" style="color:var(--text-muted)">' +
           day +

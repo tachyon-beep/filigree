@@ -258,45 +258,45 @@ tailwind.config = {
         </div>
         <div class="relative flex-1">
           <div id="cy" class="absolute inset-0"></div>
-      <div id="graphLegend" class="hidden absolute top-2 right-4 bg-base border border-strong rounded-lg p-3 text-xs z-10 max-w-xs shadow-xl">
-        <div class="text-primary font-medium mb-2">Graph Legend</div>
-        <div class="text-secondary space-y-2">
-          <div>
-            <div class="font-medium text-primary mb-1">Node Shapes</div>
-            <div class="grid grid-cols-2 gap-x-3 gap-y-0.5">
-              <div>&#11043; Hexagon = Epic</div>
-              <div>&#9670; Diamond = Bug</div>
-              <div>&#9733; Star = Feature</div>
-              <div>&#9645; Rectangle = Task</div>
+          <div id="graphLegend" class="hidden absolute top-2 right-4 bg-base border border-strong rounded-lg p-3 text-xs z-10 max-w-xs shadow-xl">
+            <div class="text-primary font-medium mb-2">Graph Legend</div>
+            <div class="text-secondary space-y-2">
+              <div>
+                <div class="font-medium text-primary mb-1">Node Shapes</div>
+                <div class="grid grid-cols-2 gap-x-3 gap-y-0.5">
+                  <div>&#11043; Hexagon = Epic</div>
+                  <div>&#9670; Diamond = Bug</div>
+                  <div>&#9733; Star = Feature</div>
+                  <div>&#9645; Rectangle = Task</div>
+                </div>
+              </div>
+              <div>
+                <div class="font-medium text-primary mb-1">Colors</div>
+                <div class="flex gap-3">
+                  <div><span class="inline-block w-3 h-3 rounded" style="background:var(--status-open)"></span> Open</div>
+                  <div><span class="inline-block w-3 h-3 rounded" style="background:var(--status-wip)"></span> In Progress</div>
+                  <div><span class="inline-block w-3 h-3 rounded" style="background:var(--status-done)"></span> Done</div>
+                </div>
+              </div>
+              <div>
+                <div class="font-medium text-primary mb-1">Indicators</div>
+                <div>Green border = Ready (no blockers)</div>
+                <div>Larger node = Higher priority</div>
+                <div>Arrows = blocks &rarr; blocked</div>
+              </div>
+              <div>
+                <div class="font-medium text-primary mb-1">Interactions</div>
+                <div>Click node &rarr; Open detail panel</div>
+                <div>Hover node &rarr; Highlight downstream</div>
+              </div>
             </div>
-          </div>
-          <div>
-            <div class="font-medium text-primary mb-1">Colors</div>
-            <div class="flex gap-3">
-              <div><span class="inline-block w-3 h-3 rounded" style="background:var(--status-open)"></span> Open</div>
-              <div><span class="inline-block w-3 h-3 rounded" style="background:var(--status-wip)"></span> In Progress</div>
-              <div><span class="inline-block w-3 h-3 rounded" style="background:var(--status-done)"></span> Done</div>
-            </div>
-          </div>
-          <div>
-            <div class="font-medium text-primary mb-1">Indicators</div>
-            <div>Green border = Ready (no blockers)</div>
-            <div>Larger node = Higher priority</div>
-            <div>Arrows = blocks &rarr; blocked</div>
-          </div>
-          <div>
-            <div class="font-medium text-primary mb-1">Interactions</div>
-            <div>Click node &rarr; Open detail panel</div>
-            <div>Hover node &rarr; Highlight downstream</div>
+            <button onclick="toggleGraphLegend()" class="text-muted text-primary-hover mt-2">Close</button>
           </div>
         </div>
-        <button onclick="toggleGraphLegend()" class="text-muted text-primary-hover mt-2">Close</button>
-      </div>
-    </div>
-    <div id="graphDiagnosticsBar" class="flex items-center gap-3 px-4 py-1 bg-raised text-xs text-secondary border-t border-default">
-      <div id="graphNodeEdgeCount" class="text-[11px] text-secondary"></div>
-      <div id="graphPerfState" class="text-[11px] text-secondary"></div>
-    </div>
+        <div id="graphDiagnosticsBar" class="flex items-center gap-3 px-4 py-1 bg-raised text-xs text-secondary border-t border-default">
+          <div id="graphNodeEdgeCount" class="text-[11px] text-secondary"></div>
+          <div id="graphPerfState" class="text-[11px] text-secondary"></div>
+        </div>
       </div><!-- /canvas area -->
     </div><!-- /flex row -->
   </div>
