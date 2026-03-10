@@ -68,7 +68,7 @@ export const TOUR_STEPS = [
   },
   {
     el: "#healthBadge",
-    text: "Health score (0\u201399) measures project flow. Click it for a detailed breakdown of what affects the score.",
+    text: "Health score (0\u2013100) measures project flow. Click it for a detailed breakdown of what affects the score.",
     pos: "bottom",
   },
   {
