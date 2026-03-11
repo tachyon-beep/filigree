@@ -126,7 +126,7 @@ _MAX_PATTERN_VALUE_LENGTH = 10_000
 def validate_field_pattern(field: FieldSchema, value: Any) -> str | None:
     """Return an error message if *value* doesn't match *field.pattern*, else None.
 
-    Skips None and empty strings (let ``required_at`` handle presence).
+    Skips None and blank strings (empty or whitespace-only) — let ``required_at`` handle presence.
     Uses ``re.fullmatch`` so the pattern must match the entire value.
     Values exceeding _MAX_PATTERN_VALUE_LENGTH are rejected to prevent
     catastrophic backtracking on complex patterns.

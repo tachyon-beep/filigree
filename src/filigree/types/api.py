@@ -16,8 +16,9 @@ from filigree.types.planning import CommentRecord, CriticalPathNode, PlanTree, S
 class TransitionDetail(TypedDict):
     """Full transition info returned by get_issue and get_valid_transitions.
 
-    ``enforcement`` is always set because TransitionDetail is built from
-    TransitionOption which sources enforcement from TypeTransition (non-nullable).
+    ``enforcement`` is always populated in practice because TransitionDetail
+    is built from TransitionOption, which sources it from TransitionDefinition.
+    The underlying type allows None for unregistered-type fallback paths.
     """
 
     to: str
