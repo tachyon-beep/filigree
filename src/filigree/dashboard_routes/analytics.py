@@ -452,7 +452,7 @@ def create_router() -> APIRouter:
 
         try:
             stats = db.observation_stats(sweep=False)
-        except sqlite3.OperationalError:
+        except sqlite3.Error:
             logger.warning("observation_stats unavailable", exc_info=True)
             return JSONResponse(
                 {"error": "observation stats unavailable", "status": "unavailable"},

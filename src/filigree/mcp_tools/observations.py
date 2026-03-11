@@ -224,7 +224,7 @@ async def _handle_batch_dismiss_observations(arguments: dict[str, Any]) -> list[
             actor=actor,
             reason=args.get("reason", ""),
         )
-    except sqlite3.OperationalError as e:
+    except sqlite3.Error as e:
         return _text(ErrorResponse(error=f"Database error: {e}", code="database_error"))
     resp: dict[str, object] = {"dismissed": result["dismissed"], "ok": True}
     if result["not_found"]:
