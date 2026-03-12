@@ -54,6 +54,11 @@ class Issue:
     status_category: StatusCategory = "open"
 
     def to_dict(self) -> IssueDict:
+        fields = self.fields
+        warnings: list[str] = []
+        if fields.get("_fields_error"):
+            fields = {k: v for k, v in fields.items() if k != "_fields_error"}
+            warnings.append("fields data was corrupt and could not be parsed")
         return IssueDict(
             id=self.id,
             title=self.title,
@@ -68,12 +73,13 @@ class Issue:
             closed_at=self.closed_at,
             description=self.description,
             notes=self.notes,
-            fields=self.fields,
+            fields=fields,
             labels=self.labels,
             blocks=self.blocks,
             blocked_by=self.blocked_by,
             is_ready=self.is_ready,
             children=self.children,
+            data_warnings=warnings,
         )
 
 
@@ -88,6 +94,11 @@ class FileRecord:
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> FileRecordDict:
+        metadata = self.metadata
+        warnings: list[str] = []
+        if metadata.get("_metadata_error"):
+            metadata = {k: v for k, v in metadata.items() if k != "_metadata_error"}
+            warnings.append("metadata was corrupt and could not be parsed")
         return FileRecordDict(
             id=self.id,
             path=self.path,
@@ -95,7 +106,8 @@ class FileRecord:
             file_type=self.file_type,
             first_seen=self.first_seen,
             updated_at=self.updated_at,
-            metadata=self.metadata,
+            metadata=metadata,
+            data_warnings=warnings,
         )
 
 
@@ -126,6 +138,11 @@ class ScanFinding:
             raise ValueError(f"Invalid finding status {self.status!r}, expected one of {sorted(_VALID_FINDING_STATUSES)}")
 
     def to_dict(self) -> ScanFindingDict:
+        metadata = self.metadata
+        warnings: list[str] = []
+        if metadata.get("_metadata_error"):
+            metadata = {k: v for k, v in metadata.items() if k != "_metadata_error"}
+            warnings.append("metadata was corrupt and could not be parsed")
         return ScanFindingDict(
             id=self.id,
             file_id=self.file_id,
@@ -143,5 +160,6 @@ class ScanFinding:
             first_seen=self.first_seen,
             updated_at=self.updated_at,
             last_seen_at=self.last_seen_at,
-            metadata=self.metadata,
+            metadata=metadata,
+            data_warnings=warnings,
         )

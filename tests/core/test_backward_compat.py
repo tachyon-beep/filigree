@@ -217,6 +217,7 @@ class TestScanFindingToDictStability:
             "updated_at",
             "last_seen_at",
             "metadata",
+            "data_warnings",
         }
         assert set(sf.keys()) == required_keys
 

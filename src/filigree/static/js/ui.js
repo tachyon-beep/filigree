@@ -361,7 +361,6 @@ export function toggleTheme() {
   THEME_COLORS.accent = next === "light" ? "#0284C7" : "#38BDF8";
   // Re-render graphs if visible so they pick up new colors
   if (state.currentView === "graph" && callbacks.renderGraph) callbacks.renderGraph();
-  if (state.currentView === "workflow" && callbacks.loadWorkflow) callbacks.loadWorkflow();
 }
 
 // ---------------------------------------------------------------------------

@@ -178,6 +178,11 @@ def migrate_v4_to_v5(conn: sqlite3.Connection) -> None:
         try:
             fields = json.loads(row["fields"] or "{}")
         except (json.JSONDecodeError, TypeError):
+            logger.warning(
+                "migrate_v4_to_v5: skipping issue %s with corrupt fields JSON: %r",
+                row["id"],
+                (row["fields"] or "")[:200],
+            )
             continue
         version = fields.get("version", "")
         if not version:

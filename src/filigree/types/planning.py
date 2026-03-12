@@ -106,6 +106,7 @@ class ReleaseSummaryItem(TypedDict):
     blocked_by: list[IssueRef]
     is_ready: bool
     children: list[str]
+    data_warnings: list[str]
     version: str | None
     target_date: str | None
     progress: ProgressDict

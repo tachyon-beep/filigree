@@ -48,14 +48,14 @@ class TestSafeFieldsJson:
         """When raw is a non-string (e.g. int from DB corruption), log should not TypeError."""
         from filigree.db_issues import _safe_fields_json
 
-        # Should return {} without raising TypeError on the log truncation
+        # Should return error sentinel without raising TypeError on the log truncation
         result = _safe_fields_json(42, "test-issue-001")  # type: ignore[arg-type]
-        assert result == {}
+        assert result == {"_fields_error": True}
 
-    def test_corrupt_json_returns_empty_dict(self) -> None:
+    def test_corrupt_json_returns_error_sentinel(self) -> None:
         from filigree.db_issues import _safe_fields_json
 
-        assert _safe_fields_json("{bad json", "test-issue-002") == {}
+        assert _safe_fields_json("{bad json", "test-issue-002") == {"_fields_error": True}
 
     def test_valid_json_returns_dict(self) -> None:
         from filigree.db_issues import _safe_fields_json
@@ -335,6 +335,7 @@ class TestIssueToDictRoundTrip:
             "blocked_by",
             "is_ready",
             "children",
+            "data_warnings",
         }
         assert set(d.keys()) == expected_keys
         assert d["labels"] == ["a"]
@@ -350,10 +351,10 @@ class TestIssueToDictRoundTrip:
         )
         db.conn.commit()
 
-        # Should not raise — gracefully degrade with empty fields
+        # Should not raise — gracefully degrade with error sentinel
         result = db.get_issue(issue.id)
         assert result is not None
-        assert result.fields == {}
+        assert result.fields == {"_fields_error": True}
 
 
 class TestChildren:

@@ -26,12 +26,12 @@ logger = logging.getLogger(__name__)
 
 
 def _safe_fields_json(raw: str | None, issue_id: str) -> dict[str, Any]:
-    """Parse issue fields JSON, returning empty dict on corrupt data."""
+    """Parse issue fields JSON, returning error sentinel on corrupt data."""
     try:
         result = json.loads(raw) if raw else {}
     except (json.JSONDecodeError, TypeError):
         logger.warning("Corrupt fields JSON for issue %s: %r", issue_id, str(raw)[:200] if raw else raw)
-        return {}
+        return {"_fields_error": True}
     return result if isinstance(result, dict) else {}
 
 

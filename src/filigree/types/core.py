@@ -76,6 +76,7 @@ class IssueDict(TypedDict):
     blocked_by: list[str]
     is_ready: bool
     children: list[str]
+    data_warnings: list[str]
 
 
 class FileRecordDict(TypedDict):
@@ -88,6 +89,7 @@ class FileRecordDict(TypedDict):
     first_seen: ISOTimestamp
     updated_at: ISOTimestamp
     metadata: dict[str, Any]
+    data_warnings: list[str]
 
 
 class ScanFindingDict(TypedDict):
@@ -110,6 +112,7 @@ class ScanFindingDict(TypedDict):
     updated_at: ISOTimestamp
     last_seen_at: ISOTimestamp | None
     metadata: dict[str, Any]
+    data_warnings: list[str]
 
 
 class ObservationDict(TypedDict):
