@@ -45,7 +45,8 @@ export async function fetchIssues() {
     const resp = await fetch(apiUrl("/issues"));
     if (!resp.ok) return null;
     return await resp.json();
-  } catch (_e) {
+  } catch (err) {
+    console.warn("[fetchIssues] Network error:", err);
     return null;
   }
 }
@@ -55,7 +56,8 @@ export async function fetchDeps() {
     const resp = await fetch(apiUrl("/dependencies"));
     if (!resp.ok) return null;
     return await resp.json();
-  } catch (_e) {
+  } catch (err) {
+    console.warn("[fetchDeps] Network error:", err);
     return null;
   }
 }
@@ -65,7 +67,8 @@ export async function fetchStats() {
     const resp = await fetch(apiUrl("/stats"));
     if (!resp.ok) return null;
     return await resp.json();
-  } catch (_e) {
+  } catch (err) {
+    console.warn("[fetchStats] Network error:", err);
     return null;
   }
 }
@@ -75,7 +78,8 @@ export async function fetchDashboardConfig() {
     const resp = await fetch(apiUrl("/config"));
     if (!resp.ok) return null;
     return await resp.json();
-  } catch (_e) {
+  } catch (err) {
+    console.warn("[fetchDashboardConfig] Network error:", err);
     return null;
   }
 }
@@ -116,7 +120,8 @@ export async function fetchIssueDetail(issueId) {
     const resp = await fetch(apiUrl(`/issue/${issueId}`));
     if (!resp.ok) return null;
     return await resp.json();
-  } catch (_e) {
+  } catch (err) {
+    console.warn("[fetchIssueDetail] Network error:", err);
     return null;
   }
 }
@@ -126,7 +131,8 @@ export async function fetchIssueFiles(issueId) {
     const resp = await fetch(apiUrl(`/issue/${issueId}/files`));
     if (!resp.ok) return null;
     return await resp.json();
-  } catch (_e) {
+  } catch (err) {
+    console.warn("[fetchIssueFiles] Network error:", err);
     return null;
   }
 }
@@ -150,7 +156,8 @@ export async function fetchMetrics(days) {
     const resp = await fetch(apiUrl(`/metrics?days=${days}`));
     if (!resp.ok) return null;
     return await resp.json();
-  } catch (_e) {
+  } catch (err) {
+    console.warn("[fetchMetrics] Network error:", err);
     return null;
   }
 }
@@ -160,7 +167,8 @@ export async function fetchObservationStats() {
     const resp = await fetch(apiUrl("/observations/stats"));
     if (!resp.ok) return null;
     return await resp.json();
-  } catch (_e) {
+  } catch (err) {
+    console.warn("[fetchObservationStats] Network error:", err);
     return null;
   }
 }
@@ -175,7 +183,8 @@ export async function fetchActivity(limit, since) {
     const resp = await fetch(url);
     if (!resp.ok) return null;
     return await resp.json();
-  } catch (_e) {
+  } catch (err) {
+    console.warn("[fetchActivity] Network error:", err);
     return null;
   }
 }
@@ -185,7 +194,8 @@ export async function fetchTypeInfo(typeName) {
     const resp = await fetch(apiUrl(`/type/${encodeURIComponent(typeName)}`));
     if (!resp.ok) return null;
     return await resp.json();
-  } catch (_e) {
+  } catch (err) {
+    console.warn("[fetchTypeInfo] Network error:", err);
     return null;
   }
 }
@@ -195,7 +205,8 @@ export async function fetchTypes() {
     const resp = await fetch(apiUrl("/types"));
     if (!resp.ok) return null;
     return await resp.json();
-  } catch (_e) {
+  } catch (err) {
+    console.warn("[fetchTypes] Network error:", err);
     return null;
   }
 }
@@ -205,7 +216,8 @@ export async function fetchPlan(milestoneId) {
     const resp = await fetch(apiUrl(`/plan/${milestoneId}`));
     if (!resp.ok) return null;
     return await resp.json();
-  } catch (_e) {
+  } catch (err) {
+    console.warn("[fetchPlan] Network error:", err);
     return null;
   }
 }
@@ -215,7 +227,8 @@ export async function fetchCriticalPath() {
     const resp = await fetch(apiUrl("/critical-path"));
     if (!resp.ok) return null;
     return await resp.json();
-  } catch (_e) {
+  } catch (err) {
+    console.warn("[fetchCriticalPath] Network error:", err);
     return null;
   }
 }
@@ -226,7 +239,8 @@ export async function fetchReleases(includeReleased = false) {
     const resp = await fetch(apiUrl(`/releases${qs}`));
     if (!resp.ok) return null;
     return await resp.json();
-  } catch (_e) {
+  } catch (err) {
+    console.warn("[fetchReleases] Network error:", err);
     return null;
   }
 }
@@ -236,7 +250,8 @@ export async function fetchReleaseTree(releaseId) {
     const resp = await fetch(apiUrl(`/release/${releaseId}/tree`));
     if (!resp.ok) return null;
     return await resp.json();
-  } catch (_e) {
+  } catch (err) {
+    console.warn("[fetchReleaseTree] Network error:", err);
     return null;
   }
 }
@@ -248,7 +263,8 @@ export async function fetchSearch(query, limit) {
     const resp = await fetch(url);
     if (!resp.ok) return null;
     return await resp.json();
-  } catch (_e) {
+  } catch (err) {
+    console.warn("[fetchSearch] Network error:", err);
     return null;
   }
 }
@@ -258,7 +274,8 @@ export async function fetchProjects(ttl) {
     const resp = await fetch(`/api/projects${ttl ? `?ttl=${ttl}` : ""}`);
     if (!resp.ok) return null;
     return await resp.json();
-  } catch (_e) {
+  } catch (err) {
+    console.warn("[fetchProjects] Network error:", err);
     return null;
   }
 }
@@ -334,7 +351,8 @@ export async function fetchFiles(params) {
     const resp = await fetch(apiUrl("/files" + qs));
     if (!resp.ok) return null;
     return await resp.json();
-  } catch (_e) {
+  } catch (err) {
+    console.warn("[fetchFiles] Network error:", err);
     return null;
   }
 }
@@ -344,7 +362,8 @@ export async function fetchFileDetail(fileId) {
     const resp = await fetch(apiUrl(`/files/${encodeURIComponent(fileId)}`));
     if (!resp.ok) return null;
     return await resp.json();
-  } catch (_e) {
+  } catch (err) {
+    console.warn("[fetchFileDetail] Network error:", err);
     return null;
   }
 }
@@ -355,7 +374,8 @@ export async function fetchFileFindings(fileId, params) {
     const resp = await fetch(apiUrl(`/files/${encodeURIComponent(fileId)}/findings` + qs));
     if (!resp.ok) return null;
     return await resp.json();
-  } catch (_e) {
+  } catch (err) {
+    console.warn("[fetchFileFindings] Network error:", err);
     return null;
   }
 }
@@ -366,7 +386,8 @@ export async function fetchFileTimeline(fileId, params) {
     const resp = await fetch(apiUrl(`/files/${encodeURIComponent(fileId)}/timeline` + qs));
     if (!resp.ok) return null;
     return await resp.json();
-  } catch (_e) {
+  } catch (err) {
+    console.warn("[fetchFileTimeline] Network error:", err);
     return null;
   }
 }
@@ -377,7 +398,8 @@ export async function fetchHotspots(limit) {
     const resp = await fetch(apiUrl("/files/hotspots" + qs));
     if (!resp.ok) return null;
     return await resp.json();
-  } catch (_e) {
+  } catch (err) {
+    console.warn("[fetchHotspots] Network error:", err);
     return null;
   }
 }
@@ -387,7 +409,8 @@ export async function fetchFileStats() {
     const resp = await fetch(apiUrl("/files/stats"));
     if (!resp.ok) return null;
     return await resp.json();
-  } catch (_e) {
+  } catch (err) {
+    console.warn("[fetchFileStats] Network error:", err);
     return null;
   }
 }
@@ -397,7 +420,8 @@ export async function fetchFileSchema() {
     const resp = await fetch(apiUrl("/files/_schema"));
     if (!resp.ok) return null;
     return await resp.json();
-  } catch (_e) {
+  } catch (err) {
+    console.warn("[fetchFileSchema] Network error:", err);
     return null;
   }
 }

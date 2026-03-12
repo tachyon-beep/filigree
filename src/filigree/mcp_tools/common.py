@@ -34,8 +34,8 @@ def _parse_args(arguments: dict[str, Any], cls: type[_T]) -> _T:
     return cast(_T, arguments)
 
 
-# Hard cap on list_issues / search_issues results to keep MCP response size
-# within token limits.  Callers can pass no_limit=true to bypass.
+# Hard cap on list/search results (issues, observations) to keep MCP response
+# size within token limits.  Callers can pass no_limit=true to bypass.
 _MAX_LIST_RESULTS = 50
 
 

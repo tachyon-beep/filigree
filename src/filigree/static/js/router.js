@@ -30,6 +30,7 @@ const INACTIVE_CLASS =
   "px-3 py-1 rounded text-xs font-medium bg-overlay text-secondary bg-overlay-hover";
 
 // Deprecated tab aliases — redirect old tab IDs to new destinations.
+// health was merged into files; activity was renamed to insights; workflow is now inline in kanban.
 const ALIASES = { health: "files", activity: "insights", workflow: "kanban" };
 
 export function switchView(view) {

@@ -252,7 +252,8 @@ class TestListObservationsStatsGuard:
             result = await call_tool("list_observations", {})
         data = _parse(result)
         assert len(data["observations"]) == 1
-        assert data["stats"]["count"] == 1  # Falls back to len(observations)
+        assert data["stats"]["count"] is None  # Total unknown when stats query fails
+        assert data["stats"]["page_count"] == 1  # Page count still available
 
     async def test_list_observations_catches_sqlite_error(self, mcp_db: FiligreeDB) -> None:
         """sqlite3.Error from list_observations itself returns error response."""

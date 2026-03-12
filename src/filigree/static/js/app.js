@@ -241,6 +241,7 @@ function setProject(key, opts) {
 async function loadProjects() {
   try {
     const projects = await fetchProjects(6);
+    if (!projects) return;
     state.allProjects = projects;
     const currentMissing =
       !!state.currentProjectKey && !state.allProjects.some((p) => p.key === state.currentProjectKey);

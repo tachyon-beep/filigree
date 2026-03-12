@@ -5,7 +5,7 @@ only on ``filigree.types.core`` (TypedDicts and Literal types), so any module
 in the package can import them without circular-dependency risk.
 
 Extracted from ``core.py`` to break the cycle:
-    types/core.py  <--  models.py  <--  core.py / db_*.py mixins
+    types/core.py  <--  models.py  <--  db_base.py / core.py / db_*.py mixins
 """
 
 from __future__ import annotations

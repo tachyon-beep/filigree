@@ -227,6 +227,13 @@ def generate_session_context() -> str | None:
             f"WARNING: Could not read project database. Run `filigree doctor` to diagnose.\n"
             f"Project directory: {filigree_dir.parent}"
         )
+    except Exception:
+        logger.error("BUG: Unexpected error building session context for %s", filigree_dir, exc_info=True)
+        context = (
+            f"=== Filigree Project Snapshot ===\n\n"
+            f"WARNING: Unexpected error building session context. Run `filigree doctor` to diagnose.\n"
+            f"Project directory: {filigree_dir.parent}"
+        )
     finally:
         db.close()
 

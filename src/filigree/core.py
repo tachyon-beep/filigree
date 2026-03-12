@@ -52,7 +52,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Re-exported names from db_files and types.core for backward compatibility.
+# Re-exported names from db_files, models, and types.core for backward compatibility.
 __all__ = [
     "VALID_ASSOC_TYPES",
     "VALID_FINDING_STATUSES",
@@ -262,11 +262,13 @@ class FiligreeDB(FilesMixin, IssuesMixin, EventsMixin, WorkflowMixin, MetaMixin,
 
     def __exit__(self, exc_type: type[BaseException] | None, *exc: object) -> None:
         if exc_type is not None and self._conn is not None:
-            with contextlib.suppress(Exception):
+            try:
                 self._conn.rollback()
-            # After rollback, skip the commit in close() — the transaction is
-            # already ended and a commit would be a no-op in SQLite, but
-            # skipping it makes the intent explicit.
+            except Exception:
+                logger.error("Rollback failed during __exit__", exc_info=True)
+            # After rollback, skip the commit in close() — the rolled-back
+            # transaction's changes are lost. Skipping the commit avoids
+            # accidentally committing any stray implicit transaction.
             self._close_no_commit()
         else:
             self.close()

@@ -56,7 +56,7 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
                         "enum": ["updated_at", "first_seen", "path", "language"],
                         "default": "updated_at",
                     },
-                    "direction": {"type": "string", "enum": ["asc", "desc", "ASC", "DESC"]},
+                    "direction": {"type": "string", "enum": ["asc", "desc"]},
                 },
             },
         ),

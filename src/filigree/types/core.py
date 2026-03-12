@@ -139,7 +139,12 @@ class BatchDismissResult(TypedDict):
 
 
 class PromoteObservationResult(TypedDict):
-    """Shape contract for promote_observation() return value."""
+    """Shape contract for promote_observation() return value.
+
+    Note: ``issue`` is an Issue dataclass (not IssueDict) because this is an
+    internal return type. The MCP layer calls ``issue.to_dict()`` before
+    serializing to the wire format.
+    """
 
     issue: Issue
     warnings: NotRequired[list[str]]

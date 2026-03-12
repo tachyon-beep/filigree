@@ -180,7 +180,8 @@ async def _handle_list_observations(arguments: dict[str, Any]) -> list[TextConte
         stats = dict(tracker.observation_stats(sweep=False))
     except sqlite3.Error as e:
         stats = {
-            "count": len(observations),
+            "count": None,
+            "page_count": len(observations),
             "stale_count": None,
             "oldest_hours": None,
             "expiring_soon_count": None,

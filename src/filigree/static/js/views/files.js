@@ -13,13 +13,13 @@ import {
 import { updateHash } from "../router.js";
 import { SEVERITY_COLORS, state } from "../state.js";
 import { escHtml, escJsSingle, showCreateForm, showToast } from "../ui.js";
+import { renderHealthOverview } from "./health.js";
 
 function formatLineRange(f, prefix = "L") {
   if (!f.line_start) return "";
   if (f.line_end && f.line_end !== f.line_start) return `${prefix}${f.line_start}\u2013${f.line_end}`;
   return `${prefix}${f.line_start}`;
 }
-import { renderHealthOverview } from "./health.js";
 
 // --- Accumulated page state for "load more" ---
 let _findingsAccum = [];

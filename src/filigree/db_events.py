@@ -42,8 +42,6 @@ class EventsMixin(DBMixinProtocol):
     provided by ``FiligreeDB`` at composition time via MRO.
     """
 
-    # -- Events (private) ----------------------------------------------------
-
     # -- Build helpers (replace cast() at SQL boundary) -----------------------
 
     @staticmethod

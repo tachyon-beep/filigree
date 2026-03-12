@@ -91,8 +91,13 @@ class ObservationsMixin(DBMixinProtocol):
             # Structural errors (IntegrityError, ProgrammingError, etc.) propagate
             # so persistent DB problems are not silently ignored on every list call.
             logger.warning("Observation sweep failed (transient), rolled back", exc_info=True)
-            self.conn.execute("ROLLBACK TO SAVEPOINT sweep_obs")
-            self.conn.execute("RELEASE SAVEPOINT sweep_obs")
+            try:
+                self.conn.execute("ROLLBACK TO SAVEPOINT sweep_obs")
+            finally:
+                try:
+                    self.conn.execute("RELEASE SAVEPOINT sweep_obs")
+                except sqlite3.Error:
+                    logger.warning("Failed to release savepoint after sweep rollback", exc_info=True)
             return 0  # Sweep is best-effort — don't block reads
 
     def create_observation(

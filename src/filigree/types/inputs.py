@@ -290,7 +290,7 @@ class ListFilesArgs(TypedDict):
     has_severity: NotRequired[Severity]
     scan_source: NotRequired[str]
     sort: NotRequired[Literal["updated_at", "first_seen", "path", "language"]]
-    direction: NotRequired[Literal["asc", "desc", "ASC", "DESC"]]
+    direction: NotRequired[Literal["asc", "desc"]]
 
 
 class GetFileArgs(TypedDict):

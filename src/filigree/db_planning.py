@@ -13,8 +13,8 @@ from collections import deque
 from typing import TYPE_CHECKING, Any
 
 from filigree.db_base import DBMixinProtocol, _now_iso
-from filigree.models import Issue
-from filigree.types.core import ISOTimestamp, IssueDict
+from filigree.models import _EMPTY_TS, Issue
+from filigree.types.core import IssueDict
 from filigree.types.planning import (
     ChildSummary,
     CriticalPathNode,
@@ -35,7 +35,6 @@ logger = logging.getLogger(__name__)
 
 
 _MAX_TREE_DEPTH = 10
-_EMPTY_TS = ISOTimestamp("")
 
 
 def _truncated_issue_sentinel(issue_id: str) -> IssueDict:

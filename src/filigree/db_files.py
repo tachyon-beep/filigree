@@ -38,7 +38,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Constants (originally in core.py, only used by file-domain methods)
+# Constants (originally in core.py, canonical definitions for file-domain types)
 # ---------------------------------------------------------------------------
 
 VALID_SEVERITIES: frozenset[str] = frozenset(get_args(Severity))

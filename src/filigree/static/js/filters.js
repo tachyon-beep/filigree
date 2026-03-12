@@ -286,6 +286,11 @@ export async function doSearch() {
   }
   try {
     const data = await fetchSearch(q, 100);
+    if (!data) {
+      state.searchResults = new Set();
+      render();
+      return;
+    }
     state.searchResults = new Set(data.results.map((i) => i.id));
   } catch (err) {
     console.warn("[search] Failed to fetch search results:", err);
