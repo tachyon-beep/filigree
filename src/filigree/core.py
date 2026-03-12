@@ -105,7 +105,16 @@ def read_config(filigree_dir: Path) -> ProjectConfig:
     if not config_path.exists():
         return defaults
     try:
-        result: ProjectConfig = json.loads(config_path.read_text())
+        raw: Any = json.loads(config_path.read_text())
+        if not isinstance(raw, dict):
+            logger.warning("Config %s is not a JSON object, using defaults", config_path)
+            return defaults
+        result: ProjectConfig = raw  # type: ignore[assignment]
+        # Ensure required keys have defaults (config.json may predate these fields)
+        if "prefix" not in result:
+            result["prefix"] = defaults["prefix"]
+        if "version" not in result:
+            result["version"] = defaults["version"]
         return result
     except (json.JSONDecodeError, OSError) as exc:
         logger.warning("Failed to read %s, using defaults: %s", config_path, exc)

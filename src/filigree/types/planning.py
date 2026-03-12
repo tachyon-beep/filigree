@@ -77,7 +77,7 @@ class IssueRef(TypedDict):
 class TreeNode(TypedDict):
     """A node in the recursive release/plan tree."""
 
-    issue: dict[str, Any]
+    issue: IssueDict
     progress: ProgressDict | None
     children: list[TreeNode]
     truncated: NotRequired[bool]

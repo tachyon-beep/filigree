@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any
 
 from filigree.db_base import DBMixinProtocol, _now_iso
 from filigree.models import Issue
+from filigree.types.core import ISOTimestamp, IssueDict
 from filigree.types.planning import (
     ChildSummary,
     CriticalPathNode,
@@ -34,6 +35,33 @@ logger = logging.getLogger(__name__)
 
 
 _MAX_TREE_DEPTH = 10
+_EMPTY_TS = ISOTimestamp("")
+
+
+def _truncated_issue_sentinel(issue_id: str) -> IssueDict:
+    """Minimal IssueDict placeholder for tree nodes truncated at the depth limit."""
+    return IssueDict(
+        id=issue_id,
+        title="(truncated)",
+        status="",
+        status_category="open",
+        priority=0,
+        type="",
+        parent_id=None,
+        assignee="",
+        created_at=_EMPTY_TS,
+        updated_at=_EMPTY_TS,
+        closed_at=None,
+        description="",
+        notes="",
+        fields={},
+        labels=[],
+        blocks=[],
+        blocked_by=[],
+        is_ready=False,
+        children=[],
+        data_warnings=["Tree depth limit reached; children truncated"],
+    )
 
 
 class PlanningMixin(DBMixinProtocol):
@@ -480,7 +508,7 @@ class PlanningMixin(DBMixinProtocol):
     def _build_tree(self, parent_id: str, *, _depth: int = 0) -> list[TreeNode]:
         if _depth > _MAX_TREE_DEPTH:
             logger.warning("_build_tree: depth limit reached at parent_id=%s", parent_id)
-            return [TreeNode(issue={"id": parent_id}, progress=None, children=[], truncated=True)]
+            return [TreeNode(issue=_truncated_issue_sentinel(parent_id), progress=None, children=[], truncated=True)]
 
         children = self.list_issues(parent_id=parent_id)
         nodes: list[TreeNode] = []
@@ -489,7 +517,7 @@ class PlanningMixin(DBMixinProtocol):
             progress = self._progress_from_subtree(subtree) if subtree else None
             nodes.append(
                 {
-                    "issue": dict(child.to_dict()),
+                    "issue": child.to_dict(),
                     "progress": progress,
                     "children": subtree,
                 }

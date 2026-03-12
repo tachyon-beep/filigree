@@ -26,6 +26,7 @@ from filigree.types.core import (
 _EMPTY_TS: ISOTimestamp = ISOTimestamp("")
 
 # Derive valid sets from Literal types (avoids importing from db_files)
+_VALID_STATUS_CATEGORIES: frozenset[str] = frozenset(get_args(StatusCategory))
 _VALID_SEVERITIES: frozenset[str] = frozenset(get_args(Severity))
 _VALID_FINDING_STATUSES: frozenset[str] = frozenset(get_args(FindingStatus))
 
@@ -52,6 +53,12 @@ class Issue:
     is_ready: bool = False
     children: list[str] = field(default_factory=list)
     status_category: StatusCategory = "open"
+
+    def __post_init__(self) -> None:
+        if self.status_category not in _VALID_STATUS_CATEGORIES:
+            raise ValueError(f"Invalid status_category {self.status_category!r}, expected one of {sorted(_VALID_STATUS_CATEGORIES)}")
+        if not isinstance(self.priority, int) or not (0 <= self.priority <= 4):
+            raise ValueError(f"Invalid priority {self.priority!r}, expected int 0-4")
 
     def to_dict(self) -> IssueDict:
         fields = self.fields

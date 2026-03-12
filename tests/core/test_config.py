@@ -13,6 +13,7 @@ from filigree import cli_common
 from filigree.core import (
     FILIGREE_DIR_NAME,
     FiligreeDB,
+    Issue,
     find_filigree_command,
     find_filigree_root,
     get_mode,
@@ -281,3 +282,62 @@ class TestConfig:
         filigree_dir.mkdir()
         config = read_config(filigree_dir)
         assert config["prefix"] == "filigree"
+
+    def test_read_config_fills_missing_prefix(self, tmp_path: Path) -> None:
+        """Config without 'prefix' should get the default filled in."""
+        filigree_dir = tmp_path / FILIGREE_DIR_NAME
+        filigree_dir.mkdir()
+        (filigree_dir / "config.json").write_text(json.dumps({"version": 1}))
+        config = read_config(filigree_dir)
+        assert config["prefix"] == "filigree"
+        assert config["version"] == 1
+
+    def test_read_config_fills_missing_version(self, tmp_path: Path) -> None:
+        """Config without 'version' should get the default filled in."""
+        filigree_dir = tmp_path / FILIGREE_DIR_NAME
+        filigree_dir.mkdir()
+        (filigree_dir / "config.json").write_text(json.dumps({"prefix": "myproj"}))
+        config = read_config(filigree_dir)
+        assert config["prefix"] == "myproj"
+        assert config["version"] == 1
+
+    def test_read_config_fills_both_missing_required_keys(self, tmp_path: Path) -> None:
+        """Config with neither 'prefix' nor 'version' should get both defaults."""
+        filigree_dir = tmp_path / FILIGREE_DIR_NAME
+        filigree_dir.mkdir()
+        (filigree_dir / "config.json").write_text(json.dumps({"mode": "ethereal"}))
+        config = read_config(filigree_dir)
+        assert config["prefix"] == "filigree"
+        assert config["version"] == 1
+        assert config.get("mode") == "ethereal"
+
+
+# ===========================================================================
+# Issue dataclass __post_init__ validation
+# ===========================================================================
+
+
+class TestIssuePostInit:
+    """Bug filigree-83986ec674: Issue must validate status_category and priority."""
+
+    def test_valid_status_categories_accepted(self) -> None:
+        for cat in ("open", "wip", "done"):
+            issue = Issue(id="x", title="t", status_category=cat)
+            assert issue.status_category == cat
+
+    def test_invalid_status_category_raises(self) -> None:
+        with pytest.raises(ValueError, match="Invalid status_category"):
+            Issue(id="x", title="t", status_category="bogus")  # type: ignore[arg-type]
+
+    def test_valid_priorities_accepted(self) -> None:
+        for p in range(5):
+            issue = Issue(id="x", title="t", priority=p)
+            assert issue.priority == p
+
+    def test_negative_priority_raises(self) -> None:
+        with pytest.raises(ValueError, match="Invalid priority"):
+            Issue(id="x", title="t", priority=-1)
+
+    def test_priority_above_4_raises(self) -> None:
+        with pytest.raises(ValueError, match="Invalid priority"):
+            Issue(id="x", title="t", priority=5)
