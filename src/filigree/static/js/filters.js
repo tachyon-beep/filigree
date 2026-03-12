@@ -287,8 +287,10 @@ export async function doSearch() {
   try {
     const data = await fetchSearch(q, 100);
     state.searchResults = new Set(data.results.map((i) => i.id));
-  } catch (_e) {
-    state.searchResults = null;
+  } catch (err) {
+    console.warn("[search] Failed to fetch search results:", err);
+    state.searchResults = new Set();
+    if (callbacks.showToast) callbacks.showToast("Search failed — showing no results", "error");
   }
   render();
 }
@@ -440,9 +442,13 @@ export async function applyTypeFilter() {
     } else {
       state.typeTemplate = null;
     }
-  } catch (_e) {
+  } catch (err) {
     if (seq !== state._typeFilterSeq) return;
+    console.warn("[typeFilter] Failed to load type info:", err);
     state.typeTemplate = null;
+    const sel = document.getElementById("filterType");
+    if (sel) sel.value = "";
+    if (callbacks.showToast) callbacks.showToast("Could not load type filter", "error");
   }
   if (callbacks.renderKanban) callbacks.renderKanban();
   updateTypeFilterUI(!!state.typeTemplate);

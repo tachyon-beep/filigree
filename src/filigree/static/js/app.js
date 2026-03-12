@@ -549,7 +549,9 @@ loadProjectFilterSettings();
       const el = document.getElementById("footVersion");
       if (el && d.version) el.textContent = `v${d.version}`;
     })
-    .catch(() => {});
+    .catch((err) => {
+      console.warn("[health] Failed to fetch version:", err);
+    });
 });
 
 setInterval(() => {
