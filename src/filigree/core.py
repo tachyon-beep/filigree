@@ -1,13 +1,9 @@
-"""Core database operations for the issue tracker.
+"""Composition point for the Filigree issue tracker database.
 
-Single source of truth for all SQLite operations. Both CLI and MCP server
-import from this module. No daemon, no sync — just direct SQLite with WAL mode.
-
-Covers issue CRUD, dependencies, events, comments, labels, workflow templates,
-file records, scan findings, file associations, and file event timelines.
-
-Convention-based discovery: each project has a `.filigree/` directory containing
-`filigree.db` (SQLite) and `config.json` (project prefix, version).
+Assembles DB mixins (db_issues, db_events, db_files, db_workflow, db_meta,
+db_planning, db_observations) into the ``FiligreeDB`` class. Also provides
+convention-based ``.filigree/`` directory discovery, configuration I/O,
+template seeding, and shared file helpers.
 """
 
 from __future__ import annotations
@@ -56,8 +52,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Re-exported names from db_files (canonical definitions moved during mixin split)
-# and from types.core (TypedDict re-exports for backward compat — see line 40)
+# Re-exported names from db_files and types.core for backward compatibility.
 __all__ = [
     "VALID_ASSOC_TYPES",
     "VALID_FINDING_STATUSES",
@@ -77,9 +72,6 @@ __all__ = [
     "Severity",
     "_normalize_scan_path",
 ]
-
-
-# ProjectConfig and PaginatedResult moved to filigree.types.core (re-exported above)
 
 
 # ---------------------------------------------------------------------------
@@ -207,9 +199,6 @@ def _seed_builtin_packs(conn: sqlite3.Connection, now: str) -> int:
             logger.debug("Seeded type template: %s (pack=%s)", type_name, pack_name)
 
     return count
-
-
-# Issue, FileRecord, ScanFinding moved to filigree.models (re-exported above)
 
 
 # ---------------------------------------------------------------------------
