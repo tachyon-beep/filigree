@@ -47,6 +47,8 @@ from filigree.types.inputs import (
     UpdateIssueArgs,
 )
 
+_UPDATE_TRACKED_FIELDS = ("status", "priority", "title", "assignee", "description", "notes", "parent_id", "fields")
+
 
 def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
     """Return (tool_definitions, handler_map) for issue-domain tools."""
@@ -455,23 +457,7 @@ async def _handle_update_issue(arguments: dict[str, Any]) -> list[TextContent]:
             actor=actor,
         )
         _refresh_summary()
-        changed: list[str] = []
-        if issue.status != before.status:
-            changed.append("status")
-        if issue.priority != before.priority:
-            changed.append("priority")
-        if issue.title != before.title:
-            changed.append("title")
-        if issue.assignee != before.assignee:
-            changed.append("assignee")
-        if issue.description != before.description:
-            changed.append("description")
-        if issue.notes != before.notes:
-            changed.append("notes")
-        if issue.parent_id != before.parent_id:
-            changed.append("parent_id")
-        if issue.fields != before.fields:
-            changed.append("fields")
+        changed = [attr for attr in _UPDATE_TRACKED_FIELDS if getattr(issue, attr) != getattr(before, attr)]
         result = IssueWithChangedFields(**issue.to_dict(), changed_fields=changed)
         return _text(result)
     except KeyError:

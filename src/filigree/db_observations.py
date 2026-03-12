@@ -27,6 +27,17 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_TTL_DAYS = 14
 STALE_THRESHOLD_HOURS = 48
+
+
+def _alive_clause(sweep: bool, now_iso: str) -> tuple[str, tuple[str, ...]]:
+    """Return (SQL WHERE fragment, params) to filter out expired observations.
+
+    When sweep=True (expired rows already deleted), returns empty filter.
+    When sweep=False, adds ``expires_at > ?`` to exclude expired rows.
+    """
+    if sweep:
+        return "", ()
+    return " AND expires_at > ?", (now_iso,)
 DISMISSED_AUDIT_TRAIL_CAP = 10_000
 
 
@@ -219,29 +230,30 @@ class ObservationsMixin(DBMixinProtocol):
 
         now = datetime.now(UTC)
         now_iso = now.isoformat()
+        alive_frag, alive_params = _alive_clause(sweep, now_iso)
 
-        # When sweep=False, filter out expired rows so counts stay consistent
-        # with list_observations (which sweeps before returning).
-        alive_filter = " WHERE expires_at > ?" if not sweep else ""
-        alive_params: tuple[str, ...] = (now_iso,) if not sweep else ()
-
-        count = self.conn.execute(f"SELECT COUNT(*) FROM observations{alive_filter}", alive_params).fetchone()[0]
+        # Base alive filter: standalone WHERE or empty
+        alive_where = " WHERE expires_at > ?" if not sweep else ""
+        count = self.conn.execute(f"SELECT COUNT(*) FROM observations{alive_where}", alive_params).fetchone()[0]
         if count == 0:
             return {"count": 0, "stale_count": 0, "oldest_hours": 0, "expiring_soon_count": 0}
 
         stale_cutoff = (now - timedelta(hours=STALE_THRESHOLD_HOURS)).isoformat()
         expiring_cutoff = (now + timedelta(hours=24)).isoformat()
 
-        stale_where = f"created_at <= ?{' AND expires_at > ?' if not sweep else ''}"
-        stale_params = (stale_cutoff, now_iso) if not sweep else (stale_cutoff,)
-        stale = self.conn.execute(f"SELECT COUNT(*) FROM observations WHERE {stale_where}", stale_params).fetchone()[0]
+        stale = self.conn.execute(
+            f"SELECT COUNT(*) FROM observations WHERE created_at <= ?{alive_frag}",
+            (stale_cutoff, *alive_params),
+        ).fetchone()[0]
 
-        expiring_where = f"expires_at <= ?{' AND expires_at > ?' if not sweep else ''}"
-        expiring_params = (expiring_cutoff, now_iso) if not sweep else (expiring_cutoff,)
-        expiring = self.conn.execute(f"SELECT COUNT(*) FROM observations WHERE {expiring_where}", expiring_params).fetchone()[0]
+        expiring = self.conn.execute(
+            f"SELECT COUNT(*) FROM observations WHERE expires_at <= ?{alive_frag}",
+            (expiring_cutoff, *alive_params),
+        ).fetchone()[0]
 
-        oldest_where = " WHERE expires_at > ?" if not sweep else ""
-        oldest_row = self.conn.execute(f"SELECT MIN(created_at) FROM observations{oldest_where}", alive_params).fetchone()
+        oldest_row = self.conn.execute(
+            f"SELECT MIN(created_at) FROM observations{alive_where}", alive_params
+        ).fetchone()
         oldest_hours = 0.0
         if oldest_row and oldest_row[0]:
             oldest_dt = datetime.fromisoformat(oldest_row[0])

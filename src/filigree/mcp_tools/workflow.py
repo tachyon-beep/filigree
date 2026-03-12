@@ -305,29 +305,30 @@ async def _handle_get_workflow_guide(arguments: dict[str, Any]) -> list[TextCont
     args = _parse_args(arguments, GetWorkflowGuideArgs)
     tracker = _get_db()
     wf_pack = tracker.templates.get_pack(args["pack"])
+    note: str | None = None
+
+    # Try resolving as a type name if not a direct pack match
     if wf_pack is None:
         type_tpl = tracker.templates.get_type(args["pack"])
         if type_tpl is not None:
             wf_pack = tracker.templates.get_pack(type_tpl.pack)
-            if wf_pack is not None:
-                if wf_pack.guide is None:
-                    return _text(WorkflowGuideResponse(pack=wf_pack.pack, guide=None, message="No guide available for this pack"))
-                return _text(
-                    WorkflowGuideResponse(
-                        pack=wf_pack.pack,
-                        guide=dict(wf_pack.guide),
-                        note=f"Resolved type '{args['pack']}' to pack '{wf_pack.pack}'",
-                    )
-                )
+            note = f"Resolved type '{args['pack']}' to pack '{wf_pack.pack}'" if wf_pack else None
+
+    if wf_pack is None:
         return _text(
             ErrorResponse(
                 error=f"Unknown pack: '{args['pack']}'. Use list_packs to see available packs, or list_types to see types.",
                 code="not_found",
             )
         )
+
     if wf_pack.guide is None:
         return _text(WorkflowGuideResponse(pack=wf_pack.pack, guide=None, message="No guide available for this pack"))
-    return _text(WorkflowGuideResponse(pack=wf_pack.pack, guide=dict(wf_pack.guide)))
+
+    result = WorkflowGuideResponse(pack=wf_pack.pack, guide=dict(wf_pack.guide))
+    if note:
+        result["note"] = note
+    return _text(result)
 
 
 async def _handle_explain_state(arguments: dict[str, Any]) -> list[TextContent]:
