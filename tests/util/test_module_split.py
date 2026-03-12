@@ -19,18 +19,18 @@ from filigree.db_workflow import WorkflowMixin
 
 
 def test_mcp_tools_package_exists() -> None:
-    """All 5 domain modules import and expose register()."""
-    from filigree.mcp_tools import files, issues, meta, planning, workflow
+    """All 6 domain modules import and expose register()."""
+    from filigree.mcp_tools import files, issues, meta, observations, planning, workflow
 
-    for mod in (issues, planning, files, workflow, meta):
+    for mod in (issues, planning, files, workflow, meta, observations):
         assert callable(getattr(mod, "register", None)), f"{mod.__name__} missing register()"
 
 
 def test_mcp_tools_register_shape() -> None:
     """register() returns (list[Tool], dict[str, Callable])."""
-    from filigree.mcp_tools import files, issues, meta, planning, workflow
+    from filigree.mcp_tools import files, issues, meta, observations, planning, workflow
 
-    for mod in (issues, planning, files, workflow, meta):
+    for mod in (issues, planning, files, workflow, meta, observations):
         tools, handlers = mod.register()
         assert isinstance(tools, list), f"{mod.__name__}.register() tools is not a list"
         assert all(isinstance(t, Tool) for t in tools), f"{mod.__name__} has non-Tool items"
@@ -47,14 +47,14 @@ def test_mcp_tools_register_shape() -> None:
 
 
 def test_mcp_tools_total_count() -> None:
-    """All 53 tools are registered across domain modules."""
-    from filigree.mcp_tools import files, issues, meta, planning, workflow
+    """All 58 tools are registered across domain modules."""
+    from filigree.mcp_tools import files, issues, meta, observations, planning, workflow
 
     total = 0
-    for mod in (issues, planning, files, workflow, meta):
+    for mod in (issues, planning, files, workflow, meta, observations):
         tools, _ = mod.register()
         total += len(tools)
-    assert total == 53, f"Expected 53 tools total, got {total}"
+    assert total == 58, f"Expected 58 tools total, got {total}"
 
 
 def test_mcp_backward_compat_imports() -> None:
