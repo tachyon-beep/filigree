@@ -940,6 +940,10 @@ class IssuesMixin(DBMixinProtocol):
         except sqlite3.OperationalError as exc:
             if "no such table" not in str(exc) and "no such module" not in str(exc):
                 raise
+            logger.warning(
+                "FTS5 search unavailable (%s); falling back to LIKE. Performance may be degraded. Run 'filigree doctor' to check.",
+                exc,
+            )
             pattern = _escape_like_query(query)
             row = self.conn.execute(
                 "SELECT COUNT(*) AS cnt FROM issues WHERE title LIKE ? ESCAPE '\\' OR description LIKE ? ESCAPE '\\'",

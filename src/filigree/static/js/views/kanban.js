@@ -132,8 +132,11 @@ function renderListMode(items) {
     return sortDir === "desc" ? -cmp : cmp;
   });
 
-  const headerCell = (col, label) =>
-    `<th class="text-left py-2 px-2 cursor-pointer select-none text-primary-hover" onclick="sortListMode('${col}')" style="color:var(--text-muted)">${label}${sortCol === col ? (sortDir === "asc" ? " \u25B2" : " \u25BC") : ""}</th>`;
+  const headerCell = (col, label) => {
+    const ariaSort = sortCol === col ? (sortDir === "asc" ? "ascending" : "descending") : "none";
+    const indicator = sortCol === col ? (sortDir === "asc" ? " \u25B2" : " \u25BC") : "";
+    return `<th class="text-left py-2 px-2 cursor-pointer select-none text-primary-hover" onclick="sortListMode('${col}')" aria-sort="${ariaSort}" role="columnheader" style="color:var(--text-muted)">${label}${indicator}</th>`;
+  };
 
   const rows = sorted
     .map((i) => {

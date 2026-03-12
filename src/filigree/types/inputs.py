@@ -19,9 +19,9 @@ Safety note on cast():
 # on Python <3.14, which the sync test in test_input_type_contracts.py
 # depends on for verifying required/optional agreement with JSON Schema.
 
-from typing import Any, NotRequired, TypedDict
+from typing import Any, Literal, NotRequired, TypedDict
 
-from filigree.types.core import AssocType, ISOTimestamp, StatusCategory
+from filigree.types.core import AssocType, ISOTimestamp, Severity, StatusCategory
 
 # ---------------------------------------------------------------------------
 # issues.py handlers
@@ -287,10 +287,10 @@ class ListFilesArgs(TypedDict):
     language: NotRequired[str]
     path_prefix: NotRequired[str]
     min_findings: NotRequired[int]
-    has_severity: NotRequired[str]
+    has_severity: NotRequired[Severity]
     scan_source: NotRequired[str]
-    sort: NotRequired[str]
-    direction: NotRequired[str]
+    sort: NotRequired[Literal["updated_at", "first_seen", "path", "language"]]
+    direction: NotRequired[Literal["asc", "desc", "ASC", "DESC"]]
 
 
 class GetFileArgs(TypedDict):

@@ -281,10 +281,10 @@ def ensure_dashboard_running(port: int | None = None) -> str:
     return _ensure_dashboard_ethereal_mode(filigree_dir)
 
 
-def _acquire_port(filigree_dir: Path) -> int | str:
+def _acquire_port(filigree_dir: Path) -> int:
     """Find an available port, falling back to deterministic port in sandboxed environments.
 
-    Returns the port number on success, or an error message string on failure.
+    Returns the port number on success, or raises ``RuntimeError`` on failure.
     """
     from filigree.ephemeral import compute_port, find_available_port
 
@@ -300,7 +300,8 @@ def _acquire_port(filigree_dir: Path) -> int | str:
                 port,
             )
             return port
-        return f"Failed to choose dashboard port: {exc}"
+        msg = f"Failed to choose dashboard port: {exc}"
+        raise RuntimeError(msg) from exc
 
 
 def _ensure_dashboard_ethereal_mode(filigree_dir: Path) -> str:
@@ -356,10 +357,10 @@ def _ensure_dashboard_ethereal_mode(filigree_dir: Path) -> str:
         if running_message:
             return running_message
 
-        port_or_err = _acquire_port(filigree_dir)
-        if isinstance(port_or_err, str):
-            return port_or_err
-        port = port_or_err
+        try:
+            port = _acquire_port(filigree_dir)
+        except RuntimeError as exc:
+            return str(exc)
         filigree_cmd = find_filigree_command()
 
         log_file = filigree_dir / "ephemeral.log"

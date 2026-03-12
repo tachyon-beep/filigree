@@ -492,6 +492,13 @@ class PlanningMixin(DBMixinProtocol):
             data["blocked_by"] = blocked_by_resolved
             data["progress"] = progress
             data["child_summary"] = child_summary
+
+            # Surface truncation warnings from the subtree
+            tree_warnings = self._collect_tree_warnings(subtree)
+            if tree_warnings:
+                existing: list[str] = data.get("data_warnings") or []
+                data["data_warnings"] = existing + tree_warnings
+
             result.append(data)  # type: ignore[arg-type]  # dict built incrementally
 
         return result
@@ -546,6 +553,17 @@ class PlanningMixin(DBMixinProtocol):
                 open_count += sub["open"]
         pct = round(completed / total * 100) if total > 0 else 0
         return {"total": total, "completed": completed, "in_progress": in_progress, "open": open_count, "pct": pct}
+
+    def _collect_tree_warnings(self, nodes: list[TreeNode]) -> list[str]:
+        """Recursively collect ``data_warnings`` from truncated tree nodes."""
+        warnings: list[str] = []
+        for node in nodes:
+            if node.get("truncated"):
+                node_warnings = node["issue"].get("data_warnings", [])
+                warnings.extend(node_warnings)
+            if node["children"]:
+                warnings.extend(self._collect_tree_warnings(node["children"]))
+        return warnings
 
     def _summarize_children_by_type(self, nodes: list[TreeNode]) -> ChildSummary:
         counts: ChildSummary = {"epics": 0, "milestones": 0, "tasks": 0, "bugs": 0, "other": 0, "total": len(nodes)}

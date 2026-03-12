@@ -38,6 +38,8 @@ def _alive_clause(sweep: bool, now_iso: str) -> tuple[str, tuple[str, ...]]:
     if sweep:
         return "", ()
     return " AND expires_at > ?", (now_iso,)
+
+
 DISMISSED_AUDIT_TRAIL_CAP = 10_000
 
 
@@ -251,9 +253,7 @@ class ObservationsMixin(DBMixinProtocol):
             (expiring_cutoff, *alive_params),
         ).fetchone()[0]
 
-        oldest_row = self.conn.execute(
-            f"SELECT MIN(created_at) FROM observations{alive_where}", alive_params
-        ).fetchone()
+        oldest_row = self.conn.execute(f"SELECT MIN(created_at) FROM observations{alive_where}", alive_params).fetchone()
         oldest_hours = 0.0
         if oldest_row and oldest_row[0]:
             oldest_dt = datetime.fromisoformat(oldest_row[0])

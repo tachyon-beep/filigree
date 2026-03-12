@@ -198,6 +198,26 @@ export function showWorkflowModal(type) {
   document.getElementById("workflowModalClose").onclick = closeModal;
   document.addEventListener("keydown", onKey);
 
+  // Focus trap: keep Tab cycling within modal
+  modal.addEventListener("keydown", (ev) => {
+    if (ev.key !== "Tab") return;
+    const focusable = modal.querySelectorAll('button, select, [tabindex]:not([tabindex="-1"])');
+    if (!focusable.length) return;
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (ev.shiftKey && document.activeElement === first) {
+      ev.preventDefault();
+      last.focus();
+    } else if (!ev.shiftKey && document.activeElement === last) {
+      ev.preventDefault();
+      first.focus();
+    }
+  });
+
+  // Move focus into modal
+  const closeBtn = document.getElementById("workflowModalClose");
+  if (closeBtn) closeBtn.focus();
+
   populateWorkflowModalTypes(type);
 }
 
