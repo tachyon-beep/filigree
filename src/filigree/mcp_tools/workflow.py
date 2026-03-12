@@ -28,7 +28,6 @@ from filigree.types.inputs import (
     ValidateIssueArgs,
 )
 from filigree.types.workflow import (
-    FieldSchemaInfo,
     StateInfo,
     TransitionInfo,
     TypeInfoResponse,
@@ -205,20 +204,7 @@ async def _handle_get_type_info(arguments: dict[str, Any]) -> list[TextContent]:
     type_tpl = tracker.templates.get_type(args["type"])
     if type_tpl is None:
         return _text(ErrorResponse(error=f"Unknown type: {args['type']}", code="not_found"))
-    fields: list[FieldSchemaInfo] = []
-    for fd in type_tpl.fields_schema:
-        fsi = FieldSchemaInfo(name=fd.name, type=fd.type, description=fd.description)
-        if fd.options:
-            fsi["options"] = list(fd.options)
-        if fd.default is not None:
-            fsi["default"] = fd.default
-        if fd.required_at:
-            fsi["required_at"] = list(fd.required_at)
-        if fd.pattern:
-            fsi["pattern"] = fd.pattern
-        if fd.unique:
-            fsi["unique"] = fd.unique
-        fields.append(fsi)
+    fields = [tracker._field_schema_to_info(fd) for fd in type_tpl.fields_schema]
     return _text(
         TypeInfoResponse(
             type=type_tpl.type,

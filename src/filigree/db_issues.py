@@ -42,6 +42,24 @@ def _validate_string_list(value: object, name: str) -> None:
         raise TypeError(msg)
 
 
+def _sanitize_fts_query(query: str) -> str:
+    """Sanitize a search query for FTS5 MATCH syntax.
+
+    Strips non-alphanumeric chars (keeping ``*`` and ``"``), quotes each token,
+    and joins with AND for prefix matching.
+    """
+    sanitized = _re.sub(r'[^\w\s*"]', "", query)
+    tokens = [t.replace('"', "") for t in sanitized.strip().split()]
+    tokens = [t for t in tokens if t]
+    return " AND ".join(f'"{t}"*' for t in tokens) if tokens else '""'
+
+
+def _escape_like_query(query: str) -> str:
+    """Escape a search query for SQL LIKE with backslash escape."""
+    escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{escaped}%"
+
+
 class IssuesMixin(DBMixinProtocol):
     """Issue CRUD, batch operations, search, and claiming.
 
@@ -914,10 +932,7 @@ class IssuesMixin(DBMixinProtocol):
     def count_search_results(self, query: str) -> int:
         """Return the total number of issues matching a search query."""
         try:
-            sanitized = _re.sub(r'[^\w\s*"]', "", query)
-            tokens = [t.replace('"', "") for t in sanitized.strip().split()]
-            tokens = [t for t in tokens if t]
-            fts_query = " AND ".join(f'"{t}"*' for t in tokens) if tokens else '""'
+            fts_query = _sanitize_fts_query(query)
             row = self.conn.execute(
                 "SELECT COUNT(*) AS cnt FROM issues i JOIN issues_fts ON issues_fts.rowid = i.rowid WHERE issues_fts MATCH ?",
                 (fts_query,),
@@ -925,8 +940,7 @@ class IssuesMixin(DBMixinProtocol):
         except sqlite3.OperationalError as exc:
             if "no such table" not in str(exc) and "no such module" not in str(exc):
                 raise
-            escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-            pattern = f"%{escaped}%"
+            pattern = _escape_like_query(query)
             row = self.conn.execute(
                 "SELECT COUNT(*) AS cnt FROM issues WHERE title LIKE ? ESCAPE '\\' OR description LIKE ? ESCAPE '\\'",
                 (pattern, pattern),
@@ -934,15 +948,9 @@ class IssuesMixin(DBMixinProtocol):
         return int(row["cnt"]) if row else 0
 
     def search_issues(self, query: str, *, limit: int = 100, offset: int = 0) -> list[Issue]:
-        # Try FTS5 first, fall back to LIKE if FTS table doesn't exist
+        """Search issues by title/description using FTS5, falling back to LIKE."""
         try:
-            # Sanitize: strip non-alphanumeric chars except * (prefix) and " (phrase)
-            sanitized = _re.sub(r'[^\w\s*"]', "", query)
-            # Quote each token and add * for prefix matching, then join with AND
-            # Strip double quotes from tokens to prevent FTS5 syntax injection
-            tokens = [t.replace('"', "") for t in sanitized.strip().split()]
-            tokens = [t for t in tokens if t]  # drop empty tokens after stripping
-            fts_query = " AND ".join(f'"{t}"*' for t in tokens) if tokens else '""'
+            fts_query = _sanitize_fts_query(query)
             rows = self.conn.execute(
                 "SELECT i.id FROM issues i "
                 "JOIN issues_fts ON issues_fts.rowid = i.rowid "
@@ -953,13 +961,11 @@ class IssuesMixin(DBMixinProtocol):
         except sqlite3.OperationalError as exc:
             if "no such table" not in str(exc) and "no such module" not in str(exc):
                 raise
-            # FTS5 not available — fall back to LIKE
             logging.getLogger(__name__).warning(
                 "FTS5 search unavailable (%s); falling back to LIKE. Performance may be degraded. Run 'filigree doctor' to check.",
                 exc,
             )
-            escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-            pattern = f"%{escaped}%"
+            pattern = _escape_like_query(query)
             rows = self.conn.execute(
                 "SELECT id FROM issues WHERE title LIKE ? ESCAPE '\\' OR description LIKE ? ESCAPE '\\' "
                 "ORDER BY priority, created_at LIMIT ? OFFSET ?",
