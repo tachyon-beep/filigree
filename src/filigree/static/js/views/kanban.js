@@ -479,7 +479,7 @@ export function initDragAndDrop() {
     const dragToken = state._dragIssueId;
     fetchTransitions(state._dragIssueId).then((transitions) => {
       if (state._dragIssueId !== dragToken) return; // drag ended before response
-      state._dragTransitions = transitions;
+      state._dragTransitions = transitions || [];
       const validCategories = new Set();
       const validStatuses = new Set();
       for (const t of transitions) {

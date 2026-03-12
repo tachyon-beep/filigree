@@ -271,7 +271,7 @@ export async function openDetail(issueId) {
   loadTransitions(issueId)
     .then((transitions) => {
     const container = document.getElementById("transitionBtns");
-    if (!container || !transitions.length) return;
+    if (!container || !transitions || !transitions.length) return;
     container.innerHTML = transitions
       .map((t) => {
         const btnStyle = t.ready
@@ -543,6 +543,10 @@ export async function showAddBlocker(issueId) {
       }
       try {
         const data = await fetchSearch(q, 10);
+        if (!data) {
+          results.innerHTML = '<div class="text-red-400">Search failed</div>';
+          return;
+        }
         results.innerHTML =
           data.results
             .filter((r) => r.id !== issueId)

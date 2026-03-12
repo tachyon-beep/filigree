@@ -31,6 +31,7 @@ export async function loadWorkflow() {
   if (wfSelect && wfSelect.options.length <= 1) {
     try {
       const registered = await fetchTypes();
+      if (!registered) return;
       for (const t of registered) {
         if (WORKFLOW_HIDDEN[t.type]) continue;
         const opt = document.createElement("option");
@@ -205,6 +206,7 @@ async function populateWorkflowModalTypes(preselect) {
   if (!select) return;
   try {
     const registered = await fetchTypes();
+    if (!registered) return;
     for (const t of registered) {
       if (WORKFLOW_HIDDEN[t.type]) continue;
       const opt = document.createElement("option");

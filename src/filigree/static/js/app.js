@@ -444,6 +444,7 @@ document.addEventListener("keydown", (e) => {
       const issueId = state.selectedIssue;
       loadTransitions(issueId)
         .then((transitions) => {
+          if (!transitions) return;
           const ready = transitions.filter((t) => t.ready);
           if (!ready.length) {
             showToast("No valid transitions", "info");

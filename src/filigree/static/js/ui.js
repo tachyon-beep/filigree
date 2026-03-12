@@ -398,12 +398,7 @@ export function toggleKanbanLegend() {
 export async function showCreateForm() {
   const existing = document.getElementById("createModal");
   if (existing) existing.remove();
-  let types = [];
-  try {
-    types = await fetchTypes();
-  } catch (_e) {
-    /* best-effort */
-  }
+  const types = (await fetchTypes()) || [];
   const typeOpts = types
     .map(
       (t) =>

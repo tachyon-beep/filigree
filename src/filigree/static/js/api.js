@@ -1,6 +1,10 @@
 // ---------------------------------------------------------------------------
 // Pure API client — all fetch calls to the Filigree backend.
-// Returns data or { ok: false, error } objects. No DOM manipulation.
+//
+// Read operations return parsed JSON on success, or null on any error
+// (HTTP error or network failure). Callers must check for null.
+//
+// Write operations return { ok, data?, error? } via writeRequest().
 // ---------------------------------------------------------------------------
 
 import { state } from "./state.js";
@@ -37,27 +41,43 @@ async function writeRequest(path, { method = "POST", body, errorLabel } = {}) {
 // --- Read operations (return data or null) ---
 
 export async function fetchIssues() {
-  const resp = await fetch(apiUrl("/issues"));
-  if (!resp.ok) return null;
-  return resp.json();
+  try {
+    const resp = await fetch(apiUrl("/issues"));
+    if (!resp.ok) return null;
+    return await resp.json();
+  } catch (_e) {
+    return null;
+  }
 }
 
 export async function fetchDeps() {
-  const resp = await fetch(apiUrl("/dependencies"));
-  if (!resp.ok) return null;
-  return resp.json();
+  try {
+    const resp = await fetch(apiUrl("/dependencies"));
+    if (!resp.ok) return null;
+    return await resp.json();
+  } catch (_e) {
+    return null;
+  }
 }
 
 export async function fetchStats() {
-  const resp = await fetch(apiUrl("/stats"));
-  if (!resp.ok) return null;
-  return resp.json();
+  try {
+    const resp = await fetch(apiUrl("/stats"));
+    if (!resp.ok) return null;
+    return await resp.json();
+  } catch (_e) {
+    return null;
+  }
 }
 
 export async function fetchDashboardConfig() {
-  const resp = await fetch(apiUrl("/config"));
-  if (!resp.ok) return null;
-  return resp.json();
+  try {
+    const resp = await fetch(apiUrl("/config"));
+    if (!resp.ok) return null;
+    return await resp.json();
+  } catch (_e) {
+    return null;
+  }
 }
 
 export async function fetchAllData() {
@@ -92,100 +112,155 @@ export async function fetchAllData() {
 }
 
 export async function fetchIssueDetail(issueId) {
-  const resp = await fetch(apiUrl(`/issue/${issueId}`));
-  if (!resp.ok) return null;
-  return resp.json();
+  try {
+    const resp = await fetch(apiUrl(`/issue/${issueId}`));
+    if (!resp.ok) return null;
+    return await resp.json();
+  } catch (_e) {
+    return null;
+  }
 }
 
 export async function fetchIssueFiles(issueId) {
-  const resp = await fetch(apiUrl(`/issue/${issueId}/files`));
-  if (!resp.ok) return null;
-  return resp.json();
+  try {
+    const resp = await fetch(apiUrl(`/issue/${issueId}/files`));
+    if (!resp.ok) return null;
+    return await resp.json();
+  } catch (_e) {
+    return null;
+  }
 }
 
 export async function fetchTransitions(issueId) {
   try {
     const resp = await fetch(apiUrl(`/issue/${issueId}/transitions`));
-    if (resp.ok) return resp.json();
-    console.warn(`[fetchTransitions] HTTP ${resp.status} for issue ${issueId}`);
+    if (!resp.ok) {
+      console.warn(`[fetchTransitions] HTTP ${resp.status} for issue ${issueId}`);
+      return null;
+    }
+    return await resp.json();
   } catch (err) {
     console.error(`[fetchTransitions] Network error for issue ${issueId}:`, err);
+    return null;
   }
-  return [];
 }
 
 export async function fetchMetrics(days) {
-  const resp = await fetch(apiUrl(`/metrics?days=${days}`));
-  if (!resp.ok) return null;
-  return resp.json();
+  try {
+    const resp = await fetch(apiUrl(`/metrics?days=${days}`));
+    if (!resp.ok) return null;
+    return await resp.json();
+  } catch (_e) {
+    return null;
+  }
 }
 
 export async function fetchObservationStats() {
-  const resp = await fetch(apiUrl("/observations/stats"));
-  if (!resp.ok) return null;
-  return resp.json();
+  try {
+    const resp = await fetch(apiUrl("/observations/stats"));
+    if (!resp.ok) return null;
+    return await resp.json();
+  } catch (_e) {
+    return null;
+  }
 }
 
 export async function fetchActivity(limit, since) {
-  let url = apiUrl("/activity");
-  const params = [];
-  if (limit) params.push(`limit=${limit}`);
-  if (since) params.push(`since=${encodeURIComponent(since)}`);
-  if (params.length) url += `?${params.join("&")}`;
-  const resp = await fetch(url);
-  if (!resp.ok) return null;
-  return resp.json();
+  try {
+    let url = apiUrl("/activity");
+    const params = [];
+    if (limit) params.push(`limit=${limit}`);
+    if (since) params.push(`since=${encodeURIComponent(since)}`);
+    if (params.length) url += `?${params.join("&")}`;
+    const resp = await fetch(url);
+    if (!resp.ok) return null;
+    return await resp.json();
+  } catch (_e) {
+    return null;
+  }
 }
 
 export async function fetchTypeInfo(typeName) {
-  const resp = await fetch(apiUrl(`/type/${encodeURIComponent(typeName)}`));
-  if (!resp.ok) return null;
-  return resp.json();
+  try {
+    const resp = await fetch(apiUrl(`/type/${encodeURIComponent(typeName)}`));
+    if (!resp.ok) return null;
+    return await resp.json();
+  } catch (_e) {
+    return null;
+  }
 }
 
 export async function fetchTypes() {
-  const resp = await fetch(apiUrl("/types"));
-  if (!resp.ok) return [];
-  return resp.json();
+  try {
+    const resp = await fetch(apiUrl("/types"));
+    if (!resp.ok) return null;
+    return await resp.json();
+  } catch (_e) {
+    return null;
+  }
 }
 
 export async function fetchPlan(milestoneId) {
-  const resp = await fetch(apiUrl(`/plan/${milestoneId}`));
-  if (!resp.ok) return null;
-  return resp.json();
+  try {
+    const resp = await fetch(apiUrl(`/plan/${milestoneId}`));
+    if (!resp.ok) return null;
+    return await resp.json();
+  } catch (_e) {
+    return null;
+  }
 }
 
 export async function fetchCriticalPath() {
-  const resp = await fetch(apiUrl("/critical-path"));
-  if (!resp.ok) return null;
-  return resp.json();
+  try {
+    const resp = await fetch(apiUrl("/critical-path"));
+    if (!resp.ok) return null;
+    return await resp.json();
+  } catch (_e) {
+    return null;
+  }
 }
 
 export async function fetchReleases(includeReleased = false) {
-  const qs = includeReleased ? "?include_released=true" : "";
-  const resp = await fetch(apiUrl(`/releases${qs}`));
-  if (!resp.ok) return null;
-  return resp.json();
+  try {
+    const qs = includeReleased ? "?include_released=true" : "";
+    const resp = await fetch(apiUrl(`/releases${qs}`));
+    if (!resp.ok) return null;
+    return await resp.json();
+  } catch (_e) {
+    return null;
+  }
 }
 
 export async function fetchReleaseTree(releaseId) {
-  const resp = await fetch(apiUrl(`/release/${releaseId}/tree`));
-  if (!resp.ok) return null;
-  return resp.json();
+  try {
+    const resp = await fetch(apiUrl(`/release/${releaseId}/tree`));
+    if (!resp.ok) return null;
+    return await resp.json();
+  } catch (_e) {
+    return null;
+  }
 }
 
 export async function fetchSearch(query, limit) {
-  let url = apiUrl(`/search?q=${encodeURIComponent(query)}`);
-  if (limit) url += `&limit=${limit}`;
-  const resp = await fetch(url);
-  if (!resp.ok) return { results: [], total: 0 };
-  return resp.json();
+  try {
+    let url = apiUrl(`/search?q=${encodeURIComponent(query)}`);
+    if (limit) url += `&limit=${limit}`;
+    const resp = await fetch(url);
+    if (!resp.ok) return null;
+    return await resp.json();
+  } catch (_e) {
+    return null;
+  }
 }
 
 export async function fetchProjects(ttl) {
-  const resp = await fetch(`/api/projects${ttl ? `?ttl=${ttl}` : ""}`);
-  if (!resp.ok) return [];
-  return resp.json();
+  try {
+    const resp = await fetch(`/api/projects${ttl ? `?ttl=${ttl}` : ""}`);
+    if (!resp.ok) return null;
+    return await resp.json();
+  } catch (_e) {
+    return null;
+  }
 }
 
 // --- Write operations (return { ok, data?, error? }) ---
@@ -254,49 +329,77 @@ export async function postReload() {
 // --- File & Findings API ---
 
 export async function fetchFiles(params) {
-  const qs = params ? "?" + new URLSearchParams(params) : "";
-  const resp = await fetch(apiUrl("/files" + qs));
-  if (!resp.ok) return null;
-  return resp.json();
+  try {
+    const qs = params ? "?" + new URLSearchParams(params) : "";
+    const resp = await fetch(apiUrl("/files" + qs));
+    if (!resp.ok) return null;
+    return await resp.json();
+  } catch (_e) {
+    return null;
+  }
 }
 
 export async function fetchFileDetail(fileId) {
-  const resp = await fetch(apiUrl(`/files/${encodeURIComponent(fileId)}`));
-  if (!resp.ok) return null;
-  return resp.json();
+  try {
+    const resp = await fetch(apiUrl(`/files/${encodeURIComponent(fileId)}`));
+    if (!resp.ok) return null;
+    return await resp.json();
+  } catch (_e) {
+    return null;
+  }
 }
 
 export async function fetchFileFindings(fileId, params) {
-  const qs = params ? "?" + new URLSearchParams(params) : "";
-  const resp = await fetch(apiUrl(`/files/${encodeURIComponent(fileId)}/findings` + qs));
-  if (!resp.ok) return null;
-  return resp.json();
+  try {
+    const qs = params ? "?" + new URLSearchParams(params) : "";
+    const resp = await fetch(apiUrl(`/files/${encodeURIComponent(fileId)}/findings` + qs));
+    if (!resp.ok) return null;
+    return await resp.json();
+  } catch (_e) {
+    return null;
+  }
 }
 
 export async function fetchFileTimeline(fileId, params) {
-  const qs = params ? "?" + new URLSearchParams(params) : "";
-  const resp = await fetch(apiUrl(`/files/${encodeURIComponent(fileId)}/timeline` + qs));
-  if (!resp.ok) return null;
-  return resp.json();
+  try {
+    const qs = params ? "?" + new URLSearchParams(params) : "";
+    const resp = await fetch(apiUrl(`/files/${encodeURIComponent(fileId)}/timeline` + qs));
+    if (!resp.ok) return null;
+    return await resp.json();
+  } catch (_e) {
+    return null;
+  }
 }
 
 export async function fetchHotspots(limit) {
-  const qs = limit ? `?limit=${limit}` : "";
-  const resp = await fetch(apiUrl("/files/hotspots" + qs));
-  if (!resp.ok) return null;
-  return resp.json();
+  try {
+    const qs = limit ? `?limit=${limit}` : "";
+    const resp = await fetch(apiUrl("/files/hotspots" + qs));
+    if (!resp.ok) return null;
+    return await resp.json();
+  } catch (_e) {
+    return null;
+  }
 }
 
 export async function fetchFileStats() {
-  const resp = await fetch(apiUrl("/files/stats"));
-  if (!resp.ok) return null;
-  return resp.json();
+  try {
+    const resp = await fetch(apiUrl("/files/stats"));
+    if (!resp.ok) return null;
+    return await resp.json();
+  } catch (_e) {
+    return null;
+  }
 }
 
 export async function fetchFileSchema() {
-  const resp = await fetch(apiUrl("/files/_schema"));
-  if (!resp.ok) return null;
-  return resp.json();
+  try {
+    const resp = await fetch(apiUrl("/files/_schema"));
+    if (!resp.ok) return null;
+    return await resp.json();
+  } catch (_e) {
+    return null;
+  }
 }
 
 export async function fetchScanRuns(limit) {
@@ -305,12 +408,12 @@ export async function fetchScanRuns(limit) {
     const resp = await fetch(apiUrl("/scan-runs" + qs));
     if (!resp.ok) {
       console.warn("[fetchScanRuns] HTTP", resp.status);
-      return { scan_runs: [] };
+      return null;
     }
-    return resp.json();
+    return await resp.json();
   } catch (err) {
     console.error("[fetchScanRuns] Network error:", err);
-    return { scan_runs: [] };
+    return null;
   }
 }
 
