@@ -19,13 +19,13 @@ from typing import Any, Literal, get_args
 from filigree.types.core import StatusCategory as StateCategory
 
 # ---------------------------------------------------------------------------
-# Logging (review B4)
+# Logging
 # ---------------------------------------------------------------------------
 
 logger = logging.getLogger(__name__)
 
 # State/type names must match this pattern to be safe for use in SQL queries
-# and filesystem paths. Validated at parse time (review B1, B5).
+# and filesystem paths. Validated at parse time.
 _NAME_PATTERN = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 _VALID_CATEGORIES: frozenset[str] = frozenset(get_args(StateCategory))
 
@@ -243,7 +243,7 @@ class TemplateRegistry:
     transition validation.
     """
 
-    # Size limits for custom templates (review B5 -- prevent DoS via huge templates)
+    # Size limits for custom templates (prevent DoS via huge templates)
     MAX_STATES = 50
     MAX_TRANSITIONS = 200
     MAX_FIELDS = 50
@@ -271,7 +271,7 @@ class TemplateRegistry:
             ValueError: If required fields are missing, invalid, or exceed size limits.
             KeyError: If required keys are missing from the dict.
         """
-        # Validate type name format (review B1, B5)
+        # Validate type name format
         type_name = raw["type"]
         if not _NAME_PATTERN.match(type_name):
             msg = f"Invalid type name '{type_name}': must match ^[a-z][a-z0-9_]{{0,63}}$"
@@ -324,7 +324,7 @@ class TemplateRegistry:
                 )
                 raise ValueError(msg)
 
-        # Size limit checks (review B5 -- prevent DoS via huge templates)
+        # Size limit checks (prevent DoS via huge templates)
         if len(raw_states) > TemplateRegistry.MAX_STATES:
             msg = f"Type '{type_name}' has {len(raw_states)} states (max {TemplateRegistry.MAX_STATES})"
             raise ValueError(msg)

@@ -1,5 +1,5 @@
 // ---------------------------------------------------------------------------
-// Graph view — Cytoscape dependency graph, critical path, health scoring.
+// Graph view — Cytoscape dependency graph, critical path, scoped subtree rendering.
 // ---------------------------------------------------------------------------
 
 import { fetchCriticalPath } from "../api.js";

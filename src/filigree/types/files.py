@@ -1,4 +1,4 @@
-"""TypedDicts for db_files.py return types (populated by Task 1B)."""
+"""TypedDicts for db_files.py return types."""
 
 from __future__ import annotations
 

@@ -112,7 +112,7 @@ class ObservationsMixin(DBMixinProtocol):
 
         # Check for existing duplicate (dedup key: summary + file_path + line).
         # If the duplicate is expired, delete it so re-creation succeeds —
-        # otherwise INSERT OR IGNORE would silently return the stale row.
+        # otherwise the SELECT match would cause us to skip the new INSERT.
         existing = self.conn.execute(
             "SELECT * FROM observations WHERE summary = ? AND file_path = ? AND coalesce(line, -1) = ?",
             (summary_stripped, file_path, line_cmp),

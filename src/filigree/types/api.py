@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Literal, NotRequired, TypedDict
 
-from filigree.types.core import ISOTimestamp, IssueDict
+from filigree.types.core import ISOTimestamp, IssueDict, StatusCategory
 from filigree.types.events import EventType
 from filigree.types.planning import CommentRecord, CriticalPathNode, PlanTree, StatsResult
 
@@ -151,7 +151,7 @@ class DepDetail(TypedDict):
 
     title: str
     status: str
-    status_category: str
+    status_category: StatusCategory
     priority: int
 
 

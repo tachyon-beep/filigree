@@ -21,7 +21,7 @@ Safety note on cast():
 
 from typing import Any, NotRequired, TypedDict
 
-from filigree.types.core import AssocType, ISOTimestamp
+from filigree.types.core import AssocType, ISOTimestamp, StatusCategory
 
 # ---------------------------------------------------------------------------
 # issues.py handlers
@@ -35,7 +35,7 @@ class GetIssueArgs(TypedDict):
 
 class ListIssuesArgs(TypedDict):
     status: NotRequired[str]
-    status_category: NotRequired[str]
+    status_category: NotRequired[StatusCategory]
     type: NotRequired[str]
     priority: NotRequired[int]
     parent_id: NotRequired[str]

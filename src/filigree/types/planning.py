@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, NotRequired, TypedDict
 
-from filigree.types.core import ISOTimestamp, IssueDict
+from filigree.types.core import ISOTimestamp, IssueDict, StatusCategory
 
 # ---------------------------------------------------------------------------
 # db_planning.py types
@@ -90,7 +90,7 @@ class ReleaseSummaryItem(TypedDict):
     id: str
     title: str
     status: str
-    status_category: str
+    status_category: StatusCategory
     priority: int
     type: str
     parent_id: str | None
