@@ -544,8 +544,12 @@ export function initDragAndDrop() {
           showToast(`Error: ${result.error || "Move failed"}`, "error");
         }
       })
-      .catch(() => {
-        showToast("Network error: could not move issue", "error");
+      .catch((err) => {
+        console.warn("[kanban] Drag-drop move failed:", err);
+        const msg = err?.message?.includes("fetch")
+          ? "Network error: could not reach server"
+          : `Move failed: ${err?.message || "unknown error"}`;
+        showToast(msg, "error");
       });
   });
 

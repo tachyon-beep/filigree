@@ -42,8 +42,8 @@ export async function loadWorkflow() {
       if (!wfSelect.value && wfSelect.options.length > 1) {
         wfSelect.value = wfSelect.options[1].value;
       }
-    } catch (_e) {
-      /* non-critical */
+    } catch (err) {
+      console.warn("[workflow] Failed to load type list:", err);
     }
   }
 
@@ -60,8 +60,10 @@ export async function loadWorkflow() {
       }
     }
     renderWorkflowGraph(tpl, stateCounts);
-  } catch (_e) {
-    /* non-critical */
+  } catch (err) {
+    console.warn("[workflow] Failed to render workflow graph:", err);
+    const cy = document.getElementById("workflowCy");
+    if (cy) cy.innerHTML = '<div class="p-4 text-xs text-red-400">Failed to load workflow diagram.</div>';
   }
 }
 
@@ -217,8 +219,8 @@ async function populateWorkflowModalTypes(preselect) {
       select.value = select.options[1].value;
       loadWorkflowInModal();
     }
-  } catch (_e) {
-    /* non-critical */
+  } catch (err) {
+    console.warn("[workflow] Failed to load modal type list:", err);
   }
 }
 

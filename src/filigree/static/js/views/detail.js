@@ -46,6 +46,7 @@ export async function openDetail(issueId) {
   let eventsData = [];
   let commentsData = [];
   let issueFilesData = [];
+  let staleBanner = "";
   try {
     const [detailData, filesData] = await Promise.all([
       fetchIssueDetail(issueId),
@@ -56,13 +57,16 @@ export async function openDetail(issueId) {
     eventsData = d.events || [];
     commentsData = d.comments || [];
     issueFilesData = Array.isArray(filesData) ? filesData : [];
-  } catch (_e) {
+  } catch (err) {
+    console.warn("[detail] Failed to fetch issue detail, using cached data:", err);
     // Fall back to local data if detail endpoint fails
     d = state.issueMap[issueId];
     if (!d) {
       content.innerHTML = '<div class="text-red-400 text-xs">Issue not found</div>';
       return;
     }
+    // Show stale-data banner so user knows they may be viewing outdated info
+    staleBanner = '<div class="text-xs rounded px-3 py-2 mb-3" style="background:var(--surface-overlay);border:1px dashed var(--border-strong);color:var(--text-secondary)">Showing cached data \u2014 could not reach server.</div>';
   }
 
   const safeId = escJsSingle(d.id);
@@ -166,6 +170,7 @@ export async function openDetail(issueId) {
     "</div>";
 
   content.innerHTML =
+    staleBanner +
     '<div class="flex items-center gap-2 mb-1">' +
     `<span class="text-lg">${typeIcon}</span>` +
     `<span class="text-lg font-semibold" style="color:var(--text-primary)">${escHtml(d.title)}</span>` +

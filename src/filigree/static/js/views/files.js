@@ -243,7 +243,8 @@ export async function loadFiles() {
       "</tbody>" +
       "</table></div>" +
       paginationHtml;
-  } catch (_e) {
+  } catch (err) {
+    console.warn("[files:list] Failed to load file list:", err);
     container.innerHTML = '<div class="text-red-400">Failed to load files.</div>';
   }
 }
@@ -316,7 +317,8 @@ export async function openFileDetail(fileId) {
 
     state.fileDetailData = data;
     renderFileDetail(data);
-  } catch (_e) {
+  } catch (err) {
+    console.warn("[files:detail] Failed to load file detail:", err);
     content.innerHTML = '<div class="text-red-400">Failed to load file details.</div>';
   }
 }
@@ -532,7 +534,8 @@ async function loadFindingsTab(fileId, offset) {
       `<div class="w-1/2 overflow-y-auto pr-1" style="max-height:400px">${listHtml}</div>` +
       `<div id="findingDetailPane" class="flex-1 rounded p-3" style="background:var(--surface-overlay);border:1px solid var(--border-default)">${renderFindingDetail(_selectedFinding)}</div>` +
       "</div>";
-  } catch (_e) {
+  } catch (err) {
+    console.warn("[files:findings] Failed to load findings:", err);
     container.innerHTML = '<div class="text-red-400">Failed to load findings.</div>';
   }
 }
@@ -667,7 +670,8 @@ async function loadTimelineTab(fileId, offset) {
     }
 
     container.innerHTML = html;
-  } catch (_e) {
+  } catch (err) {
+    console.warn("[files:timeline] Failed to load timeline:", err);
     container.innerHTML = '<div class="text-red-400">Failed to load timeline.</div>';
   }
 }

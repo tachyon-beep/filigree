@@ -47,7 +47,8 @@ export async function renderHealthOverview(container, { onClickFile, onClickScan
       renderCoverageWidget(filesWithFindings, totalFiles) +
       renderRecentScansWidget(scanRuns, onClickScan) +
       "</div>";
-  } catch (_e) {
+  } catch (err) {
+    console.warn("[health] Failed to load health data:", err);
     container.innerHTML =
       '<div class="text-xs text-red-400">Failed to load health data.</div>';
   }
