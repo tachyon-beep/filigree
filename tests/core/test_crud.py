@@ -2029,3 +2029,34 @@ class TestImportJsonlErrorPaths:
 
         with pytest.raises(ValueError, match="Cannot import Future release"):
             db.import_jsonl(jsonl)
+
+
+# ── _generate_unique_id RuntimeError ──────────────────────────────────
+
+
+class TestGenerateUniqueIdCollision:
+    """filigree-ca37abe44f: _generate_unique_id raises RuntimeError on persistent collisions."""
+
+    def test_all_collisions_raises_runtime_error(self, db: FiligreeDB) -> None:
+        """When uuid4 always returns the same value, both normal and fallback IDs collide."""
+        # Use a fixed hex that will produce predictable IDs
+        fixed_hex = "abcdef1234567890abcdef1234567890"
+        normal_id = f"test-{fixed_hex[:10]}"  # first 10 chars used in loop
+        fallback_id = f"test-{fixed_hex[:16]}"  # first 16 chars used in fallback
+
+        # Pre-insert both candidate IDs into the issues table
+        now = datetime.now(UTC).isoformat()
+        for cid in (normal_id, fallback_id):
+            db.conn.execute(
+                "INSERT INTO issues (id, title, status, priority, type, assignee, "
+                "created_at, updated_at, description, notes, fields) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (cid, "Collision placeholder", "open", 2, "task", "", now, now, "", "", "{}"),
+            )
+        db.conn.commit()
+
+        fake_uuid = MagicMock()
+        fake_uuid.hex = fixed_hex
+
+        with patch("filigree.db_issues.uuid.uuid4", return_value=fake_uuid), pytest.raises(RuntimeError, match="ID generation failed"):
+            db._generate_unique_id("issues")

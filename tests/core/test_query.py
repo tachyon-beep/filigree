@@ -374,3 +374,53 @@ class TestFTS5SpecialCharacters:
         # becomes "authentication" after stripping specials, which may tokenize differently.
         # The key point is: no crash.
         assert isinstance(results, list)
+
+
+class TestCountSearchResults:
+    """filigree-af817d0cf3: count_search_results unit tests."""
+
+    def test_fts_path_returns_correct_count(self, db: FiligreeDB) -> None:
+        db.create_issue("Fix authentication bug")
+        db.create_issue("Authentication flow rework")
+        db.create_issue("Unrelated feature")
+        count = db.count_search_results("authentication")
+        assert count == 2
+
+    def test_like_fallback_when_fts_unavailable(self, db: FiligreeDB) -> None:
+        """When FTS table is missing, LIKE fallback still returns correct count."""
+        db.create_issue("Fix notification system")
+        db.create_issue("Another notification task")
+        db.create_issue("Unrelated task")
+
+        original_execute = db.conn.execute
+
+        class _NoFTS:
+            def __getattr__(self, name: str) -> object:
+                return getattr(db._conn, name)
+
+            def execute(self, sql: str, params: tuple[object, ...] = ()) -> sqlite3.Cursor:
+                if "issues_fts" in sql and "MATCH" in sql:
+                    raise sqlite3.OperationalError("no such table: issues_fts")
+                return original_execute(sql, params)
+
+        with patch.object(db, "_conn", _NoFTS()):
+            count = db.count_search_results("notification")
+        assert count == 2
+
+    def test_special_character_sanitization(self, db: FiligreeDB) -> None:
+        """Special chars in query don't cause errors and valid tokens still match."""
+        db.create_issue("Fix the dashboard display")
+        count = db.count_search_results("dashboard @#$%")
+        assert count == 1
+
+    def test_empty_query(self, db: FiligreeDB) -> None:
+        """Empty or whitespace-only query should not crash."""
+        db.create_issue("Some issue")
+        count = db.count_search_results("")
+        assert isinstance(count, int)
+
+    def test_only_special_characters_returns_zero(self, db: FiligreeDB) -> None:
+        """Query with only special characters returns 0, not an error."""
+        db.create_issue("Normal issue")
+        count = db.count_search_results("@#$%^&()")
+        assert count == 0

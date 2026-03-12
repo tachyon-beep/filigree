@@ -572,6 +572,13 @@ class TestReleaseSummaryItemShape:
         hints = get_type_hints(ReleaseSummaryItem)
         assert set(results[0].keys()) == set(hints.keys())
 
+    def test_issue_dict_keys_present(self) -> None:
+        """Every key in IssueDict must also appear in ReleaseSummaryItem."""
+        issue_hints = get_type_hints(IssueDict)
+        release_hints = get_type_hints(ReleaseSummaryItem)
+        missing = set(issue_hints.keys()) - set(release_hints.keys())
+        assert not missing, f"ReleaseSummaryItem is missing IssueDict keys: {missing}"
+
 
 class TestReleaseTreeShape:
     def test_keys_match(self, db: FiligreeDB) -> None:

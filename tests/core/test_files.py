@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from filigree.core import FiligreeDB, _normalize_scan_path
+from filigree.core import FiligreeDB, ScanFinding, _normalize_scan_path
+from filigree.db_files import _safe_json_loads
 
 # ---------------------------------------------------------------------------
 # Schema tests
@@ -2379,3 +2380,59 @@ class TestCreateIssuesPartialFailure:
         assert result["issues_created"] == 2
         assert len(result["issue_ids"]) == 2
         assert result["findings_created"] == 2
+
+
+# ---------------------------------------------------------------------------
+# _safe_json_loads edge cases
+# ---------------------------------------------------------------------------
+
+
+class TestSafeJsonLoads:
+    """filigree-ef3925404b: _safe_json_loads edge cases."""
+
+    def test_none_input_returns_empty_dict(self) -> None:
+        assert _safe_json_loads(None, "test") == {}
+
+    def test_empty_string_returns_empty_dict(self) -> None:
+        assert _safe_json_loads("", "test") == {}
+
+    def test_non_dict_json_array_returns_empty_dict(self) -> None:
+        assert _safe_json_loads("[1,2,3]", "test") == {}
+
+    def test_non_dict_json_scalar_returns_empty_dict(self) -> None:
+        assert _safe_json_loads("42", "test") == {}
+
+    def test_valid_dict_returns_parsed(self) -> None:
+        result = _safe_json_loads('{"key": "value", "num": 42}', "test")
+        assert result == {"key": "value", "num": 42}
+
+    def test_invalid_json_returns_error_marker(self) -> None:
+        result = _safe_json_loads("{not valid json}", "test")
+        assert result == {"_metadata_error": True}
+
+
+# ---------------------------------------------------------------------------
+# ScanFinding.__post_init__ validation
+# ---------------------------------------------------------------------------
+
+
+class TestScanFindingPostInit:
+    """filigree-bd79437073: ScanFinding.__post_init__ validates severity and status."""
+
+    def test_invalid_severity_raises(self) -> None:
+        with pytest.raises(ValueError, match="Invalid severity"):
+            ScanFinding(id="x", file_id="y", severity="banana")  # type: ignore[arg-type]
+
+    def test_invalid_status_raises(self) -> None:
+        with pytest.raises(ValueError, match="Invalid finding status"):
+            ScanFinding(id="x", file_id="y", status="banana")  # type: ignore[arg-type]
+
+    def test_valid_severity_accepted(self) -> None:
+        for sev in ("critical", "high", "medium", "low", "info"):
+            f = ScanFinding(id="x", file_id="y", severity=sev)  # type: ignore[arg-type]
+            assert f.severity == sev
+
+    def test_valid_status_accepted(self) -> None:
+        for status in ("open", "acknowledged", "fixed", "false_positive", "unseen_in_latest"):
+            f = ScanFinding(id="x", file_id="y", status=status)  # type: ignore[arg-type]
+            assert f.status == status

@@ -707,3 +707,98 @@ class TestObservationStatsNoSweepOldest:
 
         stats = db.observation_stats(sweep=False)
         assert stats["expiring_soon_count"] == 1  # only the soon-expiring one
+
+
+# ── promote_observation title/priority overrides ───────────────────────
+
+
+class TestPromoteObservationOverrides:
+    """filigree-ae4d760c75: promote_observation title and priority override params."""
+
+    def test_custom_title_overrides_summary(self, db: FiligreeDB) -> None:
+        obs = db.create_observation("Original summary", priority=2)
+        result = db.promote_observation(obs["id"], title="Custom title")
+        assert result["issue"].title == "Custom title"
+
+    def test_custom_priority_overrides_observation_priority(self, db: FiligreeDB) -> None:
+        obs = db.create_observation("Something", priority=3)
+        result = db.promote_observation(obs["id"], priority=0)
+        assert result["issue"].priority == 0
+
+    def test_empty_string_title_falls_back_to_summary(self, db: FiligreeDB) -> None:
+        obs = db.create_observation("Fallback summary", priority=2)
+        result = db.promote_observation(obs["id"], title="")
+        assert result["issue"].title == "Fallback summary"
+
+
+# ── promote_observation file_association failure path ──────────────────
+
+
+class TestPromoteFileAssociationFailure:
+    """filigree-671ce16125: file_association failure during promote."""
+
+    def test_file_association_failure_still_creates_issue(self, db: FiligreeDB) -> None:
+        """If add_file_association raises, the issue is still created and returned."""
+        from unittest.mock import patch
+
+        count_before = db.conn.execute("SELECT COUNT(*) FROM issues").fetchone()[0]
+        obs = db.create_observation("bug with file", file_path="src/buggy.py")
+        with patch.object(db, "add_file_association", side_effect=sqlite3.OperationalError("assoc boom")):
+            result = db.promote_observation(obs["id"])
+        assert result["issue"] is not None
+        assert db.observation_count() == 0
+        count_after = db.conn.execute("SELECT COUNT(*) FROM issues").fetchone()[0]
+        assert count_after == count_before + 1
+
+    def test_file_association_failure_returns_warning(self, db: FiligreeDB) -> None:
+        """File association failure surfaces in warnings list."""
+        from unittest.mock import patch
+
+        obs = db.create_observation("bug with file", file_path="src/warn.py")
+        with patch.object(db, "add_file_association", side_effect=sqlite3.OperationalError("assoc boom")):
+            result = db.promote_observation(obs["id"])
+        assert "warnings" in result
+        assert any("file association" in w.lower() for w in result["warnings"])
+
+
+# ── JSONL export/import roundtrip for observations ────────────────────
+
+
+class TestObservationJsonlRoundtrip:
+    """filigree-770b3f3f75: JSONL roundtrip preserves observation data."""
+
+    def test_roundtrip_preserves_observations(self, db: FiligreeDB, tmp_path: Any) -> None:
+        """Create observations + dismiss one, export, reimport into fresh DB, verify."""
+        db.create_observation("Active obs", priority=1, file_path="src/a.py", line=10)
+        obs2 = db.create_observation("Will dismiss", priority=2)
+        db.create_observation("Another active", detail="Some detail", priority=0)
+        db.dismiss_observation(obs2["id"], reason="not relevant", actor="tester")
+
+        out = tmp_path / "obs-roundtrip.jsonl"
+        export_count = db.export_jsonl(out)
+        assert export_count > 0
+
+        fresh = FiligreeDB(tmp_path / "fresh-obs.db", prefix="test")
+        fresh.initialize()
+        result = fresh.import_jsonl(out, merge=True)
+        assert result["count"] > 0
+
+        # Active observations should be present
+        imported_obs = fresh.list_observations()
+        summaries = {o["summary"] for o in imported_obs}
+        assert "Active obs" in summaries
+        assert "Another active" in summaries
+        assert "Will dismiss" not in summaries  # was dismissed
+
+        # Verify dismissed_observations audit trail was imported
+        dismissed = fresh.conn.execute("SELECT * FROM dismissed_observations WHERE obs_id = ?", (obs2["id"],)).fetchone()
+        assert dismissed is not None
+        assert dismissed["reason"] == "not relevant"
+
+        # Verify field integrity on imported observation
+        active = next(o for o in imported_obs if o["summary"] == "Active obs")
+        assert active["priority"] == 1
+        assert active["file_path"] == "src/a.py"
+        assert active["line"] == 10
+
+        fresh.close()

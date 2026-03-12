@@ -263,3 +263,19 @@ class TestListObservationsStatsGuard:
             result = await call_tool("list_observations", {})
         data = _parse(result)
         assert data["code"] == "database_error"
+
+
+class TestPromoteExpiredObservationMCP:
+    """filigree-0aef8403ca: MCP-layer test for promoting expired observation."""
+
+    async def test_promote_expired_returns_validation_error(self, mcp_db: FiligreeDB) -> None:
+        """Promoting an expired observation via MCP should return validation_error."""
+        obs = mcp_db.create_observation("stale finding")
+        mcp_db.conn.execute(
+            "UPDATE observations SET expires_at = '2020-01-01T00:00:00+00:00' WHERE id = ?",
+            (obs["id"],),
+        )
+        mcp_db.conn.commit()
+        result = await call_tool("promote_observation", {"id": obs["id"]})
+        data = _parse(result)
+        assert data["code"] == "validation_error"
