@@ -155,5 +155,5 @@ class ObservationStatsDict(TypedDict):
 
     count: int
     stale_count: int
-    oldest_hours: float
+    oldest_hours: float | None
     expiring_soon_count: int

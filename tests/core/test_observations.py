@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
@@ -95,6 +96,35 @@ class TestCreateObservation:
         row = db.conn.execute("SELECT * FROM dismissed_observations WHERE obs_id = ?", (obs1["id"],)).fetchone()
         assert row is not None
         assert row["reason"] == "expired (replaced)"
+
+    def test_create_rollback_preserves_expired_duplicate_on_insert_failure(self, db: FiligreeDB) -> None:
+        """If INSERT fails after expired-duplicate deletion, rollback restores the original."""
+        obs1 = db.create_observation("will survive", file_path="src/rollback.py", line=1)
+        original_id = obs1["id"]
+        # Expire the observation
+        db.conn.execute(
+            "UPDATE observations SET expires_at = '2020-01-01T00:00:00+00:00' WHERE id = ?",
+            (original_id,),
+        )
+        db.conn.commit()
+
+        real_conn = db._conn
+
+        def _fail_on_insert(real: Any, sql: str, params: Any = ()) -> Any:
+            if "INSERT INTO observations" in sql and "dismissed_observations" not in sql:
+                raise sqlite3.OperationalError("disk I/O error on insert")
+            return real.execute(sql, params)
+
+        db._conn = _InterceptingConn(real_conn, _fail_on_insert)  # type: ignore[assignment]
+        try:
+            with pytest.raises(sqlite3.OperationalError, match="disk I/O error"):
+                db.create_observation("will survive", file_path="src/rollback.py", line=1)
+        finally:
+            db._conn = real_conn
+
+        # Original expired observation should be restored by rollback
+        row = db.conn.execute("SELECT id FROM observations WHERE id = ?", (original_id,)).fetchone()
+        assert row is not None, "Rollback should have preserved the expired observation"
 
     def test_create_different_summary_same_location_allowed(self, db: FiligreeDB) -> None:
         db.create_observation("null deref", file_path="src/foo.py", line=10)
@@ -246,8 +276,8 @@ class _InterceptingConn:
         return getattr(self._real, name)
 
 
-class TestSweepExceptionNarrowing:
-    """Verify _sweep_expired_observations catches only OperationalError among sqlite3.Error subclasses."""
+class TestSweepExceptionSuppression:
+    """Verify _sweep_expired_observations suppresses transient errors but propagates code bugs."""
 
     def test_sweep_catches_operational_error(self, db: FiligreeDB) -> None:
         """OperationalError during sweep is caught — list_observations still returns results."""
@@ -269,11 +299,11 @@ class TestSweepExceptionNarrowing:
             db._conn = real_conn
         assert len(result) == 1
 
-    def test_sweep_propagates_integrity_error(self, db: FiligreeDB) -> None:
-        """IntegrityError during sweep propagates — not silently swallowed."""
+    def test_sweep_suppresses_integrity_error(self, db: FiligreeDB) -> None:
+        """IntegrityError during sweep is suppressed — sweep is best-effort for all sqlite3.Error."""
         import sqlite3
 
-        db.create_observation("will see propagation")
+        db.create_observation("will survive sweep failure")
 
         real_conn = db._conn
 
@@ -284,16 +314,16 @@ class TestSweepExceptionNarrowing:
 
         db._conn = _InterceptingConn(real_conn, _fail_with_integrity)  # type: ignore[assignment]
         try:
-            with pytest.raises(sqlite3.IntegrityError, match="UNIQUE constraint"):
-                db.list_observations()
+            result = db.list_observations()
+            assert len(result) == 1
         finally:
             db._conn = real_conn
 
     def test_sweep_propagates_programming_error(self, db: FiligreeDB) -> None:
-        """ProgrammingError during sweep propagates — not silently swallowed."""
+        """ProgrammingError during sweep propagates — it indicates a code bug, not transient failure."""
         import sqlite3
 
-        db.create_observation("will see propagation")
+        db.create_observation("will survive sweep failure")
 
         real_conn = db._conn
 
@@ -326,6 +356,30 @@ class TestSweepExceptionNarrowing:
                 db.list_observations()
         finally:
             db._conn = real_conn
+
+
+class TestSweepAuditTrailPruning:
+    """Verify DISMISSED_AUDIT_TRAIL_CAP is enforced during sweep."""
+
+    def test_sweep_prunes_dismissed_observations_to_cap(self, db: FiligreeDB, monkeypatch: pytest.MonkeyPatch) -> None:
+        import filigree.db_observations as obs_mod
+
+        monkeypatch.setattr(obs_mod, "DISMISSED_AUDIT_TRAIL_CAP", 3)
+
+        # Create and expire 5 observations so sweep moves them to dismissed_observations
+        for i in range(5):
+            obs = db.create_observation(f"obs-{i}", file_path=f"src/file{i}.py")
+            db.conn.execute(
+                "UPDATE observations SET expires_at = '2020-01-01T00:00:00+00:00' WHERE id = ?",
+                (obs["id"],),
+            )
+        db.conn.commit()
+
+        # Trigger sweep via list_observations
+        db.list_observations()
+
+        count = db.conn.execute("SELECT COUNT(*) FROM dismissed_observations").fetchone()[0]
+        assert count == 3, f"Audit trail should be pruned to cap (3), got {count}"
 
 
 class TestDismissObservation:
@@ -482,10 +536,31 @@ class TestPromoteObservation:
         assert any("label" in w for w in result["warnings"])
 
     def test_promote_cleanup_failure_returns_warnings(self, db: FiligreeDB) -> None:
-        """If audit trail + observation delete fails, warning is surfaced."""
+        """If observation delete fails, warning is surfaced."""
         import sqlite3
 
         obs = db.create_observation("cleanup will fail")
+        real_conn = db._conn
+
+        def _fail_on_obs_delete(real: Any, sql: str, params: Any = ()) -> Any:
+            if "DELETE FROM observations WHERE id" in sql and "expires_at" not in sql:
+                raise sqlite3.OperationalError("disk I/O error")
+            return real.execute(sql, params)
+
+        db._conn = _InterceptingConn(real_conn, _fail_on_obs_delete)  # type: ignore[assignment]
+        try:
+            result = db.promote_observation(obs["id"])
+        finally:
+            db._conn = real_conn
+        assert result["issue"] is not None
+        assert "warnings" in result
+        assert any("delete observation" in w.lower() for w in result["warnings"])
+
+    def test_promote_audit_trail_failure_returns_warnings(self, db: FiligreeDB) -> None:
+        """If audit trail insert fails but observation delete succeeds, warning is surfaced."""
+        import sqlite3
+
+        obs = db.create_observation("audit trail will fail")
         real_conn = db._conn
 
         def _fail_on_dismissed_insert(real: Any, sql: str, params: Any = ()) -> Any:
@@ -499,8 +574,42 @@ class TestPromoteObservation:
         finally:
             db._conn = real_conn
         assert result["issue"] is not None
+        # Observation should be deleted (preventing double-promotion)
+        assert db.observation_count() == 0
         assert "warnings" in result
-        assert any("clean up" in w.lower() for w in result["warnings"])
+        assert any("audit trail" in w.lower() for w in result["warnings"])
+
+    def test_promote_cleanup_failure_prevents_double_promotion(self, db: FiligreeDB) -> None:
+        """If observation delete fails, a second promote attempt must NOT create a duplicate issue."""
+        import sqlite3
+
+        obs = db.create_observation("will survive first promote")
+        real_conn = db._conn
+        delete_blocked = True
+
+        def _fail_on_obs_delete(real: Any, sql: str, params: Any = ()) -> Any:
+            if delete_blocked and "DELETE FROM observations WHERE id" in sql and "expires_at" not in sql:
+                raise sqlite3.OperationalError("disk I/O error")
+            return real.execute(sql, params)
+
+        # First promote — delete fails, issue is created, observation lingers
+        db._conn = _InterceptingConn(real_conn, _fail_on_obs_delete)  # type: ignore[assignment]
+        try:
+            result1 = db.promote_observation(obs["id"])
+        finally:
+            db._conn = real_conn
+        first_issue = result1["issue"]
+        assert first_issue is not None
+        # Observation still exists because delete failed
+        assert db.observation_count() == 1
+
+        # Second promote — delete succeeds, should create a second issue
+        # (this is the known trade-off: cleanup failure = potential duplicate)
+        result2 = db.promote_observation(obs["id"])
+        assert result2["issue"] is not None
+        # Third promote should fail — observation is now deleted
+        with pytest.raises(ValueError, match="not found"):
+            db.promote_observation(obs["id"])
 
     def test_promote_warns_when_observation_already_swept(self, db: FiligreeDB) -> None:
         """If a concurrent sweep deletes the observation between SELECT and DELETE,
@@ -570,6 +679,18 @@ class TestObservationStats:
         db.conn.commit()
         stats = db.observation_stats()
         assert stats["stale_count"] == 1
+
+    def test_stats_corrupt_created_at_returns_none_oldest_hours(self, db: FiligreeDB) -> None:
+        """Corrupt created_at returns oldest_hours=None (unknown), not 0.0."""
+        obs = db.create_observation("has corrupt timestamp")
+        db.conn.execute(
+            "UPDATE observations SET created_at = 'not-a-date' WHERE id = ?",
+            (obs["id"],),
+        )
+        db.conn.commit()
+        stats = db.observation_stats()
+        assert stats["oldest_hours"] is None
+        assert stats["count"] == 1
 
 
 class TestObservationStatsNoSweep:
@@ -822,3 +943,69 @@ class TestObservationJsonlRoundtrip:
         assert active["line"] == 10
 
         fresh.close()
+
+    def test_merge_import_dismissed_observations_idempotent(self, db: FiligreeDB, tmp_path: Any) -> None:
+        """Importing the same JSONL twice with merge=True must not duplicate dismissed_observations rows."""
+        obs = db.create_observation("Will dismiss for merge test")
+        db.dismiss_observation(obs["id"], reason="testing merge", actor="tester")
+
+        out = tmp_path / "merge-dismissed.jsonl"
+        db.export_jsonl(out)
+
+        fresh = FiligreeDB(tmp_path / "merge-dismissed.db", prefix="test")
+        fresh.initialize()
+
+        # Import once
+        fresh.import_jsonl(out, merge=True)
+        count1 = fresh.conn.execute("SELECT COUNT(*) FROM dismissed_observations").fetchone()[0]
+        assert count1 >= 1
+
+        # Import again — should NOT duplicate dismissed_observation rows
+        fresh.import_jsonl(out, merge=True)
+        count2 = fresh.conn.execute("SELECT COUNT(*) FROM dismissed_observations").fetchone()[0]
+        assert count2 == count1, f"Expected {count1} dismissed rows after re-import, got {count2} (duplicated)"
+
+        fresh.close()
+
+
+class TestAuditTrailCap:
+    """Verify dismissed_observations is pruned to DISMISSED_AUDIT_TRAIL_CAP during sweep."""
+
+    def test_sweep_prunes_audit_trail_to_cap(self, db: FiligreeDB, monkeypatch: pytest.MonkeyPatch) -> None:
+        """When dismissed_observations exceeds the cap, sweep keeps the most recent entries."""
+        import filigree.db_observations as obs_mod
+
+        cap = 5
+        monkeypatch.setattr(obs_mod, "DISMISSED_AUDIT_TRAIL_CAP", cap)
+        overflow = 3
+        now = datetime.now(UTC)
+
+        for i in range(cap + overflow):
+            ts = (now - timedelta(hours=cap + overflow - i)).isoformat()
+            db.conn.execute(
+                "INSERT INTO dismissed_observations (obs_id, summary, actor, reason, dismissed_at) VALUES (?, ?, 'test', 'bulk', ?)",
+                (f"bulk-obs-{i}", f"Obs {i}", ts),
+            )
+        db.conn.commit()
+
+        row = db.conn.execute("SELECT COUNT(*) FROM dismissed_observations").fetchone()
+        assert row[0] == cap + overflow
+
+        # Create and expire an observation to trigger sweep
+        obs = db.create_observation("trigger sweep")
+        db.conn.execute("UPDATE observations SET expires_at = ? WHERE id = ?", ("2000-01-01T00:00:00", obs["id"]))
+        db.conn.commit()
+
+        db._sweep_expired_observations()
+
+        row = db.conn.execute("SELECT COUNT(*) FROM dismissed_observations").fetchone()
+        assert row[0] <= cap
+
+        # Verify the most recent entries were kept (not the oldest)
+        oldest = db.conn.execute("SELECT dismissed_at FROM dismissed_observations ORDER BY dismissed_at ASC LIMIT 1").fetchone()
+        newest = db.conn.execute("SELECT dismissed_at FROM dismissed_observations ORDER BY dismissed_at DESC LIMIT 1").fetchone()
+        assert oldest is not None
+        assert newest is not None
+        # The oldest surviving entry should be newer than the very first entry we inserted
+        first_ts = (now - timedelta(hours=cap + overflow)).isoformat()
+        assert oldest[0] > first_ts

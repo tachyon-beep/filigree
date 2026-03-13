@@ -1,6 +1,6 @@
 """Composition point for the Filigree issue tracker database.
 
-Assembles DB mixins (db_issues, db_events, db_files, db_workflow, db_meta,
+Assembles DB mixins (db_files, db_issues, db_events, db_workflow, db_meta,
 db_planning, db_observations) into the ``FiligreeDB`` class. Also provides
 convention-based ``.filigree/`` directory discovery, configuration I/O,
 template seeding, and shared file helpers.
@@ -384,6 +384,13 @@ class FiligreeDB(FilesMixin, IssuesMixin, EventsMixin, WorkflowMixin, MetaMixin,
             self._check_same_thread = check_same_thread
 
     def close(self) -> None:
+        """Close the database connection.
+
+        If an uncommitted transaction is active, it is rolled back with a
+        warning — all mixin methods commit their own transactions, so this
+        indicates a bug rather than normal operation.  When no transaction
+        is active, a final commit is issued (a no-op in practice).
+        """
         if self._conn is not None:
             try:
                 if self._conn.in_transaction:

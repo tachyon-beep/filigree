@@ -55,21 +55,22 @@ class ServerConfig:
 
 
 def _read_project_schema_version(filigree_dir: Path) -> int:
-    """Return the SQLite schema version for a project, or 0 if no DB exists."""
+    """Return the SQLite schema version for a project, or 0 if no DB exists.
+
+    Returns 0 when no database file exists.
+    Raises sqlite3.Error or OSError when the file exists but cannot be read
+    (corrupt DB, locked, permission denied).
+    """
     db_path = filigree_dir / DB_FILENAME
     if not db_path.exists():
         return 0
 
+    conn = sqlite3.connect(str(db_path), timeout=5)
     try:
-        conn = sqlite3.connect(str(db_path), timeout=5)
-        try:
-            row = conn.execute("PRAGMA user_version").fetchone()
-            return int(row[0]) if row else 0
-        finally:
-            conn.close()
-    except (sqlite3.Error, OSError) as exc:
-        logger.warning("Could not read schema version from %s: %s", db_path, exc)
-        return 0
+        row = conn.execute("PRAGMA user_version").fetchone()
+        return int(row[0]) if row else 0
+    finally:
+        conn.close()
 
 
 def _backup_corrupt_config() -> None:
@@ -136,8 +137,12 @@ def register_project(filigree_dir: Path) -> None:
 
     Uses ``portalocker.lock`` around the read-modify-write to prevent
     concurrent sessions from losing each other's registrations.
-    Raises ``ValueError`` if another registered project already uses
-    the same prefix.
+
+    Raises:
+        ValueError: another project already uses the same prefix, or
+            the database schema version is newer than supported.
+        sqlite3.Error: the database file exists but cannot be read.
+        OSError: permission or filesystem error reading the database.
     """
     filigree_dir = filigree_dir.resolve()
     project_config = read_config(filigree_dir)

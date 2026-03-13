@@ -499,7 +499,7 @@ class TestObservationStatsDictShape:
         result = db.observation_stats()
         assert isinstance(result["count"], int)
         assert isinstance(result["stale_count"], int)
-        assert isinstance(result["oldest_hours"], float)
+        assert isinstance(result["oldest_hours"], (float, type(None)))
         assert isinstance(result["expiring_soon_count"], int)
 
 

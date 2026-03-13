@@ -1574,8 +1574,50 @@ class TestMigrateV6ToV7:
         indexes = _get_index_names(v6_db)
         assert "idx_observations_priority" in indexes
         assert "idx_observations_expires" in indexes
+        assert "idx_observations_file_id" in indexes
         assert "idx_observations_dedup" in indexes
         assert "idx_dismissed_obs_id" in indexes
+
+    def test_dedup_index_uses_coalesce(self, v6_db: sqlite3.Connection) -> None:
+        """The dedup index uses coalesce(line, -1) so NULL lines deduplicate correctly."""
+        apply_pending_migrations(v6_db, 7)
+        now = "2026-01-01T00:00:00Z"
+        future = "2026-02-01T00:00:00Z"
+        v6_db.execute(
+            "INSERT INTO observations (id, summary, file_path, line, created_at, expires_at) "
+            "VALUES ('obs1', 'dup test', 'src/main.py', NULL, ?, ?)",
+            (now, future),
+        )
+        v6_db.commit()
+        from sqlite3 import IntegrityError
+
+        with pytest.raises(IntegrityError):
+            v6_db.execute(
+                "INSERT INTO observations (id, summary, file_path, line, created_at, expires_at) "
+                "VALUES ('obs2', 'dup test', 'src/main.py', NULL, ?, ?)",
+                (now, future),
+            )
+        v6_db.rollback()
+
+    def test_schema_matches_fresh(self, v6_db: sqlite3.Connection, tmp_path: Path) -> None:
+        """Migrated schema matches fresh SCHEMA_SQL for observation tables."""
+        apply_pending_migrations(v6_db, 7)
+
+        fresh = _make_db(tmp_path, "fresh.db")
+        fresh.executescript(SCHEMA_SQL)
+        fresh.commit()
+
+        for table in ("observations", "dismissed_observations"):
+            migrated_cols = _get_table_columns(v6_db, table)
+            fresh_cols = _get_table_columns(fresh, table)
+            assert migrated_cols == fresh_cols, f"Column mismatch in {table}: {migrated_cols} != {fresh_cols}"
+
+        fresh_indexes = _get_index_names(fresh)
+        migrated_indexes = _get_index_names(v6_db)
+        for idx in ("idx_observations_priority", "idx_observations_expires", "idx_observations_dedup", "idx_dismissed_obs_id"):
+            assert idx in fresh_indexes, f"Missing index {idx} in fresh DB"
+            assert idx in migrated_indexes, f"Missing index {idx} in migrated DB"
+        fresh.close()
 
     def test_idempotent(self, v6_db: sqlite3.Connection) -> None:
         apply_pending_migrations(v6_db, 7)

@@ -403,52 +403,50 @@ class MetaMixin(DBMixinProtocol):
         observations: list[dict[str, Any]] = []
         dismissed_observations: list[dict[str, Any]] = []
 
+        buckets: dict[str, list[dict[str, Any]]] = {
+            "issue": issues,
+            "file_record": file_records,
+            "scan_finding": scan_findings,
+            "dependency": dependencies,
+            "label": labels,
+            "comment": comments,
+            "event": events,
+            "file_association": file_associations,
+            "file_event": file_events,
+            "observation": observations,
+            "dismissed_observation": dismissed_observations,
+        }
+
         with Path(input_path).open() as f:
-            for line in f:
+            for line_num, line in enumerate(f, 1):
                 line = line.strip()
                 if not line:
                     continue
                 try:
                     record = json.loads(line)
                 except json.JSONDecodeError:
+                    logger.warning("import_jsonl: corrupt JSON at line %d: %r", line_num, line[:200])
                     skipped_types["<corrupt_json>"] = skipped_types.get("<corrupt_json>", 0) + 1
                     continue
                 record_type = record.pop("_type", None)
 
-                if record_type == "issue":
-                    issues.append(record)
-                elif record_type == "file_record":
-                    file_records.append(record)
-                elif record_type == "scan_finding":
-                    scan_findings.append(record)
-                elif record_type == "dependency":
-                    dependencies.append(record)
-                elif record_type == "label":
-                    labels.append(record)
-                elif record_type == "comment":
-                    comments.append(record)
-                elif record_type == "event":
-                    events.append(record)
-                elif record_type == "file_association":
-                    file_associations.append(record)
-                elif record_type == "file_event":
-                    file_events.append(record)
-                elif record_type == "observation":
-                    observations.append(record)
-                elif record_type == "dismissed_observation":
-                    dismissed_observations.append(record)
+                bucket = buckets.get(record_type)
+                if bucket is not None:
+                    bucket.append(record)
                 else:
-                    skipped_types[record_type or "<missing>"] = skipped_types.get(record_type or "<missing>", 0) + 1
+                    key = record_type or "<missing>"
+                    skipped_types[key] = skipped_types.get(key, 0) + 1
 
         inserted_issue_ids: set[str] = set()
         parent_map: dict[str, str] = {}
         file_id_map: dict[str, str] = {}
         _import_stage = "setup"
+        _import_index = 0
         try:
             self._reconcile_future_release_import(issues)
             _import_stage = "issue"
 
-            for record in issues:
+            for _import_index, record in enumerate(issues):
                 parent_id = record.get("parent_id")
                 fields = self._issue_fields_json(record.get("fields", "{}"))
                 cursor = self.conn.execute(
@@ -489,11 +487,11 @@ class MetaMixin(DBMixinProtocol):
                     self.conn.execute("UPDATE issues SET parent_id = ? WHERE id = ?", (parent_id, issue_id))
 
             _import_stage = "file_record"
-            for record in file_records:
+            for _import_index, record in enumerate(file_records):
                 count += self._resolve_imported_file_id(record, merge=merge, conflict=conflict, file_id_map=file_id_map)
 
             _import_stage = "scan_finding"
-            for record in scan_findings:
+            for _import_index, record in enumerate(scan_findings):
                 file_id = self._remap_file_id(record["file_id"], file_id_map)
                 severity = record.get("severity", "info")
                 finding_status = record.get("status", "open")
@@ -533,7 +531,7 @@ class MetaMixin(DBMixinProtocol):
                 count += cursor.rowcount
 
             _import_stage = "dependency"
-            for record in dependencies:
+            for _import_index, record in enumerate(dependencies):
                 cursor = self.conn.execute(
                     f"INSERT {conflict} INTO dependencies (issue_id, depends_on_id, type, created_at) VALUES (?, ?, ?, ?)",
                     (
@@ -546,7 +544,7 @@ class MetaMixin(DBMixinProtocol):
                 count += cursor.rowcount
 
             _import_stage = "label"
-            for record in labels:
+            for _import_index, record in enumerate(labels):
                 cursor = self.conn.execute(
                     f"INSERT {conflict} INTO labels (issue_id, label) VALUES (?, ?)",
                     (record["issue_id"], record["label"]),
@@ -554,7 +552,7 @@ class MetaMixin(DBMixinProtocol):
                 count += cursor.rowcount
 
             _import_stage = "comment"
-            for record in comments:
+            for _import_index, record in enumerate(comments):
                 if merge:
                     created = record.get("created_at", _now_iso())
                     cursor = self.conn.execute(
@@ -587,7 +585,7 @@ class MetaMixin(DBMixinProtocol):
                 count += cursor.rowcount
 
             _import_stage = "event"
-            for record in events:
+            for _import_index, record in enumerate(events):
                 cursor = self.conn.execute(
                     f"INSERT {conflict} INTO events "
                     "(issue_id, event_type, actor, old_value, new_value, comment, created_at) "
@@ -605,7 +603,7 @@ class MetaMixin(DBMixinProtocol):
                 count += cursor.rowcount
 
             _import_stage = "file_association"
-            for record in file_associations:
+            for _import_index, record in enumerate(file_associations):
                 file_id = self._remap_file_id(record["file_id"], file_id_map)
                 cursor = self.conn.execute(
                     f"INSERT {conflict} INTO file_associations (file_id, issue_id, assoc_type, created_at) VALUES (?, ?, ?, ?)",
@@ -619,7 +617,7 @@ class MetaMixin(DBMixinProtocol):
                 count += cursor.rowcount
 
             _import_stage = "file_event"
-            for record in file_events:
+            for _import_index, record in enumerate(file_events):
                 file_id = self._remap_file_id(record["file_id"], file_id_map)
                 if merge:
                     created = record.get("created_at", _now_iso())
@@ -660,7 +658,7 @@ class MetaMixin(DBMixinProtocol):
                 count += cursor.rowcount
 
             _import_stage = "observation"
-            for record in observations:
+            for _import_index, record in enumerate(observations):
                 obs_file_id: str | None = record.get("file_id")
                 if obs_file_id and obs_file_id in file_id_map:
                     obs_file_id = file_id_map[obs_file_id]
@@ -686,24 +684,33 @@ class MetaMixin(DBMixinProtocol):
                 count += cursor.rowcount
 
             _import_stage = "dismissed_observation"
-            for record in dismissed_observations:
+            for _import_index, record in enumerate(dismissed_observations):
+                obs_id = record["obs_id"]
+                summary = record["summary"]
+                actor_val = record.get("actor", "")
+                reason = record.get("reason", "")
+                dismissed_at = record.get("dismissed_at", _now_iso())
+                # dismissed_observations has no unique content constraint (only
+                # an auto-increment PK), so OR IGNORE won't deduplicate on
+                # content.  In merge mode, skip rows that already exist.
+                if merge:
+                    exists = self.conn.execute(
+                        "SELECT 1 FROM dismissed_observations WHERE obs_id = ? AND summary = ? AND dismissed_at = ?",
+                        (obs_id, summary, dismissed_at),
+                    ).fetchone()
+                    if exists:
+                        continue
                 cursor = self.conn.execute(
                     f"INSERT {conflict} INTO dismissed_observations (obs_id, summary, actor, reason, dismissed_at) VALUES (?, ?, ?, ?, ?)",
-                    (
-                        record["obs_id"],
-                        record["summary"],
-                        record.get("actor", ""),
-                        record.get("reason", ""),
-                        record.get("dismissed_at", _now_iso()),
-                    ),
+                    (obs_id, summary, actor_val, reason, dismissed_at),
                 )
                 count += cursor.rowcount
         except KeyError as exc:
             self.conn.rollback()
-            msg = f"Missing required field {exc} in {_import_stage} record"
+            msg = f"Missing required field {exc} in {_import_stage} record #{_import_index}"
             raise ValueError(msg) from exc
         except Exception:
-            logger.error("import_jsonl failed during stage %r", _import_stage, exc_info=True)
+            logger.error("import_jsonl failed during stage %r record #%d", _import_stage, _import_index, exc_info=True)
             self.conn.rollback()
             raise
         else:

@@ -6,9 +6,9 @@ They live in their own table and are promoted to issues or dismissed.
 Includes:
 - 14-day TTL with piggyback sweep on reads (in savepoint)
 - Dismissal audit trail via dismissed_observations table
-- Promotion to issue (best-effort cleanup — issue creation commits
-  independently, so observation deletion is non-atomic but safe:
-  orphaned observations are swept on TTL expiry)
+- Promotion to issue (creates the issue in one transaction, then cleans
+  up the observation in a second transaction; if cleanup fails, the
+  orphaned observation is swept on TTL expiry)
 - Age stats for session context prompting
 """
 
@@ -19,7 +19,7 @@ import sqlite3
 from datetime import UTC, datetime, timedelta
 from typing import cast
 
-from filigree.db_base import DBMixinProtocol, _now_iso
+from filigree.db_base import DBMixinProtocol, _escape_like, _now_iso
 from filigree.db_files import _normalize_scan_path
 from filigree.types.core import BatchDismissResult, ISOTimestamp, ObservationDict, ObservationStatsDict, PromoteObservationResult
 
@@ -29,15 +29,16 @@ DEFAULT_TTL_DAYS = 14
 STALE_THRESHOLD_HOURS = 48
 
 
-def _alive_clause(sweep: bool, now_iso: str) -> tuple[str, tuple[str, ...]]:
-    """Return (SQL WHERE fragment, params) to filter out expired observations.
+def _alive_clause(sweep: bool, now_iso: str) -> tuple[str, str, tuple[str, ...]]:
+    """Return (AND-fragment, WHERE-fragment, params) to filter expired observations.
 
-    When sweep=True (expired rows already deleted), returns empty filter.
-    When sweep=False, adds ``expires_at > ?`` to exclude expired rows.
+    When sweep=True (expired rows already deleted), returns empty filters.
+    When sweep=False, provides both ``AND expires_at > ?`` (for appending to
+    existing WHERE) and ``WHERE expires_at > ?`` (for standalone queries).
     """
     if sweep:
-        return "", ()
-    return " AND expires_at > ?", (now_iso,)
+        return "", "", ()
+    return " AND expires_at > ?", " WHERE expires_at > ?", (now_iso,)
 
 
 DISMISSED_AUDIT_TRAIL_CAP = 10_000
@@ -61,6 +62,7 @@ class ObservationsMixin(DBMixinProtocol):
         """Delete expired observations in a savepoint (piggyback cleanup).
 
         All expired observations are logged to dismissed_observations and deleted.
+        Also prunes the dismissed_observations audit trail to DISMISSED_AUDIT_TRAIL_CAP entries.
         Uses a savepoint so it doesn't commit or interfere with in-flight transactions.
         """
         now = _now_iso()
@@ -85,9 +87,10 @@ class ObservationsMixin(DBMixinProtocol):
             if cursor.rowcount > 0:
                 logger.debug("Swept %d expired observations", cursor.rowcount)
             return cursor.rowcount
-        except sqlite3.OperationalError:
-            # Suppress transient errors (DB locked, busy) — sweep is best-effort.
-            logger.warning("Observation sweep failed (transient), rolled back", exc_info=True)
+        except (sqlite3.OperationalError, sqlite3.IntegrityError):
+            # Suppress transient errors (locked, busy) and integrity violations — sweep is best-effort.
+            # Let ProgrammingError, InterfaceError propagate — those indicate code bugs.
+            logger.warning("Observation sweep failed, rolled back", exc_info=True)
             try:
                 self.conn.execute("ROLLBACK TO SAVEPOINT sweep_obs")
             finally:
@@ -173,7 +176,7 @@ class ObservationsMixin(DBMixinProtocol):
             raise
         return {
             "id": obs_id,
-            "summary": summary.strip(),
+            "summary": summary_stripped,
             "detail": detail,
             "file_id": file_id,
             "file_path": file_path,
@@ -208,12 +211,9 @@ class ObservationsMixin(DBMixinProtocol):
             ).fetchall()
         elif file_path:
             file_path = _normalize_scan_path(file_path) or file_path
-            # Escape LIKE wildcards in user-provided path to prevent % and _
-            # from being interpreted as SQL wildcards.
-            escaped = file_path.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
             rows = self.conn.execute(
                 "SELECT * FROM observations WHERE file_path LIKE ? ESCAPE '\\' ORDER BY priority ASC, created_at ASC LIMIT ? OFFSET ?",
-                (f"%{escaped}%", limit, offset),
+                (_escape_like(file_path), limit, offset),
             ).fetchall()
         else:
             rows = self.conn.execute(
@@ -248,13 +248,7 @@ class ObservationsMixin(DBMixinProtocol):
 
         now = datetime.now(UTC)
         now_iso = now.isoformat()
-        alive_frag, alive_params = _alive_clause(sweep, now_iso)
-
-        # alive_where is the standalone form (WHERE ...) for queries without a
-        # pre-existing WHERE clause. alive_frag (from _alive_clause) is the
-        # AND-suffix form for queries that already have a WHERE. Both filter
-        # the same condition (exclude expired rows); keep them in sync.
-        alive_where = " WHERE expires_at > ?" if not sweep else ""
+        alive_frag, alive_where, alive_params = _alive_clause(sweep, now_iso)
         count = self.conn.execute(f"SELECT COUNT(*) FROM observations{alive_where}", alive_params).fetchone()[0]
         if count == 0:
             return {"count": 0, "stale_count": 0, "oldest_hours": 0, "expiring_soon_count": 0}
@@ -273,15 +267,19 @@ class ObservationsMixin(DBMixinProtocol):
         ).fetchone()[0]
 
         oldest_row = self.conn.execute(f"SELECT MIN(created_at) FROM observations{alive_where}", alive_params).fetchone()
-        oldest_hours = 0.0
+        oldest_hours: float | None = 0.0
         if oldest_row and oldest_row[0]:
-            oldest_dt = datetime.fromisoformat(oldest_row[0])
-            oldest_hours = (now - oldest_dt).total_seconds() / 3600
+            try:
+                oldest_dt = datetime.fromisoformat(oldest_row[0])
+                oldest_hours = (now - oldest_dt).total_seconds() / 3600
+            except (ValueError, TypeError):
+                logger.warning("Corrupt created_at in observations: %r", oldest_row[0])
+                oldest_hours = None  # Unknown age, not zero
 
         return {
             "count": count,
             "stale_count": stale,
-            "oldest_hours": round(oldest_hours, 1),
+            "oldest_hours": round(oldest_hours, 1) if oldest_hours is not None else None,
             "expiring_soon_count": expiring,
         }
 
@@ -389,17 +387,13 @@ class ObservationsMixin(DBMixinProtocol):
             actor=actor or obs["actor"],
         )
 
-        # 4. Issue created successfully — now delete observation and write audit trail.
-        #    Best-effort: if this fails, the issue still exists and the observation
-        #    will be swept on TTL expiry. Log and continue rather than raising,
-        #    because the caller must know the issue was created.
+        # 4. Issue created successfully — now clean up the observation.
+        #    Delete the observation FIRST (prevents double-promotion on retry),
+        #    then write the audit trail (nice-to-have).  If only the audit trail
+        #    fails, the observation is already gone so retries get "not found".
         warnings: list[str] = []
         now = _now_iso()
         try:
-            self.conn.execute(
-                "INSERT INTO dismissed_observations (obs_id, summary, actor, reason, dismissed_at) VALUES (?, ?, ?, 'promoted', ?)",
-                (obs_id, obs["summary"], actor or obs["actor"], now),
-            )
             cursor = self.conn.execute("DELETE FROM observations WHERE id = ?", (obs_id,))
             self.conn.commit()
             if cursor.rowcount == 0:
@@ -411,7 +405,20 @@ class ObservationsMixin(DBMixinProtocol):
                 warnings.append(msg)
         except sqlite3.Error:
             self.conn.rollback()
-            msg = f"Failed to clean up observation {obs_id} after promotion (issue {issue.id} created)"
+            msg = f"Failed to delete observation {obs_id} after promotion (issue {issue.id} created — retry may create duplicates)"
+            logger.warning(msg, exc_info=True)
+            warnings.append(msg)
+
+        # 4b. Audit trail — best-effort, separate transaction.
+        try:
+            self.conn.execute(
+                "INSERT INTO dismissed_observations (obs_id, summary, actor, reason, dismissed_at) VALUES (?, ?, ?, 'promoted', ?)",
+                (obs_id, obs["summary"], actor or obs["actor"], now),
+            )
+            self.conn.commit()
+        except sqlite3.Error:
+            self.conn.rollback()
+            msg = f"Failed to record promotion audit trail for observation {obs_id}"
             logger.warning(msg, exc_info=True)
             warnings.append(msg)
 
@@ -423,9 +430,10 @@ class ObservationsMixin(DBMixinProtocol):
             logger.warning(msg, exc_info=True)
             warnings.append(msg)
 
+        file_id = obs.get("file_id")
         try:
-            if obs["file_id"]:
-                self.add_file_association(obs["file_id"], issue.id, "mentioned_in")
+            if file_id:
+                self.add_file_association(file_id, issue.id, "mentioned_in")
         except (sqlite3.Error, ValueError):
             msg = f"Failed to add file association for promoted observation {obs_id}"
             logger.warning(msg, exc_info=True)

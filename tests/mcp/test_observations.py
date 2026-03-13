@@ -89,6 +89,22 @@ class TestListObservationsTool:
         data = _parse(result)
         assert len(data["observations"]) == 2
 
+    async def test_list_has_more_true_when_more_results(self, mcp_db: FiligreeDB) -> None:
+        for i in range(5):
+            mcp_db.create_observation(f"Obs {i}")
+        result = await call_tool("list_observations", {"limit": 2})
+        data = _parse(result)
+        assert len(data["observations"]) == 2
+        assert data["has_more"] is True
+
+    async def test_list_has_more_false_when_no_more_results(self, mcp_db: FiligreeDB) -> None:
+        for i in range(2):
+            mcp_db.create_observation(f"Obs {i}")
+        result = await call_tool("list_observations", {"limit": 5})
+        data = _parse(result)
+        assert len(data["observations"]) == 2
+        assert data["has_more"] is False
+
     async def test_list_with_file_id_filter(self, mcp_db: FiligreeDB) -> None:
         obs = mcp_db.create_observation("api bug", file_path="src/api.py")
         mcp_db.create_observation("other bug", file_path="src/other.py")

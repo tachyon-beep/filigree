@@ -419,7 +419,7 @@ def _ensure_dashboard_server_mode(filigree_dir: Path, port: int | None) -> str:
 
     try:
         register_project(filigree_dir)
-    except (ValueError, RuntimeError, OSError) as exc:
+    except (ValueError, RuntimeError, OSError, sqlite3.Error) as exc:
         logger.warning("Failed to register project in server.json", exc_info=True)
         return f"Filigree server registration failed: {exc}"
 

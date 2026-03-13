@@ -190,9 +190,13 @@ class EventsMixin(DBMixinProtocol):
                 case "priority_changed":
                     if row["old_value"] is None:
                         return {"undone": False, "reason": "Cannot undo: event has no old_value"}
+                    try:
+                        old_priority = int(row["old_value"])
+                    except (ValueError, TypeError):
+                        return {"undone": False, "reason": f"Cannot undo: old_value {row['old_value']!r} is not a valid priority"}
                     self.conn.execute(
                         "UPDATE issues SET priority = ?, updated_at = ? WHERE id = ?",
-                        (int(row["old_value"]), now, issue_id),
+                        (old_priority, now, issue_id),
                     )
 
                 case "assignee_changed":

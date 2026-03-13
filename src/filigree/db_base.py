@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import logging
 import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
@@ -14,12 +16,39 @@ from filigree.types.events import EventType
 if TYPE_CHECKING:
     from filigree.templates import TemplateRegistry, TransitionOption
 
-# Re-export for backward compat
-__all__ = ["DBMixinProtocol", "StatusCategory", "_now_iso"]
+logger = logging.getLogger(__name__)
+
+# Shared internal API — used by DB mixins across modules.
+__all__ = ["DBMixinProtocol", "StatusCategory", "_escape_like", "_now_iso", "_safe_json_loads"]
 
 
 def _now_iso() -> ISOTimestamp:
     return ISOTimestamp(datetime.now(UTC).isoformat())
+
+
+def _safe_json_loads(raw: str | None, context: str, *, error_key: str = "_metadata_error") -> dict[str, Any]:
+    """Parse JSON from a database column, returning an error marker on corrupt data.
+
+    Used by DB mixins to safely handle corrupt JSON in issue fields, file metadata,
+    and scan finding metadata.  On failure, returns ``{error_key: True}`` — callers
+    can check for the sentinel key (``_metadata_error`` or ``_fields_error``) to
+    detect corrupt records.
+    """
+    try:
+        result = json.loads(raw) if raw else {}
+    except (json.JSONDecodeError, TypeError):
+        logger.warning("Corrupt JSON (%s): %r", context, str(raw)[:200] if raw else raw)
+        return {error_key: True}
+    if not isinstance(result, dict):
+        logger.warning("JSON (%s) parsed but is not a dict (got %s): %r", context, type(result).__name__, str(raw)[:200])
+        return {error_key: True}
+    return result
+
+
+def _escape_like(query: str) -> str:
+    """Escape a string for SQL LIKE with backslash escape, wrapped in % wildcards."""
+    escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{escaped}%"
 
 
 class DBMixinProtocol(Protocol):

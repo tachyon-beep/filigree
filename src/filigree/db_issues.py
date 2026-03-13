@@ -7,6 +7,7 @@ Python's MRO when composed into ``FiligreeDB``.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import re as _re
@@ -14,7 +15,7 @@ import sqlite3
 import uuid
 from typing import TYPE_CHECKING, Any
 
-from filigree.db_base import DBMixinProtocol, _now_iso
+from filigree.db_base import DBMixinProtocol, _escape_like, _now_iso, _safe_json_loads
 from filigree.models import Issue
 from filigree.templates import validate_field_pattern
 from filigree.types.api import BatchFailureDetail
@@ -27,12 +28,7 @@ logger = logging.getLogger(__name__)
 
 def _safe_fields_json(raw: str | None, issue_id: str) -> dict[str, Any]:
     """Parse issue fields JSON, returning error sentinel on corrupt data."""
-    try:
-        result = json.loads(raw) if raw else {}
-    except (json.JSONDecodeError, TypeError):
-        logger.warning("Corrupt fields JSON for issue %s: %r", issue_id, str(raw)[:200] if raw else raw)
-        return {"_fields_error": True}
-    return result if isinstance(result, dict) else {}
+    return _safe_json_loads(raw, f"issue {issue_id} fields", error_key="_fields_error")
 
 
 def _validate_string_list(value: object, name: str) -> None:
@@ -55,9 +51,8 @@ def _sanitize_fts_query(query: str) -> str:
 
 
 def _escape_like_query(query: str) -> str:
-    """Escape a search query for SQL LIKE with backslash escape."""
-    escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-    return f"%{escaped}%"
+    """Escape a search query for SQL LIKE — delegates to ``_escape_like``."""
+    return _escape_like(query)
 
 
 class IssuesMixin(DBMixinProtocol):
@@ -630,10 +625,19 @@ class IssuesMixin(DBMixinProtocol):
             raise ValueError(msg)
 
         initial_state = self.templates.get_initial_state(current.type)
-        # _record_event and update_issue share the same implicit transaction;
-        # update_issue owns the commit/rollback lifecycle.
-        self._record_event(issue_id, "reopened", actor=actor, old_value=current.status, new_value=initial_state)
-        return self.update_issue(issue_id, status=initial_state, actor=actor, _skip_transition_check=True)
+        result = self.update_issue(issue_id, status=initial_state, actor=actor, _skip_transition_check=True)
+        # Record "reopened" event after update_issue has committed the status
+        # change and its own status_changed event.  The state change is already
+        # durable, so a failure here must not propagate — callers would wrongly
+        # assume the reopen failed and retry into a confusing error.
+        try:
+            self._record_event(issue_id, "reopened", actor=actor, old_value=current.status, new_value=initial_state)
+            self.conn.commit()
+        except Exception:
+            logger.warning("Failed to record reopened event for %s (status change succeeded)", issue_id, exc_info=True)
+            with contextlib.suppress(sqlite3.Error):
+                self.conn.rollback()
+        return result
 
     def claim_issue(self, issue_id: str, *, assignee: str, actor: str = "") -> Issue:
         """Atomically claim an open-category issue with optimistic locking.

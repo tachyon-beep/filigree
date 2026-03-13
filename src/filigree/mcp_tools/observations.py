@@ -189,7 +189,7 @@ async def _handle_list_observations(arguments: dict[str, Any]) -> list[TextConte
             "stale_count": None,
             "oldest_hours": None,
             "expiring_soon_count": None,
-            "stats_error": f"database error: {e}",
+            "stats_error": f"observation stats temporarily unavailable ({type(e).__name__})",
         }
     return _text({"observations": observations, "stats": stats, "has_more": has_more})
 

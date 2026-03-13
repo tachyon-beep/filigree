@@ -124,7 +124,7 @@ function renderObservationStats(container, obsStats) {
     '<div class="text-[10px]" style="color:var(--text-muted)">stale (&gt;48h)</div></div>' +
     '<div><div class="text-lg font-bold ' + expiringColor + '">' + escHtml(obsStats.expiring_soon_count) + '</div>' +
     '<div class="text-[10px]" style="color:var(--text-muted)">expiring &lt;24h</div></div>' +
-    '<div><div class="text-lg font-bold" style="color:var(--text-primary)">' + escHtml(obsStats.oldest_hours) + 'h</div>' +
+    '<div><div class="text-lg font-bold" style="color:var(--text-primary)">' + escHtml(obsStats.oldest_hours != null ? obsStats.oldest_hours + 'h' : '?') + '</div>' +
     '<div class="text-[10px]" style="color:var(--text-muted)">oldest</div></div>' +
     '</div></div>';
 }

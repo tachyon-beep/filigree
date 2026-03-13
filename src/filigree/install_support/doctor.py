@@ -160,6 +160,71 @@ def _doctor_server_checks(filigree_dir: Path) -> list[CheckResult]:
     return results
 
 
+def _check_codex_mcp(filigree_dir: Path) -> CheckResult:
+    """Check Codex MCP configuration with early returns for clarity."""
+    codex_config = _codex_config_path()
+    if not codex_config.exists():
+        return CheckResult("Codex MCP", False, "No ~/.codex/config.toml found", fix_hint="Run: filigree install --codex")
+
+    try:
+        parsed = tomllib.loads(codex_config.read_text())
+    except tomllib.TOMLDecodeError:
+        return CheckResult(
+            "Codex MCP", False, "Invalid ~/.codex/config.toml", fix_hint="Fix ~/.codex/config.toml or run: filigree install --codex"
+        )
+
+    mcp_servers = parsed.get("mcp_servers", {})
+    filigree_server = mcp_servers.get("filigree") if isinstance(mcp_servers, dict) else None
+    if not isinstance(filigree_server, dict):
+        return CheckResult("Codex MCP", False, "filigree not in ~/.codex/config.toml", fix_hint="Run: filigree install --codex")
+
+    try:
+        from filigree.core import get_mode
+
+        mode = get_mode(filigree_dir)
+    except (AttributeError, ValueError, json.JSONDecodeError, OSError) as exc:
+        logger.debug("Could not determine project mode for Codex check: %s", exc)
+        mode = "ethereal"
+
+    project_root = filigree_dir.parent
+
+    # Server-mode check (url-based config)
+    if "url" in filigree_server:
+        url = filigree_server.get("url")
+        expected_url = None
+        try:
+            from filigree.server import read_server_config
+
+            expected_url = _codex_server_mode_url(project_root, read_server_config().port)
+        except (OSError, json.JSONDecodeError, ValueError, ImportError) as exc:
+            logger.debug("Could not read server config for Codex doctor check: %s", exc)
+            if mode == "server":
+                expected_url = _codex_server_mode_url(project_root, 8377)
+        if isinstance(url, str) and expected_url and url == expected_url:
+            return CheckResult("Codex MCP", True, "Configured in ~/.codex/config.toml")
+        return CheckResult(
+            "Codex MCP",
+            False,
+            "filigree in ~/.codex/config.toml targets a different project or server",
+            fix_hint="Run: filigree install --codex",
+        )
+
+    # Stdio-mode check (command + args config)
+    args = filigree_server.get("args")
+    command = filigree_server.get("command")
+    expected_args = ["--project", str(project_root)]
+    if args != expected_args or not isinstance(command, str) or not command:
+        return CheckResult(
+            "Codex MCP",
+            False,
+            "filigree in ~/.codex/config.toml targets a different project",
+            fix_hint="Run: filigree install --codex",
+        )
+    if _is_absolute_command_path(command) and not Path(command).exists():
+        return CheckResult("Codex MCP", False, f"Binary not found at {command}", fix_hint="Run: filigree install --codex")
+    return CheckResult("Codex MCP", True, "Configured in ~/.codex/config.toml")
+
+
 # ---------------------------------------------------------------------------
 # Main doctor entry point
 # ---------------------------------------------------------------------------
@@ -374,96 +439,7 @@ def run_doctor(project_root: Path | None = None) -> list[CheckResult]:
         )
 
     # 7. Check MCP configuration — Codex
-    codex_config = _codex_config_path()
-    if codex_config.exists():
-        try:
-            parsed = tomllib.loads(codex_config.read_text())
-            mcp_servers = parsed.get("mcp_servers", {})
-            filigree_server = mcp_servers.get("filigree") if isinstance(mcp_servers, dict) else None
-            if isinstance(filigree_server, dict):
-                try:
-                    from filigree.core import get_mode
-
-                    mode = get_mode(filigree_dir)
-                except (AttributeError, ValueError, json.JSONDecodeError, OSError) as exc:
-                    logger.debug("Could not determine project mode for Codex check: %s", exc)
-                    mode = "ethereal"
-
-                project_root = filigree_dir.parent
-                if "url" in filigree_server:
-                    url = filigree_server.get("url")
-                    expected_url = None
-                    try:
-                        from filigree.server import read_server_config
-
-                        expected_url = _codex_server_mode_url(project_root, read_server_config().port)
-                    except (OSError, json.JSONDecodeError, ValueError, ImportError) as exc:
-                        logger.debug("Could not read server config for Codex doctor check: %s", exc)
-                        if mode == "server":
-                            expected_url = _codex_server_mode_url(project_root, 8377)
-                    if isinstance(url, str) and expected_url and url == expected_url:
-                        results.append(CheckResult("Codex MCP", True, "Configured in ~/.codex/config.toml"))
-                    else:
-                        results.append(
-                            CheckResult(
-                                "Codex MCP",
-                                False,
-                                "filigree in ~/.codex/config.toml targets a different project or server",
-                                fix_hint="Run: filigree install --codex",
-                            )
-                        )
-                else:
-                    args = filigree_server.get("args")
-                    command = filigree_server.get("command")
-                    expected_args = ["--project", str(project_root)]
-                    if args == expected_args and isinstance(command, str) and command:
-                        if _is_absolute_command_path(command) and not Path(command).exists():
-                            results.append(
-                                CheckResult(
-                                    "Codex MCP",
-                                    False,
-                                    f"Binary not found at {command}",
-                                    fix_hint="Run: filigree install --codex",
-                                )
-                            )
-                        else:
-                            results.append(CheckResult("Codex MCP", True, "Configured in ~/.codex/config.toml"))
-                    else:
-                        results.append(
-                            CheckResult(
-                                "Codex MCP",
-                                False,
-                                "filigree in ~/.codex/config.toml targets a different project",
-                                fix_hint="Run: filigree install --codex",
-                            )
-                        )
-            else:
-                results.append(
-                    CheckResult(
-                        "Codex MCP",
-                        False,
-                        "filigree not in ~/.codex/config.toml",
-                        fix_hint="Run: filigree install --codex",
-                    )
-                )
-        except tomllib.TOMLDecodeError:
-            results.append(
-                CheckResult(
-                    "Codex MCP",
-                    False,
-                    "Invalid ~/.codex/config.toml",
-                    fix_hint="Fix ~/.codex/config.toml or run: filigree install --codex",
-                )
-            )
-    else:
-        results.append(
-            CheckResult(
-                "Codex MCP",
-                False,
-                "No ~/.codex/config.toml found",
-                fix_hint="Run: filigree install --codex",
-            )
-        )
+    results.append(_check_codex_mcp(filigree_dir))
 
     # 8. Check Claude Code hooks
     settings_json = (filigree_dir.parent) / ".claude" / "settings.json"

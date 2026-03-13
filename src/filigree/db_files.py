@@ -12,10 +12,10 @@ import json
 import logging
 import os
 import sqlite3
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, ClassVar, get_args
 
-from filigree.db_base import DBMixinProtocol, _now_iso
+from filigree.db_base import DBMixinProtocol, _escape_like, _now_iso, _safe_json_loads
 from filigree.models import FileRecord, ScanFinding
 from filigree.types.core import AssocType, FindingStatus, Severity
 from filigree.types.files import ScanIngestResult
@@ -57,16 +57,6 @@ def _normalize_scan_path(path: str) -> str:
     return "" if normalized == "." else normalized
 
 
-def _safe_json_loads(raw: str | None, context: str) -> dict[str, Any]:
-    """Parse JSON from a database column, returning an error marker on corrupt data."""
-    try:
-        result = json.loads(raw) if raw else {}
-    except (json.JSONDecodeError, TypeError):
-        logger.warning("Corrupt JSON (%s): %r", context, raw[:200] if raw else raw)
-        return {"_metadata_error": True}
-    return result if isinstance(result, dict) else {}
-
-
 class FilesMixin(DBMixinProtocol):
     """File records, scan findings, associations, and timeline.
 
@@ -83,22 +73,18 @@ class FilesMixin(DBMixinProtocol):
         "CASE severity WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 WHEN 'info' THEN 4 ELSE 5 END"
     )
 
+    _VALID_FILE_SORTS = frozenset({"updated_at", "first_seen", "path", "language"})
     _VALID_FINDING_SORTS = frozenset({"updated_at", "severity"})
 
     # -- Build helpers -------------------------------------------------------
 
+    @staticmethod
+    def _parse_metadata(raw: str | None, context_id: str) -> dict[str, Any]:
+        """Parse a JSON metadata column, returning ``{_metadata_error: True}`` on corrupt data."""
+        return _safe_json_loads(raw, context_id)
+
     def _build_file_record(self, row: sqlite3.Row) -> FileRecord:
         """Build a FileRecord from a database row."""
-        meta_raw = row["metadata"]
-        try:
-            meta = json.loads(meta_raw) if meta_raw else {}
-        except (json.JSONDecodeError, TypeError):
-            logger.warning(
-                "Corrupt metadata in file record (id=%s): %r",
-                row["id"],
-                meta_raw[:200] if meta_raw else meta_raw,
-            )
-            meta = {"_metadata_error": True}
         return FileRecord(
             id=row["id"],
             path=row["path"],
@@ -106,22 +92,11 @@ class FilesMixin(DBMixinProtocol):
             file_type=row["file_type"] or "",
             first_seen=row["first_seen"],
             updated_at=row["updated_at"],
-            metadata=meta,
+            metadata=self._parse_metadata(row["metadata"], f"file_record:{row['id']}"),
         )
 
     def _build_scan_finding(self, row: sqlite3.Row) -> ScanFinding:
         """Build a ScanFinding from a database row."""
-        meta_raw = row["metadata"]
-        try:
-            parsed_meta = json.loads(meta_raw) if meta_raw else {}
-        except (json.JSONDecodeError, TypeError):
-            logger.warning(
-                "Corrupt metadata in scan finding (file_id=%s): %r",
-                row["file_id"],
-                meta_raw[:200] if meta_raw else meta_raw,
-            )
-            parsed_meta = {"_metadata_error": True}
-        meta = parsed_meta if isinstance(parsed_meta, dict) else {}
         return ScanFinding(
             id=row["id"],
             file_id=row["file_id"],
@@ -139,7 +114,7 @@ class FilesMixin(DBMixinProtocol):
             first_seen=row["first_seen"],
             updated_at=row["updated_at"],
             last_seen_at=row["last_seen_at"],
-            metadata=meta,
+            metadata=self._parse_metadata(row["metadata"], f"scan_finding:{row['file_id']}"),
         )
 
     # -- File registration ---------------------------------------------------
@@ -262,14 +237,12 @@ class FilesMixin(DBMixinProtocol):
             clauses.append("language = ?")
             params.append(language)
         if path_prefix is not None:
-            escaped = path_prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
             clauses.append("path LIKE ? ESCAPE '\\'")
-            params.append(f"%{escaped}%")
+            params.append(_escape_like(path_prefix))
 
         where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
-        valid_sorts = {"updated_at", "first_seen", "path", "language"}
-        if sort not in valid_sorts:
-            valid = ", ".join(sorted(valid_sorts))
+        if sort not in self._VALID_FILE_SORTS:
+            valid = ", ".join(sorted(self._VALID_FILE_SORTS))
             raise ValueError(f'Invalid sort field "{sort}". Must be one of: {valid}')
         order = "ASC" if sort == "path" else "DESC"
 
@@ -339,9 +312,8 @@ class FilesMixin(DBMixinProtocol):
             params,
         ).fetchone()[0]
 
-        valid_sorts = {"updated_at", "first_seen", "path", "language"}
-        if sort not in valid_sorts:
-            valid = ", ".join(sorted(valid_sorts))
+        if sort not in self._VALID_FILE_SORTS:
+            valid = ", ".join(sorted(self._VALID_FILE_SORTS))
             raise ValueError(f'Invalid sort field "{sort}". Must be one of: {valid}')
         default_order = "ASC" if sort == "path" else "DESC"
         order = direction.upper() if direction and direction.upper() in ("ASC", "DESC") else default_order
@@ -933,8 +905,6 @@ class FilesMixin(DBMixinProtocol):
         Only affects findings whose ``last_seen_at`` (or ``updated_at`` as
         fallback) is older than the cutoff.  Returns stats about what changed.
         """
-        from datetime import timedelta
-
         cutoff = (datetime.now(UTC) - timedelta(days=days)).isoformat()
 
         clauses = [

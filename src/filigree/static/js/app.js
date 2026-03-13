@@ -22,6 +22,7 @@ import {
   loadPreset,
   loadProjectFilterSettings,
   populatePresets,
+  savePreset,
   populateTypeFilter,
   toggleBlocked,
   toggleCardSelect,
@@ -587,6 +588,7 @@ window.toggleCardSelect = toggleCardSelect;
 window.debouncedSearch = debouncedSearch;
 window.confirmSavePreset = confirmSavePreset;
 window.loadPreset = loadPreset;
+window.savePreset = savePreset;
 window.applyTypeFilter = applyTypeFilter;
 window.clearTypeFilter = clearTypeFilter;
 
