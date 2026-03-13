@@ -852,9 +852,10 @@ class TemplateRegistry:
     def _load_pack_data(self, pack_data: dict[str, Any]) -> None:
         """Load a pack dict: register its types and the pack itself.
 
-        Types are parsed into a staging dict first. Only after all parseable
-        types succeed validation are they registered, ensuring pack.types and
-        registry._types stay consistent.
+        Types that fail parsing or validation are skipped individually (logged
+        as warnings). Successfully parsed types are collected in a staging dict
+        first, then registered together, ensuring pack.types and registry._types
+        see the same set of types.
         """
         pack_name = pack_data["pack"]
 

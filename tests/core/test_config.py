@@ -23,6 +23,73 @@ from filigree.core import (
 )
 
 
+class TestReadConfig:
+    """Verify read_config handles edge cases."""
+
+    def test_non_dict_json_returns_defaults(self, tmp_path: Path) -> None:
+        """Config with valid JSON that is not an object falls back to defaults."""
+        filigree_dir = tmp_path / ".filigree"
+        filigree_dir.mkdir()
+        (filigree_dir / "config.json").write_text('"just a string"')
+
+        config = read_config(filigree_dir)
+        assert config["prefix"] == "filigree"
+        assert config["version"] == 1
+
+    def test_array_json_returns_defaults(self, tmp_path: Path) -> None:
+        """Config with JSON array falls back to defaults."""
+        filigree_dir = tmp_path / ".filigree"
+        filigree_dir.mkdir()
+        (filigree_dir / "config.json").write_text("[1, 2, 3]")
+
+        config = read_config(filigree_dir)
+        assert config["prefix"] == "filigree"
+
+    def test_missing_prefix_gets_default(self, tmp_path: Path) -> None:
+        """Config dict missing 'prefix' key gets default injected."""
+        filigree_dir = tmp_path / ".filigree"
+        filigree_dir.mkdir()
+        (filigree_dir / "config.json").write_text('{"name": "test"}')
+
+        config = read_config(filigree_dir)
+        assert config["prefix"] == "filigree"
+        assert config["version"] == 1
+
+    def test_missing_version_gets_default(self, tmp_path: Path) -> None:
+        """Config dict missing 'version' key gets default injected."""
+        filigree_dir = tmp_path / ".filigree"
+        filigree_dir.mkdir()
+        (filigree_dir / "config.json").write_text('{"prefix": "proj"}')
+
+        config = read_config(filigree_dir)
+        assert config["prefix"] == "proj"
+        assert config["version"] == 1
+
+
+class TestFromFiligreeDir:
+    """Verify FiligreeDB.from_filigree_dir construction."""
+
+    def test_missing_config_uses_defaults(self, tmp_path: Path) -> None:
+        """from_filigree_dir with no config.json should succeed with defaults."""
+        filigree_dir = tmp_path / ".filigree"
+        filigree_dir.mkdir()
+
+        db = FiligreeDB.from_filigree_dir(filigree_dir)
+        assert db.prefix == "filigree"
+        assert db.enabled_packs == ["core", "planning", "release"]
+        db.close()
+
+    def test_check_same_thread_passthrough(self, tmp_path: Path) -> None:
+        """from_filigree_dir passes check_same_thread to constructor."""
+        filigree_dir = tmp_path / ".filigree"
+        filigree_dir.mkdir()
+        write_config(filigree_dir, {"prefix": "proj", "version": 1})
+
+        db = FiligreeDB.from_filigree_dir(filigree_dir, check_same_thread=False)
+        assert db._check_same_thread is False
+        db.close()
+
+
 class TestConfigEnabledPacks:
     """Verify enabled_packs default and passthrough."""
 

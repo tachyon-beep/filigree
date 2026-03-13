@@ -4,8 +4,9 @@ These dataclasses represent database rows as typed Python objects. They depend
 only on ``filigree.types.core`` (TypedDicts and Literal types), so any module
 in the package can import them without circular-dependency risk.
 
-Extracted from ``core.py`` to break the cycle:
-    types/core.py  <--  models.py  <--  db_base.py / core.py / db_*.py mixins
+Extracted from ``core.py`` to break the cycle.  Import flow:
+    types/core.py  -->  models.py  -->  db_base.py / core.py / db_*.py mixins
+(arrows show the key dependency chain that motivated the extraction)
 """
 
 from __future__ import annotations
@@ -35,6 +36,8 @@ _VALID_FINDING_STATUSES: frozenset[str] = frozenset(get_args(FindingStatus))
 class Issue:
     id: str
     title: str
+    # status and type remain str (not Literal) because valid values are
+    # defined by workflow templates at runtime and cannot be statically enumerated.
     status: str = "open"
     priority: int = 2
     type: str = "task"

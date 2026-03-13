@@ -22,8 +22,10 @@ logger = logging.getLogger(__name__)
 class MetaMixin(DBMixinProtocol):
     """Comments, labels, stats, bulk operations, and export/import.
 
-    Inherits ``DBMixinProtocol`` for type-safe access to shared attributes.
-    Actual implementations provided by ``FiligreeDB`` at composition time via MRO.
+    Declares ``DBMixinProtocol`` as a base for type-safe access to shared
+    attributes. The Protocol provides method stubs for static analysis;
+    actual implementations are provided by ``FiligreeDB`` at composition
+    time via MRO.
     """
 
     # -- Comments ------------------------------------------------------------
@@ -701,6 +703,7 @@ class MetaMixin(DBMixinProtocol):
             msg = f"Missing required field {exc} in {_import_stage} record"
             raise ValueError(msg) from exc
         except Exception:
+            logger.error("import_jsonl failed during stage %r", _import_stage, exc_info=True)
             self.conn.rollback()
             raise
         else:

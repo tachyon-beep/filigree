@@ -138,6 +138,82 @@ class TestListIssuesBoundaries:
         assert results == []
 
 
+class TestSanitizeFtsQuery:
+    """Unit tests for _sanitize_fts_query — primary defense against FTS5 injection."""
+
+    def test_basic_tokens(self) -> None:
+        from filigree.db_issues import _sanitize_fts_query
+
+        result = _sanitize_fts_query("hello world")
+        assert result == '"hello"* AND "world"*'
+
+    def test_special_chars_stripped(self) -> None:
+        from filigree.db_issues import _sanitize_fts_query
+
+        result = _sanitize_fts_query("hello! @world#")
+        assert result == '"hello"* AND "world"*'
+
+    def test_only_special_chars_returns_empty_match(self) -> None:
+        from filigree.db_issues import _sanitize_fts_query
+
+        result = _sanitize_fts_query("!@#$%^&()")
+        assert result == '""'
+
+    def test_empty_query_returns_empty_match(self) -> None:
+        from filigree.db_issues import _sanitize_fts_query
+
+        result = _sanitize_fts_query("")
+        assert result == '""'
+
+    def test_embedded_double_quotes_removed(self) -> None:
+        from filigree.db_issues import _sanitize_fts_query
+
+        result = _sanitize_fts_query('"hello" "world"')
+        assert result == '"hello"* AND "world"*'
+
+    def test_wildcards_preserved(self) -> None:
+        from filigree.db_issues import _sanitize_fts_query
+
+        result = _sanitize_fts_query("fix*")
+        assert result == '"fix*"*'
+
+    def test_whitespace_only_returns_empty_match(self) -> None:
+        from filigree.db_issues import _sanitize_fts_query
+
+        result = _sanitize_fts_query("   ")
+        assert result == '""'
+
+
+class TestEscapeLikeQuery:
+    """Unit tests for _escape_like_query — defense against LIKE injection."""
+
+    def test_plain_string(self) -> None:
+        from filigree.db_issues import _escape_like_query
+
+        assert _escape_like_query("hello") == "%hello%"
+
+    def test_percent_escaped(self) -> None:
+        from filigree.db_issues import _escape_like_query
+
+        assert _escape_like_query("100%") == "%100\\%%"
+
+    def test_underscore_escaped(self) -> None:
+        from filigree.db_issues import _escape_like_query
+
+        assert _escape_like_query("foo_bar") == "%foo\\_bar%"
+
+    def test_backslash_escaped(self) -> None:
+        from filigree.db_issues import _escape_like_query
+
+        assert _escape_like_query("a\\b") == "%a\\\\b%"
+
+    def test_all_special_chars(self) -> None:
+        from filigree.db_issues import _escape_like_query
+
+        result = _escape_like_query("%_\\")
+        assert result == "%\\%\\_\\\\%"
+
+
 class TestSearchFTSFallback:
     """Bug filigree-35ef38: FTS fallback must only catch missing-table errors."""
 

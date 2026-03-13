@@ -1542,6 +1542,61 @@ class TestCorruptFindingMetadata:
         assert isinstance(timeline["results"], list)
 
 
+class TestToDictDataWarnings:
+    """Verify to_dict() surfaces _metadata_error as data_warnings."""
+
+    def test_corrupt_file_record_to_dict_surfaces_warning(self, db: FiligreeDB) -> None:
+        fr = db.register_file("warn_test.py")
+        db.conn.execute(
+            "UPDATE file_records SET metadata = '{bad json' WHERE id = ?",
+            (fr.id,),
+        )
+        db.conn.commit()
+
+        result = db.get_file_by_path("warn_test.py")
+        assert result is not None
+        d = result.to_dict()
+        assert "_metadata_error" not in d["metadata"]
+        assert len(d["data_warnings"]) == 1
+        assert "corrupt" in d["data_warnings"][0].lower()
+
+    def test_clean_file_record_to_dict_no_warnings(self, db: FiligreeDB) -> None:
+        fr = db.register_file("clean_test.py")
+        d = fr.to_dict()
+        assert d["data_warnings"] == []
+
+    def test_corrupt_finding_to_dict_surfaces_warning(self, db: FiligreeDB) -> None:
+        db.process_scan_results(
+            scan_source="ruff",
+            findings=[{"path": "w.py", "rule_id": "E1", "severity": "low", "message": "m"}],
+        )
+        f = db.get_file_by_path("w.py")
+        assert f is not None
+        findings = db.get_findings(f.id)
+        db.conn.execute(
+            "UPDATE scan_findings SET metadata = '{bad json' WHERE id = ?",
+            (findings[0].id,),
+        )
+        db.conn.commit()
+
+        findings = db.get_findings(f.id)
+        d = findings[0].to_dict()
+        assert "_metadata_error" not in d["metadata"]
+        assert len(d["data_warnings"]) == 1
+        assert "corrupt" in d["data_warnings"][0].lower()
+
+    def test_clean_finding_to_dict_no_warnings(self, db: FiligreeDB) -> None:
+        db.process_scan_results(
+            scan_source="ruff",
+            findings=[{"path": "c.py", "rule_id": "E2", "severity": "low", "message": "m"}],
+        )
+        f = db.get_file_by_path("c.py")
+        assert f is not None
+        findings = db.get_findings(f.id)
+        d = findings[0].to_dict()
+        assert d["data_warnings"] == []
+
+
 class TestMetaModuleLogger:
     """L4 bugfix: db_meta.py should use 'logger' not '_logger' for consistency."""
 

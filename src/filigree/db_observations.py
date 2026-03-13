@@ -51,8 +51,10 @@ def _expires_iso(ttl_days: int = DEFAULT_TTL_DAYS) -> str:
 class ObservationsMixin(DBMixinProtocol):
     """Observation CRUD — agent scratchpad for things noticed in passing.
 
-    Inherits ``DBMixinProtocol`` for type-safe access to shared attributes.
-    Actual implementations provided by ``FiligreeDB`` at composition time via MRO.
+    Declares ``DBMixinProtocol`` as a base for type-safe access to shared
+    attributes. The Protocol provides method stubs for static analysis;
+    actual implementations are provided by ``FiligreeDB`` at composition
+    time via MRO.
     """
 
     def _sweep_expired_observations(self) -> int:
@@ -85,8 +87,6 @@ class ObservationsMixin(DBMixinProtocol):
             return cursor.rowcount
         except sqlite3.OperationalError:
             # Suppress transient errors (DB locked, busy) — sweep is best-effort.
-            # Structural errors (IntegrityError, ProgrammingError, etc.) propagate
-            # so persistent DB problems are not silently ignored on every list call.
             logger.warning("Observation sweep failed (transient), rolled back", exc_info=True)
             try:
                 self.conn.execute("ROLLBACK TO SAVEPOINT sweep_obs")
@@ -108,6 +108,14 @@ class ObservationsMixin(DBMixinProtocol):
         priority: int = 3,
         actor: str = "",
     ) -> ObservationDict:
+        """Create an observation (agent scratchpad note).
+
+        If an observation with the same (summary, file_path, line) already
+        exists and is still alive, returns the existing observation unchanged.
+        If the duplicate has expired, replaces it by deleting the old and
+        inserting the new in one transaction (so no gap exists between delete
+        and insert where a concurrent caller could claim the dedup slot).
+        """
         if not summary or not summary.strip():
             raise ValueError("Observation summary cannot be empty")
         if not (0 <= priority <= 4):
@@ -185,6 +193,12 @@ class ObservationsMixin(DBMixinProtocol):
         file_path: str = "",
         file_id: str = "",
     ) -> list[ObservationDict]:
+        """List pending observations with optional filtering.
+
+        Sweeps expired observations first (best-effort, in savepoint).
+        ``file_path`` filtering uses substring matching (LIKE), not exact match.
+        ``file_id`` filtering uses exact FK match (more precise than path LIKE).
+        """
         self._sweep_expired_observations()
         if file_id:
             # Direct FK query — more precise than path LIKE.
@@ -236,7 +250,10 @@ class ObservationsMixin(DBMixinProtocol):
         now_iso = now.isoformat()
         alive_frag, alive_params = _alive_clause(sweep, now_iso)
 
-        # Base alive filter: standalone WHERE or empty
+        # alive_where is the standalone form (WHERE ...) for queries without a
+        # pre-existing WHERE clause. alive_frag (from _alive_clause) is the
+        # AND-suffix form for queries that already have a WHERE. Both filter
+        # the same condition (exclude expired rows); keep them in sync.
         alive_where = " WHERE expires_at > ?" if not sweep else ""
         count = self.conn.execute(f"SELECT COUNT(*) FROM observations{alive_where}", alive_params).fetchone()[0]
         if count == 0:

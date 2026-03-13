@@ -1099,14 +1099,13 @@ class FilesMixin(DBMixinProtocol):
         summary = self.get_file_findings_summary(file_id)
         # Observation count (no sweep, but filter expired — read-only path).
         # Guarded for pre-v7 DBs where observations table may not exist.
-        try:
+        has_obs_table = self.conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='observations'").fetchone()
+        if has_obs_table:
             obs_count = self.conn.execute(
                 "SELECT COUNT(*) FROM observations WHERE file_id = ? AND expires_at > ?",
                 (file_id, _now_iso()),
             ).fetchone()[0]
-        except sqlite3.OperationalError as exc:
-            if "no such table" not in str(exc):
-                raise
+        else:
             obs_count = 0
         return {
             "file": f.to_dict(),

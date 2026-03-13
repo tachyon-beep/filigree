@@ -267,6 +267,9 @@ async def _handle_promote_observation(arguments: dict[str, Any]) -> list[TextCon
         msg = str(e)
         code = "not_found" if "not found" in msg.lower() else "validation_error"
         return _text(ErrorResponse(error=msg, code=code))
+    except sqlite3.Error as e:
+        logger.error("promote_observation database error", exc_info=True)
+        return _text(ErrorResponse(error=f"Database error: {e}", code="database_error"))
     _refresh_summary()
     resp: dict[str, object] = {"issue": result["issue"].to_dict()}
     if result.get("warnings"):

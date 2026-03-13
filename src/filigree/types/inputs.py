@@ -34,6 +34,8 @@ class GetIssueArgs(TypedDict):
 
 
 class ListIssuesArgs(TypedDict):
+    # status is str (not Literal) because valid values are template-defined and
+    # cannot be statically enumerated, unlike status_category which is fixed.
     status: NotRequired[str]
     status_category: NotRequired[StatusCategory]
     type: NotRequired[str]

@@ -153,7 +153,7 @@ def migrate_v3_to_v4(conn: sqlite3.Connection) -> None:
 
 
 def _now_iso() -> str:
-    """ISO timestamp for migration comments (Z-suffix, no microseconds — distinct from db_base._now_iso)."""
+    """ISO timestamp for migration operations (Z-suffix, no microseconds — distinct from db_base._now_iso)."""
     from datetime import UTC, datetime
 
     return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -173,11 +173,13 @@ def migrate_v4_to_v5(conn: sqlite3.Connection) -> None:
     semver_loose = re.compile(r"^v?(\d+)\.(\d+)(?:\.(\d+))?$")
 
     rows = conn.execute("SELECT id, title, fields FROM issues WHERE type = 'release'").fetchall()
+    skipped_ids: list[str] = []
 
     for row in rows:
         try:
             fields = json.loads(row["fields"] or "{}")
         except (json.JSONDecodeError, TypeError):
+            skipped_ids.append(row["id"])
             logger.warning(
                 "migrate_v4_to_v5: skipping issue %s with corrupt fields JSON: %r",
                 row["id"],
@@ -220,6 +222,13 @@ def migrate_v4_to_v5(conn: sqlite3.Connection) -> None:
                 "INSERT INTO comments (issue_id, author, text, created_at) VALUES (?, ?, ?, ?)",
                 (row["id"], "migration", comment_text, now),
             )
+
+    if skipped_ids:
+        logger.error(
+            "migrate_v4_to_v5: skipped %d issue(s) with corrupt fields JSON: %s",
+            len(skipped_ids),
+            skipped_ids,
+        )
 
 
 def _issues_parent_fk_has_set_null(conn: sqlite3.Connection) -> bool:

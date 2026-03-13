@@ -361,6 +361,10 @@ class FiligreeDB(FilesMixin, IssuesMixin, EventsMixin, WorkflowMixin, MetaMixin,
         The reconnection is lazy — it happens on the next access to the
         ``self.conn`` property, which re-applies PRAGMAs at that point.
 
+        If the connection has an in-flight transaction, it is rolled back to
+        avoid persisting partial state.  Callers should ideally avoid calling
+        this with an active transaction, as uncommitted work will be lost.
+
         Useful in tests where a DB created with the default
         ``check_same_thread=True`` needs to be shared across threads
         (e.g. async FastAPI test clients).
@@ -368,7 +372,9 @@ class FiligreeDB(FilesMixin, IssuesMixin, EventsMixin, WorkflowMixin, MetaMixin,
         try:
             if self._conn is not None:
                 try:
-                    self._conn.commit()
+                    if self._conn.in_transaction:
+                        logger.warning("reconnect: rolling back in-flight transaction")
+                        self._conn.rollback()
                 finally:
                     try:
                         self._conn.close()
@@ -380,7 +386,11 @@ class FiligreeDB(FilesMixin, IssuesMixin, EventsMixin, WorkflowMixin, MetaMixin,
     def close(self) -> None:
         if self._conn is not None:
             try:
-                self._conn.commit()
+                if self._conn.in_transaction:
+                    logger.warning("close: rolling back in-flight transaction")
+                    self._conn.rollback()
+                else:
+                    self._conn.commit()
             finally:
                 try:
                     self._conn.close()

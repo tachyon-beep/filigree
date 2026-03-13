@@ -247,7 +247,7 @@ class _InterceptingConn:
 
 
 class TestSweepExceptionNarrowing:
-    """Verify _sweep_expired_observations only catches OperationalError, not all sqlite3.Error."""
+    """Verify _sweep_expired_observations catches only OperationalError among sqlite3.Error subclasses."""
 
     def test_sweep_catches_operational_error(self, db: FiligreeDB) -> None:
         """OperationalError during sweep is caught — list_observations still returns results."""
@@ -270,7 +270,7 @@ class TestSweepExceptionNarrowing:
         assert len(result) == 1
 
     def test_sweep_propagates_integrity_error(self, db: FiligreeDB) -> None:
-        """Structural errors (IntegrityError) propagate — not silently swallowed."""
+        """IntegrityError during sweep propagates — not silently swallowed."""
         import sqlite3
 
         db.create_observation("will see propagation")
@@ -285,6 +285,26 @@ class TestSweepExceptionNarrowing:
         db._conn = _InterceptingConn(real_conn, _fail_with_integrity)  # type: ignore[assignment]
         try:
             with pytest.raises(sqlite3.IntegrityError, match="UNIQUE constraint"):
+                db.list_observations()
+        finally:
+            db._conn = real_conn
+
+    def test_sweep_propagates_programming_error(self, db: FiligreeDB) -> None:
+        """ProgrammingError during sweep propagates — not silently swallowed."""
+        import sqlite3
+
+        db.create_observation("will see propagation")
+
+        real_conn = db._conn
+
+        def _fail_with_programming(real: Any, sql: str, params: Any = ()) -> Any:
+            if "DELETE FROM observations WHERE expires_at" in sql:
+                raise sqlite3.ProgrammingError("SQL logic error")
+            return real.execute(sql, params)
+
+        db._conn = _InterceptingConn(real_conn, _fail_with_programming)  # type: ignore[assignment]
+        try:
+            with pytest.raises(sqlite3.ProgrammingError, match="SQL logic error"):
                 db.list_observations()
         finally:
             db._conn = real_conn

@@ -356,6 +356,28 @@ class TestIssueToDictRoundTrip:
         assert result is not None
         assert result.fields == {"_fields_error": True}
 
+    def test_corrupt_fields_to_dict_surfaces_data_warning(self, db: FiligreeDB) -> None:
+        """to_dict() should strip _fields_error and produce a data_warnings entry."""
+        issue = db.create_issue("Corrupt to_dict test")
+        db.conn.execute(
+            "UPDATE issues SET fields = '{bad json' WHERE id = ?",
+            (issue.id,),
+        )
+        db.conn.commit()
+
+        result = db.get_issue(issue.id)
+        d = result.to_dict()
+        assert "_fields_error" not in d["fields"]
+        assert len(d["data_warnings"]) == 1
+        assert "corrupt" in d["data_warnings"][0].lower()
+
+    def test_clean_fields_to_dict_has_no_warnings(self, db: FiligreeDB) -> None:
+        """to_dict() should produce empty data_warnings for valid fields."""
+        issue = db.create_issue("Clean fields", fields={"x": 1})
+        d = issue.to_dict()
+        assert d["data_warnings"] == []
+        assert d["fields"] == {"x": 1}
+
 
 class TestChildren:
     def test_children_populated(self, db: FiligreeDB) -> None:
@@ -1702,6 +1724,43 @@ class TestReconnect:
         db.initialize()
         found = db.get_issue(issue.id)
         assert found.title == "survive reconnect"
+        db.close()
+
+    def test_reconnect_rolls_back_in_flight_transaction(self, tmp_path: Path) -> None:
+        """reconnect() rolls back uncommitted writes when in_transaction is True."""
+        db_path = tmp_path / "reconnect-rollback.db"
+        db = FiligreeDB(db_path, prefix="test")
+        db.initialize()
+        # Committed issue — should survive
+        committed = db.create_issue(title="committed", type="task")
+        # Raw INSERT without commit — in_transaction becomes True
+        db.conn.execute(
+            "INSERT INTO issues (id, title, status, priority, type, assignee,"
+            " created_at, updated_at, description, notes, fields)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                "test-uncommitted",
+                "uncommitted write",
+                "open",
+                2,
+                "task",
+                "",
+                "2026-01-01T00:00:00",
+                "2026-01-01T00:00:00",
+                "",
+                "",
+                "{}",
+            ),
+        )
+        assert db._conn.in_transaction
+
+        db.reconnect(check_same_thread=False)
+        db.initialize()
+
+        # Committed row survives, uncommitted row does not
+        assert db.get_issue(committed.id).title == "committed"
+        row = db.conn.execute("SELECT id FROM issues WHERE id = 'test-uncommitted'").fetchone()
+        assert row is None, "uncommitted write should have been rolled back"
         db.close()
 
     def test_reconnect_clears_conn_even_when_close_raises(self, tmp_path: Path) -> None:
