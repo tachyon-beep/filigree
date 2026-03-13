@@ -84,9 +84,16 @@ class TreeNode(TypedDict):
 
 
 class ReleaseSummaryItem(TypedDict):
-    """Shape of each item returned by ``get_releases_summary()``."""
+    """Shape of each item returned by ``get_releases_summary()``.
 
-    # Spreads all IssueDict keys plus release-specific enrichments
+    Cannot use ``class ReleaseSummaryItem(IssueDict)`` because ``blocks``
+    and ``blocked_by`` are ``list[IssueRef]`` here (enriched references with
+    title/type) vs ``list[str]`` (bare IDs) in IssueDict. TypedDict
+    inheritance does not allow narrowing inherited field types.
+    """
+
+    # Manually duplicates IssueDict keys — kept in sync by contract test
+    # TestReleaseSummaryItemShape in test_type_contracts.py
     id: str
     title: str
     status: str

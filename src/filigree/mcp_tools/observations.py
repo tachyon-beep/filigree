@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import sqlite3
 from collections.abc import Callable
 from typing import Any
@@ -24,6 +25,8 @@ from filigree.types.inputs import (
     ObserveArgs,
     PromoteObservationArgs,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
@@ -179,6 +182,7 @@ async def _handle_list_observations(arguments: dict[str, Any]) -> list[TextConte
     try:
         stats = dict(tracker.observation_stats(sweep=False))
     except sqlite3.Error as e:
+        logger.warning("observation_stats failed, returning degraded response", exc_info=True)
         stats = {
             "count": None,
             "page_count": len(observations),
@@ -207,6 +211,8 @@ async def _handle_dismiss_observation(arguments: dict[str, Any]) -> list[TextCon
         )
     except ValueError as e:
         return _text(ErrorResponse(error=str(e), code="not_found"))
+    except sqlite3.Error as e:
+        return _text(ErrorResponse(error=f"Database error: {e}", code="database_error"))
     return _text({"status": "dismissed", "id": args["id"]})
 
 

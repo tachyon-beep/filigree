@@ -269,7 +269,10 @@ class FiligreeDB(FilesMixin, IssuesMixin, EventsMixin, WorkflowMixin, MetaMixin,
             # After rollback, skip the commit in close() — the rolled-back
             # transaction's changes are lost. Skipping the commit avoids
             # accidentally committing any stray implicit transaction.
-            self._close_no_commit()
+            try:
+                self._close_no_commit()
+            except Exception:
+                logger.error("Close failed during __exit__", exc_info=True)
         else:
             self.close()
 
@@ -353,7 +356,10 @@ class FiligreeDB(FilesMixin, IssuesMixin, EventsMixin, WorkflowMixin, MetaMixin,
         return result
 
     def reconnect(self, *, check_same_thread: bool = True) -> None:
-        """Close the current connection and reopen with a new ``check_same_thread`` setting.
+        """Close the current connection so the next access reopens it with a new ``check_same_thread`` setting.
+
+        The reconnection is lazy — it happens on the next access to the
+        ``self.conn`` property, which re-applies PRAGMAs at that point.
 
         Useful in tests where a DB created with the default
         ``check_same_thread=True`` needs to be shared across threads

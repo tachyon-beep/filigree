@@ -70,13 +70,10 @@ class ObservationsMixin(DBMixinProtocol):
                 (now, now),
             )
             cursor = self.conn.execute("DELETE FROM observations WHERE expires_at <= ?", (now,))
-            # v1 known limitation: audit trail cap is only enforced during sweep
-            # (triggered by list_observations / observation_stats(sweep=True)).
-            # Dismiss/promote paths do not prune. Acceptable for experiment scope.
             # Prune dismissed_observations audit trail to prevent unbounded growth.
-            # Keep the most recent DISMISSED_AUDIT_TRAIL_CAP entries.
-            # Note: without an index on dismissed_at, this is O(N log N) for
-            # large tables. Acceptable for v1 experiment scale.
+            # Keep the most recent DISMISSED_AUDIT_TRAIL_CAP entries. Only enforced
+            # during sweep (not dismiss/promote) — acceptable for v1 scope. Without
+            # an index on dismissed_at, this is O(N log N) for large tables.
             self.conn.execute(
                 "DELETE FROM dismissed_observations WHERE id NOT IN "
                 "(SELECT id FROM dismissed_observations ORDER BY dismissed_at DESC LIMIT ?)",
@@ -306,7 +303,6 @@ class ObservationsMixin(DBMixinProtocol):
         unique_ids = list(dict.fromkeys(obs_ids))
         now = _now_iso()
         placeholders = ",".join("?" for _ in unique_ids)
-        # Log all to audit trail before deletion
         try:
             # Find which IDs actually exist before deleting
             found_rows = self.conn.execute(

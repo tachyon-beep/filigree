@@ -382,7 +382,7 @@ def apply_pending_migrations(conn: sqlite3.Connection, target_version: int) -> i
 
     Args:
         conn: Open SQLite connection (must have row_factory and PRAGMAs already set).
-        target_version: The CURRENT_SCHEMA_VERSION from core.py.
+        target_version: The CURRENT_SCHEMA_VERSION from db_schema.py.
 
     Returns:
         Number of migrations applied (0 if already up to date).

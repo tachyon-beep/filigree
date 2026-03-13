@@ -41,7 +41,7 @@ FieldType = Literal["text", "enum", "number", "date", "list", "boolean"]
 # ---------------------------------------------------------------------------
 # Templates use frozen=True for immutability (configuration data).
 # This differs intentionally from the mutable Issue dataclass (domain entity
-# in core.py). Frozen dataclasses prevent accidental mutation after loading
+# in models.py). Frozen dataclasses prevent accidental mutation after loading
 # and enable safe caching in dict lookups.
 # ---------------------------------------------------------------------------
 

@@ -1,6 +1,5 @@
 """MetaMixin — comments, labels, stats, bulk operations, and export/import.
 
-Extracted from core.py as part of the module architecture split.
 All methods access ``self.conn``, ``self.get_issue()``, etc. via
 Python's MRO when composed into ``FiligreeDB``.
 """
@@ -442,8 +441,10 @@ class MetaMixin(DBMixinProtocol):
         inserted_issue_ids: set[str] = set()
         parent_map: dict[str, str] = {}
         file_id_map: dict[str, str] = {}
+        _import_stage = "setup"
         try:
             self._reconcile_future_release_import(issues)
+            _import_stage = "issue"
 
             for record in issues:
                 parent_id = record.get("parent_id")
@@ -485,9 +486,11 @@ class MetaMixin(DBMixinProtocol):
                             raise ValueError(msg)
                     self.conn.execute("UPDATE issues SET parent_id = ? WHERE id = ?", (parent_id, issue_id))
 
+            _import_stage = "file_record"
             for record in file_records:
                 count += self._resolve_imported_file_id(record, merge=merge, conflict=conflict, file_id_map=file_id_map)
 
+            _import_stage = "scan_finding"
             for record in scan_findings:
                 file_id = self._remap_file_id(record["file_id"], file_id_map)
                 severity = record.get("severity", "info")
@@ -527,6 +530,7 @@ class MetaMixin(DBMixinProtocol):
                 )
                 count += cursor.rowcount
 
+            _import_stage = "dependency"
             for record in dependencies:
                 cursor = self.conn.execute(
                     f"INSERT {conflict} INTO dependencies (issue_id, depends_on_id, type, created_at) VALUES (?, ?, ?, ?)",
@@ -539,6 +543,7 @@ class MetaMixin(DBMixinProtocol):
                 )
                 count += cursor.rowcount
 
+            _import_stage = "label"
             for record in labels:
                 cursor = self.conn.execute(
                     f"INSERT {conflict} INTO labels (issue_id, label) VALUES (?, ?)",
@@ -546,6 +551,7 @@ class MetaMixin(DBMixinProtocol):
                 )
                 count += cursor.rowcount
 
+            _import_stage = "comment"
             for record in comments:
                 if merge:
                     created = record.get("created_at", _now_iso())
@@ -578,6 +584,7 @@ class MetaMixin(DBMixinProtocol):
                     )
                 count += cursor.rowcount
 
+            _import_stage = "event"
             for record in events:
                 cursor = self.conn.execute(
                     f"INSERT {conflict} INTO events "
@@ -595,6 +602,7 @@ class MetaMixin(DBMixinProtocol):
                 )
                 count += cursor.rowcount
 
+            _import_stage = "file_association"
             for record in file_associations:
                 file_id = self._remap_file_id(record["file_id"], file_id_map)
                 cursor = self.conn.execute(
@@ -608,6 +616,7 @@ class MetaMixin(DBMixinProtocol):
                 )
                 count += cursor.rowcount
 
+            _import_stage = "file_event"
             for record in file_events:
                 file_id = self._remap_file_id(record["file_id"], file_id_map)
                 if merge:
@@ -648,6 +657,7 @@ class MetaMixin(DBMixinProtocol):
                     )
                 count += cursor.rowcount
 
+            _import_stage = "observation"
             for record in observations:
                 obs_file_id: str | None = record.get("file_id")
                 if obs_file_id and obs_file_id in file_id_map:
@@ -673,6 +683,7 @@ class MetaMixin(DBMixinProtocol):
                 )
                 count += cursor.rowcount
 
+            _import_stage = "dismissed_observation"
             for record in dismissed_observations:
                 cursor = self.conn.execute(
                     f"INSERT {conflict} INTO dismissed_observations (obs_id, summary, actor, reason, dismissed_at) VALUES (?, ?, ?, ?, ?)",
@@ -685,6 +696,10 @@ class MetaMixin(DBMixinProtocol):
                     ),
                 )
                 count += cursor.rowcount
+        except KeyError as exc:
+            self.conn.rollback()
+            msg = f"Missing required field {exc} in {_import_stage} record"
+            raise ValueError(msg) from exc
         except Exception:
             self.conn.rollback()
             raise
