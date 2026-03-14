@@ -157,13 +157,13 @@ class TestSanitizeFtsQuery:
         from filigree.db_issues import _sanitize_fts_query
 
         result = _sanitize_fts_query("!@#$%^&()")
-        assert result == '""'
+        assert result == ""
 
     def test_empty_query_returns_empty_match(self) -> None:
         from filigree.db_issues import _sanitize_fts_query
 
         result = _sanitize_fts_query("")
-        assert result == '""'
+        assert result == ""
 
     def test_embedded_double_quotes_removed(self) -> None:
         from filigree.db_issues import _sanitize_fts_query
@@ -181,7 +181,7 @@ class TestSanitizeFtsQuery:
         from filigree.db_issues import _sanitize_fts_query
 
         result = _sanitize_fts_query("   ")
-        assert result == '""'
+        assert result == ""
 
 
 class TestEscapeLikeQuery:

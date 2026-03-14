@@ -94,9 +94,9 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
                     "label": {"type": "string", "description": "Filter by label"},
                     "limit": {
                         "type": "integer",
-                        "default": 100,
+                        "default": _MAX_LIST_RESULTS,
                         "minimum": 1,
-                        "description": f"Max results (default 100, capped at {_MAX_LIST_RESULTS} unless no_limit=true)",
+                        "description": f"Max results (default {_MAX_LIST_RESULTS}, capped at {_MAX_LIST_RESULTS} unless no_limit=true)",
                     },
                     "offset": {"type": "integer", "default": 0, "minimum": 0, "description": "Skip first N results"},
                     "no_limit": {
@@ -198,9 +198,9 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
                     "query": {"type": "string", "description": "Search query"},
                     "limit": {
                         "type": "integer",
-                        "default": 100,
+                        "default": _MAX_LIST_RESULTS,
                         "minimum": 1,
-                        "description": f"Max results (default 100, capped at {_MAX_LIST_RESULTS} unless no_limit=true)",
+                        "description": f"Max results (default {_MAX_LIST_RESULTS}, capped at {_MAX_LIST_RESULTS} unless no_limit=true)",
                     },
                     "offset": {"type": "integer", "default": 0, "minimum": 0, "description": "Skip first N results"},
                     "no_limit": {
@@ -444,6 +444,9 @@ async def _handle_update_issue(arguments: dict[str, Any]) -> list[TextContent]:
     tracker = _get_db()
     try:
         before = tracker.get_issue(args["id"])
+    except KeyError:
+        return _text(ErrorResponse(error=f"Issue not found: {args['id']}", code="not_found"))
+    try:
         issue = tracker.update_issue(
             args["id"],
             status=args.get("status"),

@@ -579,9 +579,12 @@ class TestFieldSchemaTypeValidation:
     """Bug fix: filigree-ca5711 — invalid FieldSchema.type silently accepted."""
 
     def test_valid_field_types_accepted(self) -> None:
-        for ft in ("text", "enum", "number", "date", "list", "boolean"):
+        for ft in ("text", "number", "date", "list", "boolean"):
             fs = FieldSchema(name="test_field", type=ft)
             assert fs.type == ft
+        # enum requires options
+        fs = FieldSchema(name="test_field", type="enum", options=("a", "b"))
+        assert fs.type == "enum"
 
     def test_invalid_field_type_raises_valueerror(self) -> None:
         with pytest.raises(ValueError, match=r"[Ii]nvalid.*field type"):

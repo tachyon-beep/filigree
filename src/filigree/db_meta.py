@@ -73,10 +73,11 @@ class MetaMixin(DBMixinProtocol):
         return cursor.rowcount > 0
 
     def remove_label(self, issue_id: str, label: str) -> bool:
+        normalized = self._validate_label_name(label)
         try:
             cursor = self.conn.execute(
                 "DELETE FROM labels WHERE issue_id = ? AND label = ?",
-                (issue_id, label),
+                (issue_id, normalized),
             )
             self.conn.commit()
         except Exception:

@@ -299,6 +299,8 @@ def create_router() -> APIRouter:
         if not isinstance(scan_source, str) or not scan_source:
             return _error_response("scan_source is required and must be a string", "VALIDATION_ERROR", 400)
         findings = body.get("findings", [])
+        if not isinstance(findings, list):
+            return _error_response("findings must be a JSON array", "VALIDATION_ERROR", 400)
         if "create_issues" in body:
             return _error_response(
                 "create_issues is not supported on scan ingest; create tickets via UI or MCP",

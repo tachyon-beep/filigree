@@ -419,7 +419,9 @@ def create_mcp_app(
             dir_token = _request_filigree_dir.set(resolved.db_path.parent)
         try:
             await session_manager.handle_request(scope, receive, send)
-        except RuntimeError:
+        except RuntimeError as exc:
+            if "not initialized" not in str(exc) and "Task group" not in str(exc):
+                raise
             # Session manager not started (e.g. lifespan not triggered in
             # test or ethereal mode).  Return 503 so the route is visible
             # but clearly not ready.

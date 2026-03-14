@@ -47,7 +47,7 @@ def _sanitize_fts_query(query: str) -> str:
     sanitized = _re.sub(r'[^\w\s*"]', "", query)
     tokens = [t.replace('"', "") for t in sanitized.strip().split()]
     tokens = [t for t in tokens if t]
-    return " AND ".join(f'"{t}"*' for t in tokens) if tokens else '""'
+    return " AND ".join(f'"{t}"*' for t in tokens) if tokens else ""
 
 
 def _escape_like_query(query: str) -> str:
@@ -935,8 +935,15 @@ class IssuesMixin(DBMixinProtocol):
 
     def count_search_results(self, query: str) -> int:
         """Return the total number of issues matching a search query."""
+        fts_query = _sanitize_fts_query(query)
+        if not fts_query:
+            pattern = _escape_like_query(query)
+            row = self.conn.execute(
+                "SELECT COUNT(*) AS cnt FROM issues WHERE title LIKE ? ESCAPE '\\' OR description LIKE ? ESCAPE '\\'",
+                (pattern, pattern),
+            ).fetchone()
+            return int(row["cnt"]) if row else 0
         try:
-            fts_query = _sanitize_fts_query(query)
             row = self.conn.execute(
                 "SELECT COUNT(*) AS cnt FROM issues i JOIN issues_fts ON issues_fts.rowid = i.rowid WHERE issues_fts MATCH ?",
                 (fts_query,),
@@ -957,8 +964,16 @@ class IssuesMixin(DBMixinProtocol):
 
     def search_issues(self, query: str, *, limit: int = 100, offset: int = 0) -> list[Issue]:
         """Search issues by title/description using FTS5, falling back to LIKE."""
+        fts_query = _sanitize_fts_query(query)
+        if not fts_query:
+            pattern = _escape_like_query(query)
+            rows = self.conn.execute(
+                "SELECT id FROM issues WHERE title LIKE ? ESCAPE '\\' OR description LIKE ? ESCAPE '\\' "
+                "ORDER BY priority, created_at LIMIT ? OFFSET ?",
+                (pattern, pattern, limit, offset),
+            ).fetchall()
+            return self._build_issues_batch([r["id"] for r in rows])
         try:
-            fts_query = _sanitize_fts_query(query)
             rows = self.conn.execute(
                 "SELECT i.id FROM issues i "
                 "JOIN issues_fts ON issues_fts.rowid = i.rowid "

@@ -442,6 +442,7 @@ def create_router() -> APIRouter:
         """Flow metrics: cycle time, lead time, throughput."""
         from filigree.analytics import get_flow_metrics
 
+        days = max(days, 1)
         metrics = get_flow_metrics(db, days=days)
         return JSONResponse(metrics)
 
@@ -470,6 +471,14 @@ def create_router() -> APIRouter:
     async def api_activity(limit: int = 50, since: str = "", db: FiligreeDB = Depends(_get_db)) -> JSONResponse:
         """Recent events across all issues."""
         limit = min(max(limit, 1), 1000)
+        if since:
+            from datetime import datetime
+
+            try:
+                datetime.fromisoformat(since.replace("Z", "+00:00"))
+            except (ValueError, AttributeError):
+                return JSONResponse({"error": f"Invalid ISO timestamp: {since!r}"}, status_code=400)
+            since = since.replace("Z", "+00:00") if since.endswith("Z") else since
         events = db.get_events_since(since, limit=limit) if since else db.get_recent_events(limit=limit)
         return JSONResponse(events)
 

@@ -518,6 +518,7 @@ async def _handle_trigger_scan(arguments: dict[str, Any]) -> list[TextContent]:
     await asyncio.sleep(0.2)
     exit_code = proc.poll()
     if exit_code is not None and exit_code != 0:
+        del _scan_cooldowns[cooldown_key]
         log_hint = ""
         if scan_log_path.exists():
             log_hint = f" Check log: {scan_log_path.relative_to(filigree_dir.parent)}"

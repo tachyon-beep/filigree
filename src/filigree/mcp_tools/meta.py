@@ -402,15 +402,16 @@ async def _handle_get_changes(arguments: dict[str, Any]) -> list[TextContent]:
 
     args = _parse_args(arguments, GetChangesArgs)
     since = args["since"]
+    since_normalized = since.replace("Z", "+00:00") if since.endswith("Z") else since
     try:
-        datetime.fromisoformat(since.replace("Z", "+00:00"))
+        datetime.fromisoformat(since_normalized)
     except (ValueError, AttributeError):
         return _text(
             ErrorResponse(error=f"Invalid ISO timestamp: {since!r}. Expected format: 2026-01-15T10:30:00", code="validation_error")
         )
     tracker = _get_db()
     events = tracker.get_events_since(
-        since,
+        since_normalized,
         limit=args.get("limit", 100),
     )
     return _text(events)

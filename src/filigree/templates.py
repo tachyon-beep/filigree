@@ -112,12 +112,19 @@ class FieldSchema:
             allowed = sorted(_VALID_FIELD_TYPES)
             msg = f"Invalid field type '{self.type}' for field '{self.name}': must be one of {allowed}"
             raise ValueError(msg)
+        if self.type == "enum" and not self.options:
+            msg = f"Field '{self.name}' has type 'enum' but no options defined"
+            raise ValueError(msg)
         if self.pattern is not None:
             try:
                 re.compile(self.pattern)
             except re.error as exc:
                 msg = f"Invalid regex pattern for field '{self.name}': {exc}"
                 raise ValueError(msg) from exc
+        for state_name in self.required_at:
+            if not _NAME_PATTERN.match(state_name):
+                msg = f"Invalid required_at entry '{state_name}' in field '{self.name}': must match ^[a-z][a-z0-9_]{{0,63}}$"
+                raise ValueError(msg)
 
 
 _MAX_PATTERN_VALUE_LENGTH = 10_000
@@ -281,6 +288,9 @@ class TemplateRegistry:
         raw_states = raw.get("states")
         if not isinstance(raw_states, list):
             msg = f"Type '{type_name}': 'states' must be a list, got {type(raw_states).__name__}"
+            raise ValueError(msg)
+        if not raw_states:
+            msg = f"Type '{type_name}': must have at least one state"
             raise ValueError(msg)
         for i, s in enumerate(raw_states):
             if not isinstance(s, dict) or "name" not in s or "category" not in s:
@@ -895,8 +905,10 @@ class TemplateRegistry:
             description=pack_data.get("description", ""),
             types=MappingProxyType(types_dict),
             requires_packs=tuple(pack_data.get("requires_packs", [])),
-            relationships=tuple(MappingProxyType(r) for r in pack_data.get("relationships", [])),
-            cross_pack_relationships=tuple(MappingProxyType(r) for r in pack_data.get("cross_pack_relationships", [])),
+            relationships=tuple(MappingProxyType(r) for r in pack_data.get("relationships", []) if isinstance(r, dict)),
+            cross_pack_relationships=tuple(
+                MappingProxyType(r) for r in pack_data.get("cross_pack_relationships", []) if isinstance(r, dict)
+            ),
             guide=MappingProxyType(raw_guide) if raw_guide is not None else None,
         )
         self._register_pack(pack)

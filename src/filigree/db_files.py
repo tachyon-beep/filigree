@@ -1164,7 +1164,7 @@ class FilesMixin(DBMixinProtocol):
             "UNION "
             "SELECT sf.* FROM scan_findings sf "
             "JOIN file_associations fa ON sf.file_id = fa.file_id "
-            "WHERE fa.issue_id = ? AND fa.assoc_type = 'scan_finding'",
+            "WHERE fa.issue_id = ?",
             (issue_id, issue_id),
         ).fetchall()
         return [self._build_scan_finding(r) for r in rows]

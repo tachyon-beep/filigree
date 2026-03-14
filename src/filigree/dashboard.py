@@ -433,9 +433,19 @@ def main(port: int = DEFAULT_PORT, *, no_browser: bool = False, server_mode: boo
 
     app = create_app(server_mode=server_mode)
 
+    browser_timer: threading.Timer | None = None
     if not no_browser:
-        threading.Timer(0.5, lambda: webbrowser.open(f"http://localhost:{port}")).start()
+        browser_timer = threading.Timer(0.5, lambda: webbrowser.open(f"http://localhost:{port}"))
+        browser_timer.start()
 
     mode_label = "Server" if server_mode else "Dashboard"
     print(f"Filigree {mode_label}: http://localhost:{port}")
-    uvicorn.run(app, host="127.0.0.1", port=port, log_level="warning")
+    try:
+        uvicorn.run(app, host="127.0.0.1", port=port, log_level="warning")
+    finally:
+        if browser_timer is not None:
+            browser_timer.cancel()
+        if _project_store is not None:
+            _project_store.close_all()
+        if _db is not None:
+            _db.close()
