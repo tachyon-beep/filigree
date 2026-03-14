@@ -2451,17 +2451,17 @@ class TestSafeJsonLoads:
     def test_empty_string_returns_empty_dict(self) -> None:
         assert _safe_json_loads("", "test") == {}
 
-    def test_non_dict_json_array_returns_error_marker(self) -> None:
+    def test_non_dict_json_array_repairs_to_empty(self) -> None:
         result = _safe_json_loads("[1,2,3]", "test")
-        assert result == {"_metadata_error": True}
+        assert result == {}
 
-    def test_non_dict_json_scalar_returns_error_marker(self) -> None:
+    def test_non_dict_json_scalar_repairs_to_empty(self) -> None:
         result = _safe_json_loads("42", "test")
-        assert result == {"_metadata_error": True}
+        assert result == {}
 
-    def test_non_dict_json_custom_error_key(self) -> None:
+    def test_non_dict_json_repairs_regardless_of_error_key(self) -> None:
         result = _safe_json_loads("[1,2,3]", "test", error_key="_fields_error")
-        assert result == {"_fields_error": True}
+        assert result == {}
 
     def test_valid_dict_returns_parsed(self) -> None:
         result = _safe_json_loads('{"key": "value", "num": 42}', "test")

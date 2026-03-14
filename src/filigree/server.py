@@ -57,9 +57,10 @@ class ServerConfig:
 def _read_project_schema_version(filigree_dir: Path) -> int:
     """Return the SQLite schema version for a project, or 0 if no DB exists.
 
-    Returns 0 when no database file exists.
-    Raises sqlite3.Error or OSError when the file exists but cannot be read
-    (corrupt DB, locked, permission denied).
+    Returns 0 when no database file exists or when the DB is transiently locked
+    (another process holds an exclusive lock — common during concurrent writes).
+    Raises sqlite3.DatabaseError or OSError for genuine corruption or
+    permission errors.
     """
     db_path = filigree_dir / DB_FILENAME
     if not db_path.exists():
@@ -69,6 +70,12 @@ def _read_project_schema_version(filigree_dir: Path) -> int:
     try:
         row = conn.execute("PRAGMA user_version").fetchone()
         return int(row[0]) if row else 0
+    except sqlite3.OperationalError:
+        # Transient: "database is locked", "database is busy", disk I/O.
+        # Treat as version 0 so registration proceeds — the next session
+        # start will re-read successfully once the lock is released.
+        logger.debug("Could not read schema version from %s (transient lock), assuming 0", db_path, exc_info=True)
+        return 0
     finally:
         conn.close()
 
@@ -141,7 +148,7 @@ def register_project(filigree_dir: Path) -> None:
     Raises:
         ValueError: another project already uses the same prefix, or
             the database schema version is newer than supported.
-        sqlite3.Error: the database file exists but cannot be read.
+        sqlite3.DatabaseError: the database file is genuinely corrupt.
         OSError: permission or filesystem error reading the database.
     """
     filigree_dir = filigree_dir.resolve()

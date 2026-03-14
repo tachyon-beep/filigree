@@ -190,6 +190,28 @@ class TestVersionEnforcement:
         with pytest.raises(ValueError, match="schema version"):
             register_project(filigree_dir)
 
+    def test_register_project_tolerates_transient_lock(self, tmp_path: Path) -> None:
+        """A transiently locked DB should not prevent project registration."""
+        from unittest.mock import patch
+
+        filigree_dir = tmp_path / "locked" / ".filigree"
+        filigree_dir.mkdir(parents=True)
+        (filigree_dir / "config.json").write_text(json.dumps({"prefix": "locked", "version": 1}))
+        conn = sqlite3.connect(filigree_dir / "filigree.db")
+        conn.executescript(SCHEMA_SQL)
+        conn.commit()
+        conn.close()
+
+        # Simulate OperationalError on PRAGMA user_version (transient lock)
+        from filigree.server import _read_project_schema_version
+
+        with patch("filigree.server.sqlite3.connect") as mock_connect:
+            mock_conn = mock_connect.return_value
+            mock_conn.execute.side_effect = sqlite3.OperationalError("database is locked")
+            version = _read_project_schema_version(filigree_dir)
+        # Should return 0 (safe default), not raise
+        assert version == 0
+
 
 class TestConfigValidation:
     """Bugs filigree-11862e / filigree-ddceff: read_server_config schema validation."""
