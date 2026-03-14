@@ -35,12 +35,10 @@ from mcp.types import (
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from filigree.core import (
-    DB_FILENAME,
     FILIGREE_DIR_NAME,
     SUMMARY_FILENAME,
     FiligreeDB,
     find_filigree_root,
-    read_config,
 )
 from filigree.mcp_tools.common import (  # noqa: F401  — re-exported for backward compat
     _MAX_LIST_RESULTS,
@@ -133,6 +131,7 @@ from filigree.mcp_tools import (  # noqa: E402, I001  — must come after global
     files as _files_mod,
     issues as _issues_mod,
     meta as _meta_mod,
+    observations as _observations_mod,
     planning as _planning_mod,
     workflow as _workflow_mod,
 )
@@ -140,7 +139,7 @@ from filigree.mcp_tools import (  # noqa: E402, I001  — must come after global
 _all_tools: list[Tool] = []
 _all_handlers: dict[str, Callable[..., Any]] = {}
 
-for _mod in (_issues_mod, _planning_mod, _files_mod, _workflow_mod, _meta_mod):
+for _mod in (_issues_mod, _planning_mod, _files_mod, _workflow_mod, _meta_mod, _observations_mod):
     _tools, _handlers = _mod.register()
     _all_tools.extend(_tools)
     _all_handlers.update(_handlers)
@@ -238,6 +237,18 @@ def _build_workflow_text() -> str:
             for pack in sorted(packs, key=lambda p: p.pack):
                 type_names = ", ".join(sorted(pack.types.keys()))
                 lines.append(f"- **{pack.pack}** v{pack.version}: {type_names}")
+
+        # Observation awareness (read-only, guarded for pre-v7 DBs)
+        try:
+            obs_stats = tracker.observation_stats(sweep=False)
+            if obs_stats["count"] > 0:
+                lines.append("\n## Observations\n")
+                if obs_stats["stale_count"] > 0:
+                    lines.append(f"- {obs_stats['stale_count']} stale observation(s) (>48h old). Run `list_observations` to triage.")
+                else:
+                    lines.append(f"- {obs_stats['count']} pending observation(s). Use `list_observations` to review.")
+        except sqlite3.OperationalError:
+            logging.getLogger(__name__).debug("observation stats unavailable in MCP prompt", exc_info=True)
 
         return "\n".join(lines) + "\n"
     except sqlite3.Error:
@@ -408,7 +419,9 @@ def create_mcp_app(
             dir_token = _request_filigree_dir.set(resolved.db_path.parent)
         try:
             await session_manager.handle_request(scope, receive, send)
-        except RuntimeError:
+        except RuntimeError as exc:
+            if "not initialized" not in str(exc) and "Task group" not in str(exc):
+                raise
             # Session manager not started (e.g. lifespan not triggered in
             # test or ethereal mode).  Return 503 so the route is visible
             # but clearly not ready.
@@ -420,10 +433,12 @@ def create_mcp_app(
             )
             await resp(scope, receive, send)
         finally:
-            if dir_token is not None:
-                _request_filigree_dir.reset(dir_token)
-            if db_token is not None:
-                _request_db.reset(db_token)
+            try:
+                if dir_token is not None:
+                    _request_filigree_dir.reset(dir_token)
+            finally:
+                if db_token is not None:
+                    _request_db.reset(db_token)
 
     return _handle_mcp, session_manager.run
 
@@ -449,9 +464,7 @@ async def _run(project_path: Path | None) -> None:
             sys.exit(1)
 
     _filigree_dir = filigree_dir
-    config = read_config(filigree_dir)
-    db = FiligreeDB(filigree_dir / DB_FILENAME, prefix=config.get("prefix", "filigree"))
-    db.initialize()
+    db = FiligreeDB.from_filigree_dir(filigree_dir)
 
     from filigree.logging import setup_logging
 

@@ -19,7 +19,9 @@ Safety note on cast():
 # on Python <3.14, which the sync test in test_input_type_contracts.py
 # depends on for verifying required/optional agreement with JSON Schema.
 
-from typing import Any, NotRequired, TypedDict
+from typing import Any, Literal, NotRequired, TypedDict
+
+from filigree.types.core import AssocType, ISOTimestamp, Severity, StatusCategory
 
 # ---------------------------------------------------------------------------
 # issues.py handlers
@@ -32,8 +34,10 @@ class GetIssueArgs(TypedDict):
 
 
 class ListIssuesArgs(TypedDict):
+    # status is str (not Literal) because valid values are template-defined and
+    # cannot be statically enumerated, unlike status_category which is fixed.
     status: NotRequired[str]
-    status_category: NotRequired[str]
+    status_category: NotRequired[StatusCategory]
     type: NotRequired[str]
     priority: NotRequired[int]
     parent_id: NotRequired[str]
@@ -161,7 +165,7 @@ class BatchAddCommentArgs(TypedDict):
 
 
 class GetChangesArgs(TypedDict):
-    since: str
+    since: ISOTimestamp
     limit: NotRequired[int]
 
 
@@ -285,10 +289,10 @@ class ListFilesArgs(TypedDict):
     language: NotRequired[str]
     path_prefix: NotRequired[str]
     min_findings: NotRequired[int]
-    has_severity: NotRequired[str]
+    has_severity: NotRequired[Severity]
     scan_source: NotRequired[str]
-    sort: NotRequired[str]
-    direction: NotRequired[str]
+    sort: NotRequired[Literal["updated_at", "first_seen", "path", "language"]]
+    direction: NotRequired[Literal["asc", "desc"]]
 
 
 class GetFileArgs(TypedDict):
@@ -309,7 +313,7 @@ class GetIssueFilesArgs(TypedDict):
 class AddFileAssociationArgs(TypedDict):
     file_id: str
     issue_id: str
-    assoc_type: str
+    assoc_type: AssocType
 
 
 class RegisterFileArgs(TypedDict):
@@ -323,6 +327,49 @@ class TriggerScanArgs(TypedDict):
     scanner: str
     file_path: str
     api_url: NotRequired[str]
+
+
+# ---------------------------------------------------------------------------
+# observations.py handlers
+# ---------------------------------------------------------------------------
+
+
+class ObserveArgs(TypedDict):
+    summary: str
+    detail: NotRequired[str]
+    file_path: NotRequired[str]
+    line: NotRequired[int]
+    source_issue_id: NotRequired[str]
+    priority: NotRequired[int]
+    actor: NotRequired[str]
+
+
+class ListObservationsArgs(TypedDict):
+    limit: NotRequired[int]
+    offset: NotRequired[int]
+    file_path: NotRequired[str]
+    file_id: NotRequired[str]
+
+
+class DismissObservationArgs(TypedDict):
+    id: str
+    reason: NotRequired[str]
+    actor: NotRequired[str]
+
+
+class BatchDismissObservationsArgs(TypedDict):
+    ids: list[str]
+    reason: NotRequired[str]
+    actor: NotRequired[str]
+
+
+class PromoteObservationArgs(TypedDict):
+    id: str
+    type: NotRequired[str]
+    priority: NotRequired[int]
+    title: NotRequired[str]
+    description: NotRequired[str]
+    actor: NotRequired[str]
 
 
 # Registry: tool_name -> TypedDict class.
@@ -377,4 +424,10 @@ TOOL_ARGS_MAP: dict[str, type] = {
     "add_file_association": AddFileAssociationArgs,
     "register_file": RegisterFileArgs,
     "trigger_scan": TriggerScanArgs,
+    # observations.py
+    "observe": ObserveArgs,
+    "list_observations": ListObservationsArgs,
+    "dismiss_observation": DismissObservationArgs,
+    "batch_dismiss_observations": BatchDismissObservationsArgs,
+    "promote_observation": PromoteObservationArgs,
 }

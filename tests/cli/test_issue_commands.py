@@ -155,6 +155,30 @@ class TestUpdateAndClose:
         assert result.exit_code == 1
         assert "Not found" in result.output
 
+    def test_close_json_partial_failure_preserves_successes(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        """When closing multiple issues with --json and one fails, successes must still appear."""
+        runner, _ = cli_in_project
+        r = runner.invoke(cli, ["create", "Good one"])
+        good_id = _extract_id(r.output)
+        result = runner.invoke(cli, ["close", good_id, "nonexistent-abc", "--json"])
+        assert result.exit_code == 1
+        data = json.loads(result.output)
+        assert len(data["closed"]) == 1
+        assert data["closed"][0]["id"] == good_id
+        assert len(data["errors"]) == 1
+        assert data["errors"][0]["id"] == "nonexistent-abc"
+
+    def test_close_json_all_success(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        runner, _ = cli_in_project
+        r1 = runner.invoke(cli, ["create", "A"])
+        r2 = runner.invoke(cli, ["create", "B"])
+        id1, id2 = _extract_id(r1.output), _extract_id(r2.output)
+        result = runner.invoke(cli, ["close", id1, id2, "--json"])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert len(data["closed"]) == 2
+        assert "errors" not in data
+
 
 class TestReopen:
     def test_reopen_issue(self, cli_in_project: tuple[CliRunner, Path]) -> None:
@@ -171,6 +195,32 @@ class TestReopen:
         result = runner.invoke(cli, ["reopen", "nonexistent-abc"])
         assert result.exit_code == 1
         assert "Not found" in result.output
+
+    def test_reopen_json_partial_failure_preserves_successes(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        """When reopening multiple issues with --json and one fails, successes must still appear."""
+        runner, _ = cli_in_project
+        r = runner.invoke(cli, ["create", "Reopen me"])
+        good_id = _extract_id(r.output)
+        runner.invoke(cli, ["close", good_id])
+        result = runner.invoke(cli, ["reopen", good_id, "nonexistent-abc", "--json"])
+        assert result.exit_code == 1
+        data = json.loads(result.output)
+        assert len(data["reopened"]) == 1
+        assert data["reopened"][0]["id"] == good_id
+        assert len(data["errors"]) == 1
+
+    def test_reopen_json_all_success(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        runner, _ = cli_in_project
+        r1 = runner.invoke(cli, ["create", "A"])
+        r2 = runner.invoke(cli, ["create", "B"])
+        id1, id2 = _extract_id(r1.output), _extract_id(r2.output)
+        runner.invoke(cli, ["close", id1])
+        runner.invoke(cli, ["close", id2])
+        result = runner.invoke(cli, ["reopen", id1, id2, "--json"])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert len(data["reopened"]) == 2
+        assert "errors" not in data
 
 
 class TestCommentsCli:
@@ -334,3 +384,21 @@ class TestReleaseCli:
         issue_id = _extract_id(r.output)
         result = runner.invoke(cli, ["release", issue_id])
         assert result.exit_code == 1
+
+    def test_release_json(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        runner, _ = cli_in_project
+        r = runner.invoke(cli, ["create", "JSON release"])
+        issue_id = _extract_id(r.output)
+        runner.invoke(cli, ["claim", issue_id, "--assignee", "agent-1"])
+        result = runner.invoke(cli, ["release", issue_id, "--json"])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["id"] == issue_id
+        assert data["assignee"] == ""
+
+    def test_release_json_not_found(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        runner, _ = cli_in_project
+        result = runner.invoke(cli, ["release", "nonexistent-abc", "--json"])
+        assert result.exit_code == 1
+        data = json.loads(result.output)
+        assert "error" in data

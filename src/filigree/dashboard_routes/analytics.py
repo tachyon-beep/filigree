@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections import deque
 from datetime import UTC, datetime, timedelta
 from time import perf_counter
@@ -15,7 +16,7 @@ if TYPE_CHECKING:
 
 from starlette.requests import Request
 
-from filigree.core import FiligreeDB, Issue
+from filigree.core import FiligreeDB
 from filigree.dashboard_routes.common import (
     _GRAPH_STATUS_CATEGORIES,
     _coerce_graph_mode,
@@ -25,7 +26,10 @@ from filigree.dashboard_routes.common import (
     _resolve_graph_runtime,
     _safe_bounded_int,
 )
+from filigree.models import Issue
 from filigree.types.api import StatsWithPrefix
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Graph v2 helpers
@@ -438,8 +442,24 @@ def create_router() -> APIRouter:
         """Flow metrics: cycle time, lead time, throughput."""
         from filigree.analytics import get_flow_metrics
 
+        days = max(days, 1)
         metrics = get_flow_metrics(db, days=days)
         return JSONResponse(metrics)
+
+    @router.get("/observations/stats")
+    async def api_observation_stats(db: FiligreeDB = Depends(_get_db)) -> JSONResponse:
+        """Observation count and age stats for dashboard display."""
+        import sqlite3
+
+        try:
+            stats = db.observation_stats(sweep=False)
+        except sqlite3.Error:
+            logger.warning("observation_stats unavailable", exc_info=True)
+            return JSONResponse(
+                {"error": "observation stats unavailable", "status": "unavailable", "detail": "database temporarily unavailable"},
+                status_code=503,
+            )
+        return JSONResponse(stats)
 
     @router.get("/critical-path")
     async def api_critical_path(db: FiligreeDB = Depends(_get_db)) -> JSONResponse:
@@ -451,6 +471,14 @@ def create_router() -> APIRouter:
     async def api_activity(limit: int = 50, since: str = "", db: FiligreeDB = Depends(_get_db)) -> JSONResponse:
         """Recent events across all issues."""
         limit = min(max(limit, 1), 1000)
+        if since:
+            from datetime import datetime
+
+            try:
+                datetime.fromisoformat(since.replace("Z", "+00:00"))
+            except (ValueError, AttributeError):
+                return JSONResponse({"error": f"Invalid ISO timestamp: {since!r}"}, status_code=400)
+            since = since.replace("Z", "+00:00") if since.endswith("Z") else since
         events = db.get_events_since(since, limit=limit) if since else db.get_recent_events(limit=limit)
         return JSONResponse(events)
 

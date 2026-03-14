@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+from collections.abc import Generator
 from pathlib import Path
 from typing import get_type_hints
 
@@ -10,11 +11,15 @@ import pytest
 
 from filigree.core import FileRecord, FiligreeDB
 from filigree.types.api import (
+    AddCommentResult,
+    ArchiveClosedResponse,
     BatchActionResponse,
     BatchCloseResponse,
     BatchUpdateResponse,
     BlockedIssue,
+    ClaimNextEmptyResponse,
     ClaimNextResponse,
+    CompactEventsResponse,
     CriticalPathResponse,
     DepDetail,
     DependencyActionResponse,
@@ -25,16 +30,36 @@ from filigree.types.api import (
     IssueWithChangedFields,
     IssueWithTransitions,
     IssueWithUnblocked,
+    JsonlTransferResponse,
+    LabelActionResponse,
+    OutboundTransitionInfo,
+    PackListItem,
     PlanResponse,
     SearchResponse,
     SlimIssue,
+    StateExplanation,
     StatsWithPrefix,
+    TransitionDetail,
     TransitionError,
+    TransitionHint,
+    ValidationResult,
+    WorkflowGuideResponse,
+    WorkflowStatesResponse,
 )
-from filigree.types.core import FileRecordDict, IssueDict, PaginatedResult, ScanFindingDict
+from filigree.types.core import (
+    BatchDismissResult,
+    FileRecordDict,
+    IssueDict,
+    ObservationDict,
+    ObservationStatsDict,
+    PaginatedResult,
+    PromoteObservationResult,
+    ScanFindingDict,
+)
 from filigree.types.events import EventRecord, EventRecordWithTitle, UndoFailure, UndoSuccess
 from filigree.types.files import (
     CleanStaleResult,
+    EnrichedFileItem,
     FileAssociation,
     FileDetail,
     FileHotspot,
@@ -43,17 +68,50 @@ from filigree.types.files import (
     IssueFileAssociation,
     ScanIngestResult,
     ScanRunRecord,
+    TimelineEntry,
 )
 from filigree.types.planning import (
     CommentRecord,
     CriticalPathNode,
     FlowMetrics,
     PlanTree,
+    ReleaseSummaryItem,
+    ReleaseTree,
     StatsResult,
 )
 from filigree.types.workflow import TemplateInfo, TemplateListItem
 
 # db fixture inherited from tests/conftest.py (make_db with default packs)
+# mcp_db fixture for MCP handler shape tests (section 1E)
+# Duplicated from tests/mcp/conftest.py to avoid cross-directory fixture deps.
+
+
+@pytest.fixture
+def mcp_db(tmp_path: Path) -> Generator[FiligreeDB, None, None]:
+    """Set up a FiligreeDB and patch the MCP module globals."""
+    from filigree.core import DB_FILENAME, FILIGREE_DIR_NAME, SUMMARY_FILENAME, write_config
+
+    filigree_dir = tmp_path / FILIGREE_DIR_NAME
+    filigree_dir.mkdir()
+    write_config(filigree_dir, {"prefix": "mcp", "version": 1})
+    (filigree_dir / SUMMARY_FILENAME).write_text("# test\n")
+
+    d = FiligreeDB(filigree_dir / DB_FILENAME, prefix="mcp")
+    d.initialize()
+
+    import filigree.mcp_server as mcp_mod
+
+    original_db = mcp_mod.db
+    original_dir = mcp_mod._filigree_dir
+    mcp_mod.db = d
+    mcp_mod._filigree_dir = filigree_dir
+
+    yield d
+
+    mcp_mod.db = original_db
+    mcp_mod._filigree_dir = original_dir
+    d.close()
+
 
 # ---------------------------------------------------------------------------
 # 1. Runtime shape tests — key-set + value-type checks
@@ -391,7 +449,8 @@ class TestScanIngestResultShape:
             scan_source="test",
             findings=[{"path": "/src/main.py", "rule_id": "R1", "message": "m", "severity": "high"}],
         )
-        assert isinstance(result["files_created"], int) or isinstance(result["files_updated"], int)
+        assert isinstance(result["files_created"], int)
+        assert isinstance(result["files_updated"], int)
         assert isinstance(result["findings_created"], int)
         assert isinstance(result["new_finding_ids"], list)
         assert isinstance(result["warnings"], list)
@@ -408,6 +467,125 @@ class TestCleanStaleResultShape:
     def test_value_types(self, db: FiligreeDB) -> None:
         result = db.clean_stale_findings(days=30)
         assert isinstance(result["findings_fixed"], int)
+
+
+# ---------------------------------------------------------------------------
+# 1B-2. Observation shape tests
+# ---------------------------------------------------------------------------
+
+
+class TestObservationDictShape:
+    def test_keys_match(self, db: FiligreeDB) -> None:
+        result = db.create_observation("Test obs")
+        hints = get_type_hints(ObservationDict)
+        assert set(result.keys()) == set(hints.keys())
+
+    def test_value_types(self, db: FiligreeDB) -> None:
+        result = db.create_observation("Test obs", file_path="/foo.py", line=10, priority=2)
+        assert isinstance(result["id"], str)
+        assert isinstance(result["summary"], str)
+        assert isinstance(result["priority"], int)
+        assert isinstance(result["created_at"], str)
+
+
+class TestObservationStatsDictShape:
+    def test_keys_match(self, db: FiligreeDB) -> None:
+        result = db.observation_stats()
+        hints = get_type_hints(ObservationStatsDict)
+        assert set(result.keys()) == set(hints.keys())
+
+    def test_value_types(self, db: FiligreeDB) -> None:
+        db.create_observation("Test obs")
+        result = db.observation_stats()
+        assert isinstance(result["count"], int)
+        assert isinstance(result["stale_count"], int)
+        assert isinstance(result["oldest_hours"], (float, type(None)))
+        assert isinstance(result["expiring_soon_count"], int)
+
+
+class TestBatchDismissResultShape:
+    def test_keys_match(self, db: FiligreeDB) -> None:
+        result = db.batch_dismiss_observations([])
+        hints = get_type_hints(BatchDismissResult)
+        assert set(result.keys()) == set(hints.keys())
+
+    def test_value_types(self, db: FiligreeDB) -> None:
+        obs = db.create_observation("Test obs")
+        result = db.batch_dismiss_observations([obs["id"]])
+        assert isinstance(result["dismissed"], int)
+        assert isinstance(result["not_found"], list)
+
+
+class TestPromoteObservationResultShape:
+    def test_keys_match(self, db: FiligreeDB) -> None:
+        obs = db.create_observation("Test obs")
+        result = db.promote_observation(obs["id"])
+        # warnings key is NotRequired — only check required keys
+        assert "issue" in result
+        from filigree.models import Issue
+
+        hints = get_type_hints(PromoteObservationResult, localns={"Issue": Issue})
+        assert set(result.keys()) <= set(hints.keys())
+
+
+# ---------------------------------------------------------------------------
+# 1B-3. Enriched file/timeline shape tests
+# ---------------------------------------------------------------------------
+
+
+class TestEnrichedFileItemShape:
+    def test_keys_match(self, db: FiligreeDB) -> None:
+        db.register_file("/src/main.py", language="python", file_type="source")
+        paginated = db.list_files_paginated(limit=1)
+        assert len(paginated["results"]) >= 1
+        item = paginated["results"][0]
+        hints = get_type_hints(EnrichedFileItem)
+        assert set(item.keys()) == set(hints.keys())
+
+
+class TestTimelineEntryShape:
+    def test_keys_match(self, db: FiligreeDB) -> None:
+        db.register_file("/src/main.py", language="python", file_type="source")
+        db.process_scan_results(
+            scan_source="test",
+            findings=[{"path": "/src/main.py", "rule_id": "R1", "message": "m", "severity": "high"}],
+        )
+        files = db.list_files_paginated(limit=1)
+        file_id = files["results"][0]["id"]
+        timeline = db.get_file_timeline(file_id, limit=1)
+        assert len(timeline["results"]) >= 1
+        entry = timeline["results"][0]
+        hints = get_type_hints(TimelineEntry)
+        assert set(entry.keys()) == set(hints.keys())
+
+
+# ---------------------------------------------------------------------------
+# 1B-4. Release summary shape tests
+# ---------------------------------------------------------------------------
+
+
+class TestReleaseSummaryItemShape:
+    def test_keys_match(self, db: FiligreeDB) -> None:
+        db.create_issue("v1.0.0", type="release", fields={"version": "v1.0.0"})
+        results = db.get_releases_summary()
+        assert len(results) >= 1
+        hints = get_type_hints(ReleaseSummaryItem)
+        assert set(results[0].keys()) == set(hints.keys())
+
+    def test_issue_dict_keys_present(self) -> None:
+        """Every key in IssueDict must also appear in ReleaseSummaryItem."""
+        issue_hints = get_type_hints(IssueDict)
+        release_hints = get_type_hints(ReleaseSummaryItem)
+        missing = set(issue_hints.keys()) - set(release_hints.keys())
+        assert not missing, f"ReleaseSummaryItem is missing IssueDict keys: {missing}"
+
+
+class TestReleaseTreeShape:
+    def test_keys_match(self, db: FiligreeDB) -> None:
+        release = db.create_issue("v1.0.0", type="release", fields={"version": "v1.0.0"})
+        result = db.get_release_tree(release.id)
+        hints = get_type_hints(ReleaseTree)
+        assert set(result.keys()) == set(hints.keys())
 
 
 # ---------------------------------------------------------------------------
@@ -891,6 +1069,319 @@ class TestDanglingDepDetail:
             db.get_issue(b.id)
         fallback = DepDetail(title=b.id, status="unknown", status_category="open", priority=2)
         assert set(fallback.keys()) == {"title", "status", "status_category", "priority"}
+
+
+# ---------------------------------------------------------------------------
+# 1E. MCP handler response shape tests (H5 — 14 untested TypedDicts)
+#
+# These TypedDicts are constructed by MCP tool handlers and returned directly
+# to LLM callers.  Tests call the actual MCP handlers via call_tool() and
+# verify key-set equality against the TypedDict declarations.
+# ---------------------------------------------------------------------------
+
+
+class TestAddCommentResultShape:
+    async def test_keys_match(self, mcp_db: FiligreeDB) -> None:
+        from filigree.mcp_server import call_tool
+        from tests.mcp._helpers import _parse
+
+        await call_tool("create_issue", {"title": "Comment target"})
+        issues = _parse(await call_tool("list_issues", {}))
+        issue_id = issues["issues"][0]["id"]
+        result = _parse(await call_tool("add_comment", {"issue_id": issue_id, "text": "hello"}))
+        hints = get_type_hints(AddCommentResult)
+        assert set(result.keys()) == set(hints.keys())
+
+    async def test_value_types(self, mcp_db: FiligreeDB) -> None:
+        from filigree.mcp_server import call_tool
+        from tests.mcp._helpers import _parse
+
+        await call_tool("create_issue", {"title": "Comment target"})
+        issues = _parse(await call_tool("list_issues", {}))
+        issue_id = issues["issues"][0]["id"]
+        result = _parse(await call_tool("add_comment", {"issue_id": issue_id, "text": "hello"}))
+        assert isinstance(result["status"], str)
+        assert isinstance(result["comment_id"], int)
+
+
+class TestLabelActionResponseShape:
+    async def test_keys_match(self, mcp_db: FiligreeDB) -> None:
+        from filigree.mcp_server import call_tool
+        from tests.mcp._helpers import _parse
+
+        await call_tool("create_issue", {"title": "Label target"})
+        issues = _parse(await call_tool("list_issues", {}))
+        issue_id = issues["issues"][0]["id"]
+        result = _parse(await call_tool("add_label", {"issue_id": issue_id, "label": "test-label"}))
+        hints = get_type_hints(LabelActionResponse)
+        assert set(result.keys()) == set(hints.keys())
+
+    async def test_value_types(self, mcp_db: FiligreeDB) -> None:
+        from filigree.mcp_server import call_tool
+        from tests.mcp._helpers import _parse
+
+        await call_tool("create_issue", {"title": "Label target"})
+        issues = _parse(await call_tool("list_issues", {}))
+        issue_id = issues["issues"][0]["id"]
+        result = _parse(await call_tool("add_label", {"issue_id": issue_id, "label": "test-label"}))
+        assert isinstance(result["status"], str)
+        assert isinstance(result["issue_id"], str)
+        assert isinstance(result["label"], str)
+
+
+class TestJsonlTransferResponseShape:
+    async def test_keys_match(self, mcp_db: FiligreeDB) -> None:
+        from filigree.mcp_server import call_tool
+        from tests.mcp._helpers import _parse
+
+        mcp_db.create_issue("Export me", type="task")
+        # _safe_path requires relative paths within project root
+        result = _parse(await call_tool("export_jsonl", {"output_path": "export.jsonl"}))
+        hints = get_type_hints(JsonlTransferResponse)
+        # skipped_types is NotRequired — check required keys are present
+        assert set(result.keys()) <= set(hints.keys())
+        assert {"status", "records", "path"} <= set(result.keys())
+
+    async def test_value_types(self, mcp_db: FiligreeDB) -> None:
+        from filigree.mcp_server import call_tool
+        from tests.mcp._helpers import _parse
+
+        mcp_db.create_issue("Export me", type="task")
+        result = _parse(await call_tool("export_jsonl", {"output_path": "export.jsonl"}))
+        assert isinstance(result["status"], str)
+        assert isinstance(result["records"], int)
+        assert isinstance(result["path"], str)
+
+
+class TestArchiveClosedResponseShape:
+    async def test_keys_match(self, mcp_db: FiligreeDB) -> None:
+        from filigree.mcp_server import call_tool
+        from tests.mcp._helpers import _parse
+
+        result = _parse(await call_tool("archive_closed", {"days_old": 0}))
+        hints = get_type_hints(ArchiveClosedResponse)
+        assert set(result.keys()) == set(hints.keys())
+
+    async def test_value_types(self, mcp_db: FiligreeDB) -> None:
+        from filigree.mcp_server import call_tool
+        from tests.mcp._helpers import _parse
+
+        result = _parse(await call_tool("archive_closed", {"days_old": 0}))
+        assert isinstance(result["status"], str)
+        assert isinstance(result["archived_count"], int)
+        assert isinstance(result["archived_ids"], list)
+
+
+class TestCompactEventsResponseShape:
+    async def test_keys_match(self, mcp_db: FiligreeDB) -> None:
+        from filigree.mcp_server import call_tool
+        from tests.mcp._helpers import _parse
+
+        result = _parse(await call_tool("compact_events", {}))
+        hints = get_type_hints(CompactEventsResponse)
+        assert set(result.keys()) == set(hints.keys())
+
+    async def test_value_types(self, mcp_db: FiligreeDB) -> None:
+        from filigree.mcp_server import call_tool
+        from tests.mcp._helpers import _parse
+
+        result = _parse(await call_tool("compact_events", {}))
+        assert isinstance(result["status"], str)
+        assert isinstance(result["events_deleted"], int)
+
+
+class TestClaimNextEmptyResponseShape:
+    async def test_keys_match(self, mcp_db: FiligreeDB) -> None:
+        from filigree.mcp_server import call_tool
+        from tests.mcp._helpers import _parse
+
+        # Use type filter that matches nothing to get the empty response
+        result = _parse(await call_tool("claim_next", {"assignee": "bot", "type": "nonexistent"}))
+        hints = get_type_hints(ClaimNextEmptyResponse)
+        assert set(result.keys()) == set(hints.keys())
+
+    async def test_value_types(self, mcp_db: FiligreeDB) -> None:
+        from filigree.mcp_server import call_tool
+        from tests.mcp._helpers import _parse
+
+        result = _parse(await call_tool("claim_next", {"assignee": "bot", "type": "nonexistent"}))
+        assert isinstance(result["status"], str)
+        assert isinstance(result["reason"], str)
+
+
+class TestWorkflowStatesResponseShape:
+    async def test_keys_match(self, mcp_db: FiligreeDB) -> None:
+        from filigree.mcp_server import call_tool
+        from tests.mcp._helpers import _parse
+
+        result = _parse(await call_tool("get_workflow_states", {}))
+        hints = get_type_hints(WorkflowStatesResponse)
+        assert set(result.keys()) == set(hints.keys())
+
+    async def test_value_types(self, mcp_db: FiligreeDB) -> None:
+        from filigree.mcp_server import call_tool
+        from tests.mcp._helpers import _parse
+
+        result = _parse(await call_tool("get_workflow_states", {}))
+        assert isinstance(result["states"], dict)
+        for category in ("open", "wip", "done"):
+            assert isinstance(result["states"][category], list)
+
+
+class TestPackListItemShape:
+    async def test_keys_match(self, mcp_db: FiligreeDB) -> None:
+        from filigree.mcp_server import call_tool
+        from tests.mcp._helpers import _parse
+
+        result = _parse(await call_tool("list_packs", {}))
+        assert isinstance(result, list)
+        assert len(result) >= 1
+        hints = get_type_hints(PackListItem)
+        assert set(result[0].keys()) == set(hints.keys())
+
+    async def test_value_types(self, mcp_db: FiligreeDB) -> None:
+        from filigree.mcp_server import call_tool
+        from tests.mcp._helpers import _parse
+
+        result = _parse(await call_tool("list_packs", {}))
+        pack = result[0]
+        assert isinstance(pack["pack"], str)
+        assert isinstance(pack["version"], str)
+        assert isinstance(pack["display_name"], str)
+        assert isinstance(pack["description"], str)
+        assert isinstance(pack["types"], list)
+        assert isinstance(pack["requires_packs"], list)
+
+
+class TestValidationResultShape:
+    async def test_keys_match(self, mcp_db: FiligreeDB) -> None:
+        from filigree.mcp_server import call_tool
+        from tests.mcp._helpers import _parse
+
+        issue = mcp_db.create_issue("Validate me", type="task")
+        result = _parse(await call_tool("validate_issue", {"issue_id": issue.id}))
+        hints = get_type_hints(ValidationResult)
+        assert set(result.keys()) == set(hints.keys())
+
+    async def test_value_types(self, mcp_db: FiligreeDB) -> None:
+        from filigree.mcp_server import call_tool
+        from tests.mcp._helpers import _parse
+
+        issue = mcp_db.create_issue("Validate me", type="task")
+        result = _parse(await call_tool("validate_issue", {"issue_id": issue.id}))
+        assert isinstance(result["valid"], bool)
+        assert isinstance(result["warnings"], list)
+        assert isinstance(result["errors"], list)
+
+
+class TestWorkflowGuideResponseShape:
+    async def test_keys_with_guide(self, mcp_db: FiligreeDB) -> None:
+        from filigree.mcp_server import call_tool
+        from tests.mcp._helpers import _parse
+
+        result = _parse(await call_tool("get_workflow_guide", {"pack": "core"}))
+        hints = get_type_hints(WorkflowGuideResponse)
+        # message and note are NotRequired
+        assert set(result.keys()) <= set(hints.keys())
+        assert {"pack", "guide"} <= set(result.keys())
+
+    async def test_value_types(self, mcp_db: FiligreeDB) -> None:
+        from filigree.mcp_server import call_tool
+        from tests.mcp._helpers import _parse
+
+        result = _parse(await call_tool("get_workflow_guide", {"pack": "core"}))
+        assert isinstance(result["pack"], str)
+        # guide is dict or null
+        assert result["guide"] is None or isinstance(result["guide"], dict)
+
+
+class TestStateExplanationShape:
+    async def test_keys_match(self, mcp_db: FiligreeDB) -> None:
+        from filigree.mcp_server import call_tool
+        from tests.mcp._helpers import _parse
+
+        result = _parse(await call_tool("explain_state", {"type": "task", "state": "open"}))
+        hints = get_type_hints(StateExplanation)
+        assert set(result.keys()) == set(hints.keys())
+
+    async def test_value_types(self, mcp_db: FiligreeDB) -> None:
+        from filigree.mcp_server import call_tool
+        from tests.mcp._helpers import _parse
+
+        result = _parse(await call_tool("explain_state", {"type": "task", "state": "open"}))
+        assert isinstance(result["state"], str)
+        assert isinstance(result["category"], str)
+        assert isinstance(result["type"], str)
+        assert isinstance(result["inbound_transitions"], list)
+        assert isinstance(result["outbound_transitions"], list)
+        assert isinstance(result["required_fields"], list)
+
+
+class TestTransitionDetailShape:
+    async def test_keys_match(self, mcp_db: FiligreeDB) -> None:
+        from filigree.mcp_server import call_tool
+        from tests.mcp._helpers import _parse
+
+        issue = mcp_db.create_issue("Transition test", type="task")
+        result = _parse(await call_tool("get_valid_transitions", {"issue_id": issue.id}))
+        assert isinstance(result, list)
+        assert len(result) >= 1
+        hints = get_type_hints(TransitionDetail)
+        assert set(result[0].keys()) == set(hints.keys())
+
+    async def test_value_types(self, mcp_db: FiligreeDB) -> None:
+        from filigree.mcp_server import call_tool
+        from tests.mcp._helpers import _parse
+
+        issue = mcp_db.create_issue("Transition test", type="task")
+        result = _parse(await call_tool("get_valid_transitions", {"issue_id": issue.id}))
+        t = result[0]
+        assert isinstance(t["to"], str)
+        assert isinstance(t["category"], str)
+        assert isinstance(t["enforcement"], str)
+        assert isinstance(t["requires_fields"], list)
+        assert isinstance(t["missing_fields"], list)
+        assert isinstance(t["ready"], bool)
+
+
+class TestTransitionHintShape:
+    def test_keys_match(self) -> None:
+        """TransitionHint is constructed inline in _build_transition_error.
+        Verify the TypedDict shape matches the dict literal pattern used there."""
+        # Pattern from mcp_tools/common.py: {"to": ..., "category": ..., "ready": ...}
+        result = TransitionHint(to="closed", category="done", ready=True)
+        hints = get_type_hints(TransitionHint)
+        assert set(result.keys()) == set(hints.keys())
+
+    def test_without_ready(self) -> None:
+        """ready is NotRequired — verify subset when omitted."""
+        result = TransitionHint(to="closed", category="done")
+        hints = get_type_hints(TransitionHint)
+        assert set(result.keys()) <= set(hints.keys())
+        assert {"to", "category"} <= set(result.keys())
+
+
+class TestOutboundTransitionInfoShape:
+    async def test_keys_match(self, mcp_db: FiligreeDB) -> None:
+        from filigree.mcp_server import call_tool
+        from tests.mcp._helpers import _parse
+
+        result = _parse(await call_tool("explain_state", {"type": "task", "state": "open"}))
+        outbound = result["outbound_transitions"]
+        assert isinstance(outbound, list)
+        assert len(outbound) >= 1
+        hints = get_type_hints(OutboundTransitionInfo)
+        assert set(outbound[0].keys()) == set(hints.keys())
+
+    async def test_value_types(self, mcp_db: FiligreeDB) -> None:
+        from filigree.mcp_server import call_tool
+        from tests.mcp._helpers import _parse
+
+        result = _parse(await call_tool("explain_state", {"type": "task", "state": "open"}))
+        t = result["outbound_transitions"][0]
+        assert isinstance(t["to"], str)
+        assert isinstance(t["enforcement"], str)
+        assert isinstance(t["requires_fields"], list)
 
 
 # ---------------------------------------------------------------------------

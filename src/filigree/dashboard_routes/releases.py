@@ -5,10 +5,12 @@ from __future__ import annotations
 import logging
 import re
 import sqlite3
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from fastapi import APIRouter
+
+    from filigree.types.planning import ReleaseSummaryItem
 
 from starlette.requests import Request
 
@@ -23,7 +25,7 @@ _NON_SEMVER_KEY = (999_999, 0, 0)
 _FUTURE_KEY = (999_999, 999_999, 0)
 
 
-def _semver_sort_key(release: dict[str, Any]) -> tuple[int, int, int]:
+def _semver_sort_key(release: ReleaseSummaryItem) -> tuple[int, int, int]:
     """Extract a (major, minor, patch) sort key from a release.
 
     Priority order for "Future" detection:

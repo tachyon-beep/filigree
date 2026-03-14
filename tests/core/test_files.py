@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from filigree.core import FiligreeDB, _normalize_scan_path
+from filigree.core import FiligreeDB, ScanFinding, _normalize_scan_path
+from filigree.db_files import _safe_json_loads
 
 # ---------------------------------------------------------------------------
 # Schema tests
@@ -51,6 +52,16 @@ class TestRegisterFile:
         f2 = db.register_file("src/main.py", language="python")
         assert f2.language == "python"
 
+    def test_register_duplicate_no_changes_preserves_updated_at(self, db: FiligreeDB) -> None:
+        """Re-registering with no new data must not bump updated_at.
+
+        Regression: unconditional updated_at write caused phantom updates.
+        """
+        f1 = db.register_file("src/stable.py", language="python")
+        original_updated = f1.updated_at
+        f2 = db.register_file("src/stable.py")
+        assert f2.updated_at == original_updated
+
     def test_get_file_by_id(self, db: FiligreeDB) -> None:
         created = db.register_file("src/main.py", language="python")
         fetched = db.get_file(created.id)
@@ -64,6 +75,13 @@ class TestRegisterFile:
     def test_get_file_by_path(self, db: FiligreeDB) -> None:
         created = db.register_file("src/main.py")
         fetched = db.get_file_by_path("src/main.py")
+        assert fetched is not None
+        assert fetched.id == created.id
+
+    def test_get_file_by_path_normalizes_equivalent_paths(self, db: FiligreeDB) -> None:
+        """Equivalent path spellings should round-trip through get_file_by_path()."""
+        created = db.register_file("src/foo/../bar.py")
+        fetched = db.get_file_by_path(r"src\bar.py")
         assert fetched is not None
         assert fetched.id == created.id
 
@@ -152,6 +170,12 @@ class TestListFiles:
         files = db.list_files(sort="path")
         assert files[0].path == "a.py"
         assert files[1].path == "z.py"
+
+    def test_list_files_invalid_sort_raises(self, db: FiligreeDB) -> None:
+        """Invalid sort parameter must raise ValueError, not silently fall back."""
+        db.register_file("a.py")
+        with pytest.raises(ValueError, match="Invalid sort"):
+            db.list_files(sort="nonexistent_column")
 
 
 # ---------------------------------------------------------------------------
@@ -339,6 +363,30 @@ class TestProcessScanResults:
         assert updated.issue_id == issue.id
         associations = db.get_file_associations(file_record.id)
         assert any(a["issue_id"] == issue.id and a["assoc_type"] == "bug_in" for a in associations)
+
+    def test_update_finding_rejects_no_kwargs(self, db: FiligreeDB) -> None:
+        """Calling update_finding with no status or issue_id must raise ValueError."""
+        db.process_scan_results(
+            scan_source="ruff",
+            findings=[{"path": "a.py", "rule_id": "E501", "severity": "low", "message": "m"}],
+        )
+        f = db.get_file_by_path("a.py")
+        assert f is not None
+        finding = db.get_findings(f.id)[0]
+        with pytest.raises(ValueError, match="At least one of"):
+            db.update_finding(f.id, finding.id)
+
+    def test_update_finding_rejects_invalid_status(self, db: FiligreeDB) -> None:
+        """Passing an invalid status to update_finding must raise ValueError."""
+        db.process_scan_results(
+            scan_source="ruff",
+            findings=[{"path": "a.py", "rule_id": "E501", "severity": "low", "message": "m"}],
+        )
+        f = db.get_file_by_path("a.py")
+        assert f is not None
+        finding = db.get_findings(f.id)[0]
+        with pytest.raises(ValueError, match="Invalid finding status"):
+            db.update_finding(f.id, finding.id, status="bogus")
 
     def test_ingest_finding_missing_path(self, db: FiligreeDB) -> None:
         with pytest.raises(ValueError, match="path"):
@@ -552,8 +600,8 @@ class TestScanRunId:
         row = db.conn.execute("SELECT scan_run_id FROM scan_findings").fetchone()
         assert row["scan_run_id"] == "run-001"
 
-    def test_scan_run_id_preserved_on_update(self, db: FiligreeDB) -> None:
-        """Existing non-empty scan_run_id is kept when re-ingested with a different run."""
+    def test_scan_run_id_first_attribution_wins(self, db: FiligreeDB) -> None:
+        """First-attribution-wins: re-scan must NOT overwrite the original scan_run_id."""
         db.process_scan_results(
             scan_source="codex",
             scan_run_id="run-001",
@@ -940,6 +988,47 @@ class TestCleanStaleFindings:
         eslint = next(fi for fi in findings if fi.scan_source == "eslint")
         assert eslint.status == "unseen_in_latest"
 
+    def test_cleans_when_last_seen_at_is_null(self, db: FiligreeDB) -> None:
+        """coalesce(last_seen_at, updated_at) fallback when last_seen_at is NULL (M13)."""
+        db.process_scan_results(
+            scan_source="ruff",
+            findings=[{"path": "a.py", "rule_id": "E501", "severity": "low", "message": "m"}],
+        )
+        f = db.get_file_by_path("a.py")
+        assert f is not None
+        finding = db.get_findings(f.id)[0]
+        # Set last_seen_at to NULL and updated_at to old date
+        db.conn.execute(
+            "UPDATE scan_findings SET status = 'unseen_in_latest', "
+            "last_seen_at = NULL, updated_at = '2020-01-01T00:00:00+00:00' WHERE id = ?",
+            (finding.id,),
+        )
+        db.conn.commit()
+
+        result = db.clean_stale_findings(days=30)
+        assert result["findings_fixed"] == 1
+        updated = db.get_findings(f.id)[0]
+        assert updated.status == "fixed"
+
+    def test_null_last_seen_at_recent_updated_at_not_cleaned(self, db: FiligreeDB) -> None:
+        """NULL last_seen_at with recent updated_at should NOT be cleaned."""
+        db.process_scan_results(
+            scan_source="ruff",
+            findings=[{"path": "a.py", "rule_id": "E501", "severity": "low", "message": "m"}],
+        )
+        f = db.get_file_by_path("a.py")
+        assert f is not None
+        finding = db.get_findings(f.id)[0]
+        # Set last_seen_at to NULL but keep updated_at recent
+        db.conn.execute(
+            "UPDATE scan_findings SET status = 'unseen_in_latest', last_seen_at = NULL WHERE id = ?",
+            (finding.id,),
+        )
+        db.conn.commit()
+
+        result = db.clean_stale_findings(days=30)
+        assert result["findings_fixed"] == 0
+
 
 class TestGetFindings:
     """Tests for retrieving findings for a file."""
@@ -1160,7 +1249,7 @@ class TestFileDetailCore:
     def test_get_file_detail_structure(self, db: FiligreeDB) -> None:
         f = db.register_file("src/main.py", language="python")
         detail = db.get_file_detail(f.id)
-        assert set(detail.keys()) == {"file", "associations", "recent_findings", "summary"}
+        assert set(detail.keys()) == {"file", "associations", "recent_findings", "summary", "observation_count"}
         assert detail["file"]["path"] == "src/main.py"
         assert detail["associations"] == []
         assert detail["recent_findings"] == []
@@ -1187,6 +1276,34 @@ class TestFileDetailCore:
     def test_get_file_detail_raises_for_missing(self, db: FiligreeDB) -> None:
         with pytest.raises(KeyError):
             db.get_file_detail("nonexistent")
+
+    def test_get_file_detail_propagates_non_table_operational_error(self, db: FiligreeDB) -> None:
+        """Non-'no such table' OperationalErrors must propagate, not be swallowed."""
+        import sqlite3
+
+        db.process_scan_results(scan_source="ruff", findings=[{"path": "err.py", "rule_id": "E001", "severity": "low", "message": "x"}])
+        f = db.get_file_by_path("err.py")
+        assert f is not None
+
+        real_conn = db.conn
+
+        class _ConnProxy:
+            """Proxy that raises 'database is locked' for observation queries."""
+
+            def execute(self, sql: str, params: object = ()) -> object:
+                if "observations" in sql:
+                    raise sqlite3.OperationalError("database is locked")
+                return real_conn.execute(sql, params)
+
+            def __getattr__(self, name: str) -> object:
+                return getattr(real_conn, name)
+
+        db._conn = _ConnProxy()  # type: ignore[assignment]
+        try:
+            with pytest.raises(sqlite3.OperationalError, match="database is locked"):
+                db.get_file_detail(f.id)
+        finally:
+            db._conn = real_conn
 
     def test_recent_findings_capped_at_10(self, db: FiligreeDB) -> None:
         findings = [{"path": "big.py", "rule_id": f"E{i:03d}", "severity": "low", "message": f"Finding {i}"} for i in range(15)]
@@ -1303,6 +1420,190 @@ class TestHotspots:
         db.conn.commit()
         result = db.get_file_hotspots()
         assert result == []
+
+
+class TestHotspotsIncludesAcknowledgedFindings:
+    """L3 bugfix: hotspots should count all non-terminal findings, not just 'open'."""
+
+    def test_acknowledged_findings_count_in_hotspots(self, db: FiligreeDB) -> None:
+        """Acknowledged findings should contribute to hotspot score."""
+        db.process_scan_results(
+            scan_source="ruff",
+            findings=[
+                {"path": "a.py", "rule_id": "S001", "severity": "high", "message": "Vuln"},
+            ],
+        )
+        f = db.get_file_by_path("a.py")
+        assert f is not None
+        findings = db.get_findings(f.id)
+        db.update_finding(f.id, findings[0].id, status="acknowledged")
+        result = db.get_file_hotspots()
+        assert len(result) == 1, "Acknowledged finding should still appear in hotspots"
+        assert result[0]["score"] > 0
+
+
+class TestTerminalFindingStatusesConstant:
+    """L3 bugfix: single source of truth for terminal statuses."""
+
+    def test_terminal_statuses_constant_exists(self) -> None:
+        from filigree.db_files import TERMINAL_FINDING_STATUSES
+
+        assert isinstance(TERMINAL_FINDING_STATUSES, frozenset)
+        assert frozenset({"fixed", "false_positive"}) == TERMINAL_FINDING_STATUSES
+
+    def test_open_findings_filter_uses_terminal_constant(self) -> None:
+        """SQL filters should be derived from the constant, not hardcoded."""
+        from filigree.db_files import TERMINAL_FINDING_STATUSES, FilesMixin
+
+        for status in TERMINAL_FINDING_STATUSES:
+            assert status in FilesMixin._OPEN_FINDINGS_FILTER
+
+    def test_mark_unseen_preserves_false_positive(self, db: FiligreeDB) -> None:
+        """false_positive findings must survive mark_unseen (not just fixed)."""
+        db.process_scan_results(
+            scan_source="ruff",
+            findings=[
+                {"path": "a.py", "rule_id": "E501", "severity": "low", "message": "m1"},
+                {"path": "a.py", "rule_id": "E502", "severity": "low", "message": "m2"},
+            ],
+        )
+        f = db.get_file_by_path("a.py")
+        assert f is not None
+        findings = db.get_findings(f.id)
+        e502 = next(fi for fi in findings if fi.rule_id == "E502")
+        db.conn.execute("UPDATE scan_findings SET status = 'false_positive' WHERE id = ?", (e502.id,))
+        db.conn.commit()
+
+        db.process_scan_results(
+            scan_source="ruff",
+            findings=[{"path": "a.py", "rule_id": "E501", "severity": "low", "message": "m1"}],
+            mark_unseen=True,
+        )
+        findings = db.get_findings(f.id)
+        statuses = {fi.rule_id: fi.status for fi in findings}
+        assert statuses["E502"] == "false_positive"
+
+
+class TestCorruptFindingMetadata:
+    """L2 bugfix: corrupt metadata should include programmatic indicator."""
+
+    def test_corrupt_metadata_includes_error_key(self, db: FiligreeDB) -> None:
+        """When finding metadata is corrupt JSON, result should include _metadata_error."""
+        db.process_scan_results(
+            scan_source="ruff",
+            findings=[{"path": "a.py", "rule_id": "E501", "severity": "low", "message": "m"}],
+        )
+        f = db.get_file_by_path("a.py")
+        assert f is not None
+        findings = db.get_findings(f.id)
+        # Corrupt the metadata in the DB directly
+        db.conn.execute(
+            "UPDATE scan_findings SET metadata = '{bad json' WHERE id = ?",
+            (findings[0].id,),
+        )
+        db.conn.commit()
+
+        findings = db.get_findings(f.id)
+        assert findings[0].metadata.get("_metadata_error") is True
+
+    def test_corrupt_file_record_metadata_does_not_crash(self, db: FiligreeDB) -> None:
+        """When file_records.metadata is corrupt JSON, _build_file_record should not crash."""
+        fr = db.register_file("corrupt_meta.py")
+        # Corrupt the metadata in the DB directly
+        db.conn.execute(
+            "UPDATE file_records SET metadata = '{bad json' WHERE id = ?",
+            (fr.id,),
+        )
+        db.conn.commit()
+
+        result = db.get_file_by_path("corrupt_meta.py")
+        assert result is not None
+        assert result.metadata.get("_metadata_error") is True
+
+    def test_corrupt_timeline_data_json_does_not_crash(self, db: FiligreeDB) -> None:
+        """When timeline data_json is corrupt, get_file_timeline should not crash."""
+        db.process_scan_results(
+            scan_source="ruff",
+            findings=[{"path": "tl.py", "rule_id": "E501", "severity": "low", "message": "m"}],
+        )
+        f = db.get_file_by_path("tl.py")
+        assert f is not None
+        findings = db.get_findings(f.id)
+        assert findings
+        # Corrupt the scan_findings metadata so the timeline CTE produces bad JSON
+        db.conn.execute(
+            "UPDATE scan_findings SET metadata = '{bad' WHERE id = ?",
+            (findings[0].id,),
+        )
+        db.conn.commit()
+
+        # Should not raise — gracefully degrade
+        timeline = db.get_file_timeline(f.id)
+        assert isinstance(timeline["results"], list)
+
+
+class TestToDictDataWarnings:
+    """Verify to_dict() surfaces _metadata_error as data_warnings."""
+
+    def test_corrupt_file_record_to_dict_surfaces_warning(self, db: FiligreeDB) -> None:
+        fr = db.register_file("warn_test.py")
+        db.conn.execute(
+            "UPDATE file_records SET metadata = '{bad json' WHERE id = ?",
+            (fr.id,),
+        )
+        db.conn.commit()
+
+        result = db.get_file_by_path("warn_test.py")
+        assert result is not None
+        d = result.to_dict()
+        assert "_metadata_error" not in d["metadata"]
+        assert len(d["data_warnings"]) == 1
+        assert "corrupt" in d["data_warnings"][0].lower()
+
+    def test_clean_file_record_to_dict_no_warnings(self, db: FiligreeDB) -> None:
+        fr = db.register_file("clean_test.py")
+        d = fr.to_dict()
+        assert d["data_warnings"] == []
+
+    def test_corrupt_finding_to_dict_surfaces_warning(self, db: FiligreeDB) -> None:
+        db.process_scan_results(
+            scan_source="ruff",
+            findings=[{"path": "w.py", "rule_id": "E1", "severity": "low", "message": "m"}],
+        )
+        f = db.get_file_by_path("w.py")
+        assert f is not None
+        findings = db.get_findings(f.id)
+        db.conn.execute(
+            "UPDATE scan_findings SET metadata = '{bad json' WHERE id = ?",
+            (findings[0].id,),
+        )
+        db.conn.commit()
+
+        findings = db.get_findings(f.id)
+        d = findings[0].to_dict()
+        assert "_metadata_error" not in d["metadata"]
+        assert len(d["data_warnings"]) == 1
+        assert "corrupt" in d["data_warnings"][0].lower()
+
+    def test_clean_finding_to_dict_no_warnings(self, db: FiligreeDB) -> None:
+        db.process_scan_results(
+            scan_source="ruff",
+            findings=[{"path": "c.py", "rule_id": "E2", "severity": "low", "message": "m"}],
+        )
+        f = db.get_file_by_path("c.py")
+        assert f is not None
+        findings = db.get_findings(f.id)
+        d = findings[0].to_dict()
+        assert d["data_warnings"] == []
+
+
+class TestMetaModuleLogger:
+    """L4 bugfix: db_meta.py should use 'logger' not '_logger' for consistency."""
+
+    def test_db_meta_uses_standard_logger_name(self) -> None:
+        import filigree.db_meta as db_meta
+
+        assert hasattr(db_meta, "logger"), "db_meta should export 'logger' like other db_* modules"
 
 
 class TestSortBySeverity:
@@ -1498,10 +1799,10 @@ class TestHasSeverityFilter:
         result = db.list_files_paginated(has_severity=None)
         assert result["total"] == 3
 
-    def test_has_severity_invalid_is_ignored(self, db: FiligreeDB) -> None:
+    def test_has_severity_invalid_raises(self, db: FiligreeDB) -> None:
         db.register_file("a.py")
-        result = db.list_files_paginated(has_severity="bogus")
-        assert result["total"] == 1
+        with pytest.raises(ValueError, match="Invalid severity"):
+            db.list_files_paginated(has_severity="bogus")
 
 
 class TestListFilesScanSourceFilter:
@@ -1736,6 +2037,12 @@ class TestFileTimeline:
             assert e["type"].startswith("finding_")
         assert findings_only["total"] < all_events["total"]
 
+    def test_timeline_invalid_event_type_raises(self, db: FiligreeDB) -> None:
+        """Unknown event_type must raise ValueError, not return empty results."""
+        f = db.register_file("a.py")
+        with pytest.raises(ValueError, match="Invalid event_type"):
+            db.get_file_timeline(f.id, event_type="bogus_type")
+
 
 class TestFileMetadataEvents:
     """register_file should emit file_metadata_update events on field changes."""
@@ -1797,15 +2104,14 @@ class TestFileMetadataEvents:
         assert meta_tl["total"] == 1
         assert all(e["type"] == "file_metadata_update" for e in meta_tl["results"])
 
-    def test_unknown_event_type_returns_empty(self, db: FiligreeDB) -> None:
+    def test_unknown_event_type_raises(self, db: FiligreeDB) -> None:
         f = db.register_file("a.py")
         db.process_scan_results(
             scan_source="ruff",
             findings=[{"path": "a.py", "rule_id": "E1", "severity": "low", "message": "m"}],
         )
-        result = db.get_file_timeline(f.id, event_type="bogus_type")
-        assert result["total"] == 0
-        assert result["results"] == []
+        with pytest.raises(ValueError, match="Invalid event_type"):
+            db.get_file_timeline(f.id, event_type="bogus_type")
 
 
 class TestGlobalFindingsStats:
@@ -1929,6 +2235,17 @@ class TestPaginationMetadata:
         result = db.list_files_paginated(path_prefix="file%test")
         assert result["total"] == 1
         assert result["results"][0]["path"] == "src/file%test.py"
+
+    def test_list_files_paginated_invalid_sort_raises(self, db: FiligreeDB) -> None:
+        """Invalid sort parameter must raise ValueError, not silently fall back."""
+        with pytest.raises(ValueError, match="Invalid sort"):
+            db.list_files_paginated(sort="bogus")
+
+    def test_list_files_paginated_invalid_has_severity_raises(self, db: FiligreeDB) -> None:
+        """Invalid has_severity must raise ValueError, not silently skip the filter."""
+        db.register_file("a.py")
+        with pytest.raises(ValueError, match="Invalid severity"):
+            db.list_files_paginated(has_severity="ultra_critical")
 
 
 # ---------------------------------------------------------------------------
@@ -2118,3 +2435,65 @@ class TestCreateIssuesPartialFailure:
         assert result["issues_created"] == 2
         assert len(result["issue_ids"]) == 2
         assert result["findings_created"] == 2
+
+
+# ---------------------------------------------------------------------------
+# _safe_json_loads edge cases
+# ---------------------------------------------------------------------------
+
+
+class TestSafeJsonLoads:
+    """filigree-ef3925404b: _safe_json_loads edge cases."""
+
+    def test_none_input_returns_empty_dict(self) -> None:
+        assert _safe_json_loads(None, "test") == {}
+
+    def test_empty_string_returns_empty_dict(self) -> None:
+        assert _safe_json_loads("", "test") == {}
+
+    def test_non_dict_json_array_repairs_to_empty(self) -> None:
+        result = _safe_json_loads("[1,2,3]", "test")
+        assert result == {}
+
+    def test_non_dict_json_scalar_repairs_to_empty(self) -> None:
+        result = _safe_json_loads("42", "test")
+        assert result == {}
+
+    def test_non_dict_json_repairs_regardless_of_error_key(self) -> None:
+        result = _safe_json_loads("[1,2,3]", "test", error_key="_fields_error")
+        assert result == {}
+
+    def test_valid_dict_returns_parsed(self) -> None:
+        result = _safe_json_loads('{"key": "value", "num": 42}', "test")
+        assert result == {"key": "value", "num": 42}
+
+    def test_invalid_json_returns_error_marker(self) -> None:
+        result = _safe_json_loads("{not valid json}", "test")
+        assert result == {"_metadata_error": True}
+
+
+# ---------------------------------------------------------------------------
+# ScanFinding.__post_init__ validation
+# ---------------------------------------------------------------------------
+
+
+class TestScanFindingPostInit:
+    """filigree-bd79437073: ScanFinding.__post_init__ validates severity and status."""
+
+    def test_invalid_severity_raises(self) -> None:
+        with pytest.raises(ValueError, match="Invalid severity"):
+            ScanFinding(id="x", file_id="y", severity="banana")  # type: ignore[arg-type]
+
+    def test_invalid_status_raises(self) -> None:
+        with pytest.raises(ValueError, match="Invalid finding status"):
+            ScanFinding(id="x", file_id="y", status="banana")  # type: ignore[arg-type]
+
+    def test_valid_severity_accepted(self) -> None:
+        for sev in ("critical", "high", "medium", "low", "info"):
+            f = ScanFinding(id="x", file_id="y", severity=sev)  # type: ignore[arg-type]
+            assert f.severity == sev
+
+    def test_valid_status_accepted(self) -> None:
+        for status in ("open", "acknowledged", "fixed", "false_positive", "unseen_in_latest"):
+            f = ScanFinding(id="x", file_id="y", status=status)  # type: ignore[arg-type]
+            assert f.status == status

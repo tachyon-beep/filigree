@@ -94,11 +94,13 @@ class TestTransitionValidation:
         result = registry.validate_transition("bug", "verifying", "closed", {"fix_verification": None})
         assert result.allowed is False
 
-    def test_unknown_type_always_allowed(self, registry: TemplateRegistry) -> None:
-        """Unknown types get fallback: all transitions allowed (WFT-FR-016)."""
+    def test_unknown_type_denied_with_warning(self, registry: TemplateRegistry) -> None:
+        """Unknown types are denied (fail-closed) with a warning explaining why."""
         result = registry.validate_transition("unknown", "open", "closed", {})
-        assert result.allowed is True
+        assert result.allowed is False
         assert result.enforcement is None
+        assert len(result.warnings) == 1
+        assert "unknown" in result.warnings[0].lower()
 
     # -- get_valid_transitions tests --
 
@@ -132,6 +134,19 @@ class TestTransitionValidation:
         assert confirmed_opt.category == "open"
         wont_fix_opt = next(o for o in options if o.to == "wont_fix")
         assert wont_fix_opt.category == "done"
+
+    def test_get_valid_transitions_category_uses_direct_lookup(self, registry: TemplateRegistry) -> None:
+        """Bug filigree-2a9c6009b9: category must come from direct cache lookup,
+        not a silent fallback to 'open'. A corrupted cache should raise KeyError."""
+        # Verify all transition options have correct categories from the cache
+        options = registry.get_valid_transitions("bug", "fixing", {"fix_verification": "ok"})
+        verifying_opt = next(o for o in options if o.to == "verifying")
+        assert verifying_opt.category == "wip"  # NOT "open" from silent fallback
+
+        # Corrupt the category cache to simulate internal inconsistency
+        registry._category_cache["bug"].pop("verifying")
+        with pytest.raises(KeyError):
+            registry.get_valid_transitions("bug", "fixing", {"fix_verification": "ok"})
 
     # -- validate_fields_for_state tests --
 

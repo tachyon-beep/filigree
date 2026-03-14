@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import sqlite3
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 if TYPE_CHECKING:
     from fastapi import APIRouter
@@ -23,6 +23,7 @@ from filigree.dashboard_routes.common import (
     _parse_pagination,
     _safe_int,
 )
+from filigree.types.core import FindingStatus, Severity
 
 logger = logging.getLogger(__name__)
 
@@ -59,17 +60,20 @@ def create_router() -> APIRouter:
         min_findings = _safe_int(params.get("min_findings", "0"), "min_findings", min_value=0)
         if isinstance(min_findings, JSONResponse):
             return min_findings
-        result = db.list_files_paginated(
-            limit=limit,
-            offset=offset,
-            language=params.get("language"),
-            path_prefix=params.get("path_prefix"),
-            min_findings=min_findings if min_findings > 0 else None,
-            has_severity=params.get("has_severity"),
-            scan_source=params.get("scan_source"),
-            sort=params.get("sort", "updated_at"),
-            direction=params.get("direction"),
-        )
+        try:
+            result = db.list_files_paginated(
+                limit=limit,
+                offset=offset,
+                language=params.get("language"),
+                path_prefix=params.get("path_prefix"),
+                min_findings=min_findings if min_findings > 0 else None,
+                has_severity=params.get("has_severity"),
+                scan_source=params.get("scan_source"),
+                sort=params.get("sort", "updated_at"),
+                direction=params.get("direction"),
+            )
+        except ValueError as e:
+            return _error_response(str(e), "VALIDATION_ERROR", 400)
         return JSONResponse(result, headers={"Cache-Control": "no-cache"})
 
     @router.get("/files/hotspots")
@@ -189,11 +193,25 @@ def create_router() -> APIRouter:
         if isinstance(pagination, JSONResponse):
             return pagination
         limit, offset = pagination
+        severity_raw = params.get("severity")
+        if severity_raw is not None and severity_raw not in VALID_SEVERITIES:
+            return _error_response(
+                f"Invalid severity '{severity_raw}'. Must be one of: {', '.join(sorted(VALID_SEVERITIES))}",
+                "VALIDATION_ERROR",
+                400,
+            )
+        status_raw = params.get("status")
+        if status_raw is not None and status_raw not in VALID_FINDING_STATUSES:
+            return _error_response(
+                f"Invalid status '{status_raw}'. Must be one of: {', '.join(sorted(VALID_FINDING_STATUSES))}",
+                "VALIDATION_ERROR",
+                400,
+            )
         try:
             result = db.get_findings_paginated(
                 file_id,
-                severity=params.get("severity"),
-                status=params.get("status"),
+                severity=cast(Severity | None, severity_raw),
+                status=cast(FindingStatus | None, status_raw),
                 sort=params.get("sort", "updated_at"),
                 limit=limit,
                 offset=offset,
@@ -225,7 +243,7 @@ def create_router() -> APIRouter:
             finding = db.update_finding(
                 file_id,
                 finding_id,
-                status=status,
+                status=cast(FindingStatus | None, status),
                 issue_id=issue_id,
             )
         except KeyError:
@@ -247,6 +265,8 @@ def create_router() -> APIRouter:
             result = db.get_file_timeline(file_id, limit=limit, offset=offset, event_type=event_type)
         except KeyError:
             return _error_response(f"File not found: {file_id}", "FILE_NOT_FOUND", 404)
+        except ValueError as e:
+            return _error_response(str(e), "VALIDATION_ERROR", 400)
         return JSONResponse(result)
 
     @router.post("/files/{file_id}/associations")
@@ -279,6 +299,8 @@ def create_router() -> APIRouter:
         if not isinstance(scan_source, str) or not scan_source:
             return _error_response("scan_source is required and must be a string", "VALIDATION_ERROR", 400)
         findings = body.get("findings", [])
+        if not isinstance(findings, list):
+            return _error_response("findings must be a JSON array", "VALIDATION_ERROR", 400)
         if "create_issues" in body:
             return _error_response(
                 "create_issues is not supported on scan ingest; create tickets via UI or MCP",
@@ -288,7 +310,7 @@ def create_router() -> APIRouter:
         mark_unseen = body.get("mark_unseen", False)
         if not isinstance(mark_unseen, bool):
             return _error_response("mark_unseen must be a boolean", "VALIDATION_ERROR", 400)
-        status_code = 202 if not findings else 200
+        status_code = 200
         try:
             result = db.process_scan_results(
                 scan_source=scan_source,

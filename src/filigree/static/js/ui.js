@@ -19,6 +19,21 @@ export const callbacks = {
 };
 
 // ---------------------------------------------------------------------------
+// Time formatting
+// ---------------------------------------------------------------------------
+export function relativeTime(isoStr) {
+  if (!isoStr) return "";
+  const diff = Date.now() - new Date(isoStr).getTime();
+  const mins = Math.floor(diff / 60000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  const days = Math.floor(hrs / 24);
+  return `${days}d ago`;
+}
+
+// ---------------------------------------------------------------------------
 // XSS prevention
 // ---------------------------------------------------------------------------
 export function escHtml(str) {
@@ -40,39 +55,6 @@ export function escJsSingle(str) {
     .replace(/\n/g, "\\n")
     .replace(/</g, "\\x3C")
     .replace(/>/g, "\\x3E");
-}
-
-// ---------------------------------------------------------------------------
-// Contextual popovers
-// ---------------------------------------------------------------------------
-/** Show a contextual popover. The html parameter must be trusted (hardcoded) content. */
-export function showPopover(anchorEl, html) {
-  closePopover();
-  const pop = document.createElement("div");
-  pop.id = "activePopover";
-  pop.className = "popover rounded-lg shadow-xl p-3 text-xs";
-  pop.style.cssText = "background:var(--surface-base);border:1px solid var(--border-strong)";
-  pop.innerHTML = `${html}<div class="flex justify-end mt-2"><button onclick="closePopover()" class="text-xs text-muted text-primary-hover">Dismiss</button></div>`;
-  document.body.appendChild(pop);
-  const rect = anchorEl.getBoundingClientRect();
-  pop.style.top = `${rect.bottom + window.scrollY + 8}px`;
-  pop.style.left = `${Math.max(8, Math.min(rect.left + window.scrollX, window.innerWidth - 340))}px`;
-  state._activePopover = pop;
-  setTimeout(() => {
-    document.addEventListener("click", _popoverOutsideClick);
-  }, 0);
-}
-
-export function _popoverOutsideClick(e) {
-  if (state._activePopover && !state._activePopover.contains(e.target)) closePopover();
-}
-
-export function closePopover() {
-  if (state._activePopover) {
-    state._activePopover.remove();
-    state._activePopover = null;
-  }
-  document.removeEventListener("click", _popoverOutsideClick);
 }
 
 // ---------------------------------------------------------------------------
@@ -379,7 +361,6 @@ export function toggleTheme() {
   THEME_COLORS.accent = next === "light" ? "#0284C7" : "#38BDF8";
   // Re-render graphs if visible so they pick up new colors
   if (state.currentView === "graph" && callbacks.renderGraph) callbacks.renderGraph();
-  if (state.currentView === "workflow" && callbacks.loadWorkflow) callbacks.loadWorkflow();
 }
 
 // ---------------------------------------------------------------------------
@@ -417,12 +398,7 @@ export function toggleKanbanLegend() {
 export async function showCreateForm() {
   const existing = document.getElementById("createModal");
   if (existing) existing.remove();
-  let types = [];
-  try {
-    types = await fetchTypes();
-  } catch (_e) {
-    /* best-effort */
-  }
+  const types = (await fetchTypes()) || [];
   const typeOpts = types
     .map(
       (t) =>

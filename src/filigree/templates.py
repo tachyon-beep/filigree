@@ -13,24 +13,26 @@ import re
 from dataclasses import dataclass
 from dataclasses import replace as _dc_replace
 from pathlib import Path
-from typing import Any, Literal
+from types import MappingProxyType
+from typing import Any, Literal, get_args
+
+from filigree.types.core import StatusCategory as StateCategory
 
 # ---------------------------------------------------------------------------
-# Logging (review B4)
+# Logging
 # ---------------------------------------------------------------------------
 
 logger = logging.getLogger(__name__)
 
 # State/type names must match this pattern to be safe for use in SQL queries
-# and filesystem paths. Validated at parse time (review B1, B5).
+# and filesystem paths. Validated at parse time.
 _NAME_PATTERN = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
-_VALID_CATEGORIES: frozenset[str] = frozenset({"open", "wip", "done"})
+_VALID_CATEGORIES: frozenset[str] = frozenset(get_args(StateCategory))
 
 # ---------------------------------------------------------------------------
 # Type aliases
 # ---------------------------------------------------------------------------
 
-StateCategory = Literal["open", "wip", "done"]
 EnforcementLevel = Literal["hard", "soft"]
 FieldType = Literal["text", "enum", "number", "date", "list", "boolean"]
 
@@ -39,7 +41,7 @@ FieldType = Literal["text", "enum", "number", "date", "list", "boolean"]
 # ---------------------------------------------------------------------------
 # Templates use frozen=True for immutability (configuration data).
 # This differs intentionally from the mutable Issue dataclass (domain entity
-# in core.py). Frozen dataclasses prevent accidental mutation after loading
+# in models.py). Frozen dataclasses prevent accidental mutation after loading
 # and enable safe caching in dict lookups.
 # ---------------------------------------------------------------------------
 
@@ -70,8 +72,23 @@ class TransitionDefinition:
     enforcement: EnforcementLevel
     requires_fields: tuple[str, ...] = ()
 
+    def __post_init__(self) -> None:
+        if not _NAME_PATTERN.match(self.from_state):
+            msg = f"Invalid from_state '{self.from_state}': must match ^[a-z][a-z0-9_]{{0,63}}$"
+            raise ValueError(msg)
+        if not _NAME_PATTERN.match(self.to_state):
+            msg = f"Invalid to_state '{self.to_state}': must match ^[a-z][a-z0-9_]{{0,63}}$"
+            raise ValueError(msg)
+        if self.enforcement not in ("hard", "soft"):
+            msg = f"Invalid enforcement '{self.enforcement}': must be 'hard' or 'soft'"
+            raise ValueError(msg)
+        for field_name in self.requires_fields:
+            if not _NAME_PATTERN.match(field_name):
+                msg = f"Invalid requires_fields entry '{field_name}': must match ^[a-z][a-z0-9_]{{0,63}}$"
+                raise ValueError(msg)
 
-_VALID_FIELD_TYPES: frozenset[str] = frozenset({"text", "enum", "number", "date", "list", "boolean"})
+
+_VALID_FIELD_TYPES: frozenset[str] = frozenset(get_args(FieldType))
 
 
 @dataclass(frozen=True)
@@ -88,9 +105,15 @@ class FieldSchema:
     unique: bool = False
 
     def __post_init__(self) -> None:
+        if not _NAME_PATTERN.match(self.name):
+            msg = f"Invalid field name '{self.name}': must match ^[a-z][a-z0-9_]{{0,63}}$"
+            raise ValueError(msg)
         if self.type not in _VALID_FIELD_TYPES:
             allowed = sorted(_VALID_FIELD_TYPES)
             msg = f"Invalid field type '{self.type}' for field '{self.name}': must be one of {allowed}"
+            raise ValueError(msg)
+        if self.type == "enum" and not self.options:
+            msg = f"Field '{self.name}' has type 'enum' but no options defined"
             raise ValueError(msg)
         if self.pattern is not None:
             try:
@@ -98,13 +121,22 @@ class FieldSchema:
             except re.error as exc:
                 msg = f"Invalid regex pattern for field '{self.name}': {exc}"
                 raise ValueError(msg) from exc
+        for state_name in self.required_at:
+            if not _NAME_PATTERN.match(state_name):
+                msg = f"Invalid required_at entry '{state_name}' in field '{self.name}': must match ^[a-z][a-z0-9_]{{0,63}}$"
+                raise ValueError(msg)
+
+
+_MAX_PATTERN_VALUE_LENGTH = 10_000
 
 
 def validate_field_pattern(field: FieldSchema, value: Any) -> str | None:
     """Return an error message if *value* doesn't match *field.pattern*, else None.
 
-    Skips None and empty strings (let ``required_at`` handle presence).
+    Skips None and blank strings (empty or whitespace-only) — let ``required_at`` handle presence.
     Uses ``re.fullmatch`` so the pattern must match the entire value.
+    Values exceeding _MAX_PATTERN_VALUE_LENGTH are rejected to prevent
+    catastrophic backtracking on complex patterns.
     """
     if field.pattern is None:
         return None
@@ -112,6 +144,8 @@ def validate_field_pattern(field: FieldSchema, value: Any) -> str | None:
         return None
     if not isinstance(value, str):
         return f"Field '{field.name}' pattern requires a string value, got {type(value).__name__}"
+    if len(value) > _MAX_PATTERN_VALUE_LENGTH:
+        return f"Field '{field.name}' value length {len(value)} exceeds maximum {_MAX_PATTERN_VALUE_LENGTH} for pattern matching"
     if not re.fullmatch(field.pattern, value):
         return f"Field '{field.name}' value '{value}' does not match required pattern: {field.pattern}"
     return None
@@ -135,17 +169,37 @@ class TypeTemplate:
 
 @dataclass(frozen=True)
 class WorkflowPack:
-    """A bundle of related type templates with relationships and guidance."""
+    """A bundle of related type templates with relationships and guidance.
+
+    All container fields are immutable: types and guide use MappingProxyType,
+    relationships use tuples of MappingProxyType.
+    """
 
     pack: str
     version: str
     display_name: str
     description: str
-    types: dict[str, TypeTemplate]
+    types: MappingProxyType[str, TypeTemplate]
     requires_packs: tuple[str, ...]
-    relationships: tuple[dict[str, Any], ...]
-    cross_pack_relationships: tuple[dict[str, Any], ...]
-    guide: dict[str, Any] | None
+    relationships: tuple[MappingProxyType[str, Any], ...]
+    cross_pack_relationships: tuple[MappingProxyType[str, Any], ...]
+    guide: MappingProxyType[str, Any] | None
+
+    def __post_init__(self) -> None:
+        # Auto-wrap plain dicts for callers that don't use MappingProxyType
+        if isinstance(self.types, dict) and not isinstance(self.types, MappingProxyType):
+            object.__setattr__(self, "types", MappingProxyType(self.types))
+        if isinstance(self.guide, dict) and not isinstance(self.guide, MappingProxyType):
+            object.__setattr__(self, "guide", MappingProxyType(self.guide))
+
+        # Wrap relationship dicts inside tuples
+        def _freeze_rels(rels: tuple[Any, ...]) -> tuple[MappingProxyType[str, Any], ...]:
+            return tuple(MappingProxyType(r) if isinstance(r, dict) and not isinstance(r, MappingProxyType) else r for r in rels)
+
+        if self.relationships and any(not isinstance(r, MappingProxyType) for r in self.relationships):
+            object.__setattr__(self, "relationships", _freeze_rels(self.relationships))
+        if self.cross_pack_relationships and any(not isinstance(r, MappingProxyType) for r in self.cross_pack_relationships):
+            object.__setattr__(self, "cross_pack_relationships", _freeze_rels(self.cross_pack_relationships))
 
 
 @dataclass(frozen=True)
@@ -174,43 +228,13 @@ class TransitionOption:
 class ValidationResult:
     """Result of validating an issue against its template."""
 
-    valid: bool
     warnings: tuple[str, ...]
     errors: tuple[str, ...]
 
-
-# ---------------------------------------------------------------------------
-# Custom exceptions
-# ---------------------------------------------------------------------------
-
-
-class TransitionNotAllowedError(ValueError):
-    """Raised when a transition is not defined in the type's transition table."""
-
-    def __init__(self, from_state: str, to_state: str, type_name: str) -> None:
-        self.from_state = from_state
-        self.to_state = to_state
-        self.type_name = type_name
-        super().__init__(
-            f"Transition '{from_state}' -> '{to_state}' is not defined for type '{type_name}'. "
-            f"Use get_valid_transitions() to see available transitions."
-        )
-
-
-class HardEnforcementError(ValueError):
-    """Raised when a hard-enforced transition fails field validation."""
-
-    def __init__(self, from_state: str, to_state: str, type_name: str, missing_fields: list[str]) -> None:
-        self.from_state = from_state
-        self.to_state = to_state
-        self.type_name = type_name
-        self.missing_fields = missing_fields
-        fields_str = ", ".join(missing_fields)
-        super().__init__(
-            f"Cannot transition '{from_state}' -> '{to_state}' for type '{type_name}': "
-            f"missing required fields: {fields_str}. "
-            f"Populate these fields before transitioning, or call get_type_info('{type_name}') for field details."
-        )
+    @property
+    def valid(self) -> bool:
+        """Derived from errors — impossible to construct inconsistent state."""
+        return len(self.errors) == 0
 
 
 # ---------------------------------------------------------------------------
@@ -226,7 +250,7 @@ class TemplateRegistry:
     transition validation.
     """
 
-    # Size limits for custom templates (review B5 -- prevent DoS via huge templates)
+    # Size limits for custom templates (prevent DoS via huge templates)
     MAX_STATES = 50
     MAX_TRANSITIONS = 200
     MAX_FIELDS = 50
@@ -254,7 +278,7 @@ class TemplateRegistry:
             ValueError: If required fields are missing, invalid, or exceed size limits.
             KeyError: If required keys are missing from the dict.
         """
-        # Validate type name format (review B1, B5)
+        # Validate type name format
         type_name = raw["type"]
         if not _NAME_PATTERN.match(type_name):
             msg = f"Invalid type name '{type_name}': must match ^[a-z][a-z0-9_]{{0,63}}$"
@@ -264,6 +288,9 @@ class TemplateRegistry:
         raw_states = raw.get("states")
         if not isinstance(raw_states, list):
             msg = f"Type '{type_name}': 'states' must be a list, got {type(raw_states).__name__}"
+            raise ValueError(msg)
+        if not raw_states:
+            msg = f"Type '{type_name}': must have at least one state"
             raise ValueError(msg)
         for i, s in enumerate(raw_states):
             if not isinstance(s, dict) or "name" not in s or "category" not in s:
@@ -307,7 +334,7 @@ class TemplateRegistry:
                 )
                 raise ValueError(msg)
 
-        # Size limit checks (review B5 -- prevent DoS via huge templates)
+        # Size limit checks (prevent DoS via huge templates)
         if len(raw_states) > TemplateRegistry.MAX_STATES:
             msg = f"Type '{type_name}' has {len(raw_states)} states (max {TemplateRegistry.MAX_STATES})"
             raise ValueError(msg)
@@ -457,6 +484,36 @@ class TemplateRegistry:
                 cat = next(st.category for st in tpl.states if st.name == s)
                 warnings.append(f"state '{s}' (category={cat}) has no outgoing transitions (dead end)")
 
+        # Reverse-reachability: all non-done reachable states should be able
+        # to reach at least one done-category state (filigree-d6ade2d45b).
+        # Without this, states can be reachable from initial_state but stuck
+        # in cycles (e.g. review⇄revise) with no exit to completion.
+        if done_states:
+            # BFS backwards from all done states
+            can_reach_done: set[str] = set(done_states)
+            queue_rev = list(done_states)
+            while queue_rev:
+                current = queue_rev.pop(0)
+                for t in tpl.transitions:
+                    if t.to_state == current and t.from_state not in can_reach_done:
+                        can_reach_done.add(t.from_state)
+                        queue_rev.append(t.from_state)
+            # Only warn about non-done states that are reachable from initial
+            # but cannot reach any done state
+            reachable_fwd: set[str] = set()
+            queue_fwd = [tpl.initial_state] if tpl.initial_state in state_names else []
+            while queue_fwd:
+                current = queue_fwd.pop(0)
+                if current in reachable_fwd:
+                    continue
+                reachable_fwd.add(current)
+                for t in tpl.transitions:
+                    if t.from_state == current and t.to_state not in reachable_fwd:
+                        queue_fwd.append(t.to_state)
+            stuck = (reachable_fwd - done_states) - can_reach_done
+            for s in sorted(stuck):
+                warnings.append(f"state '{s}' cannot reach any done-category state (stuck in cycle)")
+
         # Done-states with outgoing transitions to other done states are
         # unreachable: close_issue() treats done-category as "already closed",
         # so done→done transitions can never fire.  Done→non-done transitions
@@ -508,11 +565,15 @@ class TemplateRegistry:
         return list(self._packs.values())
 
     def get_initial_state(self, type_name: str) -> str:
-        """Initial state for a type. Falls back to 'open' if no template."""
+        """Initial state for a type. Raises ValueError if type is unknown."""
         tpl = self._types.get(type_name)
         if tpl is None:
-            logger.warning("Unknown type '%s' -- falling back to initial state 'open'", type_name)
-            return "open"
+            msg = (
+                f"Unknown type '{type_name}': no workflow template registered. "
+                f"Cannot determine initial state. Register a pack containing "
+                f"this type or check for typos."
+            )
+            raise ValueError(msg)
         return tpl.initial_state
 
     def get_category(self, type_name: str, state: str) -> StateCategory | None:
@@ -545,11 +606,16 @@ class TemplateRegistry:
     def _is_field_populated(value: Any) -> bool:
         """Check if a field value is considered populated.
 
-        None, empty strings, and whitespace-only strings are unpopulated.
+        None, empty strings, whitespace-only strings, and empty
+        collections (list, dict) are unpopulated.
         """
         if value is None:
             return False
-        return not (isinstance(value, str) and value.strip() == "")
+        if isinstance(value, str):
+            return value.strip() != ""
+        if isinstance(value, (list, dict)):
+            return len(value) > 0
+        return True
 
     def validate_transition(
         self,
@@ -572,8 +638,16 @@ class TemplateRegistry:
         """
         tpl = self._types.get(type_name)
         if tpl is None:
-            # Fallback: unknown types allow all transitions
-            return TransitionResult(allowed=True, enforcement=None, missing_fields=(), warnings=())
+            return TransitionResult(
+                allowed=False,
+                enforcement=None,
+                missing_fields=(),
+                warnings=(
+                    f"Unknown type '{type_name}': no workflow template registered. "
+                    f"Transition denied (fail-closed). Register a pack containing this type "
+                    f"or check for typos.",
+                ),
+            )
 
         transition_map = self._transition_cache.get(type_name, {})
         transition = transition_map.get((from_state, to_state))
@@ -647,7 +721,7 @@ class TemplateRegistry:
             missing_state = self.validate_fields_for_state(type_name, t.to_state, fields)
             all_missing = list(dict.fromkeys(missing_trans + missing_state))
 
-            target_category = self._category_cache.get(type_name, {}).get(t.to_state, "open")
+            target_category = self._category_cache[type_name][t.to_state]
             # ready = True when all required fields are populated
             ready = len(all_missing) == 0
 
@@ -723,8 +797,8 @@ class TemplateRegistry:
                     if not isinstance(config, dict):
                         raise ValueError("config.json must contain a JSON object")
                     enabled_packs = config.get("enabled_packs", _default_packs)
-                except (ValueError, KeyError):
-                    logger.warning("Could not read config.json — using default enabled_packs")
+                except (_json.JSONDecodeError, ValueError) as exc:
+                    logger.warning("Could not read config.json (%s) — using default enabled_packs", exc)
 
         # Validate enabled_packs is list[str] — strings would be split into chars
         if isinstance(enabled_packs, str):
@@ -734,6 +808,9 @@ class TemplateRegistry:
             logger.warning("enabled_packs has invalid type %s — using defaults", type(enabled_packs).__name__)
             enabled_packs = _default_packs
         else:
+            non_str = [p for p in enabled_packs if not isinstance(p, str)]
+            if non_str:
+                logger.warning("Dropped non-string entries from enabled_packs: %s", non_str)
             enabled_packs = [p for p in enabled_packs if isinstance(p, str)]
 
         logger.info("Loading templates: enabled_packs=%s", enabled_packs)
@@ -757,7 +834,7 @@ class TemplateRegistry:
                         continue
                     self._load_pack_data(pack_data)
                     logger.info("Loaded installed pack: %s from %s", pack_name, pack_file.name)
-                except (ValueError, KeyError, TypeError, AttributeError) as exc:
+                except (ValueError, KeyError, TypeError) as exc:
                     logger.warning("Skipping invalid pack file %s: %s", pack_file.name, exc)
 
         # Layer 3: Project-local overrides from .filigree/templates/*.json
@@ -776,17 +853,23 @@ class TemplateRegistry:
                         logger.warning("Quality: %s (local override): %s", tpl.type, qw)
                     self._register_type(tpl)  # Overwrites built-in with same name
                     logger.info("Loaded project-local template override: %s", tpl.type)
-                except (ValueError, KeyError, TypeError, AttributeError) as exc:
+                except (ValueError, KeyError, TypeError) as exc:
                     logger.warning("Skipping invalid template file %s: %s", tpl_file.name, exc)
 
         self._loaded = True
         logger.info("Template loading complete: %d types from %d packs", len(self._types), len(self._packs))
 
     def _load_pack_data(self, pack_data: dict[str, Any]) -> None:
-        """Load a pack dict: register its types and the pack itself."""
+        """Load a pack dict: register its types and the pack itself.
+
+        Types that fail parsing or validation are skipped individually (logged
+        as warnings). Successfully parsed types are collected in a staging dict
+        first, then registered together, ensuring pack.types and registry._types
+        see the same set of types.
+        """
         pack_name = pack_data["pack"]
 
-        # Parse and register each type in the pack
+        # Phase 1: Parse all types into staging dict (no side effects)
         types_dict: dict[str, TypeTemplate] = {}
         for type_name, type_data in pack_data.get("types", {}).items():
             try:
@@ -802,22 +885,31 @@ class TemplateRegistry:
                 quality_warnings = self.check_type_template_quality(tpl)
                 for qw in quality_warnings:
                     logger.warning("Quality: %s/%s: %s", pack_name, type_name, qw)
-                self._register_type(tpl)
                 types_dict[type_name] = tpl
-            except (ValueError, KeyError, TypeError, AttributeError) as exc:
+            except (ValueError, KeyError) as exc:
                 logger.warning("Skipping unparseable type %s in pack %s: %s", type_name, pack_name, exc)
 
-        # Register the pack itself
+        # Phase 2: Register all staged types atomically
+        for tpl in types_dict.values():
+            self._register_type(tpl)
+
+        # Register the pack itself — wrap mutable containers for immutability
+        raw_guide = pack_data.get("guide")
+        if raw_guide is not None and not isinstance(raw_guide, dict):
+            logger.warning("Pack %s has non-mapping guide (got %s), ignoring", pack_name, type(raw_guide).__name__)
+            raw_guide = None
         pack = WorkflowPack(
             pack=pack_name,
             version=pack_data.get("version", "1.0"),
             display_name=pack_data.get("display_name", pack_name),
             description=pack_data.get("description", ""),
-            types=types_dict,
+            types=MappingProxyType(types_dict),
             requires_packs=tuple(pack_data.get("requires_packs", [])),
-            relationships=tuple(pack_data.get("relationships", [])),
-            cross_pack_relationships=tuple(pack_data.get("cross_pack_relationships", [])),
-            guide=pack_data.get("guide"),
+            relationships=tuple(MappingProxyType(r) for r in pack_data.get("relationships", []) if isinstance(r, dict)),
+            cross_pack_relationships=tuple(
+                MappingProxyType(r) for r in pack_data.get("cross_pack_relationships", []) if isinstance(r, dict)
+            ),
+            guide=MappingProxyType(raw_guide) if raw_guide is not None else None,
         )
         self._register_pack(pack)
         logger.debug("Registered pack: %s (%d types)", pack_name, len(types_dict))

@@ -1,9 +1,37 @@
-<!-- filigree:instructions:v1.3.0:6bd811c8 -->
+<!-- filigree:instructions:v1.5.0:bcb039c9 -->
 ## Filigree Issue Tracker
 
 Use `filigree` for all task tracking in this project. Data lives in `.filigree/`.
 
-### Quick Reference
+### MCP Tools (Preferred)
+
+When MCP is configured, prefer `mcp__filigree__*` tools over CLI commands — they're
+faster and return structured data. Key tools:
+
+- `get_ready` / `get_blocked` — find available work
+- `get_issue` / `list_issues` / `search_issues` — read issues
+- `create_issue` / `update_issue` / `close_issue` — manage issues
+- `claim_issue` / `claim_next` — atomic claiming
+- `add_comment` / `add_label` — metadata
+- `create_plan` / `get_plan` — milestone planning
+- `get_stats` / `get_metrics` — project health
+- `get_valid_transitions` — workflow navigation
+- `observe` / `list_observations` / `dismiss_observation` / `promote_observation` — agent scratchpad
+
+Observations are fire-and-forget notes that expire after 14 days. Use `list_issues --label=from-observation` to find promoted observations.
+
+**Observations are ambient.** While doing other work, use `observe` whenever you
+notice something worth noting — a code smell, a potential bug, a missing test, a
+design concern. Don't stop what you're doing; just fire off the observation and
+carry on. They're ideal for "I don't have time to investigate this right now, but
+I want to come back to it." Include `file_path` and `line` when relevant so the
+observation is anchored to code. At session end, skim `list_observations` and
+either `dismiss` (not worth tracking) or `promote` (deserves an issue) anything
+that's accumulated.
+
+Fall back to CLI (`filigree <command>`) when MCP is unavailable.
+
+### CLI Quick Reference
 
 ```bash
 # Finding work
@@ -69,7 +97,6 @@ The dashboard exposes REST endpoints for file tracking and scan result ingestion
 Use `GET /api/files/_schema` for available endpoints and valid field values.
 
 Key endpoints:
-
 - `GET /api/files/_schema` — Discovery: valid enums, endpoint catalog
 - `POST /api/v1/scan-results` — Ingest scan results (SARIF-lite format)
 - `GET /api/files` — List tracked files with filtering and sorting
@@ -77,7 +104,6 @@ Key endpoints:
 - `GET /api/files/{file_id}/findings` — Findings for a specific file
 
 ### Workflow
-
 1. `filigree ready` to find available work
 2. `filigree show <id>` to review details
 3. `filigree transitions <id>` to see valid state changes
@@ -86,13 +112,11 @@ Key endpoints:
 6. `filigree close <id>` when done
 
 ### Session Start
-
 When beginning a new session, run `filigree session-context` to load the project
 snapshot (ready work, in-progress items, critical path). This provides the
 context needed to pick up where the previous session left off.
 
 ### Priority Scale
-
 - P0: Critical (drop everything)
 - P1: High (do next)
 - P2: Medium (default)

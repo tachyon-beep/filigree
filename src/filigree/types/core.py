@@ -1,26 +1,53 @@
-"""Foundational TypedDicts for dataclass to_dict() returns."""
+"""Foundational TypedDicts and Literal types for dataclass to_dict() returns."""
 
 from __future__ import annotations
 
-from typing import Any, NewType, TypedDict
+from typing import TYPE_CHECKING, Any, Generic, Literal, NewType, NotRequired, TypedDict, TypeVar
+
+if TYPE_CHECKING:
+    from filigree.models import Issue
 
 ISOTimestamp = NewType("ISOTimestamp", str)
 
+# Constrained-string Literal types — canonical definitions.
+# core.py re-exports these; db_files.py derives frozensets via get_args().
+Severity = Literal["critical", "high", "medium", "low", "info"]
+FindingStatus = Literal["open", "acknowledged", "fixed", "false_positive", "unseen_in_latest"]
+AssocType = Literal["bug_in", "task_for", "scan_finding", "mentioned_in"]
+StatusCategory = Literal["open", "wip", "done"]
 
-class ProjectConfig(TypedDict, total=False):
-    """Shape of .filigree/config.json."""
+
+class _ProjectConfigRequired(TypedDict):
+    """Required keys for ProjectConfig (needed for ID generation and migrations)."""
 
     prefix: str
-    name: str
     version: int
+
+
+class ProjectConfig(_ProjectConfigRequired, total=False):
+    """Shape of .filigree/config.json.
+
+    ``prefix`` (issue ID generation) and ``version`` (schema migrations) are
+    always required.  Other keys are optional.
+    """
+
+    name: str
     enabled_packs: list[str]
     mode: str
 
 
-class PaginatedResult(TypedDict):
-    """Envelope returned by paginated query methods."""
+_T = TypeVar("_T")
 
-    results: list[dict[str, Any]]
+
+class PaginatedResult(TypedDict, Generic[_T]):
+    """Envelope returned by paginated query methods.
+
+    Generic over the item type: ``PaginatedResult[FileRecordDict]`` etc.
+    Un-parameterised ``PaginatedResult`` is equivalent to ``PaginatedResult[dict[str, Any]]``
+    for backward compatibility.
+    """
+
+    results: list[_T]
     total: int
     limit: int
     offset: int
@@ -33,7 +60,7 @@ class IssueDict(TypedDict):
     id: str
     title: str
     status: str
-    status_category: str
+    status_category: StatusCategory
     priority: int
     type: str
     parent_id: str | None
@@ -49,6 +76,7 @@ class IssueDict(TypedDict):
     blocked_by: list[str]
     is_ready: bool
     children: list[str]
+    data_warnings: list[str]
 
 
 class FileRecordDict(TypedDict):
@@ -61,6 +89,7 @@ class FileRecordDict(TypedDict):
     first_seen: ISOTimestamp
     updated_at: ISOTimestamp
     metadata: dict[str, Any]
+    data_warnings: list[str]
 
 
 class ScanFindingDict(TypedDict):
@@ -68,8 +97,8 @@ class ScanFindingDict(TypedDict):
 
     id: str
     file_id: str
-    severity: str
-    status: str
+    severity: Severity
+    status: FindingStatus
     scan_source: str
     rule_id: str
     message: str
@@ -83,3 +112,48 @@ class ScanFindingDict(TypedDict):
     updated_at: ISOTimestamp
     last_seen_at: ISOTimestamp | None
     metadata: dict[str, Any]
+    data_warnings: list[str]
+
+
+class ObservationDict(TypedDict):
+    """Shape contract for observation dict representations."""
+
+    id: str
+    summary: str
+    detail: str
+    file_id: str | None
+    file_path: str
+    line: int | None
+    source_issue_id: str
+    priority: int
+    actor: str
+    created_at: ISOTimestamp
+    expires_at: ISOTimestamp
+
+
+class BatchDismissResult(TypedDict):
+    """Shape contract for batch_dismiss_observations() return value."""
+
+    dismissed: int
+    not_found: list[str]
+
+
+class PromoteObservationResult(TypedDict):
+    """Shape contract for promote_observation() return value.
+
+    Note: ``issue`` is an Issue dataclass (not IssueDict) because this is an
+    internal return type. The MCP layer calls ``issue.to_dict()`` before
+    serializing to the wire format.
+    """
+
+    issue: Issue
+    warnings: NotRequired[list[str]]
+
+
+class ObservationStatsDict(TypedDict):
+    """Shape contract for observation_stats() return value."""
+
+    count: int
+    stale_count: int
+    oldest_hours: float | None
+    expiring_soon_count: int

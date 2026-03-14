@@ -35,7 +35,19 @@ class TestListScanners:
         assert len(result) == 1
         assert result[0].name == "claude"
         assert result[0].description == "Bug hunt"
-        assert result[0].file_types == ["py"]
+        assert result[0].file_types == ("py",)
+
+    def test_fields_are_immutable_tuples(self, tmp_path: Path) -> None:
+        """L1: Frozen dataclass fields must be truly immutable (tuples, not lists)."""
+        scanners_dir = tmp_path / "scanners"
+        scanners_dir.mkdir()
+        (scanners_dir / "claude.toml").write_text(
+            '[scanner]\nname = "claude"\ndescription = "d"\ncommand = "python x.py"\nargs = ["--root"]\nfile_types = ["py"]\n'
+        )
+        result = list_scanners(scanners_dir)
+        cfg = result[0]
+        assert isinstance(cfg.args, tuple)
+        assert isinstance(cfg.file_types, tuple)
 
     def test_skips_non_toml(self, tmp_path: Path) -> None:
         scanners_dir = tmp_path / "scanners"
@@ -80,6 +92,21 @@ class TestListScanners:
         )
         result = list_scanners(scanners_dir)
         assert result == []
+
+    def test_errors_collected_for_malformed_files(self, tmp_path: Path) -> None:
+        """M3: errors list collects human-readable descriptions of skipped files."""
+        scanners_dir = tmp_path / "scanners"
+        scanners_dir.mkdir()
+        (scanners_dir / "bad-syntax.toml").write_text("not valid toml [[")
+        (scanners_dir / "no-table.toml").write_text('key = "value"\n')
+        (scanners_dir / "good.toml").write_text('[scanner]\nname = "good"\ndescription = "d"\ncommand = "python x.py"\n')
+        errors: list[str] = []
+        result = list_scanners(scanners_dir, errors=errors)
+        assert len(result) == 1
+        assert result[0].name == "good"
+        assert len(errors) == 2
+        assert any("bad-syntax.toml" in e for e in errors)
+        assert any("no-table.toml" in e for e in errors)
 
 
 # ── load_scanner ─────────────────────────────────────────────────────
@@ -148,8 +175,6 @@ class TestLoadScanner:
             name="bad",
             description="bad command",
             command="python 'unclosed",
-            args=[],
-            file_types=[],
         )
         with pytest.raises(ValueError, match=r"[Mm]alformed"):
             cfg.build_command(file_path="x.py")
@@ -160,11 +185,41 @@ class TestLoadScanner:
             name="bad",
             description="bad args",
             command="python scanner.py",
-            args=["--file", "ok", 42],  # type: ignore[list-item]
-            file_types=[],
+            args=("--file", "ok", 42),  # type: ignore[arg-type]
         )
         with pytest.raises(ValueError, match=r"[Mm]alformed args"):
             cfg.build_command(file_path="x.py")
+
+    def test_build_command_no_double_substitution(self) -> None:
+        """H3: File paths containing template variables must not be re-expanded."""
+        cfg = ScannerConfig(
+            name="safe",
+            description="test",
+            command="python scanner.py",
+            args=("--file", "{file}", "--url", "{api_url}"),
+        )
+        # File path literally contains {api_url}
+        cmd = cfg.build_command(
+            file_path="test-{api_url}.py",
+            api_url="http://localhost:8377",
+            project_root="/home/user/project",
+        )
+        # The file token should contain the literal {api_url}, NOT the expanded URL
+        assert "test-{api_url}.py" in cmd
+        assert cmd.count("http://localhost:8377") == 1  # only the --url arg
+
+    def test_build_command_no_double_substitution_in_base(self) -> None:
+        """Double-substitution also applies to the base command tokens."""
+        cfg = ScannerConfig(
+            name="safe",
+            description="test",
+            command="python scanner.py {file}",
+        )
+        cmd = cfg.build_command(
+            file_path="{project_root}/evil.py",
+            project_root="/home/user/project",
+        )
+        assert "{project_root}/evil.py" in cmd
 
 
 # ── validate_scanner_command ─────────────────────────────────────────
@@ -217,6 +272,65 @@ class TestValidateScannerCommand:
 
         err = validate_scanner_command([BadToken()])  # type: ignore[list-item]
         assert err == "Malformed command token list"
+
+    def test_absolute_executable_valid(self, tmp_path: Path) -> None:
+        """Absolute path to an executable file validates successfully (M6)."""
+        scanner_exec = tmp_path / "my_scanner"
+        scanner_exec.write_text("#!/usr/bin/env bash\nexit 0\n")
+        scanner_exec.chmod(0o755)
+        assert validate_scanner_command(str(scanner_exec)) is None
+
+    def test_absolute_executable_not_executable(self, tmp_path: Path) -> None:
+        """Absolute path to a file without execute bit fails validation (M6)."""
+        scanner_file = tmp_path / "my_scanner"
+        scanner_file.write_text("#!/usr/bin/env bash\nexit 0\n")
+        scanner_file.chmod(0o644)
+        err = validate_scanner_command(str(scanner_file))
+        assert err is not None
+        assert "not found" in err
+
+    def test_absolute_nonexistent_path(self, tmp_path: Path) -> None:
+        """Absolute path to nonexistent file fails validation."""
+        err = validate_scanner_command(str(tmp_path / "nonexistent_scanner"))
+        assert err is not None
+        assert "not found" in err
+
+    def test_malformed_shlex_string(self) -> None:
+        """Malformed shell string (unclosed quote) returns error."""
+        err = validate_scanner_command("echo 'unclosed")
+        assert err is not None
+        assert "Malformed" in err
+
+
+class TestParseTomlOSError:
+    """Tests for _parse_toml OSError handling (M6)."""
+
+    def test_unreadable_file(self, tmp_path: Path) -> None:
+        """_parse_toml returns None and appends error for unreadable file."""
+        from filigree.scanners import _parse_toml
+
+        scanner_file = tmp_path / "broken.toml"
+        scanner_file.write_text("[scanner]\ncommand = 'echo'\n")
+        scanner_file.chmod(0o000)
+
+        errors: list[str] = []
+        result = _parse_toml(scanner_file, errors=errors)
+        assert result is None
+        assert len(errors) == 1
+        assert "failed to read file" in errors[0]
+
+        # Restore permissions for cleanup
+        scanner_file.chmod(0o644)
+
+    def test_nonexistent_file(self, tmp_path: Path) -> None:
+        """_parse_toml returns None for nonexistent file."""
+        from filigree.scanners import _parse_toml
+
+        errors: list[str] = []
+        result = _parse_toml(tmp_path / "does_not_exist.toml", errors=errors)
+        assert result is None
+        assert len(errors) == 1
+        assert "failed to read file" in errors[0]
 
 
 class TestScannerExamples:

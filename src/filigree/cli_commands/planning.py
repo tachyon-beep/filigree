@@ -213,7 +213,7 @@ def create_plan(ctx: click.Context, file_path: str | None, as_json: bool) -> Non
 
     with get_db() as db:
         try:
-            result = db.create_plan(data["milestone"], data["phases"], actor=ctx.obj["actor"])
+            result = db.create_plan(data["milestone"], data["phases"], actor=ctx.obj["actor"])  # type: ignore[arg-type]
         except (ValueError, IndexError, TypeError, AttributeError) as e:
             if as_json:
                 click.echo(json_mod.dumps({"error": str(e)}))

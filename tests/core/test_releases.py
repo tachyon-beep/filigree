@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
-from filigree.core import FiligreeDB, Issue
-from filigree.db_planning import TreeNode
+from filigree.core import FiligreeDB, Issue, _seed_builtin_packs
+from filigree.types.planning import TreeNode
 
 
 def make_release_hierarchy(db: FiligreeDB, *, include_done: bool = False) -> tuple[Issue, Issue, Issue]:
@@ -199,7 +201,7 @@ class TestGetReleasesSummary:
         entry_r1 = next(e for e in result if e["id"] == r1.id)
         assert entry_r1["blocks"] == [{"id": r2.id, "title": "Blocked", "type": "release"}]
 
-    def test_resolve_refs_handles_deleted_issue(self, release_db: FiligreeDB) -> None:
+    def test_resolve_refs_handles_deleted_issue_with_dangling_flag(self, release_db: FiligreeDB) -> None:
         db = release_db
         # Call _resolve_issue_refs directly with a bogus ID
         refs = db._resolve_issue_refs(["nonexistent-id-12345"])
@@ -207,6 +209,14 @@ class TestGetReleasesSummary:
         assert refs[0]["id"] == "nonexistent-id-12345"
         assert refs[0]["title"] == "(deleted)"
         assert refs[0]["type"] == "unknown"
+        assert refs[0]["dangling"] is True
+
+    def test_resolve_refs_valid_issue_has_no_dangling_flag(self, release_db: FiligreeDB) -> None:
+        db = release_db
+        r1 = db.create_issue("Real issue", type="release")
+        refs = db._resolve_issue_refs([r1.id])
+        assert len(refs) == 1
+        assert "dangling" not in refs[0]
 
     def test_version_and_target_date_from_fields(self, release_db: FiligreeDB) -> None:
         db = release_db
@@ -485,11 +495,10 @@ class TestVersionValidation:
 
 
 class TestBuildTree:
-    def test_depth_guard_at_10_levels(self, release_db: FiligreeDB) -> None:
+    def test_depth_guard_at_10_levels_sets_truncated_flag(self, release_db: FiligreeDB) -> None:
         db = release_db
         # Build a chain: release -> t0 -> t1 -> ... -> t11 (12 children, 13 levels total)
-        # _build_tree starts at _depth=0. At _depth > 10 it returns [].
-        # So we need 12 levels of children to reach _depth=11 on the last one.
+        # _build_tree starts at _depth=0. At _depth > 10 it returns a truncated sentinel.
         release = db.create_issue("R", type="release")
         parent_id = release.id
         last_id = None
@@ -506,11 +515,14 @@ class TestBuildTree:
         node = tree[0]
         for _ in range(10):
             assert len(node["children"]) == 1, "Expected child at this depth"
+            assert node.get("truncated") is not True
             node = node["children"][0]
 
-        # At depth 11, _build_tree returned [] so this node has no children
-        # even though it has a child in the DB
-        assert node["children"] == []
+        # At depth 11, _build_tree returns a sentinel with truncated=True
+        assert len(node["children"]) == 1
+        sentinel = node["children"][0]
+        assert sentinel["truncated"] is True
+        assert sentinel["children"] == []
 
     def test_returns_empty_for_no_children(self, release_db: FiligreeDB) -> None:
         db = release_db
@@ -530,3 +542,63 @@ class TestBuildTree:
         tree = db._build_tree(release.id)
         titles = [node["issue"]["title"] for node in tree]
         assert titles == ["High", "Med", "Low"]
+
+
+# ── M6: _seed_future_release and _seed_builtin_packs edge cases ────────
+
+
+class TestSeedFutureReleaseEdgeCases:
+    """Cover untested _seed_future_release paths (M6)."""
+
+    def test_missing_release_type_template_logs_warning(self, release_db: FiligreeDB, caplog: pytest.LogCaptureFixture) -> None:
+        """When release type template is missing, _seed_future_release logs warning and skips."""
+        # Remove the release type template so get_type("release") returns None
+        with (
+            patch.object(release_db.templates, "get_type", return_value=None),
+            caplog.at_level(logging.WARNING, logger="filigree.core"),
+        ):
+            release_db._seed_future_release()
+
+        assert any("Release pack enabled but 'release' type not registered" in r.message for r in caplog.records)
+
+    def test_seed_builtin_packs_returns_type_count(self, tmp_path: Path) -> None:
+        """_seed_builtin_packs returns count of type templates seeded."""
+        import sqlite3
+
+        from filigree.db_base import _now_iso
+        from filigree.db_schema import SCHEMA_SQL
+
+        db_path = tmp_path / "count_test.db"
+        conn = sqlite3.connect(str(db_path))
+        conn.row_factory = sqlite3.Row
+        conn.executescript(SCHEMA_SQL)
+
+        count = _seed_builtin_packs(conn, _now_iso())
+        assert isinstance(count, int)
+        assert count > 0  # should seed at least the core types
+
+        # Verify the count matches actual rows inserted
+        actual = conn.execute("SELECT COUNT(*) FROM type_templates").fetchone()[0]
+        assert count == actual
+        conn.close()
+
+    def test_seed_builtin_packs_idempotent(self, tmp_path: Path) -> None:
+        """Calling _seed_builtin_packs twice returns same count (INSERT OR REPLACE)."""
+        import sqlite3
+
+        from filigree.db_base import _now_iso
+        from filigree.db_schema import SCHEMA_SQL
+
+        db_path = tmp_path / "idempotent_test.db"
+        conn = sqlite3.connect(str(db_path))
+        conn.row_factory = sqlite3.Row
+        conn.executescript(SCHEMA_SQL)
+
+        now = _now_iso()
+        count1 = _seed_builtin_packs(conn, now)
+        count2 = _seed_builtin_packs(conn, now)
+        assert count1 == count2
+
+        actual = conn.execute("SELECT COUNT(*) FROM type_templates").fetchone()[0]
+        assert actual == count1
+        conn.close()

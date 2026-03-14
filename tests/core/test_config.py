@@ -4,15 +4,16 @@
 from __future__ import annotations
 
 import json
-import logging
 from pathlib import Path
 from typing import Any
 
 import pytest
 
+from filigree import cli_common
 from filigree.core import (
     FILIGREE_DIR_NAME,
     FiligreeDB,
+    Issue,
     find_filigree_command,
     find_filigree_root,
     get_mode,
@@ -20,6 +21,73 @@ from filigree.core import (
     write_atomic,
     write_config,
 )
+
+
+class TestReadConfig:
+    """Verify read_config handles edge cases."""
+
+    def test_non_dict_json_returns_defaults(self, tmp_path: Path) -> None:
+        """Config with valid JSON that is not an object falls back to defaults."""
+        filigree_dir = tmp_path / ".filigree"
+        filigree_dir.mkdir()
+        (filigree_dir / "config.json").write_text('"just a string"')
+
+        config = read_config(filigree_dir)
+        assert config["prefix"] == "filigree"
+        assert config["version"] == 1
+
+    def test_array_json_returns_defaults(self, tmp_path: Path) -> None:
+        """Config with JSON array falls back to defaults."""
+        filigree_dir = tmp_path / ".filigree"
+        filigree_dir.mkdir()
+        (filigree_dir / "config.json").write_text("[1, 2, 3]")
+
+        config = read_config(filigree_dir)
+        assert config["prefix"] == "filigree"
+
+    def test_missing_prefix_gets_default(self, tmp_path: Path) -> None:
+        """Config dict missing 'prefix' key gets default injected."""
+        filigree_dir = tmp_path / ".filigree"
+        filigree_dir.mkdir()
+        (filigree_dir / "config.json").write_text('{"name": "test"}')
+
+        config = read_config(filigree_dir)
+        assert config["prefix"] == "filigree"
+        assert config["version"] == 1
+
+    def test_missing_version_gets_default(self, tmp_path: Path) -> None:
+        """Config dict missing 'version' key gets default injected."""
+        filigree_dir = tmp_path / ".filigree"
+        filigree_dir.mkdir()
+        (filigree_dir / "config.json").write_text('{"prefix": "proj"}')
+
+        config = read_config(filigree_dir)
+        assert config["prefix"] == "proj"
+        assert config["version"] == 1
+
+
+class TestFromFiligreeDir:
+    """Verify FiligreeDB.from_filigree_dir construction."""
+
+    def test_missing_config_uses_defaults(self, tmp_path: Path) -> None:
+        """from_filigree_dir with no config.json should succeed with defaults."""
+        filigree_dir = tmp_path / ".filigree"
+        filigree_dir.mkdir()
+
+        db = FiligreeDB.from_filigree_dir(filigree_dir)
+        assert db.prefix == "filigree"
+        assert db.enabled_packs == ["core", "planning", "release"]
+        db.close()
+
+    def test_check_same_thread_passthrough(self, tmp_path: Path) -> None:
+        """from_filigree_dir passes check_same_thread to constructor."""
+        filigree_dir = tmp_path / ".filigree"
+        filigree_dir.mkdir()
+        write_config(filigree_dir, {"prefix": "proj", "version": 1})
+
+        db = FiligreeDB.from_filigree_dir(filigree_dir, check_same_thread=False)
+        assert db._check_same_thread is False
+        db.close()
 
 
 class TestConfigEnabledPacks:
@@ -89,6 +157,32 @@ class TestConfigEnabledPacks:
         assert db.enabled_packs == ["core", "planning", "risk"]
         db.close()
 
+    def test_refresh_enabled_packs_bad_json_raises(self, tmp_path: Path) -> None:
+        """Bug filigree-996a574447: _refresh_enabled_packs must raise on corrupt config.json."""
+        filigree_dir = tmp_path / ".filigree"
+        filigree_dir.mkdir()
+        config_path = filigree_dir / "config.json"
+        config_path.write_text("{invalid json")
+
+        db = FiligreeDB(filigree_dir / "filigree.db", prefix="test")
+        db.initialize()
+
+        with pytest.raises(ValueError, match="could not be parsed"):
+            db._refresh_enabled_packs()
+        db.close()
+
+    def test_refresh_enabled_packs_no_file_uses_defaults(self, tmp_path: Path) -> None:
+        """When config.json does not exist, _refresh_enabled_packs uses defaults (no error)."""
+        filigree_dir = tmp_path / ".filigree"
+        filigree_dir.mkdir()
+        # No config.json written
+
+        db = FiligreeDB(filigree_dir / "filigree.db", prefix="test")
+        db.initialize()
+        db._refresh_enabled_packs()
+        assert db.enabled_packs == ["core", "planning", "release"]
+        db.close()
+
     def test_from_project_default_enabled_packs(self, tmp_path: Path) -> None:
         """FiligreeDB.from_project() with no enabled_packs in config gets default."""
         filigree_dir = tmp_path / ".filigree"
@@ -101,6 +195,36 @@ class TestConfigEnabledPacks:
 
         db = FiligreeDB.from_project(tmp_path)
         assert db.enabled_packs == ["core", "planning", "release"]
+        db.close()
+
+    def test_from_filigree_dir_passes_enabled_packs(self, tmp_path: Path) -> None:
+        """FiligreeDB.from_filigree_dir() should preserve explicit enabled_packs."""
+        filigree_dir = tmp_path / ".filigree"
+        filigree_dir.mkdir()
+        write_config(filigree_dir, {"prefix": "proj", "version": 1, "enabled_packs": ["core"]})
+
+        init_db = FiligreeDB(filigree_dir / "filigree.db", prefix="proj", enabled_packs=["core"])
+        init_db.initialize()
+        init_db.close()
+
+        db = FiligreeDB.from_filigree_dir(filigree_dir)
+        assert db.enabled_packs == ["core"]
+        db.close()
+
+    def test_cli_common_get_db_uses_configured_enabled_packs(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """cli_common.get_db() should not fall back to default packs when config disables them."""
+        filigree_dir = tmp_path / ".filigree"
+        filigree_dir.mkdir()
+        write_config(filigree_dir, {"prefix": "proj", "version": 1, "enabled_packs": ["core"]})
+
+        init_db = FiligreeDB(filigree_dir / "filigree.db", prefix="proj", enabled_packs=["core"])
+        init_db.initialize()
+        init_db.close()
+
+        monkeypatch.chdir(tmp_path)
+        db = cli_common.get_db()
+        assert db.enabled_packs == ["core"]
+        assert db.list_issues() == []
         db.close()
 
 
@@ -130,16 +254,14 @@ class TestGetMode:
         filigree_dir.mkdir()
         assert get_mode(filigree_dir) == "ethereal"
 
-    def test_unknown_mode_falls_back_to_ethereal(self, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
-        """Unknown mode values fall back to ethereal with a warning."""
+    def test_unknown_mode_raises_value_error(self, tmp_path: Path) -> None:
+        """Unknown mode values raise ValueError instead of silently falling back."""
         filigree_dir = tmp_path / ".filigree"
         filigree_dir.mkdir()
         config = {"prefix": "test", "version": 1, "mode": "bogus"}
         (filigree_dir / "config.json").write_text(json.dumps(config))
-        with caplog.at_level(logging.WARNING, logger="filigree.core"):
-            result = get_mode(filigree_dir)
-        assert result == "ethereal"
-        assert "bogus" in caplog.text
+        with pytest.raises(ValueError, match="bogus"):
+            get_mode(filigree_dir)
 
 
 class TestFindFiligreeCommand:
@@ -227,3 +349,62 @@ class TestConfig:
         filigree_dir.mkdir()
         config = read_config(filigree_dir)
         assert config["prefix"] == "filigree"
+
+    def test_read_config_fills_missing_prefix(self, tmp_path: Path) -> None:
+        """Config without 'prefix' should get the default filled in."""
+        filigree_dir = tmp_path / FILIGREE_DIR_NAME
+        filigree_dir.mkdir()
+        (filigree_dir / "config.json").write_text(json.dumps({"version": 1}))
+        config = read_config(filigree_dir)
+        assert config["prefix"] == "filigree"
+        assert config["version"] == 1
+
+    def test_read_config_fills_missing_version(self, tmp_path: Path) -> None:
+        """Config without 'version' should get the default filled in."""
+        filigree_dir = tmp_path / FILIGREE_DIR_NAME
+        filigree_dir.mkdir()
+        (filigree_dir / "config.json").write_text(json.dumps({"prefix": "myproj"}))
+        config = read_config(filigree_dir)
+        assert config["prefix"] == "myproj"
+        assert config["version"] == 1
+
+    def test_read_config_fills_both_missing_required_keys(self, tmp_path: Path) -> None:
+        """Config with neither 'prefix' nor 'version' should get both defaults."""
+        filigree_dir = tmp_path / FILIGREE_DIR_NAME
+        filigree_dir.mkdir()
+        (filigree_dir / "config.json").write_text(json.dumps({"mode": "ethereal"}))
+        config = read_config(filigree_dir)
+        assert config["prefix"] == "filigree"
+        assert config["version"] == 1
+        assert config.get("mode") == "ethereal"
+
+
+# ===========================================================================
+# Issue dataclass __post_init__ validation
+# ===========================================================================
+
+
+class TestIssuePostInit:
+    """Bug filigree-83986ec674: Issue must validate status_category and priority."""
+
+    def test_valid_status_categories_accepted(self) -> None:
+        for cat in ("open", "wip", "done"):
+            issue = Issue(id="x", title="t", status_category=cat)
+            assert issue.status_category == cat
+
+    def test_invalid_status_category_raises(self) -> None:
+        with pytest.raises(ValueError, match="Invalid status_category"):
+            Issue(id="x", title="t", status_category="bogus")  # type: ignore[arg-type]
+
+    def test_valid_priorities_accepted(self) -> None:
+        for p in range(5):
+            issue = Issue(id="x", title="t", priority=p)
+            assert issue.priority == p
+
+    def test_negative_priority_raises(self) -> None:
+        with pytest.raises(ValueError, match="Invalid priority"):
+            Issue(id="x", title="t", priority=-1)
+
+    def test_priority_above_4_raises(self) -> None:
+        with pytest.raises(ValueError, match="Invalid priority"):
+            Issue(id="x", title="t", priority=5)

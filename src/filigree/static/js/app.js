@@ -22,12 +22,14 @@ import {
   loadPreset,
   loadProjectFilterSettings,
   populatePresets,
-  populateTypeFilter,
   savePreset,
+  populateTypeFilter,
   toggleBlocked,
   toggleCardSelect,
   toggleMultiSelect,
   toggleReady,
+  toggleStatusPill,
+  onDoneTimeBoundChange,
   trackChanges,
   updateTypeFilterUI,
 } from "./filters.js";
@@ -44,7 +46,6 @@ import { CATEGORY_COLORS, REFRESH_INTERVAL, state, THEME_COLORS } from "./state.
 import {
   batchCloseSelected,
   batchSetPriority,
-  closePopover,
   closeSettingsMenu,
   copyIssueId,
   escHtml,
@@ -63,7 +64,6 @@ import {
   callbacks as uiCallbacks,
   updateBatchBar,
 } from "./ui.js";
-import { loadActivity } from "./views/activity.js";
 import {
   addComment,
   addDependency,
@@ -82,30 +82,22 @@ import {
   showAddBlocker,
   updateIssue,
 } from "./views/detail.js";
+import { computeHealthScore, computeImpactScores } from "./analytics.js";
 import {
-  clearGraphFocus,
-  computeHealthScore,
-  computeImpactScores,
   callbacks as graphCallbacks,
-  onGraphAssigneeInput,
-  onGraphTimeWindowChange,
-  onGraphFocusModeChange,
-  onGraphFocusRootInput,
-  onGraphEpicsOnlyChange,
-  onGraphPathInput,
-  graphSearchNext,
-  graphSearchPrev,
   graphFit,
   renderGraph,
-  setGraphPreset,
-  traceGraphPath,
-  clearGraphPath,
-  showBlockedHelp,
   showHealthBreakdown,
-  showHealthHelp,
-  showReadyHelp,
   toggleCriticalPath,
 } from "./views/graph.js";
+import {
+  renderGraphSidebar,
+  graphSidebarSelectAll,
+  graphSidebarClearAll,
+  rebuildTreeIndex,
+  attachSidebarListeners,
+  callbacks as sidebarCallbacks,
+} from "./views/graphSidebar.js";
 import {
   initDragAndDrop,
   callbacks as kanbanCallbacks,
@@ -118,7 +110,12 @@ import {
   showStaleIssues,
   updateStaleBadge,
 } from "./views/metrics.js";
-import { loadPlanView, loadWorkflow } from "./views/workflow.js";
+import {
+  loadPlanView,
+  loadWorkflow,
+  loadWorkflowInModal,
+  showWorkflowModal,
+} from "./views/workflow.js";
 import {
   closeFinding,
   clearScanSourceFilter,
@@ -138,7 +135,6 @@ import {
   submitLinkIssue,
   switchFileTab,
 } from "./views/files.js";
-import { filterFilesByScanSource, loadHealth } from "./views/health.js";
 import {
   collapseAllReleaseTree,
   loadReleases,
@@ -170,6 +166,7 @@ async function fetchData() {
     state.allIssues.forEach((i) => {
       state.issueMap[i.id] = i;
     });
+    rebuildTreeIndex();
     trackChanges(state.allIssues);
     computeImpactScores();
     computeHealthScore();
@@ -245,6 +242,7 @@ function setProject(key, opts) {
 async function loadProjects() {
   try {
     const projects = await fetchProjects(6);
+    if (!projects) return;
     state.allProjects = projects;
     const currentMissing =
       !!state.currentProjectKey && !state.allProjects.some((p) => p.key === state.currentProjectKey);
@@ -284,6 +282,20 @@ function clearSearch() {
 }
 
 // ---------------------------------------------------------------------------
+// Sort helper for Kanban list mode (called by column header onclick)
+// ---------------------------------------------------------------------------
+
+function sortListMode(col) {
+  if (state._listSortCol === col) {
+    state._listSortDir = state._listSortDir === "asc" ? "desc" : "asc";
+  } else {
+    state._listSortCol = col;
+    state._listSortDir = "asc";
+  }
+  renderKanban();
+}
+
+// ---------------------------------------------------------------------------
 // Wire up late-bound callbacks
 // ---------------------------------------------------------------------------
 
@@ -314,6 +326,9 @@ kanbanCallbacks.updateHash = updateHash;
 graphCallbacks.openDetail = openDetail;
 graphCallbacks.fetchData = fetchData;
 
+// graphSidebar.js callbacks
+sidebarCallbacks.renderGraph = renderGraph;
+
 // detail.js callbacks
 detailCallbacks.fetchData = fetchData;
 detailCallbacks.render = render;
@@ -323,12 +338,9 @@ detailCallbacks.render = render;
 // ---------------------------------------------------------------------------
 
 registerView("kanban", renderKanban);
-registerView("graph", renderGraph);
-registerView("metrics", loadMetrics);
-registerView("activity", loadActivity);
-registerView("workflow", loadWorkflow);
+registerView("graph", () => { renderGraphSidebar(); renderGraph(); });
+registerView("insights", loadMetrics);
 registerView("files", loadFiles);
-registerView("health", loadHealth);
 registerView("releases", loadReleases);
 
 // ---------------------------------------------------------------------------
@@ -434,6 +446,7 @@ document.addEventListener("keydown", (e) => {
       const issueId = state.selectedIssue;
       loadTransitions(issueId)
         .then((transitions) => {
+          if (!transitions) return;
           const ready = transitions.filter((t) => t.ready);
           if (!ready.length) {
             showToast("No valid transitions", "info");
@@ -527,17 +540,21 @@ loadProjectFilterSettings();
 })().then(() => {
   switchView(state.currentView);
   if (state.kanbanMode === "cluster") switchKanbanMode("cluster");
-  else switchKanbanMode("standard");
+  else if (state.kanbanMode === "list") switchKanbanMode("list");
+  else switchKanbanMode("board");
   if (state.selectedIssue) openDetail(state.selectedIssue);
   if (!localStorage.getItem("filigree_tour_done")) setTimeout(startTour, 1500);
   initDragAndDrop();
+  attachSidebarListeners();
   fetch("/api/health")
     .then((r) => r.json())
     .then((d) => {
       const el = document.getElementById("footVersion");
       if (el && d.version) el.textContent = `v${d.version}`;
     })
-    .catch(() => {});
+    .catch((err) => {
+      console.warn("[health] Failed to fetch version:", err);
+    });
 });
 
 setInterval(() => {
@@ -564,19 +581,20 @@ window.render = render;
 window.applyFilters = applyFilters;
 window.toggleReady = toggleReady;
 window.toggleBlocked = toggleBlocked;
+window.toggleStatusPill = toggleStatusPill;
+window.onDoneTimeBoundChange = onDoneTimeBoundChange;
 window.toggleMultiSelect = toggleMultiSelect;
 window.toggleCardSelect = toggleCardSelect;
 window.debouncedSearch = debouncedSearch;
-window.savePreset = savePreset;
 window.confirmSavePreset = confirmSavePreset;
 window.loadPreset = loadPreset;
+window.savePreset = savePreset;
 window.applyTypeFilter = applyTypeFilter;
 window.clearTypeFilter = clearTypeFilter;
 
 // UI utilities
 window.showCreateForm = showCreateForm;
 window.submitCreateForm = submitCreateForm;
-window.closePopover = closePopover;
 window.startTour = startTour;
 window.showTourStep = showTourStep;
 window.endTour = endTour;
@@ -593,27 +611,17 @@ window.copyIssueId = copyIssueId;
 
 // Kanban
 window.toggleEpicExpand = toggleEpicExpand;
+window.sortListMode = sortListMode;
 
 // Graph
 window.renderGraph = renderGraph;
 window.graphFit = graphFit;
-window.setGraphPreset = setGraphPreset;
-window.clearGraphFocus = clearGraphFocus;
-window.onGraphAssigneeInput = onGraphAssigneeInput;
-window.onGraphTimeWindowChange = onGraphTimeWindowChange;
-window.onGraphFocusModeChange = onGraphFocusModeChange;
-window.onGraphFocusRootInput = onGraphFocusRootInput;
-window.onGraphEpicsOnlyChange = onGraphEpicsOnlyChange;
-window.onGraphPathInput = onGraphPathInput;
-window.graphSearchNext = graphSearchNext;
-window.graphSearchPrev = graphSearchPrev;
-window.traceGraphPath = traceGraphPath;
-window.clearGraphPath = clearGraphPath;
 window.toggleCriticalPath = toggleCriticalPath;
 window.showHealthBreakdown = showHealthBreakdown;
-window.showHealthHelp = showHealthHelp;
-window.showReadyHelp = showReadyHelp;
-window.showBlockedHelp = showBlockedHelp;
+
+// Graph sidebar
+window.graphSidebarSelectAll = graphSidebarSelectAll;
+window.graphSidebarClearAll = graphSidebarClearAll;
 
 // Detail panel
 window.openDetail = openDetail;
@@ -635,12 +643,11 @@ window.addComment = addComment;
 window.loadMetrics = loadMetrics;
 window.showStaleIssues = showStaleIssues;
 
-// Activity
-window.loadActivity = loadActivity;
-
 // Workflow
 window.loadWorkflow = loadWorkflow;
 window.loadPlanView = loadPlanView;
+window.showWorkflowModal = showWorkflowModal;
+window.loadWorkflowInModal = loadWorkflowInModal;
 
 // Files
 window.loadFiles = loadFiles;
@@ -660,10 +667,6 @@ window.createIssueFromFinding = createIssueFromFinding;
 window.closeFinding = closeFinding;
 window.showLinkIssueModal = showLinkIssueModal;
 window.submitLinkIssue = submitLinkIssue;
-
-// Health
-window.loadHealth = loadHealth;
-window.filterFilesByScanSource = filterFilesByScanSource;
 
 // Releases
 window.loadReleases = loadReleases;

@@ -31,6 +31,7 @@ export async function loadWorkflow() {
   if (wfSelect && wfSelect.options.length <= 1) {
     try {
       const registered = await fetchTypes();
+      if (!registered) return;
       for (const t of registered) {
         if (WORKFLOW_HIDDEN[t.type]) continue;
         const opt = document.createElement("option");
@@ -42,8 +43,8 @@ export async function loadWorkflow() {
       if (!wfSelect.value && wfSelect.options.length > 1) {
         wfSelect.value = wfSelect.options[1].value;
       }
-    } catch (_e) {
-      /* non-critical */
+    } catch (err) {
+      console.warn("[workflow] Failed to load type list:", err);
     }
   }
 
@@ -60,8 +61,10 @@ export async function loadWorkflow() {
       }
     }
     renderWorkflowGraph(tpl, stateCounts);
-  } catch (_e) {
-    /* non-critical */
+  } catch (err) {
+    console.warn("[workflow] Failed to render workflow graph:", err);
+    const cy = document.getElementById("workflowCy");
+    if (cy) cy.innerHTML = '<div class="p-4 text-xs text-red-400">Failed to load workflow diagram.</div>';
   }
 }
 
@@ -72,8 +75,8 @@ export async function loadWorkflow() {
  * @param {object} template  - Type info object with `states` and `transitions`.
  * @param {object} stateCounts - Map of state-name to current issue count.
  */
-export function renderWorkflowGraph(template, stateCounts) {
-  const container = document.getElementById("workflowCy");
+export function renderWorkflowGraph(template, stateCounts, targetContainer) {
+  const container = targetContainer || document.getElementById("workflowCy");
   const nodes = template.states.map((s) => {
     const count = stateCounts[s.name] || 0;
     return {
@@ -150,6 +153,119 @@ export function renderWorkflowGraph(template, stateCounts) {
   if (state.workflowCy.zoom() > 1.5) {
     state.workflowCy.zoom(1.5);
     state.workflowCy.center();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Workflow modal — accessible via Settings gear after tab demotion.
+// ---------------------------------------------------------------------------
+
+export function showWorkflowModal(type) {
+  const existing = document.getElementById("workflowModal");
+  if (existing) existing.remove();
+
+  const modal = document.createElement("div");
+  modal.id = "workflowModal";
+  modal.className = "fixed inset-0 bg-black/50 flex items-center justify-center z-50";
+  // Shared cleanup: remove modal and keydown listener from all dismissal paths.
+  const onKey = (ev) => {
+    if (ev.key === "Escape") closeModal();
+  };
+  const closeModal = () => {
+    modal.remove();
+    document.removeEventListener("keydown", onKey);
+  };
+
+  modal.onclick = (ev) => {
+    if (ev.target === modal) closeModal();
+  };
+
+  modal.innerHTML =
+    '<div class="rounded-lg shadow-xl" style="background:var(--surface-raised);border:1px solid var(--border-strong);width:90vw;max-width:800px;height:70vh;display:flex;flex-direction:column">' +
+    '<div class="flex items-center justify-between px-4 py-3" style="border-bottom:1px solid var(--border-default)">' +
+    '<div class="flex items-center gap-3">' +
+    '<span class="text-sm font-semibold" style="color:var(--text-primary)">Workflow Diagram</span>' +
+    '<select id="workflowModalType" onchange="loadWorkflowInModal()" class="bg-overlay text-primary text-xs rounded px-2 py-1 border border-strong">' +
+    '<option value="">Select type...</option></select>' +
+    "</div>" +
+    '<button id="workflowModalClose" class="text-muted text-primary-hover text-lg">&times;</button>' +
+    "</div>" +
+    '<div id="workflowModalCy" class="flex-1" style="min-height:0"></div>' +
+    "</div>";
+
+  document.body.appendChild(modal);
+
+  document.getElementById("workflowModalClose").onclick = closeModal;
+  document.addEventListener("keydown", onKey);
+
+  // Focus trap: keep Tab cycling within modal
+  modal.addEventListener("keydown", (ev) => {
+    if (ev.key !== "Tab") return;
+    const focusable = modal.querySelectorAll('button, select, [tabindex]:not([tabindex="-1"])');
+    if (!focusable.length) return;
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (ev.shiftKey && document.activeElement === first) {
+      ev.preventDefault();
+      last.focus();
+    } else if (!ev.shiftKey && document.activeElement === last) {
+      ev.preventDefault();
+      first.focus();
+    }
+  });
+
+  // Move focus into modal
+  const closeBtn = document.getElementById("workflowModalClose");
+  if (closeBtn) closeBtn.focus();
+
+  populateWorkflowModalTypes(type);
+}
+
+async function populateWorkflowModalTypes(preselect) {
+  const select = document.getElementById("workflowModalType");
+  if (!select) return;
+  try {
+    const registered = await fetchTypes();
+    if (!registered) return;
+    for (const t of registered) {
+      if (WORKFLOW_HIDDEN[t.type]) continue;
+      const opt = document.createElement("option");
+      opt.value = t.type;
+      opt.textContent = t.display_name || t.type;
+      select.appendChild(opt);
+    }
+    if (preselect) {
+      select.value = preselect;
+      loadWorkflowInModal();
+    } else if (select.options.length > 1) {
+      select.value = select.options[1].value;
+      loadWorkflowInModal();
+    }
+  } catch (err) {
+    console.warn("[workflow] Failed to load modal type list:", err);
+  }
+}
+
+export async function loadWorkflowInModal() {
+  const select = document.getElementById("workflowModalType");
+  const container = document.getElementById("workflowModalCy");
+  if (!select || !container) return;
+  const typeName = select.value;
+  if (!typeName) return;
+
+  try {
+    const tpl = await fetchTypeInfo(typeName);
+    if (!tpl) return;
+    const stateCounts = {};
+    for (const i of state.allIssues) {
+      if (i.type === typeName) {
+        stateCounts[i.status] = (stateCounts[i.status] || 0) + 1;
+      }
+    }
+    renderWorkflowGraph(tpl, stateCounts, container);
+  } catch (_e) {
+    container.innerHTML =
+      '<div class="p-4 text-xs text-red-400">Failed to load workflow.</div>';
   }
 }
 

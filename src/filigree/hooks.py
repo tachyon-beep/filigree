@@ -10,19 +10,19 @@ from __future__ import annotations
 
 import logging
 import socket
+import sqlite3
 import subprocess
 import time
 from pathlib import Path
+from urllib.error import URLError
 
 import portalocker
 
 from filigree.core import (
-    DB_FILENAME,
     FiligreeDB,
     find_filigree_command,
     find_filigree_root,
     get_mode,
-    read_config,
 )
 from filigree.install import (
     FILIGREE_INSTRUCTIONS_MARKER,
@@ -109,6 +109,18 @@ def _build_context(db: FiligreeDB, filigree_dir: Path | None = None) -> str:
     ready_count = stats.get("ready_count", 0)
     blocked_count = stats.get("blocked_count", 0)
     lines.append(f"STATS: {ready_count} ready, {blocked_count} blocked")
+
+    # Observation awareness (read-only, guarded for pre-v7 DBs)
+    try:
+        obs_stats = db.observation_stats(sweep=False)
+        if obs_stats["count"] > 0:
+            lines.append("")
+            if obs_stats["stale_count"] > 0:
+                lines.append(f"STALE OBSERVATIONS: {obs_stats['stale_count']} older than 48h — run `list_observations` to triage")
+            else:
+                lines.append(f"OBSERVATIONS: {obs_stats['count']} pending — run `list_observations` to review")
+    except sqlite3.OperationalError:
+        logger.debug("observation stats unavailable in session context", exc_info=True)
 
     return "\n".join(lines)
 
@@ -204,17 +216,24 @@ def generate_session_context() -> str | None:
         freshness_messages = _check_instructions_freshness(project_root)
     except (OSError, UnicodeDecodeError, ValueError):
         logger.warning("Instructions freshness check failed for %s", project_root, exc_info=True)
-    except Exception:
-        logger.error("Unexpected error in instructions freshness check for %s", project_root, exc_info=True)
 
-    config = read_config(filigree_dir)
-    db = FiligreeDB(
-        filigree_dir / DB_FILENAME,
-        prefix=config.get("prefix", "filigree"),
-    )
+    db = FiligreeDB.from_filigree_dir(filigree_dir)
     try:
-        db.initialize()
         context = _build_context(db, filigree_dir)
+    except sqlite3.Error:
+        logger.warning("Database error building session context for %s", filigree_dir, exc_info=True)
+        context = (
+            f"=== Filigree Project Snapshot ===\n\n"
+            f"WARNING: Could not read project database. Run `filigree doctor` to diagnose.\n"
+            f"Project directory: {filigree_dir.parent}"
+        )
+    except Exception:
+        logger.error("BUG: Unexpected error building session context for %s", filigree_dir, exc_info=True)
+        context = (
+            f"=== Filigree Project Snapshot ===\n\n"
+            f"WARNING: Unexpected error building session context. Run `filigree doctor` to diagnose.\n"
+            f"Project directory: {filigree_dir.parent}"
+        )
     finally:
         db.close()
 
@@ -234,14 +253,15 @@ def _is_port_listening(port: int, host: str = "127.0.0.1") -> bool:
     """Check whether *port* is accepting connections on *host*."""
     if not (1 <= port <= 65535):
         return False
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sock.settimeout(0.5)
     try:
-        return sock.connect_ex((host, port)) == 0
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(0.5)
+        try:
+            return sock.connect_ex((host, port)) == 0
+        finally:
+            sock.close()
     except (OSError, OverflowError):
         return False
-    finally:
-        sock.close()
 
 
 def ensure_dashboard_running(port: int | None = None) -> str:
@@ -256,7 +276,11 @@ def ensure_dashboard_running(port: int | None = None) -> str:
     except FileNotFoundError:
         return ""
 
-    mode = get_mode(filigree_dir)
+    try:
+        mode = get_mode(filigree_dir)
+    except ValueError:
+        logger.warning("Invalid mode in config, falling back to ethereal", exc_info=True)
+        mode = "ethereal"
 
     if mode == "server":
         return _ensure_dashboard_server_mode(filigree_dir, port)
@@ -264,12 +288,34 @@ def ensure_dashboard_running(port: int | None = None) -> str:
     return _ensure_dashboard_ethereal_mode(filigree_dir)
 
 
+def _acquire_port(filigree_dir: Path) -> int:
+    """Find an available port, falling back to deterministic port in sandboxed environments.
+
+    Returns the port number on success, or raises ``RuntimeError`` on failure.
+    """
+    from filigree.ephemeral import compute_port, find_available_port
+
+    try:
+        return find_available_port(filigree_dir)
+    except (OSError, RuntimeError) as exc:
+        is_sandbox = isinstance(exc, PermissionError) or isinstance(exc.__cause__, PermissionError) or "Operation not permitted" in str(exc)
+        if is_sandbox:
+            port = compute_port(filigree_dir)
+            logger.warning(
+                "Port probe failed with permission error (%s); falling back to deterministic port %d",
+                exc,
+                port,
+            )
+            return port
+        msg = f"Failed to choose dashboard port: {exc}"
+        raise RuntimeError(msg) from exc
+
+
 def _ensure_dashboard_ethereal_mode(filigree_dir: Path) -> str:
     """Ethereal mode: session-scoped dashboard on a deterministic port."""
     from filigree.ephemeral import (
         cleanup_legacy_tmp_files,
         cleanup_stale_pid,
-        find_available_port,
         read_pid_file,
         read_port_file,
         verify_pid_ownership,
@@ -288,7 +334,7 @@ def _ensure_dashboard_ethereal_mode(filigree_dir: Path) -> str:
         existing_port = read_port_file(port_file)
         if not pid_info or not existing_port:
             return None
-        if not verify_pid_ownership(pid_file, expected_cmd="filigree"):
+        if not verify_pid_ownership(pid_file, expected_cmd="filigree", required_args=("dashboard",)):
             pid_file.unlink(missing_ok=True)
             port_file.unlink(missing_ok=True)
             return None
@@ -318,7 +364,10 @@ def _ensure_dashboard_ethereal_mode(filigree_dir: Path) -> str:
         if running_message:
             return running_message
 
-        port = find_available_port(filigree_dir)
+        try:
+            port = _acquire_port(filigree_dir)
+        except RuntimeError as exc:
+            return str(exc)
         filigree_cmd = find_filigree_command()
 
         log_file = filigree_dir / "ephemeral.log"
@@ -334,7 +383,7 @@ def _ensure_dashboard_ethereal_mode(filigree_dir: Path) -> str:
         except OSError as exc:
             return f"Failed to start dashboard: {exc}"
 
-        write_pid_file(pid_file, proc.pid, cmd="filigree")
+        write_pid_file(pid_file, proc.pid, cmd="filigree dashboard")
         write_port_file(port_file, port)
 
         # Wait for startup
@@ -370,7 +419,7 @@ def _ensure_dashboard_server_mode(filigree_dir: Path, port: int | None) -> str:
 
     try:
         register_project(filigree_dir)
-    except Exception as exc:
+    except (ValueError, RuntimeError, OSError, sqlite3.Error) as exc:
         logger.warning("Failed to register project in server.json", exc_info=True)
         return f"Filigree server registration failed: {exc}"
 
@@ -390,7 +439,7 @@ def _ensure_dashboard_server_mode(filigree_dir: Path, port: int | None) -> str:
         )
         with urllib.request.urlopen(req, timeout=2):  # noqa: S310
             pass
-    except Exception as exc:
+    except (URLError, TimeoutError, OSError) as exc:
         logger.warning("Failed to POST /api/reload to daemon: %s", exc, exc_info=True)
         reload_warning = f" (reload failed: {type(exc).__name__})"
 

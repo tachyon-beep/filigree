@@ -137,3 +137,34 @@ class TestBatchInputValidation:
         commented, errors = db.batch_add_comment([issue.id], text="done")
         assert len(commented) == 1
         assert len(errors) == 0
+
+
+class TestBatchTransitionEnrichmentRace:
+    """batch close/update should handle issue deletion between action and transition lookup."""
+
+    def test_batch_close_already_closed_includes_valid_transitions(self, db: FiligreeDB) -> None:
+        """A ValueError during close should enrich with valid_transitions."""
+        issue = db.create_issue("Test")
+        db.close_issue(issue.id)
+        # Closing again triggers ValueError; enrichment should add valid_transitions
+        _results, errors = db.batch_close([issue.id])
+        assert len(errors) == 1
+        assert errors[0]["code"] == "invalid_transition"
+
+    def test_batch_close_deleted_issue_after_valueerror(self, db: FiligreeDB) -> None:
+        """If issue is deleted between ValueError and get_valid_transitions, no crash.
+
+        Simulates a TOCTOU race: close_issue raises ValueError (already closed),
+        then get_valid_transitions raises KeyError (concurrent deletion).
+        """
+        from unittest.mock import patch
+
+        issue = db.create_issue("Test")
+        db.close_issue(issue.id)
+        # Mock get_valid_transitions to raise KeyError, simulating concurrent deletion
+        with patch.object(db, "get_valid_transitions", side_effect=KeyError(issue.id)):
+            _results, errors = db.batch_close([issue.id])
+        assert len(errors) == 1
+        assert errors[0]["code"] == "invalid_transition"
+        # Should NOT have valid_transitions key since the lookup failed
+        assert "valid_transitions" not in errors[0]

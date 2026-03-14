@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import socket
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
@@ -12,11 +13,13 @@ import pytest
 
 from filigree.core import DB_FILENAME, FiligreeDB
 from filigree.hooks import (
+    CONTEXT_TITLE_MAX_LEN,
     READY_CAP,
     _build_context,
     _check_instructions_freshness,
     _extract_marker_hash,
     _is_port_listening,
+    _sanitize_context_title,
     ensure_dashboard_running,
     generate_session_context,
 )
@@ -86,6 +89,40 @@ class TestBuildContext:
         assert "\t" not in issue_lines[0]
         assert "\x00" not in issue_lines[0]
 
+    def test_no_observations_no_mention(self, db: FiligreeDB) -> None:
+        result = _build_context(db)
+        assert "OBSERVATION" not in result.upper()
+
+    def test_observations_shown_in_context(self, db: FiligreeDB) -> None:
+        db.create_observation("Something to triage")
+        result = _build_context(db)
+        assert "OBSERVATION" in result.upper()
+        assert "list_observations" in result
+
+    def test_stale_observations_warning_in_context(self, db: FiligreeDB) -> None:
+        obs = db.create_observation("Old thing")
+        db.conn.execute(
+            "UPDATE observations SET created_at = '2020-01-01T00:00:00+00:00' WHERE id = ?",
+            (obs["id"],),
+        )
+        db.conn.commit()
+        result = _build_context(db)
+        assert "STALE OBSERVATION" in result.upper()
+
+    def test_observation_stats_operational_error_silent_in_context(self, db: FiligreeDB) -> None:
+        """If observation_stats() raises OperationalError, context still generates."""
+        import sqlite3
+
+        with patch.object(db, "observation_stats", side_effect=sqlite3.OperationalError("no such table")):
+            result = _build_context(db)
+        assert "Filigree Project Snapshot" in result
+        assert "OBSERVATION" not in result.upper()
+
+    def test_observation_stats_non_operational_error_propagates(self, db: FiligreeDB) -> None:
+        """Non-OperationalError from observation_stats() must propagate."""
+        with patch.object(db, "observation_stats", side_effect=TypeError("bad type")), pytest.raises(TypeError, match="bad type"):
+            _build_context(db)
+
 
 class TestGenerateSessionContext:
     def test_returns_none_without_filigree_dir(self, tmp_path: Path) -> None:
@@ -96,10 +133,7 @@ class TestGenerateSessionContext:
         """Smoke test that generate_session_context returns a string when a project exists."""
         # We mock find_filigree_root to return the db's directory
         db_dir = Path(db.db_path).parent
-        with (
-            patch("filigree.hooks.find_filigree_root", return_value=db_dir),
-            patch("filigree.hooks.read_config", return_value={"prefix": "test"}),
-        ):
+        with patch("filigree.hooks.find_filigree_root", return_value=db_dir):
             result = generate_session_context()
         assert result is not None
         assert "Filigree Project Snapshot" in result
@@ -114,6 +148,13 @@ class TestIsPortListening:
         assert _is_port_listening(0) is False
         assert _is_port_listening(-1) is False
         assert _is_port_listening(70000) is False
+
+    def test_socket_permission_error_returns_false(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        def _deny_socket(*_args: object, **_kwargs: object) -> socket.socket:
+            raise PermissionError(1, "Operation not permitted")
+
+        monkeypatch.setattr("filigree.hooks.socket.socket", _deny_socket)
+        assert _is_port_listening(9173) is False
 
 
 class TestExecutableResolution:
@@ -213,6 +254,52 @@ class TestEnsureDashboardSubprocessVerification:
         # Main assertion: function detects the exit and doesn't report success.
         assert "exited" in result.lower()
         assert "started" not in result.lower()
+
+
+class TestEnsureDashboardGetModeError:
+    """Bug filigree-c765b98e9c: ensure_dashboard_running must catch ValueError from get_mode()."""
+
+    def test_invalid_mode_falls_back_to_ethereal(self, tmp_path: Path) -> None:
+        """Corrupt config.json with invalid mode should not crash the hook lifecycle."""
+        mock_proc = MagicMock()
+        mock_proc.poll.return_value = None
+        mock_proc.pid = 11111
+
+        with (
+            patch("filigree.hooks.find_filigree_root", return_value=tmp_path),
+            patch("filigree.hooks.get_mode", side_effect=ValueError("Unknown mode 'bogus'")),
+            patch("filigree.hooks._is_port_listening", return_value=False),
+            patch("filigree.hooks.subprocess.Popen", return_value=mock_proc),
+            patch("filigree.hooks.find_filigree_command", return_value=["/usr/bin/filigree"]),
+            patch("filigree.hooks.time.sleep"),
+            patch.dict(os.environ, {"TMPDIR": str(tmp_path)}),
+        ):
+            result = ensure_dashboard_running()
+
+        # Should not crash — falls back to ethereal mode and spawns
+        assert result != ""
+
+    def test_invalid_mode_logs_warning(self, tmp_path: Path) -> None:
+        """Invalid mode should produce a warning log."""
+        mock_proc = MagicMock()
+        mock_proc.poll.return_value = None
+        mock_proc.pid = 11111
+
+        with (
+            patch("filigree.hooks.find_filigree_root", return_value=tmp_path),
+            patch("filigree.hooks.get_mode", side_effect=ValueError("Unknown mode 'bogus'")),
+            patch("filigree.hooks._is_port_listening", return_value=False),
+            patch("filigree.hooks.subprocess.Popen", return_value=mock_proc),
+            patch("filigree.hooks.find_filigree_command", return_value=["/usr/bin/filigree"]),
+            patch("filigree.hooks.time.sleep"),
+            patch("filigree.hooks.logger") as mock_logger,
+            patch.dict(os.environ, {"TMPDIR": str(tmp_path)}),
+        ):
+            ensure_dashboard_running()
+
+        mock_logger.warning.assert_called_once()
+        # exc_info=True ensures the actual ValueError is logged for diagnosis
+        assert mock_logger.warning.call_args.kwargs.get("exc_info") is True
 
 
 class TestExtractMarkerHash:
@@ -324,10 +411,7 @@ class TestGenerateSessionContextFreshness:
         # Create a stale CLAUDE.md in the project root
         claude_md = project_root / "CLAUDE.md"
         claude_md.write_text("<!-- filigree:instructions:v0.0.0:00000000 -->\nold\n<!-- /filigree:instructions -->\n")
-        with (
-            patch("filigree.hooks.find_filigree_root", return_value=db_dir),
-            patch("filigree.hooks.read_config", return_value={"prefix": "test"}),
-        ):
+        with patch("filigree.hooks.find_filigree_root", return_value=db_dir):
             result = generate_session_context()
         assert result is not None
         assert "Updated filigree instructions in CLAUDE.md" in result
@@ -335,10 +419,7 @@ class TestGenerateSessionContextFreshness:
     def test_context_without_stale_instructions(self, tmp_path: Path, db: FiligreeDB) -> None:
         """generate_session_context should not include update messages when everything is fresh."""
         db_dir = Path(db.db_path).parent
-        with (
-            patch("filigree.hooks.find_filigree_root", return_value=db_dir),
-            patch("filigree.hooks.read_config", return_value={"prefix": "test"}),
-        ):
+        with patch("filigree.hooks.find_filigree_root", return_value=db_dir):
             result = generate_session_context()
         assert result is not None
         assert "Updated" not in result
@@ -367,6 +448,27 @@ class TestSessionContextDashboardUrl:
         filigree_dir.mkdir()
         context = _build_context(db, filigree_dir)
         assert "localhost" not in context
+
+    def test_socket_probe_denied_still_builds_context(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        filigree_dir = tmp_path / ".filigree"
+        filigree_dir.mkdir()
+        config = {"prefix": "test", "version": 1, "mode": "ethereal"}
+        (filigree_dir / "config.json").write_text(json.dumps(config))
+        (filigree_dir / "ephemeral.port").write_text("9173")
+        (filigree_dir / "ephemeral.pid").write_text(str(os.getpid()))
+
+        db = FiligreeDB(filigree_dir / DB_FILENAME, prefix="test")
+        db.initialize()
+
+        def _deny_socket(*_args: object, **_kwargs: object) -> socket.socket:
+            raise PermissionError(1, "Operation not permitted")
+
+        monkeypatch.setattr("filigree.hooks.socket.socket", _deny_socket)
+        context = _build_context(db, filigree_dir)
+        db.close()
+
+        assert "Filigree Project Snapshot" in context
+        assert "http://localhost:9173" not in context
 
 
 class TestEnsureDashboardEthereal:
@@ -473,6 +575,73 @@ class TestEnsureDashboardEthereal:
         # Must NOT raise — returns a human-readable string
         assert isinstance(result, str)
 
+    def test_port_probe_failure_returns_clean_message(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        filigree_dir = tmp_path / ".filigree"
+        filigree_dir.mkdir()
+        config = {"prefix": "test", "version": 1, "mode": "ethereal"}
+        (filigree_dir / "config.json").write_text(json.dumps(config))
+        db = FiligreeDB(filigree_dir / DB_FILENAME, prefix="test")
+        db.initialize()
+        db.close()
+
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr("filigree.ephemeral.find_available_port", lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("denied")))
+
+        result = ensure_dashboard_running()
+        assert "port" in result.lower()
+        assert "denied" in result.lower()
+
+    def test_sandbox_permission_error_falls_back_to_compute_port(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """PermissionError from bind() in sandboxed env falls back to deterministic port."""
+        filigree_dir = tmp_path / ".filigree"
+        filigree_dir.mkdir()
+        config = {"prefix": "test", "version": 1, "mode": "ethereal"}
+        (filigree_dir / "config.json").write_text(json.dumps(config))
+        db = FiligreeDB(filigree_dir / DB_FILENAME, prefix="test")
+        db.initialize()
+        db.close()
+
+        monkeypatch.chdir(tmp_path)
+
+        # PermissionError is an OSError subclass — caught by the except clause
+        exc = PermissionError("Operation not permitted")
+        monkeypatch.setattr("filigree.ephemeral.find_available_port", lambda *_a, **_k: (_ for _ in ()).throw(exc))
+
+        popen_mock = MagicMock()
+        popen_mock.return_value.pid = 12345
+        monkeypatch.setattr("filigree.hooks.subprocess.Popen", popen_mock)
+
+        result = ensure_dashboard_running()
+        # Should NOT return an error — it should attempt to start the dashboard
+        assert "failed" not in result.lower()
+        assert popen_mock.called
+
+    def test_sandbox_wrapped_permission_error_falls_back(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """RuntimeError wrapping a PermissionError triggers sandbox fallback."""
+        filigree_dir = tmp_path / ".filigree"
+        filigree_dir.mkdir()
+        config = {"prefix": "test", "version": 1, "mode": "ethereal"}
+        (filigree_dir / "config.json").write_text(json.dumps(config))
+        db = FiligreeDB(filigree_dir / DB_FILENAME, prefix="test")
+        db.initialize()
+        db.close()
+
+        monkeypatch.chdir(tmp_path)
+
+        # RuntimeError with PermissionError as __cause__ (chained exception)
+        inner = PermissionError("Operation not permitted")
+        exc = RuntimeError("Cannot allocate a local dashboard port")
+        exc.__cause__ = inner
+        monkeypatch.setattr("filigree.ephemeral.find_available_port", lambda *_a, **_k: (_ for _ in ()).throw(exc))
+
+        popen_mock = MagicMock()
+        popen_mock.return_value.pid = 12345
+        monkeypatch.setattr("filigree.hooks.subprocess.Popen", popen_mock)
+
+        result = ensure_dashboard_running()
+        assert "failed" not in result.lower()
+        assert popen_mock.called
+
     def test_server_mode_returns_not_running(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """In server mode, reports daemon status without spawning."""
         filigree_dir = tmp_path / ".filigree"
@@ -568,6 +737,26 @@ class TestEnsureDashboardEthereal:
         mock_logger.warning.assert_called_once()
         assert "ConnectionRefusedError" in result
 
+    def test_server_mode_reload_propagates_non_network_errors(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Non-network errors (e.g. TypeError) during reload POST must propagate."""
+        from filigree.server import ServerConfig
+
+        filigree_dir = tmp_path / ".filigree"
+        filigree_dir.mkdir()
+        (filigree_dir / "config.json").write_text(json.dumps({"prefix": "test", "version": 1, "mode": "server"}))
+        db = FiligreeDB(filigree_dir / DB_FILENAME, prefix="test")
+        db.initialize()
+        db.close()
+
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr("filigree.server.register_project", lambda _p: None)
+        monkeypatch.setattr("filigree.server.read_server_config", lambda: ServerConfig(port=9911))
+        monkeypatch.setattr("filigree.hooks._is_port_listening", lambda *a: True)
+        monkeypatch.setattr("urllib.request.urlopen", lambda *a, **kw: (_ for _ in ()).throw(TypeError("bad type")))
+
+        with pytest.raises(TypeError, match="bad type"):
+            ensure_dashboard_running()
+
 
 class TestFreshnessCheckLogLevel:
     """Bug filigree-ff0974: freshness check failure must log at warning, not debug."""
@@ -582,7 +771,6 @@ class TestFreshnessCheckLogLevel:
 
         with (
             patch("filigree.hooks.find_filigree_root", return_value=db_dir),
-            patch("filigree.hooks.read_config", return_value={"prefix": "test"}),
             patch("filigree.hooks._check_instructions_freshness", side_effect=OSError("disk full")),
             patch("filigree.hooks.logger") as mock_logger,
         ):
@@ -591,7 +779,8 @@ class TestFreshnessCheckLogLevel:
         assert result is not None
         mock_logger.warning.assert_called_once()
 
-    def test_freshness_check_unexpected_error_logs_at_error(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_freshness_check_unexpected_error_propagates(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Programming errors in freshness check must propagate, not be swallowed."""
         db_dir = tmp_path / ".filigree"
         db_dir.mkdir()
         (db_dir / "config.json").write_text(json.dumps({"prefix": "test", "version": 1}))
@@ -601,11 +790,65 @@ class TestFreshnessCheckLogLevel:
 
         with (
             patch("filigree.hooks.find_filigree_root", return_value=db_dir),
-            patch("filigree.hooks.read_config", return_value={"prefix": "test"}),
             patch("filigree.hooks._check_instructions_freshness", side_effect=RuntimeError("boom")),
-            patch("filigree.hooks.logger") as mock_logger,
+            pytest.raises(RuntimeError, match="boom"),
         ):
-            result = generate_session_context()
+            generate_session_context()
 
-        assert result is not None
-        mock_logger.error.assert_called_once()
+
+# ── M6: _sanitize_context_title ────────────────────────────────────────
+
+
+class TestSanitizeContextTitle:
+    """Direct tests for _sanitize_context_title (M6)."""
+
+    def test_normal_string_passes_through(self) -> None:
+        assert _sanitize_context_title("Fix the bug") == "Fix the bug"
+
+    def test_empty_string_returns_untitled(self) -> None:
+        assert _sanitize_context_title("") == "(untitled)"
+
+    def test_none_returns_untitled(self) -> None:
+        assert _sanitize_context_title(None) == "(untitled)"  # type: ignore[arg-type]
+
+    def test_whitespace_only_returns_untitled(self) -> None:
+        assert _sanitize_context_title("   \t\n  ") == "(untitled)"
+
+    def test_newlines_collapsed(self) -> None:
+        assert _sanitize_context_title("line1\nline2\nline3") == "line1 line2 line3"
+
+    def test_tabs_collapsed(self) -> None:
+        assert _sanitize_context_title("col1\tcol2\tcol3") == "col1 col2 col3"
+
+    def test_carriage_return_collapsed(self) -> None:
+        assert _sanitize_context_title("a\r\nb") == "a b"
+
+    def test_multiple_spaces_collapsed(self) -> None:
+        assert _sanitize_context_title("too    many     spaces") == "too many spaces"
+
+    def test_control_characters_removed(self) -> None:
+        assert (
+            _sanitize_context_title("hello\x00world\x07test") == "helloworld test"
+            or _sanitize_context_title("hello\x00world\x07test") == "helloworldtest"
+        )
+        # Just verify no control chars remain
+        result = _sanitize_context_title("hello\x00world")
+        assert all(ch.isprintable() for ch in result)
+
+    def test_truncation_at_160_chars(self) -> None:
+        long_title = "A" * 200
+        result = _sanitize_context_title(long_title)
+        assert len(result) == CONTEXT_TITLE_MAX_LEN
+        assert result.endswith("...")
+
+    def test_exactly_160_chars_not_truncated(self) -> None:
+        exact_title = "B" * CONTEXT_TITLE_MAX_LEN
+        result = _sanitize_context_title(exact_title)
+        assert result == exact_title
+        assert len(result) == CONTEXT_TITLE_MAX_LEN
+
+    def test_161_chars_truncated(self) -> None:
+        title = "C" * (CONTEXT_TITLE_MAX_LEN + 1)
+        result = _sanitize_context_title(title)
+        assert len(result) == CONTEXT_TITLE_MAX_LEN
+        assert result == "C" * (CONTEXT_TITLE_MAX_LEN - 3) + "..."

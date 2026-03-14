@@ -34,6 +34,186 @@ class TestListAndSearch:
         assert "auth" in results[0].title.lower()
 
 
+class TestListIssuesCategoryAliases:
+    """M9: list_issues category aliases 'in_progress'→'wip' and 'closed'→'done'."""
+
+    def test_in_progress_alias(self, db: FiligreeDB) -> None:
+        """status='in_progress' should expand to wip-category states."""
+        issue = db.create_issue("WIP task")
+        db.update_issue(issue.id, status="in_progress")
+        results = db.list_issues(status="in_progress")
+        assert any(i.id == issue.id for i in results)
+
+    def test_closed_alias(self, db: FiligreeDB) -> None:
+        """status='closed' should expand to done-category states."""
+        issue = db.create_issue("Done task")
+        db.close_issue(issue.id)
+        results = db.list_issues(status="closed")
+        assert any(i.id == issue.id for i in results)
+
+    def test_wip_category_direct(self, db: FiligreeDB) -> None:
+        """status='wip' should also work directly."""
+        issue = db.create_issue("WIP direct")
+        db.update_issue(issue.id, status="in_progress")
+        results = db.list_issues(status="wip")
+        assert any(i.id == issue.id for i in results)
+
+    def test_done_category_direct(self, db: FiligreeDB) -> None:
+        """status='done' should also work directly."""
+        issue = db.create_issue("Done direct")
+        db.close_issue(issue.id)
+        results = db.list_issues(status="done")
+        assert any(i.id == issue.id for i in results)
+
+
+class TestListIssuesFilters:
+    """M9: list_issues filter parameters beyond status."""
+
+    def test_filter_by_label(self, db: FiligreeDB) -> None:
+        a = db.create_issue("Labeled", labels=["urgent"])
+        db.create_issue("Unlabeled")
+        results = db.list_issues(label="urgent")
+        assert len(results) >= 1
+        assert any(i.id == a.id for i in results)
+        assert all("urgent" in i.labels for i in results)
+
+    def test_filter_by_assignee(self, db: FiligreeDB) -> None:
+        issue = db.create_issue("Assigned")
+        db.claim_issue(issue.id, assignee="alice")
+        db.create_issue("Unassigned")
+        results = db.list_issues(assignee="alice")
+        assert any(i.id == issue.id for i in results)
+        assert all(i.assignee == "alice" for i in results)
+
+    def test_filter_by_type(self, db: FiligreeDB) -> None:
+        bug = db.create_issue("A bug", type="bug")
+        db.create_issue("A task", type="task")
+        results = db.list_issues(type="bug")
+        assert any(i.id == bug.id for i in results)
+        assert all(i.type == "bug" for i in results)
+
+    def test_filter_by_priority(self, db: FiligreeDB) -> None:
+        p0 = db.create_issue("Critical", priority=0)
+        db.create_issue("Normal", priority=2)
+        results = db.list_issues(priority=0)
+        assert any(i.id == p0.id for i in results)
+        assert all(i.priority == 0 for i in results)
+
+    def test_filter_by_parent_id(self, db: FiligreeDB) -> None:
+        parent = db.create_issue("Parent", type="epic")
+        child = db.create_issue("Child", parent_id=parent.id)
+        db.create_issue("Orphan")
+        results = db.list_issues(parent_id=parent.id)
+        assert any(i.id == child.id for i in results)
+        assert all(i.parent_id == parent.id for i in results)
+
+    def test_combined_filters(self, db: FiligreeDB) -> None:
+        """Multiple filters are ANDed together."""
+        db.create_issue("Bug P0", type="bug", priority=0)
+        db.create_issue("Task P0", type="task", priority=0)
+        db.create_issue("Bug P2", type="bug", priority=2)
+        results = db.list_issues(type="bug", priority=0)
+        assert all(i.type == "bug" and i.priority == 0 for i in results)
+
+
+class TestListIssuesBoundaries:
+    """M9: list_issues negative limit/offset guards."""
+
+    def test_negative_limit_raises(self, db: FiligreeDB) -> None:
+        with pytest.raises(ValueError, match="limit must be non-negative"):
+            db.list_issues(limit=-1)
+
+    def test_negative_offset_raises(self, db: FiligreeDB) -> None:
+        with pytest.raises(ValueError, match="offset must be non-negative"):
+            db.list_issues(offset=-1)
+
+    def test_zero_limit_returns_empty(self, db: FiligreeDB) -> None:
+        db.create_issue("Something")
+        results = db.list_issues(limit=0)
+        assert results == []
+
+    def test_offset_beyond_results(self, db: FiligreeDB) -> None:
+        db.create_issue("Only one")
+        results = db.list_issues(offset=9999)
+        assert results == []
+
+
+class TestSanitizeFtsQuery:
+    """Unit tests for _sanitize_fts_query — primary defense against FTS5 injection."""
+
+    def test_basic_tokens(self) -> None:
+        from filigree.db_issues import _sanitize_fts_query
+
+        result = _sanitize_fts_query("hello world")
+        assert result == '"hello"* AND "world"*'
+
+    def test_special_chars_stripped(self) -> None:
+        from filigree.db_issues import _sanitize_fts_query
+
+        result = _sanitize_fts_query("hello! @world#")
+        assert result == '"hello"* AND "world"*'
+
+    def test_only_special_chars_returns_empty_match(self) -> None:
+        from filigree.db_issues import _sanitize_fts_query
+
+        result = _sanitize_fts_query("!@#$%^&()")
+        assert result == ""
+
+    def test_empty_query_returns_empty_match(self) -> None:
+        from filigree.db_issues import _sanitize_fts_query
+
+        result = _sanitize_fts_query("")
+        assert result == ""
+
+    def test_embedded_double_quotes_removed(self) -> None:
+        from filigree.db_issues import _sanitize_fts_query
+
+        result = _sanitize_fts_query('"hello" "world"')
+        assert result == '"hello"* AND "world"*'
+
+    def test_wildcards_preserved(self) -> None:
+        from filigree.db_issues import _sanitize_fts_query
+
+        result = _sanitize_fts_query("fix*")
+        assert result == '"fix*"*'
+
+    def test_whitespace_only_returns_empty_match(self) -> None:
+        from filigree.db_issues import _sanitize_fts_query
+
+        result = _sanitize_fts_query("   ")
+        assert result == ""
+
+
+class TestEscapeLikeQuery:
+    """Unit tests for _escape_like_query — defense against LIKE injection."""
+
+    def test_plain_string(self) -> None:
+        from filigree.db_issues import _escape_like_query
+
+        assert _escape_like_query("hello") == "%hello%"
+
+    def test_percent_escaped(self) -> None:
+        from filigree.db_issues import _escape_like_query
+
+        assert _escape_like_query("100%") == "%100\\%%"
+
+    def test_underscore_escaped(self) -> None:
+        from filigree.db_issues import _escape_like_query
+
+        assert _escape_like_query("foo_bar") == "%foo\\_bar%"
+
+    def test_backslash_escaped(self) -> None:
+        from filigree.db_issues import _escape_like_query
+
+        assert _escape_like_query("a\\b") == "%a\\\\b%"
+
+    def test_all_special_chars(self) -> None:
+        from filigree.db_issues import _escape_like_query
+
+        result = _escape_like_query("%_\\")
+        assert result == "%\\%\\_\\\\%"
+
+
 class TestSearchFTSFallback:
     """Bug filigree-35ef38: FTS fallback must only catch missing-table errors."""
 
@@ -270,3 +450,53 @@ class TestFTS5SpecialCharacters:
         # becomes "authentication" after stripping specials, which may tokenize differently.
         # The key point is: no crash.
         assert isinstance(results, list)
+
+
+class TestCountSearchResults:
+    """filigree-af817d0cf3: count_search_results unit tests."""
+
+    def test_fts_path_returns_correct_count(self, db: FiligreeDB) -> None:
+        db.create_issue("Fix authentication bug")
+        db.create_issue("Authentication flow rework")
+        db.create_issue("Unrelated feature")
+        count = db.count_search_results("authentication")
+        assert count == 2
+
+    def test_like_fallback_when_fts_unavailable(self, db: FiligreeDB) -> None:
+        """When FTS table is missing, LIKE fallback still returns correct count."""
+        db.create_issue("Fix notification system")
+        db.create_issue("Another notification task")
+        db.create_issue("Unrelated task")
+
+        original_execute = db.conn.execute
+
+        class _NoFTS:
+            def __getattr__(self, name: str) -> object:
+                return getattr(db._conn, name)
+
+            def execute(self, sql: str, params: tuple[object, ...] = ()) -> sqlite3.Cursor:
+                if "issues_fts" in sql and "MATCH" in sql:
+                    raise sqlite3.OperationalError("no such table: issues_fts")
+                return original_execute(sql, params)
+
+        with patch.object(db, "_conn", _NoFTS()):
+            count = db.count_search_results("notification")
+        assert count == 2
+
+    def test_special_character_sanitization(self, db: FiligreeDB) -> None:
+        """Special chars in query don't cause errors and valid tokens still match."""
+        db.create_issue("Fix the dashboard display")
+        count = db.count_search_results("dashboard @#$%")
+        assert count == 1
+
+    def test_empty_query(self, db: FiligreeDB) -> None:
+        """Empty or whitespace-only query should not crash."""
+        db.create_issue("Some issue")
+        count = db.count_search_results("")
+        assert isinstance(count, int)
+
+    def test_only_special_characters_returns_zero(self, db: FiligreeDB) -> None:
+        """Query with only special characters returns 0, not an error."""
+        db.create_issue("Normal issue")
+        count = db.count_search_results("@#$%^&()")
+        assert count == 0

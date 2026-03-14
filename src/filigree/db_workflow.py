@@ -22,7 +22,7 @@ from filigree.types.workflow import (
 )
 
 if TYPE_CHECKING:
-    from filigree.templates import TemplateRegistry, TransitionOption, ValidationResult
+    from filigree.templates import FieldSchema, TemplateRegistry, TransitionOption, ValidationResult
 
 
 class WorkflowMixin(DBMixinProtocol):
@@ -52,6 +52,22 @@ class WorkflowMixin(DBMixinProtocol):
 
     # -- Templates -----------------------------------------------------------
 
+    @staticmethod
+    def _field_schema_to_info(f: FieldSchema) -> FieldSchemaInfo:
+        """Convert a FieldSchema dataclass to a FieldSchemaInfo TypedDict."""
+        info: FieldSchemaInfo = FieldSchemaInfo(name=f.name, type=f.type, description=f.description)
+        if f.options:
+            info["options"] = list(f.options)
+        if f.default is not None:
+            info["default"] = f.default
+        if f.required_at:
+            info["required_at"] = list(f.required_at)
+        if f.pattern:
+            info["pattern"] = f.pattern
+        if f.unique:
+            info["unique"] = f.unique
+        return info
+
     def _seed_templates(self) -> None:
         """Seed built-in packs and type templates into the database."""
         from filigree.core import _seed_builtin_packs
@@ -60,28 +76,42 @@ class WorkflowMixin(DBMixinProtocol):
         _seed_builtin_packs(self.conn, now)
 
     def reload_templates(self) -> None:
-        """Clear the cached template registry so it reloads on next access."""
+        """Clear the cached template registry so it reloads on next access.
+
+        Also refreshes ``self.enabled_packs`` from config.json when no
+        explicit override was provided at construction time.
+        """
         self._template_registry = None
+        if self._enabled_packs_override is None:
+            self._refresh_enabled_packs()
+
+    def _refresh_enabled_packs(self) -> None:
+        """Re-read enabled_packs from config.json and update self.enabled_packs."""
+        import json as _json
+
+        _default_packs = ["core", "planning", "release"]
+        config_path = self.db_path.parent / "config.json"
+        if not config_path.exists():
+            self.enabled_packs = _default_packs
+            return
+        try:
+            config = _json.loads(config_path.read_text())
+        except (ValueError, OSError) as exc:
+            msg = f"config.json exists but could not be parsed: {exc}"
+            raise ValueError(msg) from exc
+        if isinstance(config, dict):
+            packs = config.get("enabled_packs", _default_packs)
+            if isinstance(packs, list):
+                self.enabled_packs = [p for p in packs if isinstance(p, str)]
+                return
+        self.enabled_packs = _default_packs
 
     def get_template(self, issue_type: str) -> TemplateInfo | None:
         """Get a template by type name from the registry."""
         tpl = self.templates.get_type(issue_type)
         if tpl is None:
             return None
-        fields_schema: list[FieldSchemaInfo] = []
-        for f in tpl.fields_schema:
-            field_info: FieldSchemaInfo = FieldSchemaInfo(name=f.name, type=f.type, description=f.description)
-            if f.options:
-                field_info["options"] = list(f.options)
-            if f.default is not None:
-                field_info["default"] = f.default
-            if f.required_at:
-                field_info["required_at"] = list(f.required_at)
-            if f.pattern:
-                field_info["pattern"] = f.pattern
-            if f.unique:
-                field_info["unique"] = f.unique
-            fields_schema.append(field_info)
+        fields_schema = [self._field_schema_to_info(f) for f in tpl.fields_schema]
         return TemplateInfo(
             type=tpl.type,
             display_name=tpl.display_name,
@@ -106,20 +136,7 @@ class WorkflowMixin(DBMixinProtocol):
         """List all registered templates via the registry (respects enabled_packs)."""
         result: list[TemplateListItem] = []
         for tpl in self.templates.list_types():
-            fields: list[FieldSchemaInfo] = []
-            for f in tpl.fields_schema:
-                fi: FieldSchemaInfo = FieldSchemaInfo(name=f.name, type=f.type, description=f.description)
-                if f.options:
-                    fi["options"] = list(f.options)
-                if f.default is not None:
-                    fi["default"] = f.default
-                if f.required_at:
-                    fi["required_at"] = list(f.required_at)
-                if f.pattern:
-                    fi["pattern"] = f.pattern
-                if f.unique:
-                    fi["unique"] = f.unique
-                fields.append(fi)
+            fields = [self._field_schema_to_info(f) for f in tpl.fields_schema]
             result.append(
                 TemplateListItem(
                     type=tpl.type,
@@ -154,10 +171,12 @@ class WorkflowMixin(DBMixinProtocol):
 
         Returns deduplicated list. Empty if no types are registered.
         """
+        seen: set[str] = set()
         states: list[str] = []
         for tpl in self.templates.list_types():
             for s in tpl.states:
-                if s.category == category and s.name not in states:
+                if s.category == category and s.name not in seen:
+                    seen.add(s.name)
                     states.append(s.name)
         return states
 
@@ -222,7 +241,7 @@ class WorkflowMixin(DBMixinProtocol):
         issue = self.get_issue(issue_id)
         tpl = self.templates.get_type(issue.type)
         if tpl is None:
-            return ValidationResult(valid=True, warnings=(), errors=())
+            return ValidationResult(warnings=(), errors=())
 
         warnings: list[str] = []
 
@@ -247,4 +266,4 @@ class WorkflowMixin(DBMixinProtocol):
                 fields_str = ", ".join(t.missing_fields)
                 warnings.append(f"Transition to '{t.to}' requires: {fields_str}")
 
-        return ValidationResult(valid=True, warnings=tuple(warnings), errors=())
+        return ValidationResult(warnings=tuple(warnings), errors=())

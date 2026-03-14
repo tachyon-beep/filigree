@@ -24,56 +24,27 @@ class TestDashboardIndex:
     def test_html_file_exists(self) -> None:
         assert (STATIC_DIR / "dashboard.html").exists()
 
-    async def test_graph_v2_controls_present(self, client: AsyncClient) -> None:
+    async def test_graph_sidebar_and_toolbar_present(self, client: AsyncClient) -> None:
         resp = await client.get("/")
         assert resp.status_code == 200
         html = resp.text
         assert 'class="graph-toolbar flex flex-wrap items-center' in html
-        assert 'id="graphPreset"' in html
-        assert 'value="execution" selected' in html
-        assert 'id="graphFiltersGroup"' in html
-        assert 'id="graphAdvancedGroup"' in html
-        assert "Filters" in html
-        assert "Advanced" in html
-        assert 'onchange="onGraphEpicsOnlyChange()"' in html
-        assert 'id="graphReadyOnly"' in html
-        assert 'id="graphBlockedOnly"' in html
-        assert 'id="graphTimeWindow"' in html
-        assert 'onchange="onGraphTimeWindowChange()"' in html
-        assert 'aria-label="Filter graph by time window"' in html
-        assert 'id="graphAssignee"' in html
-        assert 'oninput="onGraphAssigneeInput()"' in html
+        assert 'id="graphSidebar"' in html
+        assert 'id="graphSidebarList"' in html
+        assert 'id="graphSidebarTypeFilter"' in html
+        assert 'id="graphSidebarStatus"' in html
+        assert 'id="btnCritPath"' in html
         assert 'id="graphNotice"' in html
         assert 'role="status"' in html
         assert 'aria-live="polite"' in html
         assert 'id="graphDiagnosticsBar"' in html
         assert 'id="graphPerfState"' in html
-        assert 'id="graphFocusMode"' in html
-        assert 'id="graphFocusRoot"' in html
-        assert 'id="graphFocusRadius"' in html
-        assert 'id="graphClearFocusBtn"' in html
-        assert 'id="graphClearPathBtn"' in html
-        assert 'onchange="onGraphFocusModeChange()"' in html
-        assert 'oninput="onGraphFocusRootInput()"' in html
-        assert 'id="graphPathSource"' in html
-        assert 'id="graphPathDirection"' in html
-        assert 'id="graphPathTarget"' in html
-        assert 'oninput="onGraphPathInput()"' in html
-        assert 'id="graphTraceBtn"' in html
-        assert 'graphTraceBtn" onclick="traceGraphPath()" disabled' in html
-        assert 'id="graphSearchPrevBtn"' in html
-        assert 'id="graphSearchNextBtn"' in html
-        assert 'aria-label="Previous search match"' in html
-        assert 'aria-label="Next search match"' in html
-        assert 'id="graphNodeLimit"' in html
-        assert 'id="graphEdgeLimit"' in html
 
     async def test_graph_default_not_epics_only(self, client: AsyncClient) -> None:
         resp = await client.get("/")
         assert resp.status_code == 200
         html = resp.text
         assert 'id="graphEpicsOnly" checked' not in html
-        assert 'value="execution" selected' in html
 
 
 class TestDashboardConfigAPI:
@@ -306,6 +277,21 @@ class TestCreateIssueAPI:
         assert data["description"] == "A bug report"
         assert data["assignee"] == "alice"
 
+    async def test_create_preserves_custom_fields(self, release_client: AsyncClient, release_dashboard_db: Any) -> None:
+        resp = await release_client.post(
+            "/api/issues",
+            json={
+                "title": "Release candidate",
+                "type": "release",
+                "fields": {"version": "v1.2.3"},
+            },
+        )
+        assert resp.status_code == 201
+        data = resp.json()
+        assert data["fields"] == {"version": "v1.2.3"}
+        stored = release_dashboard_db.get_issue(data["id"])
+        assert stored.fields == {"version": "v1.2.3"}
+
     async def test_create_empty_title_returns_400(self, client: AsyncClient) -> None:
         resp = await client.post(
             "/api/issues",
@@ -313,6 +299,16 @@ class TestCreateIssueAPI:
         )
         assert resp.status_code == 400
         assert "error" in resp.json()
+
+    async def test_create_invalid_fields_type_returns_400(self, client: AsyncClient) -> None:
+        resp = await client.post(
+            "/api/issues",
+            json={"title": "Bad fields", "fields": []},
+        )
+        assert resp.status_code == 400
+        err = resp.json()["error"]
+        assert err["code"] == "VALIDATION_ERROR"
+        assert "fields must be a dict" in err["message"]
 
     async def test_create_invalid_type_returns_400(self, client: AsyncClient) -> None:
         resp = await client.post(
@@ -396,6 +392,17 @@ class TestUpdateAPI:
         )
         assert resp.status_code == 404
         assert "error" in resp.json()
+
+    async def test_update_invalid_fields_type_returns_400(self, client: AsyncClient, dashboard_db: PopulatedDB) -> None:
+        ids = dashboard_db.ids
+        resp = await client.patch(
+            f"/api/issue/{ids['a']}",
+            json={"fields": []},
+        )
+        assert resp.status_code == 400
+        err = resp.json()["error"]
+        assert err["code"] == "VALIDATION_ERROR"
+        assert "fields must be a dict" in err["message"]
 
     async def test_update_invalid_transition(self, client: AsyncClient, dashboard_db: PopulatedDB) -> None:
         ids = dashboard_db.ids
@@ -833,6 +840,17 @@ class TestBatchAPI:
         assert resp.status_code == 200
         data = resp.json()
         assert len(data["updated"]) == 1
+
+    async def test_batch_update_invalid_fields_type_returns_400(self, client: AsyncClient, dashboard_db: PopulatedDB) -> None:
+        ids = dashboard_db.ids
+        resp = await client.post(
+            "/api/batch/update",
+            json={"issue_ids": [ids["a"]], "fields": []},
+        )
+        assert resp.status_code == 400
+        err = resp.json()["error"]
+        assert err["code"] == "VALIDATION_ERROR"
+        assert "fields must be a dict" in err["message"]
 
     async def test_batch_close(self, client: AsyncClient, dashboard_db: PopulatedDB) -> None:
         ids = dashboard_db.ids

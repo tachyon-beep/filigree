@@ -12,6 +12,7 @@ export const THEME_COLORS = {
   textSecondary: "#8FAAB8",
   graphOutline: "#0B1215",
   graphEdge: "#2A4454",
+  graphEdgeHierarchy: "#3B5C6E",
   accent: "#38BDF8",
 };
 
@@ -52,7 +53,7 @@ export const SEVERITY_COLORS = {
 export const TOUR_STEPS = [
   {
     el: "#btnKanban",
-    text: "The dashboard has 7 views: Kanban (default), Graph, Metrics, Activity, Workflow, Files, and Code Health. Each shows your issues differently.",
+    text: "The dashboard has 5 views: Kanban (default), Graph, Releases, Insights, and Files. Each shows your project differently.",
     pos: "bottom",
   },
   {
@@ -67,17 +68,17 @@ export const TOUR_STEPS = [
   },
   {
     el: "#healthBadge",
-    text: "Health score (0\u201399) measures project flow. Click it for a detailed breakdown of what affects the score.",
+    text: "Health score (0\u2013100) measures project flow. Click it for a detailed breakdown of what affects the score.",
     pos: "bottom",
   },
   {
     el: "#kanbanBoard",
-    text: "Click any card to open its detail panel. Use j/k to navigate between cards with your keyboard.",
+    text: "Click any card to open its detail panel. Use j/k to navigate between cards. Switch between Board, Cluster, and List modes.",
     pos: "top",
   },
   {
     el: null,
-    text: 'Press "?" anytime to see all keyboard shortcuts. Look for small "?" icons next to features for contextual help. Happy tracking!',
+    text: 'Press "?" anytime to see all keyboard shortcuts. Happy tracking!',
     pos: "center",
   },
 ];
@@ -95,7 +96,8 @@ export const state = {
 
   // View state
   currentView: "kanban",
-  kanbanMode: "standard",
+  kanbanMode: "board",
+  statusPills: { open: true, active: true, done: false },
   selectedIssue: null,
   selectedCards: new Set(),
   multiSelectMode: false,
@@ -121,6 +123,10 @@ export const state = {
   graphSearchIndex: 0,
   graphPathNodes: new Set(),
   graphPathEdges: new Set(),
+
+  // Graph sidebar (scoped subtree explorer)
+  graphSidebarSelections: new Map(),   // Map<issueId, {state, causedBy}>
+  graphSidebarTypeFilter: new Set(),   // active type filters (empty = all)
 
   // Filters
   readyFilter: true,
@@ -152,8 +158,9 @@ export const state = {
   previousIssueState: {},
   changedIds: new Set(),
 
-  // Popover
-  _activePopover: null,
+  // List mode sort
+  _listSortCol: "priority",
+  _listSortDir: "asc",
 
   // Cached view data (previously on window._)
   _staleIssues: [],

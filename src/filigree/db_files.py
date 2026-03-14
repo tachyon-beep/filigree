@@ -12,17 +12,19 @@ import json
 import logging
 import os
 import sqlite3
-from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any
+from datetime import UTC, datetime, timedelta
+from typing import TYPE_CHECKING, Any, ClassVar, get_args
 
-from filigree.db_base import DBMixinProtocol, _now_iso
+from filigree.db_base import DBMixinProtocol, _escape_like, _now_iso, _safe_json_loads
+from filigree.models import FileRecord, ScanFinding
+from filigree.types.core import AssocType, FindingStatus, Severity
 from filigree.types.files import ScanIngestResult
 
 if TYPE_CHECKING:
-    from filigree.core import FileRecord, Issue, ScanFinding
-    from filigree.types.core import PaginatedResult
+    from filigree.types.core import PaginatedResult, ScanFindingDict
     from filigree.types.files import (
         CleanStaleResult,
+        EnrichedFileItem,
         FileAssociation,
         FileDetail,
         FileHotspot,
@@ -30,17 +32,23 @@ if TYPE_CHECKING:
         GlobalFindingsStats,
         IssueFileAssociation,
         ScanRunRecord,
+        TimelineEntry,
     )
 
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Constants (originally in core.py, only used by file-domain methods)
+# Constants for file-domain validation
 # ---------------------------------------------------------------------------
 
-VALID_SEVERITIES = frozenset({"critical", "high", "medium", "low", "info"})
-VALID_FINDING_STATUSES = frozenset({"open", "acknowledged", "fixed", "false_positive", "unseen_in_latest"})
-VALID_ASSOC_TYPES = frozenset({"bug_in", "task_for", "scan_finding", "mentioned_in"})
+VALID_SEVERITIES: frozenset[str] = frozenset(get_args(Severity))
+VALID_FINDING_STATUSES: frozenset[str] = frozenset(get_args(FindingStatus))
+TERMINAL_FINDING_STATUSES: frozenset[str] = frozenset({"fixed", "false_positive"})
+# Safety: these values are interpolated into SQL string literals below.
+# Verify none contain characters that could break the SQL.
+if not all(s.isalpha() or s.replace("_", "").isalpha() for s in TERMINAL_FINDING_STATUSES):
+    raise ValueError(f"TERMINAL_FINDING_STATUSES values must be simple identifiers, got: {TERMINAL_FINDING_STATUSES}")
+VALID_ASSOC_TYPES: frozenset[str] = frozenset(get_args(AssocType))
 
 
 def _normalize_scan_path(path: str) -> str:
@@ -56,44 +64,27 @@ class FilesMixin(DBMixinProtocol):
     Actual implementations provided by ``FiligreeDB`` at composition time via MRO.
     """
 
-    # SQL fragment for filtering open (non-terminal) findings.
-    _OPEN_FINDINGS_FILTER = "status NOT IN ('fixed', 'false_positive')"
-    _OPEN_FINDINGS_FILTER_SF = "sf.status NOT IN ('fixed', 'false_positive')"
+    # SQL fragment for filtering open (non-terminal) findings — derived from TERMINAL_FINDING_STATUSES.
+    _OPEN_FINDINGS_FILTER = "status NOT IN ({})".format(", ".join(f"'{s}'" for s in sorted(TERMINAL_FINDING_STATUSES)))
+    _OPEN_FINDINGS_FILTER_SF = "sf.status NOT IN ({})".format(", ".join(f"'{s}'" for s in sorted(TERMINAL_FINDING_STATUSES)))
 
     # Severity ordering for SQL sort: lower number = more severe.
     _SEVERITY_ORDER_SQL = (
         "CASE severity WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 WHEN 'info' THEN 4 ELSE 5 END"
     )
 
+    _VALID_FILE_SORTS = frozenset({"updated_at", "first_seen", "path", "language"})
     _VALID_FINDING_SORTS = frozenset({"updated_at", "severity"})
-
-    if TYPE_CHECKING:
-        # From IssuesMixin
-        def _generate_unique_id(self, table: str, infix: str = "") -> str: ...
-        def create_issue(
-            self,
-            title: str,
-            *,
-            type: str = "task",
-            priority: int = 2,
-            parent_id: str | None = None,
-            assignee: str = "",
-            description: str = "",
-            notes: str = "",
-            fields: dict[str, Any] | None = None,
-            labels: list[str] | None = None,
-            deps: list[str] | None = None,
-            actor: str = "",
-        ) -> Issue: ...
 
     # -- Build helpers -------------------------------------------------------
 
+    @staticmethod
+    def _parse_metadata(raw: str | None, context_id: str) -> dict[str, Any]:
+        """Parse a JSON metadata column, returning ``{_metadata_error: True}`` on corrupt data."""
+        return _safe_json_loads(raw, context_id)
+
     def _build_file_record(self, row: sqlite3.Row) -> FileRecord:
         """Build a FileRecord from a database row."""
-        from filigree.core import FileRecord
-
-        meta_raw = row["metadata"]
-        meta = json.loads(meta_raw) if meta_raw else {}
         return FileRecord(
             id=row["id"],
             path=row["path"],
@@ -101,24 +92,11 @@ class FilesMixin(DBMixinProtocol):
             file_type=row["file_type"] or "",
             first_seen=row["first_seen"],
             updated_at=row["updated_at"],
-            metadata=meta,
+            metadata=self._parse_metadata(row["metadata"], f"file_record:{row['id']}"),
         )
 
     def _build_scan_finding(self, row: sqlite3.Row) -> ScanFinding:
         """Build a ScanFinding from a database row."""
-        from filigree.core import ScanFinding
-
-        meta_raw = row["metadata"]
-        try:
-            parsed_meta = json.loads(meta_raw) if meta_raw else {}
-        except (json.JSONDecodeError, TypeError):
-            logger.warning(
-                "Corrupt metadata in scan finding (file_id=%s): %r",
-                row["file_id"],
-                meta_raw[:200] if meta_raw else meta_raw,
-            )
-            parsed_meta = {}
-        meta = parsed_meta if isinstance(parsed_meta, dict) else {}
         return ScanFinding(
             id=row["id"],
             file_id=row["file_id"],
@@ -136,7 +114,7 @@ class FilesMixin(DBMixinProtocol):
             first_seen=row["first_seen"],
             updated_at=row["updated_at"],
             last_seen_at=row["last_seen_at"],
-            metadata=meta,
+            metadata=self._parse_metadata(row["metadata"], f"scan_finding:{row['file_id']}"),
         )
 
     # -- File registration ---------------------------------------------------
@@ -191,29 +169,40 @@ class FilesMixin(DBMixinProtocol):
                     updates.append("metadata = ?")
                     params.append(new_meta)
                     changes.append(("metadata", old_meta_raw, new_meta))
+            if not updates:
+                # No actual changes — return existing record without phantom update
+                return self.get_file(existing["id"])
             updates.append("updated_at = ?")
             params.append(now)
             params.append(existing["id"])
-            self.conn.execute(
-                f"UPDATE file_records SET {', '.join(updates)} WHERE id = ?",
-                params,
-            )
-            for field, old_val, new_val in changes:
+            try:
                 self.conn.execute(
-                    "INSERT INTO file_events "
-                    "(file_id, event_type, field, old_value, new_value, created_at) "
-                    "VALUES (?, 'file_metadata_update', ?, ?, ?, ?)",
-                    (existing["id"], field, old_val, new_val, now),
+                    f"UPDATE file_records SET {', '.join(updates)} WHERE id = ?",
+                    params,
                 )
-            self.conn.commit()
+                for field, old_val, new_val in changes:
+                    self.conn.execute(
+                        "INSERT INTO file_events "
+                        "(file_id, event_type, field, old_value, new_value, created_at) "
+                        "VALUES (?, 'file_metadata_update', ?, ?, ?, ?)",
+                        (existing["id"], field, old_val, new_val, now),
+                    )
+                self.conn.commit()
+            except Exception:
+                self.conn.rollback()
+                raise
             return self.get_file(existing["id"])
 
         file_id = self._generate_unique_id("file_records", "f")
-        self.conn.execute(
-            "INSERT INTO file_records (id, path, language, file_type, first_seen, updated_at, metadata) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (file_id, path, language, file_type, now, now, json.dumps(metadata or {})),
-        )
-        self.conn.commit()
+        try:
+            self.conn.execute(
+                "INSERT INTO file_records (id, path, language, file_type, first_seen, updated_at, metadata) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (file_id, path, language, file_type, now, now, json.dumps(metadata or {})),
+            )
+            self.conn.commit()
+        except Exception:
+            self.conn.rollback()
+            raise
         return self.get_file(file_id)
 
     def get_file(self, file_id: str) -> FileRecord:
@@ -225,6 +214,7 @@ class FilesMixin(DBMixinProtocol):
 
     def get_file_by_path(self, path: str) -> FileRecord | None:
         """Get a file record by path. Returns None if not found."""
+        path = _normalize_scan_path(path)
         row = self.conn.execute("SELECT * FROM file_records WHERE path = ?", (path,)).fetchone()
         if row is None:
             return None
@@ -247,17 +237,17 @@ class FilesMixin(DBMixinProtocol):
             clauses.append("language = ?")
             params.append(language)
         if path_prefix is not None:
-            escaped = path_prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
             clauses.append("path LIKE ? ESCAPE '\\'")
-            params.append(f"%{escaped}%")
+            params.append(_escape_like(path_prefix))
 
         where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
-        valid_sorts = {"updated_at", "first_seen", "path", "language"}
-        sort_col = sort if sort in valid_sorts else "updated_at"
-        order = "ASC" if sort_col == "path" else "DESC"
+        if sort not in self._VALID_FILE_SORTS:
+            valid = ", ".join(sorted(self._VALID_FILE_SORTS))
+            raise ValueError(f'Invalid sort field "{sort}". Must be one of: {valid}')
+        order = "ASC" if sort == "path" else "DESC"
 
         rows = self.conn.execute(
-            f"SELECT * FROM file_records{where} ORDER BY {sort_col} {order} LIMIT ? OFFSET ?",
+            f"SELECT * FROM file_records{where} ORDER BY {sort} {order} LIMIT ? OFFSET ?",
             [*params, limit, offset],
         ).fetchall()
         return [self._build_file_record(r) for r in rows]
@@ -274,7 +264,7 @@ class FilesMixin(DBMixinProtocol):
         scan_source: str | None = None,
         sort: str = "updated_at",
         direction: str | None = None,
-    ) -> PaginatedResult:
+    ) -> PaginatedResult[EnrichedFileItem]:
         """List file records with pagination metadata.
 
         Returns ``{results, total, limit, offset, has_more}``.
@@ -300,7 +290,10 @@ class FilesMixin(DBMixinProtocol):
         if min_findings is not None and min_findings > 0:
             clauses.append(f"(SELECT COUNT(*) FROM scan_findings sf WHERE sf.file_id = fr.id AND {self._OPEN_FINDINGS_FILTER_SF}) >= ?")
             params.append(min_findings)
-        if has_severity and has_severity in VALID_SEVERITIES:
+        if has_severity is not None:
+            if has_severity not in VALID_SEVERITIES:
+                valid = ", ".join(sorted(VALID_SEVERITIES))
+                raise ValueError(f'Invalid severity filter "{has_severity}". Must be one of: {valid}')
             clauses.append(
                 "(SELECT COUNT(*) FROM scan_findings sf"
                 " WHERE sf.file_id = fr.id"
@@ -319,9 +312,10 @@ class FilesMixin(DBMixinProtocol):
             params,
         ).fetchone()[0]
 
-        valid_sorts = {"updated_at", "first_seen", "path", "language"}
-        sort_col = sort if sort in valid_sorts else "updated_at"
-        default_order = "ASC" if sort_col == "path" else "DESC"
+        if sort not in self._VALID_FILE_SORTS:
+            valid = ", ".join(sorted(self._VALID_FILE_SORTS))
+            raise ValueError(f'Invalid sort field "{sort}". Must be one of: {valid}')
+        default_order = "ASC" if sort == "path" else "DESC"
         order = direction.upper() if direction and direction.upper() in ("ASC", "DESC") else default_order
 
         _open = self._OPEN_FINDINGS_FILTER_SF
@@ -340,14 +334,18 @@ class FilesMixin(DBMixinProtocol):
             f"{_sev_cols} "
             f"(SELECT COUNT(*) FROM file_associations fa"
             f" WHERE fa.file_id = fr.id"
-            f") AS associations_count"
+            f") AS associations_count, "
+            f"(SELECT COUNT(*) FROM observations o"
+            f" WHERE o.file_id = fr.id AND o.expires_at > ?"
+            f") AS observation_count"
             f" FROM file_records fr{where}"
-            f" ORDER BY {sort_col} {order}"
+            f" ORDER BY {sort} {order}"
             f" LIMIT ? OFFSET ?"
         )
-        rows = self.conn.execute(enriched_sql, [*params, limit, offset]).fetchall()
+        now_iso = _now_iso()
+        rows = self.conn.execute(enriched_sql, [now_iso, *params, limit, offset]).fetchall()
 
-        results = []
+        results: list[EnrichedFileItem] = []
         for r in rows:
             d: dict[str, Any] = dict(self._build_file_record(r).to_dict())
             d["summary"] = {
@@ -360,7 +358,8 @@ class FilesMixin(DBMixinProtocol):
                 "info": r["cnt_info"],
             }
             d["associations_count"] = r["associations_count"]
-            results.append(d)
+            d["observation_count"] = r["observation_count"]
+            results.append(d)  # type: ignore[arg-type]  # dict built incrementally
         return {
             "results": results,
             "total": total,
@@ -371,33 +370,13 @@ class FilesMixin(DBMixinProtocol):
 
     # -- Scan ingestion ------------------------------------------------------
 
-    def process_scan_results(
-        self,
-        *,
-        scan_source: str,
-        findings: list[dict[str, Any]],
-        scan_run_id: str = "",
-        mark_unseen: bool = False,
-        create_issues: bool = False,
-    ) -> ScanIngestResult:
-        """Ingest scan results: create/update file records and findings.
+    @staticmethod
+    def _validate_scan_findings(findings: list[dict[str, Any]], scan_source: str) -> list[str]:
+        """Validate and normalize all findings upfront before any writes.
 
-        Each finding dict must have at minimum: path, rule_id, severity, message.
-        Optional: language, line_start, line_end, metadata.
-
-        When *mark_unseen* is ``True``, findings in the same (file, scan_source)
-        that are NOT in this batch are set to ``unseen_in_latest`` status.
-        Only findings with a non-terminal status are affected (``fixed`` and
-        ``false_positive`` are left alone).
-
-        When *create_issues* is ``True``, each finding without an ``issue_id``
-        is promoted to a new candidate ``bug`` issue and linked to its file via
-        ``file_associations(assoc_type='bug_in')``.
-
-        Returns summary stats including ``new_finding_ids``.
+        Mutates findings in-place (normalizes paths and severities).
+        Returns a list of warning messages for unknown severities.
         """
-        # Validate all findings upfront before any writes, so a bad entry
-        # at index N cannot leave writes from 0..N-1 pending.
         warnings: list[str] = []
         for i, f in enumerate(findings):
             if not isinstance(f, dict):
@@ -449,6 +428,316 @@ class FilesMixin(DBMixinProtocol):
                     scan_source,
                 )
                 f["severity"] = "info"
+        return warnings
+
+    def _upsert_file_record(self, *, path: str, language: str, now: str, stats: ScanIngestResult) -> str:
+        """Create or update a file record, returning its id."""
+        existing_file = self.conn.execute("SELECT id FROM file_records WHERE path = ?", (path,)).fetchone()
+        if existing_file is not None:
+            file_id: str = existing_file["id"]
+            update_parts = ["updated_at = ?"]
+            update_params: list[Any] = [now]
+            if language:
+                update_parts.append("language = ?")
+                update_params.append(language)
+            update_params.append(file_id)
+            self.conn.execute(
+                f"UPDATE file_records SET {', '.join(update_parts)} WHERE id = ?",
+                update_params,
+            )
+            stats["files_updated"] += 1
+        else:
+            file_id = self._generate_unique_id("file_records", "f")
+            self.conn.execute(
+                "INSERT INTO file_records (id, path, language, first_seen, updated_at) VALUES (?, ?, ?, ?, ?)",
+                (file_id, path, language, now, now),
+            )
+            stats["files_created"] += 1
+        return file_id
+
+    def _upsert_finding(
+        self,
+        *,
+        f: dict[str, Any],
+        file_id: str,
+        scan_source: str,
+        scan_run_id: str,
+        now: str,
+        stats: ScanIngestResult,
+        seen_finding_ids: dict[str, list[str]],
+        create_issues: bool,
+    ) -> None:
+        """Upsert a single finding (dedup on file_id + scan_source + rule_id + line_start)."""
+        severity = f.get("severity", "info")
+        path = f["path"]
+        rule_id = f.get("rule_id", "")
+        line_start = f.get("line_start")
+        dedup_line = line_start if line_start is not None else -1
+
+        suggestion = f.get("suggestion", "")
+        if len(suggestion) > 10_000:
+            logger.warning(
+                "Suggestion truncated for %s (rule_id=%s): %d chars → 10000",
+                path,
+                rule_id,
+                len(suggestion),
+            )
+            suggestion = suggestion[:10_000] + "\n[truncated]"
+
+        existing_finding = self.conn.execute(
+            "SELECT id, seen_count, scan_run_id, issue_id FROM scan_findings "
+            "WHERE file_id = ? AND scan_source = ? AND rule_id = ? AND coalesce(line_start, -1) = ?",
+            (file_id, scan_source, rule_id, dedup_line),
+        ).fetchone()
+
+        if existing_finding is not None:
+            self._update_existing_finding(
+                existing_finding=existing_finding,
+                f=f,
+                severity=severity,
+                suggestion=suggestion,
+                scan_run_id=scan_run_id,
+                now=now,
+                stats=stats,
+            )
+            seen_finding_ids.setdefault(file_id, []).append(existing_finding["id"])
+            existing_issue_id = existing_finding["issue_id"] or ""
+            if create_issues and not existing_issue_id:
+                self._create_issue_for_finding(
+                    finding_id=existing_finding["id"],
+                    file_id=file_id,
+                    path=path,
+                    rule_id=rule_id,
+                    severity=severity,
+                    message=f.get("message", ""),
+                    suggestion=suggestion,
+                    line_start=line_start,
+                    line_end=f.get("line_end"),
+                    scan_source=scan_source,
+                    now=now,
+                    stats=stats,
+                )
+            elif create_issues and existing_issue_id:
+                self.conn.execute(
+                    "INSERT OR IGNORE INTO file_associations (file_id, issue_id, assoc_type, created_at) VALUES (?, ?, 'bug_in', ?)",
+                    (file_id, existing_issue_id, now),
+                )
+        else:
+            finding_id = self._generate_unique_id("scan_findings", "sf")
+            self.conn.execute(
+                "INSERT INTO scan_findings "
+                "(id, file_id, scan_source, rule_id, severity, status, message, "
+                "suggestion, scan_run_id, "
+                "line_start, line_end, first_seen, updated_at, last_seen_at, metadata) "
+                "VALUES (?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    finding_id,
+                    file_id,
+                    scan_source,
+                    rule_id,
+                    severity,
+                    f.get("message", ""),
+                    suggestion,
+                    scan_run_id,
+                    line_start,
+                    f.get("line_end"),
+                    now,
+                    now,
+                    now,
+                    json.dumps(f.get("metadata") or {}),
+                ),
+            )
+            stats["findings_created"] += 1
+            stats["new_finding_ids"].append(finding_id)
+            seen_finding_ids.setdefault(file_id, []).append(finding_id)
+            if create_issues:
+                self._create_issue_for_finding(
+                    finding_id=finding_id,
+                    file_id=file_id,
+                    path=path,
+                    rule_id=rule_id,
+                    severity=severity,
+                    message=f.get("message", ""),
+                    suggestion=suggestion,
+                    line_start=line_start,
+                    line_end=f.get("line_end"),
+                    scan_source=scan_source,
+                    now=now,
+                    stats=stats,
+                )
+
+    def _update_existing_finding(
+        self,
+        *,
+        existing_finding: Any,
+        f: dict[str, Any],
+        severity: str,
+        suggestion: str,
+        scan_run_id: str,
+        now: str,
+        stats: ScanIngestResult,
+    ) -> None:
+        """Update an already-existing finding with new scan data."""
+        existing_run_id = existing_finding["scan_run_id"] or ""
+        run_id_update = existing_run_id
+        if scan_run_id and not existing_run_id:  # first-attribution-wins
+            run_id_update = scan_run_id
+
+        self.conn.execute(
+            "UPDATE scan_findings SET message = ?, severity = ?, line_end = ?, "
+            "suggestion = ?, scan_run_id = ?, metadata = ?, "
+            "seen_count = seen_count + 1, updated_at = ?, last_seen_at = ?, "
+            "status = CASE WHEN status IN ('fixed', 'unseen_in_latest') THEN 'open' ELSE status END "
+            "WHERE id = ?",
+            (
+                f.get("message", ""),
+                severity,
+                f.get("line_end"),
+                suggestion,
+                run_id_update,
+                json.dumps(f.get("metadata") or {}),
+                now,
+                now,
+                existing_finding["id"],
+            ),
+        )
+        stats["findings_updated"] += 1
+
+    @staticmethod
+    def _priority_for_severity(severity: str) -> int:
+        return {
+            "critical": 0,
+            "high": 1,
+            "medium": 2,
+            "low": 3,
+            "info": 3,
+        }.get(severity, 2)
+
+    def _create_issue_for_finding(
+        self,
+        *,
+        finding_id: str,
+        file_id: str,
+        path: str,
+        rule_id: str,
+        severity: str,
+        message: str,
+        suggestion: str,
+        line_start: int | None,
+        line_end: int | None,
+        scan_source: str,
+        now: str,
+        stats: ScanIngestResult,
+    ) -> str:
+        """Promote a scan finding to a triage bug issue."""
+        summary = message.strip().splitlines()[0].strip() if message and message.strip() else "Scanner finding"
+        location = f"{path}:{line_start}" if line_start is not None else path
+        title = f"[{scan_source}] {location} {summary}"
+        if len(title) > 200:
+            title = f"{title[:197]}..."
+
+        description_lines = [
+            "Automated finding promoted for triage.",
+            "",
+            f"- Scanner: `{scan_source}`",
+            f"- Rule ID: `{rule_id}`",
+            f"- Severity: `{severity}`",
+            f"- File: `{path}`",
+        ]
+        if line_start is not None:
+            if line_end is not None and line_end != line_start:
+                description_lines.append(f"- Lines: `{line_start}`-`{line_end}`")
+            else:
+                description_lines.append(f"- Line: `{line_start}`")
+        description_lines.extend(
+            [
+                "",
+                "Message:",
+                message or "(empty)",
+            ]
+        )
+        if suggestion:
+            description_lines.extend(["", "Suggested fix:", suggestion])
+        description = "\n".join(description_lines)
+
+        issue = self.create_issue(
+            title,
+            type="bug",
+            priority=self._priority_for_severity(severity),
+            description=description,
+            fields={
+                "source": "scan",
+                "scan_source": scan_source,
+                "scan_finding_id": finding_id,
+                "scan_rule_id": rule_id,
+                "scan_severity": severity,
+                "file_id": file_id,
+                "file_path": path,
+                "line_start": line_start,
+                "line_end": line_end,
+            },
+            labels=["candidate", "scan_finding"],
+            actor=f"scanner:{scan_source}",
+        )
+        self.conn.execute(
+            "UPDATE scan_findings SET issue_id = ?, updated_at = ? WHERE id = ?",
+            (issue.id, now, finding_id),
+        )
+        self.conn.execute(
+            "INSERT OR IGNORE INTO file_associations (file_id, issue_id, assoc_type, created_at) VALUES (?, ?, 'bug_in', ?)",
+            (file_id, issue.id, now),
+        )
+        stats["issues_created"] += 1
+        stats["issue_ids"].append(issue.id)
+        return issue.id
+
+    @staticmethod
+    def _mark_unseen_findings(
+        conn: Any,
+        *,
+        scan_source: str,
+        seen_finding_ids: dict[str, list[str]],
+        now: str,
+    ) -> None:
+        """Mark findings not in current batch as unseen_in_latest."""
+        terminal = tuple(TERMINAL_FINDING_STATUSES)
+        terminal_ph = ",".join("?" * len(terminal))
+        for fid, fids in seen_finding_ids.items():
+            placeholders = ",".join("?" * len(fids))
+            conn.execute(
+                f"UPDATE scan_findings SET status = 'unseen_in_latest', updated_at = ? "
+                f"WHERE file_id = ? AND scan_source = ? "
+                f"AND status NOT IN ({terminal_ph}) "
+                f"AND id NOT IN ({placeholders})",
+                [now, fid, scan_source, *terminal, *fids],
+            )
+
+    def process_scan_results(
+        self,
+        *,
+        scan_source: str,
+        findings: list[dict[str, Any]],
+        scan_run_id: str = "",
+        mark_unseen: bool = False,
+        create_issues: bool = False,
+    ) -> ScanIngestResult:
+        """Ingest scan results: create/update file records and findings.
+
+        Each finding dict must have at minimum: path, rule_id, severity, message.
+        Optional: language, line_start, line_end, metadata.
+
+        When *mark_unseen* is ``True``, findings in the same (file, scan_source)
+        that are NOT in this batch are set to ``unseen_in_latest`` status.
+        Only findings with a non-terminal status are affected (``fixed`` and
+        ``false_positive`` are left alone).
+
+        When *create_issues* is ``True``, each finding without an ``issue_id``
+        is promoted to a new candidate ``bug`` issue and linked to its file via
+        ``file_associations(assoc_type='bug_in')``.
+
+        Returns summary stats including ``new_finding_ids``.
+        """
+        warnings = self._validate_scan_findings(findings, scan_source)
 
         now = _now_iso()
         stats = ScanIngestResult(
@@ -462,243 +751,34 @@ class FilesMixin(DBMixinProtocol):
             warnings=warnings,
         )
 
-        def _priority_for_severity(severity: str) -> int:
-            return {
-                "critical": 0,
-                "high": 1,
-                "medium": 2,
-                "low": 3,
-                "info": 3,
-            }.get(severity, 2)
-
-        def _create_issue_for_finding(
-            *,
-            finding_id: str,
-            file_id: str,
-            path: str,
-            rule_id: str,
-            severity: str,
-            message: str,
-            suggestion: str,
-            line_start: int | None,
-            line_end: int | None,
-        ) -> str:
-            summary = message.strip().splitlines()[0].strip() if message and message.strip() else "Scanner finding"
-            location = f"{path}:{line_start}" if line_start is not None else path
-            title = f"[{scan_source}] {location} {summary}"
-            if len(title) > 200:
-                title = f"{title[:197]}..."
-
-            description_lines = [
-                "Automated finding promoted for triage.",
-                "",
-                f"- Scanner: `{scan_source}`",
-                f"- Rule ID: `{rule_id}`",
-                f"- Severity: `{severity}`",
-                f"- File: `{path}`",
-            ]
-            if line_start is not None:
-                if line_end is not None and line_end != line_start:
-                    description_lines.append(f"- Lines: `{line_start}`-`{line_end}`")
-                else:
-                    description_lines.append(f"- Line: `{line_start}`")
-            description_lines.extend(
-                [
-                    "",
-                    "Message:",
-                    message or "(empty)",
-                ]
-            )
-            if suggestion:
-                description_lines.extend(["", "Suggested fix:", suggestion])
-            description = "\n".join(description_lines)
-
-            issue = self.create_issue(
-                title,
-                type="bug",
-                priority=_priority_for_severity(severity),
-                description=description,
-                fields={
-                    "source": "scan",
-                    "scan_source": scan_source,
-                    "scan_finding_id": finding_id,
-                    "scan_rule_id": rule_id,
-                    "scan_severity": severity,
-                    "file_id": file_id,
-                    "file_path": path,
-                    "line_start": line_start,
-                    "line_end": line_end,
-                },
-                labels=["candidate", "scan_finding"],
-                actor=f"scanner:{scan_source}",
-            )
-            self.conn.execute(
-                "UPDATE scan_findings SET issue_id = ?, updated_at = ? WHERE id = ?",
-                (issue.id, now, finding_id),
-            )
-            self.conn.execute(
-                "INSERT OR IGNORE INTO file_associations (file_id, issue_id, assoc_type, created_at) VALUES (?, ?, 'bug_in', ?)",
-                (file_id, issue.id, now),
-            )
-            stats["issues_created"] += 1
-            stats["issue_ids"].append(issue.id)
-            return issue.id
-
-        # Track which finding IDs were seen, keyed by file_id, for mark_unseen
         seen_finding_ids: dict[str, list[str]] = {}
 
         try:
             for f in findings:
-                severity = f.get("severity", "info")
-                path = f["path"]
-                language = f.get("language", "")
+                file_id = self._upsert_file_record(
+                    path=f["path"],
+                    language=f.get("language", ""),
+                    now=now,
+                    stats=stats,
+                )
+                self._upsert_finding(
+                    f=f,
+                    file_id=file_id,
+                    scan_source=scan_source,
+                    scan_run_id=scan_run_id,
+                    now=now,
+                    stats=stats,
+                    seen_finding_ids=seen_finding_ids,
+                    create_issues=create_issues,
+                )
 
-                # Upsert file record
-                existing_file = self.conn.execute("SELECT id FROM file_records WHERE path = ?", (path,)).fetchone()
-                if existing_file is not None:
-                    file_id = existing_file["id"]
-                    update_parts = ["updated_at = ?"]
-                    update_params: list[Any] = [now]
-                    if language:
-                        update_parts.append("language = ?")
-                        update_params.append(language)
-                    update_params.append(file_id)
-                    self.conn.execute(
-                        f"UPDATE file_records SET {', '.join(update_parts)} WHERE id = ?",
-                        update_params,
-                    )
-                    stats["files_updated"] += 1
-                else:
-                    file_id = self._generate_unique_id("file_records", "f")
-                    self.conn.execute(
-                        "INSERT INTO file_records (id, path, language, first_seen, updated_at) VALUES (?, ?, ?, ?, ?)",
-                        (file_id, path, language, now, now),
-                    )
-                    stats["files_created"] += 1
-
-                # Upsert finding (dedup on file_id + scan_source + rule_id + line_start)
-                rule_id = f.get("rule_id", "")
-                line_start = f.get("line_start")
-                dedup_line = line_start if line_start is not None else -1
-
-                # Suggestion size cap (10,000 chars)
-                suggestion = f.get("suggestion", "")
-                if len(suggestion) > 10_000:
-                    logger.warning(
-                        "Suggestion truncated for %s (rule_id=%s): %d chars → 10000",
-                        path,
-                        rule_id,
-                        len(suggestion),
-                    )
-                    suggestion = suggestion[:10_000] + "\n[truncated]"
-
-                existing_finding = self.conn.execute(
-                    "SELECT id, seen_count, scan_run_id, issue_id FROM scan_findings "
-                    "WHERE file_id = ? AND scan_source = ? AND rule_id = ? AND coalesce(line_start, -1) = ?",
-                    (file_id, scan_source, rule_id, dedup_line),
-                ).fetchone()
-
-                if existing_finding is not None:
-                    # scan_run_id attribution: keep original if non-empty, allow
-                    # late attribution for previously-unattributed findings
-                    existing_run_id = existing_finding["scan_run_id"] or ""
-                    run_id_update = existing_run_id
-                    if scan_run_id and not existing_run_id:
-                        run_id_update = scan_run_id
-
-                    self.conn.execute(
-                        "UPDATE scan_findings SET message = ?, severity = ?, line_end = ?, "
-                        "suggestion = ?, scan_run_id = ?, metadata = ?, "
-                        "seen_count = seen_count + 1, updated_at = ?, last_seen_at = ?, "
-                        "status = CASE WHEN status IN ('fixed', 'unseen_in_latest') THEN 'open' ELSE status END "
-                        "WHERE id = ?",
-                        (
-                            f.get("message", ""),
-                            severity,
-                            f.get("line_end"),
-                            suggestion,
-                            run_id_update,
-                            json.dumps(f.get("metadata") or {}),
-                            now,
-                            now,
-                            existing_finding["id"],
-                        ),
-                    )
-                    stats["findings_updated"] += 1
-                    seen_finding_ids.setdefault(file_id, []).append(existing_finding["id"])
-                    existing_issue_id = existing_finding["issue_id"] or ""
-                    if create_issues and not existing_issue_id:
-                        _create_issue_for_finding(
-                            finding_id=existing_finding["id"],
-                            file_id=file_id,
-                            path=path,
-                            rule_id=rule_id,
-                            severity=severity,
-                            message=f.get("message", ""),
-                            suggestion=suggestion,
-                            line_start=line_start,
-                            line_end=f.get("line_end"),
-                        )
-                    elif create_issues and existing_issue_id:
-                        self.conn.execute(
-                            "INSERT OR IGNORE INTO file_associations"
-                            " (file_id, issue_id, assoc_type, created_at)"
-                            " VALUES (?, ?, 'bug_in', ?)",
-                            (file_id, existing_issue_id, now),
-                        )
-                else:
-                    finding_id = self._generate_unique_id("scan_findings", "sf")
-                    self.conn.execute(
-                        "INSERT INTO scan_findings "
-                        "(id, file_id, scan_source, rule_id, severity, status, message, "
-                        "suggestion, scan_run_id, "
-                        "line_start, line_end, first_seen, updated_at, last_seen_at, metadata) "
-                        "VALUES (?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                        (
-                            finding_id,
-                            file_id,
-                            scan_source,
-                            rule_id,
-                            severity,
-                            f.get("message", ""),
-                            suggestion,
-                            scan_run_id,
-                            line_start,
-                            f.get("line_end"),
-                            now,
-                            now,
-                            now,
-                            json.dumps(f.get("metadata") or {}),
-                        ),
-                    )
-                    stats["findings_created"] += 1
-                    stats["new_finding_ids"].append(finding_id)
-                    seen_finding_ids.setdefault(file_id, []).append(finding_id)
-                    if create_issues:
-                        _create_issue_for_finding(
-                            finding_id=finding_id,
-                            file_id=file_id,
-                            path=path,
-                            rule_id=rule_id,
-                            severity=severity,
-                            message=f.get("message", ""),
-                            suggestion=suggestion,
-                            line_start=line_start,
-                            line_end=f.get("line_end"),
-                        )
-
-            # Mark unseen findings as unseen_in_latest (atomic per file+source)
             if mark_unseen:
-                terminal = ("fixed", "false_positive")
-                for fid, fids in seen_finding_ids.items():
-                    placeholders = ",".join("?" * len(fids))
-                    self.conn.execute(
-                        f"UPDATE scan_findings SET status = 'unseen_in_latest', updated_at = ? "
-                        f"WHERE file_id = ? AND scan_source = ? "
-                        f"AND status NOT IN (?, ?) "
-                        f"AND id NOT IN ({placeholders})",
-                        [now, fid, scan_source, *terminal, *fids],
-                    )
+                self._mark_unseen_findings(
+                    self.conn,
+                    scan_source=scan_source,
+                    seen_finding_ids=seen_finding_ids,
+                    now=now,
+                )
 
             self.conn.commit()
         except Exception:
@@ -743,7 +823,7 @@ class FilesMixin(DBMixinProtocol):
         file_id: str,
         finding_id: str,
         *,
-        status: str | None = None,
+        status: FindingStatus | None = None,
         issue_id: str | None = None,
     ) -> ScanFinding:
         """Update finding status and/or linked issue for a specific file finding."""
@@ -791,18 +871,22 @@ class FilesMixin(DBMixinProtocol):
         params.append(now)
         params.extend([finding_id, file_id])
 
-        self.conn.execute(
-            f"UPDATE scan_findings SET {', '.join(updates)} WHERE id = ? AND file_id = ?",
-            params,
-        )
-
-        if normalized_issue_id:
+        try:
             self.conn.execute(
-                "INSERT OR IGNORE INTO file_associations (file_id, issue_id, assoc_type, created_at) VALUES (?, ?, 'bug_in', ?)",
-                (file_id, normalized_issue_id, now),
+                f"UPDATE scan_findings SET {', '.join(updates)} WHERE id = ? AND file_id = ?",
+                params,
             )
 
-        self.conn.commit()
+            if normalized_issue_id:
+                self.conn.execute(
+                    "INSERT OR IGNORE INTO file_associations (file_id, issue_id, assoc_type, created_at) VALUES (?, ?, 'bug_in', ?)",
+                    (file_id, normalized_issue_id, now),
+                )
+
+            self.conn.commit()
+        except Exception:
+            self.conn.rollback()
+            raise
         updated = self.conn.execute("SELECT * FROM scan_findings WHERE id = ?", (finding_id,)).fetchone()
         if updated is None:
             msg = f"Finding not found after update: {finding_id}"
@@ -821,8 +905,6 @@ class FilesMixin(DBMixinProtocol):
         Only affects findings whose ``last_seen_at`` (or ``updated_at`` as
         fallback) is older than the cutoff.  Returns stats about what changed.
         """
-        from datetime import timedelta
-
         cutoff = (datetime.now(UTC) - timedelta(days=days)).isoformat()
 
         clauses = [
@@ -837,11 +919,15 @@ class FilesMixin(DBMixinProtocol):
 
         now = _now_iso()
         where = " AND ".join(clauses)
-        cursor = self.conn.execute(
-            f"UPDATE scan_findings SET status = 'fixed', updated_at = ? WHERE {where}",
-            [now, *params],
-        )
-        self.conn.commit()
+        try:
+            cursor = self.conn.execute(
+                f"UPDATE scan_findings SET status = 'fixed', updated_at = ? WHERE {where}",
+                [now, *params],
+            )
+            self.conn.commit()
+        except Exception:
+            self.conn.rollback()
+            raise
         return {"findings_fixed": cursor.rowcount}
 
     @staticmethod
@@ -856,8 +942,8 @@ class FilesMixin(DBMixinProtocol):
         self,
         file_id: str,
         *,
-        severity: str | None = None,
-        status: str | None = None,
+        severity: Severity | None = None,
+        status: FindingStatus | None = None,
         sort: str = "updated_at",
     ) -> tuple[str, list[Any], str]:
         """Build WHERE clause, params, and ORDER clause for findings queries.
@@ -887,8 +973,8 @@ class FilesMixin(DBMixinProtocol):
         self,
         file_id: str,
         *,
-        severity: str | None = None,
-        status: str | None = None,
+        severity: Severity | None = None,
+        status: FindingStatus | None = None,
         sort: str = "updated_at",
         limit: int = 100,
         offset: int = 0,
@@ -905,12 +991,12 @@ class FilesMixin(DBMixinProtocol):
         self,
         file_id: str,
         *,
-        severity: str | None = None,
-        status: str | None = None,
+        severity: Severity | None = None,
+        status: FindingStatus | None = None,
         sort: str = "updated_at",
         limit: int = 100,
         offset: int = 0,
-    ) -> PaginatedResult:
+    ) -> PaginatedResult[ScanFindingDict]:
         """Get scan findings with pagination metadata.
 
         Returns ``{results, total, limit, offset, has_more}``.
@@ -923,7 +1009,7 @@ class FilesMixin(DBMixinProtocol):
         ).fetchone()[0]
 
         findings = self.get_findings(file_id, severity=severity, status=status, sort=sort, limit=limit, offset=offset)
-        results: list[dict[str, Any]] = [dict(f.to_dict()) for f in findings]
+        results: list[ScanFindingDict] = [f.to_dict() for f in findings]
         return {
             "results": results,
             "total": total,
@@ -981,11 +1067,22 @@ class FilesMixin(DBMixinProtocol):
         associations = self.get_file_associations(file_id)
         recent = self.get_findings(file_id, limit=10)
         summary = self.get_file_findings_summary(file_id)
+        # Observation count (no sweep, but filter expired — read-only path).
+        # Guarded for pre-v7 DBs where observations table may not exist.
+        has_obs_table = self.conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='observations'").fetchone()
+        if has_obs_table:
+            obs_count = self.conn.execute(
+                "SELECT COUNT(*) FROM observations WHERE file_id = ? AND expires_at > ?",
+                (file_id, _now_iso()),
+            ).fetchone()[0]
+        else:
+            obs_count = 0
         return {
             "file": f.to_dict(),
             "associations": associations,
             "recent_findings": [r.to_dict() for r in recent],
             "summary": summary,
+            "observation_count": obs_count,
         }
 
     # -- File associations ---------------------------------------------------
@@ -994,7 +1091,7 @@ class FilesMixin(DBMixinProtocol):
         self,
         file_id: str,
         issue_id: str,
-        assoc_type: str,
+        assoc_type: AssocType,
     ) -> None:
         """Link a file to an issue. Idempotent (duplicates ignored)."""
         if assoc_type not in VALID_ASSOC_TYPES:
@@ -1006,11 +1103,15 @@ class FilesMixin(DBMixinProtocol):
             msg = f'Issue not found: "{issue_id}". Verify the issue exists before creating an association.'
             raise ValueError(msg)
         now = _now_iso()
-        self.conn.execute(
-            "INSERT OR IGNORE INTO file_associations (file_id, issue_id, assoc_type, created_at) VALUES (?, ?, ?, ?)",
-            (file_id, issue_id, assoc_type, now),
-        )
-        self.conn.commit()
+        try:
+            self.conn.execute(
+                "INSERT OR IGNORE INTO file_associations (file_id, issue_id, assoc_type, created_at) VALUES (?, ?, ?, ?)",
+                (file_id, issue_id, assoc_type, now),
+            )
+            self.conn.commit()
+        except Exception:
+            self.conn.rollback()
+            raise
 
     def get_file_associations(self, file_id: str) -> list[FileAssociation]:
         """Get all issue associations for a file."""
@@ -1063,7 +1164,7 @@ class FilesMixin(DBMixinProtocol):
             "UNION "
             "SELECT sf.* FROM scan_findings sf "
             "JOIN file_associations fa ON sf.file_id = fa.file_id "
-            "WHERE fa.issue_id = ? AND fa.assoc_type = 'scan_finding'",
+            "WHERE fa.issue_id = ?",
             (issue_id, issue_id),
         ).fetchall()
         return [self._build_scan_finding(r) for r in rows]
@@ -1071,7 +1172,7 @@ class FilesMixin(DBMixinProtocol):
     def get_file_hotspots(self, *, limit: int = 10) -> list[FileHotspot]:
         """Get files ranked by weighted finding severity score."""
         rows = self.conn.execute(
-            """
+            f"""
             SELECT
                 fr.id, fr.path, fr.language,
                 SUM(CASE WHEN sf.severity = 'critical' THEN 1 ELSE 0 END) as cnt_critical,
@@ -1090,7 +1191,7 @@ class FilesMixin(DBMixinProtocol):
                 ) as score
             FROM file_records fr
             JOIN scan_findings sf ON sf.file_id = fr.id
-            WHERE sf.status = 'open'
+            WHERE {self._OPEN_FINDINGS_FILTER_SF}
             GROUP BY fr.id
             HAVING score > 0
             ORDER BY score DESC
@@ -1116,6 +1217,43 @@ class FilesMixin(DBMixinProtocol):
 
     # -- File Timeline -------------------------------------------------------
 
+    _TIMELINE_CTE = """
+    WITH timeline AS (
+        SELECT 'finding_created' AS type, first_seen AS timestamp,
+               id AS source_id,
+               json_object('scan_source', scan_source, 'rule_id', rule_id,
+                           'severity', severity, 'message', message) AS data_json
+        FROM scan_findings WHERE file_id = ?
+        UNION ALL
+        SELECT 'finding_updated' AS type, updated_at AS timestamp,
+               id AS source_id,
+               json_object('scan_source', scan_source, 'rule_id', rule_id,
+                           'severity', severity, 'status', status) AS data_json
+        FROM scan_findings WHERE file_id = ? AND updated_at != first_seen
+        UNION ALL
+        SELECT 'association_created' AS type, fa.created_at AS timestamp,
+               CAST(fa.id AS TEXT) AS source_id,
+               json_object('issue_id', fa.issue_id,
+                           'issue_title', COALESCE(i.title, ''),
+                           'assoc_type', fa.assoc_type) AS data_json
+        FROM file_associations fa
+        LEFT JOIN issues i ON fa.issue_id = i.id
+        WHERE fa.file_id = ?
+        UNION ALL
+        SELECT 'file_metadata_update' AS type, created_at AS timestamp,
+               CAST(id AS TEXT) AS source_id,
+               json_object('field', field, 'old_value', old_value,
+                           'new_value', new_value) AS data_json
+        FROM file_events WHERE file_id = ?
+    )
+    """
+
+    _TIMELINE_TYPE_FILTERS: ClassVar[dict[str, str]] = {
+        "finding": "WHERE type IN ('finding_created', 'finding_updated')",
+        "association": "WHERE type = 'association_created'",
+        "file_metadata_update": "WHERE type = 'file_metadata_update'",
+    }
+
     def get_file_timeline(
         self,
         file_id: str,
@@ -1123,117 +1261,54 @@ class FilesMixin(DBMixinProtocol):
         limit: int = 50,
         offset: int = 0,
         event_type: str | None = None,
-    ) -> PaginatedResult:
+    ) -> PaginatedResult[TimelineEntry]:
         """Build a merged timeline of events for a file.
 
         Assembles entries from scan findings and file associations, sorted
         newest-first.  Each entry carries a deterministic ``id`` derived from
         ``sha256(type + timestamp + source_id)[:12]`` so clients can
         cache/deduplicate without server coordination.
+
+        Pagination is pushed to SQL via UNION ALL + ORDER BY + LIMIT/OFFSET
+        so only the requested page is materialized in Python.
         """
         self.get_file(file_id)  # validate existence
 
-        entries: list[dict[str, Any]] = []
+        if event_type is not None and event_type not in self._TIMELINE_TYPE_FILTERS:
+            valid_types = tuple(self._TIMELINE_TYPE_FILTERS)
+            raise ValueError(f'Invalid event_type "{event_type}". Must be one of: {", ".join(valid_types)}')
 
-        # 1. Finding events (created + status changes inferred from updated_at)
-        findings = self.conn.execute(
-            "SELECT id, scan_source, rule_id, severity, status, message, "
-            "first_seen, updated_at FROM scan_findings WHERE file_id = ? "
-            "ORDER BY first_seen DESC",
-            (file_id,),
+        type_filter = self._TIMELINE_TYPE_FILTERS[event_type] if event_type else ""
+        base_params: list[Any] = [file_id, file_id, file_id, file_id]
+
+        total_row = self.conn.execute(
+            f"{self._TIMELINE_CTE} SELECT COUNT(*) FROM timeline {type_filter}",
+            base_params,
+        ).fetchone()
+        total: int = total_row[0]
+
+        rows = self.conn.execute(
+            f"{self._TIMELINE_CTE} SELECT type, timestamp, source_id, data_json "
+            f"FROM timeline {type_filter} "
+            f"ORDER BY timestamp DESC LIMIT ? OFFSET ?",
+            [*base_params, limit, offset],
         ).fetchall()
-        for f in findings:
+
+        entries: list[TimelineEntry] = []
+        for r in rows:
+            raw = f"{r['type']}:{r['timestamp']}:{r['source_id']}"
             entries.append(
                 {
-                    "type": "finding_created",
-                    "timestamp": f["first_seen"],
-                    "source_id": f["id"],
-                    "data": {
-                        "scan_source": f["scan_source"],
-                        "rule_id": f["rule_id"],
-                        "severity": f["severity"],
-                        "message": f["message"],
-                    },
-                }
-            )
-            if f["updated_at"] != f["first_seen"]:
-                entries.append(
-                    {
-                        "type": "finding_updated",
-                        "timestamp": f["updated_at"],
-                        "source_id": f["id"],
-                        "data": {
-                            "scan_source": f["scan_source"],
-                            "rule_id": f["rule_id"],
-                            "severity": f["severity"],
-                            "status": f["status"],
-                        },
-                    }
-                )
-
-        # 2. Association events
-        assocs = self.conn.execute(
-            "SELECT fa.id, fa.issue_id, fa.assoc_type, fa.created_at, "
-            "i.title as issue_title "
-            "FROM file_associations fa "
-            "LEFT JOIN issues i ON fa.issue_id = i.id "
-            "WHERE fa.file_id = ? ORDER BY fa.created_at DESC",
-            (file_id,),
-        ).fetchall()
-        for a in assocs:
-            entries.append(
-                {
-                    "type": "association_created",
-                    "timestamp": a["created_at"],
-                    "source_id": str(a["id"]),
-                    "data": {
-                        "issue_id": a["issue_id"],
-                        "issue_title": a["issue_title"],
-                        "assoc_type": a["assoc_type"],
-                    },
+                    "id": hashlib.sha256(raw.encode()).hexdigest()[:12],
+                    "type": r["type"],
+                    "timestamp": r["timestamp"],
+                    "source_id": r["source_id"],
+                    "data": _safe_json_loads(r["data_json"], f"timeline:{r['source_id']}"),
                 }
             )
 
-        # 3. File metadata events
-        meta_events = self.conn.execute(
-            "SELECT id, field, old_value, new_value, created_at FROM file_events WHERE file_id = ? ORDER BY created_at DESC",
-            (file_id,),
-        ).fetchall()
-        for m in meta_events:
-            entries.append(
-                {
-                    "type": "file_metadata_update",
-                    "timestamp": m["created_at"],
-                    "source_id": str(m["id"]),
-                    "data": {
-                        "field": m["field"],
-                        "old_value": m["old_value"],
-                        "new_value": m["new_value"],
-                    },
-                }
-            )
-
-        # Filter by event type before sorting/paginating
-        if event_type == "finding":
-            entries = [e for e in entries if e["type"].startswith("finding_")]
-        elif event_type == "association":
-            entries = [e for e in entries if e["type"].startswith("association_")]
-        elif event_type == "file_metadata_update":
-            entries = [e for e in entries if e["type"] == "file_metadata_update"]
-        elif event_type is not None:
-            entries = []  # Unknown filter type -> empty results
-
-        # Add deterministic IDs and sort newest-first
-        for entry in entries:
-            raw = f"{entry['type']}:{entry['timestamp']}:{entry['source_id']}"
-            entry["id"] = hashlib.sha256(raw.encode()).hexdigest()[:12]
-
-        entries.sort(key=lambda e: e["timestamp"], reverse=True)
-
-        total = len(entries)
-        page = entries[offset : offset + limit]
         return {
-            "results": page,
+            "results": entries,
             "total": total,
             "limit": limit,
             "offset": offset,

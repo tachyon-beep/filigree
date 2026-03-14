@@ -7,11 +7,12 @@ Python's MRO when composed into ``FiligreeDB``.
 
 from __future__ import annotations
 
+import json
+import sqlite3
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, cast
 
-from filigree.db_base import DBMixinProtocol, StatusCategory, _now_iso
-from filigree.types.events import EventRecord, EventRecordWithTitle, UndoResult
+from filigree.db_base import DBMixinProtocol, _now_iso
+from filigree.types.events import EventRecord, EventRecordWithTitle, EventType, UndoResult
 
 # ---------------------------------------------------------------------------
 # Undo constants (moved from core.py — only used by undo_last)
@@ -28,6 +29,7 @@ _REVERSIBLE_EVENTS = frozenset(
         "dependency_removed",
         "description_changed",
         "notes_changed",
+        "fields_changed",
     }
 )
 
@@ -40,18 +42,43 @@ class EventsMixin(DBMixinProtocol):
     provided by ``FiligreeDB`` at composition time via MRO.
     """
 
-    if TYPE_CHECKING:
+    # -- Build helpers (replace cast() at SQL boundary) -----------------------
 
-        def _resolve_status_category(self, issue_type: str, status: str) -> StatusCategory: ...
+    @staticmethod
+    def _build_event_record(row: sqlite3.Row) -> EventRecord:
+        """Build an EventRecord from a database row with explicit key mapping."""
+        return EventRecord(
+            id=row["id"],
+            issue_id=row["issue_id"],
+            event_type=row["event_type"],
+            actor=row["actor"],
+            old_value=row["old_value"],
+            new_value=row["new_value"],
+            comment=row["comment"],
+            created_at=row["created_at"],
+        )
 
-        def _get_states_for_category(self, category: str) -> list[str]: ...
+    @staticmethod
+    def _build_event_record_with_title(row: sqlite3.Row) -> EventRecordWithTitle:
+        """Build an EventRecordWithTitle from a joined database row."""
+        return EventRecordWithTitle(
+            id=row["id"],
+            issue_id=row["issue_id"],
+            event_type=row["event_type"],
+            actor=row["actor"],
+            old_value=row["old_value"],
+            new_value=row["new_value"],
+            comment=row["comment"],
+            created_at=row["created_at"],
+            issue_title=row["issue_title"],
+        )
 
     # -- Events (private) ----------------------------------------------------
 
     def _record_event(
         self,
         issue_id: str,
-        event_type: str,
+        event_type: EventType,
         *,
         actor: str = "",
         old_value: str | None = None,
@@ -71,7 +98,7 @@ class EventsMixin(DBMixinProtocol):
             "ORDER BY e.created_at DESC, e.id DESC LIMIT ?",
             (limit,),
         ).fetchall()
-        return cast(list[EventRecordWithTitle], [dict(r) for r in rows])
+        return [self._build_event_record_with_title(r) for r in rows]
 
     def get_events_since(self, since: str, *, limit: int = 100) -> list[EventRecordWithTitle]:
         """Get events since a given ISO timestamp, ordered chronologically."""
@@ -82,7 +109,7 @@ class EventsMixin(DBMixinProtocol):
             "ORDER BY e.created_at ASC, e.id ASC LIMIT ?",
             (since, limit),
         ).fetchall()
-        return cast(list[EventRecordWithTitle], [dict(r) for r in rows])
+        return [self._build_event_record_with_title(r) for r in rows]
 
     def get_issue_events(self, issue_id: str, *, limit: int = 50) -> list[EventRecord]:
         """Get events for a specific issue, newest first."""
@@ -91,7 +118,7 @@ class EventsMixin(DBMixinProtocol):
             "SELECT * FROM events WHERE issue_id = ? ORDER BY created_at DESC, id DESC LIMIT ?",
             (issue_id, limit),
         ).fetchall()
-        return cast(list[EventRecord], [dict(r) for r in rows])
+        return [self._build_event_record(r) for r in rows]
 
     def undo_last(self, issue_id: str, *, actor: str = "") -> UndoResult:
         """Undo the most recent reversible event for an issue.
@@ -117,104 +144,129 @@ class EventsMixin(DBMixinProtocol):
         event_type = row["event_type"]
         event_id = row["id"]
 
-        # Check if this event was already undone (a newer 'undone' event exists)
+        # Check if this event was already undone (an 'undone' event references it)
         already_undone = self.conn.execute(
-            "SELECT 1 FROM events WHERE issue_id = ? AND event_type = 'undone' AND (created_at > ? OR (created_at = ? AND id > ?))",
-            (issue_id, row["created_at"], row["created_at"], event_id),
+            "SELECT 1 FROM events WHERE issue_id = ? AND event_type = 'undone' AND new_value = ?",
+            (issue_id, str(event_id)),
         ).fetchone()
         if already_undone:
             return {"undone": False, "reason": "Most recent reversible event already undone"}
 
-        # Apply reverse action
-        match event_type:
-            case "status_changed":
-                old_status = row["old_value"]
-                # Direct SQL update — bypasses transition validation for undo
-                self.conn.execute(
-                    "UPDATE issues SET status = ?, updated_at = ? WHERE id = ?",
-                    (old_status, now, issue_id),
-                )
-                # Maintain closed_at consistency with the restored status
-                old_cat = self._resolve_status_category(current.type, old_status)
-                if old_cat == "done":
-                    # Restoring to a done state — set closed_at
+        # Apply reverse action — wrapped in try/except for rollback safety
+        try:
+            match event_type:
+                case "status_changed":
+                    old_status = row["old_value"]
+                    if old_status is None:
+                        return {"undone": False, "reason": "Cannot undo: event has no old_value"}
+                    # Direct SQL update — bypasses transition validation for undo
                     self.conn.execute(
-                        "UPDATE issues SET closed_at = ? WHERE id = ?",
-                        (now, issue_id),
+                        "UPDATE issues SET status = ?, updated_at = ? WHERE id = ?",
+                        (old_status, now, issue_id),
                     )
-                else:
-                    # Restoring to a non-done state — clear closed_at
+                    # Maintain closed_at consistency with the restored status
+                    old_cat = self._resolve_status_category(current.type, old_status)
+                    if old_cat == "done":
+                        # Restoring to a done state — set closed_at
+                        self.conn.execute(
+                            "UPDATE issues SET closed_at = ? WHERE id = ?",
+                            (now, issue_id),
+                        )
+                    else:
+                        # Restoring to a non-done state — clear closed_at
+                        self.conn.execute(
+                            "UPDATE issues SET closed_at = NULL WHERE id = ?",
+                            (issue_id,),
+                        )
+
+                case "title_changed":
+                    if row["old_value"] is None:
+                        return {"undone": False, "reason": "Cannot undo: event has no old_value"}
                     self.conn.execute(
-                        "UPDATE issues SET closed_at = NULL WHERE id = ?",
-                        (issue_id,),
+                        "UPDATE issues SET title = ?, updated_at = ? WHERE id = ?",
+                        (row["old_value"], now, issue_id),
                     )
 
-            case "title_changed":
-                self.conn.execute(
-                    "UPDATE issues SET title = ?, updated_at = ? WHERE id = ?",
-                    (row["old_value"], now, issue_id),
-                )
+                case "priority_changed":
+                    if row["old_value"] is None:
+                        return {"undone": False, "reason": "Cannot undo: event has no old_value"}
+                    try:
+                        old_priority = int(row["old_value"])
+                    except (ValueError, TypeError):
+                        return {"undone": False, "reason": f"Cannot undo: old_value {row['old_value']!r} is not a valid priority"}
+                    self.conn.execute(
+                        "UPDATE issues SET priority = ?, updated_at = ? WHERE id = ?",
+                        (old_priority, now, issue_id),
+                    )
 
-            case "priority_changed":
-                if row["old_value"] is None:
-                    return {"undone": False, "reason": "Cannot undo: event has no old_value"}
-                self.conn.execute(
-                    "UPDATE issues SET priority = ?, updated_at = ? WHERE id = ?",
-                    (int(row["old_value"]), now, issue_id),
-                )
+                case "assignee_changed":
+                    self.conn.execute(
+                        "UPDATE issues SET assignee = ?, updated_at = ? WHERE id = ?",
+                        (row["old_value"] or "", now, issue_id),
+                    )
 
-            case "assignee_changed":
-                self.conn.execute(
-                    "UPDATE issues SET assignee = ?, updated_at = ? WHERE id = ?",
-                    (row["old_value"] or "", now, issue_id),
-                )
+                case "claimed":
+                    # Restore: revert to the assignee before the claim (usually '' but
+                    # preserves prior assignee if the claim re-assigned from another agent)
+                    self.conn.execute(
+                        "UPDATE issues SET assignee = ?, updated_at = ? WHERE id = ?",
+                        (row["old_value"] if row["old_value"] is not None else "", now, issue_id),
+                    )
 
-            case "claimed":
-                # Restore: revert to the assignee before the claim (usually '' but
-                # preserves prior assignee if the claim re-assigned from another agent)
-                self.conn.execute(
-                    "UPDATE issues SET assignee = ?, updated_at = ? WHERE id = ?",
-                    (row["old_value"] if row["old_value"] is not None else "", now, issue_id),
-                )
+                case "dependency_added":
+                    # Event: issue_id=from_id, new_value="type:depends_on_id"
+                    if row["new_value"] is None:
+                        return {"undone": False, "reason": "Cannot undo: event has no new_value"}
+                    dep_target = row["new_value"].split(":", 1)[-1] if ":" in row["new_value"] else row["new_value"]
+                    self.conn.execute(
+                        "DELETE FROM dependencies WHERE issue_id = ? AND depends_on_id = ?",
+                        (issue_id, dep_target),
+                    )
 
-            case "dependency_added":
-                # Event: issue_id=from_id, new_value="type:depends_on_id"
-                if row["new_value"] is None:
-                    return {"undone": False, "reason": "Cannot undo: event has no new_value"}
-                dep_target = row["new_value"].split(":", 1)[-1] if ":" in row["new_value"] else row["new_value"]
-                self.conn.execute(
-                    "DELETE FROM dependencies WHERE issue_id = ? AND depends_on_id = ?",
-                    (issue_id, dep_target),
-                )
+                case "dependency_removed":
+                    # Event: issue_id=from_id, old_value=depends_on_id
+                    if row["old_value"] is None:
+                        return {"undone": False, "reason": "Cannot undo: event has no old_value"}
+                    self.conn.execute(
+                        "INSERT OR IGNORE INTO dependencies (issue_id, depends_on_id, type, created_at) VALUES (?, ?, 'blocks', ?)",
+                        (issue_id, row["old_value"], now),
+                    )
 
-            case "dependency_removed":
-                # Event: issue_id=from_id, old_value=depends_on_id
-                self.conn.execute(
-                    "INSERT OR IGNORE INTO dependencies (issue_id, depends_on_id, type, created_at) VALUES (?, ?, 'blocks', ?)",
-                    (issue_id, row["old_value"], now),
-                )
+                case "description_changed":
+                    self.conn.execute(
+                        "UPDATE issues SET description = ?, updated_at = ? WHERE id = ?",
+                        (row["old_value"] or "", now, issue_id),
+                    )
 
-            case "description_changed":
-                self.conn.execute(
-                    "UPDATE issues SET description = ?, updated_at = ? WHERE id = ?",
-                    (row["old_value"] or "", now, issue_id),
-                )
+                case "notes_changed":
+                    self.conn.execute(
+                        "UPDATE issues SET notes = ?, updated_at = ? WHERE id = ?",
+                        (row["old_value"] or "", now, issue_id),
+                    )
 
-            case "notes_changed":
-                self.conn.execute(
-                    "UPDATE issues SET notes = ?, updated_at = ? WHERE id = ?",
-                    (row["old_value"] or "", now, issue_id),
-                )
+                case "fields_changed":
+                    old_fields = row["old_value"] or "{}"
+                    try:
+                        json.loads(old_fields)
+                    except (json.JSONDecodeError, TypeError):
+                        return {"undone": False, "reason": "Cannot undo: stored fields JSON is corrupt"}
+                    self.conn.execute(
+                        "UPDATE issues SET fields = ?, updated_at = ? WHERE id = ?",
+                        (old_fields, now, issue_id),
+                    )
 
-        # Record the undo event
-        self._record_event(
-            issue_id,
-            "undone",
-            actor=actor,
-            old_value=event_type,
-            new_value=str(event_id),
-        )
-        self.conn.commit()
+            # Record the undo event
+            self._record_event(
+                issue_id,
+                "undone",
+                actor=actor,
+                old_value=event_type,
+                new_value=str(event_id),
+            )
+            self.conn.commit()
+        except Exception:
+            self.conn.rollback()
+            raise
 
         return {
             "undone": True,
@@ -249,14 +301,18 @@ class EventsMixin(DBMixinProtocol):
             return []
 
         now = _now_iso()
-        for issue_id in archived_ids:
-            self.conn.execute(
-                "UPDATE issues SET status = 'archived', updated_at = ? WHERE id = ?",
-                (now, issue_id),
-            )
-            self._record_event(issue_id, "archived", actor=actor)
+        try:
+            for issue_id in archived_ids:
+                self.conn.execute(
+                    "UPDATE issues SET status = 'archived', updated_at = ? WHERE id = ?",
+                    (now, issue_id),
+                )
+                self._record_event(issue_id, "archived", actor=actor)
 
-        self.conn.commit()
+            self.conn.commit()
+        except Exception:
+            self.conn.rollback()
+            raise
         return archived_ids
 
     def compact_events(self, *, keep_recent: int = 50, actor: str = "") -> int:
@@ -269,21 +325,25 @@ class EventsMixin(DBMixinProtocol):
             return 0
 
         total_deleted = 0
-        for row in archived:
-            issue_id = row["id"]
-            event_count = self.conn.execute("SELECT COUNT(*) as cnt FROM events WHERE issue_id = ?", (issue_id,)).fetchone()["cnt"]
+        try:
+            for row in archived:
+                issue_id = row["id"]
+                event_count = self.conn.execute("SELECT COUNT(*) as cnt FROM events WHERE issue_id = ?", (issue_id,)).fetchone()["cnt"]
 
-            if event_count <= keep_recent:
-                continue
+                if event_count <= keep_recent:
+                    continue
 
-            self.conn.execute(
-                "DELETE FROM events WHERE id IN (SELECT id FROM events WHERE issue_id = ? ORDER BY created_at ASC, id ASC LIMIT ?)",
-                (issue_id, event_count - keep_recent),
-            )
-            total_deleted += event_count - keep_recent
+                cursor = self.conn.execute(
+                    "DELETE FROM events WHERE id IN (SELECT id FROM events WHERE issue_id = ? ORDER BY created_at ASC, id ASC LIMIT ?)",
+                    (issue_id, event_count - keep_recent),
+                )
+                total_deleted += cursor.rowcount
 
-        if total_deleted > 0:
-            self.conn.commit()
+            if total_deleted > 0:
+                self.conn.commit()
+        except Exception:
+            self.conn.rollback()
+            raise
 
         return total_deleted
 

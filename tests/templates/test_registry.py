@@ -11,17 +11,19 @@ import pytest
 
 from filigree.core import FiligreeDB
 from filigree.templates import (
+    _MAX_PATTERN_VALUE_LENGTH,
+    _VALID_CATEGORIES,
+    _VALID_FIELD_TYPES,
     FieldSchema,
-    HardEnforcementError,
     StateDefinition,
     TemplateRegistry,
     TransitionDefinition,
-    TransitionNotAllowedError,
     TransitionOption,
     TransitionResult,
     TypeTemplate,
     ValidationResult,
     WorkflowPack,
+    validate_field_pattern,
 )
 from filigree.templates_data import BUILT_IN_PACKS
 
@@ -78,9 +80,11 @@ class TestDataclasses:
         to = TransitionOption(to="closed", category="done", enforcement="soft", requires_fields=(), missing_fields=(), ready=True)
         assert to.ready is True
 
-    def test_validation_result(self) -> None:
-        vr = ValidationResult(valid=True, warnings=(), errors=())
+    def test_validation_result_valid_derived_from_errors(self) -> None:
+        vr = ValidationResult(warnings=(), errors=())
         assert vr.valid is True
+        vr_invalid = ValidationResult(warnings=(), errors=("missing field",))
+        assert vr_invalid.valid is False
 
     def test_state_definition_rejects_invalid_name(self) -> None:
         with pytest.raises(ValueError, match="Invalid state name"):
@@ -115,43 +119,6 @@ class TestDataclasses:
             guide=None,
         )
         assert wp.pack == "core"
-
-
-class TestExceptions:
-    """Verify exception types carry structured data and remediation hints."""
-
-    def test_transition_not_allowed_is_value_error(self) -> None:
-        err = TransitionNotAllowedError("triage", "closed", "bug")
-        assert isinstance(err, ValueError)
-        assert "triage" in str(err)
-        assert "closed" in str(err)
-        assert "bug" in str(err)
-        assert err.from_state == "triage"
-        assert err.to_state == "closed"
-        assert err.type_name == "bug"
-
-    def test_transition_not_allowed_has_remediation(self) -> None:
-        err = TransitionNotAllowedError("triage", "closed", "bug")
-        assert "get_valid_transitions" in str(err)
-
-    def test_hard_enforcement_is_value_error(self) -> None:
-        err = HardEnforcementError("fixing", "verifying", "bug", ["fix_verification"])
-        assert isinstance(err, ValueError)
-        assert "fix_verification" in str(err)
-        assert err.missing_fields == ["fix_verification"]
-        assert err.from_state == "fixing"
-        assert err.to_state == "verifying"
-        assert err.type_name == "bug"
-
-    def test_hard_enforcement_has_remediation(self) -> None:
-        err = HardEnforcementError("verifying", "closed", "bug", ["fix_verification"])
-        assert "get_type_info" in str(err)
-
-    def test_hard_enforcement_multiple_fields(self) -> None:
-        err = HardEnforcementError("assessing", "assessed", "risk", ["risk_score", "impact"])
-        assert "risk_score" in str(err)
-        assert "impact" in str(err)
-        assert err.missing_fields == ["risk_score", "impact"]
 
 
 class TestTemplateRegistry:
@@ -227,8 +194,10 @@ class TestTemplateRegistry:
         assert registry.get_initial_state("bug") == "triage"
         assert registry.get_initial_state("task") == "open"
 
-    def test_get_initial_state_fallback(self, registry: TemplateRegistry) -> None:
-        assert registry.get_initial_state("unknown_type") == "open"
+    def test_get_initial_state_unknown_type_raises(self, registry: TemplateRegistry) -> None:
+        """Unknown types raise ValueError (fail-closed) instead of silently returning 'open'."""
+        with pytest.raises(ValueError, match="unknown_type"):
+            registry.get_initial_state("unknown_type")
 
     def test_get_category(self, registry: TemplateRegistry) -> None:
         assert registry.get_category("bug", "triage") == "open"
@@ -610,9 +579,12 @@ class TestFieldSchemaTypeValidation:
     """Bug fix: filigree-ca5711 — invalid FieldSchema.type silently accepted."""
 
     def test_valid_field_types_accepted(self) -> None:
-        for ft in ("text", "enum", "number", "date", "list", "boolean"):
+        for ft in ("text", "number", "date", "list", "boolean"):
             fs = FieldSchema(name="test_field", type=ft)
             assert fs.type == ft
+        # enum requires options
+        fs = FieldSchema(name="test_field", type="enum", options=("a", "b"))
+        assert fs.type == "enum"
 
     def test_invalid_field_type_raises_valueerror(self) -> None:
         with pytest.raises(ValueError, match=r"[Ii]nvalid.*field type"):
@@ -1604,13 +1576,13 @@ class TestQualityCheckDoneOutgoing:
         done_outgoing = [w for w in warnings if "done" in w.lower() and "outgoing" in w]
         assert done_outgoing == []
 
-    def test_builtin_spike_concluded_warned(self) -> None:
-        """spike.concluded (done) has outgoing transition to actioned — should warn."""
+    def test_builtin_spike_concluded_no_done_warning(self) -> None:
+        """spike.concluded is now wip (checkpoint), so no done→done warning."""
         raw = BUILT_IN_PACKS["spike"]["types"]["spike"]
         tpl = TemplateRegistry.parse_type_template(raw)
         warnings = TemplateRegistry.check_type_template_quality(tpl)
-        concluded_warnings = [w for w in warnings if "concluded" in w]
-        assert len(concluded_warnings) == 1
+        concluded_warnings = [w for w in warnings if "concluded" in w and "done" in w.lower()]
+        assert concluded_warnings == []
 
     def test_builtin_release_no_done_outgoing_warnings(self) -> None:
         """released->rolled_back is done->wip, which is allowed (reachable via update_issue).
@@ -1760,6 +1732,27 @@ class TestTemplateMalformedShape:
         assert reg.get_type("task") is not None  # Built-ins still loaded
         assert reg.get_type("crasher") is None  # Bad template was skipped
 
+    def test_type_error_in_pack_loading_propagates(self, tmp_path: object, monkeypatch: pytest.MonkeyPatch) -> None:
+        """TypeError from parse_type_template must propagate, not be swallowed."""
+        filigree_dir = Path(str(tmp_path)) / ".filigree"
+        filigree_dir.mkdir()
+
+        config = {"prefix": "test", "version": 1, "enabled_packs": ["core"]}
+        (filigree_dir / "config.json").write_text(json.dumps(config))
+
+        original_parse = TemplateRegistry.parse_type_template
+
+        def exploding_parse(raw: Any) -> Any:
+            if isinstance(raw, dict) and raw.get("type") == "task":
+                raise TypeError("simulated code bug")
+            return original_parse(raw)
+
+        monkeypatch.setattr(TemplateRegistry, "parse_type_template", staticmethod(exploding_parse))
+
+        reg = TemplateRegistry()
+        with pytest.raises(TypeError, match="simulated code bug"):
+            reg.load(filigree_dir)
+
 
 class TestRolledBackTransition:
     def test_rolled_back_has_outbound_transition(self) -> None:
@@ -1905,6 +1898,18 @@ class TestGetTemplateEnriched:
         assert len(tpl["states"]) >= 3
         assert len(tpl["transitions"]) >= 2
 
+    def test_field_schema_parity_between_get_and_list(self, db: FiligreeDB) -> None:
+        """H6 regression: get_template and list_templates must produce identical field schemas."""
+        get_tpl = db.get_template("bug")
+        assert get_tpl is not None
+        list_tpls = db.list_templates()
+        list_bug = next(t for t in list_tpls if t["type"] == "bug")
+        get_fields = {f["name"]: f for f in get_tpl["fields_schema"]}
+        list_fields = {f["name"]: f for f in list_bug["fields_schema"]}
+        assert get_fields.keys() == list_fields.keys()
+        for name in get_fields:
+            assert get_fields[name] == list_fields[name], f"Field {name} differs between get_template and list_templates"
+
 
 # ---------------------------------------------------------------------------
 # TestFieldSchemaPattern — pattern and unique field validation
@@ -1978,3 +1983,508 @@ class TestFieldSchemaPattern:
         tpl = TemplateRegistry.parse_type_template(raw)
         assert tpl.fields_schema[0].pattern == r"^[A-Z]{3}$"
         assert tpl.fields_schema[0].unique is True
+
+
+# ---------------------------------------------------------------------------
+# Bug cluster: Template/Workflow type system integrity (H2, H3, H6, H7)
+# ---------------------------------------------------------------------------
+
+
+class TestTransitionDefinitionValidation:
+    """H7: TransitionDefinition should validate its inputs in __post_init__."""
+
+    def test_rejects_invalid_from_state(self) -> None:
+        with pytest.raises(ValueError, match=r"Invalid.*from_state"):
+            TransitionDefinition(from_state="UPPER", to_state="closed", enforcement="soft")
+
+    def test_rejects_invalid_to_state(self) -> None:
+        with pytest.raises(ValueError, match=r"Invalid.*to_state"):
+            TransitionDefinition(from_state="open", to_state="has-dash", enforcement="soft")
+
+    def test_rejects_invalid_enforcement(self) -> None:
+        with pytest.raises(ValueError, match="enforcement"):
+            TransitionDefinition(from_state="open", to_state="closed", enforcement="banana")  # type: ignore[arg-type]
+
+    def test_rejects_invalid_requires_fields_entry(self) -> None:
+        with pytest.raises(ValueError, match="requires_fields"):
+            TransitionDefinition(
+                from_state="open",
+                to_state="closed",
+                enforcement="soft",
+                requires_fields=("DROP TABLE",),
+            )
+
+    def test_accepts_valid_transition(self) -> None:
+        td = TransitionDefinition(from_state="open", to_state="closed", enforcement="hard", requires_fields=("notes",))
+        assert td.from_state == "open"
+        assert td.enforcement == "hard"
+
+
+class TestWorkflowPackImmutability:
+    """H3: WorkflowPack mutable dict fields should be immutable."""
+
+    def _make_pack(self) -> WorkflowPack:
+        tpl = TypeTemplate(
+            type="task",
+            display_name="Task",
+            description="",
+            pack="test",
+            states=(StateDefinition("open", "open"), StateDefinition("closed", "done")),
+            initial_state="open",
+            transitions=(TransitionDefinition("open", "closed", "soft"),),
+            fields_schema=(),
+        )
+        return WorkflowPack(
+            pack="test",
+            version="1.0",
+            display_name="Test",
+            description="",
+            types={"task": tpl},
+            requires_packs=(),
+            relationships=(),
+            cross_pack_relationships=(),
+            guide={"overview": "Test guide"},
+        )
+
+    def test_types_dict_not_mutatable(self) -> None:
+        """External code should not be able to add/remove types from pack.types."""
+        pack = self._make_pack()
+        with pytest.raises(TypeError):
+            pack.types["injected"] = pack.types["task"]  # type: ignore[index]
+
+    def test_guide_dict_not_mutatable(self) -> None:
+        """External code should not be able to mutate pack.guide."""
+        pack = self._make_pack()
+        assert pack.guide is not None
+        with pytest.raises(TypeError):
+            pack.guide["injected"] = "evil"  # type: ignore[index]
+
+
+class TestLoadPackDataAtomicity:
+    """H6: _load_pack_data should not leave partial state when types fail."""
+
+    def test_failed_type_does_not_pollute_registry(self) -> None:
+        """If one type in a pack fails parsing, no types from that pack should be registered."""
+        reg = TemplateRegistry()
+        pack_data: dict[str, Any] = {
+            "pack": "testpack",
+            "version": "1.0",
+            "types": {
+                "good_type": {
+                    "type": "good_type",
+                    "display_name": "Good",
+                    "states": [
+                        {"name": "open", "category": "open"},
+                        {"name": "closed", "category": "done"},
+                    ],
+                    "initial_state": "open",
+                    "transitions": [{"from": "open", "to": "closed", "enforcement": "soft"}],
+                },
+                "bad_type": {
+                    "type": "bad_type",
+                    "display_name": "Bad",
+                    "states": "not_a_list",  # Will fail parsing
+                    "initial_state": "open",
+                    "transitions": [],
+                },
+            },
+        }
+        reg._load_pack_data(pack_data)
+        registered_pack = reg.get_pack("testpack")
+        assert registered_pack is not None
+        # Pack.types and registry._types should agree
+        for type_name in registered_pack.types:
+            assert reg.get_type(type_name) is not None, f"Pack references {type_name} but registry doesn't have it"
+        for type_name, tpl in reg._types.items():
+            if tpl.pack == "testpack":
+                assert type_name in registered_pack.types, f"Registry has {type_name} from testpack but pack.types doesn't"
+
+
+class TestSpikeWorkflowDesign:
+    """H2: Spike pack concluded→actioned should be reachable."""
+
+    def test_concluded_is_not_done_category(self) -> None:
+        """concluded should be wip (checkpoint), not done, so close_issue doesn't block it."""
+        raw = BUILT_IN_PACKS["spike"]["types"]["spike"]
+        tpl = TemplateRegistry.parse_type_template(raw)
+        concluded = next(s for s in tpl.states if s.name == "concluded")
+        assert concluded.category == "wip", f"concluded should be 'wip' (checkpoint before actioned/abandoned), got '{concluded.category}'"
+
+    def test_no_done_to_done_quality_warnings(self) -> None:
+        """After fixing concluded, spike should have no done→done quality warnings."""
+        raw = BUILT_IN_PACKS["spike"]["types"]["spike"]
+        tpl = TemplateRegistry.parse_type_template(raw)
+        warnings = TemplateRegistry.check_type_template_quality(tpl)
+        done_warnings = [w for w in warnings if "done" in w.lower() and "unreachable" in w.lower()]
+        assert done_warnings == [], f"Unexpected done→done warnings: {done_warnings}"
+
+
+class TestTemplateEngineValidationCluster:
+    """Bug cluster S2: Template engine validation gaps (M1, M3, M4, M5, M6, M7)."""
+
+    # -- M7: _VALID_CATEGORIES / _VALID_FIELD_TYPES derived from Literals ------
+
+    def test_valid_categories_derived_from_state_category(self) -> None:
+        """_VALID_CATEGORIES must match the StateCategory Literal members."""
+        assert frozenset({"open", "wip", "done"}) == _VALID_CATEGORIES
+
+    def test_valid_field_types_derived_from_field_type(self) -> None:
+        """_VALID_FIELD_TYPES must match the FieldType Literal members."""
+        assert frozenset({"text", "enum", "number", "date", "list", "boolean"}) == _VALID_FIELD_TYPES
+
+    # -- M5: FieldSchema.name validated against _NAME_PATTERN ------------------
+
+    def test_field_schema_rejects_invalid_name(self) -> None:
+        """Field names with special chars must be rejected like state names."""
+        with pytest.raises(ValueError, match="Invalid field name"):
+            FieldSchema(name="has-dash", type="text")
+        with pytest.raises(ValueError, match="Invalid field name"):
+            FieldSchema(name="UPPER", type="text")
+        with pytest.raises(ValueError, match="Invalid field name"):
+            FieldSchema(name="has space", type="text")
+        with pytest.raises(ValueError, match="Invalid field name"):
+            FieldSchema(name="", type="text")
+
+    def test_field_schema_accepts_valid_name(self) -> None:
+        """Lowercase underscore-separated names should be accepted."""
+        fs = FieldSchema(name="fix_verification", type="text")
+        assert fs.name == "fix_verification"
+
+    # -- M4: _is_field_populated rejects empty collections ---------------------
+
+    def test_empty_list_is_not_populated(self) -> None:
+        """An empty list should not satisfy required_at."""
+        assert TemplateRegistry._is_field_populated([]) is False
+
+    def test_empty_dict_is_not_populated(self) -> None:
+        """An empty dict should not satisfy required_at."""
+        assert TemplateRegistry._is_field_populated({}) is False
+
+    def test_nonempty_list_is_populated(self) -> None:
+        assert TemplateRegistry._is_field_populated(["item"]) is True
+
+    def test_nonempty_dict_is_populated(self) -> None:
+        assert TemplateRegistry._is_field_populated({"k": "v"}) is True
+
+    def test_none_is_not_populated(self) -> None:
+        assert TemplateRegistry._is_field_populated(None) is False
+
+    def test_whitespace_string_is_not_populated(self) -> None:
+        assert TemplateRegistry._is_field_populated("   ") is False
+
+    def test_zero_is_populated(self) -> None:
+        """Numeric zero is a valid populated value (not empty)."""
+        assert TemplateRegistry._is_field_populated(0) is True
+
+    def test_false_is_populated(self) -> None:
+        """Boolean False is a valid populated value."""
+        assert TemplateRegistry._is_field_populated(False) is True
+
+    # -- M3: Pattern value length limit ----------------------------------------
+
+    def test_pattern_rejects_oversized_value(self) -> None:
+        """Values exceeding length limit should be rejected before regex runs."""
+        field = FieldSchema(name="test_field", type="text", pattern=r".*")
+        oversized = "a" * (_MAX_PATTERN_VALUE_LENGTH + 1)
+        result = validate_field_pattern(field, oversized)
+        assert result is not None
+        assert "exceeds maximum" in result
+
+    def test_pattern_accepts_value_at_limit(self) -> None:
+        """Values at exactly the limit should be allowed."""
+        field = FieldSchema(name="test_field", type="text", pattern=r"a+")
+        at_limit = "a" * _MAX_PATTERN_VALUE_LENGTH
+        result = validate_field_pattern(field, at_limit)
+        assert result is None
+
+    # -- M1: config.json parse errors logged with detail -----------------------
+
+    def test_malformed_config_json_logs_exception(self, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+        """A malformed config.json should log the parse error, not a generic message."""
+        filigree_dir = tmp_path / ".filigree"
+        filigree_dir.mkdir()
+        (filigree_dir / "config.json").write_text("{bad json,}")
+        reg = TemplateRegistry()
+        with caplog.at_level(logging.WARNING, logger="filigree.templates"):
+            reg.load(filigree_dir)
+        warning_msgs = [r.message for r in caplog.records if r.levelno >= logging.WARNING]
+        assert any("config.json" in m for m in warning_msgs)
+        # The warning should include the actual exception detail, not just a generic message
+        assert any("Expecting" in m or "JSONDecodeError" in m or "json" in m.lower() for m in warning_msgs), (
+            f"Warning should include exception detail, got: {warning_msgs}"
+        )
+
+    # -- M6: Non-string entries in enabled_packs logged -----------------------
+
+    def test_non_string_enabled_packs_logged(self, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+        """Non-string entries should be logged before being dropped."""
+        filigree_dir = tmp_path / ".filigree"
+        filigree_dir.mkdir()
+        config = {"enabled_packs": ["core", 42, None]}
+        (filigree_dir / "config.json").write_text(json.dumps(config))
+        reg = TemplateRegistry()
+        with caplog.at_level(logging.WARNING, logger="filigree.templates"):
+            reg.load(filigree_dir)
+        warning_msgs = [r.message for r in caplog.records if r.levelno >= logging.WARNING]
+        assert any("non-string" in m.lower() or "42" in m for m in warning_msgs), (
+            f"Expected warning about dropped non-string entries, got: {warning_msgs}"
+        )
+
+
+# ===========================================================================
+# H8: BFS unreachable state detection + MAX_TRANSITIONS/MAX_FIELDS limits
+# (filigree-9c1f0ae66c)
+# ===========================================================================
+
+
+class TestBFSUnreachableStateDetection:
+    """validate_type_template BFS must catch states unreachable from initial_state."""
+
+    def test_unreachable_state_detected(self) -> None:
+        """A state with no incoming transitions from the reachable graph is caught."""
+        tpl = TypeTemplate(
+            type="test_type",
+            display_name="Test",
+            description="",
+            pack="test",
+            states=(
+                StateDefinition(name="open", category="open"),
+                StateDefinition(name="in_progress", category="wip"),
+                StateDefinition(name="island", category="wip"),  # unreachable
+                StateDefinition(name="closed", category="done"),
+            ),
+            initial_state="open",
+            transitions=(
+                TransitionDefinition(from_state="open", to_state="in_progress", enforcement="soft"),
+                TransitionDefinition(from_state="in_progress", to_state="closed", enforcement="soft"),
+                # island has no incoming transition
+                TransitionDefinition(from_state="island", to_state="closed", enforcement="soft"),
+            ),
+            fields_schema=(),
+        )
+        errors = TemplateRegistry.validate_type_template(tpl)
+        assert any("island" in e and "unreachable" in e for e in errors)
+
+    def test_multiple_unreachable_states_all_reported(self) -> None:
+        """All unreachable states should appear in errors, not just the first."""
+        tpl = TypeTemplate(
+            type="test_type",
+            display_name="Test",
+            description="",
+            pack="test",
+            states=(
+                StateDefinition(name="open", category="open"),
+                StateDefinition(name="orphan_a", category="wip"),
+                StateDefinition(name="orphan_b", category="wip"),
+                StateDefinition(name="closed", category="done"),
+            ),
+            initial_state="open",
+            transitions=(
+                TransitionDefinition(from_state="open", to_state="closed", enforcement="soft"),
+                TransitionDefinition(from_state="orphan_a", to_state="orphan_b", enforcement="soft"),
+            ),
+            fields_schema=(),
+        )
+        errors = TemplateRegistry.validate_type_template(tpl)
+        unreachable_errors = [e for e in errors if "unreachable" in e]
+        unreachable_names = {e.split("'")[1] for e in unreachable_errors}
+        assert unreachable_names == {"orphan_a", "orphan_b"}
+
+    def test_all_reachable_no_error(self) -> None:
+        """A fully connected graph should produce no unreachable errors."""
+        tpl = TypeTemplate(
+            type="test_type",
+            display_name="Test",
+            description="",
+            pack="test",
+            states=(
+                StateDefinition(name="open", category="open"),
+                StateDefinition(name="review", category="wip"),
+                StateDefinition(name="closed", category="done"),
+            ),
+            initial_state="open",
+            transitions=(
+                TransitionDefinition(from_state="open", to_state="review", enforcement="soft"),
+                TransitionDefinition(from_state="review", to_state="closed", enforcement="soft"),
+            ),
+            fields_schema=(),
+        )
+        errors = TemplateRegistry.validate_type_template(tpl)
+        assert not any("unreachable" in e for e in errors)
+
+
+class TestDoSLimits:
+    """MAX_TRANSITIONS and MAX_FIELDS DoS prevention limits must be enforced at parse time."""
+
+    def test_parse_rejects_too_many_transitions(self) -> None:
+        """Templates exceeding MAX_TRANSITIONS (200) should be rejected."""
+        # Use a small set of states with many transitions between them
+        states = [{"name": f"s{i}", "category": "wip"} for i in range(15)]
+        states[0]["category"] = "open"
+        # 15 states => 15*14=210 possible directed pairs, generate 201
+        transitions = []
+        for i in range(15):
+            for j in range(15):
+                if i != j and len(transitions) < 201:
+                    transitions.append({"from": f"s{i}", "to": f"s{j}", "enforcement": "soft"})
+        raw = {
+            "type": "huge",
+            "display_name": "Huge",
+            "description": "Too many transitions",
+            "states": states,
+            "initial_state": "s0",
+            "transitions": transitions,
+            "fields_schema": [],
+        }
+        with pytest.raises(ValueError, match="201 transitions"):
+            TemplateRegistry.parse_type_template(raw)
+
+    def test_parse_accepts_transitions_at_limit(self) -> None:
+        """Exactly MAX_TRANSITIONS (200) should be accepted."""
+        states = [{"name": f"s{i}", "category": "wip"} for i in range(15)]
+        states[0]["category"] = "open"
+        transitions = []
+        for i in range(15):
+            for j in range(15):
+                if i != j and len(transitions) < 200:
+                    transitions.append({"from": f"s{i}", "to": f"s{j}", "enforcement": "soft"})
+        raw = {
+            "type": "big",
+            "display_name": "Big",
+            "description": "At limit",
+            "states": states,
+            "initial_state": "s0",
+            "transitions": transitions,
+            "fields_schema": [],
+        }
+        # Should not raise — 200 is exactly at the limit
+        tpl = TemplateRegistry.parse_type_template(raw)
+        assert len(tpl.transitions) == 200
+
+    def test_parse_rejects_too_many_fields(self) -> None:
+        """Templates exceeding MAX_FIELDS (50) should be rejected."""
+        raw = {
+            "type": "huge",
+            "display_name": "Huge",
+            "description": "Too many fields",
+            "states": [
+                {"name": "open", "category": "open"},
+                {"name": "closed", "category": "done"},
+            ],
+            "initial_state": "open",
+            "transitions": [],
+            "fields_schema": [{"name": f"f{i}", "type": "text"} for i in range(51)],
+        }
+        with pytest.raises(ValueError, match="51 fields"):
+            TemplateRegistry.parse_type_template(raw)
+
+    def test_parse_accepts_fields_at_limit(self) -> None:
+        """Exactly MAX_FIELDS (50) should be accepted."""
+        raw = {
+            "type": "big",
+            "display_name": "Big",
+            "description": "At limit",
+            "states": [
+                {"name": "open", "category": "open"},
+                {"name": "closed", "category": "done"},
+            ],
+            "initial_state": "open",
+            "transitions": [],
+            "fields_schema": [{"name": f"f{i}", "type": "text"} for i in range(50)],
+        }
+        tpl = TemplateRegistry.parse_type_template(raw)
+        assert len(tpl.fields_schema) == 50
+
+
+# ===========================================================================
+# L2: Reverse-reachability — states must be able to reach a done state
+# (filigree-d6ade2d45b)
+# ===========================================================================
+
+
+class TestReverseReachability:
+    """check_type_template_quality should warn if reachable states cannot reach done."""
+
+    def test_cycle_without_exit_to_done_warned(self) -> None:
+        """States stuck in a cycle (review<->revise) with no path to done produce a warning."""
+        tpl = TypeTemplate(
+            type="test_type",
+            display_name="Test",
+            description="",
+            pack="test",
+            states=(
+                StateDefinition(name="open", category="open"),
+                StateDefinition(name="review", category="wip"),
+                StateDefinition(name="revise", category="wip"),
+                StateDefinition(name="closed", category="done"),
+            ),
+            initial_state="open",
+            transitions=(
+                TransitionDefinition(from_state="open", to_state="review", enforcement="soft"),
+                TransitionDefinition(from_state="review", to_state="revise", enforcement="soft"),
+                TransitionDefinition(from_state="revise", to_state="review", enforcement="soft"),
+                # open->closed exists, but review/revise cannot reach closed
+                TransitionDefinition(from_state="open", to_state="closed", enforcement="soft"),
+            ),
+            fields_schema=(),
+        )
+        warnings = TemplateRegistry.check_type_template_quality(tpl)
+        stuck = [w for w in warnings if "cannot reach" in w and "done" in w]
+        assert len(stuck) >= 1
+        stuck_names = {w.split("'")[1] for w in stuck}
+        assert stuck_names == {"review", "revise"}
+
+    def test_all_states_can_reach_done_no_warning(self) -> None:
+        """A well-formed workflow where all states can reach done produces no warning."""
+        tpl = TypeTemplate(
+            type="test_type",
+            display_name="Test",
+            description="",
+            pack="test",
+            states=(
+                StateDefinition(name="open", category="open"),
+                StateDefinition(name="review", category="wip"),
+                StateDefinition(name="closed", category="done"),
+            ),
+            initial_state="open",
+            transitions=(
+                TransitionDefinition(from_state="open", to_state="review", enforcement="soft"),
+                TransitionDefinition(from_state="review", to_state="closed", enforcement="soft"),
+            ),
+            fields_schema=(),
+        )
+        warnings = TemplateRegistry.check_type_template_quality(tpl)
+        stuck = [w for w in warnings if "cannot reach" in w and "done" in w]
+        assert stuck == []
+
+    def test_done_states_themselves_not_flagged(self) -> None:
+        """Done-category states should not be flagged as unable to reach done."""
+        tpl = TypeTemplate(
+            type="test_type",
+            display_name="Test",
+            description="",
+            pack="test",
+            states=(
+                StateDefinition(name="open", category="open"),
+                StateDefinition(name="closed", category="done"),
+                StateDefinition(name="wont_fix", category="done"),
+            ),
+            initial_state="open",
+            transitions=(
+                TransitionDefinition(from_state="open", to_state="closed", enforcement="soft"),
+                TransitionDefinition(from_state="open", to_state="wont_fix", enforcement="soft"),
+            ),
+            fields_schema=(),
+        )
+        warnings = TemplateRegistry.check_type_template_quality(tpl)
+        stuck = [w for w in warnings if "cannot reach" in w and "done" in w]
+        assert stuck == []
+
+    def test_builtin_types_all_reach_done(self) -> None:
+        """All built-in pack types should have full reverse-reachability to done."""
+        for pack_name, pack_data in BUILT_IN_PACKS.items():
+            for type_name, type_raw in pack_data["types"].items():
+                tpl = TemplateRegistry.parse_type_template(type_raw)
+                warnings = TemplateRegistry.check_type_template_quality(tpl)
+                stuck = [w for w in warnings if "cannot reach" in w and "done" in w]
+                assert stuck == [], f"Built-in {pack_name}/{type_name} has states that cannot reach done: {stuck}"

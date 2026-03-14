@@ -182,6 +182,34 @@ class TestInvalidDepValidation:
         assert dep_issue.id in issue.blocked_by
 
 
+class TestCycleDetectionDepthLimit:
+    """Bug fix: filigree-832676c507 — BFS has no depth limit."""
+
+    def test_cycle_detection_respects_depth_limit(self, db: FiligreeDB) -> None:
+        """BFS should not traverse beyond _MAX_TREE_DEPTH nodes."""
+        # Build a chain longer than the depth limit: N0→N1→N2→...→N(depth+2)
+        from filigree.db_planning import _MAX_TREE_DEPTH
+
+        chain_len = _MAX_TREE_DEPTH + 3
+        nodes = [db.create_issue(f"Node-{i}") for i in range(chain_len)]
+        for i in range(chain_len - 1):
+            db.add_dependency(nodes[i].id, nodes[i + 1].id)
+
+        # Trying to add a dependency from the last node back to the first
+        # would create a cycle, but the BFS should stop at depth limit
+        # and raise ValueError (for depth exceeded), not silently miss the cycle
+        with pytest.raises(ValueError, match="cycle"):
+            db.add_dependency(nodes[-1].id, nodes[0].id)
+
+    def test_normal_depth_cycle_still_detected(self, db: FiligreeDB) -> None:
+        """Cycles within the depth limit should still be caught."""
+        nodes = [db.create_issue(f"N-{i}") for i in range(5)]
+        for i in range(4):
+            db.add_dependency(nodes[i].id, nodes[i + 1].id)
+        with pytest.raises(ValueError, match="cycle"):
+            db.add_dependency(nodes[4].id, nodes[0].id)
+
+
 class TestClosedDepFiltering:
     """Bug fix: keel-326c2f — Dep persists after close."""
 
@@ -224,3 +252,85 @@ class TestClosedDepFiltering:
         db.close_issue(b.id)
         a_ready = db.get_issue(a.id)
         assert a_ready.is_ready
+
+
+# ── M13: dependency edge cases ─────────────────────────────────────────
+
+
+class TestDependencyEdgeCases:
+    """Cover untested dependency edge cases (M13)."""
+
+    def test_add_dependency_custom_dep_type(self, db: FiligreeDB) -> None:
+        """Non-default dep_type is stored and returned correctly."""
+        a = db.create_issue("A")
+        b = db.create_issue("B")
+        result = db.add_dependency(a.id, b.id, dep_type="requires")
+        assert result is True
+
+        # Verify dep_type stored in DB
+        row = db.conn.execute(
+            "SELECT type FROM dependencies WHERE issue_id = ? AND depends_on_id = ?",
+            (a.id, b.id),
+        ).fetchone()
+        assert row["type"] == "requires"
+
+    def test_add_dependency_duplicate_returns_false(self, db: FiligreeDB) -> None:
+        """Adding the same dependency twice returns False (idempotent)."""
+        a = db.create_issue("A")
+        b = db.create_issue("B")
+        assert db.add_dependency(a.id, b.id) is True
+        assert db.add_dependency(a.id, b.id) is False
+
+    def test_add_dependency_duplicate_records_no_event(self, db: FiligreeDB) -> None:
+        """Duplicate add_dependency should not record a second event."""
+        a = db.create_issue("A")
+        b = db.create_issue("B")
+        db.add_dependency(a.id, b.id)
+        events_before = db.conn.execute(
+            "SELECT COUNT(*) FROM events WHERE issue_id = ? AND event_type = 'dependency_added'",
+            (a.id,),
+        ).fetchone()[0]
+        db.add_dependency(a.id, b.id)  # duplicate
+        events_after = db.conn.execute(
+            "SELECT COUNT(*) FROM events WHERE issue_id = ? AND event_type = 'dependency_added'",
+            (a.id,),
+        ).fetchone()[0]
+        assert events_after == events_before
+
+    def test_remove_dependency_nonexistent_returns_false(self, db: FiligreeDB) -> None:
+        """Removing a dependency that doesn't exist returns False."""
+        a = db.create_issue("A")
+        b = db.create_issue("B")
+        assert db.remove_dependency(a.id, b.id) is False
+
+    def test_remove_dependency_nonexistent_records_no_event(self, db: FiligreeDB) -> None:
+        """Removing nonexistent dependency should not record an event."""
+        a = db.create_issue("A")
+        b = db.create_issue("B")
+        events_before = db.conn.execute(
+            "SELECT COUNT(*) FROM events WHERE issue_id = ? AND event_type = 'dependency_removed'",
+            (a.id,),
+        ).fetchone()[0]
+        db.remove_dependency(a.id, b.id)
+        events_after = db.conn.execute(
+            "SELECT COUNT(*) FROM events WHERE issue_id = ? AND event_type = 'dependency_removed'",
+            (a.id,),
+        ).fetchone()[0]
+        assert events_after == events_before
+
+    def test_remove_dependency_rolls_back_on_event_failure(self, db: FiligreeDB, monkeypatch: pytest.MonkeyPatch) -> None:
+        """If _record_event fails, the DELETE must also be rolled back."""
+        a = db.create_issue("A")
+        b = db.create_issue("B")
+        db.add_dependency(a.id, b.id)
+
+        def _boom(*args: object, **kwargs: object) -> None:
+            raise RuntimeError("event recording failed")
+
+        monkeypatch.setattr(db, "_record_event", _boom)
+        with pytest.raises(RuntimeError, match="event recording failed"):
+            db.remove_dependency(a.id, b.id)
+
+        # Dependency must still exist — DELETE was rolled back
+        deps = db.get_all_dependencies()
+        assert any(d["from"] == a.id and d["to"] == b.id for d in deps)

@@ -29,6 +29,7 @@ from filigree.types.api import (
     IssueWithTransitions,
     IssueWithUnblocked,
     SearchResponse,
+    TransitionDetail,
 )
 from filigree.types.core import IssueDict
 from filigree.types.inputs import (
@@ -45,6 +46,8 @@ from filigree.types.inputs import (
     SearchIssuesArgs,
     UpdateIssueArgs,
 )
+
+_UPDATE_TRACKED_FIELDS = ("status", "priority", "title", "assignee", "description", "notes", "parent_id", "fields")
 
 
 def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
@@ -91,9 +94,9 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
                     "label": {"type": "string", "description": "Filter by label"},
                     "limit": {
                         "type": "integer",
-                        "default": 100,
+                        "default": _MAX_LIST_RESULTS,
                         "minimum": 1,
-                        "description": f"Max results (default 100, capped at {_MAX_LIST_RESULTS} unless no_limit=true)",
+                        "description": f"Max results (default {_MAX_LIST_RESULTS}, capped at {_MAX_LIST_RESULTS} unless no_limit=true)",
                     },
                     "offset": {"type": "integer", "default": 0, "minimum": 0, "description": "Skip first N results"},
                     "no_limit": {
@@ -195,9 +198,9 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
                     "query": {"type": "string", "description": "Search query"},
                     "limit": {
                         "type": "integer",
-                        "default": 100,
+                        "default": _MAX_LIST_RESULTS,
                         "minimum": 1,
-                        "description": f"Max results (default 100, capped at {_MAX_LIST_RESULTS} unless no_limit=true)",
+                        "description": f"Max results (default {_MAX_LIST_RESULTS}, capped at {_MAX_LIST_RESULTS} unless no_limit=true)",
                     },
                     "offset": {"type": "integer", "default": 0, "minimum": 0, "description": "Skip first N results"},
                     "no_limit": {
@@ -340,14 +343,14 @@ async def _handle_get_issue(arguments: dict[str, Any]) -> list[TextContent]:
             result = IssueWithTransitions(
                 **issue.to_dict(),
                 valid_transitions=[
-                    {
-                        "to": t.to,
-                        "category": t.category,
-                        "enforcement": t.enforcement,
-                        "requires_fields": list(t.requires_fields),
-                        "missing_fields": list(t.missing_fields),
-                        "ready": t.ready,
-                    }
+                    TransitionDetail(
+                        to=t.to,
+                        category=t.category,
+                        enforcement=t.enforcement or "",
+                        requires_fields=list(t.requires_fields),
+                        missing_fields=list(t.missing_fields),
+                        ready=t.ready,
+                    )
                     for t in transitions
                 ],
             )
@@ -441,6 +444,9 @@ async def _handle_update_issue(arguments: dict[str, Any]) -> list[TextContent]:
     tracker = _get_db()
     try:
         before = tracker.get_issue(args["id"])
+    except KeyError:
+        return _text(ErrorResponse(error=f"Issue not found: {args['id']}", code="not_found"))
+    try:
         issue = tracker.update_issue(
             args["id"],
             status=args.get("status"),
@@ -454,23 +460,7 @@ async def _handle_update_issue(arguments: dict[str, Any]) -> list[TextContent]:
             actor=actor,
         )
         _refresh_summary()
-        changed: list[str] = []
-        if issue.status != before.status:
-            changed.append("status")
-        if issue.priority != before.priority:
-            changed.append("priority")
-        if issue.title != before.title:
-            changed.append("title")
-        if issue.assignee != before.assignee:
-            changed.append("assignee")
-        if issue.description != before.description:
-            changed.append("description")
-        if issue.notes != before.notes:
-            changed.append("notes")
-        if issue.parent_id != before.parent_id:
-            changed.append("parent_id")
-        if issue.fields != before.fields:
-            changed.append("fields")
+        changed = [attr for attr in _UPDATE_TRACKED_FIELDS if getattr(issue, attr) != getattr(before, attr)]
         result = IssueWithChangedFields(**issue.to_dict(), changed_fields=changed)
         return _text(result)
     except KeyError:

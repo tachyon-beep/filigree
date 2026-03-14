@@ -10,48 +10,57 @@ from __future__ import annotations
 import json
 import logging
 from collections import deque
-from typing import TYPE_CHECKING, Any, TypedDict
+from typing import TYPE_CHECKING, Any
 
 from filigree.db_base import DBMixinProtocol, _now_iso
-from filigree.types.planning import CriticalPathNode, DependencyRecord, PlanPhase, PlanTree
+from filigree.models import _EMPTY_TS, Issue
+from filigree.types.core import IssueDict
+from filigree.types.planning import (
+    ChildSummary,
+    CriticalPathNode,
+    DependencyRecord,
+    IssueRef,
+    PlanPhase,
+    PlanTree,
+    ProgressDict,
+    ReleaseSummaryItem,
+    ReleaseTree,
+    TreeNode,
+)
 
 if TYPE_CHECKING:
-    from filigree.core import Issue
-    from filigree.templates import TemplateRegistry
+    from filigree.types.inputs import MilestoneInput, PhaseInput
 
 logger = logging.getLogger(__name__)
 
 
-class ProgressDict(TypedDict):
-    total: int
-    completed: int
-    in_progress: int
-    open: int
-    pct: int
-
-
-class ChildSummary(TypedDict):
-    epics: int
-    milestones: int
-    tasks: int
-    bugs: int
-    other: int
-    total: int
-
-
-class IssueRef(TypedDict):
-    id: str
-    title: str
-    type: str
-
-
-class TreeNode(TypedDict):
-    issue: dict[str, Any]
-    progress: ProgressDict | None
-    children: list[TreeNode]
-
-
 _MAX_TREE_DEPTH = 10
+
+
+def _truncated_issue_sentinel(issue_id: str) -> IssueDict:
+    """Minimal IssueDict placeholder for tree nodes truncated at the depth limit."""
+    return IssueDict(
+        id=issue_id,
+        title="(truncated)",
+        status="",
+        status_category="open",
+        priority=0,
+        type="",
+        parent_id=None,
+        assignee="",
+        created_at=_EMPTY_TS,
+        updated_at=_EMPTY_TS,
+        closed_at=None,
+        description="",
+        notes="",
+        fields={},
+        labels=[],
+        blocks=[],
+        blocked_by=[],
+        is_ready=False,
+        children=[],
+        data_warnings=["Tree depth limit reached; children truncated"],
+    )
 
 
 class PlanningMixin(DBMixinProtocol):
@@ -60,41 +69,6 @@ class PlanningMixin(DBMixinProtocol):
     Inherits ``DBMixinProtocol`` for type-safe access to shared attributes.
     Actual implementations provided by ``FiligreeDB`` at composition time via MRO.
     """
-
-    if TYPE_CHECKING:
-        # From EventsMixin
-        def _record_event(
-            self,
-            issue_id: str,
-            event_type: str,
-            *,
-            actor: str = "",
-            old_value: str | None = None,
-            new_value: str | None = None,
-            comment: str = "",
-        ) -> None: ...
-
-        # From WorkflowMixin
-        def _get_states_for_category(self, category: str) -> list[str]: ...
-
-        @property
-        def templates(self) -> TemplateRegistry: ...
-
-        # From IssuesMixin
-        def _generate_unique_id(self, table: str, infix: str = "") -> str: ...
-        def _build_issues_batch(self, issue_ids: list[str]) -> list[Issue]: ...
-        def list_issues(
-            self,
-            *,
-            status: str | None = None,
-            type: str | None = None,
-            priority: int | None = None,
-            parent_id: str | None = None,
-            assignee: str | None = None,
-            label: str | None = None,
-            limit: int = 100,
-            offset: int = 0,
-        ) -> list[Issue]: ...
 
     # -- Dependencies --------------------------------------------------------
 
@@ -132,7 +106,14 @@ class PlanningMixin(DBMixinProtocol):
 
         Uses BFS from depends_on_id following existing dependency edges.
         If issue_id is reachable, adding the new edge would close a cycle.
+
+        Loads all edges in a single query to avoid N+1 per-node queries.
         """
+        # Build adjacency list from all edges in one query
+        adj: dict[str, list[str]] = {}
+        for r in self.conn.execute("SELECT issue_id, depends_on_id FROM dependencies").fetchall():
+            adj.setdefault(r["issue_id"], []).append(r["depends_on_id"])
+
         visited: set[str] = set()
         queue = deque([depends_on_id])
         while queue:
@@ -142,20 +123,23 @@ class PlanningMixin(DBMixinProtocol):
             if current in visited:
                 continue
             visited.add(current)
-            # Follow existing dependencies: current depends_on X means current -> X
-            for r in self.conn.execute("SELECT depends_on_id FROM dependencies WHERE issue_id = ?", (current,)).fetchall():
-                queue.append(r["depends_on_id"])
+            for neighbor in adj.get(current, ()):
+                queue.append(neighbor)
         return False
 
     def remove_dependency(self, issue_id: str, depends_on_id: str, *, actor: str = "") -> bool:
-        cursor = self.conn.execute(
-            "DELETE FROM dependencies WHERE issue_id = ? AND depends_on_id = ?",
-            (issue_id, depends_on_id),
-        )
-        if cursor.rowcount == 0:
-            return False  # Nothing to remove
-        self._record_event(issue_id, "dependency_removed", actor=actor, old_value=depends_on_id)
-        self.conn.commit()
+        try:
+            cursor = self.conn.execute(
+                "DELETE FROM dependencies WHERE issue_id = ? AND depends_on_id = ?",
+                (issue_id, depends_on_id),
+            )
+            if cursor.rowcount == 0:
+                return False  # Nothing to remove
+            self._record_event(issue_id, "dependency_removed", actor=actor, old_value=depends_on_id)
+            self.conn.commit()
+        except Exception:
+            self.conn.rollback()
+            raise
         return True
 
     def get_all_dependencies(self) -> list[DependencyRecord]:
@@ -319,8 +303,8 @@ class PlanningMixin(DBMixinProtocol):
 
     def create_plan(
         self,
-        milestone: dict[str, Any],
-        phases: list[dict[str, Any]],
+        milestone: MilestoneInput,
+        phases: list[PhaseInput],
         *,
         actor: str = "",
     ) -> PlanTree:
@@ -382,7 +366,7 @@ class PlanningMixin(DBMixinProtocol):
             for phase_idx, phase_data in enumerate(phases):
                 # Create phase
                 phase_id = self._generate_unique_id("issues")
-                phase_fields = phase_data.get("fields") or {}
+                phase_fields: dict[str, Any] = dict(phase_data.get("fields") or {})  # type: ignore[call-overload]
                 phase_fields["sequence"] = phase_idx + 1
                 self.conn.execute(
                     "INSERT INTO issues (id, title, status, priority, type, parent_id, assignee, "
@@ -407,7 +391,7 @@ class PlanningMixin(DBMixinProtocol):
                 steps = phase_data.get("steps") or []
                 for step_idx, step_data in enumerate(steps):
                     step_id = self._generate_unique_id("issues")
-                    step_fields = step_data.get("fields") or {}
+                    step_fields: dict[str, Any] = dict(step_data.get("fields") or {})  # type: ignore[call-overload]
                     step_fields["sequence"] = step_idx + 1
                     self.conn.execute(
                         "INSERT INTO issues (id, title, status, priority, type, parent_id, assignee, "
@@ -442,12 +426,19 @@ class PlanningMixin(DBMixinProtocol):
                             if p_idx_int < 0 or s_idx_int < 0:
                                 msg = f"Negative dep index not allowed: {dep_ref_str}"
                                 raise ValueError(msg)
+                            if p_idx_int >= len(step_ids) or s_idx_int >= len(step_ids[p_idx_int]):
+                                n_steps = len(step_ids[p_idx_int]) if p_idx_int < len(step_ids) else "?"
+                                msg = f"Dep index out of range: {dep_ref_str} (phases={len(step_ids)}, steps={n_steps})"
+                                raise ValueError(msg)
                             dep_issue_id = step_ids[p_idx_int][s_idx_int]
                         else:
                             # Same phase: step index
                             same_idx = int(dep_ref_str)
                             if same_idx < 0:
                                 msg = f"Negative dep index not allowed: {dep_ref_str}"
+                                raise ValueError(msg)
+                            if same_idx >= len(step_ids[phase_idx]):
+                                msg = f"Dep index out of range: step {same_idx} in phase {phase_idx} (max={len(step_ids[phase_idx]) - 1})"
                                 raise ValueError(msg)
                             dep_issue_id = step_ids[phase_idx][same_idx]
 
@@ -474,14 +465,14 @@ class PlanningMixin(DBMixinProtocol):
 
     # -- Release tree --------------------------------------------------------
 
-    def get_releases_summary(self, *, include_released: bool = False) -> list[dict[str, Any]]:
+    def get_releases_summary(self, *, include_released: bool = False) -> list[ReleaseSummaryItem]:
         releases = self.list_issues(type="release")
         if not include_released:
             # Note: rolled_back is category "wip", so it IS included (intentional —
             # a rolled-back release needs attention, it is not "finished")
             releases = [r for r in releases if r.status_category != "done"]
 
-        result: list[dict[str, Any]] = []
+        result: list[ReleaseSummaryItem] = []
         for release in releases:
             # Build the full tree once; extract progress from it
             subtree = self._build_tree(release.id)
@@ -500,11 +491,18 @@ class PlanningMixin(DBMixinProtocol):
             data["blocked_by"] = blocked_by_resolved
             data["progress"] = progress
             data["child_summary"] = child_summary
-            result.append(data)
+
+            # Surface truncation warnings from the subtree
+            tree_warnings = self._collect_tree_warnings(subtree)
+            if tree_warnings:
+                existing: list[str] = data.get("data_warnings") or []
+                data["data_warnings"] = existing + tree_warnings
+
+            result.append(data)  # type: ignore[arg-type]  # dict built incrementally
 
         return result
 
-    def get_release_tree(self, release_id: str) -> dict[str, Any]:
+    def get_release_tree(self, release_id: str) -> ReleaseTree:
         release = self.get_issue(release_id)  # raises KeyError if not found
         if release.type != "release":
             raise ValueError(f"Issue {release_id} is not a release")
@@ -516,7 +514,7 @@ class PlanningMixin(DBMixinProtocol):
     def _build_tree(self, parent_id: str, *, _depth: int = 0) -> list[TreeNode]:
         if _depth > _MAX_TREE_DEPTH:
             logger.warning("_build_tree: depth limit reached at parent_id=%s", parent_id)
-            return []
+            return [TreeNode(issue=_truncated_issue_sentinel(parent_id), progress=None, children=[], truncated=True)]
 
         children = self.list_issues(parent_id=parent_id)
         nodes: list[TreeNode] = []
@@ -525,7 +523,7 @@ class PlanningMixin(DBMixinProtocol):
             progress = self._progress_from_subtree(subtree) if subtree else None
             nodes.append(
                 {
-                    "issue": dict(child.to_dict()),
+                    "issue": child.to_dict(),
                     "progress": progress,
                     "children": subtree,
                 }
@@ -555,6 +553,17 @@ class PlanningMixin(DBMixinProtocol):
         pct = round(completed / total * 100) if total > 0 else 0
         return {"total": total, "completed": completed, "in_progress": in_progress, "open": open_count, "pct": pct}
 
+    def _collect_tree_warnings(self, nodes: list[TreeNode]) -> list[str]:
+        """Recursively collect ``data_warnings`` from truncated tree nodes."""
+        warnings: list[str] = []
+        for node in nodes:
+            if node.get("truncated"):
+                node_warnings = node["issue"].get("data_warnings", [])
+                warnings.extend(node_warnings)
+            if node["children"]:
+                warnings.extend(self._collect_tree_warnings(node["children"]))
+        return warnings
+
     def _summarize_children_by_type(self, nodes: list[TreeNode]) -> ChildSummary:
         counts: ChildSummary = {"epics": 0, "milestones": 0, "tasks": 0, "bugs": 0, "other": 0, "total": len(nodes)}
         type_map = {"epic": "epics", "milestone": "milestones", "task": "tasks", "bug": "bugs"}
@@ -571,5 +580,5 @@ class PlanningMixin(DBMixinProtocol):
                 refs.append({"id": issue.id, "title": issue.title, "type": issue.type})
             except KeyError:
                 logger.warning("_resolve_issue_refs: dangling reference %s", issue_id)
-                refs.append({"id": issue_id, "title": "(deleted)", "type": "unknown"})
+                refs.append({"id": issue_id, "title": "(deleted)", "type": "unknown", "dangling": True})
         return refs

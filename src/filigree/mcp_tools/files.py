@@ -56,7 +56,7 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
                         "enum": ["updated_at", "first_seen", "path", "language"],
                         "default": "updated_at",
                     },
-                    "direction": {"type": "string", "enum": ["asc", "desc", "ASC", "DESC"]},
+                    "direction": {"type": "string", "enum": ["asc", "desc"]},
                 },
             },
         ),
@@ -369,8 +369,11 @@ async def _handle_list_scanners(arguments: dict[str, Any]) -> list[TextContent]:
     scanners_dir = filigree_dir / "scanners" if filigree_dir else None
     if scanners_dir is None:
         return _text({"scanners": [], "hint": "Project directory not initialized"})
-    scanners = _list_scanners(scanners_dir)
+    load_errors: list[str] = []
+    scanners = _list_scanners(scanners_dir, errors=load_errors)
     result_data: dict[str, Any] = {"scanners": [s.to_dict() for s in scanners]}
+    if load_errors:
+        result_data["errors"] = load_errors
     if not scanners:
         result_data["hint"] = "No scanners registered. Add TOML files to .filigree/scanners/"
     return _text(result_data)
@@ -515,6 +518,7 @@ async def _handle_trigger_scan(arguments: dict[str, Any]) -> list[TextContent]:
     await asyncio.sleep(0.2)
     exit_code = proc.poll()
     if exit_code is not None and exit_code != 0:
+        del _scan_cooldowns[cooldown_key]
         log_hint = ""
         if scan_log_path.exists():
             log_hint = f" Check log: {scan_log_path.relative_to(filigree_dir.parent)}"

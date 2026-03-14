@@ -7,6 +7,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-03-09
+
+### Added
+
+- **Observations subsystem** — fire-and-forget agent scratchpad with TTL expiry, audit trail, atomic promote-to-issue, and file anchoring (schema v6→v7 migration)
+- MCP tools for observations: `observe`, `list_observations`, `dismiss_observation`, `promote_observation`
+- Observation awareness in session context, project summary, and MCP prompt
+- Observation triage workflow with promote-to-type selection and requirements pack support
+- Dashboard observation stats on Insights page and observation counts in Files table and detail panel
+- Kanban List mode with sortable table view
+- Scoped subtree explorer replacing the standalone Graph tab — sidebar-driven, renders parent-child hierarchy edges
+
+### Changed
+
+- Consolidated dashboard from 7 tabs to 5: Activity merged into Insights, Health merged into Files as collapsible Code Quality Overview, Workflow demoted to Settings modal
+- Redesigned header filter bar with status pills, Done time-bound dropdown, and cleaner layout
+- Decomposed `process_scan_results` monolith into focused helpers with table-driven `export_jsonl`
+- Simplified TypedDict patterns using `PlanResponse` inheritance and `NotRequired`
+- **Breaking (MCP):** `get_valid_transitions` and `get_issue` `missing_fields` now returns bare field name strings instead of full schema objects — consumers expecting `{name, type, description}` dicts must update to plain `list[str]`
+- Threaded `Severity`/`FindingStatus`/`AssocType` Literal types through API signatures
+
+### Fixed
+
+- Codex MCP install and doctor now validate the config Codex actually uses (`~/.codex/config.toml`), rewrite stale `filigree` entries that still target another project, and support server-mode MCP URL installs
+- Restored schema `v6` compatibility for historical databases by reinstating the missing `v5 -> v6` migration for the `issues.parent_id` self-foreign-key, including FTS rebuild handling after the table swap
+- JSONL export/import now round-trips the file subsystem (`file_records`, `scan_findings`, `file_associations`, `file_events`), reconciles the seeded `Future` release singleton on restore, and makes `merge=True` idempotent for imported comments and file history rows
+- Ethereal/server lifecycle helpers now degrade cleanly under restricted socket permissions, treat `PermissionError` liveness checks as live processes, and verify PID ownership against the expected dashboard command shape before reusing or stopping processes
+- Older Filigree binaries now refuse to open databases with a newer schema version instead of silently attempting an unsupported downgrade path
+- Dashboard issue creation now preserves custom `fields`, so release/version metadata and other template-backed values survive `POST /api/issues`
+- CLI, dashboard, hooks, and MCP project openers now honor configured `enabled_packs` instead of silently falling back to the default pack set
+- File lookups by path now normalize equivalent path spellings on read, matching the write-time identity rules used by scan ingestion and file registration
+- Transaction safety hardening: rollback guards on promote/close, savepoint leak fixes, undo race conditions, and phantom write prevention
+- Template engine hardening: reverse-reachability BFS validation, crash-on-anomaly for category cache, rejection of unknown types in transitions and initial state lookups. `get_mode` raises `ValueError` for unknown modes (all callers already handle this). `get_initial_state` raises `ValueError` for unknown types (callers guard upstream or propagate correctly). `list_issues` raises `ValueError` for negative limit/offset (API schema prevents negative values at boundary).
+- TOCTOU race fixes in PID ownership and cleanup, unchecked return codes in OS command reads
+- Numerous type-safety fixes: generic `PaginatedResult`, typed observations and planning responses, `EventType` Literal enforcement at SQL boundary
+- CLI runtime fixes: partial-failure data loss prevention, correct exit codes, and `--json` support for all commands
+- Issue creation/update now reject non-dict `fields` inputs with a stable validation error instead of crashing with an internal `AttributeError`
+- Dashboard issue create/update and batch update endpoints now translate invalid non-dict `fields` payloads into `400 VALIDATION_ERROR` responses instead of leaking `500` errors
+- Dashboard filter composability: type filter and cluster mode now work together correctly
+
+### Tests
+
+- Shape contract tests for 14 MCP handler response TypedDicts
+- 42 new tests for previously untested error paths and edge cases
+- DB core test gap closure for transactions, cycle detection, and import paths
+
 ## [1.4.1] - 2026-03-03
 
 ### Changed
@@ -454,7 +500,9 @@ identified through systematic static analysis and verified against HEAD.
 - Issue validation against workflow templates (`validate`)
 - PEP 561 `py.typed` marker for downstream type checking
 
-[Unreleased]: https://github.com/tachyon-beep/filigree/compare/v1.4.0...HEAD
+[Unreleased]: https://github.com/tachyon-beep/filigree/compare/v1.5.0...HEAD
+[1.5.0]: https://github.com/tachyon-beep/filigree/compare/v1.4.1...v1.5.0
+[1.4.1]: https://github.com/tachyon-beep/filigree/compare/v1.4.0...v1.4.1
 [1.4.0]: https://github.com/tachyon-beep/filigree/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/tachyon-beep/filigree/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/tachyon-beep/filigree/compare/v1.1.1...v1.2.0

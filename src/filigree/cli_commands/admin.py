@@ -147,7 +147,12 @@ def install(
         write_config(filigree_dir, config)
 
     # Resolve effective mode (explicit flag > config > default)
-    mode = mode or get_mode(filigree_dir)
+    if not mode:
+        try:
+            mode = get_mode(filigree_dir)
+        except ValueError as exc:
+            click.echo(f"⚠ {exc}. Falling back to 'ethereal'.", err=True)
+            mode = "ethereal"
 
     project_root = filigree_dir.parent
     install_all = not any([claude_code, codex, claude_md, agents_md, gitignore, hooks_only, skills_only, codex_skills_only])
@@ -167,7 +172,7 @@ def install(
         results.append(("Claude Code MCP", ok, msg))
 
     if install_all or codex:
-        ok, msg = install_codex_mcp(project_root)
+        ok, msg = install_codex_mcp(project_root, mode=mode, server_port=server_port)
         results.append(("Codex MCP", ok, msg))
 
     if install_all or claude_md:
@@ -259,7 +264,11 @@ def doctor(fix: bool, verbose: bool) -> None:
         )
 
         project_root = filigree_dir.parent
-        mode = get_mode(filigree_dir)
+        try:
+            mode = get_mode(filigree_dir)
+        except ValueError as exc:
+            click.echo(f"⚠ {exc}. Falling back to 'ethereal'.", err=True)
+            mode = "ethereal"
         server_port = 8377
         if mode == "server":
             try:
@@ -321,7 +330,7 @@ def doctor(fix: bool, verbose: bool) -> None:
                     ok, msg = install_claude_code_mcp(project_root, mode=mode, server_port=server_port)
                     click.echo(f"  {'OK' if ok else '!!'} {r.name}: {msg}")
                 elif fix_key == "codex_mcp":
-                    ok, msg = install_codex_mcp(project_root)
+                    ok, msg = install_codex_mcp(project_root, mode=mode, server_port=server_port)
                     click.echo(f"  {'OK' if ok else '!!'} {r.name}: {msg}")
                 elif fix_key == "hooks":
                     ok, msg = install_claude_code_hooks(project_root)
@@ -455,7 +464,7 @@ def metrics(as_json: bool, days: int) -> None:
 @click.command("export")
 @click.argument("output", type=click.Path())
 def export_data(output: str) -> None:
-    """Export all issues to JSONL file."""
+    """Export full project data to a JSONL file."""
     with get_db() as db:
         count = db.export_jsonl(output)
         click.echo(f"Exported {count} records to {output}")
@@ -465,15 +474,18 @@ def export_data(output: str) -> None:
 @click.argument("input_file", type=click.Path(exists=True))
 @click.option("--merge", is_flag=True, help="Skip existing records instead of failing on conflict")
 def import_data(input_file: str, merge: bool) -> None:
-    """Import issues from JSONL file."""
+    """Import full project data from a JSONL file."""
     with get_db() as db:
         try:
-            count = db.import_jsonl(input_file, merge=merge)
+            result = db.import_jsonl(input_file, merge=merge)
         except (json_mod.JSONDecodeError, KeyError, ValueError, sqlite3.IntegrityError, OSError) as e:
             click.echo(f"Import failed: {e}", err=True)
             sys.exit(1)
         refresh_summary(db)
-        click.echo(f"Imported {count} records from {input_file}")
+        click.echo(f"Imported {result['count']} records from {input_file}")
+        if result["skipped_types"]:
+            for rtype, rcount in result["skipped_types"].items():
+                click.echo(f"  Warning: skipped {rcount} record(s) with unknown type {rtype!r}", err=True)
 
 
 @click.command("archive")

@@ -17,14 +17,14 @@ const PROJECT_FILTERS_STORAGE_KEY = "filigree_project_filter_settings";
 const DEFAULT_PROJECT_FILTERS = Object.freeze({
   open: true,
   active: true,
-  closed: true,
+  closed: false,
   priority: "all",
-  updatedDays: "0",
+  doneTimeBound: "7",
   ready: true,
   blocked: false,
 });
 const VALID_PRIORITY_FILTERS = new Set(["all", "0-1", "2", "3-4"]);
-const VALID_UPDATED_DAYS = new Set(["0", "1", "7", "14", "30", "90"]);
+const VALID_DONE_TIME_BOUNDS = new Set(["0", "1", "3", "7", "14", "30"]);
 
 function getProjectStorageKey() {
   return state.currentProjectKey || "__default__";
@@ -35,15 +35,15 @@ function normalizeProjectFilters(raw) {
   const priority = VALID_PRIORITY_FILTERS.has(src.priority)
     ? src.priority
     : DEFAULT_PROJECT_FILTERS.priority;
-  const updatedDays = VALID_UPDATED_DAYS.has(String(src.updatedDays))
-    ? String(src.updatedDays)
-    : DEFAULT_PROJECT_FILTERS.updatedDays;
+  const doneTimeBound = VALID_DONE_TIME_BOUNDS.has(String(src.doneTimeBound))
+    ? String(src.doneTimeBound)
+    : DEFAULT_PROJECT_FILTERS.doneTimeBound;
   return {
     open: src.open === undefined ? DEFAULT_PROJECT_FILTERS.open : !!src.open,
     active: src.active === undefined ? DEFAULT_PROJECT_FILTERS.active : !!src.active,
     closed: src.closed === undefined ? DEFAULT_PROJECT_FILTERS.closed : !!src.closed,
     priority,
-    updatedDays,
+    doneTimeBound,
     ready: src.ready === undefined ? DEFAULT_PROJECT_FILTERS.ready : !!src.ready,
     blocked: src.blocked === undefined ? DEFAULT_PROJECT_FILTERS.blocked : !!src.blocked,
   };
@@ -109,30 +109,41 @@ export function loadProjectFilterSettings() {
 export function getFilteredIssues() {
   let items = state.allIssues.slice();
 
-  const showOpen = document.getElementById("filterOpen").checked;
-  const showActive = document.getElementById("filterInProgress").checked;
-  const showClosed = document.getElementById("filterClosed").checked;
+  const showOpen = state.statusPills.open;
+  const showActive = state.statusPills.active;
+  const showDone = state.statusPills.done;
 
   items = items.filter((i) => {
     const cat = i.status_category || "open";
     if (cat === "open" && !showOpen) return false;
     if (cat === "wip" && !showActive) return false;
-    if (cat === "done" && !showClosed) return false;
+    if (cat === "done" && !showDone) return false;
     return true;
   });
 
-  const prio = document.getElementById("filterPriority").value;
+  // Done time-bound filter
+  if (showDone) {
+    const doneTimeBound = parseInt(document.getElementById("doneTimeBound")?.value || "7", 10);
+    if (doneTimeBound > 0) {
+      const cutoff = Date.now() - doneTimeBound * 86400000;
+      items = items.filter((i) => {
+        const cat = i.status_category || "open";
+        if (cat === "done") {
+          const closedAt = i.closed_at || i.updated_at;
+          return closedAt && new Date(closedAt).getTime() >= cutoff;
+        }
+        return true;
+      });
+    }
+  }
+
+  const prio = document.getElementById("filterPriority")?.value || "all";
   if (prio === "0-1") items = items.filter((i) => i.priority <= 1);
   else if (prio === "2") items = items.filter((i) => i.priority === 2);
   else if (prio === "3-4") items = items.filter((i) => i.priority >= 3);
 
-  const updatedDays = parseInt(document.getElementById("filterUpdatedDays")?.value || "0", 10);
-  if (updatedDays > 0) {
-    const cutoff = Date.now() - updatedDays * 86400000;
-    items = items.filter((i) => {
-      const ts = i.updated_at || i.created_at;
-      return ts && new Date(ts).getTime() >= cutoff;
-    });
+  if (state.typeTemplate) {
+    items = items.filter((i) => i.type === state.typeTemplate.type);
   }
 
   if (state.searchResults !== null) {
@@ -179,13 +190,73 @@ export function toggleBlocked() {
   render();
 }
 
+// --- Status pill toggles ---
+
+const PILL_ON = "px-2 py-1 rounded text-xs font-medium bg-accent text-primary";
+const PILL_OFF = "px-2 py-1 rounded text-xs font-medium bg-overlay text-secondary border border-strong";
+
+function syncPillUI() {
+  const pillOpen = document.getElementById("pillOpen");
+  const pillActive = document.getElementById("pillActive");
+  const pillDone = document.getElementById("pillDone");
+  if (pillOpen) pillOpen.className = state.statusPills.open ? PILL_ON : PILL_OFF;
+  if (pillActive) pillActive.className = state.statusPills.active ? PILL_ON : PILL_OFF;
+  if (pillDone) {
+    pillDone.className = state.statusPills.done ? PILL_ON : PILL_OFF;
+    const dropdown = document.getElementById("doneTimeBound");
+    if (dropdown) {
+      if (state.statusPills.done) {
+        const days = dropdown.value || "7";
+        pillDone.textContent = days === "0" ? "Done: All" : `Done: ${days}d`;
+      } else {
+        pillDone.textContent = "Done";
+        dropdown.classList.add("hidden");
+      }
+    }
+  }
+}
+
+export function toggleStatusPill(category) {
+  if (category === "done") {
+    const dropdown = document.getElementById("doneTimeBound");
+    if (!state.statusPills.done) {
+      // Phase 1: off → on + show dropdown
+      state.statusPills.done = true;
+      syncPillUI();
+      if (dropdown) dropdown.classList.remove("hidden");
+      applyFilters();
+    } else if (dropdown && !dropdown.classList.contains("hidden")) {
+      // Phase 2: on + dropdown visible → on + hide dropdown
+      dropdown.classList.add("hidden");
+    } else {
+      // Phase 3: on + dropdown hidden → off
+      state.statusPills.done = false;
+      syncPillUI();
+      applyFilters();
+    }
+    return;
+  }
+  state.statusPills[category] = !state.statusPills[category];
+  syncPillUI();
+  applyFilters();
+}
+
+export function onDoneTimeBoundChange() {
+  syncPillUI();
+  applyFilters();
+  const dropdown = document.getElementById("doneTimeBound");
+  if (dropdown) dropdown.classList.add("hidden");
+}
+
 export function toggleMultiSelect() {
   state.multiSelectMode = !state.multiSelectMode;
   if (!state.multiSelectMode) state.selectedCards.clear();
   const btn = document.getElementById("btnMultiSelect");
-  btn.className = state.multiSelectMode
-    ? "px-2 py-1 rounded text-xs font-medium bg-accent text-primary"
-    : "px-2 py-1 rounded text-xs font-medium bg-overlay text-secondary border border-strong";
+  if (btn) {
+    btn.className = state.multiSelectMode
+      ? "px-2 py-1 rounded text-xs font-medium bg-accent text-primary"
+      : "px-2 py-1 rounded text-xs font-medium bg-overlay text-secondary border border-strong";
+  }
   render();
 }
 
@@ -215,9 +286,16 @@ export async function doSearch() {
   }
   try {
     const data = await fetchSearch(q, 100);
+    if (!data) {
+      state.searchResults = new Set();
+      render();
+      return;
+    }
     state.searchResults = new Set(data.results.map((i) => i.id));
-  } catch (_e) {
-    state.searchResults = null;
+  } catch (err) {
+    console.warn("[search] Failed to fetch search results:", err);
+    state.searchResults = new Set();
+    if (callbacks.showToast) callbacks.showToast("Search failed — showing no results", "error");
   }
   render();
 }
@@ -226,34 +304,37 @@ export async function doSearch() {
 
 export function getFilterState() {
   return {
-    open: document.getElementById("filterOpen").checked,
-    active: document.getElementById("filterInProgress").checked,
-    closed: document.getElementById("filterClosed").checked,
-    priority: document.getElementById("filterPriority").value,
-    updatedDays: document.getElementById("filterUpdatedDays")?.value || "0",
+    open: state.statusPills.open,
+    active: state.statusPills.active,
+    closed: state.statusPills.done,
+    priority: document.getElementById("filterPriority")?.value || "all",
+    doneTimeBound: document.getElementById("doneTimeBound")?.value || "7",
     ready: state.readyFilter,
     blocked: state.blockedFilter,
-    search: document.getElementById("filterSearch").value,
+    search: document.getElementById("filterSearch")?.value || "",
   };
 }
 
 export function applyFilterState(filterState, opts = {}) {
   const normalized = normalizeFilterState(filterState);
-  document.getElementById("filterOpen").checked = normalized.open;
-  document.getElementById("filterInProgress").checked = normalized.active;
-  document.getElementById("filterClosed").checked = normalized.closed;
-  document.getElementById("filterPriority").value = normalized.priority;
-  const updatedEl = document.getElementById("filterUpdatedDays");
-  if (updatedEl) updatedEl.value = normalized.updatedDays;
+  state.statusPills.open = normalized.open;
+  state.statusPills.active = normalized.active;
+  state.statusPills.done = normalized.closed;
+  syncPillUI();
+  const prioEl = document.getElementById("filterPriority");
+  if (prioEl) prioEl.value = normalized.priority;
+  const doneEl = document.getElementById("doneTimeBound");
+  if (doneEl) doneEl.value = normalized.doneTimeBound || "7";
   state.readyFilter = normalized.ready;
   state.blockedFilter = normalized.blocked;
   updateToggleButtons();
   if (!opts.skipPersist) saveProjectFilterSettings();
+  const searchEl = document.getElementById("filterSearch");
   if (normalized.search) {
-    document.getElementById("filterSearch").value = normalized.search;
+    if (searchEl) searchEl.value = normalized.search;
     doSearch();
   } else {
-    document.getElementById("filterSearch").value = "";
+    if (searchEl) searchEl.value = "";
     state.searchResults = null;
     render();
   }
@@ -366,28 +447,32 @@ export async function applyTypeFilter() {
     } else {
       state.typeTemplate = null;
     }
-  } catch (_e) {
+  } catch (err) {
     if (seq !== state._typeFilterSeq) return;
+    console.warn("[typeFilter] Failed to load type info:", err);
     state.typeTemplate = null;
+    const sel = document.getElementById("filterType");
+    if (sel) sel.value = "";
+    if (callbacks.showToast) callbacks.showToast("Could not load type filter", "error");
   }
   if (callbacks.renderKanban) callbacks.renderKanban();
   updateTypeFilterUI(!!state.typeTemplate);
 }
 
 export function updateTypeFilterUI(isFiltered) {
-  const btnStd = document.getElementById("btnStandard");
+  const btnBoard = document.getElementById("btnBoard");
   const btnClust = document.getElementById("btnCluster");
   const pill = document.getElementById("typeFilterPill");
   const label = document.getElementById("typeFilterLabel");
   if (isFiltered && state.typeTemplate) {
-    btnStd.classList.add("opacity-50", "pointer-events-none");
-    btnClust.classList.add("opacity-50", "pointer-events-none");
-    pill.classList.remove("hidden");
-    label.textContent = state.typeTemplate.type;
+    if (btnBoard) btnBoard.classList.add("opacity-50", "pointer-events-none");
+    if (btnClust) btnClust.classList.add("opacity-50", "pointer-events-none");
+    if (pill) pill.classList.remove("hidden");
+    if (label) label.textContent = state.typeTemplate.type;
   } else {
-    btnStd.classList.remove("opacity-50", "pointer-events-none");
-    btnClust.classList.remove("opacity-50", "pointer-events-none");
-    pill.classList.add("hidden");
+    if (btnBoard) btnBoard.classList.remove("opacity-50", "pointer-events-none");
+    if (btnClust) btnClust.classList.remove("opacity-50", "pointer-events-none");
+    if (pill) pill.classList.add("hidden");
   }
 }
 

@@ -55,6 +55,11 @@ def _get_schema_version(conn: sqlite3.Connection) -> int:
     return int(conn.execute("PRAGMA user_version").fetchone()[0])
 
 
+def _get_foreign_keys(conn: sqlite3.Connection, table: str) -> list[sqlite3.Row]:
+    """Return PRAGMA foreign_key_list(table) rows."""
+    return conn.execute(f"PRAGMA foreign_key_list({table})").fetchall()
+
+
 # ---------------------------------------------------------------------------
 # Schema constant integrity
 # ---------------------------------------------------------------------------
@@ -1126,6 +1131,144 @@ class TestMigrateV4ToV5:
         assert len(comments) == 0
 
 
+class TestObservationsSchema:
+    """Verify observations tables are created."""
+
+    def test_observations_table_exists(self, db: FiligreeDB) -> None:
+        row = db.conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='observations'").fetchone()
+        assert row is not None
+
+    def test_observations_columns(self, db: FiligreeDB) -> None:
+        cols = {row[1] for row in db.conn.execute("PRAGMA table_info(observations)").fetchall()}
+        expected = {
+            "id",
+            "summary",
+            "detail",
+            "file_id",
+            "file_path",
+            "line",
+            "source_issue_id",
+            "priority",
+            "actor",
+            "created_at",
+            "expires_at",
+        }
+        assert expected.issubset(cols)
+
+    def test_dismissed_observations_table_exists(self, db: FiligreeDB) -> None:
+        row = db.conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='dismissed_observations'").fetchone()
+        assert row is not None
+
+    def test_dismissed_observations_columns(self, db: FiligreeDB) -> None:
+        cols = {row[1] for row in db.conn.execute("PRAGMA table_info(dismissed_observations)").fetchall()}
+        expected = {"id", "obs_id", "summary", "actor", "reason", "dismissed_at"}
+        assert expected.issubset(cols)
+
+    def test_observations_indexes(self, db: FiligreeDB) -> None:
+        indexes = {
+            row[1]
+            for row in db.conn.execute("SELECT * FROM sqlite_master WHERE type='index' AND tbl_name='observations'").fetchall()
+            if row[1]
+        }
+        assert "idx_observations_priority" in indexes
+        assert "idx_observations_expires" in indexes
+        assert "idx_observations_dedup" in indexes
+
+    def test_dismissed_observations_index(self, db: FiligreeDB) -> None:
+        indexes = {
+            row[1]
+            for row in db.conn.execute("SELECT * FROM sqlite_master WHERE type='index' AND tbl_name='dismissed_observations'").fetchall()
+            if row[1]
+        }
+        assert "idx_dismissed_obs_id" in indexes
+
+
+class TestMigrateV5ToV6:
+    """Tests for migration v5 -> v6: parent_id self-FK with ON DELETE SET NULL."""
+
+    V5_ISSUES_SCHEMA = """\
+    CREATE TABLE issues (
+        id          TEXT PRIMARY KEY,
+        title       TEXT NOT NULL,
+        status      TEXT NOT NULL DEFAULT 'open',
+        priority    INTEGER NOT NULL DEFAULT 2,
+        type        TEXT NOT NULL DEFAULT 'task',
+        parent_id   TEXT,
+        assignee    TEXT DEFAULT '',
+        created_at  TEXT NOT NULL,
+        updated_at  TEXT NOT NULL,
+        closed_at   TEXT,
+        description TEXT DEFAULT '',
+        notes       TEXT DEFAULT '',
+        fields      TEXT DEFAULT '{}',
+        CHECK (priority BETWEEN 0 AND 4)
+    )"""
+
+    def _make_v5_db_without_parent_fk(self, tmp_path: Path) -> sqlite3.Connection:
+        conn = _make_db(tmp_path)
+        conn.executescript(SCHEMA_SQL)
+        conn.commit()
+        conn.execute("PRAGMA foreign_keys=OFF")
+        rebuild_table(conn, "issues", self.V5_ISSUES_SCHEMA)
+        conn.execute("PRAGMA user_version = 5")
+        conn.commit()
+        conn.execute("PRAGMA foreign_keys=ON")
+        return conn
+
+    def test_rebuilds_old_v5_issues_table_and_preserves_data(self, tmp_path: Path) -> None:
+        """Legacy v5 issues tables gain the parent FK and keep their rows."""
+        conn = self._make_v5_db_without_parent_fk(tmp_path)
+        now = "2026-01-01T00:00:00Z"
+        conn.execute(
+            "INSERT INTO issues (id, title, status, priority, type, parent_id, assignee, created_at, updated_at, fields) "
+            "VALUES ('parent', 'Parent', 'open', 2, 'task', NULL, '', ?, ?, '{}')",
+            (now, now),
+        )
+        conn.execute(
+            "INSERT INTO issues (id, title, status, priority, type, parent_id, assignee, created_at, updated_at, fields) "
+            "VALUES ('child', 'Child', 'open', 2, 'task', 'parent', '', ?, ?, '{}')",
+            (now, now),
+        )
+        conn.execute(
+            "INSERT INTO issues (id, title, status, priority, type, parent_id, assignee, created_at, updated_at, fields) "
+            "VALUES ('orphan', 'Orphan', 'open', 2, 'task', 'missing', '', ?, ?, '{}')",
+            (now, now),
+        )
+        conn.commit()
+
+        applied = apply_pending_migrations(conn, 6)
+
+        assert applied == 1
+        assert _get_schema_version(conn) == 6
+        orphan_parent = conn.execute("SELECT parent_id FROM issues WHERE id = 'orphan'").fetchone()[0]
+        assert orphan_parent is None
+
+        parent_fk = next(row for row in _get_foreign_keys(conn, "issues") if row["from"] == "parent_id")
+        assert parent_fk["table"] == "issues"
+        assert parent_fk["on_delete"] == "SET NULL"
+
+        conn.execute("DELETE FROM issues WHERE id = 'parent'")
+        conn.commit()
+        child_parent = conn.execute("SELECT parent_id FROM issues WHERE id = 'child'").fetchone()[0]
+        assert child_parent is None
+        conn.close()
+
+    def test_restamps_already_correct_v5_schema(self, tmp_path: Path) -> None:
+        """Databases already shaped like v6 should still migrate cleanly."""
+        conn = _make_db(tmp_path)
+        conn.executescript(SCHEMA_SQL)
+        conn.execute("PRAGMA user_version = 5")
+        conn.commit()
+
+        applied = apply_pending_migrations(conn, 6)
+
+        assert applied == 1
+        assert _get_schema_version(conn) == 6
+        parent_fk = next(row for row in _get_foreign_keys(conn, "issues") if row["from"] == "parent_id")
+        assert parent_fk["on_delete"] == "SET NULL"
+        conn.close()
+
+
 # ---------------------------------------------------------------------------
 # Schema equivalence test
 # ---------------------------------------------------------------------------
@@ -1236,6 +1379,20 @@ class TestFiligreeDBMigration:
         d.initialize()  # Should be a no-op (already at current version)
         assert d.get_issue(issue.id).title == "Before reinit"
         assert d.get_schema_version() == CURRENT_SCHEMA_VERSION
+        d.close()
+
+    def test_initialize_rejects_newer_schema(self, tmp_path: Path) -> None:
+        """Older binaries must refuse to open newer databases."""
+        db_path = tmp_path / "future.db"
+        conn = _make_db(tmp_path, "future.db")
+        conn.executescript(SCHEMA_SQL)
+        conn.execute(f"PRAGMA user_version = {CURRENT_SCHEMA_VERSION + 1}")
+        conn.commit()
+        conn.close()
+
+        d = FiligreeDB(db_path, prefix="test")
+        with pytest.raises(ValueError, match="newer than this version"):
+            d.initialize()
         d.close()
 
 
@@ -1360,3 +1517,109 @@ class TestSchemaVersioning:
         db.conn.commit()
         issue = db.get_issue("test-custom1")
         assert issue.status == "review"
+
+
+# ---------------------------------------------------------------------------
+# v6 -> v7 migration tests (observations)
+# ---------------------------------------------------------------------------
+
+
+class TestMigrateV6ToV7:
+    """Tests for migration v6 -> v7: observations and dismissed_observations tables."""
+
+    @pytest.fixture
+    def v6_db(self, tmp_path: Path) -> sqlite3.Connection:
+        """Create a v6 database using the full schema (stamped as v6)."""
+        conn = _make_db(tmp_path)
+        conn.executescript(SCHEMA_SQL)
+        conn.execute("PRAGMA user_version = 6")
+        conn.commit()
+        # Drop the new tables so migration can recreate them
+        conn.execute("DROP TABLE IF EXISTS dismissed_observations")
+        conn.execute("DROP TABLE IF EXISTS observations")
+        conn.commit()
+        return conn
+
+    def test_migration_runs(self, v6_db: sqlite3.Connection) -> None:
+        applied = apply_pending_migrations(v6_db, 7)
+        assert applied == 1
+        assert _get_schema_version(v6_db) == 7
+
+    def test_observations_table_created(self, v6_db: sqlite3.Connection) -> None:
+        apply_pending_migrations(v6_db, 7)
+        cols = _get_table_columns(v6_db, "observations")
+        expected = {
+            "id",
+            "summary",
+            "detail",
+            "file_id",
+            "file_path",
+            "line",
+            "source_issue_id",
+            "priority",
+            "actor",
+            "created_at",
+            "expires_at",
+        }
+        assert expected.issubset(cols)
+
+    def test_dismissed_observations_table_created(self, v6_db: sqlite3.Connection) -> None:
+        apply_pending_migrations(v6_db, 7)
+        cols = _get_table_columns(v6_db, "dismissed_observations")
+        expected = {"id", "obs_id", "summary", "actor", "reason", "dismissed_at"}
+        assert expected.issubset(cols)
+
+    def test_indexes_created(self, v6_db: sqlite3.Connection) -> None:
+        apply_pending_migrations(v6_db, 7)
+        indexes = _get_index_names(v6_db)
+        assert "idx_observations_priority" in indexes
+        assert "idx_observations_expires" in indexes
+        assert "idx_observations_file_id" in indexes
+        assert "idx_observations_dedup" in indexes
+        assert "idx_dismissed_obs_id" in indexes
+
+    def test_dedup_index_uses_coalesce(self, v6_db: sqlite3.Connection) -> None:
+        """The dedup index uses coalesce(line, -1) so NULL lines deduplicate correctly."""
+        apply_pending_migrations(v6_db, 7)
+        now = "2026-01-01T00:00:00Z"
+        future = "2026-02-01T00:00:00Z"
+        v6_db.execute(
+            "INSERT INTO observations (id, summary, file_path, line, created_at, expires_at) "
+            "VALUES ('obs1', 'dup test', 'src/main.py', NULL, ?, ?)",
+            (now, future),
+        )
+        v6_db.commit()
+        from sqlite3 import IntegrityError
+
+        with pytest.raises(IntegrityError):
+            v6_db.execute(
+                "INSERT INTO observations (id, summary, file_path, line, created_at, expires_at) "
+                "VALUES ('obs2', 'dup test', 'src/main.py', NULL, ?, ?)",
+                (now, future),
+            )
+        v6_db.rollback()
+
+    def test_schema_matches_fresh(self, v6_db: sqlite3.Connection, tmp_path: Path) -> None:
+        """Migrated schema matches fresh SCHEMA_SQL for observation tables."""
+        apply_pending_migrations(v6_db, 7)
+
+        fresh = _make_db(tmp_path, "fresh.db")
+        fresh.executescript(SCHEMA_SQL)
+        fresh.commit()
+
+        for table in ("observations", "dismissed_observations"):
+            migrated_cols = _get_table_columns(v6_db, table)
+            fresh_cols = _get_table_columns(fresh, table)
+            assert migrated_cols == fresh_cols, f"Column mismatch in {table}: {migrated_cols} != {fresh_cols}"
+
+        fresh_indexes = _get_index_names(fresh)
+        migrated_indexes = _get_index_names(v6_db)
+        for idx in ("idx_observations_priority", "idx_observations_expires", "idx_observations_dedup", "idx_dismissed_obs_id"):
+            assert idx in fresh_indexes, f"Missing index {idx} in fresh DB"
+            assert idx in migrated_indexes, f"Missing index {idx} in migrated DB"
+        fresh.close()
+
+    def test_idempotent(self, v6_db: sqlite3.Connection) -> None:
+        apply_pending_migrations(v6_db, 7)
+        applied = apply_pending_migrations(v6_db, 7)
+        assert applied == 0

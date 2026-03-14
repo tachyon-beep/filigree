@@ -1,10 +1,11 @@
-"""TypedDicts for db_files.py return types (populated by Task 1B)."""
+"""TypedDicts for db_files.py return types."""
 
 from __future__ import annotations
 
-from typing import TypedDict
+from typing import Any, TypedDict
 
 from filigree.types.core import (
+    AssocType,
     FileRecordDict,
     ISOTimestamp,
     ScanFindingDict,
@@ -17,7 +18,7 @@ class FileAssociation(TypedDict):
     id: int
     file_id: str
     issue_id: str
-    assoc_type: str
+    assoc_type: AssocType
     created_at: ISOTimestamp
     issue_title: str | None
     issue_status: str | None
@@ -29,7 +30,7 @@ class IssueFileAssociation(TypedDict):
     id: int
     file_id: str
     issue_id: str
-    assoc_type: str
+    assoc_type: AssocType
     created_at: ISOTimestamp
     file_path: str
     file_language: str | None
@@ -81,6 +82,7 @@ class FileDetail(TypedDict):
     associations: list[FileAssociation]
     recent_findings: list[ScanFindingDict]
     summary: FindingsSummary
+    observation_count: int
 
 
 class ScanRunRecord(TypedDict):
@@ -111,6 +113,27 @@ class ScanIngestResult(TypedDict):
     issues_created: int
     issue_ids: list[str]
     warnings: list[str]
+
+
+class EnrichedFileItem(FileRecordDict):
+    """Shape of each item in ``list_files_paginated()`` results.
+
+    Extends FileRecordDict with inline summary and counts.
+    """
+
+    summary: FindingsSummary
+    associations_count: int
+    observation_count: int
+
+
+class TimelineEntry(TypedDict):
+    """Shape of each item in ``get_file_timeline()`` results."""
+
+    id: str
+    type: str
+    timestamp: ISOTimestamp
+    source_id: str
+    data: dict[str, Any]
 
 
 class CleanStaleResult(TypedDict):

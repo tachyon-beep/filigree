@@ -39,7 +39,6 @@ if TYPE_CHECKING:
 
 from filigree import __version__
 from filigree.core import (
-    DB_FILENAME,
     FiligreeDB,
     find_filigree_root,
     read_config,
@@ -123,13 +122,7 @@ class ProjectStore:
             filigree_path = Path(info["path"])
             db: FiligreeDB | None = None
             try:
-                config = read_config(filigree_path)
-                db = FiligreeDB(
-                    filigree_path / DB_FILENAME,
-                    prefix=config.get("prefix", key),
-                    check_same_thread=False,
-                )
-                db.initialize()
+                db = FiligreeDB.from_filigree_dir(filigree_path, check_same_thread=False)
                 self._dbs[key] = db
             except Exception:
                 logger.error("Failed to open project DB for key=%r path=%s", key, filigree_path, exc_info=True)
@@ -315,7 +308,7 @@ def create_app(*, server_mode: bool = False) -> ASGIApp:
                 # Match /api/p/{key}/… — extract the key segment
                 if path.startswith("/api/p/"):
                     parts = path.split("/", 5)  # ['', 'api', 'p', key, ...]
-                    if len(parts) >= 4:
+                    if len(parts) >= 4 and parts[3]:
                         token = _current_project_key.set(parts[3])
                         try:
                             return await call_next(request)
@@ -436,18 +429,23 @@ def main(port: int = DEFAULT_PORT, *, no_browser: bool = False, server_mode: boo
         filigree_dir = find_filigree_root()
         config = read_config(filigree_dir)
         _config.update(config)
-        _db = FiligreeDB(
-            filigree_dir / DB_FILENAME,
-            prefix=config.get("prefix", "filigree"),
-            check_same_thread=False,
-        )
-        _db.initialize()
+        _db = FiligreeDB.from_filigree_dir(filigree_dir, check_same_thread=False)
 
     app = create_app(server_mode=server_mode)
 
+    browser_timer: threading.Timer | None = None
     if not no_browser:
-        threading.Timer(0.5, lambda: webbrowser.open(f"http://localhost:{port}")).start()
+        browser_timer = threading.Timer(0.5, lambda: webbrowser.open(f"http://localhost:{port}"))
+        browser_timer.start()
 
     mode_label = "Server" if server_mode else "Dashboard"
     print(f"Filigree {mode_label}: http://localhost:{port}")
-    uvicorn.run(app, host="127.0.0.1", port=port, log_level="warning")
+    try:
+        uvicorn.run(app, host="127.0.0.1", port=port, log_level="warning")
+    finally:
+        if browser_timer is not None:
+            browser_timer.cancel()
+        if _project_store is not None:
+            _project_store.close_all()
+        if _db is not None:
+            _db.close()

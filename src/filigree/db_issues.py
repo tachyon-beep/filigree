@@ -7,6 +7,7 @@ Python's MRO when composed into ``FiligreeDB``.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import re as _re
@@ -14,14 +15,20 @@ import sqlite3
 import uuid
 from typing import TYPE_CHECKING, Any
 
-from filigree.db_base import DBMixinProtocol, StatusCategory, _now_iso
+from filigree.db_base import DBMixinProtocol, _escape_like, _now_iso, _safe_json_loads
+from filigree.models import Issue
 from filigree.templates import validate_field_pattern
+from filigree.types.api import BatchFailureDetail
 
 if TYPE_CHECKING:
-    from filigree.core import Issue
-    from filigree.templates import TemplateRegistry, TransitionOption
+    from collections.abc import Callable
 
 logger = logging.getLogger(__name__)
+
+
+def _safe_fields_json(raw: str | None, issue_id: str) -> dict[str, Any]:
+    """Parse issue fields JSON, returning error sentinel on corrupt data."""
+    return _safe_json_loads(raw, f"issue {issue_id} fields", error_key="_fields_error")
 
 
 def _validate_string_list(value: object, name: str) -> None:
@@ -31,46 +38,29 @@ def _validate_string_list(value: object, name: str) -> None:
         raise TypeError(msg)
 
 
+def _sanitize_fts_query(query: str) -> str:
+    """Sanitize a search query for FTS5 MATCH syntax.
+
+    Strips non-alphanumeric chars (keeping ``*`` and ``"``), quotes each token,
+    and joins with AND for prefix matching.
+    """
+    sanitized = _re.sub(r'[^\w\s*"]', "", query)
+    tokens = [t.replace('"', "") for t in sanitized.strip().split()]
+    tokens = [t for t in tokens if t]
+    return " AND ".join(f'"{t}"*' for t in tokens) if tokens else ""
+
+
+def _escape_like_query(query: str) -> str:
+    """Escape a search query for SQL LIKE — delegates to ``_escape_like``."""
+    return _escape_like(query)
+
+
 class IssuesMixin(DBMixinProtocol):
     """Issue CRUD, batch operations, search, and claiming.
 
     Inherits ``DBMixinProtocol`` for type-safe access to shared attributes.
     Actual implementations provided by ``FiligreeDB`` at composition time via MRO.
     """
-
-    if TYPE_CHECKING:
-        # From EventsMixin
-        def _record_event(
-            self,
-            issue_id: str,
-            event_type: str,
-            *,
-            actor: str = "",
-            old_value: str | None = None,
-            new_value: str | None = None,
-            comment: str = "",
-        ) -> None: ...
-
-        # From WorkflowMixin
-        @property
-        def templates(self) -> TemplateRegistry: ...
-
-        def _validate_status(self, status: str, issue_type: str = "task") -> None: ...
-        def _validate_parent_id(self, parent_id: str | None) -> None: ...
-        def _validate_label_name(self, label: str) -> str: ...
-        def _get_states_for_category(self, category: str) -> list[str]: ...
-        def _resolve_status_category(self, issue_type: str, status: str) -> StatusCategory: ...
-
-        @staticmethod
-        def _infer_status_category(status: str) -> StatusCategory: ...
-
-        # From MetaMixin
-        def add_label(self, issue_id: str, label: str) -> bool: ...
-        def add_comment(self, issue_id: str, text: str, *, author: str = "") -> int: ...
-
-        # From PlanningMixin
-        def get_ready(self) -> list[Issue]: ...
-        def get_valid_transitions(self, issue_id: str) -> list[TransitionOption]: ...
 
     # -- Field validation ----------------------------------------------------
 
@@ -126,7 +116,17 @@ class IssuesMixin(DBMixinProtocol):
             candidate = f"{self.prefix}{sep}{uuid.uuid4().hex[:10]}"
             if self.conn.execute(f"SELECT 1 FROM {table} WHERE id = ?", (candidate,)).fetchone() is None:
                 return candidate
-        return f"{self.prefix}{sep}{uuid.uuid4().hex[:16]}"
+        # 10 consecutive collisions is near-impossible — likely a systemic bug
+        logger.error(
+            "10 consecutive ID collisions in table %s (prefix=%s). Possible corrupted DB, broken RNG, or wrong table.",
+            table,
+            self.prefix,
+        )
+        candidate = f"{self.prefix}{sep}{uuid.uuid4().hex[:16]}"
+        if self.conn.execute(f"SELECT 1 FROM {table} WHERE id = ?", (candidate,)).fetchone() is not None:
+            msg = f"ID generation failed: fallback ID also collided in table {table}"
+            raise RuntimeError(msg)
+        return candidate
 
     # -- Issue CRUD ----------------------------------------------------------
 
@@ -151,6 +151,9 @@ class IssuesMixin(DBMixinProtocol):
         if not (0 <= priority <= 4):
             msg = f"Priority must be between 0 and 4, got {priority}"
             raise ValueError(msg)
+        if fields is not None and not isinstance(fields, dict):
+            msg = "fields must be a dict"
+            raise TypeError(msg)
         if fields:
             for k in fields:
                 if not k or not k.strip():
@@ -214,9 +217,10 @@ class IssuesMixin(DBMixinProtocol):
             self._record_event(issue_id, "created", actor=actor, new_value=title)
 
             if labels:
+                labels = list(dict.fromkeys(labels))  # explicit dedup, preserve order
                 for label in labels:
                     self.conn.execute(
-                        "INSERT OR IGNORE INTO labels (issue_id, label) VALUES (?, ?)",
+                        "INSERT INTO labels (issue_id, label) VALUES (?, ?)",
                         (issue_id, label),
                     )
 
@@ -235,10 +239,6 @@ class IssuesMixin(DBMixinProtocol):
         return self.get_issue(issue_id)
 
     def get_issue(self, issue_id: str) -> Issue:
-        row = self.conn.execute("SELECT * FROM issues WHERE id = ?", (issue_id,)).fetchone()
-        if row is None:
-            msg = f"Issue not found: {issue_id}"
-            raise KeyError(msg)
         return self._build_issue(issue_id)
 
     def _build_issue(self, issue_id: str) -> Issue:
@@ -251,8 +251,6 @@ class IssuesMixin(DBMixinProtocol):
 
     def _build_issues_batch(self, issue_ids: list[str]) -> list[Issue]:
         """Build multiple Issues efficiently with batched queries (eliminates N+1)."""
-        from filigree.core import Issue
-
         if not issue_ids:
             return []
 
@@ -327,7 +325,7 @@ class IssuesMixin(DBMixinProtocol):
                     closed_at=row["closed_at"],
                     description=row["description"],
                     notes=row["notes"],
-                    fields=json.loads(row["fields"]) if row["fields"] else {},
+                    fields=_safe_fields_json(row["fields"], iid),
                     labels=labels_by_id.get(iid, []),
                     blocks=blocks_by_id.get(iid, []),
                     blocked_by=blocked_by_id.get(iid, []),
@@ -357,6 +355,9 @@ class IssuesMixin(DBMixinProtocol):
         now = _now_iso()
 
         # --- Validate all inputs BEFORE any writes to prevent partial commits ---
+        if fields is not None and not isinstance(fields, dict):
+            msg = "fields must be a dict"
+            raise TypeError(msg)
         if priority is not None and priority != current.priority and not (0 <= priority <= 4):
             msg = f"Priority must be between 0 and 4, got {priority}"
             raise ValueError(msg)
@@ -528,8 +529,16 @@ class IssuesMixin(DBMixinProtocol):
             if fields is not None:
                 # Merge into existing fields
                 merged = {**current.fields, **fields}
-                updates.append("fields = ?")
-                params.append(json.dumps(merged))
+                if merged != current.fields:
+                    self._record_event(
+                        issue_id,
+                        "fields_changed",
+                        actor=actor,
+                        old_value=json.dumps(current.fields),
+                        new_value=json.dumps(merged),
+                    )
+                    updates.append("fields = ?")
+                    params.append(json.dumps(merged))
 
             if updates:
                 updates.append("updated_at = ?")
@@ -616,10 +625,19 @@ class IssuesMixin(DBMixinProtocol):
             raise ValueError(msg)
 
         initial_state = self.templates.get_initial_state(current.type)
-        # _record_event and update_issue share the same implicit transaction;
-        # update_issue owns the commit/rollback lifecycle.
-        self._record_event(issue_id, "reopened", actor=actor, old_value=current.status, new_value=initial_state)
-        return self.update_issue(issue_id, status=initial_state, actor=actor, _skip_transition_check=True)
+        result = self.update_issue(issue_id, status=initial_state, actor=actor, _skip_transition_check=True)
+        # Record "reopened" event after update_issue has committed the status
+        # change and its own status_changed event.  The state change is already
+        # durable, so a failure here must not propagate — callers would wrongly
+        # assume the reopen failed and retry into a confusing error.
+        try:
+            self._record_event(issue_id, "reopened", actor=actor, old_value=current.status, new_value=initial_state)
+            self.conn.commit()
+        except Exception:
+            logger.warning("Failed to record reopened event for %s (status change succeeded)", issue_id, exc_info=True)
+            with contextlib.suppress(sqlite3.Error):
+                self.conn.rollback()
+        return result
 
     def claim_issue(self, issue_id: str, *, assignee: str, actor: str = "") -> Issue:
         """Atomically claim an open-category issue with optimistic locking.
@@ -733,13 +751,37 @@ class IssuesMixin(DBMixinProtocol):
                 continue
             try:
                 return self.claim_issue(issue.id, assignee=assignee, actor=actor or assignee)
-            except ValueError as exc:
+            except (ValueError, KeyError) as exc:
                 skipped += 1
                 logger.debug("claim_next: skipping %s: %s", issue.id, exc)
-                continue  # Race condition or status mismatch
+                continue  # Race condition, status mismatch, or deleted issue
         if skipped:
             logger.warning("claim_next: all %d candidate(s) failed to claim for '%s'", skipped, assignee)
         return None
+
+    def _batch_with_transition_errors(
+        self,
+        issue_ids: list[str],
+        action: Callable[[str], Issue],
+    ) -> tuple[list[Issue], list[BatchFailureDetail]]:
+        """Run *action(issue_id)* per item with transition-enriched error handling."""
+        _validate_string_list(issue_ids, "issue_ids")
+        results: list[Issue] = []
+        errors: list[BatchFailureDetail] = []
+        for issue_id in issue_ids:
+            try:
+                results.append(action(issue_id))
+            except KeyError:
+                errors.append(BatchFailureDetail(id=issue_id, error=f"Not found: {issue_id}", code="not_found"))
+            except ValueError as e:
+                err = BatchFailureDetail(id=issue_id, error=str(e), code="invalid_transition")
+                try:
+                    transitions = self.get_valid_transitions(issue_id)
+                    err["valid_transitions"] = [{"to": t.to, "category": t.category} for t in transitions]
+                except KeyError:
+                    logger.debug("batch: could not enrich error with transitions for %s", issue_id)
+                errors.append(err)
+        return results, errors
 
     def batch_close(
         self,
@@ -747,25 +789,12 @@ class IssuesMixin(DBMixinProtocol):
         *,
         reason: str = "",
         actor: str = "",
-    ) -> tuple[list[Issue], list[dict[str, Any]]]:
+    ) -> tuple[list[Issue], list[BatchFailureDetail]]:
         """Close multiple issues with per-item error handling. Returns (closed, errors)."""
-        _validate_string_list(issue_ids, "issue_ids")
-        results: list[Issue] = []
-        errors: list[dict[str, Any]] = []
-        for issue_id in issue_ids:
-            try:
-                results.append(self.close_issue(issue_id, reason=reason, actor=actor))
-            except KeyError:
-                errors.append({"id": issue_id, "error": f"Not found: {issue_id}", "code": "not_found"})
-            except ValueError as e:
-                err: dict[str, Any] = {"id": issue_id, "error": str(e), "code": "invalid_transition"}
-                try:
-                    transitions = self.get_valid_transitions(issue_id)
-                    err["valid_transitions"] = [{"to": t.to, "category": t.category} for t in transitions]
-                except KeyError:
-                    pass
-                errors.append(err)
-        return results, errors
+        return self._batch_with_transition_errors(
+            issue_ids,
+            lambda iid: self.close_issue(iid, reason=reason, actor=actor),
+        )
 
     def batch_update(
         self,
@@ -776,41 +805,26 @@ class IssuesMixin(DBMixinProtocol):
         assignee: str | None = None,
         fields: dict[str, Any] | None = None,
         actor: str = "",
-    ) -> tuple[list[Issue], list[dict[str, Any]]]:
+    ) -> tuple[list[Issue], list[BatchFailureDetail]]:
         """Update multiple issues with the same changes. Returns (updated, errors)."""
-        _validate_string_list(issue_ids, "issue_ids")
-        results: list[Issue] = []
-        errors: list[dict[str, Any]] = []
-        for issue_id in issue_ids:
-            try:
-                results.append(
-                    self.update_issue(
-                        issue_id,
-                        status=status,
-                        priority=priority,
-                        assignee=assignee,
-                        fields=fields,
-                        actor=actor,
-                    )
-                )
-            except KeyError:
-                errors.append({"id": issue_id, "error": f"Not found: {issue_id}", "code": "not_found"})
-            except ValueError as e:
-                err: dict[str, Any] = {"id": issue_id, "error": str(e), "code": "invalid_transition"}
-                try:
-                    transitions = self.get_valid_transitions(issue_id)
-                    err["valid_transitions"] = [{"to": t.to, "category": t.category} for t in transitions]
-                except KeyError:
-                    pass
-                errors.append(err)
-        return results, errors
+        return self._batch_with_transition_errors(
+            issue_ids,
+            lambda iid: self.update_issue(
+                iid,
+                status=status,
+                priority=priority,
+                assignee=assignee,
+                fields=fields,
+                actor=actor,
+            ),
+        )
 
     def batch_add_label(
         self,
         issue_ids: list[str],
         *,
         label: str,
-    ) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
+    ) -> tuple[list[dict[str, str]], list[BatchFailureDetail]]:
         """Add the same label to multiple issues. Returns (labeled, errors)."""
         _validate_string_list(issue_ids, "issue_ids")
         if not isinstance(label, str):
@@ -818,16 +832,16 @@ class IssuesMixin(DBMixinProtocol):
             raise TypeError(msg)
 
         results: list[dict[str, str]] = []
-        errors: list[dict[str, str]] = []
+        errors: list[BatchFailureDetail] = []
         for issue_id in issue_ids:
             try:
                 self.get_issue(issue_id)
                 added = self.add_label(issue_id, label)
                 results.append({"id": issue_id, "status": "added" if added else "already_exists"})
             except KeyError:
-                errors.append({"id": issue_id, "error": f"Not found: {issue_id}", "code": "not_found"})
+                errors.append(BatchFailureDetail(id=issue_id, error=f"Not found: {issue_id}", code="not_found"))
             except ValueError as e:
-                errors.append({"id": issue_id, "error": str(e), "code": "validation_error"})
+                errors.append(BatchFailureDetail(id=issue_id, error=str(e), code="validation_error"))
         return results, errors
 
     def batch_add_comment(
@@ -836,7 +850,7 @@ class IssuesMixin(DBMixinProtocol):
         *,
         text: str,
         author: str = "",
-    ) -> tuple[list[dict[str, str | int]], list[dict[str, str]]]:
+    ) -> tuple[list[dict[str, str | int]], list[BatchFailureDetail]]:
         """Add the same comment to multiple issues. Returns (commented, errors)."""
         _validate_string_list(issue_ids, "issue_ids")
         if not isinstance(text, str):
@@ -847,16 +861,16 @@ class IssuesMixin(DBMixinProtocol):
             raise TypeError(msg)
 
         results: list[dict[str, str | int]] = []
-        errors: list[dict[str, str]] = []
+        errors: list[BatchFailureDetail] = []
         for issue_id in issue_ids:
             try:
                 self.get_issue(issue_id)
                 comment_id = self.add_comment(issue_id, text, author=author)
                 results.append({"id": issue_id, "comment_id": comment_id})
             except KeyError:
-                errors.append({"id": issue_id, "error": f"Not found: {issue_id}", "code": "not_found"})
+                errors.append(BatchFailureDetail(id=issue_id, error=f"Not found: {issue_id}", code="not_found"))
             except ValueError as e:
-                errors.append({"id": issue_id, "error": str(e), "code": "validation_error"})
+                errors.append(BatchFailureDetail(id=issue_id, error=str(e), code="validation_error"))
         return results, errors
 
     def list_issues(
@@ -872,9 +886,9 @@ class IssuesMixin(DBMixinProtocol):
         offset: int = 0,
     ) -> list[Issue]:
         if limit < 0:
-            limit = 100
+            raise ValueError(f"limit must be non-negative, got {limit}")
         if offset < 0:
-            offset = 0
+            raise ValueError(f"offset must be non-negative, got {offset}")
         conditions: list[str] = []
         params: list[Any] = []
 
@@ -919,16 +933,47 @@ class IssuesMixin(DBMixinProtocol):
 
         return self._build_issues_batch([r["id"] for r in rows])
 
-    def search_issues(self, query: str, *, limit: int = 100, offset: int = 0) -> list[Issue]:
-        # Try FTS5 first, fall back to LIKE if FTS table doesn't exist
+    def count_search_results(self, query: str) -> int:
+        """Return the total number of issues matching a search query."""
+        fts_query = _sanitize_fts_query(query)
+        if not fts_query:
+            pattern = _escape_like_query(query)
+            row = self.conn.execute(
+                "SELECT COUNT(*) AS cnt FROM issues WHERE title LIKE ? ESCAPE '\\' OR description LIKE ? ESCAPE '\\'",
+                (pattern, pattern),
+            ).fetchone()
+            return int(row["cnt"]) if row else 0
         try:
-            # Sanitize: strip non-alphanumeric chars except * (prefix) and " (phrase)
-            sanitized = _re.sub(r'[^\w\s*"]', "", query)
-            # Quote each token and add * for prefix matching, then join with AND
-            # Strip double quotes from tokens to prevent FTS5 syntax injection
-            tokens = [t.replace('"', "") for t in sanitized.strip().split()]
-            tokens = [t for t in tokens if t]  # drop empty tokens after stripping
-            fts_query = " AND ".join(f'"{t}"*' for t in tokens) if tokens else '""'
+            row = self.conn.execute(
+                "SELECT COUNT(*) AS cnt FROM issues i JOIN issues_fts ON issues_fts.rowid = i.rowid WHERE issues_fts MATCH ?",
+                (fts_query,),
+            ).fetchone()
+        except sqlite3.OperationalError as exc:
+            if "no such table" not in str(exc) and "no such module" not in str(exc):
+                raise
+            logger.warning(
+                "FTS5 search unavailable (%s); falling back to LIKE. Performance may be degraded. Run 'filigree doctor' to check.",
+                exc,
+            )
+            pattern = _escape_like_query(query)
+            row = self.conn.execute(
+                "SELECT COUNT(*) AS cnt FROM issues WHERE title LIKE ? ESCAPE '\\' OR description LIKE ? ESCAPE '\\'",
+                (pattern, pattern),
+            ).fetchone()
+        return int(row["cnt"]) if row else 0
+
+    def search_issues(self, query: str, *, limit: int = 100, offset: int = 0) -> list[Issue]:
+        """Search issues by title/description using FTS5, falling back to LIKE."""
+        fts_query = _sanitize_fts_query(query)
+        if not fts_query:
+            pattern = _escape_like_query(query)
+            rows = self.conn.execute(
+                "SELECT id FROM issues WHERE title LIKE ? ESCAPE '\\' OR description LIKE ? ESCAPE '\\' "
+                "ORDER BY priority, created_at LIMIT ? OFFSET ?",
+                (pattern, pattern, limit, offset),
+            ).fetchall()
+            return self._build_issues_batch([r["id"] for r in rows])
+        try:
             rows = self.conn.execute(
                 "SELECT i.id FROM issues i "
                 "JOIN issues_fts ON issues_fts.rowid = i.rowid "
@@ -939,13 +984,11 @@ class IssuesMixin(DBMixinProtocol):
         except sqlite3.OperationalError as exc:
             if "no such table" not in str(exc) and "no such module" not in str(exc):
                 raise
-            # FTS5 not available — fall back to LIKE
             logging.getLogger(__name__).warning(
                 "FTS5 search unavailable (%s); falling back to LIKE. Performance may be degraded. Run 'filigree doctor' to check.",
                 exc,
             )
-            escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-            pattern = f"%{escaped}%"
+            pattern = _escape_like_query(query)
             rows = self.conn.execute(
                 "SELECT id FROM issues WHERE title LIKE ? ESCAPE '\\' OR description LIKE ? ESCAPE '\\' "
                 "ORDER BY priority, created_at LIMIT ? OFFSET ?",

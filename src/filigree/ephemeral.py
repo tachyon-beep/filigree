@@ -33,6 +33,49 @@ PORT_RANGE = 1000
 PORT_RETRIES = 5
 
 
+def _tokens_contain_args(tokens: list[str], required_args: tuple[str, ...]) -> bool:
+    """Return True when *required_args* appear in-order within *tokens*."""
+    if not required_args:
+        return True
+    pos = 0
+    lowered = [tok.strip().lower() for tok in tokens]
+    for token in lowered:
+        if token == required_args[pos]:
+            pos += 1
+            if pos == len(required_args):
+                return True
+    return False
+
+
+def _matches_expected_process(tokens: list[str], *, expected_cmd: str, required_args: tuple[str, ...] = ()) -> bool:
+    """Return True when argv tokens identify the expected process shape."""
+    if not tokens:
+        return False
+
+    expected = expected_cmd.lower()
+    required_args = tuple(arg.strip().lower() for arg in required_args)
+    candidates: list[list[str]] = []
+
+    executable = Path(tokens[0]).name.lower()
+    exe_stem = Path(executable).stem  # strip .exe / .cmd / .bat
+    if executable == expected or exe_stem == expected:
+        candidates.append(tokens[1:])
+
+    if len(tokens) > 1:
+        if tokens[1] == "-m" and len(tokens) > 2:
+            module_name = tokens[2].strip().lower()
+            module_root = module_name.split(".", 1)[0]
+            if module_name == expected or module_root == expected:
+                candidates.append(tokens[3:])
+        else:
+            first_arg = Path(tokens[1]).name.lower()
+            first_arg_stem = Path(first_arg).stem
+            if first_arg == expected or first_arg_stem == expected:
+                candidates.append(tokens[2:])
+
+    return any(_tokens_contain_args(candidate, required_args) for candidate in candidates)
+
+
 def compute_port(filigree_dir: Path) -> int:
     """Deterministic port from project path: 8400 + hash(path) % 1000."""
     h = hashlib.sha256(str(filigree_dir.resolve()).encode()).hexdigest()
@@ -41,15 +84,16 @@ def compute_port(filigree_dir: Path) -> int:
 
 def _is_port_free(port: int) -> bool:
     """Check whether a port is available for binding."""
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sock.settimeout(0.5)
     try:
-        sock.bind(("127.0.0.1", port))
-        return True
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(0.5)
+        try:
+            sock.bind(("127.0.0.1", port))
+            return True
+        finally:
+            sock.close()
     except OSError:
         return False
-    finally:
-        sock.close()
 
 
 def find_available_port(filigree_dir: Path) -> int:
@@ -72,12 +116,15 @@ def find_available_port(filigree_dir: Path) -> int:
             return candidate
 
     # Fallback: OS-assigned
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
-        sock.bind(("127.0.0.1", 0))
-        port: int = sock.getsockname()[1]
-    finally:
-        sock.close()
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            sock.bind(("127.0.0.1", 0))
+            port: int = sock.getsockname()[1]
+        finally:
+            sock.close()
+    except OSError as exc:
+        raise RuntimeError(f"Cannot allocate a local dashboard port: {exc}") from exc
     return port
 
 
@@ -111,8 +158,19 @@ def read_pid_file(pid_file: Path) -> PidInfo | None:
                 if pid <= 0:
                     return None
                 return {"pid": pid, "cmd": data.get("cmd", "unknown")}
-        except (_json.JSONDecodeError, TypeError):
-            pass
+            # Valid JSON but wrong shape — don't fall through to legacy parser
+            if isinstance(data, dict):
+                logger.warning("PID file %s: JSON dict missing 'pid' key", pid_file)
+                return None
+            if not isinstance(data, (int, float)):
+                # Non-numeric, non-dict JSON (string, array, etc.)
+                logger.warning("PID file %s: unexpected JSON shape: %s", pid_file, type(data).__name__)
+                return None
+            # Bare numeric JSON — fall through to legacy integer parse
+        except _json.JSONDecodeError:
+            pass  # Not JSON — try legacy integer format
+        except TypeError:
+            pass  # json.loads returned something weird — try legacy
         # Fall back to plain integer (legacy format)
         pid = int(text)
         if pid <= 0:
@@ -137,6 +195,8 @@ def is_pid_alive(pid: int) -> bool:
         return False
     try:
         os.kill(pid, 0)
+        return True
+    except PermissionError:
         return True
     except (OSError, ProcessLookupError):
         return False
@@ -170,6 +230,8 @@ def _read_os_command_line(pid: int) -> list[str] | None:
             )
         except (OSError, subprocess.SubprocessError):
             return None
+        if result.returncode != 0:
+            return None
         cmdline = result.stdout.strip()
         if not cmdline:
             return None
@@ -189,6 +251,8 @@ def _read_os_command_line(pid: int) -> list[str] | None:
         )
     except (OSError, subprocess.SubprocessError):
         return None
+    if result.returncode != 0:
+        return None
     for line in result.stdout.splitlines():
         if line.startswith("CommandLine="):
             cmdline = line[len("CommandLine=") :].strip()
@@ -200,57 +264,58 @@ def _read_os_command_line(pid: int) -> list[str] | None:
     return None
 
 
-def verify_pid_ownership(pid_file: Path, *, expected_cmd: str = "filigree") -> bool:
-    """Verify PID file refers to a live process with expected identity."""
+def verify_pid_ownership(
+    pid_file: Path,
+    *,
+    expected_cmd: str = "filigree",
+    required_args: tuple[str, ...] = (),
+) -> bool:
+    """Verify PID file refers to a live process with expected identity.
+
+    Checks OS-level process identity first to avoid TOCTOU races — on Linux,
+    reading /proc/{pid}/cmdline atomically confirms alive + identity.
+    Falls back to is_pid_alive + PID-file metadata only when cmdline is unreadable.
+    """
     info = read_pid_file(pid_file)
     if info is None:
         return False
+
+    # Try OS-level identity first — avoids the TOCTOU race of checking
+    # is_pid_alive() then reading cmdline in separate steps.
+    tokens = _read_os_command_line(info["pid"])
+    if tokens:
+        return _matches_expected_process(tokens, expected_cmd=expected_cmd, required_args=required_args)
+
+    # Cmdline unreadable — process may be dead or in a constrained environment.
+    # Check aliveness, then fall back to PID-file metadata.
     if not is_pid_alive(info["pid"]):
         return False
 
-    # PID file metadata is advisory; trust the OS process identity.
-    tokens = _read_os_command_line(info["pid"])
-    if not tokens:
-        # Constrained environments may not expose process command lines.
-        # Fall back to PID-file identity as a best-effort portability path.
-        pid_cmd = str(info.get("cmd", "")).strip().lower()
-        if not pid_cmd or pid_cmd == "unknown":
-            return False
-        expected = expected_cmd.lower()
-        pid_cmd_name = Path(pid_cmd).name.lower()
-        return pid_cmd_name == expected or pid_cmd_name.startswith(expected)
-
-    expected = expected_cmd.lower()
-    executable = Path(tokens[0]).name.lower()
-    if executable == expected or executable.startswith(expected):
-        return True
-
-    # Some launchers wrap the binary and pass the real command as argv[1].
-    if len(tokens) > 1:
-        if tokens[1] == "-m" and len(tokens) > 2:
-            # Module invocation fallback: `python -m filigree ...`
-            module_name = tokens[2].strip().lower()
-            module_root = module_name.split(".", 1)[0]
-            if module_name == expected or module_root == expected:
-                return True
-        else:
-            first_arg = Path(tokens[1]).name.lower()
-            if first_arg == expected:
-                return True
-
-    return False
+    pid_cmd = str(info.get("cmd", "")).strip().lower()
+    if not pid_cmd or pid_cmd == "unknown":
+        return False
+    try:
+        pid_tokens = shlex.split(pid_cmd, posix=os.name != "nt")
+    except ValueError:
+        pid_tokens = [pid_cmd]
+    return _matches_expected_process(pid_tokens, expected_cmd=expected_cmd, required_args=required_args)
 
 
 def cleanup_stale_pid(pid_file: Path) -> bool:
-    """Remove PID file if the process is dead. Returns True if cleaned."""
+    """Remove PID file if the process is dead or not ours (PID recycled).
+
+    Uses verify_pid_ownership to check both aliveness and identity,
+    preventing stale PID files from persisting when the PID is recycled
+    to an unrelated process.
+    """
     info = read_pid_file(pid_file)
     if info is None:
         return False
-    if not is_pid_alive(info["pid"]):
-        pid_file.unlink(missing_ok=True)
-        logger.info("Cleaned stale PID file %s (pid %d)", pid_file, info["pid"])
-        return True
-    return False
+    if verify_pid_ownership(pid_file, expected_cmd="filigree", required_args=("dashboard",)):
+        return False  # Process is alive and ours — not stale
+    pid_file.unlink(missing_ok=True)
+    logger.info("Cleaned stale PID file %s (pid %d)", pid_file, info["pid"])
+    return True
 
 
 # ---------------------------------------------------------------------------

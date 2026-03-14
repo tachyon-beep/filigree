@@ -30,20 +30,6 @@ class TestGraphFrontendContracts:
         assert "setProject(fallbackKey, { keepDetail: true });" not in app_js
         assert "Selected project was removed. Switched to an available project." in app_js
 
-    def test_graph_query_builder_includes_v2_filters(self) -> None:
-        graph_js = (STATIC_DIR / "js" / "views" / "graph.js").read_text()
-        assert 'mode: "v2"' in graph_js
-        assert "graphReadyOnly" in graph_js
-        assert "graphBlockedOnly" in graph_js
-        assert "graphAssignee" in graph_js
-        assert "onGraphAssigneeInput" in graph_js
-        assert "window_days" in graph_js
-        assert "scope_root" in graph_js
-        assert "scope_radius" in graph_js
-        assert "node_limit" in graph_js
-        assert "edge_limit" in graph_js
-        assert "refreshGraphData" in graph_js
-
     def test_graph_zoom_floor_contract(self) -> None:
         graph_js = (STATIC_DIR / "js" / "views" / "graph.js").read_text()
         assert "function computeGraphMinZoom(nodeCount)" in graph_js
@@ -54,28 +40,6 @@ class TestGraphFrontendContracts:
         assert "minZoom: 0.1" not in graph_js
         assert "fitGraphWithCaps()" in graph_js
         assert "GRAPH_FIT_ZOOM_CAP = 1.5" in graph_js
-
-    def test_graph_time_window_preference_contract(self) -> None:
-        graph_js = (STATIC_DIR / "js" / "views" / "graph.js").read_text()
-        app_js = (STATIC_DIR / "js" / "app.js").read_text()
-        html = (STATIC_DIR / "dashboard.html").read_text()
-        assert 'GRAPH_TIME_WINDOW_STORAGE_KEY = "filigree.graph.time_window_days.v1"' in graph_js
-        assert "function ensureGraphTimeWindowControl()" in graph_js
-        assert "persistGraphTimeWindowDays" in graph_js
-        assert "export function onGraphTimeWindowChange()" in graph_js
-        assert "window.onGraphTimeWindowChange = onGraphTimeWindowChange;" in app_js
-        assert 'id="graphTimeWindow"' in html
-        assert 'onchange="onGraphTimeWindowChange()"' in html
-        assert 'value="7" selected' in html
-
-    def test_graph_default_change_has_one_time_callout_contract(self) -> None:
-        graph_js = (STATIC_DIR / "js" / "views" / "graph.js").read_text()
-        assert "function maybeShowGraphDefaultPresetNotice(preset)" in graph_js
-        assert 'GRAPH_DEFAULT_NOTICE_KEY = "filigree.graph.execution_default_notice.v1"' in graph_js
-        assert "window.localStorage?.getItem(GRAPH_DEFAULT_NOTICE_KEY)" in graph_js
-        assert 'window.localStorage?.setItem(GRAPH_DEFAULT_NOTICE_KEY, "1")' in graph_js
-        assert "Graph now defaults to Execution (all issue types)." in graph_js
-        assert "maybeShowGraphDefaultPresetNotice(graphPreset);" in graph_js
 
     def test_files_finding_actions_contract(self) -> None:
         files_js = (STATIC_DIR / "js" / "views" / "files.js").read_text()
@@ -88,71 +52,9 @@ class TestGraphFrontendContracts:
         assert "patchFileFinding(" in files_js
         assert "patchFileFinding(" in ui_js
 
-    def test_graph_legacy_fallback_notice_present(self) -> None:
-        graph_js = (STATIC_DIR / "js" / "views" / "graph.js").read_text()
-        assert "Graph v2 unavailable; showing legacy graph." in graph_js
-        assert "traceGraphPath" in graph_js
-        assert "clearGraphPath" in graph_js
-
     def test_graph_overlay_hierarchy_contract(self) -> None:
         graph_js = (STATIC_DIR / "js" / "views" / "graph.js").read_text()
         assert "applyCriticalPathStyles();" in graph_js
-        assert "applyPathTraceStyles();" in graph_js
-        assert "applySearchFocus(search);" in graph_js
-
-    def test_focus_controls_coupled_and_tap_no_longer_mutates_root(self) -> None:
-        graph_js = (STATIC_DIR / "js" / "views" / "graph.js").read_text()
-        app_js = (STATIC_DIR / "js" / "app.js").read_text()
-        html = (STATIC_DIR / "dashboard.html").read_text()
-        assert "export function onGraphFocusModeChange()" in graph_js
-        assert "export function onGraphFocusRootInput()" in graph_js
-        assert 'scheduleDebouncedGraphRender("focusRoot")' in graph_js
-        assert "window.onGraphAssigneeInput = onGraphAssigneeInput;" in app_js
-        assert "window.onGraphTimeWindowChange = onGraphTimeWindowChange;" in app_js
-        assert "focusRoot.value = nodeId" not in graph_js
-        assert 'onchange="onGraphFocusModeChange()"' in html
-        assert 'oninput="onGraphFocusRootInput()"' in html
-        assert 'oninput="onGraphAssigneeInput()"' in html
-        assert 'onchange="onGraphTimeWindowChange()"' in html
-
-    def test_graph_inputs_use_debounced_render(self) -> None:
-        graph_js = (STATIC_DIR / "js" / "views" / "graph.js").read_text()
-        assert "const INPUT_DEBOUNCE_MS = 300;" in graph_js
-        assert "function scheduleDebouncedGraphRender(inputType)" in graph_js
-        assert "setTimeout(() => {" in graph_js
-        assert 'scheduleDebouncedGraphRender("focusRoot")' in graph_js
-        assert 'scheduleDebouncedGraphRender("assignee")' in graph_js
-
-    def test_trace_button_disabled_until_both_path_inputs_present(self) -> None:
-        graph_js = (STATIC_DIR / "js" / "views" / "graph.js").read_text()
-        app_js = (STATIC_DIR / "js" / "app.js").read_text()
-        html = (STATIC_DIR / "dashboard.html").read_text()
-        assert "export function onGraphPathInput()" in graph_js
-        assert "traceBtn.disabled = !ready;" in graph_js
-        assert "window.onGraphPathInput = onGraphPathInput;" in app_js
-        assert 'id="graphPathSource"' in html
-        assert 'id="graphPathTarget"' in html
-        assert 'placeholder="issue ID"' in html
-        assert 'id="graphTraceBtn"' in html
-        assert "disabled" in html
-
-    def test_preset_and_epics_toggle_stay_in_sync(self) -> None:
-        graph_js = (STATIC_DIR / "js" / "views" / "graph.js").read_text()
-        app_js = (STATIC_DIR / "js" / "app.js").read_text()
-        html = (STATIC_DIR / "dashboard.html").read_text()
-        assert "export function onGraphEpicsOnlyChange()" in graph_js
-        assert 'preset.value === "roadmap" && !epicsOnly.checked' in graph_js
-        assert 'preset.value = "execution"' in graph_js
-        assert "window.onGraphEpicsOnlyChange = onGraphEpicsOnlyChange;" in app_js
-        assert 'onchange="onGraphEpicsOnlyChange()"' in html
-
-    def test_graph_toolbar_progressive_disclosure_groups_present(self) -> None:
-        html = (STATIC_DIR / "dashboard.html").read_text()
-        assert 'id="graphFiltersGroup"' in html
-        assert 'id="graphAdvancedGroup"' in html
-        assert "Trace path between issues:" in html
-        assert "Node cap:" in html
-        assert "Edge cap:" in html
 
     def test_graph_notice_uses_icon_not_color_only(self) -> None:
         graph_js = (STATIC_DIR / "js" / "views" / "graph.js").read_text()
@@ -160,35 +62,23 @@ class TestGraphFrontendContracts:
         assert 'id="graphNotice"' in html
         assert 'role="status"' in html
         assert 'aria-live="polite"' in html
-        assert 'icon.textContent = "⚠ "' in graph_js
+        assert 'icon.textContent = "\\u26A0 "' in graph_js or 'icon.textContent = "\u26a0 "' in graph_js
         assert 'icon.setAttribute("aria-hidden", "true")' in graph_js
 
-    def test_graph_toolbar_touch_target_contract(self) -> None:
-        html = (STATIC_DIR / "dashboard.html").read_text()
-        assert ".graph-toolbar label { min-height: 44px;" in html
-        assert '.graph-toolbar button, .graph-toolbar select, .graph-toolbar input[type="text"], .graph-toolbar summary {' in html
-        assert ".graph-toolbar summary { display: inline-flex; align-items: center; line-height: 1; }" in html
-        assert ".graph-toolbar .graph-disclosure[open] { flex: 1 0 100%; }" in html
-        assert ".graph-toolbar .graph-disclosure[open] > .graph-disclosure-panel { width: 100%; min-width: 0; }" in html
-        assert ".graph-toolbar .graph-inline-controls { display: inline-flex;" in html
-        assert 'class="graph-toolbar' in html
-        assert "items-center leading-none" in html
-        assert "graph-disclosure" in html
-        assert "graph-disclosure-panel" in html
-        assert "graph-inline-controls" in html
-
-    def test_graph_clear_buttons_disable_when_inactive(self) -> None:
+    def test_hover_traversal_uses_outgoers_not_full_edge_scan(self) -> None:
         graph_js = (STATIC_DIR / "js" / "views" / "graph.js").read_text()
-        html = (STATIC_DIR / "dashboard.html").read_text()
-        assert "function setToolbarButtonEnabled(id, enabled)" in graph_js
-        assert "function updateGraphClearButtons()" in graph_js
-        assert 'setToolbarButtonEnabled("graphClearFocusBtn", focusActive);' in graph_js
-        assert 'setToolbarButtonEnabled("graphClearPathBtn", state.graphPathNodes.size > 0);' in graph_js
-        assert 'if (document.getElementById("graphClearFocusBtn")?.disabled) return;' in graph_js
-        assert 'if (document.getElementById("graphClearPathBtn")?.disabled) return;' in graph_js
-        assert graph_js.count("updateGraphClearButtons();") >= 6
-        assert 'id="graphClearFocusBtn"' in html
-        assert 'id="graphClearPathBtn"' in html
+        start = graph_js.index('state.cy.on("mouseover", "node"')
+        end = graph_js.index('state.cy.on("mouseout", "node"', start)
+        hover_block = graph_js[start:end]
+        assert 'curNode.outgoers("edge")' in hover_block
+        assert "state.cy.edges().forEach" not in hover_block
+
+    def test_topology_change_reuses_positions_only_when_all_nodes_have_positions(self) -> None:
+        graph_js = (STATIC_DIR / "js" / "views" / "graph.js").read_text()
+        assert "const canReusePositions =" in graph_js
+        assert "cyNodes.every((n) => Object.prototype.hasOwnProperty.call(previousPositions, n.data.id))" in graph_js
+        assert "positions: (node) => previousPositions[node.id()]," in graph_js
+        assert "previousPositions[node.id()] || { x: 0, y: 0 }" not in graph_js
 
     def test_graph_perf_state_is_in_bottom_diagnostics_bar(self) -> None:
         html = (STATIC_DIR / "dashboard.html").read_text()
@@ -199,75 +89,163 @@ class TestGraphFrontendContracts:
         assert cy_idx < diagnostics_idx
         assert diagnostics_idx < perf_idx
 
-    def test_graph_caps_are_within_advanced_disclosure_group(self) -> None:
-        html = (STATIC_DIR / "dashboard.html").read_text()
-        start = html.index('id="graphAdvancedGroup"')
-        end = html.index("</details>", start)
-        advanced_block = html[start:end]
-        assert 'id="graphNodeLimit"' in advanced_block
-        assert 'id="graphEdgeLimit"' in advanced_block
-
-    def test_hover_traversal_uses_outgoers_not_full_edge_scan(self) -> None:
-        graph_js = (STATIC_DIR / "js" / "views" / "graph.js").read_text()
-        start = graph_js.index('state.cy.on("mouseover", "node"')
-        end = graph_js.index('state.cy.on("mouseout", "node"', start)
-        hover_block = graph_js[start:end]
-        assert 'curNode.outgoers("edge")' in hover_block
-        assert "state.cy.edges().forEach" not in hover_block
-
-    def test_path_tracing_uses_outgoers_not_full_edge_scan(self) -> None:
-        graph_js = (STATIC_DIR / "js" / "views" / "graph.js").read_text()
-        start = graph_js.index("export function traceGraphPath()")
-        end = graph_js.index("export async function refreshGraphData", start)
-        path_block = graph_js[start:end]
-        assert 'curNode.outgoers("edge")' in path_block
-        assert 'curNode.incomers("edge")' in path_block
-        assert 'direction === "upstream"' in path_block
-        assert "state.cy.edges().forEach" not in path_block
-
-    def test_topology_change_reuses_positions_only_when_all_nodes_have_positions(self) -> None:
-        graph_js = (STATIC_DIR / "js" / "views" / "graph.js").read_text()
-        assert "const canReusePositions =" in graph_js
-        assert "cyNodes.every((n) => Object.prototype.hasOwnProperty.call(previousPositions, n.data.id))" in graph_js
-        assert "positions: (node) => previousPositions[node.id()]," in graph_js
-        assert "previousPositions[node.id()] || { x: 0, y: 0 }" not in graph_js
-
-    def test_search_nav_buttons_have_disabled_state_logic(self) -> None:
-        graph_js = (STATIC_DIR / "js" / "views" / "graph.js").read_text()
-        html = (STATIC_DIR / "dashboard.html").read_text()
-        assert "function setGraphSearchButtonsEnabled(enabled)" in graph_js
-        assert '["graphSearchPrevBtn", "graphSearchNextBtn"]' in graph_js
-        assert "btn.disabled = !enabled;" in graph_js
-        assert 'id="graphSearchPrevBtn"' in html
-        assert 'id="graphSearchNextBtn"' in html
-        assert 'aria-label="Previous search match"' in html
-        assert 'aria-label="Next search match"' in html
-        assert 'aria-label="Filter graph by assignee"' in html
-        assert 'aria-label="Focus root issue ID"' in html
-        assert 'aria-label="Path source issue ID"' in html
-        assert 'aria-label="Path target issue ID"' in html
-
-    def test_graph_search_idle_state_uses_plain_language(self) -> None:
-        graph_js = (STATIC_DIR / "js" / "views" / "graph.js").read_text()
-        html = (STATIC_DIR / "dashboard.html").read_text()
-        assert "No active search." in graph_js
-        assert "Search: n/a" not in graph_js
-        assert "No active search." in html
-
     def test_graph_perf_state_user_facing_text_and_tooltip_timings(self) -> None:
         graph_js = (STATIC_DIR / "js" / "views" / "graph.js").read_text()
-        # Node/edge count moved to dedicated diagnostics element
         assert 'document.getElementById("graphNodeEdgeCount")' in graph_js
         assert "countEl.textContent = `${nodeCount} nodes, ${edgeCount} edges`;" in graph_js
-        # Timing now visible text, not tooltip
         assert "el.textContent = `Query ${queryMs}ms | Render ${renderMs}ms`;" in graph_js
         assert "Perf q:" not in graph_js
 
-    def test_v2_empty_status_categories_guard_returns_empty_graph(self) -> None:
+
+class TestGraphSidebarContracts:
+    def test_graph_sidebar_html_structure(self) -> None:
+        html = (STATIC_DIR / "dashboard.html").read_text()
+        assert 'id="graphSidebar"' in html
+        assert 'id="graphSidebarList"' in html
+        assert 'id="graphSidebarTypeFilter"' in html
+        assert 'id="graphSidebarStatus"' in html
+        assert 'role="listbox"' in html
+        assert 'aria-live="polite"' in html
+
+    def test_graph_sidebar_module_exists(self) -> None:
+        sidebar_js = (STATIC_DIR / "js" / "views" / "graphSidebar.js").read_text()
+        assert "export function rebuildTreeIndex()" in sidebar_js
+        assert "export function renderGraphSidebar()" in sidebar_js
+        assert "export function resolveGraphScope()" in sidebar_js
+        assert "export function toggleGraphSidebarItem(" in sidebar_js
+        assert "export function handleGhostClick(" in sidebar_js
+
+    def test_graph_sidebar_safety_and_sanitization(self) -> None:
+        sidebar_js = (STATIC_DIR / "js" / "views" / "graphSidebar.js").read_text()
+        assert "escHtml" in sidebar_js, "Must import escHtml for XSS prevention"
+        assert "data-sidebar-item" in sidebar_js, "Must use data attributes instead of inline onclick"
+        assert "data-sidebar-type" in sidebar_js, "Must use data attributes for type filter"
+        assert "addEventListener" in sidebar_js, "Must use delegated event listeners"
+        assert "onclick" not in sidebar_js, "Must not use inline onclick handlers"
+        assert "escHtml(issue.title)" in sidebar_js, "Issue titles must be HTML-escaped"
+        assert "checkNodeCap(" in sidebar_js, "Node cap must be checked before adding selections"
+        assert "confirmNodeCap(" in sidebar_js, "Node cap must trigger user confirmation"
+
+    def test_graph_ghost_node_style_defined(self) -> None:
         graph_js = (STATIC_DIR / "js" / "views" / "graph.js").read_text()
-        assert "query.status_categories.length === 0" in graph_js
-        assert "No status categories selected. Enable at least one status filter." in graph_js
-        assert "status_categories: []" in graph_js
+        assert "isGhost" in graph_js
+        assert "dashed" in graph_js
+
+    def test_graph_sidebar_wired_in_app(self) -> None:
+        app_js = (STATIC_DIR / "js" / "app.js").read_text()
+        assert "rebuildTreeIndex" in app_js
+        assert "renderGraphSidebar" in app_js
+        assert "attachSidebarListeners" in app_js, "Must call attachSidebarListeners during init"
+        assert "graphSidebarSelectAll" in app_js
+        assert "graphSidebarClearAll" in app_js
+
+    def test_graph_sidebar_state_model(self) -> None:
+        state_js = (STATIC_DIR / "js" / "state.js").read_text()
+        assert "graphSidebarSelections" in state_js
+        assert "graphSidebarTypeFilter" in state_js
+
+
+class TestAnalyticsContracts:
+    """Contract tests for analytics.js — health score and impact score computation."""
+
+    def test_analytics_module_exports(self) -> None:
+        analytics_js = (STATIC_DIR / "js" / "analytics.js").read_text()
+        assert "export function computeImpactScores()" in analytics_js
+        assert "export function computeHealthScore()" in analytics_js
+
+    def test_impact_scores_uses_bfs_traversal(self) -> None:
+        analytics_js = (STATIC_DIR / "js" / "analytics.js").read_text()
+        assert "const visited = new Set();" in analytics_js
+        assert "const queue = [" in analytics_js
+        assert "queue.shift()" in analytics_js
+        assert "visited.has(" in analytics_js
+        assert "state.impactScores" in analytics_js
+
+    def test_health_score_has_four_weighted_components(self) -> None:
+        analytics_js = (STATIC_DIR / "js" / "analytics.js").read_text()
+        assert "blockedScore" in analytics_js
+        assert "freshScore" in analytics_js
+        assert "readyScore" in analytics_js
+        assert "balanceScore" in analytics_js
+        assert "blockedScore + freshScore + readyScore + balanceScore" in analytics_js
+
+    def test_health_score_division_by_zero_guards(self) -> None:
+        analytics_js = (STATIC_DIR / "js" / "analytics.js").read_text()
+        assert "openIssues.length ?" in analytics_js
+        assert "wipIssues.length ?" in analytics_js
+
+    def test_health_score_stores_breakdown_in_state(self) -> None:
+        analytics_js = (STATIC_DIR / "js" / "analytics.js").read_text()
+        assert "state._healthBreakdown = {" in analytics_js
+        for key in ["blocked", "freshness", "ready", "balance"]:
+            assert f'"{key}"' in analytics_js or f"{key}:" in analytics_js
+
+    def test_analytics_wired_in_app(self) -> None:
+        app_js = (STATIC_DIR / "js" / "app.js").read_text()
+        assert "computeImpactScores" in app_js
+        assert "computeHealthScore" in app_js
+
+
+class TestRouterAliasContracts:
+    """Contract tests for router.js deprecated tab aliases."""
+
+    def test_aliases_map_exists(self) -> None:
+        router_js = (STATIC_DIR / "js" / "router.js").read_text()
+        assert "const ALIASES = {" in router_js
+        assert 'health: "files"' in router_js
+        assert 'activity: "insights"' in router_js
+        assert 'workflow: "kanban"' in router_js
+
+    def test_switch_view_applies_aliases(self) -> None:
+        router_js = (STATIC_DIR / "js" / "router.js").read_text()
+        fn_start = router_js.index("export function switchView(")
+        fn_end = router_js.index("export function switchKanbanMode(")
+        switch_block = router_js[fn_start:fn_end]
+        assert "ALIASES[view]" in switch_block
+
+    def test_parse_hash_applies_aliases(self) -> None:
+        router_js = (STATIC_DIR / "js" / "router.js").read_text()
+        fn_start = router_js.index("export function parseHash()")
+        parse_block = router_js[fn_start:]
+        assert "ALIASES[view]" in parse_block
+
+
+class TestGraphSidebarRenderingContracts:
+    """Contract tests for sidebar-scoped graph rendering model."""
+
+    def test_resolve_graph_scope_returns_nodes_edges_ghosts(self) -> None:
+        sidebar_js = (STATIC_DIR / "js" / "views" / "graphSidebar.js").read_text()
+        fn_start = sidebar_js.index("export function resolveGraphScope()")
+        scope_block = sidebar_js[fn_start:]
+        assert "nodes:" in scope_block
+        assert "edges:" in scope_block
+        assert "ghostIds" in scope_block
+
+    def test_render_graph_uses_resolve_graph_scope(self) -> None:
+        graph_js = (STATIC_DIR / "js" / "views" / "graph.js").read_text()
+        assert "resolveGraphScope()" in graph_js
+        assert "ghostIds" in graph_js
+
+    def test_sidebar_type_filter_exported(self) -> None:
+        sidebar_js = (STATIC_DIR / "js" / "views" / "graphSidebar.js").read_text()
+        assert "export function toggleGraphSidebarType(" in sidebar_js
+
+    def test_graph_renders_blank_state_when_no_selections(self) -> None:
+        graph_js = (STATIC_DIR / "js" / "views" / "graph.js").read_text()
+        assert "data-graph-blank" in graph_js
+        assert "graphSidebarSelections.size === 0" in graph_js
+
+    def test_graph_applies_status_pill_filters_to_scoped_nodes(self) -> None:
+        graph_js = (STATIC_DIR / "js" / "views" / "graph.js").read_text()
+        render_start = graph_js.index("export function renderGraph()")
+        render_block = graph_js[render_start:]
+        assert "statusPills.open" in render_block
+        assert "statusPills.active" in render_block
+        assert "statusPills.done" in render_block
+
+    def test_graph_ghost_nodes_have_reduced_opacity(self) -> None:
+        graph_js = (STATIC_DIR / "js" / "views" / "graph.js").read_text()
+        assert "isGhost ? 0.45" in graph_js or "isGhost: isGhost" in graph_js
 
 
 class TestSafeBoundedInt:

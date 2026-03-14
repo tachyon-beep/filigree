@@ -792,6 +792,25 @@ class TestWorkflowTemplateTools:
             assert "category" in t
             assert "ready" in t
             assert "missing_fields" in t
+            # H1 regression: missing_fields must always be list[str], never list[dict]
+            assert isinstance(t["missing_fields"], list)
+            for mf in t["missing_fields"]:
+                assert isinstance(mf, str), f"missing_fields element should be str, got {type(mf)}"
+
+    async def test_get_valid_transitions_enforcement_always_str(self, mcp_db: FiligreeDB) -> None:
+        """enforcement field must always be str, never None — even when source is None."""
+        from dataclasses import replace
+        from unittest.mock import patch
+
+        issue = mcp_db.create_issue("Enforcement coercion test", type="task")
+        real_transitions = mcp_db.get_valid_transitions(issue.id)
+        # Inject a None enforcement to simulate the edge case
+        patched = [replace(t, enforcement=None) for t in real_transitions]
+        with patch.object(mcp_db, "get_valid_transitions", return_value=patched):
+            result = await call_tool("get_valid_transitions", {"issue_id": issue.id})
+        data = _parse(result)
+        for t in data:
+            assert isinstance(t["enforcement"], str), f"enforcement should be str, got {type(t['enforcement'])}: {t['enforcement']}"
 
     async def test_get_valid_transitions_not_found(self, mcp_db: FiligreeDB) -> None:
         result = await call_tool("get_valid_transitions", {"issue_id": "nonexistent-xyz"})
@@ -865,6 +884,10 @@ class TestMCPMutationEnhancements:
         assert "valid_transitions" in data
         assert isinstance(data["valid_transitions"], list)
         assert len(data["valid_transitions"]) >= 1
+        # H1 regression: missing_fields shape must be list[str] in both MCP paths
+        for t in data["valid_transitions"]:
+            for mf in t.get("missing_fields", []):
+                assert isinstance(mf, str), f"missing_fields element should be str, got {type(mf)}"
 
     async def test_get_issue_without_transitions(self, mcp_db: FiligreeDB) -> None:
         issue = mcp_db.create_issue("No transitions")
@@ -957,6 +980,47 @@ class TestCoreReloadTemplates:
         # Should reload on next access
         types = mcp_db.templates.list_types()
         assert len(types) >= 2
+
+    def test_reload_updates_enabled_packs_from_config(self, mcp_db: FiligreeDB) -> None:
+        """Bug filigree-8fc86587f1: reload_templates must update enabled_packs
+        from config.json, not keep stale constructor value."""
+        import json
+
+        # Initial state: default packs
+        _ = mcp_db.templates.list_types()
+        original_packs = mcp_db.enabled_packs[:]
+
+        # Write new config with incident pack added
+        config_path = mcp_db.db_path.parent / "config.json"
+        config = json.loads(config_path.read_text())
+        config["enabled_packs"] = ["core", "planning", "release", "incident"]
+        config_path.write_text(json.dumps(config))
+
+        # Reload templates
+        mcp_db.reload_templates()
+        _ = mcp_db.templates.list_types()
+
+        # enabled_packs should reflect the updated config
+        assert "incident" in mcp_db.enabled_packs
+        assert mcp_db.enabled_packs != original_packs
+
+    def test_reload_with_explicit_override_keeps_override(self, tmp_path: Path) -> None:
+        """When enabled_packs was explicitly set in constructor, reload should
+        still honour the override (not fall back to config.json)."""
+        filigree_dir = tmp_path / FILIGREE_DIR_NAME
+        filigree_dir.mkdir()
+        write_config(filigree_dir, {"prefix": "test", "version": 1, "enabled_packs": ["core", "planning", "release"]})
+        d = FiligreeDB(filigree_dir / DB_FILENAME, prefix="test", enabled_packs=["core"])
+        d.initialize()
+        try:
+            _ = d.templates.list_types()
+            assert d.enabled_packs == ["core"]
+            d.reload_templates()
+            _ = d.templates.list_types()
+            # Should still be the explicit override, not config.json
+            assert d.enabled_packs == ["core"]
+        finally:
+            d.close()
 
 
 class TestDynamicWorkflowPrompt:
@@ -1158,15 +1222,16 @@ class TestExportImportPathTraversal:
         assert "error" in data
         assert data["code"] == "io_error"
 
-    async def test_import_malformed_jsonl_returns_parse_error_not_invalid_path(self, mcp_db: FiligreeDB) -> None:
-        """import_jsonl with malformed JSONL must not report 'invalid_path'."""
+    async def test_import_malformed_jsonl_skips_corrupt_lines(self, mcp_db: FiligreeDB) -> None:
+        """import_jsonl with malformed JSONL should skip corrupt lines, not crash."""
         project_root = mcp_db.db_path.parent.parent
         bad_file = project_root / "bad.jsonl"
         bad_file.write_text("this is not valid json\n")
         result = await call_tool("import_jsonl", {"input_path": "bad.jsonl"})
         data = _parse(result)
-        assert "error" in data
-        assert data["code"] != "invalid_path"
+        assert data["status"] == "ok"
+        assert data["records"] == 0
+        assert data["skipped_types"]["<corrupt_json>"] == 1
 
     async def test_import_jsonl_unexpected_exception_propagates(self, mcp_db: FiligreeDB) -> None:
         """Unexpected exceptions (not ValueError/OSError/sqlite3.Error) must propagate."""
@@ -2329,6 +2394,55 @@ class TestMCPExportImport:
         result = await call_tool("import_jsonl", {"input_path": "mcp_roundtrip.jsonl", "merge": True})
         data = _parse(result)
         assert data["status"] == "ok"
+
+    async def test_import_via_mcp_preserves_file_domain_rows(self, mcp_db: FiligreeDB) -> None:
+        issue = mcp_db.create_issue("File issue")
+        file_rec = mcp_db.register_file("src/mcp_file.py", language="python", metadata={"owner": "mcp"})
+        mcp_db.conn.execute(
+            "INSERT INTO scan_findings "
+            "(id, file_id, issue_id, scan_source, rule_id, severity, status, message, suggestion, "
+            "scan_run_id, line_start, line_end, seen_count, first_seen, updated_at, last_seen_at, metadata) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                "mcp-sf-1",
+                file_rec.id,
+                issue.id,
+                "ruff",
+                "F401",
+                "medium",
+                "open",
+                "unused import",
+                "",
+                "run-mcp",
+                12,
+                12,
+                1,
+                "2026-01-01T00:00:00+00:00",
+                "2026-01-01T00:00:00+00:00",
+                "2026-01-01T00:00:00+00:00",
+                '{"source":"mcp"}',
+            ),
+        )
+        mcp_db.conn.execute(
+            "INSERT INTO file_associations (file_id, issue_id, assoc_type, created_at) VALUES (?, ?, ?, ?)",
+            (file_rec.id, issue.id, "bug_in", "2026-01-01T00:00:00+00:00"),
+        )
+        mcp_db.conn.execute(
+            "INSERT INTO file_events (file_id, event_type, field, old_value, new_value, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+            (file_rec.id, "file_metadata_update", "language", "", "python", "2026-01-01T00:00:00+00:00"),
+        )
+        mcp_db.conn.commit()
+
+        export = _parse(await call_tool("export_jsonl", {"output_path": "mcp_files.jsonl"}))
+        assert export["status"] == "ok"
+
+        imported = _parse(await call_tool("import_jsonl", {"input_path": "mcp_files.jsonl", "merge": True}))
+        assert imported["status"] == "ok"
+        assert imported["records"] == 0
+        assert mcp_db.conn.execute("SELECT COUNT(*) FROM file_records").fetchone()[0] == 1
+        assert mcp_db.conn.execute("SELECT COUNT(*) FROM scan_findings").fetchone()[0] == 1
+        assert mcp_db.conn.execute("SELECT COUNT(*) FROM file_associations").fetchone()[0] == 1
+        assert mcp_db.conn.execute("SELECT COUNT(*) FROM file_events").fetchone()[0] == 1
 
     async def test_import_bad_path_via_mcp(self, mcp_db: FiligreeDB) -> None:
         result = await call_tool("import_jsonl", {"input_path": "/nonexistent/file.jsonl"})

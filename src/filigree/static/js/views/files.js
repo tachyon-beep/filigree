@@ -13,6 +13,13 @@ import {
 import { updateHash } from "../router.js";
 import { SEVERITY_COLORS, state } from "../state.js";
 import { escHtml, escJsSingle, showCreateForm, showToast } from "../ui.js";
+import { renderHealthOverview } from "./health.js";
+
+function formatLineRange(f, prefix = "L") {
+  if (!f.line_start) return "";
+  if (f.line_end && f.line_end !== f.line_start) return `${prefix}${f.line_start}\u2013${f.line_end}`;
+  return `${prefix}${f.line_start}`;
+}
 
 // --- Accumulated page state for "load more" ---
 let _findingsAccum = [];
@@ -45,9 +52,66 @@ function healthBorderClass(summary) {
 
 let _searchTimeout = null;
 
+// Inline scan source filter (replaces filterFilesByScanSource from health.js)
+function filterFilesByScanSourceInline(source) {
+  state.filesScanSource = source || "";
+  state.filesPage.offset = 0;
+  loadFiles();
+}
+window.filterFilesByScanSourceInline = filterFilesByScanSourceInline;
+
 export async function loadFiles() {
   const container = document.getElementById("filesContent");
   if (!container) return;
+
+  // --- Code Quality Overview (collapsible) ---
+  let overview = document.getElementById("filesOverview");
+  if (!overview) {
+    const projectKey = state.currentProjectKey || "__default__";
+    const storageKey = `filigree_files_overview_collapsed.${projectKey}`;
+    const collapsed = localStorage.getItem(storageKey) === "1";
+
+    overview = document.createElement("details");
+    overview.id = "filesOverview";
+    overview.className = "mb-4 rounded";
+    overview.style.cssText =
+      "background:var(--surface-raised);border:1px solid var(--border-default)";
+    if (!collapsed) overview.open = true;
+    overview.innerHTML =
+      '<summary class="cursor-pointer select-none text-xs font-medium px-4 py-3" style="color:var(--text-secondary)">' +
+      "Code Quality Overview</summary>" +
+      '<div id="filesOverviewContent" class="px-4 pb-3"></div>';
+
+    const overviewCallbacks = {
+      onClickFile: (fileId) => `openFileDetail('${escJsSingle(fileId)}')`,
+      onClickScan: (source) => `filterFilesByScanSourceInline('${escJsSingle(source)}')`,
+    };
+
+    // Guard against concurrent loads but allow re-render on subsequent loadFiles()
+    const loadOverview = (content) => {
+      if (content.dataset.loading === "1") return;
+      content.dataset.loading = "1";
+      renderHealthOverview(content, overviewCallbacks).then(() => {
+        content.dataset.loading = "";
+      });
+    };
+
+    overview.addEventListener("toggle", () => {
+      localStorage.setItem(storageKey, overview.open ? "0" : "1");
+      if (overview.open) {
+        const content = document.getElementById("filesOverviewContent");
+        if (content) loadOverview(content);
+      }
+    });
+
+    container.parentNode.insertBefore(overview, container);
+
+    // Load overview data if expanded
+    if (!collapsed) {
+      const content = document.getElementById("filesOverviewContent");
+      if (content) loadOverview(content);
+    }
+  }
 
   // Wire up search input (once)
   const searchInput = document.getElementById("filesSearch");
@@ -126,6 +190,7 @@ export async function loadFiles() {
       { key: null, label: "Low", cls: "text-center" },
       { key: null, label: "Closed", cls: "text-center" },
       { key: null, label: "Issues", cls: "text-center" },
+      { key: null, label: "Obs", cls: "text-center" },
       { key: "updated_at", label: "Last Update", cls: "text-right" },
     ];
 
@@ -158,6 +223,7 @@ export async function loadFiles() {
           `<td class="py-2 px-3 text-center">${severityBadge("low", s.low)}</td>` +
           `<td class="py-2 px-3 text-center">${closedCount ? `<span class="text-xs" style="color:var(--status-done)">${closedCount}</span>` : "\u2014"}</td>` +
           `<td class="py-2 px-3 text-center">${assocCount || "\u2014"}</td>` +
+          `<td class="py-2 px-3 text-center">${f.observation_count ? `<span class="text-xs px-1.5 py-0.5 rounded" style="color:var(--text-secondary);border:1px dashed var(--border-strong)">${f.observation_count}</span>` : "\u2014"}</td>` +
           `<td class="py-2 px-3 text-right" style="color:var(--text-muted)">${updated}</td>` +
           "</tr>"
         );
@@ -177,7 +243,8 @@ export async function loadFiles() {
       "</tbody>" +
       "</table></div>" +
       paginationHtml;
-  } catch (_e) {
+  } catch (err) {
+    console.warn("[files:list] Failed to load file list:", err);
     container.innerHTML = '<div class="text-red-400">Failed to load files.</div>';
   }
 }
@@ -250,7 +317,8 @@ export async function openFileDetail(fileId) {
 
     state.fileDetailData = data;
     renderFileDetail(data);
-  } catch (_e) {
+  } catch (err) {
+    console.warn("[files:detail] Failed to load file detail:", err);
     content.innerHTML = '<div class="text-red-400">Failed to load file details.</div>';
   }
 }
@@ -294,6 +362,15 @@ function renderFileDetail(data) {
     severityBadge("low", s.low) +
     severityBadge("info", s.info) +
     "</div>";
+
+  // Observations badge (shown only if observations exist)
+  if (data.observation_count > 0) {
+    html +=
+      '<div class="flex items-center gap-2 mb-4 px-3 py-2 rounded" style="background:var(--surface-overlay);border:1px dashed var(--border-strong)">' +
+      `<span class="text-xs" style="color:var(--text-secondary)">${data.observation_count} pending observation(s)</span>` +
+      '<span class="text-xs" style="color:var(--text-muted)">\u2014 use <code>list_observations</code> to triage</span>' +
+      '</div>';
+  }
 
   // Tab buttons
   const findingsActive = state.fileDetailTab === "findings";
@@ -350,11 +427,7 @@ function renderFileDetail(data) {
 
 function renderFindingListItem(f) {
   const c = SEVERITY_COLORS[f.severity] || SEVERITY_COLORS.info;
-  const lines = f.line_start
-    ? f.line_end && f.line_end !== f.line_start
-      ? `L${f.line_start}-${f.line_end}`
-      : `L${f.line_start}`
-    : "";
+  const lines = formatLineRange(f);
   const selected = _selectedFinding && _selectedFinding.id === f.id;
   const selClass = selected ? "border-l-2 border-l-sky-400" : "";
   const safeFindingId = escJsSingle(f.id);
@@ -372,11 +445,7 @@ function renderFindingDetail(f) {
     return '<div class="flex items-center justify-center h-full text-xs" style="color:var(--text-muted)">Select a finding to view details</div>';
   }
   const c = SEVERITY_COLORS[f.severity] || SEVERITY_COLORS.info;
-  const lines = f.line_start
-    ? f.line_end && f.line_end !== f.line_start
-      ? `Lines ${f.line_start}\u2013${f.line_end}`
-      : `Line ${f.line_start}`
-    : "";
+  const lines = formatLineRange(f, "Line ");
   return (
     '<div class="text-xs space-y-2">' +
     `<div class="flex items-center gap-2"><span class="px-1.5 py-0.5 rounded ${c.bg} ${c.text}" style="border:1px solid;${c.border}">${escHtml(f.severity)}</span>` +
@@ -465,7 +534,8 @@ async function loadFindingsTab(fileId, offset) {
       `<div class="w-1/2 overflow-y-auto pr-1" style="max-height:400px">${listHtml}</div>` +
       `<div id="findingDetailPane" class="flex-1 rounded p-3" style="background:var(--surface-overlay);border:1px solid var(--border-default)">${renderFindingDetail(_selectedFinding)}</div>` +
       "</div>";
-  } catch (_e) {
+  } catch (err) {
+    console.warn("[files:findings] Failed to load findings:", err);
     container.innerHTML = '<div class="text-red-400">Failed to load findings.</div>';
   }
 }
@@ -516,11 +586,7 @@ export async function createIssueFromFinding() {
   const prioEl = document.getElementById("createPriority");
   if (titleEl) titleEl.value = `[${f.severity}] ${f.rule_id}`;
   if (descEl) {
-    const lines = f.line_start
-      ? f.line_end && f.line_end !== f.line_start
-        ? `Lines ${f.line_start}\u2013${f.line_end}`
-        : `Line ${f.line_start}`
-      : "";
+    const lines = formatLineRange(f, "Line ");
     const filePath = state.fileDetailData?.file?.path || "";
     descEl.value = [
       f.message,
@@ -604,7 +670,8 @@ async function loadTimelineTab(fileId, offset) {
     }
 
     container.innerHTML = html;
-  } catch (_e) {
+  } catch (err) {
+    console.warn("[files:timeline] Failed to load timeline:", err);
     container.innerHTML = '<div class="text-red-400">Failed to load timeline.</div>';
   }
 }
@@ -619,14 +686,8 @@ const EVENT_TYPE_LABELS = {
 function renderTimelineEvents(events) {
   let html = "";
   for (const ev of events) {
-    const dotColor =
-      ev.type === "finding_created"
-        ? "#EF4444"
-        : ev.type === "finding_updated"
-          ? "#3B82F6"
-          : ev.type === "file_metadata_update"
-            ? "#A855F7"
-            : "#10B981";
+    const DOT_COLORS = { finding_created: "#EF4444", finding_updated: "#3B82F6", file_metadata_update: "#A855F7" };
+    const dotColor = DOT_COLORS[ev.type] || "#10B981";
     const time = ev.timestamp
       ? new Date(ev.timestamp).toLocaleString()
       : "";

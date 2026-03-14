@@ -15,7 +15,7 @@ Usage — adding a new migration:
   2. Add a function here: def migrate_v<N>_to_v<N+1>(conn) -> None
   3. Register it in MIGRATIONS: N: migrate_v<N>_to_v<N+1>
   4. Update SCHEMA_SQL in db_schema.py to match the post-migration state
-  5. Add a test in tests/test_migrations.py
+  5. Add a test in tests/core/test_schema.py
 
 SQLite ALTER TABLE limitations (why helpers exist):
   - ADD COLUMN: supported (but only with constant defaults, no NOT NULL without DEFAULT)
@@ -153,7 +153,7 @@ def migrate_v3_to_v4(conn: sqlite3.Connection) -> None:
 
 
 def _now_iso() -> str:
-    """ISO timestamp for migration comments."""
+    """ISO timestamp for migration operations (Z-suffix, no microseconds — distinct from db_base._now_iso)."""
     from datetime import UTC, datetime
 
     return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -173,9 +173,19 @@ def migrate_v4_to_v5(conn: sqlite3.Connection) -> None:
     semver_loose = re.compile(r"^v?(\d+)\.(\d+)(?:\.(\d+))?$")
 
     rows = conn.execute("SELECT id, title, fields FROM issues WHERE type = 'release'").fetchall()
+    skipped_ids: list[str] = []
 
     for row in rows:
-        fields = json.loads(row["fields"] or "{}")
+        try:
+            fields = json.loads(row["fields"] or "{}")
+        except (json.JSONDecodeError, TypeError):
+            skipped_ids.append(row["id"])
+            logger.warning(
+                "migrate_v4_to_v5: skipping issue %s with corrupt fields JSON: %r",
+                row["id"],
+                (row["fields"] or "")[:200],
+            )
+            continue
         version = fields.get("version", "")
         if not version:
             continue
@@ -213,12 +223,151 @@ def migrate_v4_to_v5(conn: sqlite3.Connection) -> None:
                 (row["id"], "migration", comment_text, now),
             )
 
+    if skipped_ids:
+        logger.error(
+            "migrate_v4_to_v5: skipped %d issue(s) with corrupt fields JSON: %s",
+            len(skipped_ids),
+            skipped_ids,
+        )
+
+
+def _issues_parent_fk_has_set_null(conn: sqlite3.Connection) -> bool:
+    """Return True when issues.parent_id has an ON DELETE SET NULL self-FK."""
+    for row in conn.execute("PRAGMA foreign_key_list(issues)").fetchall():
+        if row[2] == "issues" and row[3] == "parent_id" and row[6].upper() == "SET NULL":
+            return True
+    return False
+
+
+def _recreate_issues_fts_triggers(conn: sqlite3.Connection) -> None:
+    """Recreate issues FTS triggers after rebuilding the issues table."""
+    has_fts = conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'issues_fts'").fetchone()
+    if has_fts is None:
+        return
+
+    conn.execute("DROP TRIGGER IF EXISTS issues_fts_insert")
+    conn.execute("DROP TRIGGER IF EXISTS issues_fts_update")
+    conn.execute("DROP TRIGGER IF EXISTS issues_fts_delete")
+    conn.execute("""\
+        CREATE TRIGGER issues_fts_insert AFTER INSERT ON issues BEGIN
+            INSERT INTO issues_fts(rowid, title, description) VALUES (new.rowid, new.title, new.description);
+        END""")
+    conn.execute("""\
+        CREATE TRIGGER issues_fts_update AFTER UPDATE OF title, description ON issues BEGIN
+            INSERT INTO issues_fts(issues_fts, rowid, title, description)
+                VALUES('delete', old.rowid, old.title, old.description);
+            INSERT INTO issues_fts(rowid, title, description) VALUES (new.rowid, new.title, new.description);
+        END""")
+    conn.execute("""\
+        CREATE TRIGGER issues_fts_delete AFTER DELETE ON issues BEGIN
+            INSERT INTO issues_fts(issues_fts, rowid, title, description)
+                VALUES('delete', old.rowid, old.title, old.description);
+        END""")
+
+
+def _rebuild_issues_fts_index(conn: sqlite3.Connection) -> None:
+    """Resync the issues_fts external-content index after an issues table rebuild."""
+    has_fts = conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'issues_fts'").fetchone()
+    if has_fts is None:
+        return
+
+    conn.execute("INSERT INTO issues_fts(issues_fts) VALUES ('rebuild')")
+
+
+def migrate_v5_to_v6(conn: sqlite3.Connection) -> None:
+    """v5 → v6: Restore the parent self-FK with ON DELETE SET NULL.
+
+    Historical filigree databases already used schema version 6 for this
+    change. Some later code paths kept the v6 schema shape but regressed the
+    reported current version to v5. This migration handles both states:
+      - old v5 databases without the parent self-FK are rebuilt safely
+      - already-correct databases simply get restamped to v6
+    """
+    conn.execute("UPDATE issues SET parent_id = NULL WHERE parent_id IS NOT NULL AND parent_id NOT IN (SELECT id FROM issues)")
+
+    if _issues_parent_fk_has_set_null(conn):
+        return
+
+    rebuild_table(
+        conn,
+        "issues",
+        """\
+        CREATE TABLE issues (
+            id          TEXT PRIMARY KEY,
+            title       TEXT NOT NULL,
+            status      TEXT NOT NULL DEFAULT 'open',
+            priority    INTEGER NOT NULL DEFAULT 2,
+            type        TEXT NOT NULL DEFAULT 'task',
+            parent_id   TEXT REFERENCES issues(id) ON DELETE SET NULL,
+            assignee    TEXT DEFAULT '',
+            created_at  TEXT NOT NULL,
+            updated_at  TEXT NOT NULL,
+            closed_at   TEXT,
+            description TEXT DEFAULT '',
+            notes       TEXT DEFAULT '',
+            fields      TEXT DEFAULT '{}',
+            CHECK (priority BETWEEN 0 AND 4)
+        )""",
+    )
+    add_index(conn, "idx_issues_status", "issues", ["status"])
+    add_index(conn, "idx_issues_type", "issues", ["type"])
+    add_index(conn, "idx_issues_parent", "issues", ["parent_id"])
+    add_index(conn, "idx_issues_priority", "issues", ["priority"])
+    add_index(conn, "idx_issues_status_priority", "issues", ["status", "priority", "created_at"])
+    _recreate_issues_fts_triggers(conn)
+    _rebuild_issues_fts_index(conn)
+
+
+def migrate_v6_to_v7(conn: sqlite3.Connection) -> None:
+    """v6 → v7: Add observations and dismissed_observations tables.
+
+    Changes:
+      - new table 'observations' for lightweight agent-reported observations
+      - new table 'dismissed_observations' for dismissal audit trail
+      - new indexes on observations(priority, created_at), observations(expires_at),
+        and dedup index on (summary, file_path, line)
+
+    Rollback: DROP TABLE IF EXISTS dismissed_observations;
+              DROP TABLE IF EXISTS observations;
+              PRAGMA user_version = 6;
+    """
+    conn.execute("""\
+        CREATE TABLE IF NOT EXISTS observations (
+            id              TEXT PRIMARY KEY,
+            summary         TEXT NOT NULL,
+            detail          TEXT DEFAULT '',
+            file_id         TEXT REFERENCES file_records(id) ON DELETE SET NULL,
+            file_path       TEXT DEFAULT '',
+            line            INTEGER,
+            source_issue_id TEXT DEFAULT '',
+            priority        INTEGER DEFAULT 3 CHECK (priority BETWEEN 0 AND 4),
+            actor           TEXT DEFAULT '',
+            created_at      TEXT NOT NULL,
+            expires_at      TEXT NOT NULL
+        )""")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_observations_priority ON observations(priority, created_at)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_observations_expires ON observations(expires_at)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_observations_file_id ON observations(file_id)")
+    conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_observations_dedup ON observations(summary, file_path, coalesce(line, -1))")
+    conn.execute("""\
+        CREATE TABLE IF NOT EXISTS dismissed_observations (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            obs_id       TEXT NOT NULL,
+            summary      TEXT NOT NULL,
+            actor        TEXT DEFAULT '',
+            reason       TEXT DEFAULT '',
+            dismissed_at TEXT NOT NULL
+        )""")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_dismissed_obs_id ON dismissed_observations(obs_id)")
+
 
 MIGRATIONS: dict[int, MigrationFn] = {
     1: migrate_v1_to_v2,
     2: migrate_v2_to_v3,
     3: migrate_v3_to_v4,
     4: migrate_v4_to_v5,
+    5: migrate_v5_to_v6,
+    6: migrate_v6_to_v7,
 }
 
 
@@ -242,7 +391,7 @@ def apply_pending_migrations(conn: sqlite3.Connection, target_version: int) -> i
 
     Args:
         conn: Open SQLite connection (must have row_factory and PRAGMAs already set).
-        target_version: The CURRENT_SCHEMA_VERSION from core.py.
+        target_version: The CURRENT_SCHEMA_VERSION from db_schema.py.
 
     Returns:
         Number of migrations applied (0 if already up to date).

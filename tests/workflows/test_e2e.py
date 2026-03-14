@@ -174,7 +174,8 @@ class TestSpikeWorkflowE2E:
             fields={"findings": "Redis outperforms memcached for our use case"},
         )
         assert spike.status == "concluded"
-        assert spike.closed_at is not None
+        # concluded is a wip checkpoint — not yet closed
+        assert spike.closed_at is None
 
         spike = db.update_issue(
             spike.id,
@@ -182,6 +183,7 @@ class TestSpikeWorkflowE2E:
             fields={"recommendation": "Adopt Redis with 24h TTL"},
         )
         assert spike.status == "actioned"
+        assert spike.closed_at is not None
 
     def test_conclusion_hard_gate_blocks_without_findings(self, db: FiligreeDB) -> None:
         """Cannot conclude without findings."""

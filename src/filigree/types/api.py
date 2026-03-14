@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from typing import Any, Literal, NotRequired, TypedDict
 
-from filigree.types.core import ISOTimestamp, IssueDict
-from filigree.types.planning import CommentRecord, CriticalPathNode, PlanPhase, StatsResult
+from filigree.types.core import ISOTimestamp, IssueDict, StatusCategory
+from filigree.types.events import EventType
+from filigree.types.planning import CommentRecord, CriticalPathNode, PlanTree, StatsResult
 
 # ---------------------------------------------------------------------------
 # Shared types
@@ -13,13 +14,18 @@ from filigree.types.planning import CommentRecord, CriticalPathNode, PlanPhase, 
 
 
 class TransitionDetail(TypedDict):
-    """Full transition info returned by get_issue and get_valid_transitions."""
+    """Full transition info returned by get_issue and get_valid_transitions.
+
+    ``enforcement`` is always populated in practice because TransitionDetail
+    is built from TransitionOption, which sources it from TransitionDefinition.
+    The underlying type allows None for unregistered-type fallback paths.
+    """
 
     to: str
     category: str
-    enforcement: str | None
+    enforcement: str
     requires_fields: list[str]
-    missing_fields: list[str] | list[dict[str, Any]]
+    missing_fields: list[str]
     ready: bool
 
 
@@ -29,6 +35,11 @@ class TransitionHint(TypedDict):
     to: str
     category: str
     ready: NotRequired[bool]
+
+
+# InboundTransitionInfo uses "from" as a key at runtime (a Python keyword).
+# TypedDict cannot express this with class syntax; we use functional form.
+InboundTransitionInfo = TypedDict("InboundTransitionInfo", {"from": str, "enforcement": str})
 
 
 class OutboundTransitionInfo(TypedDict):
@@ -140,7 +151,7 @@ class DepDetail(TypedDict):
 
     title: str
     status: str
-    status_category: str
+    status_category: StatusCategory
     priority: int
 
 
@@ -149,7 +160,7 @@ class IssueDetailEvent(TypedDict):
     api_issue_detail's SQL query. Do NOT extend to full EventRecord; that is
     a separate type in types/events.py."""
 
-    event_type: str
+    event_type: EventType
     actor: str
     old_value: str | None
     new_value: str | None
@@ -166,14 +177,18 @@ class EnrichedIssueDetail(IssueDict):
 
 # ---------------------------------------------------------------------------
 # True envelopes — list / search / batch wrappers
-#
-# For types with mixed required/optional keys, use the split-base pattern
-# matching the convention in types/workflow.py (FieldSchemaInfo).
 # ---------------------------------------------------------------------------
 
 
 class IssueListResponse(TypedDict):
-    """Paginated issue list (MCP list_issues)."""
+    """Paginated issue list (MCP list_issues).
+
+    Does not use ``PaginatedResult`` because the list key is ``issues``
+    (not ``results``) for wire-format compatibility, and ``total`` is
+    omitted because counting all matching issues is expensive for large
+    projects. File pagination uses ``PaginatedResult`` with ``total``
+    because file counts are bounded.
+    """
 
     issues: list[IssueDict]
     limit: int
@@ -182,7 +197,10 @@ class IssueListResponse(TypedDict):
 
 
 class SearchResponse(TypedDict):
-    """Paginated search results with slim issues (MCP search_issues)."""
+    """Paginated search results with slim issues (MCP search_issues).
+
+    Same pagination divergence as ``IssueListResponse`` — see its docstring.
+    """
 
     issues: list[SlimIssue]
     limit: int
@@ -190,40 +208,43 @@ class SearchResponse(TypedDict):
     has_more: bool
 
 
+class BatchFailureDetail(TypedDict):
+    """Error detail for a single failed item in a batch operation.
+
+    All batch failures share this {id, error, code} shape.  Batch update/close
+    may also include valid_transitions when the failure is an invalid transition.
+    """
+
+    id: str
+    error: str
+    code: str
+    valid_transitions: NotRequired[list[TransitionHint]]
+
+
 class BatchUpdateResponse(TypedDict):
     """Batch update result with succeeded IDs and failures."""
 
     succeeded: list[str]
-    failed: list[dict[str, Any]]
+    failed: list[BatchFailureDetail]
     count: int
 
 
-class _BatchCloseRequired(TypedDict):
-    """Required keys for BatchCloseResponse (always present)."""
-
-    succeeded: list[str]
-    failed: list[dict[str, Any]]
-    count: int
-
-
-class BatchCloseResponse(_BatchCloseRequired, total=False):
+class BatchCloseResponse(TypedDict):
     """Batch close result with optional newly-unblocked list.
 
-    ``succeeded``, ``failed``, and ``count`` are always present (enforced
-    by ``_BatchCloseRequired``). ``newly_unblocked`` is only included when
-    issues were actually unblocked.
+    ``succeeded``, ``failed``, and ``count`` are always present.
+    ``newly_unblocked`` is only included when issues were actually unblocked.
     """
 
-    newly_unblocked: list[SlimIssue]
+    succeeded: list[str]
+    failed: list[BatchFailureDetail]
+    count: int
+    newly_unblocked: NotRequired[list[SlimIssue]]
 
 
-class PlanResponse(TypedDict):
+class PlanResponse(PlanTree):
     """Plan tree with computed progress percentage (MCP get_plan)."""
 
-    milestone: IssueDict
-    phases: list[PlanPhase]
-    total_steps: int
-    completed_steps: int
     progress_pct: float
 
 
@@ -248,11 +269,15 @@ class CriticalPathResponse(TypedDict):
 
 
 class BatchActionResponse(TypedDict):
-    """Shared response shape for batch_add_label / batch_add_comment."""
+    """Shared response shape for batch_add_label / batch_add_comment.
+
+    ``results`` varies by operation (label adds: {id, status}, comment adds:
+    {id, comment_id}), so it remains list[dict[str, Any]].
+    """
 
     succeeded: list[str]
     results: list[dict[str, Any]]
-    failed: list[dict[str, Any]]
+    failed: list[BatchFailureDetail]
     count: int
 
 
@@ -282,6 +307,7 @@ class JsonlTransferResponse(TypedDict):
     status: str
     records: int
     path: str
+    skipped_types: NotRequired[dict[str, int]]
 
 
 class ArchiveClosedResponse(TypedDict):
@@ -336,14 +362,7 @@ class ValidationResult(TypedDict):
     errors: list[str]
 
 
-class _WorkflowGuideRequired(TypedDict):
-    """Required keys for WorkflowGuideResponse."""
-
-    pack: str
-    guide: dict[str, Any] | None
-
-
-class WorkflowGuideResponse(_WorkflowGuideRequired, total=False):
+class WorkflowGuideResponse(TypedDict):
     """Response for get_workflow_guide MCP tool.
 
     ``pack`` and ``guide`` are always present.  ``message`` appears when
@@ -351,8 +370,10 @@ class WorkflowGuideResponse(_WorkflowGuideRequired, total=False):
     from a type name.
     """
 
-    message: str
-    note: str
+    pack: str
+    guide: dict[str, Any] | None
+    message: NotRequired[str]
+    note: NotRequired[str]
 
 
 class StateExplanation(TypedDict):
@@ -361,6 +382,6 @@ class StateExplanation(TypedDict):
     state: str
     category: str
     type: str
-    inbound_transitions: list[dict[str, str]]
+    inbound_transitions: list[InboundTransitionInfo]
     outbound_transitions: list[OutboundTransitionInfo]
     required_fields: list[str]

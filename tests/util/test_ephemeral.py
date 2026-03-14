@@ -8,7 +8,9 @@ from pathlib import Path
 import pytest
 
 from filigree.ephemeral import (
+    _matches_expected_process,
     _read_os_command_line,
+    _tokens_contain_args,
     cleanup_legacy_tmp_files,
     cleanup_stale_pid,
     compute_port,
@@ -20,6 +22,84 @@ from filigree.ephemeral import (
     write_pid_file,
     write_port_file,
 )
+
+
+class TestTokensContainArgs:
+    def test_empty_required_args(self) -> None:
+        assert _tokens_contain_args(["foo", "bar"], ()) is True
+
+    def test_single_match(self) -> None:
+        assert _tokens_contain_args(["dashboard", "--port", "8400"], ("dashboard",)) is True
+
+    def test_in_order_match(self) -> None:
+        assert _tokens_contain_args(["dashboard", "--server-mode"], ("dashboard", "--server-mode")) is True
+
+    def test_out_of_order_rejects(self) -> None:
+        assert _tokens_contain_args(["--server-mode", "dashboard"], ("dashboard", "--server-mode")) is False
+
+    def test_missing_token_rejects(self) -> None:
+        assert _tokens_contain_args(["dashboard"], ("dashboard", "--server-mode")) is False
+
+    def test_empty_tokens(self) -> None:
+        assert _tokens_contain_args([], ("dashboard",)) is False
+
+    def test_case_insensitive(self) -> None:
+        assert _tokens_contain_args(["Dashboard", "--Server-Mode"], ("dashboard", "--server-mode")) is True
+
+
+class TestMatchesExpectedProcess:
+    def test_empty_tokens(self) -> None:
+        assert _matches_expected_process([], expected_cmd="filigree") is False
+
+    def test_direct_executable(self) -> None:
+        assert _matches_expected_process(["/usr/bin/filigree", "dashboard"], expected_cmd="filigree") is True
+
+    def test_unrelated_executable_with_prefix_rejected(self) -> None:
+        """M3: filigree-unrelated-tool must NOT match 'filigree'."""
+        assert _matches_expected_process(["filigree-dashboard", "serve"], expected_cmd="filigree") is False
+        assert _matches_expected_process(["filigree-unrelated-tool"], expected_cmd="filigree") is False
+
+    def test_executable_with_exe_suffix(self) -> None:
+        """Windows .exe suffix should match after stripping."""
+        assert _matches_expected_process(["filigree.exe", "dashboard"], expected_cmd="filigree") is True
+
+    def test_python_module_invocation(self) -> None:
+        assert _matches_expected_process(["python", "-m", "filigree", "dashboard"], expected_cmd="filigree") is True
+
+    def test_python_module_dotted(self) -> None:
+        assert _matches_expected_process(["python", "-m", "filigree.cli", "serve"], expected_cmd="filigree") is True
+
+    def test_unrelated_module_rejects(self) -> None:
+        assert _matches_expected_process(["python", "-m", "other_tool", "serve"], expected_cmd="filigree") is False
+
+    def test_required_args_checked(self) -> None:
+        assert (
+            _matches_expected_process(
+                ["/usr/bin/filigree", "dashboard", "--server-mode"],
+                expected_cmd="filigree",
+                required_args=("dashboard",),
+            )
+            is True
+        )
+
+    def test_required_args_missing(self) -> None:
+        assert (
+            _matches_expected_process(
+                ["/usr/bin/filigree", "session-context"],
+                expected_cmd="filigree",
+                required_args=("dashboard",),
+            )
+            is False
+        )
+
+    def test_second_arg_as_script_path(self) -> None:
+        assert (
+            _matches_expected_process(
+                ["python", "/usr/local/bin/filigree", "serve"],
+                expected_cmd="filigree",
+            )
+            is True
+        )
 
 
 class TestComputePort:
@@ -84,6 +164,11 @@ class TestFindAvailablePort:
         # OS fallback must return a valid port
         assert 1 <= port <= 65535
 
+    def test_socket_permission_error_raises_runtime_error(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr("filigree.ephemeral.socket.socket", lambda *_a, **_k: (_ for _ in ()).throw(PermissionError(1, "denied")))
+        with pytest.raises(RuntimeError):
+            find_available_port(Path("/some/project/.filigree"))
+
 
 class TestPidLifecycle:
     def test_write_and_read_pid(self, tmp_path: Path) -> None:
@@ -130,6 +215,29 @@ class TestPidLifecycle:
             "read_pid_file must log a warning when PID file exists but can't be parsed"
         )
 
+    def test_read_pid_json_array_returns_none(self, tmp_path: Path) -> None:
+        """Non-dict JSON (array) should return None with a warning, not fall through."""
+        pid_file = tmp_path / "ephemeral.pid"
+        pid_file.write_text("[12345]")
+        assert read_pid_file(pid_file) is None
+
+    def test_read_pid_json_string_returns_none(self, tmp_path: Path) -> None:
+        """Non-dict JSON (string) should return None with a warning, not fall through."""
+        pid_file = tmp_path / "ephemeral.pid"
+        pid_file.write_text('"12345"')
+        assert read_pid_file(pid_file) is None
+
+    def test_read_pid_json_dict_without_pid_returns_none(self, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+        """JSON dict missing 'pid' key should return None with a specific warning."""
+        import logging
+
+        pid_file = tmp_path / "ephemeral.pid"
+        pid_file.write_text('{"cmd": "foo"}')
+        with caplog.at_level(logging.WARNING):
+            result = read_pid_file(pid_file)
+        assert result is None
+        assert any("missing 'pid' key" in r.message for r in caplog.records)
+
     def test_is_pid_alive_for_self(self) -> None:
         assert is_pid_alive(os.getpid()) is True
 
@@ -139,6 +247,13 @@ class TestPidLifecycle:
     def test_is_pid_alive_non_positive_false(self) -> None:
         assert is_pid_alive(0) is False
         assert is_pid_alive(-1) is False
+
+    def test_is_pid_alive_permission_denied_means_alive(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        def _deny_kill(_pid: int, _sig: int) -> None:
+            raise PermissionError(1, "operation not permitted")
+
+        monkeypatch.setattr("filigree.ephemeral.os.kill", _deny_kill)
+        assert is_pid_alive(12345) is True
 
     def test_verify_pid_ownership_for_self(self, tmp_path: Path) -> None:
         pid_file = tmp_path / "ephemeral.pid"
@@ -166,6 +281,15 @@ class TestPidLifecycle:
         )
         assert verify_pid_ownership(pid_file, expected_cmd="filigree") is True
 
+    def test_verify_pid_ownership_rejects_wrong_filigree_subcommand(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        pid_file = tmp_path / "ephemeral.pid"
+        write_pid_file(pid_file, os.getpid(), cmd="filigree dashboard")
+        monkeypatch.setattr(
+            "filigree.ephemeral._read_os_command_line",
+            lambda _pid: [sys.executable, "-m", "filigree", "session-context"],
+        )
+        assert verify_pid_ownership(pid_file, expected_cmd="filigree", required_args=("dashboard",)) is False
+
     def test_verify_pid_ownership_rejects_unrelated_python_module(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         pid_file = tmp_path / "ephemeral.pid"
         write_pid_file(pid_file, os.getpid(), cmd="filigree")
@@ -182,6 +306,13 @@ class TestPidLifecycle:
         write_pid_file(pid_file, os.getpid(), cmd="filigree")
         monkeypatch.setattr("filigree.ephemeral._read_os_command_line", lambda _pid: None)
         assert verify_pid_ownership(pid_file, expected_cmd="filigree") is True
+
+    def test_verify_pid_ownership_fallback_requires_expected_args(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        pid_file = tmp_path / "ephemeral.pid"
+        write_pid_file(pid_file, os.getpid(), cmd="filigree dashboard --server-mode")
+        monkeypatch.setattr("filigree.ephemeral._read_os_command_line", lambda _pid: None)
+        assert verify_pid_ownership(pid_file, expected_cmd="filigree", required_args=("dashboard", "--server-mode")) is True
+        assert verify_pid_ownership(pid_file, expected_cmd="filigree", required_args=("session-context",)) is False
 
     def test_verify_pid_ownership_fallback_rejects_mismatched_pid_file_cmd(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         pid_file = tmp_path / "ephemeral.pid"
@@ -208,17 +339,64 @@ class TestPidLifecycle:
         # Should return False because cmd="unknown" is not trustworthy
         assert verify_pid_ownership(pid_file, expected_cmd="filigree") is False
 
+    def test_verify_pid_ownership_uses_cmdline_before_alive_check(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """TOCTOU fix: cmdline should be checked first, not is_pid_alive.
+
+        If _read_os_command_line returns valid tokens, is_pid_alive should not
+        be called (it creates a race window on PID recycling).
+        """
+        pid_file = tmp_path / "ephemeral.pid"
+        write_pid_file(pid_file, os.getpid(), cmd="filigree")
+
+        alive_called = []
+        orig_alive = is_pid_alive
+
+        def _tracking_alive(pid: int) -> bool:
+            alive_called.append(pid)
+            return orig_alive(pid)
+
+        monkeypatch.setattr("filigree.ephemeral.is_pid_alive", _tracking_alive)
+        monkeypatch.setattr(
+            "filigree.ephemeral._read_os_command_line",
+            lambda _pid: ["/usr/bin/filigree", "dashboard"],
+        )
+
+        result = verify_pid_ownership(pid_file, expected_cmd="filigree")
+        assert result is True
+        # is_pid_alive should NOT have been called when cmdline is available
+        assert alive_called == [], f"is_pid_alive was called unnecessarily: {alive_called}"
+
     def test_cleanup_stale_pid_removes_dead(self, tmp_path: Path) -> None:
         pid_file = tmp_path / "ephemeral.pid"
         write_pid_file(pid_file, 99999999, cmd="filigree")
         cleanup_stale_pid(pid_file)
         assert not pid_file.exists()
 
-    def test_cleanup_stale_pid_keeps_alive(self, tmp_path: Path) -> None:
+    def test_cleanup_stale_pid_keeps_alive_filigree(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """PID file should be kept if the process is alive and is filigree dashboard."""
         pid_file = tmp_path / "ephemeral.pid"
-        write_pid_file(pid_file, os.getpid(), cmd="python")
+        write_pid_file(pid_file, os.getpid(), cmd="filigree dashboard")
+        monkeypatch.setattr(
+            "filigree.ephemeral._read_os_command_line",
+            lambda _pid: ["/usr/bin/filigree", "dashboard"],
+        )
         cleanup_stale_pid(pid_file)
         assert pid_file.exists()
+
+    def test_cleanup_stale_pid_removes_recycled_pid(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """TOCTOU fix: cleanup should remove PID file when PID is alive but not our process."""
+        pid_file = tmp_path / "ephemeral.pid"
+        write_pid_file(pid_file, os.getpid(), cmd="filigree dashboard")
+
+        # PID is alive (it's our test process), but cmdline doesn't match filigree
+        monkeypatch.setattr(
+            "filigree.ephemeral._read_os_command_line",
+            lambda _pid: ["/usr/bin/some-other-app", "serve"],
+        )
+
+        result = cleanup_stale_pid(pid_file)
+        assert result is True
+        assert not pid_file.exists()
 
 
 class TestPortFile:
@@ -337,6 +515,23 @@ class TestReadOsCommandLine:
         result = _read_os_command_line(12345)
         assert result is None
 
+    def test_ps_nonzero_returncode_returns_none(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """ps returning non-zero exit code should be treated as failure, even with stdout."""
+        import subprocess as _subprocess
+
+        monkeypatch.setattr("filigree.ephemeral.Path", self._make_noproc_path_factory(tmp_path))
+
+        fake_result = _subprocess.CompletedProcess(
+            args=["ps", "-p", "12345", "-o", "command="],
+            returncode=1,
+            stdout="some garbage output\n",
+            stderr="",
+        )
+        monkeypatch.setattr("filigree.ephemeral.subprocess.run", lambda *a, **kw: fake_result)
+
+        result = _read_os_command_line(12345)
+        assert result is None
+
     def test_both_proc_and_ps_fail_returns_none(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """When both /proc and ps are unavailable, returns None."""
         monkeypatch.setattr("filigree.ephemeral.Path", self._make_noproc_path_factory(tmp_path))
@@ -348,6 +543,98 @@ class TestReadOsCommandLine:
 
         result = _read_os_command_line(12345)
         assert result is None
+
+
+class TestReadOsCommandLineWmic:
+    """M6: tests for _read_os_command_line Windows wmic branch."""
+
+    @staticmethod
+    def _make_noproc_path_factory(tmp_path: Path) -> object:
+        _orig_path = Path
+
+        def _factory(*args: object, **kwargs: object) -> Path:
+            if args == ("/proc",):
+                return _orig_path(str(tmp_path / "no-proc"))
+            return _orig_path(*args, **kwargs)  # type: ignore[arg-type]
+
+        return _factory
+
+    def test_wmic_success_parses_command_line(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """wmic output with CommandLine= line is parsed correctly."""
+        import subprocess as _subprocess
+
+        monkeypatch.setattr("filigree.ephemeral.Path", self._make_noproc_path_factory(tmp_path))
+        monkeypatch.setattr("filigree.ephemeral.sys.platform", "win32")
+
+        fake_result = _subprocess.CompletedProcess(
+            args=["wmic"],
+            returncode=0,
+            stdout="\r\nCommandLine=python -m filigree dashboard --port 8377\r\n\r\n",
+            stderr="",
+        )
+        monkeypatch.setattr("filigree.ephemeral.subprocess.run", lambda *a, **kw: fake_result)
+
+        result = _read_os_command_line(12345)
+        assert result == ["python", "-m", "filigree", "dashboard", "--port", "8377"]
+
+    def test_wmic_nonzero_returncode_returns_none(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """wmic returning non-zero exit code returns None."""
+        import subprocess as _subprocess
+
+        monkeypatch.setattr("filigree.ephemeral.Path", self._make_noproc_path_factory(tmp_path))
+        monkeypatch.setattr("filigree.ephemeral.sys.platform", "win32")
+
+        fake_result = _subprocess.CompletedProcess(args=["wmic"], returncode=1, stdout="", stderr="error")
+        monkeypatch.setattr("filigree.ephemeral.subprocess.run", lambda *a, **kw: fake_result)
+
+        result = _read_os_command_line(12345)
+        assert result is None
+
+    def test_wmic_oserror_returns_none(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """OSError from wmic subprocess returns None."""
+        monkeypatch.setattr("filigree.ephemeral.Path", self._make_noproc_path_factory(tmp_path))
+        monkeypatch.setattr("filigree.ephemeral.sys.platform", "win32")
+
+        def _raise_oserror(*args: object, **kwargs: object) -> None:
+            raise OSError("wmic not found")
+
+        monkeypatch.setattr("filigree.ephemeral.subprocess.run", _raise_oserror)
+
+        result = _read_os_command_line(12345)
+        assert result is None
+
+    def test_wmic_no_commandline_in_output_returns_none(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """wmic output without CommandLine= prefix returns None."""
+        import subprocess as _subprocess
+
+        monkeypatch.setattr("filigree.ephemeral.Path", self._make_noproc_path_factory(tmp_path))
+        monkeypatch.setattr("filigree.ephemeral.sys.platform", "win32")
+
+        fake_result = _subprocess.CompletedProcess(args=["wmic"], returncode=0, stdout="No Instance(s) Available.\r\n", stderr="")
+        monkeypatch.setattr("filigree.ephemeral.subprocess.run", lambda *a, **kw: fake_result)
+
+        result = _read_os_command_line(12345)
+        assert result is None
+
+    def test_wmic_shlex_error_returns_raw(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """wmic CommandLine= with unparseable value falls back to raw string."""
+        import subprocess as _subprocess
+
+        monkeypatch.setattr("filigree.ephemeral.Path", self._make_noproc_path_factory(tmp_path))
+        monkeypatch.setattr("filigree.ephemeral.sys.platform", "win32")
+
+        # Unclosed quote triggers shlex.split ValueError
+        fake_result = _subprocess.CompletedProcess(
+            args=["wmic"],
+            returncode=0,
+            stdout='CommandLine=python -c "unclosed\r\n',
+            stderr="",
+        )
+        monkeypatch.setattr("filigree.ephemeral.subprocess.run", lambda *a, **kw: fake_result)
+
+        result = _read_os_command_line(12345)
+        assert result is not None
+        assert len(result) == 1  # raw string in a list
 
 
 class TestLegacyCleanup:

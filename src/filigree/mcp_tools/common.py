@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any, TypeVar, cast
 
 from mcp.types import TextContent
 
-from filigree.core import Issue
+from filigree.models import Issue
 
 if TYPE_CHECKING:
     from filigree.core import FiligreeDB
@@ -34,8 +34,8 @@ def _parse_args(arguments: dict[str, Any], cls: type[_T]) -> _T:
     return cast(_T, arguments)
 
 
-# Hard cap on list_issues / search_issues results to keep MCP response size
-# within token limits.  Callers can pass no_limit=true to bypass.
+# Hard cap on list/search results (issues, observations) to keep MCP response
+# size within token limits.  Callers can pass no_limit=true to bypass.
 _MAX_LIST_RESULTS = 50
 
 
@@ -67,7 +67,10 @@ def _resolve_pagination(arguments: dict[str, Any]) -> tuple[int, int]:
     requested_limit = arguments.get("limit", 100)
     offset = arguments.get("offset", 0)
 
-    effective_limit = (requested_limit if "limit" in arguments else 10_000_000) if no_limit else min(requested_limit, _MAX_LIST_RESULTS)
+    if no_limit:  # noqa: SIM108 — expanded for readability per filigree-b1b414e36e
+        effective_limit = requested_limit if "limit" in arguments else 10_000_000
+    else:
+        effective_limit = min(requested_limit, _MAX_LIST_RESULTS)
 
     return effective_limit, offset
 

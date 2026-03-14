@@ -161,7 +161,7 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
         ),
         Tool(
             name="export_jsonl",
-            description="Export all project data (issues, deps, labels, comments, events) to a JSONL file for backup or migration.",
+            description="Export all project data to a JSONL file for backup or migration.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -269,7 +269,7 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
 
 
 async def _handle_add_comment(arguments: dict[str, Any]) -> list[TextContent]:
-    from filigree.mcp_server import _get_db
+    from filigree.mcp_server import _get_db, _refresh_summary
 
     args = _parse_args(arguments, AddCommentArgs)
     actor, actor_err = _validate_actor(args.get("actor", "mcp"))
@@ -288,6 +288,7 @@ async def _handle_add_comment(arguments: dict[str, Any]) -> list[TextContent]:
         )
     except ValueError as e:
         return _text(ErrorResponse(error=str(e), code="validation_error"))
+    _refresh_summary()
     return _text(AddCommentResult(status="ok", comment_id=comment_id))
 
 
@@ -401,15 +402,16 @@ async def _handle_get_changes(arguments: dict[str, Any]) -> list[TextContent]:
 
     args = _parse_args(arguments, GetChangesArgs)
     since = args["since"]
+    since_normalized = since.replace("Z", "+00:00") if since.endswith("Z") else since
     try:
-        datetime.fromisoformat(since.replace("Z", "+00:00"))
+        datetime.fromisoformat(since_normalized)
     except (ValueError, AttributeError):
         return _text(
             ErrorResponse(error=f"Invalid ISO timestamp: {since!r}. Expected format: 2026-01-15T10:30:00", code="validation_error")
         )
     tracker = _get_db()
     events = tracker.get_events_since(
-        since,
+        since_normalized,
         limit=args.get("limit", 100),
     )
     return _text(events)
@@ -465,9 +467,12 @@ async def _handle_import_jsonl(arguments: dict[str, Any]) -> list[TextContent]:
     except ValueError as e:
         return _text(ErrorResponse(error=str(e), code="invalid_path"))
     try:
-        count = tracker.import_jsonl(safe, merge=args.get("merge", False))
+        result = tracker.import_jsonl(safe, merge=args.get("merge", False))
         _refresh_summary()
-        return _text(JsonlTransferResponse(status="ok", records=count, path=str(safe)))
+        resp = JsonlTransferResponse(status="ok", records=result["count"], path=str(safe))
+        if result["skipped_types"]:
+            resp["skipped_types"] = result["skipped_types"]
+        return _text(resp)
     except (ValueError, OSError, sqlite3.Error) as e:
         logging.getLogger(__name__).warning("import_jsonl failed: %s", e, exc_info=True)
         return _text(ErrorResponse(error=str(e), code="import_error"))

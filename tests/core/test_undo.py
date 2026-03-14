@@ -245,6 +245,107 @@ class TestGetIssueEvents:
             db.get_issue_events("nonexistent-abc123")
 
 
+class TestUndoRollback:
+    """H1: undo_last must rollback on exception, not leave partial writes."""
+
+    def test_undo_rolls_back_on_record_event_failure(self, db: FiligreeDB, monkeypatch: pytest.MonkeyPatch) -> None:
+        """If _record_event raises, the status change should be rolled back."""
+        issue = db.create_issue("Test")
+        db.update_issue(issue.id, status="in_progress", actor="t")
+
+        original = db._record_event
+
+        def failing_record_event(*args: object, **kwargs: object) -> None:
+            if kwargs.get("old_value") == "status_changed" or (args and len(args) >= 2 and args[1] == "undone"):
+                raise RuntimeError("Simulated _record_event failure")
+            original(*args, **kwargs)
+
+        monkeypatch.setattr(db, "_record_event", failing_record_event)
+
+        with pytest.raises(RuntimeError, match="Simulated"):
+            db.undo_last(issue.id, actor="t")
+
+        # The status should NOT have been changed — rollback should have reverted it
+        after = db.get_issue(issue.id)
+        assert after.status == "in_progress", "Status should be unchanged after failed undo (rollback)"
+
+
+class TestUndoNullGuards:
+    """H2: undo_last must handle NULL old_value/new_value gracefully."""
+
+    def test_undo_status_changed_null_old_value(self, db: FiligreeDB) -> None:
+        """status_changed with NULL old_value should return undone=False, not crash."""
+        issue = db.create_issue("Test")
+        # Inject a status_changed event with NULL old_value directly
+        db.conn.execute(
+            "INSERT INTO events (issue_id, event_type, actor, old_value, new_value, comment, created_at) "
+            "VALUES (?, 'status_changed', 'test', NULL, 'in_progress', '', '2099-01-01T00:00:00+00:00')",
+            (issue.id,),
+        )
+        db.conn.commit()
+
+        result = db.undo_last(issue.id)
+        assert result["undone"] is False
+        assert "no old_value" in result["reason"].lower()
+
+    def test_undo_title_changed_null_old_value(self, db: FiligreeDB) -> None:
+        """title_changed with NULL old_value should return undone=False, not crash."""
+        issue = db.create_issue("Test")
+        db.conn.execute(
+            "INSERT INTO events (issue_id, event_type, actor, old_value, new_value, comment, created_at) "
+            "VALUES (?, 'title_changed', 'test', NULL, 'New Title', '', '2099-01-01T00:00:00+00:00')",
+            (issue.id,),
+        )
+        db.conn.commit()
+
+        result = db.undo_last(issue.id)
+        assert result["undone"] is False
+        assert "no old_value" in result["reason"].lower()
+
+    def test_undo_priority_changed_corrupt_old_value(self, db: FiligreeDB) -> None:
+        """priority_changed with corrupt old_value should return undone=False, not crash."""
+        issue = db.create_issue("Test")
+        db.conn.execute(
+            "INSERT INTO events (issue_id, event_type, actor, old_value, new_value, comment, created_at) "
+            "VALUES (?, 'priority_changed', 'test', 'not-a-number', '1', '', '2099-01-01T00:00:00+00:00')",
+            (issue.id,),
+        )
+        db.conn.commit()
+
+        result = db.undo_last(issue.id)
+        assert result["undone"] is False
+        assert "not a valid priority" in result["reason"].lower()
+
+    def test_undo_priority_changed_null_old_value(self, db: FiligreeDB) -> None:
+        """priority_changed with NULL old_value should return undone=False, not crash."""
+        issue = db.create_issue("Test")
+        db.conn.execute(
+            "INSERT INTO events (issue_id, event_type, actor, old_value, new_value, comment, created_at) "
+            "VALUES (?, 'priority_changed', 'test', NULL, '1', '', '2099-01-01T00:00:00+00:00')",
+            (issue.id,),
+        )
+        db.conn.commit()
+
+        result = db.undo_last(issue.id)
+        assert result["undone"] is False
+        assert "no old_value" in result["reason"].lower()
+
+    def test_undo_dependency_removed_null_old_value(self, db: FiligreeDB) -> None:
+        """dependency_removed with NULL old_value should return undone=False, not silently no-op."""
+        issue = db.create_issue("Test")
+        # Inject a dependency_removed event with NULL old_value
+        db.conn.execute(
+            "INSERT INTO events (issue_id, event_type, actor, old_value, new_value, comment, created_at) "
+            "VALUES (?, 'dependency_removed', 'test', NULL, NULL, '', '2099-01-01T00:00:00+00:00')",
+            (issue.id,),
+        )
+        db.conn.commit()
+
+        result = db.undo_last(issue.id)
+        assert result["undone"] is False
+        assert "no old_value" in result["reason"].lower()
+
+
 class TestUndoCloseConsistency:
     """Bug fix: keel-3e899d — undo_last closed_at consistency."""
 
@@ -310,3 +411,79 @@ class TestUndoCloseConsistency:
         assert after_undo.status == "in_progress"
         assert after_undo.closed_at is None
         assert after_undo.status_category != "done"
+
+
+class TestUndoFields:
+    """H4: Field changes must be recorded as events and be undoable."""
+
+    def test_field_change_records_event(self, db: FiligreeDB) -> None:
+        """Updating fields should produce a 'fields_changed' event."""
+        issue = db.create_issue("Test", fields={"a": "1"})
+        db.update_issue(issue.id, fields={"b": "2"}, actor="tester")
+        events = db.get_issue_events(issue.id)
+        field_events = [e for e in events if e["event_type"] == "fields_changed"]
+        assert len(field_events) == 1
+        assert field_events[0]["actor"] == "tester"
+
+    def test_field_change_no_event_when_unchanged(self, db: FiligreeDB) -> None:
+        """Setting fields to the same values should not record an event."""
+        issue = db.create_issue("Test", fields={"a": "1"})
+        db.update_issue(issue.id, fields={"a": "1"}, actor="tester")
+        events = db.get_issue_events(issue.id)
+        field_events = [e for e in events if e["event_type"] == "fields_changed"]
+        assert len(field_events) == 0
+
+    def test_undo_field_change(self, db: FiligreeDB) -> None:
+        """Undoing a field change should restore the previous fields."""
+        issue = db.create_issue("Test", fields={"a": "1", "b": "2"})
+        db.update_issue(issue.id, fields={"b": "changed", "c": "3"}, actor="t")
+        result = db.undo_last(issue.id, actor="t")
+        assert result["undone"] is True
+        assert result["event_type"] == "fields_changed"
+        restored = db.get_issue(issue.id)
+        assert restored.fields == {"a": "1", "b": "2"}
+
+    def test_undo_field_change_from_empty(self, db: FiligreeDB) -> None:
+        """Undoing fields added to an issue that started with no fields."""
+        issue = db.create_issue("Test")
+        db.update_issue(issue.id, fields={"key": "val"}, actor="t")
+        result = db.undo_last(issue.id, actor="t")
+        assert result["undone"] is True
+        restored = db.get_issue(issue.id)
+        assert restored.fields == {}
+
+    def test_double_undo_same_event_by_event_id(self, db: FiligreeDB) -> None:
+        """Two rapid undo calls must not both succeed for the same event.
+
+        Regression: old check used timestamp comparison which was racy.
+        New check uses event ID linkage (undone event's new_value = target event ID).
+        """
+        issue = db.create_issue("Test")
+        db.update_issue(issue.id, status="in_progress", actor="t")
+        first = db.undo_last(issue.id, actor="t")
+        assert first["undone"] is True
+        # The undone event's new_value should be the event_id of the status_changed event
+        undone_events = db.conn.execute(
+            "SELECT new_value FROM events WHERE issue_id = ? AND event_type = 'undone'",
+            (issue.id,),
+        ).fetchall()
+        assert len(undone_events) == 1
+        assert undone_events[0]["new_value"] == str(first["event_id"])
+        # Second undo must be blocked
+        second = db.undo_last(issue.id, actor="t")
+        assert second["undone"] is False
+        assert "already undone" in second["reason"]
+
+    def test_undo_field_change_with_corrupt_json(self, db: FiligreeDB) -> None:
+        """Undoing a field change with corrupt stored JSON returns failure, not exception."""
+        issue = db.create_issue("Test", fields={"a": "1"})
+        db.update_issue(issue.id, fields={"b": "2"}, actor="t")
+        # Corrupt the old_value in the fields_changed event
+        db.conn.execute(
+            "UPDATE events SET old_value = 'not-valid-json{' WHERE issue_id = ? AND event_type = 'fields_changed'",
+            (issue.id,),
+        )
+        db.conn.commit()
+        result = db.undo_last(issue.id, actor="t")
+        assert result["undone"] is False
+        assert "corrupt" in result["reason"].lower()

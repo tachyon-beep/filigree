@@ -19,18 +19,18 @@ from filigree.db_workflow import WorkflowMixin
 
 
 def test_mcp_tools_package_exists() -> None:
-    """All 5 domain modules import and expose register()."""
-    from filigree.mcp_tools import files, issues, meta, planning, workflow
+    """All 6 domain modules import and expose register()."""
+    from filigree.mcp_tools import files, issues, meta, observations, planning, workflow
 
-    for mod in (issues, planning, files, workflow, meta):
+    for mod in (issues, planning, files, workflow, meta, observations):
         assert callable(getattr(mod, "register", None)), f"{mod.__name__} missing register()"
 
 
 def test_mcp_tools_register_shape() -> None:
     """register() returns (list[Tool], dict[str, Callable])."""
-    from filigree.mcp_tools import files, issues, meta, planning, workflow
+    from filigree.mcp_tools import files, issues, meta, observations, planning, workflow
 
-    for mod in (issues, planning, files, workflow, meta):
+    for mod in (issues, planning, files, workflow, meta, observations):
         tools, handlers = mod.register()
         assert isinstance(tools, list), f"{mod.__name__}.register() tools is not a list"
         assert all(isinstance(t, Tool) for t in tools), f"{mod.__name__} has non-Tool items"
@@ -47,14 +47,14 @@ def test_mcp_tools_register_shape() -> None:
 
 
 def test_mcp_tools_total_count() -> None:
-    """All 53 tools are registered across domain modules."""
-    from filigree.mcp_tools import files, issues, meta, planning, workflow
+    """All 58 tools are registered across domain modules."""
+    from filigree.mcp_tools import files, issues, meta, observations, planning, workflow
 
     total = 0
-    for mod in (issues, planning, files, workflow, meta):
+    for mod in (issues, planning, files, workflow, meta, observations):
         tools, _ = mod.register()
         total += len(tools)
-    assert total == 53, f"Expected 53 tools total, got {total}"
+    assert total == 58, f"Expected 58 tools total, got {total}"
 
 
 def test_mcp_backward_compat_imports() -> None:
@@ -149,8 +149,59 @@ def test_import_merge_returns_zero_for_duplicates(db: FiligreeDB, tmp_path: Path
     first_count = db.export_jsonl(str(out))
     assert first_count > 0
     # Import the same data again — all records are duplicates
-    dup_count = db.import_jsonl(str(out), merge=True)
-    assert dup_count == 0, f"Expected 0 for duplicate import, got {dup_count}"
+    dup_result = db.import_jsonl(str(out), merge=True)
+    assert dup_result["count"] == 0, f"Expected 0 for duplicate import, got {dup_result['count']}"
+
+
+def test_export_import_roundtrip_with_files(db: FiligreeDB, tmp_path: Path) -> None:
+    """JSONL round-trip should include file-domain tables through MetaMixin composition."""
+    issue = db.create_issue(title="file-roundtrip")
+    file_rec = db.register_file("src/example.py", language="python")
+    db.conn.execute(
+        "INSERT INTO scan_findings "
+        "(id, file_id, issue_id, scan_source, rule_id, severity, status, message, suggestion, "
+        "scan_run_id, line_start, line_end, seen_count, first_seen, updated_at, last_seen_at, metadata) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            "mix-sf-1",
+            file_rec.id,
+            issue.id,
+            "ruff",
+            "F401",
+            "medium",
+            "open",
+            "unused import",
+            "",
+            "run-mix",
+            1,
+            1,
+            1,
+            "2026-01-01T00:00:00+00:00",
+            "2026-01-01T00:00:00+00:00",
+            "2026-01-01T00:00:00+00:00",
+            "{}",
+        ),
+    )
+    db.conn.execute(
+        "INSERT INTO file_associations (file_id, issue_id, assoc_type, created_at) VALUES (?, ?, ?, ?)",
+        (file_rec.id, issue.id, "bug_in", "2026-01-01T00:00:00+00:00"),
+    )
+    db.conn.execute(
+        "INSERT INTO file_events (file_id, event_type, field, old_value, new_value, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+        (file_rec.id, "file_metadata_update", "language", "", "python", "2026-01-01T00:00:00+00:00"),
+    )
+    db.conn.commit()
+
+    out = tmp_path / "files-export.jsonl"
+    count = db.export_jsonl(str(out))
+    assert count > 0
+
+    fresh = FiligreeDB(tmp_path / "fresh.db", prefix="test")
+    fresh.initialize()
+    import_result = fresh.import_jsonl(str(out))
+    assert import_result["count"] == count
+    assert fresh.conn.execute("SELECT COUNT(*) FROM file_records").fetchone()[0] == 1
+    assert fresh.conn.execute("SELECT COUNT(*) FROM scan_findings").fetchone()[0] == 1
 
 
 # -- PlanningMixin ----------------------------------------------------------

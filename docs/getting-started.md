@@ -67,7 +67,7 @@ For specific integrations:
 
 ```bash
 filigree install --claude-code    # Claude Code only
-filigree install --codex          # OpenAI Codex only
+filigree install --codex          # OpenAI Codex only (updates ~/.codex/config.toml)
 filigree install --hooks          # Claude Code hooks only
 filigree install --skills         # Claude Code skills only
 filigree install --codex-skills   # Codex skills only

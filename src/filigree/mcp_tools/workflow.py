@@ -10,9 +10,11 @@ from mcp.types import TextContent, Tool
 from filigree.mcp_tools.common import _parse_args, _text
 from filigree.types.api import (
     ErrorResponse,
+    InboundTransitionInfo,
     OutboundTransitionInfo,
     PackListItem,
     StateExplanation,
+    TransitionDetail,
     ValidationResult,
     WorkflowGuideResponse,
     WorkflowStatesResponse,
@@ -26,7 +28,6 @@ from filigree.types.inputs import (
     ValidateIssueArgs,
 )
 from filigree.types.workflow import (
-    FieldSchemaInfo,
     StateInfo,
     TransitionInfo,
     TypeInfoResponse,
@@ -203,20 +204,7 @@ async def _handle_get_type_info(arguments: dict[str, Any]) -> list[TextContent]:
     type_tpl = tracker.templates.get_type(args["type"])
     if type_tpl is None:
         return _text(ErrorResponse(error=f"Unknown type: {args['type']}", code="not_found"))
-    fields: list[FieldSchemaInfo] = []
-    for fd in type_tpl.fields_schema:
-        fsi = FieldSchemaInfo(name=fd.name, type=fd.type, description=fd.description)
-        if fd.options:
-            fsi["options"] = list(fd.options)
-        if fd.default is not None:
-            fsi["default"] = fd.default
-        if fd.required_at:
-            fsi["required_at"] = list(fd.required_at)
-        if fd.pattern:
-            fsi["pattern"] = fd.pattern
-        if fd.unique:
-            fsi["unique"] = fd.unique
-        fields.append(fsi)
+    fields = [tracker._field_schema_to_info(fd) for fd in type_tpl.fields_schema]
     return _text(
         TypeInfoResponse(
             type=type_tpl.type,
@@ -262,25 +250,16 @@ async def _handle_get_valid_transitions(arguments: dict[str, Any]) -> list[TextC
     tracker = _get_db()
     try:
         transitions = tracker.get_valid_transitions(args["issue_id"])
-        issue = tracker.get_issue(args["issue_id"])
-        tpl_data = tracker.get_template(issue.type)
-        field_schemas = {f["name"]: f for f in tpl_data["fields_schema"]} if tpl_data else {}
         return _text(
             [
-                {
-                    "to": t.to,
-                    "category": t.category,
-                    "enforcement": t.enforcement,
-                    "requires_fields": list(t.requires_fields),
-                    "missing_fields": [
-                        {
-                            "name": f,
-                            **{k: v for k, v in field_schemas.get(f, {}).items() if k != "name"},
-                        }
-                        for f in t.missing_fields
-                    ],
-                    "ready": t.ready,
-                }
+                TransitionDetail(
+                    to=t.to,
+                    category=t.category,
+                    enforcement=t.enforcement or "",
+                    requires_fields=list(t.requires_fields),
+                    missing_fields=list(t.missing_fields),
+                    ready=t.ready,
+                )
                 for t in transitions
             ]
         )
@@ -312,29 +291,30 @@ async def _handle_get_workflow_guide(arguments: dict[str, Any]) -> list[TextCont
     args = _parse_args(arguments, GetWorkflowGuideArgs)
     tracker = _get_db()
     wf_pack = tracker.templates.get_pack(args["pack"])
+    note: str | None = None
+
+    # Try resolving as a type name if not a direct pack match
     if wf_pack is None:
         type_tpl = tracker.templates.get_type(args["pack"])
         if type_tpl is not None:
             wf_pack = tracker.templates.get_pack(type_tpl.pack)
-            if wf_pack is not None:
-                if wf_pack.guide is None:
-                    return _text(WorkflowGuideResponse(pack=wf_pack.pack, guide=None, message="No guide available for this pack"))
-                return _text(
-                    WorkflowGuideResponse(
-                        pack=wf_pack.pack,
-                        guide=wf_pack.guide,
-                        note=f"Resolved type '{args['pack']}' to pack '{wf_pack.pack}'",
-                    )
-                )
+            note = f"Resolved type '{args['pack']}' to pack '{wf_pack.pack}'" if wf_pack else None
+
+    if wf_pack is None:
         return _text(
             ErrorResponse(
                 error=f"Unknown pack: '{args['pack']}'. Use list_packs to see available packs, or list_types to see types.",
                 code="not_found",
             )
         )
+
     if wf_pack.guide is None:
         return _text(WorkflowGuideResponse(pack=wf_pack.pack, guide=None, message="No guide available for this pack"))
-    return _text(WorkflowGuideResponse(pack=wf_pack.pack, guide=wf_pack.guide))
+
+    result = WorkflowGuideResponse(pack=wf_pack.pack, guide=dict(wf_pack.guide))
+    if note:
+        result["note"] = note
+    return _text(result)
 
 
 async def _handle_explain_state(arguments: dict[str, Any]) -> list[TextContent]:
@@ -353,7 +333,11 @@ async def _handle_explain_state(arguments: dict[str, Any]) -> list[TextContent]:
             break
     if state_def is None:
         return _text(ErrorResponse(error=f"Unknown state '{state_name}' for type '{args['type']}'", code="not_found"))
-    inbound = [{"from": td.from_state, "enforcement": td.enforcement} for td in state_tpl.transitions if td.to_state == state_name]
+    inbound: list[InboundTransitionInfo] = [
+        InboundTransitionInfo(**{"from": td.from_state, "enforcement": td.enforcement})
+        for td in state_tpl.transitions
+        if td.to_state == state_name
+    ]
     outbound: list[OutboundTransitionInfo] = [
         OutboundTransitionInfo(to=td.to_state, enforcement=td.enforcement, requires_fields=list(td.requires_fields))
         for td in state_tpl.transitions

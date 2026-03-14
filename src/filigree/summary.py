@@ -7,13 +7,18 @@ that agents can read in a single file read at session start.
 from __future__ import annotations
 
 import contextlib
+import logging
 import os
 import re
+import sqlite3
 import tempfile
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from filigree.core import FiligreeDB, Issue
+from filigree.core import FiligreeDB
+from filigree.models import Issue
+
+logger = logging.getLogger(__name__)
 
 STALE_THRESHOLD_DAYS = 3
 
@@ -289,6 +294,28 @@ def generate_summary(db: FiligreeDB) -> str:
     else:
         lines.append("- (no recent activity)")
     lines.append("")
+
+    # Observations (read-only — sweep=False to avoid write side effects on a read path)
+    try:
+        obs_stats = db.observation_stats(sweep=False)
+        if obs_stats["count"] > 0:
+            if obs_stats["stale_count"] > 0:
+                stale_n = obs_stats["stale_count"]
+                oldest_h = obs_stats["oldest_hours"]
+                age_str = f"{oldest_h:.0f}h ago" if oldest_h is not None else "unknown"
+                lines.append(f"STALE OBSERVATIONS: {stale_n} observation(s) older than 48 hours (oldest: {age_str})")
+                lines.append(f"  Total pending: {obs_stats['count']}. Run `list_observations` to review.")
+            else:
+                oldest_h = obs_stats["oldest_hours"]
+                age_str = f"{oldest_h:.0f}h ago" if oldest_h is not None else "unknown"
+                lines.append(f"OBSERVATIONS: {obs_stats['count']} pending (oldest: {age_str})")
+                lines.append("  Use `list_observations` to review, `promote_observation` to create issues,")
+                lines.append("  or `dismiss_observation` to clear.")
+            if obs_stats["expiring_soon_count"] > 0:
+                lines.append(f"  ({obs_stats['expiring_soon_count']} expiring within 24h)")
+            lines.append("")
+    except sqlite3.OperationalError:
+        logger.debug("observation stats unavailable in summary", exc_info=True)
 
     return "\n".join(lines)
 

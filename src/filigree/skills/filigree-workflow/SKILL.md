@@ -160,6 +160,73 @@ filigree metrics          # cycle time, lead time, throughput
 filigree events <id>      # audit trail for a specific issue
 ```
 
+## Observations — Ambient Note-Taking
+
+Observations are a scratchpad for things you notice *while doing other work*. They
+are not issues — they're lightweight, expiring notes that let you capture a thought
+without breaking flow.
+
+### When to Observe
+
+Use `observe` (MCP) or `filigree observe` (CLI) whenever you notice something in
+passing that doesn't warrant stopping your current task. The core use case is:
+"I don't have time to investigate this right now, but I want to come back to it."
+Examples:
+
+- A code smell or design concern in a file you're reading
+- A missing test for an edge case you spotted
+- A potential bug that isn't related to your current work
+- A TODO or FIXME that looks stale
+- A dependency that might be outdated
+
+**Always include `file_path` and `line`** when the observation is about specific code.
+This anchors it for whoever triages it later.
+
+**Don't observe things that are clearly issues.** If you're confident something is a
+bug or a needed feature, create an issue directly. Observations are for "hmm, this
+might be worth looking at" — the uncertain middle ground.
+
+### Triage Workflow
+
+Observations expire after 14 days. Triage them before they rot:
+
+1. **At session end:** run `list_observations` and quickly scan what's accumulated
+2. **For each observation, decide:**
+   - **Dismiss** — not actionable, already fixed, or not worth tracking. Use
+     `dismiss_observation` with a brief reason for the audit trail.
+   - **Promote** — deserves to be tracked as an issue. Use `promote_observation`
+     which atomically creates an issue and labels it `from-observation`. Choose
+     the right issue type:
+     - `type='bug'` — something is broken or produces wrong results
+     - `type='task'` (default) — cleanup, improvement, or "this works but is shitty"
+     - `type='feature'` — a missing capability that should exist
+     - `type='requirement'` — a formal requirement to be reviewed, approved, and verified
+   - **Leave it** — still uncertain. Let it age. If it survives a few sessions
+     without being promoted, it's probably a dismiss.
+
+3. **Batch cleanup:** use `batch_dismiss_observations` when several observations
+   have gone stale together.
+
+### Promote vs Dismiss
+
+| Signal | Action |
+|--------|--------|
+| You noticed it twice in separate sessions | Promote |
+| It's in a hot code path or critical module | Promote |
+| It has a clear fix or next step | Promote |
+| It was about code that's since been refactored | Dismiss |
+| It's a style/taste preference, not a defect | Dismiss |
+| You can't articulate what the fix would be | Leave it (or dismiss if > 7 days old) |
+
+### Tracking the Pipeline
+
+Promoted observations get the `from-observation` label. To see the pipeline output:
+
+```bash
+filigree list --label=from-observation     # All promoted observations
+filigree search "from-observation"         # Search with context
+```
+
 ## Quick Decision Guide
 
 | Situation | Action |
@@ -171,3 +238,5 @@ filigree events <id>      # audit trail for a specific issue
 | "This task is bigger than expected" | Create sub-tasks, add deps |
 | "I'm done" | Comment, close with reason, check `ready` |
 | "Something changed while I worked" | `filigree changes --since <timestamp>` |
+| "I noticed something odd in this file" | `observe` with file_path and line — keep working |
+| "These observations are piling up" | `list_observations`, then dismiss or promote each |

@@ -195,6 +195,8 @@ def create_router() -> APIRouter:
             )
         except KeyError:
             return _error_response(f"Issue not found: {issue_id}", "ISSUE_NOT_FOUND", 404)
+        except TypeError as e:
+            return _error_response(str(e), "VALIDATION_ERROR", 400)
         except ValueError as e:
             return _error_response(str(e), "TRANSITION_ERROR", 409)
         return JSONResponse(issue.to_dict())
@@ -274,8 +276,9 @@ def create_router() -> APIRouter:
         offset = max(offset, 0)
         if not q.strip():
             return JSONResponse({"results": [], "total": 0})
-        issues = db.search_issues(q, limit=limit, offset=offset)
-        return JSONResponse({"results": [i.to_dict() for i in issues], "total": len(issues)})
+        total = db.count_search_results(q)
+        page = db.search_issues(q, limit=limit, offset=offset)
+        return JSONResponse({"results": [i.to_dict() for i in page], "total": total})
 
     @router.get("/plan/{milestone_id}")
     async def api_plan(milestone_id: str, db: FiligreeDB = Depends(_get_db)) -> JSONResponse:
@@ -303,14 +306,17 @@ def create_router() -> APIRouter:
         priority = _validate_priority(body.get("priority"))
         if isinstance(priority, JSONResponse):
             return priority
-        updated, errors = db.batch_update(
-            issue_ids,
-            status=body.get("status"),
-            priority=priority,
-            assignee=body.get("assignee"),
-            fields=body.get("fields"),
-            actor=actor,
-        )
+        try:
+            updated, errors = db.batch_update(
+                issue_ids,
+                status=body.get("status"),
+                priority=priority,
+                assignee=body.get("assignee"),
+                fields=body.get("fields"),
+                actor=actor,
+            )
+        except TypeError as e:
+            return _error_response(str(e), "VALIDATION_ERROR", 400)
         return JSONResponse(
             {
                 "updated": [i.to_dict() for i in updated],
@@ -381,10 +387,13 @@ def create_router() -> APIRouter:
                 assignee=body.get("assignee", ""),
                 description=body.get("description", ""),
                 notes=body.get("notes", ""),
+                fields=body.get("fields"),
                 labels=body.get("labels"),
                 deps=body.get("deps"),
                 actor=actor,
             )
+        except TypeError as e:
+            return _error_response(str(e), "VALIDATION_ERROR", 400)
         except ValueError as e:
             return _error_response(str(e), "VALIDATION_ERROR", 400)
         return JSONResponse(issue.to_dict(), status_code=201)
@@ -453,6 +462,8 @@ def create_router() -> APIRouter:
         if isinstance(body, JSONResponse):
             return body
         depends_on = body.get("depends_on", "")
+        if not depends_on or not isinstance(depends_on, str) or not depends_on.strip():
+            return _error_response("depends_on is required and must be a non-empty string", "VALIDATION_ERROR", 400)
         actor, actor_err = _validate_actor(body.get("actor", "dashboard"))
         if actor_err:
             return actor_err

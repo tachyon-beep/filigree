@@ -75,7 +75,7 @@ class TestFileEndpoints:
         assert resp.status_code == 200
         data = resp.json()
         # Top-level keys are separated data layers
-        assert set(data.keys()) == {"file", "associations", "recent_findings", "summary"}
+        assert set(data.keys()) == {"file", "associations", "recent_findings", "summary", "observation_count"}
         assert data["file"]["path"] == "src/main.py"
         assert data["file"]["language"] == "python"
         assert data["associations"] == []
@@ -353,14 +353,14 @@ class TestPaginatedEndpoints:
 
 
 class TestScanResultsEndpointEnhancements:
-    """Tests for enhanced scan results endpoint (202, mark_unseen, new_finding_ids)."""
+    """Tests for enhanced scan results endpoint (mark_unseen, new_finding_ids)."""
 
-    async def test_empty_findings_returns_202(self, client: AsyncClient) -> None:
+    async def test_empty_findings_returns_200(self, client: AsyncClient) -> None:
         resp = await client.post(
             "/api/v1/scan-results",
             json={"scan_source": "ruff", "findings": []},
         )
-        assert resp.status_code == 202
+        assert resp.status_code == 200
         data = resp.json()
         assert data["new_finding_ids"] == []
 
@@ -505,11 +505,11 @@ class TestHasSeverityEndpoint:
         assert data["total"] == 1
         assert data["results"][0]["path"] == "critical.py"
 
-    async def test_has_severity_invalid_ignored(self, client: AsyncClient, api_db: FiligreeDB) -> None:
+    async def test_has_severity_invalid_returns_400(self, client: AsyncClient, api_db: FiligreeDB) -> None:
         api_db.register_file("a.py")
         resp = await client.get("/api/files?has_severity=bogus")
-        assert resp.status_code == 200
-        assert resp.json()["total"] == 1  # invalid severity = no filter applied
+        assert resp.status_code == 400
+        assert resp.json()["error"]["code"] == "VALIDATION_ERROR"
 
 
 class TestTimelineEndpoint:
@@ -779,3 +779,36 @@ class TestFileStatsEndpoint:
         data = resp.json()
         for key in ("critical", "high", "medium", "low", "info", "total_findings", "open_findings", "files_with_findings"):
             assert key in data, f"Missing key: {key}"
+
+
+class TestObservationStatsEndpoint:
+    """Tests for GET /api/observations/stats."""
+
+    async def test_stats_empty(self, client: AsyncClient) -> None:
+        resp = await client.get("/api/observations/stats")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["count"] == 0
+        assert data["stale_count"] == 0
+        assert data["expiring_soon_count"] == 0
+
+    async def test_stats_with_observations(self, client: AsyncClient, api_db: FiligreeDB) -> None:
+        api_db.create_observation("test obs 1")
+        api_db.create_observation("test obs 2", file_path="src/foo.py")
+        resp = await client.get("/api/observations/stats")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["count"] == 2
+        for key in ("count", "stale_count", "oldest_hours", "expiring_soon_count"):
+            assert key in data, f"Missing key: {key}"
+
+    async def test_stats_pre_v7_database_returns_503(self, client: AsyncClient, api_db: FiligreeDB) -> None:
+        """Pre-v7 databases (missing observations table) return 503 instead of fabricated zeros."""
+        import sqlite3
+        from unittest.mock import patch
+
+        with patch.object(api_db, "observation_stats", side_effect=sqlite3.OperationalError("no such table: observations")):
+            resp = await client.get("/api/observations/stats")
+        assert resp.status_code == 503
+        data = resp.json()
+        assert data["status"] == "unavailable"

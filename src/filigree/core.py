@@ -1,13 +1,9 @@
-"""Core database operations for the issue tracker.
+"""Composition point for the Filigree issue tracker database.
 
-Single source of truth for all SQLite operations. Both CLI and MCP server
-import from this module. No daemon, no sync — just direct SQLite with WAL mode.
-
-Covers issue CRUD, dependencies, events, comments, labels, workflow templates,
-file records, scan findings, file associations, and file event timelines.
-
-Convention-based discovery: each project has a `.filigree/` directory containing
-`filigree.db` (SQLite) and `config.json` (project prefix, version).
+Assembles DB mixins (db_files, db_issues, db_events, db_workflow, db_meta,
+db_planning, db_observations) into the ``FiligreeDB`` class. Also provides
+convention-based ``.filigree/`` directory discovery, configuration I/O,
+template seeding, and shared file helpers.
 """
 
 from __future__ import annotations
@@ -20,11 +16,10 @@ import shutil
 import sqlite3
 import sys
 import uuid as _uuid
-from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any
 
-from filigree.db_base import StatusCategory, _now_iso
+from filigree.db_base import _now_iso
 from filigree.db_events import EventsMixin
 from filigree.db_files import (
     VALID_ASSOC_TYPES,
@@ -35,16 +30,21 @@ from filigree.db_files import (
 )
 from filigree.db_issues import IssuesMixin
 from filigree.db_meta import MetaMixin
+from filigree.db_observations import ObservationsMixin
 from filigree.db_planning import PlanningMixin
 from filigree.db_schema import CURRENT_SCHEMA_VERSION, SCHEMA_SQL
 from filigree.db_workflow import WorkflowMixin
+from filigree.models import _EMPTY_TS, FileRecord, Issue, ScanFinding
 from filigree.types.core import (
+    AssocType,
     FileRecordDict,
+    FindingStatus,
     ISOTimestamp,
     IssueDict,
     PaginatedResult,
     ProjectConfig,
     ScanFindingDict,
+    Severity,
 )
 
 if TYPE_CHECKING:
@@ -52,30 +52,26 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Re-exported names from db_files (canonical definitions moved during mixin split)
-# and from types.core (TypedDict re-exports for backward compat — see line 40)
+# Re-exported names from db_files, models, and types.core for backward compatibility.
 __all__ = [
     "VALID_ASSOC_TYPES",
     "VALID_FINDING_STATUSES",
     "VALID_SEVERITIES",
+    "_EMPTY_TS",
+    "AssocType",
+    "FileRecord",
     "FileRecordDict",
+    "FindingStatus",
     "ISOTimestamp",
+    "Issue",
     "IssueDict",
     "PaginatedResult",
     "ProjectConfig",
+    "ScanFinding",
     "ScanFindingDict",
+    "Severity",
     "_normalize_scan_path",
 ]
-
-# ---------------------------------------------------------------------------
-# Constrained-string Literal types
-# ---------------------------------------------------------------------------
-
-Severity = Literal["critical", "high", "medium", "low", "info"]
-FindingStatus = Literal["open", "acknowledged", "fixed", "false_positive", "unseen_in_latest"]
-
-
-# ProjectConfig and PaginatedResult moved to filigree.types.core (re-exported above)
 
 
 # ---------------------------------------------------------------------------
@@ -109,7 +105,16 @@ def read_config(filigree_dir: Path) -> ProjectConfig:
     if not config_path.exists():
         return defaults
     try:
-        result: ProjectConfig = json.loads(config_path.read_text())
+        raw: Any = json.loads(config_path.read_text())
+        if not isinstance(raw, dict):
+            logger.warning("Config %s is not a JSON object, using defaults", config_path)
+            return defaults
+        result: ProjectConfig = raw  # type: ignore[assignment]
+        # Ensure required keys have defaults (config.json may predate these fields)
+        if "prefix" not in result:
+            result["prefix"] = defaults["prefix"]
+        if "version" not in result:
+            result["version"] = defaults["version"]
         return result
     except (json.JSONDecodeError, OSError) as exc:
         logger.warning("Failed to read %s, using defaults: %s", config_path, exc)
@@ -119,19 +124,21 @@ def read_config(filigree_dir: Path) -> ProjectConfig:
 def write_config(filigree_dir: Path, config: dict[str, Any] | ProjectConfig) -> None:
     """Write .filigree/config.json."""
     config_path = filigree_dir / CONFIG_FILENAME
-    config_path.write_text(json.dumps(config, indent=2) + "\n")
+    write_atomic(config_path, json.dumps(config, indent=2) + "\n")
 
 
 VALID_MODES: frozenset[str] = frozenset({"ethereal", "server"})
 
 
 def get_mode(filigree_dir: Path) -> str:
-    """Return the installation mode for a project. Defaults to 'ethereal'."""
+    """Return the installation mode for a project. Defaults to 'ethereal'.
+
+    Raises ValueError if the config contains an explicit but invalid mode string.
+    """
     config = read_config(filigree_dir)
     mode: str = config.get("mode", "ethereal")
     if mode not in VALID_MODES:
-        logger.warning("Unknown mode '%s' in config, falling back to 'ethereal'", mode)
-        return "ethereal"
+        raise ValueError(f"Unknown mode {mode!r} in config. Valid modes: {sorted(VALID_MODES)}")
     return mode
 
 
@@ -204,130 +211,11 @@ def _seed_builtin_packs(conn: sqlite3.Connection, now: str) -> int:
 
 
 # ---------------------------------------------------------------------------
-# Data classes
-# ---------------------------------------------------------------------------
-
-# ISOTimestamp moved to filigree.types.core (re-exported above)
-_EMPTY_TS: ISOTimestamp = ISOTimestamp("")
-
-
-@dataclass
-class Issue:
-    id: str
-    title: str
-    status: str = "open"
-    priority: int = 2
-    type: str = "task"
-    parent_id: str | None = None
-    assignee: str = ""
-    created_at: ISOTimestamp = _EMPTY_TS
-    updated_at: ISOTimestamp = _EMPTY_TS
-    closed_at: ISOTimestamp | None = None
-    description: str = ""
-    notes: str = ""
-    fields: dict[str, Any] = field(default_factory=dict)
-    # Computed (not stored directly)
-    labels: list[str] = field(default_factory=list)
-    blocks: list[str] = field(default_factory=list)
-    blocked_by: list[str] = field(default_factory=list)
-    is_ready: bool = False
-    children: list[str] = field(default_factory=list)
-    status_category: StatusCategory = "open"
-
-    def to_dict(self) -> IssueDict:
-        return IssueDict(
-            id=self.id,
-            title=self.title,
-            status=self.status,
-            status_category=self.status_category,
-            priority=self.priority,
-            type=self.type,
-            parent_id=self.parent_id,
-            assignee=self.assignee,
-            created_at=self.created_at,
-            updated_at=self.updated_at,
-            closed_at=self.closed_at,
-            description=self.description,
-            notes=self.notes,
-            fields=self.fields,
-            labels=self.labels,
-            blocks=self.blocks,
-            blocked_by=self.blocked_by,
-            is_ready=self.is_ready,
-            children=self.children,
-        )
-
-
-@dataclass
-class FileRecord:
-    id: str
-    path: str
-    language: str = ""
-    file_type: str = ""
-    first_seen: ISOTimestamp = _EMPTY_TS
-    updated_at: ISOTimestamp = _EMPTY_TS
-    metadata: dict[str, Any] = field(default_factory=dict)
-
-    def to_dict(self) -> FileRecordDict:
-        return FileRecordDict(
-            id=self.id,
-            path=self.path,
-            language=self.language,
-            file_type=self.file_type,
-            first_seen=self.first_seen,
-            updated_at=self.updated_at,
-            metadata=self.metadata,
-        )
-
-
-@dataclass
-class ScanFinding:
-    id: str
-    file_id: str
-    severity: Severity = "info"
-    status: str = "open"
-    scan_source: str = ""
-    rule_id: str = ""
-    message: str = ""
-    suggestion: str = ""
-    scan_run_id: str = ""
-    line_start: int | None = None
-    line_end: int | None = None
-    issue_id: str | None = None
-    seen_count: int = 1
-    first_seen: ISOTimestamp = _EMPTY_TS
-    updated_at: ISOTimestamp = _EMPTY_TS
-    last_seen_at: ISOTimestamp | None = None
-    metadata: dict[str, Any] = field(default_factory=dict)
-
-    def to_dict(self) -> ScanFindingDict:
-        return ScanFindingDict(
-            id=self.id,
-            file_id=self.file_id,
-            severity=self.severity,
-            status=self.status,
-            scan_source=self.scan_source,
-            rule_id=self.rule_id,
-            message=self.message,
-            suggestion=self.suggestion,
-            scan_run_id=self.scan_run_id,
-            line_start=self.line_start,
-            line_end=self.line_end,
-            issue_id=self.issue_id,
-            seen_count=self.seen_count,
-            first_seen=self.first_seen,
-            updated_at=self.updated_at,
-            last_seen_at=self.last_seen_at,
-            metadata=self.metadata,
-        )
-
-
-# ---------------------------------------------------------------------------
 # FiligreeDB — the core
 # ---------------------------------------------------------------------------
 
 
-class FiligreeDB(FilesMixin, IssuesMixin, EventsMixin, WorkflowMixin, MetaMixin, PlanningMixin):
+class FiligreeDB(FilesMixin, IssuesMixin, EventsMixin, WorkflowMixin, MetaMixin, PlanningMixin, ObservationsMixin):
     """Direct SQLite operations. No daemon, no sync. Importable by CLI and MCP."""
 
     def __init__(
@@ -351,23 +239,42 @@ class FiligreeDB(FilesMixin, IssuesMixin, EventsMixin, WorkflowMixin, MetaMixin,
         self._template_registry: TemplateRegistry | None = template_registry
 
     @classmethod
-    def from_project(cls, project_path: Path | None = None) -> FiligreeDB:
-        """Create a FiligreeDB by discovering .filigree/ from project_path (or cwd)."""
-        filigree_dir = find_filigree_root(project_path)
+    def from_filigree_dir(cls, filigree_dir: Path, *, check_same_thread: bool = True) -> FiligreeDB:
+        """Create a FiligreeDB from an existing ``.filigree/`` directory."""
         config = read_config(filigree_dir)
         db = cls(
             filigree_dir / DB_FILENAME,
             prefix=config.get("prefix", "filigree"),
             enabled_packs=config.get("enabled_packs"),
+            check_same_thread=check_same_thread,
         )
         db.initialize()
         return db
 
+    @classmethod
+    def from_project(cls, project_path: Path | None = None) -> FiligreeDB:
+        """Create a FiligreeDB by discovering .filigree/ from project_path (or cwd)."""
+        filigree_dir = find_filigree_root(project_path)
+        return cls.from_filigree_dir(filigree_dir)
+
     def __enter__(self) -> FiligreeDB:
         return self
 
-    def __exit__(self, *exc: object) -> None:
-        self.close()
+    def __exit__(self, exc_type: type[BaseException] | None, *exc: object) -> None:
+        if exc_type is not None and self._conn is not None:
+            try:
+                self._conn.rollback()
+            except Exception:
+                logger.error("Rollback failed during __exit__", exc_info=True)
+            # After rollback, skip the commit in close() — the rolled-back
+            # transaction's changes are lost. Skipping the commit avoids
+            # accidentally committing any stray implicit transaction.
+            try:
+                self._close_no_commit()
+            except Exception:
+                logger.error("Close failed during __exit__", exc_info=True)
+        else:
+            self.close()
 
     @property
     def conn(self) -> sqlite3.Connection:
@@ -396,6 +303,12 @@ class FiligreeDB(FilesMixin, IssuesMixin, EventsMixin, WorkflowMixin, MetaMixin,
             # Fresh database — create everything from scratch
             self.conn.executescript(SCHEMA_SQL)
             self.conn.execute(f"PRAGMA user_version = {CURRENT_SCHEMA_VERSION}")
+        elif current_version > CURRENT_SCHEMA_VERSION:
+            msg = (
+                f"Database schema v{current_version} is newer than this version of "
+                f"filigree (expects v{CURRENT_SCHEMA_VERSION}). Downgrade is not supported."
+            )
+            raise ValueError(msg)
         elif current_version < CURRENT_SCHEMA_VERSION:
             # Existing database — apply pending migrations
             from filigree.migrations import apply_pending_migrations
@@ -414,6 +327,10 @@ class FiligreeDB(FilesMixin, IssuesMixin, EventsMixin, WorkflowMixin, MetaMixin,
         release with ``version == "Future"`` already exists.
         """
         if "release" not in self.enabled_packs:
+            return
+
+        if self.templates.get_type("release") is None:
+            logger.warning("Release pack enabled but 'release' type not registered — skipping Future release seed")
             return
 
         existing = self.conn.execute(
@@ -439,23 +356,58 @@ class FiligreeDB(FilesMixin, IssuesMixin, EventsMixin, WorkflowMixin, MetaMixin,
         return result
 
     def reconnect(self, *, check_same_thread: bool = True) -> None:
-        """Close the current connection and reopen with a new ``check_same_thread`` setting.
+        """Close the current connection so the next access reopens it with a new ``check_same_thread`` setting.
+
+        The reconnection is lazy — it happens on the next access to the
+        ``self.conn`` property, which re-applies PRAGMAs at that point.
+
+        If the connection has an in-flight transaction, it is rolled back to
+        avoid persisting partial state.  Callers should ideally avoid calling
+        this with an active transaction, as uncommitted work will be lost.
 
         Useful in tests where a DB created with the default
         ``check_same_thread=True`` needs to be shared across threads
         (e.g. async FastAPI test clients).
         """
+        try:
+            if self._conn is not None:
+                try:
+                    if self._conn.in_transaction:
+                        logger.warning("reconnect: rolling back in-flight transaction")
+                        self._conn.rollback()
+                finally:
+                    try:
+                        self._conn.close()
+                    finally:
+                        self._conn = None
+        finally:
+            self._check_same_thread = check_same_thread
+
+    def close(self) -> None:
+        """Close the database connection.
+
+        If an uncommitted transaction is active, it is rolled back with a
+        warning — all mixin methods commit their own transactions, so this
+        indicates a bug rather than normal operation.  When no transaction
+        is active, a final commit is issued (a no-op in practice).
+        """
         if self._conn is not None:
             try:
-                self._conn.commit()
+                if self._conn.in_transaction:
+                    logger.warning("close: rolling back in-flight transaction")
+                    self._conn.rollback()
+                else:
+                    self._conn.commit()
             finally:
                 try:
                     self._conn.close()
                 finally:
                     self._conn = None
-        self._check_same_thread = check_same_thread
 
-    def close(self) -> None:
+    def _close_no_commit(self) -> None:
+        """Close the connection without committing (used after rollback)."""
         if self._conn is not None:
-            self._conn.close()
-            self._conn = None
+            try:
+                self._conn.close()
+            finally:
+                self._conn = None

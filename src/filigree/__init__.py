@@ -7,6 +7,7 @@ try:
 except PackageNotFoundError:
     __version__ = "0.0.0-dev"
 
-from filigree.core import FiligreeDB, Issue
+from filigree.core import FiligreeDB
+from filigree.models import Issue
 
 __all__ = ["FiligreeDB", "Issue", "__version__"]

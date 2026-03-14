@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Any
+from typing import Any, cast
 
 from mcp.types import TextContent, Tool
 
@@ -13,6 +13,8 @@ from filigree.types.inputs import (
     AddDependencyArgs,
     CreatePlanArgs,
     GetPlanArgs,
+    MilestoneInput,
+    PhaseInput,
     RemoveDependencyArgs,
 )
 
@@ -246,8 +248,8 @@ async def _handle_create_plan(arguments: dict[str, Any]) -> list[TextContent]:
     tracker = _get_db()
     try:
         plan = tracker.create_plan(
-            dict(milestone),
-            [dict(p) for p in args["phases"]],
+            cast(MilestoneInput, dict(milestone)),
+            [cast(PhaseInput, dict(p)) for p in args["phases"]],
             actor=actor,
         )
         _refresh_summary()
