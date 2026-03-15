@@ -107,9 +107,7 @@ class MetaMixin(DBMixinProtocol):
         auto_ns = WorkflowMixin.RESERVED_NAMESPACES_AUTO
         virtual_ns = WorkflowMixin.RESERVED_NAMESPACES_VIRTUAL
 
-        rows = self.conn.execute(
-            "SELECT label, COUNT(*) as cnt FROM labels GROUP BY label ORDER BY label"
-        ).fetchall()
+        rows = self.conn.execute("SELECT label, COUNT(*) as cnt FROM labels GROUP BY label ORDER BY label").fetchall()
 
         namespaces: dict[str, dict[str, Any]] = {}
         for row in rows:
@@ -175,22 +173,16 @@ class MetaMixin(DBMixinProtocol):
             done_states,
         ).fetchone()["cnt"]
         counts.append({"label": "has:blockers", "count": cnt})
-        cnt = self.conn.execute(
-            "SELECT COUNT(DISTINCT parent_id) as cnt FROM issues WHERE parent_id IS NOT NULL"
-        ).fetchone()["cnt"]
+        cnt = self.conn.execute("SELECT COUNT(DISTINCT parent_id) as cnt FROM issues WHERE parent_id IS NOT NULL").fetchone()["cnt"]
         counts.append({"label": "has:children", "count": cnt})
         cnt = self.conn.execute(
             "SELECT COUNT(DISTINCT issue_id) as cnt FROM scan_findings "
             "WHERE issue_id IS NOT NULL AND status NOT IN ('fixed', 'false_positive')"
         ).fetchone()["cnt"]
         counts.append({"label": "has:findings", "count": cnt})
-        cnt = self.conn.execute(
-            "SELECT COUNT(DISTINCT issue_id) as cnt FROM file_associations"
-        ).fetchone()["cnt"]
+        cnt = self.conn.execute("SELECT COUNT(DISTINCT issue_id) as cnt FROM file_associations").fetchone()["cnt"]
         counts.append({"label": "has:files", "count": cnt})
-        cnt = self.conn.execute(
-            "SELECT COUNT(DISTINCT issue_id) as cnt FROM comments"
-        ).fetchone()["cnt"]
+        cnt = self.conn.execute("SELECT COUNT(DISTINCT issue_id) as cnt FROM comments").fetchone()["cnt"]
         counts.append({"label": "has:comments", "count": cnt})
         return counts
 
@@ -238,8 +230,16 @@ class MetaMixin(DBMixinProtocol):
                     "writable": True,
                     "values": ["added", "changed", "fixed", "removed", "deprecated"],
                 },
-                "wait": {"description": "External blocker type", "writable": True, "examples": ["design", "upstream", "vendor", "decision"]},
-                "breaking": {"description": "Breaking change marker", "writable": True, "examples": ["api", "schema", "config"]},
+                "wait": {
+                    "description": "External blocker type",
+                    "writable": True,
+                    "examples": ["design", "upstream", "vendor", "decision"],
+                },
+                "breaking": {
+                    "description": "Breaking change marker",
+                    "writable": True,
+                    "examples": ["api", "schema", "config"],
+                },
                 "review": {
                     "description": "Review workflow state (mutually exclusive)",
                     "writable": True,
