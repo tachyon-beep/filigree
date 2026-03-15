@@ -5,11 +5,12 @@ the filigree core package. The API (POST /api/v1/scan-results) is the
 first-class product; these utilities are documentation-by-code.
 
 Functions:
-    find_files      — Walk directory tree collecting source files
-    load_context    — Load repo context files (CLAUDE.md, ARCHITECTURE.md)
-    parse_findings  — Parse structured markdown output into finding dicts
-    severity_map    — Map scanner-native severities to filigree severities
-    post_to_api     — POST findings to filigree scan API with error handling
+    find_files              — Walk directory tree collecting source files
+    load_context            — Load repo context files (CLAUDE.md, ARCHITECTURE.md)
+    parse_findings          — Parse structured markdown output into finding dicts
+    severity_map            — Map scanner-native severities to filigree severities
+    post_to_api             — POST findings to filigree scan API with error handling
+    run_scanner_pipeline    — End-to-end CLI pipeline (discovery → execute → parse → ingest)
 """
 
 from __future__ import annotations
@@ -19,6 +20,7 @@ import json
 import logging
 import os
 import re
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -311,7 +313,7 @@ def post_to_api(
     scan_source: str,
     scan_run_id: str,
     findings: list[dict[str, Any]],
-    create_issues: bool = False,
+    create_observations: bool = False,
 ) -> bool:
     """POST findings to filigree's scan API.
 
@@ -320,7 +322,7 @@ def post_to_api(
         scan_source: Scanner identifier (e.g., "codex", "claude").
         scan_run_id: Unique run identifier.
         findings: List of finding dicts.
-        create_issues: If True, auto-promote findings to candidate bug issues.
+        create_observations: If True, auto-promote findings to observations for triage.
 
     Returns:
         True on success, False on failure.
@@ -333,7 +335,7 @@ def post_to_api(
         "scan_source": scan_source,
         "scan_run_id": scan_run_id,
         "findings": findings,
-        "create_issues": create_issues,
+        "create_observations": create_observations,
     }
     data = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(  # noqa: S310
@@ -388,3 +390,321 @@ def estimate_tokens(files: list[Path], context_overhead: int = 2000) -> int:
         except OSError:
             total += context_overhead
     return total
+
+
+# ── Shared pipeline ────────────────────────────────────────────────────
+
+
+PROMPT_TEMPLATE = """\
+You are a static analysis agent doing a deep bug audit.
+Target file: {file_path}
+
+{context}
+
+Instructions:
+- Analyse the target file for real, concrete bugs.
+- You may read any repo file to verify integration behaviour.
+- Report bugs only if the primary fix belongs in the target file.
+- If you find multiple distinct bugs, separate them with a line containing only '---'.
+- If you find no credible bug, output exactly:
+  "No concrete bug found in {file_path}"
+- Cite file paths and line numbers in evidence.
+
+Bug categories to check (use these exact rule_id values):
+1. **logic-error** — off-by-one, wrong comparison, unreachable branches
+2. **error-handling** — bare except, swallowed exceptions, missing cleanup
+3. **resource-leak** — unclosed files/connections, missing context managers
+4. **race-condition** — shared mutable state in async code, missing locks
+5. **type-error** — wrong return types, schema mismatches
+6. **injection** — unsanitised inputs, missing parameterisation, XSS
+7. **performance** — O(n²) where avoidable, blocking I/O in async
+8. **api-misuse** — wrong argument order, deprecated calls, silent failures
+9. **other** — anything that doesn't fit the above
+
+For each bug found, use this format:
+
+## Summary
+<one-line description>
+
+## Severity
+- Severity: <critical|major|minor|trivial>
+- Priority: <P0|P1|P2|P3>
+
+## Evidence
+<file:line citations, code snippets>
+
+## Root Cause Hypothesis
+<why the bug exists>
+
+## Suggested Fix
+<concrete fix>
+"""
+
+
+def _display_path(path: Path, base: Path) -> Path:
+    """Best-effort relative path for display; falls back to absolute."""
+    try:
+        return path.relative_to(base)
+    except ValueError:
+        return path
+
+
+def _resolve_target_file(*, repo_root: Path, root_dir: Path, file_arg: str) -> Path:
+    """Resolve a target file for single-file scan mode."""
+    raw = Path(file_arg)
+    target = raw.resolve() if raw.is_absolute() else (repo_root / raw).resolve()
+    if not target.is_file():
+        msg = f"target file does not exist: {target}"
+        raise ValueError(msg)
+    try:
+        target.relative_to(root_dir)
+    except ValueError:
+        msg = f"target file is outside scan root: {target} (root: {root_dir})"
+        raise ValueError(msg) from None
+    return target
+
+
+async def _analyse_files(
+    *,
+    files: list[Path],
+    output_dir: Path,
+    root_dir: Path,
+    repo_root: Path,
+    model: str | None,
+    batch_size: int,
+    context: str,
+    skip_existing: bool,
+    timeout: int,
+    api_url: str,
+    no_ingest: bool,
+    scan_run_id: str,
+    scan_source: str,
+    executor: Any,
+    prompt_template: str,
+) -> dict[str, int]:
+    """Run analysis on all files in batches. Returns summary stats."""
+    import asyncio
+    import re
+    from collections import Counter
+
+    failed: list[tuple[Path, Exception]] = []
+    report_paths: list[Path] = []
+    done = 0
+    total = len(files)
+    api_successes = 0
+    api_failures = 0
+
+    for batch_start in range(0, total, batch_size):
+        batch = files[batch_start : batch_start + batch_size]
+        tasks: list[tuple[Path, Path, asyncio.Task[None]]] = []
+
+        for fpath in batch:
+            rel = fpath.relative_to(root_dir)
+            out = (output_dir / rel).with_suffix(rel.suffix + ".md")
+
+            if skip_existing and out.exists():
+                done += 1
+                report_paths.append(out)
+                print(f"  [skip] {_display_path(fpath, repo_root)}", file=sys.stderr)
+                continue
+
+            prompt = prompt_template.format(file_path=fpath, context=context)
+            task = asyncio.create_task(
+                executor(
+                    prompt=prompt,
+                    output_path=out,
+                    model=model,
+                    repo_root=repo_root,
+                    timeout=timeout,
+                )
+            )
+            tasks.append((fpath, out, task))
+
+        results = await asyncio.gather(*(t for _, _, t in tasks), return_exceptions=True)
+        for (fpath, out, _), result in zip(tasks, results, strict=True):
+            done += 1
+            if isinstance(result, Exception):
+                failed.append((fpath, result))
+                print(f"  FAIL {_display_path(fpath, repo_root)}: {result}", file=sys.stderr)
+            else:
+                report_paths.append(out)
+                print(f"  [{done}/{total}] {_display_path(fpath, repo_root)}", file=sys.stderr)
+
+                if not no_ingest and out.exists():
+                    text = out.read_text(encoding="utf-8")
+                    rel_path = str(_display_path(fpath, repo_root))
+                    findings = parse_findings(text, file_path=rel_path)
+                    if findings:
+                        ok = post_to_api(
+                            api_url=api_url,
+                            scan_source=scan_source,
+                            scan_run_id=scan_run_id,
+                            findings=findings,
+                            create_observations=True,
+                        )
+                        if ok:
+                            api_successes += len(findings)
+                        else:
+                            api_failures += len(findings)
+
+    stats: Counter[str] = Counter()
+    for md in report_paths:
+        if not md.exists():
+            continue
+        text = md.read_text(encoding="utf-8")
+        if "No concrete bug found" in text:
+            stats["clean"] += 1
+        else:
+            priorities = re.findall(r"Priority:\s*(P\d)", text, re.IGNORECASE)
+            if priorities:
+                for pri in priorities:
+                    stats[pri.upper()] += 1
+            else:
+                stats["unknown"] += 1
+
+    stats["failed"] = len(failed)
+    stats["api_posted"] = api_successes
+    stats["api_failed"] = api_failures
+    return dict(stats)
+
+
+async def run_scanner_pipeline(
+    *,
+    executor: Any,
+    scan_source: str,
+    description: str = "",
+    cli_tool: str = "",
+    default_model: str | None = None,
+    default_batch_size: int = 10,
+    prompt_template: str = "",
+) -> int:
+    """End-to-end CLI pipeline: parse args → discover files → execute → ingest.
+
+    Args:
+        executor: Async callable with signature
+            ``(prompt, output_path, model, repo_root, timeout) -> None``
+        scan_source: Scanner identifier for API ingestion (e.g. "codex").
+        description: CLI description text.
+        cli_tool: CLI tool name to check on PATH (e.g. "codex", "claude").
+        default_model: Default model arg (None = no --model flag).
+        default_batch_size: Default concurrency.
+        prompt_template: Prompt template string (uses PROMPT_TEMPLATE if empty).
+
+    Returns:
+        Exit code (0 = success, 1 = failure).
+    """
+    import argparse
+    import asyncio
+    import shutil
+    from datetime import UTC, datetime
+
+    template = prompt_template or PROMPT_TEMPLATE
+
+    parser = argparse.ArgumentParser(description=description or f"Per-file bug hunt ({scan_source}).")
+    parser.add_argument("--root", default="src/filigree", help="Directory to scan")
+    parser.add_argument("--file", default=None, help="Scan exactly one file")
+    parser.add_argument("--output-dir", default="docs/bugs/generated", help="Report output dir")
+    parser.add_argument("--batch-size", type=int, default=default_batch_size, help=f"Concurrent runs (default: {default_batch_size})")
+    if default_model is not None:
+        parser.add_argument("--model", default=default_model, help=f"Model override (default: {default_model})")
+    else:
+        parser.add_argument("--model", default=None, help="Model override")
+    parser.add_argument("--file-type", choices=["python", "all"], default="python", help="File filter")
+    parser.add_argument("--skip-existing", action="store_true", help="Skip files with existing reports")
+    parser.add_argument("--timeout", type=int, default=300, help="Per-file timeout in seconds (default: 300)")
+    parser.add_argument("--dry-run", action="store_true", help="List files with count and token estimate")
+    parser.add_argument("--max-files", type=int, default=50, help="Maximum files to scan (default: 50)")
+    parser.add_argument("--api-url", default="http://localhost:8377", help="Filigree dashboard URL")
+    parser.add_argument("--no-ingest", action="store_true", help="Skip API POST (markdown-only mode)")
+    parser.add_argument("--scan-run-id", default=None, help="External scan run ID")
+
+    args = parser.parse_args()
+
+    if args.batch_size < 1:
+        print("Error: --batch-size must be at least 1", file=sys.stderr)
+        return 1
+
+    repo_root = Path(__file__).resolve().parents[1]
+    root_dir = (repo_root / args.root).resolve()
+    output_dir = (repo_root / args.output_dir).resolve()
+
+    if not root_dir.is_dir():
+        print(f"Error: scan root is not a directory: {root_dir}", file=sys.stderr)
+        return 1
+
+    if args.file:
+        try:
+            files = [_resolve_target_file(repo_root=repo_root, root_dir=root_dir, file_arg=args.file)]
+        except ValueError as e:
+            print(f"Error: {e}", file=sys.stderr)
+            return 1
+    else:
+        files = find_files(
+            root_dir,
+            file_type=args.file_type,
+            exclude_dirs={output_dir},
+            max_files=args.max_files,
+        )
+    if not files:
+        print(f"No files found under {root_dir}", file=sys.stderr)
+        return 1
+
+    if args.dry_run:
+        tokens = estimate_tokens(files)
+        print(f"Would analyse {len(files)} files (~{tokens:,} estimated tokens):")
+        for f in files:
+            print(f"  {_display_path(f, repo_root)}")
+        return 0
+
+    if cli_tool and shutil.which(cli_tool) is None:
+        print(f"Error: `{cli_tool}` not found on PATH", file=sys.stderr)
+        return 1
+
+    context = load_context(repo_root)
+    scan_run_id = args.scan_run_id or f"{scan_source}-{datetime.now(UTC).isoformat()}"
+
+    model_display = f", model={args.model}" if args.model else ""
+    print(f"Analysing {len(files)} files (batch={args.batch_size}{model_display}) ...", file=sys.stderr)
+    if not args.no_ingest:
+        print(f"  API: {args.api_url}  run_id: {scan_run_id}", file=sys.stderr)
+
+    stats = await _analyse_files(
+        files=files,
+        output_dir=output_dir,
+        root_dir=root_dir,
+        repo_root=repo_root,
+        model=args.model,
+        batch_size=args.batch_size,
+        context=context,
+        skip_existing=args.skip_existing,
+        timeout=args.timeout,
+        api_url=args.api_url,
+        no_ingest=args.no_ingest,
+        scan_run_id=scan_run_id,
+        scan_source=scan_source,
+        executor=executor,
+        prompt_template=template,
+    )
+
+    print("\n" + "=" * 50)
+    print(f"Bug Hunt Summary ({scan_source})")
+    print("=" * 50)
+    defects = sum(v for k, v in stats.items() if k not in ("clean", "failed", "unknown", "api_posted", "api_failed"))
+    print(f"  Defects found:  {defects}")
+    for pri in ("P0", "P1", "P2", "P3"):
+        c = stats.get(pri, 0)
+        if c:
+            print(f"    {pri}: {c}")
+    print(f"  Clean files:    {stats.get('clean', 0)}")
+    if stats.get("failed", 0):
+        print(f"  Failed:         {stats['failed']}")
+    if not args.no_ingest:
+        print(f"  API posted:     {stats.get('api_posted', 0)}")
+        if stats.get("api_failed", 0):
+            print(f"  API failures:   {stats['api_failed']}")
+    print("=" * 50)
+
+    if not args.no_ingest and stats.get("api_posted", 0) == 0 and stats.get("api_failed", 0) > 0:
+        return 1
+
+    return 0

@@ -1,0 +1,187 @@
+"""ScansMixin — scan run lifecycle tracking.
+
+Owns the scan_runs table: CRUD, status transitions, cooldown checks, log tail.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import os
+from pathlib import Path
+from typing import Any
+
+from filigree.db_base import DBMixinProtocol, _now_iso
+from filigree.types.files import ScanRunDict, ScanRunStatusDict
+
+logger = logging.getLogger(__name__)
+
+SCAN_COOLDOWN_SECONDS = 30
+
+# Valid transitions: from_status -> set of valid to_statuses
+_VALID_TRANSITIONS: dict[str, set[str]] = {
+    "pending": {"running", "failed"},
+    "running": {"completed", "failed", "timeout"},
+}
+
+
+class ScansMixin(DBMixinProtocol):
+    """Scan run lifecycle — create, update status, check cooldown, read logs."""
+
+    def create_scan_run(
+        self,
+        *,
+        scan_run_id: str,
+        scanner_name: str,
+        scan_source: str,
+        file_paths: list[str],
+        file_ids: list[str],
+        pid: int | None = None,
+        api_url: str = "",
+        log_path: str = "",
+    ) -> ScanRunDict:
+        now = _now_iso()
+        existing = self.conn.execute("SELECT id FROM scan_runs WHERE id = ?", (scan_run_id,)).fetchone()
+        if existing:
+            logger.warning("Duplicate scan_run_id %r rejected", scan_run_id)
+            raise ValueError(f"Scan run {scan_run_id!r} already exists")
+        self.conn.execute(
+            "INSERT INTO scan_runs "
+            "(id, scanner_name, scan_source, status, file_paths, file_ids, "
+            "pid, api_url, log_path, started_at, updated_at) "
+            "VALUES (?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?)",
+            (
+                scan_run_id,
+                scanner_name,
+                scan_source,
+                json.dumps(file_paths),
+                json.dumps(file_ids),
+                pid,
+                api_url,
+                log_path,
+                now,
+                now,
+            ),
+        )
+        self.conn.commit()
+        return self.get_scan_run(scan_run_id)
+
+    def get_scan_run(self, scan_run_id: str) -> ScanRunDict:
+        row = self.conn.execute("SELECT * FROM scan_runs WHERE id = ?", (scan_run_id,)).fetchone()
+        if row is None:
+            raise KeyError(f"Scan run not found: {scan_run_id!r}")
+        return self._build_scan_run_dict(row)
+
+    def update_scan_run_status(
+        self,
+        scan_run_id: str,
+        status: str,
+        *,
+        exit_code: int | None = None,
+        findings_count: int | None = None,
+        error_message: str | None = None,
+    ) -> ScanRunDict:
+        current = self.get_scan_run(scan_run_id)
+        current_status = current["status"]
+        valid_next = _VALID_TRANSITIONS.get(current_status, set())
+        if status not in valid_next:
+            logger.warning(
+                "Invalid scan_run transition %r -> %r for %s",
+                current_status,
+                status,
+                scan_run_id,
+            )
+            raise ValueError(f"Invalid transition: {current_status!r} -> {status!r}. Valid: {sorted(valid_next)}")
+        now = _now_iso()
+        # Column names are hardcoded — no injection risk from dynamic SQL
+        updates = ["status = ?", "updated_at = ?"]
+        params: list[Any] = [status, now]
+        if status in ("completed", "failed", "timeout"):
+            updates.append("completed_at = ?")
+            params.append(now)
+        if exit_code is not None:
+            updates.append("exit_code = ?")
+            params.append(exit_code)
+        if findings_count is not None:
+            updates.append("findings_count = ?")
+            params.append(findings_count)
+        if error_message is not None:
+            updates.append("error_message = ?")
+            params.append(error_message)
+        params.append(scan_run_id)
+        self.conn.execute(
+            f"UPDATE scan_runs SET {', '.join(updates)} WHERE id = ?",
+            params,
+        )
+        self.conn.commit()
+        return self.get_scan_run(scan_run_id)
+
+    def check_scan_cooldown(self, scanner_name: str, file_path: str) -> ScanRunDict | None:
+        """Check if a recent non-failed scan blocks triggering.
+
+        Returns the blocking scan run dict, or None if trigger is allowed.
+        Only 'running' and recently-'completed' scans block.
+        """
+        # TODO: replace LIKE with json_each() for robustness against
+        # paths containing JSON-special characters (quotes, backslashes).
+        # The bounded-quote pattern below mitigates prefix false-positives
+        # (e.g., "src/main.py" matching "src/main.py.bak") but json_each()
+        # is the proper fix.
+        row = self.conn.execute(
+            "SELECT * FROM scan_runs "
+            "WHERE scanner_name = ? "
+            "AND json_extract(file_paths, '$') LIKE '%\"' || ? || '\"%' "
+            "AND status IN ('pending', 'running', 'completed') "
+            "AND updated_at >= datetime('now', ?) "
+            "ORDER BY updated_at DESC LIMIT 1",
+            (scanner_name, file_path, f"-{SCAN_COOLDOWN_SECONDS} seconds"),
+        ).fetchone()
+        if row is None:
+            return None
+        return self._build_scan_run_dict(row)
+
+    def get_scan_status(self, scan_run_id: str, *, log_lines: int = 50) -> ScanRunStatusDict:
+        """Get scan run with live PID check and log tail."""
+        run = self.get_scan_run(scan_run_id)
+        process_alive = False
+        if run["pid"] is not None and run["status"] == "running":
+            try:
+                os.kill(run["pid"], 0)
+                process_alive = True
+            except (OSError, ProcessLookupError):
+                pass
+        log_tail: list[str] = []
+        if run["log_path"]:
+            log_path = Path(run["log_path"])
+            if log_path.is_file():
+                try:
+                    lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()
+                    log_tail = lines[-log_lines:] if len(lines) > log_lines else lines
+                except OSError as exc:
+                    logger.warning("Could not read log file %s: %s", run["log_path"], exc)
+        return ScanRunStatusDict(
+            **run,
+            process_alive=process_alive,
+            log_tail=log_tail,
+        )
+
+    def _build_scan_run_dict(self, row: Any) -> ScanRunDict:
+        file_paths = json.loads(row["file_paths"]) if row["file_paths"] else []
+        file_ids = json.loads(row["file_ids"]) if row["file_ids"] else []
+        return ScanRunDict(
+            id=row["id"],
+            scanner_name=row["scanner_name"],
+            scan_source=row["scan_source"],
+            status=row["status"],
+            file_paths=file_paths,
+            file_ids=file_ids,
+            pid=row["pid"],
+            api_url=row["api_url"] or "",
+            log_path=row["log_path"] or "",
+            started_at=row["started_at"],
+            updated_at=row["updated_at"],
+            completed_at=row["completed_at"],
+            exit_code=row["exit_code"],
+            findings_count=row["findings_count"] or 0,
+            error_message=row["error_message"] or "",
+        )

@@ -111,6 +111,7 @@ def create_router() -> APIRouter:
                         "findings": "array (required)",
                         "scan_run_id": "string (optional)",
                         "mark_unseen": "boolean (optional)",
+                        "create_observations": "boolean (optional, default false)",
                     },
                 },
                 {"method": "GET", "path": "/api/files", "description": "List tracked files", "status": "live"},
@@ -241,8 +242,8 @@ def create_router() -> APIRouter:
             return _error_response("issue_id must be a string", "VALIDATION_ERROR", 400)
         try:
             finding = db.update_finding(
-                file_id,
                 finding_id,
+                file_id=file_id,
                 status=cast(FindingStatus | None, status),
                 issue_id=issue_id,
             )
@@ -250,7 +251,7 @@ def create_router() -> APIRouter:
             return _error_response(f"Finding not found: {finding_id}", "FINDING_NOT_FOUND", 404)
         except ValueError as e:
             return _error_response(str(e), "VALIDATION_ERROR", 400)
-        return JSONResponse(finding.to_dict())
+        return JSONResponse(finding)
 
     @router.get("/files/{file_id}/timeline")
     async def api_get_file_timeline(file_id: str, request: Request, db: FiligreeDB = Depends(_get_db)) -> JSONResponse:
@@ -301,15 +302,12 @@ def create_router() -> APIRouter:
         findings = body.get("findings", [])
         if not isinstance(findings, list):
             return _error_response("findings must be a JSON array", "VALIDATION_ERROR", 400)
-        if "create_issues" in body:
-            return _error_response(
-                "create_issues is not supported on scan ingest; create tickets via UI or MCP",
-                "VALIDATION_ERROR",
-                400,
-            )
         mark_unseen = body.get("mark_unseen", False)
         if not isinstance(mark_unseen, bool):
             return _error_response("mark_unseen must be a boolean", "VALIDATION_ERROR", 400)
+        create_observations = body.get("create_observations", False)
+        if not isinstance(create_observations, bool):
+            return _error_response("create_observations must be a boolean", "VALIDATION_ERROR", 400)
         status_code = 200
         try:
             result = db.process_scan_results(
@@ -317,6 +315,7 @@ def create_router() -> APIRouter:
                 findings=findings,
                 scan_run_id=body.get("scan_run_id", ""),
                 mark_unseen=mark_unseen,
+                create_observations=create_observations,
             )
         except ValueError as e:
             return _error_response(str(e), "VALIDATION_ERROR", 400)

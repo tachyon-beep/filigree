@@ -1,0 +1,122 @@
+"""Tests for finding triage DB methods."""
+
+from __future__ import annotations
+
+import pytest
+
+from filigree.core import FiligreeDB
+
+
+def _seed_findings(db: FiligreeDB) -> dict[str, str]:
+    """Create a file with 3 findings and return {name: finding_id}."""
+    db.register_file("src/main.py", language="python")
+    result = db.process_scan_results(
+        scan_source="test-scanner",
+        findings=[
+            {"path": "src/main.py", "rule_id": "logic-error", "severity": "high", "message": "Off by one"},
+            {"path": "src/main.py", "rule_id": "type-error", "severity": "medium", "message": "Wrong return type", "line_start": 42},
+            {"path": "src/main.py", "rule_id": "injection", "severity": "critical", "message": "SQL injection", "line_start": 100},
+        ],
+    )
+    ids = result["new_finding_ids"]
+    return {"obo": ids[0], "type": ids[1], "sqli": ids[2]}
+
+
+class TestGetFinding:
+    def test_get_by_id(self, db: FiligreeDB) -> None:
+        ids = _seed_findings(db)
+        finding = db.get_finding(ids["obo"])
+        assert finding["rule_id"] == "logic-error"
+        assert finding["severity"] == "high"
+
+    def test_not_found_raises(self, db: FiligreeDB) -> None:
+        with pytest.raises(KeyError):
+            db.get_finding("no-such-id")
+
+
+class TestListFindingsGlobal:
+    def test_returns_all_findings(self, db: FiligreeDB) -> None:
+        _seed_findings(db)
+        result = db.list_findings_global()
+        assert len(result["findings"]) == 3
+
+    def test_filter_by_severity(self, db: FiligreeDB) -> None:
+        _seed_findings(db)
+        result = db.list_findings_global(severity="critical")
+        assert len(result["findings"]) == 1
+        assert result["findings"][0]["rule_id"] == "injection"
+
+    def test_filter_by_status(self, db: FiligreeDB) -> None:
+        _seed_findings(db)
+        result = db.list_findings_global(status="open")
+        assert len(result["findings"]) == 3
+
+    def test_filter_by_scan_run_id(self, db: FiligreeDB) -> None:
+        db.register_file("src/main.py")
+        db.process_scan_results(
+            scan_source="s1",
+            scan_run_id="run-1",
+            findings=[{"path": "src/main.py", "rule_id": "r1", "severity": "info", "message": "m1"}],
+        )
+        db.process_scan_results(
+            scan_source="s1",
+            scan_run_id="run-2",
+            findings=[{"path": "src/main.py", "rule_id": "r2", "severity": "info", "message": "m2"}],
+        )
+        result = db.list_findings_global(scan_run_id="run-2")
+        assert len(result["findings"]) == 1
+        assert result["findings"][0]["rule_id"] == "r2"
+
+    def test_filter_by_issue_id(self, db: FiligreeDB) -> None:
+        ids = _seed_findings(db)
+        issue = db.create_issue("Test bug", type="bug")
+        db.update_finding(ids["sqli"], issue_id=issue.id)
+        result = db.list_findings_global(issue_id=issue.id)
+        assert len(result["findings"]) == 1
+
+    def test_pagination(self, db: FiligreeDB) -> None:
+        _seed_findings(db)
+        result = db.list_findings_global(limit=2, offset=0)
+        assert len(result["findings"]) == 2
+        assert result["total"] == 3
+
+
+class TestUpdateFinding:
+    def test_update_status(self, db: FiligreeDB) -> None:
+        ids = _seed_findings(db)
+        updated = db.update_finding(ids["obo"], status="acknowledged")
+        assert updated["status"] == "acknowledged"
+
+    def test_update_issue_id(self, db: FiligreeDB) -> None:
+        ids = _seed_findings(db)
+        issue = db.create_issue("Test bug", type="bug")
+        updated = db.update_finding(ids["obo"], issue_id=issue.id)
+        assert updated["issue_id"] == issue.id
+
+    def test_invalid_status_raises(self, db: FiligreeDB) -> None:
+        ids = _seed_findings(db)
+        with pytest.raises(ValueError, match="Invalid finding status"):
+            db.update_finding(ids["obo"], status="bogus")
+
+    def test_not_found_raises(self, db: FiligreeDB) -> None:
+        with pytest.raises(KeyError):
+            db.update_finding("no-such-id", status="fixed")
+
+
+class TestPromoteFindingToObservation:
+    def test_creates_observation(self, db: FiligreeDB) -> None:
+        ids = _seed_findings(db)
+        obs = db.promote_finding_to_observation(ids["sqli"])
+        assert obs["summary"].startswith("[test-scanner]")
+        assert "SQL injection" in obs["summary"]
+        assert obs["file_path"] == "src/main.py"
+        assert obs["line"] == 100
+
+    def test_priority_from_severity(self, db: FiligreeDB) -> None:
+        ids = _seed_findings(db)
+        obs = db.promote_finding_to_observation(ids["sqli"])
+        assert obs["priority"] == 0  # critical -> P0
+
+    def test_not_found_raises(self, db: FiligreeDB) -> None:
+        with pytest.raises(KeyError):
+            db.promote_finding_to_observation("no-such-id")

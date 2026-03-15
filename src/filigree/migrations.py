@@ -361,6 +361,41 @@ def migrate_v6_to_v7(conn: sqlite3.Connection) -> None:
     conn.execute("CREATE INDEX IF NOT EXISTS idx_dismissed_obs_id ON dismissed_observations(obs_id)")
 
 
+def migrate_v7_to_v8(conn: sqlite3.Connection) -> None:
+    """v7 → v8: Add scan_runs table for scan lifecycle tracking.
+
+    Changes:
+      - new table 'scan_runs' for tracking scanner invocations and their status
+      - new indexes on scan_runs(status) and scan_runs(scanner_name)
+
+    Rollback: DROP TABLE IF EXISTS scan_runs;
+              DROP INDEX IF EXISTS idx_scan_runs_status;
+              DROP INDEX IF EXISTS idx_scan_runs_scanner;
+              PRAGMA user_version = 7;
+    """
+    conn.execute("""\
+        CREATE TABLE IF NOT EXISTS scan_runs (
+            id            TEXT PRIMARY KEY,
+            scanner_name  TEXT NOT NULL,
+            scan_source   TEXT NOT NULL DEFAULT '',
+            status        TEXT NOT NULL DEFAULT 'pending',
+            file_paths    TEXT NOT NULL DEFAULT '[]',
+            file_ids      TEXT NOT NULL DEFAULT '[]',
+            pid           INTEGER,
+            api_url       TEXT DEFAULT '',
+            log_path      TEXT DEFAULT '',
+            started_at    TEXT NOT NULL,
+            updated_at    TEXT NOT NULL,
+            completed_at  TEXT,
+            exit_code     INTEGER,
+            findings_count INTEGER DEFAULT 0,
+            error_message TEXT DEFAULT '',
+            CHECK (status IN ('pending', 'running', 'completed', 'failed', 'timeout'))
+        )""")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_scan_runs_status ON scan_runs(status)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_scan_runs_scanner ON scan_runs(scanner_name)")
+
+
 MIGRATIONS: dict[int, MigrationFn] = {
     1: migrate_v1_to_v2,
     2: migrate_v2_to_v3,
@@ -368,6 +403,7 @@ MIGRATIONS: dict[int, MigrationFn] = {
     4: migrate_v4_to_v5,
     5: migrate_v5_to_v6,
     6: migrate_v6_to_v7,
+    7: migrate_v7_to_v8,
 }
 
 

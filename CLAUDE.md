@@ -1,4 +1,4 @@
-<!-- filigree:instructions:v1.5.0:bcb039c9 -->
+<!-- filigree:instructions:v1.5.0:d6a73398 -->
 ## Filigree Issue Tracker
 
 Use `filigree` for all task tracking in this project. Data lives in `.filigree/`.
@@ -26,8 +26,8 @@ design concern. Don't stop what you're doing; just fire off the observation and
 carry on. They're ideal for "I don't have time to investigate this right now, but
 I want to come back to it." Include `file_path` and `line` when relevant so the
 observation is anchored to code. At session end, skim `list_observations` and
-either `dismiss` (not worth tracking) or `promote` (deserves an issue) anything
-that's accumulated.
+either `dismiss_observation` (not worth tracking) or `promote_observation`
+(deserves an issue) for anything that's accumulated.
 
 Fall back to CLI (`filigree <command>`) when MCP is unavailable.
 

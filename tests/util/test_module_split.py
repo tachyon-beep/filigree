@@ -47,14 +47,17 @@ def test_mcp_tools_register_shape() -> None:
 
 
 def test_mcp_tools_total_count() -> None:
-    """All 58 tools are registered across domain modules."""
-    from filigree.mcp_tools import files, issues, meta, observations, planning, workflow
+    """All 69 tools are registered across domain modules."""
+    from filigree.mcp_tools import files, issues, meta, observations, planning, scanners, workflow
 
     total = 0
     for mod in (issues, planning, files, workflow, meta, observations):
         tools, _ = mod.register()
         total += len(tools)
-    assert total == 58, f"Expected 58 tools total, got {total}"
+    # Scanner module needs include_legacy=True to include all 5 tools
+    tools, _ = scanners.register(include_legacy=True)
+    total += len(tools)
+    assert total == 69, f"Expected 69 tools total, got {total}"
 
 
 def test_mcp_backward_compat_imports() -> None:

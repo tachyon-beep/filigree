@@ -402,3 +402,36 @@ class TestReleaseCli:
         assert result.exit_code == 1
         data = json.loads(result.output)
         assert "error" in data
+
+
+class TestListLabelQuery:
+    def test_list_label_prefix(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        runner, _ = cli_in_project
+        runner.invoke(cli, ["create", "Issue A", "-l", "cluster:broad-except"])
+        runner.invoke(cli, ["create", "Issue B", "-l", "effort:m"])
+        result = runner.invoke(cli, ["list", "--label-prefix", "cluster:"])
+        assert result.exit_code == 0
+        assert "Issue A" in result.output
+
+    def test_list_not_label(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        runner, _ = cli_in_project
+        runner.invoke(cli, ["create", "Issue A", "-l", "wont-fix"])
+        runner.invoke(cli, ["create", "Issue B", "-l", "needs-review"])
+        result = runner.invoke(cli, ["list", "--not-label", "wont-fix"])
+        assert result.exit_code == 0
+        assert "Issue A" not in result.output
+
+    def test_list_multiple_labels_and(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        runner, _ = cli_in_project
+        runner.invoke(cli, ["create", "Issue A", "-l", "needs-review", "-l", "urgent"])
+        runner.invoke(cli, ["create", "Issue B", "-l", "needs-review"])
+        result = runner.invoke(cli, ["list", "-l", "needs-review", "-l", "urgent"])
+        assert result.exit_code == 0
+        assert "Issue A" in result.output
+
+    def test_list_virtual_label_via_cli(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        runner, _ = cli_in_project
+        runner.invoke(cli, ["create", "Fresh issue"])
+        result = runner.invoke(cli, ["list", "-l", "age:fresh"])
+        assert result.exit_code == 0
+        assert "Fresh issue" in result.output

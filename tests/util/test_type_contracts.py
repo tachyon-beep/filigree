@@ -454,8 +454,7 @@ class TestScanIngestResultShape:
         assert isinstance(result["findings_created"], int)
         assert isinstance(result["new_finding_ids"], list)
         assert isinstance(result["warnings"], list)
-        assert isinstance(result["issues_created"], int)
-        assert isinstance(result["issue_ids"], list)
+        assert isinstance(result["observations_created"], int)
 
 
 class TestCleanStaleResultShape:

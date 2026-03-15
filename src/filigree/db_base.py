@@ -15,11 +15,22 @@ from filigree.types.events import EventType
 
 if TYPE_CHECKING:
     from filigree.templates import TemplateRegistry, TransitionOption
+    from filigree.types.core import ObservationDict
+    from filigree.types.files import ScanRunDict
 
 logger = logging.getLogger(__name__)
 
 # Shared internal API — used by DB mixins across modules.
-__all__ = ["DBMixinProtocol", "StatusCategory", "_escape_like", "_now_iso", "_safe_json_loads"]
+__all__ = ["AGE_BUCKETS", "DBMixinProtocol", "StatusCategory", "_escape_like", "_now_iso", "_safe_json_loads"]
+
+# Virtual label dispatch — explicit allowlist, no prefix matching
+AGE_BUCKETS: dict[str, tuple[int, int]] = {
+    "fresh": (0, 7),
+    "recent": (7, 30),
+    "aging": (30, 90),
+    "stale": (90, 180),
+    "ancient": (180, 999999),
+}
 
 
 def _now_iso() -> ISOTimestamp:
@@ -135,7 +146,9 @@ class DBMixinProtocol(Protocol):
         priority: int | None = None,
         parent_id: str | None = None,
         assignee: str | None = None,
-        label: str | None = None,
+        label: str | list[str] | None = None,
+        label_prefix: str | None = None,
+        not_label: str | None = None,
         limit: int = 100,
         offset: int = 0,
     ) -> list[Issue]: ...
@@ -162,3 +175,29 @@ class DBMixinProtocol(Protocol):
     ) -> FileRecord: ...
 
     def add_file_association(self, file_id: str, issue_id: str, assoc_type: AssocType) -> None: ...
+
+    # -- ObservationsMixin ---------------------------------------------------
+
+    def create_observation(
+        self,
+        summary: str,
+        *,
+        detail: str = "",
+        file_path: str = "",
+        line: int | None = None,
+        source_issue_id: str = "",
+        priority: int = 3,
+        actor: str = "",
+    ) -> ObservationDict: ...
+
+    # -- ScansMixin ----------------------------------------------------------
+
+    def update_scan_run_status(
+        self,
+        scan_run_id: str,
+        status: str,
+        *,
+        exit_code: int | None = None,
+        findings_count: int | None = None,
+        error_message: str | None = None,
+    ) -> ScanRunDict: ...

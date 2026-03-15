@@ -62,6 +62,12 @@ class MetaMixin(DBMixinProtocol):
     def add_label(self, issue_id: str, label: str) -> bool:
         normalized = self._validate_label_name(label)
         try:
+            # Mutual exclusivity for review: namespace
+            if normalized.startswith("review:"):
+                self.conn.execute(
+                    "DELETE FROM labels WHERE issue_id = ? AND label LIKE 'review:%'",
+                    (issue_id,),
+                )
             cursor = self.conn.execute(
                 "INSERT OR IGNORE INTO labels (issue_id, label) VALUES (?, ?)",
                 (issue_id, normalized),
@@ -84,6 +90,169 @@ class MetaMixin(DBMixinProtocol):
             self.conn.rollback()
             raise
         return cursor.rowcount > 0
+
+    def list_labels(
+        self,
+        *,
+        namespace: str | None = None,
+        top: int = 10,
+    ) -> dict[str, Any]:
+        """Return all distinct labels grouped by namespace with counts.
+
+        Includes virtual namespaces with computed counts.
+        Sorted alphabetically within each namespace.
+        """
+        from filigree.db_workflow import WorkflowMixin
+
+        auto_ns = WorkflowMixin.RESERVED_NAMESPACES_AUTO
+        virtual_ns = WorkflowMixin.RESERVED_NAMESPACES_VIRTUAL
+
+        rows = self.conn.execute("SELECT label, COUNT(*) as cnt FROM labels GROUP BY label ORDER BY label").fetchall()
+
+        namespaces: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            lbl = row["label"]
+            cnt = row["cnt"]
+            ns = lbl.split(":", 1)[0] if ":" in lbl else "_bare"
+
+            if namespace is not None and ns != namespace:
+                continue
+
+            if ns not in namespaces:
+                ns_lower = ns.casefold() if ns != "_bare" else "_bare"
+                if ns_lower in auto_ns:
+                    label_type, writable = "auto", False
+                elif ns_lower in virtual_ns:
+                    label_type, writable = "virtual", False
+                else:
+                    label_type, writable = "manual", True
+                namespaces[ns] = {"type": label_type, "writable": writable, "labels": []}
+
+            namespaces[ns]["labels"].append({"label": lbl, "count": cnt})
+
+        if top > 0:
+            for ns_data in namespaces.values():
+                ns_data["labels"] = ns_data["labels"][:top]
+
+        # Add virtual namespaces with computed counts
+        if namespace is None or namespace == "age":
+            age_labels = self._compute_virtual_age_counts()
+            namespaces.setdefault("age", {"type": "virtual", "writable": False, "labels": age_labels})
+
+        if namespace is None or namespace == "has":
+            has_labels = self._compute_virtual_has_counts()
+            namespaces.setdefault("has", {"type": "virtual", "writable": False, "labels": has_labels})
+
+        total = sum(len(ns["labels"]) for ns in namespaces.values())
+        return {"namespaces": namespaces, "total_in_result": total}
+
+    def _compute_virtual_age_counts(self) -> list[dict[str, Any]]:
+        from filigree.db_base import AGE_BUCKETS
+
+        results = []
+        for name, (low, high) in sorted(AGE_BUCKETS.items()):
+            cnt = self.conn.execute(
+                "SELECT COUNT(*) as cnt FROM issues "
+                "WHERE datetime(created_at) <= datetime('now', ?) "
+                "AND datetime(created_at) > datetime('now', ?)",
+                (f"-{low} days", f"-{high} days"),
+            ).fetchone()["cnt"]
+            results.append({"label": f"age:{name}", "count": cnt})
+        return results
+
+    def _compute_virtual_has_counts(self) -> list[dict[str, Any]]:
+        _, done_states_raw, _, _ = self._resolve_open_done_states()
+        done_states = done_states_raw or ["closed"]
+        done_ph = ",".join("?" * len(done_states))
+        counts = []
+        cnt = self.conn.execute(
+            f"SELECT COUNT(DISTINCT i.id) as cnt FROM issues i "
+            f"JOIN dependencies d ON d.issue_id = i.id "
+            f"JOIN issues b ON d.depends_on_id = b.id "
+            f"WHERE b.status NOT IN ({done_ph})",
+            done_states,
+        ).fetchone()["cnt"]
+        counts.append({"label": "has:blockers", "count": cnt})
+        cnt = self.conn.execute("SELECT COUNT(DISTINCT parent_id) as cnt FROM issues WHERE parent_id IS NOT NULL").fetchone()["cnt"]
+        counts.append({"label": "has:children", "count": cnt})
+        cnt = self.conn.execute(
+            "SELECT COUNT(DISTINCT issue_id) as cnt FROM scan_findings "
+            "WHERE issue_id IS NOT NULL AND status NOT IN ('fixed', 'false_positive')"
+        ).fetchone()["cnt"]
+        counts.append({"label": "has:findings", "count": cnt})
+        cnt = self.conn.execute("SELECT COUNT(DISTINCT issue_id) as cnt FROM file_associations").fetchone()["cnt"]
+        counts.append({"label": "has:files", "count": cnt})
+        cnt = self.conn.execute("SELECT COUNT(DISTINCT issue_id) as cnt FROM comments").fetchone()["cnt"]
+        counts.append({"label": "has:comments", "count": cnt})
+        return counts
+
+    def get_label_taxonomy(self) -> dict[str, Any]:
+        """Return the full label vocabulary with descriptions and writability."""
+        return {
+            "auto": {
+                "area": {"description": "Component area from file paths", "writable": False, "example": "area:mcp"},
+                "severity": {
+                    "description": "Highest active finding severity",
+                    "writable": False,
+                    "values": ["critical", "high", "medium", "low", "info"],
+                },
+                "scanner": {"description": "Scan source that produced findings", "writable": False, "example": "scanner:ruff"},
+                "pack": {
+                    "description": "Workflow pack the issue type belongs to",
+                    "writable": False,
+                    "values": ["core", "planning", "release", "requirements"],
+                },
+            },
+            "virtual": {
+                "age": {
+                    "description": "Issue age bucket",
+                    "writable": False,
+                    "values": ["fresh", "recent", "aging", "stale", "ancient"],
+                },
+                "has": {
+                    "description": "Existence predicates",
+                    "writable": False,
+                    "values": ["blockers", "children", "findings", "files", "comments"],
+                },
+            },
+            "manual_suggested": {
+                "cluster": {
+                    "description": "Root cause pattern for bugs",
+                    "writable": True,
+                    "examples": ["broad-except", "race-condition", "null-check", "type-coercion", "resource-leak"],
+                },
+                "effort": {"description": "T-shirt sizing", "writable": True, "values": ["xs", "s", "m", "l", "xl"]},
+                "source": {"description": "How the issue was discovered", "writable": True, "examples": ["scanner", "review", "agent"]},
+                "agent": {"description": "Agent instance attribution (manual)", "writable": True, "examples": ["claude-1", "claude-2"]},
+                "release": {"description": "Release version targeting", "writable": True, "examples": ["v1.3.0", "v1.4.0"]},
+                "changelog": {
+                    "description": "Changelog category",
+                    "writable": True,
+                    "values": ["added", "changed", "fixed", "removed", "deprecated"],
+                },
+                "wait": {
+                    "description": "External blocker type",
+                    "writable": True,
+                    "examples": ["design", "upstream", "vendor", "decision"],
+                },
+                "breaking": {
+                    "description": "Breaking change marker",
+                    "writable": True,
+                    "examples": ["api", "schema", "config"],
+                },
+                "review": {
+                    "description": "Review workflow state (mutually exclusive)",
+                    "writable": True,
+                    "mutually_exclusive": True,
+                    "values": ["needed", "done", "rework"],
+                },
+            },
+            "bare_labels": {
+                "description": "Common labels without namespace prefix",
+                "writable": True,
+                "suggested": ["tech-debt", "regression", "security", "perf", "cherry-pick", "hotfix", "flaky-test", "wontfix"],
+            },
+        }
 
     # -- Stats ---------------------------------------------------------------
 

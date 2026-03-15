@@ -373,12 +373,51 @@ def batch_add_comment(ctx: click.Context, text: str, issue_ids: tuple[str, ...],
             sys.exit(1)
 
 
+@click.command("labels")
+@click.option("--namespace", "-n", default=None, help="Filter to a namespace")
+@click.option("--top", default=10, type=int, help="Max labels per namespace (0 for unlimited)")
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+def list_labels_cmd(namespace: str | None, top: int, as_json: bool) -> None:
+    """List all labels grouped by namespace with counts."""
+    with get_db() as db:
+        result = db.list_labels(namespace=namespace, top=top)
+        if as_json:
+            click.echo(json_mod.dumps(result, indent=2))
+            return
+        for ns_name, ns_data in sorted(result["namespaces"].items()):
+            writable = "rw" if ns_data["writable"] else "ro"
+            click.echo(f"\n{ns_name}: ({ns_data['type']}, {writable})")
+            for item in ns_data["labels"]:
+                click.echo(f"  {item['label']}  ({item['count']})")
+
+
+@click.command("taxonomy")
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+def taxonomy_cmd(as_json: bool) -> None:
+    """Show the label taxonomy vocabulary."""
+    with get_db() as db:
+        result = db.get_label_taxonomy()
+        if as_json:
+            click.echo(json_mod.dumps(result, indent=2))
+            return
+        for section, data in result.items():
+            click.echo(f"\n== {section} ==")
+            if isinstance(data, dict) and "suggested" in data:
+                click.echo(f"  {', '.join(data['suggested'])}")
+            elif isinstance(data, dict):
+                for ns, info in data.items():
+                    vals = info.get("values") or info.get("examples") or [info.get("example", "")]
+                    click.echo(f"  {ns}: {info['description']}  [{', '.join(str(v) for v in vals)}]")
+
+
 def register(cli: click.Group) -> None:
     """Register metadata commands with the CLI group."""
     cli.add_command(add_comment)
     cli.add_command(get_comments)
     cli.add_command(add_label)
     cli.add_command(remove_label)
+    cli.add_command(list_labels_cmd)
+    cli.add_command(taxonomy_cmd)
     cli.add_command(stats)
     cli.add_command(search)
     cli.add_command(events_cmd)
