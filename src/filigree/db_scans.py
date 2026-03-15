@@ -41,9 +41,7 @@ class ScansMixin(DBMixinProtocol):
         log_path: str = "",
     ) -> ScanRunDict:
         now = _now_iso()
-        existing = self.conn.execute(
-            "SELECT id FROM scan_runs WHERE id = ?", (scan_run_id,)
-        ).fetchone()
+        existing = self.conn.execute("SELECT id FROM scan_runs WHERE id = ?", (scan_run_id,)).fetchone()
         if existing:
             logger.warning("Duplicate scan_run_id %r rejected", scan_run_id)
             raise ValueError(f"Scan run {scan_run_id!r} already exists")
@@ -69,9 +67,7 @@ class ScansMixin(DBMixinProtocol):
         return self.get_scan_run(scan_run_id)
 
     def get_scan_run(self, scan_run_id: str) -> ScanRunDict:
-        row = self.conn.execute(
-            "SELECT * FROM scan_runs WHERE id = ?", (scan_run_id,)
-        ).fetchone()
+        row = self.conn.execute("SELECT * FROM scan_runs WHERE id = ?", (scan_run_id,)).fetchone()
         if row is None:
             raise KeyError(f"Scan run not found: {scan_run_id!r}")
         return self._build_scan_run_dict(row)
@@ -95,10 +91,7 @@ class ScansMixin(DBMixinProtocol):
                 status,
                 scan_run_id,
             )
-            raise ValueError(
-                f"Invalid transition: {current_status!r} -> {status!r}. "
-                f"Valid: {sorted(valid_next)}"
-            )
+            raise ValueError(f"Invalid transition: {current_status!r} -> {status!r}. Valid: {sorted(valid_next)}")
         now = _now_iso()
         # Column names are hardcoded — no injection risk from dynamic SQL
         updates = ["status = ?", "updated_at = ?"]
@@ -123,9 +116,7 @@ class ScansMixin(DBMixinProtocol):
         self.conn.commit()
         return self.get_scan_run(scan_run_id)
 
-    def check_scan_cooldown(
-        self, scanner_name: str, file_path: str
-    ) -> ScanRunDict | None:
+    def check_scan_cooldown(self, scanner_name: str, file_path: str) -> ScanRunDict | None:
         """Check if a recent non-failed scan blocks triggering.
 
         Returns the blocking scan run dict, or None if trigger is allowed.
@@ -149,9 +140,7 @@ class ScansMixin(DBMixinProtocol):
             return None
         return self._build_scan_run_dict(row)
 
-    def get_scan_status(
-        self, scan_run_id: str, *, log_lines: int = 50
-    ) -> ScanRunStatusDict:
+    def get_scan_status(self, scan_run_id: str, *, log_lines: int = 50) -> ScanRunStatusDict:
         """Get scan run with live PID check and log tail."""
         run = self.get_scan_run(scan_run_id)
         process_alive = False

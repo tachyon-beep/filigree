@@ -12,7 +12,7 @@ from typing import Any
 
 from mcp.types import TextContent, Tool
 
-from filigree.mcp_tools.common import _parse_args, _text, _validate_int_range, _validate_str
+from filigree.mcp_tools.common import _parse_args, _text, _validate_int_range
 from filigree.scanners import list_scanners as _list_scanners
 from filigree.scanners import load_scanner, validate_scanner_command
 from filigree.types.api import ErrorResponse
@@ -27,7 +27,8 @@ _logger = logging.getLogger(__name__)
 
 
 def register(
-    *, include_legacy: bool = False,
+    *,
+    include_legacy: bool = False,
 ) -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
     """Return (tool_definitions, handler_map) for scanner-domain tools.
 
@@ -148,9 +149,7 @@ def register(
 # ---------------------------------------------------------------------------
 
 
-def _load_scanner_or_error(
-    filigree_dir: Path, scanner_name: str
-) -> tuple[Any | None, list[TextContent] | None]:
+def _load_scanner_or_error(filigree_dir: Path, scanner_name: str) -> tuple[Any | None, list[TextContent] | None]:
     """Load scanner config or return an error response."""
     scanners_dir = filigree_dir / "scanners"
     cfg = load_scanner(scanners_dir, scanner_name)
@@ -284,6 +283,7 @@ async def _handle_trigger_scan(arguments: dict[str, Any]) -> list[TextContent]:
     cfg, err = _load_scanner_or_error(filigree_dir, scanner_name)
     if err is not None:
         return err
+    assert cfg is not None  # noqa: S101  -- narrowing after error-check
 
     if not target.is_file():
         return _text(ErrorResponse(error=f"File not found: {file_path}", code="file_not_found"))
@@ -344,7 +344,8 @@ async def _handle_trigger_scan(arguments: dict[str, Any]) -> list[TextContent]:
     exit_code = proc.poll()
     if exit_code is not None and exit_code != 0:
         tracker.update_scan_run_status(
-            scan_run_id, "failed",
+            scan_run_id,
+            "failed",
             exit_code=exit_code,
             error_message=f"Scanner exited immediately with code {exit_code}",
         )
@@ -423,6 +424,7 @@ async def _handle_trigger_scan_batch(arguments: dict[str, Any]) -> list[TextCont
     cfg, err = _load_scanner_or_error(filigree_dir, scanner_name)
     if err is not None:
         return err
+    assert cfg is not None  # noqa: S101  -- narrowing after error-check
 
     # Validate and resolve all paths
     canonical_paths: list[str] = []
@@ -448,11 +450,13 @@ async def _handle_trigger_scan_batch(arguments: dict[str, Any]) -> list[TextCont
         file_ids.append(file_record.id)
 
     if not canonical_paths:
-        return _text({
-            "error": "No files eligible for scanning",
-            "code": "no_eligible_files",
-            "skipped": skipped,
-        })
+        return _text(
+            {
+                "error": "No files eligible for scanning",
+                "code": "no_eligible_files",
+                "skipped": skipped,
+            }
+        )
 
     project_root = filigree_dir.parent
     ts = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S")
@@ -490,16 +494,19 @@ async def _handle_trigger_scan_batch(arguments: dict[str, Any]) -> list[TextCont
     exit_code = proc.poll()
     if exit_code is not None and exit_code != 0:
         tracker.update_scan_run_status(
-            scan_run_id, "failed",
+            scan_run_id,
+            "failed",
             exit_code=exit_code,
             error_message=f"Scanner exited immediately with code {exit_code}",
         )
-        return _text({
-            "error": f"Scanner process exited immediately with code {exit_code}.",
-            "code": "spawn_failed",
-            "scan_run_id": scan_run_id,
-            "log_path": log_rel,
-        })
+        return _text(
+            {
+                "error": f"Scanner process exited immediately with code {exit_code}.",
+                "code": "spawn_failed",
+                "scan_run_id": scan_run_id,
+                "log_path": log_rel,
+            }
+        )
 
     result: dict[str, Any] = {
         "status": "triggered",
@@ -554,6 +561,7 @@ async def _handle_preview_scan(arguments: dict[str, Any]) -> list[TextContent]:
     cfg, err = _load_scanner_or_error(filigree_dir, scanner_name)
     if err is not None:
         return err
+    assert cfg is not None  # noqa: S101  -- narrowing after error-check
 
     canonical_path = str(target.relative_to(filigree_dir.resolve().parent))
     project_root = filigree_dir.parent
@@ -569,11 +577,13 @@ async def _handle_preview_scan(arguments: dict[str, Any]) -> list[TextContent]:
 
     cmd_err = validate_scanner_command(cmd, project_root=project_root)
 
-    return _text({
-        "scanner": scanner_name,
-        "file_path": file_path,
-        "command": cmd,
-        "command_string": " ".join(cmd),
-        "valid": cmd_err is None,
-        "validation_error": cmd_err,
-    })
+    return _text(
+        {
+            "scanner": scanner_name,
+            "file_path": file_path,
+            "command": cmd,
+            "command_string": " ".join(cmd),
+            "valid": cmd_err is None,
+            "validation_error": cmd_err,
+        }
+    )

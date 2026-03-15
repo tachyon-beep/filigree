@@ -21,7 +21,7 @@ from filigree.types.core import AssocType, FindingStatus, Severity
 from filigree.types.files import ScanIngestResult
 
 if TYPE_CHECKING:
-    from filigree.types.core import PaginatedResult, ScanFindingDict
+    from filigree.types.core import ObservationDict, PaginatedResult, ScanFindingDict
     from filigree.types.files import (
         CleanStaleResult,
         EnrichedFileItem,
@@ -677,14 +677,14 @@ class FilesMixin(DBMixinProtocol):
             raise
 
         if scan_run_id:
-            try:
+            import contextlib
+
+            with contextlib.suppress(KeyError, ValueError, AttributeError):
                 self.update_scan_run_status(
                     scan_run_id,
                     "completed",
                     findings_count=stats["findings_created"] + stats["findings_updated"],
                 )
-            except (KeyError, ValueError, AttributeError):
-                pass  # scan_run may not exist; AttributeError if ScansMixin not in MRO
 
         return stats
 
@@ -1014,7 +1014,7 @@ class FilesMixin(DBMixinProtocol):
         *,
         priority: int | None = None,
         actor: str = "",
-    ) -> dict[str, Any]:
+    ) -> ObservationDict:
         """Promote a finding to an observation.
 
         Creates an observation note from the finding's data.  Priority
@@ -1036,9 +1036,7 @@ class FilesMixin(DBMixinProtocol):
 
     def _file_path_for_finding(self, file_id: str) -> str:
         """Look up the file path for a file_id, returning empty string if not found."""
-        row = self.conn.execute(
-            "SELECT path FROM file_records WHERE id = ?", (file_id,)
-        ).fetchone()
+        row = self.conn.execute("SELECT path FROM file_records WHERE id = ?", (file_id,)).fetchone()
         return row["path"] if row else ""
 
     def get_file_findings_summary(self, file_id: str) -> FindingsSummary:

@@ -29,10 +29,10 @@ from filigree.db_files import (
     _normalize_scan_path,
 )
 from filigree.db_issues import IssuesMixin
-from filigree.db_scans import ScansMixin
 from filigree.db_meta import MetaMixin
 from filigree.db_observations import ObservationsMixin
 from filigree.db_planning import PlanningMixin
+from filigree.db_scans import ScansMixin
 from filigree.db_schema import CURRENT_SCHEMA_VERSION, SCHEMA_SQL
 from filigree.db_workflow import WorkflowMixin
 from filigree.models import _EMPTY_TS, FileRecord, Issue, ScanFinding

@@ -1602,7 +1602,6 @@ class TestScannerTools:
             target.unlink(missing_ok=True)
             (scanners_dir / "bad.toml").unlink(missing_ok=True)
 
-
     async def test_trigger_scan_path_traversal_rejected(self, mcp_db: FiligreeDB) -> None:
         self._write_scanner_toml(mcp_db)
         result = _parse(
@@ -1724,7 +1723,6 @@ class TestScannerTools:
         finally:
             target.unlink(missing_ok=True)
 
-
     async def test_trigger_scan_registers_file_idempotent(self, mcp_db: FiligreeDB) -> None:
         import filigree.mcp_server as mcp_mod
 
@@ -1784,7 +1782,6 @@ class TestScannerTools:
             target.unlink(missing_ok=True)
             # Clear cooldown state for test isolation
 
-
     async def test_trigger_scan_file_type_mismatch_warning(self, mcp_db: FiligreeDB) -> None:
         """Scanning a .txt file with a py-only scanner should succeed with a warning."""
         import filigree.mcp_server as mcp_mod
@@ -1809,7 +1806,6 @@ class TestScannerTools:
             assert "txt" in result["warning"]
         finally:
             target.unlink(missing_ok=True)
-
 
     async def test_trigger_scan_allows_templated_executable_path(self, mcp_db: FiligreeDB) -> None:
         import filigree.mcp_server as mcp_mod
@@ -1846,7 +1842,6 @@ class TestScannerTools:
             scanner_exec.unlink(missing_ok=True)
             (scanners_dir / "templated-scanner.toml").unlink(missing_ok=True)
 
-
     async def test_trigger_scan_allows_project_relative_executable_path(self, mcp_db: FiligreeDB) -> None:
         import filigree.mcp_server as mcp_mod
 
@@ -1881,7 +1876,6 @@ class TestScannerTools:
             target.unlink(missing_ok=True)
             scanner_exec.unlink(missing_ok=True)
             (scanners_dir / "relative-scanner.toml").unlink(missing_ok=True)
-
 
     async def test_trigger_scan_response_includes_log_path(self, mcp_db: FiligreeDB) -> None:
         """trigger_scan must include log_path in response and create the log file."""
@@ -1953,13 +1947,11 @@ class TestScannerTools:
         finally:
             target.unlink(missing_ok=True)
 
-
     async def test_trigger_scan_cooldown_is_scoped_per_project(self, tmp_path: Path) -> None:
         import filigree.mcp_server as mcp_mod
 
         original_db = mcp_mod.db
         original_dir = mcp_mod._filigree_dir
-
 
         def _make_project(name: str, prefix: str) -> tuple[FiligreeDB, Path]:
             project_root = tmp_path / name
@@ -2284,7 +2276,6 @@ class TestTriggerScanCooldownDB:
         finally:
             target.unlink(missing_ok=True)
             (scanners_dir / "bad-cmd.toml").unlink(missing_ok=True)
-
 
 
 # ---------------------------------------------------------------------------

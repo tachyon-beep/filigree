@@ -1654,9 +1654,20 @@ class TestMigrateV7ToV8:
         apply_pending_migrations(v7_db, 8)
         cols = _get_table_columns(v7_db, "scan_runs")
         expected = {
-            "id", "scanner_name", "scan_source", "status", "file_paths",
-            "file_ids", "pid", "api_url", "log_path", "started_at",
-            "updated_at", "completed_at", "exit_code", "findings_count",
+            "id",
+            "scanner_name",
+            "scan_source",
+            "status",
+            "file_paths",
+            "file_ids",
+            "pid",
+            "api_url",
+            "log_path",
+            "started_at",
+            "updated_at",
+            "completed_at",
+            "exit_code",
+            "findings_count",
             "error_message",
         }
         assert expected.issubset(cols)

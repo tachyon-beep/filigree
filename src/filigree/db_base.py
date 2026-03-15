@@ -15,6 +15,8 @@ from filigree.types.events import EventType
 
 if TYPE_CHECKING:
     from filigree.templates import TemplateRegistry, TransitionOption
+    from filigree.types.core import ObservationDict
+    from filigree.types.files import ScanRunDict
 
 logger = logging.getLogger(__name__)
 
@@ -173,3 +175,29 @@ class DBMixinProtocol(Protocol):
     ) -> FileRecord: ...
 
     def add_file_association(self, file_id: str, issue_id: str, assoc_type: AssocType) -> None: ...
+
+    # -- ObservationsMixin ---------------------------------------------------
+
+    def create_observation(
+        self,
+        summary: str,
+        *,
+        detail: str = "",
+        file_path: str = "",
+        line: int | None = None,
+        source_issue_id: str = "",
+        priority: int = 3,
+        actor: str = "",
+    ) -> ObservationDict: ...
+
+    # -- ScansMixin ----------------------------------------------------------
+
+    def update_scan_run_status(
+        self,
+        scan_run_id: str,
+        status: str,
+        *,
+        exit_code: int | None = None,
+        findings_count: int | None = None,
+        error_message: str | None = None,
+    ) -> ScanRunDict: ...
