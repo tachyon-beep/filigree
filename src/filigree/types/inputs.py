@@ -336,6 +336,43 @@ class TriggerScanArgs(TypedDict):
     api_url: NotRequired[str]
 
 
+class GetFindingArgs(TypedDict):
+    finding_id: str
+
+
+class ListFindingsArgs(TypedDict):
+    severity: NotRequired[str]
+    status: NotRequired[str]
+    scan_source: NotRequired[str]
+    scan_run_id: NotRequired[str]
+    file_id: NotRequired[str]
+    issue_id: NotRequired[str]
+    limit: NotRequired[int]
+    offset: NotRequired[int]
+
+
+class UpdateFindingArgs(TypedDict):
+    finding_id: str
+    status: NotRequired[str]
+    issue_id: NotRequired[str]
+
+
+class BatchUpdateFindingsArgs(TypedDict):
+    finding_ids: list[str]
+    status: str
+
+
+class PromoteFindingArgs(TypedDict):
+    finding_id: str
+    priority: NotRequired[int]
+    actor: NotRequired[str]
+
+
+class DismissFindingArgs(TypedDict):
+    finding_id: str
+    reason: NotRequired[str]
+
+
 # ---------------------------------------------------------------------------
 # observations.py handlers
 # ---------------------------------------------------------------------------
@@ -432,6 +469,12 @@ TOOL_ARGS_MAP: dict[str, type] = {
     "add_file_association": AddFileAssociationArgs,
     "register_file": RegisterFileArgs,
     "trigger_scan": TriggerScanArgs,
+    "get_finding": GetFindingArgs,
+    "list_findings": ListFindingsArgs,
+    "update_finding": UpdateFindingArgs,
+    "batch_update_findings": BatchUpdateFindingsArgs,
+    "promote_finding": PromoteFindingArgs,
+    "dismiss_finding": DismissFindingArgs,
     # observations.py
     "observe": ObserveArgs,
     "list_observations": ListObservationsArgs,

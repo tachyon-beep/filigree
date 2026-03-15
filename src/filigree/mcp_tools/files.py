@@ -20,12 +20,18 @@ from filigree.scanners import load_scanner, validate_scanner_command
 from filigree.types.api import ErrorResponse
 from filigree.types.inputs import (
     AddFileAssociationArgs,
+    BatchUpdateFindingsArgs,
+    DismissFindingArgs,
     GetFileArgs,
     GetFileTimelineArgs,
+    GetFindingArgs,
     GetIssueFilesArgs,
     ListFilesArgs,
+    ListFindingsArgs,
+    PromoteFindingArgs,
     RegisterFileArgs,
     TriggerScanArgs,
+    UpdateFindingArgs,
 )
 
 _logger = logging.getLogger(__name__)
@@ -161,6 +167,88 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
                 "required": ["scanner", "file_path"],
             },
         ),
+        Tool(
+            name="get_finding",
+            description="Get a single scan finding by ID.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "finding_id": {"type": "string", "description": "Finding ID"},
+                },
+                "required": ["finding_id"],
+            },
+        ),
+        Tool(
+            name="list_findings",
+            description="List scan findings across all files with optional filters.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "severity": {"type": "string", "enum": sorted(VALID_SEVERITIES), "description": "Filter by severity"},
+                    "status": {"type": "string", "description": "Filter by finding status"},
+                    "scan_source": {"type": "string", "description": "Filter by scan source"},
+                    "scan_run_id": {"type": "string", "description": "Filter by scan run ID"},
+                    "file_id": {"type": "string", "description": "Filter by file ID"},
+                    "issue_id": {"type": "string", "description": "Filter by linked issue ID"},
+                    "limit": {"type": "integer", "default": 100, "minimum": 1, "maximum": 10000},
+                    "offset": {"type": "integer", "default": 0, "minimum": 0},
+                },
+            },
+        ),
+        Tool(
+            name="update_finding",
+            description="Update a finding's status or linked issue.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "finding_id": {"type": "string", "description": "Finding ID"},
+                    "status": {"type": "string", "description": "New finding status"},
+                    "issue_id": {"type": "string", "description": "Issue ID to link"},
+                },
+                "required": ["finding_id"],
+            },
+        ),
+        Tool(
+            name="batch_update_findings",
+            description="Update the status of multiple findings at once.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "finding_ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "List of finding IDs to update",
+                    },
+                    "status": {"type": "string", "description": "New status for all findings"},
+                },
+                "required": ["finding_ids", "status"],
+            },
+        ),
+        Tool(
+            name="promote_finding",
+            description="Promote a scan finding to an observation for triage tracking.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "finding_id": {"type": "string", "description": "Finding ID"},
+                    "priority": {"type": "integer", "minimum": 0, "maximum": 4, "description": "Override priority (default: inferred from severity)"},
+                    "actor": {"type": "string", "description": "Actor identity"},
+                },
+                "required": ["finding_id"],
+            },
+        ),
+        Tool(
+            name="dismiss_finding",
+            description="Dismiss a finding by marking it as false_positive.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "finding_id": {"type": "string", "description": "Finding ID"},
+                    "reason": {"type": "string", "description": "Optional reason for dismissal"},
+                },
+                "required": ["finding_id"],
+            },
+        ),
     ]
 
     handlers: dict[str, Callable[..., Any]] = {
@@ -172,6 +260,12 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
         "register_file": _handle_register_file,
         "list_scanners": _handle_list_scanners,
         "trigger_scan": _handle_trigger_scan,
+        "get_finding": _handle_get_finding,
+        "list_findings": _handle_list_findings,
+        "update_finding": _handle_update_finding,
+        "batch_update_findings": _handle_batch_update_findings,
+        "promote_finding": _handle_promote_finding,
+        "dismiss_finding": _handle_dismiss_finding,
     }
 
     return tools, handlers
@@ -560,3 +654,129 @@ async def _handle_trigger_scan(arguments: dict[str, Any]) -> list[TextContent]:
     if file_type_warning:
         scan_result["warning"] = file_type_warning
     return _text(scan_result)
+
+
+# ---------------------------------------------------------------------------
+# Finding triage handlers
+# ---------------------------------------------------------------------------
+
+
+async def _handle_get_finding(arguments: dict[str, Any]) -> list[TextContent]:
+    from filigree.mcp_server import _get_db
+
+    args = _parse_args(arguments, GetFindingArgs)
+    finding_id = args.get("finding_id", "")
+    if not isinstance(finding_id, str) or not finding_id.strip():
+        return _text(ErrorResponse(error="finding_id is required", code="validation_error"))
+    tracker = _get_db()
+    try:
+        finding = tracker.get_finding(finding_id)
+    except KeyError:
+        return _text(ErrorResponse(error=f"Finding not found: {finding_id}", code="not_found"))
+    return _text(finding)
+
+
+async def _handle_list_findings(arguments: dict[str, Any]) -> list[TextContent]:
+    from filigree.mcp_server import _get_db
+
+    args = _parse_args(arguments, ListFindingsArgs)
+    tracker = _get_db()
+    limit = args.get("limit", 100)
+    offset = args.get("offset", 0)
+
+    for err in (
+        _validate_int_range(limit, "limit", min_val=1, max_val=10000),
+        _validate_int_range(offset, "offset", min_val=0),
+    ):
+        if err is not None:
+            return err
+
+    filters: dict[str, Any] = {}
+    for key in ("severity", "status", "scan_source", "scan_run_id", "file_id", "issue_id"):
+        val = args.get(key)
+        if val is not None:
+            filters[key] = val
+
+    result = tracker.list_findings_global(limit=limit, offset=offset, **filters)
+    return _text(result)
+
+
+async def _handle_update_finding(arguments: dict[str, Any]) -> list[TextContent]:
+    from filigree.mcp_server import _get_db
+
+    args = _parse_args(arguments, UpdateFindingArgs)
+    finding_id = args.get("finding_id", "")
+    if not isinstance(finding_id, str) or not finding_id.strip():
+        return _text(ErrorResponse(error="finding_id is required", code="validation_error"))
+    status = args.get("status")
+    issue_id = args.get("issue_id")
+    if status is None and issue_id is None:
+        return _text(ErrorResponse(error="At least one of status or issue_id must be provided", code="validation_error"))
+
+    tracker = _get_db()
+    try:
+        updated = tracker.update_finding(finding_id, status=status, issue_id=issue_id)
+    except KeyError:
+        return _text(ErrorResponse(error=f"Finding not found: {finding_id}", code="not_found"))
+    except ValueError as e:
+        return _text(ErrorResponse(error=str(e), code="validation_error"))
+    return _text(updated)
+
+
+async def _handle_batch_update_findings(arguments: dict[str, Any]) -> list[TextContent]:
+    from filigree.mcp_server import _get_db
+
+    args = _parse_args(arguments, BatchUpdateFindingsArgs)
+    finding_ids = args.get("finding_ids", [])
+    status = args.get("status", "")
+    if not isinstance(finding_ids, list) or not finding_ids:
+        return _text(ErrorResponse(error="finding_ids must be a non-empty list", code="validation_error"))
+    if not isinstance(status, str) or not status.strip():
+        return _text(ErrorResponse(error="status is required", code="validation_error"))
+
+    tracker = _get_db()
+    updated: list[str] = []
+    errors: list[dict[str, str]] = []
+    for fid in finding_ids:
+        try:
+            tracker.update_finding(fid, status=status)
+            updated.append(fid)
+        except (KeyError, ValueError) as e:
+            errors.append({"finding_id": fid, "error": str(e)})
+    return _text({"updated": updated, "errors": errors})
+
+
+async def _handle_promote_finding(arguments: dict[str, Any]) -> list[TextContent]:
+    from filigree.mcp_server import _get_db
+
+    args = _parse_args(arguments, PromoteFindingArgs)
+    finding_id = args.get("finding_id", "")
+    if not isinstance(finding_id, str) or not finding_id.strip():
+        return _text(ErrorResponse(error="finding_id is required", code="validation_error"))
+    priority = args.get("priority")
+    actor = args.get("actor", "")
+
+    tracker = _get_db()
+    try:
+        obs = tracker.promote_finding_to_observation(finding_id, priority=priority, actor=actor)
+    except KeyError:
+        return _text(ErrorResponse(error=f"Finding not found: {finding_id}", code="not_found"))
+    return _text(obs)
+
+
+async def _handle_dismiss_finding(arguments: dict[str, Any]) -> list[TextContent]:
+    from filigree.mcp_server import _get_db
+
+    args = _parse_args(arguments, DismissFindingArgs)
+    finding_id = args.get("finding_id", "")
+    if not isinstance(finding_id, str) or not finding_id.strip():
+        return _text(ErrorResponse(error="finding_id is required", code="validation_error"))
+
+    tracker = _get_db()
+    try:
+        updated = tracker.update_finding(finding_id, status="false_positive")
+    except KeyError:
+        return _text(ErrorResponse(error=f"Finding not found: {finding_id}", code="not_found"))
+    except ValueError as e:
+        return _text(ErrorResponse(error=str(e), code="validation_error"))
+    return _text(updated)
