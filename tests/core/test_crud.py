@@ -2149,3 +2149,23 @@ class TestNamespaceReservation:
         issue = db.create_issue("Test")
         with pytest.raises(ValueError, match="control characters"):
             db.add_label(issue.id, label)
+
+
+class TestReviewMutualExclusivity:
+    def test_adding_review_label_removes_prior(self, db: FiligreeDB) -> None:
+        issue = db.create_issue("Test")
+        db.add_label(issue.id, "review:needed")
+        db.add_label(issue.id, "review:done")
+        refreshed = db.get_issue(issue.id)
+        assert "review:done" in refreshed.labels
+        assert "review:needed" not in refreshed.labels
+
+    def test_review_labels_dont_affect_other_labels(self, db: FiligreeDB) -> None:
+        issue = db.create_issue("Test")
+        db.add_label(issue.id, "tech-debt")
+        db.add_label(issue.id, "review:needed")
+        db.add_label(issue.id, "review:rework")
+        refreshed = db.get_issue(issue.id)
+        assert "review:rework" in refreshed.labels
+        assert "review:needed" not in refreshed.labels
+        assert "tech-debt" in refreshed.labels

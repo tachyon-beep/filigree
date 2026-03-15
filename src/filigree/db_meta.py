@@ -62,6 +62,12 @@ class MetaMixin(DBMixinProtocol):
     def add_label(self, issue_id: str, label: str) -> bool:
         normalized = self._validate_label_name(label)
         try:
+            # Mutual exclusivity for review: namespace
+            if normalized.startswith("review:"):
+                self.conn.execute(
+                    "DELETE FROM labels WHERE issue_id = ? AND label LIKE 'review:%'",
+                    (issue_id,),
+                )
             cursor = self.conn.execute(
                 "INSERT OR IGNORE INTO labels (issue_id, label) VALUES (?, ?)",
                 (issue_id, normalized),
