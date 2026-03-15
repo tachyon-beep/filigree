@@ -154,6 +154,11 @@ class RemoveLabelArgs(TypedDict):
     label: str
 
 
+class ListLabelsArgs(TypedDict):
+    namespace: NotRequired[str]
+    top: NotRequired[int]
+
+
 class BatchAddLabelArgs(TypedDict):
     ids: list[str]
     label: str
@@ -396,6 +401,7 @@ TOOL_ARGS_MAP: dict[str, type] = {
     "get_comments": GetCommentsArgs,
     "add_label": AddLabelArgs,
     "remove_label": RemoveLabelArgs,
+    "list_labels": ListLabelsArgs,
     "batch_add_label": BatchAddLabelArgs,
     "batch_add_comment": BatchAddCommentArgs,
     "get_changes": GetChangesArgs,

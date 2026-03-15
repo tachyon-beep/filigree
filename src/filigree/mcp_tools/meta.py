@@ -239,6 +239,33 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
                 "required": ["issue_id"],
             },
         ),
+        Tool(
+            name="list_labels",
+            description=(
+                "List all distinct labels grouped by namespace with counts. "
+                "Use get_label_taxonomy to see reserved namespaces and suggested vocabulary."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "namespace": {"type": "string", "description": "Filter to a specific namespace (e.g. 'cluster')"},
+                    "top": {
+                        "type": "integer",
+                        "default": 10,
+                        "minimum": 0,
+                        "description": "Max labels per namespace (default 10, 0 for unlimited)",
+                    },
+                },
+            },
+        ),
+        Tool(
+            name="get_label_taxonomy",
+            description=(
+                "Get the full label vocabulary: reserved namespaces, auto-tags, virtual labels, "
+                "and suggested manual labels. Use before adding labels to see what's available."
+            ),
+            inputSchema={"type": "object", "properties": {}},
+        ),
     ]
 
     handlers: dict[str, Callable[..., Any]] = {
@@ -258,6 +285,8 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
         "compact_events": _handle_compact_events,
         "undo_last": _handle_undo_last,
         "get_issue_events": _handle_get_issue_events,
+        "list_labels": _handle_list_labels,
+        "get_label_taxonomy": _handle_get_label_taxonomy,
     }
 
     return tools, handlers
@@ -533,3 +562,22 @@ async def _handle_get_issue_events(arguments: dict[str, Any]) -> list[TextConten
         return _text(events)
     except KeyError:
         return _text(ErrorResponse(error=f"Issue not found: {args['issue_id']}", code="not_found"))
+
+
+async def _handle_list_labels(arguments: dict[str, Any]) -> list[TextContent]:
+    from filigree.mcp_server import _get_db
+
+    tracker = _get_db()
+    result = tracker.list_labels(
+        namespace=arguments.get("namespace"),
+        top=arguments.get("top", 10),
+    )
+    return _text(result)
+
+
+async def _handle_get_label_taxonomy(arguments: dict[str, Any]) -> list[TextContent]:
+    from filigree.mcp_server import _get_db
+
+    tracker = _get_db()
+    result = tracker.get_label_taxonomy()
+    return _text(result)

@@ -2473,3 +2473,35 @@ class TestMCPV10:
         data = _parse(result)
         assert data["status"] == "ok"
         assert data["events_deleted"] == 0
+
+
+class TestListLabels:
+    async def test_list_labels_returns_namespaces(self, mcp_db: FiligreeDB) -> None:
+        mcp_db.create_issue("A", labels=["cluster:broad-except"])
+        result = await call_tool("list_labels", {})
+        data = _parse(result)
+        assert "namespaces" in data
+        assert "cluster" in data["namespaces"]
+
+    async def test_list_labels_with_namespace_filter(self, mcp_db: FiligreeDB) -> None:
+        mcp_db.create_issue("A", labels=["cluster:x", "effort:m"])
+        result = await call_tool("list_labels", {"namespace": "cluster"})
+        data = _parse(result)
+        assert "cluster" in data["namespaces"]
+        assert "effort" not in data["namespaces"]
+
+    async def test_list_labels_includes_virtual(self, mcp_db: FiligreeDB) -> None:
+        result = await call_tool("list_labels", {})
+        data = _parse(result)
+        assert "age" in data["namespaces"]
+        assert "has" in data["namespaces"]
+
+
+class TestGetLabelTaxonomy:
+    async def test_taxonomy_returns_all_sections(self, mcp_db: FiligreeDB) -> None:
+        result = await call_tool("get_label_taxonomy", {})
+        data = _parse(result)
+        assert "auto" in data
+        assert "virtual" in data
+        assert "manual_suggested" in data
+        assert "bare_labels" in data
