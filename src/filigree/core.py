@@ -29,6 +29,7 @@ from filigree.db_files import (
     _normalize_scan_path,
 )
 from filigree.db_issues import IssuesMixin
+from filigree.db_scans import ScansMixin
 from filigree.db_meta import MetaMixin
 from filigree.db_observations import ObservationsMixin
 from filigree.db_planning import PlanningMixin
@@ -215,7 +216,7 @@ def _seed_builtin_packs(conn: sqlite3.Connection, now: str) -> int:
 # ---------------------------------------------------------------------------
 
 
-class FiligreeDB(FilesMixin, IssuesMixin, EventsMixin, WorkflowMixin, MetaMixin, PlanningMixin, ObservationsMixin):
+class FiligreeDB(FilesMixin, ScansMixin, IssuesMixin, EventsMixin, WorkflowMixin, MetaMixin, PlanningMixin, ObservationsMixin):
     """Direct SQLite operations. No daemon, no sync. Importable by CLI and MCP."""
 
     def __init__(
