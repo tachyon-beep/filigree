@@ -21,7 +21,7 @@ Safety note on cast():
 
 from typing import Any, Literal, NotRequired, TypedDict
 
-from filigree.types.core import AssocType, ISOTimestamp, Severity, StatusCategory
+from filigree.types.core import AssocType, FindingStatus, ISOTimestamp, Severity, StatusCategory
 
 # ---------------------------------------------------------------------------
 # issues.py handlers
@@ -341,8 +341,8 @@ class GetFindingArgs(TypedDict):
 
 
 class ListFindingsArgs(TypedDict):
-    severity: NotRequired[str]
-    status: NotRequired[str]
+    severity: NotRequired[Severity]
+    status: NotRequired[FindingStatus]
     scan_source: NotRequired[str]
     scan_run_id: NotRequired[str]
     file_id: NotRequired[str]
@@ -353,13 +353,13 @@ class ListFindingsArgs(TypedDict):
 
 class UpdateFindingArgs(TypedDict):
     finding_id: str
-    status: NotRequired[str]
+    status: NotRequired[FindingStatus]
     issue_id: NotRequired[str]
 
 
 class BatchUpdateFindingsArgs(TypedDict):
     finding_ids: list[str]
-    status: str
+    status: FindingStatus
 
 
 class PromoteFindingArgs(TypedDict):

@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from filigree.db_base import DBMixinProtocol, _now_iso
+from filigree.types.core import ScanRunStatus
 from filigree.types.files import ScanRunDict, ScanRunStatusDict
 
 logger = logging.getLogger(__name__)
@@ -19,7 +20,7 @@ logger = logging.getLogger(__name__)
 SCAN_COOLDOWN_SECONDS = 30
 
 # Valid transitions: from_status -> set of valid to_statuses
-_VALID_TRANSITIONS: dict[str, set[str]] = {
+_VALID_TRANSITIONS: dict[ScanRunStatus, set[ScanRunStatus]] = {
     "pending": {"running", "failed"},
     "running": {"completed", "failed", "timeout"},
 }
@@ -75,7 +76,7 @@ class ScansMixin(DBMixinProtocol):
     def update_scan_run_status(
         self,
         scan_run_id: str,
-        status: str,
+        status: ScanRunStatus,
         *,
         exit_code: int | None = None,
         findings_count: int | None = None,
@@ -120,7 +121,7 @@ class ScansMixin(DBMixinProtocol):
         """Check if a recent non-failed scan blocks triggering.
 
         Returns the blocking scan run dict, or None if trigger is allowed.
-        Only 'running' and recently-'completed' scans block.
+        Scans with status 'pending', 'running', or recently-'completed' block.
         """
         # TODO: replace LIKE with json_each() for robustness against
         # paths containing JSON-special characters (quotes, backslashes).
@@ -141,7 +142,11 @@ class ScansMixin(DBMixinProtocol):
         return self._build_scan_run_dict(row)
 
     def get_scan_status(self, scan_run_id: str, *, log_lines: int = 50) -> ScanRunStatusDict:
-        """Get scan run with live PID check and log tail."""
+        """Get scan run with live PID check and log tail.
+
+        When a running scan's process is detected as dead, the status is
+        auto-transitioned to ``'failed'`` so the DB does not stay stale.
+        """
         run = self.get_scan_run(scan_run_id)
         process_alive = False
         if run["pid"] is not None and run["status"] == "running":
@@ -149,7 +154,23 @@ class ScansMixin(DBMixinProtocol):
                 os.kill(run["pid"], 0)
                 process_alive = True
             except (OSError, ProcessLookupError):
-                pass
+                logger.info(
+                    "Scan run %s: process %d appears dead, transitioning to failed",
+                    scan_run_id,
+                    run["pid"],
+                )
+                try:
+                    run = self.update_scan_run_status(
+                        scan_run_id,
+                        "failed",
+                        error_message=f"Process {run['pid']} died without updating status",
+                    )
+                except (KeyError, ValueError) as exc:
+                    logger.warning(
+                        "Could not auto-fail scan run %s: %s",
+                        scan_run_id,
+                        exc,
+                    )
         log_tail: list[str] = []
         if run["log_path"]:
             log_path = Path(run["log_path"])
@@ -166,8 +187,16 @@ class ScansMixin(DBMixinProtocol):
         )
 
     def _build_scan_run_dict(self, row: Any) -> ScanRunDict:
-        file_paths = json.loads(row["file_paths"]) if row["file_paths"] else []
-        file_ids = json.loads(row["file_ids"]) if row["file_ids"] else []
+        try:
+            file_paths = json.loads(row["file_paths"]) if row["file_paths"] else []
+        except (json.JSONDecodeError, TypeError):
+            logger.warning("Corrupt file_paths JSON in scan_run %s", row["id"])
+            file_paths = []
+        try:
+            file_ids = json.loads(row["file_ids"]) if row["file_ids"] else []
+        except (json.JSONDecodeError, TypeError):
+            logger.warning("Corrupt file_ids JSON in scan_run %s", row["id"])
+            file_ids = []
         return ScanRunDict(
             id=row["id"],
             scanner_name=row["scanner_name"],

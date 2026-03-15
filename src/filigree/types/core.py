@@ -15,6 +15,7 @@ Severity = Literal["critical", "high", "medium", "low", "info"]
 FindingStatus = Literal["open", "acknowledged", "fixed", "false_positive", "unseen_in_latest"]
 AssocType = Literal["bug_in", "task_for", "scan_finding", "mentioned_in"]
 StatusCategory = Literal["open", "wip", "done"]
+ScanRunStatus = Literal["pending", "running", "completed", "failed", "timeout"]
 
 
 class _ProjectConfigRequired(TypedDict):

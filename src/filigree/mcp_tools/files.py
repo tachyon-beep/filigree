@@ -4,14 +4,13 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
-from typing import Any, cast
+from typing import Any
 
 from mcp.types import TextContent, Tool
 
 from filigree.core import VALID_ASSOC_TYPES, VALID_SEVERITIES
 from filigree.mcp_tools.common import _parse_args, _text, _validate_int_range, _validate_str
 from filigree.types.api import ErrorResponse
-from filigree.types.core import FindingStatus
 from filigree.types.inputs import (
     AddFileAssociationArgs,
     BatchUpdateFindingsArgs,
@@ -481,7 +480,7 @@ async def _handle_update_finding(arguments: dict[str, Any]) -> list[TextContent]
 
     tracker = _get_db()
     try:
-        updated = tracker.update_finding(finding_id, status=cast(FindingStatus | None, status), issue_id=issue_id)
+        updated = tracker.update_finding(finding_id, status=status, issue_id=issue_id)
     except KeyError:
         return _text(ErrorResponse(error=f"Finding not found: {finding_id}", code="not_found"))
     except ValueError as e:
@@ -505,7 +504,7 @@ async def _handle_batch_update_findings(arguments: dict[str, Any]) -> list[TextC
     errors: list[dict[str, str]] = []
     for fid in finding_ids:
         try:
-            tracker.update_finding(fid, status=cast(FindingStatus, status))
+            tracker.update_finding(fid, status=status)
             updated.append(fid)
         except (KeyError, ValueError) as e:
             errors.append({"finding_id": fid, "error": str(e)})

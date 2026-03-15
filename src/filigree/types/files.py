@@ -9,6 +9,7 @@ from filigree.types.core import (
     FileRecordDict,
     ISOTimestamp,
     ScanFindingDict,
+    ScanRunStatus,
 )
 
 
@@ -112,7 +113,7 @@ class ScanRunDict(TypedDict):
     id: str
     scanner_name: str
     scan_source: str
-    status: str
+    status: ScanRunStatus
     file_paths: list[str]
     file_ids: list[str]
     pid: int | None

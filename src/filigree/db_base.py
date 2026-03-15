@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
 
 from filigree.models import FileRecord, Issue
-from filigree.types.core import AssocType, ISOTimestamp, StatusCategory
+from filigree.types.core import AssocType, ISOTimestamp, ScanRunStatus, StatusCategory
 from filigree.types.events import EventType
 
 if TYPE_CHECKING:
@@ -195,7 +195,7 @@ class DBMixinProtocol(Protocol):
     def update_scan_run_status(
         self,
         scan_run_id: str,
-        status: str,
+        status: ScanRunStatus,
         *,
         exit_code: int | None = None,
         findings_count: int | None = None,

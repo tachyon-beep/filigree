@@ -685,8 +685,7 @@ class FilesMixin(DBMixinProtocol):
                 )
             except (KeyError, ValueError) as exc:
                 logger.warning(
-                    "Failed to mark scan run %r as completed "
-                    "(findings were ingested successfully): %s",
+                    "Failed to mark scan run %r as completed (findings were ingested successfully): %s",
                     scan_run_id,
                     exc,
                 )

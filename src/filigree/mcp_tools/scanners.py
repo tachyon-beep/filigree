@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import secrets
 import subprocess
@@ -173,10 +174,15 @@ def _spawn_scan(
     project_root: Path,
     scan_run_id: str,
     filigree_dir: Path,
+    log_suffix: str = "",
 ) -> dict[str, Any] | list[TextContent]:
     """Build command, validate, and spawn scanner process.
 
-    Returns a dict with process info on success, or a TextContent error.
+    Returns ``{'proc': Popen, 'scan_log_path': Path, 'cmd': list[str]}``
+    on success, or a ``list[TextContent]`` error response.
+
+    *log_suffix* disambiguates log files when multiple processes share
+    a scan_run_id (batch mode).
     """
     try:
         cmd = cfg.build_command(
@@ -194,7 +200,8 @@ def _spawn_scan(
 
     scan_log_dir = filigree_dir / "scans"
     scan_log_dir.mkdir(parents=True, exist_ok=True)
-    scan_log_path = scan_log_dir / f"{scan_run_id}.log"
+    log_name = f"{scan_run_id}{log_suffix}.log"
+    scan_log_path = scan_log_dir / log_name
     try:
         scan_log_fd = open(scan_log_path, "w")  # noqa: SIM115
     except OSError as log_err:
@@ -462,10 +469,13 @@ async def _handle_trigger_scan_batch(arguments: dict[str, Any]) -> list[TextCont
     ts = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S")
     scan_run_id = f"{scanner_name}-batch-{ts}-{secrets.token_hex(3)}"
 
-    # Spawn one scanner process per file — build_command only accepts a single path
+    # Spawn one scanner process per file — build_command only accepts a single path.
+    # Each process gets a unique log file via log_suffix to avoid clobbering.
     spawned: list[dict[str, Any]] = []
+    spawned_paths: list[str] = []
+    spawned_file_ids: list[str] = []
     spawn_errors: list[dict[str, str]] = []
-    for cp in canonical_paths:
+    for i, cp in enumerate(canonical_paths):
         spawn_result = _spawn_scan(
             cfg=cfg,
             canonical_path=cp,
@@ -473,11 +483,21 @@ async def _handle_trigger_scan_batch(arguments: dict[str, Any]) -> list[TextCont
             project_root=project_root,
             scan_run_id=scan_run_id,
             filigree_dir=filigree_dir,
+            log_suffix=f"-{i}",
         )
         if isinstance(spawn_result, list):
-            spawn_errors.append({"file_path": cp, "reason": "spawn_failed"})
+            # Extract error detail from the TextContent response
+            reason = "spawn_failed"
+            try:
+                detail = json.loads(spawn_result[0].text)
+                reason = detail.get("error", reason)
+            except (ValueError, IndexError, AttributeError):
+                pass
+            spawn_errors.append({"file_path": cp, "reason": reason})
             continue
         spawned.append(spawn_result)
+        spawned_paths.append(cp)
+        spawned_file_ids.append(file_ids[i])
 
     if not spawned:
         return _text(
@@ -498,8 +518,8 @@ async def _handle_trigger_scan_batch(arguments: dict[str, Any]) -> list[TextCont
         scan_run_id=scan_run_id,
         scanner_name=scanner_name,
         scan_source=scanner_name,
-        file_paths=canonical_paths,
-        file_ids=file_ids,
+        file_paths=spawned_paths,
+        file_ids=spawned_file_ids,
         pid=last["proc"].pid,
         api_url=api_url,
         log_path=log_rel,
@@ -534,7 +554,7 @@ async def _handle_trigger_scan_batch(arguments: dict[str, Any]) -> list[TextCont
     result: dict[str, Any] = {
         "status": "triggered",
         "scanner": scanner_name,
-        "file_count": len(canonical_paths),
+        "file_count": len(spawned_paths),
         "processes_spawned": len(spawned),
         "scan_run_id": scan_run_id,
         "log_path": log_rel,
