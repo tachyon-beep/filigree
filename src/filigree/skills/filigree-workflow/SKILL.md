@@ -204,7 +204,7 @@ Observations expire after 14 days. Triage them before they rot:
    - **Leave it** — still uncertain. Let it age. If it survives a few sessions
      without being promoted, it's probably a dismiss.
 
-3. **Batch cleanup:** use `batch_dismiss_observations` when several observations
+3. **Batch cleanup:** use the MCP tool `batch_dismiss_observations` when several observations
    have gone stale together.
 
 ### Promote vs Dismiss

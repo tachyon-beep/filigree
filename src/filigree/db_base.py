@@ -23,10 +23,10 @@ __all__ = ["AGE_BUCKETS", "DBMixinProtocol", "StatusCategory", "_escape_like", "
 
 # Virtual label dispatch — explicit allowlist, no prefix matching
 AGE_BUCKETS: dict[str, tuple[int, int]] = {
-    "fresh":   (0, 7),
-    "recent":  (7, 30),
-    "aging":   (30, 90),
-    "stale":   (90, 180),
+    "fresh": (0, 7),
+    "recent": (7, 30),
+    "aging": (30, 90),
+    "stale": (90, 180),
     "ancient": (180, 999999),
 }
 

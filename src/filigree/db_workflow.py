@@ -199,9 +199,16 @@ class WorkflowMixin(DBMixinProtocol):
         return self._infer_status_category(status)
 
     # Namespace reservation — auto-tag and virtual namespaces are system-managed
-    RESERVED_NAMESPACES_AUTO: frozenset[str] = frozenset({
-        "area", "severity", "scanner", "pack", "lang", "rule",
-    })
+    RESERVED_NAMESPACES_AUTO: frozenset[str] = frozenset(
+        {
+            "area",
+            "severity",
+            "scanner",
+            "pack",
+            "lang",
+            "rule",
+        }
+    )
     RESERVED_NAMESPACES_VIRTUAL: frozenset[str] = frozenset({"age", "has"})
     RESERVED_NAMESPACES: frozenset[str] = RESERVED_NAMESPACES_AUTO | RESERVED_NAMESPACES_VIRTUAL
 

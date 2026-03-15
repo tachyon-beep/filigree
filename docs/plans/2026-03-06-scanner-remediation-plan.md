@@ -17,7 +17,7 @@
 - Types: `types/files.py` (`ScanRunRecord` at line 88, `ScanIngestResult` at line 105)
 - CLI scanner utils: `scripts/scan_utils.py` (NOT in src/ — CLI pipeline utilities)
 - FiligreeDB class: `core.py:340` — MRO: FilesMixin, IssuesMixin, EventsMixin, WorkflowMixin, MetaMixin, PlanningMixin, ObservationsMixin
-- Schema version: 7 (at `db_schema.py:317`)
+- Schema version: 7 → 8 (at `db_schema.py:317`; migration in `migrations.py`)
 - Note: `db_scans.py` and `mcp_tools/scanners.py` do NOT exist yet — they are created by this plan
 
 **Design doc:** `docs/plans/2026-03-06-scanner-remediation-design.md`
@@ -30,13 +30,19 @@ These were identified during plan review and verified against the codebase:
 
 1. **`ScanRunDict` vs `ScanRunRecord`** — `types/files.py` already has `ScanRunRecord` (line 88, runs to ~line 103), which is a GROUP BY shape from scan_findings. The new `ScanRunDict` is a proper scan_runs table shape. Add a docstring to `ScanRunDict` clarifying the distinction: _"Shape for scan_runs table rows. Not to be confused with ScanRunRecord, which is a GROUP BY projection from scan_findings."_
 
-2. **`check_scan_cooldown` LIKE query** — The `json_extract(file_paths, '$') LIKE '%"path"%'` pattern is fragile for paths containing JSON-special characters. Acceptable for MVP. Add a `# TODO: replace LIKE with json_each() for robustness` comment in the implementation.
+2. **`check_scan_cooldown` LIKE query** — The `json_extract(file_paths, '$') LIKE '%"path"%'` pattern is fragile for paths containing JSON-special characters AND has a prefix-match false-positive (`src/main.py` matches a run targeting `src/main.py.bak`). Use bounded-quote pattern `'%"' || ? || '"%'` to mitigate the prefix issue. Acceptable for MVP. Add a `# TODO: replace LIKE with json_each() for robustness` comment in the implementation.
 
-3. **Task 7 / Task 10 overlap** — Both modify `dashboard_routes/files.py` for scan_run completion tracking. The executing agent MUST check whether Task 7's Step 6 already handled the scan_runs update before applying Task 10's Step 1. If it did, skip the duplicate code in Task 10.
+3. **Task 7 / Task 10 overlap** — Both modify `dashboard_routes/files.py` for scan_run completion tracking. The executing agent MUST check whether Task 7's Step 6 already handled the `update_scan_run_status` call inside `process_scan_results`. If it did, do NOT add a second call in the REST handler — it would attempt a `completed → completed` transition that the state machine rejects. The `try/except` would silently swallow this, meaning the REST layer's `findings_count` is discarded. The DB layer wins; the REST layer's call is a no-op if the DB already updated it.
 
 4. **Task 6 extraction ordering** — When moving tools from `files.py` to `scanners.py`, do additive changes first: create `scanners.py`, register it in `mcp_server.py`, verify tests pass with both modules registering the tools, THEN remove from `files.py`. This avoids a window where tools vanish if something breaks mid-task.
 
 5. **No FK on `scan_run_id`** — The `scan_findings.scan_run_id` column is a plain TEXT field with no foreign key to `scan_runs`. This is intentional (results can be POSTed without `trigger_scan`), but means orphaned references are possible. No action needed for MVP.
+
+6. **Cross-mixin dependency in Task 7** — `process_scan_results` (in `FilesMixin`) calls `self.update_scan_run_status(...)` (in `ScansMixin`). The `try/except` must catch `AttributeError` in addition to `KeyError`/`ValueError`, in case `ScansMixin` is not in the MRO. Use `except (KeyError, ValueError, AttributeError): pass`.
+
+7. **`db_scans.py` logger must be used** — The plan declares `logger = logging.getLogger(__name__)` but never calls it. Add `logger.warning(...)` at error boundaries: duplicate scan_run_id in `create_scan_run`, invalid transition in `update_scan_run_status`, and `OSError` in `get_scan_status` log file read.
+
+8. **Add mypy to Task 3** — Task 3 creates `db_scans.py` with a `ScanRunStatusDict(**run, ...)` spread pattern that mypy should verify. Add `uv run mypy src/filigree/db_scans.py` before the Task 3 commit step, consistent with Task 2's mypy check.
 
 ---
 
@@ -45,8 +51,10 @@ These were identified during plan review and verified against the codebase:
 ### Task 1: Schema — add `scan_runs` table DDL
 
 **Files:**
-- Modify: `src/filigree/db_schema.py` (after line 170, after the `file_associations` index block)
+- Modify: `src/filigree/db_schema.py` (after line 170, after the `file_associations` index block; bump `CURRENT_SCHEMA_VERSION` to 8)
+- Modify: `src/filigree/migrations.py` (add `migrate_v7_to_v8` and register in `MIGRATIONS` dict)
 - Test: `tests/core/test_files.py` (add schema test)
+- Test: `tests/core/test_schema.py` (add migration test)
 
 **Step 1: Write the failing test**
 
@@ -95,16 +103,107 @@ CREATE INDEX IF NOT EXISTS idx_scan_runs_status ON scan_runs(status);
 CREATE INDEX IF NOT EXISTS idx_scan_runs_scanner ON scan_runs(scanner_name);
 ```
 
-**Step 4: Run test to verify it passes**
+**Step 4: Bump schema version**
 
-Run: `uv run pytest tests/core/test_files.py::TestFileSchema -v`
+In `src/filigree/db_schema.py`, change `CURRENT_SCHEMA_VERSION = 7` (at line 317) to `CURRENT_SCHEMA_VERSION = 8`.
+
+**Step 5: Add migration function**
+
+In `src/filigree/migrations.py`, after `migrate_v6_to_v7` (ends at line 362), add:
+
+```python
+def migrate_v7_to_v8(conn: sqlite3.Connection) -> None:
+    """v7 → v8: Add scan_runs table for scan lifecycle tracking.
+
+    Changes:
+      - new table 'scan_runs' for tracking scanner invocations and their status
+      - new indexes on scan_runs(status) and scan_runs(scanner_name)
+
+    Rollback: DROP TABLE IF EXISTS scan_runs;
+              DROP INDEX IF EXISTS idx_scan_runs_status;
+              DROP INDEX IF EXISTS idx_scan_runs_scanner;
+              PRAGMA user_version = 7;
+    """
+    conn.execute("""\
+        CREATE TABLE IF NOT EXISTS scan_runs (
+            id            TEXT PRIMARY KEY,
+            scanner_name  TEXT NOT NULL,
+            scan_source   TEXT NOT NULL DEFAULT '',
+            status        TEXT NOT NULL DEFAULT 'pending',
+            file_paths    TEXT NOT NULL DEFAULT '[]',
+            file_ids      TEXT NOT NULL DEFAULT '[]',
+            pid           INTEGER,
+            api_url       TEXT DEFAULT '',
+            log_path      TEXT DEFAULT '',
+            started_at    TEXT NOT NULL,
+            updated_at    TEXT NOT NULL,
+            completed_at  TEXT,
+            exit_code     INTEGER,
+            findings_count INTEGER DEFAULT 0,
+            error_message TEXT DEFAULT '',
+            CHECK (status IN ('pending', 'running', 'completed', 'failed', 'timeout'))
+        )""")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_scan_runs_status ON scan_runs(status)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_scan_runs_scanner ON scan_runs(scanner_name)")
+```
+
+Register it in the `MIGRATIONS` dict (at line 364):
+```python
+MIGRATIONS: dict[int, MigrationFn] = {
+    1: migrate_v1_to_v2,
+    2: migrate_v2_to_v3,
+    3: migrate_v3_to_v4,
+    4: migrate_v4_to_v5,
+    5: migrate_v5_to_v6,
+    6: migrate_v6_to_v7,
+    7: migrate_v7_to_v8,
+}
+```
+
+**Step 6: Add migration test**
+
+Add to `tests/core/test_schema.py` (following the existing migration test pattern):
+
+```python
+def test_migrate_v7_to_v8_creates_scan_runs(self, tmp_path: Path) -> None:
+    """Verify v7→v8 migration creates scan_runs table on existing DB."""
+    db_path = tmp_path / "test.db"
+    conn = sqlite3.connect(str(db_path))
+    conn.row_factory = sqlite3.Row
+    # Create a v7 database (all tables except scan_runs)
+    conn.executescript(SCHEMA_SQL_V7)  # or use the migration runner up to v7
+    conn.execute("PRAGMA user_version = 7")
+    conn.commit()
+    # Verify scan_runs does NOT exist yet
+    row = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='scan_runs'"
+    ).fetchone()
+    assert row is None
+    # Run migration
+    migrate_v7_to_v8(conn)
+    conn.execute("PRAGMA user_version = 8")
+    conn.commit()
+    # Verify scan_runs exists
+    row = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='scan_runs'"
+    ).fetchone()
+    assert row is not None
+    conn.close()
+```
+
+> **Note:** Adapt this test to match the existing migration test pattern in `test_schema.py`. If the file uses a helper like `_make_db_at_version(n)`, use that instead of raw SQL.
+
+**Step 7: Run tests to verify migration and schema pass**
+
+Run: `uv run pytest tests/core/test_files.py::TestFileSchema tests/core/test_schema.py -v`
 Expected: ALL PASS
 
-**Step 5: Commit**
+**Step 8: Commit**
 
 ```bash
-git add src/filigree/db_schema.py tests/core/test_files.py
-git commit -m "feat(schema): add scan_runs table for scan lifecycle tracking"
+git add src/filigree/db_schema.py src/filigree/migrations.py \
+    tests/core/test_files.py tests/core/test_schema.py
+git commit -m "feat(schema): add scan_runs table with v7→v8 migration"
 ```
 
 ---
@@ -386,6 +485,7 @@ class ScansMixin(DBMixinProtocol):
             "SELECT id FROM scan_runs WHERE id = ?", (scan_run_id,)
         ).fetchone()
         if existing:
+            logger.warning("Duplicate scan_run_id %r rejected", scan_run_id)
             raise ValueError(f"Scan run {scan_run_id!r} already exists")
         self.conn.execute(
             "INSERT INTO scan_runs "
@@ -422,6 +522,10 @@ class ScansMixin(DBMixinProtocol):
         current_status = current["status"]
         valid_next = _VALID_TRANSITIONS.get(current_status, set())
         if status not in valid_next:
+            logger.warning(
+                "Invalid scan_run transition %r -> %r for %s",
+                current_status, status, scan_run_id,
+            )
             raise ValueError(
                 f"Invalid transition: {current_status!r} -> {status!r}. "
                 f"Valid: {sorted(valid_next)}"
@@ -458,15 +562,18 @@ class ScansMixin(DBMixinProtocol):
         Only 'running' and recently-'completed' scans block.
         """
         # TODO: replace LIKE with json_each() for robustness against
-        # paths containing JSON-special characters (quotes, backslashes)
+        # paths containing JSON-special characters (quotes, backslashes).
+        # The bounded-quote pattern below mitigates prefix false-positives
+        # (e.g., "src/main.py" matching "src/main.py.bak") but json_each()
+        # is the proper fix.
         row = self.conn.execute(
             "SELECT * FROM scan_runs "
             "WHERE scanner_name = ? "
-            "AND json_extract(file_paths, '$') LIKE ? "
+            "AND json_extract(file_paths, '$') LIKE '%\"' || ? || '\"%' "
             "AND status IN ('pending', 'running', 'completed') "
             "AND updated_at >= datetime('now', ?) "
             "ORDER BY updated_at DESC LIMIT 1",
-            (scanner_name, f'%"{file_path}"%', f"-{SCAN_COOLDOWN_SECONDS} seconds"),
+            (scanner_name, file_path, f"-{SCAN_COOLDOWN_SECONDS} seconds"),
         ).fetchone()
         if row is None:
             return None
@@ -491,8 +598,8 @@ class ScansMixin(DBMixinProtocol):
                 try:
                     lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()
                     log_tail = lines[-log_lines:] if len(lines) > log_lines else lines
-                except OSError:
-                    pass
+                except OSError as exc:
+                    logger.warning("Could not read log file %s: %s", run["log_path"], exc)
         return ScanRunStatusDict(
             **run,
             process_alive=process_alive,
@@ -535,12 +642,17 @@ class FiligreeDB(FilesMixin, ScansMixin, IssuesMixin, EventsMixin, WorkflowMixin
 Run: `uv run pytest tests/core/test_scans.py -v`
 Expected: ALL PASS
 
-**Step 6: Run full test suite**
+**Step 6: Run mypy on new module**
+
+Run: `uv run mypy src/filigree/db_scans.py`
+Expected: PASS (verifies `ScanRunStatusDict(**run, ...)` spread and all type annotations)
+
+**Step 7: Run full test suite**
 
 Run: `uv run pytest --tb=short -q`
 Expected: ALL PASS (no regressions)
 
-**Step 7: Commit**
+**Step 8: Commit**
 
 ```bash
 git add src/filigree/db_scans.py src/filigree/core.py tests/core/test_scans.py
@@ -919,16 +1031,52 @@ Now that `scanners.py` is verified:
 - Remove `list_scanners` and `trigger_scan` Tool definitions, handler functions, and their entries in `handlers` dict from `mcp_tools/files.py`. Remove scanner-related imports (`list_scanners as _list_scanners`, `load_scanner`, `validate_scanner_command`).
 - In `mcp_server.py`: remove `_scan_cooldowns` dict (line 62) and `_SCAN_COOLDOWN_SECONDS` constant (line 63). This replaces the in-memory cooldown at `mcp_server.py:60-63` and the monotonic clock cooldown logic at `mcp_tools/files.py:447-505`. After implementing, also remove all `_scan_cooldowns` references and `time.monotonic()` cooldown logic from `mcp_tools/files.py`.
 
-**Step 6: Run tests again**
+**Step 6: Add happy-path tests for new scanner tools**
+
+Add to `tests/api/test_scanner_tools.py` (new file):
+
+```python
+"""Tests for new scanner MCP tools — trigger_scan_batch, get_scan_status, preview_scan."""
+
+from __future__ import annotations
+
+import pytest
+
+from filigree.core import FiligreeDB
+
+
+class TestGetScanStatus:
+    def test_returns_status_with_process_info(self, db: FiligreeDB) -> None:
+        db.create_scan_run(
+            scan_run_id="run-1",
+            scanner_name="codex",
+            scan_source="codex",
+            file_paths=["src/main.py"],
+            file_ids=["f-1"],
+        )
+        status = db.get_scan_status("run-1")
+        assert status["id"] == "run-1"
+        assert status["process_alive"] is False
+        assert isinstance(status["log_tail"], list)
+
+    def test_not_found_raises(self, db: FiligreeDB) -> None:
+        with pytest.raises(KeyError):
+            db.get_scan_status("no-such-run")
+```
+
+> **Note:** `trigger_scan_batch` and `preview_scan` handler tests should follow the existing MCP handler test pattern in `tests/api/`. At minimum, test `preview_scan` returns a command string without spawning a process, and `trigger_scan_batch` with an empty `file_paths` list returns an appropriate error.
+
+**Step 7: Run tests again**
 
 Run: `uv run pytest --tb=short -q`
 Expected: ALL PASS
 
-**Step 7: Commit**
+**Step 8: Commit**
 
 ```bash
 git add src/filigree/mcp_tools/scanners.py src/filigree/mcp_tools/files.py \
-    src/filigree/mcp_server.py src/filigree/types/inputs.py
+    src/filigree/mcp_server.py src/filigree/types/inputs.py \
+    tests/api/test_scanner_tools.py
 git commit -m "feat(mcp): extract scanner lifecycle tools into mcp_tools/scanners.py"
 ```
 
@@ -1061,8 +1209,9 @@ if scan_run_id:
             scan_run_id, "completed",
             findings_count=stats["findings_created"] + stats["findings_updated"],
         )
-    except (KeyError, ValueError):
+    except (KeyError, ValueError, AttributeError):
         pass  # scan_run may not exist if results were POSTed without trigger_scan
+        # AttributeError guard: ScansMixin may not be in MRO (review callout #6)
 ```
 
 **Step 7: Run tests**

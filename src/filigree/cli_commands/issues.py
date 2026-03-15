@@ -138,7 +138,7 @@ def show(issue_id: str, as_json: bool) -> None:
 @click.option("--priority", "-p", default=None, type=click.IntRange(0, 4), help="Filter by priority")
 @click.option("--parent", default=None, help="Filter by parent ID")
 @click.option("--assignee", default=None, help="Filter by assignee")
-@click.option("--label", "-l", multiple=True, help="Filter by label (repeatable, AND logic). Supports virtual labels (age:fresh, has:findings).")
+@click.option("--label", "-l", multiple=True, help="Filter by label (repeatable, AND logic). Supports virtuals.")
 @click.option("--label-prefix", default=None, help="Filter by label namespace prefix (include trailing colon)")
 @click.option("--not-label", default=None, help="Exclude issues with this label")
 @click.option("--limit", default=100, type=click.IntRange(min=0), help="Max results (default 100)")

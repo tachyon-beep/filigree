@@ -75,8 +75,7 @@ def _resolve_virtual_label(
                 [],
             ),
             "findings": (
-                f"{exists_op} (SELECT 1 FROM scan_findings sf "
-                "WHERE sf.issue_id = i.id AND sf.status NOT IN ('fixed', 'false_positive'))",
+                f"{exists_op} (SELECT 1 FROM scan_findings sf WHERE sf.issue_id = i.id AND sf.status NOT IN ('fixed', 'false_positive'))",
                 [],
             ),
             "files": (
