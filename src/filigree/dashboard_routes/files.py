@@ -111,6 +111,7 @@ def create_router() -> APIRouter:
                         "findings": "array (required)",
                         "scan_run_id": "string (optional)",
                         "mark_unseen": "boolean (optional)",
+                        "create_observations": "boolean (optional, default false)",
                     },
                 },
                 {"method": "GET", "path": "/api/files", "description": "List tracked files", "status": "live"},
