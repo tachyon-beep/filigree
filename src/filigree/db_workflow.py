@@ -198,6 +198,13 @@ class WorkflowMixin(DBMixinProtocol):
             return cat
         return self._infer_status_category(status)
 
+    # Namespace reservation — auto-tag and virtual namespaces are system-managed
+    RESERVED_NAMESPACES_AUTO: frozenset[str] = frozenset({
+        "area", "severity", "scanner", "pack", "lang", "rule",
+    })
+    RESERVED_NAMESPACES_VIRTUAL: frozenset[str] = frozenset({"age", "has"})
+    RESERVED_NAMESPACES: frozenset[str] = RESERVED_NAMESPACES_AUTO | RESERVED_NAMESPACES_VIRTUAL
+
     def _reserved_label_names(self) -> set[str]:
         """Issue type names are reserved and cannot be used as free-form labels."""
         return {tpl.type.casefold() for tpl in self.templates.list_types()}
@@ -211,9 +218,22 @@ class WorkflowMixin(DBMixinProtocol):
         if not normalized:
             msg = "Label cannot be empty"
             raise ValueError(msg)
+        # Reject control characters (would corrupt JSONL export line boundaries)
+        if any(ord(c) < 32 or c == "\x7f" for c in normalized):
+            msg = "Label contains control characters"
+            raise ValueError(msg)
         if normalized.casefold() in self._reserved_label_names():
             msg = f"Label '{normalized}' is reserved as an issue type name; set the issue type explicitly instead."
             raise ValueError(msg)
+        # Check namespace reservation
+        if ":" in normalized:
+            ns = normalized.split(":", 1)[0].casefold()
+            if ns in self.RESERVED_NAMESPACES_AUTO:
+                msg = f"{ns}: is a system-managed auto-tag namespace. These labels are computed automatically."
+                raise ValueError(msg)
+            if ns in self.RESERVED_NAMESPACES_VIRTUAL:
+                msg = f"{ns}: is a virtual namespace computed at query time. You can filter by it with --label but cannot add it manually."
+                raise ValueError(msg)
         return normalized
 
     # -- Template-aware queries ----------------------------------------------
