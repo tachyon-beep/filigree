@@ -1,22 +1,15 @@
-"""MCP tools for file tracking, associations, scanners, and scan triggering."""
+"""MCP tools for file tracking, associations, and finding triage."""
 
 from __future__ import annotations
 
-import asyncio
 import logging
-import secrets
-import subprocess
-import time
 from collections.abc import Callable
-from pathlib import Path
 from typing import Any
 
 from mcp.types import TextContent, Tool
 
 from filigree.core import VALID_ASSOC_TYPES, VALID_SEVERITIES
 from filigree.mcp_tools.common import _parse_args, _text, _validate_int_range, _validate_str
-from filigree.scanners import list_scanners as _list_scanners
-from filigree.scanners import load_scanner, validate_scanner_command
 from filigree.types.api import ErrorResponse
 from filigree.types.inputs import (
     AddFileAssociationArgs,
@@ -30,7 +23,6 @@ from filigree.types.inputs import (
     ListFindingsArgs,
     PromoteFindingArgs,
     RegisterFileArgs,
-    TriggerScanArgs,
     UpdateFindingArgs,
 )
 
@@ -138,36 +130,6 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
             },
         ),
         Tool(
-            name="list_scanners",
-            description="List registered scanners from .filigree/scanners/*.toml. Returns available scanner names, descriptions, and supported file types.",
-            inputSchema={
-                "type": "object",
-                "properties": {},
-            },
-        ),
-        Tool(
-            name="trigger_scan",
-            description=(
-                "Trigger an async bug scan on a file. Registers the file, spawns a detached scanner process, "
-                "and returns immediately with a scan_run_id for correlation. Check file findings later for results. "
-                "Note: results are POSTed to the dashboard API — ensure the dashboard is running at the target api_url. "
-                "Repeated triggers for the same scanner+file are rate-limited (30s cooldown)."
-            ),
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "scanner": {"type": "string", "description": "Scanner name (from list_scanners)"},
-                    "file_path": {"type": "string", "description": "File path to scan (relative to project root)"},
-                    "api_url": {
-                        "type": "string",
-                        "default": "http://localhost:8377",
-                        "description": "Dashboard URL where scanner POSTs results (localhost only by default)",
-                    },
-                },
-                "required": ["scanner", "file_path"],
-            },
-        ),
-        Tool(
             name="get_finding",
             description="Get a single scan finding by ID.",
             inputSchema={
@@ -258,8 +220,6 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
         "get_issue_files": _handle_get_issue_files,
         "add_file_association": _handle_add_file_association,
         "register_file": _handle_register_file,
-        "list_scanners": _handle_list_scanners,
-        "trigger_scan": _handle_trigger_scan,
         "get_finding": _handle_get_finding,
         "list_findings": _handle_list_findings,
         "update_finding": _handle_update_finding,
@@ -454,206 +414,6 @@ async def _handle_register_file(arguments: dict[str, Any]) -> list[TextContent]:
         metadata=metadata,
     )
     return _text(file_record.to_dict())
-
-
-async def _handle_list_scanners(arguments: dict[str, Any]) -> list[TextContent]:
-    from filigree.mcp_server import _get_filigree_dir
-
-    filigree_dir = _get_filigree_dir()
-    scanners_dir = filigree_dir / "scanners" if filigree_dir else None
-    if scanners_dir is None:
-        return _text({"scanners": [], "hint": "Project directory not initialized"})
-    load_errors: list[str] = []
-    scanners = _list_scanners(scanners_dir, errors=load_errors)
-    result_data: dict[str, Any] = {"scanners": [s.to_dict() for s in scanners]}
-    if load_errors:
-        result_data["errors"] = load_errors
-    if not scanners:
-        result_data["hint"] = "No scanners registered. Add TOML files to .filigree/scanners/"
-    return _text(result_data)
-
-
-async def _handle_trigger_scan(arguments: dict[str, Any]) -> list[TextContent]:
-    from datetime import UTC, datetime
-    from urllib.parse import urlparse
-
-    from filigree.mcp_server import (
-        _SCAN_COOLDOWN_SECONDS,
-        _get_db,
-        _get_filigree_dir,
-        _safe_path,
-        _scan_cooldowns,
-    )
-
-    filigree_dir = _get_filigree_dir()
-    if filigree_dir is None:
-        return _text(ErrorResponse(error="Project directory not initialized", code="not_initialized"))
-
-    args = _parse_args(arguments, TriggerScanArgs)
-    tracker = _get_db()
-    scanner_name = args["scanner"]
-    file_path = args["file_path"]
-    api_url = args.get("api_url", "http://localhost:8377")
-
-    parsed_url = urlparse(api_url)
-    url_host = parsed_url.hostname or ""
-    if url_host not in ("localhost", "127.0.0.1", "::1", ""):
-        return _text(
-            ErrorResponse(
-                error=f"Non-localhost api_url not allowed: {url_host!r}. Scanner results would be sent to an external host.",
-                code="invalid_api_url",
-            )
-        )
-
-    try:
-        target = _safe_path(file_path)
-    except ValueError as e:
-        return _text(ErrorResponse(error=str(e), code="invalid_path"))
-
-    scanners_dir = filigree_dir / "scanners"
-    cfg = load_scanner(scanners_dir, scanner_name)
-    if cfg is None:
-        available = [s.name for s in _list_scanners(scanners_dir)]
-        return _text(
-            {
-                "error": f"Scanner {scanner_name!r} not found",
-                "code": "scanner_not_found",
-                "available_scanners": available,
-            }
-        )
-
-    if not target.is_file():
-        return _text(
-            ErrorResponse(
-                error=f"File not found: {file_path}",
-                code="file_not_found",
-            )
-        )
-
-    file_type_warning = ""
-    if cfg.file_types:
-        ext = Path(file_path).suffix.lstrip(".")
-        if ext and ext not in cfg.file_types:
-            file_type_warning = f"Warning: file extension {ext!r} not in scanner's declared file_types {cfg.file_types}. Proceeding anyway."
-
-    canonical_path = str(target.relative_to(filigree_dir.resolve().parent))
-    project_scope = str(tracker.db_path.parent.resolve())
-    cooldown_key = (project_scope, scanner_name, canonical_path)
-    now_mono = time.monotonic()
-    stale = [k for k, v in _scan_cooldowns.items() if now_mono - v >= _SCAN_COOLDOWN_SECONDS]
-    for k in stale:
-        del _scan_cooldowns[k]
-    last_trigger = _scan_cooldowns.get(cooldown_key, 0.0)
-    if now_mono - last_trigger < _SCAN_COOLDOWN_SECONDS:
-        remaining = _SCAN_COOLDOWN_SECONDS - (now_mono - last_trigger)
-        return _text(
-            {
-                "error": f"Scanner {scanner_name!r} was already triggered for {file_path!r} recently. Wait {remaining:.0f}s.",
-                "code": "rate_limited",
-                "retry_after_seconds": round(remaining),
-            }
-        )
-
-    # Reserve cooldown BEFORE any await points to prevent concurrent
-    # calls from bypassing rate limiting (filigree-5bee22).
-    _scan_cooldowns[cooldown_key] = now_mono
-
-    project_root = filigree_dir.parent
-    ts = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S")
-    scan_run_id = f"{scanner_name}-{ts}-{secrets.token_hex(3)}"
-    try:
-        cmd = cfg.build_command(
-            file_path=canonical_path,
-            api_url=api_url,
-            project_root=str(project_root),
-            scan_run_id=scan_run_id,
-        )
-    except ValueError as e:
-        del _scan_cooldowns[cooldown_key]
-        return _text(ErrorResponse(error=str(e), code="invalid_command"))
-
-    cmd_err = validate_scanner_command(cmd, project_root=project_root)
-    if cmd_err is not None:
-        del _scan_cooldowns[cooldown_key]
-        return _text(ErrorResponse(error=cmd_err, code="command_not_found"))
-
-    file_record = tracker.register_file(canonical_path)
-
-    scan_log_dir = filigree_dir / "scans"
-    scan_log_dir.mkdir(parents=True, exist_ok=True)
-    scan_log_path = scan_log_dir / f"{scan_run_id}.log"
-    try:
-        scan_log_fd = open(scan_log_path, "w")  # noqa: SIM115
-    except OSError as log_err:
-        scan_log_fd = None
-        _logger.warning("Cannot open scan log %s: %s", scan_log_path, log_err)
-    try:
-        proc = subprocess.Popen(
-            cmd,
-            cwd=str(project_root),
-            stdout=subprocess.DEVNULL,
-            stderr=scan_log_fd if scan_log_fd is not None else subprocess.DEVNULL,
-            start_new_session=True,
-        )
-    except OSError as e:
-        del _scan_cooldowns[cooldown_key]
-        return _text(
-            {
-                "error": f"Failed to spawn scanner process: {e}",
-                "code": "spawn_failed",
-                "scanner": scanner_name,
-                "file_id": file_record.id,
-            }
-        )
-    finally:
-        if scan_log_fd is not None:
-            scan_log_fd.close()
-
-    await asyncio.sleep(0.2)
-    exit_code = proc.poll()
-    if exit_code is not None and exit_code != 0:
-        del _scan_cooldowns[cooldown_key]
-        log_hint = ""
-        if scan_log_path.exists():
-            log_hint = f" Check log: {scan_log_path.relative_to(filigree_dir.parent)}"
-        return _text(
-            {
-                "error": f"Scanner process exited immediately with code {exit_code}.{log_hint}",
-                "code": "spawn_failed",
-                "scanner": scanner_name,
-                "file_id": file_record.id,
-                "exit_code": exit_code,
-                "log_path": str(scan_log_path.relative_to(filigree_dir.parent)),
-            }
-        )
-
-    _logger.info(
-        "Spawned scanner %s for %s (pid=%d, run_id=%s)",
-        scanner_name,
-        file_path,
-        proc.pid,
-        scan_run_id,
-    )
-
-    log_rel = str(scan_log_path.relative_to(filigree_dir.parent))
-    scan_result: dict[str, Any] = {
-        "status": "triggered",
-        "scanner": scanner_name,
-        "file_path": file_path,
-        "file_id": file_record.id,
-        "scan_run_id": scan_run_id,
-        "pid": proc.pid,
-        "log_path": log_rel,
-        "message": (
-            f"Scan triggered with run_id={scan_run_id!r}. "
-            f"Results will be POSTed to {api_url}. "
-            f"Poll findings via file_id={file_record.id!r}. "
-            f"Scanner log: {log_rel}"
-        ),
-    }
-    if file_type_warning:
-        scan_result["warning"] = file_type_warning
-    return _text(scan_result)
 
 
 # ---------------------------------------------------------------------------

@@ -1601,7 +1601,7 @@ class TestScannerTools:
         finally:
             target.unlink(missing_ok=True)
             (scanners_dir / "bad.toml").unlink(missing_ok=True)
-            mcp_mod._scan_cooldowns.clear()
+
 
     async def test_trigger_scan_path_traversal_rejected(self, mcp_db: FiligreeDB) -> None:
         self._write_scanner_toml(mcp_db)
@@ -1707,7 +1707,7 @@ class TestScannerTools:
         try:
             target.write_text("x = 1\n")
             self._write_scanner_toml(mcp_db)
-            with patch("filigree.mcp_tools.files.subprocess.Popen", return_value=_Proc()) as popen:
+            with patch("filigree.mcp_tools.scanners.subprocess.Popen", return_value=_Proc()) as popen:
                 result = _parse(
                     await call_tool(
                         "trigger_scan",
@@ -1723,7 +1723,7 @@ class TestScannerTools:
             assert "./canonical_target.py" not in cmd
         finally:
             target.unlink(missing_ok=True)
-            mcp_mod._scan_cooldowns.clear()
+
 
     async def test_trigger_scan_registers_file_idempotent(self, mcp_db: FiligreeDB) -> None:
         import filigree.mcp_server as mcp_mod
@@ -1783,7 +1783,7 @@ class TestScannerTools:
         finally:
             target.unlink(missing_ok=True)
             # Clear cooldown state for test isolation
-            mcp_mod._scan_cooldowns.clear()
+
 
     async def test_trigger_scan_file_type_mismatch_warning(self, mcp_db: FiligreeDB) -> None:
         """Scanning a .txt file with a py-only scanner should succeed with a warning."""
@@ -1809,7 +1809,7 @@ class TestScannerTools:
             assert "txt" in result["warning"]
         finally:
             target.unlink(missing_ok=True)
-            mcp_mod._scan_cooldowns.clear()
+
 
     async def test_trigger_scan_allows_templated_executable_path(self, mcp_db: FiligreeDB) -> None:
         import filigree.mcp_server as mcp_mod
@@ -1845,7 +1845,7 @@ class TestScannerTools:
             target.unlink(missing_ok=True)
             scanner_exec.unlink(missing_ok=True)
             (scanners_dir / "templated-scanner.toml").unlink(missing_ok=True)
-            mcp_mod._scan_cooldowns.clear()
+
 
     async def test_trigger_scan_allows_project_relative_executable_path(self, mcp_db: FiligreeDB) -> None:
         import filigree.mcp_server as mcp_mod
@@ -1881,7 +1881,7 @@ class TestScannerTools:
             target.unlink(missing_ok=True)
             scanner_exec.unlink(missing_ok=True)
             (scanners_dir / "relative-scanner.toml").unlink(missing_ok=True)
-            mcp_mod._scan_cooldowns.clear()
+
 
     async def test_trigger_scan_response_includes_log_path(self, mcp_db: FiligreeDB) -> None:
         """trigger_scan must include log_path in response and create the log file."""
@@ -1939,7 +1939,7 @@ class TestScannerTools:
                 return original_open(path, *args, **kwargs)
 
             with (
-                patch("filigree.mcp_tools.files.subprocess.Popen", return_value=_Proc()),
+                patch("filigree.mcp_tools.scanners.subprocess.Popen", return_value=_Proc()),
                 patch("builtins.open", side_effect=_spy_open),
             ):
                 result = _parse(
@@ -1952,14 +1952,14 @@ class TestScannerTools:
             mock_fd.close.assert_called_once()  # scan_log_fd must be closed after Popen succeeds
         finally:
             target.unlink(missing_ok=True)
-            mcp_mod._scan_cooldowns.clear()
+
 
     async def test_trigger_scan_cooldown_is_scoped_per_project(self, tmp_path: Path) -> None:
         import filigree.mcp_server as mcp_mod
 
         original_db = mcp_mod.db
         original_dir = mcp_mod._filigree_dir
-        mcp_mod._scan_cooldowns.clear()
+
 
         def _make_project(name: str, prefix: str) -> tuple[FiligreeDB, Path]:
             project_root = tmp_path / name
@@ -2011,7 +2011,7 @@ class TestScannerTools:
         finally:
             mcp_mod.db = original_db
             mcp_mod._filigree_dir = original_dir
-            mcp_mod._scan_cooldowns.clear()
+
             db_a.close()
             db_b.close()
 
@@ -2197,61 +2197,49 @@ class TestAddFileAssociationIssueNotFound:
 
 
 # ---------------------------------------------------------------------------
-# Bug: filigree-5bee22 — trigger_scan cooldown race condition
+# DB-persisted scan cooldown tests (replaces in-memory filigree-5bee22 tests)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.slow
-class TestTriggerScanCooldownRace:
-    """Bug fix: filigree-5bee22 — cooldown must be set before async operations."""
+class TestTriggerScanCooldownDB:
+    """Cooldown is now DB-persisted via scan_runs table."""
 
-    async def test_cooldown_set_before_async_sleep(self, mcp_db: FiligreeDB) -> None:
-        """Cooldown key must be set BEFORE asyncio.sleep (the first await point).
-
-        The race window is between the check and set — if another coroutine runs
-        during the await, it could bypass cooldown. We verify by patching sleep
-        to assert the cooldown dict already has the key.
-        """
+    async def test_db_cooldown_blocks_retrigger(self, mcp_db: FiligreeDB) -> None:
+        """DB-persisted cooldown blocks re-triggering the same scanner+file."""
         import filigree.mcp_server as mcp_mod
 
         assert mcp_mod._filigree_dir is not None
         project_root = mcp_mod._filigree_dir.parent
-        target = project_root / "race_before_sleep.py"
+        target = project_root / "cooldown_test.py"
         scanners_dir = mcp_mod._filigree_dir / "scanners"
         scanners_dir.mkdir(exist_ok=True)
         (scanners_dir / "echo-scanner.toml").write_text('[scanner]\nname = "echo-scanner"\ncommand = "echo"\nargs = ["{file_path}"]\n')
         try:
             target.write_text("x = 1\n")
-            mcp_mod._scan_cooldowns.clear()
-
-            cooldown_was_set_before_sleep = False
-            project_scope = str(mcp_mod._filigree_dir.resolve())
-            cooldown_key = (project_scope, "echo-scanner", "race_before_sleep.py")
-
-            original_sleep = asyncio.sleep
-
-            async def spy_sleep(duration: float) -> None:
-                nonlocal cooldown_was_set_before_sleep
-                if cooldown_key in mcp_mod._scan_cooldowns:
-                    cooldown_was_set_before_sleep = True
-                await original_sleep(duration)
-
-            with patch("filigree.mcp_tools.files.asyncio.sleep", side_effect=spy_sleep):
-                result = _parse(
-                    await call_tool(
-                        "trigger_scan",
-                        {"scanner": "echo-scanner", "file_path": "race_before_sleep.py"},
-                    )
+            # First trigger should succeed
+            result = _parse(
+                await call_tool(
+                    "trigger_scan",
+                    {"scanner": "echo-scanner", "file_path": "cooldown_test.py"},
                 )
+            )
             assert result.get("status") == "triggered"
-            assert cooldown_was_set_before_sleep, "Cooldown must be set BEFORE asyncio.sleep to prevent race condition"
+
+            # Second trigger should be rate-limited
+            result2 = _parse(
+                await call_tool(
+                    "trigger_scan",
+                    {"scanner": "echo-scanner", "file_path": "cooldown_test.py"},
+                )
+            )
+            assert result2["code"] == "rate_limited"
         finally:
             target.unlink(missing_ok=True)
             (scanners_dir / "echo-scanner.toml").unlink(missing_ok=True)
-            mcp_mod._scan_cooldowns.clear()
 
-    async def test_cooldown_rolled_back_on_spawn_failure(self, mcp_db: FiligreeDB) -> None:
-        """If process spawn fails (OSError), cooldown should be rolled back."""
+    async def test_spawn_failure_returns_error(self, mcp_db: FiligreeDB) -> None:
+        """If process spawn fails (OSError), scan run is marked failed."""
         import filigree.mcp_server as mcp_mod
 
         assert mcp_mod._filigree_dir is not None
@@ -2262,9 +2250,7 @@ class TestTriggerScanCooldownRace:
         (scanners_dir / "spawn-fail.toml").write_text('[scanner]\nname = "spawn-fail"\ncommand = "echo"\nargs = ["{file_path}"]\n')
         try:
             target.write_text("y = 1\n")
-            mcp_mod._scan_cooldowns.clear()
-
-            with patch("filigree.mcp_tools.files.subprocess.Popen", side_effect=OSError("mock spawn fail")):
+            with patch("filigree.mcp_tools.scanners.subprocess.Popen", side_effect=OSError("mock spawn fail")):
                 result = _parse(
                     await call_tool(
                         "trigger_scan",
@@ -2272,18 +2258,12 @@ class TestTriggerScanCooldownRace:
                     )
                 )
             assert result["code"] == "spawn_failed"
-
-            # Cooldown should be rolled back so retry is allowed
-            project_scope = str(mcp_mod._filigree_dir.resolve())
-            cooldown_key = (project_scope, "spawn-fail", "spawn_fail.py")
-            assert cooldown_key not in mcp_mod._scan_cooldowns, "Cooldown should be rolled back after spawn failure"
         finally:
             target.unlink(missing_ok=True)
             (scanners_dir / "spawn-fail.toml").unlink(missing_ok=True)
-            mcp_mod._scan_cooldowns.clear()
 
-    async def test_cooldown_rolled_back_on_command_not_found(self, mcp_db: FiligreeDB) -> None:
-        """If command validation fails, cooldown should be rolled back."""
+    async def test_command_not_found_returns_error(self, mcp_db: FiligreeDB) -> None:
+        """If command validation fails, no scan run is created."""
         import filigree.mcp_server as mcp_mod
 
         assert mcp_mod._filigree_dir is not None
@@ -2294,8 +2274,6 @@ class TestTriggerScanCooldownRace:
         (scanners_dir / "bad-cmd.toml").write_text('[scanner]\nname = "bad-cmd"\ncommand = "nonexistent_binary_xyz"\n')
         try:
             target.write_text("z = 1\n")
-            mcp_mod._scan_cooldowns.clear()
-
             result = _parse(
                 await call_tool(
                     "trigger_scan",
@@ -2303,15 +2281,10 @@ class TestTriggerScanCooldownRace:
                 )
             )
             assert result["code"] == "command_not_found"
-
-            # Cooldown should be rolled back so retry is allowed
-            project_scope = str(mcp_mod._filigree_dir.resolve())
-            cooldown_key = (project_scope, "bad-cmd", "cmd_fail.py")
-            assert cooldown_key not in mcp_mod._scan_cooldowns, "Cooldown should be rolled back after command validation failure"
         finally:
             target.unlink(missing_ok=True)
             (scanners_dir / "bad-cmd.toml").unlink(missing_ok=True)
-            mcp_mod._scan_cooldowns.clear()
+
 
 
 # ---------------------------------------------------------------------------

@@ -30,6 +30,7 @@ _MCP_MODULES = [
     "filigree.mcp_tools.workflow",
     "filigree.mcp_tools.files",
     "filigree.mcp_tools.observations",
+    "filigree.mcp_tools.scanners",
 ]
 
 
@@ -38,7 +39,11 @@ def _discover_tools() -> list[tuple[str, Tool]]:
     result: list[tuple[str, Tool]] = []
     for mod_path in _MCP_MODULES:
         mod = importlib.import_module(mod_path)
-        tools, _ = mod.register()
+        # Scanner module needs include_legacy=True to include all tools
+        if mod_path.endswith(".scanners"):
+            tools, _ = mod.register(include_legacy=True)
+        else:
+            tools, _ = mod.register()
         for tool in tools:
             result.append((tool.name, tool))
     return result

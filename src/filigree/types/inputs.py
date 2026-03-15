@@ -374,6 +374,27 @@ class DismissFindingArgs(TypedDict):
 
 
 # ---------------------------------------------------------------------------
+# scanners.py handlers
+# ---------------------------------------------------------------------------
+
+
+class TriggerScanBatchArgs(TypedDict):
+    scanner: str
+    file_paths: list[str]
+    api_url: NotRequired[str]
+
+
+class GetScanStatusArgs(TypedDict):
+    scan_run_id: str
+    log_lines: NotRequired[int]
+
+
+class PreviewScanArgs(TypedDict):
+    scanner: str
+    file_path: str
+
+
+# ---------------------------------------------------------------------------
 # observations.py handlers
 # ---------------------------------------------------------------------------
 
@@ -468,13 +489,17 @@ TOOL_ARGS_MAP: dict[str, type] = {
     "get_issue_files": GetIssueFilesArgs,
     "add_file_association": AddFileAssociationArgs,
     "register_file": RegisterFileArgs,
-    "trigger_scan": TriggerScanArgs,
     "get_finding": GetFindingArgs,
     "list_findings": ListFindingsArgs,
     "update_finding": UpdateFindingArgs,
     "batch_update_findings": BatchUpdateFindingsArgs,
     "promote_finding": PromoteFindingArgs,
     "dismiss_finding": DismissFindingArgs,
+    # scanners.py (list_scanners has no args — excluded)
+    "trigger_scan": TriggerScanArgs,
+    "trigger_scan_batch": TriggerScanBatchArgs,
+    "get_scan_status": GetScanStatusArgs,
+    "preview_scan": PreviewScanArgs,
     # observations.py
     "observe": ObserveArgs,
     "list_observations": ListObservationsArgs,
