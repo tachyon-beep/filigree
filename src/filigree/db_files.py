@@ -820,20 +820,33 @@ class FilesMixin(DBMixinProtocol):
 
     def update_finding(
         self,
-        file_id: str,
         finding_id: str,
         *,
+        file_id: str | None = None,
         status: FindingStatus | None = None,
         issue_id: str | None = None,
-    ) -> ScanFinding:
-        """Update finding status and/or linked issue for a specific file finding."""
-        row = self.conn.execute(
-            "SELECT id FROM scan_findings WHERE id = ? AND file_id = ?",
-            (finding_id, file_id),
-        ).fetchone()
+    ) -> ScanFindingDict:
+        """Update finding status and/or linked issue.
+
+        *file_id* is optional — when omitted, it is looked up from the
+        finding record.  This allows callers that only have a finding ID
+        (e.g. MCP tool handlers) to update findings without knowing
+        which file they belong to.
+        """
+        if file_id is not None:
+            row = self.conn.execute(
+                "SELECT id, file_id FROM scan_findings WHERE id = ? AND file_id = ?",
+                (finding_id, file_id),
+            ).fetchone()
+        else:
+            row = self.conn.execute(
+                "SELECT id, file_id FROM scan_findings WHERE id = ?",
+                (finding_id,),
+            ).fetchone()
         if row is None:
             msg = f"Finding not found: {finding_id}"
             raise KeyError(msg)
+        file_id = row["file_id"]
 
         updates: list[str] = []
         params: list[Any] = []
@@ -891,7 +904,7 @@ class FilesMixin(DBMixinProtocol):
         if updated is None:
             msg = f"Finding not found after update: {finding_id}"
             raise KeyError(msg)
-        return self._build_scan_finding(updated)
+        return self._build_scan_finding(updated).to_dict()
 
     def clean_stale_findings(
         self,
@@ -1017,6 +1030,115 @@ class FilesMixin(DBMixinProtocol):
             "offset": offset,
             "has_more": (offset + limit) < total,
         }
+
+    # ------------------------------------------------------------------
+    # Finding triage methods
+    # ------------------------------------------------------------------
+
+    _SEVERITY_TO_PRIORITY: ClassVar[dict[str, int]] = {
+        "critical": 0,
+        "high": 1,
+        "medium": 2,
+        "low": 3,
+        "info": 3,
+    }
+
+    def get_finding(self, finding_id: str) -> ScanFindingDict:
+        """Get a single finding by ID.  Raises *KeyError* if not found."""
+        row = self.conn.execute(
+            "SELECT * FROM scan_findings WHERE id = ?",
+            (finding_id,),
+        ).fetchone()
+        if row is None:
+            msg = f"Finding not found: {finding_id}"
+            raise KeyError(msg)
+        return self._build_scan_finding(row).to_dict()
+
+    def list_findings_global(
+        self,
+        *,
+        severity: str | None = None,
+        status: str | None = None,
+        scan_source: str | None = None,
+        scan_run_id: str | None = None,
+        file_id: str | None = None,
+        issue_id: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        """Project-wide finding query with optional filters.
+
+        Returns ``{"findings": [...], "total": N, "limit": ..., "offset": ...}``.
+        """
+        clauses: list[str] = []
+        params: list[Any] = []
+
+        if severity is not None:
+            clauses.append("severity = ?")
+            params.append(severity)
+        if status is not None:
+            clauses.append("status = ?")
+            params.append(status)
+        if scan_source is not None:
+            clauses.append("scan_source = ?")
+            params.append(scan_source)
+        if scan_run_id is not None:
+            clauses.append("scan_run_id = ?")
+            params.append(scan_run_id)
+        if file_id is not None:
+            clauses.append("file_id = ?")
+            params.append(file_id)
+        if issue_id is not None:
+            clauses.append("issue_id = ?")
+            params.append(issue_id)
+
+        where = " AND ".join(clauses) if clauses else "1=1"
+
+        total: int = self.conn.execute(
+            f"SELECT COUNT(*) FROM scan_findings WHERE {where}",
+            params,
+        ).fetchone()[0]
+
+        rows = self.conn.execute(
+            f"SELECT * FROM scan_findings WHERE {where} ORDER BY updated_at DESC LIMIT ? OFFSET ?",
+            [*params, limit, offset],
+        ).fetchall()
+
+        findings = [self._build_scan_finding(r).to_dict() for r in rows]
+        return {"findings": findings, "total": total, "limit": limit, "offset": offset}
+
+    def promote_finding_to_observation(
+        self,
+        finding_id: str,
+        *,
+        priority: int | None = None,
+        actor: str = "",
+    ) -> dict[str, Any]:
+        """Promote a finding to an observation.
+
+        Creates an observation note from the finding's data.  Priority
+        is inferred from severity if not provided explicitly.
+        """
+        finding = self.get_finding(finding_id)
+        if priority is None:
+            priority = self._SEVERITY_TO_PRIORITY.get(finding["severity"], 3)
+
+        summary = f"[{finding['scan_source']}] {finding['message']}"
+        return self.create_observation(
+            summary,
+            detail=f"rule: {finding['rule_id']}, severity: {finding['severity']}",
+            file_path=self._file_path_for_finding(finding["file_id"]),
+            line=finding.get("line_start"),
+            priority=priority,
+            actor=actor,
+        )
+
+    def _file_path_for_finding(self, file_id: str) -> str:
+        """Look up the file path for a file_id, returning empty string if not found."""
+        row = self.conn.execute(
+            "SELECT path FROM file_records WHERE id = ?", (file_id,)
+        ).fetchone()
+        return row["path"] if row else ""
 
     def get_file_findings_summary(self, file_id: str) -> FindingsSummary:
         """Get a severity-bucketed summary of findings for a file."""

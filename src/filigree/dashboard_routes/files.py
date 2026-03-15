@@ -241,8 +241,8 @@ def create_router() -> APIRouter:
             return _error_response("issue_id must be a string", "VALIDATION_ERROR", 400)
         try:
             finding = db.update_finding(
-                file_id,
                 finding_id,
+                file_id=file_id,
                 status=cast(FindingStatus | None, status),
                 issue_id=issue_id,
             )
@@ -250,7 +250,7 @@ def create_router() -> APIRouter:
             return _error_response(f"Finding not found: {finding_id}", "FINDING_NOT_FOUND", 404)
         except ValueError as e:
             return _error_response(str(e), "VALIDATION_ERROR", 400)
-        return JSONResponse(finding.to_dict())
+        return JSONResponse(finding)
 
     @router.get("/files/{file_id}/timeline")
     async def api_get_file_timeline(file_id: str, request: Request, db: FiligreeDB = Depends(_get_db)) -> JSONResponse:

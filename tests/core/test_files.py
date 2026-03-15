@@ -347,8 +347,8 @@ class TestProcessScanResults:
         assert file_record is not None
         finding = db.get_findings(file_record.id)[0]
 
-        updated = db.update_finding(file_record.id, finding.id, status="fixed")
-        assert updated.status == "fixed"
+        updated = db.update_finding(finding.id, file_id=file_record.id, status="fixed")
+        assert updated["status"] == "fixed"
         summary = db.get_file_findings_summary(file_record.id)
         assert summary["open_findings"] == 0
 
@@ -362,9 +362,9 @@ class TestProcessScanResults:
         assert file_record is not None
         finding = db.get_findings(file_record.id)[0]
 
-        updated = db.update_finding(file_record.id, finding.id, status="fixed", issue_id=issue.id)
-        assert updated.status == "fixed"
-        assert updated.issue_id == issue.id
+        updated = db.update_finding(finding.id, file_id=file_record.id, status="fixed", issue_id=issue.id)
+        assert updated["status"] == "fixed"
+        assert updated["issue_id"] == issue.id
         associations = db.get_file_associations(file_record.id)
         assert any(a["issue_id"] == issue.id and a["assoc_type"] == "bug_in" for a in associations)
 
@@ -378,7 +378,7 @@ class TestProcessScanResults:
         assert f is not None
         finding = db.get_findings(f.id)[0]
         with pytest.raises(ValueError, match="At least one of"):
-            db.update_finding(f.id, finding.id)
+            db.update_finding(finding.id, file_id=f.id)
 
     def test_update_finding_rejects_invalid_status(self, db: FiligreeDB) -> None:
         """Passing an invalid status to update_finding must raise ValueError."""
@@ -390,7 +390,7 @@ class TestProcessScanResults:
         assert f is not None
         finding = db.get_findings(f.id)[0]
         with pytest.raises(ValueError, match="Invalid finding status"):
-            db.update_finding(f.id, finding.id, status="bogus")
+            db.update_finding(finding.id, file_id=f.id, status="bogus")
 
     def test_ingest_finding_missing_path(self, db: FiligreeDB) -> None:
         with pytest.raises(ValueError, match="path"):
@@ -1440,7 +1440,7 @@ class TestHotspotsIncludesAcknowledgedFindings:
         f = db.get_file_by_path("a.py")
         assert f is not None
         findings = db.get_findings(f.id)
-        db.update_finding(f.id, findings[0].id, status="acknowledged")
+        db.update_finding(findings[0].id, file_id=f.id, status="acknowledged")
         result = db.get_file_hotspots()
         assert len(result) == 1, "Acknowledged finding should still appear in hotspots"
         assert result[0]["score"] > 0
