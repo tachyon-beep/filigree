@@ -42,8 +42,8 @@ def register(
             name="trigger_scan_batch",
             description=(
                 "Trigger a scanner on multiple files in one call. "
-                "Registers all files, spawns a single scanner process with all paths, "
-                "and returns a scan_run_id for correlation. Rate-limited per scanner+file."
+                "Registers all files, spawns one scanner process per file, "
+                "and returns a shared scan_run_id for correlation. Rate-limited per scanner+file."
             ),
             inputSchema={
                 "type": "object",
@@ -462,20 +462,36 @@ async def _handle_trigger_scan_batch(arguments: dict[str, Any]) -> list[TextCont
     ts = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S")
     scan_run_id = f"{scanner_name}-batch-{ts}-{secrets.token_hex(3)}"
 
-    # Build command with first file (scanner should accept multiple via scan_run_id correlation)
-    spawn_result = _spawn_scan(
-        cfg=cfg,
-        canonical_path=canonical_paths[0],
-        api_url=api_url,
-        project_root=project_root,
-        scan_run_id=scan_run_id,
-        filigree_dir=filigree_dir,
-    )
-    if isinstance(spawn_result, list):
-        return spawn_result
+    # Spawn one scanner process per file — build_command only accepts a single path
+    spawned: list[dict[str, Any]] = []
+    spawn_errors: list[dict[str, str]] = []
+    for cp in canonical_paths:
+        spawn_result = _spawn_scan(
+            cfg=cfg,
+            canonical_path=cp,
+            api_url=api_url,
+            project_root=project_root,
+            scan_run_id=scan_run_id,
+            filigree_dir=filigree_dir,
+        )
+        if isinstance(spawn_result, list):
+            spawn_errors.append({"file_path": cp, "reason": "spawn_failed"})
+            continue
+        spawned.append(spawn_result)
 
-    proc = spawn_result["proc"]
-    scan_log_path = spawn_result["scan_log_path"]
+    if not spawned:
+        return _text(
+            {
+                "error": "All scanner processes failed to spawn",
+                "code": "spawn_failed",
+                "spawn_errors": spawn_errors,
+                "skipped": skipped,
+            }
+        )
+
+    # Use the last spawned process for the scan run record (all share scan_run_id)
+    last = spawned[-1]
+    scan_log_path = last["scan_log_path"]
     log_rel = str(scan_log_path.relative_to(filigree_dir.parent))
 
     tracker.create_scan_run(
@@ -484,24 +500,31 @@ async def _handle_trigger_scan_batch(arguments: dict[str, Any]) -> list[TextCont
         scan_source=scanner_name,
         file_paths=canonical_paths,
         file_ids=file_ids,
-        pid=proc.pid,
+        pid=last["proc"].pid,
         api_url=api_url,
         log_path=log_rel,
     )
     tracker.update_scan_run_status(scan_run_id, "running")
 
+    # Quick check: did any process exit immediately with error?
     await asyncio.sleep(0.2)
-    exit_code = proc.poll()
-    if exit_code is not None and exit_code != 0:
+    immediate_failures = 0
+    for s in spawned:
+        ec = s["proc"].poll()
+        if ec is not None and ec != 0:
+            immediate_failures += 1
+
+    if immediate_failures == len(spawned):
+        last_exit = last["proc"].poll()
         tracker.update_scan_run_status(
             scan_run_id,
             "failed",
-            exit_code=exit_code,
-            error_message=f"Scanner exited immediately with code {exit_code}",
+            exit_code=last_exit,
+            error_message=f"All {len(spawned)} scanner processes exited immediately",
         )
         return _text(
             {
-                "error": f"Scanner process exited immediately with code {exit_code}.",
+                "error": f"All {len(spawned)} scanner processes exited immediately.",
                 "code": "spawn_failed",
                 "scan_run_id": scan_run_id,
                 "log_path": log_rel,
@@ -512,12 +535,16 @@ async def _handle_trigger_scan_batch(arguments: dict[str, Any]) -> list[TextCont
         "status": "triggered",
         "scanner": scanner_name,
         "file_count": len(canonical_paths),
+        "processes_spawned": len(spawned),
         "scan_run_id": scan_run_id,
-        "pid": proc.pid,
         "log_path": log_rel,
     }
+    if spawn_errors:
+        result["spawn_errors"] = spawn_errors
     if skipped:
         result["skipped"] = skipped
+    if immediate_failures:
+        result["immediate_failures"] = immediate_failures
     return _text(result)
 
 

@@ -677,13 +677,18 @@ class FilesMixin(DBMixinProtocol):
             raise
 
         if scan_run_id:
-            import contextlib
-
-            with contextlib.suppress(KeyError, ValueError, AttributeError):
+            try:
                 self.update_scan_run_status(
                     scan_run_id,
                     "completed",
                     findings_count=stats["findings_created"] + stats["findings_updated"],
+                )
+            except (KeyError, ValueError) as exc:
+                logger.warning(
+                    "Failed to mark scan run %r as completed "
+                    "(findings were ingested successfully): %s",
+                    scan_run_id,
+                    exc,
                 )
 
         return stats
