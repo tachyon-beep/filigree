@@ -27,6 +27,10 @@ class TestFileSchema:
         row = db.conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='file_associations'").fetchone()
         assert row is not None
 
+    def test_scan_runs_table_exists(self, db: FiligreeDB) -> None:
+        row = db.conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='scan_runs'").fetchone()
+        assert row is not None
+
 
 # ---------------------------------------------------------------------------
 # FileRecord CRUD tests

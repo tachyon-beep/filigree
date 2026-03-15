@@ -1623,3 +1623,51 @@ class TestMigrateV6ToV7:
         apply_pending_migrations(v6_db, 7)
         applied = apply_pending_migrations(v6_db, 7)
         assert applied == 0
+
+
+# ---------------------------------------------------------------------------
+# v7 -> v8 migration tests (scan_runs)
+# ---------------------------------------------------------------------------
+
+
+class TestMigrateV7ToV8:
+    """Tests for migration v7 -> v8: scan_runs table."""
+
+    @pytest.fixture
+    def v7_db(self, tmp_path: Path) -> sqlite3.Connection:
+        """Create a v7 database using the full schema (stamped as v7)."""
+        conn = _make_db(tmp_path)
+        conn.executescript(SCHEMA_SQL)
+        conn.execute("PRAGMA user_version = 7")
+        conn.commit()
+        # Drop the new table so migration can recreate it
+        conn.execute("DROP TABLE IF EXISTS scan_runs")
+        conn.commit()
+        return conn
+
+    def test_migration_runs(self, v7_db: sqlite3.Connection) -> None:
+        applied = apply_pending_migrations(v7_db, 8)
+        assert applied == 1
+        assert _get_schema_version(v7_db) == 8
+
+    def test_scan_runs_table_created(self, v7_db: sqlite3.Connection) -> None:
+        apply_pending_migrations(v7_db, 8)
+        cols = _get_table_columns(v7_db, "scan_runs")
+        expected = {
+            "id", "scanner_name", "scan_source", "status", "file_paths",
+            "file_ids", "pid", "api_url", "log_path", "started_at",
+            "updated_at", "completed_at", "exit_code", "findings_count",
+            "error_message",
+        }
+        assert expected.issubset(cols)
+
+    def test_indexes_created(self, v7_db: sqlite3.Connection) -> None:
+        apply_pending_migrations(v7_db, 8)
+        indexes = _get_index_names(v7_db)
+        assert "idx_scan_runs_status" in indexes
+        assert "idx_scan_runs_scanner" in indexes
+
+    def test_idempotent(self, v7_db: sqlite3.Connection) -> None:
+        apply_pending_migrations(v7_db, 8)
+        applied = apply_pending_migrations(v7_db, 8)
+        assert applied == 0

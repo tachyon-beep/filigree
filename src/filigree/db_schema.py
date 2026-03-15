@@ -169,6 +169,30 @@ CREATE TABLE IF NOT EXISTS file_associations (
 CREATE INDEX IF NOT EXISTS idx_file_assoc_file ON file_associations(file_id);
 CREATE INDEX IF NOT EXISTS idx_file_assoc_issue ON file_associations(issue_id);
 
+-- ---- Scan run lifecycle tracking ------------------------------------------
+
+CREATE TABLE IF NOT EXISTS scan_runs (
+    id            TEXT PRIMARY KEY,
+    scanner_name  TEXT NOT NULL,
+    scan_source   TEXT NOT NULL DEFAULT '',
+    status        TEXT NOT NULL DEFAULT 'pending',
+    file_paths    TEXT NOT NULL DEFAULT '[]',
+    file_ids      TEXT NOT NULL DEFAULT '[]',
+    pid           INTEGER,
+    api_url       TEXT DEFAULT '',
+    log_path      TEXT DEFAULT '',
+    started_at    TEXT NOT NULL,
+    updated_at    TEXT NOT NULL,
+    completed_at  TEXT,
+    exit_code     INTEGER,
+    findings_count INTEGER DEFAULT 0,
+    error_message TEXT DEFAULT '',
+    CHECK (status IN ('pending', 'running', 'completed', 'failed', 'timeout'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_scan_runs_status ON scan_runs(status);
+CREATE INDEX IF NOT EXISTS idx_scan_runs_scanner ON scan_runs(scanner_name);
+
 CREATE TABLE IF NOT EXISTS file_events (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     file_id     TEXT NOT NULL REFERENCES file_records(id),
@@ -314,4 +338,4 @@ CREATE TRIGGER IF NOT EXISTS issues_fts_delete AFTER DELETE ON issues BEGIN
 END;
 """
 
-CURRENT_SCHEMA_VERSION = 7
+CURRENT_SCHEMA_VERSION = 8
