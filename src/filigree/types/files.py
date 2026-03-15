@@ -102,6 +102,37 @@ class ScanRunRecord(TypedDict):
     files_scanned: int
 
 
+class ScanRunDict(TypedDict):
+    """Shape for scan_runs table rows returned by ScansMixin.
+
+    Not to be confused with ScanRunRecord (above), which is a GROUP BY
+    projection from scan_findings for legacy scan history queries.
+    """
+
+    id: str
+    scanner_name: str
+    scan_source: str
+    status: str
+    file_paths: list[str]
+    file_ids: list[str]
+    pid: int | None
+    api_url: str
+    log_path: str
+    started_at: ISOTimestamp
+    updated_at: ISOTimestamp
+    completed_at: ISOTimestamp | None
+    exit_code: int | None
+    findings_count: int
+    error_message: str
+
+
+class ScanRunStatusDict(ScanRunDict):
+    """Extended shape for get_scan_status with live process info and log tail."""
+
+    process_alive: bool
+    log_tail: list[str]
+
+
 class ScanIngestResult(TypedDict):
     """Shape returned by ``process_scan_results()``."""
 
