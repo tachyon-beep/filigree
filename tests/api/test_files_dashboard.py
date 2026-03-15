@@ -415,12 +415,12 @@ class TestScanResultsEndpointEnhancements:
         assert statuses["E501"] == "open"
         assert statuses["E502"] == "unseen_in_latest"
 
-    async def test_create_issues_via_api_is_rejected(self, client: AsyncClient) -> None:
+    async def test_create_observations_via_api(self, client: AsyncClient) -> None:
         resp = await client.post(
             "/api/v1/scan-results",
             json={
                 "scan_source": "codex",
-                "create_issues": True,
+                "create_observations": True,
                 "findings": [
                     {
                         "path": "src/main.py",
@@ -432,10 +432,9 @@ class TestScanResultsEndpointEnhancements:
                 ],
             },
         )
-        assert resp.status_code == 400
+        assert resp.status_code == 200
         payload = resp.json()
-        assert payload["error"]["code"] == "VALIDATION_ERROR"
-        assert "not supported" in payload["error"]["message"].lower()
+        assert payload["observations_created"] == 1
 
 
 class TestSortBySeverityEndpoint:
@@ -683,14 +682,13 @@ class TestInputValidation400s:
         assert resp.status_code == 400
         assert resp.json()["error"]["code"] == "VALIDATION_ERROR"
 
-    async def test_scan_create_issues_field_is_rejected(self, client: AsyncClient) -> None:
+    async def test_scan_create_observations_must_be_boolean(self, client: AsyncClient) -> None:
         resp = await client.post(
             "/api/v1/scan-results",
-            json={"scan_source": "ruff", "create_issues": "yes", "findings": []},
+            json={"scan_source": "ruff", "create_observations": "yes", "findings": []},
         )
         assert resp.status_code == 400
         assert resp.json()["error"]["code"] == "VALIDATION_ERROR"
-        assert "not supported" in resp.json()["error"]["message"].lower()
 
     async def test_scan_mark_unseen_must_be_boolean(self, client: AsyncClient) -> None:
         resp = await client.post(

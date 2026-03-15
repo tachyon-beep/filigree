@@ -311,7 +311,7 @@ def post_to_api(
     scan_source: str,
     scan_run_id: str,
     findings: list[dict[str, Any]],
-    create_issues: bool = False,
+    create_observations: bool = False,
 ) -> bool:
     """POST findings to filigree's scan API.
 
@@ -320,7 +320,7 @@ def post_to_api(
         scan_source: Scanner identifier (e.g., "codex", "claude").
         scan_run_id: Unique run identifier.
         findings: List of finding dicts.
-        create_issues: If True, auto-promote findings to candidate bug issues.
+        create_observations: If True, auto-promote findings to observations for triage.
 
     Returns:
         True on success, False on failure.
@@ -333,7 +333,7 @@ def post_to_api(
         "scan_source": scan_source,
         "scan_run_id": scan_run_id,
         "findings": findings,
-        "create_issues": create_issues,
+        "create_observations": create_observations,
     }
     data = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(  # noqa: S310

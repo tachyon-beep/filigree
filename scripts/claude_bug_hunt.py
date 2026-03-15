@@ -259,7 +259,7 @@ async def analyse_files(
                             scan_source="claude",
                             scan_run_id=scan_run_id,
                             findings=findings,
-                            create_issues=True,
+                            create_observations=True,
                         )
                         if ok:
                             api_successes += len(findings)
