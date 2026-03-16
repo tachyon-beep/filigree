@@ -1,4 +1,4 @@
-<!-- filigree:instructions:v1.5.0:d6a73398 -->
+<!-- filigree:instructions:v1.5.0:63b4188e -->
 ## Filigree Issue Tracker
 
 Use `filigree` for all task tracking in this project. Data lives in `.filigree/`.
@@ -13,10 +13,14 @@ faster and return structured data. Key tools:
 - `create_issue` / `update_issue` / `close_issue` — manage issues
 - `claim_issue` / `claim_next` — atomic claiming
 - `add_comment` / `add_label` — metadata
+- `list_labels` / `get_label_taxonomy` — discover labels and reserved namespaces
 - `create_plan` / `get_plan` — milestone planning
 - `get_stats` / `get_metrics` — project health
 - `get_valid_transitions` — workflow navigation
 - `observe` / `list_observations` / `dismiss_observation` / `promote_observation` — agent scratchpad
+- `trigger_scan` / `trigger_scan_batch` / `get_scan_status` / `preview_scan` / `list_scanners` — automated code scanning
+- `get_finding` / `list_findings` / `update_finding` / `batch_update_findings` — scan finding triage
+- `promote_finding` / `dismiss_finding` — finding lifecycle (promote to issue or dismiss)
 
 Observations are fire-and-forget notes that expire after 14 days. Use `list_issues --label=from-observation` to find promoted observations.
 
@@ -38,6 +42,9 @@ Fall back to CLI (`filigree <command>`) when MCP is unavailable.
 filigree ready                              # Show issues ready to work (no blockers)
 filigree list --status=open                 # All open issues
 filigree list --status=in_progress          # Active work
+filigree list --label=bug --label=P1        # Filter by multiple labels (AND)
+filigree list --label-prefix=cluster/       # Filter by label namespace prefix
+filigree list --not-label=wontfix           # Exclude issues with label
 filigree show <id>                          # Detailed issue view
 
 # Creating & updating
@@ -56,6 +63,8 @@ filigree add-comment <id> "text"            # Add comment
 filigree get-comments <id>                  # List comments
 filigree add-label <id> <label>             # Add label
 filigree remove-label <id> <label>          # Remove label
+filigree labels                             # List all labels by namespace
+filigree taxonomy                           # Show reserved namespaces and vocabulary
 
 # Workflow templates
 filigree types                              # List registered types with state flows
