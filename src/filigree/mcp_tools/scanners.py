@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import secrets
@@ -33,10 +34,9 @@ def register(
 ) -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
     """Return (tool_definitions, handler_map) for scanner-domain tools.
 
-    When *include_legacy* is False (default), only the 3 NEW tools are
-    returned — ``list_scanners`` and ``trigger_scan`` remain in
-    ``files.py`` during the transition.  Set *include_legacy=True* once
-    those tools are removed from ``files.py``.
+    When *include_legacy* is True (as used in production), all 5 scanner
+    tools are returned.  When False, only the 3 batch/status/preview
+    tools are returned (useful for testing subsets).
     """
     new_tools = [
         Tool(
@@ -202,10 +202,12 @@ def _spawn_scan(
     scan_log_dir.mkdir(parents=True, exist_ok=True)
     log_name = f"{scan_run_id}{log_suffix}.log"
     scan_log_path = scan_log_dir / log_name
+    log_warning: str | None = None
     try:
         scan_log_fd = open(scan_log_path, "w")  # noqa: SIM115
     except OSError as log_err:
         scan_log_fd = None
+        log_warning = f"Scan log could not be created at {scan_log_path}: {log_err}. Scanner stderr will be discarded."
         _logger.warning("Cannot open scan log %s: %s", scan_log_path, log_err)
     try:
         proc = subprocess.Popen(
@@ -215,7 +217,7 @@ def _spawn_scan(
             stderr=scan_log_fd if scan_log_fd is not None else subprocess.DEVNULL,
             start_new_session=True,
         )
-    except OSError as e:
+    except (OSError, ValueError, TypeError) as e:
         return _text(
             {
                 "error": f"Failed to spawn scanner process: {e}",
@@ -227,11 +229,14 @@ def _spawn_scan(
         if scan_log_fd is not None:
             scan_log_fd.close()
 
-    return {
+    result: dict[str, Any] = {
         "proc": proc,
         "scan_log_path": scan_log_path,
         "cmd": cmd,
     }
+    if log_warning:
+        result["log_warning"] = log_warning
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -245,7 +250,7 @@ async def _handle_list_scanners(arguments: dict[str, Any]) -> list[TextContent]:
     filigree_dir = _get_filigree_dir()
     scanners_dir = filigree_dir / "scanners" if filigree_dir else None
     if scanners_dir is None:
-        return _text({"scanners": [], "hint": "Project directory not initialized"})
+        return _text(ErrorResponse(error="Project directory not initialized", code="not_initialized"))
     load_errors: list[str] = []
     scanners = _list_scanners(scanners_dir, errors=load_errors)
     result_data: dict[str, Any] = {"scanners": [s.to_dict() for s in scanners]}
@@ -334,18 +339,35 @@ async def _handle_trigger_scan(arguments: dict[str, Any]) -> list[TextContent]:
     scan_log_path = spawn_result["scan_log_path"]
     log_rel = str(scan_log_path.relative_to(filigree_dir.parent))
 
-    # Create DB-tracked scan run
-    tracker.create_scan_run(
-        scan_run_id=scan_run_id,
-        scanner_name=scanner_name,
-        scan_source=scanner_name,
-        file_paths=[canonical_path],
-        file_ids=[file_record.id],
-        pid=proc.pid,
-        api_url=api_url,
-        log_path=log_rel,
-    )
-    tracker.update_scan_run_status(scan_run_id, "running")
+    # Create DB-tracked scan run.  If the DB call fails the spawned
+    # process would be orphaned, so kill it on any error.
+    try:
+        tracker.create_scan_run(
+            scan_run_id=scan_run_id,
+            scanner_name=scanner_name,
+            scan_source=scanner_name,
+            file_paths=[canonical_path],
+            file_ids=[file_record.id],
+            pid=proc.pid,
+            api_url=api_url,
+            log_path=log_rel,
+        )
+        tracker.update_scan_run_status(scan_run_id, "running")
+    except Exception as exc:
+        with contextlib.suppress(OSError):
+            proc.kill()
+        _logger.error(
+            "Failed to record scan run %s (pid %d killed): %s",
+            scan_run_id,
+            proc.pid,
+            exc,
+        )
+        return _text(
+            ErrorResponse(
+                error=f"Scan process spawned but DB tracking failed: {exc}. Process (pid={proc.pid}) terminated.",
+                code="db_error",
+            )
+        )
 
     await asyncio.sleep(0.2)
     exit_code = proc.poll()
@@ -394,8 +416,13 @@ async def _handle_trigger_scan(arguments: dict[str, Any]) -> list[TextContent]:
             f"Scanner log: {log_rel}"
         ),
     }
+    warnings: list[str] = []
     if file_type_warning:
-        scan_result["warning"] = file_type_warning
+        warnings.append(file_type_warning)
+    if spawn_result.get("log_warning"):
+        warnings.append(spawn_result["log_warning"])
+    if warnings:
+        scan_result["warnings"] = warnings
     return _text(scan_result)
 
 
@@ -509,22 +536,43 @@ async def _handle_trigger_scan_batch(arguments: dict[str, Any]) -> list[TextCont
             }
         )
 
-    # Use the last spawned process for the scan run record (all share scan_run_id)
+    # Limitation: only one PID/log_path can be stored per scan_run_id.
+    # The last spawned process is used; get_scan_status only monitors this PID.
+    # Individual per-file logs are available via log_suffix (-0, -1, ...).
     last = spawned[-1]
     scan_log_path = last["scan_log_path"]
     log_rel = str(scan_log_path.relative_to(filigree_dir.parent))
 
-    tracker.create_scan_run(
-        scan_run_id=scan_run_id,
-        scanner_name=scanner_name,
-        scan_source=scanner_name,
-        file_paths=spawned_paths,
-        file_ids=spawned_file_ids,
-        pid=last["proc"].pid,
-        api_url=api_url,
-        log_path=log_rel,
-    )
-    tracker.update_scan_run_status(scan_run_id, "running")
+    # Record the batch scan run.  If DB tracking fails, kill all
+    # spawned processes so they don't run orphaned.
+    try:
+        tracker.create_scan_run(
+            scan_run_id=scan_run_id,
+            scanner_name=scanner_name,
+            scan_source=scanner_name,
+            file_paths=spawned_paths,
+            file_ids=spawned_file_ids,
+            pid=last["proc"].pid,
+            api_url=api_url,
+            log_path=log_rel,
+        )
+        tracker.update_scan_run_status(scan_run_id, "running")
+    except Exception as exc:
+        for s in spawned:
+            with contextlib.suppress(OSError):
+                s["proc"].kill()
+        _logger.error(
+            "Failed to record batch scan run %s (%d processes killed): %s",
+            scan_run_id,
+            len(spawned),
+            exc,
+        )
+        return _text(
+            ErrorResponse(
+                error=f"Batch scan spawned {len(spawned)} processes but DB tracking failed: {exc}. All processes terminated.",
+                code="db_error",
+            )
+        )
 
     # Quick check: did any process exit immediately with error?
     await asyncio.sleep(0.2)
@@ -565,6 +613,9 @@ async def _handle_trigger_scan_batch(arguments: dict[str, Any]) -> list[TextCont
         result["skipped"] = skipped
     if immediate_failures:
         result["immediate_failures"] = immediate_failures
+    log_warnings = [s["log_warning"] for s in spawned if s.get("log_warning")]
+    if log_warnings:
+        result["warnings"] = log_warnings
     return _text(result)
 
 

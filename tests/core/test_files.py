@@ -1303,18 +1303,15 @@ class TestFileDetailCore:
 
 
 class TestCreateObservationsFailure:
-    """Test that create_observations=True propagates exceptions gracefully."""
+    """Test that observation failures don't abort finding ingestion."""
 
-    def test_create_observation_failure_propagates(self, db: FiligreeDB) -> None:
+    def test_observation_failure_does_not_abort_findings(self, db: FiligreeDB) -> None:
         """When create_observations=True and observation creation fails,
-        the exception propagates and scan writes are rolled back."""
+        findings are still persisted (observations are best-effort)."""
         from unittest.mock import patch
 
-        with (
-            patch.object(db, "create_observation", side_effect=RuntimeError("DB write failed")),
-            pytest.raises(RuntimeError, match="DB write failed"),
-        ):
-            db.process_scan_results(
+        with patch.object(db, "create_observation", side_effect=RuntimeError("DB write failed")):
+            result = db.process_scan_results(
                 scan_source="codex",
                 create_observations=True,
                 findings=[
@@ -1327,6 +1324,9 @@ class TestCreateObservationsFailure:
                     },
                 ],
             )
+
+        assert result["findings_created"] == 1
+        assert result["observations_created"] == 0
 
 
 class TestHotspots:

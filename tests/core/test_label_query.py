@@ -129,6 +129,53 @@ class TestVirtualLabels:
         assert len(results) == 0  # all task issues are fresh
 
 
+class TestHasBlockers:
+    """has:blockers involves a complex three-table JOIN."""
+
+    def test_has_blockers_matches_blocked_issue(self, db: FiligreeDB) -> None:
+        blocker = db.create_issue("Blocker task")
+        blocked = db.create_issue("Blocked task")
+        db.add_dependency(blocked.id, blocker.id)
+        results = db.list_issues(label=["has:blockers"])
+        ids = [i.id for i in results]
+        assert blocked.id in ids
+        assert blocker.id not in ids
+
+    def test_has_blockers_excludes_resolved_blockers(self, db: FiligreeDB) -> None:
+        """Closed blockers don't count — issue should not appear."""
+        blocker = db.create_issue("Blocker task")
+        blocked = db.create_issue("Blocked task")
+        db.add_dependency(blocked.id, blocker.id)
+        db.close_issue(blocker.id)
+        results = db.list_issues(label=["has:blockers"])
+        ids = [i.id for i in results]
+        assert blocked.id not in ids
+
+    def test_has_blockers_no_deps(self, db: FiligreeDB) -> None:
+        db.create_issue("No deps")
+        results = db.list_issues(label=["has:blockers"])
+        assert len(results) == 0
+
+
+class TestNotLabelVirtualPrefix:
+    """Negating virtual namespace prefixes is rejected."""
+
+    def test_not_label_age_prefix_raises(self, db: FiligreeDB) -> None:
+        with pytest.raises(ValueError, match="Cannot negate virtual namespace prefix"):
+            db.list_issues(not_label="age:")
+
+    def test_not_label_has_prefix_raises(self, db: FiligreeDB) -> None:
+        with pytest.raises(ValueError, match="Cannot negate virtual namespace prefix"):
+            db.list_issues(not_label="has:")
+
+    def test_not_label_specific_virtual_is_allowed(self, db: FiligreeDB) -> None:
+        """Specific virtual values like age:stale are fine to negate."""
+        db.create_issue("A")
+        # Should not raise — specific values are ok, only bare prefixes are blocked
+        results = db.list_issues(not_label="age:fresh", type="task")
+        assert isinstance(results, list)
+
+
 class TestVirtualAndStoredCombined:
     def test_virtual_and_stored_label_and(self, db: FiligreeDB) -> None:
         a = db.create_issue("A", labels=["defect"])

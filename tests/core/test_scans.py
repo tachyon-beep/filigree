@@ -163,3 +163,116 @@ class TestGetScanStatus:
     def test_not_found_raises(self, db: FiligreeDB) -> None:
         with pytest.raises(KeyError):
             db.get_scan_status("no-such-run")
+
+    def test_batch_scan_warns_about_partial_pid_monitoring(self, db: FiligreeDB) -> None:
+        """Batch scans (multiple file_paths) include a data_warnings note."""
+        db.create_scan_run(
+            scan_run_id="batch-1",
+            scanner_name="codex",
+            scan_source="codex",
+            file_paths=["a.py", "b.py", "c.py"],
+            file_ids=["f-1", "f-2", "f-3"],
+            pid=99999,
+        )
+        status = db.get_scan_status("batch-1")
+        assert any("1 of 3" in w for w in status["data_warnings"])
+
+
+class TestCorruptScanRunJson:
+    """Corrupt JSON in scan_runs is handled gracefully with data_warnings."""
+
+    def test_corrupt_file_paths_returns_empty_with_warning(self, db: FiligreeDB) -> None:
+        db.create_scan_run(
+            scan_run_id="run-corrupt",
+            scanner_name="codex",
+            scan_source="codex",
+            file_paths=["a.py"],
+            file_ids=["f-1"],
+        )
+        # Corrupt the file_paths JSON directly
+        db.conn.execute(
+            "UPDATE scan_runs SET file_paths = 'not-valid-json' WHERE id = ?",
+            ("run-corrupt",),
+        )
+        db.conn.commit()
+        run = db.get_scan_run("run-corrupt")
+        assert run["file_paths"] == []
+        assert any("file_paths" in w for w in run["data_warnings"])
+
+    def test_corrupt_file_ids_returns_empty_with_warning(self, db: FiligreeDB) -> None:
+        db.create_scan_run(
+            scan_run_id="run-corrupt-ids",
+            scanner_name="codex",
+            scan_source="codex",
+            file_paths=["a.py"],
+            file_ids=["f-1"],
+        )
+        db.conn.execute(
+            "UPDATE scan_runs SET file_ids = '{broken' WHERE id = ?",
+            ("run-corrupt-ids",),
+        )
+        db.conn.commit()
+        run = db.get_scan_run("run-corrupt-ids")
+        assert run["file_ids"] == []
+        assert any("file_ids" in w for w in run["data_warnings"])
+
+    def test_valid_json_has_no_warnings(self, db: FiligreeDB) -> None:
+        db.create_scan_run(
+            scan_run_id="run-ok",
+            scanner_name="codex",
+            scan_source="codex",
+            file_paths=["a.py"],
+            file_ids=["f-1"],
+        )
+        run = db.get_scan_run("run-ok")
+        assert run["data_warnings"] == []
+
+
+class TestScanRunTimeout:
+    """The running -> timeout transition is valid."""
+
+    def test_transition_running_to_timeout(self, db: FiligreeDB) -> None:
+        db.create_scan_run(
+            scan_run_id="run-t",
+            scanner_name="codex",
+            scan_source="codex",
+            file_paths=["x.py"],
+            file_ids=["f-1"],
+        )
+        db.update_scan_run_status("run-t", "running")
+        db.update_scan_run_status("run-t", "timeout", error_message="Exceeded 300s limit")
+        run = db.get_scan_run("run-t")
+        assert run["status"] == "timeout"
+        assert run["completed_at"] is not None
+        assert run["error_message"] == "Exceeded 300s limit"
+
+
+class TestCooldownMultiFile:
+    """json_each cooldown correctly matches individual files in arrays."""
+
+    def test_cooldown_matches_specific_file_in_batch(self, db: FiligreeDB) -> None:
+        db.create_scan_run(
+            scan_run_id="batch-cd",
+            scanner_name="codex",
+            scan_source="codex",
+            file_paths=["src/main.py", "src/other.py", "src/utils.py"],
+            file_ids=["f-1", "f-2", "f-3"],
+        )
+        db.update_scan_run_status("batch-cd", "running")
+        # Should block for a file that's in the array
+        assert db.check_scan_cooldown("codex", "src/other.py") is not None
+        # Should not block for a file not in the array
+        assert db.check_scan_cooldown("codex", "src/different.py") is None
+
+    def test_cooldown_no_prefix_false_positive(self, db: FiligreeDB) -> None:
+        """json_each matches exactly, not as prefix like LIKE would."""
+        db.create_scan_run(
+            scan_run_id="batch-prefix",
+            scanner_name="codex",
+            scan_source="codex",
+            file_paths=["src/main.py"],
+            file_ids=["f-1"],
+        )
+        db.update_scan_run_status("batch-prefix", "running")
+        # "src/main.py.bak" should NOT match "src/main.py"
+        assert db.check_scan_cooldown("codex", "src/main.py.bak") is None

@@ -536,15 +536,23 @@ class FilesMixin(DBMixinProtocol):
                 obs_detail = f.get("message", "")
                 if f.get("suggestion"):
                     obs_detail += f"\n\nSuggested fix:\n{f['suggestion']}"
-                self.create_observation(
-                    obs_summary,
-                    detail=obs_detail,
-                    file_path=path,
-                    line=f.get("line_start"),
-                    priority=severity_to_priority.get(f.get("severity", "info"), 3),
-                    actor=f"scanner:{scan_source}",
-                )
-                stats["observations_created"] += 1
+                try:
+                    self.create_observation(
+                        obs_summary,
+                        detail=obs_detail,
+                        file_path=path,
+                        line=f.get("line_start"),
+                        priority=severity_to_priority.get(f.get("severity", "info"), 3),
+                        actor=f"scanner:{scan_source}",
+                    )
+                    stats["observations_created"] += 1
+                except Exception as obs_exc:
+                    logger.warning(
+                        "Failed to create observation for finding %s in %s: %s",
+                        finding_id,
+                        path,
+                        obs_exc,
+                    )
 
     def _update_existing_finding(
         self,
@@ -689,6 +697,7 @@ class FilesMixin(DBMixinProtocol):
                     scan_run_id,
                     exc,
                 )
+                stats["warnings"].append(f"Scan run {scan_run_id} status not updated to 'completed': {exc}")
 
         return stats
 
@@ -730,6 +739,7 @@ class FilesMixin(DBMixinProtocol):
         file_id: str | None = None,
         status: FindingStatus | None = None,
         issue_id: str | None = None,
+        dismiss_reason: str | None = None,
     ) -> ScanFindingDict:
         """Update finding status and/or linked issue.
 
@@ -779,6 +789,20 @@ class FilesMixin(DBMixinProtocol):
                 raise ValueError(msg)
             updates.append("issue_id = ?")
             params.append(normalized_issue_id)
+
+        if dismiss_reason is not None:
+            if status is None:
+                msg = "dismiss_reason requires status to also be provided"
+                raise ValueError(msg)
+            old_meta_raw = self.conn.execute("SELECT metadata FROM scan_findings WHERE id = ?", (finding_id,)).fetchone()
+            try:
+                old_meta = json.loads(old_meta_raw["metadata"]) if old_meta_raw and old_meta_raw["metadata"] else {}
+            except (json.JSONDecodeError, TypeError):
+                logger.warning("Corrupt metadata JSON in finding %s, resetting to empty", finding_id)
+                old_meta = {}
+            old_meta["dismiss_reason"] = dismiss_reason
+            updates.append("metadata = ?")
+            params.append(json.dumps(old_meta))
 
         if not updates:
             msg = "At least one of status or issue_id must be provided"

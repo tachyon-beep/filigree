@@ -117,14 +117,15 @@ class ScanRunDict(TypedDict):
     file_paths: list[str]
     file_ids: list[str]
     pid: int | None
-    api_url: str
-    log_path: str
+    api_url: str  # empty string means not set
+    log_path: str  # empty string means not set
     started_at: ISOTimestamp
     updated_at: ISOTimestamp
     completed_at: ISOTimestamp | None
     exit_code: int | None
     findings_count: int
-    error_message: str
+    error_message: str  # empty string means no error
+    data_warnings: list[str]
 
 
 class ScanRunStatusDict(ScanRunDict):

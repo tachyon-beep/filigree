@@ -8,7 +8,7 @@ from typing import Any
 
 from mcp.types import TextContent, Tool
 
-from filigree.core import VALID_ASSOC_TYPES, VALID_SEVERITIES
+from filigree.core import VALID_ASSOC_TYPES, VALID_FINDING_STATUSES, VALID_SEVERITIES
 from filigree.mcp_tools.common import _parse_args, _text, _validate_int_range, _validate_str
 from filigree.types.api import ErrorResponse
 from filigree.types.inputs import (
@@ -147,7 +147,7 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
                 "type": "object",
                 "properties": {
                     "severity": {"type": "string", "enum": sorted(VALID_SEVERITIES), "description": "Filter by severity"},
-                    "status": {"type": "string", "description": "Filter by finding status"},
+                    "status": {"type": "string", "enum": sorted(VALID_FINDING_STATUSES), "description": "Filter by finding status"},
                     "scan_source": {"type": "string", "description": "Filter by scan source"},
                     "scan_run_id": {"type": "string", "description": "Filter by scan run ID"},
                     "file_id": {"type": "string", "description": "Filter by file ID"},
@@ -526,6 +526,9 @@ async def _handle_promote_finding(arguments: dict[str, Any]) -> list[TextContent
         obs = tracker.promote_finding_to_observation(finding_id, priority=priority, actor=actor)
     except KeyError:
         return _text(ErrorResponse(error=f"Finding not found: {finding_id}", code="not_found"))
+    except Exception as exc:
+        _logger.warning("Failed to promote finding %s: %s", finding_id, exc)
+        return _text(ErrorResponse(error=f"Failed to promote finding: {exc}", code="promotion_error"))
     return _text(obs)
 
 
@@ -537,9 +540,11 @@ async def _handle_dismiss_finding(arguments: dict[str, Any]) -> list[TextContent
     if not isinstance(finding_id, str) or not finding_id.strip():
         return _text(ErrorResponse(error="finding_id is required", code="validation_error"))
 
+    reason = args.get("reason")
+
     tracker = _get_db()
     try:
-        updated = tracker.update_finding(finding_id, status="false_positive")
+        updated = tracker.update_finding(finding_id, status="false_positive", dismiss_reason=reason or None)
     except KeyError:
         return _text(ErrorResponse(error=f"Finding not found: {finding_id}", code="not_found"))
     except ValueError as e:

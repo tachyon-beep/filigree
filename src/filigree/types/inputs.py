@@ -386,7 +386,7 @@ class TriggerScanBatchArgs(TypedDict):
 
 class GetScanStatusArgs(TypedDict):
     scan_run_id: str
-    log_lines: NotRequired[int]
+    log_lines: NotRequired[int]  # 1..500
 
 
 class PreviewScanArgs(TypedDict):

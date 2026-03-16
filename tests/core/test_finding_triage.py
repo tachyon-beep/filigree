@@ -102,6 +102,32 @@ class TestUpdateFinding:
         with pytest.raises(KeyError):
             db.update_finding("no-such-id", status="fixed")
 
+    def test_update_without_file_id(self, db: FiligreeDB) -> None:
+        """file_id=None path looks up file_id from the finding record."""
+        ids = _seed_findings(db)
+        # Call without file_id — should resolve it from the DB
+        updated = db.update_finding(ids["obo"], status="acknowledged")
+        assert updated["status"] == "acknowledged"
+        assert updated["file_id"]  # file_id should be populated from DB
+
+    def test_dismiss_reason_persists_in_metadata(self, db: FiligreeDB) -> None:
+        """dismiss_reason is stored in finding metadata JSON."""
+        ids = _seed_findings(db)
+        updated = db.update_finding(ids["obo"], status="false_positive", dismiss_reason="not a real bug")
+        assert updated["status"] == "false_positive"
+        meta = updated.get("metadata") or {}
+        if isinstance(meta, str):
+            import json
+
+            meta = json.loads(meta)
+        assert meta["dismiss_reason"] == "not a real bug"
+
+    def test_dismiss_reason_without_status_raises(self, db: FiligreeDB) -> None:
+        """dismiss_reason requires status to also be provided."""
+        ids = _seed_findings(db)
+        with pytest.raises(ValueError, match="dismiss_reason requires status"):
+            db.update_finding(ids["obo"], dismiss_reason="reason only")
+
 
 class TestPromoteFindingToObservation:
     def test_creates_observation(self, db: FiligreeDB) -> None:

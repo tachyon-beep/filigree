@@ -235,7 +235,7 @@ class TestPostToApi:
                 scan_run_id="run-1",
                 findings=[{"path": "x.py", "rule_id": "other", "severity": "info", "message": "test"}],
             )
-        assert result is True
+        assert result == (True, "")
 
     def test_sends_correct_payload(self) -> None:
         findings = [{"path": "x.py", "rule_id": "other", "severity": "info", "message": "test"}]
@@ -270,7 +270,9 @@ class TestPostToApi:
                 scan_run_id="run-1",
                 findings=[{"path": "x.py", "rule_id": "other", "severity": "info", "message": "test"}],
             )
-        assert result is False
+        ok, detail = result
+        assert ok is False
+        assert "HTTP 500" in detail
 
     def test_url_error_returns_false(self) -> None:
         import urllib.error
@@ -283,7 +285,9 @@ class TestPostToApi:
                 scan_run_id="run-1",
                 findings=[{"path": "x.py", "rule_id": "other", "severity": "info", "message": "test"}],
             )
-        assert result is False
+        ok, detail = result
+        assert ok is False
+        assert "Connection" in detail
 
     def test_api_warnings_logged(self) -> None:
         body = {"status": "ok", "warnings": ["severity coerced: extreme → info"]}
@@ -319,7 +323,9 @@ class TestPostToApi:
                 scan_run_id="run-1",
                 findings=[{"path": "x.py", "rule_id": "other", "severity": "info", "message": "test"}],
             )
-        assert result is False  # Graceful degradation: returns False, doesn't crash
+        ok, detail = result
+        assert ok is False  # Graceful degradation: returns error detail, doesn't crash
+        assert "HTTP 500" in detail
 
 
 # ── find_files ─────────────────────────────────────────────────────────

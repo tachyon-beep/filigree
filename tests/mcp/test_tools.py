@@ -1802,8 +1802,8 @@ class TestScannerTools:
                 )
             )
             assert result.get("status") == "triggered"
-            assert "warning" in result
-            assert "txt" in result["warning"]
+            assert "warnings" in result
+            assert any("txt" in w for w in result["warnings"])
         finally:
             target.unlink(missing_ok=True)
 

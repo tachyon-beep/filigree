@@ -4,12 +4,13 @@ These are helper functions for external scanner integrations — NOT part of
 the filigree core package. The API (POST /api/v1/scan-results) is the
 first-class product; these utilities are documentation-by-code.
 
-Functions:
+Key functions:
     find_files              — Walk directory tree collecting source files
-    load_context            — Load repo context files (CLAUDE.md, ARCHITECTURE.md)
+    load_context            — Load repo context files for inclusion in scanner prompts
     parse_findings          — Parse structured markdown output into finding dicts
     severity_map            — Map scanner-native severities to filigree severities
-    post_to_api             — POST findings to filigree scan API with error handling
+    post_to_api             — POST findings to filigree scan API (returns (ok, error_detail))
+    estimate_tokens         — Estimate token cost for a set of files
     run_scanner_pipeline    — End-to-end CLI pipeline (discovery → execute → parse → ingest)
 """
 
@@ -158,7 +159,8 @@ def find_files(
 
     Args:
         root: Directory to scan.
-        file_type: "python" to filter .py files, "all" for everything non-binary.
+        file_type: "python" to filter .py files (excludes test_ prefixed files),
+            "all" for everything non-binary.
         exclude_dirs: Additional directories to skip.
         max_files: If > 0, truncate the result list to this many files.
 
@@ -190,7 +192,7 @@ def find_files(
 
 
 def load_context(repo_root: Path) -> str:
-    """Load repo context files (CLAUDE.md, ARCHITECTURE.md) for prompt injection."""
+    """Load repo context files (CLAUDE.md, ARCHITECTURE.md) for inclusion in scanner prompts."""
     parts: list[str] = []
     for name in ("CLAUDE.md", "ARCHITECTURE.md"):
         path = repo_root / name
@@ -314,7 +316,7 @@ def post_to_api(
     scan_run_id: str,
     findings: list[dict[str, Any]],
     create_observations: bool = False,
-) -> bool:
+) -> tuple[bool, str]:
     """POST findings to filigree's scan API.
 
     Args:
@@ -325,7 +327,7 @@ def post_to_api(
         create_observations: If True, auto-promote findings to observations for triage.
 
     Returns:
-        True on success, False on failure.
+        ``(True, "")`` on success, ``(False, error_detail)`` on failure.
     """
     import urllib.error
     import urllib.request
@@ -351,27 +353,28 @@ def post_to_api(
             # Log any severity coercion warnings from the API [B2]
             for w in body.get("warnings", []):
                 logger.warning("API warning: %s", w)
-            return True
+            return True, ""
     except urllib.error.HTTPError as e:
         body_text = ""
         with contextlib.suppress(OSError, urllib.error.URLError):
             body_text = e.read().decode("utf-8", errors="replace")[:500]
+        detail = f"HTTP {e.code}: {body_text}" if body_text else f"HTTP {e.code}"
         logger.warning(
-            "API POST failed: HTTP %d for %s — %s (endpoint: %s)",
-            e.code,
+            "API POST failed: %s for %s (endpoint: %s)",
+            detail,
             scan_source,
-            body_text,
             endpoint,
         )
-        return False
+        return False, detail
     except (urllib.error.URLError, OSError) as e:
+        detail = f"Connection error: {e}"
         logger.warning(
             "API unreachable for %s: %s (endpoint: %s)",
             scan_source,
             e,
             endpoint,
         )
-        return False
+        return False, detail
 
 
 # ── Token estimation ────────────────────────────────────────────────────
@@ -535,7 +538,7 @@ async def _analyse_files(
                     rel_path = str(_display_path(fpath, repo_root))
                     findings = parse_findings(text, file_path=rel_path)
                     if findings:
-                        ok = post_to_api(
+                        ok, err_detail = post_to_api(
                             api_url=api_url,
                             scan_source=scan_source,
                             scan_run_id=scan_run_id,
@@ -546,6 +549,7 @@ async def _analyse_files(
                             api_successes += len(findings)
                         else:
                             api_failures += len(findings)
+                            print(f"  API error for {rel_path}: {err_detail}", file=sys.stderr)
 
     stats: Counter[str] = Counter()
     for md in report_paths:
@@ -594,7 +598,6 @@ async def run_scanner_pipeline(
         Exit code (0 = success, 1 = failure).
     """
     import argparse
-    import asyncio
     import shutil
     from datetime import UTC, datetime
 

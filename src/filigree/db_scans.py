@@ -8,7 +8,7 @@ from __future__ import annotations
 import json
 import logging
 import os
-from typing import Any
+from typing import Any, get_args
 
 from filigree.db_base import DBMixinProtocol, _now_iso
 from filigree.types.core import ScanRunStatus
@@ -17,6 +17,7 @@ from filigree.types.files import ScanRunDict, ScanRunStatusDict
 logger = logging.getLogger(__name__)
 
 SCAN_COOLDOWN_SECONDS = 30
+VALID_SCAN_RUN_STATUSES: frozenset[str] = frozenset(get_args(ScanRunStatus))
 
 # Valid transitions: from_status -> set of valid to_statuses
 _VALID_TRANSITIONS: dict[ScanRunStatus, set[ScanRunStatus]] = {
@@ -81,6 +82,8 @@ class ScansMixin(DBMixinProtocol):
         findings_count: int | None = None,
         error_message: str | None = None,
     ) -> ScanRunDict:
+        if status not in VALID_SCAN_RUN_STATUSES:
+            raise ValueError(f"Invalid scan run status {status!r}. Must be one of: {sorted(VALID_SCAN_RUN_STATUSES)}")
         current = self.get_scan_run(scan_run_id)
         current_status = current["status"]
         valid_next = _VALID_TRANSITIONS.get(current_status, set())
@@ -119,21 +122,19 @@ class ScansMixin(DBMixinProtocol):
     def check_scan_cooldown(self, scanner_name: str, file_path: str) -> ScanRunDict | None:
         """Check if a recent non-failed scan blocks triggering.
 
-        Returns the blocking scan run dict, or None if trigger is allowed.
-        Scans with status 'pending', 'running', or recently-'completed' block.
+        Returns the blocking scan run dict, or ``None`` if trigger is allowed.
+        A scan blocks if it was updated within the last ``SCAN_COOLDOWN_SECONDS``
+        and has status 'pending', 'running', or 'completed'.
         """
-        # TODO: replace LIKE with json_each() for robustness against
-        # paths containing JSON-special characters (quotes, backslashes).
-        # The bounded-quote pattern below mitigates prefix false-positives
-        # (e.g., "src/main.py" matching "src/main.py.bak") but json_each()
-        # is the proper fix.
         row = self.conn.execute(
-            "SELECT * FROM scan_runs "
-            "WHERE scanner_name = ? "
-            "AND json_extract(file_paths, '$') LIKE '%\"' || ? || '\"%' "
-            "AND status IN ('pending', 'running', 'completed') "
-            "AND updated_at >= datetime('now', ?) "
-            "ORDER BY updated_at DESC LIMIT 1",
+            "SELECT sr.* FROM scan_runs sr "
+            "WHERE sr.scanner_name = ? "
+            "AND EXISTS ("
+            "  SELECT 1 FROM json_each(sr.file_paths) je WHERE je.value = ?"
+            ") "
+            "AND sr.status IN ('pending', 'running', 'completed') "
+            "AND sr.updated_at >= datetime('now', ?) "
+            "ORDER BY sr.updated_at DESC LIMIT 1",
             (scanner_name, file_path, f"-{SCAN_COOLDOWN_SECONDS} seconds"),
         ).fetchone()
         if row is None:
@@ -170,6 +171,9 @@ class ScansMixin(DBMixinProtocol):
                         scan_run_id,
                         exc,
                     )
+                    # Re-read to get actual DB state (may have been
+                    # completed by another codepath).
+                    run = self.get_scan_run(scan_run_id)
         log_tail: list[str] = []
         if run["log_path"]:
             # Log paths are stored relative to the project root; resolve against
@@ -181,23 +185,29 @@ class ScansMixin(DBMixinProtocol):
                     log_tail = lines[-log_lines:] if len(lines) > log_lines else lines
                 except OSError as exc:
                     logger.warning("Could not read log file %s: %s", run["log_path"], exc)
-        return ScanRunStatusDict(
+        result = ScanRunStatusDict(
             **run,
             process_alive=process_alive,
             log_tail=log_tail,
         )
+        if len(run["file_paths"]) > 1:
+            result["data_warnings"].append(f"Batch scan: only PID {run['pid']} (1 of {len(run['file_paths'])} processes) is monitored")
+        return result
 
     def _build_scan_run_dict(self, row: Any) -> ScanRunDict:
+        warnings: list[str] = []
         try:
             file_paths = json.loads(row["file_paths"]) if row["file_paths"] else []
         except (json.JSONDecodeError, TypeError):
             logger.warning("Corrupt file_paths JSON in scan_run %s", row["id"])
             file_paths = []
+            warnings.append("Corrupt file_paths JSON — defaulted to empty list")
         try:
             file_ids = json.loads(row["file_ids"]) if row["file_ids"] else []
         except (json.JSONDecodeError, TypeError):
             logger.warning("Corrupt file_ids JSON in scan_run %s", row["id"])
             file_ids = []
+            warnings.append("Corrupt file_ids JSON — defaulted to empty list")
         return ScanRunDict(
             id=row["id"],
             scanner_name=row["scanner_name"],
@@ -214,4 +224,5 @@ class ScansMixin(DBMixinProtocol):
             exit_code=row["exit_code"],
             findings_count=row["findings_count"] or 0,
             error_message=row["error_message"] or "",
+            data_warnings=warnings,
         )
