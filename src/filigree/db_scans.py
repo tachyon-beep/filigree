@@ -8,7 +8,6 @@ from __future__ import annotations
 import json
 import logging
 import os
-from pathlib import Path
 from typing import Any
 
 from filigree.db_base import DBMixinProtocol, _now_iso
@@ -173,7 +172,9 @@ class ScansMixin(DBMixinProtocol):
                     )
         log_tail: list[str] = []
         if run["log_path"]:
-            log_path = Path(run["log_path"])
+            # Log paths are stored relative to the project root; resolve against
+            # db_path's grandparent (.filigree/filigree.db -> project root).
+            log_path = self.db_path.parent.parent / run["log_path"]
             if log_path.is_file():
                 try:
                     lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()

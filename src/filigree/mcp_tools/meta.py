@@ -32,6 +32,7 @@ from filigree.types.inputs import (
     GetIssueEventsArgs,
     GetMetricsArgs,
     ImportJsonlArgs,
+    ListLabelsArgs,
     RemoveLabelArgs,
     UndoLastArgs,
 )
@@ -567,10 +568,11 @@ async def _handle_get_issue_events(arguments: dict[str, Any]) -> list[TextConten
 async def _handle_list_labels(arguments: dict[str, Any]) -> list[TextContent]:
     from filigree.mcp_server import _get_db
 
+    args = _parse_args(arguments, ListLabelsArgs)
     tracker = _get_db()
     result = tracker.list_labels(
-        namespace=arguments.get("namespace"),
-        top=arguments.get("top", 10),
+        namespace=args.get("namespace"),
+        top=args.get("top", 10),
     )
     return _text(result)
 
