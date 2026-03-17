@@ -45,6 +45,16 @@ class TestLabelPrefix:
         assert b.id in ids
         assert len(ids) == 2
 
+    def test_prefix_escapes_like_wildcards(self, db: FiligreeDB) -> None:
+        """LIKE wildcards in label values must not cause over-matching."""
+        db.create_issue("A", labels=["ns%evil:val"])
+        db.create_issue("B", labels=["ns_other:val"])
+        db.create_issue("C", labels=["ns:normal"])
+        # "ns:" should only match "ns:normal", not "ns%evil:" or "ns_other:"
+        results = db.list_issues(label_prefix="ns:")
+        ids = [i.id for i in results]
+        assert len(ids) == 1
+
     def test_prefix_requires_trailing_colon(self, db: FiligreeDB) -> None:
         with pytest.raises(ValueError, match="trailing colon"):
             db.list_issues(label_prefix="cluster")
@@ -116,6 +126,35 @@ class TestVirtualLabels:
         results = db.list_issues(label=["has:files"])
         assert len(results) == 1
         assert results[0].id == a.id
+
+    def test_has_findings_matches_linked_issue(self, db: FiligreeDB) -> None:
+        a = db.create_issue("A")
+        db.create_issue("B")
+        file_rec = db.register_file("src/core.py")
+        db.process_scan_results(
+            scan_source="test",
+            findings=[{"path": "src/core.py", "rule_id": "R1", "severity": "medium", "message": "bug"}],
+        )
+        # Link a finding to the issue
+        findings = db.get_findings_paginated(file_rec.id)
+        fid = findings["results"][0]["id"]
+        db.update_finding(fid, issue_id=a.id)
+        results = db.list_issues(label=["has:findings"])
+        assert len(results) == 1
+        assert results[0].id == a.id
+
+    def test_has_findings_excludes_fixed(self, db: FiligreeDB) -> None:
+        a = db.create_issue("A")
+        file_rec = db.register_file("src/core.py")
+        db.process_scan_results(
+            scan_source="test",
+            findings=[{"path": "src/core.py", "rule_id": "R1", "severity": "medium", "message": "bug"}],
+        )
+        findings = db.get_findings_paginated(file_rec.id)
+        fid = findings["results"][0]["id"]
+        db.update_finding(fid, issue_id=a.id, status="fixed")
+        results = db.list_issues(label=["has:findings"])
+        assert len(results) == 0
 
     def test_unknown_virtual_returns_empty(self, db: FiligreeDB) -> None:
         db.create_issue("A")

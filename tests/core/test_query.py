@@ -185,32 +185,32 @@ class TestSanitizeFtsQuery:
 
 
 class TestEscapeLikeQuery:
-    """Unit tests for _escape_like_query — defense against LIKE injection."""
+    """Unit tests for _escape_like — defense against LIKE injection."""
 
     def test_plain_string(self) -> None:
-        from filigree.db_issues import _escape_like_query
+        from filigree.db_base import _escape_like
 
-        assert _escape_like_query("hello") == "%hello%"
+        assert _escape_like("hello") == "%hello%"
 
     def test_percent_escaped(self) -> None:
-        from filigree.db_issues import _escape_like_query
+        from filigree.db_base import _escape_like
 
-        assert _escape_like_query("100%") == "%100\\%%"
+        assert _escape_like("100%") == "%100\\%%"
 
     def test_underscore_escaped(self) -> None:
-        from filigree.db_issues import _escape_like_query
+        from filigree.db_base import _escape_like
 
-        assert _escape_like_query("foo_bar") == "%foo\\_bar%"
+        assert _escape_like("foo_bar") == "%foo\\_bar%"
 
     def test_backslash_escaped(self) -> None:
-        from filigree.db_issues import _escape_like_query
+        from filigree.db_base import _escape_like
 
-        assert _escape_like_query("a\\b") == "%a\\\\b%"
+        assert _escape_like("a\\b") == "%a\\\\b%"
 
     def test_all_special_chars(self) -> None:
-        from filigree.db_issues import _escape_like_query
+        from filigree.db_base import _escape_like
 
-        result = _escape_like_query("%_\\")
+        result = _escape_like("%_\\")
         assert result == "%\\%\\_\\\\%"
 
 

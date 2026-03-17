@@ -25,6 +25,8 @@ from filigree.types.inputs import (
     TriggerScanBatchArgs,
 )
 
+_LOCALHOST_HOSTS = frozenset(("localhost", "127.0.0.1", "::1", ""))
+
 _logger = logging.getLogger(__name__)
 
 
@@ -150,6 +152,21 @@ def register(
 # ---------------------------------------------------------------------------
 
 
+def _validate_localhost_url(api_url: str) -> list[TextContent] | None:
+    """Return an error response if *api_url* is not localhost, else ``None``."""
+    from urllib.parse import urlparse
+
+    host = urlparse(api_url).hostname or ""
+    if host not in _LOCALHOST_HOSTS:
+        return _text(
+            ErrorResponse(
+                error=f"Non-localhost api_url not allowed: {host!r}. Scanner results would be sent to an external host.",
+                code="invalid_api_url",
+            )
+        )
+    return None
+
+
 def _load_scanner_or_error(filigree_dir: Path, scanner_name: str) -> tuple[Any | None, list[TextContent] | None]:
     """Load scanner config or return an error response."""
     scanners_dir = filigree_dir / "scanners"
@@ -263,7 +280,6 @@ async def _handle_list_scanners(arguments: dict[str, Any]) -> list[TextContent]:
 
 async def _handle_trigger_scan(arguments: dict[str, Any]) -> list[TextContent]:
     from datetime import UTC, datetime
-    from urllib.parse import urlparse
 
     from filigree.mcp_server import _get_db, _get_filigree_dir, _safe_path
 
@@ -277,15 +293,9 @@ async def _handle_trigger_scan(arguments: dict[str, Any]) -> list[TextContent]:
     file_path = args["file_path"]
     api_url = args.get("api_url", "http://localhost:8377")
 
-    parsed_url = urlparse(api_url)
-    url_host = parsed_url.hostname or ""
-    if url_host not in ("localhost", "127.0.0.1", "::1", ""):
-        return _text(
-            ErrorResponse(
-                error=f"Non-localhost api_url not allowed: {url_host!r}. Scanner results would be sent to an external host.",
-                code="invalid_api_url",
-            )
-        )
+    url_err = _validate_localhost_url(api_url)
+    if url_err is not None:
+        return url_err
 
     try:
         target = _safe_path(file_path)
@@ -379,8 +389,10 @@ async def _handle_trigger_scan(arguments: dict[str, Any]) -> list[TextContent]:
             error_message=f"Scanner exited immediately with code {exit_code}",
         )
         log_hint = ""
-        if scan_log_path.exists():
+        if scan_log_path.exists() and scan_log_path.stat().st_size > 0:
             log_hint = f" Check log: {log_rel}"
+        elif spawn_result.get("log_warning"):
+            log_hint = f" Note: {spawn_result['log_warning']}"
         return _text(
             {
                 "error": f"Scanner process exited immediately with code {exit_code}.{log_hint}",
@@ -428,7 +440,6 @@ async def _handle_trigger_scan(arguments: dict[str, Any]) -> list[TextContent]:
 
 async def _handle_trigger_scan_batch(arguments: dict[str, Any]) -> list[TextContent]:
     from datetime import UTC, datetime
-    from urllib.parse import urlparse
 
     from filigree.mcp_server import _get_db, _get_filigree_dir, _safe_path
 
@@ -445,15 +456,9 @@ async def _handle_trigger_scan_batch(arguments: dict[str, Any]) -> list[TextCont
     if not isinstance(file_paths, list) or not file_paths:
         return _text(ErrorResponse(error="file_paths must be a non-empty list", code="validation_error"))
 
-    parsed_url = urlparse(api_url)
-    url_host = parsed_url.hostname or ""
-    if url_host not in ("localhost", "127.0.0.1", "::1", ""):
-        return _text(
-            ErrorResponse(
-                error=f"Non-localhost api_url not allowed: {url_host!r}.",
-                code="invalid_api_url",
-            )
-        )
+    url_err = _validate_localhost_url(api_url)
+    if url_err is not None:
+        return url_err
 
     cfg, err = _load_scanner_or_error(filigree_dir, scanner_name)
     if err is not None:
@@ -518,7 +523,7 @@ async def _handle_trigger_scan_batch(arguments: dict[str, Any]) -> list[TextCont
             try:
                 detail = json.loads(spawn_result[0].text)
                 reason = detail.get("error", reason)
-            except (ValueError, IndexError, AttributeError):
+            except (ValueError, IndexError, AttributeError, TypeError):
                 pass
             spawn_errors.append({"file_path": cp, "reason": reason})
             continue
@@ -628,9 +633,9 @@ async def _handle_get_scan_status(arguments: dict[str, Any]) -> list[TextContent
         return _text(ErrorResponse(error="scan_run_id is required", code="validation_error"))
     log_lines = args.get("log_lines", 50)
 
-    for err_resp in (_validate_int_range(log_lines, "log_lines", min_val=1, max_val=500),):
-        if err_resp is not None:
-            return err_resp
+    err_resp = _validate_int_range(log_lines, "log_lines", min_val=1, max_val=500)
+    if err_resp is not None:
+        return err_resp
 
     tracker = _get_db()
     try:

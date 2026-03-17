@@ -110,6 +110,7 @@ class ObservationsMixin(DBMixinProtocol):
         source_issue_id: str = "",
         priority: int = 3,
         actor: str = "",
+        auto_commit: bool = True,
     ) -> ObservationDict:
         """Create an observation (agent scratchpad note).
 
@@ -118,6 +119,11 @@ class ObservationsMixin(DBMixinProtocol):
         If the duplicate has expired, replaces it by deleting the old and
         inserting the new in one transaction (so no gap exists between delete
         and insert where a concurrent caller could claim the dedup slot).
+
+        When *auto_commit* is ``False``, the caller is responsible for
+        committing (or rolling back) the connection.  Use this when
+        ``create_observation`` is called inside an outer transaction to
+        avoid committing partial work.
         """
         if not summary or not summary.strip():
             raise ValueError("Observation summary cannot be empty")
@@ -129,8 +135,16 @@ class ObservationsMixin(DBMixinProtocol):
         file_id: str | None = None
         if file_path:
             file_path = _normalize_scan_path(file_path)
-            fr = self.register_file(file_path)
-            file_id = fr.id
+            if auto_commit:
+                # Standalone call — register_file commits, which is fine.
+                fr = self.register_file(file_path)
+                file_id = fr.id
+            else:
+                # Inside an outer transaction — register_file would commit
+                # prematurely.  Look up the file_id without side effects;
+                # the caller is responsible for ensuring the file exists.
+                row = self.conn.execute("SELECT id FROM file_records WHERE path = ?", (file_path,)).fetchone()
+                file_id = row["id"] if row else None
 
         now = _now_iso()
         summary_stripped = summary.strip()
@@ -170,9 +184,11 @@ class ObservationsMixin(DBMixinProtocol):
                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (obs_id, summary_stripped, detail, file_id, file_path, line, source_issue_id, priority, actor, now, expires),
             )
-            self.conn.commit()
+            if auto_commit:
+                self.conn.commit()
         except sqlite3.Error:
-            self.conn.rollback()
+            if auto_commit:
+                self.conn.rollback()
             raise
         return {
             "id": obs_id,

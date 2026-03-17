@@ -36,6 +36,13 @@ class TestListLabels:
         result = db.list_labels(top=5)
         assert len(result["namespaces"]["cluster"]["labels"]) == 5
 
+    def test_top_zero_returns_all(self, db: FiligreeDB) -> None:
+        """top=0 means no truncation — all labels returned."""
+        for i in range(15):
+            db.create_issue(f"Issue {i}", labels=[f"cluster:type-{i:02d}"])
+        result = db.list_labels(top=0)
+        assert len(result["namespaces"]["cluster"]["labels"]) == 15
+
     def test_namespace_filter(self, db: FiligreeDB) -> None:
         db.create_issue("A", labels=["cluster:x", "effort:m"])
         result = db.list_labels(namespace="cluster")

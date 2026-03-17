@@ -1308,9 +1308,10 @@ class TestCreateObservationsFailure:
     def test_observation_failure_does_not_abort_findings(self, db: FiligreeDB) -> None:
         """When create_observations=True and observation creation fails,
         findings are still persisted (observations are best-effort)."""
+        import sqlite3
         from unittest.mock import patch
 
-        with patch.object(db, "create_observation", side_effect=RuntimeError("DB write failed")):
+        with patch.object(db, "create_observation", side_effect=sqlite3.OperationalError("DB write failed")):
             result = db.process_scan_results(
                 scan_source="codex",
                 create_observations=True,

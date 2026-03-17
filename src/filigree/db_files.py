@@ -15,7 +15,7 @@ import sqlite3
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, ClassVar, get_args
 
-from filigree.db_base import DBMixinProtocol, _escape_like, _now_iso, _safe_json_loads
+from filigree.db_base import DBMixinProtocol, _escape_like, _escape_like_chars, _now_iso, _safe_json_loads
 from filigree.models import FileRecord, ScanFinding
 from filigree.types.core import AssocType, FindingStatus, Severity
 from filigree.types.files import ScanIngestResult
@@ -284,7 +284,7 @@ class FilesMixin(DBMixinProtocol):
             clauses.append("fr.language = ?")
             params.append(language)
         if path_prefix is not None:
-            escaped = path_prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            escaped = _escape_like_chars(path_prefix)
             clauses.append("fr.path LIKE ? ESCAPE '\\'")
             params.append(f"%{escaped}%")
         if min_findings is not None and min_findings > 0:
@@ -371,39 +371,36 @@ class FilesMixin(DBMixinProtocol):
     # -- Scan ingestion ------------------------------------------------------
 
     @staticmethod
+    def _require_str(f: dict[str, Any], key: str, idx: int, *, non_empty: bool = False) -> str:
+        """Validate that finding[key] exists and is a string. Raises ValueError on failure."""
+        if key not in f:
+            raise ValueError(f"findings[{idx}] is missing required key '{key}'")
+        val = f[key]
+        if not isinstance(val, str):
+            raise ValueError(f"findings[{idx}] {key} must be a string, got {type(val).__name__}")
+        if non_empty and not val.strip():
+            raise ValueError(f"findings[{idx}] {key} must be a non-empty string")
+        return val
+
+    @staticmethod
     def _validate_scan_findings(findings: list[dict[str, Any]], scan_source: str) -> list[str]:
         """Validate and normalize all findings upfront before any writes.
 
         Mutates findings in-place (normalizes paths and severities).
         Returns a list of warning messages for unknown severities.
         """
+        _req = FilesMixin._require_str
         warnings: list[str] = []
         for i, f in enumerate(findings):
             if not isinstance(f, dict):
                 raise ValueError(f"findings[{i}] must be a dict, got {type(f).__name__}")
-            if "path" not in f:
-                raise ValueError(f"findings[{i}] is missing required key 'path'")
-            if not isinstance(f["path"], str):
-                raise ValueError(f"findings[{i}] path must be a string, got {type(f['path']).__name__}")
+            _req(f, "path", i)
             f["path"] = _normalize_scan_path(f["path"])
-            if "rule_id" not in f:
-                raise ValueError(f"findings[{i}] is missing required key 'rule_id'")
-            if "message" not in f:
-                raise ValueError(f"findings[{i}] is missing required key 'message'")
-            rule_id = f["rule_id"]
-            if not isinstance(rule_id, str):
-                raise ValueError(f"findings[{i}] rule_id must be a string, got {type(rule_id).__name__}")
-            if not rule_id.strip():
-                raise ValueError(f"findings[{i}] rule_id must be a non-empty string")
-            message = f["message"]
-            if not isinstance(message, str):
-                raise ValueError(f"findings[{i}] message must be a string, got {type(message).__name__}")
-            if not message.strip():
-                raise ValueError(f"findings[{i}] message must be a non-empty string")
+            _req(f, "rule_id", i, non_empty=True)
+            _req(f, "message", i, non_empty=True)
             severity = f.get("severity", "info")
             if not isinstance(severity, str):
-                msg = f"findings[{i}] severity must be a string, got {type(severity).__name__}"
-                raise ValueError(msg)
+                raise ValueError(f"findings[{i}] severity must be a string, got {type(severity).__name__}")
             for ln_field in ("line_start", "line_end"):
                 ln_val = f.get(ln_field)
                 if ln_val is not None and not isinstance(ln_val, int):
@@ -411,7 +408,7 @@ class FilesMixin(DBMixinProtocol):
             suggestion = f.get("suggestion")
             if suggestion is not None and not isinstance(suggestion, str):
                 raise ValueError(f"findings[{i}] suggestion must be a string, got {type(suggestion).__name__}")
-            # Normalize: strip whitespace and lowercase
+            # Normalize severity
             normalized = severity.strip().lower()
             if normalized in VALID_SEVERITIES:
                 f["severity"] = normalized
@@ -530,7 +527,6 @@ class FilesMixin(DBMixinProtocol):
             stats["new_finding_ids"].append(finding_id)
             seen_finding_ids.setdefault(file_id, []).append(finding_id)
             if create_observations:
-                severity_to_priority = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 3}
                 first_line = f.get("message", "").strip().splitlines()[0] if f.get("message", "").strip() else "Scanner finding"
                 obs_summary = f"[{scan_source}] {path}:{f.get('line_start', '?')} -- {first_line}"
                 obs_detail = f.get("message", "")
@@ -542,11 +538,12 @@ class FilesMixin(DBMixinProtocol):
                         detail=obs_detail,
                         file_path=path,
                         line=f.get("line_start"),
-                        priority=severity_to_priority.get(f.get("severity", "info"), 3),
+                        priority=self._SEVERITY_TO_PRIORITY.get(f.get("severity", "info"), 3),
                         actor=f"scanner:{scan_source}",
+                        auto_commit=False,
                     )
                     stats["observations_created"] += 1
-                except Exception as obs_exc:
+                except (sqlite3.Error, ValueError) as obs_exc:
                     logger.warning(
                         "Failed to create observation for finding %s in %s: %s",
                         finding_id,
@@ -620,6 +617,7 @@ class FilesMixin(DBMixinProtocol):
         scan_run_id: str = "",
         mark_unseen: bool = False,
         create_observations: bool = False,
+        complete_scan_run: bool = True,
     ) -> ScanIngestResult:
         """Ingest scan results: create/update file records and findings.
 
@@ -633,6 +631,12 @@ class FilesMixin(DBMixinProtocol):
 
         When *create_observations* is ``True``, each new finding is promoted to
         an observation for triage tracking.
+
+        When *complete_scan_run* is ``False`` and a *scan_run_id* is provided,
+        the scan run status is NOT transitioned to ``completed``.  Use this for
+        batch scans where multiple callers share one scan_run_id — the
+        orchestrator should send a final call with ``complete_scan_run=True``
+        after all workers finish.
 
         Returns summary stats including ``new_finding_ids``.
         """
@@ -684,19 +688,27 @@ class FilesMixin(DBMixinProtocol):
                 self.conn.rollback()
             raise
 
-        if scan_run_id:
+        if scan_run_id and complete_scan_run:
             try:
                 self.update_scan_run_status(
                     scan_run_id,
                     "completed",
                     findings_count=stats["findings_created"] + stats["findings_updated"],
                 )
-            except (KeyError, ValueError) as exc:
-                logger.warning(
-                    "Failed to mark scan run %r as completed (findings were ingested successfully): %s",
-                    scan_run_id,
-                    exc,
-                )
+            except (KeyError, ValueError, sqlite3.Error) as exc:
+                is_terminal = "Invalid transition" in str(exc)
+                if is_terminal:
+                    logger.info(
+                        "Scan run %r already in terminal state, skipping completion: %s",
+                        scan_run_id,
+                        exc,
+                    )
+                else:
+                    logger.warning(
+                        "Failed to mark scan run %r as completed (findings were ingested successfully): %s",
+                        scan_run_id,
+                        exc,
+                    )
                 stats["warnings"].append(f"Scan run {scan_run_id} status not updated to 'completed': {exc}")
 
         return stats
@@ -999,27 +1011,27 @@ class FilesMixin(DBMixinProtocol):
 
         Returns ``{"findings": [...], "total": N, "limit": ..., "offset": ...}``.
         """
+        if severity is not None and severity not in VALID_SEVERITIES:
+            valid = ", ".join(sorted(VALID_SEVERITIES))
+            raise ValueError(f'Invalid severity filter "{severity}". Must be one of: {valid}')
+        if status is not None and status not in VALID_FINDING_STATUSES:
+            valid = ", ".join(sorted(VALID_FINDING_STATUSES))
+            raise ValueError(f'Invalid status filter "{status}". Must be one of: {valid}')
+        # All filters are simple equality on identically-named columns.
+        filters = {
+            "severity": severity,
+            "status": status,
+            "scan_source": scan_source,
+            "scan_run_id": scan_run_id,
+            "file_id": file_id,
+            "issue_id": issue_id,
+        }
         clauses: list[str] = []
         params: list[Any] = []
-
-        if severity is not None:
-            clauses.append("severity = ?")
-            params.append(severity)
-        if status is not None:
-            clauses.append("status = ?")
-            params.append(status)
-        if scan_source is not None:
-            clauses.append("scan_source = ?")
-            params.append(scan_source)
-        if scan_run_id is not None:
-            clauses.append("scan_run_id = ?")
-            params.append(scan_run_id)
-        if file_id is not None:
-            clauses.append("file_id = ?")
-            params.append(file_id)
-        if issue_id is not None:
-            clauses.append("issue_id = ?")
-            params.append(issue_id)
+        for col, val in filters.items():
+            if val is not None:
+                clauses.append(f"{col} = ?")
+                params.append(val)
 
         where = " AND ".join(clauses) if clauses else "1=1"
 
@@ -1065,7 +1077,10 @@ class FilesMixin(DBMixinProtocol):
     def _file_path_for_finding(self, file_id: str) -> str:
         """Look up the file path for a file_id, returning empty string if not found."""
         row = self.conn.execute("SELECT path FROM file_records WHERE id = ?", (file_id,)).fetchone()
-        return row["path"] if row else ""
+        if row is None:
+            logger.warning("File record not found for file_id=%s during finding promotion", file_id)
+            return ""
+        return str(row["path"])
 
     def get_file_findings_summary(self, file_id: str) -> FindingsSummary:
         """Get a severity-bucketed summary of findings for a file."""

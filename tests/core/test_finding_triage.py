@@ -80,6 +80,16 @@ class TestListFindingsGlobal:
         assert len(result["findings"]) == 2
         assert result["total"] == 3
 
+    def test_invalid_severity_raises(self, db: FiligreeDB) -> None:
+        _seed_findings(db)
+        with pytest.raises(ValueError, match="Invalid severity filter"):
+            db.list_findings_global(severity="hgih")
+
+    def test_invalid_status_raises(self, db: FiligreeDB) -> None:
+        _seed_findings(db)
+        with pytest.raises(ValueError, match="Invalid status filter"):
+            db.list_findings_global(status="bogus")
+
 
 class TestUpdateFinding:
     def test_update_status(self, db: FiligreeDB) -> None:

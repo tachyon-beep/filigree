@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import sqlite3
 from collections.abc import Callable
 from typing import Any
 
@@ -526,7 +527,7 @@ async def _handle_promote_finding(arguments: dict[str, Any]) -> list[TextContent
         obs = tracker.promote_finding_to_observation(finding_id, priority=priority, actor=actor)
     except KeyError:
         return _text(ErrorResponse(error=f"Finding not found: {finding_id}", code="not_found"))
-    except Exception as exc:
+    except (ValueError, sqlite3.Error) as exc:
         _logger.warning("Failed to promote finding %s: %s", finding_id, exc)
         return _text(ErrorResponse(error=f"Failed to promote finding: {exc}", code="promotion_error"))
     return _text(obs)

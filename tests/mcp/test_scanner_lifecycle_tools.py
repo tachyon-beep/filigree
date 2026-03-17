@@ -7,10 +7,13 @@ these tests verify the MCP integration layer on top.
 
 from __future__ import annotations
 
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
+
+import pytest
 
 from filigree.core import FiligreeDB
 from filigree.mcp_server import call_tool  # type: ignore[attr-defined]
+from filigree.mcp_tools.scanners import _validate_localhost_url
 from tests.mcp._helpers import _parse
 
 
@@ -341,3 +344,100 @@ class TestProcessScanResultsCompletion:
 
         assert result["findings_created"] == 1
         assert len(result["new_finding_ids"]) == 1
+
+
+class TestValidateLocalhostUrl:
+    """Edge-case coverage for the _validate_localhost_url security boundary."""
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "http://localhost:8377/api/v1/scan-results",
+            "http://127.0.0.1:8377/api/v1/scan-results",
+            "http://[::1]:8377/api/v1/scan-results",
+            "http://localhost/path",
+        ],
+    )
+    def test_localhost_urls_accepted(self, url: str) -> None:
+        assert _validate_localhost_url(url) is None
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "https://evil.example.com/api",
+            "http://localhost.evil.com/api",
+            "http://192.168.1.1:8377/api",
+            "http://10.0.0.1/api",
+        ],
+    )
+    def test_non_localhost_urls_rejected(self, url: str) -> None:
+        result = _validate_localhost_url(url)
+        assert result is not None
+        # Should be an error response (list of TextContent)
+        assert isinstance(result, list)
+
+    def test_empty_string_url(self) -> None:
+        # Empty URL produces empty hostname — accepted by fallback
+        result = _validate_localhost_url("")
+        assert result is None
+
+    def test_malformed_url_no_scheme(self) -> None:
+        # urlparse("no-scheme") puts everything in path, hostname is None → ""
+        result = _validate_localhost_url("no-scheme")
+        assert result is None
+
+
+class TestSpawnScanLogFileFailure:
+    """_spawn_scan handles log file creation failure gracefully."""
+
+    async def test_log_file_open_failure_still_spawns(self, mcp_db: FiligreeDB) -> None:
+        files = _make_target_files(mcp_db, ["log_fail_target.py"])
+        _write_scanner_toml(mcp_db)
+        try:
+            real_open = open
+
+            def mock_open_fail(path, *a, **kw):
+                if "scans" in str(path) and str(path).endswith(".log"):
+                    raise OSError("disk full")
+                return real_open(path, *a, **kw)
+
+            with (
+                patch("filigree.mcp_tools.scanners.subprocess.Popen", return_value=_FakeProc(100)),
+                patch("builtins.open", side_effect=mock_open_fail),
+            ):
+                data = _parse(
+                    await call_tool(
+                        "trigger_scan_batch",
+                        {"scanner": "test-scanner", "file_paths": ["log_fail_target.py"]},
+                    )
+                )
+            assert data["status"] == "triggered"
+            assert "log_warning" in data or any("log" in str(w).lower() for w in data.get("warnings", []))
+        finally:
+            _cleanup_files(mcp_db, files)
+
+
+class TestBatchScanDbTrackingFailure:
+    """trigger_scan_batch kills all processes when DB tracking fails."""
+
+    async def test_db_failure_kills_spawned_processes(self, mcp_db: FiligreeDB) -> None:
+        files = _make_target_files(mcp_db, ["db_fail_a.py", "db_fail_b.py"])
+        _write_scanner_toml(mcp_db)
+        mock_procs = [MagicMock(pid=100, poll=MagicMock(return_value=None)), MagicMock(pid=101, poll=MagicMock(return_value=None))]
+        try:
+            with (
+                patch("filigree.mcp_tools.scanners.subprocess.Popen", side_effect=mock_procs),
+                patch.object(mcp_db, "create_scan_run", side_effect=RuntimeError("DB broken")),
+            ):
+                data = _parse(
+                    await call_tool(
+                        "trigger_scan_batch",
+                        {"scanner": "test-scanner", "file_paths": ["db_fail_a.py", "db_fail_b.py"]},
+                    )
+                )
+            assert data["code"] == "db_error"
+            # Both processes should have been killed
+            for proc in mock_procs:
+                proc.kill.assert_called_once()
+        finally:
+            _cleanup_files(mcp_db, files)

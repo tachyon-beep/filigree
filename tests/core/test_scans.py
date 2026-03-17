@@ -177,6 +177,29 @@ class TestGetScanStatus:
         status = db.get_scan_status("batch-1")
         assert any("1 of 3" in w for w in status["data_warnings"])
 
+    def test_dead_pid_already_completed_race(self, db: FiligreeDB) -> None:
+        """When another codepath completes the run before dead-PID auto-fail, re-read succeeds."""
+        from unittest.mock import patch
+
+        db.create_scan_run(
+            scan_run_id="race-1",
+            scanner_name="codex",
+            scan_source="codex",
+            file_paths=["a.py"],
+            file_ids=["f-1"],
+            pid=99999,
+        )
+        db.update_scan_run_status("race-1", "running")
+        # Simulate: another codepath already completed the run
+        db.update_scan_run_status("race-1", "completed", findings_count=3)
+        # os.kill will raise ProcessLookupError (PID doesn't exist),
+        # then auto-fail will fail with "Invalid transition" since it's already completed.
+        # The method should re-read and return the completed status.
+        with patch("os.kill", side_effect=ProcessLookupError):
+            status = db.get_scan_status("race-1")
+        assert status["status"] == "completed"
+        assert status["process_alive"] is False
+
 
 class TestCorruptScanRunJson:
     """Corrupt JSON in scan_runs is handled gracefully with data_warnings."""
@@ -276,3 +299,203 @@ class TestCooldownMultiFile:
         db.update_scan_run_status("batch-prefix", "running")
         # "src/main.py.bak" should NOT match "src/main.py"
         assert db.check_scan_cooldown("codex", "src/main.py.bak") is None
+
+
+class TestCooldownTimestampFormat:
+    """Regression: cooldown comparison must use ISO format matching _now_iso()."""
+
+    def test_cooldown_expires_after_threshold(self, db: FiligreeDB) -> None:
+        """A completed scan should stop blocking after SCAN_COOLDOWN_SECONDS.
+
+        Before the fix, _now_iso()'s 'T' separator sorted after SQLite
+        datetime()'s space separator, making every same-day scan appear
+        newer than the cutoff — permanent rate-limiting until date change.
+        """
+        from filigree.db_scans import SCAN_COOLDOWN_SECONDS
+
+        db.create_scan_run(
+            scan_run_id="ts-fmt-1",
+            scanner_name="codex",
+            scan_source="codex",
+            file_paths=["src/main.py"],
+            file_ids=["f-1"],
+        )
+        db.update_scan_run_status("ts-fmt-1", "running")
+        db.update_scan_run_status("ts-fmt-1", "completed")
+
+        # Immediately after completion, cooldown should block
+        assert db.check_scan_cooldown("codex", "src/main.py") is not None
+
+        # Backdate updated_at to exceed cooldown
+        db.conn.execute(
+            "UPDATE scan_runs SET updated_at = strftime('%Y-%m-%dT%H:%M:%S+00:00', 'now', ?) WHERE id = ?",
+            (f"-{SCAN_COOLDOWN_SECONDS + 5} seconds", "ts-fmt-1"),
+        )
+        db.conn.commit()
+
+        # After cooldown expires, trigger should be allowed
+        assert db.check_scan_cooldown("codex", "src/main.py") is None
+
+
+class TestProcessScanResultsCompleteScanRun:
+    """Regression: complete_scan_run=False prevents premature batch completion."""
+
+    def test_complete_scan_run_false_does_not_transition(self, db: FiligreeDB) -> None:
+        db.create_scan_run(
+            scan_run_id="batch-no-complete",
+            scanner_name="codex",
+            scan_source="codex",
+            file_paths=["a.py", "b.py"],
+            file_ids=["f-1", "f-2"],
+        )
+        db.update_scan_run_status("batch-no-complete", "running")
+
+        # Ingest findings for first file but don't complete
+        db.process_scan_results(
+            scan_source="codex",
+            findings=[{"path": "a.py", "rule_id": "R1", "severity": "medium", "message": "test"}],
+            scan_run_id="batch-no-complete",
+            complete_scan_run=False,
+        )
+        run = db.get_scan_run("batch-no-complete")
+        assert run["status"] == "running"  # NOT completed
+
+    def test_complete_scan_run_true_transitions(self, db: FiligreeDB) -> None:
+        db.create_scan_run(
+            scan_run_id="batch-complete",
+            scanner_name="codex",
+            scan_source="codex",
+            file_paths=["a.py"],
+            file_ids=["f-1"],
+        )
+        db.update_scan_run_status("batch-complete", "running")
+
+        # Ingest with default (complete_scan_run=True)
+        db.process_scan_results(
+            scan_source="codex",
+            findings=[{"path": "a.py", "rule_id": "R1", "severity": "medium", "message": "test"}],
+            scan_run_id="batch-complete",
+        )
+        run = db.get_scan_run("batch-complete")
+        assert run["status"] == "completed"
+
+    def test_empty_findings_with_complete_marks_done(self, db: FiligreeDB) -> None:
+        """Clean scans (zero findings) can still complete the run."""
+        db.create_scan_run(
+            scan_run_id="clean-run",
+            scanner_name="codex",
+            scan_source="codex",
+            file_paths=["a.py"],
+            file_ids=["f-1"],
+        )
+        db.update_scan_run_status("clean-run", "running")
+
+        db.process_scan_results(
+            scan_source="codex",
+            findings=[],
+            scan_run_id="clean-run",
+            complete_scan_run=True,
+        )
+        run = db.get_scan_run("clean-run")
+        assert run["status"] == "completed"
+
+    def test_completion_race_already_failed_warns(self, db: FiligreeDB) -> None:
+        """When scan run is already failed (e.g. dead PID), completion logs info, not crash."""
+        db.create_scan_run(
+            scan_run_id="race-complete",
+            scanner_name="codex",
+            scan_source="codex",
+            file_paths=["a.py"],
+            file_ids=["f-1"],
+        )
+        db.update_scan_run_status("race-complete", "running")
+        db.update_scan_run_status("race-complete", "failed", error_message="PID died")
+
+        # Ingest findings — completion will fail (failed→completed invalid)
+        # but findings should still be ingested and a warning surfaced
+        result = db.process_scan_results(
+            scan_source="codex",
+            findings=[{"path": "a.py", "rule_id": "R1", "severity": "medium", "message": "test"}],
+            scan_run_id="race-complete",
+        )
+        assert result["findings_created"] == 1
+        assert any("race-complete" in w for w in result["warnings"])
+        # Run should still be failed
+        run = db.get_scan_run("race-complete")
+        assert run["status"] == "failed"
+
+
+class TestCreateObservationsIntegration:
+    """process_scan_results with create_observations=True creates observations."""
+
+    def test_observations_created_for_new_findings(self, db: FiligreeDB) -> None:
+        db.register_file("src/main.py")
+        result = db.process_scan_results(
+            scan_source="test-scanner",
+            findings=[
+                {"path": "src/main.py", "rule_id": "R1", "severity": "high", "message": "Bug found"},
+                {"path": "src/main.py", "rule_id": "R2", "severity": "low", "message": "Style issue"},
+            ],
+            create_observations=True,
+        )
+        assert result["observations_created"] == 2
+        obs_list = db.list_observations()
+        assert len(obs_list) == 2
+        summaries = {o["summary"] for o in obs_list}
+        assert any("Bug found" in s for s in summaries)
+        assert any("Style issue" in s for s in summaries)
+
+    def test_observations_not_created_when_false(self, db: FiligreeDB) -> None:
+        db.register_file("src/main.py")
+        result = db.process_scan_results(
+            scan_source="test-scanner",
+            findings=[{"path": "src/main.py", "rule_id": "R1", "severity": "medium", "message": "test"}],
+            create_observations=False,
+        )
+        assert result["observations_created"] == 0
+        assert len(db.list_observations()) == 0
+
+    def test_findings_survive_observation_failure(self, db: FiligreeDB) -> None:
+        """If observation creation fails, the finding itself is still ingested."""
+        db.register_file("src/main.py")
+        # First call creates both finding and observation
+        db.process_scan_results(
+            scan_source="test-scanner",
+            findings=[{"path": "src/main.py", "rule_id": "R1", "severity": "medium", "message": "dup test"}],
+            create_observations=True,
+        )
+        # Second call with same finding — finding is updated, observation deduped (not an error)
+        result = db.process_scan_results(
+            scan_source="test-scanner",
+            findings=[{"path": "src/main.py", "rule_id": "R1", "severity": "medium", "message": "dup test"}],
+            create_observations=True,
+        )
+        # Finding should be updated regardless
+        assert result["findings_updated"] == 1
+
+
+class TestObservationAutoCommit:
+    """Regression: create_observation with auto_commit=False defers commit."""
+
+    def test_auto_commit_false_does_not_commit(self, db: FiligreeDB) -> None:
+        """Observations created with auto_commit=False can be rolled back."""
+        db.create_observation(
+            "test obs",
+            file_path="src/main.py",
+            auto_commit=False,
+        )
+        # Roll back — observation should disappear
+        db.conn.rollback()
+        obs_list = db.list_observations()
+        assert len(obs_list) == 0
+
+    def test_auto_commit_true_persists(self, db: FiligreeDB) -> None:
+        """Default auto_commit=True commits immediately."""
+        db.create_observation(
+            "test obs persisted",
+            file_path="src/main.py",
+        )
+        # Even after rollback attempt, observation persists (already committed)
+        db.conn.rollback()
+        obs_list = db.list_observations()
+        assert len(obs_list) == 1

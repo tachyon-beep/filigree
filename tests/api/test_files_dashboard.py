@@ -437,6 +437,56 @@ class TestScanResultsEndpointEnhancements:
         assert payload["observations_created"] == 1
 
 
+class TestCompleteScanRunEndpoint:
+    """Tests for complete_scan_run parameter on scan results endpoint."""
+
+    async def test_complete_scan_run_false_keeps_running(self, client: AsyncClient, api_db: FiligreeDB) -> None:
+        api_db.create_scan_run(
+            scan_run_id="batch-api-test",
+            scanner_name="codex",
+            scan_source="codex",
+            file_paths=["a.py", "b.py"],
+            file_ids=["f-1", "f-2"],
+        )
+        api_db.update_scan_run_status("batch-api-test", "running")
+
+        resp = await client.post(
+            "/api/v1/scan-results",
+            json={
+                "scan_source": "codex",
+                "scan_run_id": "batch-api-test",
+                "complete_scan_run": False,
+                "findings": [{"path": "a.py", "rule_id": "R1", "severity": "medium", "message": "test"}],
+            },
+        )
+        assert resp.status_code == 200
+        run = api_db.get_scan_run("batch-api-test")
+        assert run["status"] == "running"
+
+    async def test_complete_scan_run_true_completes(self, client: AsyncClient, api_db: FiligreeDB) -> None:
+        api_db.create_scan_run(
+            scan_run_id="batch-api-done",
+            scanner_name="codex",
+            scan_source="codex",
+            file_paths=["a.py"],
+            file_ids=["f-1"],
+        )
+        api_db.update_scan_run_status("batch-api-done", "running")
+
+        resp = await client.post(
+            "/api/v1/scan-results",
+            json={
+                "scan_source": "codex",
+                "scan_run_id": "batch-api-done",
+                "complete_scan_run": True,
+                "findings": [{"path": "a.py", "rule_id": "R1", "severity": "medium", "message": "test"}],
+            },
+        )
+        assert resp.status_code == 200
+        run = api_db.get_scan_run("batch-api-done")
+        assert run["status"] == "completed"
+
+
 class TestSortBySeverityEndpoint:
     """Tests for sort=severity on findings endpoint."""
 

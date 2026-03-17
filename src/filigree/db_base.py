@@ -21,7 +21,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # Shared internal API — used by DB mixins across modules.
-__all__ = ["AGE_BUCKETS", "DBMixinProtocol", "StatusCategory", "_escape_like", "_now_iso", "_safe_json_loads"]
+__all__ = ["AGE_BUCKETS", "DBMixinProtocol", "StatusCategory", "_escape_like", "_escape_like_chars", "_now_iso", "_safe_json_loads"]
 
 # Virtual label dispatch — explicit allowlist, no prefix matching
 AGE_BUCKETS: dict[str, tuple[int, int]] = {
@@ -56,10 +56,14 @@ def _safe_json_loads(raw: str | None, context: str, *, error_key: str = "_metada
     return result
 
 
+def _escape_like_chars(value: str) -> str:
+    """Escape LIKE wildcard characters (``%``, ``_``, ``\\``) without adding wrapping wildcards."""
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 def _escape_like(query: str) -> str:
     """Escape a string for SQL LIKE with backslash escape, wrapped in % wildcards."""
-    escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-    return f"%{escaped}%"
+    return f"%{_escape_like_chars(query)}%"
 
 
 class DBMixinProtocol(Protocol):
@@ -188,6 +192,7 @@ class DBMixinProtocol(Protocol):
         source_issue_id: str = "",
         priority: int = 3,
         actor: str = "",
+        auto_commit: bool = True,
     ) -> ObservationDict: ...
 
     # -- ScansMixin ----------------------------------------------------------

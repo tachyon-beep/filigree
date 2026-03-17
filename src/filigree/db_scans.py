@@ -133,7 +133,7 @@ class ScansMixin(DBMixinProtocol):
             "  SELECT 1 FROM json_each(sr.file_paths) je WHERE je.value = ?"
             ") "
             "AND sr.status IN ('pending', 'running', 'completed') "
-            "AND sr.updated_at >= datetime('now', ?) "
+            "AND sr.updated_at >= strftime('%Y-%m-%dT%H:%M:%S+00:00', 'now', ?) "
             "ORDER BY sr.updated_at DESC LIMIT 1",
             (scanner_name, file_path, f"-{SCAN_COOLDOWN_SECONDS} seconds"),
         ).fetchone()
@@ -194,20 +194,23 @@ class ScansMixin(DBMixinProtocol):
             result["data_warnings"].append(f"Batch scan: only PID {run['pid']} (1 of {len(run['file_paths'])} processes) is monitored")
         return result
 
+    @staticmethod
+    def _safe_json_list(raw: str | None, field: str, run_id: str) -> tuple[list[str], str | None]:
+        """Parse a JSON list column, returning ``([], warning)`` on corrupt data."""
+        try:
+            return json.loads(raw) if raw else [], None
+        except (json.JSONDecodeError, TypeError):
+            logger.warning("Corrupt %s JSON in scan_run %s", field, run_id)
+            return [], f"Corrupt {field} JSON — defaulted to empty list"
+
     def _build_scan_run_dict(self, row: Any) -> ScanRunDict:
         warnings: list[str] = []
-        try:
-            file_paths = json.loads(row["file_paths"]) if row["file_paths"] else []
-        except (json.JSONDecodeError, TypeError):
-            logger.warning("Corrupt file_paths JSON in scan_run %s", row["id"])
-            file_paths = []
-            warnings.append("Corrupt file_paths JSON — defaulted to empty list")
-        try:
-            file_ids = json.loads(row["file_ids"]) if row["file_ids"] else []
-        except (json.JSONDecodeError, TypeError):
-            logger.warning("Corrupt file_ids JSON in scan_run %s", row["id"])
-            file_ids = []
-            warnings.append("Corrupt file_ids JSON — defaulted to empty list")
+        file_paths, w1 = self._safe_json_list(row["file_paths"], "file_paths", row["id"])
+        if w1:
+            warnings.append(w1)
+        file_ids, w2 = self._safe_json_list(row["file_ids"], "file_ids", row["id"])
+        if w2:
+            warnings.append(w2)
         return ScanRunDict(
             id=row["id"],
             scanner_name=row["scanner_name"],

@@ -15,7 +15,7 @@ import sqlite3
 import uuid
 from typing import TYPE_CHECKING, Any
 
-from filigree.db_base import AGE_BUCKETS, DBMixinProtocol, _escape_like, _now_iso, _safe_json_loads
+from filigree.db_base import AGE_BUCKETS, DBMixinProtocol, _escape_like, _escape_like_chars, _now_iso, _safe_json_loads
 from filigree.models import Issue
 from filigree.templates import validate_field_pattern
 from filigree.types.api import BatchFailureDetail
@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 
 def _escape_like_prefix(value: str) -> str:
     """Escape LIKE wildcard characters for prefix matching (no wrapping %)."""
-    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return _escape_like_chars(value)
 
 
 def _resolve_virtual_label(
@@ -118,11 +118,6 @@ def _sanitize_fts_query(query: str) -> str:
     tokens = [t.replace('"', "") for t in sanitized.strip().split()]
     tokens = [t for t in tokens if t]
     return " AND ".join(f'"{t}"*' for t in tokens) if tokens else ""
-
-
-def _escape_like_query(query: str) -> str:
-    """Escape a search query for SQL LIKE — delegates to ``_escape_like``."""
-    return _escape_like(query)
 
 
 class IssuesMixin(DBMixinProtocol):
@@ -1056,7 +1051,7 @@ class IssuesMixin(DBMixinProtocol):
         """Return the total number of issues matching a search query."""
         fts_query = _sanitize_fts_query(query)
         if not fts_query:
-            pattern = _escape_like_query(query)
+            pattern = _escape_like(query)
             row = self.conn.execute(
                 "SELECT COUNT(*) AS cnt FROM issues WHERE title LIKE ? ESCAPE '\\' OR description LIKE ? ESCAPE '\\'",
                 (pattern, pattern),
@@ -1074,7 +1069,7 @@ class IssuesMixin(DBMixinProtocol):
                 "FTS5 search unavailable (%s); falling back to LIKE. Performance may be degraded. Run 'filigree doctor' to check.",
                 exc,
             )
-            pattern = _escape_like_query(query)
+            pattern = _escape_like(query)
             row = self.conn.execute(
                 "SELECT COUNT(*) AS cnt FROM issues WHERE title LIKE ? ESCAPE '\\' OR description LIKE ? ESCAPE '\\'",
                 (pattern, pattern),
@@ -1085,7 +1080,7 @@ class IssuesMixin(DBMixinProtocol):
         """Search issues by title/description using FTS5, falling back to LIKE."""
         fts_query = _sanitize_fts_query(query)
         if not fts_query:
-            pattern = _escape_like_query(query)
+            pattern = _escape_like(query)
             rows = self.conn.execute(
                 "SELECT id FROM issues WHERE title LIKE ? ESCAPE '\\' OR description LIKE ? ESCAPE '\\' "
                 "ORDER BY priority, created_at LIMIT ? OFFSET ?",
@@ -1107,7 +1102,7 @@ class IssuesMixin(DBMixinProtocol):
                 "FTS5 search unavailable (%s); falling back to LIKE. Performance may be degraded. Run 'filigree doctor' to check.",
                 exc,
             )
-            pattern = _escape_like_query(query)
+            pattern = _escape_like(query)
             rows = self.conn.execute(
                 "SELECT id FROM issues WHERE title LIKE ? ESCAPE '\\' OR description LIKE ? ESCAPE '\\' "
                 "ORDER BY priority, created_at LIMIT ? OFFSET ?",

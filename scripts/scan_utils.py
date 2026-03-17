@@ -316,6 +316,7 @@ def post_to_api(
     scan_run_id: str,
     findings: list[dict[str, Any]],
     create_observations: bool = False,
+    complete_scan_run: bool = True,
 ) -> tuple[bool, str]:
     """POST findings to filigree's scan API.
 
@@ -325,6 +326,8 @@ def post_to_api(
         scan_run_id: Unique run identifier.
         findings: List of finding dicts.
         create_observations: If True, auto-promote findings to observations for triage.
+        complete_scan_run: If False, don't mark the scan run as completed.
+            Use for batch scans where multiple POSTs share a scan_run_id.
 
     Returns:
         ``(True, "")`` on success, ``(False, error_detail)`` on failure.
@@ -333,12 +336,14 @@ def post_to_api(
     import urllib.request
 
     endpoint = f"{api_url}/api/v1/scan-results"
-    payload = {
+    payload: dict[str, Any] = {
         "scan_source": scan_source,
         "scan_run_id": scan_run_id,
         "findings": findings,
         "create_observations": create_observations,
     }
+    if not complete_scan_run:
+        payload["complete_scan_run"] = False
     data = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(  # noqa: S310
         endpoint,
@@ -390,7 +395,8 @@ def estimate_tokens(files: list[Path], context_overhead: int = 2000) -> int:
         try:
             size = f.stat().st_size
             total += (size // 4) + context_overhead
-        except OSError:
+        except OSError as exc:
+            logger.warning("Cannot stat %s for token estimation: %s", f, exc)
             total += context_overhead
     return total
 
@@ -538,18 +544,35 @@ async def _analyse_files(
                     rel_path = str(_display_path(fpath, repo_root))
                     findings = parse_findings(text, file_path=rel_path)
                     if findings:
+                        # Ingest findings but defer scan run completion to the
+                        # final POST after all files are processed (Bug #4 fix).
                         ok, err_detail = post_to_api(
                             api_url=api_url,
                             scan_source=scan_source,
                             scan_run_id=scan_run_id,
                             findings=findings,
                             create_observations=True,
+                            complete_scan_run=False,
                         )
                         if ok:
-                            api_successes += len(findings)
+                            api_successes += 1
                         else:
-                            api_failures += len(findings)
+                            api_failures += 1
                             print(f"  API error for {rel_path}: {err_detail}", file=sys.stderr)
+
+    # Send a final completion POST with empty findings to mark the scan run
+    # as completed.  Per-file POSTs above used complete_scan_run=False to
+    # avoid prematurely completing batch scan runs (Bug #2 + #4 fix).
+    if not no_ingest and scan_run_id:
+        ok, err_detail = post_to_api(
+            api_url=api_url,
+            scan_source=scan_source,
+            scan_run_id=scan_run_id,
+            findings=[],
+            complete_scan_run=True,
+        )
+        if not ok:
+            print(f"  API error completing scan run: {err_detail}", file=sys.stderr)
 
     stats: Counter[str] = Counter()
     for md in report_paths:
@@ -567,8 +590,8 @@ async def _analyse_files(
                 stats["unknown"] += 1
 
     stats["failed"] = len(failed)
-    stats["api_posted"] = api_successes
-    stats["api_failed"] = api_failures
+    stats["api_files_posted"] = api_successes
+    stats["api_files_failed"] = api_failures
     return dict(stats)
 
 
@@ -692,7 +715,7 @@ async def run_scanner_pipeline(
     print("\n" + "=" * 50)
     print(f"Bug Hunt Summary ({scan_source})")
     print("=" * 50)
-    defects = sum(v for k, v in stats.items() if k not in ("clean", "failed", "unknown", "api_posted", "api_failed"))
+    defects = sum(v for k, v in stats.items() if k not in ("clean", "failed", "unknown", "api_files_posted", "api_files_failed"))
     print(f"  Defects found:  {defects}")
     for pri in ("P0", "P1", "P2", "P3"):
         c = stats.get(pri, 0)
@@ -702,12 +725,12 @@ async def run_scanner_pipeline(
     if stats.get("failed", 0):
         print(f"  Failed:         {stats['failed']}")
     if not args.no_ingest:
-        print(f"  API posted:     {stats.get('api_posted', 0)}")
-        if stats.get("api_failed", 0):
-            print(f"  API failures:   {stats['api_failed']}")
+        print(f"  API files posted:  {stats.get('api_files_posted', 0)}")
+        if stats.get("api_files_failed", 0):
+            print(f"  API files failed:  {stats['api_files_failed']}")
     print("=" * 50)
 
-    if not args.no_ingest and stats.get("api_posted", 0) == 0 and stats.get("api_failed", 0) > 0:
+    if not args.no_ingest and stats.get("api_files_posted", 0) == 0 and stats.get("api_files_failed", 0) > 0:
         return 1
 
     return 0
