@@ -9,9 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.5.1] - 2026-03-18
 
+### Added
+
+- **Label taxonomy system** — namespace reservation, virtual labels (`age:fresh`, `age:stale`, `has:findings`, `has:plan`, `has:dependencies`), array labels, prefix search (`--label-prefix=cluster/`), and not-label exclusion in `list_issues`
+- MCP tools for label discovery: `list_labels` and `get_label_taxonomy`
+- CLI commands: `filigree labels`, `filigree taxonomy`, `--label-prefix`, `--not-label`, repeatable `--label` on `list`
+- Mutual exclusivity enforcement for `review:` namespace labels
+- **Scanner lifecycle tracking** — `scan_runs` table with schema v7→v8 migration, `ScansMixin` with CRUD, cooldown checks, and status transitions
+- **Finding triage tools** — `get_finding`, `list_findings` (global), `update_finding` (file_id optional), `dismiss_finding`, `promote_finding`, `batch_update_findings` MCP tools
+- **Scanner module extraction** — new `mcp_tools/scanners.py` with `trigger_scan_batch`, `get_scan_status`, `preview_scan`; DB-persisted cooldown replaces in-memory dict
+- **Shared scanner pipeline** — `run_scanner_pipeline()` in `scripts/scan_utils.py` with argparse integration, batch orchestration, and API completion logic; slimmed `claude_bug_hunt.py` and `codex_bug_hunt.py`
+- Scanner config file: `.filigree/scanners/claude-code.toml`
+
 ### Changed
 
 - **Breaking (API):** `POST /api/v1/scan-results` response replaces `issues_created`/`issue_ids` with `observations_created` count. The `create_issues` parameter is replaced by `create_observations`.
+- **Breaking:** `update_finding` signature changed — `file_id` is now keyword-only and optional
+- `process_scan_results` replaces `create_issues` with `create_observations` for lightweight triage
 - Narrowed `except Exception` to specific exception types in scanner MCP handlers to avoid masking programming errors as DB failures
 - `batch_update_findings` response now includes `"partial": true` flag when some updates succeed and others fail
 - `ScanIngestResult` now tracks `observations_failed` count and reports per-finding failure messages
@@ -31,9 +45,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Tests
 
+- 6 new test files: `test_scans.py`, `test_finding_triage.py`, `test_label_discovery.py`, `test_label_query.py`, `test_scanner_lifecycle_tools.py`, `test_finding_triage_tools.py`
 - Test for breaking `create_issues` → `create_observations` parameter rename
 - Test for `update_finding` with mismatched `file_id` raises `KeyError`
 - Parametrized severity-to-priority mapping tests for all 5 severity levels
+- Security boundary tests: path traversal, non-localhost URL rejection, reserved namespace enforcement
 
 ## [1.5.0] - 2026-03-09
 
