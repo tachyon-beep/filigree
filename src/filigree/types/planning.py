@@ -125,6 +125,7 @@ class ReleaseTree(TypedDict):
 
     release: IssueDict
     children: list[TreeNode]
+    data_warnings: NotRequired[list[str]]
 
 
 # ---------------------------------------------------------------------------

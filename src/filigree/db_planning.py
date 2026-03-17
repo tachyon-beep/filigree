@@ -506,9 +506,12 @@ class PlanningMixin(DBMixinProtocol):
         release = self.get_issue(release_id)  # raises KeyError if not found
         if release.type != "release":
             raise ValueError(f"Issue {release_id} is not a release")
+        children = self._build_tree(release.id)
+        tree_warnings = self._collect_tree_warnings(children)
         return {
             "release": release.to_dict(),
-            "children": self._build_tree(release.id),
+            "children": children,
+            "data_warnings": tree_warnings,
         }
 
     def _build_tree(self, parent_id: str, *, _depth: int = 0) -> list[TreeNode]:

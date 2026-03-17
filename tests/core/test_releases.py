@@ -355,6 +355,31 @@ class TestGetReleaseTree:
             else:
                 assert child["progress"] is None
 
+    def test_truncated_tree_surfaces_data_warnings(self, release_db: FiligreeDB) -> None:
+        """get_release_tree surfaces truncation warnings at the top level."""
+        db = release_db
+        release = db.create_issue("R", type="release")
+        # Build chain deep enough to trigger truncation (depth > 10)
+        parent_id = release.id
+        for i in range(12):
+            child = db.create_issue(f"T{i}", type="task", parent_id=parent_id)
+            parent_id = child.id
+        # Add a child that will be truncated
+        db.create_issue("Truncated", type="task", parent_id=parent_id)
+
+        result = db.get_release_tree(release.id)
+        assert "data_warnings" in result
+        assert any("truncated" in w.lower() for w in result["data_warnings"])
+
+    def test_shallow_tree_has_no_data_warnings(self, release_db: FiligreeDB) -> None:
+        """Shallow trees should not produce data_warnings."""
+        db = release_db
+        release = db.create_issue("R", type="release")
+        db.create_issue("T1", type="task", parent_id=release.id)
+
+        result = db.get_release_tree(release.id)
+        assert result["data_warnings"] == []
+
 
 # ---------------------------------------------------------------------------
 # TestProgressFromSubtree
