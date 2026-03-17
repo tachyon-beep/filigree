@@ -156,10 +156,10 @@ class TestVirtualLabels:
         results = db.list_issues(label=["has:findings"])
         assert len(results) == 0
 
-    def test_unknown_virtual_returns_empty(self, db: FiligreeDB) -> None:
+    def test_unknown_virtual_raises_valueerror(self, db: FiligreeDB) -> None:
         db.create_issue("A")
-        results = db.list_issues(label=["age:garbage"])
-        assert len(results) == 0
+        with pytest.raises(ValueError, match="Unknown age bucket"):
+            db.list_issues(label=["age:garbage"])
 
     def test_not_label_virtual(self, db: FiligreeDB) -> None:
         """Negation works on virtual labels."""

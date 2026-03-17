@@ -251,6 +251,44 @@ class TestCorruptScanRunJson:
         assert run["data_warnings"] == []
 
 
+class TestNonListJsonInScanRun:
+    """Valid JSON that is not a list should be treated as corrupt."""
+
+    def test_dict_json_returns_empty_with_warning(self, db: FiligreeDB) -> None:
+        db.create_scan_run(
+            scan_run_id="run-dict",
+            scanner_name="codex",
+            scan_source="codex",
+            file_paths=["a.py"],
+            file_ids=["f-1"],
+        )
+        db.conn.execute(
+            'UPDATE scan_runs SET file_paths = \'{"not": "a list"}\' WHERE id = ?',
+            ("run-dict",),
+        )
+        db.conn.commit()
+        run = db.get_scan_run("run-dict")
+        assert run["file_paths"] == []
+        assert any("expected list" in w for w in run["data_warnings"])
+
+    def test_int_json_returns_empty_with_warning(self, db: FiligreeDB) -> None:
+        db.create_scan_run(
+            scan_run_id="run-int",
+            scanner_name="codex",
+            scan_source="codex",
+            file_paths=["a.py"],
+            file_ids=["f-1"],
+        )
+        db.conn.execute(
+            "UPDATE scan_runs SET file_ids = '42' WHERE id = ?",
+            ("run-int",),
+        )
+        db.conn.commit()
+        run = db.get_scan_run("run-int")
+        assert run["file_ids"] == []
+        assert any("expected list" in w for w in run["data_warnings"])
+
+
 class TestScanRunTimeout:
     """The running -> timeout transition is valid."""
 
@@ -472,6 +510,33 @@ class TestCreateObservationsIntegration:
         )
         # Finding should be updated regardless
         assert result["findings_updated"] == 1
+
+
+class TestObservationFailureWarning:
+    """Observation creation failures are surfaced in stats warnings."""
+
+    def test_observation_failure_adds_warning(self, db: FiligreeDB, monkeypatch: pytest.MonkeyPatch) -> None:
+        db.register_file("src/main.py")
+        original = db.create_observation
+
+        def failing_create_observation(*args: object, **kwargs: object) -> None:
+            raise ValueError("forced observation failure")
+
+        monkeypatch.setattr(db, "create_observation", failing_create_observation)
+        result = db.process_scan_results(
+            scan_source="test-scanner",
+            findings=[
+                {"path": "src/main.py", "rule_id": "R1", "severity": "medium", "message": "msg1"},
+                {"path": "src/main.py", "rule_id": "R2", "severity": "high", "message": "msg2"},
+            ],
+            create_observations=True,
+        )
+        assert result["observations_created"] == 0
+        assert result["findings_created"] == 2
+        assert any("observations failed" in w for w in result["warnings"])
+        # Only one warning even though both observations failed
+        obs_warnings = [w for w in result["warnings"] if "observations failed" in w]
+        assert len(obs_warnings) == 1
 
 
 class TestObservationAutoCommit:

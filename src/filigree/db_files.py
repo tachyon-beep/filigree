@@ -550,6 +550,8 @@ class FilesMixin(DBMixinProtocol):
                         path,
                         obs_exc,
                     )
+                    if not any(w.startswith("Some observations failed") for w in stats["warnings"]):
+                        stats["warnings"].append(f"Some observations failed to create: {obs_exc}")
 
     def _update_existing_finding(
         self,

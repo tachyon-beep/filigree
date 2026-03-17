@@ -36,9 +36,9 @@ def register(
 ) -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
     """Return (tool_definitions, handler_map) for scanner-domain tools.
 
-    When *include_legacy* is True (as used in production), all 5 scanner
-    tools are returned.  When False, only the 3 batch/status/preview
-    tools are returned (useful for testing subsets).
+    When *include_legacy* is True, all 5 scanner tools are returned
+    (adds ``list_scanners`` and single-file ``trigger_scan``).  When
+    False, only the 3 batch/status/preview tools are returned.
     """
     new_tools = [
         Tool(
@@ -195,8 +195,9 @@ def _spawn_scan(
 ) -> dict[str, Any] | list[TextContent]:
     """Build command, validate, and spawn scanner process.
 
-    Returns ``{'proc': Popen, 'scan_log_path': Path, 'cmd': list[str]}``
-    on success, or a ``list[TextContent]`` error response.
+    Returns ``{'proc': Popen, 'scan_log_path': Path, 'cmd': list[str],
+    'log_warning'?: str}`` on success, or a ``list[TextContent]`` error
+    response.
 
     *log_suffix* disambiguates log files when multiple processes share
     a scan_run_id (batch mode).

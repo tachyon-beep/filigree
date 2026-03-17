@@ -153,7 +153,7 @@ class ScansMixin(DBMixinProtocol):
             try:
                 os.kill(run["pid"], 0)
                 process_alive = True
-            except (OSError, ProcessLookupError):
+            except OSError:
                 logger.info(
                     "Scan run %s: process %d appears dead, transitioning to failed",
                     scan_run_id,
@@ -171,9 +171,12 @@ class ScansMixin(DBMixinProtocol):
                         scan_run_id,
                         exc,
                     )
-                    # Re-read to get actual DB state (may have been
-                    # completed by another codepath).
+                    # Re-read: another codepath may have completed it concurrently.
                     run = self.get_scan_run(scan_run_id)
+                    if run["status"] == "running":
+                        run["data_warnings"].append(
+                            f"Process {run['pid']} appears dead but status is still 'running' (auto-fail transition failed: {exc})"
+                        )
         log_tail: list[str] = []
         if run["log_path"]:
             # Log paths are stored relative to the project root; resolve against
@@ -198,10 +201,14 @@ class ScansMixin(DBMixinProtocol):
     def _safe_json_list(raw: str | None, field: str, run_id: str) -> tuple[list[str], str | None]:
         """Parse a JSON list column, returning ``([], warning)`` on corrupt data."""
         try:
-            return json.loads(raw) if raw else [], None
+            parsed = json.loads(raw) if raw else []
         except (json.JSONDecodeError, TypeError):
             logger.warning("Corrupt %s JSON in scan_run %s", field, run_id)
             return [], f"Corrupt {field} JSON — defaulted to empty list"
+        if not isinstance(parsed, list):
+            logger.warning("Corrupt %s JSON in scan_run %s: expected list, got %s", field, run_id, type(parsed).__name__)
+            return [], f"Corrupt {field} JSON — expected list, got {type(parsed).__name__}"
+        return parsed, None
 
     def _build_scan_run_dict(self, row: Any) -> ScanRunDict:
         warnings: list[str] = []

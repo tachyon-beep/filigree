@@ -463,7 +463,16 @@ async def _handle_list_findings(arguments: dict[str, Any]) -> list[TextContent]:
         if val is not None:
             filters[key] = val
 
-    result = tracker.list_findings_global(limit=limit, offset=offset, **filters)
+    # Validate string-type filters from MCP input
+    for key in ("scan_source", "scan_run_id", "file_id", "issue_id"):
+        val = filters.get(key)
+        if val is not None and not isinstance(val, str):
+            return _text(ErrorResponse(error=f"{key} must be a string", code="validation_error"))
+
+    try:
+        result = tracker.list_findings_global(limit=limit, offset=offset, **filters)
+    except ValueError as e:
+        return _text(ErrorResponse(error=str(e), code="validation_error"))
     return _text(result)
 
 
@@ -509,6 +518,13 @@ async def _handle_batch_update_findings(arguments: dict[str, Any]) -> list[TextC
             updated.append(fid)
         except (KeyError, ValueError) as e:
             errors.append({"finding_id": fid, "error": str(e)})
+    if not updated and errors:
+        return _text(
+            ErrorResponse(
+                error=f"All {len(errors)} finding update(s) failed",
+                code="batch_all_failed",
+            )
+        )
     return _text({"updated": updated, "errors": errors})
 
 

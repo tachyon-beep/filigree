@@ -392,18 +392,21 @@ async def _handle_list_issues(arguments: dict[str, Any]) -> list[TextContent]:
 
     effective_limit, offset = _resolve_pagination(arguments)
 
-    issues = tracker.list_issues(
-        status=status_filter,
-        type=args.get("type"),
-        priority=priority,
-        parent_id=args.get("parent_id"),
-        assignee=args.get("assignee"),
-        label=args.get("label"),
-        label_prefix=args.get("label_prefix"),
-        not_label=args.get("not_label"),
-        limit=effective_limit + 1,
-        offset=offset,
-    )
+    try:
+        issues = tracker.list_issues(
+            status=status_filter,
+            type=args.get("type"),
+            priority=priority,
+            parent_id=args.get("parent_id"),
+            assignee=args.get("assignee"),
+            label=args.get("label"),
+            label_prefix=args.get("label_prefix"),
+            not_label=args.get("not_label"),
+            limit=effective_limit + 1,
+            offset=offset,
+        )
+    except ValueError as e:
+        return _text(ErrorResponse(error=str(e), code="validation_error"))
     issues, has_more = _apply_has_more(issues, effective_limit)
     return _text(
         IssueListResponse(

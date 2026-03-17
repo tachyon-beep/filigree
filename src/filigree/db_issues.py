@@ -45,8 +45,8 @@ def _resolve_virtual_label(
         value = label.split(":", 1)[1]
         bucket = AGE_BUCKETS.get(value)
         if bucket is None:
-            logger.warning("Unknown virtual label value: %s", label)
-            return ("1=0" if not negate else "1=1", [])
+            valid = ", ".join(sorted(AGE_BUCKETS))
+            raise ValueError(f"Unknown age bucket {value!r} in virtual label {label!r}. Valid values: {valid}")
         low, high = bucket
         if negate:
             return (
@@ -89,8 +89,8 @@ def _resolve_virtual_label(
         }
         entry = subqueries.get(value)
         if entry is None:
-            logger.warning("Unknown virtual label value: %s", label)
-            return ("1=0" if not negate else "1=1", [])
+            valid = ", ".join(sorted(subqueries))
+            raise ValueError(f"Unknown has: value {value!r} in virtual label {label!r}. Valid values: {valid}")
         return entry
 
     return None  # Not a virtual label

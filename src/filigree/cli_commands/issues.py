@@ -160,18 +160,21 @@ def list_issues(
     """List issues with optional filters."""
     with get_db() as db:
         label_filter = list(label) if label else None
-        issues = db.list_issues(
-            status=status,
-            type=issue_type,
-            priority=priority,
-            parent_id=parent,
-            assignee=assignee,
-            label=label_filter,
-            label_prefix=label_prefix,
-            not_label=not_label,
-            limit=limit,
-            offset=offset,
-        )
+        try:
+            issues = db.list_issues(
+                status=status,
+                type=issue_type,
+                priority=priority,
+                parent_id=parent,
+                assignee=assignee,
+                label=label_filter,
+                label_prefix=label_prefix,
+                not_label=not_label,
+                limit=limit,
+                offset=offset,
+            )
+        except ValueError as e:
+            raise click.ClickException(str(e)) from e
 
         if as_json:
             click.echo(json_mod.dumps([i.to_dict() for i in issues], indent=2, default=str))
