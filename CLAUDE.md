@@ -1,4 +1,4 @@
-<!-- filigree:instructions:v1.5.0:63b4188e -->
+<!-- filigree:instructions:v1.5.1:63b4188e -->
 ## Filigree Issue Tracker
 
 Use `filigree` for all task tracking in this project. Data lives in `.filigree/`.
