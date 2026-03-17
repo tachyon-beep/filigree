@@ -57,11 +57,6 @@ _logger: logging.Logger | None = None
 _request_db: ContextVar[FiligreeDB | None] = ContextVar("filigree_request_db", default=None)
 _request_filigree_dir: ContextVar[Path | None] = ContextVar("filigree_request_dir", default=None)
 
-# Per-(project, scanner, file) cooldown to prevent unbounded process spawning.
-# Maps (project_scope, scanner_name, file_path) -> timestamp of last trigger.
-_scan_cooldowns: dict[tuple[str, str, str], float] = {}
-_SCAN_COOLDOWN_SECONDS = 30
-
 
 # ---------------------------------------------------------------------------
 # State accessors (used by domain modules via deferred import)
@@ -133,6 +128,7 @@ from filigree.mcp_tools import (  # noqa: E402, I001  — must come after global
     meta as _meta_mod,
     observations as _observations_mod,
     planning as _planning_mod,
+    scanners as _scanners_mod,
     workflow as _workflow_mod,
 )
 
@@ -143,6 +139,11 @@ for _mod in (_issues_mod, _planning_mod, _files_mod, _workflow_mod, _meta_mod, _
     _tools, _handlers = _mod.register()
     _all_tools.extend(_tools)
     _all_handlers.update(_handlers)
+
+# Scanner module uses include_legacy=True to own list_scanners + trigger_scan
+_tools, _handlers = _scanners_mod.register(include_legacy=True)
+_all_tools.extend(_tools)
+_all_handlers.update(_handlers)
 
 
 # ---------------------------------------------------------------------------

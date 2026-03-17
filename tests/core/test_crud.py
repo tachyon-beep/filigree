@@ -2119,3 +2119,73 @@ class TestGenerateUniqueIdCollision:
 
         with patch("filigree.db_issues.uuid.uuid4", return_value=fake_uuid), pytest.raises(RuntimeError, match="ID generation failed"):
             db._generate_unique_id("issues")
+
+
+class TestNamespaceReservation:
+    """Reserved namespaces cannot be used as manual labels."""
+
+    @pytest.mark.parametrize(
+        "label",
+        [
+            "area:mcp",
+            "severity:high",
+            "scanner:ruff",
+            "pack:core",
+            "age:stale",
+            "has:blockers",
+            "AREA:MCP",  # case-insensitive
+        ],
+    )
+    def test_reserved_namespace_rejected(self, db: FiligreeDB, label: str) -> None:
+        issue = db.create_issue("Test")
+        with pytest.raises(ValueError, match="namespace"):
+            db.add_label(issue.id, label)
+
+    @pytest.mark.parametrize(
+        "label",
+        [
+            "cluster:broad-except",
+            "effort:m",
+            "review:needed",
+            "wait:upstream",
+            "tech-debt",
+            "needs-review",
+        ],
+    )
+    def test_manual_namespace_allowed(self, db: FiligreeDB, label: str) -> None:
+        issue = db.create_issue("Test")
+        assert db.add_label(issue.id, label) is True
+
+    @pytest.mark.parametrize(
+        "label",
+        [
+            "has\nnewline",
+            "has\rcarriage",
+            "has\x00null",
+            "has\x1fcontrol",
+        ],
+    )
+    def test_control_characters_rejected(self, db: FiligreeDB, label: str) -> None:
+        issue = db.create_issue("Test")
+        with pytest.raises(ValueError, match="control characters"):
+            db.add_label(issue.id, label)
+
+
+class TestReviewMutualExclusivity:
+    def test_adding_review_label_removes_prior(self, db: FiligreeDB) -> None:
+        issue = db.create_issue("Test")
+        db.add_label(issue.id, "review:needed")
+        db.add_label(issue.id, "review:done")
+        refreshed = db.get_issue(issue.id)
+        assert "review:done" in refreshed.labels
+        assert "review:needed" not in refreshed.labels
+
+    def test_review_labels_dont_affect_other_labels(self, db: FiligreeDB) -> None:
+        issue = db.create_issue("Test")
+        db.add_label(issue.id, "tech-debt")
+        db.add_label(issue.id, "review:needed")
+        db.add_label(issue.id, "review:rework")
+        refreshed = db.get_issue(issue.id)
+        assert "review:rework" in refreshed.labels
+        assert "review:needed" not in refreshed.labels
+        assert "tech-debt" in refreshed.labels

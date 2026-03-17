@@ -21,7 +21,7 @@ Safety note on cast():
 
 from typing import Any, Literal, NotRequired, TypedDict
 
-from filigree.types.core import AssocType, ISOTimestamp, Severity, StatusCategory
+from filigree.types.core import AssocType, FindingStatus, ISOTimestamp, Severity, StatusCategory
 
 # ---------------------------------------------------------------------------
 # issues.py handlers
@@ -42,7 +42,9 @@ class ListIssuesArgs(TypedDict):
     priority: NotRequired[int]
     parent_id: NotRequired[str]
     assignee: NotRequired[str]
-    label: NotRequired[str]
+    label: NotRequired[str | list[str]]
+    label_prefix: NotRequired[str]
+    not_label: NotRequired[str]
     limit: NotRequired[int]
     offset: NotRequired[int]
     no_limit: NotRequired[bool]
@@ -150,6 +152,11 @@ class AddLabelArgs(TypedDict):
 class RemoveLabelArgs(TypedDict):
     issue_id: str
     label: str
+
+
+class ListLabelsArgs(TypedDict):
+    namespace: NotRequired[str]
+    top: NotRequired[int]
 
 
 class BatchAddLabelArgs(TypedDict):
@@ -329,6 +336,64 @@ class TriggerScanArgs(TypedDict):
     api_url: NotRequired[str]
 
 
+class GetFindingArgs(TypedDict):
+    finding_id: str
+
+
+class ListFindingsArgs(TypedDict):
+    severity: NotRequired[Severity]
+    status: NotRequired[FindingStatus]
+    scan_source: NotRequired[str]
+    scan_run_id: NotRequired[str]
+    file_id: NotRequired[str]
+    issue_id: NotRequired[str]
+    limit: NotRequired[int]
+    offset: NotRequired[int]
+
+
+class UpdateFindingArgs(TypedDict):
+    finding_id: str
+    status: NotRequired[FindingStatus]
+    issue_id: NotRequired[str]
+
+
+class BatchUpdateFindingsArgs(TypedDict):
+    finding_ids: list[str]
+    status: FindingStatus
+
+
+class PromoteFindingArgs(TypedDict):
+    finding_id: str
+    priority: NotRequired[int]
+    actor: NotRequired[str]
+
+
+class DismissFindingArgs(TypedDict):
+    finding_id: str
+    reason: NotRequired[str]
+
+
+# ---------------------------------------------------------------------------
+# scanners.py handlers
+# ---------------------------------------------------------------------------
+
+
+class TriggerScanBatchArgs(TypedDict):
+    scanner: str
+    file_paths: list[str]
+    api_url: NotRequired[str]
+
+
+class GetScanStatusArgs(TypedDict):
+    scan_run_id: str
+    log_lines: NotRequired[int]  # 1..500
+
+
+class PreviewScanArgs(TypedDict):
+    scanner: str
+    file_path: str
+
+
 # ---------------------------------------------------------------------------
 # observations.py handlers
 # ---------------------------------------------------------------------------
@@ -394,6 +459,7 @@ TOOL_ARGS_MAP: dict[str, type] = {
     "get_comments": GetCommentsArgs,
     "add_label": AddLabelArgs,
     "remove_label": RemoveLabelArgs,
+    "list_labels": ListLabelsArgs,
     "batch_add_label": BatchAddLabelArgs,
     "batch_add_comment": BatchAddCommentArgs,
     "get_changes": GetChangesArgs,
@@ -423,7 +489,17 @@ TOOL_ARGS_MAP: dict[str, type] = {
     "get_issue_files": GetIssueFilesArgs,
     "add_file_association": AddFileAssociationArgs,
     "register_file": RegisterFileArgs,
+    "get_finding": GetFindingArgs,
+    "list_findings": ListFindingsArgs,
+    "update_finding": UpdateFindingArgs,
+    "batch_update_findings": BatchUpdateFindingsArgs,
+    "promote_finding": PromoteFindingArgs,
+    "dismiss_finding": DismissFindingArgs,
+    # scanners.py (list_scanners has no args — excluded)
     "trigger_scan": TriggerScanArgs,
+    "trigger_scan_batch": TriggerScanBatchArgs,
+    "get_scan_status": GetScanStatusArgs,
+    "preview_scan": PreviewScanArgs,
     # observations.py
     "observe": ObserveArgs,
     "list_observations": ListObservationsArgs,

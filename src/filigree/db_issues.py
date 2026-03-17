@@ -15,7 +15,7 @@ import sqlite3
 import uuid
 from typing import TYPE_CHECKING, Any
 
-from filigree.db_base import DBMixinProtocol, _escape_like, _now_iso, _safe_json_loads
+from filigree.db_base import AGE_BUCKETS, DBMixinProtocol, _escape_like, _escape_like_chars, _now_iso, _safe_json_loads
 from filigree.models import Issue
 from filigree.templates import validate_field_pattern
 from filigree.types.api import BatchFailureDetail
@@ -24,6 +24,76 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
 logger = logging.getLogger(__name__)
+
+
+def _escape_like_prefix(value: str) -> str:
+    """Escape LIKE wildcard characters for prefix matching (no wrapping %)."""
+    return _escape_like_chars(value)
+
+
+def _resolve_virtual_label(
+    label: str,
+    *,
+    negate: bool = False,
+    done_states: list[str] | None = None,
+) -> tuple[str, list[Any]] | None:
+    """Resolve a virtual label to a SQL condition + params.
+
+    Returns (sql_fragment, params) or None if not a virtual label.
+    """
+    if label.startswith("age:"):
+        value = label.split(":", 1)[1]
+        bucket = AGE_BUCKETS.get(value)
+        if bucket is None:
+            valid = ", ".join(sorted(AGE_BUCKETS))
+            raise ValueError(f"Unknown age bucket {value!r} in virtual label {label!r}. Valid values: {valid}")
+        low, high = bucket
+        if negate:
+            return (
+                "(datetime(i.created_at) > datetime('now', ?) OR datetime(i.created_at) <= datetime('now', ?))",
+                [f"-{low} days", f"-{high} days"],
+            )
+        return (
+            "datetime(i.created_at) <= datetime('now', ?) AND datetime(i.created_at) > datetime('now', ?)",
+            [f"-{low} days", f"-{high} days"],
+        )
+
+    if label.startswith("has:"):
+        value = label.split(":", 1)[1]
+        exists_op = "NOT EXISTS" if negate else "EXISTS"
+        effective_done = done_states or ["closed"]
+        done_ph = ",".join("?" * len(effective_done))
+        subqueries: dict[str, tuple[str, list[Any]]] = {
+            "blockers": (
+                f"{exists_op} (SELECT 1 FROM dependencies d "
+                "JOIN issues blocker ON d.depends_on_id = blocker.id "
+                f"WHERE d.issue_id = i.id AND blocker.status NOT IN ({done_ph}))",
+                list(effective_done),
+            ),
+            "children": (
+                f"{exists_op} (SELECT 1 FROM issues child WHERE child.parent_id = i.id)",
+                [],
+            ),
+            "findings": (
+                f"{exists_op} (SELECT 1 FROM scan_findings sf WHERE sf.issue_id = i.id AND sf.status NOT IN ('fixed', 'false_positive'))",
+                [],
+            ),
+            "files": (
+                f"{exists_op} (SELECT 1 FROM file_associations fa WHERE fa.issue_id = i.id)",
+                [],
+            ),
+            "comments": (
+                f"{exists_op} (SELECT 1 FROM comments c WHERE c.issue_id = i.id)",
+                [],
+            ),
+        }
+        entry = subqueries.get(value)
+        if entry is None:
+            valid = ", ".join(sorted(subqueries))
+            raise ValueError(f"Unknown has: value {value!r} in virtual label {label!r}. Valid values: {valid}")
+        return entry
+
+    return None  # Not a virtual label
 
 
 def _safe_fields_json(raw: str | None, issue_id: str) -> dict[str, Any]:
@@ -48,11 +118,6 @@ def _sanitize_fts_query(query: str) -> str:
     tokens = [t.replace('"', "") for t in sanitized.strip().split()]
     tokens = [t for t in tokens if t]
     return " AND ".join(f'"{t}"*' for t in tokens) if tokens else ""
-
-
-def _escape_like_query(query: str) -> str:
-    """Escape a search query for SQL LIKE — delegates to ``_escape_like``."""
-    return _escape_like(query)
 
 
 class IssuesMixin(DBMixinProtocol):
@@ -881,7 +946,9 @@ class IssuesMixin(DBMixinProtocol):
         priority: int | None = None,
         parent_id: str | None = None,
         assignee: str | None = None,
-        label: str | None = None,
+        label: str | list[str] | None = None,
+        label_prefix: str | None = None,
+        not_label: str | None = None,
         limit: int = 100,
         offset: int = 0,
     ) -> list[Issue]:
@@ -889,8 +956,19 @@ class IssuesMixin(DBMixinProtocol):
             raise ValueError(f"limit must be non-negative, got {limit}")
         if offset < 0:
             raise ValueError(f"offset must be non-negative, got {offset}")
+        if label_prefix is not None and not label_prefix.endswith(":"):
+            msg = f"label_prefix must include a trailing colon (got {label_prefix!r})"
+            raise ValueError(msg)
+
+        # Normalize label to list
+        if isinstance(label, str):
+            label = [label]
+
         conditions: list[str] = []
         params: list[Any] = []
+
+        # Get done states once for virtual has:blockers
+        done_states = self._get_states_for_category("done")
 
         if status is not None:
             # Check if status is a category name (with aliases)
@@ -902,32 +980,68 @@ class IssuesMixin(DBMixinProtocol):
 
             if category_states:
                 placeholders = ",".join("?" * len(category_states))
-                conditions.append(f"status IN ({placeholders})")
+                conditions.append(f"i.status IN ({placeholders})")
                 params.extend(category_states)
             else:
                 # Literal state match (either not a category, or W7 empty guard)
-                conditions.append("status = ?")
+                conditions.append("i.status = ?")
                 params.append(status)
         if type is not None:
-            conditions.append("type = ?")
+            conditions.append("i.type = ?")
             params.append(type)
         if priority is not None:
-            conditions.append("priority = ?")
+            conditions.append("i.priority = ?")
             params.append(priority)
         if parent_id is not None:
-            conditions.append("parent_id = ?")
+            conditions.append("i.parent_id = ?")
             params.append(parent_id)
         if assignee is not None:
-            conditions.append("assignee = ?")
+            conditions.append("i.assignee = ?")
             params.append(assignee)
-        if label is not None:
-            conditions.append("id IN (SELECT issue_id FROM labels WHERE label = ?)")
-            params.append(label)
+
+        # Label filters (array, AND logic)
+        if label:
+            for lbl in label:
+                virtual = _resolve_virtual_label(lbl, negate=False, done_states=done_states)
+                if virtual is not None:
+                    sql_frag, vparams = virtual
+                    conditions.append(f"({sql_frag})")
+                    params.extend(vparams)
+                else:
+                    conditions.append("i.id IN (SELECT issue_id FROM labels WHERE label = ?)")
+                    params.append(lbl)
+
+        # Label prefix filter
+        if label_prefix is not None:
+            escaped = _escape_like_prefix(label_prefix)
+            conditions.append("i.id IN (SELECT issue_id FROM labels WHERE label LIKE ? ESCAPE '\\')")
+            params.append(escaped + "%")
+
+        # Not-label filter
+        if not_label is not None:
+            if not_label.endswith(":"):
+                # Prefix negation
+                ns = not_label.rstrip(":")
+                if ns in ("age", "has"):
+                    msg = f"Cannot negate virtual namespace prefix {not_label!r} — use a specific value like {ns}:stale"
+                    raise ValueError(msg)
+                escaped = _escape_like_prefix(not_label)
+                conditions.append("i.id NOT IN (SELECT issue_id FROM labels WHERE label LIKE ? ESCAPE '\\')")
+                params.append(escaped + "%")
+            else:
+                virtual = _resolve_virtual_label(not_label, negate=True, done_states=done_states)
+                if virtual is not None:
+                    sql_frag, vparams = virtual
+                    conditions.append(f"({sql_frag})")
+                    params.extend(vparams)
+                else:
+                    conditions.append("i.id NOT IN (SELECT issue_id FROM labels WHERE label = ?)")
+                    params.append(not_label)
 
         where = f" WHERE {' AND '.join(conditions)}" if conditions else ""
         params.extend([limit, offset])
         rows = self.conn.execute(
-            f"SELECT id FROM issues{where} ORDER BY priority, created_at LIMIT ? OFFSET ?",
+            f"SELECT i.id FROM issues i{where} ORDER BY i.priority, i.created_at LIMIT ? OFFSET ?",
             params,
         ).fetchall()
 
@@ -937,7 +1051,7 @@ class IssuesMixin(DBMixinProtocol):
         """Return the total number of issues matching a search query."""
         fts_query = _sanitize_fts_query(query)
         if not fts_query:
-            pattern = _escape_like_query(query)
+            pattern = _escape_like(query)
             row = self.conn.execute(
                 "SELECT COUNT(*) AS cnt FROM issues WHERE title LIKE ? ESCAPE '\\' OR description LIKE ? ESCAPE '\\'",
                 (pattern, pattern),
@@ -955,7 +1069,7 @@ class IssuesMixin(DBMixinProtocol):
                 "FTS5 search unavailable (%s); falling back to LIKE. Performance may be degraded. Run 'filigree doctor' to check.",
                 exc,
             )
-            pattern = _escape_like_query(query)
+            pattern = _escape_like(query)
             row = self.conn.execute(
                 "SELECT COUNT(*) AS cnt FROM issues WHERE title LIKE ? ESCAPE '\\' OR description LIKE ? ESCAPE '\\'",
                 (pattern, pattern),
@@ -966,7 +1080,7 @@ class IssuesMixin(DBMixinProtocol):
         """Search issues by title/description using FTS5, falling back to LIKE."""
         fts_query = _sanitize_fts_query(query)
         if not fts_query:
-            pattern = _escape_like_query(query)
+            pattern = _escape_like(query)
             rows = self.conn.execute(
                 "SELECT id FROM issues WHERE title LIKE ? ESCAPE '\\' OR description LIKE ? ESCAPE '\\' "
                 "ORDER BY priority, created_at LIMIT ? OFFSET ?",
@@ -988,7 +1102,7 @@ class IssuesMixin(DBMixinProtocol):
                 "FTS5 search unavailable (%s); falling back to LIKE. Performance may be degraded. Run 'filigree doctor' to check.",
                 exc,
             )
-            pattern = _escape_like_query(query)
+            pattern = _escape_like(query)
             rows = self.conn.execute(
                 "SELECT id FROM issues WHERE title LIKE ? ESCAPE '\\' OR description LIKE ? ESCAPE '\\' "
                 "ORDER BY priority, created_at LIMIT ? OFFSET ?",

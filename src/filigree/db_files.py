@@ -15,13 +15,13 @@ import sqlite3
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, ClassVar, get_args
 
-from filigree.db_base import DBMixinProtocol, _escape_like, _now_iso, _safe_json_loads
+from filigree.db_base import DBMixinProtocol, _escape_like, _escape_like_chars, _now_iso, _safe_json_loads
 from filigree.models import FileRecord, ScanFinding
 from filigree.types.core import AssocType, FindingStatus, Severity
 from filigree.types.files import ScanIngestResult
 
 if TYPE_CHECKING:
-    from filigree.types.core import PaginatedResult, ScanFindingDict
+    from filigree.types.core import ObservationDict, PaginatedResult, ScanFindingDict
     from filigree.types.files import (
         CleanStaleResult,
         EnrichedFileItem,
@@ -284,7 +284,7 @@ class FilesMixin(DBMixinProtocol):
             clauses.append("fr.language = ?")
             params.append(language)
         if path_prefix is not None:
-            escaped = path_prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            escaped = _escape_like_chars(path_prefix)
             clauses.append("fr.path LIKE ? ESCAPE '\\'")
             params.append(f"%{escaped}%")
         if min_findings is not None and min_findings > 0:
@@ -371,39 +371,36 @@ class FilesMixin(DBMixinProtocol):
     # -- Scan ingestion ------------------------------------------------------
 
     @staticmethod
+    def _require_str(f: dict[str, Any], key: str, idx: int, *, non_empty: bool = False) -> str:
+        """Validate that finding[key] exists and is a string. Raises ValueError on failure."""
+        if key not in f:
+            raise ValueError(f"findings[{idx}] is missing required key '{key}'")
+        val = f[key]
+        if not isinstance(val, str):
+            raise ValueError(f"findings[{idx}] {key} must be a string, got {type(val).__name__}")
+        if non_empty and not val.strip():
+            raise ValueError(f"findings[{idx}] {key} must be a non-empty string")
+        return val
+
+    @staticmethod
     def _validate_scan_findings(findings: list[dict[str, Any]], scan_source: str) -> list[str]:
         """Validate and normalize all findings upfront before any writes.
 
         Mutates findings in-place (normalizes paths and severities).
         Returns a list of warning messages for unknown severities.
         """
+        _req = FilesMixin._require_str
         warnings: list[str] = []
         for i, f in enumerate(findings):
             if not isinstance(f, dict):
                 raise ValueError(f"findings[{i}] must be a dict, got {type(f).__name__}")
-            if "path" not in f:
-                raise ValueError(f"findings[{i}] is missing required key 'path'")
-            if not isinstance(f["path"], str):
-                raise ValueError(f"findings[{i}] path must be a string, got {type(f['path']).__name__}")
+            _req(f, "path", i)
             f["path"] = _normalize_scan_path(f["path"])
-            if "rule_id" not in f:
-                raise ValueError(f"findings[{i}] is missing required key 'rule_id'")
-            if "message" not in f:
-                raise ValueError(f"findings[{i}] is missing required key 'message'")
-            rule_id = f["rule_id"]
-            if not isinstance(rule_id, str):
-                raise ValueError(f"findings[{i}] rule_id must be a string, got {type(rule_id).__name__}")
-            if not rule_id.strip():
-                raise ValueError(f"findings[{i}] rule_id must be a non-empty string")
-            message = f["message"]
-            if not isinstance(message, str):
-                raise ValueError(f"findings[{i}] message must be a string, got {type(message).__name__}")
-            if not message.strip():
-                raise ValueError(f"findings[{i}] message must be a non-empty string")
+            _req(f, "rule_id", i, non_empty=True)
+            _req(f, "message", i, non_empty=True)
             severity = f.get("severity", "info")
             if not isinstance(severity, str):
-                msg = f"findings[{i}] severity must be a string, got {type(severity).__name__}"
-                raise ValueError(msg)
+                raise ValueError(f"findings[{i}] severity must be a string, got {type(severity).__name__}")
             for ln_field in ("line_start", "line_end"):
                 ln_val = f.get(ln_field)
                 if ln_val is not None and not isinstance(ln_val, int):
@@ -411,7 +408,7 @@ class FilesMixin(DBMixinProtocol):
             suggestion = f.get("suggestion")
             if suggestion is not None and not isinstance(suggestion, str):
                 raise ValueError(f"findings[{i}] suggestion must be a string, got {type(suggestion).__name__}")
-            # Normalize: strip whitespace and lowercase
+            # Normalize severity
             normalized = severity.strip().lower()
             if normalized in VALID_SEVERITIES:
                 f["severity"] = normalized
@@ -465,7 +462,7 @@ class FilesMixin(DBMixinProtocol):
         now: str,
         stats: ScanIngestResult,
         seen_finding_ids: dict[str, list[str]],
-        create_issues: bool,
+        create_observations: bool,
     ) -> None:
         """Upsert a single finding (dedup on file_id + scan_source + rule_id + line_start)."""
         severity = f.get("severity", "info")
@@ -501,27 +498,6 @@ class FilesMixin(DBMixinProtocol):
                 stats=stats,
             )
             seen_finding_ids.setdefault(file_id, []).append(existing_finding["id"])
-            existing_issue_id = existing_finding["issue_id"] or ""
-            if create_issues and not existing_issue_id:
-                self._create_issue_for_finding(
-                    finding_id=existing_finding["id"],
-                    file_id=file_id,
-                    path=path,
-                    rule_id=rule_id,
-                    severity=severity,
-                    message=f.get("message", ""),
-                    suggestion=suggestion,
-                    line_start=line_start,
-                    line_end=f.get("line_end"),
-                    scan_source=scan_source,
-                    now=now,
-                    stats=stats,
-                )
-            elif create_issues and existing_issue_id:
-                self.conn.execute(
-                    "INSERT OR IGNORE INTO file_associations (file_id, issue_id, assoc_type, created_at) VALUES (?, ?, 'bug_in', ?)",
-                    (file_id, existing_issue_id, now),
-                )
         else:
             finding_id = self._generate_unique_id("scan_findings", "sf")
             self.conn.execute(
@@ -550,21 +526,34 @@ class FilesMixin(DBMixinProtocol):
             stats["findings_created"] += 1
             stats["new_finding_ids"].append(finding_id)
             seen_finding_ids.setdefault(file_id, []).append(finding_id)
-            if create_issues:
-                self._create_issue_for_finding(
-                    finding_id=finding_id,
-                    file_id=file_id,
-                    path=path,
-                    rule_id=rule_id,
-                    severity=severity,
-                    message=f.get("message", ""),
-                    suggestion=suggestion,
-                    line_start=line_start,
-                    line_end=f.get("line_end"),
-                    scan_source=scan_source,
-                    now=now,
-                    stats=stats,
-                )
+            if create_observations:
+                first_line = f.get("message", "").strip().splitlines()[0] if f.get("message", "").strip() else "Scanner finding"
+                obs_summary = f"[{scan_source}] {path}:{f.get('line_start', '?')} -- {first_line}"
+                obs_detail = f.get("message", "")
+                if f.get("suggestion"):
+                    obs_detail += f"\n\nSuggested fix:\n{f['suggestion']}"
+                try:
+                    self.create_observation(
+                        obs_summary,
+                        detail=obs_detail,
+                        file_path=path,
+                        line=f.get("line_start"),
+                        priority=self._SEVERITY_TO_PRIORITY.get(f.get("severity", "info"), 3),
+                        actor=f"scanner:{scan_source}",
+                        auto_commit=False,
+                    )
+                    stats["observations_created"] += 1
+                except (sqlite3.Error, ValueError) as obs_exc:
+                    logger.warning(
+                        "Failed to create observation for finding %s in %s: %s",
+                        finding_id,
+                        path,
+                        obs_exc,
+                    )
+                    stats["observations_failed"] += 1
+                    msg = f"Observation failed for {finding_id}: {obs_exc}"
+                    if msg not in stats["warnings"]:
+                        stats["warnings"].append(msg)
 
     def _update_existing_finding(
         self,
@@ -604,94 +593,6 @@ class FilesMixin(DBMixinProtocol):
         stats["findings_updated"] += 1
 
     @staticmethod
-    def _priority_for_severity(severity: str) -> int:
-        return {
-            "critical": 0,
-            "high": 1,
-            "medium": 2,
-            "low": 3,
-            "info": 3,
-        }.get(severity, 2)
-
-    def _create_issue_for_finding(
-        self,
-        *,
-        finding_id: str,
-        file_id: str,
-        path: str,
-        rule_id: str,
-        severity: str,
-        message: str,
-        suggestion: str,
-        line_start: int | None,
-        line_end: int | None,
-        scan_source: str,
-        now: str,
-        stats: ScanIngestResult,
-    ) -> str:
-        """Promote a scan finding to a triage bug issue."""
-        summary = message.strip().splitlines()[0].strip() if message and message.strip() else "Scanner finding"
-        location = f"{path}:{line_start}" if line_start is not None else path
-        title = f"[{scan_source}] {location} {summary}"
-        if len(title) > 200:
-            title = f"{title[:197]}..."
-
-        description_lines = [
-            "Automated finding promoted for triage.",
-            "",
-            f"- Scanner: `{scan_source}`",
-            f"- Rule ID: `{rule_id}`",
-            f"- Severity: `{severity}`",
-            f"- File: `{path}`",
-        ]
-        if line_start is not None:
-            if line_end is not None and line_end != line_start:
-                description_lines.append(f"- Lines: `{line_start}`-`{line_end}`")
-            else:
-                description_lines.append(f"- Line: `{line_start}`")
-        description_lines.extend(
-            [
-                "",
-                "Message:",
-                message or "(empty)",
-            ]
-        )
-        if suggestion:
-            description_lines.extend(["", "Suggested fix:", suggestion])
-        description = "\n".join(description_lines)
-
-        issue = self.create_issue(
-            title,
-            type="bug",
-            priority=self._priority_for_severity(severity),
-            description=description,
-            fields={
-                "source": "scan",
-                "scan_source": scan_source,
-                "scan_finding_id": finding_id,
-                "scan_rule_id": rule_id,
-                "scan_severity": severity,
-                "file_id": file_id,
-                "file_path": path,
-                "line_start": line_start,
-                "line_end": line_end,
-            },
-            labels=["candidate", "scan_finding"],
-            actor=f"scanner:{scan_source}",
-        )
-        self.conn.execute(
-            "UPDATE scan_findings SET issue_id = ?, updated_at = ? WHERE id = ?",
-            (issue.id, now, finding_id),
-        )
-        self.conn.execute(
-            "INSERT OR IGNORE INTO file_associations (file_id, issue_id, assoc_type, created_at) VALUES (?, ?, 'bug_in', ?)",
-            (file_id, issue.id, now),
-        )
-        stats["issues_created"] += 1
-        stats["issue_ids"].append(issue.id)
-        return issue.id
-
-    @staticmethod
     def _mark_unseen_findings(
         conn: Any,
         *,
@@ -719,21 +620,27 @@ class FilesMixin(DBMixinProtocol):
         findings: list[dict[str, Any]],
         scan_run_id: str = "",
         mark_unseen: bool = False,
-        create_issues: bool = False,
+        create_observations: bool = False,
+        complete_scan_run: bool = True,
     ) -> ScanIngestResult:
         """Ingest scan results: create/update file records and findings.
 
-        Each finding dict must have at minimum: path, rule_id, severity, message.
-        Optional: language, line_start, line_end, metadata.
+        Each finding dict must have at minimum: path, rule_id, message.
+        Optional: severity (default: 'info'), language, line_start, line_end, suggestion, metadata.
 
         When *mark_unseen* is ``True``, findings in the same (file, scan_source)
         that are NOT in this batch are set to ``unseen_in_latest`` status.
         Only findings with a non-terminal status are affected (``fixed`` and
         ``false_positive`` are left alone).
 
-        When *create_issues* is ``True``, each finding without an ``issue_id``
-        is promoted to a new candidate ``bug`` issue and linked to its file via
-        ``file_associations(assoc_type='bug_in')``.
+        When *create_observations* is ``True``, each new finding is promoted to
+        an observation for triage tracking.
+
+        When *complete_scan_run* is ``False`` and a *scan_run_id* is provided,
+        the scan run status is NOT transitioned to ``completed``.  Use this for
+        batch scans where multiple callers share one scan_run_id — the
+        orchestrator should send a final call with ``complete_scan_run=True``
+        after all workers finish.
 
         Returns summary stats including ``new_finding_ids``.
         """
@@ -746,8 +653,8 @@ class FilesMixin(DBMixinProtocol):
             findings_created=0,
             findings_updated=0,
             new_finding_ids=[],
-            issues_created=0,
-            issue_ids=[],
+            observations_created=0,
+            observations_failed=0,
             warnings=warnings,
         )
 
@@ -769,7 +676,7 @@ class FilesMixin(DBMixinProtocol):
                     now=now,
                     stats=stats,
                     seen_finding_ids=seen_finding_ids,
-                    create_issues=create_issues,
+                    create_observations=create_observations,
                 )
 
             if mark_unseen:
@@ -785,6 +692,36 @@ class FilesMixin(DBMixinProtocol):
             if self.conn.in_transaction:
                 self.conn.rollback()
             raise
+
+        if scan_run_id and complete_scan_run:
+            try:
+                self.update_scan_run_status(
+                    scan_run_id,
+                    "completed",
+                    findings_count=stats["findings_created"] + stats["findings_updated"],
+                )
+            except (KeyError, ValueError, sqlite3.Error) as exc:
+                # Check if the scan run is already in a terminal state by
+                # querying directly, rather than relying on error message text.
+                try:
+                    row = self.conn.execute("SELECT status FROM scan_runs WHERE id = ?", (scan_run_id,)).fetchone()
+                    is_terminal = row is not None and row["status"] in ("completed", "failed")
+                except sqlite3.Error:
+                    is_terminal = False
+                if is_terminal:
+                    logger.info(
+                        "Scan run %r already in terminal state, skipping completion: %s",
+                        scan_run_id,
+                        exc,
+                    )
+                else:
+                    logger.warning(
+                        "Failed to mark scan run %r as completed (findings were ingested successfully): %s",
+                        scan_run_id,
+                        exc,
+                    )
+                stats["warnings"].append(f"Scan run {scan_run_id} status not updated to 'completed': {exc}")
+
         return stats
 
     def get_scan_runs(self, *, limit: int = 10) -> list[ScanRunRecord]:
@@ -820,20 +757,34 @@ class FilesMixin(DBMixinProtocol):
 
     def update_finding(
         self,
-        file_id: str,
         finding_id: str,
         *,
+        file_id: str | None = None,
         status: FindingStatus | None = None,
         issue_id: str | None = None,
-    ) -> ScanFinding:
-        """Update finding status and/or linked issue for a specific file finding."""
-        row = self.conn.execute(
-            "SELECT id FROM scan_findings WHERE id = ? AND file_id = ?",
-            (finding_id, file_id),
-        ).fetchone()
+        dismiss_reason: str | None = None,
+    ) -> ScanFindingDict:
+        """Update finding status and/or linked issue.
+
+        *file_id* is optional — when omitted, it is looked up from the
+        finding record.  This allows callers that only have a finding ID
+        (e.g. MCP tool handlers) to update findings without knowing
+        which file they belong to.
+        """
+        if file_id is not None:
+            row = self.conn.execute(
+                "SELECT id, file_id FROM scan_findings WHERE id = ? AND file_id = ?",
+                (finding_id, file_id),
+            ).fetchone()
+        else:
+            row = self.conn.execute(
+                "SELECT id, file_id FROM scan_findings WHERE id = ?",
+                (finding_id,),
+            ).fetchone()
         if row is None:
             msg = f"Finding not found: {finding_id}"
             raise KeyError(msg)
+        file_id = row["file_id"]
 
         updates: list[str] = []
         params: list[Any] = []
@@ -861,6 +812,20 @@ class FilesMixin(DBMixinProtocol):
                 raise ValueError(msg)
             updates.append("issue_id = ?")
             params.append(normalized_issue_id)
+
+        if dismiss_reason is not None:
+            if status is None:
+                msg = "dismiss_reason requires status to also be provided"
+                raise ValueError(msg)
+            old_meta_raw = self.conn.execute("SELECT metadata FROM scan_findings WHERE id = ?", (finding_id,)).fetchone()
+            try:
+                old_meta = json.loads(old_meta_raw["metadata"]) if old_meta_raw and old_meta_raw["metadata"] else {}
+            except (json.JSONDecodeError, TypeError):
+                logger.warning("Corrupt metadata JSON in finding %s, resetting to empty", finding_id)
+                old_meta = {}
+            old_meta["dismiss_reason"] = dismiss_reason
+            updates.append("metadata = ?")
+            params.append(json.dumps(old_meta))
 
         if not updates:
             msg = "At least one of status or issue_id must be provided"
@@ -891,7 +856,7 @@ class FilesMixin(DBMixinProtocol):
         if updated is None:
             msg = f"Finding not found after update: {finding_id}"
             raise KeyError(msg)
-        return self._build_scan_finding(updated)
+        return self._build_scan_finding(updated).to_dict()
 
     def clean_stale_findings(
         self,
@@ -1017,6 +982,127 @@ class FilesMixin(DBMixinProtocol):
             "offset": offset,
             "has_more": (offset + limit) < total,
         }
+
+    # ------------------------------------------------------------------
+    # Finding triage methods
+    # ------------------------------------------------------------------
+
+    _SEVERITY_TO_PRIORITY: ClassVar[dict[str, int]] = {
+        "critical": 0,
+        "high": 1,
+        "medium": 2,
+        "low": 3,
+        "info": 3,
+    }
+
+    def get_finding(self, finding_id: str) -> ScanFindingDict:
+        """Get a single finding by ID.  Raises *KeyError* if not found."""
+        row = self.conn.execute(
+            "SELECT * FROM scan_findings WHERE id = ?",
+            (finding_id,),
+        ).fetchone()
+        if row is None:
+            msg = f"Finding not found: {finding_id}"
+            raise KeyError(msg)
+        return self._build_scan_finding(row).to_dict()
+
+    def list_findings_global(
+        self,
+        *,
+        severity: str | None = None,
+        status: str | None = None,
+        scan_source: str | None = None,
+        scan_run_id: str | None = None,
+        file_id: str | None = None,
+        issue_id: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        """Project-wide finding query with optional filters.
+
+        Returns ``{"findings": [...], "total": N, "limit": ..., "offset": ...}``.
+        """
+        if severity is not None and severity not in VALID_SEVERITIES:
+            valid = ", ".join(sorted(VALID_SEVERITIES))
+            raise ValueError(f'Invalid severity filter "{severity}". Must be one of: {valid}')
+        if status is not None and status not in VALID_FINDING_STATUSES:
+            valid = ", ".join(sorted(VALID_FINDING_STATUSES))
+            raise ValueError(f'Invalid status filter "{status}". Must be one of: {valid}')
+        # All filters are simple equality on identically-named columns.
+        filters = {
+            "severity": severity,
+            "status": status,
+            "scan_source": scan_source,
+            "scan_run_id": scan_run_id,
+            "file_id": file_id,
+            "issue_id": issue_id,
+        }
+        clauses: list[str] = []
+        params: list[Any] = []
+        for col, val in filters.items():
+            if val is not None:
+                clauses.append(f"{col} = ?")
+                params.append(val)
+
+        where = " AND ".join(clauses) if clauses else "1=1"
+
+        total: int = self.conn.execute(
+            f"SELECT COUNT(*) FROM scan_findings WHERE {where}",
+            params,
+        ).fetchone()[0]
+
+        rows = self.conn.execute(
+            f"SELECT * FROM scan_findings WHERE {where} ORDER BY updated_at DESC LIMIT ? OFFSET ?",
+            [*params, limit, offset],
+        ).fetchall()
+
+        findings = [self._build_scan_finding(r).to_dict() for r in rows]
+        return {"findings": findings, "total": total, "limit": limit, "offset": offset}
+
+    def promote_finding_to_observation(
+        self,
+        finding_id: str,
+        *,
+        priority: int | None = None,
+        actor: str = "",
+    ) -> ObservationDict:
+        """Promote a finding to an observation.
+
+        Creates an observation note from the finding's data.  Priority
+        is inferred from severity if not provided explicitly.
+        """
+        finding = self.get_finding(finding_id)
+        if priority is None:
+            priority = self._SEVERITY_TO_PRIORITY.get(finding["severity"], 3)
+
+        file_path = self._file_path_for_finding(finding["file_id"])
+        if not file_path:
+            logger.warning(
+                "Promoting finding %s without file context (file_id=%s not found)",
+                finding_id,
+                finding["file_id"],
+            )
+
+        summary = f"[{finding['scan_source']}] {finding['message']}"
+        detail = f"rule: {finding['rule_id']}, severity: {finding['severity']}"
+        if not file_path:
+            detail += f"\n\nNote: file record for file_id={finding['file_id']} was not found."
+        return self.create_observation(
+            summary,
+            detail=detail,
+            file_path=file_path,
+            line=finding.get("line_start"),
+            priority=priority,
+            actor=actor,
+        )
+
+    def _file_path_for_finding(self, file_id: str) -> str:
+        """Look up the file path for a file_id, returning empty string if not found."""
+        row = self.conn.execute("SELECT path FROM file_records WHERE id = ?", (file_id,)).fetchone()
+        if row is None:
+            logger.warning("File record not found for file_id=%s during finding promotion", file_id)
+            return ""
+        return str(row["path"])
 
     def get_file_findings_summary(self, file_id: str) -> FindingsSummary:
         """Get a severity-bucketed summary of findings for a file."""

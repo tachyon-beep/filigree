@@ -4,9 +4,6 @@
 Scans source files, runs `codex exec` on each with a static-analysis prompt,
 writes markdown reports, and optionally POSTs findings to filigree's scan API.
 
-This is a reference implementation (documentation-by-code) showing how external
-tools integrate with filigree. The API is the first-class product.
-
 No external dependencies beyond Python 3.11+ and `codex` on PATH.
 
 Usage:
@@ -20,115 +17,21 @@ Usage:
 
 from __future__ import annotations
 
-import argparse
 import asyncio
 import logging
-import re
-import shutil
 import sys
-from collections import Counter
-from datetime import UTC, datetime
 from pathlib import Path
 
-# Import shared utilities from scripts/scan_utils.py
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from scan_utils import (
-    estimate_tokens,
-    find_files,
-    load_context,
-    parse_findings,
-    post_to_api,
-)
+from scan_utils import run_scanner_pipeline
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(levelname)s: %(message)s",
-)
-logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
 # ── Config ──────────────────────────────────────────────────────────────
 
 MAX_RETRIES = 3
-RETRY_BASE_S = 2  # exponential backoff: 2s, 4s, 8s
+RETRY_BASE_S = 2
 STDERR_TRUNCATE = 500
-DEFAULT_TIMEOUT_S = 300  # 5 minutes per codex invocation
-
-PROMPT_TEMPLATE = """\
-You are a static analysis agent doing a deep bug audit.
-Target file: {file_path}
-
-{context}
-
-Instructions:
-- Analyse the target file for real, concrete bugs.
-- You may read any repo file to verify integration behaviour.
-- Report bugs only if the primary fix belongs in the target file.
-- If you find multiple distinct bugs, separate them with a line containing only '---'.
-- If you find no credible bug, output exactly:
-  "No concrete bug found in {file_path}"
-- Cite file paths and line numbers in evidence.
-
-Bug categories to check (use these exact rule_id values):
-1. **logic-error** — off-by-one, wrong comparison, unreachable branches
-2. **error-handling** — bare except, swallowed exceptions, missing cleanup
-3. **resource-leak** — unclosed files/connections, missing context managers
-4. **race-condition** — shared mutable state in async code, missing locks
-5. **type-error** — wrong return types, schema mismatches
-6. **injection** — unsanitised inputs, missing parameterisation, XSS
-7. **performance** — O(n²) where avoidable, blocking I/O in async
-8. **api-misuse** — wrong argument order, deprecated calls, silent failures
-9. **other** — anything that doesn't fit the above
-
-For each bug found, use this format:
-
-## Summary
-<one-line description>
-
-## Severity
-- Severity: <critical|major|minor|trivial>
-- Priority: <P0|P1|P2|P3>
-
-## Evidence
-<file:line citations, code snippets>
-
-## Root Cause Hypothesis
-<why the bug exists>
-
-## Suggested Fix
-<concrete fix>
-"""
-
-
-# ── Helpers ─────────────────────────────────────────────────────────────
-
-
-def _display_path(path: Path, base: Path) -> Path:
-    """Best-effort relative path for display; falls back to absolute."""
-    try:
-        return path.relative_to(base)
-    except ValueError:
-        return path
-
-
-def _resolve_target_file(*, repo_root: Path, root_dir: Path, file_arg: str) -> Path:
-    """Resolve a target file for single-file scan mode.
-
-    Accepts relative paths (resolved against repo_root) or absolute paths.
-    The resolved file must exist and stay within the configured scan root.
-    """
-    raw = Path(file_arg)
-    target = raw.resolve() if raw.is_absolute() else (repo_root / raw).resolve()
-    if not target.is_file():
-        msg = f"target file does not exist: {target}"
-        raise ValueError(msg)
-
-    try:
-        target.relative_to(root_dir)
-    except ValueError:
-        msg = f"target file is outside scan root: {target} (root: {root_dir})"
-        raise ValueError(msg) from None
-
-    return target
 
 
 # ── Codex execution with retry ──────────────────────────────────────────
@@ -210,247 +113,19 @@ async def run_codex_with_retry(
     raise RuntimeError(f"all {MAX_RETRIES} attempts failed") from last_exc
 
 
-# ── Batch runner ────────────────────────────────────────────────────────
-
-
-async def analyse_files(
-    *,
-    files: list[Path],
-    output_dir: Path,
-    root_dir: Path,
-    repo_root: Path,
-    model: str | None,
-    batch_size: int,
-    context: str,
-    skip_existing: bool,
-    timeout: int,
-    api_url: str,
-    no_ingest: bool,
-    scan_run_id: str,
-) -> dict[str, int]:
-    """Run analysis on all files in batches. Returns summary stats."""
-    failed: list[tuple[Path, Exception]] = []
-    report_paths: list[Path] = []
-    done = 0
-    total = len(files)
-    api_successes = 0
-    api_failures = 0
-
-    for batch_start in range(0, total, batch_size):
-        batch = files[batch_start : batch_start + batch_size]
-        tasks: list[tuple[Path, Path, asyncio.Task[None]]] = []
-
-        for fpath in batch:
-            rel = fpath.relative_to(root_dir)
-            out = (output_dir / rel).with_suffix(rel.suffix + ".md")
-
-            if skip_existing and out.exists():
-                done += 1
-                report_paths.append(out)
-                print(f"  [skip] {_display_path(fpath, repo_root)}", file=sys.stderr)
-                continue
-
-            prompt = PROMPT_TEMPLATE.format(file_path=fpath, context=context)
-            task = asyncio.create_task(
-                run_codex_with_retry(
-                    prompt=prompt,
-                    output_path=out,
-                    model=model,
-                    repo_root=repo_root,
-                    timeout=timeout,
-                )
-            )
-            tasks.append((fpath, out, task))
-
-        results = await asyncio.gather(*(t for _, _, t in tasks), return_exceptions=True)
-        for (fpath, out, _), result in zip(tasks, results, strict=True):
-            done += 1
-            if isinstance(result, Exception):
-                failed.append((fpath, result))
-                print(f"  FAIL {_display_path(fpath, repo_root)}: {result}", file=sys.stderr)
-            else:
-                report_paths.append(out)
-                print(f"  [{done}/{total}] {_display_path(fpath, repo_root)}", file=sys.stderr)
-
-                # Parse findings and POST to API
-                if not no_ingest and out.exists():
-                    text = out.read_text(encoding="utf-8")
-                    rel_path = str(_display_path(fpath, repo_root))
-                    findings = parse_findings(text, file_path=rel_path)
-                    if findings:
-                        ok = post_to_api(
-                            api_url=api_url,
-                            scan_source="codex",
-                            scan_run_id=scan_run_id,
-                            findings=findings,
-                            create_issues=True,
-                        )
-                        if ok:
-                            api_successes += len(findings)
-                        else:
-                            api_failures += len(findings)
-
-    # ── Summary stats (scoped to this run's reports only) ────────
-    stats: Counter[str] = Counter()
-    for md in report_paths:
-        if not md.exists():
-            continue
-        text = md.read_text(encoding="utf-8")
-        if "No concrete bug found" in text:
-            stats["clean"] += 1
-        else:
-            priorities = re.findall(r"Priority:\s*(P\d)", text, re.IGNORECASE)
-            if priorities:
-                for pri in priorities:
-                    stats[pri.upper()] += 1
-            else:
-                stats["unknown"] += 1
-
-    stats["failed"] = len(failed)
-    stats["api_posted"] = api_successes
-    stats["api_failed"] = api_failures
-    return dict(stats)
-
-
-# ── Organise by priority (optional) ────────────────────────────────────
-
-
-def organise_by_priority(output_dir: Path) -> None:
-    """Copy reports into by-priority/ dirs using the highest severity found."""
-    pri_order = {"P0": 0, "P1": 1, "P2": 2, "P3": 3}
-    by_pri = output_dir / "by-priority"
-    for md in output_dir.rglob("*.md"):
-        if "by-priority" in md.parts:
-            continue
-        text = md.read_text(encoding="utf-8")
-        if "No concrete bug found" in text:
-            continue
-        priorities = re.findall(r"Priority:\s*(P\d)", text, re.IGNORECASE)
-        pri = min((p.upper() for p in priorities), key=lambda p: pri_order.get(p, 99)) if priorities else "unknown"
-        rel_path = md.relative_to(output_dir)
-        dest_path = by_pri / pri / rel_path
-        dest_path.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(md, dest_path)
-
-
-# ── CLI ─────────────────────────────────────────────────────────────────
+# ── Entry point ────────────────────────────────────────────────────────
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Per-file bug hunt via Codex.")
-    parser.add_argument("--root", default="src/filigree", help="Directory to scan (default: src/filigree)")
-    parser.add_argument("--file", default=None, help="Scan exactly one file (relative to repo root or absolute path)")
-    parser.add_argument("--output-dir", default="docs/bugs/generated", help="Report output dir")
-    parser.add_argument("--batch-size", type=int, default=10, help="Concurrent codex runs (default: 10)")
-    parser.add_argument("--model", default=None, help="Override codex model")
-    parser.add_argument("--file-type", choices=["python", "all"], default="python", help="File filter")
-    parser.add_argument("--skip-existing", action="store_true", help="Skip files with existing reports")
-    parser.add_argument("--organise-by-priority", action="store_true", help="Copy reports into by-priority/ dirs")
-    parser.add_argument(
-        "--timeout",
-        type=int,
-        default=DEFAULT_TIMEOUT_S,
-        help=f"Per-file timeout in seconds (default: {DEFAULT_TIMEOUT_S})",
-    )
-    parser.add_argument("--dry-run", action="store_true", help="List files with count and token estimate")
-    parser.add_argument("--max-files", type=int, default=50, help="Maximum files to scan (default: 50)")
-    parser.add_argument("--api-url", default="http://localhost:8377", help="Filigree dashboard URL")
-    parser.add_argument("--no-ingest", action="store_true", help="Skip API POST (markdown-only mode)")
-    parser.add_argument("--scan-run-id", default=None, help="External scan run ID (from MCP trigger)")
-
-    args = parser.parse_args()
-
-    if args.batch_size < 1:
-        print("Error: --batch-size must be at least 1", file=sys.stderr)
-        return 1
-
-    repo_root = Path(__file__).resolve().parents[1]
-    root_dir = (repo_root / args.root).resolve()
-    output_dir = (repo_root / args.output_dir).resolve()
-
-    if not root_dir.is_dir():
-        print(f"Error: scan root is not a directory: {root_dir}", file=sys.stderr)
-        return 1
-
-    if args.file:
-        try:
-            files = [_resolve_target_file(repo_root=repo_root, root_dir=root_dir, file_arg=args.file)]
-        except ValueError as e:
-            print(f"Error: {e}", file=sys.stderr)
-            return 1
-    else:
-        files = find_files(
-            root_dir,
-            file_type=args.file_type,
-            exclude_dirs={output_dir},
-            max_files=args.max_files,
-        )
-    if not files:
-        print(f"No files found under {root_dir}", file=sys.stderr)
-        return 1
-
-    if args.dry_run:
-        tokens = estimate_tokens(files)
-        print(f"Would analyse {len(files)} files (~{tokens:,} estimated tokens):")
-        for f in files:
-            print(f"  {_display_path(f, repo_root)}")
-        return 0
-
-    if shutil.which("codex") is None:
-        print("Error: `codex` not found on PATH", file=sys.stderr)
-        return 1
-
-    context = load_context(repo_root)
-    scan_run_id = args.scan_run_id or f"codex-{datetime.now(UTC).isoformat()}"
-
-    print(f"Analysing {len(files)} files (batch={args.batch_size}) ...", file=sys.stderr)
-    if not args.no_ingest:
-        print(f"  API: {args.api_url}  run_id: {scan_run_id}", file=sys.stderr)
-
-    stats = asyncio.run(
-        analyse_files(
-            files=files,
-            output_dir=output_dir,
-            root_dir=root_dir,
-            repo_root=repo_root,
-            model=args.model,
-            batch_size=args.batch_size,
-            context=context,
-            skip_existing=args.skip_existing,
-            timeout=args.timeout,
-            api_url=args.api_url,
-            no_ingest=args.no_ingest,
-            scan_run_id=scan_run_id,
+    return asyncio.run(
+        run_scanner_pipeline(
+            executor=run_codex_with_retry,
+            scan_source="codex",
+            description="Per-file bug hunt via Codex.",
+            cli_tool="codex",
+            default_batch_size=10,
         )
     )
-
-    if args.organise_by_priority:
-        organise_by_priority(output_dir)
-
-    # ── Print summary ───────────────────────────────────────────────
-    print("\n" + "=" * 50)
-    print("Bug Hunt Summary (codex)")
-    print("=" * 50)
-    defects = sum(v for k, v in stats.items() if k not in ("clean", "failed", "unknown", "api_posted", "api_failed"))
-    print(f"  Defects found:  {defects}")
-    for pri in ("P0", "P1", "P2", "P3"):
-        c = stats.get(pri, 0)
-        if c:
-            print(f"    {pri}: {c}")
-    print(f"  Clean files:    {stats.get('clean', 0)}")
-    if stats.get("failed", 0):
-        print(f"  Failed:         {stats['failed']}")
-    if not args.no_ingest:
-        print(f"  API posted:     {stats.get('api_posted', 0)}")
-        if stats.get("api_failed", 0):
-            print(f"  API failures:   {stats['api_failed']}")
-    print("=" * 50)
-
-    # Exit non-zero if all API posts failed (CI can detect a down dashboard)
-    if not args.no_ingest and stats.get("api_posted", 0) == 0 and stats.get("api_failed", 0) > 0:
-        return 1
-
-    return 0
 
 
 if __name__ == "__main__":

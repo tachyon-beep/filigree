@@ -27,6 +27,10 @@ class TestFileSchema:
         row = db.conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='file_associations'").fetchone()
         assert row is not None
 
+    def test_scan_runs_table_exists(self, db: FiligreeDB) -> None:
+        row = db.conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='scan_runs'").fetchone()
+        assert row is not None
+
 
 # ---------------------------------------------------------------------------
 # FileRecord CRUD tests
@@ -282,13 +286,12 @@ class TestProcessScanResults:
         assert result["files_created"] == 0
         assert result["findings_created"] == 0
         assert result["new_finding_ids"] == []
-        assert result["issues_created"] == 0
-        assert result["issue_ids"] == []
+        assert result["observations_created"] == 0
 
-    def test_create_issues_promotes_finding_to_bug_and_links_file(self, db: FiligreeDB) -> None:
+    def test_create_observations_promotes_finding_to_observation(self, db: FiligreeDB) -> None:
         result = db.process_scan_results(
             scan_source="codex",
-            create_issues=True,
+            create_observations=True,
             findings=[
                 {
                     "path": "src/main.py",
@@ -299,24 +302,13 @@ class TestProcessScanResults:
                 },
             ],
         )
-        assert result["issues_created"] == 1
-        assert len(result["issue_ids"]) == 1
+        assert result["observations_created"] == 1
+        obs = db.list_observations()
+        assert len(obs) == 1
+        assert "[codex]" in obs[0]["summary"]
+        assert obs[0]["priority"] == 1  # high -> P1
 
-        issue_id = result["issue_ids"][0]
-        issue = db.get_issue(issue_id)
-        assert issue.type == "bug"
-        assert "candidate" in issue.labels
-        assert "scan_finding" in issue.labels
-
-        file_record = db.get_file_by_path("src/main.py")
-        assert file_record is not None
-        finding = db.get_findings(file_record.id)[0]
-        assert finding.issue_id == issue_id
-
-        associations = db.get_file_associations(file_record.id)
-        assert any(a["issue_id"] == issue_id and a["assoc_type"] == "bug_in" for a in associations)
-
-    def test_create_issues_backfills_existing_unlinked_finding(self, db: FiligreeDB) -> None:
+    def test_create_observations_does_not_backfill_existing(self, db: FiligreeDB) -> None:
         finding = {
             "path": "src/main.py",
             "rule_id": "logic-error",
@@ -324,15 +316,10 @@ class TestProcessScanResults:
             "message": "Off-by-one in pagination loop",
             "line_start": 42,
         }
-        db.process_scan_results(scan_source="codex", create_issues=False, findings=[finding])
-        result = db.process_scan_results(scan_source="codex", create_issues=True, findings=[finding])
-
-        assert result["issues_created"] == 1
-        issue_id = result["issue_ids"][0]
-        file_record = db.get_file_by_path("src/main.py")
-        assert file_record is not None
-        updated_finding = db.get_findings(file_record.id)[0]
-        assert updated_finding.issue_id == issue_id
+        db.process_scan_results(scan_source="codex", create_observations=False, findings=[finding])
+        # Re-ingest — finding already exists, so no new observation
+        result = db.process_scan_results(scan_source="codex", create_observations=True, findings=[finding])
+        assert result["observations_created"] == 0
 
     def test_update_finding_marks_it_fixed(self, db: FiligreeDB) -> None:
         db.process_scan_results(
@@ -343,8 +330,8 @@ class TestProcessScanResults:
         assert file_record is not None
         finding = db.get_findings(file_record.id)[0]
 
-        updated = db.update_finding(file_record.id, finding.id, status="fixed")
-        assert updated.status == "fixed"
+        updated = db.update_finding(finding.id, file_id=file_record.id, status="fixed")
+        assert updated["status"] == "fixed"
         summary = db.get_file_findings_summary(file_record.id)
         assert summary["open_findings"] == 0
 
@@ -358,9 +345,9 @@ class TestProcessScanResults:
         assert file_record is not None
         finding = db.get_findings(file_record.id)[0]
 
-        updated = db.update_finding(file_record.id, finding.id, status="fixed", issue_id=issue.id)
-        assert updated.status == "fixed"
-        assert updated.issue_id == issue.id
+        updated = db.update_finding(finding.id, file_id=file_record.id, status="fixed", issue_id=issue.id)
+        assert updated["status"] == "fixed"
+        assert updated["issue_id"] == issue.id
         associations = db.get_file_associations(file_record.id)
         assert any(a["issue_id"] == issue.id and a["assoc_type"] == "bug_in" for a in associations)
 
@@ -374,7 +361,7 @@ class TestProcessScanResults:
         assert f is not None
         finding = db.get_findings(f.id)[0]
         with pytest.raises(ValueError, match="At least one of"):
-            db.update_finding(f.id, finding.id)
+            db.update_finding(finding.id, file_id=f.id)
 
     def test_update_finding_rejects_invalid_status(self, db: FiligreeDB) -> None:
         """Passing an invalid status to update_finding must raise ValueError."""
@@ -386,7 +373,7 @@ class TestProcessScanResults:
         assert f is not None
         finding = db.get_findings(f.id)[0]
         with pytest.raises(ValueError, match="Invalid finding status"):
-            db.update_finding(f.id, finding.id, status="bogus")
+            db.update_finding(finding.id, file_id=f.id, status="bogus")
 
     def test_ingest_finding_missing_path(self, db: FiligreeDB) -> None:
         with pytest.raises(ValueError, match="path"):
@@ -1315,37 +1302,19 @@ class TestFileDetailCore:
         assert detail["summary"]["total_findings"] == 15
 
 
-class TestCreateIssuesExistingUnlinkedFailure:
-    """Test that create_issues=True propagates exceptions on existing unlinked findings."""
+class TestCreateObservationsFailure:
+    """Test that observation failures don't abort finding ingestion."""
 
-    def test_create_issue_failure_propagates_on_existing_finding(self, db: FiligreeDB) -> None:
-        """When create_issues=True and creating a bug issue fails for an existing
-        unlinked finding, the exception propagates and scan writes are rolled back."""
+    def test_observation_failure_does_not_abort_findings(self, db: FiligreeDB) -> None:
+        """When create_observations=True and observation creation fails,
+        findings are still persisted (observations are best-effort)."""
+        import sqlite3
         from unittest.mock import patch
 
-        # First, ingest a finding without creating issues
-        db.process_scan_results(
-            scan_source="codex",
-            create_issues=False,
-            findings=[
-                {
-                    "path": "src/bad.py",
-                    "rule_id": "logic-error",
-                    "severity": "high",
-                    "message": "Off-by-one in loop",
-                    "line_start": 10,
-                },
-            ],
-        )
-
-        # Now re-ingest with create_issues=True, but patch create_issue to fail
-        with (
-            patch.object(db, "create_issue", side_effect=RuntimeError("DB write failed")),
-            pytest.raises(RuntimeError, match="DB write failed"),
-        ):
-            db.process_scan_results(
+        with patch.object(db, "create_observation", side_effect=sqlite3.OperationalError("DB write failed")):
+            result = db.process_scan_results(
                 scan_source="codex",
-                create_issues=True,
+                create_observations=True,
                 findings=[
                     {
                         "path": "src/bad.py",
@@ -1356,6 +1325,9 @@ class TestCreateIssuesExistingUnlinkedFailure:
                     },
                 ],
             )
+
+        assert result["findings_created"] == 1
+        assert result["observations_created"] == 0
 
 
 class TestHotspots:
@@ -1436,7 +1408,7 @@ class TestHotspotsIncludesAcknowledgedFindings:
         f = db.get_file_by_path("a.py")
         assert f is not None
         findings = db.get_findings(f.id)
-        db.update_finding(f.id, findings[0].id, status="acknowledged")
+        db.update_finding(findings[0].id, file_id=f.id, status="acknowledged")
         result = db.get_file_hotspots()
         assert len(result) == 1, "Acknowledged finding should still appear in hotspots"
         assert result[0]["score"] > 0
@@ -2341,80 +2313,14 @@ class TestGetScanRunsCore:
         assert len(runs) == 2
 
 
-class TestCreateIssuesPartialFailure:
-    """Test that create_issues=True handles mid-batch failures correctly.
+class TestCreateObservationsPartialFailure:
+    """Test that create_observations=True handles mid-batch failures correctly."""
 
-    When create_issues=True and the inner create_issue() fails mid-way
-    through a batch, process_scan_results raises the exception and rolls
-    back uncommitted scan data. Because create_issue() commits its own
-    transaction internally, earlier successful issues are already persisted
-    -- this is inherent to the current architecture.
-    """
-
-    def test_create_issue_failure_raises_and_rolls_back_uncommitted(self, db: FiligreeDB) -> None:
-        """When create_issues=True and bug creation fails for the second finding,
-        the exception propagates and uncommitted scan writes are rolled back.
-
-        The first finding's issue (committed by create_issue) persists, but
-        the second finding's file/finding data (uncommitted) does not.
-        """
-        from unittest.mock import patch
-
-        original_create = db.create_issue
-        call_count = 0
-
-        def failing_create(*args: object, **kwargs: object) -> object:
-            nonlocal call_count
-            call_count += 1
-            if call_count >= 2:
-                raise RuntimeError("Simulated issue creation failure")
-            return original_create(*args, **kwargs)  # type: ignore[arg-type]
-
-        with (
-            patch.object(db, "create_issue", side_effect=failing_create),
-            pytest.raises(RuntimeError, match="Simulated issue creation failure"),
-        ):
-            db.process_scan_results(
-                scan_source="codex",
-                create_issues=True,
-                findings=[
-                    {
-                        "path": "src/a.py",
-                        "rule_id": "logic-error-1",
-                        "severity": "high",
-                        "message": "Off by one",
-                        "line_start": 10,
-                    },
-                    {
-                        "path": "src/b.py",
-                        "rule_id": "logic-error-2",
-                        "severity": "critical",
-                        "message": "Null deref",
-                        "line_start": 20,
-                    },
-                ],
-            )
-
-        # First finding's issue was committed by create_issue() -- it persists
-        issues = db.list_issues()
-        # DB has the auto-seeded Future release + the first finding's issue
-        non_future = [i for i in issues if i.title != "Future"]
-        assert len(non_future) == 1
-        assert "Off by one" in non_future[0].title
-
-        # First finding's file/finding also committed (same txn as issue)
-        file_a = db.get_file_by_path("src/a.py")
-        assert file_a is not None
-
-        # Second finding's file was never committed -- rolled back
-        file_b = db.get_file_by_path("src/b.py")
-        assert file_b is None
-
-    def test_create_issues_succeeds_for_two_findings(self, db: FiligreeDB) -> None:
-        """Baseline: create_issues=True for multiple findings creates all issues."""
+    def test_create_observations_succeeds_for_two_findings(self, db: FiligreeDB) -> None:
+        """Baseline: create_observations=True for multiple findings creates all observations."""
         result = db.process_scan_results(
             scan_source="codex",
-            create_issues=True,
+            create_observations=True,
             findings=[
                 {
                     "path": "src/a.py",
@@ -2432,8 +2338,7 @@ class TestCreateIssuesPartialFailure:
                 },
             ],
         )
-        assert result["issues_created"] == 2
-        assert len(result["issue_ids"]) == 2
+        assert result["observations_created"] == 2
         assert result["findings_created"] == 2
 
 
@@ -2497,3 +2402,32 @@ class TestScanFindingPostInit:
         for status in ("open", "acknowledged", "fixed", "false_positive", "unseen_in_latest"):
             f = ScanFinding(id="x", file_id="y", status=status)  # type: ignore[arg-type]
             assert f.status == status
+
+
+class TestProcessScanResultsCreateObservations:
+    def test_creates_observations_for_new_findings(self, db: FiligreeDB) -> None:
+        db.register_file("src/main.py")
+        result = db.process_scan_results(
+            scan_source="test",
+            findings=[
+                {"path": "src/main.py", "rule_id": "r1", "severity": "high", "message": "Bug found", "line_start": 10},
+            ],
+            create_observations=True,
+        )
+        assert result["findings_created"] == 1
+        obs = db.list_observations()
+        assert len(obs) == 1
+        assert "[test]" in obs[0]["summary"]
+        assert obs[0]["priority"] == 1  # high -> P1
+
+    def test_no_observations_when_flag_false(self, db: FiligreeDB) -> None:
+        db.register_file("src/main.py")
+        db.process_scan_results(
+            scan_source="test",
+            findings=[
+                {"path": "src/main.py", "rule_id": "r1", "severity": "high", "message": "Bug"},
+            ],
+            create_observations=False,
+        )
+        obs = db.list_observations()
+        assert len(obs) == 0

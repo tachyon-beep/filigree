@@ -7,9 +7,9 @@ from types import ModuleType
 import pytest
 
 
-def _load_codex_bug_hunt() -> ModuleType:
-    script_path = Path(__file__).resolve().parents[2] / "scripts" / "codex_bug_hunt.py"
-    spec = importlib.util.spec_from_file_location("codex_bug_hunt_script", script_path)
+def _load_scan_utils() -> ModuleType:
+    script_path = Path(__file__).resolve().parents[2] / "scripts" / "scan_utils.py"
+    spec = importlib.util.spec_from_file_location("scan_utils_script", script_path)
     assert spec is not None
     assert spec.loader is not None
     module = importlib.util.module_from_spec(spec)
@@ -19,7 +19,7 @@ def _load_codex_bug_hunt() -> ModuleType:
 
 class TestResolveTargetFile:
     def test_resolve_relative_target_file(self, tmp_path: Path) -> None:
-        mod = _load_codex_bug_hunt()
+        mod = _load_scan_utils()
         repo_root = tmp_path / "repo"
         root_dir = repo_root / "src"
         root_dir.mkdir(parents=True)
@@ -30,7 +30,7 @@ class TestResolveTargetFile:
         assert resolved == target.resolve()
 
     def test_reject_target_outside_root(self, tmp_path: Path) -> None:
-        mod = _load_codex_bug_hunt()
+        mod = _load_scan_utils()
         repo_root = tmp_path / "repo"
         root_dir = repo_root / "src"
         root_dir.mkdir(parents=True)
@@ -42,7 +42,7 @@ class TestResolveTargetFile:
             mod._resolve_target_file(repo_root=repo_root, root_dir=root_dir, file_arg="outside.py")
 
     def test_reject_missing_target(self, tmp_path: Path) -> None:
-        mod = _load_codex_bug_hunt()
+        mod = _load_scan_utils()
         repo_root = tmp_path / "repo"
         root_dir = repo_root / "src"
         root_dir.mkdir(parents=True)

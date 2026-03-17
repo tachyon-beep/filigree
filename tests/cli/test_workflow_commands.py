@@ -547,3 +547,44 @@ class TestExplainStateCli:
         result = runner.invoke(cli, ["explain-state", "task", "nonexistent"])
         assert result.exit_code == 1
         assert "Unknown state" in result.output
+
+
+class TestLabelsCommand:
+    def test_labels_command(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        runner, _ = cli_in_project
+        runner.invoke(cli, ["create", "Issue A", "-l", "cluster:broad-except"])
+        result = runner.invoke(cli, ["labels"])
+        assert result.exit_code == 0
+        assert "cluster" in result.output
+        assert "broad-except" in result.output
+
+    def test_labels_json_output(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        runner, _ = cli_in_project
+        result = runner.invoke(cli, ["labels", "--json"])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert "namespaces" in data
+
+    def test_labels_namespace_filter(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        runner, _ = cli_in_project
+        runner.invoke(cli, ["create", "Issue A", "-l", "cluster:x", "-l", "effort:m"])
+        result = runner.invoke(cli, ["labels", "--namespace", "cluster"])
+        assert result.exit_code == 0
+        assert "cluster" in result.output
+        assert "effort" not in result.output
+
+
+class TestTaxonomyCommand:
+    def test_taxonomy_command(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        runner, _ = cli_in_project
+        result = runner.invoke(cli, ["taxonomy"])
+        assert result.exit_code == 0
+        assert "auto" in result.output
+        assert "virtual" in result.output
+
+    def test_taxonomy_json_output(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        runner, _ = cli_in_project
+        result = runner.invoke(cli, ["taxonomy", "--json"])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert "manual_suggested" in data

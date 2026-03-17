@@ -415,12 +415,12 @@ class TestScanResultsEndpointEnhancements:
         assert statuses["E501"] == "open"
         assert statuses["E502"] == "unseen_in_latest"
 
-    async def test_create_issues_via_api_is_rejected(self, client: AsyncClient) -> None:
+    async def test_create_observations_via_api(self, client: AsyncClient) -> None:
         resp = await client.post(
             "/api/v1/scan-results",
             json={
                 "scan_source": "codex",
-                "create_issues": True,
+                "create_observations": True,
                 "findings": [
                     {
                         "path": "src/main.py",
@@ -432,10 +432,59 @@ class TestScanResultsEndpointEnhancements:
                 ],
             },
         )
-        assert resp.status_code == 400
+        assert resp.status_code == 200
         payload = resp.json()
-        assert payload["error"]["code"] == "VALIDATION_ERROR"
-        assert "not supported" in payload["error"]["message"].lower()
+        assert payload["observations_created"] == 1
+
+
+class TestCompleteScanRunEndpoint:
+    """Tests for complete_scan_run parameter on scan results endpoint."""
+
+    async def test_complete_scan_run_false_keeps_running(self, client: AsyncClient, api_db: FiligreeDB) -> None:
+        api_db.create_scan_run(
+            scan_run_id="batch-api-test",
+            scanner_name="codex",
+            scan_source="codex",
+            file_paths=["a.py", "b.py"],
+            file_ids=["f-1", "f-2"],
+        )
+        api_db.update_scan_run_status("batch-api-test", "running")
+
+        resp = await client.post(
+            "/api/v1/scan-results",
+            json={
+                "scan_source": "codex",
+                "scan_run_id": "batch-api-test",
+                "complete_scan_run": False,
+                "findings": [{"path": "a.py", "rule_id": "R1", "severity": "medium", "message": "test"}],
+            },
+        )
+        assert resp.status_code == 200
+        run = api_db.get_scan_run("batch-api-test")
+        assert run["status"] == "running"
+
+    async def test_complete_scan_run_true_completes(self, client: AsyncClient, api_db: FiligreeDB) -> None:
+        api_db.create_scan_run(
+            scan_run_id="batch-api-done",
+            scanner_name="codex",
+            scan_source="codex",
+            file_paths=["a.py"],
+            file_ids=["f-1"],
+        )
+        api_db.update_scan_run_status("batch-api-done", "running")
+
+        resp = await client.post(
+            "/api/v1/scan-results",
+            json={
+                "scan_source": "codex",
+                "scan_run_id": "batch-api-done",
+                "complete_scan_run": True,
+                "findings": [{"path": "a.py", "rule_id": "R1", "severity": "medium", "message": "test"}],
+            },
+        )
+        assert resp.status_code == 200
+        run = api_db.get_scan_run("batch-api-done")
+        assert run["status"] == "completed"
 
 
 class TestSortBySeverityEndpoint:
@@ -683,14 +732,13 @@ class TestInputValidation400s:
         assert resp.status_code == 400
         assert resp.json()["error"]["code"] == "VALIDATION_ERROR"
 
-    async def test_scan_create_issues_field_is_rejected(self, client: AsyncClient) -> None:
+    async def test_scan_create_observations_must_be_boolean(self, client: AsyncClient) -> None:
         resp = await client.post(
             "/api/v1/scan-results",
-            json={"scan_source": "ruff", "create_issues": "yes", "findings": []},
+            json={"scan_source": "ruff", "create_observations": "yes", "findings": []},
         )
         assert resp.status_code == 400
         assert resp.json()["error"]["code"] == "VALIDATION_ERROR"
-        assert "not supported" in resp.json()["error"]["message"].lower()
 
     async def test_scan_mark_unseen_must_be_boolean(self, client: AsyncClient) -> None:
         resp = await client.post(

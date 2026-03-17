@@ -138,7 +138,9 @@ def show(issue_id: str, as_json: bool) -> None:
 @click.option("--priority", "-p", default=None, type=click.IntRange(0, 4), help="Filter by priority")
 @click.option("--parent", default=None, help="Filter by parent ID")
 @click.option("--assignee", default=None, help="Filter by assignee")
-@click.option("--label", default=None, help="Filter by label")
+@click.option("--label", "-l", multiple=True, help="Filter by label (repeatable, AND logic). Supports virtuals.")
+@click.option("--label-prefix", default=None, help="Filter by label namespace prefix (include trailing colon)")
+@click.option("--not-label", default=None, help="Exclude issues with this label")
 @click.option("--limit", default=100, type=click.IntRange(min=0), help="Max results (default 100)")
 @click.option("--offset", default=0, type=click.IntRange(min=0), help="Skip first N results")
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON")
@@ -148,23 +150,31 @@ def list_issues(
     priority: int | None,
     parent: str | None,
     assignee: str | None,
-    label: str | None,
+    label: tuple[str, ...],
+    label_prefix: str | None,
+    not_label: str | None,
     limit: int,
     offset: int,
     as_json: bool,
 ) -> None:
     """List issues with optional filters."""
     with get_db() as db:
-        issues = db.list_issues(
-            status=status,
-            type=issue_type,
-            priority=priority,
-            parent_id=parent,
-            assignee=assignee,
-            label=label,
-            limit=limit,
-            offset=offset,
-        )
+        label_filter = list(label) if label else None
+        try:
+            issues = db.list_issues(
+                status=status,
+                type=issue_type,
+                priority=priority,
+                parent_id=parent,
+                assignee=assignee,
+                label=label_filter,
+                label_prefix=label_prefix,
+                not_label=not_label,
+                limit=limit,
+                offset=offset,
+            )
+        except ValueError as e:
+            raise click.ClickException(str(e)) from e
 
         if as_json:
             click.echo(json_mod.dumps([i.to_dict() for i in issues], indent=2, default=str))
