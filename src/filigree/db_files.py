@@ -550,8 +550,10 @@ class FilesMixin(DBMixinProtocol):
                         path,
                         obs_exc,
                     )
-                    if not any(w.startswith("Some observations failed") for w in stats["warnings"]):
-                        stats["warnings"].append(f"Some observations failed to create: {obs_exc}")
+                    stats["observations_failed"] += 1
+                    msg = f"Observation failed for {finding_id}: {obs_exc}"
+                    if msg not in stats["warnings"]:
+                        stats["warnings"].append(msg)
 
     def _update_existing_finding(
         self,
@@ -623,8 +625,8 @@ class FilesMixin(DBMixinProtocol):
     ) -> ScanIngestResult:
         """Ingest scan results: create/update file records and findings.
 
-        Each finding dict must have at minimum: path, rule_id, severity, message.
-        Optional: language, line_start, line_end, metadata.
+        Each finding dict must have at minimum: path, rule_id, message.
+        Optional: severity (default: 'info'), language, line_start, line_end, suggestion, metadata.
 
         When *mark_unseen* is ``True``, findings in the same (file, scan_source)
         that are NOT in this batch are set to ``unseen_in_latest`` status.
@@ -652,6 +654,7 @@ class FilesMixin(DBMixinProtocol):
             findings_updated=0,
             new_finding_ids=[],
             observations_created=0,
+            observations_failed=0,
             warnings=warnings,
         )
 
@@ -698,7 +701,13 @@ class FilesMixin(DBMixinProtocol):
                     findings_count=stats["findings_created"] + stats["findings_updated"],
                 )
             except (KeyError, ValueError, sqlite3.Error) as exc:
-                is_terminal = "Invalid transition" in str(exc)
+                # Check if the scan run is already in a terminal state by
+                # querying directly, rather than relying on error message text.
+                try:
+                    row = self.conn.execute("SELECT status FROM scan_runs WHERE id = ?", (scan_run_id,)).fetchone()
+                    is_terminal = row is not None and row["status"] in ("completed", "failed")
+                except sqlite3.Error:
+                    is_terminal = False
                 if is_terminal:
                     logger.info(
                         "Scan run %r already in terminal state, skipping completion: %s",
@@ -1066,11 +1075,22 @@ class FilesMixin(DBMixinProtocol):
         if priority is None:
             priority = self._SEVERITY_TO_PRIORITY.get(finding["severity"], 3)
 
+        file_path = self._file_path_for_finding(finding["file_id"])
+        if not file_path:
+            logger.warning(
+                "Promoting finding %s without file context (file_id=%s not found)",
+                finding_id,
+                finding["file_id"],
+            )
+
         summary = f"[{finding['scan_source']}] {finding['message']}"
+        detail = f"rule: {finding['rule_id']}, severity: {finding['severity']}"
+        if not file_path:
+            detail += f"\n\nNote: file record for file_id={finding['file_id']} was not found."
         return self.create_observation(
             summary,
-            detail=f"rule: {finding['rule_id']}, severity: {finding['severity']}",
-            file_path=self._file_path_for_finding(finding["file_id"]),
+            detail=detail,
+            file_path=file_path,
             line=finding.get("line_start"),
             priority=priority,
             actor=actor,

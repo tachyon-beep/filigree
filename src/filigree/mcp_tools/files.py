@@ -517,6 +517,7 @@ async def _handle_batch_update_findings(arguments: dict[str, Any]) -> list[TextC
             tracker.update_finding(fid, status=status)
             updated.append(fid)
         except (KeyError, ValueError) as e:
+            _logger.warning("batch_update_findings: failed for %s: %s", fid, e)
             errors.append({"finding_id": fid, "error": str(e)})
     if not updated and errors:
         return _text(
@@ -525,7 +526,10 @@ async def _handle_batch_update_findings(arguments: dict[str, Any]) -> list[TextC
                 code="batch_all_failed",
             )
         )
-    return _text({"updated": updated, "errors": errors})
+    result: dict[str, Any] = {"updated": updated, "errors": errors}
+    if updated and errors:
+        result["partial"] = True
+    return _text(result)
 
 
 async def _handle_promote_finding(arguments: dict[str, Any]) -> list[TextContent]:
@@ -564,6 +568,6 @@ async def _handle_dismiss_finding(arguments: dict[str, Any]) -> list[TextContent
         updated = tracker.update_finding(finding_id, status="false_positive", dismiss_reason=reason or None)
     except KeyError:
         return _text(ErrorResponse(error=f"Finding not found: {finding_id}", code="not_found"))
-    except ValueError as e:
+    except (ValueError, sqlite3.Error) as e:
         return _text(ErrorResponse(error=str(e), code="validation_error"))
     return _text(updated)

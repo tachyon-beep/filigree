@@ -112,6 +112,14 @@ class TestUpdateFinding:
         with pytest.raises(KeyError):
             db.update_finding("no-such-id", status="fixed")
 
+    def test_mismatched_file_id_raises(self, db: FiligreeDB) -> None:
+        """Providing a file_id that doesn't match the finding should raise KeyError."""
+        ids = _seed_findings(db)
+        db.register_file("src/other.py")
+        other_file = db.conn.execute("SELECT id FROM file_records WHERE path = 'src/other.py'").fetchone()["id"]
+        with pytest.raises(KeyError, match="Finding not found"):
+            db.update_finding(ids["obo"], file_id=other_file, status="acknowledged")
+
     def test_update_without_file_id(self, db: FiligreeDB) -> None:
         """file_id=None path looks up file_id from the finding record."""
         ids = _seed_findings(db)
@@ -156,3 +164,31 @@ class TestPromoteFindingToObservation:
     def test_not_found_raises(self, db: FiligreeDB) -> None:
         with pytest.raises(KeyError):
             db.promote_finding_to_observation("no-such-id")
+
+    @pytest.mark.parametrize(
+        ("severity", "expected_priority"),
+        [("critical", 0), ("high", 1), ("medium", 2), ("low", 3), ("info", 3)],
+    )
+    def test_severity_to_priority_mapping(self, db: FiligreeDB, severity: str, expected_priority: int) -> None:
+        """Each severity level maps to the correct priority."""
+        db.register_file("src/sev.py")
+        result = db.process_scan_results(
+            scan_source="test",
+            findings=[{"path": "src/sev.py", "rule_id": "r1", "severity": severity, "message": "msg"}],
+        )
+        finding_id = result["new_finding_ids"][0]
+        obs = db.promote_finding_to_observation(finding_id)
+        assert obs["priority"] == expected_priority
+
+
+class TestProcessScanResultsBreakingChange:
+    """The old create_issues parameter was removed — callers must use create_observations."""
+
+    def test_old_create_issues_kwarg_raises_type_error(self, db: FiligreeDB) -> None:
+        db.register_file("src/main.py")
+        with pytest.raises(TypeError):
+            db.process_scan_results(
+                scan_source="test",
+                findings=[{"path": "src/main.py", "rule_id": "r1", "severity": "info", "message": "m"}],
+                create_issues=True,  # type: ignore[call-arg]
+            )

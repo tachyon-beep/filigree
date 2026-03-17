@@ -7,6 +7,7 @@ these tests verify the MCP integration layer on top.
 
 from __future__ import annotations
 
+import sqlite3
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -427,7 +428,7 @@ class TestBatchScanDbTrackingFailure:
         try:
             with (
                 patch("filigree.mcp_tools.scanners.subprocess.Popen", side_effect=mock_procs),
-                patch.object(mcp_db, "create_scan_run", side_effect=RuntimeError("DB broken")),
+                patch.object(mcp_db, "create_scan_run", side_effect=sqlite3.OperationalError("DB broken")),
             ):
                 data = _parse(
                     await call_tool(

@@ -144,6 +144,7 @@ class ScanIngestResult(TypedDict):
     findings_updated: int
     new_finding_ids: list[str]
     observations_created: int
+    observations_failed: int
     warnings: list[str]
 
 

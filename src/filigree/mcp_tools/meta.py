@@ -570,10 +570,13 @@ async def _handle_list_labels(arguments: dict[str, Any]) -> list[TextContent]:
 
     args = _parse_args(arguments, ListLabelsArgs)
     tracker = _get_db()
-    result = tracker.list_labels(
-        namespace=args.get("namespace"),
-        top=args.get("top", 10),
-    )
+    try:
+        result = tracker.list_labels(
+            namespace=args.get("namespace"),
+            top=args.get("top", 10),
+        )
+    except (sqlite3.Error, ValueError) as exc:
+        return _text(ErrorResponse(error=f"Failed to list labels: {exc}", code="db_error"))
     return _text(result)
 
 
@@ -581,5 +584,8 @@ async def _handle_get_label_taxonomy(arguments: dict[str, Any]) -> list[TextCont
     from filigree.mcp_server import _get_db
 
     tracker = _get_db()
-    result = tracker.get_label_taxonomy()
+    try:
+        result = tracker.get_label_taxonomy()
+    except (sqlite3.Error, ValueError) as exc:
+        return _text(ErrorResponse(error=f"Failed to get label taxonomy: {exc}", code="db_error"))
     return _text(result)

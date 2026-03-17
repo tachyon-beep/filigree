@@ -194,7 +194,10 @@ class ScansMixin(DBMixinProtocol):
             log_tail=log_tail,
         )
         if len(run["file_paths"]) > 1:
-            result["data_warnings"].append(f"Batch scan: only PID {run['pid']} (1 of {len(run['file_paths'])} processes) is monitored")
+            result["data_warnings"].append(
+                f"Batch scan: only PID {run['pid']} is monitored; "
+                f"status for the remaining {len(run['file_paths']) - 1} file(s) is not tracked individually"
+            )
         return result
 
     @staticmethod

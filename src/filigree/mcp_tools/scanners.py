@@ -7,6 +7,7 @@ import contextlib
 import json
 import logging
 import secrets
+import sqlite3
 import subprocess
 from collections.abc import Callable
 from pathlib import Path
@@ -36,9 +37,9 @@ def register(
 ) -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
     """Return (tool_definitions, handler_map) for scanner-domain tools.
 
-    When *include_legacy* is True, all 5 scanner tools are returned
-    (adds ``list_scanners`` and single-file ``trigger_scan``).  When
-    False, only the 3 batch/status/preview tools are returned.
+    When *include_legacy* is True, all scanner tools including legacy are
+    returned (adds ``list_scanners`` and single-file ``trigger_scan``).
+    When False, only the batch/status/preview tools are returned.
     """
     new_tools = [
         Tool(
@@ -364,7 +365,7 @@ async def _handle_trigger_scan(arguments: dict[str, Any]) -> list[TextContent]:
             log_path=log_rel,
         )
         tracker.update_scan_run_status(scan_run_id, "running")
-    except Exception as exc:
+    except (sqlite3.Error, KeyError, ValueError) as exc:
         with contextlib.suppress(OSError):
             proc.kill()
         _logger.error(
@@ -508,7 +509,7 @@ async def _handle_trigger_scan_batch(arguments: dict[str, Any]) -> list[TextCont
     spawned_paths: list[str] = []
     spawned_file_ids: list[str] = []
     spawn_errors: list[dict[str, str]] = []
-    for i, cp in enumerate(canonical_paths):
+    for i, (cp, fid) in enumerate(zip(canonical_paths, file_ids, strict=True)):
         spawn_result = _spawn_scan(
             cfg=cfg,
             canonical_path=cp,
@@ -530,7 +531,7 @@ async def _handle_trigger_scan_batch(arguments: dict[str, Any]) -> list[TextCont
             continue
         spawned.append(spawn_result)
         spawned_paths.append(cp)
-        spawned_file_ids.append(file_ids[i])
+        spawned_file_ids.append(fid)
 
     if not spawned:
         return _text(
@@ -563,7 +564,7 @@ async def _handle_trigger_scan_batch(arguments: dict[str, Any]) -> list[TextCont
             log_path=log_rel,
         )
         tracker.update_scan_run_status(scan_run_id, "running")
-    except Exception as exc:
+    except (sqlite3.Error, KeyError, ValueError) as exc:
         for s in spawned:
             with contextlib.suppress(OSError):
                 s["proc"].kill()
@@ -643,6 +644,9 @@ async def _handle_get_scan_status(arguments: dict[str, Any]) -> list[TextContent
         status = tracker.get_scan_status(scan_run_id, log_lines=log_lines)
     except KeyError:
         return _text(ErrorResponse(error=f"Scan run not found: {scan_run_id}", code="not_found"))
+    except sqlite3.Error as exc:
+        _logger.error("Database error getting scan status for %s: %s", scan_run_id, exc)
+        return _text(ErrorResponse(error=f"Database error: {exc}", code="db_error"))
     return _text(status)
 
 

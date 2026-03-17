@@ -175,7 +175,7 @@ class TestGetScanStatus:
             pid=99999,
         )
         status = db.get_scan_status("batch-1")
-        assert any("1 of 3" in w for w in status["data_warnings"])
+        assert any("remaining 2 file(s)" in w for w in status["data_warnings"])
 
     def test_dead_pid_already_completed_race(self, db: FiligreeDB) -> None:
         """When another codepath completes the run before dead-PID auto-fail, re-read succeeds."""
@@ -517,7 +517,6 @@ class TestObservationFailureWarning:
 
     def test_observation_failure_adds_warning(self, db: FiligreeDB, monkeypatch: pytest.MonkeyPatch) -> None:
         db.register_file("src/main.py")
-        original = db.create_observation
 
         def failing_create_observation(*args: object, **kwargs: object) -> None:
             raise ValueError("forced observation failure")
@@ -532,11 +531,11 @@ class TestObservationFailureWarning:
             create_observations=True,
         )
         assert result["observations_created"] == 0
+        assert result["observations_failed"] == 2
         assert result["findings_created"] == 2
-        assert any("observations failed" in w for w in result["warnings"])
-        # Only one warning even though both observations failed
-        obs_warnings = [w for w in result["warnings"] if "observations failed" in w]
-        assert len(obs_warnings) == 1
+        # Each distinct failure gets its own warning message
+        obs_warnings = [w for w in result["warnings"] if "Observation failed" in w]
+        assert len(obs_warnings) == 2
 
 
 class TestObservationAutoCommit:

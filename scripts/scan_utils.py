@@ -540,7 +540,12 @@ async def _analyse_files(
                 print(f"  [{done}/{total}] {_display_path(fpath, repo_root)}", file=sys.stderr)
 
                 if not no_ingest and out.exists():
-                    text = out.read_text(encoding="utf-8")
+                    try:
+                        text = out.read_text(encoding="utf-8")
+                    except (OSError, UnicodeDecodeError) as read_exc:
+                        failed.append((fpath, read_exc))
+                        print(f"  FAIL reading report for {_display_path(fpath, repo_root)}: {read_exc}", file=sys.stderr)
+                        continue
                     rel_path = str(_display_path(fpath, repo_root))
                     findings = parse_findings(text, file_path=rel_path)
                     if findings:
@@ -573,6 +578,7 @@ async def _analyse_files(
         )
         if not ok:
             print(f"  API error completing scan run: {err_detail}", file=sys.stderr)
+            api_failures += 1
 
     stats: Counter[str] = Counter()
     for md in report_paths:
