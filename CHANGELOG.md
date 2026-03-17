@@ -7,9 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.1] - 2026-03-18
+
 ### Changed
 
 - **Breaking (API):** `POST /api/v1/scan-results` response replaces `issues_created`/`issue_ids` with `observations_created` count. The `create_issues` parameter is replaced by `create_observations`.
+- Narrowed `except Exception` to specific exception types in scanner MCP handlers to avoid masking programming errors as DB failures
+- `batch_update_findings` response now includes `"partial": true` flag when some updates succeed and others fail
+- `ScanIngestResult` now tracks `observations_failed` count and reports per-finding failure messages
+- Batch scan data warning now distinguishes files from processes
+- `process_scan_results` terminal-state detection uses direct DB query instead of brittle string matching
+
+### Fixed
+
+- `batch_update_findings` now logs individual failure warnings server-side (previously only in MCP response)
+- `promote_finding_to_observation` surfaces a note when file record is missing instead of silently losing context
+- `process_scan_results` docstring corrected: `severity` is optional (defaults to `"info"`), `suggestion` added to optional fields
+- `_handle_get_scan_status`, `_handle_dismiss_finding`, `_handle_list_labels`, and `_handle_get_label_taxonomy` now catch `sqlite3.Error` instead of returning raw exception traces
+- Scanner batch file report read wrapped in try/except so one corrupt file no longer kills the entire batch
+- Scan-run completion POST failure now counted in `api_failures` for correct exit code
+- Fragile parallel-list index coupling in batch scan replaced with `zip(..., strict=True)`
+- Unused variable lint violation in test_scans.py
+
+### Tests
+
+- Test for breaking `create_issues` → `create_observations` parameter rename
+- Test for `update_finding` with mismatched `file_id` raises `KeyError`
+- Parametrized severity-to-priority mapping tests for all 5 severity levels
 
 ## [1.5.0] - 2026-03-09
 
