@@ -1479,7 +1479,7 @@ _SPIKE_PACK: dict[str, Any] = {
     ],
     "guide": {
         "state_diagram": (
-            "spike:   proposed(O) --> investigating(W) --> concluded(D) --> actioned(D)\n"
+            "spike:   proposed(O) --> investigating(W) --> concluded(W) --> actioned(D)\n"
             "                    \\-> abandoned(D)      \\-> abandoned(D)\n"
             "         HARD: investigating-->concluded requires findings\n"
             "\n"

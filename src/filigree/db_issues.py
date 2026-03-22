@@ -146,6 +146,13 @@ class IssuesMixin(DBMixinProtocol):
             err = validate_field_pattern(fs, value)
             if err is not None:
                 errors.append(err)
+            if fs.type == "enum" and fs.options and value is not None:
+                str_value = str(value)
+                if str_value and str_value not in fs.options:
+                    errors.append(
+                        f"Field '{fs.name}' value '{str_value}' is not a valid option. "
+                        f"Valid options: {', '.join(fs.options)}"
+                    )
         return errors
 
     def _check_field_uniqueness(self, issue_type: str, fields: dict[str, Any], *, exclude_id: str | None = None) -> None:
