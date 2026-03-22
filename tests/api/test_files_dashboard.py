@@ -859,4 +859,4 @@ class TestObservationStatsEndpoint:
             resp = await client.get("/api/observations/stats")
         assert resp.status_code == 503
         data = resp.json()
-        assert data["status"] == "unavailable"
+        assert data["error"]["code"] == "DB_UNAVAILABLE"

@@ -217,7 +217,18 @@ def generate_session_context() -> str | None:
     except (OSError, UnicodeDecodeError, ValueError):
         logger.warning("Instructions freshness check failed for %s", project_root, exc_info=True)
 
-    db = FiligreeDB.from_filigree_dir(filigree_dir)
+    try:
+        db = FiligreeDB.from_filigree_dir(filigree_dir)
+    except (sqlite3.Error, ValueError, OSError):
+        logger.warning("Database init failed for %s", filigree_dir, exc_info=True)
+        context = (
+            f"=== Filigree Project Snapshot ===\n\n"
+            f"WARNING: Could not open project database. Run `filigree doctor` to diagnose.\n"
+            f"Project directory: {filigree_dir.parent}"
+        )
+        if freshness_messages:
+            context += "\n\n" + "\n".join(freshness_messages)
+        return context
     try:
         context = _build_context(db, filigree_dir)
     except sqlite3.Error:

@@ -312,12 +312,15 @@ def create_router() -> APIRouter:
         complete_scan_run = body.get("complete_scan_run", True)
         if not isinstance(complete_scan_run, bool):
             return _error_response("complete_scan_run must be a boolean", "VALIDATION_ERROR", 400)
+        scan_run_id = body.get("scan_run_id", "")
+        if not isinstance(scan_run_id, str):
+            return _error_response("scan_run_id must be a string", "VALIDATION_ERROR", 400)
         status_code = 200
         try:
             result = db.process_scan_results(
                 scan_source=scan_source,
                 findings=findings,
-                scan_run_id=body.get("scan_run_id", ""),
+                scan_run_id=scan_run_id,
                 mark_unseen=mark_unseen,
                 create_observations=create_observations,
                 complete_scan_run=complete_scan_run,

@@ -55,26 +55,33 @@ def create_router() -> APIRouter:
         except KeyError:
             return _error_response(f"Issue not found: {issue_id}", "ISSUE_NOT_FOUND", 404)
 
-        # Resolve dep details for blocks and blocked_by
-        dep_ids = set(issue.blocks + issue.blocked_by)
+        # Resolve dep details for blocks and blocked_by in a single query
+        dep_ids = list(set(issue.blocks + issue.blocked_by))
         dep_details: dict[str, DepDetail] = {}
-        for did in dep_ids:
-            try:
-                dep = db.get_issue(did)
-                dep_details[did] = DepDetail(
-                    title=dep.title,
-                    status=dep.status,
-                    status_category=dep.status_category,
-                    priority=dep.priority,
-                )
-            except KeyError:
-                logger.warning("Dangling dependency reference %s in issue %s", did, issue_id)
-                dep_details[did] = DepDetail(
-                    title=f"[Deleted: {did}]",
-                    status="deleted",
-                    status_category="done",
-                    priority=4,
-                )
+        if dep_ids:
+            placeholders = ",".join("?" * len(dep_ids))
+            rows = db.conn.execute(
+                f"SELECT id, title, status, type, priority FROM issues WHERE id IN ({placeholders})",
+                dep_ids,
+            ).fetchall()
+            found = {r["id"]: r for r in rows}
+            for did in dep_ids:
+                if did in found:
+                    r = found[did]
+                    dep_details[did] = DepDetail(
+                        title=r["title"],
+                        status=r["status"],
+                        status_category=db._resolve_status_category(r["type"], r["status"]),
+                        priority=r["priority"],
+                    )
+                else:
+                    logger.warning("Dangling dependency reference %s in issue %s", did, issue_id)
+                    dep_details[did] = DepDetail(
+                        title=f"[Deleted: {did}]",
+                        status="deleted",
+                        status_category="done",
+                        priority=4,
+                    )
 
         # Events — NOTE: SQL column list must stay in sync with IssueDetailEvent fields.
         # IssueDetailEvent is a slim 5-column projection — NOT full EventRecord.

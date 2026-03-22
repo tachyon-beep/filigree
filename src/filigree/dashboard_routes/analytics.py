@@ -442,7 +442,7 @@ def create_router() -> APIRouter:
         """Flow metrics: cycle time, lead time, throughput."""
         from filigree.analytics import get_flow_metrics
 
-        days = max(days, 1)
+        days = min(max(days, 1), 3650)
         metrics = get_flow_metrics(db, days=days)
         return JSONResponse(metrics)
 
@@ -455,10 +455,7 @@ def create_router() -> APIRouter:
             stats = db.observation_stats(sweep=False)
         except sqlite3.Error:
             logger.warning("observation_stats unavailable", exc_info=True)
-            return JSONResponse(
-                {"error": "observation stats unavailable", "status": "unavailable", "detail": "database temporarily unavailable"},
-                status_code=503,
-            )
+            return _error_response("observation stats unavailable", "DB_UNAVAILABLE", 503)
         return JSONResponse(stats)
 
     @router.get("/critical-path")
@@ -477,7 +474,7 @@ def create_router() -> APIRouter:
             try:
                 datetime.fromisoformat(since.replace("Z", "+00:00"))
             except (ValueError, AttributeError):
-                return JSONResponse({"error": f"Invalid ISO timestamp: {since!r}"}, status_code=400)
+                return _error_response(f"Invalid ISO timestamp: {since!r}", "VALIDATION_ERROR", 400)
             since = since.replace("Z", "+00:00") if since.endswith("Z") else since
         events = db.get_events_since(since, limit=limit) if since else db.get_recent_events(limit=limit)
         return JSONResponse(events)
