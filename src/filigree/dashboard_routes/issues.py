@@ -47,6 +47,12 @@ def create_router() -> APIRouter:
         issues = db.list_issues(limit=10000)
         return JSONResponse([i.to_dict() for i in issues])
 
+    @router.get("/ready")
+    async def api_ready(db: FiligreeDB = Depends(_get_db)) -> JSONResponse:
+        """Issues with no open blockers, sorted by priority."""
+        issues = db.get_ready()
+        return JSONResponse([i.to_dict() for i in issues])
+
     @router.get("/issue/{issue_id}")
     async def api_issue_detail(issue_id: str, db: FiligreeDB = Depends(_get_db)) -> JSONResponse:
         """Full issue detail with dependency details, events, and comments."""

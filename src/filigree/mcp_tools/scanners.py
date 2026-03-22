@@ -15,6 +15,7 @@ from typing import Any
 
 from mcp.types import TextContent, Tool
 
+from filigree.core import VALID_SEVERITIES
 from filigree.mcp_tools.common import _parse_args, _text, _validate_int_range
 from filigree.scanners import list_scanners as _list_scanners
 from filigree.scanners import load_scanner, validate_scanner_command
@@ -22,6 +23,7 @@ from filigree.types.api import ErrorResponse
 from filigree.types.inputs import (
     GetScanStatusArgs,
     PreviewScanArgs,
+    ReportFindingArgs,
     TriggerScanArgs,
     TriggerScanBatchArgs,
 )
@@ -42,6 +44,32 @@ def register(
     When False, only the batch/status/preview tools are returned.
     """
     new_tools = [
+        Tool(
+            name="report_finding",
+            description=(
+                "Report a single code finding (bug, smell, security issue) discovered by the agent. "
+                "Auto-registers the file if not already tracked. No scanner config needed — "
+                "one call, one finding, zero ceremony."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "file_path": {"type": "string", "description": "Project-relative file path"},
+                    "rule_id": {"type": "string", "description": "Finding identifier / title (e.g. 'unused-import', 'sql-injection')"},
+                    "message": {"type": "string", "description": "Detailed description of the finding"},
+                    "severity": {
+                        "type": "string",
+                        "enum": sorted(VALID_SEVERITIES),
+                        "default": "info",
+                        "description": "Finding severity",
+                    },
+                    "line_start": {"type": "integer", "minimum": 1, "description": "Start line number"},
+                    "line_end": {"type": "integer", "minimum": 1, "description": "End line number"},
+                    "category": {"type": "string", "description": "Optional grouping category"},
+                },
+                "required": ["file_path", "rule_id", "message"],
+            },
+        ),
         Tool(
             name="trigger_scan_batch",
             description=(
@@ -135,6 +163,7 @@ def register(
 
     tools = list(new_tools)
     handlers: dict[str, Callable[..., Any]] = {
+        "report_finding": _handle_report_finding,
         "trigger_scan_batch": _handle_trigger_scan_batch,
         "get_scan_status": _handle_get_scan_status,
         "preview_scan": _handle_preview_scan,
@@ -278,6 +307,62 @@ async def _handle_list_scanners(arguments: dict[str, Any]) -> list[TextContent]:
     if not scanners:
         result_data["hint"] = "No scanners registered. Add TOML files to .filigree/scanners/"
     return _text(result_data)
+
+
+async def _handle_report_finding(arguments: dict[str, Any]) -> list[TextContent]:
+    """Report a single agent-discovered finding via process_scan_results."""
+    from filigree.mcp_server import _get_db
+
+    args = _parse_args(arguments, ReportFindingArgs)
+    file_path = args.get("file_path", "")
+    rule_id = args.get("rule_id", "")
+    message = args.get("message", "")
+    if not file_path or not rule_id or not message:
+        return _text(ErrorResponse(error="file_path, rule_id, and message are required", code="validation_error"))
+
+    severity = args.get("severity", "info")
+    if severity not in VALID_SEVERITIES:
+        return _text(ErrorResponse(
+            error=f"Invalid severity: {severity!r}. Valid: {', '.join(sorted(VALID_SEVERITIES))}",
+            code="validation_error",
+        ))
+
+    finding: dict[str, Any] = {
+        "path": file_path,
+        "rule_id": rule_id,
+        "message": message,
+        "severity": severity,
+    }
+    if args.get("line_start") is not None:
+        finding["line_start"] = args["line_start"]
+    if args.get("line_end") is not None:
+        finding["line_end"] = args["line_end"]
+    if args.get("category"):
+        finding["metadata"] = {"category": args["category"]}
+
+    tracker = _get_db()
+    try:
+        result = tracker.process_scan_results(
+            scan_source="agent",
+            findings=[finding],
+            scan_run_id="",
+            create_observations=True,
+        )
+    except (ValueError, sqlite3.Error) as exc:
+        _logger.error("report_finding failed: %s", exc)
+        return _text(ErrorResponse(error=f"Failed to report finding: {exc}", code="ingestion_error"))
+
+    response: dict[str, Any] = {
+        "status": "created" if result["findings_created"] else "updated",
+        "findings_created": result["findings_created"],
+        "findings_updated": result["findings_updated"],
+        "file_created": result["files_created"] > 0,
+    }
+    if result["new_finding_ids"]:
+        response["finding_id"] = result["new_finding_ids"][0]
+    if result.get("warnings"):
+        response["warnings"] = result["warnings"]
+    return _text(response)
 
 
 async def _handle_trigger_scan(arguments: dict[str, Any]) -> list[TextContent]:

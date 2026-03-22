@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 from collections.abc import Callable
 from typing import Any
 
@@ -64,6 +65,11 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
                         "type": "boolean",
                         "default": False,
                         "description": "Include valid_transitions in response (saves a separate call)",
+                    },
+                    "include_files": {
+                        "type": "boolean",
+                        "default": True,
+                        "description": "Include file associations in response (default true)",
                     },
                 },
                 "required": ["id"],
@@ -352,10 +358,18 @@ async def _handle_get_issue(arguments: dict[str, Any]) -> list[TextContent]:
     tracker = _get_db()
     try:
         issue = tracker.get_issue(args["id"])
+        issue_dict = issue.to_dict()
+
+        # Include file associations (default true)
+        file_assocs: list[Any] = []
+        if args.get("include_files", True):
+            with contextlib.suppress(Exception):
+                file_assocs = tracker.get_issue_files(args["id"])
+
         if args.get("include_transitions"):
             transitions = tracker.get_valid_transitions(args["id"])
             result = IssueWithTransitions(
-                **issue.to_dict(),
+                **issue_dict,
                 valid_transitions=[
                     TransitionDetail(
                         to=t.to,
@@ -368,8 +382,14 @@ async def _handle_get_issue(arguments: dict[str, Any]) -> list[TextContent]:
                     for t in transitions
                 ],
             )
-            return _text(result)
-        return _text(issue.to_dict())
+            out: dict[str, Any] = dict(result)
+            if args.get("include_files", True):
+                out["files"] = file_assocs
+            return _text(out)
+        out = dict(issue_dict)
+        if args.get("include_files", True):
+            out["files"] = file_assocs
+        return _text(out)
     except KeyError:
         return _text(ErrorResponse(error=f"Issue not found: {args['id']}", code="not_found"))
 

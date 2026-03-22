@@ -150,6 +150,7 @@ tailwind.config = {
     <button onclick="showCreateForm()" class="text-xs bg-accent text-white px-2 py-1 rounded bg-accent-hover" title="Create Issue">+ New</button>
     <div class="flex gap-1">
       <button id="btnKanban" onclick="switchView('kanban')" class="px-3 py-1 rounded text-xs font-medium" title="Kanban board view">Kanban</button>
+      <button id="btnReady" onclick="switchView('ready')" class="px-3 py-1 rounded text-xs font-medium" title="Issues ready to work — no open blockers">Ready</button>
       <button id="btnGraph" onclick="switchView('graph')" class="px-3 py-1 rounded text-xs font-medium" title="Dependency graph visualization">Graph</button>
       <button id="btnReleases" onclick="switchView('releases')" class="px-3 py-1 rounded text-xs font-medium" title="Release roadmap and progress">Releases</button>
       <button id="btnInsights" onclick="switchView('insights')" class="px-3 py-1 rounded text-xs font-medium" title="Flow metrics — throughput, cycle time, lead time">Insights</button>
@@ -374,6 +375,33 @@ tailwind.config = {
     <div class="flex-1 overflow-y-auto scrollbar-thin px-6 pb-6">
       <div class="max-w-6xl mx-auto">
         <div id="filesContent" class="text-secondary text-xs">Loading...</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Ready view -->
+  <div id="readyView" class="flex-1 hidden flex flex-col">
+    <div class="shrink-0 px-6 pt-6 pb-2">
+      <div class="max-w-5xl mx-auto flex items-center gap-3">
+        <span class="text-base font-semibold text-primary">Ready to Work</span>
+        <span id="readyCount" class="text-xs text-secondary"></span>
+      </div>
+    </div>
+    <div class="flex-1 overflow-y-auto px-6 pb-6">
+      <div class="max-w-5xl mx-auto">
+        <table class="w-full text-xs border-collapse">
+          <thead>
+            <tr class="text-left text-secondary border-b border-strong">
+              <th class="py-2 px-2 w-10">P</th>
+              <th class="py-2 px-2">ID</th>
+              <th class="py-2 px-2">Type</th>
+              <th class="py-2 px-2">Title</th>
+              <th class="py-2 px-2">Assignee</th>
+              <th class="py-2 px-2">Status</th>
+            </tr>
+          </thead>
+          <tbody id="readyTableBody"></tbody>
+        </table>
       </div>
     </div>
   </div>

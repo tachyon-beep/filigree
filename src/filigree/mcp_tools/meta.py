@@ -267,6 +267,11 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
             ),
             inputSchema={"type": "object", "properties": {}},
         ),
+        Tool(
+            name="restart_dashboard",
+            description="Stop and restart the ephemeral dashboard. Returns the new URL.",
+            inputSchema={"type": "object", "properties": {}},
+        ),
     ]
 
     handlers: dict[str, Callable[..., Any]] = {
@@ -288,6 +293,7 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
         "get_issue_events": _handle_get_issue_events,
         "list_labels": _handle_list_labels,
         "get_label_taxonomy": _handle_get_label_taxonomy,
+        "restart_dashboard": _handle_restart_dashboard,
     }
 
     return tools, handlers
@@ -588,4 +594,55 @@ async def _handle_get_label_taxonomy(arguments: dict[str, Any]) -> list[TextCont
         result = tracker.get_label_taxonomy()
     except (sqlite3.Error, ValueError) as exc:
         return _text(ErrorResponse(error=f"Failed to get label taxonomy: {exc}", code="db_error"))
+    return _text(result)
+
+
+async def _handle_restart_dashboard(arguments: dict[str, Any]) -> list[TextContent]:
+    """Stop the ephemeral dashboard and restart it."""
+    import os
+    import signal
+    import time
+
+    from filigree.core import find_filigree_root
+    from filigree.ephemeral import is_pid_alive, read_pid_file, verify_pid_ownership
+
+    try:
+        filigree_dir = find_filigree_root()
+    except FileNotFoundError:
+        return _text(ErrorResponse(error="No .filigree/ directory found", code="not_initialized"))
+
+    pid_file = filigree_dir / "ephemeral.pid"
+    info = read_pid_file(pid_file)
+
+    # Stop existing dashboard if running
+    stopped = False
+    if info is not None and verify_pid_ownership(pid_file, expected_cmd="filigree"):
+        pid = info["pid"]
+        try:
+            os.kill(pid, signal.SIGTERM)
+            # Wait briefly for graceful shutdown
+            for _ in range(20):  # up to 2 seconds
+                time.sleep(0.1)
+                if not is_pid_alive(pid):
+                    break
+            stopped = True
+        except ProcessLookupError:
+            stopped = True  # Already dead
+        except PermissionError:
+            return _text(ErrorResponse(
+                error=f"Cannot stop dashboard (PID {pid}): permission denied",
+                code="permission_error",
+            ))
+
+    # Restart via ensure_dashboard_running
+    from filigree.hooks import ensure_dashboard_running
+
+    url = ensure_dashboard_running()
+
+    result: dict[str, Any] = {"status": "restarted" if stopped else "started"}
+    if url:
+        result["url"] = url
+    else:
+        result["status"] = "failed"
+        result["error"] = "Dashboard did not start"
     return _text(result)

@@ -4,7 +4,7 @@ Filigree is an issue tracker designed for AI coding agents. This roadmap outline
 
 ## Shipped (v1.0–v1.1)
 
-- **MCP server** with 69 tools for agent-native interaction
+- **MCP server** with 71 tools for agent-native interaction
 - **Full CLI** with `--json` output and `--actor` audit trails
 - **Custom workflow packs** -- 9 built-in packs (24 issue types) with enforced state machines, plus user-defined templates in `.filigree/templates/`
 - **Web dashboard** -- single-page UI with filtering, search, and real-time updates

@@ -31,6 +31,7 @@ from filigree.types.core import AssocType, FindingStatus, ISOTimestamp, Severity
 class GetIssueArgs(TypedDict):
     id: str
     include_transitions: NotRequired[bool]
+    include_files: NotRequired[bool]
 
 
 class ListIssuesArgs(TypedDict):
@@ -378,6 +379,16 @@ class DismissFindingArgs(TypedDict):
 # ---------------------------------------------------------------------------
 
 
+class ReportFindingArgs(TypedDict):
+    file_path: str
+    rule_id: str
+    message: str
+    severity: NotRequired[str]
+    line_start: NotRequired[int]
+    line_end: NotRequired[int]
+    category: NotRequired[str]
+
+
 class TriggerScanBatchArgs(TypedDict):
     scanner: str
     file_paths: list[str]
@@ -498,6 +509,7 @@ TOOL_ARGS_MAP: dict[str, type] = {
     "dismiss_finding": DismissFindingArgs,
     # scanners.py (list_scanners has no args — excluded)
     "trigger_scan": TriggerScanArgs,
+    "report_finding": ReportFindingArgs,
     "trigger_scan_batch": TriggerScanBatchArgs,
     "get_scan_status": GetScanStatusArgs,
     "preview_scan": PreviewScanArgs,
