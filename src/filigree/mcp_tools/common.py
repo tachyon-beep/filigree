@@ -64,7 +64,7 @@ def _resolve_pagination(arguments: dict[str, Any]) -> tuple[int, int]:
     should overfetch by 1 (``limit=effective_limit + 1``) to detect ``has_more``.
     """
     no_limit = arguments.get("no_limit", False)
-    requested_limit = arguments.get("limit", 100)
+    requested_limit = arguments.get("limit", _MAX_LIST_RESULTS)
     offset = arguments.get("offset", 0)
 
     if no_limit:  # noqa: SIM108 — expanded for readability per filigree-b1b414e36e
