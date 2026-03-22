@@ -296,12 +296,20 @@ def run_doctor(project_root: Path | None = None) -> list[CheckResult]:
         conn: sqlite3.Connection | None = None
         try:
             conn = sqlite3.connect(str(db_path))
-            conn.execute("SELECT COUNT(*) FROM issues")
             count = conn.execute("SELECT COUNT(*) FROM issues").fetchone()[0]
             # 3b. Check schema version
             schema_version = conn.execute("PRAGMA user_version").fetchone()[0]
             results.append(CheckResult("filigree.db", True, f"{count} issues"))
-            if schema_version < CURRENT_SCHEMA_VERSION:
+            if schema_version > CURRENT_SCHEMA_VERSION:
+                results.append(
+                    CheckResult(
+                        "Schema version",
+                        False,
+                        f"v{schema_version} (this filigree supports v{CURRENT_SCHEMA_VERSION})",
+                        fix_hint="Database was created by a newer filigree version. Upgrade filigree.",
+                    )
+                )
+            elif schema_version < CURRENT_SCHEMA_VERSION:
                 results.append(
                     CheckResult(
                         "Schema version",

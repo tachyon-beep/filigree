@@ -153,7 +153,10 @@ class ScansMixin(DBMixinProtocol):
             try:
                 os.kill(run["pid"], 0)
                 process_alive = True
-            except OSError:
+            except PermissionError:
+                # EPERM means process exists but is owned by another user
+                process_alive = True
+            except ProcessLookupError:
                 logger.info(
                     "Scan run %s: process %d appears dead, transitioning to failed",
                     scan_run_id,

@@ -412,6 +412,7 @@ class ObserveArgs(TypedDict):
 class ListObservationsArgs(TypedDict):
     limit: NotRequired[int]
     offset: NotRequired[int]
+    no_limit: NotRequired[bool]
     file_path: NotRequired[str]
     file_id: NotRequired[str]
 
