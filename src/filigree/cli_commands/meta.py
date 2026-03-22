@@ -150,8 +150,8 @@ def stats(as_json: bool) -> None:
 
 @click.command()
 @click.argument("query")
-@click.option("--limit", default=100, type=int, help="Max results (default 100)")
-@click.option("--offset", default=0, type=int, help="Skip first N results")
+@click.option("--limit", default=100, type=click.IntRange(min=0), help="Max results (default 100)")
+@click.option("--offset", default=0, type=click.IntRange(min=0), help="Skip first N results")
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON")
 def search(query: str, limit: int, offset: int, as_json: bool) -> None:
     """Search issues by title/description."""
@@ -169,7 +169,7 @@ def search(query: str, limit: int, offset: int, as_json: bool) -> None:
 
 @click.command("events")
 @click.argument("issue_id")
-@click.option("--limit", default=50, type=int, help="Max events (default 50)")
+@click.option("--limit", default=50, type=click.IntRange(min=0), help="Max events (default 50)")
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON")
 def events_cmd(issue_id: str, limit: int, as_json: bool) -> None:
     """Get event history for a specific issue, newest first."""
@@ -177,7 +177,10 @@ def events_cmd(issue_id: str, limit: int, as_json: bool) -> None:
         try:
             event_list = db.get_issue_events(issue_id, limit=limit)
         except KeyError:
-            click.echo(f"Not found: {issue_id}", err=True)
+            if as_json:
+                click.echo(json_mod.dumps({"error": f"Not found: {issue_id}"}))
+            else:
+                click.echo(f"Not found: {issue_id}", err=True)
             sys.exit(1)
 
         if as_json:

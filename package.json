@@ -2,7 +2,7 @@
   "name": "filigree",
   "version": "1.0.0",
   "description": "Agent-native issue tracker with convention-based project discovery.",
-  "main": "index.js",
+  "private": true,
   "directories": {
     "doc": "docs",
     "test": "tests"
@@ -19,7 +19,7 @@
   },
   "keywords": [],
   "author": "",
-  "license": "ISC",
+  "license": "MIT",
   "type": "module",
   "bugs": {
     "url": "https://github.com/tachyon-beep/filigree/issues"
