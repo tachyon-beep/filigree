@@ -23,6 +23,10 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import signal
+import threading
+import time
 import webbrowser
 from contextvars import ContextVar
 from pathlib import Path
@@ -58,6 +62,11 @@ logger = logging.getLogger(__name__)
 
 _db: FiligreeDB | None = None
 _config: dict[str, Any] = {}
+
+# Idle auto-shutdown for ethereal mode (seconds)
+IDLE_TIMEOUT_SECONDS = 3600  # 1 hour
+IDLE_CHECK_INTERVAL = 60  # check every minute
+_last_request_time: float = 0.0  # monotonic clock; set at startup
 
 # Server mode: per-request project key set by middleware
 _current_project_key: ContextVar[str] = ContextVar("project_key", default="")
@@ -292,6 +301,18 @@ def create_app(*, server_mode: bool = False) -> ASGIApp:
         allow_headers=["*"],
     )
 
+    # Idle-tracking middleware (ethereal mode only — server mode runs indefinitely)
+    if not server_mode:
+        from starlette.middleware.base import BaseHTTPMiddleware
+
+        class IdleTrackingMiddleware(BaseHTTPMiddleware):
+            async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
+                global _last_request_time
+                _last_request_time = time.monotonic()
+                return await call_next(request)
+
+        app.add_middleware(IdleTrackingMiddleware)
+
     router = _create_project_router()
 
     if server_mode:
@@ -408,17 +429,29 @@ def create_app(*, server_mode: bool = False) -> ASGIApp:
     return app
 
 
+def _idle_watchdog(timeout: float, check_interval: float) -> None:
+    """Background thread that sends SIGTERM when no requests arrive for *timeout* seconds."""
+    while True:
+        time.sleep(check_interval)
+        elapsed = time.monotonic() - _last_request_time
+        if elapsed >= timeout:
+            logger.info("Idle for %.0fs (threshold %.0fs), shutting down", elapsed, timeout)
+            os.kill(os.getpid(), signal.SIGTERM)
+            return
+
+
 def main(port: int = DEFAULT_PORT, *, no_browser: bool = False, server_mode: bool = False) -> None:
     """Start the dashboard server.
 
     In server mode, reads ``server.json`` for multi-project routing.
     In ethereal mode (default), serves the single local project.
+    Ethereal servers auto-shutdown after IDLE_TIMEOUT_SECONDS of inactivity.
     """
-    import threading
-
     import uvicorn
 
-    global _db, _project_store
+    global _db, _last_request_time, _project_store
+
+    filigree_dir: Path | None = None
 
     if server_mode:
         _project_store = ProjectStore()
@@ -432,6 +465,16 @@ def main(port: int = DEFAULT_PORT, *, no_browser: bool = False, server_mode: boo
         _db = FiligreeDB.from_filigree_dir(filigree_dir, check_same_thread=False)
 
     app = create_app(server_mode=server_mode)
+
+    # Initialise idle timer and start watchdog (ethereal mode only)
+    _last_request_time = time.monotonic()
+    if not server_mode:
+        watchdog = threading.Thread(
+            target=_idle_watchdog,
+            args=(IDLE_TIMEOUT_SECONDS, IDLE_CHECK_INTERVAL),
+            daemon=True,
+        )
+        watchdog.start()
 
     browser_timer: threading.Timer | None = None
     if not no_browser:
@@ -449,3 +492,7 @@ def main(port: int = DEFAULT_PORT, *, no_browser: bool = False, server_mode: boo
             _project_store.close_all()
         if _db is not None:
             _db.close()
+        # Clean up ephemeral PID/port files so next session starts fresh
+        if filigree_dir is not None:
+            for name in ("ephemeral.pid", "ephemeral.port"):
+                (filigree_dir / name).unlink(missing_ok=True)
