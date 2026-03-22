@@ -60,6 +60,13 @@ class CheckResult:
         return "OK" if self.passed else "!!"
 
 
+def _is_venv_binary(path: str) -> bool:
+    """Return True when *path* is inside a Python virtual environment."""
+    p = Path(path)
+    # Walk up looking for pyvenv.cfg (the marker for any venv/virtualenv)
+    return any((parent / "pyvenv.cfg").exists() for parent in p.parents)
+
+
 def _is_absolute_command_path(path: str) -> bool:
     """Return True when *path* looks like an absolute command path."""
     if not path:
@@ -222,6 +229,15 @@ def _check_codex_mcp(filigree_dir: Path) -> CheckResult:
         )
     if _is_absolute_command_path(command) and not Path(command).exists():
         return CheckResult("Codex MCP", False, f"Binary not found at {command}", fix_hint="Run: filigree install --codex")
+    if _is_absolute_command_path(command) and _is_venv_binary(command):
+        uv_tool_bin = Path.home() / ".local" / "bin" / "filigree-mcp"
+        if uv_tool_bin.exists():
+            return CheckResult(
+                "Codex MCP",
+                False,
+                f"Codex config points at venv binary ({command}) but uv tool is installed",
+                fix_hint="Run: filigree install --codex  (to update to global uv tool path)",
+            )
     return CheckResult("Codex MCP", True, "Configured in ~/.codex/config.toml")
 
 
@@ -416,6 +432,19 @@ def run_doctor(project_root: Path | None = None) -> list[CheckResult]:
                             fix_hint="Run: filigree install --claude-code",
                         )
                     )
+                elif _is_absolute_command_path(mcp_command) and _is_venv_binary(mcp_command):
+                    uv_tool_bin = Path.home() / ".local" / "bin" / "filigree-mcp"
+                    if uv_tool_bin.exists():
+                        results.append(
+                            CheckResult(
+                                "Claude Code MCP",
+                                False,
+                                f"MCP points at venv binary ({mcp_command}) but uv tool is installed",
+                                fix_hint="Run: filigree install --claude-code  (to update to global uv tool path)",
+                            )
+                        )
+                    else:
+                        results.append(CheckResult("Claude Code MCP", True, "Configured in .mcp.json (venv path)"))
                 else:
                     results.append(CheckResult("Claude Code MCP", True, "Configured in .mcp.json"))
             else:
@@ -610,6 +639,94 @@ def run_doctor(project_root: Path | None = None) -> list[CheckResult]:
                 False,
                 "git status timed out (5s)",
                 fix_hint="Check for .git/index.lock or repository corruption",
+            )
+        )
+
+    # 14. Check installation method
+    results.extend(_doctor_install_method())
+
+    return results
+
+
+def _doctor_install_method() -> list[CheckResult]:
+    """Check how filigree is installed and recommend uv tool if appropriate."""
+    import shutil
+    import sys
+
+    results: list[CheckResult] = []
+
+    # Detect current installation type
+    current_exe = shutil.which("filigree") or ""
+    uv_tools_dir = Path.home() / ".local" / "share" / "uv" / "tools" / "filigree"
+    uv_tool_bin = Path.home() / ".local" / "bin" / "filigree"
+    has_uv_tool = uv_tools_dir.is_dir() and uv_tool_bin.exists()
+
+    # Check if currently running from a uv tool environment
+    running_from_uv_tool = False
+    if has_uv_tool:
+        try:
+            uv_tools_resolved = uv_tools_dir.resolve()
+            exe_resolved = Path(sys.executable).resolve()
+            running_from_uv_tool = str(exe_resolved).startswith(str(uv_tools_resolved))
+        except (OSError, ValueError):
+            pass
+
+    # Check if running from a project-local venv (dev checkout or project dep)
+    running_from_venv = False
+    venv_path = ""
+    exe_path = Path(sys.executable)
+    for parent in exe_path.parents:
+        if (parent / "pyvenv.cfg").exists():
+            running_from_venv = True
+            venv_path = str(parent)
+            break
+
+    if running_from_uv_tool:
+        results.append(CheckResult("Installation", True, "Installed as uv tool (recommended)"))
+    elif has_uv_tool and running_from_venv:
+        # Both exist — the current session is using the venv copy, but a global tool is also installed
+        results.append(
+            CheckResult(
+                "Installation",
+                False,
+                f"Running from venv ({venv_path}) but uv tool also installed",
+                fix_hint=(
+                    "Duplicate install detected. To use the global tool: "
+                    "remove filigree from this venv (uv remove filigree / pip uninstall filigree) "
+                    "and ensure ~/.local/bin is on PATH"
+                ),
+            )
+        )
+    elif running_from_venv and not has_uv_tool:
+        results.append(
+            CheckResult(
+                "Installation",
+                False,
+                f"Installed in project venv ({venv_path})",
+                fix_hint=(
+                    "Consider installing as a uv tool for global availability: "
+                    "uv tool install filigree"
+                ),
+            )
+        )
+    elif has_uv_tool:
+        # uv tool exists but we're not running from it (unusual — maybe PATH issue)
+        results.append(
+            CheckResult(
+                "Installation",
+                False,
+                "uv tool installed but not on PATH",
+                fix_hint="Ensure ~/.local/bin is on your PATH",
+            )
+        )
+    else:
+        # No uv tool, not in a recognizable venv — system-level pip or something else
+        results.append(
+            CheckResult(
+                "Installation",
+                False,
+                f"Installed via pip/system ({current_exe or 'unknown location'})",
+                fix_hint="Consider installing as a uv tool for isolation: uv tool install filigree",
             )
         )
 

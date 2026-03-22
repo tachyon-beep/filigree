@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import time
+from collections.abc import Iterator
 from pathlib import Path
 from unittest.mock import patch
 
@@ -473,8 +474,14 @@ class TestRunDoctor:
 
 
 class TestFindFiligreeMcpCommand:
+    @pytest.fixture(autouse=True)
+    def _no_real_uv_tool(self, tmp_path: Path) -> Iterator[None]:
+        """Prevent real uv tool install from interfering with tests."""
+        with patch("filigree.install_support.integrations.Path.home", return_value=tmp_path):
+            yield
+
     def test_found_on_path(self, tmp_path: Path) -> None:
-        """When filigree-mcp is on PATH, return its path."""
+        """When filigree-mcp is on PATH (no uv tool), return its path."""
 
         def _fake_which(name: str) -> str | None:
             return f"/usr/bin/{name}" if name == "filigree-mcp" else None
@@ -482,6 +489,19 @@ class TestFindFiligreeMcpCommand:
         with patch("filigree.install_support.integrations.shutil.which", side_effect=_fake_which):
             result = _find_filigree_mcp_command()
             assert result == "/usr/bin/filigree-mcp"
+
+    def test_uv_tool_preferred_over_path(self, tmp_path: Path) -> None:
+        """When uv tool is installed, prefer it over shutil.which result."""
+        uv_bin = tmp_path / ".local" / "bin"
+        uv_bin.mkdir(parents=True)
+        (uv_bin / "filigree-mcp").touch()
+
+        def _fake_which(name: str) -> str | None:
+            return f"/some/venv/bin/{name}" if name == "filigree-mcp" else None
+
+        with patch("filigree.install_support.integrations.shutil.which", side_effect=_fake_which):
+            result = _find_filigree_mcp_command()
+            assert result == str(uv_bin / "filigree-mcp")
 
     def test_fallback_to_sys_executable_sibling(self, tmp_path: Path) -> None:
         """When filigree-mcp not on PATH, look next to sys.executable."""
