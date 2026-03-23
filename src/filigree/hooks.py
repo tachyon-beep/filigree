@@ -60,7 +60,7 @@ def _build_context(db: FiligreeDB, filigree_dir: Path | None = None) -> str:
     lines.append("=== Filigree Project Snapshot ===")
     lines.append("")
 
-    # Dashboard URL (if running)
+    # Dashboard URL — restart if idle-shutdown killed it
     if filigree_dir is not None:
         from filigree.ephemeral import is_pid_alive, read_pid_file, read_port_file
 
@@ -68,7 +68,17 @@ def _build_context(db: FiligreeDB, filigree_dir: Path | None = None) -> str:
         pid_file = filigree_dir / "ephemeral.pid"
         port = read_port_file(port_file)
         pid_info = read_pid_file(pid_file)
-        if port and pid_info and is_pid_alive(pid_info["pid"]) and _is_port_listening(port):
+        dashboard_alive = port and pid_info and is_pid_alive(pid_info["pid"]) and _is_port_listening(port)
+        if not dashboard_alive and pid_info is not None:
+            # Dashboard was running but died (idle-shutdown) — try to restart
+            try:
+                url = ensure_dashboard_running()
+                if url:
+                    lines.append(f"DASHBOARD: {url}")
+                    lines.append("")
+            except Exception:
+                logger.debug("Dashboard auto-restart failed", exc_info=True)
+        elif dashboard_alive:
             lines.append(f"DASHBOARD: http://localhost:{port}")
             lines.append("")
 
