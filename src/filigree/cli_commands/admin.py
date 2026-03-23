@@ -175,13 +175,13 @@ def install(
         ok, msg = install_codex_mcp(project_root, mode=mode, server_port=server_port)
         results.append(("Codex MCP", ok, msg))
 
-    if install_all or claude_md:
-        ok, msg = inject_instructions(project_root / "CLAUDE.md")
-        results.append(("CLAUDE.md", ok, msg))
-
     if install_all or agents_md:
         ok, msg = inject_instructions(project_root / "AGENTS.md")
         results.append(("AGENTS.md", ok, msg))
+
+    if claude_md:
+        ok, msg = inject_instructions(project_root / "CLAUDE.md")
+        results.append(("CLAUDE.md", ok, msg))
 
     if install_all or gitignore:
         ok, msg = ensure_gitignore(project_root)
