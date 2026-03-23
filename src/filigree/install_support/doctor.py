@@ -553,32 +553,7 @@ def run_doctor(project_root: Path | None = None) -> list[CheckResult]:
             )
         )
 
-    # 10. Check AGENTS.md has instructions (primary target)
-    agents_md = (filigree_dir.parent) / "AGENTS.md"
-    if agents_md.exists():
-        content = agents_md.read_text()
-        if FILIGREE_INSTRUCTIONS_MARKER in content:
-            results.append(CheckResult("AGENTS.md", True, "Filigree instructions present"))
-        else:
-            results.append(
-                CheckResult(
-                    "AGENTS.md",
-                    False,
-                    "No filigree instructions",
-                    fix_hint="Run: filigree install --agents-md",
-                )
-            )
-    else:
-        results.append(
-            CheckResult(
-                "AGENTS.md",
-                False,
-                "File not found",
-                fix_hint="Run: filigree install --agents-md",
-            )
-        )
-
-    # 11. Check CLAUDE.md has instructions (optional — only checked if file exists)
+    # 10. Check CLAUDE.md has instructions
     claude_md = (filigree_dir.parent) / "CLAUDE.md"
     if claude_md.exists():
         content = claude_md.read_text()
@@ -593,7 +568,32 @@ def run_doctor(project_root: Path | None = None) -> list[CheckResult]:
                     fix_hint="Run: filigree install --claude-md",
                 )
             )
-    # CLAUDE.md is optional — don't warn if it doesn't exist
+    else:
+        results.append(
+            CheckResult(
+                "CLAUDE.md",
+                False,
+                "File not found",
+                fix_hint="Run: filigree install --claude-md",
+            )
+        )
+
+    # 11. Check AGENTS.md has instructions
+    agents_md = (filigree_dir.parent) / "AGENTS.md"
+    if agents_md.exists():
+        content = agents_md.read_text()
+        if FILIGREE_INSTRUCTIONS_MARKER in content:
+            results.append(CheckResult("AGENTS.md", True, "Filigree instructions present"))
+        else:
+            results.append(
+                CheckResult(
+                    "AGENTS.md",
+                    False,
+                    "No filigree instructions",
+                    fix_hint="Run: filigree install --agents-md",
+                )
+            )
+    # AGENTS.md is optional — don't warn if it doesn't exist
 
     # 12. Mode-specific checks
     from filigree.core import get_mode

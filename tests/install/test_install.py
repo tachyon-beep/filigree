@@ -413,19 +413,13 @@ class TestRunDoctor:
         assert not codex_check.passed
         assert "Invalid ~/.codex/config.toml" in codex_check.message
 
-    def test_claude_md_missing_is_optional(self, filigree_project: Path) -> None:
-        """Doctor should NOT warn when CLAUDE.md is absent (it's optional now)."""
+    def test_claude_md_missing(self, filigree_project: Path) -> None:
+        """Doctor should warn when CLAUDE.md is absent."""
         results = run_doctor(filigree_project)
         claude_check = next((r for r in results if r.name == "CLAUDE.md"), None)
-        assert claude_check is None  # No check emitted when file doesn't exist
-
-    def test_agents_md_missing(self, filigree_project: Path) -> None:
-        """Doctor should warn when AGENTS.md is absent (primary target)."""
-        results = run_doctor(filigree_project)
-        agents_check = next((r for r in results if r.name == "AGENTS.md"), None)
-        assert agents_check is not None
-        assert not agents_check.passed
-        assert "File not found" in agents_check.message
+        assert claude_check is not None
+        assert not claude_check.passed
+        assert "File not found" in claude_check.message
 
     def test_claude_md_without_instructions(self, filigree_project: Path) -> None:
         """Doctor should warn when CLAUDE.md exists but has no instructions."""
