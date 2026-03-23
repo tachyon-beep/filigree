@@ -648,6 +648,42 @@ def run_doctor(project_root: Path | None = None) -> list[CheckResult]:
     return results
 
 
+def _find_all_filigree_binaries(which_result: str, uv_tool_bin: Path) -> list[str]:
+    """Find filigree installs other than the uv tool.
+
+    Checks common locations: pip user site, system site-packages, other
+    entries on PATH that aren't the uv tool binary.
+    """
+    import site
+
+    uv_resolved = str(uv_tool_bin.resolve()) if uv_tool_bin.exists() else ""
+    others: list[str] = []
+
+    # Check if shutil.which found something different from the uv tool
+    if which_result and uv_resolved:
+        try:
+            which_resolved = str(Path(which_result).resolve())
+            if which_resolved != uv_resolved:
+                others.append(which_result)
+        except (OSError, ValueError):
+            pass
+
+    # Check pip user and system site-packages for filigree metadata
+    for site_dir in {*site.getsitepackages(), site.getusersitepackages()}:
+        site_path = Path(site_dir)
+        if not site_path.is_dir():
+            continue
+        # pip installs leave dist-info directories
+        for dist_info in site_path.glob("filigree-*.dist-info"):
+            # Make sure this isn't the uv tool's own site-packages
+            if uv_resolved and str(dist_info.resolve()).startswith(str(Path(uv_resolved).parent.parent.resolve())):
+                continue
+            others.append(str(dist_info.parent))
+            break
+
+    return others
+
+
 def _doctor_install_method() -> list[CheckResult]:
     """Check how filigree is installed and recommend uv tool if appropriate."""
     import shutil
@@ -681,8 +717,28 @@ def _doctor_install_method() -> list[CheckResult]:
             venv_path = str(parent)
             break
 
+    # Detect other installs that may shadow the uv tool
+    other_installs: list[str] = []
+    if has_uv_tool:
+        # Check for pip/pipx installs that could conflict
+        for candidate in _find_all_filigree_binaries(current_exe, uv_tool_bin):
+            other_installs.append(candidate)
+
     if running_from_uv_tool:
-        results.append(CheckResult("Installation", True, "Installed as uv tool (recommended)"))
+        if other_installs:
+            results.append(
+                CheckResult(
+                    "Installation",
+                    False,
+                    f"uv tool installed (good) but also found: {', '.join(other_installs)}",
+                    fix_hint=(
+                        "Duplicate installs can cause version conflicts. Remove the extra copies: "
+                        + "; ".join(f"pip uninstall filigree (in {p})" if "site-packages" in p else f"remove {p}" for p in other_installs)
+                    ),
+                )
+            )
+        else:
+            results.append(CheckResult("Installation", True, "Installed as uv tool (recommended)"))
     elif has_uv_tool and running_from_venv:
         # Both exist — the current session is using the venv copy, but a global tool is also installed
         results.append(
