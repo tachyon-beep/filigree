@@ -7,6 +7,7 @@ import contextlib
 import json
 import logging
 import secrets
+import shlex
 import sqlite3
 import subprocess
 from collections.abc import Callable
@@ -322,10 +323,12 @@ async def _handle_report_finding(arguments: dict[str, Any]) -> list[TextContent]
 
     severity = args.get("severity", "info")
     if severity not in VALID_SEVERITIES:
-        return _text(ErrorResponse(
-            error=f"Invalid severity: {severity!r}. Valid: {', '.join(sorted(VALID_SEVERITIES))}",
-            code="validation_error",
-        ))
+        return _text(
+            ErrorResponse(
+                error=f"Invalid severity: {severity!r}. Valid: {', '.join(sorted(VALID_SEVERITIES))}",
+                code="validation_error",
+            )
+        )
 
     finding: dict[str, Any] = {
         "path": file_path,
@@ -542,6 +545,15 @@ async def _handle_trigger_scan_batch(arguments: dict[str, Any]) -> list[TextCont
 
     if not isinstance(file_paths, list) or not file_paths:
         return _text(ErrorResponse(error="file_paths must be a non-empty list", code="validation_error"))
+
+    max_batch_size = 500
+    if len(file_paths) > max_batch_size:
+        return _text(
+            ErrorResponse(
+                error=f"file_paths length {len(file_paths)} exceeds maximum of {max_batch_size}",
+                code="validation_error",
+            )
+        )
 
     url_err = _validate_localhost_url(api_url)
     if url_err is not None:
@@ -775,7 +787,7 @@ async def _handle_preview_scan(arguments: dict[str, Any]) -> list[TextContent]:
             "scanner": scanner_name,
             "file_path": file_path,
             "command": cmd,
-            "command_string": " ".join(cmd),
+            "command_string": shlex.join(cmd),
             "valid": cmd_err is None,
             "validation_error": cmd_err,
         }
