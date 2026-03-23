@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-import contextlib
+import logging
+import sqlite3
 from collections.abc import Callable
 from typing import Any
 
@@ -47,6 +48,8 @@ from filigree.types.inputs import (
     SearchIssuesArgs,
     UpdateIssueArgs,
 )
+
+logger = logging.getLogger(__name__)
 
 _UPDATE_TRACKED_FIELDS = ("status", "priority", "title", "assignee", "description", "notes", "parent_id", "fields")
 
@@ -363,8 +366,10 @@ async def _handle_get_issue(arguments: dict[str, Any]) -> list[TextContent]:
         # Include file associations (default true)
         file_assocs: list[Any] = []
         if args.get("include_files", True):
-            with contextlib.suppress(Exception):
+            try:
                 file_assocs = tracker.get_issue_files(args["id"])
+            except (sqlite3.Error, KeyError) as exc:
+                logger.warning("Failed to load file associations for %s: %s", args["id"], exc)
 
         if args.get("include_transitions"):
             transitions = tracker.get_valid_transitions(args["id"])

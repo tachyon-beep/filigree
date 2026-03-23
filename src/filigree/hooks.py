@@ -77,7 +77,7 @@ def _build_context(db: FiligreeDB, filigree_dir: Path | None = None) -> str:
                     lines.append(f"DASHBOARD: {url}")
                     lines.append("")
             except Exception:
-                logger.debug("Dashboard auto-restart failed", exc_info=True)
+                logger.warning("Dashboard auto-restart failed", exc_info=True)
         elif dashboard_alive:
             lines.append(f"DASHBOARD: http://localhost:{port}")
             lines.append("")

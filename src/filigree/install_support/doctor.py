@@ -665,8 +665,8 @@ def _find_all_filigree_binaries(which_result: str, uv_tool_bin: Path) -> list[st
             which_resolved = str(Path(which_result).resolve())
             if which_resolved != uv_resolved:
                 others.append(which_result)
-        except (OSError, ValueError):
-            pass
+        except (OSError, ValueError) as exc:
+            logger.debug("Could not resolve path %s: %s", which_result, exc)
 
     # Check pip user and system site-packages for filigree metadata
     for site_dir in {*site.getsitepackages(), site.getusersitepackages()}:
@@ -704,8 +704,8 @@ def _doctor_install_method() -> list[CheckResult]:
             uv_tools_resolved = uv_tools_dir.resolve()
             exe_resolved = Path(sys.executable).resolve()
             running_from_uv_tool = str(exe_resolved).startswith(str(uv_tools_resolved))
-        except (OSError, ValueError):
-            pass
+        except (OSError, ValueError) as exc:
+            logger.debug("Could not resolve executable path: %s", exc)
 
     # Check if running from a project-local venv (dev checkout or project dep)
     running_from_venv = False

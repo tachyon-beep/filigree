@@ -47,7 +47,7 @@ def test_mcp_tools_register_shape() -> None:
 
 
 def test_mcp_tools_total_count() -> None:
-    """All 69 tools are registered across domain modules."""
+    """All 71 tools are registered across domain modules."""
     from filigree.mcp_tools import files, issues, meta, observations, planning, scanners, workflow
 
     total = 0

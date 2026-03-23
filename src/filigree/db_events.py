@@ -232,7 +232,7 @@ class EventsMixin(DBMixinProtocol):
                         dep_type, dep_target = old_val.split(":", 1)
                     else:
                         dep_type, dep_target = "blocks", old_val
-                    # Check for cycles before re-inserting (inline BFS
+                    # Check for cycles before re-inserting (inline DFS
                     # to avoid cross-mixin call that mypy can't resolve)
                     adj: dict[str, list[str]] = {}
                     for dep_row in self.conn.execute("SELECT issue_id, depends_on_id FROM dependencies").fetchall():

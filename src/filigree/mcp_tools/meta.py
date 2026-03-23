@@ -37,6 +37,8 @@ from filigree.types.inputs import (
     UndoLastArgs,
 )
 
+logger = logging.getLogger(__name__)
+
 
 def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
     """Return (tool_definitions, handler_map) for meta-domain tools."""
@@ -639,12 +641,17 @@ async def _handle_restart_dashboard(arguments: dict[str, Any]) -> list[TextConte
     # Restart via ensure_dashboard_running
     from filigree.hooks import ensure_dashboard_running
 
-    url = ensure_dashboard_running()
+    try:
+        url = ensure_dashboard_running()
+    except Exception as exc:
+        logger.error("restart_dashboard: %s", exc)
+        return _text({"status": "failed", "error": f"Dashboard restart failed: {exc}"})
 
     result: dict[str, Any] = {"status": "restarted" if stopped else "started"}
     if url:
         result["url"] = url
     else:
+        logger.warning("restart_dashboard: ensure_dashboard_running returned no URL")
         result["status"] = "failed"
         result["error"] = "Dashboard did not start"
     return _text(result)

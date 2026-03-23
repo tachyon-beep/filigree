@@ -3,7 +3,7 @@
 // ---------------------------------------------------------------------------
 
 import { fetchReady } from "../api.js";
-import { escHtml } from "../ui.js";
+import { escHtml, escJsSingle } from "../ui.js";
 import { callbacks } from "../router.js";
 
 const PRIORITY_LABELS = ["P0", "P1", "P2", "P3", "P4"];
@@ -40,7 +40,7 @@ export async function loadReady() {
     const pLabel = PRIORITY_LABELS[p] || `P${p}`;
     const pStyle = PRIORITY_COLORS[p] || "";
     const shortId = issue.id.length > 16 ? issue.id.slice(0, 16) : issue.id;
-    return `<tr class="border-b border-strong hover:bg-overlay cursor-pointer" onclick="openDetail('${escHtml(issue.id)}')">
+    return `<tr class="border-b border-strong hover:bg-overlay cursor-pointer" onclick="openDetail('${escJsSingle(issue.id)}')">
       <td class="py-1.5 px-2 font-mono" style="${pStyle}">${pLabel}</td>
       <td class="py-1.5 px-2 font-mono text-accent">${escHtml(shortId)}</td>
       <td class="py-1.5 px-2">${escHtml(issue.type || "")}</td>

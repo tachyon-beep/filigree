@@ -401,8 +401,8 @@ def claim_current_process_as_daemon(*, port: int | None = None) -> bool:
 def release_daemon_pid_if_owned(pid: int) -> None:
     """Remove ``server.pid`` only if it currently points at *pid*.
 
-    Uses rename-to-temp then delete to narrow the TOCTOU window between
-    checking and removing the file.
+    Uses rename-to-temp, check, then delete-or-restore to narrow the TOCTOU
+    window between checking ownership and removing the file.
     """
     try:
         tmp = SERVER_PID_FILE.with_suffix(".pid.removing")
@@ -417,4 +417,5 @@ def release_daemon_pid_if_owned(pid: int) -> None:
         try:
             tmp.rename(SERVER_PID_FILE)
         except OSError:
+            logger.warning("Could not restore PID file for another process; removing temp")
             tmp.unlink(missing_ok=True)
