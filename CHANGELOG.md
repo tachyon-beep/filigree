@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.2] - 2026-03-23
+
+### Fixed
+
+- **README accuracy** — MCP tool count corrected from 53 to 71; ruff line-length corrected from 120 to 140
+- **Accessibility** — added `aria-label` attributes to `role="button"` elements in dashboard detail panel (blocker links, downstream links, file links)
+- **XSS defense** — tour tooltip text now escaped via `escHtml()` (was safe from constants, now safe by construction)
+- **CLI help text** — `reopen` command clarifies it returns issues to their type's initial state, not previous state
+- Ruff formatting applied to 5 source files that had drifted
+
+### Tests
+
+- **New `tests/test_dashboard.py`** — 25 tests covering `ProjectStore` init/load/corruption, idle watchdog, idle tracking middleware, `_get_db` error paths, ethereal vs server mode app creation
+- **New `tests/test_doctor.py`** — 70 tests covering `CheckResult`, `_is_venv_binary`, `_is_absolute_command_path`, config/DB/context/gitignore/MCP/hooks/skills/instruction file checks
+- **Expanded `tests/api/test_scanner_tools.py`** — 36 new tests (was 2) covering scan run CRUD, status transitions, cooldown logic, batch runs, log tailing, edge cases
+
 ## [1.5.1] - 2026-03-18
 
 ### Added

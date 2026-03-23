@@ -553,8 +553,9 @@ export function selectFinding(findingId) {
   const container = document.getElementById("fileTabContent");
   if (container) {
     container.querySelectorAll("[onclick^=\"selectFinding\"]").forEach((el) => {
-      el.classList.toggle("border-l-2", el.getAttribute("onclick").includes(findingId));
-      el.classList.toggle("border-l-sky-400", el.getAttribute("onclick").includes(findingId));
+      const elId = el.getAttribute("onclick").match(/selectFinding\('([^']+)'\)/)?.[1];
+      el.classList.toggle("border-l-2", elId === findingId);
+      el.classList.toggle("border-l-sky-400", elId === findingId);
     });
   }
 }

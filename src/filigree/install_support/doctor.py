@@ -60,6 +60,13 @@ class CheckResult:
         return "OK" if self.passed else "!!"
 
 
+def _is_venv_binary(path: str) -> bool:
+    """Return True when *path* is inside a Python virtual environment."""
+    p = Path(path)
+    # Walk up looking for pyvenv.cfg (the marker for any venv/virtualenv)
+    return any((parent / "pyvenv.cfg").exists() for parent in p.parents)
+
+
 def _is_absolute_command_path(path: str) -> bool:
     """Return True when *path* looks like an absolute command path."""
     if not path:
@@ -222,6 +229,15 @@ def _check_codex_mcp(filigree_dir: Path) -> CheckResult:
         )
     if _is_absolute_command_path(command) and not Path(command).exists():
         return CheckResult("Codex MCP", False, f"Binary not found at {command}", fix_hint="Run: filigree install --codex")
+    if _is_absolute_command_path(command) and _is_venv_binary(command):
+        uv_tool_bin = Path.home() / ".local" / "bin" / "filigree-mcp"
+        if uv_tool_bin.exists():
+            return CheckResult(
+                "Codex MCP",
+                False,
+                f"Codex config points at venv binary ({command}) but uv tool is installed",
+                fix_hint="Run: filigree install --codex  (to update to global uv tool path)",
+            )
     return CheckResult("Codex MCP", True, "Configured in ~/.codex/config.toml")
 
 
@@ -296,12 +312,20 @@ def run_doctor(project_root: Path | None = None) -> list[CheckResult]:
         conn: sqlite3.Connection | None = None
         try:
             conn = sqlite3.connect(str(db_path))
-            conn.execute("SELECT COUNT(*) FROM issues")
             count = conn.execute("SELECT COUNT(*) FROM issues").fetchone()[0]
             # 3b. Check schema version
             schema_version = conn.execute("PRAGMA user_version").fetchone()[0]
             results.append(CheckResult("filigree.db", True, f"{count} issues"))
-            if schema_version < CURRENT_SCHEMA_VERSION:
+            if schema_version > CURRENT_SCHEMA_VERSION:
+                results.append(
+                    CheckResult(
+                        "Schema version",
+                        False,
+                        f"v{schema_version} (this filigree supports v{CURRENT_SCHEMA_VERSION})",
+                        fix_hint="Database was created by a newer filigree version. Upgrade filigree.",
+                    )
+                )
+            elif schema_version < CURRENT_SCHEMA_VERSION:
                 results.append(
                     CheckResult(
                         "Schema version",
@@ -408,6 +432,19 @@ def run_doctor(project_root: Path | None = None) -> list[CheckResult]:
                             fix_hint="Run: filigree install --claude-code",
                         )
                     )
+                elif _is_absolute_command_path(mcp_command) and _is_venv_binary(mcp_command):
+                    uv_tool_bin = Path.home() / ".local" / "bin" / "filigree-mcp"
+                    if uv_tool_bin.exists():
+                        results.append(
+                            CheckResult(
+                                "Claude Code MCP",
+                                False,
+                                f"MCP points at venv binary ({mcp_command}) but uv tool is installed",
+                                fix_hint="Run: filigree install --claude-code  (to update to global uv tool path)",
+                            )
+                        )
+                    else:
+                        results.append(CheckResult("Claude Code MCP", True, "Configured in .mcp.json (venv path)"))
                 else:
                     results.append(CheckResult("Claude Code MCP", True, "Configured in .mcp.json"))
             else:
@@ -602,6 +639,147 @@ def run_doctor(project_root: Path | None = None) -> list[CheckResult]:
                 False,
                 "git status timed out (5s)",
                 fix_hint="Check for .git/index.lock or repository corruption",
+            )
+        )
+
+    # 14. Check installation method
+    results.extend(_doctor_install_method())
+
+    return results
+
+
+def _find_all_filigree_binaries(which_result: str, uv_tool_bin: Path) -> list[str]:
+    """Find filigree installs other than the uv tool.
+
+    Checks common locations: pip user site, system site-packages, other
+    entries on PATH that aren't the uv tool binary.
+    """
+    import site
+
+    uv_resolved = str(uv_tool_bin.resolve()) if uv_tool_bin.exists() else ""
+    others: list[str] = []
+
+    # Check if shutil.which found something different from the uv tool
+    if which_result and uv_resolved:
+        try:
+            which_resolved = str(Path(which_result).resolve())
+            if which_resolved != uv_resolved:
+                others.append(which_result)
+        except (OSError, ValueError) as exc:
+            logger.debug("Could not resolve path %s: %s", which_result, exc)
+
+    # Check pip user and system site-packages for filigree metadata
+    for site_dir in {*site.getsitepackages(), site.getusersitepackages()}:
+        site_path = Path(site_dir)
+        if not site_path.is_dir():
+            continue
+        # pip installs leave dist-info directories
+        for dist_info in site_path.glob("filigree-*.dist-info"):
+            # Make sure this isn't the uv tool's own site-packages
+            if uv_resolved and str(dist_info.resolve()).startswith(str(Path(uv_resolved).parent.parent.resolve())):
+                continue
+            others.append(str(dist_info.parent))
+            break
+
+    return others
+
+
+def _doctor_install_method() -> list[CheckResult]:
+    """Check how filigree is installed and recommend uv tool if appropriate."""
+    import shutil
+    import sys
+
+    results: list[CheckResult] = []
+
+    # Detect current installation type
+    current_exe = shutil.which("filigree") or ""
+    uv_tools_dir = Path.home() / ".local" / "share" / "uv" / "tools" / "filigree"
+    uv_tool_bin = Path.home() / ".local" / "bin" / "filigree"
+    has_uv_tool = uv_tools_dir.is_dir() and uv_tool_bin.exists()
+
+    # Check if currently running from a uv tool environment
+    running_from_uv_tool = False
+    if has_uv_tool:
+        try:
+            uv_tools_resolved = uv_tools_dir.resolve()
+            exe_resolved = Path(sys.executable).resolve()
+            running_from_uv_tool = str(exe_resolved).startswith(str(uv_tools_resolved))
+        except (OSError, ValueError) as exc:
+            logger.debug("Could not resolve executable path: %s", exc)
+
+    # Check if running from a project-local venv (dev checkout or project dep)
+    running_from_venv = False
+    venv_path = ""
+    exe_path = Path(sys.executable)
+    for parent in exe_path.parents:
+        if (parent / "pyvenv.cfg").exists():
+            running_from_venv = True
+            venv_path = str(parent)
+            break
+
+    # Detect other installs that may shadow the uv tool
+    other_installs: list[str] = []
+    if has_uv_tool:
+        # Check for pip/pipx installs that could conflict
+        for candidate in _find_all_filigree_binaries(current_exe, uv_tool_bin):
+            other_installs.append(candidate)
+
+    if running_from_uv_tool:
+        if other_installs:
+            results.append(
+                CheckResult(
+                    "Installation",
+                    False,
+                    f"uv tool installed (good) but also found: {', '.join(other_installs)}",
+                    fix_hint=(
+                        "Duplicate installs can cause version conflicts. Remove the extra copies: "
+                        + "; ".join(f"pip uninstall filigree (in {p})" if "site-packages" in p else f"remove {p}" for p in other_installs)
+                    ),
+                )
+            )
+        else:
+            results.append(CheckResult("Installation", True, "Installed as uv tool (recommended)"))
+    elif has_uv_tool and running_from_venv:
+        # Both exist — the current session is using the venv copy, but a global tool is also installed
+        results.append(
+            CheckResult(
+                "Installation",
+                False,
+                f"Running from venv ({venv_path}) but uv tool also installed",
+                fix_hint=(
+                    "Duplicate install detected. To use the global tool: "
+                    "remove filigree from this venv (uv remove filigree / pip uninstall filigree) "
+                    "and ensure ~/.local/bin is on PATH"
+                ),
+            )
+        )
+    elif running_from_venv and not has_uv_tool:
+        results.append(
+            CheckResult(
+                "Installation",
+                False,
+                f"Installed in project venv ({venv_path})",
+                fix_hint=("Consider installing as a uv tool for global availability: uv tool install filigree"),
+            )
+        )
+    elif has_uv_tool:
+        # uv tool exists but we're not running from it (unusual — maybe PATH issue)
+        results.append(
+            CheckResult(
+                "Installation",
+                False,
+                "uv tool installed but not on PATH",
+                fix_hint="Ensure ~/.local/bin is on your PATH",
+            )
+        )
+    else:
+        # No uv tool, not in a recognizable venv — system-level pip or something else
+        results.append(
+            CheckResult(
+                "Installation",
+                False,
+                f"Installed via pip/system ({current_exe or 'unknown location'})",
+                fix_hint="Consider installing as a uv tool for isolation: uv tool install filigree",
             )
         )
 

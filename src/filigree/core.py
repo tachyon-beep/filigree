@@ -152,10 +152,16 @@ def find_filigree_command() -> list[str]:
     """Locate the filigree CLI command as a list of argument tokens.
 
     Resolution order:
-    1. shutil.which("filigree") -- absolute path if on PATH
-    2. Sibling of running Python interpreter (covers venv case)
-    3. sys.executable -m filigree -- module invocation fallback
+    1. uv tool binary (~/.local/bin/filigree) -- stable global install
+    2. shutil.which("filigree") -- absolute path if on PATH
+    3. Sibling of running Python interpreter (covers venv case)
+    4. sys.executable -m filigree -- module invocation fallback
     """
+    # Prefer uv tool install — stable path that survives venv changes
+    uv_tool_bin = Path.home() / ".local" / "bin" / "filigree"
+    if uv_tool_bin.is_file():
+        return [str(uv_tool_bin)]
+
     which = shutil.which("filigree")
     if which:
         return [which]

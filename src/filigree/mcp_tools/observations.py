@@ -10,6 +10,7 @@ from typing import Any
 from mcp.types import TextContent, Tool
 
 from filigree.mcp_tools.common import (
+    _MAX_LIST_RESULTS,
     _apply_has_more,
     _parse_args,
     _resolve_pagination,
@@ -61,8 +62,18 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "limit": {"type": "integer", "default": 100, "description": "Max results", "minimum": 1},
+                    "limit": {
+                        "type": "integer",
+                        "default": _MAX_LIST_RESULTS,
+                        "minimum": 1,
+                        "description": f"Max results (default {_MAX_LIST_RESULTS}, capped at {_MAX_LIST_RESULTS} unless no_limit=true)",
+                    },
                     "offset": {"type": "integer", "default": 0, "description": "Skip first N results", "minimum": 0},
+                    "no_limit": {
+                        "type": "boolean",
+                        "default": False,
+                        "description": f"Bypass the default result cap of {_MAX_LIST_RESULTS}. Use with caution on large projects.",
+                    },
                     "file_path": {"type": "string", "description": "Filter by substring in file path"},
                     "file_id": {"type": "string", "description": "Filter by exact file ID"},
                 },

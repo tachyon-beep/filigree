@@ -4,11 +4,11 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Filigree Dashboard</title>
-<script src="https://cdn.tailwindcss.com/3.4.17"></script>
+<script src="https://cdn.tailwindcss.com/3.4.17" integrity="sha384-igm5BeiBt36UU4gqwWS7imYmelpTsZlQ45FZf+XBn9MuJbn4nQr7yx1yFydocC/K" crossorigin="anonymous"></script>
 <script src="https://unpkg.com/cytoscape@3.30.4/dist/cytoscape.min.js" integrity="sha384-H3uzGzTfGHUAumB8+s4GEdfFwzAceN9wCCndN8AXubWKFIPuBSWKKtWDx7RhSf/z" crossorigin="anonymous"></script>
 <script src="https://unpkg.com/dagre@0.8.5/dist/dagre.min.js" integrity="sha384-2IH3T69EIKYC4c+RXZifZRvaH5SRUdacJW7j6HtE5rQbvLhKKdawxq6vpIzJ7j9M" crossorigin="anonymous"></script>
 <script src="https://unpkg.com/cytoscape-dagre@2.5.0/cytoscape-dagre.js" integrity="sha384-u69h9ebXeSjlg6q/rb1zKTRAGu/h8deCl0409xpS/QJctMKnc4M9Fzkm01VOQdeF" crossorigin="anonymous"></script>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&display=swap" crossorigin="anonymous">
 <style>
   :root {
     --surface-base: #0B1215;
@@ -148,19 +148,22 @@ tailwind.config = {
       </select>
     </div>
     <button onclick="showCreateForm()" class="text-xs bg-accent text-white px-2 py-1 rounded bg-accent-hover" title="Create Issue">+ New</button>
+    <nav aria-label="View navigation">
     <div class="flex gap-1">
       <button id="btnKanban" onclick="switchView('kanban')" class="px-3 py-1 rounded text-xs font-medium" title="Kanban board view">Kanban</button>
+      <button id="btnReady" onclick="switchView('ready')" class="px-3 py-1 rounded text-xs font-medium" title="Issues ready to work — no open blockers">Ready</button>
       <button id="btnGraph" onclick="switchView('graph')" class="px-3 py-1 rounded text-xs font-medium" title="Dependency graph visualization">Graph</button>
       <button id="btnReleases" onclick="switchView('releases')" class="px-3 py-1 rounded text-xs font-medium" title="Release roadmap and progress">Releases</button>
       <button id="btnInsights" onclick="switchView('insights')" class="px-3 py-1 rounded text-xs font-medium" title="Flow metrics — throughput, cycle time, lead time">Insights</button>
       <button id="btnFiles" onclick="switchView('files')" class="px-3 py-1 rounded text-xs font-medium" title="File records, scan findings, and code health">Files</button>
     </div>
+    </nav>
   </div>
 
   <!-- Filter bar -->
   <div class="flex items-center gap-3">
-    <button id="btnReady" onclick="toggleReady()" class="px-2 py-1 rounded text-xs font-medium bg-emerald-900/50 text-emerald-400 border border-emerald-700" title="Ready issues have no blockers and can be worked on immediately">
-      &#9679; Ready (<span id="readyCount">0</span>)
+    <button id="btnReadyFilter" onclick="toggleReady()" class="px-2 py-1 rounded text-xs font-medium bg-emerald-900/50 text-emerald-400 border border-emerald-700" title="Ready issues have no blockers and can be worked on immediately">
+      &#9679; Ready (<span id="readyFilterCount">0</span>)
     </button>
     <button id="btnBlocked" onclick="toggleBlocked()" class="px-2 py-1 rounded text-xs font-medium bg-overlay text-secondary border border-strong" title="Blocked issues are waiting on dependencies to be resolved">
       &#128279; Blocked (<span id="blockedCount">0</span>)
@@ -224,7 +227,7 @@ tailwind.config = {
 </header>
 
 <!-- Main content area -->
-<div class="flex flex-1 overflow-hidden relative">
+<main class="flex flex-1 overflow-hidden relative">
   <!-- Graph view -->
   <div id="graphView" class="flex-1 hidden flex flex-col">
     <div class="flex flex-1 overflow-hidden">
@@ -378,6 +381,33 @@ tailwind.config = {
     </div>
   </div>
 
+  <!-- Ready view -->
+  <div id="readyView" class="flex-1 hidden flex flex-col">
+    <div class="shrink-0 px-6 pt-6 pb-2">
+      <div class="max-w-5xl mx-auto flex items-center gap-3">
+        <span class="text-base font-semibold text-primary">Ready to Work</span>
+        <span id="readyCount" class="text-xs text-secondary"></span>
+      </div>
+    </div>
+    <div class="flex-1 overflow-y-auto px-6 pb-6">
+      <div class="max-w-5xl mx-auto">
+        <table class="w-full text-xs border-collapse">
+          <thead>
+            <tr class="text-left text-secondary border-b border-strong">
+              <th class="py-2 px-2 w-10">P</th>
+              <th class="py-2 px-2">ID</th>
+              <th class="py-2 px-2">Type</th>
+              <th class="py-2 px-2">Title</th>
+              <th class="py-2 px-2">Assignee</th>
+              <th class="py-2 px-2">Status</th>
+            </tr>
+          </thead>
+          <tbody id="readyTableBody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
   <!-- Releases view -->
   <div id="releasesView" class="flex-1 hidden flex flex-col">
     <div class="shrink-0 px-6 pt-6 pb-2">
@@ -401,7 +431,7 @@ tailwind.config = {
     <div id="detailHeader" class="flex items-center justify-between px-5 pt-4 pb-2 shrink-0"></div>
     <div id="detailContent" class="p-5 pt-0 overflow-y-auto scrollbar-thin flex-1"></div>
   </div>
-</div>
+</main>
 
 <!-- Stats bar -->
 <footer class="flex items-center gap-4 px-4 py-1 bg-raised border-t border-default text-xs text-secondary shrink-0">

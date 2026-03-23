@@ -10,7 +10,7 @@ from typing import Any
 from mcp.types import TextContent, Tool
 
 from filigree.core import VALID_ASSOC_TYPES, VALID_FINDING_STATUSES, VALID_SEVERITIES
-from filigree.mcp_tools.common import _parse_args, _text, _validate_int_range, _validate_str
+from filigree.mcp_tools.common import _parse_args, _text, _validate_actor, _validate_int_range, _validate_str
 from filigree.types.api import ErrorResponse
 from filigree.types.inputs import (
     AddFileAssociationArgs,
@@ -165,7 +165,7 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
                 "type": "object",
                 "properties": {
                     "finding_id": {"type": "string", "description": "Finding ID"},
-                    "status": {"type": "string", "description": "New finding status"},
+                    "status": {"type": "string", "enum": sorted(VALID_FINDING_STATUSES), "description": "New finding status"},
                     "issue_id": {"type": "string", "description": "Issue ID to link"},
                 },
                 "required": ["finding_id"],
@@ -182,7 +182,7 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
                         "items": {"type": "string"},
                         "description": "List of finding IDs to update",
                     },
-                    "status": {"type": "string", "description": "New status for all findings"},
+                    "status": {"type": "string", "enum": sorted(VALID_FINDING_STATUSES), "description": "New status for all findings"},
                 },
                 "required": ["finding_ids", "status"],
             },
@@ -508,6 +508,13 @@ async def _handle_batch_update_findings(arguments: dict[str, Any]) -> list[TextC
         return _text(ErrorResponse(error="finding_ids must be a non-empty list", code="validation_error"))
     if not isinstance(status, str) or not status.strip():
         return _text(ErrorResponse(error="status is required", code="validation_error"))
+    if status not in VALID_FINDING_STATUSES:
+        return _text(
+            ErrorResponse(
+                error=f"Invalid finding status: {status!r}. Valid: {', '.join(sorted(VALID_FINDING_STATUSES))}",
+                code="validation_error",
+            )
+        )
 
     tracker = _get_db()
     updated: list[str] = []
@@ -540,7 +547,9 @@ async def _handle_promote_finding(arguments: dict[str, Any]) -> list[TextContent
     if not isinstance(finding_id, str) or not finding_id.strip():
         return _text(ErrorResponse(error="finding_id is required", code="validation_error"))
     priority = args.get("priority")
-    actor = args.get("actor", "")
+    actor, actor_err = _validate_actor(args.get("actor", "mcp"))
+    if actor_err:
+        return actor_err
 
     tracker = _get_db()
     try:

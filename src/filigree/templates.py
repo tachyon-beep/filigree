@@ -829,6 +829,8 @@ class TemplateRegistry:
                 try:
                     pack_data = _json.loads(pack_file.read_text())
                     pack_name = pack_data.get("pack", pack_file.stem)
+                    if "pack" not in pack_data:
+                        pack_data["pack"] = pack_name
                     if pack_name not in enabled_packs:
                         logger.debug("Skipping disabled installed pack: %s", pack_name)
                         continue

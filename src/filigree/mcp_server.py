@@ -472,8 +472,12 @@ async def _run(project_path: Path | None) -> None:
     _logger = setup_logging(filigree_dir)
     _logger.info("mcp_server_start", extra={"tool": "server", "args_data": {"project": str(filigree_dir.parent)}})
 
-    async with stdio_server() as (read_stream, write_stream):
-        await server.run(read_stream, write_stream, server.create_initialization_options())
+    try:
+        async with stdio_server() as (read_stream, write_stream):
+            await server.run(read_stream, write_stream, server.create_initialization_options())
+    finally:
+        if db is not None:
+            db.close()
 
 
 def main() -> None:

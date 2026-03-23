@@ -224,12 +224,36 @@ class EventsMixin(DBMixinProtocol):
                     )
 
                 case "dependency_removed":
-                    # Event: issue_id=from_id, old_value=depends_on_id
+                    # Event: issue_id=from_id, old_value="dep_type:depends_on_id" or legacy "depends_on_id"
                     if row["old_value"] is None:
                         return {"undone": False, "reason": "Cannot undo: event has no old_value"}
+                    old_val = row["old_value"]
+                    if ":" in old_val:
+                        dep_type, dep_target = old_val.split(":", 1)
+                    else:
+                        dep_type, dep_target = "blocks", old_val
+                    # Check for cycles before re-inserting (inline DFS
+                    # to avoid cross-mixin call that mypy can't resolve)
+                    adj: dict[str, list[str]] = {}
+                    for dep_row in self.conn.execute("SELECT issue_id, depends_on_id FROM dependencies").fetchall():
+                        adj.setdefault(dep_row["issue_id"], []).append(dep_row["depends_on_id"])
+                    visited: set[str] = set()
+                    queue = [dep_target]
+                    would_cycle = False
+                    while queue:
+                        cur = queue.pop()
+                        if cur == issue_id:
+                            would_cycle = True
+                            break
+                        if cur in visited:
+                            continue
+                        visited.add(cur)
+                        queue.extend(adj.get(cur, ()))
+                    if would_cycle:
+                        return {"undone": False, "reason": "Cannot undo: restoring dependency would create a cycle"}
                     self.conn.execute(
-                        "INSERT OR IGNORE INTO dependencies (issue_id, depends_on_id, type, created_at) VALUES (?, ?, 'blocks', ?)",
-                        (issue_id, row["old_value"], now),
+                        "INSERT OR IGNORE INTO dependencies (issue_id, depends_on_id, type, created_at) VALUES (?, ?, ?, ?)",
+                        (issue_id, dep_target, dep_type, now),
                     )
 
                 case "description_changed":

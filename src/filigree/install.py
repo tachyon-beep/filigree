@@ -14,7 +14,9 @@ from __future__ import annotations
 import hashlib
 import importlib.metadata
 import importlib.resources
+import os
 import shutil
+import tempfile
 from pathlib import Path
 
 # ---------------------------------------------------------------------------
@@ -131,6 +133,18 @@ def _build_instructions_block() -> str:
 FILIGREE_INSTRUCTIONS = _build_instructions_block()
 
 
+def _atomic_write_text(path: Path, content: str) -> None:
+    """Write *content* to *path* atomically via write-to-temp + rename."""
+    fd, tmp = tempfile.mkstemp(dir=path.parent, suffix=".tmp", prefix=path.name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(content)
+        os.replace(tmp, path)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
+
+
 # ---------------------------------------------------------------------------
 # Instruction file injection
 # ---------------------------------------------------------------------------
@@ -153,19 +167,27 @@ def inject_instructions(file_path: Path) -> tuple[bool, str]:
                 end = end_pos + len(_END_MARKER)
                 content = content[:start] + FILIGREE_INSTRUCTIONS + content[end:]
             else:
-                # Malformed — just replace from marker to end
-                content = content[:start] + FILIGREE_INSTRUCTIONS
-            file_path.write_text(content)
+                # Malformed — end marker missing. Only replace the opening
+                # marker line to avoid truncating user content that may
+                # follow the (now-corrupted) filigree block.  The old body
+                # becomes orphan text below the new end marker, but on the
+                # next run the end marker will be found and cleaned up.
+                marker_line_end = content.find("\n", start)
+                if marker_line_end == -1:
+                    content = FILIGREE_INSTRUCTIONS
+                else:
+                    content = content[:start] + FILIGREE_INSTRUCTIONS + content[marker_line_end:]
+            _atomic_write_text(file_path, content)
             return True, f"Updated instructions in {file_path}"
         else:
             # Append
             if not content.endswith("\n"):
                 content += "\n"
             content += "\n" + FILIGREE_INSTRUCTIONS + "\n"
-            file_path.write_text(content)
+            _atomic_write_text(file_path, content)
             return True, f"Appended instructions to {file_path}"
     else:
-        file_path.write_text(FILIGREE_INSTRUCTIONS + "\n")
+        _atomic_write_text(file_path, FILIGREE_INSTRUCTIONS + "\n")
         return True, f"Created {file_path}"
 
 
@@ -186,10 +208,10 @@ def ensure_gitignore(project_root: Path) -> tuple[bool, str]:
         if not content.endswith("\n"):
             content += "\n"
         content += f"\n# Filigree issue tracker\n{filigree_pattern}\n"
-        gitignore.write_text(content)
+        _atomic_write_text(gitignore, content)
         return True, f"Added {filigree_pattern} to .gitignore"
     else:
-        gitignore.write_text(f"# Filigree issue tracker\n{filigree_pattern}\n")
+        _atomic_write_text(gitignore, f"# Filigree issue tracker\n{filigree_pattern}\n")
         return True, f"Created .gitignore with {filigree_pattern}"
 
 
@@ -217,9 +239,15 @@ def _install_skill_to(project_root: Path, target_subpath: Path) -> tuple[bool, s
     target_dir = project_root / target_subpath / SKILL_NAME
     target_dir.parent.mkdir(parents=True, exist_ok=True)
 
+    # Copy to temp dir first, then swap — avoids losing the skill
+    # directory if the process crashes between rmtree and copytree.
+    tmp_dir = target_dir.with_name(f"{SKILL_NAME}.installing")
+    if tmp_dir.exists():
+        shutil.rmtree(tmp_dir)
+    shutil.copytree(skill_source, tmp_dir)
     if target_dir.exists():
         shutil.rmtree(target_dir)
-    shutil.copytree(skill_source, target_dir)
+    tmp_dir.rename(target_dir)
 
     return True, f"Installed skill pack to {target_dir}"
 

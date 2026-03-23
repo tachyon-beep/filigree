@@ -4,7 +4,7 @@ Filigree is an issue tracker designed for AI coding agents. This roadmap outline
 
 ## Shipped (v1.0–v1.1)
 
-- **MCP server** with 43 tools for agent-native interaction
+- **MCP server** with 71 tools for agent-native interaction
 - **Full CLI** with `--json` output and `--actor` audit trails
 - **Custom workflow packs** -- 9 built-in packs (24 issue types) with enforced state machines, plus user-defined templates in `.filigree/templates/`
 - **Web dashboard** -- single-page UI with filtering, search, and real-time updates
@@ -26,20 +26,28 @@ Filigree is an issue tracker designed for AI coding agents. This roadmap outline
 - **Dashboard UX overhaul** -- equal-width Kanban columns, drag-and-drop status changes with transition validation, header density reduction, type-filter/mode toggle conflict resolution, WCAG-compliant status badges, P0/P1 text priority labels, stale issue list, workflow auto-select, transition hints, claim modal improvements
 - **Deep Teal color theme** -- full migration from hardcoded Tailwind colors to 20 CSS custom properties on `:root`/`[data-theme="light"]`, 15 utility classes, JS `THEME_COLORS` object for Cytoscape; dark and light themes with consistent palette
 
+## Shipped (v1.3–v1.5)
+
+- **Server/ethereal operating modes** -- `filigree init --mode` and `filigree install --mode` for explicit setup; server daemon lifecycle, deterministic port selection, streamable HTTP MCP endpoint
+- **Files, findings, and scanner platform** -- file records, scan findings workflow, scanner registry from TOML configs, scan ingest with issue promotion, Files and Code Health dashboard views
+- **Observations subsystem** -- fire-and-forget agent scratchpad with TTL expiry, promote-to-issue flow, file anchoring, dashboard integration
+- **Architecture refactor (v1.4)** -- `FiligreeDB` decomposed into domain mixins, CLI commands split into subpackage, MCP tools split into domain modules, `DBMixinProtocol` for type safety
+- **Dashboard consolidation** -- 7 tabs → 5, Kanban list mode, scoped subtree explorer, sticky headers, updated-in-last-N-days filter
+- **Codex MCP support** -- install and doctor validate Codex config, server-mode MCP URL installs
+
 ## Phase 1: Stability & Foundation (Immediate)
 
 *Technical debt, bug fixes, and cross-platform reliability.*
 
 - **Cross-platform parity** -- replace `fcntl` with a cross-platform file locking mechanism (e.g., `portalocker`) to enable Server Mode and Session Hooks on Windows; abstract PID verification beyond raw `/proc` dependency
-- **Data integrity & scaling** -- increase ID entropy from 6 to 10 characters or switch to collision-resistant Crockford Base32; refactor `SCHEMA_V1_SQL` definition to be non-brittle
-- **Core reliability** -- fix lossy `undo_last` for claims by recording previous assignee state in event log; standardize batch operations in CLI to match MCP server's per-issue error reporting; fix broken template requirement display (`required` -> `required_at`)
+- **Data integrity & scaling** -- increase ID entropy from 6 to 10 characters or switch to collision-resistant Crockford Base32
 
 ## Phase 2: Codebase Intelligence (Next)
 
 *Bridging the gap between tasks (intent) and source code (implementation).*
 
 - **File hotspot analysis** -- "Hotspots" section in `context.md` listing files with high churn and high scan finding density to warn agents before they start work
-- **Traceability graph** -- automatic association of files to issues based on git commit messages parsed during `filigree watch`; bidirectional navigation between issues and file records
+- **Commit-based traceability** -- automatic association of files to issues based on git commit messages; bidirectional navigation between issues and file records
 - **Schema-aware interaction** -- type coercion in CLI and Dashboard so custom fields respect template type hints (`boolean`, `number`, `date`) instead of defaulting to strings
 - **Workflow visualization** -- `filigree visualize <type>` to export Mermaid/Graphviz diagrams of state machines
 

@@ -57,7 +57,7 @@ export const TOUR_STEPS = [
     pos: "bottom",
   },
   {
-    el: "#btnReady",
+    el: "#btnReadyFilter",
     text: "Ready issues have no blockers and can be worked on immediately. Toggle this to sort them first.",
     pos: "bottom",
   },

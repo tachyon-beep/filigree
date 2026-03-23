@@ -233,6 +233,17 @@ export async function fetchCriticalPath() {
   }
 }
 
+export async function fetchReady() {
+  try {
+    const resp = await fetch(apiUrl("/ready"));
+    if (!resp.ok) return null;
+    return await resp.json();
+  } catch (err) {
+    console.warn("[fetchReady] Network error:", err);
+    return null;
+  }
+}
+
 export async function fetchReleases(includeReleased = false) {
   try {
     const qs = includeReleased ? "?include_released=true" : "";

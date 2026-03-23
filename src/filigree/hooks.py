@@ -60,7 +60,7 @@ def _build_context(db: FiligreeDB, filigree_dir: Path | None = None) -> str:
     lines.append("=== Filigree Project Snapshot ===")
     lines.append("")
 
-    # Dashboard URL (if running)
+    # Dashboard URL — restart if idle-shutdown killed it
     if filigree_dir is not None:
         from filigree.ephemeral import is_pid_alive, read_pid_file, read_port_file
 
@@ -68,7 +68,17 @@ def _build_context(db: FiligreeDB, filigree_dir: Path | None = None) -> str:
         pid_file = filigree_dir / "ephemeral.pid"
         port = read_port_file(port_file)
         pid_info = read_pid_file(pid_file)
-        if port and pid_info and is_pid_alive(pid_info["pid"]) and _is_port_listening(port):
+        dashboard_alive = port and pid_info and is_pid_alive(pid_info["pid"]) and _is_port_listening(port)
+        if not dashboard_alive and (pid_info is not None or port is not None):
+            # Dashboard was running but died (idle-shutdown, crash) — try to restart
+            try:
+                url = ensure_dashboard_running()
+                if url:
+                    lines.append(f"DASHBOARD: {url}")
+                    lines.append("")
+            except Exception:
+                logger.warning("Dashboard auto-restart failed", exc_info=True)
+        elif dashboard_alive:
             lines.append(f"DASHBOARD: http://localhost:{port}")
             lines.append("")
 
@@ -217,7 +227,18 @@ def generate_session_context() -> str | None:
     except (OSError, UnicodeDecodeError, ValueError):
         logger.warning("Instructions freshness check failed for %s", project_root, exc_info=True)
 
-    db = FiligreeDB.from_filigree_dir(filigree_dir)
+    try:
+        db = FiligreeDB.from_filigree_dir(filigree_dir)
+    except (sqlite3.Error, ValueError, OSError):
+        logger.warning("Database init failed for %s", filigree_dir, exc_info=True)
+        context = (
+            f"=== Filigree Project Snapshot ===\n\n"
+            f"WARNING: Could not open project database. Run `filigree doctor` to diagnose.\n"
+            f"Project directory: {filigree_dir.parent}"
+        )
+        if freshness_messages:
+            context += "\n\n" + "\n".join(freshness_messages)
+        return context
     try:
         context = _build_context(db, filigree_dir)
     except sqlite3.Error:

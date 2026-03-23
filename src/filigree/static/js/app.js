@@ -143,6 +143,7 @@ import {
   toggleReleaseExpand,
   toggleReleaseTreeNode,
 } from "./views/releases.js";
+import { loadReady } from "./views/ready.js";
 
 // ---------------------------------------------------------------------------
 // Core data fetching (lives here because it touches every module)
@@ -206,7 +207,7 @@ function updateStats() {
   if (!state.stats) return;
   const s = state.stats;
   const byCat = s.by_category || {};
-  document.getElementById("readyCount").textContent = s.ready_count;
+  document.getElementById("readyFilterCount").textContent = s.ready_count;
   document.getElementById("footOpen").textContent = byCat.open || 0;
   document.getElementById("footActive").textContent = byCat.wip || 0;
   document.getElementById("footReady").textContent = s.ready_count;
@@ -341,6 +342,7 @@ registerView("kanban", renderKanban);
 registerView("graph", () => { renderGraphSidebar(); renderGraph(); });
 registerView("insights", loadMetrics);
 registerView("files", loadFiles);
+registerView("ready", loadReady);
 registerView("releases", loadReleases);
 
 // ---------------------------------------------------------------------------
@@ -669,6 +671,7 @@ window.showLinkIssueModal = showLinkIssueModal;
 window.submitLinkIssue = submitLinkIssue;
 
 // Releases
+window.loadReady = loadReady;
 window.loadReleases = loadReleases;
 window._scrollToReleaseCard = scrollToReleaseCard;
 window._toggleReleaseExpand = toggleReleaseExpand;

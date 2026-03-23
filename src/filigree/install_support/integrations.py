@@ -30,12 +30,18 @@ def _find_filigree_mcp_command() -> str:
     """Find the filigree-mcp executable path.
 
     Resolution order:
-    1. ``shutil.which("filigree-mcp")`` — absolute path if on PATH
-    2. Sibling of the running Python interpreter (covers venv case),
+    1. uv tool binary (``~/.local/bin/filigree-mcp``) — stable global install
+    2. ``shutil.which("filigree-mcp")`` — absolute path if on PATH
+    3. Sibling of the running Python interpreter (covers venv case),
        probing ``filigree-mcp`` and ``filigree-mcp.exe``
-    3. Sibling of the filigree binary if on PATH, probing the same names
-    4. Bare ``"filigree-mcp"`` fallback
+    4. Sibling of the filigree binary if on PATH, probing the same names
+    5. Bare ``"filigree-mcp"`` fallback
     """
+    # Prefer uv tool install — it's the stable global path that survives
+    # venv changes and project switches
+    uv_tool_bin = Path.home() / ".local" / "bin" / "filigree-mcp"
+    if uv_tool_bin.is_file():
+        return str(uv_tool_bin)
     which = shutil.which("filigree-mcp")
     if which:
         return which

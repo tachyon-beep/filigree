@@ -152,6 +152,35 @@ def _extract_hook_binary(settings: dict[str, Any], bare_command: str) -> str | N
     return None
 
 
+def _ensure_pre_tool_use_hook(settings: dict[str, Any], ensure_dashboard_cmd: str) -> None:
+    """Register ensure-dashboard as a PreToolUse hook scoped to filigree MCP tools.
+
+    This restarts the dashboard if idle-shutdown killed it mid-session.
+    Only fires when filigree MCP tools are invoked, not on every tool call.
+    """
+    if "hooks" not in settings or not isinstance(settings.get("hooks"), dict):
+        settings["hooks"] = {}
+    pre_hooks = settings["hooks"].get("PreToolUse")
+    if not isinstance(pre_hooks, list):
+        pre_hooks = []
+        settings["hooks"]["PreToolUse"] = pre_hooks
+
+    # Check if already registered
+    for matcher in pre_hooks:
+        if not isinstance(matcher, dict):
+            continue
+        for hook in matcher.get("hooks", []):
+            if isinstance(hook, dict) and "ensure-dashboard" in hook.get("command", ""):
+                return
+
+    pre_hooks.append(
+        {
+            "matcher": "mcp__filigree__.*",
+            "hooks": [{"type": "command", "command": ensure_dashboard_cmd, "timeout": 5000}],
+        }
+    )
+
+
 # ---------------------------------------------------------------------------
 # Hook installation
 # ---------------------------------------------------------------------------
@@ -206,7 +235,12 @@ def install_claude_code_hooks(project_root: Path) -> tuple[bool, str]:
     if not _has_hook_command(settings, ENSURE_DASHBOARD_COMMAND):
         commands_to_add.append(ensure_dashboard_cmd)
 
+    # Ensure PreToolUse hook for dashboard auto-restart on MCP tool calls
+    # (handles case where idle-shutdown killed dashboard mid-session)
+    _ensure_pre_tool_use_hook(settings, ensure_dashboard_cmd)
+
     if not commands_to_add and not upgraded:
+        settings_path.write_text(json.dumps(settings, indent=2) + "\n")
         return True, "Hooks already registered in .claude/settings.json"
 
     if not commands_to_add and upgraded:

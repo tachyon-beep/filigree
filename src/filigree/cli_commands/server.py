@@ -26,9 +26,8 @@ def _reload_server_daemon_if_running() -> tuple[bool, str]:
         headers={"Content-Type": "application/json"},
     )
     try:
-        with urllib.request.urlopen(req, timeout=2) as resp:  # noqa: S310
-            if resp.status >= 400:
-                return False, f"daemon reload failed with HTTP {resp.status}"
+        with urllib.request.urlopen(req, timeout=2) as _resp:  # noqa: S310
+            pass
     except urllib.error.HTTPError as e:
         return False, f"daemon reload failed with HTTP {e.code}"
     except (urllib.error.URLError, TimeoutError, OSError) as e:
