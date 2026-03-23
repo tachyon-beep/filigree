@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+from collections.abc import Generator
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
-from filigree.core import FiligreeDB
+from filigree.core import DB_FILENAME, FILIGREE_DIR_NAME, SUMMARY_FILENAME, VALID_SEVERITIES, FiligreeDB, write_config
 from filigree.db_scans import SCAN_COOLDOWN_SECONDS
+from filigree.mcp_server import call_tool  # type: ignore[attr-defined]
+from tests.mcp._helpers import _parse
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -396,3 +400,213 @@ class TestScanRunStatusEdgeCases:
         # Batch warning mentions remaining count
         warnings = status["data_warnings"]
         assert any("4" in w for w in warnings)
+
+
+# ---------------------------------------------------------------------------
+# Fixture: mcp_db_for_report_finding
+# Mirrors tests/mcp/conftest.py::mcp_db — sets up FiligreeDB and patches
+# the MCP module globals so that _get_db() returns the test DB.
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def mcp_db_for_report_finding(tmp_path: Path) -> Generator[FiligreeDB, None, None]:
+    """FiligreeDB wired into the MCP server for report_finding handler tests."""
+    filigree_dir = tmp_path / FILIGREE_DIR_NAME
+    filigree_dir.mkdir()
+    write_config(filigree_dir, {"prefix": "mcp", "version": 1})
+    (filigree_dir / SUMMARY_FILENAME).write_text("# test\n")
+
+    d = FiligreeDB(filigree_dir / DB_FILENAME, prefix="mcp")
+    d.initialize()
+
+    import filigree.mcp_server as mcp_mod
+
+    original_db = mcp_mod.db
+    original_dir = mcp_mod._filigree_dir
+    mcp_mod.db = d
+    mcp_mod._filigree_dir = filigree_dir
+
+    yield d
+
+    mcp_mod.db = original_db
+    mcp_mod._filigree_dir = original_dir
+    d.close()
+
+
+# ---------------------------------------------------------------------------
+# TestReportFindingTool
+# ---------------------------------------------------------------------------
+
+
+class TestReportFindingTool:
+    """Tests for the report_finding MCP tool handler."""
+
+    async def test_happy_path_all_fields(self, mcp_db_for_report_finding: FiligreeDB) -> None:
+        """All optional fields are accepted and the response includes finding_id."""
+        data = _parse(
+            await call_tool(
+                "report_finding",
+                {
+                    "file_path": "src/auth/login.py",
+                    "rule_id": "sql-injection",
+                    "message": "Unsanitized input passed to query",
+                    "severity": "high",
+                    "line_start": 42,
+                    "line_end": 45,
+                    "category": "security",
+                },
+            )
+        )
+        assert data["status"] == "created"
+        assert data["findings_created"] == 1
+        assert data["findings_updated"] == 0
+        assert data["file_created"] is True
+        assert "finding_id" in data
+
+    async def test_happy_path_minimal_required_fields(self, mcp_db_for_report_finding: FiligreeDB) -> None:
+        """Only required fields — severity defaults to info, no finding_id key if empty."""
+        data = _parse(
+            await call_tool(
+                "report_finding",
+                {
+                    "file_path": "src/utils/format.py",
+                    "rule_id": "unused-import",
+                    "message": "Module imported but never used",
+                },
+            )
+        )
+        assert data["status"] == "created"
+        assert data["findings_created"] == 1
+        assert data["file_created"] is True
+        assert "finding_id" in data
+
+    async def test_invalid_severity_returns_validation_error(self, mcp_db_for_report_finding: FiligreeDB) -> None:
+        """An unrecognised severity value is rejected before any DB writes."""
+        data = _parse(
+            await call_tool(
+                "report_finding",
+                {
+                    "file_path": "src/main.py",
+                    "rule_id": "some-rule",
+                    "message": "A message",
+                    "severity": "catastrophic",
+                },
+            )
+        )
+        assert data["code"] == "validation_error"
+        assert "catastrophic" in data["error"]
+
+    async def test_missing_file_path_returns_validation_error(self, mcp_db_for_report_finding: FiligreeDB) -> None:
+        """Omitting file_path triggers the required-fields validation error."""
+        data = _parse(
+            await call_tool(
+                "report_finding",
+                {
+                    "file_path": "",
+                    "rule_id": "some-rule",
+                    "message": "A message",
+                },
+            )
+        )
+        assert data["code"] == "validation_error"
+        assert "file_path" in data["error"]
+
+    async def test_missing_rule_id_returns_validation_error(self, mcp_db_for_report_finding: FiligreeDB) -> None:
+        """Omitting rule_id triggers the required-fields validation error."""
+        data = _parse(
+            await call_tool(
+                "report_finding",
+                {
+                    "file_path": "src/main.py",
+                    "rule_id": "",
+                    "message": "A message",
+                },
+            )
+        )
+        assert data["code"] == "validation_error"
+        assert "rule_id" in data["error"]
+
+    async def test_missing_message_returns_validation_error(self, mcp_db_for_report_finding: FiligreeDB) -> None:
+        """Omitting message triggers the required-fields validation error."""
+        data = _parse(
+            await call_tool(
+                "report_finding",
+                {
+                    "file_path": "src/main.py",
+                    "rule_id": "some-rule",
+                    "message": "",
+                },
+            )
+        )
+        assert data["code"] == "validation_error"
+        assert "message" in data["error"]
+
+    @pytest.mark.parametrize("severity", sorted(VALID_SEVERITIES))
+    async def test_all_valid_severities_accepted(self, mcp_db_for_report_finding: FiligreeDB, severity: str) -> None:
+        """Every member of VALID_SEVERITIES creates a finding without error."""
+        data = _parse(
+            await call_tool(
+                "report_finding",
+                {
+                    "file_path": f"src/file_{severity}.py",
+                    "rule_id": "test-rule",
+                    "message": f"Finding with severity {severity}",
+                    "severity": severity,
+                },
+            )
+        )
+        assert data["status"] == "created"
+        assert data["findings_created"] == 1
+
+    async def test_duplicate_finding_returns_updated_status(self, mcp_db_for_report_finding: FiligreeDB) -> None:
+        """Reporting the same rule_id+file_path twice yields status='updated' on the second call."""
+        args = {
+            "file_path": "src/core.py",
+            "rule_id": "duplicate-rule",
+            "message": "First report",
+        }
+        first = _parse(await call_tool("report_finding", args))
+        assert first["status"] == "created"
+
+        second = _parse(await call_tool("report_finding", {**args, "message": "Second report"}))
+        assert second["status"] == "updated"
+        assert second["findings_created"] == 0
+        assert second["findings_updated"] == 1
+
+    async def test_db_error_returns_ingestion_error(self, mcp_db_for_report_finding: FiligreeDB) -> None:
+        """sqlite3.Error from process_scan_results is caught and returned as ingestion_error."""
+        import sqlite3
+
+        with patch.object(
+            mcp_db_for_report_finding,
+            "process_scan_results",
+            side_effect=sqlite3.OperationalError("disk full"),
+        ):
+            data = _parse(
+                await call_tool(
+                    "report_finding",
+                    {
+                        "file_path": "src/main.py",
+                        "rule_id": "test-rule",
+                        "message": "A message",
+                    },
+                )
+            )
+        assert data["code"] == "ingestion_error"
+        assert "disk full" in data["error"]
+
+    async def test_file_created_false_for_existing_file(self, mcp_db_for_report_finding: FiligreeDB) -> None:
+        """file_created is False when the file was already registered before reporting."""
+        mcp_db_for_report_finding.register_file("src/existing.py")
+        data = _parse(
+            await call_tool(
+                "report_finding",
+                {
+                    "file_path": "src/existing.py",
+                    "rule_id": "existing-rule",
+                    "message": "Finding on pre-existing file",
+                },
+            )
+        )
+        assert data["file_created"] is False

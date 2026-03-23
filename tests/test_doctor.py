@@ -25,6 +25,10 @@ from filigree.install_support import (
 )
 from filigree.install_support.doctor import (
     CheckResult,
+    _doctor_ethereal_checks,
+    _doctor_install_method,
+    _doctor_server_checks,
+    _find_all_filigree_binaries,
     _is_absolute_command_path,
     _is_venv_binary,
     run_doctor,
@@ -708,3 +712,819 @@ class TestDoctorResultStructure:
         for r in results:
             if not r.passed and r.name not in {"Git working tree", "Installation"}:
                 assert r.fix_hint.strip(), f"Failed check '{r.name}' has no fix_hint"
+
+
+# ---------------------------------------------------------------------------
+# _find_all_filigree_binaries
+# ---------------------------------------------------------------------------
+
+
+class TestFindAllFiligreeeBinaries:
+    """Unit tests for _find_all_filigree_binaries().
+
+    The function accepts (which_result, uv_tool_bin) and returns a list of
+    other install paths found outside the uv tool environment.
+    """
+
+    def test_no_other_installs_same_binary(self, tmp_path: Path) -> None:
+        """When shutil.which points at the uv tool binary, no extras returned."""
+        uv_bin = tmp_path / "uv_bin" / "filigree"
+        uv_bin.parent.mkdir(parents=True)
+        uv_bin.write_text("#!/bin/sh\n")
+
+        with patch("site.getsitepackages", return_value=[]), patch("site.getusersitepackages", return_value=str(tmp_path / "no_user_site")):
+            result = _find_all_filigree_binaries(str(uv_bin), uv_bin)
+
+        assert result == []
+
+    def test_which_points_to_different_binary(self, tmp_path: Path) -> None:
+        """When shutil.which finds a different binary, it is reported."""
+        uv_bin = tmp_path / "uv_bin" / "filigree"
+        uv_bin.parent.mkdir(parents=True)
+        uv_bin.write_text("#!/bin/sh\n")
+
+        other_bin = tmp_path / "other_bin" / "filigree"
+        other_bin.parent.mkdir(parents=True)
+        other_bin.write_text("#!/bin/sh\n")
+
+        with patch("site.getsitepackages", return_value=[]), patch("site.getusersitepackages", return_value=str(tmp_path / "no_user_site")):
+            result = _find_all_filigree_binaries(str(other_bin), uv_bin)
+
+        assert str(other_bin) in result
+
+    def test_pip_dist_info_found_in_site_packages(self, tmp_path: Path) -> None:
+        """A filigree dist-info directory in site-packages is reported."""
+        # Place the uv tool under a deep path so its grandparent does not overlap
+        # with the system site-packages location used in the test.
+        uv_home = tmp_path / "uv_home"
+        uv_bin = uv_home / ".local" / "share" / "uv" / "tools" / "filigree" / "bin" / "filigree"
+        uv_bin.parent.mkdir(parents=True)
+        uv_bin.write_text("#!/bin/sh\n")
+
+        # System site-packages lives elsewhere under tmp_path
+        site_pkg = tmp_path / "system" / "lib" / "python3.11" / "site-packages"
+        site_pkg.mkdir(parents=True)
+        dist_info = site_pkg / "filigree-1.0.0.dist-info"
+        dist_info.mkdir()
+
+        with (
+            patch("site.getsitepackages", return_value=[str(site_pkg)]),
+            patch("site.getusersitepackages", return_value=str(tmp_path / "no_user_site")),
+        ):
+            result = _find_all_filigree_binaries("", uv_bin)
+
+        assert str(site_pkg) in result
+
+    def test_dist_info_in_uv_tool_site_packages_is_skipped(self, tmp_path: Path) -> None:
+        """dist-info inside the uv tool tree itself is not reported as an extra."""
+        uv_tools_dir = tmp_path / "uv_tools" / "filigree"
+        uv_bin = uv_tools_dir / "bin" / "filigree"
+        uv_bin.parent.mkdir(parents=True)
+        uv_bin.write_text("#!/bin/sh\n")
+
+        # Place dist-info inside the uv tool's own lib tree
+        site_pkg = uv_tools_dir / "lib" / "python3.11" / "site-packages"
+        site_pkg.mkdir(parents=True)
+        dist_info = site_pkg / "filigree-1.0.0.dist-info"
+        dist_info.mkdir()
+
+        with (
+            patch("site.getsitepackages", return_value=[str(site_pkg)]),
+            patch("site.getusersitepackages", return_value=str(tmp_path / "no_user_site")),
+        ):
+            result = _find_all_filigree_binaries("", uv_bin)
+
+        assert result == []
+
+    def test_empty_which_result_no_uv_tool(self, tmp_path: Path) -> None:
+        """When which returns '' and uv_bin doesn't exist, nothing crashes."""
+        uv_bin = tmp_path / "nonexistent" / "filigree"  # does not exist
+
+        with patch("site.getsitepackages", return_value=[]), patch("site.getusersitepackages", return_value=str(tmp_path / "no_user_site")):
+            result = _find_all_filigree_binaries("", uv_bin)
+
+        assert result == []
+
+    def test_nonexistent_site_packages_dir_skipped(self, tmp_path: Path) -> None:
+        """site-packages dirs that don't exist on disk are silently skipped."""
+        uv_bin = tmp_path / "uv_bin" / "filigree"
+        uv_bin.parent.mkdir(parents=True)
+        uv_bin.write_text("#!/bin/sh\n")
+
+        missing_site = str(tmp_path / "missing_site_packages")
+
+        with patch("site.getsitepackages", return_value=[missing_site]), patch("site.getusersitepackages", return_value=missing_site):
+            result = _find_all_filigree_binaries("", uv_bin)
+
+        assert result == []
+
+
+# ---------------------------------------------------------------------------
+# _doctor_install_method — all 5 branches
+# ---------------------------------------------------------------------------
+
+
+class TestDoctorInstallMethod:
+    """Unit tests for _doctor_install_method().
+
+    Each test exercises one of the five conditional branches by controlling:
+    - sys.executable (to simulate running from uv tool or venv)
+    - Path.home() / uv tool directories
+    - _find_all_filigree_binaries() return value
+    """
+
+    def _patch_home(self, tmp_path: Path):
+        """Return a patch that redirects Path.home() to tmp_path."""
+        return patch("pathlib.Path.home", return_value=tmp_path)
+
+    def test_branch_uv_tool_no_other_installs(self, tmp_path: Path) -> None:
+        """Branch 1: running from uv tool, no competing installs → passes."""
+        uv_tools_dir = tmp_path / ".local" / "share" / "uv" / "tools" / "filigree"
+        uv_tool_bin = tmp_path / ".local" / "bin" / "filigree"
+        uv_tools_dir.mkdir(parents=True)
+        uv_tool_bin.parent.mkdir(parents=True)
+        uv_tool_bin.write_text("#!/bin/sh\n")
+
+        # sys.executable inside the uv tool tree
+        fake_exe = uv_tools_dir / "bin" / "python"
+        fake_exe.parent.mkdir(parents=True)
+        fake_exe.write_text("")
+
+        with (
+            self._patch_home(tmp_path),
+            patch("sys.executable", str(fake_exe)),
+            patch(
+                "filigree.install_support.doctor._find_all_filigree_binaries",
+                return_value=[],
+            ),
+        ):
+            results = _doctor_install_method()
+
+        assert len(results) == 1
+        r = results[0]
+        assert r.name == "Installation"
+        assert r.passed is True
+        assert "uv tool" in r.message
+
+    def test_branch_uv_tool_with_other_installs(self, tmp_path: Path) -> None:
+        """Branch 2: running from uv tool but competing installs exist → fails with coexistence warning."""
+        uv_tools_dir = tmp_path / ".local" / "share" / "uv" / "tools" / "filigree"
+        uv_tool_bin = tmp_path / ".local" / "bin" / "filigree"
+        uv_tools_dir.mkdir(parents=True)
+        uv_tool_bin.parent.mkdir(parents=True)
+        uv_tool_bin.write_text("#!/bin/sh\n")
+
+        fake_exe = uv_tools_dir / "bin" / "python"
+        fake_exe.parent.mkdir(parents=True)
+        fake_exe.write_text("")
+
+        other_install = "/usr/lib/python3/dist-packages"
+
+        with (
+            self._patch_home(tmp_path),
+            patch("sys.executable", str(fake_exe)),
+            patch(
+                "filigree.install_support.doctor._find_all_filigree_binaries",
+                return_value=[other_install],
+            ),
+        ):
+            results = _doctor_install_method()
+
+        assert len(results) == 1
+        r = results[0]
+        assert r.name == "Installation"
+        assert r.passed is False
+        assert "uv tool" in r.message
+        assert other_install in r.message
+        assert r.fix_hint
+
+    def test_branch_venv_only(self, tmp_path: Path) -> None:
+        """Branch 3: running from venv, no uv tool installed → fails, suggests uv tool."""
+        venv_dir = tmp_path / "myenv"
+        fake_exe = venv_dir / "bin" / "python"
+        fake_exe.parent.mkdir(parents=True)
+        fake_exe.write_text("")
+        (venv_dir / "pyvenv.cfg").write_text("[pyvenv]\n")
+
+        # No uv tool: uv_tools_dir does NOT exist
+        with (
+            self._patch_home(tmp_path),
+            patch("sys.executable", str(fake_exe)),
+        ):
+            results = _doctor_install_method()
+
+        assert len(results) == 1
+        r = results[0]
+        assert r.name == "Installation"
+        assert r.passed is False
+        assert "venv" in r.message.lower()
+        assert "uv tool" in r.fix_hint.lower()
+
+    def test_branch_uv_tool_exists_but_not_on_path(self, tmp_path: Path) -> None:
+        """Branch 4: uv tool installed but current executable is neither uv-tool nor a venv."""
+        uv_tools_dir = tmp_path / ".local" / "share" / "uv" / "tools" / "filigree"
+        uv_tool_bin = tmp_path / ".local" / "bin" / "filigree"
+        uv_tools_dir.mkdir(parents=True)
+        uv_tool_bin.parent.mkdir(parents=True)
+        uv_tool_bin.write_text("#!/bin/sh\n")
+
+        # sys.executable is somewhere completely different (no pyvenv.cfg in tree)
+        system_python = tmp_path / "usr" / "bin" / "python3"
+        system_python.parent.mkdir(parents=True)
+        system_python.write_text("")
+
+        with (
+            self._patch_home(tmp_path),
+            patch("sys.executable", str(system_python)),
+            patch(
+                "filigree.install_support.doctor._find_all_filigree_binaries",
+                return_value=[],
+            ),
+        ):
+            results = _doctor_install_method()
+
+        assert len(results) == 1
+        r = results[0]
+        assert r.name == "Installation"
+        assert r.passed is False
+        assert "PATH" in r.fix_hint or "path" in r.fix_hint.lower()
+
+    def test_branch_system_pip_install(self, tmp_path: Path) -> None:
+        """Branch 5: no uv tool, not in venv → system pip fallback."""
+        # sys.executable in a system location with no pyvenv.cfg in parents
+        system_python = tmp_path / "usr" / "bin" / "python3"
+        system_python.parent.mkdir(parents=True)
+        system_python.write_text("")
+
+        with (
+            self._patch_home(tmp_path),
+            patch("sys.executable", str(system_python)),
+            patch("shutil.which", return_value="/usr/local/bin/filigree"),
+        ):
+            results = _doctor_install_method()
+
+        assert len(results) == 1
+        r = results[0]
+        assert r.name == "Installation"
+        assert r.passed is False
+        assert "pip" in r.message.lower() or "system" in r.message.lower()
+        assert "uv tool" in r.fix_hint.lower()
+
+    def test_branch_venv_with_uv_tool_coexist(self, tmp_path: Path) -> None:
+        """Branch: has_uv_tool=True but running_from_venv — warns about duplicate."""
+        uv_tools_dir = tmp_path / ".local" / "share" / "uv" / "tools" / "filigree"
+        uv_tool_bin = tmp_path / ".local" / "bin" / "filigree"
+        uv_tools_dir.mkdir(parents=True)
+        uv_tool_bin.parent.mkdir(parents=True)
+        uv_tool_bin.write_text("#!/bin/sh\n")
+
+        # sys.executable inside a project venv (not inside uv_tools_dir)
+        venv_dir = tmp_path / "project" / ".venv"
+        fake_exe = venv_dir / "bin" / "python"
+        fake_exe.parent.mkdir(parents=True)
+        fake_exe.write_text("")
+        (venv_dir / "pyvenv.cfg").write_text("[pyvenv]\n")
+
+        with (
+            self._patch_home(tmp_path),
+            patch("sys.executable", str(fake_exe)),
+            patch(
+                "filigree.install_support.doctor._find_all_filigree_binaries",
+                return_value=[],
+            ),
+        ):
+            results = _doctor_install_method()
+
+        assert len(results) == 1
+        r = results[0]
+        assert r.name == "Installation"
+        assert r.passed is False
+        assert "venv" in r.message.lower()
+        assert "uv tool" in r.message.lower()
+        assert r.fix_hint
+
+
+# ---------------------------------------------------------------------------
+# _doctor_ethereal_checks
+# ---------------------------------------------------------------------------
+
+
+class TestDoctorEtherealChecks:
+    """Unit tests for _doctor_ethereal_checks().
+
+    The function reads optional .filigree/ephemeral.pid and .filigree/ephemeral.port
+    files and calls imported helpers from filigree.ephemeral and filigree.hooks.
+    """
+
+    def test_no_pid_no_port_files(self, tmp_path: Path) -> None:
+        """When neither ephemeral file exists, returns an empty list."""
+        filigree_dir = tmp_path / ".filigree"
+        filigree_dir.mkdir()
+        results = _doctor_ethereal_checks(filigree_dir)
+        assert results == []
+
+    def test_pid_file_alive(self, tmp_path: Path) -> None:
+        """Alive PID → passing check with process info."""
+        filigree_dir = tmp_path / ".filigree"
+        filigree_dir.mkdir()
+        pid_file = filigree_dir / "ephemeral.pid"
+        pid_file.write_text("42\n")
+
+        with (
+            patch("filigree.ephemeral.read_pid_file", return_value={"pid": 42}),
+            patch("filigree.ephemeral.is_pid_alive", return_value=True),
+        ):
+            results = _doctor_ethereal_checks(filigree_dir)
+
+        assert len(results) == 1
+        r = results[0]
+        assert r.name == "Ephemeral PID"
+        assert r.passed is True
+        assert "42" in r.message
+
+    def test_pid_file_stale_with_known_pid(self, tmp_path: Path) -> None:
+        """Stale PID (process gone) → failing check with stale message."""
+        filigree_dir = tmp_path / ".filigree"
+        filigree_dir.mkdir()
+        pid_file = filigree_dir / "ephemeral.pid"
+        pid_file.write_text("99\n")
+
+        with (
+            patch("filigree.ephemeral.read_pid_file", return_value={"pid": 99}),
+            patch("filigree.ephemeral.is_pid_alive", return_value=False),
+        ):
+            results = _doctor_ethereal_checks(filigree_dir)
+
+        assert len(results) == 1
+        r = results[0]
+        assert r.name == "Ephemeral PID"
+        assert r.passed is False
+        assert "Stale" in r.message
+        assert "99" in r.message
+        assert r.fix_hint
+
+    def test_pid_file_stale_unreadable(self, tmp_path: Path) -> None:
+        """If read_pid_file returns None, pid shows as 'unknown'."""
+        filigree_dir = tmp_path / ".filigree"
+        filigree_dir.mkdir()
+        pid_file = filigree_dir / "ephemeral.pid"
+        pid_file.write_text("garbage\n")
+
+        with (
+            patch("filigree.ephemeral.read_pid_file", return_value=None),
+            patch("filigree.ephemeral.is_pid_alive", return_value=False),
+        ):
+            results = _doctor_ethereal_checks(filigree_dir)
+
+        assert len(results) == 1
+        r = results[0]
+        assert r.passed is False
+        assert "unknown" in r.message
+
+    def test_port_file_listening(self, tmp_path: Path) -> None:
+        """Port file exists and port is listening → passing check."""
+        filigree_dir = tmp_path / ".filigree"
+        filigree_dir.mkdir()
+        port_file = filigree_dir / "ephemeral.port"
+        port_file.write_text("8377\n")
+
+        with (
+            patch("filigree.ephemeral.read_port_file", return_value=8377),
+            patch("filigree.hooks._is_port_listening", return_value=True),
+        ):
+            results = _doctor_ethereal_checks(filigree_dir)
+
+        assert len(results) == 1
+        r = results[0]
+        assert r.name == "Ephemeral port"
+        assert r.passed is True
+        assert "8377" in r.message
+
+    def test_port_file_not_listening(self, tmp_path: Path) -> None:
+        """Port file exists but port is not listening → failing check."""
+        filigree_dir = tmp_path / ".filigree"
+        filigree_dir.mkdir()
+        port_file = filigree_dir / "ephemeral.port"
+        port_file.write_text("8377\n")
+
+        with (
+            patch("filigree.ephemeral.read_port_file", return_value=8377),
+            patch("filigree.hooks._is_port_listening", return_value=False),
+        ):
+            results = _doctor_ethereal_checks(filigree_dir)
+
+        assert len(results) == 1
+        r = results[0]
+        assert r.name == "Ephemeral port"
+        assert r.passed is False
+        assert "not listening" in r.message
+        assert r.fix_hint
+
+    def test_both_files_healthy(self, tmp_path: Path) -> None:
+        """Both PID and port files present, both healthy → two passing results."""
+        filigree_dir = tmp_path / ".filigree"
+        filigree_dir.mkdir()
+        (filigree_dir / "ephemeral.pid").write_text("55\n")
+        (filigree_dir / "ephemeral.port").write_text("8377\n")
+
+        with (
+            patch("filigree.ephemeral.read_pid_file", return_value={"pid": 55}),
+            patch("filigree.ephemeral.is_pid_alive", return_value=True),
+            patch("filigree.ephemeral.read_port_file", return_value=8377),
+            patch("filigree.hooks._is_port_listening", return_value=True),
+        ):
+            results = _doctor_ethereal_checks(filigree_dir)
+
+        assert len(results) == 2
+        assert all(r.passed for r in results)
+
+
+# ---------------------------------------------------------------------------
+# _doctor_server_checks
+# ---------------------------------------------------------------------------
+
+
+class TestDoctorServerChecks:
+    """Unit tests for _doctor_server_checks().
+
+    Mocks filigree.server.daemon_status and filigree.server.read_server_config
+    to exercise each branch without a real daemon.
+    """
+
+    def _make_server_config(self, projects: dict | None = None):
+        """Build a minimal ServerConfig-like object."""
+        from filigree.server import ServerConfig
+
+        return ServerConfig(port=8377, projects=projects or {})
+
+    def test_daemon_running_no_projects(self, tmp_path: Path) -> None:
+        """Running daemon, no registered projects → single passing result."""
+        from filigree.server import DaemonStatus
+
+        status = DaemonStatus(running=True, pid=1234, port=8377, project_count=0)
+        config = self._make_server_config()
+
+        filigree_dir = tmp_path / ".filigree"
+        filigree_dir.mkdir()
+
+        with (
+            patch("filigree.server.daemon_status", return_value=status),
+            patch("filigree.server.read_server_config", return_value=config),
+        ):
+            results = _doctor_server_checks(filigree_dir)
+
+        assert len(results) == 1
+        r = results[0]
+        assert r.name == "Server daemon"
+        assert r.passed is True
+        assert "1234" in r.message
+        assert "8377" in r.message
+
+    def test_daemon_not_running(self, tmp_path: Path) -> None:
+        """Daemon not running → failing check with start hint."""
+        from filigree.server import DaemonStatus
+
+        status = DaemonStatus(running=False)
+        config = self._make_server_config()
+
+        filigree_dir = tmp_path / ".filigree"
+        filigree_dir.mkdir()
+
+        with (
+            patch("filigree.server.daemon_status", return_value=status),
+            patch("filigree.server.read_server_config", return_value=config),
+        ):
+            results = _doctor_server_checks(filigree_dir)
+
+        assert len(results) >= 1
+        daemon_result = next(r for r in results if r.name == "Server daemon")
+        assert daemon_result.passed is False
+        assert "Not running" in daemon_result.message
+        assert "filigree server start" in daemon_result.fix_hint
+
+    def test_registered_project_directory_exists(self, tmp_path: Path) -> None:
+        """A registered project whose directory still exists produces no extra failures."""
+        from filigree.server import DaemonStatus
+
+        # Create the directory so the path check passes
+        project_dir = tmp_path / "my_project" / ".filigree"
+        project_dir.mkdir(parents=True)
+
+        status = DaemonStatus(running=True, pid=1, port=8377, project_count=1)
+        config = self._make_server_config(projects={str(project_dir): {"prefix": "myp"}})
+
+        filigree_dir = tmp_path / ".filigree"
+        filigree_dir.mkdir()
+
+        with (
+            patch("filigree.server.daemon_status", return_value=status),
+            patch("filigree.server.read_server_config", return_value=config),
+        ):
+            results = _doctor_server_checks(filigree_dir)
+
+        project_failures = [r for r in results if not r.passed and "Project" in r.name]
+        assert project_failures == []
+
+    def test_registered_project_directory_gone(self, tmp_path: Path) -> None:
+        """A registered project whose directory no longer exists → failing check."""
+        from filigree.server import DaemonStatus
+
+        missing_dir = tmp_path / "vanished_project" / ".filigree"
+        # Deliberately NOT created
+
+        status = DaemonStatus(running=True, pid=1, port=8377, project_count=1)
+        config = self._make_server_config(projects={str(missing_dir): {"prefix": "van"}})
+
+        filigree_dir = tmp_path / ".filigree"
+        filigree_dir.mkdir()
+
+        with (
+            patch("filigree.server.daemon_status", return_value=status),
+            patch("filigree.server.read_server_config", return_value=config),
+        ):
+            results = _doctor_server_checks(filigree_dir)
+
+        project_failures = [r for r in results if not r.passed and "van" in r.name]
+        assert len(project_failures) == 1
+        r = project_failures[0]
+        assert "Directory gone" in r.message
+        assert r.fix_hint
+
+
+# ---------------------------------------------------------------------------
+# run_doctor — Codex MCP (~/.codex/config.toml) check
+# ---------------------------------------------------------------------------
+
+
+class TestDoctorCodexMcp:
+    """Tests for _check_codex_mcp() exercised via run_doctor().
+
+    The real ~/.codex/config.toml is never touched; every test redirects
+    _codex_config_path via unittest.mock.patch.
+    """
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+
+    def _write_codex_config(self, config_path: Path, content: str) -> None:
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        config_path.write_text(content)
+
+    def _stdio_toml(self, command: str, project_root: Path) -> str:
+        escaped_root = str(project_root).replace("\\", "\\\\")
+        return f'[mcp_servers.filigree]\ncommand = "{command}"\nargs = ["--project", "{escaped_root}"]\n'
+
+    def _run(self, tmp_path: Path, config_path: Path) -> list:
+        with patch(
+            "filigree.install_support.doctor._codex_config_path",
+            return_value=config_path,
+        ):
+            return run_doctor(tmp_path)
+
+    def _codex_result(self, results: list) -> CheckResult:
+        return next(r for r in results if r.name == "Codex MCP")
+
+    # ------------------------------------------------------------------
+    # No config file
+    # ------------------------------------------------------------------
+
+    def test_no_codex_config_file(self, tmp_path: Path) -> None:
+        """Missing ~/.codex/config.toml produces a failing check with install hint."""
+        _make_project(tmp_path)
+        missing = tmp_path / ".codex" / "config.toml"  # deliberately not created
+        result = self._codex_result(self._run(tmp_path, missing))
+        assert result.passed is False
+        assert "No ~/.codex/config.toml" in result.message
+        assert "filigree install --codex" in result.fix_hint
+
+    # ------------------------------------------------------------------
+    # Corrupt TOML
+    # ------------------------------------------------------------------
+
+    def test_corrupt_toml(self, tmp_path: Path) -> None:
+        """Unreadable TOML returns a failing result with a repair hint."""
+        _make_project(tmp_path)
+        config_path = tmp_path / ".codex" / "config.toml"
+        self._write_codex_config(config_path, "this = [invalid toml\n")
+        result = self._codex_result(self._run(tmp_path, config_path))
+        assert result.passed is False
+        assert "Invalid ~/.codex/config.toml" in result.message
+        assert "filigree install --codex" in result.fix_hint
+
+    # ------------------------------------------------------------------
+    # Missing filigree entry
+    # ------------------------------------------------------------------
+
+    def test_missing_filigree_entry(self, tmp_path: Path) -> None:
+        """mcp_servers exists but has no filigree key."""
+        _make_project(tmp_path)
+        config_path = tmp_path / ".codex" / "config.toml"
+        self._write_codex_config(config_path, '[mcp_servers.other]\ncommand = "other-tool"\n')
+        result = self._codex_result(self._run(tmp_path, config_path))
+        assert result.passed is False
+        assert "filigree not in ~/.codex/config.toml" in result.message
+        assert "filigree install --codex" in result.fix_hint
+
+    def test_mcp_servers_is_not_a_table(self, tmp_path: Path) -> None:
+        """mcp_servers is a TOML value but not a table — treated the same as absent."""
+        _make_project(tmp_path)
+        config_path = tmp_path / ".codex" / "config.toml"
+        # A bare string array is valid TOML but the code expects a dict.
+        self._write_codex_config(config_path, 'mcp_servers = ["not", "a", "table"]\n')
+        result = self._codex_result(self._run(tmp_path, config_path))
+        assert result.passed is False
+        assert "filigree not in" in result.message
+
+    # ------------------------------------------------------------------
+    # Valid stdio config (relative command)
+    # ------------------------------------------------------------------
+
+    def test_valid_stdio_relative_command(self, tmp_path: Path) -> None:
+        """Relative command + correct --project arg is the happy-path stdio case."""
+        _make_project(tmp_path)
+        config_path = tmp_path / ".codex" / "config.toml"
+        self._write_codex_config(config_path, self._stdio_toml("filigree-mcp", tmp_path))
+        result = self._codex_result(self._run(tmp_path, config_path))
+        assert result.passed is True
+        assert "Configured in ~/.codex/config.toml" in result.message
+
+    def test_stdio_wrong_project_root(self, tmp_path: Path) -> None:
+        """--project arg points to a different directory — should fail."""
+        _make_project(tmp_path)
+        config_path = tmp_path / ".codex" / "config.toml"
+        wrong_root = tmp_path / "some_other_project"
+        self._write_codex_config(config_path, self._stdio_toml("filigree-mcp", wrong_root))
+        result = self._codex_result(self._run(tmp_path, config_path))
+        assert result.passed is False
+        assert "different project" in result.message
+        assert "filigree install --codex" in result.fix_hint
+
+    def test_stdio_empty_command(self, tmp_path: Path) -> None:
+        """Empty command string with otherwise-correct args should fail."""
+        _make_project(tmp_path)
+        config_path = tmp_path / ".codex" / "config.toml"
+        escaped_root = str(tmp_path).replace("\\", "\\\\")
+        toml_content = f'[mcp_servers.filigree]\ncommand = ""\nargs = ["--project", "{escaped_root}"]\n'
+        self._write_codex_config(config_path, toml_content)
+        result = self._codex_result(self._run(tmp_path, config_path))
+        assert result.passed is False
+        assert "different project" in result.message
+
+    # ------------------------------------------------------------------
+    # URL-based (server-mode) config
+    # ------------------------------------------------------------------
+
+    def test_url_config_matching_url(self, tmp_path: Path) -> None:
+        """A url entry that matches the server-mode URL passes."""
+        _make_project(tmp_path)
+        config_path = tmp_path / ".codex" / "config.toml"
+        expected_url = "http://localhost:8377/projects/filigree/mcp"
+        toml_content = f'[mcp_servers.filigree]\nurl = "{expected_url}"\n'
+        self._write_codex_config(config_path, toml_content)
+        with (
+            patch(
+                "filigree.install_support.doctor._codex_server_mode_url",
+                return_value=expected_url,
+            ),
+            patch(
+                "filigree.install_support.doctor._codex_config_path",
+                return_value=config_path,
+            ),
+        ):
+            results = run_doctor(tmp_path)
+        result = self._codex_result(results)
+        assert result.passed is True
+        assert "Configured in ~/.codex/config.toml" in result.message
+
+    def test_url_config_mismatched_url(self, tmp_path: Path) -> None:
+        """A url entry that does not match the expected URL fails."""
+        _make_project(tmp_path)
+        config_path = tmp_path / ".codex" / "config.toml"
+        expected_url = "http://localhost:8377/projects/filigree/mcp"
+        wrong_url = "http://localhost:9999/projects/other/mcp"
+        toml_content = f'[mcp_servers.filigree]\nurl = "{wrong_url}"\n'
+        self._write_codex_config(config_path, toml_content)
+        with (
+            patch(
+                "filigree.install_support.doctor._codex_server_mode_url",
+                return_value=expected_url,
+            ),
+            patch(
+                "filigree.install_support.doctor._codex_config_path",
+                return_value=config_path,
+            ),
+        ):
+            results = run_doctor(tmp_path)
+        result = self._codex_result(results)
+        assert result.passed is False
+        assert "different project or server" in result.message
+        assert "filigree install --codex" in result.fix_hint
+
+    # ------------------------------------------------------------------
+    # Absolute path — missing binary
+    # ------------------------------------------------------------------
+
+    def test_absolute_command_missing_binary(self, tmp_path: Path) -> None:
+        """Absolute command path that does not exist on disk → binary-not-found failure."""
+        _make_project(tmp_path)
+        config_path = tmp_path / ".codex" / "config.toml"
+        missing_bin = tmp_path / "bin" / "filigree-mcp"
+        # Do NOT create the binary file
+        self._write_codex_config(config_path, self._stdio_toml(str(missing_bin), tmp_path))
+        result = self._codex_result(self._run(tmp_path, config_path))
+        assert result.passed is False
+        assert "Binary not found" in result.message
+        assert str(missing_bin) in result.message
+        assert "filigree install --codex" in result.fix_hint
+
+    # ------------------------------------------------------------------
+    # Absolute path — existing binary (not in a venv)
+    # ------------------------------------------------------------------
+
+    def test_absolute_command_existing_binary_not_venv(self, tmp_path: Path) -> None:
+        """Absolute command path that exists and is not in a venv passes."""
+        _make_project(tmp_path)
+        config_path = tmp_path / ".codex" / "config.toml"
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+        binary = bin_dir / "filigree-mcp"
+        binary.write_text("#!/bin/sh\n")
+        # No pyvenv.cfg anywhere in parents — _is_venv_binary returns False
+        self._write_codex_config(config_path, self._stdio_toml(str(binary), tmp_path))
+        result = self._codex_result(self._run(tmp_path, config_path))
+        assert result.passed is True
+        assert "Configured in ~/.codex/config.toml" in result.message
+
+    # ------------------------------------------------------------------
+    # Venv binary warning
+    # ------------------------------------------------------------------
+
+    def test_venv_binary_with_uv_tool_installed_warns(self, tmp_path: Path) -> None:
+        """Venv binary + uv tool present at ~/.local/bin/filigree-mcp → warning failure."""
+        _make_project(tmp_path)
+        config_path = tmp_path / ".codex" / "config.toml"
+
+        # Create a fake venv so _is_venv_binary returns True
+        venv_dir = tmp_path / "venv"
+        venv_bin = venv_dir / "bin"
+        venv_bin.mkdir(parents=True)
+        (venv_dir / "pyvenv.cfg").write_text("[pyvenv]\n")
+        venv_binary = venv_bin / "filigree-mcp"
+        venv_binary.write_text("#!/bin/sh\n")
+
+        # Create a fake home with the uv tool binary present
+        fake_home = tmp_path / "fakehome"
+        uv_local_bin = fake_home / ".local" / "bin"
+        uv_local_bin.mkdir(parents=True)
+        (uv_local_bin / "filigree-mcp").write_text("#!/bin/sh\n")
+
+        self._write_codex_config(config_path, self._stdio_toml(str(venv_binary), tmp_path))
+
+        with (
+            patch(
+                "filigree.install_support.doctor._codex_config_path",
+                return_value=config_path,
+            ),
+            patch("pathlib.Path.home", return_value=fake_home),
+        ):
+            results = run_doctor(tmp_path)
+
+        result = self._codex_result(results)
+        assert result.passed is False
+        assert "venv binary" in result.message
+        assert "uv tool is installed" in result.message
+        assert "filigree install --codex" in result.fix_hint
+
+    def test_venv_binary_without_uv_tool_passes(self, tmp_path: Path) -> None:
+        """Venv binary but no uv tool present — warning branch skipped, check passes."""
+        _make_project(tmp_path)
+        config_path = tmp_path / ".codex" / "config.toml"
+
+        # Create a fake venv so _is_venv_binary returns True
+        venv_dir = tmp_path / "venv"
+        venv_bin = venv_dir / "bin"
+        venv_bin.mkdir(parents=True)
+        (venv_dir / "pyvenv.cfg").write_text("[pyvenv]\n")
+        venv_binary = venv_bin / "filigree-mcp"
+        venv_binary.write_text("#!/bin/sh\n")
+
+        # Fake home with NO uv tool binary at .local/bin/filigree-mcp
+        fake_home = tmp_path / "fakehome"
+        fake_home.mkdir()
+
+        self._write_codex_config(config_path, self._stdio_toml(str(venv_binary), tmp_path))
+
+        with (
+            patch(
+                "filigree.install_support.doctor._codex_config_path",
+                return_value=config_path,
+            ),
+            patch("pathlib.Path.home", return_value=fake_home),
+        ):
+            results = run_doctor(tmp_path)
+
+        result = self._codex_result(results)
+        # uv_tool_bin does not exist → warning branch skipped → passes
+        assert result.passed is True
+        assert "Configured in ~/.codex/config.toml" in result.message
