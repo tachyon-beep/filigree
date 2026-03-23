@@ -561,11 +561,27 @@ class TestFindFiligreeMcpCommand:
 
 
 class TestFindFiligreeCommand:
+    @pytest.fixture(autouse=True)
+    def _no_real_uv_tool(self, tmp_path: Path) -> Iterator[None]:
+        """Prevent real uv tool install from interfering with tests."""
+        with patch("filigree.core.Path.home", return_value=tmp_path):
+            yield
+
     def test_found_on_path(self) -> None:
-        """When filigree is on PATH, return single-element list."""
+        """When filigree is on PATH (no uv tool), return single-element list."""
         with patch("filigree.core.shutil.which", return_value="/usr/local/bin/filigree"):
             result = find_filigree_command()
             assert result == ["/usr/local/bin/filigree"]
+
+    def test_uv_tool_preferred_over_path(self, tmp_path: Path) -> None:
+        """When uv tool is installed, prefer it over shutil.which result."""
+        uv_bin = tmp_path / ".local" / "bin"
+        uv_bin.mkdir(parents=True)
+        (uv_bin / "filigree").touch()
+
+        with patch("filigree.core.shutil.which", return_value="/some/venv/bin/filigree"):
+            result = find_filigree_command()
+            assert result == [str(uv_bin / "filigree")]
 
     def test_fallback_to_sys_executable_sibling(self, tmp_path: Path) -> None:
         """When filigree not on PATH, look next to sys.executable."""
