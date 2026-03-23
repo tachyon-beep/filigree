@@ -69,8 +69,8 @@ def _build_context(db: FiligreeDB, filigree_dir: Path | None = None) -> str:
         port = read_port_file(port_file)
         pid_info = read_pid_file(pid_file)
         dashboard_alive = port and pid_info and is_pid_alive(pid_info["pid"]) and _is_port_listening(port)
-        if not dashboard_alive and pid_info is not None:
-            # Dashboard was running but died (idle-shutdown) — try to restart
+        if not dashboard_alive and (pid_info is not None or port is not None):
+            # Dashboard was running but died (idle-shutdown, crash) — try to restart
             try:
                 url = ensure_dashboard_running()
                 if url:

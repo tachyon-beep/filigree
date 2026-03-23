@@ -162,8 +162,8 @@ tailwind.config = {
 
   <!-- Filter bar -->
   <div class="flex items-center gap-3">
-    <button id="btnReady" onclick="toggleReady()" class="px-2 py-1 rounded text-xs font-medium bg-emerald-900/50 text-emerald-400 border border-emerald-700" title="Ready issues have no blockers and can be worked on immediately">
-      &#9679; Ready (<span id="readyCount">0</span>)
+    <button id="btnReadyFilter" onclick="toggleReady()" class="px-2 py-1 rounded text-xs font-medium bg-emerald-900/50 text-emerald-400 border border-emerald-700" title="Ready issues have no blockers and can be worked on immediately">
+      &#9679; Ready (<span id="readyFilterCount">0</span>)
     </button>
     <button id="btnBlocked" onclick="toggleBlocked()" class="px-2 py-1 rounded text-xs font-medium bg-overlay text-secondary border border-strong" title="Blocked issues are waiting on dependencies to be resolved">
       &#128279; Blocked (<span id="blockedCount">0</span>)

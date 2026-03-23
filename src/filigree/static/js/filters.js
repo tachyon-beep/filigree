@@ -77,7 +77,7 @@ function writeProjectFilterSettings(settings) {
 }
 
 function updateToggleButtons() {
-  const readyBtn = document.getElementById("btnReady");
+  const readyBtn = document.getElementById("btnReadyFilter");
   if (readyBtn) {
     readyBtn.className = state.readyFilter
       ? "px-2 py-1 rounded text-xs font-medium bg-emerald-900/50 text-emerald-400 border border-emerald-700"

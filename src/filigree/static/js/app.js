@@ -207,7 +207,7 @@ function updateStats() {
   if (!state.stats) return;
   const s = state.stats;
   const byCat = s.by_category || {};
-  document.getElementById("readyCount").textContent = s.ready_count;
+  document.getElementById("readyFilterCount").textContent = s.ready_count;
   document.getElementById("footOpen").textContent = byCat.open || 0;
   document.getElementById("footActive").textContent = byCat.wip || 0;
   document.getElementById("footReady").textContent = s.ready_count;

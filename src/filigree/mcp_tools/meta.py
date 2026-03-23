@@ -618,7 +618,7 @@ async def _handle_restart_dashboard(arguments: dict[str, Any]) -> list[TextConte
 
     # Stop existing dashboard if running
     stopped = False
-    if info is not None and verify_pid_ownership(pid_file, expected_cmd="filigree"):
+    if info is not None and verify_pid_ownership(pid_file, expected_cmd="filigree", required_args=("dashboard",)):
         pid = info["pid"]
         try:
             os.kill(pid, signal.SIGTERM)

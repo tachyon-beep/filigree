@@ -136,15 +136,11 @@ FILIGREE_INSTRUCTIONS = _build_instructions_block()
 def _atomic_write_text(path: Path, content: str) -> None:
     """Write *content* to *path* atomically via write-to-temp + rename."""
     fd, tmp = tempfile.mkstemp(dir=path.parent, suffix=".tmp", prefix=path.name)
-    closed = False
     try:
-        os.write(fd, content.encode())
-        os.close(fd)
-        closed = True
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(content)
         os.replace(tmp, path)
     except BaseException:
-        if not closed:
-            os.close(fd)
         Path(tmp).unlink(missing_ok=True)
         raise
 
