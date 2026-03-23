@@ -19,7 +19,7 @@ Filigree is local-first. No cloud, no accounts. Each project gets a `.filigree/`
 
 ### Key Features
 
-- **MCP server** with 53 tools — agents interact natively without parsing text
+- **MCP server** with 71 tools — agents interact natively without parsing text
 - **Full CLI** with `--json` output for background subagents and `--actor` for audit trails
 - **Claude Code integration** — session hooks inject project snapshots at startup; bundled skill pack teaches agents workflow patterns
 - **Workflow templates** — 24 issue types across 9 packs with enforced state machines
@@ -157,7 +157,7 @@ make test-cov        # Pytest with coverage (fail-under=85%)
 
 ### Key Conventions
 
-- **Ruff** for linting and formatting (line-length=120)
+- **Ruff** for linting and formatting (line-length=140)
 - **Mypy** in strict mode
 - **Pytest** with pytest-asyncio for MCP server tests
 - **Coverage** threshold at 85%

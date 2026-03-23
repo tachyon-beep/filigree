@@ -629,10 +629,12 @@ async def _handle_restart_dashboard(arguments: dict[str, Any]) -> list[TextConte
         except ProcessLookupError:
             stopped = True  # Already dead
         except PermissionError:
-            return _text(ErrorResponse(
-                error=f"Cannot stop dashboard (PID {pid}): permission denied",
-                code="permission_error",
-            ))
+            return _text(
+                ErrorResponse(
+                    error=f"Cannot stop dashboard (PID {pid}): permission denied",
+                    code="permission_error",
+                )
+            )
 
     # Restart via ensure_dashboard_running
     from filigree.hooks import ensure_dashboard_running

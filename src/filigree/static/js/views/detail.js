@@ -90,7 +90,7 @@ export async function openDetail(issueId) {
       return (
         '<div class="flex items-center gap-2 text-xs">' +
         `<span class="w-2 h-2 rounded-full shrink-0" style="background:${sc}"></span>` +
-        `<span class="cursor-pointer flex-1" style="color:var(--accent)" role="button" tabindex="0" onclick="openDetail('${safeBid}')">${escHtml(det.title.slice(0, 40))}</span>` +
+        `<span class="cursor-pointer flex-1" style="color:var(--accent)" role="button" tabindex="0" aria-label="Open blocker ${escHtml(det.title.slice(0, 40))}" onclick="openDetail('${safeBid}')">${escHtml(det.title.slice(0, 40))}</span>` +
         `<span style="color:var(--text-muted)">${escHtml(det.status || "")}</span>` +
         `<button onclick="event.stopPropagation();removeDependency('${safeIssueId}','${safeBid}')" class="text-red-400 hover:text-red-300 ml-1" title="Remove dependency">&times;</button></div>`
       );
@@ -105,7 +105,7 @@ export async function openDetail(issueId) {
       const sc = CATEGORY_COLORS[detCat] || "#64748B";
       const safeBid = escJsSingle(bid);
       return (
-        `<div class="flex items-center gap-2 text-xs cursor-pointer" style="color:var(--accent)" role="button" tabindex="0" onclick="openDetail('${safeBid}')">` +
+        `<div class="flex items-center gap-2 text-xs cursor-pointer" style="color:var(--accent)" role="button" tabindex="0" aria-label="Open downstream ${escHtml(det.title.slice(0, 40))}" onclick="openDetail('${safeBid}')">` +
         `<span class="w-2 h-2 rounded-full" style="background:${sc}"></span>` +
         `<span>${escHtml(det.title.slice(0, 40))}</span>` +
         `<span style="color:var(--text-muted)">${escHtml(det.status || "")}</span></div>`
@@ -140,7 +140,7 @@ export async function openDetail(issueId) {
         : "";
       return (
         '<div class="flex items-center gap-2 text-xs rounded px-2 py-1 cursor-pointer bg-overlay-hover mb-1" ' +
-        `onclick="switchView('files');setTimeout(()=>openFileDetail('${safeFileId}'),100)" role="button" tabindex="0">` +
+        `onclick="switchView('files');setTimeout(()=>openFileDetail('${safeFileId}'),100)" role="button" tabindex="0" aria-label="Open file ${escHtml(f.file_path || f.file_id)}">` +
         `<span class="truncate flex-1" style="color:var(--accent)">${escHtml(f.file_path || f.file_id)}</span>` +
         assoc +
         lang +

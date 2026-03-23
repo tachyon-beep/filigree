@@ -509,10 +509,12 @@ async def _handle_batch_update_findings(arguments: dict[str, Any]) -> list[TextC
     if not isinstance(status, str) or not status.strip():
         return _text(ErrorResponse(error="status is required", code="validation_error"))
     if status not in VALID_FINDING_STATUSES:
-        return _text(ErrorResponse(
-            error=f"Invalid finding status: {status!r}. Valid: {', '.join(sorted(VALID_FINDING_STATUSES))}",
-            code="validation_error",
-        ))
+        return _text(
+            ErrorResponse(
+                error=f"Invalid finding status: {status!r}. Valid: {', '.join(sorted(VALID_FINDING_STATUSES))}",
+                code="validation_error",
+            )
+        )
 
     tracker = _get_db()
     updated: list[str] = []

@@ -173,10 +173,12 @@ def _ensure_pre_tool_use_hook(settings: dict[str, Any], ensure_dashboard_cmd: st
             if isinstance(hook, dict) and "ensure-dashboard" in hook.get("command", ""):
                 return
 
-    pre_hooks.append({
-        "matcher": "mcp__filigree__.*",
-        "hooks": [{"type": "command", "command": ensure_dashboard_cmd, "timeout": 5000}],
-    })
+    pre_hooks.append(
+        {
+            "matcher": "mcp__filigree__.*",
+            "hooks": [{"type": "command", "command": ensure_dashboard_cmd, "timeout": 5000}],
+        }
+    )
 
 
 # ---------------------------------------------------------------------------

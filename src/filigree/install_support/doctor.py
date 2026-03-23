@@ -759,10 +759,7 @@ def _doctor_install_method() -> list[CheckResult]:
                 "Installation",
                 False,
                 f"Installed in project venv ({venv_path})",
-                fix_hint=(
-                    "Consider installing as a uv tool for global availability: "
-                    "uv tool install filigree"
-                ),
+                fix_hint=("Consider installing as a uv tool for global availability: uv tool install filigree"),
             )
         )
     elif has_uv_tool:

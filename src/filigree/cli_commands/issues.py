@@ -308,7 +308,7 @@ def close(ctx: click.Context, issue_ids: tuple[str, ...], reason: str, as_json: 
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON")
 @click.pass_context
 def reopen(ctx: click.Context, issue_ids: tuple[str, ...], as_json: bool) -> None:
-    """Reopen one or more closed issues."""
+    """Reopen one or more closed issues (returns each to its type's initial state)."""
     with get_db() as db:
         reopened: list[dict[str, Any]] = []
         errors: list[dict[str, str]] = []

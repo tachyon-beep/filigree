@@ -91,7 +91,7 @@ export function showTourStep(index) {
   tooltip.className = "tour-tooltip rounded-lg p-4 shadow-xl";
   tooltip.style.cssText = "background:var(--surface-raised);border:1px solid var(--accent)";
   tooltip.innerHTML =
-    `<div class="text-sm mb-3 leading-relaxed" style="color:var(--text-primary)">${step.text}</div>` +
+    `<div class="text-sm mb-3 leading-relaxed" style="color:var(--text-primary)">${escHtml(step.text)}</div>` +
     '<div class="flex items-center justify-between">' +
     `<span class="text-xs" style="color:var(--text-muted)">${index + 1} of ${TOUR_STEPS.length}</span>` +
     '<div class="flex gap-2">' +
