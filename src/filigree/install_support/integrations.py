@@ -85,7 +85,7 @@ def _codex_server_mode_url(project_root: Path, port: int) -> str:
     return f"http://localhost:{port}/mcp/?project={encoded_key}"
 
 
-def _build_codex_server_config(project_root: Path, *, mode: str, server_port: int) -> dict[str, Any]:
+def _build_codex_server_config() -> dict[str, Any]:
     """Return the Codex MCP server config.
 
     Codex config is global, so pinning a specific project path or daemon URL
@@ -277,7 +277,7 @@ def install_codex_mcp(
     """
     config_path = _codex_config_path()
     config_path.parent.mkdir(parents=True, exist_ok=True)
-    desired = _build_codex_server_config(project_root, mode=mode, server_port=server_port)
+    desired = _build_codex_server_config()
 
     # Read existing config if present
     existing = ""
