@@ -33,10 +33,7 @@ from filigree.install_support.hooks import (
     _extract_hook_binary,
     _has_hook_command,
 )
-from filigree.install_support.integrations import (
-    _codex_config_path,
-    _codex_server_mode_url,
-)
+from filigree.install_support.integrations import _codex_config_path
 
 logger = logging.getLogger(__name__)
 
@@ -185,46 +182,24 @@ def _check_codex_mcp(filigree_dir: Path) -> CheckResult:
     if not isinstance(filigree_server, dict):
         return CheckResult("Codex MCP", False, "filigree not in ~/.codex/config.toml", fix_hint="Run: filigree install --codex")
 
-    try:
-        from filigree.core import get_mode
-
-        mode = get_mode(filigree_dir)
-    except (AttributeError, ValueError, json.JSONDecodeError, OSError) as exc:
-        logger.debug("Could not determine project mode for Codex check: %s", exc)
-        mode = "ethereal"
-
-    project_root = filigree_dir.parent
-
-    # Server-mode check (url-based config)
+    # Codex config is global. Project-pinned args/URLs are unsafe because they
+    # outlive the folder the user is currently working in.
     if "url" in filigree_server:
-        url = filigree_server.get("url")
-        expected_url = None
-        try:
-            from filigree.server import read_server_config
-
-            expected_url = _codex_server_mode_url(project_root, read_server_config().port)
-        except (OSError, json.JSONDecodeError, ValueError, ImportError) as exc:
-            logger.debug("Could not read server config for Codex doctor check: %s", exc)
-            if mode == "server":
-                expected_url = _codex_server_mode_url(project_root, 8377)
-        if isinstance(url, str) and expected_url and url == expected_url:
-            return CheckResult("Codex MCP", True, "Configured in ~/.codex/config.toml")
         return CheckResult(
             "Codex MCP",
             False,
-            "filigree in ~/.codex/config.toml targets a different project or server",
+            "filigree in ~/.codex/config.toml uses deprecated URL-based routing",
             fix_hint="Run: filigree install --codex",
         )
 
     # Stdio-mode check (command + args config)
     args = filigree_server.get("args")
     command = filigree_server.get("command")
-    expected_args = ["--project", str(project_root)]
-    if args != expected_args or not isinstance(command, str) or not command:
+    if args != [] or not isinstance(command, str) or not command:
         return CheckResult(
             "Codex MCP",
             False,
-            "filigree in ~/.codex/config.toml targets a different project",
+            "filigree in ~/.codex/config.toml must use runtime project autodiscovery",
             fix_hint="Run: filigree install --codex",
         )
     if _is_absolute_command_path(command) and not Path(command).exists():

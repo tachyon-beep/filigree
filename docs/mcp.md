@@ -27,10 +27,15 @@ Filigree exposes an MCP (Model Context Protocol) server so AI agents interact na
 The simplest path:
 
 ```bash
-filigree install --claude-code    # Writes .mcp.json (or uses `claude mcp add`)
-filigree install --codex          # Writes ~/.codex/config.toml for the current project
+filigree install --claude-code    # Writes .mcp.json with folder-based autodiscovery
+filigree install --codex          # Writes ~/.codex/config.toml with folder-based autodiscovery
 filigree install --mode=server    # Configure streamable HTTP MCP for daemon mode
 ```
+
+For Claude Code and Codex in stdio mode, Filigree now always uses runtime
+project discovery. Their config must not pin `--project`, and Codex's global
+config must not pin a daemon URL, because those forms can send one workspace's
+writes to another workspace's database.
 
 Or manually add to `.mcp.json`:
 
@@ -40,7 +45,7 @@ Or manually add to `.mcp.json`:
     "filigree": {
       "type": "stdio",
       "command": "filigree-mcp",
-      "args": ["--project", "/path/to/project"]
+      "args": []
     }
   }
 }

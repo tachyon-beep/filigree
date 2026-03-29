@@ -6,7 +6,7 @@ Step-by-step run sheet for migrating a project from [beads](https://github.com/s
 
 Beads is a git-backed issue tracker that stores data in `.beads/` directories using a Dolt-powered SQLite database. It syncs issue data through git commits, which can cause merge conflicts and data loss when branches diverge.
 
-Filigree replaces this with a local-first SQLite database (`.filigree/`) that never touches git. Agent access is via MCP tools (53 available) or CLI with `--json` output.
+Filigree replaces this with a local-first SQLite database (`.filigree/`) that never touches git. Agent access is via MCP tools (71 available) or CLI with `--json` output.
 
 Filigree's `migrate` command imports all beads issues, dependencies, events, labels, and comments in a single operation.
 
@@ -87,7 +87,7 @@ For specific targets only:
 
 ```bash
 filigree install --claude-code    # Claude Code MCP only
-filigree install --codex          # OpenAI Codex only (updates ~/.codex/config.toml)
+filigree install --codex          # OpenAI Codex only (runtime folder autodiscovery)
 filigree install --claude-md      # CLAUDE.md instructions only
 filigree install --agents-md      # AGENTS.md instructions only
 filigree install --gitignore      # .gitignore entry only

@@ -349,9 +349,7 @@ class TestRunDoctor:
         codex_dir = home / ".codex"
         home.mkdir()
         codex_dir.mkdir()
-        (codex_dir / "config.toml").write_text(
-            f"[mcp_servers.filigree]\ncommand = 'filigree-mcp'\nargs = ['--project', '{filigree_project}']\n"
-        )
+        (codex_dir / "config.toml").write_text("[mcp_servers.filigree]\ncommand = 'filigree-mcp'\nargs = []\n")
         with patch("filigree.install_support.doctor.Path.home", return_value=home):
             results = run_doctor(filigree_project)
         codex_check = next((r for r in results if r.name == "Codex MCP"), None)
@@ -371,8 +369,8 @@ class TestRunDoctor:
         assert codex_check is not None
         assert not codex_check.passed
 
-    def test_codex_wrong_project_fails(self, filigree_project: Path) -> None:
-        """Doctor should fail when Codex filigree entry targets a different project."""
+    def test_codex_pinned_project_fails(self, filigree_project: Path) -> None:
+        """Doctor should fail when Codex filigree entry still pins a project path."""
         home = filigree_project / "home"
         codex_dir = home / ".codex"
         home.mkdir()
@@ -383,7 +381,7 @@ class TestRunDoctor:
         codex_check = next((r for r in results if r.name == "Codex MCP"), None)
         assert codex_check is not None
         assert not codex_check.passed
-        assert "targets a different project" in codex_check.message
+        assert "runtime project autodiscovery" in codex_check.message
 
     def test_codex_filigree_comment_does_not_count(self, filigree_project: Path) -> None:
         """Doctor should not treat commented filigree table text as configured."""
@@ -617,6 +615,7 @@ class TestInstallClaudeCodeMcp:
         assert mcp_json.exists()
         data = json.loads(mcp_json.read_text())
         assert "filigree" in data["mcpServers"]
+        assert data["mcpServers"]["filigree"]["args"] == []
 
     def test_merges_with_existing_mcp_json(self, tmp_path: Path) -> None:
         """Should preserve existing entries in .mcp.json."""
@@ -679,7 +678,7 @@ class TestInstallCodexMcp:
         codex_dir = home / ".codex"
         home.mkdir()
         codex_dir.mkdir()
-        (codex_dir / "config.toml").write_text(f"[mcp_servers.filigree]\ncommand = 'filigree-mcp'\nargs = ['--project', '{tmp_path}']\n")
+        (codex_dir / "config.toml").write_text("[mcp_servers.filigree]\ncommand = 'filigree-mcp'\nargs = []\n")
         with (
             patch("filigree.install_support.integrations._find_filigree_mcp_command", return_value="filigree-mcp"),
             patch("filigree.install_support.integrations.Path.home", return_value=home),
@@ -735,6 +734,7 @@ class TestInstallCodexMcp:
         assert raw.count(b"[mcp_servers.filigree]") == 1
         assert b'command = "old-mcp"' not in raw
         assert b'command = "filigree-mcp"\r\n' in raw
+        assert b"args = []\r\n" in raw
         assert b"[mcp_servers.other]\r\n" in raw
 
 
@@ -1423,6 +1423,7 @@ class TestInstallMcpServerMode:
         mcp = json.loads((project_root / ".mcp.json").read_text())
         server_config = mcp["mcpServers"]["filigree"]
         assert server_config.get("type") == "stdio" or "command" in server_config
+        assert server_config["args"] == []
 
 
 class TestCheckResult:
@@ -1563,7 +1564,7 @@ class TestCodexTomlPresenceCheck:
         home.mkdir()
         codex_dir.mkdir()
         config = codex_dir / "config.toml"
-        config.write_text(f'[mcp_servers.filigree]\ncommand = "filigree-mcp"\nargs = ["--project", "{tmp_path}"]\n')
+        config.write_text('[mcp_servers.filigree]\ncommand = "filigree-mcp"\nargs = []\n')
 
         with (
             patch("filigree.install_support.integrations._find_filigree_mcp_command", return_value="filigree-mcp"),
@@ -1574,8 +1575,8 @@ class TestCodexTomlPresenceCheck:
         assert ok
         assert "Already configured" in msg
 
-    def test_existing_other_project_is_reconfigured(self, tmp_path: Path) -> None:
-        """A filigree entry for another project should be rewritten for the current one."""
+    def test_existing_pinned_project_is_reconfigured(self, tmp_path: Path) -> None:
+        """A stale project-pinned filigree entry should be rewritten to autodiscovery."""
         home = tmp_path / "home"
         codex_dir = home / ".codex"
         home.mkdir()
@@ -1591,10 +1592,10 @@ class TestCodexTomlPresenceCheck:
         assert ok
         assert "Already configured" not in msg
         content = config.read_text()
-        assert f'args = ["--project", "{tmp_path}"]' in content
+        assert "args = []" in content
 
-    def test_server_mode_writes_url(self, tmp_path: Path) -> None:
-        """Server mode should write a streamable HTTP URL for Codex."""
+    def test_server_mode_still_writes_stdio_autodiscovery(self, tmp_path: Path) -> None:
+        """Server mode should not switch Codex to URL routing."""
         home = tmp_path / "home"
         home.mkdir()
         filigree_dir = tmp_path / ".filigree"
@@ -1605,7 +1606,10 @@ class TestCodexTomlPresenceCheck:
             ok, _msg = install_codex_mcp(tmp_path, mode="server", server_port=9911)
         assert ok
         content = (home / ".codex" / "config.toml").read_text()
-        assert 'url = "http://localhost:9911/mcp/?project=testproj"' in content
+        assert 'command = "' in content
+        assert "filigree-mcp" in content
+        assert "args = []" in content
+        assert "url =" not in content
 
 
 class TestPackageNotFoundError:

@@ -71,6 +71,7 @@ cd filigree && uv sync
 
 ```bash
 filigree install --claude-code   # MCP server + CLAUDE.md instructions
+filigree install --codex         # Codex MCP config via runtime autodiscovery
 filigree install --hooks         # SessionStart hooks (project snapshot + dashboard auto-start)
 filigree install --skills        # Workflow skill pack for agents
 filigree doctor                  # Verify installation health
