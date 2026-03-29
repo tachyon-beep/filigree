@@ -31,7 +31,7 @@ filigree init --prefix=myproject           # Custom ID prefix
 filigree init --mode=server                # Initialize in persistent server mode
 filigree install                           # Install everything: MCP, instructions, .gitignore
 filigree install --claude-code             # Claude Code MCP server only
-filigree install --codex                   # OpenAI Codex MCP server only (~/.codex/config.toml)
+filigree install --codex                   # OpenAI Codex MCP server only (~/.codex/config.toml, autodiscovery)
 filigree install --claude-md               # Inject instructions into CLAUDE.md only
 filigree install --agents-md               # Inject instructions into AGENTS.md only
 filigree install --gitignore               # Add .filigree/ to .gitignore only
@@ -60,7 +60,7 @@ Install filigree into the current project. With no flags, installs everything: M
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `--claude-code` | flag | Install MCP config for Claude Code only |
-| `--codex` | flag | Install MCP config for Codex only |
+| `--codex` | flag | Install MCP config for Codex only (runtime folder autodiscovery) |
 | `--claude-md` | flag | Inject instructions into CLAUDE.md only |
 | `--agents-md` | flag | Inject instructions into AGENTS.md only |
 | `--gitignore` | flag | Add `.filigree/` to .gitignore only |

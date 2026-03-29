@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-03-30
+
+### Changed
+
+- Codex MCP install now always writes global stdio config with runtime project autodiscovery instead of project-pinned `--project` args or URL-based routing
+- Claude Code stdio MCP install now also uses runtime autodiscovery (`args = []`) so folder switches do not leave stale project targets behind
+- Installation and migration docs now describe autodiscovery-based MCP wiring and correct the remaining MCP tool-count references to 71
+
+### Fixed
+
+- `filigree doctor` now rejects deprecated Codex URL routing and stale project-pinned Codex config with a clearer remediation message
+- Server-mode Codex installs no longer write daemon URLs that can misroute writes across workspaces
+
+### Tests
+
+- Updated install, doctor, and CLI-admin coverage for autodiscovery-based Claude Code and Codex MCP config
+
 ## [1.5.2] - 2026-03-23
 
 ### Fixed
@@ -560,7 +577,9 @@ identified through systematic static analysis and verified against HEAD.
 - Issue validation against workflow templates (`validate`)
 - PEP 561 `py.typed` marker for downstream type checking
 
-[Unreleased]: https://github.com/tachyon-beep/filigree/compare/v1.5.1...HEAD
+[Unreleased]: https://github.com/tachyon-beep/filigree/compare/v1.6.0...HEAD
+[1.6.0]: https://github.com/tachyon-beep/filigree/compare/v1.5.2...v1.6.0
+[1.5.2]: https://github.com/tachyon-beep/filigree/compare/v1.5.1...v1.5.2
 [1.5.1]: https://github.com/tachyon-beep/filigree/compare/v1.5.0...v1.5.1
 [1.5.0]: https://github.com/tachyon-beep/filigree/compare/v1.4.1...v1.5.0
 [1.4.1]: https://github.com/tachyon-beep/filigree/compare/v1.4.0...v1.4.1

@@ -1,4 +1,6 @@
-<!-- filigree:instructions:v1.5.1:84820288 -->
+1. This project uses UV like millions of other projects. Use uv run rather than trying literally nothing and then saying its broken.
+
+<!-- filigree:instructions:v1.6.0:84820288 -->
 ## Filigree Issue Tracker
 
 Use `filigree` for all task tracking in this project. Data lives in `.filigree/`.

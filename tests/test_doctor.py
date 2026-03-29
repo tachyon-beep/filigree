@@ -383,8 +383,8 @@ class TestDoctorGitignore:
 
 
 class TestDoctorClaudeCodeMcp:
-    def _base_mcp(self, command: str = "filigree-mcp", project_root: Path | None = None) -> dict:
-        args = ["--project", str(project_root)] if project_root else []
+    def _base_mcp(self, command: str = "filigree-mcp", args: list[str] | None = None) -> dict:
+        args = [] if args is None else args
         return {"mcpServers": {"filigree": {"command": command, "args": args}}}
 
     def test_no_mcp_json(self, tmp_path: Path) -> None:
@@ -396,7 +396,7 @@ class TestDoctorClaudeCodeMcp:
 
     def test_valid_mcp_json_relative_command(self, tmp_path: Path) -> None:
         _make_project(tmp_path)
-        mcp_data = self._base_mcp("filigree-mcp", tmp_path)
+        mcp_data = self._base_mcp("filigree-mcp")
         (tmp_path / ".mcp.json").write_text(json.dumps(mcp_data))
         results = run_doctor(tmp_path)
         mcp_result = next(r for r in results if r.name == "Claude Code MCP")
@@ -1271,9 +1271,8 @@ class TestDoctorCodexMcp:
         config_path.parent.mkdir(parents=True, exist_ok=True)
         config_path.write_text(content)
 
-    def _stdio_toml(self, command: str, project_root: Path) -> str:
-        escaped_root = str(project_root).replace("\\", "\\\\")
-        return f'[mcp_servers.filigree]\ncommand = "{command}"\nargs = ["--project", "{escaped_root}"]\n'
+    def _stdio_toml(self, command: str, args: str = "[]") -> str:
+        return f'[mcp_servers.filigree]\ncommand = "{command}"\nargs = {args}\n'
 
     def _run(self, tmp_path: Path, config_path: Path) -> list:
         with patch(
@@ -1341,84 +1340,50 @@ class TestDoctorCodexMcp:
     # ------------------------------------------------------------------
 
     def test_valid_stdio_relative_command(self, tmp_path: Path) -> None:
-        """Relative command + correct --project arg is the happy-path stdio case."""
+        """Relative command + empty args is the happy-path stdio case."""
         _make_project(tmp_path)
         config_path = tmp_path / ".codex" / "config.toml"
-        self._write_codex_config(config_path, self._stdio_toml("filigree-mcp", tmp_path))
+        self._write_codex_config(config_path, self._stdio_toml("filigree-mcp"))
         result = self._codex_result(self._run(tmp_path, config_path))
         assert result.passed is True
         assert "Configured in ~/.codex/config.toml" in result.message
 
-    def test_stdio_wrong_project_root(self, tmp_path: Path) -> None:
-        """--project arg points to a different directory — should fail."""
+    def test_stdio_pinned_project_root_fails(self, tmp_path: Path) -> None:
+        """Pinned --project args should fail because global config must not target one folder."""
         _make_project(tmp_path)
         config_path = tmp_path / ".codex" / "config.toml"
-        wrong_root = tmp_path / "some_other_project"
-        self._write_codex_config(config_path, self._stdio_toml("filigree-mcp", wrong_root))
+        self._write_codex_config(
+            config_path,
+            self._stdio_toml("filigree-mcp", args='["--project", "/tmp/some_other_project"]'),
+        )
         result = self._codex_result(self._run(tmp_path, config_path))
         assert result.passed is False
-        assert "different project" in result.message
+        assert "runtime project autodiscovery" in result.message
         assert "filigree install --codex" in result.fix_hint
 
     def test_stdio_empty_command(self, tmp_path: Path) -> None:
         """Empty command string with otherwise-correct args should fail."""
         _make_project(tmp_path)
         config_path = tmp_path / ".codex" / "config.toml"
-        escaped_root = str(tmp_path).replace("\\", "\\\\")
-        toml_content = f'[mcp_servers.filigree]\ncommand = ""\nargs = ["--project", "{escaped_root}"]\n'
+        toml_content = '[mcp_servers.filigree]\ncommand = ""\nargs = []\n'
         self._write_codex_config(config_path, toml_content)
         result = self._codex_result(self._run(tmp_path, config_path))
         assert result.passed is False
-        assert "different project" in result.message
+        assert "runtime project autodiscovery" in result.message
 
     # ------------------------------------------------------------------
-    # URL-based (server-mode) config
+    # URL-based config
     # ------------------------------------------------------------------
 
-    def test_url_config_matching_url(self, tmp_path: Path) -> None:
-        """A url entry that matches the server-mode URL passes."""
+    def test_url_config_is_rejected(self, tmp_path: Path) -> None:
+        """A URL entry is deprecated because it pins routing outside the workspace."""
         _make_project(tmp_path)
         config_path = tmp_path / ".codex" / "config.toml"
-        expected_url = "http://localhost:8377/projects/filigree/mcp"
-        toml_content = f'[mcp_servers.filigree]\nurl = "{expected_url}"\n'
+        toml_content = '[mcp_servers.filigree]\nurl = "http://localhost:8377/mcp/?project=filigree"\n'
         self._write_codex_config(config_path, toml_content)
-        with (
-            patch(
-                "filigree.install_support.doctor._codex_server_mode_url",
-                return_value=expected_url,
-            ),
-            patch(
-                "filigree.install_support.doctor._codex_config_path",
-                return_value=config_path,
-            ),
-        ):
-            results = run_doctor(tmp_path)
-        result = self._codex_result(results)
-        assert result.passed is True
-        assert "Configured in ~/.codex/config.toml" in result.message
-
-    def test_url_config_mismatched_url(self, tmp_path: Path) -> None:
-        """A url entry that does not match the expected URL fails."""
-        _make_project(tmp_path)
-        config_path = tmp_path / ".codex" / "config.toml"
-        expected_url = "http://localhost:8377/projects/filigree/mcp"
-        wrong_url = "http://localhost:9999/projects/other/mcp"
-        toml_content = f'[mcp_servers.filigree]\nurl = "{wrong_url}"\n'
-        self._write_codex_config(config_path, toml_content)
-        with (
-            patch(
-                "filigree.install_support.doctor._codex_server_mode_url",
-                return_value=expected_url,
-            ),
-            patch(
-                "filigree.install_support.doctor._codex_config_path",
-                return_value=config_path,
-            ),
-        ):
-            results = run_doctor(tmp_path)
-        result = self._codex_result(results)
+        result = self._codex_result(self._run(tmp_path, config_path))
         assert result.passed is False
-        assert "different project or server" in result.message
+        assert "deprecated URL-based routing" in result.message
         assert "filigree install --codex" in result.fix_hint
 
     # ------------------------------------------------------------------
@@ -1431,7 +1396,7 @@ class TestDoctorCodexMcp:
         config_path = tmp_path / ".codex" / "config.toml"
         missing_bin = tmp_path / "bin" / "filigree-mcp"
         # Do NOT create the binary file
-        self._write_codex_config(config_path, self._stdio_toml(str(missing_bin), tmp_path))
+        self._write_codex_config(config_path, self._stdio_toml(str(missing_bin)))
         result = self._codex_result(self._run(tmp_path, config_path))
         assert result.passed is False
         assert "Binary not found" in result.message
@@ -1451,7 +1416,7 @@ class TestDoctorCodexMcp:
         binary = bin_dir / "filigree-mcp"
         binary.write_text("#!/bin/sh\n")
         # No pyvenv.cfg anywhere in parents — _is_venv_binary returns False
-        self._write_codex_config(config_path, self._stdio_toml(str(binary), tmp_path))
+        self._write_codex_config(config_path, self._stdio_toml(str(binary)))
         result = self._codex_result(self._run(tmp_path, config_path))
         assert result.passed is True
         assert "Configured in ~/.codex/config.toml" in result.message
@@ -1479,7 +1444,7 @@ class TestDoctorCodexMcp:
         uv_local_bin.mkdir(parents=True)
         (uv_local_bin / "filigree-mcp").write_text("#!/bin/sh\n")
 
-        self._write_codex_config(config_path, self._stdio_toml(str(venv_binary), tmp_path))
+        self._write_codex_config(config_path, self._stdio_toml(str(venv_binary)))
 
         with (
             patch(
@@ -1513,7 +1478,7 @@ class TestDoctorCodexMcp:
         fake_home = tmp_path / "fakehome"
         fake_home.mkdir()
 
-        self._write_codex_config(config_path, self._stdio_toml(str(venv_binary), tmp_path))
+        self._write_codex_config(config_path, self._stdio_toml(str(venv_binary)))
 
         with (
             patch(

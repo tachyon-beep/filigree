@@ -72,7 +72,7 @@ def _toml_quote(value: str) -> str:
 
 
 def _codex_server_mode_url(project_root: Path, port: int) -> str:
-    """Build the streamable-HTTP URL for Codex server-mode MCP."""
+    """Build the streamable-HTTP URL for a project-keyed daemon route."""
     project_key = "filigree"
     try:
         config = read_config(project_root / FILIGREE_DIR_NAME)
@@ -80,18 +80,22 @@ def _codex_server_mode_url(project_root: Path, port: int) -> str:
         if isinstance(prefix, str) and prefix.strip():
             project_key = prefix.strip()
     except (json.JSONDecodeError, OSError) as exc:
-        logger.warning("Unable to read project prefix for Codex server-mode MCP install: %s", exc)
+        logger.warning("Unable to read project prefix for server-mode MCP install: %s", exc)
     encoded_key = quote(project_key, safe="")
     return f"http://localhost:{port}/mcp/?project={encoded_key}"
 
 
-def _build_codex_server_config(project_root: Path, *, mode: str, server_port: int) -> dict[str, Any]:
-    """Return the Codex MCP server config that should target this project."""
-    if mode == "server":
-        return {"url": _codex_server_mode_url(project_root, server_port)}
+def _build_codex_server_config() -> dict[str, Any]:
+    """Return the Codex MCP server config.
+
+    Codex config is global, so pinning a specific project path or daemon URL
+    causes cross-project writes when users switch folders. Always launch the
+    stdio server without ``--project`` and let ``filigree-mcp`` discover the
+    active project from Codex's working directory at runtime.
+    """
     return {
         "command": _find_filigree_mcp_command(),
-        "args": ["--project", str(project_root)],
+        "args": [],
     }
 
 
@@ -174,10 +178,7 @@ def _read_mcp_json(mcp_json_path: Path) -> dict[str, Any]:
 
 
 def _install_mcp_ethereal_mode(project_root: Path) -> tuple[bool, str]:
-    """Existing stdio-based MCP install (current behavior).
-
-    Uses `claude mcp add` if available, otherwise writes .mcp.json directly.
-    """
+    """Install Claude Code stdio MCP with runtime project autodiscovery."""
     filigree_mcp = _find_filigree_mcp_command()
 
     # Try using `claude mcp add` first
@@ -196,15 +197,13 @@ def _install_mcp_ethereal_mode(project_root: Path) -> tuple[bool, str]:
                     "filigree",
                     "--",
                     filigree_mcp,
-                    "--project",
-                    str(project_root),
                 ],
                 capture_output=True,
                 text=True,
                 timeout=10,
             )
             if result.returncode == 0:
-                return True, "Installed via `claude mcp add` (project scope)"
+                return True, "Installed via `claude mcp add` (runtime autodiscovery)"
             logger.warning(
                 "`claude mcp add` failed (exit %d): %s",
                 result.returncode,
@@ -222,7 +221,7 @@ def _install_mcp_ethereal_mode(project_root: Path) -> tuple[bool, str]:
     mcp_config["mcpServers"]["filigree"] = {
         "type": "stdio",
         "command": filigree_mcp,
-        "args": ["--project", str(project_root)],
+        "args": [],
     }
 
     mcp_json_path.write_text(json.dumps(mcp_config, indent=2) + "\n")
@@ -278,7 +277,7 @@ def install_codex_mcp(
     """
     config_path = _codex_config_path()
     config_path.parent.mkdir(parents=True, exist_ok=True)
-    desired = _build_codex_server_config(project_root, mode=mode, server_port=server_port)
+    desired = _build_codex_server_config()
 
     # Read existing config if present
     existing = ""
