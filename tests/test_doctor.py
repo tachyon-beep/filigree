@@ -1003,6 +1003,51 @@ class TestDoctorInstallMethod:
         assert "uv tool" in r.message.lower()
         assert r.fix_hint
 
+    def test_branch_uv_tool_symlinked_python_not_false_duplicate(self, tmp_path: Path) -> None:
+        """Bug fix: uv tool venv with symlinked system python must not trigger duplicate warning.
+
+        uv tool venvs symlink their python to a uv-managed interpreter
+        outside the venv.  Path(sys.executable).resolve() follows the
+        symlink and escapes the venv tree, so the startswith check
+        fails.  The fallback should recognise that the *venv* found by
+        walking unresolved parents is the uv tool's own venv.
+        """
+        uv_tools_dir = tmp_path / ".local" / "share" / "uv" / "tools" / "filigree"
+        uv_tool_bin = tmp_path / ".local" / "bin" / "filigree"
+        uv_tools_dir.mkdir(parents=True)
+        uv_tool_bin.parent.mkdir(parents=True)
+        uv_tool_bin.write_text("#!/bin/sh\n")
+
+        # Create a "system" python outside the venv to symlink to —
+        # this simulates the uv-managed interpreter that the venv's
+        # python symlinks to.
+        system_python = tmp_path / "uv" / "python" / "bin" / "python3"
+        system_python.parent.mkdir(parents=True)
+        system_python.write_text("")
+
+        # The venv's python is a symlink to the system python.
+        # resolve() will follow it outside the uv tools dir.
+        venv_python = uv_tools_dir / "bin" / "python"
+        venv_python.parent.mkdir(parents=True, exist_ok=True)
+        venv_python.symlink_to(system_python)
+        (uv_tools_dir / "pyvenv.cfg").write_text("[pyvenv]\n")
+
+        with (
+            self._patch_home(tmp_path),
+            patch("sys.executable", str(venv_python)),
+            patch(
+                "filigree.install_support.doctor._find_all_filigree_binaries",
+                return_value=[],
+            ),
+        ):
+            results = _doctor_install_method()
+
+        assert len(results) == 1
+        r = results[0]
+        assert r.name == "Installation"
+        assert r.passed is True, f"Expected pass but got: {r.message} | hint: {r.fix_hint}"
+        assert "uv tool" in r.message
+
 
 # ---------------------------------------------------------------------------
 # _doctor_ethereal_checks
