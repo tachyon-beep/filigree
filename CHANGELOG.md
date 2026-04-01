@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `filigree doctor` no longer reports a false "duplicate install" warning when running from a uv tool venv whose Python is symlinked to a uv-managed interpreter outside the venv
+
 ## [1.6.0] - 2026-03-30
 
 ### Changed
