@@ -695,15 +695,15 @@ def _doctor_install_method() -> list[CheckResult]:
     # The uv tool venv's python is typically a symlink to the system Python,
     # so Path(sys.executable).resolve() escapes the venv and the startswith
     # check above fails.  Fall back to checking whether the *venv* we found
-    # is the uv tool's own venv (unresolved path comparison avoids symlink
-    # confusion).
+    # is the uv tool's own venv (resolve both to canonicalise before
+    # comparing).
     if has_uv_tool and running_from_venv and not running_from_uv_tool:
         try:
             if Path(venv_path).resolve() == uv_tools_dir.resolve():
                 running_from_uv_tool = True
                 running_from_venv = False  # it's the uv tool, not an extra venv
-        except (OSError, ValueError):
-            pass
+        except (OSError, ValueError) as exc:
+            logger.debug("Could not resolve venv/uv tool paths: %s", exc)
 
     # Detect other installs that may shadow the uv tool
     other_installs: list[str] = []
