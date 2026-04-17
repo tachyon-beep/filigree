@@ -13,6 +13,8 @@ import click
 
 from filigree.cli_common import get_db, refresh_summary
 from filigree.core import (
+    CONF_FILENAME,
+    CONF_VERSION,
     DB_FILENAME,
     FILIGREE_DIR_NAME,
     SUMMARY_FILENAME,
@@ -20,6 +22,7 @@ from filigree.core import (
     find_filigree_root,
     get_mode,
     read_config,
+    write_conf,
     write_config,
 )
 from filigree.summary import write_summary
@@ -80,6 +83,19 @@ def init(prefix: str | None, name: str | None, mode: str | None) -> None:
     config = {"prefix": prefix, "name": name, "version": 1, "mode": mode}
     write_config(filigree_dir, config)
 
+    # v2.0: also write the .filigree.conf anchor — this is the file agents
+    # walk up looking for, the authoritative declaration that "this folder and
+    # its subtree belong to this filigree project".
+    conf_data: dict[str, object] = {
+        "version": CONF_VERSION,
+        "project_name": name,
+        "prefix": prefix,
+        "db": f"{FILIGREE_DIR_NAME}/{DB_FILENAME}",
+    }
+    if mode and mode != "ethereal":
+        conf_data["mode"] = mode
+    write_conf(cwd / CONF_FILENAME, conf_data)
+
     db = FiligreeDB(filigree_dir / DB_FILENAME, prefix=prefix)
     db.initialize()
     write_summary(db, filigree_dir / SUMMARY_FILENAME)
@@ -89,6 +105,7 @@ def init(prefix: str | None, name: str | None, mode: str | None) -> None:
     click.echo(f"  Prefix: {prefix}")
     click.echo(f"  Mode: {mode}")
     click.echo(f"  Database: {filigree_dir / DB_FILENAME}")
+    click.echo(f"  Anchor: {cwd / CONF_FILENAME}")
     click.echo(f"  Scanners: {filigree_dir / 'scanners'}/ (add .toml files to register scanners)")
     click.echo("\nNext: filigree install")
 

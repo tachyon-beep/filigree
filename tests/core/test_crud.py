@@ -308,7 +308,7 @@ class TestUpdateIssuePaths:
 
     def test_update_nonexistent_raises(self, db: FiligreeDB) -> None:
         with pytest.raises(KeyError):
-            db.update_issue("nonexistent-abc123", title="nope")
+            db.update_issue("test-nonexistent", title="nope")
 
 
 class TestIssueToDictRoundTrip:
@@ -455,7 +455,7 @@ class TestClaimIssue:
 
     def test_claim_not_found(self, db: FiligreeDB) -> None:
         with pytest.raises(KeyError, match="not found"):
-            db.claim_issue("nonexistent-abc123", assignee="agent-1")
+            db.claim_issue("test-nonexistent", assignee="agent-1")
 
     def test_claim_records_event(self, db: FiligreeDB) -> None:
         issue = db.create_issue("Claimable")
@@ -669,7 +669,7 @@ class TestClaimRaceCondition:
     def test_claim_nonexistent_raises_keyerror(self, db: FiligreeDB) -> None:
         """Claiming a nonexistent issue raises KeyError."""
         with pytest.raises(KeyError):
-            db.claim_issue("nonexistent-xyz", assignee="agent1")
+            db.claim_issue("test-nonexistent", assignee="agent1")
 
     def test_claim_non_open_raises(self, db: FiligreeDB) -> None:
         """Claiming an issue not in an open-category state raises ValueError."""

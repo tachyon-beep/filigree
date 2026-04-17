@@ -16,20 +16,20 @@ class TestMCPCommentErrors:
     async def test_add_comment_missing_issue(self, mcp_db: FiligreeDB) -> None:
         result = await call_tool(
             "add_comment",
-            {"issue_id": "nonexistent-xyz", "text": "Hello"},
+            {"issue_id": "mcp-nonexistent", "text": "Hello"},
         )
         data = _parse(result)
         assert data["code"] == "not_found"
-        assert "nonexistent-xyz" in data["error"]
+        assert "mcp-nonexistent" in data["error"]
 
     async def test_get_comments_missing_issue(self, mcp_db: FiligreeDB) -> None:
         result = await call_tool(
             "get_comments",
-            {"issue_id": "nonexistent-xyz"},
+            {"issue_id": "mcp-nonexistent"},
         )
         data = _parse(result)
         assert data["code"] == "not_found"
-        assert "nonexistent-xyz" in data["error"]
+        assert "mcp-nonexistent" in data["error"]
 
     async def test_add_comment_still_works(self, mcp_db: FiligreeDB) -> None:
         """Verify normal add_comment still works after the fix."""
@@ -48,20 +48,20 @@ class TestMCPLabelErrors:
     async def test_add_label_missing_issue(self, mcp_db: FiligreeDB) -> None:
         result = await call_tool(
             "add_label",
-            {"issue_id": "nonexistent-xyz", "label": "bug"},
+            {"issue_id": "mcp-nonexistent", "label": "bug"},
         )
         data = _parse(result)
         assert data["code"] == "not_found"
-        assert "nonexistent-xyz" in data["error"]
+        assert "mcp-nonexistent" in data["error"]
 
     async def test_remove_label_missing_issue(self, mcp_db: FiligreeDB) -> None:
         result = await call_tool(
             "remove_label",
-            {"issue_id": "nonexistent-xyz", "label": "bug"},
+            {"issue_id": "mcp-nonexistent", "label": "bug"},
         )
         data = _parse(result)
         assert data["code"] == "not_found"
-        assert "nonexistent-xyz" in data["error"]
+        assert "mcp-nonexistent" in data["error"]
 
     async def test_add_label_still_works(self, mcp_db: FiligreeDB) -> None:
         """Verify normal add_label still works after the fix."""

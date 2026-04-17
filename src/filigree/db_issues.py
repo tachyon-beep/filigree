@@ -308,6 +308,9 @@ class IssuesMixin(DBMixinProtocol):
         return self.get_issue(issue_id)
 
     def get_issue(self, issue_id: str) -> Issue:
+        # Reads do not enforce prefix-matching — cross-project lookups simply
+        # return KeyError if not found. Writes do enforce; see update_issue,
+        # close_issue, reopen_issue, claim_issue.
         return self._build_issue(issue_id)
 
     def _build_issue(self, issue_id: str) -> Issue:
@@ -420,6 +423,7 @@ class IssuesMixin(DBMixinProtocol):
         actor: str = "",
         _skip_transition_check: bool = False,
     ) -> Issue:
+        self._check_id_prefix(issue_id)
         current = self.get_issue(issue_id)
         now = _now_iso()
 
@@ -634,6 +638,7 @@ class IssuesMixin(DBMixinProtocol):
         if fields is not None and not isinstance(fields, dict):
             msg = "fields must be a dict"
             raise TypeError(msg)
+        self._check_id_prefix(issue_id)
 
         current = self.get_issue(issue_id)
 
@@ -688,6 +693,7 @@ class IssuesMixin(DBMixinProtocol):
 
         Clears closed_at. Only works on issues in done-category states.
         """
+        self._check_id_prefix(issue_id)
         current = self.get_issue(issue_id)
         if self._resolve_status_category(current.type, current.status) != "done":
             msg = f"Cannot reopen {issue_id}: status '{current.status}' is not in a done-category state"
@@ -720,6 +726,7 @@ class IssuesMixin(DBMixinProtocol):
         if not assignee or not assignee.strip():
             msg = "Assignee cannot be empty"
             raise ValueError(msg)
+        self._check_id_prefix(issue_id)
         # Look up the issue type and current assignee so we know which states are "open"
         # and can record old_value for undo
         row = self.conn.execute("SELECT type, assignee FROM issues WHERE id = ?", (issue_id,)).fetchone()
@@ -771,6 +778,7 @@ class IssuesMixin(DBMixinProtocol):
 
         Does NOT change status. Only succeeds if issue has an assignee.
         """
+        self._check_id_prefix(issue_id)
         current = self.get_issue(issue_id)
 
         if not current.assignee:

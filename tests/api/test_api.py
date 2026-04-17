@@ -1033,8 +1033,8 @@ class TestDependencyManagementAPI:
 
     async def test_add_dep_not_found(self, client: AsyncClient) -> None:
         resp = await client.post(
-            "/api/issue/nonexistent/dependencies",
-            json={"depends_on": "also-nonexistent"},
+            "/api/issue/test-nonexistent/dependencies",
+            json={"depends_on": "test-also-nonexistent"},
         )
         assert resp.status_code == 404
 

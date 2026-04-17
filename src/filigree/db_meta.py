@@ -34,6 +34,7 @@ class MetaMixin(DBMixinProtocol):
         if not text or not text.strip():
             msg = "Comment text cannot be empty"
             raise ValueError(msg)
+        self._check_id_prefix(issue_id)
         now = _now_iso()
         try:
             cursor = self.conn.execute(
@@ -60,6 +61,7 @@ class MetaMixin(DBMixinProtocol):
     # -- Labels --------------------------------------------------------------
 
     def add_label(self, issue_id: str, label: str) -> bool:
+        self._check_id_prefix(issue_id)
         normalized = self._validate_label_name(label)
         try:
             # Mutual exclusivity for review: namespace
@@ -79,6 +81,7 @@ class MetaMixin(DBMixinProtocol):
         return cursor.rowcount > 0
 
     def remove_label(self, issue_id: str, label: str) -> bool:
+        self._check_id_prefix(issue_id)
         normalized = self._validate_label_name(label)
         try:
             cursor = self.conn.execute(

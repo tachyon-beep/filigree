@@ -82,21 +82,140 @@ __all__ = [
 FILIGREE_DIR_NAME = ".filigree"
 DB_FILENAME = "filigree.db"
 CONFIG_FILENAME = "config.json"
+CONF_FILENAME = ".filigree.conf"
 SUMMARY_FILENAME = "context.md"
 
+# Schema version for .filigree.conf — bump if the file format changes incompatibly.
+CONF_VERSION = 1
 
-def find_filigree_root(start: Path | None = None) -> Path:
-    """Walk up from start (default cwd) looking for .filigree/ directory.
 
-    Returns the .filigree/ directory path (not the project root).
+# ---------------------------------------------------------------------------
+# Exceptions
+# ---------------------------------------------------------------------------
+
+
+class ProjectNotInitialisedError(FileNotFoundError):
+    """Raised when no ``.filigree.conf`` is found anywhere up to the filesystem root.
+
+    Inherits from FileNotFoundError so existing call sites that catch
+    FileNotFoundError still work during the v2.0 transition.
+    """
+
+
+class WrongProjectError(ValueError):
+    """Raised when an issue ID's prefix doesn't match the open DB's prefix.
+
+    Indicates the caller is operating on a ticket that belongs to a different
+    project. Common cause: an agent climbed into a parent's database and is
+    trying to act on an ID copy-pasted from somewhere else.
+    """
+
+
+def find_filigree_conf(start: Path | None = None) -> Path:
+    """Walk up from *start* (default cwd) looking for ``.filigree.conf``.
+
+    Strict and read-only: returns the path to an existing conf file or raises.
+    Does **not** auto-migrate legacy installs — that would require a write,
+    which makes inspection-only commands fail on read-only mounts. For
+    discovery that tolerates legacy installs without writing, use
+    :func:`find_filigree_anchor`.
+
+    Nested ``.filigree.conf`` files override their parents — first hit wins.
+
+    Raises:
+        ProjectNotInitialisedError: if no ``.filigree.conf`` is found in
+            *start* or any ancestor up to ``/``. The error message points at
+            ``filigree init`` and ``filigree doctor``.
     """
     current = (start or Path.cwd()).resolve()
     for parent in [current, *current.parents]:
-        candidate = parent / FILIGREE_DIR_NAME
-        if candidate.is_dir():
-            return candidate
-    msg = f"No {FILIGREE_DIR_NAME}/ directory found in {current} or any parent"
-    raise FileNotFoundError(msg)
+        conf = parent / CONF_FILENAME
+        if conf.is_file():
+            return conf
+    msg = (
+        f"No {CONF_FILENAME} found in {current} or any parent directory. "
+        f"Run `filigree init` here to create one, or `filigree doctor` to diagnose."
+    )
+    raise ProjectNotInitialisedError(msg)
+
+
+def find_filigree_anchor(start: Path | None = None) -> tuple[Path, Path | None]:
+    """Walk up from *start* for either a v2.0 conf or a legacy ``.filigree/`` dir.
+
+    Returns a ``(project_root, conf_path)`` pair. ``conf_path`` is the path
+    to the resolved ``.filigree.conf`` file when one exists, or ``None`` for a
+    legacy install (``.filigree/`` present, no conf yet). The walk is
+    closer-first: a child anchor wins over an ancestor regardless of type.
+
+    Pure read — never writes. Use this when discovery must work on read-only
+    mounts (inspection commands, MCP startup, ``filigree doctor``). To force
+    a backfill, run ``filigree init`` (or another explicit write path) on
+    a writable copy of the project.
+
+    Raises:
+        ProjectNotInitialisedError: if neither anchor is found anywhere up
+            to ``/``.
+    """
+    current = (start or Path.cwd()).resolve()
+    for parent in [current, *current.parents]:
+        conf = parent / CONF_FILENAME
+        if conf.is_file():
+            return parent, conf
+        legacy_dir = parent / FILIGREE_DIR_NAME
+        if legacy_dir.is_dir():
+            return parent, None
+    msg = (
+        f"No {CONF_FILENAME} or {FILIGREE_DIR_NAME}/ found in {current} or any parent directory. "
+        f"Run `filigree init` here to create one, or `filigree doctor` to diagnose."
+    )
+    raise ProjectNotInitialisedError(msg)
+
+
+def find_filigree_root(start: Path | None = None) -> Path:
+    """Return the project's ``.filigree/`` directory (back-compat helper).
+
+    Locates the project via :func:`find_filigree_conf` (the v2.0 anchor) and
+    returns the ``.filigree/`` directory next to that conf. The contract is
+    "the literal ``.filigree/`` directory" — every caller in this codebase
+    concatenates ``SUMMARY_FILENAME``, ``ephemeral.pid``, or ``DB_FILENAME``
+    onto the result, or does ``.parent`` to derive the project root, so the
+    return value must point at ``conf.parent / .filigree``, regardless of any
+    custom ``db`` location declared in the conf.
+
+    The conf's ``db`` field can still relocate the database itself; callers
+    that need the actual DB path should use :meth:`FiligreeDB.from_conf`.
+
+    Resolves through :func:`find_filigree_anchor` so legacy installs (which
+    have no conf yet) are still discoverable without writing.
+
+    New code should prefer :func:`find_filigree_anchor` plus
+    :meth:`FiligreeDB.from_conf` / :meth:`FiligreeDB.from_filigree_dir` over
+    this helper.
+    """
+    project_root, _conf_path = find_filigree_anchor(start)
+    return project_root / FILIGREE_DIR_NAME
+
+
+def read_conf(conf_path: Path) -> dict[str, Any]:
+    """Read and validate a ``.filigree.conf`` file.
+
+    Returns the parsed JSON dict. Raises ``ValueError`` if the file is not a
+    JSON object or is missing required keys (``prefix``, ``db``).
+    """
+    raw: Any = json.loads(conf_path.read_text())
+    if not isinstance(raw, dict):
+        msg = f"{conf_path}: must be a JSON object, got {type(raw).__name__}"
+        raise ValueError(msg)
+    missing = [k for k in ("prefix", "db") if k not in raw]
+    if missing:
+        msg = f"{conf_path}: missing required keys: {', '.join(missing)}"
+        raise ValueError(msg)
+    return raw
+
+
+def write_conf(conf_path: Path, data: dict[str, Any]) -> None:
+    """Write a ``.filigree.conf`` file atomically."""
+    write_atomic(conf_path, json.dumps(data, indent=2) + "\n")
 
 
 def read_config(filigree_dir: Path) -> ProjectConfig:
@@ -259,10 +378,37 @@ class FiligreeDB(FilesMixin, ScansMixin, IssuesMixin, EventsMixin, WorkflowMixin
         return db
 
     @classmethod
+    def from_conf(cls, conf_path: Path, *, check_same_thread: bool = True) -> FiligreeDB:
+        """Create a FiligreeDB from a ``.filigree.conf`` anchor file (v2.0).
+
+        Resolves the DB path relative to the conf file's directory.
+        """
+        data = read_conf(conf_path)
+        db_path = (conf_path.parent / data["db"]).resolve()
+        prefix: str = data["prefix"]
+        enabled_packs = data.get("enabled_packs")
+        db = cls(
+            db_path,
+            prefix=prefix,
+            enabled_packs=enabled_packs,
+            check_same_thread=check_same_thread,
+        )
+        db.initialize()
+        return db
+
+    @classmethod
     def from_project(cls, project_path: Path | None = None) -> FiligreeDB:
-        """Create a FiligreeDB by discovering .filigree/ from project_path (or cwd)."""
-        filigree_dir = find_filigree_root(project_path)
-        return cls.from_filigree_dir(filigree_dir)
+        """Create a FiligreeDB by discovering the project anchor from *project_path* (or cwd).
+
+        Walks up via :func:`find_filigree_anchor` so legacy installs (a bare
+        ``.filigree/`` directory with no conf yet) still open without requiring
+        write access during discovery. Returns the v2.0 conf-based DB if a
+        conf is present, otherwise falls back to ``from_filigree_dir``.
+        """
+        project_root, conf_path = find_filigree_anchor(project_path)
+        if conf_path is not None:
+            return cls.from_conf(conf_path)
+        return cls.from_filigree_dir(project_root / FILIGREE_DIR_NAME)
 
     def __enter__(self) -> FiligreeDB:
         return self
@@ -296,6 +442,33 @@ class FiligreeDB(FilesMixin, ScansMixin, IssuesMixin, EventsMixin, WorkflowMixin
             self._conn.execute("PRAGMA foreign_keys=ON")
             self._conn.execute("PRAGMA busy_timeout=5000")
         return self._conn
+
+    def _check_id_prefix(self, issue_id: str) -> None:
+        """Reject IDs whose prefix doesn't match this DB's prefix.
+
+        Catches cross-project ID confusion — e.g. ``update_issue("alpha-xyz")``
+        against a DB with ``prefix="beefdata"``. IDs without a recognisable
+        ``<prefix>-<infix>`` structure are passed through; the not-found path
+        handles them as before.
+
+        Prefixes may contain hyphens (``filigree init`` defaults the prefix to
+        ``cwd.name``, which is unconstrained), so the match is anchored on
+        ``startswith(prefix + "-")`` rather than splitting the ID.
+        """
+        if "-" not in issue_id:
+            return
+        if issue_id.startswith(self.prefix + "-"):
+            return
+        # Strip the trailing ``-<10-hex>`` infix to derive a readable label
+        # for the error message; rsplit handles hyphenated foreign prefixes too.
+        candidate_prefix = issue_id.rsplit("-", 1)[0]
+        msg = (
+            f"Issue ID {issue_id!r} belongs to project {candidate_prefix!r}, "
+            f"but this database is for project {self.prefix!r}. "
+            f"You may be in the wrong project directory, or you copied an ID "
+            f"from another project's docs."
+        )
+        raise WrongProjectError(msg)
 
     def initialize(self) -> None:
         """Create tables (if new) or migrate (if existing), then seed templates.

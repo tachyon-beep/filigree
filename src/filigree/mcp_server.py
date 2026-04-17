@@ -460,8 +460,10 @@ async def _run(project_path: Path | None) -> None:
     else:
         try:
             filigree_dir = find_filigree_root()
-        except FileNotFoundError:
-            print(f"Error: No {FILIGREE_DIR_NAME}/ found. Run 'filigree init' first.", file=sys.stderr)
+        except FileNotFoundError as exc:
+            # ProjectNotInitialisedError carries a message that points at
+            # `filigree init` and `filigree doctor`.
+            print(f"Error: {exc}", file=sys.stderr)
             sys.exit(1)
 
     _filigree_dir = filigree_dir

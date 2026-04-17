@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.0] - Unreleased
+
+### Added
+
+- **`.filigree.conf`** — JSON anchor file at the project root. The authoritative discovery target: walk-up looks for this file (not the `.filigree/` directory). Nested `.filigree.conf` files override their parents — first hit wins. Carries `version`, `project_name`, `prefix`, and `db` (path to the database, relative to the conf file).
+- **`FiligreeDB.from_conf(conf_path)`** classmethod — open a project DB by its conf anchor.
+- **`WrongProjectError`** (`ValueError` subclass) — raised on write operations against IDs whose prefix doesn't match the open DB's prefix. Catches an agent that climbed into a parent's database and tries to mutate a foreign-prefix ticket. Read methods (`get_issue`, `get_comments`, etc.) intentionally do not enforce, so legitimate cross-prefix lookups (migration, history) still work.
+- **`ProjectNotInitialisedError`** (`FileNotFoundError` subclass) — raised when no `.filigree.conf` is found anywhere up to `/`. Error message points at `filigree init` and `filigree doctor`.
+- **`filigree doctor`** flags `~/.filigree.conf` if present (a conf at `$HOME` claims everything beneath it; almost always a mistake) and reports whether the project's `.filigree.conf` anchor exists.
+
+### Changed
+
+- **`filigree init`** writes `.filigree.conf` alongside `.filigree/`.
+- **Discovery** is split: `find_filigree_conf` is strict (returns the conf path or raises) and `find_filigree_anchor` walks up for either a `.filigree.conf` or a legacy `.filigree/` directory, returning `(project_root, conf_path_or_None)`. Both are pure reads — discovery never writes. Legacy installs are still discoverable; the conf is created only by explicit init/install paths so inspection commands work on read-only mounts.
+- `find_filigree_root` continues to return the literal `.filigree/` directory next to the project anchor, regardless of any custom `db` location declared in the conf.
+- `FiligreeDB.from_project` now resolves via `find_filigree_anchor`, falling back to `from_filigree_dir` for legacy installs.
+- Error messages for "project not initialised" now point at `filigree init` and `filigree doctor` explicitly.
+
+### Fixed
+
+- **filigree-7840eae0bd**: agents in a directory with no `.filigree/` would silently walk up into a parent's `.filigree/` and write tickets into the wrong DB. Mitigated by the explicit `.filigree.conf` claim model plus the `WrongProjectError` write guard.
+- `WrongProjectError` no longer rejects legitimate IDs from projects whose prefix contains a hyphen. The check is now anchored on `startswith(prefix + "-")` instead of splitting the ID on the first `-` (which broke any project initialised with a hyphenated `cwd.name`, e.g. `my-app/` generating IDs like `my-app-abc1234567`).
+- Project discovery no longer writes during the walk-up. Previously a legacy install discovered via `find_filigree_conf` triggered a `.filigree.conf` backfill, causing `PermissionError` for inspection-only commands (`filigree list`, `filigree doctor`, MCP startup) on read-only checkouts.
+- `find_filigree_root` no longer misroutes callers when the conf's `db` field points outside `.filigree/`. It now returns the project's `.filigree/` directory directly, so `mcp_server`, `install`, `dashboard`, `hooks`, and the summary writers operate against the correct database and filesystem location.
+
 ## [1.6.1] - 2026-04-01
 
 ### Fixed

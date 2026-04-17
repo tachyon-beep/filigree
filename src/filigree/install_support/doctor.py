@@ -16,6 +16,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from filigree.core import (
+    CONF_FILENAME,
     CONFIG_FILENAME,
     DB_FILENAME,
     FILIGREE_DIR_NAME,
@@ -243,6 +244,39 @@ def run_doctor(project_root: Path | None = None) -> list[CheckResult]:
             )
             return results  # Can't proceed without .filigree/
     results.append(CheckResult(".filigree/ directory", True, f"Found at {filigree_dir}"))
+
+    # 1b. Check .filigree.conf anchor (v2.0). Warn if missing — this means the
+    # project predates the conf anchor; running any filigree command will
+    # auto-backfill on first open, but flagging it lets users see it's pending.
+    project_root = filigree_dir.parent
+    conf_path = project_root / CONF_FILENAME
+    if conf_path.exists():
+        results.append(CheckResult(".filigree.conf anchor", True, f"Found at {conf_path}"))
+    else:
+        results.append(
+            CheckResult(
+                ".filigree.conf anchor",
+                False,
+                f"Missing at {conf_path} — this v2.0 anchor will be auto-written on next use.",
+                fix_hint="No action required; run any filigree command to backfill.",
+            )
+        )
+
+    # 1c. Warn if ~/.filigree.conf exists. A conf at $HOME claims everything
+    # under $HOME — every uninitialised subdir falls into this DB unless the
+    # subdir has its own .filigree.conf. Almost certainly a mistake.
+    home_conf = Path.home() / CONF_FILENAME
+    if home_conf.exists() and home_conf.resolve() != conf_path.resolve():
+        results.append(
+            CheckResult(
+                "Home-directory .filigree.conf",
+                False,
+                f"{home_conf} exists. Any project under your home dir without its own {CONF_FILENAME} will fall into this database.",
+                fix_hint=f"Remove {home_conf} (and the sibling {FILIGREE_DIR_NAME}/) "
+                f"if it was created by accident, or `filigree init` in each "
+                f"subproject so they have their own anchor.",
+            )
+        )
 
     # 2. Check config.json
     config_path = filigree_dir / CONFIG_FILENAME

@@ -92,6 +92,7 @@ class DBMixinProtocol(Protocol):
     # -- Core (FiligreeDB) ---------------------------------------------------
 
     def get_issue(self, issue_id: str) -> Issue: ...
+    def _check_id_prefix(self, issue_id: str) -> None: ...
 
     # -- WorkflowMixin -------------------------------------------------------
 

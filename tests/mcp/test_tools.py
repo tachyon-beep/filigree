@@ -61,7 +61,7 @@ class TestCreateAndGet:
         assert data["title"] == "Get me"
 
     async def test_get_issue_not_found(self, mcp_db: FiligreeDB) -> None:
-        result = await call_tool("get_issue", {"id": "nonexistent-xyz"})
+        result = await call_tool("get_issue", {"id": "mcp-nonexistent"})
         data = _parse(result)
         assert data["code"] == "not_found"
 
@@ -201,7 +201,7 @@ class TestUpdateAndClose:
         assert data["status"] == "in_progress"
 
     async def test_update_not_found(self, mcp_db: FiligreeDB) -> None:
-        result = await call_tool("update_issue", {"id": "nonexistent-xyz", "title": "nope"})
+        result = await call_tool("update_issue", {"id": "mcp-nonexistent", "title": "nope"})
         data = _parse(result)
         assert data["code"] == "not_found"
 
@@ -212,7 +212,7 @@ class TestUpdateAndClose:
         assert data["status"] == "closed"
 
     async def test_close_not_found(self, mcp_db: FiligreeDB) -> None:
-        result = await call_tool("close_issue", {"id": "nonexistent-xyz"})
+        result = await call_tool("close_issue", {"id": "mcp-nonexistent"})
         data = _parse(result)
         assert data["code"] == "not_found"
 
@@ -295,7 +295,7 @@ class TestPlan:
         assert data["completed_steps"] == 1
 
     async def test_get_plan_not_found(self, mcp_db: FiligreeDB) -> None:
-        result = await call_tool("get_plan", {"milestone_id": "nonexistent-xyz"})
+        result = await call_tool("get_plan", {"milestone_id": "mcp-nonexistent"})
         data = _parse(result)
         assert data["code"] == "not_found"
 
@@ -444,7 +444,7 @@ class TestBatchClose:
         assert data["failed"] == []
 
     async def test_batch_close_not_found(self, mcp_db: FiligreeDB) -> None:
-        result = await call_tool("batch_close", {"ids": ["nonexistent-xyz"]})
+        result = await call_tool("batch_close", {"ids": ["mcp-nonexistent"]})
         data = _parse(result)
         assert data["count"] == 0
         assert len(data["failed"]) == 1
@@ -471,7 +471,7 @@ class TestBatchUpdate:
         assert mcp_db.get_issue(a.id).priority == 0
 
     async def test_batch_update_not_found(self, mcp_db: FiligreeDB) -> None:
-        result = await call_tool("batch_update", {"ids": ["nonexistent-xyz"], "status": "closed"})
+        result = await call_tool("batch_update", {"ids": ["mcp-nonexistent"], "status": "closed"})
         data = _parse(result)
         assert data["count"] == 0
         assert len(data["failed"]) == 1
@@ -491,7 +491,7 @@ class TestBatchAddLabel:
 
     async def test_batch_add_label_partial_failure(self, mcp_db: FiligreeDB) -> None:
         a = mcp_db.create_issue("Label A")
-        result = await call_tool("batch_add_label", {"ids": [a.id, "nonexistent-xyz"], "label": "security"})
+        result = await call_tool("batch_add_label", {"ids": [a.id, "mcp-nonexistent"], "label": "security"})
         data = _parse(result)
         assert data["count"] == 1
         assert a.id in data["succeeded"]
@@ -520,7 +520,7 @@ class TestBatchAddComment:
 
     async def test_batch_add_comment_partial_failure(self, mcp_db: FiligreeDB) -> None:
         a = mcp_db.create_issue("Comment A")
-        result = await call_tool("batch_add_comment", {"ids": [a.id, "nonexistent-xyz"], "text": "triage complete"})
+        result = await call_tool("batch_add_comment", {"ids": [a.id, "mcp-nonexistent"], "text": "triage complete"})
         data = _parse(result)
         assert data["count"] == 1
         assert a.id in data["succeeded"]
@@ -552,7 +552,7 @@ class TestClaimIssue:
         assert data["code"] == "conflict"
 
     async def test_claim_not_found(self, mcp_db: FiligreeDB) -> None:
-        result = await call_tool("claim_issue", {"id": "nonexistent-xyz", "assignee": "agent-1"})
+        result = await call_tool("claim_issue", {"id": "mcp-nonexistent", "assignee": "agent-1"})
         data = _parse(result)
         assert data["code"] == "not_found"
 
@@ -813,7 +813,7 @@ class TestWorkflowTemplateTools:
             assert isinstance(t["enforcement"], str), f"enforcement should be str, got {type(t['enforcement'])}: {t['enforcement']}"
 
     async def test_get_valid_transitions_not_found(self, mcp_db: FiligreeDB) -> None:
-        result = await call_tool("get_valid_transitions", {"issue_id": "nonexistent-xyz"})
+        result = await call_tool("get_valid_transitions", {"issue_id": "mcp-nonexistent"})
         data = _parse(result)
         assert data["code"] == "not_found"
 
@@ -827,7 +827,7 @@ class TestWorkflowTemplateTools:
         assert data["valid"] is True
 
     async def test_validate_issue_not_found(self, mcp_db: FiligreeDB) -> None:
-        result = await call_tool("validate_issue", {"issue_id": "nonexistent-xyz"})
+        result = await call_tool("validate_issue", {"issue_id": "mcp-nonexistent"})
         data = _parse(result)
         assert data["code"] == "not_found"
 
@@ -952,16 +952,16 @@ class TestMCPMutationEnhancements:
 
     async def test_batch_close_partial_failure(self, mcp_db: FiligreeDB) -> None:
         a = mcp_db.create_issue("Closeable")
-        result = await call_tool("batch_close", {"ids": [a.id, "nonexistent-xyz"]})
+        result = await call_tool("batch_close", {"ids": [a.id, "mcp-nonexistent"]})
         data = _parse(result)
         assert data["count"] == 1
         assert a.id in data["succeeded"]
         assert len(data["failed"]) == 1
-        assert data["failed"][0]["id"] == "nonexistent-xyz"
+        assert data["failed"][0]["id"] == "mcp-nonexistent"
 
     async def test_batch_update_partial_failure(self, mcp_db: FiligreeDB) -> None:
         a = mcp_db.create_issue("Updatable")
-        result = await call_tool("batch_update", {"ids": [a.id, "nonexistent-xyz"], "priority": 0})
+        result = await call_tool("batch_update", {"ids": [a.id, "mcp-nonexistent"], "priority": 0})
         data = _parse(result)
         assert data["count"] == 1
         assert a.id in data["succeeded"]
@@ -1496,7 +1496,7 @@ class TestFileTools:
         assert result["code"] == "not_found"
 
     async def test_get_issue_files_not_found(self, mcp_db: FiligreeDB) -> None:
-        result = _parse(await call_tool("get_issue_files", {"issue_id": "nonexistent-xyz"}))
+        result = _parse(await call_tool("get_issue_files", {"issue_id": "mcp-nonexistent"}))
         assert result["code"] == "not_found"
 
     async def test_get_file_timeline_for_association_event(self, mcp_db: FiligreeDB) -> None:
@@ -2164,7 +2164,7 @@ class TestAddFileAssociationIssueNotFound:
                 "add_file_association",
                 {
                     "file_id": file_data["id"],
-                    "issue_id": "nonexistent-xyz",
+                    "issue_id": "mcp-nonexistent",
                     "assoc_type": "task_for",
                 },
             )
@@ -2309,7 +2309,7 @@ class TestMCPReopenIssue:
         assert data["code"] == "invalid_transition"
 
     async def test_reopen_not_found(self, mcp_db: FiligreeDB) -> None:
-        result = await call_tool("reopen_issue", {"id": "nonexistent-xyz"})
+        result = await call_tool("reopen_issue", {"id": "mcp-nonexistent"})
         data = _parse(result)
         assert data["code"] == "not_found"
 
@@ -2338,7 +2338,7 @@ class TestMCPReleaseClaim:
         assert data["code"] == "conflict"
 
     async def test_release_not_found_via_mcp(self, mcp_db: FiligreeDB) -> None:
-        result = await call_tool("release_claim", {"id": "nonexistent-xyz"})
+        result = await call_tool("release_claim", {"id": "mcp-nonexistent"})
         data = _parse(result)
         assert data["code"] == "not_found"
 

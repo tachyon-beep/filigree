@@ -97,7 +97,7 @@ class TestShowAndList:
 
     def test_show_not_found(self, cli_in_project: tuple[CliRunner, Path]) -> None:
         runner, _ = cli_in_project
-        result = runner.invoke(cli, ["show", "nonexistent-abc"])
+        result = runner.invoke(cli, ["show", "test-nonexistent"])
         assert result.exit_code == 1
 
     def test_list_all(self, cli_in_project: tuple[CliRunner, Path]) -> None:
@@ -131,7 +131,7 @@ class TestUpdateAndClose:
 
     def test_update_not_found(self, cli_in_project: tuple[CliRunner, Path]) -> None:
         runner, _ = cli_in_project
-        result = runner.invoke(cli, ["update", "nonexistent-abc", "--title", "nope"])
+        result = runner.invoke(cli, ["update", "test-nonexistent", "--title", "nope"])
         assert result.exit_code == 1
 
     def test_close_issue(self, cli_in_project: tuple[CliRunner, Path]) -> None:
@@ -151,7 +151,7 @@ class TestUpdateAndClose:
 
     def test_close_not_found(self, cli_in_project: tuple[CliRunner, Path]) -> None:
         runner, _ = cli_in_project
-        result = runner.invoke(cli, ["close", "nonexistent-abc"])
+        result = runner.invoke(cli, ["close", "test-nonexistent"])
         assert result.exit_code == 1
         assert "Not found" in result.output
 
@@ -160,13 +160,13 @@ class TestUpdateAndClose:
         runner, _ = cli_in_project
         r = runner.invoke(cli, ["create", "Good one"])
         good_id = _extract_id(r.output)
-        result = runner.invoke(cli, ["close", good_id, "nonexistent-abc", "--json"])
+        result = runner.invoke(cli, ["close", good_id, "test-nonexistent", "--json"])
         assert result.exit_code == 1
         data = json.loads(result.output)
         assert len(data["closed"]) == 1
         assert data["closed"][0]["id"] == good_id
         assert len(data["errors"]) == 1
-        assert data["errors"][0]["id"] == "nonexistent-abc"
+        assert data["errors"][0]["id"] == "test-nonexistent"
 
     def test_close_json_all_success(self, cli_in_project: tuple[CliRunner, Path]) -> None:
         runner, _ = cli_in_project
@@ -192,7 +192,7 @@ class TestReopen:
 
     def test_reopen_not_found(self, cli_in_project: tuple[CliRunner, Path]) -> None:
         runner, _ = cli_in_project
-        result = runner.invoke(cli, ["reopen", "nonexistent-abc"])
+        result = runner.invoke(cli, ["reopen", "test-nonexistent"])
         assert result.exit_code == 1
         assert "Not found" in result.output
 
@@ -202,7 +202,7 @@ class TestReopen:
         r = runner.invoke(cli, ["create", "Reopen me"])
         good_id = _extract_id(r.output)
         runner.invoke(cli, ["close", good_id])
-        result = runner.invoke(cli, ["reopen", good_id, "nonexistent-abc", "--json"])
+        result = runner.invoke(cli, ["reopen", good_id, "test-nonexistent", "--json"])
         assert result.exit_code == 1
         data = json.loads(result.output)
         assert len(data["reopened"]) == 1
@@ -245,7 +245,7 @@ class TestCommentsCli:
 
     def test_comment_not_found(self, cli_in_project: tuple[CliRunner, Path]) -> None:
         runner, _ = cli_in_project
-        result = runner.invoke(cli, ["add-comment", "nonexistent-abc", "text"])
+        result = runner.invoke(cli, ["add-comment", "test-nonexistent", "text"])
         assert result.exit_code == 1
 
     def test_comments_empty(self, cli_in_project: tuple[CliRunner, Path]) -> None:
@@ -284,7 +284,7 @@ class TestLabelCli:
 
     def test_label_add_not_found(self, cli_in_project: tuple[CliRunner, Path]) -> None:
         runner, _ = cli_in_project
-        result = runner.invoke(cli, ["add-label", "nonexistent-abc", "bug"])
+        result = runner.invoke(cli, ["add-label", "test-nonexistent", "bug"])
         assert result.exit_code == 1
 
 
@@ -317,7 +317,7 @@ class TestClaimCli:
 
     def test_claim_not_found(self, cli_in_project: tuple[CliRunner, Path]) -> None:
         runner, _ = cli_in_project
-        result = runner.invoke(cli, ["claim", "nonexistent-abc", "--assignee", "a"])
+        result = runner.invoke(cli, ["claim", "test-nonexistent", "--assignee", "a"])
         assert result.exit_code == 1
 
 
@@ -375,7 +375,7 @@ class TestReleaseCli:
 
     def test_release_not_found(self, cli_in_project: tuple[CliRunner, Path]) -> None:
         runner, _ = cli_in_project
-        result = runner.invoke(cli, ["release", "nonexistent-abc"])
+        result = runner.invoke(cli, ["release", "test-nonexistent"])
         assert result.exit_code == 1
 
     def test_release_not_claimed(self, cli_in_project: tuple[CliRunner, Path]) -> None:
@@ -398,7 +398,7 @@ class TestReleaseCli:
 
     def test_release_json_not_found(self, cli_in_project: tuple[CliRunner, Path]) -> None:
         runner, _ = cli_in_project
-        result = runner.invoke(cli, ["release", "nonexistent-abc", "--json"])
+        result = runner.invoke(cli, ["release", "test-nonexistent", "--json"])
         assert result.exit_code == 1
         data = json.loads(result.output)
         assert "error" in data

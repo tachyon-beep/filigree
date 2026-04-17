@@ -73,6 +73,10 @@ class PlanningMixin(DBMixinProtocol):
     # -- Dependencies --------------------------------------------------------
 
     def add_dependency(self, issue_id: str, depends_on_id: str, *, dep_type: str = "blocks", actor: str = "") -> bool:
+        # Reject cross-project IDs up front so the prefix mismatch is reported
+        # for *either* argument, not whichever happens to be looked up first.
+        self._check_id_prefix(issue_id)
+        self._check_id_prefix(depends_on_id)
         # Validate both issues exist
         self.get_issue(issue_id)  # raises KeyError if not found
         self.get_issue(depends_on_id)  # raises KeyError if not found
@@ -128,6 +132,8 @@ class PlanningMixin(DBMixinProtocol):
         return False
 
     def remove_dependency(self, issue_id: str, depends_on_id: str, *, actor: str = "") -> bool:
+        self._check_id_prefix(issue_id)
+        self._check_id_prefix(depends_on_id)
         try:
             # Read dep_type before deleting so undo can restore it
             row = self.conn.execute(

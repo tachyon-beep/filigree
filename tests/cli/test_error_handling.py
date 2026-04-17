@@ -19,13 +19,13 @@ class TestReopenExitCode:
 
     def test_reopen_nonexistent_exits_nonzero(self, cli_in_project: tuple[CliRunner, Path]) -> None:
         runner, _ = cli_in_project
-        result = runner.invoke(cli, ["reopen", "nonexistent-abc"])
+        result = runner.invoke(cli, ["reopen", "test-nonexistent"])
         assert result.exit_code != 0, f"Expected non-zero exit code, got {result.exit_code}"
         assert "Not found" in result.output
 
     def test_reopen_nonexistent_json_exits_nonzero(self, cli_in_project: tuple[CliRunner, Path]) -> None:
         runner, _ = cli_in_project
-        result = runner.invoke(cli, ["reopen", "nonexistent-abc", "--json"])
+        result = runner.invoke(cli, ["reopen", "test-nonexistent", "--json"])
         assert result.exit_code != 0
         data = json.loads(result.output)
         assert "errors" in data

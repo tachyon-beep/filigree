@@ -442,7 +442,7 @@ class TestReleaseClaim:
 
     def test_release_not_found(self, db: FiligreeDB) -> None:
         with pytest.raises(KeyError, match="not found"):
-            db.release_claim("nonexistent-xyz")
+            db.release_claim("test-nonexistent")
 
     def test_release_then_reclaim(self, db: FiligreeDB) -> None:
         issue = db.create_issue("Reclaim test")
