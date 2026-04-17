@@ -31,6 +31,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `WrongProjectError` no longer rejects legitimate IDs from projects whose prefix contains a hyphen. The check is now anchored on `startswith(prefix + "-")` instead of splitting the ID on the first `-` (which broke any project initialised with a hyphenated `cwd.name`, e.g. `my-app/` generating IDs like `my-app-abc1234567`).
 - Project discovery no longer writes during the walk-up. Previously a legacy install discovered via `find_filigree_conf` triggered a `.filigree.conf` backfill, causing `PermissionError` for inspection-only commands (`filigree list`, `filigree doctor`, MCP startup) on read-only checkouts.
 - `find_filigree_root` no longer misroutes callers when the conf's `db` field points outside `.filigree/`. It now returns the project's `.filigree/` directory directly, so `mcp_server`, `install`, `dashboard`, `hooks`, and the summary writers operate against the correct database and filesystem location.
+- **filigree-33a938b515**: concurrent MCP tool invocations no longer corrupt each other. The MCP SDK dispatches tool calls concurrently (`tg.start_soon` per request) and `FiligreeDB` caches a single `sqlite3.Connection` — a failing mutation's `finally`-block rollback could erase a sibling coroutine's uncommitted writes on the shared connection. `call_tool` now acquires a per-`FiligreeDB` `asyncio.Lock` around handler execution and the safety-net rollback, serialising tool calls against the shared connection.
 
 ## [1.6.1] - 2026-04-01
 

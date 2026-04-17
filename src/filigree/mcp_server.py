@@ -12,10 +12,12 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import asyncio
 import logging
 import sqlite3
 import sys
 import time
+import weakref
 from collections.abc import Callable
 from contextvars import ContextVar, Token
 from pathlib import Path
@@ -56,6 +58,21 @@ _filigree_dir: Path | None = None
 _logger: logging.Logger | None = None
 _request_db: ContextVar[FiligreeDB | None] = ContextVar("filigree_request_db", default=None)
 _request_filigree_dir: ContextVar[Path | None] = ContextVar("filigree_request_dir", default=None)
+
+# Per-DB async lock serialising ``call_tool`` execution. The MCP SDK dispatches
+# tool invocations concurrently via ``tg.start_soon``; without serialisation two
+# coroutines share the single cached ``sqlite3.Connection`` on ``FiligreeDB``
+# and the ``finally`` rollback of one can wipe another's uncommitted writes.
+# See filigree-33a938b515.
+_tool_locks: weakref.WeakKeyDictionary[FiligreeDB, asyncio.Lock] = weakref.WeakKeyDictionary()
+
+
+def _lock_for(db_obj: FiligreeDB) -> asyncio.Lock:
+    lock = _tool_locks.get(db_obj)
+    if lock is None:
+        lock = asyncio.Lock()
+        _tool_locks[db_obj] = lock
+    return lock
 
 
 # ---------------------------------------------------------------------------
@@ -327,31 +344,48 @@ async def list_tools() -> list[Tool]:
 async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
     t0 = time.monotonic()
 
-    try:
-        handler = _all_handlers.get(name)
-        if handler is None:
-            from filigree.mcp_tools.common import _text as _common_text
+    # Fast-path: unknown tool returns an error response before any DB contact
+    # and without holding the serialisation lock.
+    handler = _all_handlers.get(name)
+    if handler is None:
+        from filigree.mcp_tools.common import _text as _common_text
 
-            return _common_text({"error": f"Unknown tool: {name}", "code": "unknown_tool"})
-        result: list[TextContent] = await handler(arguments)
-    except Exception:
-        if _logger:
-            _logger.error("tool_error", extra={"tool": name, "args_data": arguments}, exc_info=True)
-        raise
+        return _common_text({"error": f"Unknown tool: {name}", "code": "unknown_tool"})
+
+    # Serialise tool execution per-DB. The MCP SDK dispatches tool calls
+    # concurrently; the shared ``sqlite3.Connection`` on ``FiligreeDB`` has
+    # no transaction isolation between coroutines, and the finally-rollback
+    # below would otherwise erase a sibling coroutine's uncommitted writes.
+    # See filigree-33a938b515.
+    active_db = _request_db.get() or db
+    lock = _lock_for(active_db) if active_db is not None else None
+
+    async def _run() -> list[TextContent]:
+        try:
+            out: list[TextContent] = await handler(arguments)
+            return out
+        except Exception:
+            if _logger:
+                _logger.error("tool_error", extra={"tool": name, "args_data": arguments}, exc_info=True)
+            raise
+        finally:
+            # Safety net: roll back any uncommitted transaction left by a
+            # failed mutation. Re-resolve _get_db() in case the handler
+            # switched the ContextVar-scoped DB.
+            resolved = _request_db.get() or db
+            if resolved is not None and resolved.conn.in_transaction:
+                resolved.conn.rollback()
+
+    if lock is None:
+        result = await _run()
     else:
-        duration_ms = round((time.monotonic() - t0) * 1000, 1)
-        if _logger:
-            _logger.info("tool_call", extra={"tool": name, "args_data": arguments, "duration_ms": duration_ms})
-        return result
-    finally:
-        # Safety net: roll back any uncommitted transaction left by a failed
-        # mutation.  Successful mutations commit explicitly; only partial
-        # failures leave dirty state that would be flushed by the next commit.
-        # Re-resolve _get_db() to ensure we roll back the correct connection
-        # in server mode where _request_db ContextVar scopes per-request.
-        active_db = _request_db.get() or db
-        if active_db is not None and active_db.conn.in_transaction:
-            active_db.conn.rollback()
+        async with lock:
+            result = await _run()
+
+    duration_ms = round((time.monotonic() - t0) * 1000, 1)
+    if _logger:
+        _logger.info("tool_call", extra={"tool": name, "args_data": arguments, "duration_ms": duration_ms})
+    return result
 
 
 # ---------------------------------------------------------------------------
