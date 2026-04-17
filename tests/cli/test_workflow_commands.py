@@ -296,6 +296,87 @@ class TestPlanCli:
         data = json.loads(result.output)
         assert "milestone" in data
 
+    def test_plan_step_marker_uses_status_category(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        """Bug fix: filigree-6b0f8cfb49 — step icons must be derived from
+
+        status_category, not raw status names. Built-in planning states use
+        ``pending`` (open) and ``in_progress`` (wip), not the legacy
+        ``open``/``closed`` names the CLI hardcodes.
+        """
+        runner, _ = cli_in_project
+        plan_json = json.dumps(
+            {
+                "milestone": {"title": "Markers MS"},
+                "phases": [{"title": "Phase 1", "steps": [{"title": "Step 1"}]}],
+            }
+        )
+        r = runner.invoke(cli, ["create-plan"], input=plan_json)
+        assert r.exit_code == 0
+        milestone_line = next(line for line in r.output.splitlines() if "Markers MS" in line)
+        ms_id = milestone_line.split("(")[1].rstrip(")")
+        result = runner.invoke(cli, ["plan", ms_id])
+        assert result.exit_code == 0
+        # A pending step is "open" category → space marker, NOT "?" (unknown)
+        step_lines = [ln for ln in result.output.splitlines() if "Step 1" in ln]
+        assert step_lines, "Step 1 missing from plan output"
+        assert "[?]" not in step_lines[0], f"Unknown marker for pending step: {step_lines[0]!r}"
+        assert "[ ]" in step_lines[0], f"Expected open marker for pending step: {step_lines[0]!r}"
+
+    def test_plan_phase_marker_uses_status_category(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        """Phase WIP marker must use status_category=='wip', not raw 'in_progress'.
+
+        The built-in planning phase workflow uses ``active`` (wip category),
+        not ``in_progress`` — so the old equality check never matched.
+        """
+        runner, _ = cli_in_project
+        plan_json = json.dumps(
+            {
+                "milestone": {"title": "PhaseMarkers MS"},
+                "phases": [{"title": "Phase A", "steps": [{"title": "Step 1"}]}],
+            }
+        )
+        r = runner.invoke(cli, ["create-plan"], input=plan_json)
+        assert r.exit_code == 0
+        milestone_line = next(line for line in r.output.splitlines() if "PhaseMarkers MS" in line)
+        ms_id = milestone_line.split("(")[1].rstrip(")")
+
+        # Advance phase to wip state (built-in planning uses 'active' as wip)
+        phase_line = next(line for line in r.output.splitlines() if "Phase A" in line)
+        # "Created plan: ...(ms_id)" then "  Phase: Phase A (1 steps)"
+        # Find phase id via JSON call
+        result_json = runner.invoke(cli, ["plan", ms_id, "--json"])
+        data = json.loads(result_json.output)
+        phase_id = data["phases"][0]["phase"]["id"]
+        upd = runner.invoke(cli, ["update", phase_id, "--status", "active"])
+        assert upd.exit_code == 0, f"update to active failed: {upd.output}"
+
+        result = runner.invoke(cli, ["plan", ms_id])
+        assert result.exit_code == 0
+        phase_lines = [ln for ln in result.output.splitlines() if "Phase A" in ln]
+        assert phase_lines, "Phase A missing from plan output"
+        # WIP marker should appear, not the empty [    ] marker
+        assert "[WIP]" in phase_lines[0], f"Expected WIP marker for active phase: {phase_lines[0]!r}"
+        # Silence unused-variable warning for phase_line sanity output
+        assert "Phase A" in phase_line
+
+    def test_create_plan_bad_priority_exits_1(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        """Bug fix: filigree-a5e7090f76 — out-of-range priority must exit 1
+
+        with a clean error message, not crash with sqlite3.IntegrityError
+        traceback.
+        """
+        runner, _ = cli_in_project
+        plan_json = json.dumps(
+            {
+                "milestone": {"title": "MS"},
+                "phases": [{"title": "P1", "steps": [{"title": "S1", "priority": 99}]}],
+            }
+        )
+        result = runner.invoke(cli, ["create-plan"], input=plan_json)
+        assert result.exit_code == 1
+        assert "Traceback" not in result.output
+        assert "priority" in result.output.lower()
+
 
 class TestCreatePlanMissingKeys:
     def test_missing_milestone_key(self, cli_in_project: tuple[CliRunner, Path]) -> None:

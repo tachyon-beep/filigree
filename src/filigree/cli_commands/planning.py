@@ -80,16 +80,18 @@ def plan(milestone_id: str, as_json: bool) -> None:
 
             if p_done == p_total and p_total > 0:
                 marker = "[DONE]"
-            elif phase["status"] == "in_progress":
+            elif phase["status_category"] == "wip":
                 marker = "[WIP] "
             else:
                 marker = "[    ]"
 
             click.echo(f"  {marker} {phase['title']} ({p_done}/{p_total})")
 
+            # Markers keyed on status_category so custom packs and the built-in
+            # planning workflow (pending/in_progress/completed) both render correctly.
+            status_icon = {"open": " ", "wip": ">", "done": "x"}
             for step_dict in phase_data["steps"]:
-                status_icon = {"open": " ", "in_progress": ">", "closed": "x"}
-                icon = status_icon.get(step_dict["status"], "?")
+                icon = status_icon.get(step_dict["status_category"], "?")
                 ready_mark = " *" if step_dict["is_ready"] else ""
                 click.echo(f"    [{icon}] {step_dict['id']} {step_dict['title']}{ready_mark}")
 

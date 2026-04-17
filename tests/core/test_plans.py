@@ -173,6 +173,76 @@ class TestCreatePlan:
         dep_events = [e for e in events if e["event_type"] == "dependency_added"]
         assert len(dep_events) == 1
 
+    def test_plan_dedups_duplicate_step_deps(self, db: FiligreeDB) -> None:
+        """Bug fix: filigree-fcac6acf6c — a step with duplicate dep indices
+
+        creates one dep row (INSERT OR IGNORE) but must not emit duplicate
+        dependency_added events. Duplicate events block undo_last() from
+        reaching earlier reversible events on the same step.
+        """
+        plan = db.create_plan(
+            {"title": "Dup Deps MS"},
+            [
+                {
+                    "title": "Phase",
+                    "steps": [
+                        {"title": "S1"},
+                        {"title": "S2", "deps": [0, 0, 0]},
+                    ],
+                },
+            ],
+        )
+        step_2_id = plan["phases"][0]["steps"][1]["id"]
+        events = db.get_issue_events(step_2_id)
+        dep_events = [e for e in events if e["event_type"] == "dependency_added"]
+        assert len(dep_events) == 1, f"Expected 1 dependency_added event for duplicate deps, got {len(dep_events)}"
+
+    def test_plan_rejects_out_of_range_priority(self, db: FiligreeDB) -> None:
+        """Bug fix: filigree-a5e7090f76 — invalid priority must raise ValueError
+
+        before the transaction begins, not surface as sqlite3.IntegrityError
+        from the DB-layer CHECK constraint.
+        """
+        with pytest.raises(ValueError, match="priority"):
+            db.create_plan(
+                {"title": "Bad Priority MS", "priority": 99},
+                [{"title": "Phase", "steps": [{"title": "S1"}]}],
+            )
+
+    def test_plan_rejects_out_of_range_phase_priority(self, db: FiligreeDB) -> None:
+        """Phase priority must also be validated up front."""
+        with pytest.raises(ValueError, match="priority"):
+            db.create_plan(
+                {"title": "MS"},
+                [{"title": "Phase", "priority": 99, "steps": [{"title": "S1"}]}],
+            )
+
+    def test_plan_rejects_out_of_range_step_priority(self, db: FiligreeDB) -> None:
+        """Step priority must also be validated up front."""
+        with pytest.raises(ValueError, match="priority"):
+            db.create_plan(
+                {"title": "MS"},
+                [{"title": "Phase", "steps": [{"title": "S1", "priority": -1}]}],
+            )
+
+    def test_plan_rejects_non_int_priority(self, db: FiligreeDB) -> None:
+        """Non-integer priority must raise ValueError, not sqlite3.IntegrityError."""
+        with pytest.raises(ValueError, match="priority"):
+            db.create_plan(
+                {"title": "MS", "priority": "high"},  # type: ignore[typeddict-item]
+                [{"title": "Phase", "steps": [{"title": "S1"}]}],
+            )
+
+    def test_plan_bad_priority_does_not_orphan_rows(self, db: FiligreeDB) -> None:
+        """Priority validation must run before any INSERT — no orphan milestones."""
+        issues_before = len(db.list_issues())
+        with pytest.raises(ValueError, match="priority"):
+            db.create_plan(
+                {"title": "MS"},
+                [{"title": "Phase", "steps": [{"title": "S1", "priority": 99}]}],
+            )
+        assert len(db.list_issues()) == issues_before
+
 
 class TestCreatePlanRollback:
     """Bug fix: filigree-4135c6 — create_plan no rollback."""

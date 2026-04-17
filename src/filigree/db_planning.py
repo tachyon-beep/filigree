@@ -37,6 +37,22 @@ logger = logging.getLogger(__name__)
 _MAX_TREE_DEPTH = 10
 
 
+def _validate_priority(value: Any, label: str) -> None:
+    """Validate a plan-input priority up front.
+
+    Mirrors the DB-layer CHECK constraint (``priority BETWEEN 0 AND 4``) so
+    bad values surface as ValueError before the transaction begins — preventing
+    a partial insert from tripping ``sqlite3.IntegrityError`` mid-plan and
+    bubbling raw DB errors to CLI callers.
+
+    Rejects booleans explicitly since ``bool`` is a subclass of ``int`` and
+    would otherwise pass the range check silently.
+    """
+    if isinstance(value, bool) or not isinstance(value, int) or not (0 <= value <= 4):
+        msg = f"{label} 'priority' must be an integer 0-4, got {value!r}"
+        raise ValueError(msg)
+
+
 class NotAReleaseError(ValueError):
     """Raised by ``get_release_tree`` when the issue exists but is not a release.
 
@@ -346,14 +362,20 @@ class PlanningMixin(DBMixinProtocol):
         if not milestone.get("title", "").strip():
             msg = "Milestone 'title' is required and cannot be empty"
             raise ValueError(msg)
+        _validate_priority(milestone.get("priority", 2), "Milestone")
         for phase_idx, phase_data in enumerate(phases):
             if not phase_data.get("title", "").strip():
                 msg = f"Phase {phase_idx + 1} 'title' is required and cannot be empty"
                 raise ValueError(msg)
+            _validate_priority(phase_data.get("priority", 2), f"Phase {phase_idx + 1}")
             for step_idx, step_data in enumerate(phase_data.get("steps", [])):
                 if not step_data.get("title", "").strip():
                     msg = f"Phase {phase_idx + 1}, Step {step_idx + 1} 'title' is required and cannot be empty"
                     raise ValueError(msg)
+                _validate_priority(
+                    step_data.get("priority", 2),
+                    f"Phase {phase_idx + 1}, Step {step_idx + 1}",
+                )
 
         now = _now_iso()
         milestone_initial = self.templates.get_initial_state("milestone")
@@ -472,11 +494,20 @@ class PlanningMixin(DBMixinProtocol):
                             msg = f"Dependency {issue_id} -> {dep_issue_id} would create a cycle"
                             raise ValueError(msg)
 
-                        self.conn.execute(
+                        cursor = self.conn.execute(
                             "INSERT OR IGNORE INTO dependencies (issue_id, depends_on_id, type, created_at) VALUES (?, ?, 'blocks', ?)",
                             (issue_id, dep_issue_id, now),
                         )
-                        self._record_event(issue_id, "dependency_added", actor=actor, new_value=f"blocks:{dep_issue_id}")
+                        # Emit event only when a new row was inserted: duplicate deps
+                        # (``deps: [0, 0]``) collapse to one dep row and must not produce
+                        # multiple events, which otherwise wedge undo_last().
+                        if cursor.rowcount > 0:
+                            self._record_event(
+                                issue_id,
+                                "dependency_added",
+                                actor=actor,
+                                new_value=f"blocks:{dep_issue_id}",
+                            )
 
             self.conn.commit()
         except Exception:
