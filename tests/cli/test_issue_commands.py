@@ -179,6 +179,21 @@ class TestUpdateAndClose:
         assert len(data["closed"]) == 2
         assert "errors" not in data
 
+    def test_close_json_unblocked_only_newly_unblocked(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        """`unblocked` must contain only issues that became ready from this close, not pre-existing ready issues."""
+        runner, _ = cli_in_project
+        already_ready = _extract_id(runner.invoke(cli, ["create", "Already ready"]).output)
+        dep = _extract_id(runner.invoke(cli, ["create", "Dep"]).output)
+        blocked = _extract_id(runner.invoke(cli, ["create", "Blocked"]).output)
+        assert runner.invoke(cli, ["add-dep", blocked, dep]).exit_code == 0
+
+        result = runner.invoke(cli, ["close", dep, "--json"])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        unblocked_ids = {i["id"] for i in data["unblocked"]}
+        assert blocked in unblocked_ids, "issue whose only dep closed must appear in unblocked"
+        assert already_ready not in unblocked_ids, f"pre-existing ready issue must NOT appear in unblocked; got {unblocked_ids}"
+
 
 class TestReopen:
     def test_reopen_issue(self, cli_in_project: tuple[CliRunner, Path]) -> None:

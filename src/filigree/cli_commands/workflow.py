@@ -113,16 +113,7 @@ def type_info(type_name: str, as_json: bool) -> None:
                     }
                     for t in tpl.transitions
                 ],
-                "fields_schema": [
-                    {
-                        "name": f.name,
-                        "type": f.type,
-                        "description": f.description,
-                        **({"pattern": f.pattern} if f.pattern else {}),
-                        **({"unique": f.unique} if f.unique else {}),
-                    }
-                    for f in tpl.fields_schema
-                ],
+                "fields_schema": [db._field_schema_to_info(f) for f in tpl.fields_schema],
             }
             click.echo(json_mod.dumps(data, indent=2))
             return
@@ -276,7 +267,8 @@ def guide_cmd(pack_name: str, as_json: bool) -> None:
             sys.exit(1)
 
         if as_json:
-            click.echo(json_mod.dumps({"pack": pack_name, "guide": pack.guide}, indent=2, default=str))
+            guide_obj = None if pack.guide is None else dict(pack.guide)
+            click.echo(json_mod.dumps({"pack": pack.pack, "guide": guide_obj}, indent=2))
             return
 
         if pack.guide is None:

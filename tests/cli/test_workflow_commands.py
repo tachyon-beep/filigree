@@ -49,6 +49,22 @@ class TestWorkflowCli:
         assert "transitions" in data
         assert "initial_state" in data
 
+    def test_type_info_json_includes_field_schema_metadata(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        """--json must include options/default/required_at for fields that define them.
+
+        The built-in `bug` type's `severity` field has all three, so it anchors this test.
+        """
+        runner, _ = cli_in_project
+        result = runner.invoke(cli, ["type-info", "bug", "--json"])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        fields = {f["name"]: f for f in data["fields_schema"]}
+        assert "severity" in fields, "bug.severity field missing from --json output"
+        severity = fields["severity"]
+        assert severity.get("options") == ["critical", "major", "minor", "cosmetic"]
+        assert severity.get("default") == "major"
+        assert severity.get("required_at") == ["confirmed"]
+
     def test_type_info_unknown(self, cli_in_project: tuple[CliRunner, Path]) -> None:
         runner, _ = cli_in_project
         result = runner.invoke(cli, ["type-info", "nonexistent_type"])
@@ -134,6 +150,16 @@ class TestWorkflowCli:
         result = runner.invoke(cli, ["guide", "nonexistent_pack"])
         assert result.exit_code == 1
         assert "Unknown pack" in result.output
+
+    def test_guide_json_returns_object(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        """--json must emit guide as an object, not a stringified MappingProxyType."""
+        runner, _ = cli_in_project
+        result = runner.invoke(cli, ["guide", "core", "--json"])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["pack"] == "core"
+        assert isinstance(data["guide"], dict), f"guide must be dict, got {type(data['guide']).__name__}"
+        assert "overview" in data["guide"]
 
     def test_templates_group_default(self, cli_in_project: tuple[CliRunner, Path]) -> None:
         """filigree templates (no subcommand) still lists templates."""

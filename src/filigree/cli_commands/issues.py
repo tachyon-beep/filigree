@@ -274,6 +274,7 @@ def close(ctx: click.Context, issue_ids: tuple[str, ...], reason: str, as_json: 
     with get_db() as db:
         closed: list[dict[str, Any]] = []
         errors: list[dict[str, str]] = []
+        ready_before = {i.id for i in db.get_ready()} if as_json else set()
         for issue_id in issue_ids:
             try:
                 issue = db.close_issue(issue_id, reason=reason, actor=ctx.obj["actor"])
@@ -290,10 +291,9 @@ def close(ctx: click.Context, issue_ids: tuple[str, ...], reason: str, as_json: 
                 if not as_json:
                     click.echo(str(e), err=True)
         if as_json:
-            # Include newly-unblocked issues (minimal fields to save tokens)
-            closed_ids = {d["id"] for d in closed}
+            # Only issues that became ready *after* the close (per docs/cli.md).
             ready = db.get_ready()
-            unblocked = [{"id": i.id, "title": i.title, "priority": i.priority, "type": i.type} for i in ready if i.id not in closed_ids]
+            unblocked = [{"id": i.id, "title": i.title, "priority": i.priority, "type": i.type} for i in ready if i.id not in ready_before]
             payload: dict[str, Any] = {"closed": closed, "unblocked": unblocked}
             if errors:
                 payload["errors"] = errors
