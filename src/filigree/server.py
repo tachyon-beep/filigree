@@ -266,7 +266,7 @@ def start_daemon(port: int | None = None) -> DaemonResult:
         except OSError as exc:
             return DaemonResult(False, f"Failed to start daemon: {exc}")
 
-        write_pid_file(SERVER_PID_FILE, proc.pid, cmd="filigree dashboard --server-mode")
+        write_pid_file(SERVER_PID_FILE, proc.pid, cmd="filigree dashboard --server-mode", port=daemon_port)
         # Lock released here — critical section is complete
 
     # Post-startup health check runs outside the lock to avoid blocking
@@ -389,7 +389,8 @@ def claim_current_process_as_daemon(*, port: int | None = None) -> bool:
                 logger.warning("Stale PID file (pid %d is not filigree); cleaning up", tracked_pid)
             SERVER_PID_FILE.unlink(missing_ok=True)
 
-        write_pid_file(SERVER_PID_FILE, current_pid, cmd="filigree dashboard --server-mode")
+        claim_port = port if port is not None else read_server_config().port
+        write_pid_file(SERVER_PID_FILE, current_pid, cmd="filigree dashboard --server-mode", port=claim_port)
         if port is not None:
             config = read_server_config()
             if config.port != port:

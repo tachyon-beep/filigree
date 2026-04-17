@@ -199,6 +199,89 @@ class TestIdleTrackingMiddleware:
 # ---------------------------------------------------------------------------
 
 
+class TestMainGlobalReset:
+    """Bug filigree-bff063de18: repeated in-process main() calls must not serve the
+    wrong database because _project_store / _db globals leak between runs."""
+
+    def test_ethereal_main_clears_prior_project_store(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        filigree_dir = _create_filigree_dir(tmp_path, "proj-a", "a")
+        monkeypatch.setattr(dash_module, "find_filigree_root", lambda: filigree_dir)
+
+        # Simulate lingering server-mode global from a prior in-process run.
+        leftover = ProjectStore()
+        dash_module._project_store = leftover
+        dash_module._db = None
+
+        captured: dict[str, object] = {}
+
+        def fake_uvicorn_run(*args: object, **kwargs: object) -> None:
+            captured["project_store_during_run"] = dash_module._project_store
+            captured["db_during_run"] = dash_module._db
+
+        monkeypatch.setattr("uvicorn.run", fake_uvicorn_run)
+        monkeypatch.setattr("filigree.dashboard.webbrowser.open", lambda *a, **kw: None)
+
+        try:
+            dash_module.main(port=9999, no_browser=True, server_mode=False)
+        finally:
+            # Ensure we don't pollute other tests.
+            dash_module._project_store = None
+            dash_module._db = None
+
+        assert captured["project_store_during_run"] is None, (
+            "ethereal main must clear leftover _project_store before running so _get_db routes to the intended single-project _db"
+        )
+        assert captured["db_during_run"] is not None, "ethereal main must assign _db before running"
+
+    def test_server_main_clears_prior_single_db(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        filigree_dir = _create_filigree_dir(tmp_path, "proj-b", "b")
+        # Simulate leftover ethereal _db from a prior in-process run.
+        leftover_db = FiligreeDB(filigree_dir / DB_FILENAME, prefix="b", check_same_thread=False)
+        dash_module._db = leftover_db
+        dash_module._project_store = None
+
+        # Point ProjectStore at an empty server config so load() is cheap.
+        config_dir = tmp_path / ".server-config"
+        config_dir.mkdir()
+        (config_dir / "server.json").write_text(json.dumps({"port": 8377, "projects": {}}))
+        monkeypatch.setattr("filigree.server.SERVER_CONFIG_DIR", config_dir)
+        monkeypatch.setattr("filigree.server.SERVER_CONFIG_FILE", config_dir / "server.json")
+
+        captured: dict[str, object] = {}
+
+        def fake_uvicorn_run(*args: object, **kwargs: object) -> None:
+            captured["db_during_run"] = dash_module._db
+            captured["project_store_during_run"] = dash_module._project_store
+
+        monkeypatch.setattr("uvicorn.run", fake_uvicorn_run)
+        monkeypatch.setattr("filigree.dashboard.webbrowser.open", lambda *a, **kw: None)
+
+        try:
+            dash_module.main(port=9999, no_browser=True, server_mode=True)
+        finally:
+            leftover_db.close()
+            dash_module._project_store = None
+            dash_module._db = None
+
+        assert captured["db_during_run"] is None, "server main must clear leftover _db before running so _get_db routes via _project_store"
+        assert captured["project_store_during_run"] is not None
+
+    def test_main_resets_both_globals_in_finally(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        filigree_dir = _create_filigree_dir(tmp_path, "proj-c", "c")
+        monkeypatch.setattr(dash_module, "find_filigree_root", lambda: filigree_dir)
+
+        dash_module._project_store = ProjectStore()
+        dash_module._db = None
+
+        monkeypatch.setattr("uvicorn.run", lambda *a, **kw: None)
+        monkeypatch.setattr("filigree.dashboard.webbrowser.open", lambda *a, **kw: None)
+
+        dash_module.main(port=9999, no_browser=True, server_mode=False)
+
+        assert dash_module._project_store is None, "finally must reset _project_store"
+        assert dash_module._db is None, "finally must reset _db"
+
+
 class TestGetDbErrorPaths:
     async def test_returns_500_when_db_is_none_in_ethereal_mode(self) -> None:
         """_get_db() must raise HTTP 500 when module-level _db is None."""

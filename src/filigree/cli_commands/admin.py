@@ -400,21 +400,41 @@ def migrate(from_beads: bool, beads_db: str | None) -> None:
 
 
 @click.command()
-@click.option("--port", default=8377, type=int, help="Server port (default 8377)")
+@click.option(
+    "--port",
+    default=None,
+    type=int,
+    help="Server port (defaults to configured daemon port in --server-mode, else 8377)",
+)
 @click.option("--no-browser", is_flag=True, help="Don't auto-open browser")
 @click.option("--server-mode", is_flag=True, help="Multi-project server mode (reads server.json)")
-def dashboard(port: int, no_browser: bool, server_mode: bool) -> None:
+def dashboard(port: int | None, no_browser: bool, server_mode: bool) -> None:
     """Launch the web dashboard."""
+    from filigree.dashboard import DEFAULT_PORT
     from filigree.dashboard import main as dashboard_main
 
     pid_claimed = False
     current_pid = os.getpid()
     if server_mode:
-        from filigree.server import claim_current_process_as_daemon
+        from filigree.server import claim_current_process_as_daemon, read_server_config
 
+        effective_port = port if port is not None else read_server_config().port
+        # Pass only the user-specified port to claim — ``None`` means "don't
+        # overwrite the configured daemon port" (filigree-f863b9d1f8).
         pid_claimed = claim_current_process_as_daemon(port=port)
+        if not pid_claimed:
+            # A different live daemon is already tracked — refuse rather than
+            # racing a second server (filigree-ceb2da2411).
+            click.echo(
+                "Another filigree daemon is already running. Stop it with `filigree server stop` first.",
+                err=True,
+            )
+            sys.exit(1)
+    else:
+        effective_port = port if port is not None else DEFAULT_PORT
+
     try:
-        dashboard_main(port=port, no_browser=no_browser, server_mode=server_mode)
+        dashboard_main(port=effective_port, no_browser=no_browser, server_mode=server_mode)
     finally:
         if server_mode and pid_claimed:
             from filigree.server import release_daemon_pid_if_owned

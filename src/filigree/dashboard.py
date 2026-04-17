@@ -453,6 +453,13 @@ def main(port: int = DEFAULT_PORT, *, no_browser: bool = False, server_mode: boo
 
     filigree_dir: Path | None = None
 
+    # Clear any leftover globals from a previous in-process run so ``_get_db``
+    # routes to the intended mode (filigree-bff063de18). Without this, a
+    # server-mode run followed by an ethereal run (or vice versa) can serve
+    # the wrong database because ``_get_db`` keys off ``_project_store``.
+    _project_store = None
+    _db = None
+
     if server_mode:
         _project_store = ProjectStore()
         _project_store.load()
@@ -496,3 +503,7 @@ def main(port: int = DEFAULT_PORT, *, no_browser: bool = False, server_mode: boo
         if filigree_dir is not None:
             for name in ("ephemeral.pid", "ephemeral.port"):
                 (filigree_dir / name).unlink(missing_ok=True)
+        # Reset both globals so a later in-process ``main()`` call starts
+        # from a clean slate (filigree-bff063de18).
+        _project_store = None
+        _db = None

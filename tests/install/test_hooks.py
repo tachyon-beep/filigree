@@ -256,6 +256,46 @@ class TestEnsureDashboardSubprocessVerification:
         assert "started" not in result.lower()
 
 
+class TestEnsureDashboardStartupRace:
+    """Bug filigree-ea2a1959e1: concurrent hook calls must not spawn a second dashboard
+    while the first child is alive but not yet listening."""
+
+    def test_does_not_respawn_while_startup_window_open(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        import time
+
+        from filigree.ephemeral import write_pid_file, write_port_file
+
+        pid_file = tmp_path / "ephemeral.pid"
+        port_file = tmp_path / "ephemeral.port"
+        write_pid_file(pid_file, 99999, cmd="filigree dashboard", port=8501)
+        write_port_file(port_file, 8501)
+
+        mock_proc = MagicMock()
+        mock_proc.poll.return_value = None
+        mock_proc.pid = 77777
+
+        with (
+            patch("filigree.hooks.find_filigree_root", return_value=tmp_path),
+            patch("filigree.hooks.get_mode", return_value="ethereal"),
+            patch("filigree.hooks._is_port_listening", return_value=False),
+            patch(
+                "filigree.ephemeral.verify_pid_ownership",
+                return_value=True,  # PID 99999 looks alive and like ours
+            ),
+            patch("filigree.hooks.subprocess.Popen", return_value=mock_proc) as mock_popen,
+            patch("filigree.hooks.find_filigree_command", return_value=["/usr/bin/filigree"]),
+            patch("filigree.hooks.time.sleep"),
+            patch.dict(os.environ, {"TMPDIR": str(tmp_path)}),
+        ):
+            result = ensure_dashboard_running()
+
+        assert mock_popen.call_count == 0, "must not spawn a second dashboard during startup window"
+        assert "starting" in result.lower() or "initializing" in result.lower(), result
+        # PID file must be preserved, not unlinked
+        assert pid_file.exists(), "must preserve PID file during startup window"
+        _ = time  # silence unused import warning on some linters
+
+
 class TestEnsureDashboardGetModeError:
     """Bug filigree-c765b98e9c: ensure_dashboard_running must catch ValueError from get_mode()."""
 

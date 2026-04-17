@@ -335,6 +335,7 @@ def _acquire_port(filigree_dir: Path) -> int:
 def _ensure_dashboard_ethereal_mode(filigree_dir: Path) -> str:
     """Ethereal mode: session-scoped dashboard on a deterministic port."""
     from filigree.ephemeral import (
+        DASHBOARD_STARTUP_GRACE_SECONDS,
         cleanup_legacy_tmp_files,
         cleanup_stale_pid,
         read_pid_file,
@@ -361,6 +362,14 @@ def _ensure_dashboard_ethereal_mode(filigree_dir: Path) -> str:
             return None
         if _is_port_listening(existing_port):
             return f"Filigree dashboard running on http://localhost:{existing_port}"
+        # PID is alive and ours, but the port isn't accepting yet. If we're
+        # inside the startup grace window, treat the dashboard as "starting"
+        # rather than respawning a competing process
+        # (filigree-ea2a1959e1). Outside the window, fall through so the
+        # caller can clean up and respawn.
+        startup_ts = pid_info.get("startup_ts")
+        if isinstance(startup_ts, (int, float)) and time.time() - startup_ts < DASHBOARD_STARTUP_GRACE_SECONDS:
+            return f"Filigree dashboard starting on http://localhost:{existing_port} (initializing)"
         return None
 
     # Check if already running from a previous session
@@ -404,7 +413,7 @@ def _ensure_dashboard_ethereal_mode(filigree_dir: Path) -> str:
         except OSError as exc:
             return f"Failed to start dashboard: {exc}"
 
-        write_pid_file(pid_file, proc.pid, cmd="filigree dashboard")
+        write_pid_file(pid_file, proc.pid, cmd="filigree dashboard", port=port)
         write_port_file(port_file, port)
 
         # Wait for startup
