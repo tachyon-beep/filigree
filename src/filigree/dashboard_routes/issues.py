@@ -194,6 +194,9 @@ def create_router() -> APIRouter:
         priority = _validate_priority(body.get("priority"))
         if isinstance(priority, JSONResponse):
             return priority
+        parent_id = body.get("parent_id")
+        if parent_id is not None and not isinstance(parent_id, str):
+            return _error_response("parent_id must be a string or null", "VALIDATION_ERROR", 400)
         try:
             issue = db.update_issue(
                 issue_id,
@@ -203,6 +206,7 @@ def create_router() -> APIRouter:
                 title=body.get("title"),
                 description=body.get("description"),
                 notes=body.get("notes"),
+                parent_id=parent_id,
                 fields=body.get("fields"),
                 actor=actor,
             )
@@ -263,6 +267,8 @@ def create_router() -> APIRouter:
         if isinstance(body, JSONResponse):
             return body
         text = body.get("text", "")
+        if not isinstance(text, str):
+            return _error_response("text must be a string", "VALIDATION_ERROR", 400)
         author, author_err = _validate_actor(body.get("author", "dashboard"))
         if author_err:
             return author_err
@@ -383,6 +389,8 @@ def create_router() -> APIRouter:
         if isinstance(body, JSONResponse):
             return body
         title = body.get("title", "")
+        if not isinstance(title, str):
+            return _error_response("title must be a string", "VALIDATION_ERROR", 400)
         actor, actor_err = _validate_actor(body.get("actor", "dashboard"))
         if actor_err:
             return actor_err
@@ -418,6 +426,8 @@ def create_router() -> APIRouter:
         if isinstance(body, JSONResponse):
             return body
         assignee = body.get("assignee", "")
+        if not isinstance(assignee, str):
+            return _error_response("assignee must be a string", "VALIDATION_ERROR", 400)
         if not assignee or not assignee.strip():
             return _error_response("assignee is required and cannot be empty", "VALIDATION_ERROR", 400)
         actor, actor_err = _validate_actor(body.get("actor", "dashboard"))
@@ -455,6 +465,8 @@ def create_router() -> APIRouter:
         if isinstance(body, JSONResponse):
             return body
         assignee = body.get("assignee", "")
+        if not isinstance(assignee, str):
+            return _error_response("assignee must be a string", "VALIDATION_ERROR", 400)
         if not assignee or not assignee.strip():
             return _error_response("assignee is required and cannot be empty", "VALIDATION_ERROR", 400)
         actor, actor_err = _validate_actor(body.get("actor", "dashboard"))

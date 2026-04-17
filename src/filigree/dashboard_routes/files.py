@@ -23,7 +23,7 @@ from filigree.dashboard_routes.common import (
     _parse_pagination,
     _safe_int,
 )
-from filigree.types.core import FindingStatus, Severity
+from filigree.types.core import AssocType, FindingStatus, Severity
 
 logger = logging.getLogger(__name__)
 
@@ -283,10 +283,12 @@ def create_router() -> APIRouter:
             return body
         issue_id = body.get("issue_id", "")
         assoc_type = body.get("assoc_type", "")
+        if not isinstance(issue_id, str) or not isinstance(assoc_type, str):
+            return _error_response("issue_id and assoc_type must be strings", "VALIDATION_ERROR", 400)
         if not issue_id or not assoc_type:
             return _error_response("issue_id and assoc_type are required", "VALIDATION_ERROR", 400)
         try:
-            db.add_file_association(file_id, issue_id, assoc_type)
+            db.add_file_association(file_id, issue_id, cast(AssocType, assoc_type))
         except ValueError as e:
             return _error_response(str(e), "VALIDATION_ERROR", 400)
         return JSONResponse({"status": "created"}, status_code=201)

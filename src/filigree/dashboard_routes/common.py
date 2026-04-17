@@ -134,24 +134,80 @@ def _read_graph_runtime_config(db: FiligreeDB) -> dict[str, Any]:
     return dict(read_config(db.db_path.parent))
 
 
+def _coerce_config_bool(value: Any, name: str) -> bool:
+    """Coerce a config-file value to bool using strict parsing.
+
+    Native bool passes through. Strings are parsed via the same allowlist as
+    env vars (``_parse_bool_value``) so ``"false"``/``"0"`` read as False
+    instead of truthy-non-empty-string. Anything else logs and returns False.
+    """
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    if isinstance(value, str):
+        parsed = _parse_bool_value(value, name)
+        if isinstance(parsed, bool):
+            return parsed
+        logger.warning("Unparseable config value %s=%r; defaulting to False", name, value)
+        return False
+    logger.warning(
+        "Unexpected config value %s=%r (type %s); defaulting to False",
+        name,
+        value,
+        type(value).__name__,
+    )
+    return False
+
+
+def _coerce_config_graph_mode(value: Any) -> str:
+    """Normalize a config graph_api_mode value to a canonical mode or ``''``."""
+    if not isinstance(value, str):
+        return ""
+    mode = value.strip().lower()
+    return mode if mode in _GRAPH_MODE_VALUES else ""
+
+
 def _resolve_graph_runtime(db: FiligreeDB) -> dict[str, Any]:
-    """Resolve graph feature controls from env + project config."""
+    """Resolve graph feature controls from env + project config.
+
+    Precedence: explicit env var (when validly parseable) wins; otherwise the
+    project config value is used. Malformed env vars log and fall back to
+    config — they do not silently force the feature off.
+    """
     config = _read_graph_runtime_config(db)
+    config_enabled = _coerce_config_bool(config.get("graph_v2_enabled"), "graph_v2_enabled")
 
     enabled_raw = os.getenv("FILIGREE_GRAPH_V2_ENABLED")
-    enabled: bool
     if enabled_raw is not None:
         enabled_value = _parse_bool_value(enabled_raw, "FILIGREE_GRAPH_V2_ENABLED")
-        if not isinstance(enabled_value, bool):
-            logger.warning("Unparseable FILIGREE_GRAPH_V2_ENABLED=%r, falling back to False", enabled_raw)
-        enabled = bool(enabled_value) if isinstance(enabled_value, bool) else False
+        if isinstance(enabled_value, bool):
+            enabled = enabled_value
+        else:
+            logger.warning(
+                "Unparseable FILIGREE_GRAPH_V2_ENABLED=%r, falling back to config value %s",
+                enabled_raw,
+                config_enabled,
+            )
+            enabled = config_enabled
     else:
-        enabled = bool(config.get("graph_v2_enabled", False))
+        enabled = config_enabled
 
-    configured_mode_raw = os.getenv("FILIGREE_GRAPH_API_MODE") or str(config.get("graph_api_mode", "")).strip()
-    configured_mode = configured_mode_raw.lower() if configured_mode_raw else ""
-    if configured_mode not in _GRAPH_MODE_VALUES:
-        configured_mode = ""
+    config_mode = _coerce_config_graph_mode(config.get("graph_api_mode"))
+    env_mode_raw = os.getenv("FILIGREE_GRAPH_API_MODE")
+    if env_mode_raw is not None and env_mode_raw.strip():
+        env_mode = env_mode_raw.strip().lower()
+        if env_mode in _GRAPH_MODE_VALUES:
+            configured_mode = env_mode
+        else:
+            logger.warning(
+                "Invalid FILIGREE_GRAPH_API_MODE=%r, falling back to config value %r",
+                env_mode_raw,
+                config_mode or None,
+            )
+            configured_mode = config_mode
+    else:
+        configured_mode = config_mode
 
     compatibility_mode = configured_mode or ("v2" if enabled else "legacy")
     return {

@@ -469,13 +469,17 @@ def create_router() -> APIRouter:
         """Recent events across all issues."""
         limit = min(max(limit, 1), 1000)
         if since:
-            from datetime import datetime
+            from datetime import UTC, datetime
 
             try:
-                datetime.fromisoformat(since.replace("Z", "+00:00"))
+                parsed = datetime.fromisoformat(since.replace("Z", "+00:00"))
             except (ValueError, AttributeError):
                 return _error_response(f"Invalid ISO timestamp: {since!r}", "VALIDATION_ERROR", 400)
-            since = since.replace("Z", "+00:00") if since.endswith("Z") else since
+            # Stored timestamps are ISO with explicit UTC offset and SQLite compares as text.
+            # Normalize to UTC isoformat so offset-bearing and naive inputs compare correctly.
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=UTC)
+            since = parsed.astimezone(UTC).isoformat()
         events = db.get_events_since(since, limit=limit) if since else db.get_recent_events(limit=limit)
         return JSONResponse(events)
 

@@ -43,6 +43,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **filigree-73e909e6cc**: `cleanup_stale_pid` no longer unlinks a freshly written PID file under TOCTOU. The stale record is now moved aside with an atomic rename, re-verified from quarantine, and either committed (unlinked) or restored if a concurrent writer re-populated it during the check.
 - **filigree-ea2a1959e1**: `ensure_dashboard_running` no longer spawns a second dashboard when a hook fires during startup. `write_pid_file` now records a `startup_ts`; when the recorded PID is alive, ours, and the port isn't yet listening but startup is within a 30-second grace window, the hook reports "initializing" instead of respawning.
 - **filigree-bff063de18**: Repeated in-process `filigree.dashboard.main()` calls no longer serve the wrong database. The `_db` / `_project_store` module globals are cleared on both entry and exit, so a subsequent call in the opposite mode routes through the correct resolver instead of inheriting stale state from the previous run.
+- **Dashboard input validation cluster (6 P1 bugs)**:
+  - **filigree-719f0abbb5**: `POST /issues`, `POST /issue/{id}/comments`, `POST /issue/{id}/claim`, and `POST /claim-next` no longer surface non-string body fields as uncaught `AttributeError` (500). Each route now rejects non-string `title`/`text`/`assignee` with `VALIDATION_ERROR` 400 before the value reaches `str.strip()` in core.
+  - **filigree-6c21f57786**: `POST /files/{file_id}/associations` now type-checks `issue_id` and `assoc_type` before calling `add_file_association`, rejecting non-string values with 400 instead of relying on truthiness.
+  - **filigree-2b756a5a44**: `PATCH /api/issue/{id}` now accepts and forwards `parent_id`, so dashboard clients can re-parent or clear (`""`) an issue via the API. Non-string `parent_id` is rejected with 400.
+  - **filigree-237bbad946**: `GET /api/activity?since=…` now normalizes the parsed timestamp to UTC isoformat before running the SQL text comparison. Offset-bearing and naive inputs now compare correctly against the stored UTC-offset column instead of being compared byte-for-byte.
+  - **filigree-6e6411daba**: `graph_v2_enabled` from `.filigree/config.json` is now parsed via the same strict bool allowlist as env vars. Previously `bool("false")` → `True` via Python truthiness; now `"false"`, `"0"`, `"no"` etc. disable the feature as intended.
+  - **filigree-37c95a7e51**: Malformed `FILIGREE_GRAPH_V2_ENABLED` / `FILIGREE_GRAPH_API_MODE` values no longer override a valid config. Invalid env values log a warning and fall back to the project-config value, matching the documented resolution order (explicit → compatibility → feature-flag default).
 
 ## [1.6.1] - 2026-04-01
 
