@@ -106,7 +106,7 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
                                             "description": {"type": "string", "default": ""},
                                             "deps": {
                                                 "type": "array",
-                                                "items": {},
+                                                "items": {"type": ["integer", "string"]},
                                                 "description": "Step indices (int for same-phase, 'p.s' for cross-phase)",
                                             },
                                         },
@@ -176,11 +176,14 @@ async def _handle_remove_dependency(arguments: dict[str, Any]) -> list[TextConte
     if actor_err:
         return actor_err
     tracker = _get_db()
-    removed = tracker.remove_dependency(
-        args["from_id"],
-        args["to_id"],
-        actor=actor,
-    )
+    try:
+        removed = tracker.remove_dependency(
+            args["from_id"],
+            args["to_id"],
+            actor=actor,
+        )
+    except (ValueError, KeyError) as e:
+        return _text(ErrorResponse(error=str(e), code="invalid"))
     _refresh_summary()
     status = "removed" if removed else "not_found"
     return _text(DependencyActionResponse(status=status, from_id=args["from_id"], to_id=args["to_id"]))
@@ -223,6 +226,46 @@ async def _handle_get_plan(arguments: dict[str, Any]) -> list[TextContent]:
         return _text(ErrorResponse(error=f"Milestone not found: {args['milestone_id']}", code="not_found"))
 
 
+def _validate_plan_deps(deps: Any, name: str) -> list[TextContent] | None:
+    """Reject deps values that db_planning would silently misinterpret.
+
+    ``db_planning.create_plan`` uses ``str(dep_ref)`` and treats any string
+    containing ``"."`` as ``"phase_idx.step_idx"``. A JSON float like ``0.1``
+    would become ``"0.1"`` and resolve to phase 0 step 1 instead of being
+    rejected; a bool would become ``"True"``/``"False"`` and fail with a raw
+    ``ValueError`` from ``int()`` (per filigree-e87d310708).
+    """
+    if not isinstance(deps, list):
+        return _text(ErrorResponse(error=f"{name} must be an array", code="validation_error"))
+    for i, dep in enumerate(deps):
+        label = f"{name}[{i}]"
+        # Reject bool before int: ``True`` is ``int`` subclass but ``str(True)``
+        # hits ``int('True')`` → raw ValueError.
+        if isinstance(dep, bool):
+            return _text(ErrorResponse(error=f"{label} must be integer or string, not bool", code="validation_error"))
+        if isinstance(dep, int):
+            if dep < 0:
+                return _text(ErrorResponse(error=f"{label} must be >= 0", code="validation_error"))
+            continue
+        if isinstance(dep, str):
+            parts = dep.split(".")
+            if len(parts) > 2 or any(not p.lstrip("-").isdigit() for p in parts):
+                return _text(
+                    ErrorResponse(
+                        error=f"{label} must be 'N' or 'P.S' with integer components, got {dep!r}",
+                        code="validation_error",
+                    )
+                )
+            continue
+        return _text(
+            ErrorResponse(
+                error=f"{label} must be integer or 'P.S' string, got {type(dep).__name__}",
+                code="validation_error",
+            )
+        )
+    return None
+
+
 async def _handle_create_plan(arguments: dict[str, Any]) -> list[TextContent]:
     from filigree.mcp_server import _get_db, _refresh_summary
 
@@ -244,6 +287,9 @@ async def _handle_create_plan(arguments: dict[str, Any]) -> list[TextContent]:
             err = _validate_int_range(step.get("priority"), f"phases[{pi}].steps[{si}].priority", min_val=0, max_val=4)
             if err:
                 return err
+            dep_err = _validate_plan_deps(step.get("deps", []), f"phases[{pi}].steps[{si}].deps")
+            if dep_err:
+                return dep_err
 
     tracker = _get_db()
     try:

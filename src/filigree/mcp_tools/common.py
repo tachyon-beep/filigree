@@ -56,23 +56,38 @@ def _slim_issue(issue: Issue) -> SlimIssue:
     )
 
 
-def _resolve_pagination(arguments: dict[str, Any]) -> tuple[int, int]:
+def _resolve_pagination(arguments: dict[str, Any]) -> tuple[int, int, list[TextContent] | None]:
     """Compute effective limit and offset for paginated MCP list/search tools.
 
     Handles the ``no_limit`` bypass and caps to ``_MAX_LIST_RESULTS``.
     The returned *effective_limit* is the user-visible page size; callers
     should overfetch by 1 (``limit=effective_limit + 1``) to detect ``has_more``.
+
+    Validates ``no_limit``/``limit``/``offset`` types up front. Returns
+    ``(0, 0, error_response)`` on malformed input so callers can short-circuit
+    with a structured ``validation_error`` instead of letting ``TypeError``
+    escape the MCP boundary (per filigree-772691017d).
     """
     no_limit = arguments.get("no_limit", False)
+    if not isinstance(no_limit, bool):
+        return 0, 0, _text(ErrorResponse(error="no_limit must be a boolean", code="validation_error"))
+
     requested_limit = arguments.get("limit", _MAX_LIST_RESULTS)
+    limit_err = _validate_int_range(requested_limit, "limit", min_val=1)
+    if limit_err is not None:
+        return 0, 0, limit_err
+
     offset = arguments.get("offset", 0)
+    offset_err = _validate_int_range(offset, "offset", min_val=0)
+    if offset_err is not None:
+        return 0, 0, offset_err
 
     if no_limit:  # noqa: SIM108 — expanded for readability per filigree-b1b414e36e
         effective_limit = requested_limit if "limit" in arguments else 10_000_000
     else:
         effective_limit = min(requested_limit, _MAX_LIST_RESULTS)
 
-    return effective_limit, offset
+    return effective_limit, offset, None
 
 
 def _apply_has_more(items: list[Any], effective_limit: int) -> tuple[list[Any], bool]:

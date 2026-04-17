@@ -17,6 +17,7 @@ from filigree.mcp_tools.common import (
     _text,
     _validate_actor,
     _validate_int_range,
+    _validate_str,
 )
 from filigree.types.api import ErrorResponse
 from filigree.types.inputs import (
@@ -155,6 +156,20 @@ async def _handle_observe(arguments: dict[str, Any]) -> list[TextContent]:
     if actor_err:
         return actor_err
 
+    # Validate raw argument types up front — otherwise a bool priority would
+    # silently coerce to int (True==1), a dict detail would hit SQLite binding
+    # errors, and a non-string file_path would crash in _normalize_scan_path.
+    for err in (
+        _validate_str(args.get("summary"), "summary"),
+        _validate_str(args.get("detail"), "detail"),
+        _validate_str(args.get("file_path"), "file_path"),
+        _validate_str(args.get("source_issue_id"), "source_issue_id"),
+        _validate_int_range(args.get("line"), "line", min_val=0),
+        _validate_int_range(args.get("priority"), "priority", min_val=0, max_val=4),
+    ):
+        if err is not None:
+            return err
+
     tracker = _get_db()
     try:
         obs = tracker.create_observation(
@@ -178,7 +193,9 @@ async def _handle_list_observations(arguments: dict[str, Any]) -> list[TextConte
     from filigree.mcp_server import _get_db
 
     args = _parse_args(arguments, ListObservationsArgs)
-    effective_limit, offset = _resolve_pagination(arguments)
+    effective_limit, offset, pag_err = _resolve_pagination(arguments)
+    if pag_err is not None:
+        return pag_err
     tracker = _get_db()
     try:
         observations = tracker.list_observations(

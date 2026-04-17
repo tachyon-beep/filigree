@@ -245,7 +245,7 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
                 "type": "object",
                 "properties": {
                     "id": {"type": "string", "description": "Issue ID to claim"},
-                    "assignee": {"type": "string", "description": "Who is claiming (agent name)"},
+                    "assignee": {"type": "string", "minLength": 1, "description": "Who is claiming (agent name)"},
                     "actor": {
                         "type": "string",
                         "description": "Agent/user identity for audit trail (defaults to assignee)",
@@ -272,7 +272,7 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "assignee": {"type": "string", "description": "Who is claiming (agent name)"},
+                    "assignee": {"type": "string", "minLength": 1, "description": "Who is claiming (agent name)"},
                     "type": {"type": "string", "description": "Filter by issue type"},
                     "priority_min": {
                         "type": "integer",
@@ -415,7 +415,9 @@ async def _handle_list_issues(arguments: dict[str, Any]) -> list[TextContent]:
         # expansion internally (open/wip/done + aliases like in_progress/closed).
         status_filter = status_category
 
-    effective_limit, offset = _resolve_pagination(arguments)
+    effective_limit, offset, pag_err = _resolve_pagination(arguments)
+    if pag_err is not None:
+        return pag_err
 
     try:
         issues = tracker.list_issues(
@@ -574,7 +576,9 @@ async def _handle_search_issues(arguments: dict[str, Any]) -> list[TextContent]:
 
     args = _parse_args(arguments, SearchIssuesArgs)
     tracker = _get_db()
-    effective_limit, offset = _resolve_pagination(arguments)
+    effective_limit, offset, pag_err = _resolve_pagination(arguments)
+    if pag_err is not None:
+        return pag_err
 
     issues = tracker.search_issues(
         args["query"],
@@ -596,14 +600,17 @@ async def _handle_claim_issue(arguments: dict[str, Any]) -> list[TextContent]:
     from filigree.mcp_server import _get_db, _refresh_summary
 
     args = _parse_args(arguments, ClaimIssueArgs)
-    actor, actor_err = _validate_actor(args.get("actor", args["assignee"]))
+    assignee = args.get("assignee")
+    if not isinstance(assignee, str) or not assignee.strip():
+        return _text(ErrorResponse(error="assignee must be a non-empty string", code="validation_error"))
+    actor, actor_err = _validate_actor(args.get("actor", assignee))
     if actor_err:
         return actor_err
     tracker = _get_db()
     try:
         issue = tracker.claim_issue(
             args["id"],
-            assignee=args["assignee"],
+            assignee=assignee,
             actor=actor,
         )
         _refresh_summary()
@@ -636,7 +643,10 @@ async def _handle_claim_next(arguments: dict[str, Any]) -> list[TextContent]:
     from filigree.mcp_server import _get_db, _refresh_summary
 
     args = _parse_args(arguments, ClaimNextArgs)
-    actor, actor_err = _validate_actor(args.get("actor", args["assignee"]))
+    assignee = args.get("assignee")
+    if not isinstance(assignee, str) or not assignee.strip():
+        return _text(ErrorResponse(error="assignee must be a non-empty string", code="validation_error"))
+    actor, actor_err = _validate_actor(args.get("actor", assignee))
     if actor_err:
         return actor_err
     priority_min = args.get("priority_min")
@@ -648,13 +658,16 @@ async def _handle_claim_next(arguments: dict[str, Any]) -> list[TextContent]:
     if pmax_err:
         return pmax_err
     tracker = _get_db()
-    claimed = tracker.claim_next(
-        args["assignee"],
-        type_filter=args.get("type"),
-        priority_min=priority_min,
-        priority_max=priority_max,
-        actor=actor,
-    )
+    try:
+        claimed = tracker.claim_next(
+            assignee,
+            type_filter=args.get("type"),
+            priority_min=priority_min,
+            priority_max=priority_max,
+            actor=actor,
+        )
+    except ValueError as e:
+        return _text(ErrorResponse(error=str(e), code="validation_error"))
     if claimed is None:
         return _text(ClaimNextEmptyResponse(status="empty", reason="No ready issues matching filters"))
     _refresh_summary()

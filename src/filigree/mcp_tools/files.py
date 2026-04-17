@@ -550,6 +550,9 @@ async def _handle_promote_finding(arguments: dict[str, Any]) -> list[TextContent
     if not isinstance(finding_id, str) or not finding_id.strip():
         return _text(ErrorResponse(error="finding_id is required", code="validation_error"))
     priority = args.get("priority")
+    priority_err = _validate_int_range(priority, "priority", min_val=0, max_val=4)
+    if priority_err:
+        return priority_err
     actor, actor_err = _validate_actor(args.get("actor", "mcp"))
     if actor_err:
         return actor_err
