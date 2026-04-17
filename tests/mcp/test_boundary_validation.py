@@ -294,3 +294,19 @@ class TestMCPStringValidation:
         result = await call_tool("list_files", {"scan_source": ["test"]})
         data = _parse(result)
         assert data["code"] == "validation_error"
+
+
+class TestMCPArchiveClosedDaysOld:
+    """filigree-0903743222: archive_closed must reject negative days_old via MCP."""
+
+    async def test_archive_closed_negative_days_old_rejected(self, mcp_db: FiligreeDB) -> None:
+        result = await call_tool("archive_closed", {"days_old": -1})
+        data = _parse(result)
+        assert data["code"] == "validation_error"
+        assert "days_old" in data["error"]
+
+    async def test_archive_closed_days_old_zero_ok(self, mcp_db: FiligreeDB) -> None:
+        """0 is valid — archives everything closed right now."""
+        result = await call_tool("archive_closed", {"days_old": 0})
+        data = _parse(result)
+        assert "error" not in data

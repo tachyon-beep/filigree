@@ -90,3 +90,18 @@ class TestCLIActorValidation:
         runner, _ = cli_in_project
         result = runner.invoke(cli, ["create", "Test"])
         assert result.exit_code == 0
+
+
+class TestCLILabelsTopValidation:
+    """filigree-39c410ef92: labels --top must reject negatives (0 is the documented unlimited sentinel)."""
+
+    def test_labels_top_negative_rejected(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        runner, _ = cli_in_project
+        result = runner.invoke(cli, ["labels", "--top", "-1"])
+        assert result.exit_code != 0
+
+    def test_labels_top_zero_accepted(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        """0 is the documented unlimited sentinel and must still work."""
+        runner, _ = cli_in_project
+        result = runner.invoke(cli, ["labels", "--top", "0"])
+        assert result.exit_code == 0

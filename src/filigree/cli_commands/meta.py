@@ -385,7 +385,7 @@ def batch_add_comment(ctx: click.Context, text: str, issue_ids: tuple[str, ...],
 
 @click.command("labels")
 @click.option("--namespace", "-n", default=None, help="Filter to a namespace")
-@click.option("--top", default=10, type=int, help="Max labels per namespace (0 for unlimited)")
+@click.option("--top", default=10, type=click.IntRange(min=0), help="Max labels per namespace (0 for unlimited)")
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON")
 def list_labels_cmd(namespace: str | None, top: int, as_json: bool) -> None:
     """List all labels grouped by namespace with counts."""

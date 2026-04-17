@@ -40,6 +40,55 @@ class TestCreateIssueValidation:
         with pytest.raises(ValueError, match="Unknown type"):
             db.create_issue("Valid title", type="nonexistent_type")
 
+    @pytest.mark.parametrize("bad", ["urgent", "a"], ids=["word", "single_char"])
+    def test_bare_string_labels_raises_type_error(self, db: FiligreeDB, bad: str) -> None:
+        """filigree-0b4fcb6d30: bare string as labels must not be iterated char-by-char."""
+        with pytest.raises(TypeError, match="labels must be a list of strings"):
+            db.create_issue("Valid title", labels=bad)  # type: ignore[arg-type]
+
+    def test_mixed_type_labels_raises_type_error(self, db: FiligreeDB) -> None:
+        """filigree-0b4fcb6d30: non-string items must be rejected up front."""
+        with pytest.raises(TypeError, match="labels must be a list of strings"):
+            db.create_issue("Valid title", labels=["ok", 42])  # type: ignore[list-item]
+
+    def test_bare_string_deps_raises_type_error(self, db: FiligreeDB) -> None:
+        """filigree-0b4fcb6d30: bare string as deps must not be iterated char-by-char."""
+        with pytest.raises(TypeError, match="deps must be a list of strings"):
+            db.create_issue("Valid title", deps="abc")  # type: ignore[arg-type]
+
+    def test_non_string_assignee_raises_type_error(self, db: FiligreeDB) -> None:
+        """filigree-7c1932b74e: non-string assignee is a programming error, not a silent store."""
+        with pytest.raises(TypeError, match="assignee must be a string"):
+            db.create_issue("Valid title", assignee=123)  # type: ignore[arg-type]
+
+
+class TestAssigneeNormalization:
+    """filigree-7c1932b74e: create/update must strip assignee and never store whitespace-only."""
+
+    def test_create_trims_assignee(self, db: FiligreeDB) -> None:
+        issue = db.create_issue("T", assignee="  bob  ")
+        assert issue.assignee == "bob"
+
+    def test_create_whitespace_only_assignee_stored_empty(self, db: FiligreeDB) -> None:
+        issue = db.create_issue("T", assignee="   ")
+        assert issue.assignee == ""
+
+    def test_update_trims_assignee(self, db: FiligreeDB) -> None:
+        issue = db.create_issue("T")
+        updated = db.update_issue(issue.id, assignee="  alice  ")
+        assert updated.assignee == "alice"
+
+    def test_update_whitespace_only_assignee_stored_empty(self, db: FiligreeDB) -> None:
+        issue = db.create_issue("T", assignee="alice")
+        updated = db.update_issue(issue.id, assignee="   ")
+        assert updated.assignee == ""
+
+    def test_claimable_after_create_with_whitespace_assignee(self, db: FiligreeDB) -> None:
+        """Regression: whitespace-only assignee used to prevent claim (treated as already-owned)."""
+        issue = db.create_issue("T", assignee="   ")
+        claimed = db.claim_issue(issue.id, assignee="bob")
+        assert claimed.assignee == "bob"
+
 
 class TestSafeFieldsJson:
     """Bug filigree-58ce3d9da4: _safe_fields_json must handle non-string raw values."""
@@ -1433,6 +1482,15 @@ class TestArchival:
         archived = db.archive_closed(days_old=0)
         assert issue.id in archived
         assert db.get_issue(issue.id).status == "archived"
+
+    @pytest.mark.parametrize("days", [-1, -30])
+    def test_archive_rejects_negative_days_old(self, db: FiligreeDB, days: int) -> None:
+        """filigree-0903743222: negative days_old shifted cutoff into the future, archiving every closed issue."""
+        issue = db.create_issue("Recently closed")
+        db.close_issue(issue.id)
+        with pytest.raises(ValueError, match="days_old must be >= 0"):
+            db.archive_closed(days_old=days)
+        assert db.get_issue(issue.id).status == "closed"
 
     def test_archive_records_event(self, db: FiligreeDB) -> None:
         issue = db.create_issue("Archive event")

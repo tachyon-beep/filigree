@@ -198,7 +198,8 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
                     "days_old": {
                         "type": "integer",
                         "default": 30,
-                        "description": "Archive issues closed more than N days ago",
+                        "minimum": 0,
+                        "description": "Archive issues closed more than N days ago (must be >= 0)",
                     },
                     "actor": {"type": "string", "description": "Agent/user identity for audit trail"},
                 },
@@ -524,9 +525,13 @@ async def _handle_archive_closed(arguments: dict[str, Any]) -> list[TextContent]
     actor, actor_err = _validate_actor(args.get("actor", "mcp"))
     if actor_err:
         return actor_err
+    days_old = args.get("days_old", 30)
+    days_err = _validate_int_range(days_old, "days_old", min_val=0)
+    if days_err:
+        return days_err
     tracker = _get_db()
     archived = tracker.archive_closed(
-        days_old=args.get("days_old", 30),
+        days_old=days_old,
         actor=actor,
     )
     _refresh_summary()

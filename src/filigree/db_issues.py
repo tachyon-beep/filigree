@@ -108,6 +108,20 @@ def _validate_string_list(value: object, name: str) -> None:
         raise TypeError(msg)
 
 
+def _normalize_assignee(value: object) -> str:
+    """Strip whitespace from an assignee value; whitespace-only becomes ``""`` (unassigned).
+
+    Enforces the storage invariant that ``assignee`` is either the empty string
+    (unassigned) or a trimmed real identity — never whitespace-only. This keeps
+    ``claim_issue``'s "already assigned" check (which treats any non-empty
+    stored value as owned) from misfiring on a blank that looks empty.
+    """
+    if not isinstance(value, str):
+        msg = "assignee must be a string"
+        raise TypeError(msg)
+    return value.strip()
+
+
 def _sanitize_fts_query(query: str) -> str:
     """Sanitize a search query for FTS5 MATCH syntax.
 
@@ -228,6 +242,13 @@ class IssuesMixin(DBMixinProtocol):
                 if not k or not k.strip():
                     msg = "Field key cannot be empty"
                     raise ValueError(msg)
+        # Validate container shape before iterating — a bare str would otherwise
+        # be iterated character-by-character (see filigree-0b4fcb6d30).
+        if labels is not None:
+            _validate_string_list(labels, "labels")
+        if deps is not None:
+            _validate_string_list(deps, "deps")
+        assignee = _normalize_assignee(assignee)
         if labels:
             labels = [self._validate_label_name(label) for label in labels]
         # Reject unknown types — don't silently fall back
@@ -434,6 +455,8 @@ class IssuesMixin(DBMixinProtocol):
         if priority is not None and priority != current.priority and not (0 <= priority <= 4):
             msg = f"Priority must be between 0 and 4, got {priority}"
             raise ValueError(msg)
+        if assignee is not None:
+            assignee = _normalize_assignee(assignee)
 
         if parent_id is not None and parent_id != "":
             if parent_id == issue_id:

@@ -309,6 +309,10 @@ class EventsMixin(DBMixinProtocol):
         """
         from datetime import timedelta
 
+        if days_old < 0:
+            msg = f"days_old must be >= 0, got {days_old}"
+            raise ValueError(msg)
+
         cutoff_dt = datetime.now(UTC) - timedelta(days=days_old)
         cutoff = cutoff_dt.isoformat()
 
