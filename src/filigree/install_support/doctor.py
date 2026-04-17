@@ -85,7 +85,7 @@ def _is_absolute_command_path(path: str) -> bool:
 
 def _doctor_ethereal_checks(filigree_dir: Path) -> list[CheckResult]:
     """Ethereal mode health checks."""
-    from filigree.ephemeral import is_pid_alive, read_pid_file, read_port_file
+    from filigree.ephemeral import read_pid_file, read_port_file, verify_pid_ownership
 
     results: list[CheckResult] = []
     pid_file = filigree_dir / "ephemeral.pid"
@@ -93,7 +93,14 @@ def _doctor_ethereal_checks(filigree_dir: Path) -> list[CheckResult]:
 
     if pid_file.exists():
         info = read_pid_file(pid_file)
-        if info and is_pid_alive(info["pid"]):
+        # Ownership (liveness + argv identity + recorded-port) — not raw aliveness —
+        # so a recycled PID belonging to an unrelated process is reported as stale
+        # rather than as a healthy dashboard (filigree-aa80d21b97).
+        if info and verify_pid_ownership(
+            pid_file,
+            expected_cmd="filigree",
+            required_args=("dashboard",),
+        ):
             results.append(CheckResult("Ephemeral PID", True, f"Process {info['pid']} alive"))
         else:
             pid_val = info["pid"] if info else "unknown"

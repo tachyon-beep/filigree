@@ -626,7 +626,11 @@ async def _handle_restart_dashboard(arguments: dict[str, Any]) -> list[TextConte
     pid_file = filigree_dir / "ephemeral.pid"
     info = read_pid_file(pid_file)
 
-    # Stop existing dashboard if running
+    # Stop existing dashboard if running. Only mark ``stopped`` once the PID is
+    # actually gone (filigree-2298877675) — previously this was set
+    # unconditionally after SIGTERM+grace, so a wedged dashboard produced
+    # ``status: "restarted"`` even though ``ensure_dashboard_running`` simply
+    # reused the same still-alive process.
     stopped = False
     if info is not None and verify_pid_ownership(pid_file, expected_cmd="filigree", required_args=("dashboard",)):
         pid = info["pid"]
@@ -637,6 +641,33 @@ async def _handle_restart_dashboard(arguments: dict[str, Any]) -> list[TextConte
                 time.sleep(0.1)
                 if not is_pid_alive(pid):
                     break
+            if is_pid_alive(pid):
+                # Escalate: SIGKILL the unresponsive dashboard.
+                try:
+                    os.kill(pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                except PermissionError:
+                    return _text(
+                        ErrorResponse(
+                            error=f"Cannot stop dashboard (PID {pid}): permission denied",
+                            code="permission_error",
+                        )
+                    )
+                for _ in range(10):  # up to 1 more second
+                    time.sleep(0.1)
+                    if not is_pid_alive(pid):
+                        break
+            if is_pid_alive(pid):
+                return _text(
+                    ErrorResponse(
+                        error=(
+                            f"Old dashboard (PID {pid}) did not exit after SIGTERM+SIGKILL; "
+                            "aborting restart to avoid reporting a spurious success"
+                        ),
+                        code="stop_failed",
+                    )
+                )
             stopped = True
         except ProcessLookupError:
             stopped = True  # Already dead

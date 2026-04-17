@@ -413,8 +413,33 @@ def _ensure_dashboard_ethereal_mode(filigree_dir: Path) -> str:
         except OSError as exc:
             return f"Failed to start dashboard: {exc}"
 
-        write_pid_file(pid_file, proc.pid, cmd="filigree dashboard", port=port)
-        write_port_file(port_file, port)
+        # If metadata writes fail after Popen, the child is already detached
+        # (``start_new_session=True``) — terminate it and clean up rather than
+        # leak an untracked dashboard (filigree-89e7a1c833).
+        try:
+            write_pid_file(pid_file, proc.pid, cmd="filigree dashboard", port=port)
+            write_port_file(port_file, port)
+        except OSError as exc:
+            logger.warning(
+                "Failed to persist dashboard metadata for pid %d; terminating orphan",
+                proc.pid,
+                exc_info=True,
+            )
+            try:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=2.0)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    try:
+                        proc.wait(timeout=1.0)
+                    except subprocess.TimeoutExpired:
+                        logger.error("Orphan dashboard pid %d did not exit after SIGKILL", proc.pid)
+            except OSError:
+                logger.warning("Failed to terminate orphan dashboard pid %d", proc.pid, exc_info=True)
+            pid_file.unlink(missing_ok=True)
+            port_file.unlink(missing_ok=True)
+            return f"Failed to record dashboard metadata: {exc}"
 
         # Wait for startup
         for _ in range(10):

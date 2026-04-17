@@ -1144,7 +1144,7 @@ class TestDoctorEtherealChecks:
         assert results == []
 
     def test_pid_file_alive(self, tmp_path: Path) -> None:
-        """Alive PID → passing check with process info."""
+        """Alive PID owned by this project → passing check with process info."""
         filigree_dir = tmp_path / ".filigree"
         filigree_dir.mkdir()
         pid_file = filigree_dir / "ephemeral.pid"
@@ -1152,7 +1152,7 @@ class TestDoctorEtherealChecks:
 
         with (
             patch("filigree.ephemeral.read_pid_file", return_value={"pid": 42}),
-            patch("filigree.ephemeral.is_pid_alive", return_value=True),
+            patch("filigree.ephemeral.verify_pid_ownership", return_value=True),
         ):
             results = _doctor_ethereal_checks(filigree_dir)
 
@@ -1171,7 +1171,7 @@ class TestDoctorEtherealChecks:
 
         with (
             patch("filigree.ephemeral.read_pid_file", return_value={"pid": 99}),
-            patch("filigree.ephemeral.is_pid_alive", return_value=False),
+            patch("filigree.ephemeral.verify_pid_ownership", return_value=False),
         ):
             results = _doctor_ethereal_checks(filigree_dir)
 
@@ -1192,7 +1192,7 @@ class TestDoctorEtherealChecks:
 
         with (
             patch("filigree.ephemeral.read_pid_file", return_value=None),
-            patch("filigree.ephemeral.is_pid_alive", return_value=False),
+            patch("filigree.ephemeral.verify_pid_ownership", return_value=False),
         ):
             results = _doctor_ethereal_checks(filigree_dir)
 
@@ -1200,6 +1200,36 @@ class TestDoctorEtherealChecks:
         r = results[0]
         assert r.passed is False
         assert "unknown" in r.message
+
+    def test_pid_file_recycled_reports_stale(self, tmp_path: Path) -> None:
+        """filigree-aa80d21b97: recycled PID (alive but not ours) must report as stale.
+
+        Pre-fix the check used raw ``is_pid_alive``, so any unrelated process
+        that happened to reuse the recorded PID passed the Ephemeral PID check
+        as a healthy dashboard.
+        """
+        filigree_dir = tmp_path / ".filigree"
+        filigree_dir.mkdir()
+        pid_file = filigree_dir / "ephemeral.pid"
+        pid_file.write_text("1234\n")
+
+        # read_pid_file returns a valid record, but verify_pid_ownership
+        # rejects it — the live process with PID 1234 isn't our dashboard.
+        # (is_pid_alive would return True here; doctor must NOT trust that
+        # signal alone.)
+        with (
+            patch("filigree.ephemeral.read_pid_file", return_value={"pid": 1234}),
+            patch("filigree.ephemeral.is_pid_alive", return_value=True),
+            patch("filigree.ephemeral.verify_pid_ownership", return_value=False),
+        ):
+            results = _doctor_ethereal_checks(filigree_dir)
+
+        assert len(results) == 1
+        r = results[0]
+        assert r.name == "Ephemeral PID"
+        assert r.passed is False, "Recycled PID must not be reported as healthy"
+        assert "Stale" in r.message
+        assert "1234" in r.message
 
     def test_port_file_listening(self, tmp_path: Path) -> None:
         """Port file exists and port is listening → passing check."""
@@ -1249,7 +1279,7 @@ class TestDoctorEtherealChecks:
 
         with (
             patch("filigree.ephemeral.read_pid_file", return_value={"pid": 55}),
-            patch("filigree.ephemeral.is_pid_alive", return_value=True),
+            patch("filigree.ephemeral.verify_pid_ownership", return_value=True),
             patch("filigree.ephemeral.read_port_file", return_value=8377),
             patch("filigree.hooks._is_port_listening", return_value=True),
         ):
