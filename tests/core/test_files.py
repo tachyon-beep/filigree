@@ -410,6 +410,15 @@ class TestProcessScanResults:
                 findings=[{"path": "a.py", "rule_id": "E1", "severity": "low", "message": "  "}],
             )
 
+    def test_ingest_finding_path_dot_rejected_after_normalization(self, db: FiligreeDB) -> None:
+        """Bug filigree-0911b35955: path='.' normalizes to '' and must be rejected, not inserted."""
+        with pytest.raises(ValueError, match="empty after normalization"):
+            db.process_scan_results(
+                scan_source="ruff",
+                findings=[{"path": ".", "rule_id": "R1", "severity": "low", "message": "m"}],
+            )
+        assert db.conn.execute("SELECT COUNT(*) FROM file_records").fetchone()[0] == 0
+
     def test_ingest_finding_is_string(self, db: FiligreeDB) -> None:
         with pytest.raises(ValueError, match="dict"):
             db.process_scan_results(scan_source="ruff", findings=["not-a-dict"])  # type: ignore[list-item]

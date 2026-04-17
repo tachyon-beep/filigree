@@ -396,6 +396,8 @@ class FilesMixin(DBMixinProtocol):
                 raise ValueError(f"findings[{i}] must be a dict, got {type(f).__name__}")
             _req(f, "path", i, non_empty=True)
             f["path"] = _normalize_scan_path(f["path"])
+            if not f["path"]:
+                raise ValueError(f"findings[{i}] path is empty after normalization")
             _req(f, "rule_id", i, non_empty=True)
             _req(f, "message", i, non_empty=True)
             severity = f.get("severity", "info")

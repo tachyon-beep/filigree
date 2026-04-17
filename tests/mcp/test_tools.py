@@ -1419,6 +1419,11 @@ class TestFileTools:
         result = _parse(await call_tool("register_file", {"path": "../../etc/passwd"}))
         assert result["code"] == "invalid_path"
 
+    async def test_register_file_project_root_dot_rejected(self, mcp_db: FiligreeDB) -> None:
+        """Bug filigree-78903e4ff7: path='.' resolves to project root and must return a validation error, not crash."""
+        result = _parse(await call_tool("register_file", {"path": "."}))
+        assert result.get("code") == "invalid_path"
+
     async def test_list_files_with_filters(self, mcp_db: FiligreeDB) -> None:
         await call_tool("register_file", {"path": "src/a.py", "language": "python"})
         await call_tool("register_file", {"path": "docs/readme.md", "language": "markdown"})

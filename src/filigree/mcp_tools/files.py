@@ -413,12 +413,15 @@ async def _handle_register_file(arguments: dict[str, Any]) -> list[TextContent]:
         return _text(ErrorResponse(error="Project directory not initialized", code="not_initialized"))
 
     canonical_path = str(target.relative_to(filigree_dir.resolve().parent))
-    file_record = tracker.register_file(
-        canonical_path,
-        language=language or "",
-        file_type=file_type or "",
-        metadata=metadata,
-    )
+    try:
+        file_record = tracker.register_file(
+            canonical_path,
+            language=language or "",
+            file_type=file_type or "",
+            metadata=metadata,
+        )
+    except ValueError as e:
+        return _text(ErrorResponse(error=str(e), code="invalid_path"))
     return _text(file_record.to_dict())
 
 
