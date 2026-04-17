@@ -344,6 +344,9 @@ class EventsMixin(DBMixinProtocol):
 
         Returns the number of events deleted.
         """
+        if keep_recent < 0:
+            msg = f"keep_recent must be >= 0, got {keep_recent}"
+            raise ValueError(msg)
         archived = self.conn.execute("SELECT id FROM issues WHERE status = 'archived'").fetchall()
         if not archived:
             return 0

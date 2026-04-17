@@ -2438,6 +2438,31 @@ class TestMCPV10:
         assert data["status"] == "ok"
         assert data["events_deleted"] == 0
 
+    async def test_compact_events_rejects_negative_keep_recent(self, mcp_db: FiligreeDB) -> None:
+        """Regression for filigree-fe8956fb16: negative keep_recent must not wipe history."""
+        issue = mcp_db.create_issue("Negative guard via MCP")
+        for i in range(10):
+            mcp_db.conn.execute(
+                "INSERT INTO events (issue_id, event_type, actor, created_at) VALUES (?, ?, ?, ?)",
+                (issue.id, "test_event", "tester", f"2026-01-01T00:{i:02d}:00+00:00"),
+            )
+        mcp_db.conn.commit()
+        mcp_db.close_issue(issue.id)
+        old_date = (datetime.now(UTC) - timedelta(days=60)).isoformat()
+        mcp_db.conn.execute("UPDATE issues SET closed_at = ? WHERE id = ?", (old_date, issue.id))
+        mcp_db.conn.commit()
+        mcp_db.archive_closed(days_old=30)
+
+        before = mcp_db.conn.execute("SELECT COUNT(*) as cnt FROM events WHERE issue_id = ?", (issue.id,)).fetchone()["cnt"]
+        assert before > 0
+
+        result = await call_tool("compact_events", {"keep_recent": -1})
+        data = _parse(result)
+        assert data.get("code") == "validation_error", data
+
+        after = mcp_db.conn.execute("SELECT COUNT(*) as cnt FROM events WHERE issue_id = ?", (issue.id,)).fetchone()["cnt"]
+        assert after == before, f"MCP compact_events with keep_recent=-1 wiped {before - after} events"
+
 
 class TestListLabels:
     async def test_list_labels_returns_namespaces(self, mcp_db: FiligreeDB) -> None:

@@ -1578,6 +1578,31 @@ class TestCompaction:
                 f"Issue {issue.id}: expected {counts_before[issue.id]} events after rollback, got {after}"
             )
 
+    def test_compact_rejects_negative_keep_recent(self, db: FiligreeDB) -> None:
+        """Negative keep_recent would delete all archived events (regression for filigree-fe8956fb16)."""
+        issue = db.create_issue("Negative keep_recent guard")
+        for i in range(10):
+            db.conn.execute(
+                "INSERT INTO events (issue_id, event_type, actor, created_at) VALUES (?, ?, ?, ?)",
+                (issue.id, "test_event", "tester", f"2026-01-01T00:{i:02d}:00+00:00"),
+            )
+        db.conn.commit()
+        db.close_issue(issue.id)
+        old_date = (datetime.now(UTC) - timedelta(days=60)).isoformat()
+        db.conn.execute("UPDATE issues SET closed_at = ? WHERE id = ?", (old_date, issue.id))
+        db.conn.commit()
+        db.archive_closed(days_old=30)
+
+        before = db.conn.execute("SELECT COUNT(*) as cnt FROM events WHERE issue_id = ?", (issue.id,)).fetchone()["cnt"]
+        assert before > 0
+
+        with pytest.raises(ValueError, match="keep_recent"):
+            db.compact_events(keep_recent=-1)
+
+        # Events must be untouched after the guard rejects the call
+        after = db.conn.execute("SELECT COUNT(*) as cnt FROM events WHERE issue_id = ?", (issue.id,)).fetchone()["cnt"]
+        assert after == before, f"negative keep_recent wiped {before - after} events"
+
     def test_vacuum(self, db: FiligreeDB) -> None:
         # vacuum() returns None; verify it completes without error
         db.vacuum()

@@ -9,7 +9,7 @@ from typing import Any
 
 from mcp.types import TextContent, Tool
 
-from filigree.mcp_tools.common import _parse_args, _text, _validate_actor
+from filigree.mcp_tools.common import _parse_args, _text, _validate_actor, _validate_int_range
 from filigree.types.api import (
     AddCommentResult,
     ArchiveClosedResponse,
@@ -213,7 +213,8 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
                     "keep_recent": {
                         "type": "integer",
                         "default": 50,
-                        "description": "Keep N most recent events per archived issue",
+                        "minimum": 0,
+                        "description": "Keep N most recent events per archived issue (must be >= 0)",
                     },
                 },
             },
@@ -536,8 +537,12 @@ async def _handle_compact_events(arguments: dict[str, Any]) -> list[TextContent]
     from filigree.mcp_server import _get_db
 
     args = _parse_args(arguments, CompactEventsArgs)
+    keep_recent = args.get("keep_recent", 50)
+    keep_err = _validate_int_range(keep_recent, "keep_recent", min_val=0)
+    if keep_err:
+        return keep_err
     tracker = _get_db()
-    deleted = tracker.compact_events(keep_recent=args.get("keep_recent", 50))
+    deleted = tracker.compact_events(keep_recent=keep_recent)
     return _text(CompactEventsResponse(status="ok", events_deleted=deleted))
 
 
