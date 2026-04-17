@@ -58,12 +58,18 @@ class ObservationsMixin(DBMixinProtocol):
     time via MRO.
     """
 
-    def _sweep_expired_observations(self) -> int:
+    def _sweep_expired_observations(self) -> tuple[int, bool]:
         """Delete expired observations in a savepoint (piggyback cleanup).
 
         All expired observations are logged to dismissed_observations and deleted.
         Also prunes the dismissed_observations audit trail to DISMISSED_AUDIT_TRAIL_CAP entries.
         Uses a savepoint so it doesn't commit or interfere with in-flight transactions.
+
+        Returns:
+            (deleted_row_count, succeeded). ``succeeded=False`` indicates that the
+            sweep was rolled back after a transient error, so expired rows may
+            still be present — callers must apply ``WHERE expires_at > ?`` to
+            avoid returning them as live results.
         """
         now = _now_iso()
         self.conn.execute("SAVEPOINT sweep_obs")
@@ -86,7 +92,7 @@ class ObservationsMixin(DBMixinProtocol):
             self.conn.execute("RELEASE SAVEPOINT sweep_obs")
             if cursor.rowcount > 0:
                 logger.debug("Swept %d expired observations", cursor.rowcount)
-            return cursor.rowcount
+            return cursor.rowcount, True
         except (sqlite3.OperationalError, sqlite3.IntegrityError):
             # Suppress transient errors (locked, busy) and integrity violations — sweep is best-effort.
             # Let ProgrammingError, InterfaceError propagate — those indicate code bugs.
@@ -98,7 +104,7 @@ class ObservationsMixin(DBMixinProtocol):
                     self.conn.execute("RELEASE SAVEPOINT sweep_obs")
                 except sqlite3.Error:
                     logger.warning("Failed to release savepoint after sweep rollback", exc_info=True)
-            return 0  # Sweep is best-effort — don't block reads
+            return 0, False  # Sweep is best-effort — don't block reads, but signal failure
 
     def create_observation(
         self,
@@ -133,12 +139,19 @@ class ObservationsMixin(DBMixinProtocol):
             raise ValueError(f"line must be >= 0, got {line}")
 
         file_id: str | None = None
+        # Track whether THIS call created a new file_record so we can compensate
+        # by deleting it if the later observation INSERT fails — otherwise the
+        # file_record is orphaned (register_file commits independently).
+        created_file_id: str | None = None
         if file_path:
             file_path = _normalize_scan_path(file_path)
             if auto_commit:
                 # Standalone call — register_file commits, which is fine.
+                existing_fr = self.conn.execute("SELECT id FROM file_records WHERE path = ?", (file_path,)).fetchone()
                 fr = self.register_file(file_path)
                 file_id = fr.id
+                if existing_fr is None:
+                    created_file_id = file_id
             else:
                 # Inside an outer transaction — register_file would commit
                 # prematurely.  Look up the file_id without side effects;
@@ -189,6 +202,20 @@ class ObservationsMixin(DBMixinProtocol):
         except sqlite3.Error:
             if auto_commit:
                 self.conn.rollback()
+                # Compensate: delete the file_record we just created.  register_file
+                # committed independently, so rolling back this transaction does not
+                # remove it — and we'd leave an orphan row otherwise.
+                if created_file_id is not None:
+                    try:
+                        self.conn.execute("DELETE FROM file_records WHERE id = ?", (created_file_id,))
+                        self.conn.commit()
+                    except sqlite3.Error:
+                        self.conn.rollback()
+                        logger.warning(
+                            "Failed to compensate orphaned file_record %s after observation insert failure",
+                            created_file_id,
+                            exc_info=True,
+                        )
             raise
         return {
             "id": obs_id,
@@ -214,27 +241,33 @@ class ObservationsMixin(DBMixinProtocol):
     ) -> list[ObservationDict]:
         """List pending observations with optional filtering.
 
-        Sweeps expired observations first (best-effort, in savepoint).
+        Sweeps expired observations first (best-effort, in savepoint).  If the
+        sweep itself fails (transient DB error, rolled back), the read falls
+        back to ``WHERE expires_at > ?`` so expired rows are still excluded
+        from results — otherwise a suppressed sweep error would surface
+        expired rows as live.
         ``file_path`` filtering uses substring matching (LIKE), not exact match.
         ``file_id`` filtering uses exact FK match (more precise than path LIKE).
         """
-        self._sweep_expired_observations()
+        _, swept_ok = self._sweep_expired_observations()
+        alive_frag, alive_where, alive_params = _alive_clause(swept_ok, _now_iso())
         if file_id:
             # Direct FK query — more precise than path LIKE.
             rows = self.conn.execute(
-                "SELECT * FROM observations WHERE file_id = ? ORDER BY priority ASC, created_at ASC LIMIT ? OFFSET ?",
-                (file_id, limit, offset),
+                f"SELECT * FROM observations WHERE file_id = ?{alive_frag} ORDER BY priority ASC, created_at ASC LIMIT ? OFFSET ?",
+                (file_id, *alive_params, limit, offset),
             ).fetchall()
         elif file_path:
             file_path = _normalize_scan_path(file_path) or file_path
             rows = self.conn.execute(
-                "SELECT * FROM observations WHERE file_path LIKE ? ESCAPE '\\' ORDER BY priority ASC, created_at ASC LIMIT ? OFFSET ?",
-                (_escape_like(file_path), limit, offset),
+                f"SELECT * FROM observations WHERE file_path LIKE ? ESCAPE '\\'{alive_frag} "
+                "ORDER BY priority ASC, created_at ASC LIMIT ? OFFSET ?",
+                (_escape_like(file_path), *alive_params, limit, offset),
             ).fetchall()
         else:
             rows = self.conn.execute(
-                "SELECT * FROM observations ORDER BY priority ASC, created_at ASC LIMIT ? OFFSET ?",
-                (limit, offset),
+                f"SELECT * FROM observations{alive_where} ORDER BY priority ASC, created_at ASC LIMIT ? OFFSET ?",
+                (*alive_params, limit, offset),
             ).fetchall()
         return [cast(ObservationDict, dict(row)) for row in rows]
 
@@ -256,15 +289,19 @@ class ObservationsMixin(DBMixinProtocol):
             sweep: If True (default), sweep expired observations first.
                    Pass False when calling from read-only context paths
                    (summary generation, MCP prompt) to avoid write side effects.
-                   When False, expired rows are excluded via WHERE filter
-                   to keep counts consistent with what list_observations returns.
+                   When False — or when the sweep itself fails — expired rows
+                   are excluded via WHERE filter to keep counts consistent with
+                   what list_observations returns.
         """
+        swept_ok = True
         if sweep:
-            self._sweep_expired_observations()
+            _, swept_ok = self._sweep_expired_observations()
 
         now = datetime.now(UTC)
         now_iso = now.isoformat()
-        alive_frag, alive_where, alive_params = _alive_clause(sweep, now_iso)
+        # Apply expires-filter whenever the sweep did not succeed OR when caller
+        # opted out of sweeping — in both cases expired rows may still exist.
+        alive_frag, alive_where, alive_params = _alive_clause(sweep and swept_ok, now_iso)
         count = self.conn.execute(f"SELECT COUNT(*) FROM observations{alive_where}", alive_params).fetchone()[0]
         if count == 0:
             return {"count": 0, "stale_count": 0, "oldest_hours": 0, "expiring_soon_count": 0}
@@ -368,6 +405,30 @@ class ObservationsMixin(DBMixinProtocol):
         extra_description: str = "",
         actor: str = "",
     ) -> PromoteObservationResult:
+        # Idempotency check: if a prior promote already created an issue for this
+        # obs_id (recorded in issue.fields.source_observation_id), return that
+        # issue instead of creating a duplicate.  Handles the retry case where
+        # the observation delete failed after the issue was committed.
+        warnings: list[str] = []
+        existing_issue_row = self.conn.execute(
+            "SELECT id FROM issues WHERE json_extract(fields, '$.source_observation_id') = ?",
+            (obs_id,),
+        ).fetchone()
+        if existing_issue_row is not None:
+            existing_issue = self.get_issue(existing_issue_row["id"])
+            # Clean up lingering observation from prior failed promote (best-effort).
+            try:
+                self.conn.execute("DELETE FROM observations WHERE id = ?", (obs_id,))
+                self.conn.commit()
+            except sqlite3.Error:
+                self.conn.rollback()
+                logger.warning("Failed to clean up observation %s on idempotent retry", obs_id, exc_info=True)
+            msg = f"Observation {obs_id} was already promoted to issue {existing_issue.id} (returning existing)"
+            logger.info(msg)
+            warnings.append(msg)
+            idem_result = cast(PromoteObservationResult, {"issue": existing_issue, "warnings": warnings})
+            return idem_result
+
         # 1. Read observation (don't delete yet)
         row = self.conn.execute("SELECT * FROM observations WHERE id = ?", (obs_id,)).fetchone()
         if row is None:
@@ -394,20 +455,23 @@ class ObservationsMixin(DBMixinProtocol):
             desc_parts.append(f"Observed while working on: {obs['source_issue_id']}")
         description = "\n\n".join(desc_parts)
 
-        # 3. Create issue first — if this fails, observation is untouched
+        # 3. Create issue first — if this fails, observation is untouched.
+        #    The source_observation_id field is the durable idempotency key:
+        #    retries after a cleanup failure see the existing issue and return
+        #    it instead of creating a duplicate.
         issue = self.create_issue(
             issue_title,
             type=issue_type,
             priority=priority if priority is not None else obs["priority"],
             description=description,
             actor=actor or obs["actor"],
+            fields={"source_observation_id": obs_id},
         )
 
         # 4. Issue created successfully — now clean up the observation.
         #    Delete the observation FIRST (prevents double-promotion on retry),
         #    then write the audit trail (nice-to-have).  If only the audit trail
         #    fails, the observation is already gone so retries get "not found".
-        warnings: list[str] = []
         now = _now_iso()
         try:
             cursor = self.conn.execute("DELETE FROM observations WHERE id = ?", (obs_id,))
@@ -455,7 +519,7 @@ class ObservationsMixin(DBMixinProtocol):
             logger.warning(msg, exc_info=True)
             warnings.append(msg)
 
-        result: PromoteObservationResult = {"issue": issue}
+        result = cast(PromoteObservationResult, {"issue": issue})
         if warnings:
             result["warnings"] = warnings
         return result

@@ -14,6 +14,7 @@ from typing import Any, ClassVar
 
 from filigree.db_base import DBMixinProtocol, _now_iso
 from filigree.db_files import VALID_FINDING_STATUSES, VALID_SEVERITIES
+from filigree.db_observations import _expires_iso
 from filigree.types.planning import CommentRecord, StatsResult
 
 logger = logging.getLogger(__name__)
@@ -926,6 +927,9 @@ class MetaMixin(DBMixinProtocol):
                 obs_file_id: str | None = record.get("file_id")
                 if obs_file_id and obs_file_id in file_id_map:
                     obs_file_id = file_id_map[obs_file_id]
+                # Default expires_at to _expires_iso() (now + TTL) when missing.
+                # _now_iso() would make every imported observation already expired
+                # and swept on the next read.
                 cursor = self.conn.execute(
                     f"INSERT {conflict} INTO observations "
                     "(id, summary, detail, file_id, file_path, line, source_issue_id, "
@@ -942,7 +946,7 @@ class MetaMixin(DBMixinProtocol):
                         record.get("priority", 3),
                         record.get("actor", ""),
                         record.get("created_at", _now_iso()),
-                        record.get("expires_at", _now_iso()),
+                        record.get("expires_at") or _expires_iso(),
                     ),
                 )
                 count += cursor.rowcount

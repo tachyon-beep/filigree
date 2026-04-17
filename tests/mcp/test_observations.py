@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+from unittest.mock import patch
 
 from filigree.core import FiligreeDB
 from filigree.mcp_server import call_tool
@@ -168,6 +169,42 @@ class TestBatchDismissTool:
         data = _parse(result)
         assert data.get("dismissed", 0) == 0
         assert set(data.get("not_found", [])) == {"nope-1", "nope-2"}
+
+    async def test_batch_dismiss_rejects_bare_string_ids(self, mcp_db: FiligreeDB) -> None:
+        """filigree-45580755aa: bare string must not be iterated char-by-char."""
+        result = await call_tool("batch_dismiss_observations", {"ids": "obs-123"})
+        data = _parse(result)
+        assert data.get("code") == "validation_error"
+
+    async def test_batch_dismiss_rejects_non_string_members(self, mcp_db: FiligreeDB) -> None:
+        """filigree-45580755aa: non-string ids rejected up front."""
+        result = await call_tool("batch_dismiss_observations", {"ids": [1, 2, 3]})
+        data = _parse(result)
+        assert data.get("code") == "validation_error"
+
+
+class TestSummaryRefreshOnObservationMutations:
+    """filigree-134296bf02: observe / dismiss_observation / batch_dismiss_observations
+    must refresh context.md so the session snapshot stays in sync.
+    """
+
+    async def test_observe_refreshes_summary(self, mcp_db: FiligreeDB) -> None:
+        with patch("filigree.mcp_server.write_summary") as mock_write:
+            await call_tool("observe", {"summary": "fresh observation"})
+        assert mock_write.called, "observe must call _refresh_summary"
+
+    async def test_dismiss_refreshes_summary(self, mcp_db: FiligreeDB) -> None:
+        obs = mcp_db.create_observation("will dismiss")
+        with patch("filigree.mcp_server.write_summary") as mock_write:
+            await call_tool("dismiss_observation", {"id": obs["id"]})
+        assert mock_write.called, "dismiss_observation must call _refresh_summary"
+
+    async def test_batch_dismiss_refreshes_summary(self, mcp_db: FiligreeDB) -> None:
+        o1 = mcp_db.create_observation("A")
+        o2 = mcp_db.create_observation("B")
+        with patch("filigree.mcp_server.write_summary") as mock_write:
+            await call_tool("batch_dismiss_observations", {"ids": [o1["id"], o2["id"]]})
+        assert mock_write.called, "batch_dismiss_observations must call _refresh_summary"
 
 
 class TestPromoteObservationTool:

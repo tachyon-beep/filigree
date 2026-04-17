@@ -148,7 +148,7 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
 
 
 async def _handle_observe(arguments: dict[str, Any]) -> list[TextContent]:
-    from filigree.mcp_server import _get_db
+    from filigree.mcp_server import _get_db, _refresh_summary
 
     args = _parse_args(arguments, ObserveArgs)
     actor, actor_err = _validate_actor(args.get("actor", "mcp"))
@@ -170,6 +170,7 @@ async def _handle_observe(arguments: dict[str, Any]) -> list[TextContent]:
         return _text(ErrorResponse(error=str(e), code="validation_error"))
     except sqlite3.Error as e:
         return _text(ErrorResponse(error=f"Database error: {e}", code="database_error"))
+    _refresh_summary()
     return _text(obs)
 
 
@@ -206,7 +207,7 @@ async def _handle_list_observations(arguments: dict[str, Any]) -> list[TextConte
 
 
 async def _handle_dismiss_observation(arguments: dict[str, Any]) -> list[TextContent]:
-    from filigree.mcp_server import _get_db
+    from filigree.mcp_server import _get_db, _refresh_summary
 
     args = _parse_args(arguments, DismissObservationArgs)
     actor, actor_err = _validate_actor(args.get("actor", "mcp"))
@@ -224,26 +225,37 @@ async def _handle_dismiss_observation(arguments: dict[str, Any]) -> list[TextCon
         return _text(ErrorResponse(error=str(e), code="not_found"))
     except sqlite3.Error as e:
         return _text(ErrorResponse(error=f"Database error: {e}", code="database_error"))
+    _refresh_summary()
     return _text({"status": "dismissed", "id": args["id"]})
 
 
 async def _handle_batch_dismiss_observations(arguments: dict[str, Any]) -> list[TextContent]:
-    from filigree.mcp_server import _get_db
+    from filigree.mcp_server import _get_db, _refresh_summary
 
     args = _parse_args(arguments, BatchDismissObservationsArgs)
     actor, actor_err = _validate_actor(args.get("actor", "mcp"))
     if actor_err:
         return actor_err
 
+    # Validate ids is a list of strings up front — a bare string would
+    # otherwise be iterated char-by-char and produce bogus per-character
+    # not_found results (see filigree-45580755aa).
+    raw_ids = args.get("ids", [])
+    if not isinstance(raw_ids, list):
+        return _text(ErrorResponse(error="'ids' must be an array of strings", code="validation_error"))
+    if not all(isinstance(x, str) for x in raw_ids):
+        return _text(ErrorResponse(error="'ids' must contain only string values", code="validation_error"))
+
     tracker = _get_db()
     try:
         result = tracker.batch_dismiss_observations(
-            args.get("ids", []),
+            raw_ids,
             actor=actor,
             reason=args.get("reason", ""),
         )
     except sqlite3.Error as e:
         return _text(ErrorResponse(error=f"Database error: {e}", code="database_error"))
+    _refresh_summary()
     resp: dict[str, object] = {"dismissed": result["dismissed"], "ok": True}
     if result["not_found"]:
         resp["not_found"] = result["not_found"]
