@@ -16,17 +16,24 @@ from starlette.requests import Request
 
 from filigree.core import FiligreeDB
 from filigree.dashboard_routes.common import _error_response, _get_bool_param
+from filigree.db_planning import NotAReleaseError
 
 logger = logging.getLogger(__name__)
 
 _SEMVER_STRICT_RE = re.compile(r"^v(\d+)\.(\d+)\.(\d+)$")
 _SEMVER_LOOSE_RE = re.compile(r"v?(\d+)\.(\d+)(?:\.(\d+))?")
-_NON_SEMVER_KEY = (999_999, 0, 0)
-_FUTURE_KEY = (999_999, 999_999, 0)
+
+# Tagged sort keys: a leading "kind" discriminator guarantees that no valid
+# semver tuple can collide with a sentinel, regardless of version magnitude.
+# 0 = semver, 1 = non-semver, 2 = Future — so the ordering contract
+# (semver < non-semver < Future) holds without relying on numeric headroom.
+_SemverSortKey = tuple[int, int, int, int]
+_NON_SEMVER_KEY: _SemverSortKey = (1, 0, 0, 0)
+_FUTURE_KEY: _SemverSortKey = (2, 0, 0, 0)
 
 
-def _semver_sort_key(release: ReleaseSummaryItem) -> tuple[int, int, int]:
-    """Extract a (major, minor, patch) sort key from a release.
+def _semver_sort_key(release: ReleaseSummaryItem) -> _SemverSortKey:
+    """Extract a tagged sort key ``(kind, major, minor, patch)`` from a release.
 
     Priority order for "Future" detection:
       1. ``version == "Future"`` (exact match on version field)
@@ -35,9 +42,15 @@ def _semver_sort_key(release: ReleaseSummaryItem) -> tuple[int, int, int]:
     For semver parsing, checks version field first (strict 3-part),
     then falls back to title (loose matching).
     Non-semver releases sort after all semver releases but before "future".
+
+    Non-string ``version``/``title`` values (possible via ``import_jsonl``,
+    which stores ``fields`` verbatim) are treated as absent rather than being
+    passed through to ``re.match``.
     """
-    version = release.get("version") or ""
-    title = release.get("title", "")
+    version_raw = release.get("version")
+    version = version_raw if isinstance(version_raw, str) else ""
+    title_raw = release.get("title", "")
+    title = title_raw if isinstance(title_raw, str) else ""
 
     # Check version field for exact "Future" first
     if version == "Future":
@@ -51,13 +64,13 @@ def _semver_sort_key(release: ReleaseSummaryItem) -> tuple[int, int, int]:
     if version:
         m = _SEMVER_STRICT_RE.match(version)
         if m:
-            return (int(m.group(1)), int(m.group(2)), int(m.group(3)))
+            return (0, int(m.group(1)), int(m.group(2)), int(m.group(3)))
 
     # Fallback: loose semver on version or title
     text = version or title
     m = _SEMVER_LOOSE_RE.search(text)
     if m:
-        return (int(m.group(1)), int(m.group(2)), int(m.group(3) or 0))
+        return (0, int(m.group(1)), int(m.group(2)), int(m.group(3) or 0))
 
     # Fallback: after semver releases, before future
     return _NON_SEMVER_KEY
@@ -91,16 +104,17 @@ def create_router() -> APIRouter:
 
         try:
             releases = db.get_releases_summary(include_released=include_released)
+            # Sort is a UI concern — applied here, not in the DB layer.
+            # Kept inside the try block so a corrupt release row (e.g.
+            # non-string version from import_jsonl) surfaces as a structured
+            # error instead of an uncaught exception.
+            releases.sort(key=_semver_sort_key)
         except sqlite3.Error:
             logger.exception("Database error loading releases summary")
             return _error_response("Database error loading releases", "RELEASES_LOAD_ERROR", 500)
         except Exception:
             logger.exception("BUG: Unexpected error loading releases summary")
             return _error_response("Internal error loading releases", "RELEASES_LOAD_ERROR", 500)
-
-        # Sort is a UI concern — applied here, not in the DB layer
-        # Primary: semantic version ascending; "future" always last
-        releases.sort(key=_semver_sort_key)
 
         return JSONResponse({"releases": releases})
 
@@ -111,12 +125,14 @@ def create_router() -> APIRouter:
             tree = db.get_release_tree(release_id)
         except KeyError:
             return _error_response(f"Release not found: {release_id}", "RELEASE_NOT_FOUND", 404)
-        except ValueError as e:
+        except NotAReleaseError as e:
             return _error_response(str(e), "NOT_A_RELEASE", 404)
         except sqlite3.Error:
             logger.exception("Database error loading release tree for %s", release_id)
             return _error_response("Database error loading release tree", "TREE_LOAD_ERROR", 500)
         except Exception:
+            # Includes bare ValueError from corrupt imported data (e.g. Issue.__post_init__)
+            # — that is data corruption, not a release-type mismatch.
             logger.exception("BUG: Unexpected error loading release tree for %s", release_id)
             return _error_response("Internal error loading release tree", "TREE_LOAD_ERROR", 500)
         return JSONResponse(tree)

@@ -421,6 +421,36 @@ class TestProgressFromSubtree:
         result = release_db._progress_from_subtree([])
         assert result == {"total": 0, "completed": 0, "in_progress": 0, "open": 0, "pct": 0}
 
+    def test_truncated_sentinel_not_counted_as_leaf(self, release_db: FiligreeDB) -> None:
+        """Truncation sentinels must not inflate progress totals as fake open leaves.
+
+        Regression: filigree-719ec7afe3. A deeply nested chain that hits
+        ``_MAX_TREE_DEPTH`` produces a single truncated sentinel node at the
+        depth boundary. The sentinel has empty children and is not a real
+        leaf; progress math must skip it (warnings surface via
+        ``_collect_tree_warnings`` instead).
+        """
+        db = release_db
+        release = db.create_issue("R", type="release")
+        parent_id = release.id
+        last_id = None
+        for i in range(12):
+            child = db.create_issue(f"T{i}", type="task", parent_id=parent_id)
+            parent_id = child.id
+            last_id = child.id
+        # Give the deepest node a child that will be entirely hidden by truncation
+        db.create_issue("HiddenByTruncation", type="task", parent_id=last_id)
+
+        summary = db.get_releases_summary()
+        entry = next(e for e in summary if e["id"] == release.id)
+        # Every visible task on the spine has one child, so none are real leaves.
+        # The only "leaf" in the tree is the truncation sentinel, which must be
+        # skipped. Before fix: total == 1 (sentinel counted as open). After: 0.
+        assert entry["progress"]["total"] == 0
+        assert entry["progress"]["open"] == 0
+        # Truncation should still surface as a data warning, not as silent zero.
+        assert any("truncat" in w.lower() for w in entry.get("data_warnings", []))
+
 
 # ---------------------------------------------------------------------------
 # TestBuildTree

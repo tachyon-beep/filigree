@@ -37,6 +37,16 @@ logger = logging.getLogger(__name__)
 _MAX_TREE_DEPTH = 10
 
 
+class NotAReleaseError(ValueError):
+    """Raised by ``get_release_tree`` when the issue exists but is not a release.
+
+    Subclasses ``ValueError`` so existing ``except ValueError`` call sites keep
+    working; new callers can disambiguate this case from unrelated ValueErrors
+    (e.g. data-validation failures in ``Issue.__post_init__``) by catching this
+    subclass specifically.
+    """
+
+
 def _truncated_issue_sentinel(issue_id: str) -> IssueDict:
     """Minimal IssueDict placeholder for tree nodes truncated at the depth limit."""
     return IssueDict(
@@ -517,7 +527,7 @@ class PlanningMixin(DBMixinProtocol):
     def get_release_tree(self, release_id: str) -> ReleaseTree:
         release = self.get_issue(release_id)  # raises KeyError if not found
         if release.type != "release":
-            raise ValueError(f"Issue {release_id} is not a release")
+            raise NotAReleaseError(f"Issue {release_id} is not a release")
         children = self._build_tree(release.id)
         tree_warnings = self._collect_tree_warnings(children)
         return {
@@ -550,6 +560,11 @@ class PlanningMixin(DBMixinProtocol):
     def _progress_from_subtree(self, nodes: list[TreeNode]) -> ProgressDict:
         total = completed = in_progress = open_count = 0
         for node in nodes:
+            # Depth-limit sentinels stand for "unknown more items below" — skip
+            # them from the count (surfaced separately via _collect_tree_warnings)
+            # so a truncated subtree does not masquerade as a single open leaf.
+            if node.get("truncated"):
+                continue
             if not node["children"]:  # leaf node
                 cat = node["issue"].get("status_category", "open")
                 total += 1

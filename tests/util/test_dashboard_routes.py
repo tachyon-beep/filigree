@@ -43,19 +43,20 @@ class TestSemverSortKey:
         from filigree.dashboard_routes.releases import _semver_sort_key
 
         release = {"version": "v1.2.3", "title": "v1.2.3"}
-        assert _semver_sort_key(release) == (1, 2, 3)
+        # Keys are tagged 4-tuples (kind, major, minor, patch); kind=0 is semver
+        assert _semver_sort_key(release) == (0, 1, 2, 3)
 
     def test_two_component_semver_defaults_patch_to_zero(self) -> None:
         from filigree.dashboard_routes.releases import _semver_sort_key
 
         release = {"version": "v1.2", "title": "v1.2"}
-        assert _semver_sort_key(release) == (1, 2, 0)
+        assert _semver_sort_key(release) == (0, 1, 2, 0)
 
     def test_semver_without_v_prefix(self) -> None:
         from filigree.dashboard_routes.releases import _semver_sort_key
 
         release = {"version": "2.0.1", "title": "2.0.1"}
-        assert _semver_sort_key(release) == (2, 0, 1)
+        assert _semver_sort_key(release) == (0, 2, 0, 1)
 
     def test_future_title_sorts_last(self) -> None:
         from filigree.dashboard_routes.releases import _FUTURE_KEY, _semver_sort_key
@@ -87,13 +88,13 @@ class TestSemverSortKey:
         from filigree.dashboard_routes.releases import _semver_sort_key
 
         release = {"version": "v3.0.0", "title": "v1.0.0"}
-        assert _semver_sort_key(release) == (3, 0, 0)
+        assert _semver_sort_key(release) == (0, 3, 0, 0)
 
     def test_title_used_when_version_empty(self) -> None:
         from filigree.dashboard_routes.releases import _semver_sort_key
 
         release = {"version": "", "title": "v2.5.1"}
-        assert _semver_sort_key(release) == (2, 5, 1)
+        assert _semver_sort_key(release) == (0, 2, 5, 1)
 
     def test_sort_order_end_to_end(self) -> None:
         """Full sort order: semver ascending, then non-semver, then future."""
