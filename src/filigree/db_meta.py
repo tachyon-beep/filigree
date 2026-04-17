@@ -551,15 +551,95 @@ class MetaMixin(DBMixinProtocol):
                     count += 1
         return count
 
-    def import_jsonl(self, input_path: str | Path, *, merge: bool = False) -> dict[str, Any]:
+    def _assert_import_ids_match_prefix(
+        self,
+        *,
+        issues: list[dict[str, Any]],
+        dependencies: list[dict[str, Any]],
+        labels: list[dict[str, Any]],
+        comments: list[dict[str, Any]],
+        events: list[dict[str, Any]],
+        file_associations: list[dict[str, Any]],
+        scan_findings: list[dict[str, Any]],
+    ) -> None:
+        """Raise WrongProjectError if any imported record references an
+        issue ID whose prefix doesn't match this DB.
+
+        Rationale: ``import_jsonl`` inserts rows by ``INSERT OR (IGNORE|ABORT)``
+        directly into SQLite, bypassing the per-method ``_check_id_prefix``
+        guard. Without this preflight, a cross-prefix JSONL would silently
+        install rows that every subsequent mutation path rejects.
+        """
+        from filigree.core import WrongProjectError
+
+        foreign: set[str] = set()
+
+        def check(issue_id: Any) -> None:
+            if not isinstance(issue_id, str) or not issue_id:
+                return
+            if "-" not in issue_id:
+                return
+            if issue_id.startswith(self.prefix + "-"):
+                return
+            foreign.add(issue_id)
+
+        for rec in issues:
+            check(rec.get("id"))
+            check(rec.get("parent_id"))
+        for rec in dependencies:
+            check(rec.get("issue_id"))
+            check(rec.get("depends_on_id"))
+        for rec in labels:
+            check(rec.get("issue_id"))
+        for rec in comments:
+            check(rec.get("issue_id"))
+        for rec in events:
+            check(rec.get("issue_id"))
+        for rec in file_associations:
+            check(rec.get("issue_id"))
+        for rec in scan_findings:
+            check(rec.get("issue_id"))
+
+        if not foreign:
+            return
+        sample = sorted(foreign)[:5]
+        extra = f" (+{len(foreign) - len(sample)} more)" if len(foreign) > len(sample) else ""
+        msg = (
+            f"import_jsonl: {len(foreign)} record(s) reference issue ID(s) "
+            f"from a foreign project — this DB's prefix is {self.prefix!r}. "
+            f"Examples: {sample}{extra}. Re-export the source data or pass "
+            f"allow_foreign_ids=True to keep the original IDs (which will "
+            f"then be readable but not mutable through the prefix-guarded "
+            f"write methods)."
+        )
+        raise WrongProjectError(msg)
+
+    def import_jsonl(
+        self,
+        input_path: str | Path,
+        *,
+        merge: bool = False,
+        allow_foreign_ids: bool = False,
+    ) -> dict[str, Any]:
         """Import full project data from a JSONL file.
 
         Args:
             input_path: Path to JSONL file
             merge: If True, skip existing records (OR IGNORE). If False, raise on conflict.
+            allow_foreign_ids: If True, permit imported issue IDs whose prefix
+                does not match this DB's prefix. The default (False) rejects
+                cross-prefix imports fast, because later write paths enforce
+                the prefix guard and the imported rows would otherwise be
+                readable-but-unwritable. Migration tools that deliberately
+                preserve source IDs may opt in.
 
         Returns dict with ``count`` (records inserted) and ``skipped_types``
         (mapping of unknown _type values to their occurrence counts, empty if none).
+
+        Raises:
+            WrongProjectError: if *allow_foreign_ids* is False and any
+                imported record carries an issue ID that does not belong to
+                this project. No rows are inserted before the check.
         """
         count = 0
         skipped_types: dict[str, int] = {}
@@ -609,6 +689,17 @@ class MetaMixin(DBMixinProtocol):
                 else:
                     key = record_type or "<missing>"
                     skipped_types[key] = skipped_types.get(key, 0) + 1
+
+        if not allow_foreign_ids:
+            self._assert_import_ids_match_prefix(
+                issues=issues,
+                dependencies=dependencies,
+                labels=labels,
+                comments=comments,
+                events=events,
+                file_associations=file_associations,
+                scan_findings=scan_findings,
+            )
 
         inserted_issue_ids: set[str] = set()
         parent_map: dict[str, str] = {}

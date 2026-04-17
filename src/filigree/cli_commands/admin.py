@@ -490,11 +490,20 @@ def export_data(output: str) -> None:
 @click.command("import")
 @click.argument("input_file", type=click.Path(exists=True))
 @click.option("--merge", is_flag=True, help="Skip existing records instead of failing on conflict")
-def import_data(input_file: str, merge: bool) -> None:
+@click.option(
+    "--allow-foreign-ids",
+    is_flag=True,
+    help=(
+        "Keep source issue IDs even when their prefix doesn't match this "
+        "project (migration escape hatch; imported rows become readable "
+        "but not mutable)."
+    ),
+)
+def import_data(input_file: str, merge: bool, allow_foreign_ids: bool) -> None:
     """Import full project data from a JSONL file."""
     with get_db() as db:
         try:
-            result = db.import_jsonl(input_file, merge=merge)
+            result = db.import_jsonl(input_file, merge=merge, allow_foreign_ids=allow_foreign_ids)
         except (json_mod.JSONDecodeError, KeyError, ValueError, sqlite3.IntegrityError, OSError) as e:
             click.echo(f"Import failed: {e}", err=True)
             sys.exit(1)

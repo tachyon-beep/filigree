@@ -267,6 +267,72 @@ class TestFromConf:
             db.close()
 
 
+class TestFromFiligreeDirLegacyPrefixFallback:
+    """Regression: legacy installs with no (or malformed) config.json must
+    not silently open with ``prefix="filigree"``.
+
+    Bug filigree-fda0e2a340: ``read_config`` returned a hardcoded default of
+    ``prefix="filigree"`` when config.json was missing or lacked a ``prefix``
+    key, and ``from_filigree_dir`` adopted it. A legacy project initialised
+    by directory name (the pre-v2 behaviour) ended up mislabelled so every
+    write to its own issues raised ``WrongProjectError``.
+
+    Fix: when an explicit prefix is not present, fall back to the project
+    directory's own name (``filigree_dir.parent.name``), mirroring
+    ``filigree init``'s default.
+    """
+
+    def test_missing_config_uses_project_dir_name_as_prefix(self, tmp_path: Path) -> None:
+        project_root = tmp_path / "myproj"
+        project_root.mkdir()
+        filigree_dir = project_root / FILIGREE_DIR_NAME
+        filigree_dir.mkdir()
+        # No config.json, no .filigree.conf — the mis-handled legacy path.
+        # Pre-populate a DB with an issue under the project-name prefix so
+        # the bad default would silently diverge.
+        seed = FiligreeDB(filigree_dir / DB_FILENAME, prefix="myproj")
+        seed.initialize()
+        seed_issue = seed.create_issue("seed")
+        seed.close()
+
+        db = FiligreeDB.from_filigree_dir(filigree_dir)
+        try:
+            assert db.prefix == "myproj"
+            # A mutation on the seeded issue must succeed, not raise
+            # WrongProjectError — this is the symptom in the bug report.
+            db.update_issue(seed_issue.id, title="renamed")
+        finally:
+            db.close()
+
+    def test_config_missing_prefix_key_uses_dir_name(self, tmp_path: Path) -> None:
+        """config.json exists but omits the ``prefix`` key (partial/corrupt)."""
+        project_root = tmp_path / "widget-tracker"
+        project_root.mkdir()
+        filigree_dir = project_root / FILIGREE_DIR_NAME
+        filigree_dir.mkdir()
+        (filigree_dir / "config.json").write_text(json.dumps({"version": 1}))
+
+        db = FiligreeDB.from_filigree_dir(filigree_dir)
+        try:
+            assert db.prefix == "widget-tracker"
+        finally:
+            db.close()
+
+    def test_config_with_explicit_prefix_still_wins(self, tmp_path: Path) -> None:
+        """Config-provided prefix must override any directory-name fallback."""
+        project_root = tmp_path / "dirname-ignored"
+        project_root.mkdir()
+        filigree_dir = project_root / FILIGREE_DIR_NAME
+        filigree_dir.mkdir()
+        (filigree_dir / "config.json").write_text(json.dumps({"prefix": "explicit", "version": 1}))
+
+        db = FiligreeDB.from_filigree_dir(filigree_dir)
+        try:
+            assert db.prefix == "explicit"
+        finally:
+            db.close()
+
+
 # ---------------------------------------------------------------------------
 # Prefix-mismatch guard
 # ---------------------------------------------------------------------------

@@ -247,6 +247,28 @@ def write_config(filigree_dir: Path, config: dict[str, Any] | ProjectConfig) -> 
     write_atomic(config_path, json.dumps(config, indent=2) + "\n")
 
 
+def _raw_config_prefix(config_path: Path) -> str | None:
+    """Return the ``prefix`` key from config.json as it was literally written.
+
+    Unlike :func:`read_config`, this does not backfill defaults. Returns
+    ``None`` when the file is missing, unreadable, not a JSON object, or
+    lacks a non-empty string ``prefix`` — letting callers distinguish
+    "user declared this prefix" from "read_config made one up".
+    """
+    if not config_path.exists():
+        return None
+    try:
+        raw: Any = json.loads(config_path.read_text())
+    except (json.JSONDecodeError, OSError):
+        return None
+    if not isinstance(raw, dict):
+        return None
+    value = raw.get("prefix")
+    if isinstance(value, str) and value:
+        return value
+    return None
+
+
 VALID_MODES: frozenset[str] = frozenset({"ethereal", "server"})
 
 
@@ -366,11 +388,24 @@ class FiligreeDB(FilesMixin, ScansMixin, IssuesMixin, EventsMixin, WorkflowMixin
 
     @classmethod
     def from_filigree_dir(cls, filigree_dir: Path, *, check_same_thread: bool = True) -> FiligreeDB:
-        """Create a FiligreeDB from an existing ``.filigree/`` directory."""
+        """Create a FiligreeDB from an existing ``.filigree/`` directory.
+
+        When ``config.json`` is missing or omits the ``prefix`` key, fall back
+        to the project directory's own name rather than the hardcoded
+        ``"filigree"`` default. This mirrors what ``filigree init`` writes
+        (prefix defaults to ``cwd.name``) and prevents a legacy install from
+        silently opening with the wrong identity — every write to its own
+        pre-existing issues would otherwise raise ``WrongProjectError``.
+        """
         config = read_config(filigree_dir)
+        # ``read_config`` backfills a "filigree" prefix into its return value
+        # for missing/partial configs, so inspect the raw JSON to detect
+        # whether the user ever declared one explicitly.
+        configured_prefix = _raw_config_prefix(filigree_dir / CONFIG_FILENAME)
+        prefix = configured_prefix if configured_prefix is not None else (filigree_dir.parent.name or "filigree")
         db = cls(
             filigree_dir / DB_FILENAME,
-            prefix=config.get("prefix", "filigree"),
+            prefix=prefix,
             enabled_packs=config.get("enabled_packs"),
             check_same_thread=check_same_thread,
         )

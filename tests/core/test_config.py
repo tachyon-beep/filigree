@@ -70,12 +70,19 @@ class TestFromFiligreeDir:
     """Verify FiligreeDB.from_filigree_dir construction."""
 
     def test_missing_config_uses_defaults(self, tmp_path: Path) -> None:
-        """from_filigree_dir with no config.json should succeed with defaults."""
-        filigree_dir = tmp_path / ".filigree"
+        """from_filigree_dir with no config.json should succeed with defaults.
+
+        The prefix defaults to the project directory's name (mirroring
+        ``filigree init``'s default), not the hardcoded string ``"filigree"``
+        — see bug filigree-fda0e2a340.
+        """
+        project_root = tmp_path / "myproj"
+        project_root.mkdir()
+        filigree_dir = project_root / ".filigree"
         filigree_dir.mkdir()
 
         db = FiligreeDB.from_filigree_dir(filigree_dir)
-        assert db.prefix == "filigree"
+        assert db.prefix == "myproj"
         assert db.enabled_packs == ["core", "planning", "release"]
         db.close()
 

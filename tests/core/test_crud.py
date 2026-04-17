@@ -1124,6 +1124,33 @@ class TestImportJsonl:
         assert db.conn.execute("SELECT COUNT(*) FROM file_associations").fetchone()[0] == 1
         assert db.conn.execute("SELECT COUNT(*) FROM file_events").fetchone()[0] == 1
 
+    def test_import_cross_prefix_rejects_by_default(self, tmp_path: Path) -> None:
+        """Regression filigree-bac0797445: by default, importing a JSONL whose
+        issue IDs use a foreign prefix must fail fast rather than silently
+        creating unwritable rows. Every guarded write method would later
+        raise WrongProjectError on those IDs, effectively corrupting the
+        destination DB.
+        """
+        from filigree.core import WrongProjectError
+
+        source = FiligreeDB(tmp_path / "source-xfail.db", prefix="src")
+        source.initialize()
+        source.create_issue("cross-prefix seed")
+        out = tmp_path / "cross-prefix-reject.jsonl"
+        source.export_jsonl(out)
+        source.close()
+
+        fresh = FiligreeDB(tmp_path / "dest-xfail.db", prefix="dst")
+        fresh.initialize()
+        with pytest.raises(WrongProjectError, match=r"src|dst"):
+            fresh.import_jsonl(out, merge=True)
+        # No foreign-prefixed rows should have been inserted — the import
+        # aborted before touching destination data. (The auto-seeded
+        # ``Future`` release singleton uses the dst prefix and is ignored.)
+        foreign_rows = fresh.conn.execute("SELECT COUNT(*) FROM issues WHERE id NOT LIKE ?", (f"{fresh.prefix}-%",)).fetchone()[0]
+        assert foreign_rows == 0
+        fresh.close()
+
     def test_import_merge_reconciles_file_ids_by_path(self, tmp_path: Path) -> None:
         source = FiligreeDB(tmp_path / "source.db", prefix="src")
         source.initialize()
@@ -1135,7 +1162,8 @@ class TestImportJsonl:
         fresh = FiligreeDB(tmp_path / "dest.db", prefix="dst")
         fresh.initialize()
         dst_file = fresh.register_file("src/example.py", language="python")
-        fresh.import_jsonl(out, merge=True)
+        # Migration tools that deliberately preserve source IDs must opt in.
+        fresh.import_jsonl(out, merge=True, allow_foreign_ids=True)
 
         assert fresh.conn.execute("SELECT COUNT(*) FROM file_records WHERE path = ?", ("src/example.py",)).fetchone()[0] == 1
         finding = fresh.conn.execute("SELECT file_id, issue_id FROM scan_findings WHERE id = ?", ("src-sf1",)).fetchone()
@@ -1179,9 +1207,9 @@ class TestImportJsonl:
             json.dumps(
                 {
                     "_type": "issue",
-                    "id": "child-001",
+                    "id": "test-child001",
                     "title": "Child with bad parent",
-                    "parent_id": "nonexistent-parent-999",
+                    "parent_id": "test-nonex999",
                 }
             ),
         ]
@@ -1196,24 +1224,24 @@ class TestImportJsonl:
             json.dumps(
                 {
                     "_type": "issue",
-                    "id": "parent-001",
+                    "id": "test-parent001",
                     "title": "Parent",
                 }
             ),
             json.dumps(
                 {
                     "_type": "issue",
-                    "id": "child-001",
+                    "id": "test-child001",
                     "title": "Child",
-                    "parent_id": "parent-001",
+                    "parent_id": "test-parent001",
                 }
             ),
         ]
         jsonl.write_text("\n".join(lines) + "\n")
         result = db.import_jsonl(jsonl)
         assert result["count"] == 2
-        child = db.get_issue("child-001")
-        assert child.parent_id == "parent-001"
+        child = db.get_issue("test-child001")
+        assert child.parent_id == "test-parent001"
 
     def test_import_parent_id_referencing_existing_db_issue(self, db: FiligreeDB, tmp_path: Path) -> None:
         """Parent references to issues already in the DB should work."""
@@ -1223,7 +1251,7 @@ class TestImportJsonl:
             json.dumps(
                 {
                     "_type": "issue",
-                    "id": "child-002",
+                    "id": "test-child002",
                     "title": "Child referencing existing parent",
                     "parent_id": parent.id,
                 }
@@ -1232,7 +1260,7 @@ class TestImportJsonl:
         jsonl.write_text("\n".join(lines) + "\n")
         result = db.import_jsonl(jsonl)
         assert result["count"] == 1
-        child = db.get_issue("child-002")
+        child = db.get_issue("test-child002")
         assert child.parent_id == parent.id
 
     def test_import_skips_blank_lines(self, db: FiligreeDB, tmp_path: Path) -> None:
@@ -1852,7 +1880,7 @@ class TestImportJsonlErrorPaths:
             json.dumps(
                 {
                     "_type": "issue",
-                    "id": "future-1",
+                    "id": "test-future1",
                     "title": "Future",
                     "type": "release",
                     "status": "open",
@@ -1863,7 +1891,7 @@ class TestImportJsonlErrorPaths:
             json.dumps(
                 {
                     "_type": "issue",
-                    "id": "future-2",
+                    "id": "test-future2",
                     "title": "Future",
                     "type": "release",
                     "status": "open",
@@ -1885,7 +1913,7 @@ class TestImportJsonlErrorPaths:
             "created_at, updated_at, description, notes, fields) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
-                "existing-future",
+                "test-existfut",
                 "Future",
                 "open",
                 4,
@@ -1898,7 +1926,7 @@ class TestImportJsonlErrorPaths:
                 '{"version": "Future"}',
             ),
         )
-        db.conn.execute("INSERT INTO labels (issue_id, label) VALUES (?, ?)", ("existing-future", "important"))
+        db.conn.execute("INSERT INTO labels (issue_id, label) VALUES (?, ?)", ("test-existfut", "important"))
         db.conn.commit()
 
         # Import a different Future release
@@ -1907,7 +1935,7 @@ class TestImportJsonlErrorPaths:
             json.dumps(
                 {
                     "_type": "issue",
-                    "id": "imported-future",
+                    "id": "test-impfut",
                     "title": "Future",
                     "type": "release",
                     "status": "open",
@@ -1928,7 +1956,7 @@ class TestImportJsonlErrorPaths:
             "created_at, updated_at, description, notes, fields) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
-                "existing-future",
+                "test-existfut",
                 "Future",
                 "open",
                 4,
@@ -1943,7 +1971,7 @@ class TestImportJsonlErrorPaths:
         )
         db.conn.execute(
             "INSERT INTO comments (issue_id, author, text, created_at) VALUES (?, ?, ?, ?)",
-            ("existing-future", "dev", "planning note", "2026-01-01T00:00:00+00:00"),
+            ("test-existfut", "dev", "planning note", "2026-01-01T00:00:00+00:00"),
         )
         db.conn.commit()
 
@@ -1952,7 +1980,7 @@ class TestImportJsonlErrorPaths:
             json.dumps(
                 {
                     "_type": "issue",
-                    "id": "imported-future",
+                    "id": "test-impfut",
                     "title": "Future",
                     "type": "release",
                     "status": "open",
@@ -1973,7 +2001,7 @@ class TestImportJsonlErrorPaths:
             "created_at, updated_at, description, notes, fields) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
-                "existing-future",
+                "test-existfut",
                 "Future",
                 "open",
                 4,
@@ -1997,7 +2025,7 @@ class TestImportJsonlErrorPaths:
                 "open",
                 2,
                 "task",
-                "existing-future",
+                "test-existfut",
                 "",
                 "2026-01-01T00:00:00+00:00",
                 "2026-01-01T00:00:00+00:00",
@@ -2013,7 +2041,7 @@ class TestImportJsonlErrorPaths:
             json.dumps(
                 {
                     "_type": "issue",
-                    "id": "imported-future",
+                    "id": "test-impfut",
                     "title": "Future",
                     "type": "release",
                     "status": "open",
@@ -2034,7 +2062,7 @@ class TestImportJsonlErrorPaths:
             "created_at, updated_at, description, notes, fields) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
-                "existing-future",
+                "test-existfut",
                 "Future",
                 "open",
                 4,
@@ -2050,7 +2078,7 @@ class TestImportJsonlErrorPaths:
         other = db.create_issue("Other task")
         db.conn.execute(
             "INSERT INTO dependencies (issue_id, depends_on_id, type, created_at) VALUES (?, ?, ?, ?)",
-            ("existing-future", other.id, "blocks", "2026-01-01T00:00:00+00:00"),
+            ("test-existfut", other.id, "blocks", "2026-01-01T00:00:00+00:00"),
         )
         db.conn.commit()
 
@@ -2059,7 +2087,7 @@ class TestImportJsonlErrorPaths:
             json.dumps(
                 {
                     "_type": "issue",
-                    "id": "imported-future",
+                    "id": "test-impfut",
                     "title": "Future",
                     "type": "release",
                     "status": "open",
@@ -2080,7 +2108,7 @@ class TestImportJsonlErrorPaths:
             "created_at, updated_at, description, notes, fields) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
-                "existing-future",
+                "test-existfut",
                 "Modified Future",
                 "open",
                 4,
@@ -2100,7 +2128,7 @@ class TestImportJsonlErrorPaths:
             json.dumps(
                 {
                     "_type": "issue",
-                    "id": "imported-future",
+                    "id": "test-impfut",
                     "title": "Future",
                     "type": "release",
                     "status": "open",
