@@ -129,6 +129,7 @@ class ScansMixin(DBMixinProtocol):
         row = self.conn.execute(
             "SELECT sr.* FROM scan_runs sr "
             "WHERE sr.scanner_name = ? "
+            "AND json_valid(sr.file_paths) "
             "AND EXISTS ("
             "  SELECT 1 FROM json_each(sr.file_paths) je WHERE je.value = ?"
             ") "

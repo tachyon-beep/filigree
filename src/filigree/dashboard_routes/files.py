@@ -300,7 +300,13 @@ def create_router() -> APIRouter:
         scan_source = body.get("scan_source", "")
         if not isinstance(scan_source, str) or not scan_source:
             return _error_response("scan_source is required and must be a string", "VALIDATION_ERROR", 400)
-        findings = body.get("findings", [])
+        if "findings" not in body:
+            return _error_response(
+                "findings is required (use [] for a clean scan)",
+                "VALIDATION_ERROR",
+                400,
+            )
+        findings = body["findings"]
         if not isinstance(findings, list):
             return _error_response("findings must be a JSON array", "VALIDATION_ERROR", 400)
         mark_unseen = body.get("mark_unseen", False)

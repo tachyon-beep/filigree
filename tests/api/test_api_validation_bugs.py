@@ -90,6 +90,14 @@ class TestScanIngestStatusCode:
         # 202 is wrong here — the operation completed synchronously
         assert resp.status_code == 200, f"No findings: expected 200, got {resp.status_code}"
 
+    async def test_scan_missing_findings_field_returns_400(self, bug_db: FiligreeDB, client: AsyncClient) -> None:
+        """Missing findings field must be rejected as malformed, not treated as clean scan (9a9caabc08)."""
+        payload = {"scan_source": "test-scanner"}  # no findings key at all
+        resp = await client.post("/api/v1/scan-results", json=payload)
+        assert resp.status_code == 400, f"Missing findings should return 400, got {resp.status_code}"
+        body = resp.json()
+        assert body.get("error", {}).get("code") == "VALIDATION_ERROR"
+
 
 # ---------------------------------------------------------------------------
 # Bug 3: findings endpoint accepts invalid severity/status without validation

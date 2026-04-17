@@ -538,6 +538,80 @@ class TestObservationFailureWarning:
         assert len(obs_warnings) == 2
 
 
+class TestScanIngestClusterRegressions:
+    """Regressions for the scan ingest correctness cluster (f71df69ee2, 784b698cf4, 23c676fd5a)."""
+
+    def test_mark_unseen_with_empty_findings_is_rejected(self, db: FiligreeDB) -> None:
+        """mark_unseen=True + empty findings is ambiguous and must be rejected (f71df69ee2)."""
+        # Seed a prior finding that should NOT be silently left open.
+        db.process_scan_results(
+            scan_source="ruff",
+            findings=[{"path": "a.py", "rule_id": "R1", "severity": "medium", "message": "m"}],
+        )
+        with pytest.raises(ValueError, match="mark_unseen"):
+            db.process_scan_results(
+                scan_source="ruff",
+                findings=[],
+                mark_unseen=True,
+            )
+
+    def test_mark_unseen_false_still_allows_empty_findings(self, db: FiligreeDB) -> None:
+        """Empty findings without mark_unseen remains valid (clean scan)."""
+        result = db.process_scan_results(scan_source="ruff", findings=[], mark_unseen=False)
+        assert result["findings_created"] == 0
+
+    def test_batch_completion_counts_all_findings_not_last_delta(self, db: FiligreeDB) -> None:
+        """findings_count on completion reflects all findings for the run, not the final call's delta (784b698cf4)."""
+        db.create_scan_run(
+            scan_run_id="batch-count",
+            scanner_name="codex",
+            scan_source="codex",
+            file_paths=["a.py", "b.py"],
+            file_ids=["f-1", "f-2"],
+        )
+        db.update_scan_run_status("batch-count", "running")
+
+        db.process_scan_results(
+            scan_source="codex",
+            findings=[{"path": "a.py", "rule_id": "R1", "severity": "medium", "message": "m1"}],
+            scan_run_id="batch-count",
+            complete_scan_run=False,
+        )
+        db.process_scan_results(
+            scan_source="codex",
+            findings=[{"path": "b.py", "rule_id": "R2", "severity": "medium", "message": "m2"}],
+            scan_run_id="batch-count",
+            complete_scan_run=False,
+        )
+        # Final orchestrator call has no new findings but must complete the run
+        db.process_scan_results(
+            scan_source="codex",
+            findings=[],
+            scan_run_id="batch-count",
+            complete_scan_run=True,
+        )
+        run = db.get_scan_run("batch-count")
+        assert run["status"] == "completed"
+        assert run["findings_count"] == 2, f"expected 2 total findings, got {run['findings_count']}"
+
+    def test_cooldown_check_tolerates_malformed_file_paths(self, db: FiligreeDB) -> None:
+        """One corrupt scan_runs.file_paths row must not block cooldown checks for other files (23c676fd5a)."""
+        db.create_scan_run(
+            scan_run_id="corrupt-cd",
+            scanner_name="codex",
+            scan_source="codex",
+            file_paths=["x.py"],
+            file_ids=["f-1"],
+        )
+        db.conn.execute(
+            "UPDATE scan_runs SET file_paths = 'not-valid-json' WHERE id = ?",
+            ("corrupt-cd",),
+        )
+        db.conn.commit()
+        # Must not raise OperationalError; corrupt row is simply skipped
+        assert db.check_scan_cooldown("codex", "anything.py") is None
+
+
 class TestObservationAutoCommit:
     """Regression: create_observation with auto_commit=False defers commit."""
 

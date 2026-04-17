@@ -646,6 +646,11 @@ class FilesMixin(DBMixinProtocol):
 
         Returns summary stats including ``new_finding_ids``.
         """
+        if mark_unseen and not findings:
+            raise ValueError(
+                "mark_unseen=True requires at least one finding; an empty batch cannot identify which (file, scan_source) pairs to sweep"
+            )
+
         warnings = self._validate_scan_findings(findings, scan_source)
 
         now = _now_iso()
@@ -696,11 +701,16 @@ class FilesMixin(DBMixinProtocol):
             raise
 
         if scan_run_id and complete_scan_run:
+            total_row = self.conn.execute(
+                "SELECT COUNT(*) AS n FROM scan_findings WHERE scan_run_id = ?",
+                (scan_run_id,),
+            ).fetchone()
+            total_findings = int(total_row["n"]) if total_row is not None else 0
             try:
                 self.update_scan_run_status(
                     scan_run_id,
                     "completed",
-                    findings_count=stats["findings_created"] + stats["findings_updated"],
+                    findings_count=total_findings,
                 )
             except (KeyError, ValueError, sqlite3.Error) as exc:
                 # Check if the scan run is already in a terminal state by
