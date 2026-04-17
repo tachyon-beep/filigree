@@ -708,6 +708,66 @@ class TestInstallCodexMcp:
         parsed = tomllib.loads(config_text)
         assert "filigree" in parsed["mcp_servers"]
 
+    def test_replaces_header_with_inline_comment_without_duplication(self, tmp_path: Path) -> None:
+        """Bug filigree-37b1452e59: TOML allows whitespace/inline comment between
+        ``]`` and the line terminator. A bare-header regex left the old
+        ``[mcp_servers.filigree]`` block in place and appended a second copy,
+        making the file unparseable under tomllib's duplicate-table rule.
+        """
+        import tomllib
+
+        home = tmp_path / "home"
+        codex_dir = home / ".codex"
+        config_path = codex_dir / "config.toml"
+        home.mkdir()
+        codex_dir.mkdir()
+        config_path.write_text(
+            "[mcp_servers.filigree] # pinned by laptop-setup script\n"
+            'command = "/old/venv/bin/filigree-mcp"\n'
+            'args = ["--project", "/srv/old"]\n'
+            "\n"
+            "[mcp_servers.other]\n"
+            'command = "other-mcp"\n'
+        )
+        with (
+            patch("filigree.install_support.integrations.Path.home", return_value=home),
+            patch("filigree.install_support.integrations.shutil.which", return_value=None),
+            patch("filigree.install_support.integrations._find_filigree_mcp_command", return_value="filigree-mcp"),
+        ):
+            ok, _msg = install_codex_mcp(tmp_path)
+        assert ok
+        text = config_path.read_text()
+        # Duplicate table rule must hold — tomllib refuses otherwise
+        parsed = tomllib.loads(text)
+        assert parsed["mcp_servers"]["filigree"] == {"command": "filigree-mcp", "args": []}
+        # The [mcp_servers.other] table must be left intact
+        assert parsed["mcp_servers"]["other"] == {"command": "other-mcp"}
+        # No stale project arg survived
+        assert "/srv/old" not in text
+
+    def test_replaces_header_with_trailing_whitespace(self, tmp_path: Path) -> None:
+        """Trailing spaces/tabs after ``]`` are valid TOML and must not block replacement."""
+        import tomllib
+
+        home = tmp_path / "home"
+        codex_dir = home / ".codex"
+        config_path = codex_dir / "config.toml"
+        home.mkdir()
+        codex_dir.mkdir()
+        # Trailing spaces after the header; note no comment
+        config_path.write_text('[mcp_servers.filigree]   \ncommand = "/old/filigree-mcp"\nargs = []\n')
+        with (
+            patch("filigree.install_support.integrations.Path.home", return_value=home),
+            patch("filigree.install_support.integrations.shutil.which", return_value=None),
+            patch("filigree.install_support.integrations._find_filigree_mcp_command", return_value="filigree-mcp"),
+        ):
+            ok, _msg = install_codex_mcp(tmp_path)
+        assert ok
+        text = config_path.read_text()
+        parsed = tomllib.loads(text)  # must not raise duplicate-table
+        assert parsed["mcp_servers"]["filigree"]["command"] == "filigree-mcp"
+        assert text.count("[mcp_servers.filigree]") == 1
+
     def test_replaces_existing_crlf_table_without_duplication(self, tmp_path: Path) -> None:
         """CRLF-terminated Codex configs should replace filigree in place."""
         home = tmp_path / "home"
@@ -924,6 +984,110 @@ class TestInstallClaudeCodeHooks:
         parsed = shlex.split(session_cmd)
         assert parsed[0] == "/path with spaces/python"
         assert parsed[1:] == ["-m", "filigree", "session-context"]
+
+
+class TestInstallHooksPreToolUseRepair:
+    """Bug filigree-83c52565d6: PreToolUse ensure-dashboard hooks must be
+    repaired on reinstall after a binary move, not left stale with a
+    substring match."""
+
+    MOCK_TOKENS = ["/mock/venv/bin/filigree"]  # noqa: RUF012
+    MOCK_BIN = "/mock/venv/bin/filigree"
+
+    def _pre_tool_use_cmds(self, settings_path: Path) -> list[str]:
+        data = json.loads(settings_path.read_text())
+        return [h["command"] for m in data["hooks"]["PreToolUse"] for h in m["hooks"]]
+
+    def test_stale_absolute_path_is_rewritten(self, tmp_path: Path) -> None:
+        claude_dir = tmp_path / ".claude"
+        claude_dir.mkdir()
+        old_bin = "/old/venv/bin/filigree"
+        settings = {
+            "hooks": {
+                "SessionStart": [
+                    {
+                        "hooks": [
+                            {"type": "command", "command": f"{old_bin} session-context", "timeout": 5000},
+                            {"type": "command", "command": f"{old_bin} ensure-dashboard", "timeout": 5000},
+                        ]
+                    }
+                ],
+                "PreToolUse": [
+                    {
+                        "matcher": "mcp__filigree__.*",
+                        "hooks": [{"type": "command", "command": f"{old_bin} ensure-dashboard", "timeout": 5000}],
+                    }
+                ],
+            }
+        }
+        (claude_dir / "settings.json").write_text(json.dumps(settings))
+        with patch("filigree.install_support.hooks.find_filigree_command", return_value=self.MOCK_TOKENS):
+            ok, _msg = install_claude_code_hooks(tmp_path)
+        assert ok
+        cmds = self._pre_tool_use_cmds(claude_dir / "settings.json")
+        assert f"{self.MOCK_BIN} ensure-dashboard" in cmds
+        assert f"{old_bin} ensure-dashboard" not in cmds
+
+    def test_bare_command_is_rewritten(self, tmp_path: Path) -> None:
+        claude_dir = tmp_path / ".claude"
+        claude_dir.mkdir()
+        settings = {
+            "hooks": {
+                "PreToolUse": [
+                    {
+                        "matcher": "mcp__filigree__.*",
+                        "hooks": [{"type": "command", "command": "filigree ensure-dashboard", "timeout": 5000}],
+                    }
+                ]
+            }
+        }
+        (claude_dir / "settings.json").write_text(json.dumps(settings))
+        with patch("filigree.install_support.hooks.find_filigree_command", return_value=self.MOCK_TOKENS):
+            install_claude_code_hooks(tmp_path)
+        cmds = self._pre_tool_use_cmds(claude_dir / "settings.json")
+        assert f"{self.MOCK_BIN} ensure-dashboard" in cmds
+        assert "filigree ensure-dashboard" not in cmds
+
+    def test_idempotent_when_already_current(self, tmp_path: Path) -> None:
+        """Running install twice must not duplicate the PreToolUse entry."""
+        with patch("filigree.install_support.hooks.find_filigree_command", return_value=self.MOCK_TOKENS):
+            install_claude_code_hooks(tmp_path)
+            install_claude_code_hooks(tmp_path)
+        cmds = self._pre_tool_use_cmds(tmp_path / ".claude" / "settings.json")
+        # ensure-dashboard should appear exactly once in PreToolUse
+        ensure_cmds = [c for c in cmds if "ensure-dashboard" in c]
+        assert len(ensure_cmds) == 1
+
+    def test_drifted_matcher_is_repaired(self, tmp_path: Path) -> None:
+        """If matcher drifted away from mcp__filigree__.*, reinstall repairs it."""
+        claude_dir = tmp_path / ".claude"
+        claude_dir.mkdir()
+        settings = {
+            "hooks": {
+                "PreToolUse": [
+                    {
+                        "matcher": "wrong-matcher",
+                        "hooks": [{"type": "command", "command": f"{self.MOCK_BIN} ensure-dashboard", "timeout": 5000}],
+                    }
+                ]
+            }
+        }
+        (claude_dir / "settings.json").write_text(json.dumps(settings))
+        with patch("filigree.install_support.hooks.find_filigree_command", return_value=self.MOCK_TOKENS):
+            install_claude_code_hooks(tmp_path)
+        data = json.loads((claude_dir / "settings.json").read_text())
+        matchers = [m.get("matcher") for m in data["hooks"]["PreToolUse"]]
+        assert "mcp__filigree__.*" in matchers
+        assert "wrong-matcher" not in matchers
+
+    def test_fresh_install_adds_pre_tool_use_with_scoped_matcher(self, tmp_path: Path) -> None:
+        with patch("filigree.install_support.hooks.find_filigree_command", return_value=self.MOCK_TOKENS):
+            install_claude_code_hooks(tmp_path)
+        data = json.loads((tmp_path / ".claude" / "settings.json").read_text())
+        pre_tool_use = data["hooks"]["PreToolUse"]
+        assert len(pre_tool_use) == 1
+        assert pre_tool_use[0]["matcher"] == "mcp__filigree__.*"
+        assert pre_tool_use[0]["hooks"][0]["command"] == f"{self.MOCK_BIN} ensure-dashboard"
 
 
 class TestHasHookCommand:

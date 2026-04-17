@@ -305,6 +305,81 @@ class TestDoctorDatabase:
         assert "newer" in schema_result.fix_hint.lower() or "Upgrade" in schema_result.fix_hint
 
 
+class TestDoctorHonorsConfDbPath:
+    """Bug filigree-3572d3b273: run_doctor must resolve the DB path from
+    ``.filigree.conf`` when one exists, not hardcode ``.filigree/filigree.db``.
+
+    Custom relocations like ``db = "storage/track.db"`` are explicitly
+    supported by ``FiligreeDB.from_conf`` and ``filigree init``; doctor
+    cannot silently inspect the wrong file (or report a false "missing DB").
+    """
+
+    def test_honors_custom_db_path_from_conf(self, tmp_path: Path) -> None:
+        from filigree.core import CONF_FILENAME, write_conf
+
+        # Build a project whose DB lives at storage/track.db, not .filigree/filigree.db
+        filigree_dir = tmp_path / FILIGREE_DIR_NAME
+        filigree_dir.mkdir()
+        storage_dir = tmp_path / "storage"
+        storage_dir.mkdir()
+        custom_db = storage_dir / "track.db"
+
+        write_config(filigree_dir, {"prefix": "tst", "version": 1})
+        (filigree_dir / SUMMARY_FILENAME).write_text("# summary\n")
+
+        db = FiligreeDB(custom_db, prefix="tst")
+        db.initialize()
+        db.close()
+
+        write_conf(
+            tmp_path / CONF_FILENAME,
+            {"version": 1, "project_name": "tst", "prefix": "tst", "db": "storage/track.db"},
+        )
+
+        results = run_doctor(tmp_path)
+        db_result = next(r for r in results if r.name == "filigree.db")
+        assert db_result.passed is True, f"doctor did not find DB at {custom_db}: {db_result.message}"
+
+    def test_reports_missing_custom_db(self, tmp_path: Path) -> None:
+        """If conf declares a DB path that doesn't exist, doctor reports missing."""
+        from filigree.core import CONF_FILENAME, write_conf
+
+        filigree_dir = tmp_path / FILIGREE_DIR_NAME
+        filigree_dir.mkdir()
+        write_config(filigree_dir, {"prefix": "tst", "version": 1})
+        (filigree_dir / SUMMARY_FILENAME).write_text("# summary\n")
+        # Conf points at a DB that was never created
+        write_conf(
+            tmp_path / CONF_FILENAME,
+            {"version": 1, "project_name": "tst", "prefix": "tst", "db": "storage/track.db"},
+        )
+
+        results = run_doctor(tmp_path)
+        db_result = next(r for r in results if r.name == "filigree.db")
+        assert db_result.passed is False
+        assert "Missing" in db_result.message
+
+    def test_falls_back_to_legacy_layout_without_conf(self, tmp_path: Path) -> None:
+        """Legacy installs without .filigree.conf must keep working."""
+        _make_project(tmp_path)  # no conf written
+        results = run_doctor(tmp_path)
+        db_result = next(r for r in results if r.name == "filigree.db")
+        assert db_result.passed is True
+
+    def test_unreadable_conf_surfaces_but_falls_back(self, tmp_path: Path) -> None:
+        """A corrupt conf must surface as a check failure, but not block the DB check."""
+        from filigree.core import CONF_FILENAME
+
+        _make_project(tmp_path)
+        (tmp_path / CONF_FILENAME).write_text("not json at all {")
+        results = run_doctor(tmp_path)
+        anchor_result = next(r for r in results if r.name == ".filigree.conf anchor")
+        assert anchor_result.passed is False
+        # DB check should still report the legacy DB as fine
+        db_result = next(r for r in results if r.name == "filigree.db")
+        assert db_result.passed is True
+
+
 # ---------------------------------------------------------------------------
 # run_doctor — context.md freshness check
 # ---------------------------------------------------------------------------

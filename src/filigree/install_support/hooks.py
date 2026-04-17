@@ -152,12 +152,26 @@ def _extract_hook_binary(settings: dict[str, Any], bare_command: str) -> str | N
     return None
 
 
-def _ensure_pre_tool_use_hook(settings: dict[str, Any], ensure_dashboard_cmd: str) -> None:
+PRE_TOOL_USE_MATCHER = "mcp__filigree__.*"
+
+
+def _ensure_pre_tool_use_hook(settings: dict[str, Any], ensure_dashboard_cmd: str) -> bool:
     """Register ensure-dashboard as a PreToolUse hook scoped to filigree MCP tools.
 
     This restarts the dashboard if idle-shutdown killed it mid-session.
     Only fires when filigree MCP tools are invoked, not on every tool call.
+
+    Idempotent and self-repairing: walks existing PreToolUse entries with
+    :func:`_hook_cmd_matches` so bare-form or stale-absolute-path commands
+    (e.g. after a binary move) are upgraded to ``ensure_dashboard_cmd`` in
+    place. Also repairs the enclosing ``matcher`` to the expected
+    ``mcp__filigree__.*`` scope when it has drifted. Only appends a fresh
+    entry when no matching command is found.
+
+    Returns ``True`` if the settings dict was mutated (added, repaired, or
+    matcher rewritten), ``False`` if it was already correct.
     """
+    changed = False
     if "hooks" not in settings or not isinstance(settings.get("hooks"), dict):
         settings["hooks"] = {}
     pre_hooks = settings["hooks"].get("PreToolUse")
@@ -165,20 +179,36 @@ def _ensure_pre_tool_use_hook(settings: dict[str, Any], ensure_dashboard_cmd: st
         pre_hooks = []
         settings["hooks"]["PreToolUse"] = pre_hooks
 
-    # Check if already registered
+    found = False
     for matcher in pre_hooks:
         if not isinstance(matcher, dict):
             continue
-        for hook in matcher.get("hooks", []):
-            if isinstance(hook, dict) and "ensure-dashboard" in hook.get("command", ""):
-                return
+        hook_list = matcher.get("hooks", [])
+        if not isinstance(hook_list, list):
+            continue
+        for hook in hook_list:
+            if not isinstance(hook, dict):
+                continue
+            cmd = hook.get("command", "")
+            if _hook_cmd_matches(cmd, ENSURE_DASHBOARD_COMMAND):
+                found = True
+                if cmd != ensure_dashboard_cmd:
+                    hook["command"] = ensure_dashboard_cmd
+                    changed = True
+                if matcher.get("matcher") != PRE_TOOL_USE_MATCHER:
+                    matcher["matcher"] = PRE_TOOL_USE_MATCHER
+                    changed = True
 
-    pre_hooks.append(
-        {
-            "matcher": "mcp__filigree__.*",
-            "hooks": [{"type": "command", "command": ensure_dashboard_cmd, "timeout": 5000}],
-        }
-    )
+    if not found:
+        pre_hooks.append(
+            {
+                "matcher": PRE_TOOL_USE_MATCHER,
+                "hooks": [{"type": "command", "command": ensure_dashboard_cmd, "timeout": 5000}],
+            }
+        )
+        changed = True
+
+    return changed
 
 
 # ---------------------------------------------------------------------------
@@ -237,14 +267,14 @@ def install_claude_code_hooks(project_root: Path) -> tuple[bool, str]:
 
     # Ensure PreToolUse hook for dashboard auto-restart on MCP tool calls
     # (handles case where idle-shutdown killed dashboard mid-session)
-    _ensure_pre_tool_use_hook(settings, ensure_dashboard_cmd)
+    pre_tool_use_changed = _ensure_pre_tool_use_hook(settings, ensure_dashboard_cmd)
 
-    if not commands_to_add and not upgraded:
+    if not commands_to_add and not upgraded and not pre_tool_use_changed:
         settings_path.write_text(json.dumps(settings, indent=2) + "\n")
         return True, "Hooks already registered in .claude/settings.json"
 
-    if not commands_to_add and upgraded:
-        # Only upgrades, no new hooks needed
+    if not commands_to_add and (upgraded or pre_tool_use_changed):
+        # Only upgrades/repairs, no new hooks needed
         settings_path.write_text(json.dumps(settings, indent=2) + "\n")
         return True, f"Upgraded hook commands in .claude/settings.json to use {filigree_prefix}"
 

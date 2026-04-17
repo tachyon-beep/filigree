@@ -118,6 +118,12 @@ def _upsert_toml_table(content: str, table_name: str, table_block: str) -> str:
     Note: The regex-based approach assumes simple TOML structure (no multiline
     strings containing bare ``[`` at line start). Suitable for machine-generated
     configs like Codex MCP config.
+
+    TOML permits trailing whitespace and an inline ``#`` comment between the
+    closing ``]`` and the line terminator — the header match must accept both
+    so hand-annotated configs are replaced in place instead of being duplicated
+    (which would render the file unparseable under tomllib's duplicate-table
+    rule).
     """
     newline_match = re.search(r"\r\n|\n|\r", content)
     newline = newline_match.group(0) if newline_match else "\n"
@@ -125,7 +131,7 @@ def _upsert_toml_table(content: str, table_name: str, table_block: str) -> str:
     if table_block.endswith(("\r\n", "\n", "\r")):
         rendered_block += newline
     pattern = re.compile(
-        rf"(?ms)^\[{re.escape(table_name)}\](?:\r\n|\n|\r).*?(?=^\[|\Z)",
+        rf"(?ms)^\[{re.escape(table_name)}\][ \t]*(?:#[^\r\n]*)?(?:\r\n|\n|\r).*?(?=^\[|\Z)",
     )
     if pattern.search(content):
         updated = pattern.sub(rendered_block, content, count=1)

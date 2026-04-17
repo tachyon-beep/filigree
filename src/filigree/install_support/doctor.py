@@ -22,6 +22,7 @@ from filigree.core import (
     FILIGREE_DIR_NAME,
     SUMMARY_FILENAME,
     find_filigree_root,
+    read_conf,
 )
 from filigree.db_schema import CURRENT_SCHEMA_VERSION
 from filigree.install_support import (
@@ -250,8 +251,23 @@ def run_doctor(project_root: Path | None = None) -> list[CheckResult]:
     # auto-backfill on first open, but flagging it lets users see it's pending.
     project_root = filigree_dir.parent
     conf_path = project_root / CONF_FILENAME
+    # conf_db_path is the authoritative DB location when the conf declares it;
+    # falls back to .filigree/DB_FILENAME for legacy installs or unreadable confs.
+    conf_db_path: Path | None = None
     if conf_path.exists():
-        results.append(CheckResult(".filigree.conf anchor", True, f"Found at {conf_path}"))
+        try:
+            conf_data = read_conf(conf_path)
+            conf_db_path = (conf_path.parent / conf_data["db"]).resolve()
+            results.append(CheckResult(".filigree.conf anchor", True, f"Found at {conf_path}"))
+        except (json.JSONDecodeError, ValueError, OSError) as exc:
+            results.append(
+                CheckResult(
+                    ".filigree.conf anchor",
+                    False,
+                    f"Found at {conf_path} but unreadable: {exc}",
+                    fix_hint=f"Fix or regenerate {conf_path}",
+                )
+            )
     else:
         results.append(
             CheckResult(
@@ -315,8 +331,10 @@ def run_doctor(project_root: Path | None = None) -> list[CheckResult]:
             )
         )
 
-    # 3. Check filigree.db exists and is accessible
-    db_path = filigree_dir / DB_FILENAME
+    # 3. Check filigree.db exists and is accessible. Prefer the DB path declared
+    # in .filigree.conf (v2.0 — users may relocate the DB); fall back to the
+    # legacy .filigree/filigree.db when no conf is present or it's unreadable.
+    db_path = conf_db_path if conf_db_path is not None else filigree_dir / DB_FILENAME
     if db_path.exists():
         conn: sqlite3.Connection | None = None
         try:
