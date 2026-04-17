@@ -114,7 +114,14 @@ def remove_label(issue_id: str, label_name: str, as_json: bool) -> None:
             else:
                 click.echo(f"Not found: {issue_id}", err=True)
             sys.exit(1)
-        removed = db.remove_label(issue_id, label_name)
+        try:
+            removed = db.remove_label(issue_id, label_name)
+        except ValueError as e:
+            if as_json:
+                click.echo(json_mod.dumps({"error": str(e)}))
+            else:
+                click.echo(f"Error: {e}", err=True)
+            sys.exit(1)
         status = "removed" if removed else "not_found"
         if as_json:
             click.echo(json_mod.dumps({"issue_id": issue_id, "label": label_name, "status": status}))

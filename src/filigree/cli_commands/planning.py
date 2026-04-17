@@ -135,7 +135,14 @@ def add_dep(ctx: click.Context, issue_id: str, depends_on_id: str, as_json: bool
 def remove_dep(ctx: click.Context, issue_id: str, depends_on_id: str, as_json: bool) -> None:
     """Remove dependency."""
     with get_db() as db:
-        removed = db.remove_dependency(issue_id, depends_on_id, actor=ctx.obj["actor"])
+        try:
+            removed = db.remove_dependency(issue_id, depends_on_id, actor=ctx.obj["actor"])
+        except ValueError as e:
+            if as_json:
+                click.echo(json_mod.dumps({"error": str(e)}))
+            else:
+                click.echo(f"Error: {e}", err=True)
+            sys.exit(1)
         status = "removed" if removed else "not_found"
         if as_json:
             click.echo(json_mod.dumps({"from_id": issue_id, "to_id": depends_on_id, "status": status}))
