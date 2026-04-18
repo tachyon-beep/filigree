@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Install / doctor cluster (5 P2 bugs)**:
+  - **filigree-e1ef3675f7**: `filigree install --claude-code` and `--codex` now install only the MCP, matching their help text. Previously both flags implicitly pulled in hooks + skills (and `--codex` pulled in codex-skills), making it impossible to update an MCP config alone and duplicating behaviour that the dedicated `--hooks`, `--skills`, and `--codex-skills` flags already cover.
+  - **filigree-e671d07d56**: `filigree server register` and `filigree server unregister` no longer exit non-zero when the daemon reload step fails. The registry change is already committed by that point, so a reload failure is a best-effort warning ("restart the daemon manually") rather than a masked-success error. Scripts chaining these commands no longer misinterpret a completed registration as a failure.
+  - **filigree-36539914b3**: `filigree doctor` now detects broken module-form `SessionStart` hooks. For hooks shaped like `python -m filigree session-context`, the interpreter existing is necessary but not sufficient — doctor additionally runs `python -c "import filigree"` to verify the module is still installed in that interpreter, catching venv purges and pip uninstalls that previously left the hook looking healthy.
+  - **filigree-9fb21f2b4b**: `install_claude_code_hooks` no longer appends new `SessionStart` hooks to a user block that merely *mentions* "filigree" in a command. Reuse is now strict: only a block whose `matcher` is empty/missing AND that already holds a recognised filigree hook command (via `_hook_cmd_matches`) is a valid reuse target. Otherwise a dedicated unscoped block is created, so `session-context` and `ensure-dashboard` fire for every session source (startup, resume, clear, compact) instead of inheriting a narrower user matcher.
+  - **filigree-09d0dff729**: `_find_filigree_mcp_command` now probes both `filigree-mcp` and `filigree-mcp.exe` in the uv-tool branch. Previously the Windows filename was skipped in favour of the bare-`filigree-mcp` fallback, even when an absolute `~/.local/bin/filigree-mcp.exe` existed.
+
 ## [2.0.0] - Unreleased
 
 ### Added

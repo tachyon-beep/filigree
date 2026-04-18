@@ -33,7 +33,9 @@ from filigree.install_support import (
 from filigree.install_support.hooks import (
     SESSION_CONTEXT_COMMAND,
     _extract_hook_binary,
+    _extract_hook_tokens,
     _has_hook_command,
+    _is_module_form_tokens,
 )
 from filigree.install_support.integrations import _codex_config_path
 
@@ -76,6 +78,28 @@ def _is_absolute_command_path(path: str) -> bool:
     if path.startswith("\\\\"):
         return True
     return len(path) > 2 and path[0].isalpha() and path[1] == ":" and path[2] in ("/", "\\")
+
+
+def _module_form_import_works(python_binary: str) -> bool:
+    """Check whether *python_binary* can import ``filigree``.
+
+    Used for module-form hooks (``python -m filigree ...``) where the
+    interpreter path existing doesn't prove the module is still installed
+    in that interpreter's site-packages (bug filigree-36539914b3). Any
+    failure — non-zero exit, missing binary, timeout — is treated as
+    "import broken".
+    """
+    try:
+        result = subprocess.run(
+            [python_binary, "-c", "import filigree"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
+        return False
+    return result.returncode == 0
 
 
 # ---------------------------------------------------------------------------
@@ -518,8 +542,16 @@ def run_doctor(project_root: Path | None = None) -> list[CheckResult]:
         try:
             s = json.loads(settings_json.read_text())
             if _has_hook_command(s, SESSION_CONTEXT_COMMAND):
-                # Validate binary path if it's an absolute path
+                # Validate binary path if it's an absolute path. For
+                # module-form hooks (``python -m filigree …``) the
+                # interpreter path existing is necessary but not
+                # sufficient — we also verify ``filigree`` can actually
+                # be imported from that interpreter (bug
+                # filigree-36539914b3). Otherwise a venv purge or
+                # pip uninstall leaves a healthy-looking hook that fails
+                # at session start.
                 hook_binary = _extract_hook_binary(s, SESSION_CONTEXT_COMMAND)
+                hook_tokens = _extract_hook_tokens(s, SESSION_CONTEXT_COMMAND)
                 if hook_binary and _is_absolute_command_path(hook_binary) and not Path(hook_binary).exists():
                     results.append(
                         CheckResult(
@@ -527,6 +559,21 @@ def run_doctor(project_root: Path | None = None) -> list[CheckResult]:
                             False,
                             f"Binary not found at {hook_binary}",
                             fix_hint="Run: filigree install --hooks",
+                        )
+                    )
+                elif (
+                    hook_tokens
+                    and hook_binary
+                    and _is_module_form_tokens(hook_tokens)
+                    and _is_absolute_command_path(hook_binary)
+                    and not _module_form_import_works(hook_binary)
+                ):
+                    results.append(
+                        CheckResult(
+                            "Claude Code hooks",
+                            False,
+                            f"Interpreter {hook_binary} cannot import `filigree`",
+                            fix_hint="Reinstall filigree in that interpreter, or run: filigree install --hooks",
                         )
                     )
                 else:

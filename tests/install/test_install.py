@@ -557,6 +557,22 @@ class TestFindFiligreeMcpCommand:
             result = _find_filigree_mcp_command()
             assert result == "filigree-mcp"
 
+    def test_uv_tool_exe_preferred_on_windows_layout(self, tmp_path: Path) -> None:
+        """Bug filigree-09d0dff729: uv-tool probe must also accept ``.exe``.
+
+        On Windows the uv-tool binary is installed as ``filigree-mcp.exe``.
+        Previously the uv-tool branch only probed the POSIX name, so the
+        preferred absolute path was skipped and the resolver fell through
+        to the bare-``filigree-mcp`` fallback.
+        """
+        uv_bin = tmp_path / ".local" / "bin"
+        uv_bin.mkdir(parents=True)
+        (uv_bin / "filigree-mcp.exe").touch()
+
+        with patch("filigree.install_support.integrations.shutil.which", return_value=None):
+            result = _find_filigree_mcp_command()
+            assert result == str(uv_bin / "filigree-mcp.exe")
+
 
 class TestFindFiligreeCommand:
     @pytest.fixture(autouse=True)
@@ -984,6 +1000,139 @@ class TestInstallClaudeCodeHooks:
         parsed = shlex.split(session_cmd)
         assert parsed[0] == "/path with spaces/python"
         assert parsed[1:] == ["-m", "filigree", "session-context"]
+
+
+class TestInstallHooksMatcherIsolation:
+    """Bug filigree-9fb21f2b4b: filigree SessionStart hooks must not be
+    appended to a user block whose ``matcher`` scopes it to a subset of
+    session sources (``resume``, ``clear``, ``compact``).
+    """
+
+    MOCK_TOKENS = ["/mock/venv/bin/filigree"]  # noqa: RUF012
+    MOCK_BIN = "/mock/venv/bin/filigree"
+
+    def _find_filigree_session_block(self, settings_path: Path) -> dict[str, object]:
+        data = json.loads(settings_path.read_text())
+        for block in data["hooks"]["SessionStart"]:
+            for hook in block.get("hooks", []):
+                cmd = hook.get("command", "") if isinstance(hook, dict) else ""
+                if "session-context" in cmd:
+                    return block
+        raise AssertionError("no filigree session-context hook found in settings")
+
+    def test_does_not_inherit_user_resume_matcher(self, tmp_path: Path) -> None:
+        """A user block with matcher=``resume`` (even one that casually
+        mentions ``filigree`` in its command) must not adopt the new
+        session-context hook. The hook belongs to a dedicated block with
+        no matcher so it fires on cold startup too.
+        """
+        claude_dir = tmp_path / ".claude"
+        claude_dir.mkdir()
+        settings = {
+            "hooks": {
+                "SessionStart": [
+                    {
+                        "matcher": "resume",
+                        "hooks": [
+                            {
+                                "type": "command",
+                                "command": "echo resuming filigree session",
+                                "timeout": 5000,
+                            }
+                        ],
+                    }
+                ]
+            }
+        }
+        (claude_dir / "settings.json").write_text(json.dumps(settings))
+        with patch("filigree.install_support.hooks.find_filigree_command", return_value=self.MOCK_TOKENS):
+            install_claude_code_hooks(tmp_path)
+
+        data = json.loads((claude_dir / "settings.json").read_text())
+        blocks = data["hooks"]["SessionStart"]
+        # User's resume block is preserved untouched.
+        resume_block = next(b for b in blocks if b.get("matcher") == "resume")
+        assert len(resume_block["hooks"]) == 1
+        assert resume_block["hooks"][0]["command"] == "echo resuming filigree session"
+        # Filigree hooks live in their own block with no matcher scoping.
+        filigree_block = self._find_filigree_session_block(claude_dir / "settings.json")
+        assert "matcher" not in filigree_block or filigree_block.get("matcher") in (None, "*")
+
+    def test_reuses_existing_unscoped_filigree_block(self, tmp_path: Path) -> None:
+        """An existing *unscoped* block that already holds a filigree
+        session-context hook is the legitimate reuse target — adding
+        ensure-dashboard should slot into it rather than create a second
+        block.
+        """
+        claude_dir = tmp_path / ".claude"
+        claude_dir.mkdir()
+        settings = {
+            "hooks": {
+                "SessionStart": [
+                    {
+                        "hooks": [
+                            {
+                                "type": "command",
+                                "command": f"{self.MOCK_BIN} session-context",
+                                "timeout": 5000,
+                            }
+                        ]
+                    }
+                ]
+            }
+        }
+        (claude_dir / "settings.json").write_text(json.dumps(settings))
+        with patch("filigree.install_support.hooks.find_filigree_command", return_value=self.MOCK_TOKENS):
+            install_claude_code_hooks(tmp_path)
+
+        data = json.loads((claude_dir / "settings.json").read_text())
+        blocks = data["hooks"]["SessionStart"]
+        # Only one block holds filigree session hooks, and both commands
+        # ended up in it.
+        filigree_blocks = [
+            b
+            for b in blocks
+            if any("session-context" in h.get("command", "") or "ensure-dashboard" in h.get("command", "") for h in b.get("hooks", []))
+        ]
+        assert len(filigree_blocks) == 1
+        cmds = [h["command"] for h in filigree_blocks[0]["hooks"]]
+        assert any("session-context" in c for c in cmds)
+        assert any("ensure-dashboard" in c for c in cmds)
+
+    def test_does_not_reuse_scoped_block_holding_filigree_hook(self, tmp_path: Path) -> None:
+        """Even if an existing block happens to hold a filigree hook, if
+        its ``matcher`` scopes it to a subset of session sources, don't
+        append more hooks there — they'd also inherit the scope.
+        """
+        claude_dir = tmp_path / ".claude"
+        claude_dir.mkdir()
+        settings = {
+            "hooks": {
+                "SessionStart": [
+                    {
+                        "matcher": "resume",
+                        "hooks": [
+                            {
+                                "type": "command",
+                                "command": f"{self.MOCK_BIN} session-context",
+                                "timeout": 5000,
+                            }
+                        ],
+                    }
+                ]
+            }
+        }
+        (claude_dir / "settings.json").write_text(json.dumps(settings))
+        with patch("filigree.install_support.hooks.find_filigree_command", return_value=self.MOCK_TOKENS):
+            install_claude_code_hooks(tmp_path)
+
+        data = json.loads((claude_dir / "settings.json").read_text())
+        blocks = data["hooks"]["SessionStart"]
+        # A fresh unscoped block exists alongside the user's scoped one.
+        unscoped_blocks = [b for b in blocks if "matcher" not in b or b.get("matcher") in (None, "*")]
+        assert unscoped_blocks, "filigree hooks must land in an unscoped block"
+        cmds = [h["command"] for b in unscoped_blocks for h in b.get("hooks", [])]
+        assert any("ensure-dashboard" in c for c in cmds)
 
 
 class TestInstallHooksPreToolUseRepair:

@@ -38,10 +38,14 @@ def _find_filigree_mcp_command() -> str:
     5. Bare ``"filigree-mcp"`` fallback
     """
     # Prefer uv tool install — it's the stable global path that survives
-    # venv changes and project switches
-    uv_tool_bin = Path.home() / ".local" / "bin" / "filigree-mcp"
-    if uv_tool_bin.is_file():
-        return str(uv_tool_bin)
+    # venv changes and project switches. Probe both POSIX and Windows
+    # executable names so a Windows uv-tool layout isn't skipped in favour
+    # of the bare-``filigree-mcp`` fallback.
+    uv_tool_dir = Path.home() / ".local" / "bin"
+    for name in ("filigree-mcp", "filigree-mcp.exe"):
+        uv_tool_bin = uv_tool_dir / name
+        if uv_tool_bin.is_file():
+            return str(uv_tool_bin)
     which = shutil.which("filigree-mcp")
     if which:
         return which

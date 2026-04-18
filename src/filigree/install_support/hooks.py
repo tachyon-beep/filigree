@@ -125,6 +125,21 @@ def _extract_hook_binary(settings: dict[str, Any], bare_command: str) -> str | N
     Uses ``shlex.split`` to correctly handle quoted paths that contain
     spaces.  Returns ``None`` if no matching hook is found.
     """
+    tokens = _extract_hook_tokens(settings, bare_command)
+    if not tokens:
+        return None
+    return tokens[0]
+
+
+def _extract_hook_tokens(settings: dict[str, Any], bare_command: str) -> list[str] | None:
+    """Return the tokenised command for the first hook matching *bare_command*.
+
+    Unlike :func:`_extract_hook_binary` this preserves the full token list,
+    letting callers distinguish a direct invocation (``["filigree", ...]``)
+    from a module-form invocation (``["/path/to/python", "-m", "filigree",
+    ...]``). Returns ``None`` if no matching hook is found or the command
+    is empty.
+    """
     hooks = settings.get("hooks", {})
     if not isinstance(hooks, dict):
         return None
@@ -148,8 +163,18 @@ def _extract_hook_binary(settings: dict[str, Any], bare_command: str) -> str | N
                     tokens = shlex.split(cmd)
                 except ValueError:
                     tokens = cmd.split()
-                return tokens[0] if tokens else None
+                return tokens or None
     return None
+
+
+def _is_module_form_tokens(tokens: list[str]) -> bool:
+    """Return True when *tokens* invoke filigree via ``python -m filigree``.
+
+    The ``-m filigree`` pair must be present anywhere before the subcommand
+    — covering both ``python -m filigree session-context`` and quoted
+    Windows interpreter paths.
+    """
+    return any(tokens[i] == "-m" and tokens[i + 1] == "filigree" for i in range(len(tokens) - 1))
 
 
 PRE_TOOL_USE_MATCHER = "mcp__filigree__.*"
@@ -284,27 +309,46 @@ def install_claude_code_hooks(project_root: Path) -> tuple[bool, str]:
     if "SessionStart" not in settings["hooks"] or not isinstance(settings["hooks"].get("SessionStart"), list):
         settings["hooks"]["SessionStart"] = []
 
-    # Find or create the matcher block for filigree hooks
+    # Find or create the matcher block for filigree hooks.
+    #
+    # Reuse is STRICT: only reuse a block whose matcher is empty/missing
+    # (fires for every SessionStart event — startup, resume, clear,
+    # compact) AND that already contains a known filigree hook command
+    # (session-context or ensure-dashboard). A substring match on
+    # "filigree" would happily attach to a user-authored block with a
+    # narrower matcher like ``resume``, so the newly-installed
+    # session-context hook would silently stop firing on cold startup
+    # (bug filigree-9fb21f2b4b).
     filigree_hooks: list[dict[str, Any]] = []
     matcher_block = None
     for matcher in settings["hooks"]["SessionStart"]:
         if not isinstance(matcher, dict):
             continue
+        # Only blocks that apply to every session source are safe to reuse.
+        # An explicit ``matcher`` (even an empty string) signals the user
+        # scoped this block intentionally; don't piggyback on that scope.
+        if "matcher" in matcher and matcher.get("matcher") not in (None, "*"):
+            continue
         hook_list = matcher.get("hooks", [])
         if not isinstance(hook_list, list):
             continue
-        for hook in hook_list:
-            if not isinstance(hook, dict):
-                continue
-            cmd = hook.get("command", "")
-            if "filigree" in cmd:
-                matcher_block = matcher
-                filigree_hooks = hook_list
-                break
-        if matcher_block is not None:
+        has_filigree_hook = any(
+            isinstance(hook, dict)
+            and (
+                _hook_cmd_matches(hook.get("command", ""), SESSION_CONTEXT_COMMAND)
+                or _hook_cmd_matches(hook.get("command", ""), ENSURE_DASHBOARD_COMMAND)
+            )
+            for hook in hook_list
+        )
+        if has_filigree_hook:
+            matcher_block = matcher
+            filigree_hooks = hook_list
             break
 
     if matcher_block is None:
+        # Dedicated block with no matcher so filigree hooks fire on every
+        # SessionStart source regardless of how neighbouring blocks are
+        # scoped.
         matcher_block = {"hooks": []}
         settings["hooks"]["SessionStart"].append(matcher_block)
         filigree_hooks = matcher_block["hooks"]

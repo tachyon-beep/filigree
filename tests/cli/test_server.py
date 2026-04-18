@@ -156,5 +156,27 @@ class TestServerUnregister:
             ),
         ):
             result = cli_runner.invoke(cli, ["server", "unregister", str(tmp_path)])
-        assert result.exit_code == 1
+        # Reload is best-effort after a successful unregister (bug
+        # filigree-e671d07d56) — the registry change already committed,
+        # so exit 0 with a warning instead of masking success as failure.
+        assert result.exit_code == 0
+        assert "Unregistered" in result.output
         assert "daemon reload failed" in result.output
+        assert "Restart the daemon manually" in result.output
+
+    def test_register_with_daemon_reload_failure(self, tmp_path: Path, cli_runner: CliRunner) -> None:
+        filigree_dir = tmp_path / ".filigree"
+        filigree_dir.mkdir()
+        with (
+            patch("filigree.server.register_project"),
+            patch(
+                "filigree.cli_commands.server._reload_server_daemon_if_running",
+                return_value=(False, "daemon reload request failed: timeout"),
+            ),
+        ):
+            result = cli_runner.invoke(cli, ["server", "register", str(tmp_path)])
+        # Registration committed; reload failure is a warning, not a failure.
+        assert result.exit_code == 0
+        assert "Registered" in result.output
+        assert "daemon reload request failed" in result.output
+        assert "Restart the daemon manually" in result.output

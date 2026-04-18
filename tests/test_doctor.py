@@ -585,6 +585,54 @@ class TestDoctorClaudeCodeHooks:
         assert hook_result.passed is False
         assert "Binary not found" in hook_result.message
 
+    def test_module_form_hook_with_broken_import_flagged(self, tmp_path: Path) -> None:
+        """Bug filigree-36539914b3: ``python -m filigree session-context``
+        must not report healthy when the interpreter can't import
+        ``filigree``. Previously only ``Path(python).exists()`` was
+        checked, so a venv-purge or pip uninstall left the hook looking
+        fine.
+        """
+        _make_project(tmp_path)
+        claude_dir = tmp_path / ".claude"
+        claude_dir.mkdir()
+        fake_python = tmp_path / "bin" / "python3"
+        fake_python.parent.mkdir()
+        fake_python.touch()
+        settings = self._settings_with_hook(f"{fake_python} -m filigree session-context")
+        (claude_dir / "settings.json").write_text(json.dumps(settings))
+
+        with patch(
+            "filigree.install_support.doctor._module_form_import_works",
+            return_value=False,
+        ):
+            results = run_doctor(tmp_path)
+        hook_result = next(r for r in results if r.name == "Claude Code hooks")
+        assert hook_result.passed is False
+        assert "cannot import `filigree`" in hook_result.message
+        assert "Reinstall filigree" in hook_result.fix_hint
+
+    def test_module_form_hook_with_working_import_passes(self, tmp_path: Path) -> None:
+        """Module-form hook whose interpreter still imports filigree
+        passes the health check (happy path for bug filigree-36539914b3).
+        """
+        _make_project(tmp_path)
+        claude_dir = tmp_path / ".claude"
+        claude_dir.mkdir()
+        fake_python = tmp_path / "bin" / "python3"
+        fake_python.parent.mkdir()
+        fake_python.touch()
+        settings = self._settings_with_hook(f"{fake_python} -m filigree session-context")
+        (claude_dir / "settings.json").write_text(json.dumps(settings))
+
+        with patch(
+            "filigree.install_support.doctor._module_form_import_works",
+            return_value=True,
+        ):
+            results = run_doctor(tmp_path)
+        hook_result = next(r for r in results if r.name == "Claude Code hooks")
+        assert hook_result.passed is True
+        assert "session-context hook registered" in hook_result.message
+
 
 # ---------------------------------------------------------------------------
 # run_doctor — Claude Code skills check

@@ -204,15 +204,15 @@ def install(
         ok, msg = ensure_gitignore(project_root)
         results.append((".gitignore", ok, msg))
 
-    if install_all or claude_code or hooks_only:
+    if install_all or hooks_only:
         ok, msg = install_claude_code_hooks(project_root)
         results.append(("Claude Code hooks", ok, msg))
 
-    if install_all or claude_code or skills_only:
+    if install_all or skills_only:
         ok, msg = install_skills(project_root)
         results.append(("Claude Code skills", ok, msg))
 
-    if install_all or codex or codex_skills_only:
+    if install_all or codex_skills_only:
         ok, msg = install_codex_skills(project_root)
         results.append(("Codex skills", ok, msg))
 

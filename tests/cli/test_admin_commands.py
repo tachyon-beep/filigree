@@ -252,6 +252,63 @@ class TestInstallCli:
         skill_md = project / ".agents" / "skills" / "filigree-workflow" / "SKILL.md"
         assert skill_md.exists()
 
+    def test_claude_code_flag_only_installs_mcp(self, cli_in_project: tuple[CliRunner, Path], monkeypatch: pytest.MonkeyPatch) -> None:
+        """Bug filigree-e1ef3675f7: ``--claude-code`` must install the MCP
+        only, matching the help text. Hooks and skills have their own
+        flags and should not be implicitly pulled in.
+        """
+        runner, _project = cli_in_project
+
+        called: dict[str, bool] = {}
+
+        def _mk_stub(name: str):
+            def _stub(*args: object, **kwargs: object) -> tuple[bool, str]:
+                called[name] = True
+                return True, f"stub {name}"
+
+            return _stub
+
+        monkeypatch.setattr("filigree.install.install_claude_code_mcp", _mk_stub("mcp"))
+        monkeypatch.setattr("filigree.install.install_claude_code_hooks", _mk_stub("hooks"))
+        monkeypatch.setattr("filigree.install.install_skills", _mk_stub("skills"))
+        monkeypatch.setattr("filigree.install.install_codex_mcp", _mk_stub("codex_mcp"))
+        monkeypatch.setattr("filigree.install.install_codex_skills", _mk_stub("codex_skills"))
+
+        result = runner.invoke(cli, ["install", "--claude-code"])
+        assert result.exit_code == 0, result.output
+        assert called.get("mcp") is True
+        assert "hooks" not in called
+        assert "skills" not in called
+        assert "codex_mcp" not in called
+        assert "codex_skills" not in called
+
+    def test_codex_flag_only_installs_mcp(self, cli_in_project: tuple[CliRunner, Path], monkeypatch: pytest.MonkeyPatch) -> None:
+        """Bug filigree-e1ef3675f7: ``--codex`` must install the Codex
+        MCP only; ``--codex-skills`` is the separate flag for skills.
+        """
+        runner, _project = cli_in_project
+
+        called: dict[str, bool] = {}
+
+        def _mk_stub(name: str):
+            def _stub(*args: object, **kwargs: object) -> tuple[bool, str]:
+                called[name] = True
+                return True, f"stub {name}"
+
+            return _stub
+
+        monkeypatch.setattr("filigree.install.install_claude_code_mcp", _mk_stub("mcp"))
+        monkeypatch.setattr("filigree.install.install_claude_code_hooks", _mk_stub("hooks"))
+        monkeypatch.setattr("filigree.install.install_skills", _mk_stub("skills"))
+        monkeypatch.setattr("filigree.install.install_codex_mcp", _mk_stub("codex_mcp"))
+        monkeypatch.setattr("filigree.install.install_codex_skills", _mk_stub("codex_skills"))
+
+        result = runner.invoke(cli, ["install", "--codex"])
+        assert result.exit_code == 0, result.output
+        assert called.get("codex_mcp") is True
+        assert "codex_skills" not in called
+        assert "mcp" not in called
+
     def test_install_codex_server_mode_passes_mode_and_port(
         self, cli_in_project: tuple[CliRunner, Path], monkeypatch: pytest.MonkeyPatch
     ) -> None:
