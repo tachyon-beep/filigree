@@ -29,7 +29,8 @@ from filigree.types.inputs import (
     TriggerScanBatchArgs,
 )
 
-_LOCALHOST_HOSTS = frozenset(("localhost", "127.0.0.1", "::1", ""))
+_LOCALHOST_HOSTS = frozenset(("localhost", "127.0.0.1", "::1"))
+_ALLOWED_URL_SCHEMES = frozenset(("http", "https"))
 
 _logger = logging.getLogger(__name__)
 
@@ -74,9 +75,9 @@ def register(
         Tool(
             name="trigger_scan_batch",
             description=(
-                "Trigger a scanner on multiple files in one call. "
-                "Registers all files, spawns one scanner process per file, "
-                "and returns a shared scan_run_id for correlation. Rate-limited per scanner+file."
+                "Trigger a scanner on multiple files in one call. Registers all files, "
+                "spawns one scanner process per file, and returns a list of per-file "
+                "scan_run_ids plus a batch_id for correlation. Rate-limited per scanner+file."
             ),
             inputSchema={
                 "type": "object",
@@ -184,10 +185,44 @@ def register(
 
 
 def _validate_localhost_url(api_url: str) -> list[TextContent] | None:
-    """Return an error response if *api_url* is not localhost, else ``None``."""
+    """Return an error response if *api_url* is not a usable localhost HTTP URL, else ``None``.
+
+    Rejects empty strings, URLs without an ``http``/``https`` scheme, and any
+    hostname outside the fixed localhost set. Scanner helper code assembles
+    ``f"{api_url}/api/v1/scan-results"`` unconditionally; a blank or scheme-less
+    value there produces an unusable callback silently, so the check must fail
+    closed.
+    """
     from urllib.parse import urlparse
 
-    host = urlparse(api_url).hostname or ""
+    if not isinstance(api_url, str) or not api_url.strip():
+        return _text(
+            ErrorResponse(
+                error="api_url is required and must be a non-empty http(s) URL pointing at localhost.",
+                code="invalid_api_url",
+            )
+        )
+
+    try:
+        parsed = urlparse(api_url)
+    except ValueError as exc:
+        return _text(
+            ErrorResponse(
+                error=f"api_url could not be parsed: {exc}",
+                code="invalid_api_url",
+            )
+        )
+
+    scheme = (parsed.scheme or "").lower()
+    if scheme not in _ALLOWED_URL_SCHEMES:
+        return _text(
+            ErrorResponse(
+                error=f"api_url scheme {scheme!r} not allowed; expected one of {sorted(_ALLOWED_URL_SCHEMES)}.",
+                code="invalid_api_url",
+            )
+        )
+
+    host = (parsed.hostname or "").lower()
     if host not in _LOCALHOST_HOSTS:
         return _text(
             ErrorResponse(
@@ -408,8 +443,32 @@ async def _handle_trigger_scan(arguments: dict[str, Any]) -> list[TextContent]:
 
     canonical_path = str(target.relative_to(filigree_dir.resolve().parent))
 
-    # DB-persisted cooldown check
-    blocking_run = tracker.check_scan_cooldown(scanner_name, canonical_path)
+    file_record = tracker.register_file(canonical_path)
+    project_root = filigree_dir.parent
+    ts = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S")
+    scan_run_id = f"{scanner_name}-{ts}-{secrets.token_hex(3)}"
+
+    # Reserve the scan run BEFORE spawning. ``reserve_scan_run`` atomically
+    # checks cooldown and inserts a pending row; a concurrent trigger will
+    # see the reservation and get rate_limited. This closes the TOCTOU
+    # between check_scan_cooldown and create_scan_run.
+    try:
+        created, blocking_run = tracker.reserve_scan_run(
+            scan_run_id=scan_run_id,
+            scanner_name=scanner_name,
+            scan_source=scanner_name,
+            file_path=canonical_path,
+            file_id=file_record.id,
+            api_url=api_url,
+        )
+    except (sqlite3.Error, ValueError) as exc:
+        _logger.error("Failed to reserve scan run %s: %s", scan_run_id, exc)
+        return _text(
+            ErrorResponse(
+                error=f"Failed to reserve scan run: {exc}",
+                code="db_error",
+            )
+        )
     if blocking_run is not None:
         return _text(
             {
@@ -418,11 +477,7 @@ async def _handle_trigger_scan(arguments: dict[str, Any]) -> list[TextContent]:
                 "blocking_run_id": blocking_run["id"],
             }
         )
-
-    file_record = tracker.register_file(canonical_path)
-    project_root = filigree_dir.parent
-    ts = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S")
-    scan_run_id = f"{scanner_name}-{ts}-{secrets.token_hex(3)}"
+    assert created is not None  # noqa: S101  -- exactly one of (created, blocking) is set
 
     spawn_result = _spawn_scan(
         cfg=cfg,
@@ -433,31 +488,27 @@ async def _handle_trigger_scan(arguments: dict[str, Any]) -> list[TextContent]:
         filigree_dir=filigree_dir,
     )
     if isinstance(spawn_result, list):
+        with contextlib.suppress(sqlite3.Error, KeyError, ValueError):
+            tracker.update_scan_run_status(
+                scan_run_id,
+                "failed",
+                error_message="Scanner process failed to spawn",
+            )
         return spawn_result
 
     proc = spawn_result["proc"]
     scan_log_path = spawn_result["scan_log_path"]
     log_rel = str(scan_log_path.relative_to(filigree_dir.parent))
 
-    # Create DB-tracked scan run.  If the DB call fails the spawned
-    # process would be orphaned, so kill it on any error.
+    # Backfill PID/log onto the reservation and transition to running.
     try:
-        tracker.create_scan_run(
-            scan_run_id=scan_run_id,
-            scanner_name=scanner_name,
-            scan_source=scanner_name,
-            file_paths=[canonical_path],
-            file_ids=[file_record.id],
-            pid=proc.pid,
-            api_url=api_url,
-            log_path=log_rel,
-        )
+        tracker.set_scan_run_spawn_info(scan_run_id, pid=proc.pid, log_path=log_rel)
         tracker.update_scan_run_status(scan_run_id, "running")
     except (sqlite3.Error, KeyError, ValueError) as exc:
         with contextlib.suppress(OSError):
             proc.kill()
         _logger.error(
-            "Failed to record scan run %s (pid %d killed): %s",
+            "Failed to finalize scan run %s (pid %d killed): %s",
             scan_run_id,
             proc.pid,
             exc,
@@ -564,10 +615,13 @@ async def _handle_trigger_scan_batch(arguments: dict[str, Any]) -> list[TextCont
         return err
     assert cfg is not None  # noqa: S101  -- narrowing after error-check
 
-    # Validate and resolve all paths
+    # Validate and resolve all paths. Dedupe repeated file_paths in the
+    # request so we don't attempt to reserve the same (scanner, file) twice —
+    # the second reservation would block itself via cooldown.
     canonical_paths: list[str] = []
     file_ids: list[str] = []
     skipped: list[dict[str, str]] = []
+    seen_canonical: set[str] = set()
     for fp in file_paths:
         try:
             target = _safe_path(fp)
@@ -578,11 +632,10 @@ async def _handle_trigger_scan_batch(arguments: dict[str, Any]) -> list[TextCont
             skipped.append({"file_path": fp, "reason": "File not found"})
             continue
         cp = str(target.relative_to(filigree_dir.resolve().parent))
-        # Check cooldown
-        blocking = tracker.check_scan_cooldown(scanner_name, cp)
-        if blocking is not None:
-            skipped.append({"file_path": fp, "reason": "rate_limited"})
+        if cp in seen_canonical:
+            skipped.append({"file_path": fp, "reason": "duplicate"})
             continue
+        seen_canonical.add(cp)
         file_record = tracker.register_file(cp)
         canonical_paths.append(cp)
         file_ids.append(file_record.id)
@@ -598,26 +651,70 @@ async def _handle_trigger_scan_batch(arguments: dict[str, Any]) -> list[TextCont
 
     project_root = filigree_dir.parent
     ts = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S")
-    scan_run_id = f"{scanner_name}-batch-{ts}-{secrets.token_hex(3)}"
+    # batch_id is a caller-facing correlation string; each file also gets its
+    # own scan_run_id so per-file lifecycles (PID, log, completion) don't
+    # collide — previously a single shared scan_run_id caused the fastest
+    # child's completion POST to finalize the run before the others finished.
+    batch_id = f"{scanner_name}-batch-{ts}-{secrets.token_hex(3)}"
 
-    # Spawn one scanner process per file — build_command only accepts a single path.
-    # Each process gets a unique log file via log_suffix to avoid clobbering.
-    spawned: list[dict[str, Any]] = []
-    spawned_paths: list[str] = []
-    spawned_file_ids: list[str] = []
-    spawn_errors: list[dict[str, str]] = []
+    # Reserve a per-file scan_run BEFORE spawning. Any cooldown conflicts
+    # surface here atomically. Reserved rows carry status='pending' until
+    # the spawn succeeds and backfills pid/log_path.
+    reserved: list[dict[str, Any]] = []
     for i, (cp, fid) in enumerate(zip(canonical_paths, file_ids, strict=True)):
+        child_run_id = f"{batch_id}-{i}"
+        try:
+            created, blocking = tracker.reserve_scan_run(
+                scan_run_id=child_run_id,
+                scanner_name=scanner_name,
+                scan_source=scanner_name,
+                file_path=cp,
+                file_id=fid,
+                api_url=api_url,
+            )
+        except (sqlite3.Error, ValueError) as exc:
+            _logger.warning("reserve_scan_run failed for %s: %s", cp, exc)
+            skipped.append({"file_path": cp, "reason": f"reservation_failed: {exc}"})
+            continue
+        if blocking is not None:
+            skipped.append({"file_path": cp, "reason": "rate_limited"})
+            continue
+        assert created is not None  # noqa: S101
+        reserved.append(
+            {
+                "scan_run_id": child_run_id,
+                "canonical_path": cp,
+                "file_id": fid,
+                "index": i,
+            }
+        )
+
+    if not reserved:
+        return _text(
+            {
+                "error": "No files eligible for scanning",
+                "code": "no_eligible_files",
+                "skipped": skipped,
+            }
+        )
+
+    # Spawn one scanner process per reserved run.  On failure, transition
+    # that run to 'failed' and record a spawn_error; the others proceed.
+    spawned: list[dict[str, Any]] = []
+    spawn_errors: list[dict[str, str]] = []
+    for entry in reserved:
+        cp = entry["canonical_path"]
+        child_run_id = entry["scan_run_id"]
         spawn_result = _spawn_scan(
             cfg=cfg,
             canonical_path=cp,
             api_url=api_url,
             project_root=project_root,
-            scan_run_id=scan_run_id,
+            scan_run_id=child_run_id,
             filigree_dir=filigree_dir,
-            log_suffix=f"-{i}",
+            log_suffix=f"-{entry['index']}",
         )
         if isinstance(spawn_result, list):
-            # Extract error detail from the TextContent response
             reason = "spawn_failed"
             try:
                 detail = json.loads(spawn_result[0].text)
@@ -625,10 +722,15 @@ async def _handle_trigger_scan_batch(arguments: dict[str, Any]) -> list[TextCont
             except (ValueError, IndexError, AttributeError, TypeError):
                 pass
             spawn_errors.append({"file_path": cp, "reason": reason})
+            with contextlib.suppress(sqlite3.Error, KeyError, ValueError):
+                tracker.update_scan_run_status(
+                    child_run_id,
+                    "failed",
+                    error_message=f"Scanner process failed to spawn: {reason}",
+                )
             continue
-        spawned.append(spawn_result)
-        spawned_paths.append(cp)
-        spawned_file_ids.append(fid)
+        entry["spawn_result"] = spawn_result
+        spawned.append(entry)
 
     if not spawned:
         return _text(
@@ -637,79 +739,95 @@ async def _handle_trigger_scan_batch(arguments: dict[str, Any]) -> list[TextCont
                 "code": "spawn_failed",
                 "spawn_errors": spawn_errors,
                 "skipped": skipped,
+                "batch_id": batch_id,
             }
         )
 
-    # Limitation: only one PID/log_path can be stored per scan_run_id.
-    # The last spawned process is used; get_scan_status only monitors this PID.
-    # Individual per-file logs are available via log_suffix (-0, -1, ...).
-    last = spawned[-1]
-    scan_log_path = last["scan_log_path"]
-    log_rel = str(scan_log_path.relative_to(filigree_dir.parent))
-
-    # Record the batch scan run.  If DB tracking fails, kill all
-    # spawned processes so they don't run orphaned.
-    try:
-        tracker.create_scan_run(
-            scan_run_id=scan_run_id,
-            scanner_name=scanner_name,
-            scan_source=scanner_name,
-            file_paths=spawned_paths,
-            file_ids=spawned_file_ids,
-            pid=last["proc"].pid,
-            api_url=api_url,
-            log_path=log_rel,
-        )
-        tracker.update_scan_run_status(scan_run_id, "running")
-    except (sqlite3.Error, KeyError, ValueError) as exc:
-        for s in spawned:
+    # Backfill pid/log_path onto each reservation and transition to running.
+    # If backfill fails for any run, kill that one process and mark it
+    # failed; the rest of the batch stays alive.
+    finalized: list[dict[str, Any]] = []
+    for entry in spawned:
+        spawn_result = entry["spawn_result"]
+        proc = spawn_result["proc"]
+        scan_log_path = spawn_result["scan_log_path"]
+        log_rel = str(scan_log_path.relative_to(filigree_dir.parent))
+        try:
+            tracker.set_scan_run_spawn_info(entry["scan_run_id"], pid=proc.pid, log_path=log_rel)
+            tracker.update_scan_run_status(entry["scan_run_id"], "running")
+        except (sqlite3.Error, KeyError, ValueError) as exc:
             with contextlib.suppress(OSError):
-                s["proc"].kill()
-        _logger.error(
-            "Failed to record batch scan run %s (%d processes killed): %s",
-            scan_run_id,
-            len(spawned),
-            exc,
-        )
-        return _text(
-            ErrorResponse(
-                error=f"Batch scan spawned {len(spawned)} processes but DB tracking failed: {exc}. All processes terminated.",
-                code="db_error",
+                proc.kill()
+            _logger.error(
+                "Failed to finalize scan run %s (pid %d killed): %s",
+                entry["scan_run_id"],
+                proc.pid,
+                exc,
             )
+            spawn_errors.append({"file_path": entry["canonical_path"], "reason": f"db_tracking_failed: {exc}"})
+            continue
+        entry["log_rel"] = log_rel
+        entry["pid"] = proc.pid
+        finalized.append(entry)
+
+    if not finalized:
+        return _text(
+            {
+                "error": "All scanner processes spawned but DB tracking failed",
+                "code": "db_error",
+                "spawn_errors": spawn_errors,
+                "skipped": skipped,
+                "batch_id": batch_id,
+            }
         )
 
     # Quick check: did any process exit immediately with error?
     await asyncio.sleep(0.2)
     immediate_failures = 0
-    for s in spawned:
-        ec = s["proc"].poll()
+    for entry in finalized:
+        proc = entry["spawn_result"]["proc"]
+        ec = proc.poll()
         if ec is not None and ec != 0:
             immediate_failures += 1
+            with contextlib.suppress(sqlite3.Error, KeyError, ValueError):
+                tracker.update_scan_run_status(
+                    entry["scan_run_id"],
+                    "failed",
+                    exit_code=ec,
+                    error_message="Scanner exited immediately",
+                )
 
-    if immediate_failures == len(spawned):
-        last_exit = last["proc"].poll()
-        tracker.update_scan_run_status(
-            scan_run_id,
-            "failed",
-            exit_code=last_exit,
-            error_message=f"All {len(spawned)} scanner processes exited immediately",
-        )
+    scan_run_ids = [entry["scan_run_id"] for entry in finalized]
+    per_file = [
+        {
+            "scan_run_id": entry["scan_run_id"],
+            "file_path": entry["canonical_path"],
+            "file_id": entry["file_id"],
+            "pid": entry["pid"],
+            "log_path": entry["log_rel"],
+        }
+        for entry in finalized
+    ]
+
+    if immediate_failures == len(finalized):
         return _text(
             {
-                "error": f"All {len(spawned)} scanner processes exited immediately.",
+                "error": f"All {len(finalized)} scanner processes exited immediately.",
                 "code": "spawn_failed",
-                "scan_run_id": scan_run_id,
-                "log_path": log_rel,
+                "batch_id": batch_id,
+                "scan_run_ids": scan_run_ids,
+                "per_file": per_file,
             }
         )
 
     result: dict[str, Any] = {
         "status": "triggered",
         "scanner": scanner_name,
-        "file_count": len(spawned_paths),
-        "processes_spawned": len(spawned),
-        "scan_run_id": scan_run_id,
-        "log_path": log_rel,
+        "file_count": len(finalized),
+        "processes_spawned": len(finalized),
+        "batch_id": batch_id,
+        "scan_run_ids": scan_run_ids,
+        "per_file": per_file,
     }
     if spawn_errors:
         result["spawn_errors"] = spawn_errors
@@ -717,7 +835,7 @@ async def _handle_trigger_scan_batch(arguments: dict[str, Any]) -> list[TextCont
         result["skipped"] = skipped
     if immediate_failures:
         result["immediate_failures"] = immediate_failures
-    log_warnings = [s["log_warning"] for s in spawned if s.get("log_warning")]
+    log_warnings = [entry["spawn_result"]["log_warning"] for entry in finalized if entry["spawn_result"].get("log_warning")]
     if log_warnings:
         result["warnings"] = log_warnings
     return _text(result)

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from filigree.core import FiligreeDB
@@ -176,6 +178,39 @@ class TestGetScanStatus:
         )
         status = db.get_scan_status("batch-1")
         assert any("remaining 2 file(s)" in w for w in status["data_warnings"])
+
+    def test_log_tail_resolves_from_project_root(self, tmp_path: Path) -> None:
+        """Log paths resolve against ``project_root`` — not the DB's parent.parent.
+
+        Regression for filigree-daefeda81d: custom ``.filigree.conf`` DB
+        locations made ``db_path.parent.parent`` land on the wrong directory,
+        so ``log_tail`` was always empty for those installs.
+        """
+        # Mimic a v2.0 install that put the DB off to the side.
+        project_root = tmp_path / "proj"
+        project_root.mkdir()
+        db_dir = tmp_path / "storage" / "db"
+        db_dir.mkdir(parents=True)
+        scan_log = project_root / ".filigree" / "scans" / "my-run.log"
+        scan_log.parent.mkdir(parents=True)
+        scan_log.write_text("line one\nline two\nline three\n")
+
+        d = FiligreeDB(db_dir / "track.db", prefix="test", project_root=project_root)
+        d.initialize()
+        try:
+            d.create_scan_run(
+                scan_run_id="my-run",
+                scanner_name="codex",
+                scan_source="codex",
+                file_paths=["a.py"],
+                file_ids=["f-1"],
+                log_path=".filigree/scans/my-run.log",
+            )
+            status = d.get_scan_status("my-run")
+        finally:
+            d.close()
+
+        assert status["log_tail"] == ["line one", "line two", "line three"]
 
     def test_dead_pid_already_completed_race(self, db: FiligreeDB) -> None:
         """When another codepath completes the run before dead-PID auto-fail, re-read succeeds."""

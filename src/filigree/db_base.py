@@ -81,6 +81,9 @@ class DBMixinProtocol(Protocol):
     # -- Shared attributes ---------------------------------------------------
 
     db_path: Path
+    # Project root set by from_filigree_dir / from_conf.  ``None`` for legacy
+    # direct-path construction — consumers that need it must fall back.
+    project_root: Path | None
     prefix: str
     _conn: sqlite3.Connection | None
     _template_registry: TemplateRegistry | None
@@ -207,3 +210,23 @@ class DBMixinProtocol(Protocol):
         findings_count: int | None = None,
         error_message: str | None = None,
     ) -> ScanRunDict: ...
+
+    def reserve_scan_run(
+        self,
+        *,
+        scan_run_id: str,
+        scanner_name: str,
+        scan_source: str,
+        file_path: str,
+        file_id: str,
+        api_url: str = "",
+        log_path: str = "",
+    ) -> tuple[ScanRunDict | None, ScanRunDict | None]: ...
+
+    def set_scan_run_spawn_info(
+        self,
+        scan_run_id: str,
+        *,
+        pid: int,
+        log_path: str,
+    ) -> None: ...

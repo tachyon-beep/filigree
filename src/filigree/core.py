@@ -374,9 +374,15 @@ class FiligreeDB(FilesMixin, ScansMixin, IssuesMixin, EventsMixin, WorkflowMixin
         enabled_packs: list[str] | None = None,
         template_registry: TemplateRegistry | None = None,
         check_same_thread: bool = True,
+        project_root: str | Path | None = None,
     ) -> None:
         self.db_path = Path(db_path)
         self.prefix = prefix
+        # ``project_root`` anchors filesystem paths stored relative to the
+        # project (e.g. scanner log files). None means "derive from db_path",
+        # which only works for the legacy .filigree/filigree.db layout;
+        # v2.0 conf installs may place the DB anywhere and must set this.
+        self.project_root: Path | None = Path(project_root) if project_root is not None else None
         if enabled_packs is not None and isinstance(enabled_packs, str):
             msg = f"enabled_packs must be a list of strings, not a bare string: {enabled_packs!r}"
             raise TypeError(msg)
@@ -408,6 +414,7 @@ class FiligreeDB(FilesMixin, ScansMixin, IssuesMixin, EventsMixin, WorkflowMixin
             prefix=prefix,
             enabled_packs=config.get("enabled_packs"),
             check_same_thread=check_same_thread,
+            project_root=filigree_dir.resolve().parent,
         )
         db.initialize()
         return db
@@ -427,6 +434,7 @@ class FiligreeDB(FilesMixin, ScansMixin, IssuesMixin, EventsMixin, WorkflowMixin
             prefix=prefix,
             enabled_packs=enabled_packs,
             check_same_thread=check_same_thread,
+            project_root=conf_path.resolve().parent,
         )
         db.initialize()
         return db

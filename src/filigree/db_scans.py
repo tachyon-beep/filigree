@@ -67,6 +67,87 @@ class ScansMixin(DBMixinProtocol):
         self.conn.commit()
         return self.get_scan_run(scan_run_id)
 
+    def reserve_scan_run(
+        self,
+        *,
+        scan_run_id: str,
+        scanner_name: str,
+        scan_source: str,
+        file_path: str,
+        file_id: str,
+        api_url: str = "",
+        log_path: str = "",
+    ) -> tuple[ScanRunDict | None, ScanRunDict | None]:
+        """Atomically check cooldown and insert a pending scan_run row.
+
+        Returns ``(created_run, None)`` on success, or ``(None, blocking_run)``
+        if a cooldown-active run already exists for ``(scanner_name, file_path)``.
+
+        Uses ``BEGIN IMMEDIATE`` so the cooldown read + insert is serialized
+        across concurrent callers — without that, two concurrent
+        ``trigger_scan`` invocations can both pass the cooldown check and
+        both spawn a scanner for the same file.
+        """
+        # If another call left an open implicit transaction, roll it back
+        # first so BEGIN IMMEDIATE can take the writer lock cleanly.
+        if self.conn.in_transaction:
+            self.conn.commit()
+        self.conn.execute("BEGIN IMMEDIATE")
+        try:
+            blocking = self.check_scan_cooldown(scanner_name, file_path)
+            if blocking is not None:
+                self.conn.rollback()
+                return None, blocking
+            existing = self.conn.execute("SELECT id FROM scan_runs WHERE id = ?", (scan_run_id,)).fetchone()
+            if existing:
+                self.conn.rollback()
+                msg = f"Scan run {scan_run_id!r} already exists"
+                raise ValueError(msg)
+            now = _now_iso()
+            self.conn.execute(
+                "INSERT INTO scan_runs "
+                "(id, scanner_name, scan_source, status, file_paths, file_ids, "
+                "pid, api_url, log_path, started_at, updated_at) "
+                "VALUES (?, ?, ?, 'pending', ?, ?, NULL, ?, ?, ?, ?)",
+                (
+                    scan_run_id,
+                    scanner_name,
+                    scan_source,
+                    json.dumps([file_path]),
+                    json.dumps([file_id]),
+                    api_url,
+                    log_path,
+                    now,
+                    now,
+                ),
+            )
+            self.conn.commit()
+        except Exception:
+            if self.conn.in_transaction:
+                self.conn.rollback()
+            raise
+        return self.get_scan_run(scan_run_id), None
+
+    def set_scan_run_spawn_info(
+        self,
+        scan_run_id: str,
+        *,
+        pid: int,
+        log_path: str,
+    ) -> None:
+        """Backfill ``pid`` and ``log_path`` onto a reserved (pending) run.
+
+        Used by the trigger handlers after they spawn the scanner process —
+        the row exists from :meth:`reserve_scan_run`, this fills in the
+        process-specific fields.
+        """
+        now = _now_iso()
+        self.conn.execute(
+            "UPDATE scan_runs SET pid = ?, log_path = ?, updated_at = ? WHERE id = ?",
+            (pid, log_path, now, scan_run_id),
+        )
+        self.conn.commit()
+
     def get_scan_run(self, scan_run_id: str) -> ScanRunDict:
         row = self.conn.execute("SELECT * FROM scan_runs WHERE id = ?", (scan_run_id,)).fetchone()
         if row is None:
@@ -183,9 +264,15 @@ class ScansMixin(DBMixinProtocol):
                         )
         log_tail: list[str] = []
         if run["log_path"]:
-            # Log paths are stored relative to the project root; resolve against
-            # db_path's grandparent (.filigree/filigree.db -> project root).
-            log_path = self.db_path.parent.parent / run["log_path"]
+            # Log paths are stored relative to the project root. Prefer the
+            # explicit ``project_root`` set by from_filigree_dir/from_conf.
+            # Fall back to ``db_path.parent.parent`` only for legacy callers
+            # that constructed ``FiligreeDB(path)`` directly without declaring
+            # a root (the legacy ``.filigree/filigree.db`` layout). Custom
+            # ``.filigree.conf`` DB locations would otherwise resolve logs
+            # against the wrong directory.
+            project_root = self.project_root if self.project_root is not None else self.db_path.parent.parent
+            log_path = project_root / run["log_path"]
             if log_path.is_file():
                 try:
                     lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()
