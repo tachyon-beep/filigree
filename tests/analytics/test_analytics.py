@@ -10,6 +10,77 @@ from filigree.analytics import cycle_time, get_flow_metrics, lead_time
 from filigree.core import FiligreeDB, Issue
 
 
+class TestCycleTimeTimezoneOrdering:
+    """Regression: cycle_time must order events by chronological time, not by
+    raw SQL text. Events imported from external systems can carry heterogeneous
+    ISO offsets; lexical ordering picks the wrong WIP→done pair.
+    """
+
+    def test_cycle_time_orders_by_utc_not_raw_text(self, db: FiligreeDB) -> None:
+        """WIP event with +10:00 offset is chronologically earlier than
+        done event with +00:00 offset, even though the raw text sorts later.
+
+        Lexical sort would place 'T00:30:00+00:00' before 'T09:00:00+10:00',
+        producing either a negative cycle time or None. Proper chronological
+        sort keeps them in order and yields ~30 minutes.
+        """
+        issue = db.create_issue("TZ order test")
+        db.conn.execute(
+            "DELETE FROM events WHERE issue_id = ? AND event_type = 'status_changed'",
+            (issue.id,),
+        )
+        # WIP event: 2026-01-01T10:00:00+10:00 == 2026-01-01T00:00:00 UTC
+        db.conn.execute(
+            "INSERT INTO events (issue_id, event_type, old_value, new_value, created_at) "
+            "VALUES (?, 'status_changed', 'open', 'in_progress', '2026-01-01T10:00:00+10:00')",
+            (issue.id,),
+        )
+        # Done event: 2026-01-01T00:30:00+00:00 == 2026-01-01T00:30:00 UTC (30 min later)
+        # Lexically '2026-01-01T00:30:00+00:00' < '2026-01-01T10:00:00+10:00',
+        # so raw-text SQL sort places done before WIP — breaking cycle_time.
+        db.conn.execute(
+            "INSERT INTO events (issue_id, event_type, old_value, new_value, created_at) "
+            "VALUES (?, 'status_changed', 'in_progress', 'closed', '2026-01-01T00:30:00+00:00')",
+            (issue.id,),
+        )
+        db.conn.commit()
+
+        ct = cycle_time(db, issue.id)
+        assert ct is not None, "should find WIP→done pair with chronological ordering"
+        # 30 minutes = 0.5 hours
+        assert abs(ct - 0.5) < 0.01, f"cycle time should be 0.5h UTC, got {ct}"
+
+    def test_flow_metrics_orders_events_chronologically(self, db: FiligreeDB) -> None:
+        """get_flow_metrics must sort per-issue events by UTC, not raw text."""
+        issue = db.create_issue("Flow TZ test")
+        db.close_issue(issue.id)
+        db.conn.execute(
+            "DELETE FROM events WHERE issue_id = ? AND event_type = 'status_changed'",
+            (issue.id,),
+        )
+        # WIP in +10:00, done in +00:00 — chronological gap is 30 minutes.
+        db.conn.execute(
+            "INSERT INTO events (issue_id, event_type, old_value, new_value, created_at) "
+            "VALUES (?, 'status_changed', 'open', 'in_progress', '2026-01-01T10:00:00+10:00')",
+            (issue.id,),
+        )
+        db.conn.execute(
+            "INSERT INTO events (issue_id, event_type, old_value, new_value, created_at) "
+            "VALUES (?, 'status_changed', 'in_progress', 'closed', '2026-01-01T00:30:00+00:00')",
+            (issue.id,),
+        )
+        # Make sure the issue is counted (closed_at recent)
+        db.conn.execute(
+            "UPDATE issues SET closed_at = ? WHERE id = ?",
+            (datetime.now(UTC).isoformat(), issue.id),
+        )
+        db.conn.commit()
+
+        metrics = get_flow_metrics(db, days=30)
+        assert metrics["avg_cycle_time_hours"] is not None
+        assert abs(metrics["avg_cycle_time_hours"] - 0.5) < 0.01
+
+
 class TestCycleTime:
     def test_cycle_time_basic(self, db: FiligreeDB) -> None:
         issue = db.create_issue("CT test")

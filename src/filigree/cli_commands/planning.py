@@ -4,11 +4,33 @@ from __future__ import annotations
 
 import json as json_mod
 import sys
+from datetime import datetime
 from pathlib import Path
 
 import click
 
 from filigree.cli_common import get_db, refresh_summary
+
+
+def _normalize_iso_timestamp(raw: str) -> str:
+    """Normalize user-supplied ISO-8601 to the form stored in the DB.
+
+    Stored timestamps use ``datetime.now(UTC).isoformat()`` which emits
+    ``+00:00`` offsets, not ``Z``. SQLite compares TEXT lexically, so
+    ``Z`` would miscompare against ``+00:00``-suffixed rows. Rejects
+    unparseable input with a SystemExit+stderr message (not a silent
+    miscomparison).
+    """
+    normalized = raw.replace("Z", "+00:00") if raw.endswith("Z") else raw
+    try:
+        datetime.fromisoformat(normalized)
+    except (ValueError, TypeError):
+        click.echo(
+            f"Error: Invalid ISO timestamp: {raw!r}. Expected format: 2026-01-15T10:30:00 or 2026-01-15T10:30:00+00:00",
+            err=True,
+        )
+        sys.exit(1)
+    return normalized
 
 
 @click.command()
@@ -248,6 +270,7 @@ def create_plan(ctx: click.Context, file_path: str | None, as_json: bool) -> Non
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON")
 def changes(since: str, limit: int, as_json: bool) -> None:
     """Get events since a timestamp (for session resumption)."""
+    since = _normalize_iso_timestamp(since)
     with get_db() as db:
         events = db.get_events_since(since, limit=limit)
 

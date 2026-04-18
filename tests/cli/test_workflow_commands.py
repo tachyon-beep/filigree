@@ -603,6 +603,58 @@ class TestEventsCli:
         result = runner.invoke(cli, ["changes", "--since", "2099-01-01T00:00:00"])
         assert result.exit_code == 0
 
+    def test_changes_z_suffix_normalized(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        """'Z' suffix (Zulu) is idiomatic ISO-8601; must be accepted and normalized
+        to +00:00 before comparison, matching stored timestamps.
+        """
+        runner, _ = cli_in_project
+        runner.invoke(cli, ["create", "Z test"])
+        result = runner.invoke(cli, ["changes", "--since", "2020-01-01T00:00:00Z", "--json"])
+        assert result.exit_code == 0, f"Z-suffix must be accepted: {result.output}"
+        data = json.loads(result.output)
+        assert len(data) >= 1, "Z-suffixed --since should match stored +00:00 timestamps"
+
+    def test_changes_z_suffix_boundary_matches_plus_zero(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        """Z-suffix at a precision boundary must behave as +00:00 would.
+
+        Regression: stored rows carry microseconds (``...51.147689+00:00``).
+        Raw lexical SQLite compare of ``...51Z`` against ``...51.147689+00:00``
+        places the Z-suffix string AFTER the stored value (Z=90 > .=46), so
+        ``created_at > ?`` would silently drop matching rows. Normalizing to
+        ``+00:00`` first keeps comparison correct.
+        """
+        runner, _ = cli_in_project
+        # Manually insert event with fractional-second +00:00 timestamp (matches
+        # how filigree actually writes timestamps via _now_iso).
+        from filigree.core import FiligreeDB
+
+        _, project_root = cli_in_project
+        db = FiligreeDB.from_filigree_dir(project_root / ".filigree")
+        issue = db.create_issue("boundary test")
+        db.conn.execute(
+            "UPDATE events SET created_at = ? WHERE issue_id = ?",
+            ("2026-06-15T12:00:00.123456+00:00", issue.id),
+        )
+        db.conn.commit()
+        db.close()
+
+        # Query with Z-suffix at the same second: ...12:00:00Z should match
+        # ...12:00:00.123456+00:00 because the stored event is 0.123s later.
+        result = runner.invoke(cli, ["changes", "--since", "2026-06-15T12:00:00Z", "--json"])
+        assert result.exit_code == 0, f"CLI error: {result.output}"
+        data = json.loads(result.output)
+        # The boundary event must be returned (it's 0.123s after --since).
+        issue_ids = {e["issue_id"] for e in data}
+        assert issue.id in issue_ids, f"Z-suffix boundary must match fractional +00:00 timestamp; got {data}"
+
+    def test_changes_malformed_since_rejected(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        """Malformed --since input must produce a clean error, not silent empty result."""
+        runner, _ = cli_in_project
+        runner.invoke(cli, ["create", "Malformed test"])
+        result = runner.invoke(cli, ["changes", "--since", "not-a-date"])
+        assert result.exit_code != 0, "malformed timestamp must error"
+        assert "invalid" in result.output.lower() or "invalid" in (result.stderr or "").lower()
+
     def test_events_for_issue(self, cli_in_project: tuple[CliRunner, Path]) -> None:
         runner, _ = cli_in_project
         r = runner.invoke(cli, ["create", "Track events"])

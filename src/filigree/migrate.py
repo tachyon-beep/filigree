@@ -27,13 +27,36 @@ def _safe_priority(raw: int | float | str | None) -> int:
         return 2
 
 
-def _safe_timestamp(raw: object) -> str:
-    """Return a valid ISO-8601 timestamp string, falling back to now(UTC)."""
+def _is_parseable_iso(raw: str) -> bool:
+    """True when ``raw`` is a valid ISO-8601 timestamp string."""
+    try:
+        datetime.fromisoformat(raw)
+    except (TypeError, ValueError):
+        return False
+    return True
+
+
+def _safe_timestamp(raw: object, fallback: str | None = None) -> str:
+    """Return a valid ISO-8601 timestamp string.
+
+    When ``raw`` parses as ISO-8601, return it unchanged. Otherwise return
+    ``fallback`` if it is also a parseable ISO-8601 string. As a last resort,
+    synthesize ``datetime.now(UTC).isoformat()`` — but note that is non-
+    deterministic across runs, which breaks downstream dedup keys (events,
+    comments). Callers migrating re-runnable data MUST pass a stable
+    ``fallback`` (typically the owning issue's already-normalized timestamp).
+    """
     if raw and isinstance(raw, str) and raw.strip():
         try:
             datetime.fromisoformat(raw)
             return raw
         except ValueError:
+            pass
+    if fallback is not None:
+        try:
+            datetime.fromisoformat(fallback)
+            return fallback
+        except (TypeError, ValueError):
             pass
     return datetime.now(UTC).isoformat()
 
@@ -86,6 +109,9 @@ def migrate_from_beads(beads_db_path: str | Path, tracker: FiligreeDB) -> int:
         # Pass 1: build issue data and insert WITHOUT parent_id to avoid FK ordering
         parent_map: dict[str, str] = {}  # id -> parent_id for pass 2
         inserted_ids: set[str] = set()  # track actually inserted rows for safe pass 2
+        # Owning-issue timestamps drive deterministic fallbacks for events/comments
+        # whose source created_at is blank/invalid — keeps dedup keys stable across re-runs.
+        issue_fallback_ts: dict[str, str] = {}
         count = 0
         for row in rows:
             # Build fields bag from beads-specific columns
@@ -133,6 +159,25 @@ def migrate_from_beads(beads_db_path: str | Path, tracker: FiligreeDB) -> int:
             if parent_id:
                 parent_map[row["id"]] = parent_id
 
+            created_at_iso = _safe_timestamp(row["created_at"])
+            updated_at_iso = _safe_timestamp(row["updated_at"], fallback=created_at_iso)
+            # Deterministic fallback for child rows (events, comments) — keeps
+            # dedup keys stable across re-migrations when source ts is blank/bad.
+            issue_fallback_ts[row["id"]] = updated_at_iso
+
+            # Non-done issues must not carry a closed_at (filigree clears it on
+            # reopen — beads doesn't, so a stale value can leak through).
+            # Done issues need a parseable ISO timestamp for downstream
+            # analytics/archival; fall back to updated_at when source is bad.
+            raw_closed = row["closed_at"]
+            closed_at_iso: str | None
+            if status == "closed":
+                closed_at_iso = (
+                    raw_closed if isinstance(raw_closed, str) and raw_closed.strip() and _is_parseable_iso(raw_closed) else updated_at_iso
+                )
+            else:
+                closed_at_iso = None
+
             issue_data = {
                 "id": row["id"],
                 "title": row["title"] or "(untitled)",
@@ -141,9 +186,9 @@ def migrate_from_beads(beads_db_path: str | Path, tracker: FiligreeDB) -> int:
                 "type": issue_type,
                 "parent_id": None,
                 "assignee": row["assignee"] or "",
-                "created_at": _safe_timestamp(row["created_at"]),
-                "updated_at": _safe_timestamp(row["updated_at"]),
-                "closed_at": row["closed_at"],
+                "created_at": created_at_iso,
+                "updated_at": updated_at_iso,
+                "closed_at": closed_at_iso,
                 "description": row["description"] or "",
                 "notes": row["notes"] or "",
                 "fields": fields,
@@ -185,7 +230,10 @@ def migrate_from_beads(beads_db_path: str | Path, tracker: FiligreeDB) -> int:
                             "old_value": evt["old_value"],
                             "new_value": evt["new_value"],
                             "comment": evt["comment"] or "",
-                            "created_at": _safe_timestamp(evt["created_at"]),
+                            "created_at": _safe_timestamp(
+                                evt["created_at"],
+                                fallback=issue_fallback_ts.get(evt["issue_id"]),
+                            ),
                         }
                     )
         except sqlite3.OperationalError as e:
@@ -210,7 +258,10 @@ def migrate_from_beads(beads_db_path: str | Path, tracker: FiligreeDB) -> int:
             comments = beads_conn.execute("SELECT issue_id, author, text, created_at FROM comments").fetchall()
             for cmt in comments:
                 if cmt["issue_id"] in migrated_ids:
-                    cmt_ts = _safe_timestamp(cmt["created_at"])
+                    cmt_ts = _safe_timestamp(
+                        cmt["created_at"],
+                        fallback=issue_fallback_ts.get(cmt["issue_id"]),
+                    )
                     cmt_author = cmt["author"] or ""
                     tracker.conn.execute(
                         "INSERT INTO comments (issue_id, author, text, created_at) "

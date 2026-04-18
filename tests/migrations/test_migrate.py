@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -921,3 +922,210 @@ class TestSafeTimestampDirect:
 
         result = _safe_timestamp(12345)
         datetime.fromisoformat(result)
+
+    def test_deterministic_fallback_used_when_provided(self) -> None:
+        """When raw is invalid but a valid fallback is supplied, use fallback."""
+        fallback = "2026-01-15T10:00:00+00:00"
+        assert _safe_timestamp(None, fallback=fallback) == fallback
+        assert _safe_timestamp("", fallback=fallback) == fallback
+        assert _safe_timestamp("not-a-date", fallback=fallback) == fallback
+
+    def test_valid_raw_wins_over_fallback(self) -> None:
+        """Valid raw ISO timestamp is preferred over fallback."""
+        raw = "2026-03-20T14:30:00+00:00"
+        fallback = "2026-01-15T10:00:00+00:00"
+        assert _safe_timestamp(raw, fallback=fallback) == raw
+
+    def test_invalid_fallback_ignored(self) -> None:
+        """A malformed fallback is ignored; _safe_timestamp synthesizes a valid ISO string."""
+        from datetime import datetime
+
+        result = _safe_timestamp(None, fallback="also-broken")
+        datetime.fromisoformat(result)  # still valid ISO
+
+
+class TestMigrateEventDeterminism:
+    """Regression: re-migration must not duplicate events/comments when source
+    timestamps are blank/invalid.
+
+    Root cause: `_safe_timestamp()` synthesizes a fresh `datetime.now()` each
+    invocation, so the dedup key `(issue_id, event_type, actor, old_value,
+    new_value, created_at)` changes on every run. Fix: pass a deterministic
+    fallback derived from the owning issue's timestamp.
+    """
+
+    def _make_beads_db(
+        self,
+        tmp_path: Path,
+        *,
+        event_ts: str | None = None,
+        comment_ts: str | None = None,
+    ) -> Path:
+        db_path = tmp_path / "beads_blank_ts.db"
+        conn = sqlite3.connect(str(db_path))
+        conn.executescript("""
+            CREATE TABLE issues (
+                id TEXT PRIMARY KEY, title TEXT, status TEXT DEFAULT 'open',
+                priority INTEGER DEFAULT 2, issue_type TEXT DEFAULT 'task',
+                parent_id TEXT, parent_epic TEXT, assignee TEXT DEFAULT '',
+                created_at TEXT, updated_at TEXT, closed_at TEXT, deleted_at TEXT,
+                description TEXT DEFAULT '', notes TEXT DEFAULT '',
+                metadata TEXT DEFAULT 'null'
+            );
+            CREATE TABLE dependencies (
+                issue_id TEXT, depends_on_id TEXT, type TEXT DEFAULT 'blocks',
+                PRIMARY KEY (issue_id, depends_on_id)
+            );
+            CREATE TABLE events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                issue_id TEXT NOT NULL, event_type TEXT, actor TEXT DEFAULT '',
+                old_value TEXT, new_value TEXT, comment TEXT DEFAULT '',
+                created_at TEXT
+            );
+            CREATE TABLE comments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                issue_id TEXT NOT NULL, author TEXT DEFAULT '',
+                text TEXT NOT NULL, created_at TEXT
+            );
+        """)
+        issue_ts = "2026-02-10T09:00:00+00:00"
+        conn.execute(
+            "INSERT INTO issues (id, title, created_at, updated_at) VALUES (?, ?, ?, ?)",
+            ("bd-det1", "Determinism test", issue_ts, issue_ts),
+        )
+        conn.execute(
+            "INSERT INTO events (issue_id, event_type, actor, new_value, created_at) VALUES (?, ?, ?, ?, ?)",
+            ("bd-det1", "created", "alice", "Determinism test", event_ts),
+        )
+        conn.execute(
+            "INSERT INTO comments (issue_id, author, text, created_at) VALUES (?, ?, ?, ?)",
+            ("bd-det1", "alice", "first note", comment_ts),
+        )
+        conn.commit()
+        conn.close()
+        return db_path
+
+    def test_blank_event_timestamp_deduped_across_runs(self, tmp_path: Path, db: FiligreeDB) -> None:
+        """Blank event created_at must not produce a duplicate on re-migration."""
+        beads = self._make_beads_db(tmp_path, event_ts="", comment_ts="2026-02-10T09:00:00+00:00")
+
+        migrate_from_beads(beads, db)
+        events_first = db.get_issue_events("bd-det1")
+        created_count_first = sum(1 for e in events_first if e["event_type"] == "created")
+        assert created_count_first == 1
+
+        migrate_from_beads(beads, db)
+        events_second = db.get_issue_events("bd-det1")
+        created_count_second = sum(1 for e in events_second if e["event_type"] == "created")
+        assert created_count_second == 1, "Re-migration with blank event timestamp must not duplicate events"
+
+    def test_invalid_event_timestamp_deduped_across_runs(self, tmp_path: Path, db: FiligreeDB) -> None:
+        """Malformed event created_at must not produce a duplicate on re-migration."""
+        beads = self._make_beads_db(tmp_path, event_ts="not-a-date", comment_ts="2026-02-10T09:00:00+00:00")
+
+        migrate_from_beads(beads, db)
+        migrate_from_beads(beads, db)
+        events = db.get_issue_events("bd-det1")
+        created_count = sum(1 for e in events if e["event_type"] == "created")
+        assert created_count == 1
+
+    def test_blank_comment_timestamp_deduped_across_runs(self, tmp_path: Path, db: FiligreeDB) -> None:
+        """Blank comment created_at must not produce a duplicate on re-migration."""
+        beads = self._make_beads_db(tmp_path, event_ts="2026-02-10T09:00:00+00:00", comment_ts="")
+
+        migrate_from_beads(beads, db)
+        migrate_from_beads(beads, db)
+        comments = db.get_comments("bd-det1")
+        assert len(comments) == 1
+
+    def test_invalid_comment_timestamp_deduped_across_runs(self, tmp_path: Path, db: FiligreeDB) -> None:
+        """Malformed comment created_at must not produce a duplicate on re-migration."""
+        beads = self._make_beads_db(tmp_path, event_ts="2026-02-10T09:00:00+00:00", comment_ts="bogus")
+
+        migrate_from_beads(beads, db)
+        migrate_from_beads(beads, db)
+        comments = db.get_comments("bd-det1")
+        assert len(comments) == 1
+
+
+class TestMigrateClosedAtNormalization:
+    """Regression: imported closed_at must be a valid ISO timestamp or NULL.
+
+    Downstream code assumes it is parseable (analytics.lead_time via
+    datetime.fromisoformat) or comparable in SQL (db_events.archive_closed
+    uses `closed_at < ?` against an ISO cutoff). Malformed values silently
+    break both.
+    """
+
+    def _make_beads_db_with_closed_at(
+        self,
+        tmp_path: Path,
+        *,
+        status: str,
+        closed_at: str | None,
+    ) -> Path:
+        db_path = tmp_path / "beads_closed_at.db"
+        conn = sqlite3.connect(str(db_path))
+        conn.executescript("""
+            CREATE TABLE issues (
+                id TEXT PRIMARY KEY, title TEXT, status TEXT DEFAULT 'open',
+                priority INTEGER DEFAULT 2, issue_type TEXT DEFAULT 'task',
+                parent_id TEXT, parent_epic TEXT, assignee TEXT DEFAULT '',
+                created_at TEXT, updated_at TEXT, closed_at TEXT, deleted_at TEXT,
+                description TEXT DEFAULT '', notes TEXT DEFAULT '',
+                metadata TEXT DEFAULT 'null'
+            );
+            CREATE TABLE dependencies (
+                issue_id TEXT, depends_on_id TEXT, type TEXT DEFAULT 'blocks',
+                PRIMARY KEY (issue_id, depends_on_id)
+            );
+        """)
+        issue_ts = "2026-02-10T09:00:00+00:00"
+        conn.execute(
+            "INSERT INTO issues (id, title, status, created_at, updated_at, closed_at) VALUES (?, ?, ?, ?, ?, ?)",
+            ("bd-cat1", "Closed-at test", status, issue_ts, issue_ts, closed_at),
+        )
+        conn.commit()
+        conn.close()
+        return db_path
+
+    def test_open_issue_with_stale_closed_at_cleared(self, tmp_path: Path, db: FiligreeDB) -> None:
+        """A non-done source issue carrying a stale closed_at must import with closed_at=NULL."""
+        beads = self._make_beads_db_with_closed_at(tmp_path, status="open", closed_at="2020-01-01T00:00:00+00:00")
+        migrate_from_beads(beads, db)
+        issue = db.get_issue("bd-cat1")
+        assert issue.status_category != "done"
+        assert issue.closed_at is None
+
+    def test_closed_issue_with_invalid_closed_at_coerced(self, tmp_path: Path, db: FiligreeDB) -> None:
+        """Done-category issue with malformed closed_at must get a parseable ISO fallback."""
+        beads = self._make_beads_db_with_closed_at(tmp_path, status="closed", closed_at="not-a-date")
+        migrate_from_beads(beads, db)
+        issue = db.get_issue("bd-cat1")
+        assert issue.closed_at is not None
+        datetime.fromisoformat(issue.closed_at)  # must parse
+
+    def test_closed_issue_with_blank_closed_at_coerced(self, tmp_path: Path, db: FiligreeDB) -> None:
+        """Done-category issue with blank closed_at falls back to updated_at."""
+        beads = self._make_beads_db_with_closed_at(tmp_path, status="closed", closed_at="")
+        migrate_from_beads(beads, db)
+        issue = db.get_issue("bd-cat1")
+        assert issue.closed_at is not None
+        datetime.fromisoformat(issue.closed_at)
+
+    def test_closed_issue_with_missing_closed_at_coerced(self, tmp_path: Path, db: FiligreeDB) -> None:
+        """Done-category issue with NULL closed_at falls back to updated_at (never stays NULL)."""
+        beads = self._make_beads_db_with_closed_at(tmp_path, status="closed", closed_at=None)
+        migrate_from_beads(beads, db)
+        issue = db.get_issue("bd-cat1")
+        # Downstream closed-at queries assume done issues have a closed_at; coerce to updated_at.
+        assert issue.closed_at is not None
+        datetime.fromisoformat(issue.closed_at)
+
+    def test_closed_issue_with_valid_closed_at_preserved(self, tmp_path: Path, db: FiligreeDB) -> None:
+        """A valid closed_at on a done-category issue must survive migration unchanged."""
+        original = "2026-02-10T09:00:00+00:00"
+        beads = self._make_beads_db_with_closed_at(tmp_path, status="closed", closed_at=original)
+        migrate_from_beads(beads, db)
+        issue = db.get_issue("bd-cat1")
+        assert issue.closed_at == original

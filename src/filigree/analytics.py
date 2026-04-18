@@ -42,15 +42,32 @@ def cycle_time(db: FiligreeDB, issue_id: str) -> float | None:
     issue = db.get_issue(issue_id)
     issue_type = issue.type
 
-    events = db.conn.execute(
-        "SELECT event_type, new_value, created_at FROM events "
-        "WHERE issue_id = ? AND event_type = 'status_changed' ORDER BY created_at ASC, id ASC",
+    rows = db.conn.execute(
+        "SELECT id, event_type, new_value, created_at FROM events WHERE issue_id = ? AND event_type = 'status_changed'",
         (issue_id,),
     ).fetchall()
     return _cycle_time_from_events(
-        events,
+        _sort_events_chronologically(rows),
         lambda state: db._resolve_status_category(issue_type, state),
     )
+
+
+def _sort_events_chronologically(rows: list[sqlite3.Row]) -> list[sqlite3.Row]:
+    """Sort event rows by parsed UTC timestamp then by id.
+
+    SQLite ORDER BY on raw ISO text produces wrong results when rows carry
+    mixed timezone offsets (e.g. +00:00 vs +10:00 sort lexically but not
+    chronologically). Unparseable timestamps are dropped — callers already
+    handle missing events by returning None metrics.
+    """
+    ordered: list[tuple[datetime, int, sqlite3.Row]] = []
+    for r in rows:
+        dt = _parse_iso(r["created_at"])
+        if dt is None:
+            continue
+        ordered.append((dt, r["id"], r))
+    ordered.sort(key=lambda t: (t[0], t[1]))
+    return [t[2] for t in ordered]
 
 
 def _cycle_time_from_events(
@@ -87,18 +104,18 @@ def _fetch_status_events_by_issue(db: FiligreeDB, issue_ids: list[str]) -> dict[
         placeholders = ",".join("?" for _ in chunk)
         rows = db.conn.execute(
             (
-                "SELECT issue_id, new_value, created_at "
+                "SELECT id, issue_id, new_value, created_at "
                 "FROM events "
                 "WHERE event_type = 'status_changed' "
-                f"AND issue_id IN ({placeholders}) "
-                "ORDER BY issue_id ASC, created_at ASC, id ASC"
+                f"AND issue_id IN ({placeholders})"
             ),
             tuple(chunk),
         ).fetchall()
         for row in rows:
             by_issue.setdefault(row["issue_id"], []).append(row)
 
-    return by_issue
+    # Sort each issue's events chronologically (by parsed UTC), not by raw text.
+    return {issue_id: _sort_events_chronologically(evts) for issue_id, evts in by_issue.items()}
 
 
 def lead_time(
