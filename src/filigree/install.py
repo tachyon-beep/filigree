@@ -167,16 +167,14 @@ def inject_instructions(file_path: Path) -> tuple[bool, str]:
                 end = end_pos + len(_END_MARKER)
                 content = content[:start] + FILIGREE_INSTRUCTIONS + content[end:]
             else:
-                # Malformed — end marker missing. Only replace the opening
-                # marker line to avoid truncating user content that may
-                # follow the (now-corrupted) filigree block.  The old body
-                # becomes orphan text below the new end marker, but on the
-                # next run the end marker will be found and cleaned up.
-                marker_line_end = content.find("\n", start)
-                if marker_line_end == -1:
-                    content = FILIGREE_INSTRUCTIONS
-                else:
-                    content = content[:start] + FILIGREE_INSTRUCTIONS + content[marker_line_end:]
+                # Malformed — end marker missing. The block is unclosed, so
+                # anything from the start marker onward belongs to the broken
+                # block and cannot be safely preserved.  Replace from the
+                # start marker through EOF.  (The previous behaviour of
+                # preserving the tail left orphan content behind that the
+                # next run could no longer distinguish from genuine user
+                # text, so the corruption persisted indefinitely.)
+                content = content[:start] + FILIGREE_INSTRUCTIONS
             _atomic_write_text(file_path, content)
             return True, f"Updated instructions in {file_path}"
         else:
@@ -196,6 +194,32 @@ def inject_instructions(file_path: Path) -> tuple[bool, str]:
 # ---------------------------------------------------------------------------
 
 
+# Normalised forms that effectively ignore the project-root `.filigree/`
+# directory under gitignore semantics. `.filigree[/]` matches at any depth
+# (including the root); the `/`-anchored variants are explicitly root-scoped.
+_FILIGREE_IGNORE_RULES: frozenset[str] = frozenset({".filigree", ".filigree/", "/.filigree", "/.filigree/"})
+
+
+def _has_active_filigree_ignore(content: str) -> bool:
+    """Return True if *content* has an active ignore rule for the project-root ``.filigree/``.
+
+    Honours gitignore syntax: blank lines and ``#`` comments are skipped, ``!``
+    negations are rejected (they un-ignore, not ignore), and trailing whitespace
+    is stripped. Substring matches (``src/.filigree/cache/``, ``#.filigree/``)
+    do not count.
+    """
+    for raw_line in content.splitlines():
+        line = raw_line.rstrip()
+        if not line:
+            continue
+        stripped = line.lstrip()
+        if stripped.startswith(("#", "!")):
+            continue
+        if stripped in _FILIGREE_IGNORE_RULES:
+            return True
+    return False
+
+
 def ensure_gitignore(project_root: Path) -> tuple[bool, str]:
     """Ensure .filigree/ is in .gitignore."""
     gitignore = project_root / ".gitignore"
@@ -203,7 +227,7 @@ def ensure_gitignore(project_root: Path) -> tuple[bool, str]:
 
     if gitignore.exists():
         content = gitignore.read_text()
-        if filigree_pattern in content:
+        if _has_active_filigree_ignore(content):
             return True, ".filigree/ already in .gitignore"
         if not content.endswith("\n"):
             content += "\n"

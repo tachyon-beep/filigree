@@ -105,6 +105,28 @@ class TestInjectInstructions:
         # "Middle" (between stray end marker and real start) must appear exactly once
         assert content.count("Middle") == 1
 
+    def test_malformed_block_repair_is_idempotent(self, tmp_path: Path) -> None:
+        """Repeated runs on a block missing its end marker must converge to a single clean block.
+
+        Regression: previously the first run preserved the orphan tail after the
+        newly-inserted block, and subsequent runs treated the tail as user content
+        and kept preserving it forever.
+        """
+        target = tmp_path / "CLAUDE.md"
+        target.write_text(f"Before preamble\n{FILIGREE_INSTRUCTIONS_MARKER}\nstale body line 1\nstale body line 2\n")
+        inject_instructions(target)
+        # Run again to prove no orphan tail is dragged through a second pass.
+        inject_instructions(target)
+        content = target.read_text()
+        # Content before the start marker must be preserved.
+        assert "Before preamble" in content
+        # Exactly one opening marker, exactly one end marker.
+        assert content.count(FILIGREE_INSTRUCTIONS_MARKER) == 1
+        assert content.count("<!-- /filigree:instructions -->") == 1
+        # Stale body must not survive repair.
+        assert "stale body line 1" not in content
+        assert "stale body line 2" not in content
+
 
 class TestInstructionsVersionFallback:
     def test_instructions_version_falls_back_to_package_version(self) -> None:
@@ -165,6 +187,52 @@ class TestEnsureGitignore:
     def test_already_present(self, tmp_path: Path) -> None:
         gitignore = tmp_path / ".gitignore"
         gitignore.write_text(".filigree/\n")
+        ok, msg = ensure_gitignore(tmp_path)
+        assert ok
+        assert "already" in msg
+
+    def test_commented_pattern_not_treated_as_ignored(self, tmp_path: Path) -> None:
+        """A `#.filigree/` comment must not count as an active ignore rule."""
+        gitignore = tmp_path / ".gitignore"
+        gitignore.write_text("#.filigree/\n")
+        ok, _msg = ensure_gitignore(tmp_path)
+        assert ok
+        lines = gitignore.read_text().splitlines()
+        # Active entry (not commented) must now exist.
+        assert ".filigree/" in lines
+
+    def test_negated_pattern_not_treated_as_ignored(self, tmp_path: Path) -> None:
+        """A `!.filigree/` negation un-ignores; it must not count as an ignore rule."""
+        gitignore = tmp_path / ".gitignore"
+        gitignore.write_text("!.filigree/\n")
+        ok, _msg = ensure_gitignore(tmp_path)
+        assert ok
+        lines = gitignore.read_text().splitlines()
+        # Active entry must now exist alongside (or instead of) the negation.
+        assert ".filigree/" in lines
+
+    def test_subpath_substring_not_treated_as_ignored(self, tmp_path: Path) -> None:
+        """Any non-root path that contains `.filigree/` as substring must not satisfy the check."""
+        gitignore = tmp_path / ".gitignore"
+        gitignore.write_text("src/some/.filigree/cache/\n")
+        ok, _msg = ensure_gitignore(tmp_path)
+        assert ok
+        lines = gitignore.read_text().splitlines()
+        # A real root-level entry must have been added.
+        assert ".filigree/" in lines
+
+    def test_root_anchored_pattern_accepted(self, tmp_path: Path) -> None:
+        """`/.filigree/` is an anchored ignore rule — must be recognised as already present."""
+        gitignore = tmp_path / ".gitignore"
+        gitignore.write_text("/.filigree/\n")
+        ok, msg = ensure_gitignore(tmp_path)
+        assert ok
+        assert "already" in msg
+
+    def test_bare_name_without_trailing_slash_accepted(self, tmp_path: Path) -> None:
+        """`.filigree` (no trailing slash) matches the directory — must be recognised."""
+        gitignore = tmp_path / ".gitignore"
+        gitignore.write_text(".filigree\n")
         ok, msg = ensure_gitignore(tmp_path)
         assert ok
         assert "already" in msg
