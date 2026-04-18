@@ -30,6 +30,7 @@ CREATE INDEX IF NOT EXISTS idx_issues_type ON issues(type);
 CREATE INDEX IF NOT EXISTS idx_issues_parent ON issues(parent_id);
 CREATE INDEX IF NOT EXISTS idx_issues_priority ON issues(priority);
 CREATE INDEX IF NOT EXISTS idx_issues_status_priority ON issues(status, priority, created_at);
+CREATE INDEX IF NOT EXISTS idx_issues_assignee_priority ON issues(assignee, priority, created_at);
 
 CREATE TABLE IF NOT EXISTS dependencies (
     issue_id       TEXT NOT NULL REFERENCES issues(id),
@@ -75,6 +76,8 @@ CREATE TABLE IF NOT EXISTS labels (
     label    TEXT NOT NULL,
     PRIMARY KEY (issue_id, label)
 );
+
+CREATE INDEX IF NOT EXISTS idx_labels_label_issue ON labels(label, issue_id);
 
 CREATE TABLE IF NOT EXISTS type_templates (
     type          TEXT PRIMARY KEY,
@@ -338,4 +341,4 @@ CREATE TRIGGER IF NOT EXISTS issues_fts_delete AFTER DELETE ON issues BEGIN
 END;
 """
 
-CURRENT_SCHEMA_VERSION = 8
+CURRENT_SCHEMA_VERSION = 9

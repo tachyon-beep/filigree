@@ -1682,3 +1682,80 @@ class TestMigrateV7ToV8:
         apply_pending_migrations(v7_db, 8)
         applied = apply_pending_migrations(v7_db, 8)
         assert applied == 0
+
+
+# ---------------------------------------------------------------------------
+# Migration v8 -> v9: missing performance indexes
+# ---------------------------------------------------------------------------
+
+
+class TestMigrateV8ToV9:
+    """Tests for migration v8 -> v9: label and assignee performance indexes."""
+
+    @pytest.fixture
+    def v8_db(self, tmp_path: Path) -> sqlite3.Connection:
+        """Create a v8 database using the full schema (stamped as v8)."""
+        conn = _make_db(tmp_path)
+        conn.executescript(SCHEMA_SQL)
+        conn.execute("PRAGMA user_version = 8")
+        conn.commit()
+        # Drop the new indexes so migration can recreate them
+        conn.execute("DROP INDEX IF EXISTS idx_labels_label_issue")
+        conn.execute("DROP INDEX IF EXISTS idx_issues_assignee_priority")
+        conn.commit()
+        return conn
+
+    def test_migration_runs(self, v8_db: sqlite3.Connection) -> None:
+        applied = apply_pending_migrations(v8_db, 9)
+        assert applied == 1
+        assert _get_schema_version(v8_db) == 9
+
+    def test_indexes_created(self, v8_db: sqlite3.Connection) -> None:
+        apply_pending_migrations(v8_db, 9)
+        indexes = _get_index_names(v8_db)
+        assert "idx_labels_label_issue" in indexes
+        assert "idx_issues_assignee_priority" in indexes
+
+    def test_label_equality_uses_index(self, v8_db: sqlite3.Connection) -> None:
+        """`WHERE label = ?` must be served by the new covering index."""
+        apply_pending_migrations(v8_db, 9)
+        plan = v8_db.execute(
+            "EXPLAIN QUERY PLAN SELECT issue_id FROM labels WHERE label = ?",
+            ("foo",),
+        ).fetchall()
+        text = " | ".join(row["detail"] for row in plan)
+        assert "idx_labels_label_issue" in text, f"plan did not use label index: {text}"
+        assert "SCAN labels" not in text, f"label= query still falls back to scan: {text}"
+
+    def test_taxonomy_scan_is_covering(self, v8_db: sqlite3.Connection) -> None:
+        """`GROUP BY label ORDER BY label` must use the ordered covering index."""
+        apply_pending_migrations(v8_db, 9)
+        plan = v8_db.execute("EXPLAIN QUERY PLAN SELECT label, COUNT(*) AS cnt FROM labels GROUP BY label ORDER BY label").fetchall()
+        text = " | ".join(row["detail"] for row in plan)
+        assert "idx_labels_label_issue" in text, f"taxonomy did not use label index: {text}"
+
+    def test_assignee_query_uses_index(self, v8_db: sqlite3.Connection) -> None:
+        """`WHERE assignee = ? ORDER BY priority, created_at` must use the new index
+        and avoid a temp B-tree sort."""
+        apply_pending_migrations(v8_db, 9)
+        plan = v8_db.execute(
+            "EXPLAIN QUERY PLAN SELECT id FROM issues i WHERE i.assignee = ? ORDER BY i.priority, i.created_at LIMIT 50 OFFSET 0",
+            ("alice",),
+        ).fetchall()
+        text = " | ".join(row["detail"] for row in plan)
+        assert "idx_issues_assignee_priority" in text, f"plan did not use assignee index: {text}"
+        assert "USE TEMP B-TREE" not in text, f"ORDER BY still requires sort: {text}"
+
+    def test_idempotent(self, v8_db: sqlite3.Connection) -> None:
+        apply_pending_migrations(v8_db, 9)
+        applied = apply_pending_migrations(v8_db, 9)
+        assert applied == 0
+
+    def test_fresh_schema_has_indexes(self, tmp_path: Path) -> None:
+        """Fresh DB from SCHEMA_SQL must already have the new indexes."""
+        d = FiligreeDB(tmp_path / "fresh.db", prefix="test")
+        d.initialize()
+        indexes = _get_index_names(d.conn)
+        assert "idx_labels_label_issue" in indexes
+        assert "idx_issues_assignee_priority" in indexes
+        d.close()

@@ -396,6 +396,27 @@ def migrate_v7_to_v8(conn: sqlite3.Connection) -> None:
     conn.execute("CREATE INDEX IF NOT EXISTS idx_scan_runs_scanner ON scan_runs(scanner_name)")
 
 
+def migrate_v8_to_v9(conn: sqlite3.Connection) -> None:
+    """v8 → v9: Add missing performance indexes for label and assignee queries.
+
+    Changes:
+      - new index idx_labels_label_issue on labels(label, issue_id) —
+        covers label-first lookups (WHERE label = ?) and the taxonomy
+        GROUP BY label ORDER BY label scan. The labels PK is
+        (issue_id, label), which is left-prefix and cannot serve label-first
+        queries.
+      - new index idx_issues_assignee_priority on issues(assignee, priority,
+        created_at) — satisfies `--assignee` filters and collapses the
+        ORDER BY priority, created_at sort into an index range scan.
+
+    Rollback: DROP INDEX IF EXISTS idx_labels_label_issue;
+              DROP INDEX IF EXISTS idx_issues_assignee_priority;
+              PRAGMA user_version = 8;
+    """
+    add_index(conn, "idx_labels_label_issue", "labels", ["label", "issue_id"])
+    add_index(conn, "idx_issues_assignee_priority", "issues", ["assignee", "priority", "created_at"])
+
+
 MIGRATIONS: dict[int, MigrationFn] = {
     1: migrate_v1_to_v2,
     2: migrate_v2_to_v3,
@@ -404,6 +425,7 @@ MIGRATIONS: dict[int, MigrationFn] = {
     5: migrate_v5_to_v6,
     6: migrate_v6_to_v7,
     7: migrate_v7_to_v8,
+    8: migrate_v8_to_v9,
 }
 
 
