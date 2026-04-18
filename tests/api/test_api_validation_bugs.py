@@ -96,7 +96,7 @@ class TestScanIngestStatusCode:
         resp = await client.post("/api/v1/scan-results", json=payload)
         assert resp.status_code == 400, f"Missing findings should return 400, got {resp.status_code}"
         body = resp.json()
-        assert body.get("error", {}).get("code") == "VALIDATION_ERROR"
+        assert body.get("code") == "VALIDATION"
 
 
 # ---------------------------------------------------------------------------

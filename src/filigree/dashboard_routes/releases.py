@@ -17,6 +17,7 @@ from starlette.requests import Request
 from filigree.core import FiligreeDB
 from filigree.dashboard_routes.common import _error_response, _get_bool_param
 from filigree.db_planning import NotAReleaseError
+from filigree.types.api import ErrorCode
 
 logger = logging.getLogger(__name__)
 
@@ -111,10 +112,10 @@ def create_router() -> APIRouter:
             releases.sort(key=_semver_sort_key)
         except sqlite3.Error:
             logger.exception("Database error loading releases summary")
-            return _error_response("Database error loading releases", "RELEASES_LOAD_ERROR", 500)
+            return _error_response("Database error loading releases", ErrorCode.IO, 500)
         except Exception:
             logger.exception("BUG: Unexpected error loading releases summary")
-            return _error_response("Internal error loading releases", "RELEASES_LOAD_ERROR", 500)
+            return _error_response("Internal error loading releases", ErrorCode.IO, 500)
 
         return JSONResponse({"releases": releases})
 
@@ -124,17 +125,17 @@ def create_router() -> APIRouter:
         try:
             tree = db.get_release_tree(release_id)
         except KeyError:
-            return _error_response(f"Release not found: {release_id}", "RELEASE_NOT_FOUND", 404)
+            return _error_response(f"Release not found: {release_id}", ErrorCode.NOT_FOUND, 404)
         except NotAReleaseError as e:
-            return _error_response(str(e), "NOT_A_RELEASE", 404)
+            return _error_response(str(e), ErrorCode.VALIDATION, 404)
         except sqlite3.Error:
             logger.exception("Database error loading release tree for %s", release_id)
-            return _error_response("Database error loading release tree", "TREE_LOAD_ERROR", 500)
+            return _error_response("Database error loading release tree", ErrorCode.IO, 500)
         except Exception:
             # Includes bare ValueError from corrupt imported data (e.g. Issue.__post_init__)
             # — that is data corruption, not a release-type mismatch.
             logger.exception("BUG: Unexpected error loading release tree for %s", release_id)
-            return _error_response("Internal error loading release tree", "TREE_LOAD_ERROR", 500)
+            return _error_response("Internal error loading release tree", ErrorCode.IO, 500)
         return JSONResponse(tree)
 
     return router

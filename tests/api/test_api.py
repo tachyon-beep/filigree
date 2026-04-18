@@ -139,9 +139,9 @@ class TestIssueDetailAPI:
     async def test_issue_detail_not_found(self, client: AsyncClient) -> None:
         resp = await client.get("/api/issue/nonexistent")
         assert resp.status_code == 404
-        err = resp.json()["error"]
-        assert err["code"] == "ISSUE_NOT_FOUND"
-        assert "nonexistent" in err["message"]
+        body = resp.json()
+        assert body["code"] == "NOT_FOUND"
+        assert "nonexistent" in body["error"]
 
     async def test_issue_with_comments(self, client: AsyncClient, dashboard_db: PopulatedDB) -> None:
         ids = dashboard_db.ids
@@ -185,12 +185,12 @@ class TestTypeTemplateAPI:
     async def test_type_template_not_found(self, client: AsyncClient) -> None:
         resp = await client.get("/api/type/nonexistent")
         assert resp.status_code == 404
-        err = resp.json()["error"]
-        assert err["code"] == "INVALID_TYPE"
+        body = resp.json()
+        assert body["code"] == "NOT_FOUND"
         # Error message must include the invalid value and valid types
-        assert "nonexistent" in err["message"]
-        assert "task" in err["message"]
-        assert "bug" in err["message"]
+        assert "nonexistent" in body["error"]
+        assert "task" in body["error"]
+        assert "bug" in body["error"]
 
 
 class TestWorkflowAwareAPI:
@@ -306,9 +306,9 @@ class TestCreateIssueAPI:
             json={"title": "Bad fields", "fields": []},
         )
         assert resp.status_code == 400
-        err = resp.json()["error"]
-        assert err["code"] == "VALIDATION_ERROR"
-        assert "fields must be a dict" in err["message"]
+        body = resp.json()
+        assert body["code"] == "VALIDATION"
+        assert "fields must be a dict" in body["error"]
 
     async def test_create_invalid_type_returns_400(self, client: AsyncClient) -> None:
         resp = await client.post(
@@ -316,10 +316,10 @@ class TestCreateIssueAPI:
             json={"title": "Bad type", "type": "nonexistent_type"},
         )
         assert resp.status_code == 400
-        err = resp.json()["error"]
+        body = resp.json()
         # Error from core.py includes valid types
-        assert "nonexistent_type" in err["message"]
-        assert "task" in err["message"]
+        assert "nonexistent_type" in body["error"]
+        assert "task" in body["error"]
 
     async def test_create_with_parent(self, client: AsyncClient, dashboard_db: PopulatedDB) -> None:
         ids = dashboard_db.ids
@@ -400,9 +400,9 @@ class TestUpdateAPI:
             json={"fields": []},
         )
         assert resp.status_code == 400
-        err = resp.json()["error"]
-        assert err["code"] == "VALIDATION_ERROR"
-        assert "fields must be a dict" in err["message"]
+        body = resp.json()
+        assert body["code"] == "VALIDATION"
+        assert "fields must be a dict" in body["error"]
 
     async def test_update_invalid_transition(self, client: AsyncClient, dashboard_db: PopulatedDB) -> None:
         ids = dashboard_db.ids
@@ -564,13 +564,13 @@ class TestClaimEmptyAssigneeAPI:
         ids = dashboard_db.ids
         resp = await client.post(f"/api/issue/{ids['a']}/claim", json=body)
         assert resp.status_code == 400
-        assert "assignee" in resp.json()["error"]["message"].lower()
+        assert "assignee" in resp.json()["error"].lower()
 
     @pytest.mark.parametrize("body", [{"assignee": ""}, {}], ids=["empty", "missing"])
     async def test_claim_next_rejects_bad_assignee(self, client: AsyncClient, body: dict[str, str]) -> None:
         resp = await client.post("/api/claim-next", json=body)
         assert resp.status_code == 400
-        assert "assignee" in resp.json()["error"]["message"].lower()
+        assert "assignee" in resp.json()["error"].lower()
 
 
 class TestCommentAPI:
@@ -848,9 +848,9 @@ class TestBatchAPI:
             json={"issue_ids": [ids["a"]], "fields": []},
         )
         assert resp.status_code == 400
-        err = resp.json()["error"]
-        assert err["code"] == "VALIDATION_ERROR"
-        assert "fields must be a dict" in err["message"]
+        body = resp.json()
+        assert body["code"] == "VALIDATION"
+        assert "fields must be a dict" in body["error"]
 
     async def test_batch_close(self, client: AsyncClient, dashboard_db: PopulatedDB) -> None:
         ids = dashboard_db.ids
@@ -922,7 +922,7 @@ class TestBatchAPIInputValidation:
     async def test_null_issue_ids_returns_400(self, client: AsyncClient, endpoint: str, body: dict[str, Any]) -> None:
         resp = await client.post(endpoint, json=body)
         assert resp.status_code == 400
-        assert "issue_ids" in resp.json()["error"]["message"].lower()
+        assert "issue_ids" in resp.json()["error"].lower()
 
     @pytest.mark.parametrize(
         ("endpoint", "body", "check_message"),
@@ -953,7 +953,7 @@ class TestBatchAPIInputValidation:
         resp = await client.post(endpoint, json=body)
         assert resp.status_code == 400
         if check_message:
-            assert check_message in resp.json()["error"]["message"].lower()
+            assert check_message in resp.json()["error"].lower()
 
 
 class TestBatchClosePartialMutation:

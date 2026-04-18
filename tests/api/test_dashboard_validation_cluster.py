@@ -30,7 +30,7 @@ class TestPostNonStringFields:
     async def test_create_issue_rejects_non_string_title(self, client: AsyncClient) -> None:
         resp = await client.post("/api/issues", json={"title": 123})
         assert resp.status_code == 400
-        assert resp.json()["error"]["code"] == "VALIDATION_ERROR"
+        assert resp.json()["code"] == "VALIDATION"
 
     async def test_create_issue_rejects_list_title(self, client: AsyncClient) -> None:
         resp = await client.post("/api/issues", json={"title": ["oops"]})
@@ -41,19 +41,19 @@ class TestPostNonStringFields:
         issue_id = resp.json()["id"]
         resp = await client.post(f"/api/issue/{issue_id}/comments", json={"text": {"bad": True}})
         assert resp.status_code == 400
-        assert resp.json()["error"]["code"] == "VALIDATION_ERROR"
+        assert resp.json()["code"] == "VALIDATION"
 
     async def test_claim_rejects_non_string_assignee(self, client: AsyncClient) -> None:
         resp = await client.post("/api/issues", json={"title": "Target"})
         issue_id = resp.json()["id"]
         resp = await client.post(f"/api/issue/{issue_id}/claim", json={"assignee": 42})
         assert resp.status_code == 400
-        assert resp.json()["error"]["code"] == "VALIDATION_ERROR"
+        assert resp.json()["code"] == "VALIDATION"
 
     async def test_claim_next_rejects_non_string_assignee(self, client: AsyncClient) -> None:
         resp = await client.post("/api/claim-next", json={"assignee": False})
         assert resp.status_code == 400
-        assert resp.json()["error"]["code"] == "VALIDATION_ERROR"
+        assert resp.json()["code"] == "VALIDATION"
 
 
 # ---------------------------------------------------------------------------
@@ -95,7 +95,7 @@ class TestAssociationsTypeCheck:
             json={"issue_id": 123, "assoc_type": "bug_in"},
         )
         assert resp.status_code == 400
-        assert resp.json()["error"]["code"] == "VALIDATION_ERROR"
+        assert resp.json()["code"] == "VALIDATION"
 
     async def test_rejects_non_string_assoc_type(self, client: AsyncClient) -> None:
         file_id = await self._make_file(client)
@@ -104,7 +104,7 @@ class TestAssociationsTypeCheck:
             json={"issue_id": "does-not-exist", "assoc_type": {"evil": True}},
         )
         assert resp.status_code == 400
-        assert resp.json()["error"]["code"] == "VALIDATION_ERROR"
+        assert resp.json()["code"] == "VALIDATION"
 
 
 # ---------------------------------------------------------------------------
@@ -134,7 +134,7 @@ class TestPatchParentId:
         issue = (await client.post("/api/issues", json={"title": "Target"})).json()
         resp = await client.patch(f"/api/issue/{issue['id']}", json={"parent_id": 123})
         assert resp.status_code == 400
-        assert resp.json()["error"]["code"] == "VALIDATION_ERROR"
+        assert resp.json()["code"] == "VALIDATION"
 
 
 # ---------------------------------------------------------------------------

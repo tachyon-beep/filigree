@@ -14,7 +14,7 @@ class TestDashboardPriorityValidation:
         issue_id = resp.json()["id"]
         resp = await client.patch(f"/api/issue/{issue_id}", json={"priority": 5})
         assert resp.status_code == 400
-        assert "INVALID_PRIORITY" in resp.json()["error"]["code"]
+        assert resp.json()["code"] == "VALIDATION"
 
     async def test_update_issue_priority_too_low(self, client: AsyncClient) -> None:
         resp = await client.post("/api/issues", json={"title": "Target"})
@@ -25,7 +25,7 @@ class TestDashboardPriorityValidation:
     async def test_create_issue_priority_out_of_range(self, client: AsyncClient) -> None:
         resp = await client.post("/api/issues", json={"title": "Bad", "priority": 99})
         assert resp.status_code == 400
-        assert "INVALID_PRIORITY" in resp.json()["error"]["code"]
+        assert resp.json()["code"] == "VALIDATION"
 
     async def test_create_issue_priority_boundary_0(self, client: AsyncClient) -> None:
         resp = await client.post("/api/issues", json={"title": "P0", "priority": 0})
@@ -64,7 +64,7 @@ class TestDashboardActorValidation:
         issue_id = resp.json()["id"]
         resp = await client.patch(f"/api/issue/{issue_id}", json={"actor": "", "title": "New"})
         assert resp.status_code == 400
-        assert "VALIDATION_ERROR" in resp.json()["error"]["code"]
+        assert resp.json()["code"] == "VALIDATION"
 
     async def test_close_issue_control_char_actor(self, client: AsyncClient) -> None:
         resp = await client.post("/api/issues", json={"title": "Target"})
@@ -85,7 +85,7 @@ class TestDashboardActorValidation:
             json={"text": "hello", "author": "\x00evil"},
         )
         assert resp.status_code == 400
-        assert "VALIDATION_ERROR" in resp.json()["error"]["code"]
+        assert resp.json()["code"] == "VALIDATION"
 
     async def test_add_comment_empty_author(self, client: AsyncClient) -> None:
         """Empty comment author should be rejected."""

@@ -13,6 +13,7 @@ if TYPE_CHECKING:
     from starlette.requests import Request
 
 from filigree.core import FiligreeDB, read_config
+from filigree.types.api import ErrorCode
 from filigree.validation import sanitize_actor as _sanitize_actor
 
 logger = logging.getLogger(__name__)
@@ -32,23 +33,22 @@ _BOOL_FALSE_VALUES = frozenset({"0", "false", "no", "off"})
 
 
 def _error_response(
-    message: str,
-    code: str,
+    error: str,
+    code: ErrorCode,
     status_code: int,
     details: dict[str, Any] | None = None,
 ) -> JSONResponse:
-    """Return a structured error response and log the error.
+    """Return a flat 2.0 ErrorResponse and log the error.
 
-    NOTE: Dashboard errors use a nested format ``{"error": {"message", "code", "details"}}``.
-    MCP tools use a flat ``ErrorResponse(error=str, code=str)`` — see types/api.py.
+    Shape: ``{"error": str, "code": ErrorCode, "details"?: dict}``.
     """
     from fastapi.responses import JSONResponse
 
-    logger.warning("API error [%s] %s: %s", status_code, code, message)
-    return JSONResponse(
-        {"error": {"message": message, "code": code, "details": details or {}}},
-        status_code=status_code,
-    )
+    logger.warning("API error [%s] %s: %s", status_code, code, error)
+    body: dict[str, Any] = {"error": error, "code": str(code)}
+    if details is not None:
+        body["details"] = details
+    return JSONResponse(body, status_code=status_code)
 
 
 async def _parse_json_body(request: Request) -> dict[str, Any] | JSONResponse:
@@ -58,9 +58,9 @@ async def _parse_json_body(request: Request) -> dict[str, Any] | JSONResponse:
     try:
         body = await request.json()
     except (json.JSONDecodeError, ValueError, UnicodeDecodeError):
-        return _error_response("Invalid JSON body", "VALIDATION_ERROR", 400)
+        return _error_response("Invalid JSON body", ErrorCode.VALIDATION, 400)
     if not isinstance(body, dict):
-        return _error_response("Request body must be a JSON object", "VALIDATION_ERROR", 400)
+        return _error_response("Request body must be a JSON object", ErrorCode.VALIDATION, 400)
     return body
 
 
@@ -91,13 +91,13 @@ def _safe_int(value: str, name: str, *, min_value: int | None = None) -> int | J
     except (ValueError, TypeError):
         return _error_response(
             f'Invalid value for {name}: "{value}". Must be an integer.',
-            "VALIDATION_ERROR",
+            ErrorCode.VALIDATION,
             400,
         )
     if min_value is not None and result < min_value:
         return _error_response(
             f"Invalid value for {name}: {result}. Must be >= {min_value}.",
-            "VALIDATION_ERROR",
+            ErrorCode.VALIDATION,
             400,
         )
     return result
@@ -111,7 +111,7 @@ def _parse_bool_value(raw: str, name: str) -> bool | JSONResponse:
         return False
     return _error_response(
         f'Invalid value for {name}: "{raw}". Must be one of true/false, 1/0, yes/no, on/off.',
-        "VALIDATION_ERROR",
+        ErrorCode.VALIDATION,
         400,
         {"param": name, "value": raw},
     )
@@ -228,7 +228,7 @@ def _safe_bounded_int(raw: str, *, name: str, min_value: int, max_value: int) ->
     if value < min_value or value > max_value:
         return _error_response(
             f'Invalid value for {name}: "{raw}". Must be between {min_value} and {max_value}.',
-            "VALIDATION_ERROR",
+            ErrorCode.VALIDATION,
             400,
             {"param": name, "value": raw},
         )
@@ -243,7 +243,7 @@ def _coerce_graph_mode(raw: str | None, db: FiligreeDB) -> str | JSONResponse:
     if mode not in _GRAPH_MODE_VALUES:
         return _error_response(
             f'Invalid value for mode: "{raw}". Must be one of: legacy, v2.',
-            "GRAPH_INVALID_PARAM",
+            ErrorCode.VALIDATION,
             400,
             {"param": "mode", "value": raw},
         )
@@ -257,12 +257,12 @@ def _validate_priority(value: Any, *, required: bool = False) -> int | None | JS
     """
     if value is None:
         if required:
-            return _error_response("priority is required", "VALIDATION_ERROR", 400)
+            return _error_response("priority is required", ErrorCode.VALIDATION, 400)
         return None
     if not isinstance(value, int) or isinstance(value, bool):
-        return _error_response("priority must be an integer between 0 and 4", "INVALID_PRIORITY", 400)
+        return _error_response("priority must be an integer between 0 and 4", ErrorCode.VALIDATION, 400)
     if not (0 <= value <= 4):
-        return _error_response(f"priority must be between 0 and 4, got {value}", "INVALID_PRIORITY", 400)
+        return _error_response(f"priority must be between 0 and 4, got {value}", ErrorCode.VALIDATION, 400)
     return value
 
 
@@ -273,5 +273,5 @@ def _validate_actor(value: Any) -> tuple[str, JSONResponse | None]:
     """
     cleaned, err = _sanitize_actor(value)
     if err:
-        return ("", _error_response(err, "VALIDATION_ERROR", 400))
+        return ("", _error_response(err, ErrorCode.VALIDATION, 400))
     return (cleaned, None)

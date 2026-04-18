@@ -264,8 +264,8 @@ class TestSafeBoundedInt:
 
         assert isinstance(result.body, bytes)
         body = json.loads(result.body.decode())
-        # Must use _safe_int's VALIDATION_ERROR, not the replaced GRAPH_INVALID_PARAM
-        assert body["error"]["code"] == "VALIDATION_ERROR"
+        # Must use _safe_int's VALIDATION, not the replaced GRAPH_INVALID_PARAM
+        assert body["code"] == "VALIDATION"
 
 
 class TestGraphAdvancedAPI:
@@ -490,20 +490,20 @@ class TestGraphAPI:
     async def test_graph_invalid_mode(self, client: AsyncClient) -> None:
         resp = await client.get("/api/graph?mode=nope")
         assert resp.status_code == 400
-        err = resp.json()["error"]
-        assert err["code"] == "GRAPH_INVALID_PARAM"
+        body = resp.json()
+        assert body["code"] == "VALIDATION"
 
     async def test_graph_invalid_ready_blocked_combo(self, client: AsyncClient) -> None:
         resp = await client.get("/api/graph?mode=v2&ready_only=true&blocked_only=true")
         assert resp.status_code == 422
-        err = resp.json()["error"]
-        assert err["code"] == "GRAPH_INVALID_PARAM"
+        body = resp.json()
+        assert body["code"] == "VALIDATION"
 
     async def test_graph_scope_root_not_found(self, client: AsyncClient) -> None:
         resp = await client.get("/api/graph?mode=v2&scope_root=missing")
         assert resp.status_code == 404
-        err = resp.json()["error"]
-        assert err["code"] == "GRAPH_INVALID_PARAM"
+        body = resp.json()
+        assert body["code"] == "VALIDATION"
 
     async def test_graph_include_done_false_excludes_done_nodes(self, client: AsyncClient) -> None:
         resp = await client.get("/api/graph?mode=v2&include_done=false")
@@ -529,44 +529,44 @@ class TestGraphAPI:
     async def test_graph_invalid_boolean_param(self, client: AsyncClient) -> None:
         resp = await client.get("/api/graph?mode=v2&include_done=maybe")
         assert resp.status_code == 400
-        err = resp.json()["error"]
-        assert err["code"] == "VALIDATION_ERROR"
-        assert err["details"]["param"] == "include_done"
+        body = resp.json()
+        assert body["code"] == "VALIDATION"
+        assert body["details"]["param"] == "include_done"
 
     async def test_graph_invalid_status_category(self, client: AsyncClient) -> None:
         resp = await client.get("/api/graph?mode=v2&status_categories=open,wat")
         assert resp.status_code == 400
-        err = resp.json()["error"]
-        assert err["code"] == "GRAPH_INVALID_PARAM"
-        assert err["details"]["param"] == "status_categories"
+        body = resp.json()
+        assert body["code"] == "VALIDATION"
+        assert body["details"]["param"] == "status_categories"
 
     async def test_graph_invalid_type_filter(self, client: AsyncClient) -> None:
         resp = await client.get("/api/graph?mode=v2&types=task,notatype")
         assert resp.status_code == 400
-        err = resp.json()["error"]
-        assert err["code"] == "GRAPH_INVALID_PARAM"
-        assert err["details"]["param"] == "types"
+        body = resp.json()
+        assert body["code"] == "VALIDATION"
+        assert body["details"]["param"] == "types"
 
     async def test_graph_scope_radius_requires_scope_root(self, client: AsyncClient) -> None:
         resp = await client.get("/api/graph?mode=v2&scope_radius=2")
         assert resp.status_code == 422
-        err = resp.json()["error"]
-        assert err["code"] == "GRAPH_INVALID_PARAM"
-        assert err["details"]["param"] == "scope_radius"
+        body = resp.json()
+        assert body["code"] == "VALIDATION"
+        assert body["details"]["param"] == "scope_radius"
 
     async def test_graph_limit_validation(self, client: AsyncClient) -> None:
         resp = await client.get("/api/graph?mode=v2&node_limit=10")
         assert resp.status_code == 400
-        err = resp.json()["error"]
-        assert err["code"] == "VALIDATION_ERROR"
-        assert err["details"]["param"] == "node_limit"
+        body = resp.json()
+        assert body["code"] == "VALIDATION"
+        assert body["details"]["param"] == "node_limit"
 
     async def test_graph_window_days_validation(self, client: AsyncClient) -> None:
         resp = await client.get("/api/graph?mode=v2&window_days=-1")
         assert resp.status_code == 400
-        err = resp.json()["error"]
-        assert err["code"] == "VALIDATION_ERROR"
-        assert err["details"]["param"] == "window_days"
+        body = resp.json()
+        assert body["code"] == "VALIDATION"
+        assert body["details"]["param"] == "window_days"
 
     async def test_graph_window_days_zero_is_noop(self, client: AsyncClient, dashboard_db: PopulatedDB) -> None:
         """window_days=0 should not filter any nodes — it's a no-op."""

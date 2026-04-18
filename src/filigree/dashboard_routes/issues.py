@@ -17,7 +17,7 @@ from filigree.dashboard_routes.common import (
     _validate_actor,
     _validate_priority,
 )
-from filigree.types.api import DepDetail, EnrichedIssueDetail, IssueDetailEvent
+from filigree.types.api import DepDetail, EnrichedIssueDetail, ErrorCode, IssueDetailEvent
 from filigree.types.core import ISOTimestamp
 from filigree.types.planning import CommentRecord
 
@@ -59,7 +59,7 @@ def create_router() -> APIRouter:
         try:
             issue = db.get_issue(issue_id)
         except KeyError:
-            return _error_response(f"Issue not found: {issue_id}", "ISSUE_NOT_FOUND", 404)
+            return _error_response(f"Issue not found: {issue_id}", ErrorCode.NOT_FOUND, 404)
 
         # Resolve dep details for blocks and blocked_by in a single query
         dep_ids = list(set(issue.blocks + issue.blocked_by))
@@ -127,7 +127,7 @@ def create_router() -> APIRouter:
             valid_types = [t.type for t in db.templates.list_types()]
             return _error_response(
                 f'Unknown type "{type_name}". Valid types: {", ".join(valid_types)}',
-                "INVALID_TYPE",
+                ErrorCode.NOT_FOUND,
                 404,
             )
         return JSONResponse(
@@ -146,7 +146,7 @@ def create_router() -> APIRouter:
         try:
             transitions = db.get_valid_transitions(issue_id)
         except KeyError:
-            return _error_response(f"Issue not found: {issue_id}", "ISSUE_NOT_FOUND", 404)
+            return _error_response(f"Issue not found: {issue_id}", ErrorCode.NOT_FOUND, 404)
         return JSONResponse(
             [
                 {
@@ -167,7 +167,7 @@ def create_router() -> APIRouter:
         try:
             db.get_issue(issue_id)
         except KeyError:
-            return _error_response(f"Issue not found: {issue_id}", "ISSUE_NOT_FOUND", 404)
+            return _error_response(f"Issue not found: {issue_id}", ErrorCode.NOT_FOUND, 404)
         files = db.get_issue_files(issue_id)
         return JSONResponse(files)
 
@@ -177,7 +177,7 @@ def create_router() -> APIRouter:
         try:
             db.get_issue(issue_id)
         except KeyError:
-            return _error_response(f"Issue not found: {issue_id}", "ISSUE_NOT_FOUND", 404)
+            return _error_response(f"Issue not found: {issue_id}", ErrorCode.NOT_FOUND, 404)
         findings = db.get_issue_findings(issue_id)
         return JSONResponse([f.to_dict() for f in findings])
 
@@ -196,7 +196,7 @@ def create_router() -> APIRouter:
             return priority
         parent_id = body.get("parent_id")
         if parent_id is not None and not isinstance(parent_id, str):
-            return _error_response("parent_id must be a string or null", "VALIDATION_ERROR", 400)
+            return _error_response("parent_id must be a string or null", ErrorCode.VALIDATION, 400)
         try:
             issue = db.update_issue(
                 issue_id,
@@ -211,11 +211,11 @@ def create_router() -> APIRouter:
                 actor=actor,
             )
         except KeyError:
-            return _error_response(f"Issue not found: {issue_id}", "ISSUE_NOT_FOUND", 404)
+            return _error_response(f"Issue not found: {issue_id}", ErrorCode.NOT_FOUND, 404)
         except TypeError as e:
-            return _error_response(str(e), "VALIDATION_ERROR", 400)
+            return _error_response(str(e), ErrorCode.VALIDATION, 400)
         except ValueError as e:
-            return _error_response(str(e), "TRANSITION_ERROR", 409)
+            return _error_response(str(e), ErrorCode.INVALID_TRANSITION, 409)
         return JSONResponse(issue.to_dict())
 
     @router.post("/issue/{issue_id}/close")
@@ -232,11 +232,11 @@ def create_router() -> APIRouter:
         try:
             issue = db.close_issue(issue_id, reason=reason, actor=actor, fields=fields)
         except KeyError:
-            return _error_response(f"Issue not found: {issue_id}", "ISSUE_NOT_FOUND", 404)
+            return _error_response(f"Issue not found: {issue_id}", ErrorCode.NOT_FOUND, 404)
         except TypeError as e:
-            return _error_response(str(e), "VALIDATION_ERROR", 400)
+            return _error_response(str(e), ErrorCode.VALIDATION, 400)
         except ValueError as e:
-            return _error_response(str(e), "TRANSITION_ERROR", 409)
+            return _error_response(str(e), ErrorCode.INVALID_TRANSITION, 409)
         return JSONResponse(issue.to_dict())
 
     @router.post("/issue/{issue_id}/reopen")
@@ -251,9 +251,9 @@ def create_router() -> APIRouter:
         try:
             issue = db.reopen_issue(issue_id, actor=actor)
         except KeyError:
-            return _error_response(f"Issue not found: {issue_id}", "ISSUE_NOT_FOUND", 404)
+            return _error_response(f"Issue not found: {issue_id}", ErrorCode.NOT_FOUND, 404)
         except ValueError as e:
-            return _error_response(str(e), "TRANSITION_ERROR", 409)
+            return _error_response(str(e), ErrorCode.INVALID_TRANSITION, 409)
         return JSONResponse(issue.to_dict())
 
     @router.post("/issue/{issue_id}/comments", status_code=201)
@@ -262,26 +262,26 @@ def create_router() -> APIRouter:
         try:
             db.get_issue(issue_id)
         except KeyError:
-            return _error_response(f"Issue not found: {issue_id}", "ISSUE_NOT_FOUND", 404)
+            return _error_response(f"Issue not found: {issue_id}", ErrorCode.NOT_FOUND, 404)
         body = await _parse_json_body(request)
         if isinstance(body, JSONResponse):
             return body
         text = body.get("text", "")
         if not isinstance(text, str):
-            return _error_response("text must be a string", "VALIDATION_ERROR", 400)
+            return _error_response("text must be a string", ErrorCode.VALIDATION, 400)
         author, author_err = _validate_actor(body.get("author", "dashboard"))
         if author_err:
             return author_err
         try:
             comment_id = db.add_comment(issue_id, text, author=author)
         except ValueError as e:
-            return _error_response(str(e), "VALIDATION_ERROR", 400)
+            return _error_response(str(e), ErrorCode.VALIDATION, 400)
         # Fetch just the single comment to get the real created_at timestamp
         row = db.conn.execute("SELECT created_at FROM comments WHERE id = ?", (comment_id,)).fetchone()
         if row is None:
             logger = logging.getLogger(__name__)
             logger.error("Comment %d not found immediately after INSERT for issue %s", comment_id, issue_id)
-            return _error_response("Internal error: comment created but not retrievable", "INTERNAL_ERROR", 500)
+            return _error_response("Internal error: comment created but not retrievable", ErrorCode.IO, 500)
         created_at = ISOTimestamp(row["created_at"])
         return JSONResponse(
             CommentRecord(id=comment_id, author=author, text=text, created_at=created_at),
@@ -305,7 +305,7 @@ def create_router() -> APIRouter:
         try:
             plan = db.get_plan(milestone_id)
         except KeyError:
-            return _error_response(f"Issue not found: {milestone_id}", "ISSUE_NOT_FOUND", 404)
+            return _error_response(f"Issue not found: {milestone_id}", ErrorCode.NOT_FOUND, 404)
         return JSONResponse(plan)
 
     @router.post("/batch/update")
@@ -316,9 +316,9 @@ def create_router() -> APIRouter:
             return body
         issue_ids = body.get("issue_ids")
         if not isinstance(issue_ids, list):
-            return _error_response("issue_ids must be a JSON array", "VALIDATION_ERROR", 400)
+            return _error_response("issue_ids must be a JSON array", ErrorCode.VALIDATION, 400)
         if not all(isinstance(i, str) for i in issue_ids):
-            return _error_response("All issue_ids must be strings", "VALIDATION_ERROR", 400)
+            return _error_response("All issue_ids must be strings", ErrorCode.VALIDATION, 400)
         actor, actor_err = _validate_actor(body.get("actor", "dashboard"))
         if actor_err:
             return actor_err
@@ -335,7 +335,7 @@ def create_router() -> APIRouter:
                 actor=actor,
             )
         except TypeError as e:
-            return _error_response(str(e), "VALIDATION_ERROR", 400)
+            return _error_response(str(e), ErrorCode.VALIDATION, 400)
         return JSONResponse(
             {
                 "updated": [i.to_dict() for i in updated],
@@ -351,9 +351,9 @@ def create_router() -> APIRouter:
             return body
         issue_ids = body.get("issue_ids")
         if not isinstance(issue_ids, list):
-            return _error_response("issue_ids must be a JSON array", "VALIDATION_ERROR", 400)
+            return _error_response("issue_ids must be a JSON array", ErrorCode.VALIDATION, 400)
         if not all(isinstance(i, str) for i in issue_ids):
-            return _error_response("All issue_ids must be strings", "VALIDATION_ERROR", 400)
+            return _error_response("All issue_ids must be strings", ErrorCode.VALIDATION, 400)
         reason = body.get("reason", "")
         actor, actor_err = _validate_actor(body.get("actor", "dashboard"))
         if actor_err:
@@ -390,7 +390,7 @@ def create_router() -> APIRouter:
             return body
         title = body.get("title", "")
         if not isinstance(title, str):
-            return _error_response("title must be a string", "VALIDATION_ERROR", 400)
+            return _error_response("title must be a string", ErrorCode.VALIDATION, 400)
         actor, actor_err = _validate_actor(body.get("actor", "dashboard"))
         if actor_err:
             return actor_err
@@ -414,9 +414,9 @@ def create_router() -> APIRouter:
                 actor=actor,
             )
         except TypeError as e:
-            return _error_response(str(e), "VALIDATION_ERROR", 400)
+            return _error_response(str(e), ErrorCode.VALIDATION, 400)
         except ValueError as e:
-            return _error_response(str(e), "VALIDATION_ERROR", 400)
+            return _error_response(str(e), ErrorCode.VALIDATION, 400)
         return JSONResponse(issue.to_dict(), status_code=201)
 
     @router.post("/issue/{issue_id}/claim")
@@ -427,18 +427,18 @@ def create_router() -> APIRouter:
             return body
         assignee = body.get("assignee", "")
         if not isinstance(assignee, str):
-            return _error_response("assignee must be a string", "VALIDATION_ERROR", 400)
+            return _error_response("assignee must be a string", ErrorCode.VALIDATION, 400)
         if not assignee or not assignee.strip():
-            return _error_response("assignee is required and cannot be empty", "VALIDATION_ERROR", 400)
+            return _error_response("assignee is required and cannot be empty", ErrorCode.VALIDATION, 400)
         actor, actor_err = _validate_actor(body.get("actor", "dashboard"))
         if actor_err:
             return actor_err
         try:
             issue = db.claim_issue(issue_id, assignee=assignee, actor=actor)
         except KeyError:
-            return _error_response(f"Issue not found: {issue_id}", "ISSUE_NOT_FOUND", 404)
+            return _error_response(f"Issue not found: {issue_id}", ErrorCode.NOT_FOUND, 404)
         except ValueError as e:
-            return _error_response(str(e), "CLAIM_CONFLICT", 409)
+            return _error_response(str(e), ErrorCode.CONFLICT, 409)
         return JSONResponse(issue.to_dict())
 
     @router.post("/issue/{issue_id}/release")
@@ -453,9 +453,9 @@ def create_router() -> APIRouter:
         try:
             issue = db.release_claim(issue_id, actor=actor)
         except KeyError:
-            return _error_response(f"Issue not found: {issue_id}", "ISSUE_NOT_FOUND", 404)
+            return _error_response(f"Issue not found: {issue_id}", ErrorCode.NOT_FOUND, 404)
         except ValueError as e:
-            return _error_response(str(e), "CLAIM_CONFLICT", 409)
+            return _error_response(str(e), ErrorCode.CONFLICT, 409)
         return JSONResponse(issue.to_dict())
 
     @router.post("/claim-next")
@@ -466,18 +466,18 @@ def create_router() -> APIRouter:
             return body
         assignee = body.get("assignee", "")
         if not isinstance(assignee, str):
-            return _error_response("assignee must be a string", "VALIDATION_ERROR", 400)
+            return _error_response("assignee must be a string", ErrorCode.VALIDATION, 400)
         if not assignee or not assignee.strip():
-            return _error_response("assignee is required and cannot be empty", "VALIDATION_ERROR", 400)
+            return _error_response("assignee is required and cannot be empty", ErrorCode.VALIDATION, 400)
         actor, actor_err = _validate_actor(body.get("actor", "dashboard"))
         if actor_err:
             return actor_err
         try:
             issue = db.claim_next(assignee, actor=actor)
         except ValueError as e:
-            return _error_response(str(e), "CLAIM_CONFLICT", 409)
+            return _error_response(str(e), ErrorCode.CONFLICT, 409)
         if issue is None:
-            return _error_response("No ready issues to claim", "ISSUE_NOT_FOUND", 404)
+            return _error_response("No ready issues to claim", ErrorCode.NOT_FOUND, 404)
         return JSONResponse(issue.to_dict())
 
     @router.post("/issue/{issue_id}/dependencies")
@@ -488,16 +488,16 @@ def create_router() -> APIRouter:
             return body
         depends_on = body.get("depends_on", "")
         if not depends_on or not isinstance(depends_on, str) or not depends_on.strip():
-            return _error_response("depends_on is required and must be a non-empty string", "VALIDATION_ERROR", 400)
+            return _error_response("depends_on is required and must be a non-empty string", ErrorCode.VALIDATION, 400)
         actor, actor_err = _validate_actor(body.get("actor", "dashboard"))
         if actor_err:
             return actor_err
         try:
             added = db.add_dependency(issue_id, depends_on, actor=actor)
         except KeyError as e:
-            return _error_response(str(e), "ISSUE_NOT_FOUND", 404)
+            return _error_response(str(e), ErrorCode.NOT_FOUND, 404)
         except ValueError as e:
-            return _error_response(str(e), "DEPENDENCY_ERROR", 409)
+            return _error_response(str(e), ErrorCode.CONFLICT, 409)
         return JSONResponse({"added": added})
 
     @router.delete("/issue/{issue_id}/dependencies/{dep_id}")
@@ -511,7 +511,7 @@ def create_router() -> APIRouter:
         try:
             removed = db.remove_dependency(issue_id, dep_id, actor=clean_actor)
         except KeyError as e:
-            return _error_response(str(e), "ISSUE_NOT_FOUND", 404)
+            return _error_response(str(e), ErrorCode.NOT_FOUND, 404)
         return JSONResponse({"removed": removed})
 
     return router

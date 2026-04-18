@@ -27,7 +27,7 @@ from filigree.dashboard_routes.common import (
     _safe_bounded_int,
 )
 from filigree.models import Issue
-from filigree.types.api import StatsWithPrefix
+from filigree.types.api import ErrorCode, StatsWithPrefix
 
 logger = logging.getLogger(__name__)
 
@@ -129,7 +129,7 @@ def _parse_graph_v2_params(
     if gp.ready_only and gp.blocked_only:
         return _error_response(
             "ready_only and blocked_only cannot both be true.",
-            "GRAPH_INVALID_PARAM",
+            ErrorCode.VALIDATION,
             422,
             {"param": "ready_only,blocked_only"},
         )
@@ -154,7 +154,7 @@ def _parse_graph_v2_params(
     if gp.scope_root and gp.scope_root not in issue_map:
         return _error_response(
             f"Unknown scope_root issue id: {gp.scope_root}",
-            "GRAPH_INVALID_PARAM",
+            ErrorCode.VALIDATION,
             404,
             {"param": "scope_root", "value": gp.scope_root},
         )
@@ -169,7 +169,7 @@ def _parse_graph_v2_params(
         if not gp.scope_root:
             return _error_response(
                 "scope_radius requires scope_root.",
-                "GRAPH_INVALID_PARAM",
+                ErrorCode.VALIDATION,
                 422,
                 {"param": "scope_radius", "value": scope_radius_raw},
             )
@@ -183,7 +183,7 @@ def _parse_graph_v2_params(
         if unknown_types:
             return _error_response(
                 f"Unknown types: {', '.join(unknown_types)}",
-                "GRAPH_INVALID_PARAM",
+                ErrorCode.VALIDATION,
                 400,
                 {"param": "types", "value": type_filter_raw},
             )
@@ -196,7 +196,7 @@ def _parse_graph_v2_params(
         if unknown_cats:
             return _error_response(
                 f"Unknown status_categories: {', '.join(unknown_cats)}",
-                "GRAPH_INVALID_PARAM",
+                ErrorCode.VALIDATION,
                 400,
                 {"param": "status_categories", "value": status_filter_raw},
             )
@@ -478,7 +478,7 @@ def create_router() -> APIRouter:
             stats = db.observation_stats(sweep=False)
         except sqlite3.Error:
             logger.warning("observation_stats unavailable", exc_info=True)
-            return _error_response("observation stats unavailable", "DB_UNAVAILABLE", 503)
+            return _error_response("observation stats unavailable", ErrorCode.IO, 503)
         return JSONResponse(stats)
 
     @router.get("/critical-path")
@@ -497,7 +497,7 @@ def create_router() -> APIRouter:
             try:
                 parsed = datetime.fromisoformat(since.replace("Z", "+00:00"))
             except (ValueError, AttributeError):
-                return _error_response(f"Invalid ISO timestamp: {since!r}", "VALIDATION_ERROR", 400)
+                return _error_response(f"Invalid ISO timestamp: {since!r}", ErrorCode.VALIDATION, 400)
             # Stored timestamps are ISO with explicit UTC offset and SQLite compares as text.
             # Normalize to UTC isoformat so offset-bearing and naive inputs compare correctly.
             if parsed.tzinfo is None:

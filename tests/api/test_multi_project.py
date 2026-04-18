@@ -346,9 +346,9 @@ class TestMultiProjectManagement:
 
         resp = await multi_client.post("/api/reload")
         assert resp.status_code == 409
-        err = resp.json()["error"]
-        assert err["code"] == "RELOAD_FAILED"
-        assert "reload" in err["message"].lower()
+        body = resp.json()
+        assert body["code"] == "IO"
+        assert "reload" in body["error"].lower()
 
     async def test_health_in_server_mode(self, multi_client: AsyncClient) -> None:
         resp = await multi_client.get("/api/health")

@@ -380,10 +380,11 @@ def create_app(*, server_mode: bool = False) -> ASGIApp:
             diff = _project_store.reload()
             if diff.get("error"):
                 from filigree.dashboard_routes.common import _error_response
+                from filigree.types.api import ErrorCode
 
                 return _error_response(
                     f"Failed to reload project store: {diff['error']}",
-                    "RELOAD_FAILED",
+                    ErrorCode.IO,
                     409,
                 )
             logger.info("Project store reloaded: %s", diff)

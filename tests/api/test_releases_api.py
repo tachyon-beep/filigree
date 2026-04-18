@@ -150,7 +150,7 @@ class TestGetReleaseTreeEndpoint:
     async def test_nonexistent_id_returns_404(self, release_client: AsyncClient, release_dashboard_db: FiligreeDB) -> None:
         resp = await release_client.get("/api/release/nonexistent-abc123/tree")
         assert resp.status_code == 404
-        assert resp.json()["error"]["code"] == "RELEASE_NOT_FOUND"
+        assert resp.json()["code"] == "NOT_FOUND"
 
     async def test_non_release_type_returns_404(self, release_client: AsyncClient, release_dashboard_db: FiligreeDB) -> None:
         db = release_dashboard_db
@@ -158,7 +158,7 @@ class TestGetReleaseTreeEndpoint:
 
         resp = await release_client.get(f"/api/release/{epic.id}/tree")
         assert resp.status_code == 404
-        assert resp.json()["error"]["code"] == "NOT_A_RELEASE"
+        assert resp.json()["code"] == "VALIDATION"
 
     async def test_tree_structure_shape(self, release_client: AsyncClient, release_dashboard_db: FiligreeDB) -> None:
         db = release_dashboard_db
@@ -272,7 +272,7 @@ class TestReleasesRobustnessAgainstCorruptData:
             resp = await release_client.get(f"/api/release/{r.id}/tree")
         assert resp.status_code == 500
         body = resp.json()
-        assert body["error"]["code"] == "TREE_LOAD_ERROR"
+        assert body["code"] == "IO"
 
     async def test_high_semver_sorts_before_non_semver(self, release_client: AsyncClient, release_dashboard_db: FiligreeDB) -> None:
         """Regression: filigree-2fc4203a63. Version ``v999999.0.1`` is a
