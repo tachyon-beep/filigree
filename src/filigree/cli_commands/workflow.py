@@ -28,7 +28,8 @@ def templates(ctx: click.Context, issue_type: str | None) -> None:
             click.echo(f"  {tpl['description']}")
             click.echo("\n  Fields:")
             for f in tpl["fields_schema"]:
-                req = " (required)" if f.get("required") else ""
+                required_at = f.get("required_at") or []
+                req = f" (required at: {', '.join(required_at)})" if required_at else ""
                 click.echo(f"    {f['name']}: {f['type']}{req} — {f['description']}")
         else:
             for item in db.list_templates():

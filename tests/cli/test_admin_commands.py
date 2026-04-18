@@ -221,6 +221,26 @@ class TestJsonRetrofit:
         data = json.loads(result.output)
         assert data["status"] == "removed"
 
+    def test_label_add_json_returns_canonical_label(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        """Bug filigree-6870a1dcc0: --json must return canonical (stripped) label, not raw argv."""
+        runner, _ = cli_in_project
+        r = runner.invoke(cli, ["create", "Label JSON"])
+        issue_id = _extract_id(r.output)
+        result = runner.invoke(cli, ["add-label", issue_id, "  urgent  ", "--json"])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["label"] == "urgent", f"expected canonical 'urgent', got {data['label']!r}"
+
+    def test_label_remove_json_returns_canonical_label(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        """Bug filigree-6870a1dcc0: --json must return canonical (stripped) label, not raw argv."""
+        runner, _ = cli_in_project
+        r = runner.invoke(cli, ["create", "Label JSON", "-l", "urgent"])
+        issue_id = _extract_id(r.output)
+        result = runner.invoke(cli, ["remove-label", issue_id, "  urgent  ", "--json"])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["label"] == "urgent"
+
 
 class TestInstallCli:
     def test_install_all(self, cli_in_project: tuple[CliRunner, Path], monkeypatch: pytest.MonkeyPatch) -> None:

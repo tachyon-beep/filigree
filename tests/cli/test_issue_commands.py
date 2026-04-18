@@ -328,6 +328,26 @@ class TestLabelCli:
         result = runner.invoke(cli, ["add-label", "test-nonexistent", "bug"])
         assert result.exit_code == 1
 
+    def test_label_add_echoes_canonical_form(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        """Bug filigree-6870a1dcc0: add-label must echo the canonical (stripped) label, not raw argv."""
+        runner, _ = cli_in_project
+        r = runner.invoke(cli, ["create", "Label echo"])
+        issue_id = _extract_id(r.output)
+        result = runner.invoke(cli, ["add-label", issue_id, "  urgent  "])
+        assert result.exit_code == 0
+        assert "'urgent'" in result.output, f"expected canonical 'urgent' in output, got: {result.output!r}"
+        assert "  urgent  " not in result.output
+
+    def test_label_remove_echoes_canonical_form(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        """Bug filigree-6870a1dcc0: remove-label must echo the canonical (stripped) label, not raw argv."""
+        runner, _ = cli_in_project
+        r = runner.invoke(cli, ["create", "Label echo", "-l", "urgent"])
+        issue_id = _extract_id(r.output)
+        result = runner.invoke(cli, ["remove-label", issue_id, "  urgent  "])
+        assert result.exit_code == 0
+        assert "'urgent'" in result.output
+        assert "  urgent  " not in result.output
+
 
 class TestClaimCli:
     def test_claim_issue(self, cli_in_project: tuple[CliRunner, Path]) -> None:

@@ -405,7 +405,7 @@ class FilesMixin(DBMixinProtocol):
                 raise ValueError(f"findings[{i}] severity must be a string, got {type(severity).__name__}")
             for ln_field in ("line_start", "line_end"):
                 ln_val = f.get(ln_field)
-                if ln_val is not None and not isinstance(ln_val, int):
+                if ln_val is not None and (isinstance(ln_val, bool) or not isinstance(ln_val, int)):
                     raise ValueError(f"findings[{i}] {ln_field} must be an integer or null, got {type(ln_val).__name__}")
             suggestion = f.get("suggestion")
             if suggestion is not None and not isinstance(suggestion, str):

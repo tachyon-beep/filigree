@@ -355,12 +355,12 @@ async def _handle_add_label(arguments: dict[str, Any]) -> list[TextContent]:
     except KeyError:
         return _text(ErrorResponse(error=f"Issue not found: {args['issue_id']}", code="not_found"))
     try:
-        added = tracker.add_label(args["issue_id"], args["label"])
+        added, canonical = tracker.add_label(args["issue_id"], args["label"])
     except ValueError as e:
         return _text(ErrorResponse(error=str(e), code="validation_error"))
     _refresh_summary()
     status = "added" if added else "already_exists"
-    return _text(LabelActionResponse(status=status, issue_id=args["issue_id"], label=args["label"]))
+    return _text(LabelActionResponse(status=status, issue_id=args["issue_id"], label=canonical))
 
 
 async def _handle_remove_label(arguments: dict[str, Any]) -> list[TextContent]:
@@ -373,12 +373,12 @@ async def _handle_remove_label(arguments: dict[str, Any]) -> list[TextContent]:
     except KeyError:
         return _text(ErrorResponse(error=f"Issue not found: {args['issue_id']}", code="not_found"))
     try:
-        removed = tracker.remove_label(args["issue_id"], args["label"])
+        removed, canonical = tracker.remove_label(args["issue_id"], args["label"])
     except ValueError as e:
         return _text(ErrorResponse(error=str(e), code="validation_error"))
     _refresh_summary()
     status = "removed" if removed else "not_found"
-    return _text(LabelActionResponse(status=status, issue_id=args["issue_id"], label=args["label"]))
+    return _text(LabelActionResponse(status=status, issue_id=args["issue_id"], label=canonical))
 
 
 async def _handle_batch_add_label(arguments: dict[str, Any]) -> list[TextContent]:

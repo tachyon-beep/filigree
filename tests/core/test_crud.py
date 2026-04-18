@@ -2265,7 +2265,9 @@ class TestNamespaceReservation:
     )
     def test_manual_namespace_allowed(self, db: FiligreeDB, label: str) -> None:
         issue = db.create_issue("Test")
-        assert db.add_label(issue.id, label) is True
+        added, canonical = db.add_label(issue.id, label)
+        assert added is True
+        assert canonical == label
 
     @pytest.mark.parametrize(
         "label",

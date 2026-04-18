@@ -61,7 +61,12 @@ class MetaMixin(DBMixinProtocol):
 
     # -- Labels --------------------------------------------------------------
 
-    def add_label(self, issue_id: str, label: str) -> bool:
+    def add_label(self, issue_id: str, label: str) -> tuple[bool, str]:
+        """Add label to issue. Returns (added, canonical_label).
+
+        ``canonical_label`` is the stored form after normalization (strip, etc.);
+        callers rendering output should use it rather than the raw argument.
+        """
         self._check_id_prefix(issue_id)
         normalized = self._validate_label_name(label)
         try:
@@ -79,9 +84,10 @@ class MetaMixin(DBMixinProtocol):
         except Exception:
             self.conn.rollback()
             raise
-        return cursor.rowcount > 0
+        return cursor.rowcount > 0, normalized
 
-    def remove_label(self, issue_id: str, label: str) -> bool:
+    def remove_label(self, issue_id: str, label: str) -> tuple[bool, str]:
+        """Remove label from issue. Returns (removed, canonical_label)."""
         self._check_id_prefix(issue_id)
         normalized = self._validate_label_name(label)
         try:
@@ -93,7 +99,7 @@ class MetaMixin(DBMixinProtocol):
         except Exception:
             self.conn.rollback()
             raise
-        return cursor.rowcount > 0
+        return cursor.rowcount > 0, normalized
 
     def list_labels(
         self,

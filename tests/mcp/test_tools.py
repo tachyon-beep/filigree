@@ -391,6 +391,22 @@ class TestLabels:
         assert "defect" not in updated.labels
         assert "urgent" in updated.labels
 
+    async def test_add_label_returns_canonical_label(self, mcp_db: FiligreeDB) -> None:
+        """Bug filigree-6870a1dcc0: MCP must return canonical (stripped) label, not raw arg."""
+        issue = mcp_db.create_issue("Labelable")
+        result = await call_tool("add_label", {"issue_id": issue.id, "label": "  urgent  "})
+        data = _parse(result)
+        assert data["status"] == "added"
+        assert data["label"] == "urgent", f"expected canonical 'urgent', got {data['label']!r}"
+
+    async def test_remove_label_returns_canonical_label(self, mcp_db: FiligreeDB) -> None:
+        """Bug filigree-6870a1dcc0: MCP must return canonical (stripped) label, not raw arg."""
+        issue = mcp_db.create_issue("Labelable", labels=["urgent"])
+        result = await call_tool("remove_label", {"issue_id": issue.id, "label": "  urgent  "})
+        data = _parse(result)
+        assert data["status"] == "removed"
+        assert data["label"] == "urgent"
+
 
 class TestCreatePlan:
     async def test_create_plan_basic(self, mcp_db: FiligreeDB) -> None:

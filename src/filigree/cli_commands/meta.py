@@ -81,7 +81,7 @@ def add_label(issue_id: str, label_name: str, as_json: bool) -> None:
                 click.echo(f"Not found: {issue_id}", err=True)
             sys.exit(1)
         try:
-            added = db.add_label(issue_id, label_name)
+            added, canonical = db.add_label(issue_id, label_name)
         except ValueError as e:
             if as_json:
                 click.echo(json_mod.dumps({"error": str(e)}))
@@ -90,12 +90,12 @@ def add_label(issue_id: str, label_name: str, as_json: bool) -> None:
             sys.exit(1)
         status = "added" if added else "already_exists"
         if as_json:
-            click.echo(json_mod.dumps({"issue_id": issue_id, "label": label_name, "status": status}))
+            click.echo(json_mod.dumps({"issue_id": issue_id, "label": canonical, "status": status}))
         else:
             if added:
-                click.echo(f"Added label '{label_name}' to {issue_id}")
+                click.echo(f"Added label '{canonical}' to {issue_id}")
             else:
-                click.echo(f"Label '{label_name}' already on {issue_id}")
+                click.echo(f"Label '{canonical}' already on {issue_id}")
         refresh_summary(db)
 
 
@@ -115,7 +115,7 @@ def remove_label(issue_id: str, label_name: str, as_json: bool) -> None:
                 click.echo(f"Not found: {issue_id}", err=True)
             sys.exit(1)
         try:
-            removed = db.remove_label(issue_id, label_name)
+            removed, canonical = db.remove_label(issue_id, label_name)
         except ValueError as e:
             if as_json:
                 click.echo(json_mod.dumps({"error": str(e)}))
@@ -124,12 +124,12 @@ def remove_label(issue_id: str, label_name: str, as_json: bool) -> None:
             sys.exit(1)
         status = "removed" if removed else "not_found"
         if as_json:
-            click.echo(json_mod.dumps({"issue_id": issue_id, "label": label_name, "status": status}))
+            click.echo(json_mod.dumps({"issue_id": issue_id, "label": canonical, "status": status}))
         else:
             if removed:
-                click.echo(f"Removed label '{label_name}' from {issue_id}")
+                click.echo(f"Removed label '{canonical}' from {issue_id}")
             else:
-                click.echo(f"Label '{label_name}' not found on {issue_id}")
+                click.echo(f"Label '{canonical}' not found on {issue_id}")
         refresh_summary(db)
 
 

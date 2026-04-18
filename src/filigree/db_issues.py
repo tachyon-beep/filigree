@@ -936,7 +936,7 @@ class IssuesMixin(DBMixinProtocol):
         for issue_id in issue_ids:
             try:
                 self.get_issue(issue_id)
-                added = self.add_label(issue_id, label)
+                added, _canonical = self.add_label(issue_id, label)
                 results.append({"id": issue_id, "status": "added" if added else "already_exists"})
             except KeyError:
                 errors.append(BatchFailureDetail(id=issue_id, error=f"Not found: {issue_id}", code="not_found"))

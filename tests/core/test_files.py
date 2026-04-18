@@ -492,6 +492,26 @@ class TestProcessScanResults:
                 ],
             )
 
+    def test_bool_line_start_rejected(self, db: FiligreeDB) -> None:
+        """Bug filigree-f08a57b68f: bool passes isinstance(int) so was silently stored as 1/0."""
+        with pytest.raises(ValueError, match="line_start must be"):
+            db.process_scan_results(
+                scan_source="ruff",
+                findings=[
+                    {"path": "a.py", "rule_id": "E1", "severity": "low", "message": "m", "line_start": True},
+                ],
+            )
+
+    def test_bool_line_end_rejected(self, db: FiligreeDB) -> None:
+        """Bug filigree-f08a57b68f: bool passes isinstance(int) so was silently stored as 1/0."""
+        with pytest.raises(ValueError, match="line_end must be"):
+            db.process_scan_results(
+                scan_source="ruff",
+                findings=[
+                    {"path": "a.py", "rule_id": "E1", "severity": "low", "message": "m", "line_end": False},
+                ],
+            )
+
     def test_non_string_suggestion_rejected(self, db: FiligreeDB) -> None:
         """Bug filigree-0dbe1a: non-string suggestion must raise ValueError."""
         with pytest.raises(ValueError, match="suggestion must be a string"):

@@ -174,6 +174,26 @@ class TestWorkflowCli:
         assert result.exit_code == 0
         assert "reloaded" in result.output.lower()
 
+    def test_templates_type_renders_required_at(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        """Bug filigree-36c0699c5d: CLI must annotate fields from required_at, not nonexistent 'required'."""
+        runner, _ = cli_in_project
+        result = runner.invoke(cli, ["templates", "--type", "bug"])
+        assert result.exit_code == 0
+        # `severity` is required at the `confirmed` state in the built-in bug pack
+        severity_line = next((line for line in result.output.splitlines() if line.lstrip().startswith("severity:")), None)
+        assert severity_line is not None, f"severity field missing from output:\n{result.output}"
+        assert "confirmed" in severity_line, f"severity annotation must mention the required_at state 'confirmed', got: {severity_line!r}"
+
+    def test_templates_type_omits_annotation_when_not_required(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        """Bug filigree-36c0699c5d: fields without required_at must not carry a required annotation."""
+        runner, _ = cli_in_project
+        result = runner.invoke(cli, ["templates", "--type", "bug"])
+        assert result.exit_code == 0
+        # `component` has no required_at in the built-in bug pack
+        component_line = next((line for line in result.output.splitlines() if line.lstrip().startswith("component:")), None)
+        assert component_line is not None
+        assert "required" not in component_line
+
 
 class TestCreatePlanCli:
     def test_create_plan_from_stdin(self, cli_in_project: tuple[CliRunner, Path]) -> None:
