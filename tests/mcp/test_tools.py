@@ -25,6 +25,7 @@ from filigree.mcp_server import (  # type: ignore[attr-defined]
     list_tools,
     read_context,
 )
+from filigree.types.api import ErrorCode
 from tests.mcp._helpers import _parse
 
 
@@ -63,7 +64,7 @@ class TestCreateAndGet:
     async def test_get_issue_not_found(self, mcp_db: FiligreeDB) -> None:
         result = await call_tool("get_issue", {"id": "mcp-nonexistent"})
         data = _parse(result)
-        assert data["code"] == "not_found"
+        assert data["code"] == ErrorCode.NOT_FOUND
 
     async def test_get_issue_file_lookup_failure_propagates(self, mcp_db: FiligreeDB) -> None:
         """filigree-c6c7842661: get_issue must not convert sqlite3.Error into files=[]."""
@@ -224,7 +225,7 @@ class TestUpdateAndClose:
     async def test_update_not_found(self, mcp_db: FiligreeDB) -> None:
         result = await call_tool("update_issue", {"id": "mcp-nonexistent", "title": "nope"})
         data = _parse(result)
-        assert data["code"] == "not_found"
+        assert data["code"] == ErrorCode.NOT_FOUND
 
     async def test_close_issue(self, mcp_db: FiligreeDB) -> None:
         issue = mcp_db.create_issue("Close me")
@@ -235,7 +236,7 @@ class TestUpdateAndClose:
     async def test_close_not_found(self, mcp_db: FiligreeDB) -> None:
         result = await call_tool("close_issue", {"id": "mcp-nonexistent"})
         data = _parse(result)
-        assert data["code"] == "not_found"
+        assert data["code"] == ErrorCode.NOT_FOUND
 
 
 class TestDependencies:
@@ -379,7 +380,7 @@ class TestLabels:
         issue = mcp_db.create_issue("Labelable")
         result = await call_tool("add_label", {"issue_id": issue.id, "label": "bug"})
         data = _parse(result)
-        assert data["code"] == "validation_error"
+        assert data["code"] == ErrorCode.VALIDATION
         assert "reserved as an issue type" in data["error"]
 
     async def test_remove_label(self, mcp_db: FiligreeDB) -> None:
@@ -586,12 +587,12 @@ class TestClaimIssue:
         mcp_db.claim_issue(issue.id, assignee="agent-1")
         result = await call_tool("claim_issue", {"id": issue.id, "assignee": "agent-2"})
         data = _parse(result)
-        assert data["code"] == "conflict"
+        assert data["code"] == ErrorCode.CONFLICT
 
     async def test_claim_not_found(self, mcp_db: FiligreeDB) -> None:
         result = await call_tool("claim_issue", {"id": "mcp-nonexistent", "assignee": "agent-1"})
         data = _parse(result)
-        assert data["code"] == "not_found"
+        assert data["code"] == ErrorCode.NOT_FOUND
 
 
 class TestGetChanges:
@@ -1266,25 +1267,25 @@ class TestExportImportPathTraversal:
     async def test_export_rejects_absolute_path(self, mcp_db: FiligreeDB) -> None:
         result = await call_tool("export_jsonl", {"output_path": "/var/data/evil.jsonl"})
         data = _parse(result)
-        assert data["code"] == "invalid_path"
+        assert data["code"] == ErrorCode.VALIDATION
         assert "Absolute paths not allowed" in data["error"]
 
     async def test_export_rejects_path_traversal(self, mcp_db: FiligreeDB) -> None:
         result = await call_tool("export_jsonl", {"output_path": "../../evil.jsonl"})
         data = _parse(result)
-        assert data["code"] == "invalid_path"
+        assert data["code"] == ErrorCode.VALIDATION
         assert "escapes project directory" in data["error"]
 
     async def test_import_rejects_absolute_path(self, mcp_db: FiligreeDB) -> None:
         result = await call_tool("import_jsonl", {"input_path": "/etc/passwd"})
         data = _parse(result)
-        assert data["code"] == "invalid_path"
+        assert data["code"] == ErrorCode.VALIDATION
         assert "Absolute paths not allowed" in data["error"]
 
     async def test_import_rejects_path_traversal(self, mcp_db: FiligreeDB) -> None:
         result = await call_tool("import_jsonl", {"input_path": "../../../etc/passwd"})
         data = _parse(result)
-        assert data["code"] == "invalid_path"
+        assert data["code"] == ErrorCode.VALIDATION
         assert "escapes project directory" in data["error"]
 
     async def test_export_allows_valid_relative_path(self, mcp_db: FiligreeDB) -> None:
@@ -1300,7 +1301,7 @@ class TestExportImportPathTraversal:
         result = await call_tool("export_jsonl", {"output_path": "nonexistent-dir/out.jsonl"})
         data = _parse(result)
         assert "error" in data
-        assert data["code"] == "io_error"
+        assert data["code"] == ErrorCode.IO
 
     async def test_import_malformed_jsonl_skips_corrupt_lines(self, mcp_db: FiligreeDB) -> None:
         """import_jsonl with malformed JSONL should skip corrupt lines, not crash."""
@@ -1338,7 +1339,7 @@ class TestExportImportPathTraversal:
                 result = await call_tool("import_jsonl", {"input_path": "valid.jsonl"})
                 data = _parse(result)
                 assert "error" in data, f"{exc_type.__name__} must be caught gracefully"
-                assert data["code"] == "import_error"
+                assert data["code"] == ErrorCode.IO
 
 
 class TestRefreshSummaryLogging:
@@ -2391,12 +2392,12 @@ class TestMCPReopenIssue:
         issue = mcp_db.create_issue("Still open")
         result = await call_tool("reopen_issue", {"id": issue.id})
         data = _parse(result)
-        assert data["code"] == "invalid_transition"
+        assert data["code"] == ErrorCode.INVALID_TRANSITION
 
     async def test_reopen_not_found(self, mcp_db: FiligreeDB) -> None:
         result = await call_tool("reopen_issue", {"id": "mcp-nonexistent"})
         data = _parse(result)
-        assert data["code"] == "not_found"
+        assert data["code"] == ErrorCode.NOT_FOUND
 
     async def test_reopen_default_actor_is_mcp(self, mcp_db: FiligreeDB) -> None:
         issue = mcp_db.create_issue("Default actor reopen")
@@ -2420,12 +2421,12 @@ class TestMCPReleaseClaim:
         issue = mcp_db.create_issue("Not claimed")
         result = await call_tool("release_claim", {"id": issue.id})
         data = _parse(result)
-        assert data["code"] == "conflict"
+        assert data["code"] == ErrorCode.CONFLICT
 
     async def test_release_not_found_via_mcp(self, mcp_db: FiligreeDB) -> None:
         result = await call_tool("release_claim", {"id": "mcp-nonexistent"})
         data = _parse(result)
-        assert data["code"] == "not_found"
+        assert data["code"] == ErrorCode.NOT_FOUND
 
 
 class TestMCPExportImport:
@@ -2496,7 +2497,7 @@ class TestMCPExportImport:
     async def test_import_bad_path_via_mcp(self, mcp_db: FiligreeDB) -> None:
         result = await call_tool("import_jsonl", {"input_path": "/nonexistent/file.jsonl"})
         data = _parse(result)
-        assert data["code"] == "invalid_path"
+        assert data["code"] == ErrorCode.VALIDATION
 
 
 # ---------------------------------------------------------------------------

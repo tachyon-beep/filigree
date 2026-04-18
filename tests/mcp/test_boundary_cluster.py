@@ -15,6 +15,7 @@ import pytest
 
 from filigree.core import FiligreeDB
 from filigree.mcp_server import call_tool
+from filigree.types.api import ErrorCode
 from tests.mcp._helpers import _parse
 
 # ---------------------------------------------------------------------------
@@ -61,7 +62,7 @@ class TestClaimBlankAssignee:
             {"id": issue.id, "assignee": "", "actor": "user"},
         )
         data = _parse(result)
-        assert data.get("code") == "validation_error", data
+        assert data.get("code") == ErrorCode.VALIDATION, data
 
     async def test_claim_issue_whitespace_assignee_is_validation_error(self, mcp_db: FiligreeDB) -> None:
         issue = mcp_db.create_issue("Target")
@@ -70,7 +71,7 @@ class TestClaimBlankAssignee:
             {"id": issue.id, "assignee": "   ", "actor": "user"},
         )
         data = _parse(result)
-        assert data.get("code") == "validation_error", data
+        assert data.get("code") == ErrorCode.VALIDATION, data
 
     async def test_claim_next_blank_assignee_with_actor_returns_error(self, mcp_db: FiligreeDB) -> None:
         """claim_next with explicit actor but blank assignee must be validation_error (not crash)."""
@@ -81,7 +82,7 @@ class TestClaimBlankAssignee:
         )
         data = _parse(result)
         assert isinstance(data, dict), f"claim_next crashed instead of returning error: {data!r}"
-        assert data.get("code") == "validation_error", data
+        assert data.get("code") == ErrorCode.VALIDATION, data
 
     async def test_claim_next_whitespace_assignee_returns_error(self, mcp_db: FiligreeDB) -> None:
         mcp_db.create_issue("Target")
@@ -90,7 +91,7 @@ class TestClaimBlankAssignee:
             {"assignee": "\t\t", "actor": "user"},
         )
         data = _parse(result)
-        assert data.get("code") == "validation_error", data
+        assert data.get("code") == ErrorCode.VALIDATION, data
 
 
 # ---------------------------------------------------------------------------

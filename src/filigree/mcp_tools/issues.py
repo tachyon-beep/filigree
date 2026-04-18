@@ -24,6 +24,7 @@ from filigree.types.api import (
     BatchUpdateResponse,
     ClaimNextEmptyResponse,
     ClaimNextResponse,
+    ErrorCode,
     ErrorResponse,
     IssueListResponse,
     IssueWithChangedFields,
@@ -393,7 +394,7 @@ async def _handle_get_issue(arguments: dict[str, Any]) -> list[TextContent]:
             out["files"] = file_assocs
         return _text(out)
     except KeyError:
-        return _text(ErrorResponse(error=f"Issue not found: {args['id']}", code="not_found"))
+        return _text(ErrorResponse(error=f"Issue not found: {args['id']}", code=ErrorCode.NOT_FOUND))
 
 
 async def _handle_list_issues(arguments: dict[str, Any]) -> list[TextContent]:
@@ -430,7 +431,7 @@ async def _handle_list_issues(arguments: dict[str, Any]) -> list[TextContent]:
             offset=offset,
         )
     except ValueError as e:
-        return _text(ErrorResponse(error=str(e), code="validation_error"))
+        return _text(ErrorResponse(error=str(e), code=ErrorCode.VALIDATION))
     issues, has_more = _apply_has_more(issues, effective_limit)
     return _text(
         IssueListResponse(
@@ -468,7 +469,7 @@ async def _handle_create_issue(arguments: dict[str, Any]) -> list[TextContent]:
             actor=actor,
         )
     except ValueError as e:
-        return _text(ErrorResponse(error=str(e), code="validation_error"))
+        return _text(ErrorResponse(error=str(e), code=ErrorCode.VALIDATION))
     _refresh_summary()
     return _text(issue.to_dict())
 
@@ -488,7 +489,7 @@ async def _handle_update_issue(arguments: dict[str, Any]) -> list[TextContent]:
     try:
         before = tracker.get_issue(args["id"])
     except KeyError:
-        return _text(ErrorResponse(error=f"Issue not found: {args['id']}", code="not_found"))
+        return _text(ErrorResponse(error=f"Issue not found: {args['id']}", code=ErrorCode.NOT_FOUND))
     try:
         issue = tracker.update_issue(
             args["id"],
@@ -507,12 +508,12 @@ async def _handle_update_issue(arguments: dict[str, Any]) -> list[TextContent]:
         result = IssueWithChangedFields(**issue.to_dict(), changed_fields=changed)
         return _text(result)
     except KeyError:
-        return _text(ErrorResponse(error=f"Issue not found: {args['id']}", code="not_found"))
+        return _text(ErrorResponse(error=f"Issue not found: {args['id']}", code=ErrorCode.NOT_FOUND))
     except ValueError as e:
         msg = str(e)
         if "status" in msg.lower() or "transition" in msg.lower() or "state" in msg.lower():
             return _text(_build_transition_error(tracker, args["id"], msg))
-        return _text(ErrorResponse(error=msg, code="validation_error"))
+        return _text(ErrorResponse(error=msg, code=ErrorCode.VALIDATION))
 
 
 async def _handle_close_issue(arguments: dict[str, Any]) -> list[TextContent]:
@@ -542,7 +543,7 @@ async def _handle_close_issue(arguments: dict[str, Any]) -> list[TextContent]:
             result = issue.to_dict()
         return _text(result)
     except KeyError:
-        return _text(ErrorResponse(error=f"Issue not found: {args['id']}", code="not_found"))
+        return _text(ErrorResponse(error=f"Issue not found: {args['id']}", code=ErrorCode.NOT_FOUND))
     except ValueError as e:
         return _text(_build_transition_error(tracker, args["id"], str(e)))
 
@@ -563,9 +564,9 @@ async def _handle_reopen_issue(arguments: dict[str, Any]) -> list[TextContent]:
         _refresh_summary()
         return _text(issue.to_dict())
     except KeyError:
-        return _text(ErrorResponse(error=f"Issue not found: {args['id']}", code="not_found"))
+        return _text(ErrorResponse(error=f"Issue not found: {args['id']}", code=ErrorCode.NOT_FOUND))
     except ValueError as e:
-        return _text(ErrorResponse(error=str(e), code="invalid_transition"))
+        return _text(ErrorResponse(error=str(e), code=ErrorCode.INVALID_TRANSITION))
 
 
 async def _handle_search_issues(arguments: dict[str, Any]) -> list[TextContent]:
@@ -599,7 +600,7 @@ async def _handle_claim_issue(arguments: dict[str, Any]) -> list[TextContent]:
     args = _parse_args(arguments, ClaimIssueArgs)
     assignee = args.get("assignee")
     if not isinstance(assignee, str) or not assignee.strip():
-        return _text(ErrorResponse(error="assignee must be a non-empty string", code="validation_error"))
+        return _text(ErrorResponse(error="assignee must be a non-empty string", code=ErrorCode.VALIDATION))
     actor, actor_err = _validate_actor(args.get("actor", assignee))
     if actor_err:
         return actor_err
@@ -613,9 +614,9 @@ async def _handle_claim_issue(arguments: dict[str, Any]) -> list[TextContent]:
         _refresh_summary()
         return _text(issue.to_dict())
     except KeyError:
-        return _text(ErrorResponse(error=f"Issue not found: {args['id']}", code="not_found"))
+        return _text(ErrorResponse(error=f"Issue not found: {args['id']}", code=ErrorCode.NOT_FOUND))
     except ValueError as e:
-        return _text(ErrorResponse(error=str(e), code="conflict"))
+        return _text(ErrorResponse(error=str(e), code=ErrorCode.CONFLICT))
 
 
 async def _handle_release_claim(arguments: dict[str, Any]) -> list[TextContent]:
@@ -631,9 +632,9 @@ async def _handle_release_claim(arguments: dict[str, Any]) -> list[TextContent]:
         _refresh_summary()
         return _text(issue.to_dict())
     except KeyError:
-        return _text(ErrorResponse(error=f"Issue not found: {args['id']}", code="not_found"))
+        return _text(ErrorResponse(error=f"Issue not found: {args['id']}", code=ErrorCode.NOT_FOUND))
     except ValueError as e:
-        return _text(ErrorResponse(error=str(e), code="conflict"))
+        return _text(ErrorResponse(error=str(e), code=ErrorCode.CONFLICT))
 
 
 async def _handle_claim_next(arguments: dict[str, Any]) -> list[TextContent]:
@@ -642,7 +643,7 @@ async def _handle_claim_next(arguments: dict[str, Any]) -> list[TextContent]:
     args = _parse_args(arguments, ClaimNextArgs)
     assignee = args.get("assignee")
     if not isinstance(assignee, str) or not assignee.strip():
-        return _text(ErrorResponse(error="assignee must be a non-empty string", code="validation_error"))
+        return _text(ErrorResponse(error="assignee must be a non-empty string", code=ErrorCode.VALIDATION))
     actor, actor_err = _validate_actor(args.get("actor", assignee))
     if actor_err:
         return actor_err
@@ -664,7 +665,7 @@ async def _handle_claim_next(arguments: dict[str, Any]) -> list[TextContent]:
             actor=actor,
         )
     except ValueError as e:
-        return _text(ErrorResponse(error=str(e), code="validation_error"))
+        return _text(ErrorResponse(error=str(e), code=ErrorCode.VALIDATION))
     if claimed is None:
         return _text(ClaimNextEmptyResponse(status="empty", reason="No ready issues matching filters"))
     _refresh_summary()
@@ -689,7 +690,7 @@ async def _handle_batch_close(arguments: dict[str, Any]) -> list[TextContent]:
     tracker = _get_db()
     ids = args["ids"]
     if not all(isinstance(i, str) for i in ids):
-        return _text(ErrorResponse(error="All issue IDs must be strings", code="validation_error"))
+        return _text(ErrorResponse(error="All issue IDs must be strings", code=ErrorCode.VALIDATION))
     ready_before = {i.id for i in tracker.get_ready()}
     closed, failed = tracker.batch_close(
         ids,
@@ -723,10 +724,10 @@ async def _handle_batch_update(arguments: dict[str, Any]) -> list[TextContent]:
     tracker = _get_db()
     u_ids = args["ids"]
     if not all(isinstance(i, str) for i in u_ids):
-        return _text(ErrorResponse(error="All issue IDs must be strings", code="validation_error"))
+        return _text(ErrorResponse(error="All issue IDs must be strings", code=ErrorCode.VALIDATION))
     u_fields = args.get("fields")
     if u_fields is not None and not isinstance(u_fields, dict):
-        return _text(ErrorResponse(error="fields must be a JSON object", code="validation_error"))
+        return _text(ErrorResponse(error="fields must be a JSON object", code=ErrorCode.VALIDATION))
     updated, update_failed = tracker.batch_update(
         u_ids,
         status=args.get("status"),

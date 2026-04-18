@@ -18,6 +18,8 @@ from unittest.mock import patch
 
 import pytest
 
+from filigree.types.api import ErrorCode
+
 from filigree.core import FiligreeDB
 from filigree.mcp_tools.meta import _handle_restart_dashboard
 from tests.mcp._helpers import _parse
@@ -51,7 +53,7 @@ class TestRestartDashboardStopValidation:
             result = await _handle_restart_dashboard({})
 
         data = _parse(result)
-        assert data.get("code") == "stop_failed", data
+        assert data.get("code") == ErrorCode.STOP_FAILED, data
         assert "99999" in data.get("error", "")
         assert data.get("status") != "restarted", "must not claim success while old PID is alive"
         # Must not proceed to respawn when we couldn't stop the old one.
