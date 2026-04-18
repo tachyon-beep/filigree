@@ -799,22 +799,39 @@ class IssuesMixin(DBMixinProtocol):
     def release_claim(self, issue_id: str, *, actor: str = "") -> Issue:
         """Release a claimed issue by clearing its assignee.
 
-        Does NOT change status. Only succeeds if issue has an assignee.
+        Does NOT change status. Uses compare-and-swap on the observed
+        assignee so a concurrent reassignment between read and UPDATE
+        cannot be silently erased.
         """
         self._check_id_prefix(issue_id)
-        current = self.get_issue(issue_id)
-
-        if not current.assignee:
+        row = self.conn.execute("SELECT assignee FROM issues WHERE id = ?", (issue_id,)).fetchone()
+        if row is None:
+            msg = f"Issue not found: {issue_id}"
+            raise KeyError(msg)
+        observed = row["assignee"] or ""
+        if not observed:
             msg = f"Cannot release {issue_id}: no assignee set"
             raise ValueError(msg)
 
         try:
-            self.conn.execute(
-                "UPDATE issues SET assignee = '', updated_at = ? WHERE id = ?",
-                [_now_iso(), issue_id],
+            cursor = self.conn.execute(
+                "UPDATE issues SET assignee = '', updated_at = ? WHERE id = ? AND assignee = ?",
+                [_now_iso(), issue_id, observed],
             )
 
-            self._record_event(issue_id, "released", actor=actor, old_value=current.assignee)
+            if cursor.rowcount == 0:
+                current = self.conn.execute("SELECT assignee FROM issues WHERE id = ?", (issue_id,)).fetchone()
+                if current is None:
+                    msg = f"Issue not found: {issue_id}"
+                    raise KeyError(msg)
+                new_assignee = current["assignee"] or ""
+                if not new_assignee:
+                    msg = f"Cannot release {issue_id}: already released"
+                    raise ValueError(msg)
+                msg = f"Cannot release {issue_id}: reassigned to '{new_assignee}' (expected '{observed}')"
+                raise ValueError(msg)
+
+            self._record_event(issue_id, "released", actor=actor, old_value=observed)
             self.conn.commit()
         except Exception:
             self.conn.rollback()

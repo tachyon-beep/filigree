@@ -46,6 +46,46 @@ def incident_db(tmp_path: Path) -> Generator[FiligreeDB, None, None]:
 
 
 # ---------------------------------------------------------------------------
+# Test helpers for TOCTOU race simulation
+# ---------------------------------------------------------------------------
+
+
+class _InterceptingConnProxy:
+    """Wraps a sqlite3.Connection and fires a callback before each execute().
+
+    Used to simulate a concurrent writer landing between a reader's
+    time-of-check and time-of-use — the callback may issue its own
+    statements through the real connection before the caller's query runs.
+    """
+
+    def __init__(self, real: Any, on_sql: Any) -> None:
+        self._real = real
+        self._on_sql = on_sql
+        self.fired = False
+
+    def execute(self, sql: str, params: Any = ()) -> Any:
+        if not self.fired:
+            effect = self._on_sql(sql)
+            if effect is not None:
+                self.fired = True
+        return self._real.execute(sql, params)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._real, name)
+
+
+def _reassign_to(conn: Any, issue_id: str, assignee: str) -> object:
+    """Simulate a concurrent reassignment via a direct UPDATE, bypassing release_claim.
+
+    Commits immediately so the "other actor's" write is durable when the
+    intercepted statement subsequently rolls back on failure.
+    """
+    conn.execute("UPDATE issues SET assignee = ? WHERE id = ?", [assignee, issue_id])
+    conn.commit()
+    return True
+
+
+# ---------------------------------------------------------------------------
 # Task 1.9: Per-Type Status Validation
 # ---------------------------------------------------------------------------
 
@@ -451,6 +491,49 @@ class TestReleaseClaim:
         reclaimed = db.claim_issue(issue.id, assignee="agent-2")
         assert reclaimed.status == "open"  # status unchanged
         assert reclaimed.assignee == "agent-2"
+
+    def test_release_rejects_concurrent_reassign(self, db: FiligreeDB) -> None:
+        """TOCTOU: a reassignment landing between read and UPDATE must not be erased."""
+        issue = db.create_issue("Race test", type="task")
+        db.claim_issue(issue.id, assignee="agent-1")
+
+        # Intercept the release UPDATE and, right before it executes, simulate
+        # another actor reassigning the issue to agent-2. With the old
+        # unconditional UPDATE the clear silently wins; with compare-and-swap
+        # it must rowcount=0 and raise.
+        proxy = _InterceptingConnProxy(
+            db._conn,
+            lambda sql: _reassign_to(db._conn, issue.id, "agent-2") if "set assignee = ''" in sql.lower() else None,
+        )
+        db._conn = proxy  # type: ignore[assignment]
+        try:
+            with pytest.raises(ValueError, match="reassigned"):
+                db.release_claim(issue.id, actor="agent-1")
+        finally:
+            db._conn = proxy._real
+
+        assert proxy.fired, "race hook never fired — test is not exercising the gap"
+        after = db.get_issue(issue.id)
+        assert after.assignee == "agent-2", "newer claim must not be erased"
+
+    def test_release_detects_concurrent_release(self, db: FiligreeDB) -> None:
+        """If another actor already cleared the claim, CAS must raise instead of no-op'ing."""
+        issue = db.create_issue("Double-release test", type="task")
+        db.claim_issue(issue.id, assignee="agent-1")
+
+        proxy = _InterceptingConnProxy(
+            db._conn,
+            lambda sql: _reassign_to(db._conn, issue.id, "") if "set assignee = ''" in sql.lower() else None,
+        )
+        db._conn = proxy  # type: ignore[assignment]
+        try:
+            with pytest.raises(ValueError, match="already released"):
+                db.release_claim(issue.id, actor="agent-1")
+        finally:
+            db._conn = proxy._real
+
+        assert proxy.fired
+        assert db.get_issue(issue.id).assignee == ""
 
 
 # ---------------------------------------------------------------------------
