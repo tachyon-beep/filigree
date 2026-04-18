@@ -400,6 +400,37 @@ class TestFlowMetrics:
         data = get_flow_metrics(db, days=30)
         assert data["throughput"] >= 1, "Archived issues should be counted"
 
+    def test_flow_metrics_dedupes_issues_appearing_in_multiple_buckets(self, db: FiligreeDB) -> None:
+        """Issue returned by both status='closed' and status='archived' scans must count once.
+
+        The closed-category expansion includes any template-defined done state — if
+        a workflow pack declares an 'archived' done state, it overlaps with the
+        synthetic status that archive_closed() writes, so both status queries return
+        the same issue. Without id-keyed dedup, throughput and cycle-time averages
+        are inflated.
+        """
+        issue = db.create_issue("Overlap target")
+        db.update_issue(issue.id, status="in_progress")
+        db.close_issue(issue.id)
+        closed_issue = db.get_issue(issue.id)
+
+        original = db.list_issues
+
+        def overlapping_list(**kwargs):  # type: ignore[no-untyped-def]
+            status = kwargs.get("status")
+            offset = kwargs.get("offset", 0)
+            if status in ("closed", "archived") and offset == 0:
+                return [closed_issue]
+            if status in ("closed", "archived"):
+                return []
+            return original(**kwargs)
+
+        with patch.object(db, "list_issues", side_effect=overlapping_list):
+            data = get_flow_metrics(db, days=30)
+
+        assert data["throughput"] == 1, f"Same issue in both buckets should be counted once, got {data['throughput']}"
+        assert data["by_type"].get("task", {}).get("count", 0) <= 1
+
 
 # ---------------------------------------------------------------------------
 # Bug fixes: cycle_time reopen, _parse_iso, flow_metrics date comparison

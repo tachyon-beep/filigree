@@ -164,20 +164,24 @@ def get_flow_metrics(db: FiligreeDB, *, days: int = 30) -> FlowMetrics:
     # Paginate through all done issues to avoid silent truncation.
     # Query both "closed" (template-defined done states) and "archived"
     # (synthetic status set by archive_closed()) to avoid undercounting.
+    # Key by id to dedupe: templates may define an "archived" done state,
+    # which overlaps the literal "archived" status bucket; a concurrent
+    # archive_closed() can also shift an issue between buckets mid-scan.
     page_size = 1000
-    recent_closed = []
+    recent_by_id: dict[str, Issue] = {}
     for status_filter in ("closed", "archived"):
         offset = 0
         while True:
             page = db.list_issues(status=status_filter, limit=page_size, offset=offset)
             for i in page:
-                if i.closed_at:
+                if i.closed_at and i.id not in recent_by_id:
                     closed_dt = _parse_iso(i.closed_at)
                     if closed_dt is not None and closed_dt >= cutoff_dt:
-                        recent_closed.append(i)
+                        recent_by_id[i.id] = i
             if len(page) < page_size:
                 break
             offset += page_size
+    recent_closed = list(recent_by_id.values())
 
     cycle_times: list[float] = []
     lead_times: list[float] = []

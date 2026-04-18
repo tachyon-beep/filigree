@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Analytics-correctness cluster (1 P1 + 1 P3 bug)**:
+  - **filigree-fc30d6efd9**: `/api/graph` no longer silently truncates large projects at a hidden 10000-row preload. The handler now paginates `list_issues` through every row before building `issue_map` and running v2 filters, so projects beyond the old cap stop losing nodes and `scope_root` validation stops false-404ing for any issue past the first 10000. The page size (`_GRAPH_LIST_PAGE_SIZE = 1000`) is a module-level constant so tests can exercise pagination boundaries.
+  - **filigree-0fe4558ea9**: `get_flow_metrics` no longer double-counts issues returned by both the `status="closed"` (template-defined done states) and `status="archived"` (literal) scans. The two buckets overlap when a workflow pack defines an `archived` done state, or when `archive_closed()` runs mid-scan. Results are now deduped by `issue.id` before throughput count and cycle-/lead-time averaging, so a single archived issue contributes exactly one observation to the window.
+
 - **Silent failure cluster (2 P2 + 2 P3 bugs)**:
   - **filigree-769a192252**: `_safe_json_loads` now returns `{error_key: True}` when parsed JSON is valid but not a dict (arrays, scalars), matching the behaviour for malformed JSON. Previously the non-dict branch returned bare `{}`, so callers (`Issue.fields`, `FileRecord.metadata`, `ScanFinding.metadata`) saw an empty payload with no warning, and `to_dict()` emitted zero `data_warnings`. A corrupt column containing `"[1,2,3]"` now produces the same corruption signal as `"{bad json"`.
   - **filigree-c6c7842661**: MCP `get_issue` no longer swallows `sqlite3.Error` from the file-association lookup and masquerade-returns `files: []`. The handler now fails fast — matching `dashboard_routes/issues.py` and the dedicated `get_issue_files` MCP tool — so schema/query failures surface as MCP errors instead of being misread as "no associations".

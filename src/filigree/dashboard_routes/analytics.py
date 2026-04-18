@@ -31,6 +31,29 @@ from filigree.types.api import StatsWithPrefix
 
 logger = logging.getLogger(__name__)
 
+# Page size used when streaming every issue into the graph endpoint. Exposed
+# at module scope so tests can shrink it to exercise pagination boundaries.
+_GRAPH_LIST_PAGE_SIZE = 1000
+
+
+def _fetch_all_issues(db: FiligreeDB) -> list[Issue]:
+    """Return every issue in the DB by paginating list_issues.
+
+    The graph endpoint previously called list_issues(limit=10000), which
+    silently truncated large projects and caused scope_root false-404s for
+    any issue beyond the cap. Pagination removes the hidden ceiling.
+    """
+    all_issues: list[Issue] = []
+    offset = 0
+    while True:
+        page = db.list_issues(limit=_GRAPH_LIST_PAGE_SIZE, offset=offset)
+        all_issues.extend(page)
+        if len(page) < _GRAPH_LIST_PAGE_SIZE:
+            break
+        offset += _GRAPH_LIST_PAGE_SIZE
+    return all_issues
+
+
 # ---------------------------------------------------------------------------
 # Graph v2 helpers
 # ---------------------------------------------------------------------------
@@ -333,7 +356,7 @@ def create_router() -> APIRouter:
         if isinstance(mode, JSONResponse):
             return mode
 
-        issues = db.list_issues(limit=10000)
+        issues = _fetch_all_issues(db)
         deps = db.get_all_dependencies()
 
         # Legacy behavior remains the default compatibility path.

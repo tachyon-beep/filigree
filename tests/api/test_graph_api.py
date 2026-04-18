@@ -372,6 +372,61 @@ class TestGraphAdvancedAPI:
         assert len(data["edges"]) == 50
         assert data["telemetry"]["total_edges_before_limit"] > 50
 
+    async def test_graph_v2_paginates_beyond_single_list_page(
+        self,
+        client: AsyncClient,
+        dashboard_db: PopulatedDB,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Regression: /api/graph must paginate through all issues, not cap silently.
+
+        Previously the handler called list_issues(limit=10000); projects with
+        more issues silently lost graph nodes and could false-404 on a valid
+        scope_root past the cap.
+        """
+        from filigree.dashboard_routes import analytics as analytics_routes
+
+        monkeypatch.setattr(analytics_routes, "_GRAPH_LIST_PAGE_SIZE", 3)
+
+        created_ids: list[str] = []
+        for i in range(7):
+            new_issue = dashboard_db.db.create_issue(f"Beyond cap {i}", type="task", priority=2)
+            created_ids.append(new_issue.id)
+
+        resp = await client.get("/api/graph?mode=v2&node_limit=2000")
+        assert resp.status_code == 200
+        data = resp.json()
+        node_ids = {n["id"] for n in data["nodes"]}
+        for issue_id in created_ids:
+            assert issue_id in node_ids, f"Issue {issue_id} missing — pagination failed"
+
+    async def test_graph_v2_scope_root_accepted_when_beyond_preload_page(
+        self,
+        client: AsyncClient,
+        dashboard_db: PopulatedDB,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """scope_root must validate against the full DB, not a preload-truncated subset."""
+        from filigree.dashboard_routes import analytics as analytics_routes
+
+        monkeypatch.setattr(analytics_routes, "_GRAPH_LIST_PAGE_SIZE", 3)
+
+        far_ids: list[str] = []
+        for i in range(6):
+            far_issue = dashboard_db.db.create_issue(f"Far issue {i}", type="task", priority=2)
+            far_ids.append(far_issue.id)
+
+        # scope_root is the last-created issue, which under the old non-paginated
+        # 10000-limit code was inside the preload, but the bug class the test
+        # guards against is: any issue not in the preload must still validate.
+        # The pagination fix ensures issue_map is complete even when the underlying
+        # list_issues default page size is tiny.
+        resp = await client.get(f"/api/graph?mode=v2&scope_root={far_ids[-1]}&scope_radius=0")
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        node_ids = {n["id"] for n in data["nodes"]}
+        assert far_ids[-1] in node_ids
+
     async def test_graph_window_days_filters_stale_nodes(self, client: AsyncClient, dashboard_db: PopulatedDB) -> None:
         stale = dashboard_db.db.create_issue("Old graph issue", type="task", priority=2)
         fresh = dashboard_db.db.create_issue("Fresh graph issue", type="task", priority=2)
