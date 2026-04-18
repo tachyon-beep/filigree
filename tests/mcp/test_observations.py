@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 from filigree.core import FiligreeDB
 from filigree.mcp_server import call_tool
+from filigree.types.api import ErrorCode
 from tests.mcp._helpers import _parse
 
 
@@ -37,7 +38,7 @@ class TestObserveTool:
     async def test_observe_empty_summary_fails(self, mcp_db: FiligreeDB) -> None:
         result = await call_tool("observe", {"summary": ""})
         data = _parse(result)
-        assert data["code"] == "validation_error"
+        assert data["code"] == ErrorCode.VALIDATION
 
     async def test_observe_priority_zero(self, mcp_db: FiligreeDB) -> None:
         result = await call_tool("observe", {"summary": "critical", "priority": 0})
@@ -139,7 +140,7 @@ class TestDismissObservationTool:
     async def test_dismiss_nonexistent_fails(self, mcp_db: FiligreeDB) -> None:
         result = await call_tool("dismiss_observation", {"id": "nope-123"})
         data = _parse(result)
-        assert data["code"] == "not_found"
+        assert data["code"] == ErrorCode.NOT_FOUND
 
 
 class TestBatchDismissTool:
@@ -174,13 +175,13 @@ class TestBatchDismissTool:
         """filigree-45580755aa: bare string must not be iterated char-by-char."""
         result = await call_tool("batch_dismiss_observations", {"ids": "obs-123"})
         data = _parse(result)
-        assert data.get("code") == "validation_error"
+        assert data.get("code") == ErrorCode.VALIDATION
 
     async def test_batch_dismiss_rejects_non_string_members(self, mcp_db: FiligreeDB) -> None:
         """filigree-45580755aa: non-string ids rejected up front."""
         result = await call_tool("batch_dismiss_observations", {"ids": [1, 2, 3]})
         data = _parse(result)
-        assert data.get("code") == "validation_error"
+        assert data.get("code") == ErrorCode.VALIDATION
 
 
 class TestSummaryRefreshOnObservationMutations:
@@ -266,7 +267,7 @@ class TestPromoteObservationTool:
     async def test_promote_nonexistent_fails(self, mcp_db: FiligreeDB) -> None:
         result = await call_tool("promote_observation", {"id": "nope-123"})
         data = _parse(result)
-        assert data["code"] == "not_found"
+        assert data["code"] == ErrorCode.NOT_FOUND
 
     async def test_promote_invalid_type_returns_validation_error(self, mcp_db: FiligreeDB) -> None:
         """Invalid issue_type should return 'validation_error', not 'not_found'."""
@@ -276,7 +277,7 @@ class TestPromoteObservationTool:
             {"id": obs["id"], "type": "nonexistent_type"},
         )
         data = _parse(result)
-        assert data["code"] == "validation_error"
+        assert data["code"] == ErrorCode.VALIDATION
         assert "nonexistent_type" in data["error"]
 
     async def test_promote_surfaces_warnings(self, mcp_db: FiligreeDB) -> None:
@@ -316,7 +317,7 @@ class TestListObservationsStatsGuard:
         with patch.object(mcp_db, "list_observations", side_effect=sqlite3.InterfaceError("connection closed")):
             result = await call_tool("list_observations", {})
         data = _parse(result)
-        assert data["code"] == "database_error"
+        assert data["code"] == ErrorCode.IO
 
 
 class TestPromoteExpiredObservationMCP:
@@ -332,4 +333,4 @@ class TestPromoteExpiredObservationMCP:
         mcp_db.conn.commit()
         result = await call_tool("promote_observation", {"id": obs["id"]})
         data = _parse(result)
-        assert data["code"] == "validation_error"
+        assert data["code"] == ErrorCode.VALIDATION

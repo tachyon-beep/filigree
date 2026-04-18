@@ -19,7 +19,7 @@ from filigree.mcp_tools.common import (
     _validate_int_range,
     _validate_str,
 )
-from filigree.types.api import ErrorResponse
+from filigree.types.api import ErrorCode, ErrorResponse
 from filigree.types.inputs import (
     BatchDismissObservationsArgs,
     DismissObservationArgs,
@@ -182,9 +182,9 @@ async def _handle_observe(arguments: dict[str, Any]) -> list[TextContent]:
             actor=actor,
         )
     except ValueError as e:
-        return _text(ErrorResponse(error=str(e), code="validation_error"))
+        return _text(ErrorResponse(error=str(e), code=ErrorCode.VALIDATION))
     except sqlite3.Error as e:
-        return _text(ErrorResponse(error=f"Database error: {e}", code="database_error"))
+        return _text(ErrorResponse(error=f"Database error: {e}", code=ErrorCode.IO))
     _refresh_summary()
     return _text(obs)
 
@@ -205,7 +205,7 @@ async def _handle_list_observations(arguments: dict[str, Any]) -> list[TextConte
             file_id=args.get("file_id", ""),
         )
     except sqlite3.Error as e:
-        return _text(ErrorResponse(error=f"Database error: {e}", code="database_error"))
+        return _text(ErrorResponse(error=f"Database error: {e}", code=ErrorCode.IO))
     observations, has_more = _apply_has_more(observations, effective_limit)
     stats: dict[str, object]
     try:
@@ -239,9 +239,9 @@ async def _handle_dismiss_observation(arguments: dict[str, Any]) -> list[TextCon
             reason=args.get("reason", ""),
         )
     except ValueError as e:
-        return _text(ErrorResponse(error=str(e), code="not_found"))
+        return _text(ErrorResponse(error=str(e), code=ErrorCode.NOT_FOUND))
     except sqlite3.Error as e:
-        return _text(ErrorResponse(error=f"Database error: {e}", code="database_error"))
+        return _text(ErrorResponse(error=f"Database error: {e}", code=ErrorCode.IO))
     _refresh_summary()
     return _text({"status": "dismissed", "id": args["id"]})
 
@@ -259,9 +259,9 @@ async def _handle_batch_dismiss_observations(arguments: dict[str, Any]) -> list[
     # not_found results (see filigree-45580755aa).
     raw_ids = args.get("ids", [])
     if not isinstance(raw_ids, list):
-        return _text(ErrorResponse(error="'ids' must be an array of strings", code="validation_error"))
+        return _text(ErrorResponse(error="'ids' must be an array of strings", code=ErrorCode.VALIDATION))
     if not all(isinstance(x, str) for x in raw_ids):
-        return _text(ErrorResponse(error="'ids' must contain only string values", code="validation_error"))
+        return _text(ErrorResponse(error="'ids' must contain only string values", code=ErrorCode.VALIDATION))
 
     tracker = _get_db()
     try:
@@ -271,7 +271,7 @@ async def _handle_batch_dismiss_observations(arguments: dict[str, Any]) -> list[
             reason=args.get("reason", ""),
         )
     except sqlite3.Error as e:
-        return _text(ErrorResponse(error=f"Database error: {e}", code="database_error"))
+        return _text(ErrorResponse(error=f"Database error: {e}", code=ErrorCode.IO))
     _refresh_summary()
     resp: dict[str, object] = {"dismissed": result["dismissed"], "ok": True}
     if result["not_found"]:
@@ -305,11 +305,11 @@ async def _handle_promote_observation(arguments: dict[str, Any]) -> list[TextCon
         )
     except ValueError as e:
         msg = str(e)
-        code = "not_found" if "not found" in msg.lower() else "validation_error"
-        return _text(ErrorResponse(error=msg, code=code))
+        err_code = ErrorCode.NOT_FOUND if "not found" in msg.lower() else ErrorCode.VALIDATION
+        return _text(ErrorResponse(error=msg, code=err_code))
     except sqlite3.Error as e:
         logger.error("promote_observation database error", exc_info=True)
-        return _text(ErrorResponse(error=f"Database error: {e}", code="database_error"))
+        return _text(ErrorResponse(error=f"Database error: {e}", code=ErrorCode.IO))
     _refresh_summary()
     resp: dict[str, object] = {"issue": result["issue"].to_dict()}
     if result.get("warnings"):
