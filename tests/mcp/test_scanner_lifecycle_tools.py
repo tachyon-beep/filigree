@@ -15,6 +15,7 @@ import pytest
 from filigree.core import FiligreeDB
 from filigree.mcp_server import call_tool  # type: ignore[attr-defined]
 from filigree.mcp_tools.scanners import _validate_localhost_url
+from filigree.types.api import ErrorCode
 from tests.mcp._helpers import _parse
 
 
@@ -87,7 +88,7 @@ class TestPreviewScanTool:
                 {"scanner": "nonexistent", "file_path": "foo.py"},
             )
         )
-        assert data["code"] == "scanner_not_found"
+        assert data["code"] == ErrorCode.NOT_FOUND
 
     async def test_preview_scan_path_traversal(self, mcp_db: FiligreeDB) -> None:
         _write_scanner_toml(mcp_db)
@@ -97,7 +98,7 @@ class TestPreviewScanTool:
                 {"scanner": "test-scanner", "file_path": "../../etc/passwd"},
             )
         )
-        assert data["code"] == "invalid_path"
+        assert data["code"] == ErrorCode.VALIDATION
 
 
 class TestGetScanStatusTool:
@@ -117,11 +118,11 @@ class TestGetScanStatusTool:
 
     async def test_get_scan_status_not_found(self, mcp_db: FiligreeDB) -> None:
         data = _parse(await call_tool("get_scan_status", {"scan_run_id": "nonexistent"}))
-        assert data["code"] == "not_found"
+        assert data["code"] == ErrorCode.NOT_FOUND
 
     async def test_get_scan_status_empty_id_rejected(self, mcp_db: FiligreeDB) -> None:
         data = _parse(await call_tool("get_scan_status", {"scan_run_id": ""}))
-        assert data["code"] == "validation_error"
+        assert data["code"] == ErrorCode.VALIDATION
 
     async def test_get_scan_status_log_lines_validated(self, mcp_db: FiligreeDB) -> None:
         data = _parse(await call_tool("get_scan_status", {"scan_run_id": "x", "log_lines": 0}))
@@ -232,7 +233,7 @@ class TestTriggerScanBatchTool:
                 {"scanner": "test-scanner", "file_paths": []},
             )
         )
-        assert data["code"] == "validation_error"
+        assert data["code"] == ErrorCode.VALIDATION
 
     async def test_batch_scan_scanner_not_found(self, mcp_db: FiligreeDB) -> None:
         data = _parse(
@@ -241,7 +242,7 @@ class TestTriggerScanBatchTool:
                 {"scanner": "nonexistent", "file_paths": ["foo.py"]},
             )
         )
-        assert data["code"] == "scanner_not_found"
+        assert data["code"] == ErrorCode.NOT_FOUND
 
     async def test_batch_scan_non_localhost_rejected(self, mcp_db: FiligreeDB) -> None:
         files = _make_target_files(mcp_db, ["batch_url.py"])
@@ -257,7 +258,7 @@ class TestTriggerScanBatchTool:
                     },
                 )
             )
-            assert data["code"] == "invalid_api_url"
+            assert data["code"] == ErrorCode.INVALID_API_URL
         finally:
             _cleanup_files(mcp_db, files)
 
@@ -526,7 +527,7 @@ class TestBatchScanDbTrackingFailure:
                         {"scanner": "test-scanner", "file_paths": ["backfill_fail.py"]},
                     )
                 )
-            assert data["code"] == "db_error"
+            assert data["code"] == ErrorCode.IO
             proc.kill.assert_called_once()
         finally:
             _cleanup_files(mcp_db, files)

@@ -1682,7 +1682,7 @@ class TestScannerTools:
                     },
                 )
             )
-            assert result["code"] == "scanner_not_found"
+            assert result["code"] == ErrorCode.NOT_FOUND
             assert "bad" not in result.get("available_scanners", [])
         finally:
             target.unlink(missing_ok=True)
@@ -1700,7 +1700,7 @@ class TestScannerTools:
             )
         )
         assert "error" in result
-        assert result["code"] == "invalid_path"
+        assert result["code"] == ErrorCode.VALIDATION
 
     async def test_trigger_scan_scanner_name_traversal_rejected(self, mcp_db: FiligreeDB) -> None:
         result = _parse(
@@ -1728,7 +1728,7 @@ class TestScannerTools:
                 },
             )
         )
-        assert result["code"] == "invalid_api_url"
+        assert result["code"] == ErrorCode.INVALID_API_URL
         assert "non-localhost" in result["error"].lower() or "not allowed" in result["error"].lower()
 
     async def test_trigger_scan_file_not_found(self, mcp_db: FiligreeDB) -> None:
@@ -2358,7 +2358,7 @@ class TestTriggerScanCooldownDB:
                     {"scanner": "bad-cmd", "file_path": "cmd_fail.py"},
                 )
             )
-            assert result["code"] == "command_not_found"
+            assert result["code"] == ErrorCode.NOT_FOUND
         finally:
             target.unlink(missing_ok=True)
             (scanners_dir / "bad-cmd.toml").unlink(missing_ok=True)

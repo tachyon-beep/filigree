@@ -20,7 +20,7 @@ from filigree.core import VALID_SEVERITIES
 from filigree.mcp_tools.common import _parse_args, _text, _validate_int_range
 from filigree.scanners import list_scanners as _list_scanners
 from filigree.scanners import load_scanner, validate_scanner_command
-from filigree.types.api import ErrorResponse
+from filigree.types.api import ErrorCode, ErrorResponse
 from filigree.types.inputs import (
     GetScanStatusArgs,
     PreviewScanArgs,
@@ -199,7 +199,7 @@ def _validate_localhost_url(api_url: str) -> list[TextContent] | None:
         return _text(
             ErrorResponse(
                 error="api_url is required and must be a non-empty http(s) URL pointing at localhost.",
-                code="invalid_api_url",
+                code=ErrorCode.INVALID_API_URL,
             )
         )
 
@@ -209,7 +209,7 @@ def _validate_localhost_url(api_url: str) -> list[TextContent] | None:
         return _text(
             ErrorResponse(
                 error=f"api_url could not be parsed: {exc}",
-                code="invalid_api_url",
+                code=ErrorCode.INVALID_API_URL,
             )
         )
 
@@ -218,7 +218,7 @@ def _validate_localhost_url(api_url: str) -> list[TextContent] | None:
         return _text(
             ErrorResponse(
                 error=f"api_url scheme {scheme!r} not allowed; expected one of {sorted(_ALLOWED_URL_SCHEMES)}.",
-                code="invalid_api_url",
+                code=ErrorCode.INVALID_API_URL,
             )
         )
 
@@ -227,7 +227,7 @@ def _validate_localhost_url(api_url: str) -> list[TextContent] | None:
         return _text(
             ErrorResponse(
                 error=f"Non-localhost api_url not allowed: {host!r}. Scanner results would be sent to an external host.",
-                code="invalid_api_url",
+                code=ErrorCode.INVALID_API_URL,
             )
         )
     return None
@@ -242,7 +242,7 @@ def _load_scanner_or_error(filigree_dir: Path, scanner_name: str) -> tuple[Any |
         return None, _text(
             {
                 "error": f"Scanner {scanner_name!r} not found",
-                "code": "scanner_not_found",
+                "code": ErrorCode.NOT_FOUND,
                 "available_scanners": available,
             }
         )
@@ -276,11 +276,11 @@ def _spawn_scan(
             scan_run_id=scan_run_id,
         )
     except ValueError as e:
-        return _text(ErrorResponse(error=str(e), code="invalid_command"))
+        return _text(ErrorResponse(error=str(e), code=ErrorCode.VALIDATION))
 
     cmd_err = validate_scanner_command(cmd, project_root=project_root)
     if cmd_err is not None:
-        return _text(ErrorResponse(error=cmd_err, code="command_not_found"))
+        return _text(ErrorResponse(error=cmd_err, code=ErrorCode.NOT_FOUND))
 
     scan_log_dir = filigree_dir / "scans"
     scan_log_dir.mkdir(parents=True, exist_ok=True)
@@ -334,7 +334,7 @@ async def _handle_list_scanners(arguments: dict[str, Any]) -> list[TextContent]:
     filigree_dir = _get_filigree_dir()
     scanners_dir = filigree_dir / "scanners" if filigree_dir else None
     if scanners_dir is None:
-        return _text(ErrorResponse(error="Project directory not initialized", code="not_initialized"))
+        return _text(ErrorResponse(error="Project directory not initialized", code=ErrorCode.NOT_INITIALIZED))
     load_errors: list[str] = []
     scanners = _list_scanners(scanners_dir, errors=load_errors)
     result_data: dict[str, Any] = {"scanners": [s.to_dict() for s in scanners]}
@@ -354,14 +354,14 @@ async def _handle_report_finding(arguments: dict[str, Any]) -> list[TextContent]
     rule_id = args.get("rule_id", "")
     message = args.get("message", "")
     if not file_path or not rule_id or not message:
-        return _text(ErrorResponse(error="file_path, rule_id, and message are required", code="validation_error"))
+        return _text(ErrorResponse(error="file_path, rule_id, and message are required", code=ErrorCode.VALIDATION))
 
     severity = args.get("severity", "info")
     if severity not in VALID_SEVERITIES:
         return _text(
             ErrorResponse(
                 error=f"Invalid severity: {severity!r}. Valid: {', '.join(sorted(VALID_SEVERITIES))}",
-                code="validation_error",
+                code=ErrorCode.VALIDATION,
             )
         )
 
@@ -410,7 +410,7 @@ async def _handle_trigger_scan(arguments: dict[str, Any]) -> list[TextContent]:
 
     filigree_dir = _get_filigree_dir()
     if filigree_dir is None:
-        return _text(ErrorResponse(error="Project directory not initialized", code="not_initialized"))
+        return _text(ErrorResponse(error="Project directory not initialized", code=ErrorCode.NOT_INITIALIZED))
 
     args = _parse_args(arguments, TriggerScanArgs)
     tracker = _get_db()
@@ -425,7 +425,7 @@ async def _handle_trigger_scan(arguments: dict[str, Any]) -> list[TextContent]:
     try:
         target = _safe_path(file_path)
     except ValueError as e:
-        return _text(ErrorResponse(error=str(e), code="invalid_path"))
+        return _text(ErrorResponse(error=str(e), code=ErrorCode.VALIDATION))
 
     cfg, err = _load_scanner_or_error(filigree_dir, scanner_name)
     if err is not None:
@@ -466,7 +466,7 @@ async def _handle_trigger_scan(arguments: dict[str, Any]) -> list[TextContent]:
         return _text(
             ErrorResponse(
                 error=f"Failed to reserve scan run: {exc}",
-                code="db_error",
+                code=ErrorCode.IO,
             )
         )
     if blocking_run is not None:
@@ -516,7 +516,7 @@ async def _handle_trigger_scan(arguments: dict[str, Any]) -> list[TextContent]:
         return _text(
             ErrorResponse(
                 error=f"Scan process spawned but DB tracking failed: {exc}. Process (pid={proc.pid}) terminated.",
-                code="db_error",
+                code=ErrorCode.IO,
             )
         )
 
@@ -586,7 +586,7 @@ async def _handle_trigger_scan_batch(arguments: dict[str, Any]) -> list[TextCont
 
     filigree_dir = _get_filigree_dir()
     if filigree_dir is None:
-        return _text(ErrorResponse(error="Project directory not initialized", code="not_initialized"))
+        return _text(ErrorResponse(error="Project directory not initialized", code=ErrorCode.NOT_INITIALIZED))
 
     args = _parse_args(arguments, TriggerScanBatchArgs)
     tracker = _get_db()
@@ -595,14 +595,14 @@ async def _handle_trigger_scan_batch(arguments: dict[str, Any]) -> list[TextCont
     api_url = args.get("api_url", "http://localhost:8377")
 
     if not isinstance(file_paths, list) or not file_paths:
-        return _text(ErrorResponse(error="file_paths must be a non-empty list", code="validation_error"))
+        return _text(ErrorResponse(error="file_paths must be a non-empty list", code=ErrorCode.VALIDATION))
 
     max_batch_size = 500
     if len(file_paths) > max_batch_size:
         return _text(
             ErrorResponse(
                 error=f"file_paths length {len(file_paths)} exceeds maximum of {max_batch_size}",
-                code="validation_error",
+                code=ErrorCode.VALIDATION,
             )
         )
 
@@ -774,7 +774,7 @@ async def _handle_trigger_scan_batch(arguments: dict[str, Any]) -> list[TextCont
         return _text(
             {
                 "error": "All scanner processes spawned but DB tracking failed",
-                "code": "db_error",
+                "code": ErrorCode.IO,
                 "spawn_errors": spawn_errors,
                 "skipped": skipped,
                 "batch_id": batch_id,
@@ -847,7 +847,7 @@ async def _handle_get_scan_status(arguments: dict[str, Any]) -> list[TextContent
     args = _parse_args(arguments, GetScanStatusArgs)
     scan_run_id = args.get("scan_run_id", "")
     if not isinstance(scan_run_id, str) or not scan_run_id.strip():
-        return _text(ErrorResponse(error="scan_run_id is required", code="validation_error"))
+        return _text(ErrorResponse(error="scan_run_id is required", code=ErrorCode.VALIDATION))
     log_lines = args.get("log_lines", 50)
 
     err_resp = _validate_int_range(log_lines, "log_lines", min_val=1, max_val=500)
@@ -858,10 +858,10 @@ async def _handle_get_scan_status(arguments: dict[str, Any]) -> list[TextContent
     try:
         status = tracker.get_scan_status(scan_run_id, log_lines=log_lines)
     except KeyError:
-        return _text(ErrorResponse(error=f"Scan run not found: {scan_run_id}", code="not_found"))
+        return _text(ErrorResponse(error=f"Scan run not found: {scan_run_id}", code=ErrorCode.NOT_FOUND))
     except sqlite3.Error as exc:
         _logger.error("Database error getting scan status for %s: %s", scan_run_id, exc)
-        return _text(ErrorResponse(error=f"Database error: {exc}", code="db_error"))
+        return _text(ErrorResponse(error=f"Database error: {exc}", code=ErrorCode.IO))
     return _text(status)
 
 
@@ -870,7 +870,7 @@ async def _handle_preview_scan(arguments: dict[str, Any]) -> list[TextContent]:
 
     filigree_dir = _get_filigree_dir()
     if filigree_dir is None:
-        return _text(ErrorResponse(error="Project directory not initialized", code="not_initialized"))
+        return _text(ErrorResponse(error="Project directory not initialized", code=ErrorCode.NOT_INITIALIZED))
 
     args = _parse_args(arguments, PreviewScanArgs)
     scanner_name = args["scanner"]
@@ -879,7 +879,7 @@ async def _handle_preview_scan(arguments: dict[str, Any]) -> list[TextContent]:
     try:
         target = _safe_path(file_path)
     except ValueError as e:
-        return _text(ErrorResponse(error=str(e), code="invalid_path"))
+        return _text(ErrorResponse(error=str(e), code=ErrorCode.VALIDATION))
 
     cfg, err = _load_scanner_or_error(filigree_dir, scanner_name)
     if err is not None:
@@ -896,7 +896,7 @@ async def _handle_preview_scan(arguments: dict[str, Any]) -> list[TextContent]:
             scan_run_id="preview-dry-run",
         )
     except ValueError as e:
-        return _text(ErrorResponse(error=str(e), code="invalid_command"))
+        return _text(ErrorResponse(error=str(e), code=ErrorCode.VALIDATION))
 
     cmd_err = validate_scanner_command(cmd, project_root=project_root)
 
