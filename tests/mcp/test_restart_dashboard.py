@@ -18,10 +18,9 @@ from unittest.mock import patch
 
 import pytest
 
-from filigree.types.api import ErrorCode
-
 from filigree.core import FiligreeDB
 from filigree.mcp_tools.meta import _handle_restart_dashboard
+from filigree.types.api import ErrorCode
 from tests.mcp._helpers import _parse
 
 

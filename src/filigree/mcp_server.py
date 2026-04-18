@@ -433,7 +433,7 @@ def create_mcp_app(
                 resp = JSONResponse(
                     {
                         "error": "Unknown project",
-                        "code": "project_not_found",
+                        "code": ErrorCode.NOT_FOUND,
                         "project": project_key,
                     },
                     status_code=404,
@@ -445,7 +445,7 @@ def create_mcp_app(
                 resp = JSONResponse(
                     {
                         "error": "Unable to resolve project database",
-                        "code": "project_unavailable",
+                        "code": ErrorCode.NOT_INITIALIZED,
                     },
                     status_code=503,
                 )

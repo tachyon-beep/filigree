@@ -564,7 +564,7 @@ async def _handle_promote_finding(arguments: dict[str, Any]) -> list[TextContent
         return _text(ErrorResponse(error=f"Finding not found: {finding_id}", code=ErrorCode.NOT_FOUND))
     except (ValueError, sqlite3.Error) as exc:
         _logger.warning("Failed to promote finding %s: %s", finding_id, exc)
-        return _text(ErrorResponse(error=f"Failed to promote finding: {exc}", code="promotion_error"))
+        return _text(ErrorResponse(error=f"Failed to promote finding: {exc}", code=ErrorCode.VALIDATION))
     return _text(obs)
 
 

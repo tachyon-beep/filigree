@@ -525,4 +525,15 @@ LEGACY_CODE_TO_ERRORCODE: dict[str, ErrorCode] = {
     "batch_all_failed": ErrorCode.VALIDATION,  # rare; used in scanner batch path
     "invalid_api_url": ErrorCode.INVALID_API_URL,
     "stop_failed": ErrorCode.STOP_FAILED,
+    # --- Added during Stage 2a sweep — legacy codes discovered beyond the
+    # --- original 19-code mapping. Mapping decisions documented in
+    # --- docs/plans/2026-04-18-2.0-unified-surface-plan.md (Stage 2a fix-up).
+    "ingestion_error": ErrorCode.IO,
+    "file_not_found": ErrorCode.NOT_FOUND,
+    "promotion_error": ErrorCode.VALIDATION,
+    "spawn_failed": ErrorCode.IO,
+    "rate_limited": ErrorCode.IO,
+    "no_eligible_files": ErrorCode.VALIDATION,
+    "project_not_found": ErrorCode.NOT_FOUND,
+    "project_unavailable": ErrorCode.NOT_INITIALIZED,
 }

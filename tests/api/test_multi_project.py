@@ -10,6 +10,7 @@ from httpx import ASGITransport, AsyncClient
 import filigree.dashboard as dash_module
 from filigree.core import FiligreeDB
 from filigree.dashboard import ProjectStore, create_app
+from filigree.types.api import ErrorCode
 from tests.api.conftest import _create_project
 
 
@@ -277,7 +278,7 @@ class TestMultiProjectRouting:
         resp = await multi_client.get("/mcp/?project=nonexistent")
         assert resp.status_code == 404
         data = resp.json()
-        assert data["code"] == "project_not_found"
+        assert data["code"] == ErrorCode.NOT_FOUND
 
     async def test_stats_per_project(self, multi_client: AsyncClient) -> None:
         """Stats endpoint returns different prefixes per project."""

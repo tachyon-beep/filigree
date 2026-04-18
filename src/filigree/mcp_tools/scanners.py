@@ -305,7 +305,7 @@ def _spawn_scan(
         return _text(
             {
                 "error": f"Failed to spawn scanner process: {e}",
-                "code": "spawn_failed",
+                "code": ErrorCode.IO,
                 "scanner": cfg.name,
             }
         )
@@ -388,7 +388,7 @@ async def _handle_report_finding(arguments: dict[str, Any]) -> list[TextContent]
         )
     except (ValueError, sqlite3.Error) as exc:
         _logger.error("report_finding failed: %s", exc)
-        return _text(ErrorResponse(error=f"Failed to report finding: {exc}", code="ingestion_error"))
+        return _text(ErrorResponse(error=f"Failed to report finding: {exc}", code=ErrorCode.IO))
 
     response: dict[str, Any] = {
         "status": "created" if result["findings_created"] else "updated",
@@ -433,7 +433,7 @@ async def _handle_trigger_scan(arguments: dict[str, Any]) -> list[TextContent]:
     assert cfg is not None  # noqa: S101  -- narrowing after error-check
 
     if not target.is_file():
-        return _text(ErrorResponse(error=f"File not found: {file_path}", code="file_not_found"))
+        return _text(ErrorResponse(error=f"File not found: {file_path}", code=ErrorCode.NOT_FOUND))
 
     file_type_warning = ""
     if cfg.file_types:
@@ -473,7 +473,7 @@ async def _handle_trigger_scan(arguments: dict[str, Any]) -> list[TextContent]:
         return _text(
             {
                 "error": f"Scanner {scanner_name!r} was already triggered for {file_path!r} recently.",
-                "code": "rate_limited",
+                "code": ErrorCode.IO,
                 "blocking_run_id": blocking_run["id"],
             }
         )
@@ -537,7 +537,7 @@ async def _handle_trigger_scan(arguments: dict[str, Any]) -> list[TextContent]:
         return _text(
             {
                 "error": f"Scanner process exited immediately with code {exit_code}.{log_hint}",
-                "code": "spawn_failed",
+                "code": ErrorCode.IO,
                 "scanner": scanner_name,
                 "file_id": file_record.id,
                 "scan_run_id": scan_run_id,
@@ -644,7 +644,7 @@ async def _handle_trigger_scan_batch(arguments: dict[str, Any]) -> list[TextCont
         return _text(
             {
                 "error": "No files eligible for scanning",
-                "code": "no_eligible_files",
+                "code": ErrorCode.VALIDATION,
                 "skipped": skipped,
             }
         )
@@ -693,7 +693,7 @@ async def _handle_trigger_scan_batch(arguments: dict[str, Any]) -> list[TextCont
         return _text(
             {
                 "error": "No files eligible for scanning",
-                "code": "no_eligible_files",
+                "code": ErrorCode.VALIDATION,
                 "skipped": skipped,
             }
         )
@@ -736,7 +736,7 @@ async def _handle_trigger_scan_batch(arguments: dict[str, Any]) -> list[TextCont
         return _text(
             {
                 "error": "All scanner processes failed to spawn",
-                "code": "spawn_failed",
+                "code": ErrorCode.IO,
                 "spawn_errors": spawn_errors,
                 "skipped": skipped,
                 "batch_id": batch_id,
@@ -813,7 +813,7 @@ async def _handle_trigger_scan_batch(arguments: dict[str, Any]) -> list[TextCont
         return _text(
             {
                 "error": f"All {len(finalized)} scanner processes exited immediately.",
-                "code": "spawn_failed",
+                "code": ErrorCode.IO,
                 "batch_id": batch_id,
                 "scan_run_ids": scan_run_ids,
                 "per_file": per_file,

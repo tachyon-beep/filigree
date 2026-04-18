@@ -594,7 +594,7 @@ class TestReportFindingTool:
                     },
                 )
             )
-        assert data["code"] == "ingestion_error"
+        assert data["code"] == ErrorCode.IO
         assert "disk full" in data["error"]
 
     async def test_file_created_false_for_existing_file(self, mcp_db_for_report_finding: FiligreeDB) -> None:

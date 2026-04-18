@@ -1863,7 +1863,7 @@ class TestScannerTools:
                     },
                 )
             )
-            assert result2["code"] == "rate_limited"
+            assert result2["code"] == ErrorCode.IO
         finally:
             target.unlink(missing_ok=True)
             # Clear cooldown state for test isolation
@@ -2311,7 +2311,7 @@ class TestTriggerScanCooldownDB:
                     {"scanner": "echo-scanner", "file_path": "cooldown_test.py"},
                 )
             )
-            assert result2["code"] == "rate_limited"
+            assert result2["code"] == ErrorCode.IO
         finally:
             target.unlink(missing_ok=True)
             (scanners_dir / "echo-scanner.toml").unlink(missing_ok=True)
@@ -2335,7 +2335,7 @@ class TestTriggerScanCooldownDB:
                         {"scanner": "spawn-fail", "file_path": "spawn_fail.py"},
                     )
                 )
-            assert result["code"] == "spawn_failed"
+            assert result["code"] == ErrorCode.IO
         finally:
             target.unlink(missing_ok=True)
             (scanners_dir / "spawn-fail.toml").unlink(missing_ok=True)

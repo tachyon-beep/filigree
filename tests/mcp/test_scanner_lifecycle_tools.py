@@ -221,7 +221,7 @@ class TestTriggerScanBatchTool:
                         {"scanner": "test-scanner", "file_paths": ["batch_all_fail.py"]},
                     )
                 )
-            assert data["code"] == "spawn_failed"
+            assert data["code"] == ErrorCode.IO
         finally:
             _cleanup_files(mcp_db, files)
 
@@ -505,7 +505,7 @@ class TestBatchScanDbTrackingFailure:
                     )
                 )
             # No files eligible (all reservations failed); no processes spawned.
-            assert data["code"] == "no_eligible_files"
+            assert data["code"] == ErrorCode.VALIDATION
             popen_mock.assert_not_called()
             assert all("reservation_failed" in s["reason"] for s in data["skipped"])
         finally:
@@ -558,7 +558,7 @@ class TestTriggerScanCooldownReservation:
                         {"scanner": "test-scanner", "file_path": "reserve_target.py"},
                     )
                 )
-            assert second["code"] == "rate_limited"
+            assert second["code"] == ErrorCode.IO
             assert second["blocking_run_id"] == first["scan_run_id"]
         finally:
             _cleanup_files(mcp_db, files)
@@ -579,7 +579,7 @@ class TestTriggerScanCooldownReservation:
                         {"scanner": "test-scanner", "file_path": "spawn_fail_target.py"},
                     )
                 )
-            assert data["code"] == "spawn_failed"
+            assert data["code"] == ErrorCode.IO
             # The cooldown query should no longer find a blocking run — failed
             # rows are excluded from the cooldown window.
             assert mcp_db.check_scan_cooldown("test-scanner", "spawn_fail_target.py") is None
