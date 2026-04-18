@@ -1,9 +1,17 @@
 1. This project uses UV like millions of other projects. Use uv run rather than trying literally nothing and then saying its broken.
 
-<!-- filigree:instructions:v1.6.0:84820288 -->
+<!-- filigree:instructions:v2.0.0:9a4b7a16 -->
 ## Filigree Issue Tracker
 
 Use `filigree` for all task tracking in this project. Data lives in `.filigree/`.
+
+### If you see a `ForeignDatabaseError`
+
+Filigree refuses to open an ancestor project's database when it detects that
+the current directory is inside a git repo with no local `.filigree.conf`.
+The error message tells you exactly what to do (usually `filigree init` in
+the current project, then restart MCP). Do not work around it by `cd`-ing
+upward unless that was the actual intent.
 
 ### MCP Tools (Preferred)
 
