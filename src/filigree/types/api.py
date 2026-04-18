@@ -501,3 +501,28 @@ class InvalidTransitionError(Exception):
         self.type_name = type_name
         self.current_status = current_status
         super().__init__(f"No wip-category transition from {current_status!r} for type {type_name!r}.")
+
+
+# Mapping used only during Stage 2a rollout for developer reference.
+# After Stage 2a lands, this dict stays as documentation.
+LEGACY_CODE_TO_ERRORCODE: dict[str, ErrorCode] = {
+    "invalid": ErrorCode.VALIDATION,
+    "validation_error": ErrorCode.VALIDATION,
+    "invalid_path": ErrorCode.VALIDATION,
+    "invalid_command": ErrorCode.VALIDATION,
+    "not_found": ErrorCode.NOT_FOUND,
+    "scanner_not_found": ErrorCode.NOT_FOUND,
+    "unknown_tool": ErrorCode.NOT_FOUND,
+    "command_not_found": ErrorCode.NOT_FOUND,
+    "conflict": ErrorCode.CONFLICT,
+    "invalid_transition": ErrorCode.INVALID_TRANSITION,
+    "permission_error": ErrorCode.PERMISSION,
+    "not_initialized": ErrorCode.NOT_INITIALIZED,
+    "io_error": ErrorCode.IO,
+    "db_error": ErrorCode.IO,
+    "database_error": ErrorCode.IO,
+    "import_error": ErrorCode.IO,
+    "batch_all_failed": ErrorCode.VALIDATION,  # rare; used in scanner batch path
+    "invalid_api_url": ErrorCode.INVALID_API_URL,
+    "stop_failed": ErrorCode.STOP_FAILED,
+}
