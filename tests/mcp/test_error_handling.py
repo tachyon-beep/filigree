@@ -5,8 +5,11 @@ Covers: filigree-d6c3f6 (comment/label error handling)
 
 from __future__ import annotations
 
+import json
+
 from filigree.core import FiligreeDB
 from filigree.mcp_server import call_tool
+from filigree.types.api import ErrorCode
 from tests.mcp._helpers import _parse
 
 
@@ -19,7 +22,7 @@ class TestMCPCommentErrors:
             {"issue_id": "mcp-nonexistent", "text": "Hello"},
         )
         data = _parse(result)
-        assert data["code"] == "not_found"
+        assert data["code"] == ErrorCode.NOT_FOUND
         assert "mcp-nonexistent" in data["error"]
 
     async def test_get_comments_missing_issue(self, mcp_db: FiligreeDB) -> None:
@@ -28,7 +31,7 @@ class TestMCPCommentErrors:
             {"issue_id": "mcp-nonexistent"},
         )
         data = _parse(result)
-        assert data["code"] == "not_found"
+        assert data["code"] == ErrorCode.NOT_FOUND
         assert "mcp-nonexistent" in data["error"]
 
     async def test_add_comment_still_works(self, mcp_db: FiligreeDB) -> None:
@@ -51,7 +54,7 @@ class TestMCPLabelErrors:
             {"issue_id": "mcp-nonexistent", "label": "bug"},
         )
         data = _parse(result)
-        assert data["code"] == "not_found"
+        assert data["code"] == ErrorCode.NOT_FOUND
         assert "mcp-nonexistent" in data["error"]
 
     async def test_remove_label_missing_issue(self, mcp_db: FiligreeDB) -> None:
@@ -60,7 +63,7 @@ class TestMCPLabelErrors:
             {"issue_id": "mcp-nonexistent", "label": "bug"},
         )
         data = _parse(result)
-        assert data["code"] == "not_found"
+        assert data["code"] == ErrorCode.NOT_FOUND
         assert "mcp-nonexistent" in data["error"]
 
     async def test_add_label_still_works(self, mcp_db: FiligreeDB) -> None:
@@ -72,3 +75,13 @@ class TestMCPLabelErrors:
         )
         data = _parse(result)
         assert data["status"] == "added"
+
+
+def test_meta_errors_use_error_code_enum(mcp_client_for_empty_project) -> None:
+    """Every error emitted from meta.py should have a code that is a
+    valid ErrorCode member."""
+    client = mcp_client_for_empty_project
+    # add_comment on a non-existent issue
+    result = client.call_tool("add_comment", {"issue_id": "nope-123", "text": "x"})
+    payload = json.loads(result.content[0].text)
+    assert payload["code"] in {e.value for e in ErrorCode}
