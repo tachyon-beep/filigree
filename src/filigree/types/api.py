@@ -455,3 +455,48 @@ class ListResponse(TypedDict, Generic[_T]):
     items: list[_T]
     has_more: bool
     next_offset: NotRequired[int]
+
+
+# ---------------------------------------------------------------------------
+# 2.0 typed exceptions
+# ---------------------------------------------------------------------------
+
+
+class SchemaVersionMismatchError(Exception):
+    """Raised when installed filigree is older than the project's DB schema.
+
+    Both ``filigree doctor`` and the dashboard/mcp_server catch this by
+    type, so callers can pattern-match on it without string-matching the
+    message.
+    """
+
+    def __init__(self, *, installed: int, database: int) -> None:
+        self.installed = installed
+        self.database = database
+        super().__init__(
+            f"Database schema v{database} is newer than this version of filigree (expects v{installed}). Downgrade is not supported."
+        )
+
+
+class AmbiguousTransitionError(Exception):
+    """Raised by WorkflowPack.canonical_working_status when multiple
+    wip-category targets exist from the current status."""
+
+    def __init__(self, type_name: str, candidates: list[str]) -> None:
+        self.type_name = type_name
+        self.candidates = candidates
+        super().__init__(
+            f"start_work ambiguous for type {type_name!r}: "
+            f"multiple wip-category targets available ({candidates}). "
+            f"Specify target_status explicitly."
+        )
+
+
+class InvalidTransitionError(Exception):
+    """Raised by WorkflowPack.canonical_working_status when no wip-category
+    target is reachable from the current status."""
+
+    def __init__(self, type_name: str, current_status: str) -> None:
+        self.type_name = type_name
+        self.current_status = current_status
+        super().__init__(f"No wip-category transition from {current_status!r} for type {type_name!r}.")

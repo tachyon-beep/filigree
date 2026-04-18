@@ -80,3 +80,26 @@ def test_error_response_has_no_legacy_fields() -> None:
 
     hints = get_type_hints(ErrorResponse)
     assert set(hints.keys()) == {"error", "code", "details"}
+
+
+def test_schema_version_mismatch_error_shape() -> None:
+    from filigree.types.api import SchemaVersionMismatchError
+
+    exc = SchemaVersionMismatchError(installed=8, database=9)
+    assert exc.installed == 8
+    assert exc.database == 9
+    assert "v8" in str(exc)
+    assert "v9" in str(exc)
+
+
+def test_transition_errors_exist() -> None:
+    from filigree.types.api import (
+        AmbiguousTransitionError,
+        InvalidTransitionError,
+    )
+
+    exc1 = AmbiguousTransitionError("X", ["fixing", "reviewing"])
+    assert "fixing" in str(exc1)
+
+    exc2 = InvalidTransitionError("X", "confirmed")
+    assert "confirmed" in str(exc2)
