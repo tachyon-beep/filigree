@@ -29,23 +29,9 @@ def _extract_id(create_output: str) -> str:
     return create_output.split(":")[0].replace("Created ", "").strip()
 
 
-def _fresh_project(tmp_path: Path) -> Path:
-    """Run `filigree init` into tmp_path and return the project root."""
-    original = os.getcwd()
-    os.chdir(str(tmp_path))
-    try:
-        runner = CliRunner()
-        result = runner.invoke(cli, ["init", "--prefix", "test"])
-        assert result.exit_code == 0, result.output
-        return tmp_path
-    finally:
-        os.chdir(original)
-
-
-@pytest.fixture
-def initialized_project(tmp_path: Path) -> Path:
-    """A freshly `filigree init`'d project. Returns the project root."""
-    return _fresh_project(tmp_path)
+# initialized_project and _fresh_project live in tests/conftest.py so they are
+# visible to both tests/cli/ and tests/mcp/. Pytest resolves them from the root
+# conftest; no local definition needed here.
 
 
 @pytest.fixture

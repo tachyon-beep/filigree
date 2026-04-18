@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 from collections.abc import Generator
 from dataclasses import dataclass, field
@@ -90,6 +91,27 @@ def filigree_project(tmp_path: Path) -> Path:
 def cli_runner() -> CliRunner:
     """Click CLI test runner."""
     return CliRunner()
+
+
+def _fresh_project(tmp_path: Path) -> Path:
+    """Run `filigree init` into tmp_path and return the project root."""
+    from filigree.cli import cli
+
+    original = os.getcwd()
+    os.chdir(str(tmp_path))
+    try:
+        runner = CliRunner()
+        result = runner.invoke(cli, ["init", "--prefix", "test"])
+        assert result.exit_code == 0, result.output
+        return tmp_path
+    finally:
+        os.chdir(original)
+
+
+@pytest.fixture
+def initialized_project(tmp_path: Path) -> Path:
+    """A freshly `filigree init`'d project. Returns the project root."""
+    return _fresh_project(tmp_path)
 
 
 @pytest.fixture

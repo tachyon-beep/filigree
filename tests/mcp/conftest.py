@@ -214,46 +214,46 @@ def mcp_client_with_ambiguous_pack_issue(mcp_db: FiligreeDB) -> SeededMCPClient:
 
 
 @pytest.fixture
-def mcp_client_with_too_new_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Generator[SeededMCPClient, None, None]:
-    """Initialize a DB, then bump user_version so the next open fails."""
-    import sqlite3
+def mcp_client_with_too_new_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> SeededMCPClient:
+    """Initialize a DB, then bump user_version so the next open fails.
 
-    from filigree.core import DB_FILENAME, FILIGREE_DIR_NAME, SUMMARY_FILENAME, write_config
-    from filigree.db_schema import CURRENT_SCHEMA_VERSION
-
-    filigree_dir = tmp_path / FILIGREE_DIR_NAME
-    filigree_dir.mkdir()
-    write_config(filigree_dir, {"prefix": "mcp", "version": 1})
-    (filigree_dir / SUMMARY_FILENAME).write_text("# test\n")
-
-    d = FiligreeDB(filigree_dir / DB_FILENAME, prefix="mcp")
-    d.initialize()
-    d.close()
-
-    conn = sqlite3.connect(filigree_dir / DB_FILENAME)
-    conn.execute(f"PRAGMA user_version = {CURRENT_SCHEMA_VERSION + 1}")
-    conn.commit()
-    conn.close()
-
-    # Point mcp_server at this filigree_dir; see mcp_server._filigree_dir
-    # handling. The module's startup will fail and set the degraded-mode
-    # flag (Task 5.4 behavior).
-    import filigree.mcp_server as mcp_mod
-
-    original_db = mcp_mod.db
-    original_dir = mcp_mod._filigree_dir
-    mcp_mod.db = None
-    mcp_mod._filigree_dir = filigree_dir
-    # Trigger the startup path — the exact entry point depends on how
-    # Task 5.4 wires it. For the purpose of this fixture, call the
-    # module's startup hook (inspect mcp_server.py for the current
-    # name — as of pre-2.0 there is no startup hook; Task 5.4 adds one
-    # called _attempt_startup() or similar).
-    # NOTE: _attempt_startup() does not exist yet (added by Task 5.4).
-    # Until then, the startup call below is a no-op placeholder.
-    yield SeededMCPClient(client=_InProcessMCPClient(mcp_mod.db))  # type: ignore[arg-type]  # db is None here — client call goes through degraded path
-    mcp_mod.db = original_db
-    mcp_mod._filigree_dir = original_dir
+    Scaffolded — requires Task 5.4's `_attempt_startup()` to fully wire.
+    Tests using this fixture should be gated on Stage 5 being complete.
+    """
+    raise NotImplementedError(
+        "mcp_client_with_too_new_db requires Task 5.4's _attempt_startup() "
+        "wiring in mcp_server.py. The fixture's body below shows the intended "
+        "shape (seed filigree_dir + bump user_version), but the degraded-mode "
+        "path it exercises doesn't exist until Task 5.4. Implement that task "
+        "first, then remove this raise and uncomment the fixture body."
+    )
+    # Intended fixture body (uncomment when Task 5.4 lands):
+    # import sqlite3
+    # from filigree.core import DB_FILENAME, FILIGREE_DIR_NAME, SUMMARY_FILENAME, write_config
+    # from filigree.db_schema import CURRENT_SCHEMA_VERSION
+    #
+    # filigree_dir = tmp_path / FILIGREE_DIR_NAME
+    # filigree_dir.mkdir()
+    # write_config(filigree_dir, {"prefix": "mcp", "version": 1})
+    # (filigree_dir / SUMMARY_FILENAME).write_text("# test\n")
+    #
+    # d = FiligreeDB(filigree_dir / DB_FILENAME, prefix="mcp")
+    # d.initialize()
+    # d.close()
+    #
+    # conn = sqlite3.connect(filigree_dir / DB_FILENAME)
+    # conn.execute(f"PRAGMA user_version = {CURRENT_SCHEMA_VERSION + 1}")
+    # conn.commit()
+    # conn.close()
+    #
+    # # Point mcp_server at this filigree_dir so startup sees the too-new DB.
+    # # monkeypatch auto-restores on teardown regardless of test exceptions.
+    # import filigree.mcp_server as mcp_mod
+    # monkeypatch.setattr(mcp_mod, "db", None)
+    # monkeypatch.setattr(mcp_mod, "_filigree_dir", filigree_dir)
+    # # Call Task 5.4's _attempt_startup() here — it sets the degraded-mode flag.
+    # # mcp_mod._attempt_startup()
+    # return SeededMCPClient(client=_InProcessMCPClient(mcp_mod.db))  # type: ignore[arg-type]
 
 
 @pytest.fixture
