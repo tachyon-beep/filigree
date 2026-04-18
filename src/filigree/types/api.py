@@ -431,8 +431,9 @@ class BatchResponse(TypedDict, Generic[_T]):
     """Unified response for batch mutation operations.
 
     Rules:
-    - ``succeeded`` is a list of T — SlimIssue for issue-centric ops in
-      slim mode, full records for others or in full mode.
+    - ``succeeded`` is a list of T, where T is the per-op result type
+      (e.g. SlimIssue for issue batch ops, FindingRecord for finding
+      batch ops).
     - ``failed`` is always present (empty list if no failures).
     - ``newly_unblocked`` is OMITTED entirely when the op cannot unblock
       (not present as ``[]``). Present only for close/transition ops.
