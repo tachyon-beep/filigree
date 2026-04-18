@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Any, Literal, NotRequired, TypedDict
+from enum import StrEnum
+from typing import Any, Generic, Literal, NotRequired, TypedDict, TypeVar
 
 from filigree.types.core import ISOTimestamp, IssueDict, StatusCategory
 from filigree.types.events import EventType
@@ -391,9 +392,25 @@ class StateExplanation(TypedDict):
 # 2.0 response envelopes
 # ---------------------------------------------------------------------------
 
-from typing import Generic, TypeVar  # noqa: E402
-
 _T = TypeVar("_T")
+
+
+class ErrorCode(StrEnum):
+    """Closed set of error codes for MCP + dashboard + CLI.
+
+    Consolidated from 15+ ad-hoc strings into 9 stable members. Callers
+    branch on these values; retry / UX policies depend on them.
+    """
+
+    VALIDATION = "VALIDATION"  # replaces: invalid, validation_error, invalid_path, invalid_command, database_error→rare, etc.
+    NOT_FOUND = "NOT_FOUND"  # replaces: not_found, scanner_not_found, unknown_tool, command_not_found
+    CONFLICT = "CONFLICT"  # claim races, optimistic-lock miss
+    INVALID_TRANSITION = "INVALID_TRANSITION"
+    PERMISSION = "PERMISSION"  # replaces: permission_error
+    NOT_INITIALIZED = "NOT_INITIALIZED"  # replaces: not_initialized
+    IO = "IO"  # replaces: io_error, db_error, import_error
+    INVALID_API_URL = "INVALID_API_URL"
+    STOP_FAILED = "STOP_FAILED"
 
 
 class BatchFailure(TypedDict):
@@ -406,7 +423,7 @@ class BatchFailure(TypedDict):
 
     item_id: str
     error: str
-    code: str
+    code: ErrorCode
 
 
 class BatchResponse(TypedDict, Generic[_T]):

@@ -30,3 +30,28 @@ def test_batch_response_is_generic() -> None:
     # A parameterized form should be usable
     inst: BatchResponse[SlimIssue] = {"succeeded": [], "failed": []}
     assert inst["succeeded"] == []
+
+
+def test_error_code_enum_members() -> None:
+    from filigree.types.api import ErrorCode
+
+    # Exact 9-member set — locked by spec §1e
+    expected = {
+        "VALIDATION",
+        "NOT_FOUND",
+        "CONFLICT",
+        "INVALID_TRANSITION",
+        "PERMISSION",
+        "NOT_INITIALIZED",
+        "IO",
+        "INVALID_API_URL",
+        "STOP_FAILED",
+    }
+    assert {e.name for e in ErrorCode} == expected
+
+
+def test_error_code_is_str_subclass() -> None:
+    from filigree.types.api import ErrorCode
+
+    assert ErrorCode.VALIDATION == "VALIDATION"
+    assert isinstance(ErrorCode.VALIDATION, str)
