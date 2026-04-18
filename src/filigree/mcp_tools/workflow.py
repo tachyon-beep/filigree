@@ -9,6 +9,7 @@ from mcp.types import TextContent, Tool
 
 from filigree.mcp_tools.common import _parse_args, _text
 from filigree.types.api import (
+    ErrorCode,
     ErrorResponse,
     InboundTransitionInfo,
     OutboundTransitionInfo,
@@ -158,7 +159,7 @@ async def _handle_get_template(arguments: dict[str, Any]) -> list[TextContent]:
     tracker = _get_db()
     tpl = tracker.get_template(args["type"])
     if tpl is None:
-        return _text(ErrorResponse(error=f"Unknown template: {args['type']}", code="not_found"))
+        return _text(ErrorResponse(error=f"Unknown template: {args['type']}", code=ErrorCode.NOT_FOUND))
     return _text(tpl)
 
 
@@ -203,7 +204,7 @@ async def _handle_get_type_info(arguments: dict[str, Any]) -> list[TextContent]:
     tracker = _get_db()
     type_tpl = tracker.templates.get_type(args["type"])
     if type_tpl is None:
-        return _text(ErrorResponse(error=f"Unknown type: {args['type']}", code="not_found"))
+        return _text(ErrorResponse(error=f"Unknown type: {args['type']}", code=ErrorCode.NOT_FOUND))
     fields = [tracker._field_schema_to_info(fd) for fd in type_tpl.fields_schema]
     return _text(
         TypeInfoResponse(
@@ -264,7 +265,7 @@ async def _handle_get_valid_transitions(arguments: dict[str, Any]) -> list[TextC
             ]
         )
     except KeyError:
-        return _text(ErrorResponse(error=f"Issue not found: {args['issue_id']}", code="not_found"))
+        return _text(ErrorResponse(error=f"Issue not found: {args['issue_id']}", code=ErrorCode.NOT_FOUND))
 
 
 async def _handle_validate_issue(arguments: dict[str, Any]) -> list[TextContent]:
@@ -282,7 +283,7 @@ async def _handle_validate_issue(arguments: dict[str, Any]) -> list[TextContent]
             )
         )
     except KeyError:
-        return _text(ErrorResponse(error=f"Issue not found: {args['issue_id']}", code="not_found"))
+        return _text(ErrorResponse(error=f"Issue not found: {args['issue_id']}", code=ErrorCode.NOT_FOUND))
 
 
 async def _handle_get_workflow_guide(arguments: dict[str, Any]) -> list[TextContent]:
@@ -304,7 +305,7 @@ async def _handle_get_workflow_guide(arguments: dict[str, Any]) -> list[TextCont
         return _text(
             ErrorResponse(
                 error=f"Unknown pack: '{args['pack']}'. Use list_packs to see available packs, or list_types to see types.",
-                code="not_found",
+                code=ErrorCode.NOT_FOUND,
             )
         )
 
@@ -324,7 +325,7 @@ async def _handle_explain_state(arguments: dict[str, Any]) -> list[TextContent]:
     tracker = _get_db()
     state_tpl = tracker.templates.get_type(args["type"])
     if state_tpl is None:
-        return _text(ErrorResponse(error=f"Unknown type: {args['type']}", code="not_found"))
+        return _text(ErrorResponse(error=f"Unknown type: {args['type']}", code=ErrorCode.NOT_FOUND))
     state_name = args["state"]
     state_def = None
     for s in state_tpl.states:
@@ -332,7 +333,7 @@ async def _handle_explain_state(arguments: dict[str, Any]) -> list[TextContent]:
             state_def = s
             break
     if state_def is None:
-        return _text(ErrorResponse(error=f"Unknown state '{state_name}' for type '{args['type']}'", code="not_found"))
+        return _text(ErrorResponse(error=f"Unknown state '{state_name}' for type '{args['type']}'", code=ErrorCode.NOT_FOUND))
     inbound: list[InboundTransitionInfo] = [
         InboundTransitionInfo(**{"from": td.from_state, "enforcement": td.enforcement})
         for td in state_tpl.transitions
@@ -366,6 +367,6 @@ async def _handle_reload_templates(arguments: dict[str, Any]) -> list[TextConten
         # _refresh_summary reads template-derived sections.
         tracker.templates.list_types()
     except ValueError as exc:
-        return _text(ErrorResponse(error=str(exc), code="validation_error"))
+        return _text(ErrorResponse(error=str(exc), code=ErrorCode.VALIDATION))
     _refresh_summary()
     return _text({"status": "ok"})

@@ -350,7 +350,7 @@ class TestTemplateAndSummary:
     async def test_get_template_unknown(self, mcp_db: FiligreeDB) -> None:
         result = await call_tool("get_template", {"type": "nonexistent"})
         data = _parse(result)
-        assert data["code"] == "not_found"
+        assert data["code"] == ErrorCode.NOT_FOUND
 
     async def test_get_summary(self, mcp_db: FiligreeDB) -> None:
         result = await call_tool("get_summary", {})
@@ -798,7 +798,7 @@ class TestWorkflowTemplateTools:
     async def test_get_type_info_not_found(self, mcp_db: FiligreeDB) -> None:
         result = await call_tool("get_type_info", {"type": "nonexistent"})
         data = _parse(result)
-        assert data["code"] == "not_found"
+        assert data["code"] == ErrorCode.NOT_FOUND
 
     async def test_get_type_info_fields_have_options(self, mcp_db: FiligreeDB) -> None:
         result = await call_tool("get_type_info", {"type": "bug"})
@@ -853,7 +853,7 @@ class TestWorkflowTemplateTools:
     async def test_get_valid_transitions_not_found(self, mcp_db: FiligreeDB) -> None:
         result = await call_tool("get_valid_transitions", {"issue_id": "mcp-nonexistent"})
         data = _parse(result)
-        assert data["code"] == "not_found"
+        assert data["code"] == ErrorCode.NOT_FOUND
 
     async def test_validate_issue(self, mcp_db: FiligreeDB) -> None:
         issue = mcp_db.create_issue("Validate test", type="task")
@@ -867,7 +867,7 @@ class TestWorkflowTemplateTools:
     async def test_validate_issue_not_found(self, mcp_db: FiligreeDB) -> None:
         result = await call_tool("validate_issue", {"issue_id": "mcp-nonexistent"})
         data = _parse(result)
-        assert data["code"] == "not_found"
+        assert data["code"] == ErrorCode.NOT_FOUND
 
     async def test_get_workflow_guide(self, mcp_db: FiligreeDB) -> None:
         result = await call_tool("get_workflow_guide", {"pack": "core"})
@@ -879,7 +879,7 @@ class TestWorkflowTemplateTools:
     async def test_get_workflow_guide_not_found(self, mcp_db: FiligreeDB) -> None:
         result = await call_tool("get_workflow_guide", {"pack": "nonexistent"})
         data = _parse(result)
-        assert data["code"] == "not_found"
+        assert data["code"] == ErrorCode.NOT_FOUND
 
     async def test_explain_state(self, mcp_db: FiligreeDB) -> None:
         result = await call_tool("explain_state", {"type": "task", "state": "open"})
@@ -894,12 +894,12 @@ class TestWorkflowTemplateTools:
     async def test_explain_state_unknown_type(self, mcp_db: FiligreeDB) -> None:
         result = await call_tool("explain_state", {"type": "nonexistent", "state": "open"})
         data = _parse(result)
-        assert data["code"] == "not_found"
+        assert data["code"] == ErrorCode.NOT_FOUND
 
     async def test_explain_state_unknown_state(self, mcp_db: FiligreeDB) -> None:
         result = await call_tool("explain_state", {"type": "task", "state": "nonexistent"})
         data = _parse(result)
-        assert data["code"] == "not_found"
+        assert data["code"] == ErrorCode.NOT_FOUND
 
     async def test_reload_templates(self, mcp_db: FiligreeDB) -> None:
         result = await call_tool("reload_templates", {})
@@ -919,7 +919,7 @@ class TestWorkflowTemplateTools:
 
         result = await call_tool("reload_templates", {})
         data = _parse(result)
-        assert data["code"] == "validation_error"
+        assert data["code"] == ErrorCode.VALIDATION
         assert "config.json" in data["error"]
 
     async def test_reload_templates_refreshes_context_md(self, mcp_db: FiligreeDB) -> None:
