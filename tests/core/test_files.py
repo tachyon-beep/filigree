@@ -2357,7 +2357,7 @@ class TestCreateObservationsPartialFailure:
 
 
 class TestSafeJsonLoads:
-    """filigree-ef3925404b: _safe_json_loads edge cases."""
+    """filigree-ef3925404b and filigree-769a192252: _safe_json_loads edge cases."""
 
     def test_none_input_returns_empty_dict(self) -> None:
         assert _safe_json_loads(None, "test") == {}
@@ -2365,17 +2365,17 @@ class TestSafeJsonLoads:
     def test_empty_string_returns_empty_dict(self) -> None:
         assert _safe_json_loads("", "test") == {}
 
-    def test_non_dict_json_array_repairs_to_empty(self) -> None:
+    def test_non_dict_json_array_surfaces_error_marker(self) -> None:
         result = _safe_json_loads("[1,2,3]", "test")
-        assert result == {}
+        assert result == {"_metadata_error": True}
 
-    def test_non_dict_json_scalar_repairs_to_empty(self) -> None:
+    def test_non_dict_json_scalar_surfaces_error_marker(self) -> None:
         result = _safe_json_loads("42", "test")
-        assert result == {}
+        assert result == {"_metadata_error": True}
 
-    def test_non_dict_json_repairs_regardless_of_error_key(self) -> None:
+    def test_non_dict_json_honours_error_key(self) -> None:
         result = _safe_json_loads("[1,2,3]", "test", error_key="_fields_error")
-        assert result == {}
+        assert result == {"_fields_error": True}
 
     def test_valid_dict_returns_parsed(self) -> None:
         result = _safe_json_loads('{"key": "value", "num": 42}', "test")
@@ -2384,6 +2384,22 @@ class TestSafeJsonLoads:
     def test_invalid_json_returns_error_marker(self) -> None:
         result = _safe_json_loads("{not valid json}", "test")
         assert result == {"_metadata_error": True}
+
+    def test_non_dict_file_metadata_surfaces_data_warning(self, db: FiligreeDB) -> None:
+        """End-to-end: array JSON in file_records.metadata must yield a data_warning."""
+        fr = db.register_file("array_meta.py")
+        db.conn.execute(
+            "UPDATE file_records SET metadata = '[1,2,3]' WHERE id = ?",
+            (fr.id,),
+        )
+        db.conn.commit()
+
+        result = db.get_file_by_path("array_meta.py")
+        assert result is not None
+        d = result.to_dict()
+        assert "_metadata_error" not in d["metadata"]
+        assert len(d["data_warnings"]) == 1
+        assert "corrupt" in d["data_warnings"][0].lower()
 
 
 # ---------------------------------------------------------------------------

@@ -134,6 +134,32 @@ class TestUpdateAndClose:
         result = runner.invoke(cli, ["update", "test-nonexistent", "--title", "nope"])
         assert result.exit_code == 1
 
+    def test_update_design_sets_field(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        runner, _ = cli_in_project
+        r = runner.invoke(cli, ["create", "Design shorthand"])
+        issue_id = _extract_id(r.output)
+        result = runner.invoke(cli, ["update", issue_id, "--design", "draft v1"])
+        assert result.exit_code == 0
+
+        show = runner.invoke(cli, ["show", issue_id, "--json"])
+        data = json.loads(show.output)
+        assert data["fields"]["design"] == "draft v1"
+
+    def test_update_design_empty_string_clears_field(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        """filigree-613e9f5f66: `--design=` must clear the field via shorthand, not silently no-op."""
+        runner, _ = cli_in_project
+        r = runner.invoke(cli, ["create", "Design clear"])
+        issue_id = _extract_id(r.output)
+        runner.invoke(cli, ["update", issue_id, "--design", "initial"])
+
+        # Clear via empty-string shorthand.
+        result = runner.invoke(cli, ["update", issue_id, "--design", ""])
+        assert result.exit_code == 0
+
+        show = runner.invoke(cli, ["show", issue_id, "--json"])
+        data = json.loads(show.output)
+        assert data["fields"].get("design") == ""
+
     def test_close_issue(self, cli_in_project: tuple[CliRunner, Path]) -> None:
         runner, _ = cli_in_project
         r = runner.invoke(cli, ["create", "Close me"])

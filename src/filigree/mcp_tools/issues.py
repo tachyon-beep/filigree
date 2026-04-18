@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import sqlite3
 from collections.abc import Callable
 from typing import Any
 
@@ -363,13 +362,11 @@ async def _handle_get_issue(arguments: dict[str, Any]) -> list[TextContent]:
         issue = tracker.get_issue(args["id"])
         issue_dict = issue.to_dict()
 
-        # Include file associations (default true)
+        # Fail-fast to match dashboard and get_issue_files MCP tool; see
+        # filigree-c6c7842661 for why swallowing sqlite3.Error is wrong.
         file_assocs: list[Any] = []
         if args.get("include_files", True):
-            try:
-                file_assocs = tracker.get_issue_files(args["id"])
-            except (sqlite3.Error, KeyError) as exc:
-                logger.warning("Failed to load file associations for %s: %s", args["id"], exc)
+            file_assocs = tracker.get_issue_files(args["id"])
 
         if args.get("include_transitions"):
             transitions = tracker.get_valid_transitions(args["id"])

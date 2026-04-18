@@ -216,7 +216,9 @@ def update(
 ) -> None:
     """Update an issue."""
     fields = None
-    if field or design:
+    # Truthiness gates would silently drop `--design=` (empty-string clear);
+    # see filigree-613e9f5f66.  Distinguish unset (None) from cleared ("").
+    if field or design is not None:
         fields = {}
         for f in field:
             if "=" not in f:
@@ -227,7 +229,7 @@ def update(
                 sys.exit(1)
             k, v = f.split("=", 1)
             fields[k] = v
-        if design:
+        if design is not None:
             fields["design"] = design
 
     with get_db() as db:

@@ -141,7 +141,13 @@ def _build_transition_error(
     *,
     include_ready: bool = True,
 ) -> TransitionError:
-    """Build a structured error dict with valid-transition hints."""
+    """Build a structured error dict with valid-transition hints.
+
+    Transition enrichment is best-effort: ``get_valid_transitions()`` re-reads
+    the issue from SQLite, so a backend exception during error construction
+    must not mask the caller's original invalid_transition payload (see
+    filigree-55c5347992).
+    """
     data: TransitionError = {"error": error, "code": "invalid_transition"}
     try:
         transitions = tracker.get_valid_transitions(issue_id)
@@ -150,6 +156,7 @@ def _build_transition_error(
         else:
             data["valid_transitions"] = [{"to": t.to, "category": t.category} for t in transitions]
         data["hint"] = "Use get_valid_transitions to see allowed state changes"
-    except KeyError:
+    except Exception:
+        # Enrichment is best-effort — must never mask the original error.
         logger.debug("Could not resolve transitions for %s", issue_id, exc_info=True)
     return data

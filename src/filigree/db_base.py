@@ -51,8 +51,8 @@ def _safe_json_loads(raw: str | None, context: str, *, error_key: str = "_metada
         logger.warning("Corrupt JSON (%s): %r", context, str(raw)[:200] if raw else raw)
         return {error_key: True}
     if not isinstance(result, dict):
-        logger.warning("JSON (%s) parsed but is not a dict (got %s), repairing to {{}}: %r", context, type(result).__name__, str(raw)[:200])
-        return {}
+        logger.warning("JSON (%s) parsed but is not a dict (got %s): %r", context, type(result).__name__, str(raw)[:200])
+        return {error_key: True}
     return result
 
 

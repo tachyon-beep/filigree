@@ -65,6 +65,27 @@ class TestCreateAndGet:
         data = _parse(result)
         assert data["code"] == "not_found"
 
+    async def test_get_issue_file_lookup_failure_propagates(self, mcp_db: FiligreeDB) -> None:
+        """filigree-c6c7842661: get_issue must not convert sqlite3.Error into files=[]."""
+        import sqlite3
+
+        issue = mcp_db.create_issue("File lookup will fail")
+
+        def _raise(issue_id: str) -> list[Any]:
+            raise sqlite3.OperationalError("no such table: file_associations")
+
+        with patch.object(mcp_db, "get_issue_files", side_effect=_raise), pytest.raises(sqlite3.OperationalError):
+            await call_tool("get_issue", {"id": issue.id})
+
+    async def test_get_issue_without_files_skips_lookup(self, mcp_db: FiligreeDB) -> None:
+        """include_files=False must not call get_issue_files at all."""
+        issue = mcp_db.create_issue("Skip file lookup")
+        with patch.object(mcp_db, "get_issue_files") as mocked:
+            result = await call_tool("get_issue", {"id": issue.id, "include_files": False})
+        mocked.assert_not_called()
+        data = _parse(result)
+        assert "files" not in data
+
 
 class TestRefreshSummaryBestEffort:
     async def test_mutation_succeeds_when_summary_refresh_fails(self, mcp_db: FiligreeDB) -> None:
@@ -939,6 +960,25 @@ class TestMCPMutationEnhancements:
         assert data["code"] == "invalid_transition"
         assert "valid_transitions" in data
         assert "hint" in data
+
+    async def test_transition_error_survives_enrichment_backend_failure(self, mcp_db: FiligreeDB) -> None:
+        """filigree-55c5347992: enrichment lookup failure must not mask invalid_transition."""
+        import sqlite3
+
+        from filigree.mcp_tools.common import _build_transition_error
+
+        issue = mcp_db.create_issue("Crash enrichment", type="bug")
+        with patch.object(
+            mcp_db,
+            "get_valid_transitions",
+            side_effect=sqlite3.OperationalError("database is locked"),
+        ):
+            data = _build_transition_error(mcp_db, issue.id, "bad state")
+        assert data["code"] == "invalid_transition"
+        assert data["error"] == "bad state"
+        # Enrichment fields are absent — lookup failed, but original error is preserved.
+        assert "valid_transitions" not in data
+        assert "hint" not in data
 
     async def test_claim_next_success(self, mcp_db: FiligreeDB) -> None:
         mcp_db.create_issue("Ready task", type="task", priority=1)
