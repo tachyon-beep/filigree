@@ -34,7 +34,7 @@ class TestRemoveDependencyWrongProject:
         )
         data = _parse(result)
         assert isinstance(data, dict), f"expected error dict, got {data!r}"
-        assert data.get("code") == "invalid", data
+        assert data.get("code") == ErrorCode.VALIDATION, data
 
     async def test_missing_dep_still_returns_not_found_status(self, mcp_db: FiligreeDB) -> None:
         """Removing non-existent dep between valid ids returns status=not_found (not an error)."""
@@ -242,7 +242,7 @@ class TestCreatePlanDeps:
         )
         data = _parse(result)
         assert isinstance(data, dict), f"crashed: {data!r}"
-        assert data.get("code") == "validation_error", data
+        assert data.get("code") == ErrorCode.VALIDATION, data
 
     async def test_bool_dep_rejected(self, mcp_db: FiligreeDB) -> None:
         result = await call_tool(
@@ -253,7 +253,7 @@ class TestCreatePlanDeps:
             },
         )
         data = _parse(result)
-        assert data.get("code") == "validation_error", data
+        assert data.get("code") == ErrorCode.VALIDATION, data
 
     async def test_object_dep_rejected(self, mcp_db: FiligreeDB) -> None:
         result = await call_tool(
@@ -264,7 +264,7 @@ class TestCreatePlanDeps:
             },
         )
         data = _parse(result)
-        assert data.get("code") == "validation_error", data
+        assert data.get("code") == ErrorCode.VALIDATION, data
 
     async def test_malformed_string_dep_rejected(self, mcp_db: FiligreeDB) -> None:
         """'1.2.3' or 'abc' must be rejected, not crash via int()."""
@@ -276,7 +276,7 @@ class TestCreatePlanDeps:
             },
         )
         data = _parse(result)
-        assert data.get("code") == "validation_error", data
+        assert data.get("code") == ErrorCode.VALIDATION, data
 
     async def test_valid_int_dep_still_works(self, mcp_db: FiligreeDB) -> None:
         """Valid same-phase int dep still creates plan."""

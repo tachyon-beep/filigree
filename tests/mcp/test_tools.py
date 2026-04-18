@@ -254,7 +254,7 @@ class TestDependencies:
         mcp_db.add_dependency(a.id, b.id)
         result = await call_tool("add_dependency", {"from_id": b.id, "to_id": a.id})
         data = _parse(result)
-        assert data["code"] == "invalid"
+        assert data["code"] == ErrorCode.VALIDATION
 
     async def test_remove_dependency(self, mcp_db: FiligreeDB) -> None:
         a = mcp_db.create_issue("A")
@@ -319,7 +319,7 @@ class TestPlan:
     async def test_get_plan_not_found(self, mcp_db: FiligreeDB) -> None:
         result = await call_tool("get_plan", {"milestone_id": "mcp-nonexistent"})
         data = _parse(result)
-        assert data["code"] == "not_found"
+        assert data["code"] == ErrorCode.NOT_FOUND
 
 
 class TestComments:

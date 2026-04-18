@@ -8,7 +8,7 @@ from typing import Any, cast
 from mcp.types import TextContent, Tool
 
 from filigree.mcp_tools.common import _parse_args, _slim_issue, _text, _validate_actor, _validate_int_range
-from filigree.types.api import BlockedIssue, CriticalPathResponse, DependencyActionResponse, ErrorResponse, PlanResponse
+from filigree.types.api import BlockedIssue, CriticalPathResponse, DependencyActionResponse, ErrorCode, ErrorResponse, PlanResponse
 from filigree.types.inputs import (
     AddDependencyArgs,
     CreatePlanArgs,
@@ -162,7 +162,7 @@ async def _handle_add_dependency(arguments: dict[str, Any]) -> list[TextContent]
             actor=actor,
         )
     except (ValueError, KeyError) as e:
-        return _text(ErrorResponse(error=str(e), code="invalid"))
+        return _text(ErrorResponse(error=str(e), code=ErrorCode.VALIDATION))
     _refresh_summary()
     status = "added" if added else "already_exists"
     return _text(DependencyActionResponse(status=status, from_id=args["from_id"], to_id=args["to_id"]))
@@ -183,7 +183,7 @@ async def _handle_remove_dependency(arguments: dict[str, Any]) -> list[TextConte
             actor=actor,
         )
     except (ValueError, KeyError) as e:
-        return _text(ErrorResponse(error=str(e), code="invalid"))
+        return _text(ErrorResponse(error=str(e), code=ErrorCode.VALIDATION))
     _refresh_summary()
     status = "removed" if removed else "not_found"
     return _text(DependencyActionResponse(status=status, from_id=args["from_id"], to_id=args["to_id"]))
@@ -223,7 +223,7 @@ async def _handle_get_plan(arguments: dict[str, Any]) -> list[TextContent]:
         )
         return _text(result)
     except KeyError:
-        return _text(ErrorResponse(error=f"Milestone not found: {args['milestone_id']}", code="not_found"))
+        return _text(ErrorResponse(error=f"Milestone not found: {args['milestone_id']}", code=ErrorCode.NOT_FOUND))
 
 
 def _validate_plan_deps(deps: Any, name: str) -> list[TextContent] | None:
@@ -236,16 +236,16 @@ def _validate_plan_deps(deps: Any, name: str) -> list[TextContent] | None:
     ``ValueError`` from ``int()`` (per filigree-e87d310708).
     """
     if not isinstance(deps, list):
-        return _text(ErrorResponse(error=f"{name} must be an array", code="validation_error"))
+        return _text(ErrorResponse(error=f"{name} must be an array", code=ErrorCode.VALIDATION))
     for i, dep in enumerate(deps):
         label = f"{name}[{i}]"
         # Reject bool before int: ``True`` is ``int`` subclass but ``str(True)``
         # hits ``int('True')`` → raw ValueError.
         if isinstance(dep, bool):
-            return _text(ErrorResponse(error=f"{label} must be integer or string, not bool", code="validation_error"))
+            return _text(ErrorResponse(error=f"{label} must be integer or string, not bool", code=ErrorCode.VALIDATION))
         if isinstance(dep, int):
             if dep < 0:
-                return _text(ErrorResponse(error=f"{label} must be >= 0", code="validation_error"))
+                return _text(ErrorResponse(error=f"{label} must be >= 0", code=ErrorCode.VALIDATION))
             continue
         if isinstance(dep, str):
             parts = dep.split(".")
@@ -253,14 +253,14 @@ def _validate_plan_deps(deps: Any, name: str) -> list[TextContent] | None:
                 return _text(
                     ErrorResponse(
                         error=f"{label} must be 'N' or 'P.S' with integer components, got {dep!r}",
-                        code="validation_error",
+                        code=ErrorCode.VALIDATION,
                     )
                 )
             continue
         return _text(
             ErrorResponse(
                 error=f"{label} must be integer or 'P.S' string, got {type(dep).__name__}",
-                code="validation_error",
+                code=ErrorCode.VALIDATION,
             )
         )
     return None
@@ -301,7 +301,7 @@ async def _handle_create_plan(arguments: dict[str, Any]) -> list[TextContent]:
         _refresh_summary()
         return _text(plan)
     except (KeyError, IndexError, ValueError) as e:
-        return _text(ErrorResponse(error=str(e), code="invalid"))
+        return _text(ErrorResponse(error=str(e), code=ErrorCode.VALIDATION))
 
 
 async def _handle_get_critical_path(arguments: dict[str, Any]) -> list[TextContent]:
