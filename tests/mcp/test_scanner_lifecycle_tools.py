@@ -126,7 +126,7 @@ class TestGetScanStatusTool:
 
     async def test_get_scan_status_log_lines_validated(self, mcp_db: FiligreeDB) -> None:
         data = _parse(await call_tool("get_scan_status", {"scan_run_id": "x", "log_lines": 0}))
-        assert data["code"] == "validation_error"
+        assert data["code"] == ErrorCode.VALIDATION
 
     async def test_get_scan_status_auto_fails_dead_process(self, mcp_db: FiligreeDB) -> None:
         """When process is dead, get_scan_status should auto-transition to 'failed'."""

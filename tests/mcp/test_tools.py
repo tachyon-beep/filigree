@@ -749,7 +749,7 @@ class TestUnknownTool:
     async def test_unknown_tool(self, mcp_db: FiligreeDB) -> None:
         result = await call_tool("nonexistent_tool", {})
         data = _parse(result)
-        assert data["code"] == "unknown_tool"
+        assert data["code"] == ErrorCode.NOT_FOUND
 
 
 class TestTextHelper:
@@ -1528,7 +1528,7 @@ class TestFileTools:
         self, mcp_db: FiligreeDB, field: str, value: dict[str, str]
     ) -> None:
         result = _parse(await call_tool("list_files", {field: value}))
-        assert result["code"] == "validation_error"  # from common._validate_str, not yet migrated
+        assert result["code"] == ErrorCode.VALIDATION
         assert result["error"] == f"{field} must be a string"
 
     async def test_add_file_association_and_get_issue_files(self, mcp_db: FiligreeDB) -> None:
@@ -2544,7 +2544,7 @@ class TestMCPV10:
 
         result = await call_tool("compact_events", {"keep_recent": -1})
         data = _parse(result)
-        assert data.get("code") == "validation_error", data
+        assert data.get("code") == ErrorCode.VALIDATION, data
 
         after = mcp_db.conn.execute("SELECT COUNT(*) as cnt FROM events WHERE issue_id = ?", (issue.id,)).fetchone()["cnt"]
         assert after == before, f"MCP compact_events with keep_recent=-1 wiped {before - after} events"

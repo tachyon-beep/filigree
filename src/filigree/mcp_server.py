@@ -47,6 +47,7 @@ from filigree.mcp_tools.common import (  # noqa: F401  — re-exported for backw
     _text,
 )
 from filigree.summary import generate_summary, write_summary
+from filigree.types.api import ErrorCode
 
 # ---------------------------------------------------------------------------
 # Module globals (state accessors depend on these)
@@ -350,7 +351,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
     if handler is None:
         from filigree.mcp_tools.common import _text as _common_text
 
-        return _common_text({"error": f"Unknown tool: {name}", "code": "unknown_tool"})
+        return _common_text({"error": f"Unknown tool: {name}", "code": ErrorCode.NOT_FOUND})
 
     # Serialise tool execution per-DB. The MCP SDK dispatches tool calls
     # concurrently; the shared ``sqlite3.Connection`` on ``FiligreeDB`` has

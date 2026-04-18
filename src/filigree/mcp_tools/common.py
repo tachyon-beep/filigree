@@ -16,7 +16,7 @@ from filigree.models import Issue
 
 if TYPE_CHECKING:
     from filigree.core import FiligreeDB
-from filigree.types.api import ErrorResponse, SlimIssue, TransitionError
+from filigree.types.api import ErrorCode, ErrorResponse, SlimIssue, TransitionError
 from filigree.validation import sanitize_actor
 
 logger = logging.getLogger(__name__)
@@ -70,7 +70,7 @@ def _resolve_pagination(arguments: dict[str, Any]) -> tuple[int, int, list[TextC
     """
     no_limit = arguments.get("no_limit", False)
     if not isinstance(no_limit, bool):
-        return 0, 0, _text(ErrorResponse(error="no_limit must be a boolean", code="validation_error"))
+        return 0, 0, _text(ErrorResponse(error="no_limit must be a boolean", code=ErrorCode.VALIDATION))
 
     requested_limit = arguments.get("limit", _MAX_LIST_RESULTS)
     limit_err = _validate_int_range(requested_limit, "limit", min_val=1)
@@ -101,7 +101,7 @@ def _apply_has_more(items: list[Any], effective_limit: int) -> tuple[list[Any], 
 def _validate_str(value: Any, name: str) -> list[TextContent] | None:
     """Return a validation error if *value* is not ``None`` and not a ``str``."""
     if value is not None and not isinstance(value, str):
-        return _text(ErrorResponse(error=f"{name} must be a string", code="validation_error"))
+        return _text(ErrorResponse(error=f"{name} must be a string", code=ErrorCode.VALIDATION))
     return None
 
 
@@ -118,11 +118,11 @@ def _validate_int_range(
     if value is None:
         return None
     if isinstance(value, bool) or not isinstance(value, int):
-        return _text(ErrorResponse(error=f"{name} must be an integer", code="validation_error"))
+        return _text(ErrorResponse(error=f"{name} must be an integer", code=ErrorCode.VALIDATION))
     if min_val is not None and value < min_val:
-        return _text(ErrorResponse(error=f"{name} must be >= {min_val}", code="validation_error"))
+        return _text(ErrorResponse(error=f"{name} must be >= {min_val}", code=ErrorCode.VALIDATION))
     if max_val is not None and value > max_val:
-        return _text(ErrorResponse(error=f"{name} must be <= {max_val}", code="validation_error"))
+        return _text(ErrorResponse(error=f"{name} must be <= {max_val}", code=ErrorCode.VALIDATION))
     return None
 
 
@@ -130,7 +130,7 @@ def _validate_actor(value: Any) -> tuple[str, list[TextContent] | None]:
     """Sanitize actor, returning (cleaned, None) or ("", error_response)."""
     cleaned, err = sanitize_actor(value)
     if err:
-        return ("", _text(ErrorResponse(error=err, code="validation_error")))
+        return ("", _text(ErrorResponse(error=err, code=ErrorCode.VALIDATION)))
     return (cleaned, None)
 
 

@@ -124,7 +124,7 @@ class TestPromoteFindingPriority:
         )
         data = _parse(result)
         assert isinstance(data, dict), f"crashed: {data!r}"
-        assert data.get("code") == "validation_error", data
+        assert data.get("code") == ErrorCode.VALIDATION, data
 
     async def test_float_priority_rejected(self, mcp_db: FiligreeDB, finding_id: str) -> None:
         result = await call_tool(
@@ -132,7 +132,7 @@ class TestPromoteFindingPriority:
             {"finding_id": finding_id, "priority": 2.5},
         )
         data = _parse(result)
-        assert data.get("code") == "validation_error", data
+        assert data.get("code") == ErrorCode.VALIDATION, data
 
     async def test_out_of_range_priority_rejected(self, mcp_db: FiligreeDB, finding_id: str) -> None:
         result = await call_tool(
@@ -140,7 +140,7 @@ class TestPromoteFindingPriority:
             {"finding_id": finding_id, "priority": 99},
         )
         data = _parse(result)
-        assert data.get("code") == "validation_error", data
+        assert data.get("code") == ErrorCode.VALIDATION, data
 
     async def test_bool_priority_rejected(self, mcp_db: FiligreeDB, finding_id: str) -> None:
         """bool is an int subclass but must be rejected (True would silently become priority=1)."""
@@ -149,7 +149,7 @@ class TestPromoteFindingPriority:
             {"finding_id": finding_id, "priority": True},
         )
         data = _parse(result)
-        assert data.get("code") == "validation_error", data
+        assert data.get("code") == ErrorCode.VALIDATION, data
 
 
 # ---------------------------------------------------------------------------
@@ -162,29 +162,29 @@ class TestPaginationValidation:
         result = await call_tool("search_issues", {"query": "x", "limit": "5"})
         data = _parse(result)
         assert isinstance(data, dict), f"crashed: {data!r}"
-        assert data.get("code") == "validation_error", data
+        assert data.get("code") == ErrorCode.VALIDATION, data
 
     async def test_negative_limit_rejected(self, mcp_db: FiligreeDB) -> None:
         result = await call_tool("list_issues", {"limit": -1})
         data = _parse(result)
-        assert data.get("code") == "validation_error", data
+        assert data.get("code") == ErrorCode.VALIDATION, data
 
     async def test_negative_offset_rejected(self, mcp_db: FiligreeDB) -> None:
         result = await call_tool("list_issues", {"offset": -1})
         data = _parse(result)
-        assert data.get("code") == "validation_error", data
+        assert data.get("code") == ErrorCode.VALIDATION, data
 
     async def test_string_no_limit_rejected(self, mcp_db: FiligreeDB) -> None:
         """'false' as string must not be treated as truthy."""
         result = await call_tool("search_issues", {"query": "x", "no_limit": "false"})
         data = _parse(result)
-        assert data.get("code") == "validation_error", data
+        assert data.get("code") == ErrorCode.VALIDATION, data
 
     async def test_bool_limit_rejected(self, mcp_db: FiligreeDB) -> None:
         """Bool is int subclass — must not be accepted as limit."""
         result = await call_tool("list_issues", {"limit": True})
         data = _parse(result)
-        assert data.get("code") == "validation_error", data
+        assert data.get("code") == ErrorCode.VALIDATION, data
 
 
 # ---------------------------------------------------------------------------
@@ -197,24 +197,24 @@ class TestObserveValidation:
         result = await call_tool("observe", {"summary": "x", "priority": True})
         data = _parse(result)
         assert isinstance(data, dict), f"crashed: {data!r}"
-        assert data.get("code") == "validation_error", data
+        assert data.get("code") == ErrorCode.VALIDATION, data
 
     async def test_string_line_rejected(self, mcp_db: FiligreeDB) -> None:
         result = await call_tool("observe", {"summary": "x", "line": "42"})
         data = _parse(result)
-        assert data.get("code") == "validation_error", data
+        assert data.get("code") == ErrorCode.VALIDATION, data
 
     async def test_non_string_file_path_rejected(self, mcp_db: FiligreeDB) -> None:
         """file_path=42 would crash in _normalize_scan_path via .replace()."""
         result = await call_tool("observe", {"summary": "x", "file_path": 42})
         data = _parse(result)
         assert isinstance(data, dict), f"crashed: {data!r}"
-        assert data.get("code") == "validation_error", data
+        assert data.get("code") == ErrorCode.VALIDATION, data
 
     async def test_non_string_detail_rejected(self, mcp_db: FiligreeDB) -> None:
         result = await call_tool("observe", {"summary": "x", "detail": {"nope": 1}})
         data = _parse(result)
-        assert data.get("code") == "validation_error", data
+        assert data.get("code") == ErrorCode.VALIDATION, data
 
 
 # ---------------------------------------------------------------------------
