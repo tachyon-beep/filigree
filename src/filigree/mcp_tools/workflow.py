@@ -357,8 +357,15 @@ async def _handle_explain_state(arguments: dict[str, Any]) -> list[TextContent]:
 
 
 async def _handle_reload_templates(arguments: dict[str, Any]) -> list[TextContent]:
-    from filigree.mcp_server import _get_db
+    from filigree.mcp_server import _get_db, _refresh_summary
 
     tracker = _get_db()
-    tracker.reload_templates()
+    try:
+        tracker.reload_templates()
+        # Force the new registry to materialise before regenerating context.md;
+        # _refresh_summary reads template-derived sections.
+        tracker.templates.list_types()
+    except ValueError as exc:
+        return _text(ErrorResponse(error=str(exc), code="validation_error"))
+    _refresh_summary()
     return _text({"status": "ok"})

@@ -879,3 +879,108 @@ class TestValidateIssue:
         """validate_issue on nonexistent issue raises KeyError."""
         with pytest.raises(KeyError):
             db.validate_issue("test-nonexistent")
+
+    def test_unknown_type_emits_error(self, tmp_path: Path) -> None:
+        """Bug filigree-910f1cb024: issue whose type is not in the active registry
+        must fail validation, not silently pass."""
+        d = make_db(tmp_path, packs=["core", "planning", "release"])
+        try:
+            issue = d.create_issue("Rel", type="release")
+        finally:
+            d.close()
+
+        # Disable release pack on next load — the type is now unknown.
+        d2 = make_db(tmp_path, packs=["core", "planning"])
+        try:
+            result = d2.validate_issue(issue.id)
+            assert result.valid is False
+            assert any("release" in e for e in result.errors)
+        finally:
+            d2.close()
+
+    def test_undeclared_status_emits_error(self, db: FiligreeDB) -> None:
+        """Bug filigree-910f1cb024: issue whose current status is not a declared
+        state for its type must fail validation."""
+        issue = db.create_issue("Task", type="task")
+        # Force an impossible state via raw SQL (simulates bulk import / migration
+        # from an older template).
+        db.conn.execute("UPDATE issues SET status = ? WHERE id = ?", ("not_a_real_state", issue.id))
+        db.conn.commit()
+        result = db.validate_issue(issue.id)
+        assert result.valid is False
+        assert any("not_a_real_state" in e for e in result.errors)
+
+
+class TestInferStatusCategoryFallback:
+    """Bug filigree-5c1605d349: name-only fallback must cover every built-in done state.
+
+    Exercised whenever ``_resolve_status_category`` can't find a ``(type, state)`` in
+    the active registry — e.g. pack disabled after issues in it were created.
+    """
+
+    def test_builtin_release_released_is_done(self) -> None:
+        """``release`` pack's ``released`` state must classify as done even when disabled."""
+        from filigree.core import FiligreeDB
+
+        assert FiligreeDB._infer_status_category("release", "released") == "done"
+
+    def test_builtin_risk_mitigated_is_done(self) -> None:
+        """``risk`` pack's ``mitigated`` state must classify as done even when disabled."""
+        from filigree.core import FiligreeDB
+
+        assert FiligreeDB._infer_status_category("risk", "mitigated") == "done"
+
+    def test_builtin_requirement_verified_is_done(self) -> None:
+        """``requirement`` pack's ``verified`` state must classify as done."""
+        from filigree.core import FiligreeDB
+
+        assert FiligreeDB._infer_status_category("requirement", "verified") == "done"
+
+    def test_builtin_milestone_completed_is_done(self) -> None:
+        """``milestone`` pack's ``completed`` state must classify as done."""
+        from filigree.core import FiligreeDB
+
+        assert FiligreeDB._infer_status_category("milestone", "completed") == "done"
+
+    def test_incident_resolved_is_wip_not_done(self) -> None:
+        """``resolved`` is wip for incidents — type-aware lookup must return wip,
+        even though the legacy hardcoded set treated ``resolved`` as done."""
+        from filigree.core import FiligreeDB
+
+        assert FiligreeDB._infer_status_category("incident", "resolved") == "wip"
+
+    def test_bug_fixing_is_wip(self) -> None:
+        """``bug`` pack's ``fixing`` state must classify as wip."""
+        from filigree.core import FiligreeDB
+
+        assert FiligreeDB._infer_status_category("bug", "fixing") == "wip"
+
+    def test_custom_type_falls_through_to_open(self) -> None:
+        """Truly unknown (type, state) pairs default to ``open`` — permissive."""
+        from filigree.core import FiligreeDB
+
+        assert FiligreeDB._infer_status_category("my_custom_type", "some_weird_state") == "open"
+
+    def test_disabled_pack_issue_stays_done(self, tmp_path: Path) -> None:
+        """End-to-end: release issue in ``released`` state retains done category
+        after the release pack is disabled — so close_issue/reopen_issue/stats
+        keep working."""
+        d = make_db(tmp_path, packs=["core", "planning", "release"])
+        try:
+            issue = d.create_issue("Rel", type="release")
+            # Force status directly — the full transition chain is out of scope
+            # for this regression (it requires populating required fields). What
+            # matters here is that the issue row has type=release, status=released.
+            d.conn.execute("UPDATE issues SET status = ? WHERE id = ?", ("released", issue.id))
+            d.conn.commit()
+            assert d.get_issue(issue.id).to_dict()["status_category"] == "done"
+        finally:
+            d.close()
+
+        # Disable release pack and verify fallback still yields done
+        d2 = make_db(tmp_path, packs=["core", "planning"])
+        try:
+            fetched = d2.get_issue(issue.id)
+            assert fetched.to_dict()["status_category"] == "done"
+        finally:
+            d2.close()

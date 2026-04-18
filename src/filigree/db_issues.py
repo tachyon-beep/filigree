@@ -549,7 +549,7 @@ class IssuesMixin(DBMixinProtocol):
 
                 # Set closed_at when entering a done-category state
                 status_cat = self.templates.get_category(current.type, status)
-                is_done = (status_cat or self._infer_status_category(status)) == "done"
+                is_done = (status_cat or self._infer_status_category(current.type, status)) == "done"
 
                 if is_done:
                     updates.append("closed_at = ?")
@@ -557,7 +557,7 @@ class IssuesMixin(DBMixinProtocol):
                 else:
                     # Clear closed_at when leaving a done-category state
                     old_cat = self.templates.get_category(current.type, current.status)
-                    if (old_cat or self._infer_status_category(current.status)) == "done":
+                    if (old_cat or self._infer_status_category(current.type, current.status)) == "done":
                         updates.append("closed_at = NULL")
 
             if priority is not None and priority != current.priority:

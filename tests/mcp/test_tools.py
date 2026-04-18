@@ -872,6 +872,30 @@ class TestWorkflowTemplateTools:
         data2 = _parse(result2)
         assert len(data2) >= 2
 
+    async def test_reload_templates_corrupt_config_returns_structured_error(self, mcp_db: FiligreeDB) -> None:
+        """Bug filigree-5c9f9aa7c2: corrupt config.json must not crash the MCP tool."""
+        # Clear the explicit override so reload_templates re-reads config.json.
+        mcp_db._enabled_packs_override = None
+        config_path = mcp_db.db_path.parent / "config.json"
+        config_path.write_text("{not valid json")
+
+        result = await call_tool("reload_templates", {})
+        data = _parse(result)
+        assert data["code"] == "validation_error"
+        assert "config.json" in data["error"]
+
+    async def test_reload_templates_refreshes_context_md(self, mcp_db: FiligreeDB) -> None:
+        """Bug filigree-33e7bf9947: reload_templates must refresh context.md so
+        template-derived sections reflect the new registry."""
+        summary_path = mcp_db.db_path.parent / SUMMARY_FILENAME
+        # Create a marker we know _refresh_summary will overwrite.
+        summary_path.write_text("STALE-MARKER-BEFORE-RELOAD")
+
+        result = await call_tool("reload_templates", {})
+        data = _parse(result)
+        assert data["status"] == "ok"
+        assert summary_path.read_text() != "STALE-MARKER-BEFORE-RELOAD"
+
 
 class TestMCPMutationEnhancements:
     """Tests for Batch 2 — enhanced error handling and new features."""
