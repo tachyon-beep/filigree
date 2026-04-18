@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from filigree.core import FiligreeDB
 from filigree.mcp_server import call_tool  # type: ignore[attr-defined]
+from filigree.types.api import ErrorCode
 from tests.mcp._helpers import _parse
 
 
@@ -36,15 +37,15 @@ class TestGetFindingTool:
 
     async def test_get_finding_not_found(self, mcp_db: FiligreeDB) -> None:
         data = _parse(await call_tool("get_finding", {"finding_id": "nonexistent"}))
-        assert data["code"] == "not_found"
+        assert data["code"] == ErrorCode.NOT_FOUND
 
     async def test_get_finding_empty_id_rejected(self, mcp_db: FiligreeDB) -> None:
         data = _parse(await call_tool("get_finding", {"finding_id": ""}))
-        assert data["code"] == "validation_error"
+        assert data["code"] == ErrorCode.VALIDATION
 
     async def test_get_finding_missing_id_rejected(self, mcp_db: FiligreeDB) -> None:
         data = _parse(await call_tool("get_finding", {}))
-        assert data["code"] == "validation_error"
+        assert data["code"] == ErrorCode.VALIDATION
 
 
 class TestListFindingsTool:
@@ -86,19 +87,19 @@ class TestUpdateFindingTool:
 
     async def test_update_not_found(self, mcp_db: FiligreeDB) -> None:
         data = _parse(await call_tool("update_finding", {"finding_id": "nonexistent", "status": "acknowledged"}))
-        assert data["code"] == "not_found"
+        assert data["code"] == ErrorCode.NOT_FOUND
 
     async def test_update_no_fields_rejected(self, mcp_db: FiligreeDB) -> None:
         """At least one of status or issue_id must be provided."""
         ids = _seed_findings(mcp_db)
         data = _parse(await call_tool("update_finding", {"finding_id": ids["obo"]}))
-        assert data["code"] == "validation_error"
+        assert data["code"] == ErrorCode.VALIDATION
         assert "at least one" in data["error"].lower()
 
     async def test_update_invalid_status_rejected(self, mcp_db: FiligreeDB) -> None:
         ids = _seed_findings(mcp_db)
         data = _parse(await call_tool("update_finding", {"finding_id": ids["obo"], "status": "banana"}))
-        assert data["code"] == "validation_error"
+        assert data["code"] == ErrorCode.VALIDATION
 
 
 class TestBatchUpdateFindingsTool:
@@ -127,12 +128,12 @@ class TestBatchUpdateFindingsTool:
 
     async def test_batch_update_empty_ids_rejected(self, mcp_db: FiligreeDB) -> None:
         data = _parse(await call_tool("batch_update_findings", {"finding_ids": [], "status": "acknowledged"}))
-        assert data["code"] == "validation_error"
+        assert data["code"] == ErrorCode.VALIDATION
 
     async def test_batch_update_missing_status_rejected(self, mcp_db: FiligreeDB) -> None:
         ids = _seed_findings(mcp_db)
         data = _parse(await call_tool("batch_update_findings", {"finding_ids": [ids["obo"]], "status": ""}))
-        assert data["code"] == "validation_error"
+        assert data["code"] == ErrorCode.VALIDATION
 
 
 class TestPromoteFindingTool:
@@ -149,11 +150,11 @@ class TestPromoteFindingTool:
 
     async def test_promote_not_found(self, mcp_db: FiligreeDB) -> None:
         data = _parse(await call_tool("promote_finding", {"finding_id": "nonexistent"}))
-        assert data["code"] == "not_found"
+        assert data["code"] == ErrorCode.NOT_FOUND
 
     async def test_promote_empty_id_rejected(self, mcp_db: FiligreeDB) -> None:
         data = _parse(await call_tool("promote_finding", {"finding_id": ""}))
-        assert data["code"] == "validation_error"
+        assert data["code"] == ErrorCode.VALIDATION
 
 
 class TestDismissFindingTool:
@@ -164,8 +165,8 @@ class TestDismissFindingTool:
 
     async def test_dismiss_not_found(self, mcp_db: FiligreeDB) -> None:
         data = _parse(await call_tool("dismiss_finding", {"finding_id": "nonexistent"}))
-        assert data["code"] == "not_found"
+        assert data["code"] == ErrorCode.NOT_FOUND
 
     async def test_dismiss_empty_id_rejected(self, mcp_db: FiligreeDB) -> None:
         data = _parse(await call_tool("dismiss_finding", {"finding_id": ""}))
-        assert data["code"] == "validation_error"
+        assert data["code"] == ErrorCode.VALIDATION

@@ -11,7 +11,7 @@ from mcp.types import TextContent, Tool
 
 from filigree.core import VALID_ASSOC_TYPES, VALID_FINDING_STATUSES, VALID_SEVERITIES
 from filigree.mcp_tools.common import _parse_args, _text, _validate_actor, _validate_int_range, _validate_str
-from filigree.types.api import ErrorResponse
+from filigree.types.api import ErrorCode, ErrorResponse
 from filigree.types.inputs import (
     AddFileAssociationArgs,
     BatchUpdateFindingsArgs,
@@ -269,11 +269,11 @@ async def _handle_list_files(arguments: dict[str, Any]) -> list[TextContent]:
         if err is not None:
             return err
     if has_severity is not None and (not isinstance(has_severity, str) or has_severity not in VALID_SEVERITIES):
-        return _text(ErrorResponse(error=f"has_severity must be one of {sorted(VALID_SEVERITIES)}", code="validation_error"))
+        return _text(ErrorResponse(error=f"has_severity must be one of {sorted(VALID_SEVERITIES)}", code=ErrorCode.VALIDATION))
     if not isinstance(sort, str) or sort not in valid_sorts:
-        return _text(ErrorResponse(error=f"sort must be one of {sorted(valid_sorts)}", code="validation_error"))
+        return _text(ErrorResponse(error=f"sort must be one of {sorted(valid_sorts)}", code=ErrorCode.VALIDATION))
     if direction is not None and (not isinstance(direction, str) or direction.upper() not in {"ASC", "DESC"}):
-        return _text(ErrorResponse(error="direction must be 'asc' or 'desc'", code="validation_error"))
+        return _text(ErrorResponse(error="direction must be 'asc' or 'desc'", code=ErrorCode.VALIDATION))
 
     files_result = tracker.list_files_paginated(
         limit=limit,
@@ -296,11 +296,11 @@ async def _handle_get_file(arguments: dict[str, Any]) -> list[TextContent]:
     tracker = _get_db()
     file_id = args.get("file_id", "")
     if not isinstance(file_id, str) or not file_id.strip():
-        return _text(ErrorResponse(error="file_id is required", code="validation_error"))
+        return _text(ErrorResponse(error="file_id is required", code=ErrorCode.VALIDATION))
     try:
         data = tracker.get_file_detail(file_id)
     except KeyError:
-        return _text(ErrorResponse(error=f"File not found: {file_id}", code="not_found"))
+        return _text(ErrorResponse(error=f"File not found: {file_id}", code=ErrorCode.NOT_FOUND))
     return _text(data)
 
 
@@ -316,23 +316,23 @@ async def _handle_get_file_timeline(arguments: dict[str, Any]) -> list[TextConte
     valid_event_types = {"finding", "association", "file_metadata_update"}
 
     if not isinstance(file_id, str) or not file_id.strip():
-        return _text(ErrorResponse(error="file_id is required", code="validation_error"))
+        return _text(ErrorResponse(error="file_id is required", code=ErrorCode.VALIDATION))
     if not isinstance(limit, int) or limit < 1 or limit > 10000:
-        return _text(ErrorResponse(error="limit must be an integer in [1, 10000]", code="validation_error"))
+        return _text(ErrorResponse(error="limit must be an integer in [1, 10000]", code=ErrorCode.VALIDATION))
     if not isinstance(offset, int) or offset < 0:
-        return _text(ErrorResponse(error="offset must be a non-negative integer", code="validation_error"))
+        return _text(ErrorResponse(error="offset must be a non-negative integer", code=ErrorCode.VALIDATION))
     if event_type is not None and (not isinstance(event_type, str) or event_type not in valid_event_types):
         return _text(
             ErrorResponse(
                 error=f"event_type must be one of {sorted(valid_event_types)}",
-                code="validation_error",
+                code=ErrorCode.VALIDATION,
             )
         )
 
     try:
         timeline_result = tracker.get_file_timeline(file_id, limit=limit, offset=offset, event_type=event_type)
     except KeyError:
-        return _text(ErrorResponse(error=f"File not found: {file_id}", code="not_found"))
+        return _text(ErrorResponse(error=f"File not found: {file_id}", code=ErrorCode.NOT_FOUND))
     return _text(timeline_result)
 
 
@@ -343,11 +343,11 @@ async def _handle_get_issue_files(arguments: dict[str, Any]) -> list[TextContent
     tracker = _get_db()
     issue_id = args.get("issue_id", "")
     if not isinstance(issue_id, str) or not issue_id.strip():
-        return _text(ErrorResponse(error="issue_id is required", code="validation_error"))
+        return _text(ErrorResponse(error="issue_id is required", code=ErrorCode.VALIDATION))
     try:
         tracker.get_issue(issue_id)
     except KeyError:
-        return _text(ErrorResponse(error=f"Issue not found: {issue_id}", code="not_found"))
+        return _text(ErrorResponse(error=f"Issue not found: {issue_id}", code=ErrorCode.NOT_FOUND))
     return _text(tracker.get_issue_files(issue_id))
 
 
@@ -361,26 +361,26 @@ async def _handle_add_file_association(arguments: dict[str, Any]) -> list[TextCo
     assoc_type = args.get("assoc_type", "")
 
     if not isinstance(file_id, str) or not file_id.strip():
-        return _text(ErrorResponse(error="file_id is required", code="validation_error"))
+        return _text(ErrorResponse(error="file_id is required", code=ErrorCode.VALIDATION))
     if not isinstance(issue_id, str) or not issue_id.strip():
-        return _text(ErrorResponse(error="issue_id is required", code="validation_error"))
+        return _text(ErrorResponse(error="issue_id is required", code=ErrorCode.VALIDATION))
     if not isinstance(assoc_type, str) or not assoc_type.strip():
-        return _text(ErrorResponse(error="assoc_type is required", code="validation_error"))
+        return _text(ErrorResponse(error="assoc_type is required", code=ErrorCode.VALIDATION))
 
     try:
         tracker.get_file(file_id)
     except KeyError:
-        return _text(ErrorResponse(error=f"File not found: {file_id}", code="not_found"))
+        return _text(ErrorResponse(error=f"File not found: {file_id}", code=ErrorCode.NOT_FOUND))
 
     try:
         tracker.get_issue(issue_id)
     except KeyError:
-        return _text(ErrorResponse(error=f"Issue not found: {issue_id}", code="not_found"))
+        return _text(ErrorResponse(error=f"Issue not found: {issue_id}", code=ErrorCode.NOT_FOUND))
 
     try:
         tracker.add_file_association(file_id, issue_id, assoc_type)
     except ValueError as e:
-        return _text(ErrorResponse(error=str(e), code="validation_error"))
+        return _text(ErrorResponse(error=str(e), code=ErrorCode.VALIDATION))
     return _text({"status": "created"})
 
 
@@ -395,22 +395,22 @@ async def _handle_register_file(arguments: dict[str, Any]) -> list[TextContent]:
     metadata = args.get("metadata")
 
     if not isinstance(raw_path, str) or not raw_path.strip():
-        return _text(ErrorResponse(error="path is required", code="validation_error"))
+        return _text(ErrorResponse(error="path is required", code=ErrorCode.VALIDATION))
     if language is not None and not isinstance(language, str):
-        return _text(ErrorResponse(error="language must be a string", code="validation_error"))
+        return _text(ErrorResponse(error="language must be a string", code=ErrorCode.VALIDATION))
     if file_type is not None and not isinstance(file_type, str):
-        return _text(ErrorResponse(error="file_type must be a string", code="validation_error"))
+        return _text(ErrorResponse(error="file_type must be a string", code=ErrorCode.VALIDATION))
     if metadata is not None and not isinstance(metadata, dict):
-        return _text(ErrorResponse(error="metadata must be an object", code="validation_error"))
+        return _text(ErrorResponse(error="metadata must be an object", code=ErrorCode.VALIDATION))
 
     try:
         target = _safe_path(raw_path)
     except ValueError as e:
-        return _text(ErrorResponse(error=str(e), code="invalid_path"))
+        return _text(ErrorResponse(error=str(e), code=ErrorCode.VALIDATION))
 
     filigree_dir = _get_filigree_dir()
     if filigree_dir is None:
-        return _text(ErrorResponse(error="Project directory not initialized", code="not_initialized"))
+        return _text(ErrorResponse(error="Project directory not initialized", code=ErrorCode.NOT_INITIALIZED))
 
     canonical_path = str(target.relative_to(filigree_dir.resolve().parent))
     try:
@@ -421,7 +421,7 @@ async def _handle_register_file(arguments: dict[str, Any]) -> list[TextContent]:
             metadata=metadata,
         )
     except ValueError as e:
-        return _text(ErrorResponse(error=str(e), code="invalid_path"))
+        return _text(ErrorResponse(error=str(e), code=ErrorCode.VALIDATION))
     return _text(file_record.to_dict())
 
 
@@ -436,12 +436,12 @@ async def _handle_get_finding(arguments: dict[str, Any]) -> list[TextContent]:
     args = _parse_args(arguments, GetFindingArgs)
     finding_id = args.get("finding_id", "")
     if not isinstance(finding_id, str) or not finding_id.strip():
-        return _text(ErrorResponse(error="finding_id is required", code="validation_error"))
+        return _text(ErrorResponse(error="finding_id is required", code=ErrorCode.VALIDATION))
     tracker = _get_db()
     try:
         finding = tracker.get_finding(finding_id)
     except KeyError:
-        return _text(ErrorResponse(error=f"Finding not found: {finding_id}", code="not_found"))
+        return _text(ErrorResponse(error=f"Finding not found: {finding_id}", code=ErrorCode.NOT_FOUND))
     return _text(finding)
 
 
@@ -470,12 +470,12 @@ async def _handle_list_findings(arguments: dict[str, Any]) -> list[TextContent]:
     for key in ("scan_source", "scan_run_id", "file_id", "issue_id"):
         val = filters.get(key)
         if val is not None and not isinstance(val, str):
-            return _text(ErrorResponse(error=f"{key} must be a string", code="validation_error"))
+            return _text(ErrorResponse(error=f"{key} must be a string", code=ErrorCode.VALIDATION))
 
     try:
         result = tracker.list_findings_global(limit=limit, offset=offset, **filters)
     except ValueError as e:
-        return _text(ErrorResponse(error=str(e), code="validation_error"))
+        return _text(ErrorResponse(error=str(e), code=ErrorCode.VALIDATION))
     return _text(result)
 
 
@@ -485,19 +485,19 @@ async def _handle_update_finding(arguments: dict[str, Any]) -> list[TextContent]
     args = _parse_args(arguments, UpdateFindingArgs)
     finding_id = args.get("finding_id", "")
     if not isinstance(finding_id, str) or not finding_id.strip():
-        return _text(ErrorResponse(error="finding_id is required", code="validation_error"))
+        return _text(ErrorResponse(error="finding_id is required", code=ErrorCode.VALIDATION))
     status = args.get("status")
     issue_id = args.get("issue_id")
     if status is None and issue_id is None:
-        return _text(ErrorResponse(error="At least one of status or issue_id must be provided", code="validation_error"))
+        return _text(ErrorResponse(error="At least one of status or issue_id must be provided", code=ErrorCode.VALIDATION))
 
     tracker = _get_db()
     try:
         updated = tracker.update_finding(finding_id, status=status, issue_id=issue_id)
     except KeyError:
-        return _text(ErrorResponse(error=f"Finding not found: {finding_id}", code="not_found"))
+        return _text(ErrorResponse(error=f"Finding not found: {finding_id}", code=ErrorCode.NOT_FOUND))
     except ValueError as e:
-        return _text(ErrorResponse(error=str(e), code="validation_error"))
+        return _text(ErrorResponse(error=str(e), code=ErrorCode.VALIDATION))
     return _text(updated)
 
 
@@ -508,14 +508,14 @@ async def _handle_batch_update_findings(arguments: dict[str, Any]) -> list[TextC
     finding_ids = args.get("finding_ids", [])
     status = args.get("status", "")
     if not isinstance(finding_ids, list) or not finding_ids:
-        return _text(ErrorResponse(error="finding_ids must be a non-empty list", code="validation_error"))
+        return _text(ErrorResponse(error="finding_ids must be a non-empty list", code=ErrorCode.VALIDATION))
     if not isinstance(status, str) or not status.strip():
-        return _text(ErrorResponse(error="status is required", code="validation_error"))
+        return _text(ErrorResponse(error="status is required", code=ErrorCode.VALIDATION))
     if status not in VALID_FINDING_STATUSES:
         return _text(
             ErrorResponse(
                 error=f"Invalid finding status: {status!r}. Valid: {', '.join(sorted(VALID_FINDING_STATUSES))}",
-                code="validation_error",
+                code=ErrorCode.VALIDATION,
             )
         )
 
@@ -533,7 +533,7 @@ async def _handle_batch_update_findings(arguments: dict[str, Any]) -> list[TextC
         return _text(
             ErrorResponse(
                 error=f"All {len(errors)} finding update(s) failed",
-                code="batch_all_failed",
+                code=ErrorCode.VALIDATION,
             )
         )
     result: dict[str, Any] = {"updated": updated, "errors": errors}
@@ -548,7 +548,7 @@ async def _handle_promote_finding(arguments: dict[str, Any]) -> list[TextContent
     args = _parse_args(arguments, PromoteFindingArgs)
     finding_id = args.get("finding_id", "")
     if not isinstance(finding_id, str) or not finding_id.strip():
-        return _text(ErrorResponse(error="finding_id is required", code="validation_error"))
+        return _text(ErrorResponse(error="finding_id is required", code=ErrorCode.VALIDATION))
     priority = args.get("priority")
     priority_err = _validate_int_range(priority, "priority", min_val=0, max_val=4)
     if priority_err:
@@ -561,7 +561,7 @@ async def _handle_promote_finding(arguments: dict[str, Any]) -> list[TextContent
     try:
         obs = tracker.promote_finding_to_observation(finding_id, priority=priority, actor=actor)
     except KeyError:
-        return _text(ErrorResponse(error=f"Finding not found: {finding_id}", code="not_found"))
+        return _text(ErrorResponse(error=f"Finding not found: {finding_id}", code=ErrorCode.NOT_FOUND))
     except (ValueError, sqlite3.Error) as exc:
         _logger.warning("Failed to promote finding %s: %s", finding_id, exc)
         return _text(ErrorResponse(error=f"Failed to promote finding: {exc}", code="promotion_error"))
@@ -574,7 +574,7 @@ async def _handle_dismiss_finding(arguments: dict[str, Any]) -> list[TextContent
     args = _parse_args(arguments, DismissFindingArgs)
     finding_id = args.get("finding_id", "")
     if not isinstance(finding_id, str) or not finding_id.strip():
-        return _text(ErrorResponse(error="finding_id is required", code="validation_error"))
+        return _text(ErrorResponse(error="finding_id is required", code=ErrorCode.VALIDATION))
 
     reason = args.get("reason")
 
@@ -582,7 +582,7 @@ async def _handle_dismiss_finding(arguments: dict[str, Any]) -> list[TextContent
     try:
         updated = tracker.update_finding(finding_id, status="false_positive", dismiss_reason=reason or None)
     except KeyError:
-        return _text(ErrorResponse(error=f"Finding not found: {finding_id}", code="not_found"))
+        return _text(ErrorResponse(error=f"Finding not found: {finding_id}", code=ErrorCode.NOT_FOUND))
     except (ValueError, sqlite3.Error) as e:
-        return _text(ErrorResponse(error=str(e), code="validation_error"))
+        return _text(ErrorResponse(error=str(e), code=ErrorCode.VALIDATION))
     return _text(updated)

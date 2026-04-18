@@ -1498,12 +1498,12 @@ class TestFileTools:
 
     async def test_register_file_path_traversal_rejected(self, mcp_db: FiligreeDB) -> None:
         result = _parse(await call_tool("register_file", {"path": "../../etc/passwd"}))
-        assert result["code"] == "invalid_path"
+        assert result["code"] == ErrorCode.VALIDATION
 
     async def test_register_file_project_root_dot_rejected(self, mcp_db: FiligreeDB) -> None:
         """Bug filigree-78903e4ff7: path='.' resolves to project root and must return a validation error, not crash."""
         result = _parse(await call_tool("register_file", {"path": "."}))
-        assert result.get("code") == "invalid_path"
+        assert result.get("code") == ErrorCode.VALIDATION
 
     async def test_list_files_with_filters(self, mcp_db: FiligreeDB) -> None:
         await call_tool("register_file", {"path": "src/a.py", "language": "python"})
@@ -1514,7 +1514,7 @@ class TestFileTools:
 
     async def test_list_files_invalid_sort_rejected(self, mcp_db: FiligreeDB) -> None:
         result = _parse(await call_tool("list_files", {"sort": "bad_sort"}))
-        assert result["code"] == "validation_error"
+        assert result["code"] == ErrorCode.VALIDATION
 
     @pytest.mark.parametrize(
         ("field", "value"),
@@ -1528,7 +1528,7 @@ class TestFileTools:
         self, mcp_db: FiligreeDB, field: str, value: dict[str, str]
     ) -> None:
         result = _parse(await call_tool("list_files", {field: value}))
-        assert result["code"] == "validation_error"
+        assert result["code"] == "validation_error"  # from common._validate_str, not yet migrated
         assert result["error"] == f"{field} must be a string"
 
     async def test_add_file_association_and_get_issue_files(self, mcp_db: FiligreeDB) -> None:
@@ -1565,7 +1565,7 @@ class TestFileTools:
                 },
             )
         )
-        assert result["code"] == "validation_error"
+        assert result["code"] == ErrorCode.VALIDATION
 
     async def test_add_file_association_file_not_found(self, mcp_db: FiligreeDB) -> None:
         issue = mcp_db.create_issue("Issue for missing file")
@@ -1579,11 +1579,11 @@ class TestFileTools:
                 },
             )
         )
-        assert result["code"] == "not_found"
+        assert result["code"] == ErrorCode.NOT_FOUND
 
     async def test_get_issue_files_not_found(self, mcp_db: FiligreeDB) -> None:
         result = _parse(await call_tool("get_issue_files", {"issue_id": "mcp-nonexistent"}))
-        assert result["code"] == "not_found"
+        assert result["code"] == ErrorCode.NOT_FOUND
 
     async def test_get_file_timeline_for_association_event(self, mcp_db: FiligreeDB) -> None:
         issue = mcp_db.create_issue("Issue for timeline")
@@ -1616,7 +1616,7 @@ class TestFileTools:
                 {"file_id": file_data["id"], "event_type": "bogus"},
             )
         )
-        assert result["code"] == "validation_error"
+        assert result["code"] == ErrorCode.VALIDATION
 
 
 @pytest.mark.slow
@@ -2255,7 +2255,7 @@ class TestAddFileAssociationIssueNotFound:
                 },
             )
         )
-        assert result["code"] == "not_found", f"Expected 'not_found', got '{result['code']}'"
+        assert result["code"] == ErrorCode.NOT_FOUND, f"Expected 'NOT_FOUND', got '{result['code']}'"
 
     async def test_invalid_assoc_type_still_validation_error(self, mcp_db: FiligreeDB) -> None:
         """Bad assoc_type should still be validation_error (not affected by fix)."""
@@ -2271,7 +2271,7 @@ class TestAddFileAssociationIssueNotFound:
                 },
             )
         )
-        assert result["code"] == "validation_error"
+        assert result["code"] == ErrorCode.VALIDATION
 
 
 # ---------------------------------------------------------------------------
