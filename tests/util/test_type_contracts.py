@@ -942,8 +942,22 @@ class TestBatchCloseResponseShape:
 
 
 class TestErrorResponseShape:
-    def test_keys_match(self) -> None:
-        result = ErrorResponse(error="not found", code="not_found")
+    def test_required_keys(self) -> None:
+        """Required keys (error, code) always present; details is NotRequired."""
+        from filigree.types.api import ErrorCode
+
+        result = ErrorResponse(error="not found", code=ErrorCode.NOT_FOUND)
+        assert {"error", "code"} <= set(result.keys())
+
+    def test_with_details(self) -> None:
+        """All 3 keys present when details is populated."""
+        from filigree.types.api import ErrorCode
+
+        result = ErrorResponse(
+            error="conflict",
+            code=ErrorCode.CONFLICT,
+            details={"issue_id": "abc"},
+        )
         hints = get_type_hints(ErrorResponse)
         assert set(result.keys()) == set(hints.keys())
 

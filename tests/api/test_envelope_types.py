@@ -55,3 +55,28 @@ def test_error_code_is_str_subclass() -> None:
 
     assert ErrorCode.VALIDATION == "VALIDATION"
     assert isinstance(ErrorCode.VALIDATION, str)
+
+
+def test_error_response_flat_shape() -> None:
+    from filigree.types.api import ErrorCode, ErrorResponse
+
+    # Without details
+    err1: ErrorResponse = {"error": "nope", "code": ErrorCode.VALIDATION}
+    assert err1["code"] == ErrorCode.VALIDATION
+
+    # With details (optional field)
+    err2: ErrorResponse = {
+        "error": "conflict",
+        "code": ErrorCode.CONFLICT,
+        "details": {"issue_id": "abc", "current_assignee": "alice"},
+    }
+    assert err2["details"]["issue_id"] == "abc"
+
+
+def test_error_response_has_no_legacy_fields() -> None:
+    from typing import get_type_hints
+
+    from filigree.types.api import ErrorResponse
+
+    hints = get_type_hints(ErrorResponse)
+    assert set(hints.keys()) == {"error", "code", "details"}

@@ -68,14 +68,15 @@ class BlockedIssue(SlimIssue):
 
 
 class ErrorResponse(TypedDict):
-    """Flat error envelope returned by MCP tool handlers.
+    """Unified error envelope for MCP tools, CLI, and dashboard routes.
 
-    NOTE: Dashboard routes use a different nested format via _error_response()
-    in dashboard_routes/common.py: ``{"error": {"message", "code", "details"}}``.
+    Flat shape — `details` is optional. Dashboard previously used nested
+    `{"error": {"message", "code"}}`; 2.0 consolidates to this one shape.
     """
 
     error: str
-    code: str
+    code: ErrorCode
+    details: NotRequired[dict[str, Any]]
 
 
 class TransitionError(TypedDict):
