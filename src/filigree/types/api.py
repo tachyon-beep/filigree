@@ -402,13 +402,13 @@ class ErrorCode(StrEnum):
     branch on these values; retry / UX policies depend on them.
     """
 
-    VALIDATION = "VALIDATION"  # replaces: invalid, validation_error, invalid_path, invalid_command, database_error→rare, etc.
+    VALIDATION = "VALIDATION"  # replaces: invalid, validation_error, invalid_path, invalid_command, batch_all_failed
     NOT_FOUND = "NOT_FOUND"  # replaces: not_found, scanner_not_found, unknown_tool, command_not_found
     CONFLICT = "CONFLICT"  # claim races, optimistic-lock miss
     INVALID_TRANSITION = "INVALID_TRANSITION"
     PERMISSION = "PERMISSION"  # replaces: permission_error
     NOT_INITIALIZED = "NOT_INITIALIZED"  # replaces: not_initialized
-    IO = "IO"  # replaces: io_error, db_error, import_error
+    IO = "IO"  # replaces: io_error, db_error, database_error, import_error
     INVALID_API_URL = "INVALID_API_URL"
     STOP_FAILED = "STOP_FAILED"
 
