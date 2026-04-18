@@ -385,3 +385,55 @@ class StateExplanation(TypedDict):
     inbound_transitions: list[InboundTransitionInfo]
     outbound_transitions: list[OutboundTransitionInfo]
     required_fields: list[str]
+
+
+# ---------------------------------------------------------------------------
+# 2.0 response envelopes
+# ---------------------------------------------------------------------------
+
+from typing import Generic, TypeVar  # noqa: E402
+
+_T = TypeVar("_T")
+
+
+class BatchFailure(TypedDict):
+    """One failed item inside a BatchResponse.failed list.
+
+    ``item_id`` is deliberately generic — batch operations exist for
+    issues, findings, and observations; this field carries whichever id
+    shape the specific batch tool operates on.
+    """
+
+    item_id: str
+    error: str
+    code: str
+
+
+class BatchResponse(TypedDict, Generic[_T]):
+    """Unified response for batch mutation operations.
+
+    Rules:
+    - ``succeeded`` is a list of T — SlimIssue for issue-centric ops in
+      slim mode, full records for others or in full mode.
+    - ``failed`` is always present (empty list if no failures).
+    - ``newly_unblocked`` is OMITTED entirely when the op cannot unblock
+      (not present as ``[]``). Present only for close/transition ops.
+    """
+
+    succeeded: list[_T]
+    failed: list[BatchFailure]
+    newly_unblocked: NotRequired[list[SlimIssue]]
+
+
+class ListResponse(TypedDict, Generic[_T]):
+    """Unified response for list/query operations.
+
+    - ``items`` is always present (empty list for no results).
+    - ``has_more`` is always present (never omitted); callers can
+      reliably distinguish "no more" from "field absent."
+    - ``next_offset`` is present only when ``has_more=True``.
+    """
+
+    items: list[_T]
+    has_more: bool
+    next_offset: NotRequired[int]
