@@ -8,6 +8,7 @@ import sys
 import click
 
 from filigree.cli_common import get_db, refresh_summary
+from filigree.types.api import ErrorCode
 
 
 @click.command("add-comment")
@@ -22,7 +23,7 @@ def add_comment(ctx: click.Context, issue_id: str, text: str, as_json: bool) -> 
             db.get_issue(issue_id)
         except KeyError:
             if as_json:
-                click.echo(json_mod.dumps({"error": f"Not found: {issue_id}"}))
+                click.echo(json_mod.dumps({"error": f"Not found: {issue_id}", "code": ErrorCode.NOT_FOUND}))
             else:
                 click.echo(f"Not found: {issue_id}", err=True)
             sys.exit(1)
@@ -30,7 +31,7 @@ def add_comment(ctx: click.Context, issue_id: str, text: str, as_json: bool) -> 
             comment_id = db.add_comment(issue_id, text, author=ctx.obj["actor"])
         except ValueError as e:
             if as_json:
-                click.echo(json_mod.dumps({"error": str(e)}))
+                click.echo(json_mod.dumps({"error": str(e), "code": ErrorCode.VALIDATION}))
             else:
                 click.echo(f"Error: {e}", err=True)
             sys.exit(1)
@@ -50,7 +51,7 @@ def get_comments(issue_id: str, as_json: bool) -> None:
             db.get_issue(issue_id)
         except KeyError:
             if as_json:
-                click.echo(json_mod.dumps({"error": f"Not found: {issue_id}"}))
+                click.echo(json_mod.dumps({"error": f"Not found: {issue_id}", "code": ErrorCode.NOT_FOUND}))
             else:
                 click.echo(f"Not found: {issue_id}", err=True)
             sys.exit(1)
@@ -76,7 +77,7 @@ def add_label(issue_id: str, label_name: str, as_json: bool) -> None:
             db.get_issue(issue_id)
         except KeyError:
             if as_json:
-                click.echo(json_mod.dumps({"error": f"Not found: {issue_id}"}))
+                click.echo(json_mod.dumps({"error": f"Not found: {issue_id}", "code": ErrorCode.NOT_FOUND}))
             else:
                 click.echo(f"Not found: {issue_id}", err=True)
             sys.exit(1)
@@ -84,7 +85,7 @@ def add_label(issue_id: str, label_name: str, as_json: bool) -> None:
             added, canonical = db.add_label(issue_id, label_name)
         except ValueError as e:
             if as_json:
-                click.echo(json_mod.dumps({"error": str(e)}))
+                click.echo(json_mod.dumps({"error": str(e), "code": ErrorCode.VALIDATION}))
             else:
                 click.echo(f"Error: {e}", err=True)
             sys.exit(1)
@@ -110,7 +111,7 @@ def remove_label(issue_id: str, label_name: str, as_json: bool) -> None:
             db.get_issue(issue_id)
         except KeyError:
             if as_json:
-                click.echo(json_mod.dumps({"error": f"Not found: {issue_id}"}))
+                click.echo(json_mod.dumps({"error": f"Not found: {issue_id}", "code": ErrorCode.NOT_FOUND}))
             else:
                 click.echo(f"Not found: {issue_id}", err=True)
             sys.exit(1)
@@ -118,7 +119,7 @@ def remove_label(issue_id: str, label_name: str, as_json: bool) -> None:
             removed, canonical = db.remove_label(issue_id, label_name)
         except ValueError as e:
             if as_json:
-                click.echo(json_mod.dumps({"error": str(e)}))
+                click.echo(json_mod.dumps({"error": str(e), "code": ErrorCode.VALIDATION}))
             else:
                 click.echo(f"Error: {e}", err=True)
             sys.exit(1)
@@ -185,7 +186,7 @@ def events_cmd(issue_id: str, limit: int, as_json: bool) -> None:
             event_list = db.get_issue_events(issue_id, limit=limit)
         except KeyError:
             if as_json:
-                click.echo(json_mod.dumps({"error": f"Not found: {issue_id}"}))
+                click.echo(json_mod.dumps({"error": f"Not found: {issue_id}", "code": ErrorCode.NOT_FOUND}))
             else:
                 click.echo(f"Not found: {issue_id}", err=True)
             sys.exit(1)
@@ -233,7 +234,7 @@ def batch_update(
         for f in field:
             if "=" not in f:
                 if as_json:
-                    click.echo(json_mod.dumps({"error": f"Invalid field format: {f} (expected key=value)"}))
+                    click.echo(json_mod.dumps({"error": f"Invalid field format: {f} (expected key=value)", "code": ErrorCode.VALIDATION}))
                 else:
                     click.echo(f"Invalid field format: {f}", err=True)
                 sys.exit(1)

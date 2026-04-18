@@ -9,6 +9,7 @@ from typing import Any
 import click
 
 from filigree.cli_common import get_db
+from filigree.types.api import ErrorCode
 
 
 @click.group(invoke_without_command=True)
@@ -262,7 +263,7 @@ def guide_cmd(pack_name: str, as_json: bool) -> None:
         pack = db.templates.get_pack(pack_name)
         if pack is None:
             if as_json:
-                click.echo(json_mod.dumps({"error": f"Unknown pack: {pack_name}"}))
+                click.echo(json_mod.dumps({"error": f"Unknown pack: {pack_name}", "code": ErrorCode.NOT_FOUND}))
             else:
                 click.echo(f"Unknown pack: {pack_name}", err=True)
             sys.exit(1)

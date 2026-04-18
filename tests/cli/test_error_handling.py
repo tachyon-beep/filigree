@@ -2,7 +2,8 @@
 
 Covers: filigree-8a7e6a (reopen exit code), filigree-537425 (create --json field error),
 filigree-25daf4e886 (remove-label ValueError), filigree-565ff86495 (remove-dep WrongProjectError),
-filigree-62c5b61f68 (refresh_summary OSError), filigree-3c4196854b (get_db corrupt conf).
+filigree-62c5b61f68 (refresh_summary OSError), filigree-3c4196854b (get_db corrupt conf),
+2a.11 ErrorCode alignment (--json errors emit uppercase code values).
 """
 
 from __future__ import annotations
@@ -164,3 +165,74 @@ class TestGetDbCorruptConf:
             )
         finally:
             os.chdir(original_cwd)
+
+
+class TestErrorCodeAlignment:
+    """2a.11: --json error output must include 'code' with uppercase ErrorCode values."""
+
+    def test_show_nonexistent_json_has_code(self, initialized_project: Path) -> None:
+        """show <nonexistent> --json must emit code=NOT_FOUND."""
+        runner = CliRunner()
+        original = os.getcwd()
+        os.chdir(str(initialized_project))
+        try:
+            # Use correct prefix (test-) but nonexistent suffix to reach KeyError path
+            result = runner.invoke(cli, ["show", "test-0000000000", "--json"])
+        finally:
+            os.chdir(original)
+        assert result.exit_code != 0
+        payload = json.loads(result.output)
+        assert payload["code"] == "NOT_FOUND"
+        assert isinstance(payload["error"], str)
+
+    def test_update_nonexistent_json_has_code(self, initialized_project: Path) -> None:
+        """update <nonexistent> --json must emit code=NOT_FOUND."""
+        runner = CliRunner()
+        original = os.getcwd()
+        os.chdir(str(initialized_project))
+        try:
+            result = runner.invoke(cli, ["update", "test-0000000000", "--status", "open", "--json"])
+        finally:
+            os.chdir(original)
+        assert result.exit_code != 0
+        payload = json.loads(result.output)
+        assert payload["code"] == "NOT_FOUND"
+
+    def test_create_bad_field_json_has_code(self, initialized_project: Path) -> None:
+        """create with invalid --field format --json must emit code=VALIDATION."""
+        runner = CliRunner()
+        original = os.getcwd()
+        os.chdir(str(initialized_project))
+        try:
+            result = runner.invoke(cli, ["create", "Title", "-f", "no_equals_sign", "--json"])
+        finally:
+            os.chdir(original)
+        assert result.exit_code != 0
+        payload = json.loads(result.output)
+        assert payload["code"] == "VALIDATION"
+
+    def test_add_comment_nonexistent_json_has_code(self, initialized_project: Path) -> None:
+        """add-comment <nonexistent> --json must emit code=NOT_FOUND."""
+        runner = CliRunner()
+        original = os.getcwd()
+        os.chdir(str(initialized_project))
+        try:
+            result = runner.invoke(cli, ["add-comment", "test-0000000000", "hello", "--json"])
+        finally:
+            os.chdir(original)
+        assert result.exit_code != 0
+        payload = json.loads(result.output)
+        assert payload["code"] == "NOT_FOUND"
+
+    def test_claim_nonexistent_json_has_code(self, initialized_project: Path) -> None:
+        """claim <nonexistent> --json must emit code=NOT_FOUND."""
+        runner = CliRunner()
+        original = os.getcwd()
+        os.chdir(str(initialized_project))
+        try:
+            result = runner.invoke(cli, ["claim", "test-0000000000", "--assignee", "agent1", "--json"])
+        finally:
+            os.chdir(original)
+        assert result.exit_code != 0
+        payload = json.loads(result.output)
+        assert payload["code"] == "NOT_FOUND"

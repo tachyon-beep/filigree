@@ -9,6 +9,7 @@ from typing import Any
 import click
 
 from filigree.cli_common import get_db, refresh_summary
+from filigree.types.api import ErrorCode
 
 
 @click.command()
@@ -48,7 +49,7 @@ def create(
     for f in field:
         if "=" not in f:
             if as_json:
-                click.echo(json_mod.dumps({"error": f"Invalid field format: {f} (expected key=value)"}))
+                click.echo(json_mod.dumps({"error": f"Invalid field format: {f} (expected key=value)", "code": ErrorCode.VALIDATION}))
             else:
                 click.echo(f"Invalid field format: {f} (expected key=value)", err=True)
             sys.exit(1)
@@ -72,7 +73,7 @@ def create(
             )
         except ValueError as e:
             if as_json:
-                click.echo(json_mod.dumps({"error": str(e)}))
+                click.echo(json_mod.dumps({"error": str(e), "code": ErrorCode.VALIDATION}))
             else:
                 click.echo(f"Error: {e}", err=True)
             sys.exit(1)
@@ -93,7 +94,10 @@ def show(issue_id: str, as_json: bool) -> None:
         try:
             issue = db.get_issue(issue_id)
         except KeyError:
-            click.echo(f"Not found: {issue_id}", err=True)
+            if as_json:
+                click.echo(json_mod.dumps({"error": f"Not found: {issue_id}", "code": ErrorCode.NOT_FOUND}))
+            else:
+                click.echo(f"Not found: {issue_id}", err=True)
             sys.exit(1)
 
         if as_json:
@@ -223,7 +227,7 @@ def update(
         for f in field:
             if "=" not in f:
                 if as_json:
-                    click.echo(json_mod.dumps({"error": f"Invalid field format: {f}"}))
+                    click.echo(json_mod.dumps({"error": f"Invalid field format: {f}", "code": ErrorCode.VALIDATION}))
                 else:
                     click.echo(f"Invalid field format: {f}", err=True)
                 sys.exit(1)
@@ -252,13 +256,13 @@ def update(
                 click.echo(f"Updated {issue.id}: {issue.title} [{issue.status}]")
         except KeyError:
             if as_json:
-                click.echo(json_mod.dumps({"error": f"Not found: {issue_id}"}))
+                click.echo(json_mod.dumps({"error": f"Not found: {issue_id}", "code": ErrorCode.NOT_FOUND}))
             else:
                 click.echo(f"Not found: {issue_id}", err=True)
             sys.exit(1)
         except ValueError as e:
             if as_json:
-                click.echo(json_mod.dumps({"error": str(e)}))
+                click.echo(json_mod.dumps({"error": str(e), "code": ErrorCode.INVALID_TRANSITION}))
             else:
                 click.echo(f"Error: {e}", err=True)
             sys.exit(1)
@@ -285,11 +289,11 @@ def close(ctx: click.Context, issue_ids: tuple[str, ...], reason: str, as_json: 
                 else:
                     click.echo(f"Closed {issue.id}: {issue.title}")
             except KeyError:
-                errors.append({"id": issue_id, "error": f"Not found: {issue_id}"})
+                errors.append({"id": issue_id, "error": f"Not found: {issue_id}", "code": ErrorCode.NOT_FOUND})
                 if not as_json:
                     click.echo(f"Not found: {issue_id}", err=True)
             except ValueError as e:
-                errors.append({"id": issue_id, "error": str(e)})
+                errors.append({"id": issue_id, "error": str(e), "code": ErrorCode.INVALID_TRANSITION})
                 if not as_json:
                     click.echo(str(e), err=True)
         if as_json:
@@ -322,11 +326,11 @@ def reopen(ctx: click.Context, issue_ids: tuple[str, ...], as_json: bool) -> Non
                 else:
                     click.echo(f"Reopened {issue.id}: {issue.title} [{issue.status}]")
             except KeyError:
-                errors.append({"id": issue_id, "error": f"Not found: {issue_id}"})
+                errors.append({"id": issue_id, "error": f"Not found: {issue_id}", "code": ErrorCode.NOT_FOUND})
                 if not as_json:
                     click.echo(f"Not found: {issue_id}", err=True)
             except ValueError as e:
-                errors.append({"id": issue_id, "error": str(e)})
+                errors.append({"id": issue_id, "error": str(e), "code": ErrorCode.INVALID_TRANSITION})
                 if not as_json:
                     click.echo(f"Error reopening {issue_id}: {e}", err=True)
         if as_json:
@@ -351,13 +355,13 @@ def claim(ctx: click.Context, issue_id: str, assignee: str, as_json: bool) -> No
             issue = db.claim_issue(issue_id, assignee=assignee, actor=ctx.obj["actor"])
         except KeyError:
             if as_json:
-                click.echo(json_mod.dumps({"error": f"Not found: {issue_id}"}))
+                click.echo(json_mod.dumps({"error": f"Not found: {issue_id}", "code": ErrorCode.NOT_FOUND}))
             else:
                 click.echo(f"Not found: {issue_id}", err=True)
             sys.exit(1)
         except ValueError as e:
             if as_json:
-                click.echo(json_mod.dumps({"error": str(e)}))
+                click.echo(json_mod.dumps({"error": str(e), "code": ErrorCode.CONFLICT}))
             else:
                 click.echo(f"Error: {e}", err=True)
             sys.exit(1)
@@ -396,7 +400,7 @@ def claim_next(
             )
         except ValueError as e:
             if as_json:
-                click.echo(json_mod.dumps({"error": str(e)}))
+                click.echo(json_mod.dumps({"error": str(e), "code": ErrorCode.CONFLICT}))
             else:
                 click.echo(f"Error: {e}", err=True)
             sys.exit(1)
@@ -428,13 +432,13 @@ def release(ctx: click.Context, issue_id: str, as_json: bool) -> None:
                 click.echo(f"Released {issue.id}: {issue.title} [{issue.status}]")
         except KeyError:
             if as_json:
-                click.echo(json_mod.dumps({"error": f"Not found: {issue_id}"}))
+                click.echo(json_mod.dumps({"error": f"Not found: {issue_id}", "code": ErrorCode.NOT_FOUND}))
             else:
                 click.echo(f"Not found: {issue_id}", err=True)
             sys.exit(1)
         except ValueError as e:
             if as_json:
-                click.echo(json_mod.dumps({"error": str(e)}))
+                click.echo(json_mod.dumps({"error": str(e), "code": ErrorCode.CONFLICT}))
             else:
                 click.echo(f"Error: {e}", err=True)
             sys.exit(1)
@@ -452,7 +456,7 @@ def undo(ctx: click.Context, issue_id: str, as_json: bool) -> None:
             result = db.undo_last(issue_id, actor=ctx.obj["actor"])
         except KeyError:
             if as_json:
-                click.echo(json_mod.dumps({"error": f"Not found: {issue_id}"}))
+                click.echo(json_mod.dumps({"error": f"Not found: {issue_id}", "code": ErrorCode.NOT_FOUND}))
             else:
                 click.echo(f"Not found: {issue_id}", err=True)
             sys.exit(1)

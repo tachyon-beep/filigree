@@ -10,6 +10,7 @@ from pathlib import Path
 import click
 
 from filigree.cli_common import get_db, refresh_summary
+from filigree.types.api import ErrorCode
 
 
 def _normalize_iso_timestamp(raw: str) -> str:
@@ -138,13 +139,13 @@ def add_dep(ctx: click.Context, issue_id: str, depends_on_id: str, as_json: bool
                     click.echo(f"Already exists: {issue_id} depends on {depends_on_id}")
         except KeyError as e:
             if as_json:
-                click.echo(json_mod.dumps({"error": f"Not found: {e}"}))
+                click.echo(json_mod.dumps({"error": f"Not found: {e}", "code": ErrorCode.NOT_FOUND}))
             else:
                 click.echo(f"Not found: {e}", err=True)
             sys.exit(1)
         except ValueError as e:
             if as_json:
-                click.echo(json_mod.dumps({"error": str(e)}))
+                click.echo(json_mod.dumps({"error": str(e), "code": ErrorCode.VALIDATION}))
             else:
                 click.echo(f"Error: {e}", err=True)
             sys.exit(1)
@@ -163,7 +164,7 @@ def remove_dep(ctx: click.Context, issue_id: str, depends_on_id: str, as_json: b
             removed = db.remove_dependency(issue_id, depends_on_id, actor=ctx.obj["actor"])
         except ValueError as e:
             if as_json:
-                click.echo(json_mod.dumps({"error": str(e)}))
+                click.echo(json_mod.dumps({"error": str(e), "code": ErrorCode.VALIDATION}))
             else:
                 click.echo(f"Error: {e}", err=True)
             sys.exit(1)
@@ -247,7 +248,7 @@ def create_plan(ctx: click.Context, file_path: str | None, as_json: bool) -> Non
             result = db.create_plan(data["milestone"], data["phases"], actor=ctx.obj["actor"])  # type: ignore[arg-type]
         except (ValueError, IndexError, TypeError, AttributeError) as e:
             if as_json:
-                click.echo(json_mod.dumps({"error": str(e)}))
+                click.echo(json_mod.dumps({"error": str(e), "code": ErrorCode.VALIDATION}))
             else:
                 click.echo(f"Error: {e}", err=True)
             sys.exit(1)
