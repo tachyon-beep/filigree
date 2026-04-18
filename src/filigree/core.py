@@ -475,7 +475,16 @@ class FiligreeDB(FilesMixin, ScansMixin, IssuesMixin, EventsMixin, WorkflowMixin
             check_same_thread=check_same_thread,
             project_root=filigree_dir.resolve().parent,
         )
-        db.initialize()
+        try:
+            db.initialize()
+        except BaseException:
+            # ``initialize()`` opens the connection lazily on its first line
+            # (``get_schema_version()`` → ``self.conn``). If it raises before
+            # returning, the caller never receives ``db`` and so cannot close
+            # the connection — close it here to avoid leaking the handle and
+            # its WAL/SHM sidecar files.
+            db.close()
+            raise
         return db
 
     @classmethod
@@ -495,7 +504,11 @@ class FiligreeDB(FilesMixin, ScansMixin, IssuesMixin, EventsMixin, WorkflowMixin
             check_same_thread=check_same_thread,
             project_root=conf_path.resolve().parent,
         )
-        db.initialize()
+        try:
+            db.initialize()
+        except BaseException:
+            db.close()
+            raise
         return db
 
     @classmethod

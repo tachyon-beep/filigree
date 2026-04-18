@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import os
+import sqlite3
 import sys
 from pathlib import Path
 
@@ -38,6 +39,7 @@ from filigree.core import (
     read_conf,
     write_conf,
 )
+from filigree.db_schema import CURRENT_SCHEMA_VERSION
 
 # ---------------------------------------------------------------------------
 # Discovery: find_filigree_conf
@@ -413,6 +415,77 @@ class TestFromConf:
             assert db.db_path == filigree_dir / DB_FILENAME
         finally:
             db.close()
+
+
+class TestFactoriesCloseConnOnInitFailure:
+    """Regression: ``from_filigree_dir`` / ``from_conf`` must close the
+    lazily-opened SQLite connection if ``initialize()`` raises.
+
+    Bug filigree-3449322141: ``initialize()``'s first statement opens the
+    connection via ``get_schema_version()`` → ``self.conn``. If it then
+    raises (e.g. schema version newer than this build supports), the
+    classmethod exits before ``return db``, so the caller never receives a
+    handle to ``close()``. The connection — and its WAL/SHM sidecar files —
+    leak until the interpreter exits or GC collects the instance.
+
+    Fix: the factories wrap ``initialize()`` in try/except, call
+    ``db.close()`` on failure, and re-raise.
+    """
+
+    def _poison_db_with_future_schema(self, db_path: Path) -> None:
+        """Create a SQLite file with a schema version newer than supported."""
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        conn = sqlite3.connect(str(db_path))
+        try:
+            conn.execute(f"PRAGMA user_version = {CURRENT_SCHEMA_VERSION + 1}")
+            conn.commit()
+        finally:
+            conn.close()
+
+    def test_from_filigree_dir_closes_conn_when_initialize_raises(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        filigree_dir = tmp_path / FILIGREE_DIR_NAME
+        filigree_dir.mkdir()
+        self._poison_db_with_future_schema(filigree_dir / DB_FILENAME)
+
+        created: list[FiligreeDB] = []
+        original_init = FiligreeDB.__init__
+
+        def capturing_init(self: FiligreeDB, *args: object, **kwargs: object) -> None:
+            original_init(self, *args, **kwargs)  # type: ignore[arg-type]
+            created.append(self)
+
+        monkeypatch.setattr(FiligreeDB, "__init__", capturing_init)
+
+        with pytest.raises(ValueError, match="newer than this version"):
+            FiligreeDB.from_filigree_dir(filigree_dir)
+
+        assert len(created) == 1, "expected a single FiligreeDB instance to be constructed"
+        assert created[0]._conn is None, "from_filigree_dir must close the SQLite connection when initialize() raises"
+
+    def test_from_conf_closes_conn_when_initialize_raises(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        filigree_dir = tmp_path / FILIGREE_DIR_NAME
+        filigree_dir.mkdir()
+        self._poison_db_with_future_schema(filigree_dir / DB_FILENAME)
+        conf = tmp_path / CONF_FILENAME
+        write_conf(
+            conf,
+            {"version": 1, "project_name": "p", "prefix": "p", "db": f"{FILIGREE_DIR_NAME}/{DB_FILENAME}"},
+        )
+
+        created: list[FiligreeDB] = []
+        original_init = FiligreeDB.__init__
+
+        def capturing_init(self: FiligreeDB, *args: object, **kwargs: object) -> None:
+            original_init(self, *args, **kwargs)  # type: ignore[arg-type]
+            created.append(self)
+
+        monkeypatch.setattr(FiligreeDB, "__init__", capturing_init)
+
+        with pytest.raises(ValueError, match="newer than this version"):
+            FiligreeDB.from_conf(conf)
+
+        assert len(created) == 1, "expected a single FiligreeDB instance to be constructed"
+        assert created[0]._conn is None, "from_conf must close the SQLite connection when initialize() raises"
 
 
 class TestFromFiligreeDirLegacyPrefixFallback:
