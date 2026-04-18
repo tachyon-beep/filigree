@@ -102,6 +102,45 @@ class ProjectNotInitialisedError(FileNotFoundError):
     """
 
 
+class ForeignDatabaseError(ProjectNotInitialisedError):
+    """Walk-up discovery crossed a ``.git/`` boundary before finding an anchor.
+
+    The current working directory sits inside a git repository that has no
+    ``.filigree.conf`` (or legacy ``.filigree/``) of its own, but an ancestor
+    *above* the git root does. Silently opening that ancestor's database
+    would dump tickets into a foreign project, so discovery refuses.
+
+    Subclasses :class:`ProjectNotInitialisedError` so generic "not set up"
+    handlers still work; catch :class:`ForeignDatabaseError` specifically
+    when you want to surface the richer message (e.g. in the MCP server or
+    ``filigree doctor``).
+    """
+
+    def __init__(self, *, cwd: Path, found_anchor: Path, git_boundary: Path) -> None:
+        self.cwd = cwd
+        self.found_anchor = found_anchor
+        self.git_boundary = git_boundary
+        msg = (
+            "Refusing to latch onto another project's filigree database.\n"
+            "\n"
+            f"  Current directory: {cwd}\n"
+            f"  Nearest anchor:    {found_anchor}\n"
+            f"  Git boundary at:   {git_boundary}\n"
+            "\n"
+            "The nearest filigree anchor sits above a .git/ boundary, so it "
+            "belongs to a different project. To track work here, install "
+            "filigree in this project:\n"
+            "\n"
+            f"  cd {git_boundary} && filigree init\n"
+            "\n"
+            "If MCP is configured, ask the user to restart the MCP server "
+            "after `filigree init` so it picks up the new project's "
+            "database. To operate on the outer project intentionally, `cd` "
+            "above the git boundary."
+        )
+        super().__init__(msg)
+
+
 class WrongProjectError(ValueError):
     """Raised when an issue ID's prefix doesn't match the open DB's prefix.
 
@@ -126,12 +165,21 @@ def find_filigree_conf(start: Path | None = None) -> Path:
         ProjectNotInitialisedError: if no ``.filigree.conf`` is found in
             *start* or any ancestor up to ``/``. The error message points at
             ``filigree init`` and ``filigree doctor``.
+        ForeignDatabaseError: if the walk-up passes a ``.git/`` boundary
+            before finding ``.filigree.conf`` — that conf belongs to a
+            different project and silently opening it would write to the
+            wrong database.
     """
     current = (start or Path.cwd()).resolve()
+    git_boundary: Path | None = None
     for parent in [current, *current.parents]:
         conf = parent / CONF_FILENAME
         if conf.is_file():
+            if git_boundary is not None:
+                raise ForeignDatabaseError(cwd=current, found_anchor=conf, git_boundary=git_boundary)
             return conf
+        if git_boundary is None and (parent / ".git").exists():
+            git_boundary = parent
     msg = (
         f"No {CONF_FILENAME} found in {current} or any parent directory. "
         f"Run `filigree init` here to create one, or `filigree doctor` to diagnose."
@@ -155,15 +203,26 @@ def find_filigree_anchor(start: Path | None = None) -> tuple[Path, Path | None]:
     Raises:
         ProjectNotInitialisedError: if neither anchor is found anywhere up
             to ``/``.
+        ForeignDatabaseError: if the walk-up passes a ``.git/`` boundary
+            before finding any anchor — the ancestor anchor belongs to a
+            different project and silently opening it would write to the
+            wrong database.
     """
     current = (start or Path.cwd()).resolve()
+    git_boundary: Path | None = None
     for parent in [current, *current.parents]:
         conf = parent / CONF_FILENAME
         if conf.is_file():
+            if git_boundary is not None:
+                raise ForeignDatabaseError(cwd=current, found_anchor=conf, git_boundary=git_boundary)
             return parent, conf
         legacy_dir = parent / FILIGREE_DIR_NAME
         if legacy_dir.is_dir():
+            if git_boundary is not None:
+                raise ForeignDatabaseError(cwd=current, found_anchor=legacy_dir, git_boundary=git_boundary)
             return parent, None
+        if git_boundary is None and (parent / ".git").exists():
+            git_boundary = parent
     msg = (
         f"No {CONF_FILENAME} or {FILIGREE_DIR_NAME}/ found in {current} or any parent directory. "
         f"Run `filigree init` here to create one, or `filigree doctor` to diagnose."

@@ -21,6 +21,7 @@ from filigree.core import (
     DB_FILENAME,
     FILIGREE_DIR_NAME,
     SUMMARY_FILENAME,
+    ForeignDatabaseError,
     find_filigree_root,
     read_conf,
 )
@@ -265,6 +266,21 @@ def run_doctor(project_root: Path | None = None) -> list[CheckResult]:
         # Try walking up
         try:
             filigree_dir = find_filigree_root(cwd)
+        except ForeignDatabaseError as exc:
+            # Walk-up crossed a .git/ boundary — surface the full message so
+            # users (and agents) see exactly why we refused to open the
+            # ancestor anchor.  ``ForeignDatabaseError`` is also a
+            # ``FileNotFoundError`` so the generic handler would otherwise
+            # swallow it into a bland "No .filigree/ found" line.
+            results.append(
+                CheckResult(
+                    ".filigree/ directory",
+                    False,
+                    str(exc),
+                    fix_hint=f"Run `filigree init` in {exc.git_boundary} (this project).",
+                )
+            )
+            return results  # Can't proceed without a local anchor
         except FileNotFoundError:
             results.append(
                 CheckResult(

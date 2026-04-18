@@ -24,6 +24,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`ForeignDatabaseError`** — runtime guard against cross-project latch-on.
+  Discovery now tracks the first ``.git/`` directory it sees during walk-up;
+  if it subsequently finds a ``.filigree.conf`` (or legacy ``.filigree/``)
+  *above* that git boundary, it raises ``ForeignDatabaseError`` instead of
+  silently returning the ancestor anchor. The primary failure this prevents:
+  when ``filigree`` is installed globally (``uv tool install filigree``) and
+  an LLM runs commands in a git repo that has no anchor of its own, the old
+  walk-up would dump tickets into whichever parent project's database it
+  found first. The error message tells the caller exactly what to do —
+  ``cd <project> && filigree init`` and restart MCP — so the LLM can
+  self-correct rather than corrupting a sibling project's data. Monorepos
+  (conf at the git root) and anchor-less trees (no git in ancestry) remain
+  unaffected. ``ForeignDatabaseError`` subclasses ``ProjectNotInitialisedError``
+  so existing generic "not set up" handlers still catch it, and ``filigree
+  doctor`` now emits the full message as a CheckResult.
 - **`.filigree.conf`** — JSON anchor file at the project root. The authoritative discovery target: walk-up looks for this file (not the `.filigree/` directory). Nested `.filigree.conf` files override their parents — first hit wins. Carries `version`, `project_name`, `prefix`, and `db` (path to the database, relative to the conf file).
 - **`FiligreeDB.from_conf(conf_path)`** classmethod — open a project DB by its conf anchor.
 - **`WrongProjectError`** (`ValueError` subclass) — raised on write operations against IDs whose prefix doesn't match the open DB's prefix. Catches an agent that climbed into a parent's database and tries to mutate a foreign-prefix ticket. Read methods (`get_issue`, `get_comments`, etc.) intentionally do not enforce, so legitimate cross-prefix lookups (migration, history) still work.

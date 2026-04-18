@@ -202,6 +202,24 @@ class TestDoctorFiligreeDir:
         first = results[0]
         assert first.passed is True
 
+    def test_foreign_database_is_reported_with_specific_message(self, tmp_path: Path) -> None:
+        """Doctor must surface the full ForeignDatabaseError message — not
+        collapse it into the generic "No .filigree/ found" line — so agents
+        and users see *why* we refused and what to do next.
+        """
+        _make_project(tmp_path)  # outer project has .filigree/ and .filigree.conf
+        inner = tmp_path / "inner-repo"
+        inner.mkdir()
+        (inner / ".git").mkdir()  # inner is a separate git repo, no anchor of its own
+
+        results = run_doctor(inner)
+        assert len(results) == 1
+        r = results[0]
+        assert r.passed is False
+        assert "Refusing to latch" in r.message
+        assert "filigree init" in r.fix_hint
+        assert str(inner.resolve()) in r.fix_hint
+
 
 # ---------------------------------------------------------------------------
 # run_doctor — config.json check

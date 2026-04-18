@@ -2,6 +2,14 @@
 
 Use `filigree` for all task tracking in this project. Data lives in `.filigree/`.
 
+### If you see a `ForeignDatabaseError`
+
+Filigree refuses to open an ancestor project's database when it detects that
+the current directory is inside a git repo with no local `.filigree.conf`.
+The error message tells you exactly what to do (usually `filigree init` in
+the current project, then restart MCP). Do not work around it by `cd`-ing
+upward unless that was the actual intent.
+
 ### MCP Tools (Preferred)
 
 When MCP is configured, prefer `mcp__filigree__*` tools over CLI commands — they're

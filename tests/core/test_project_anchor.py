@@ -29,6 +29,7 @@ from filigree.core import (
     DB_FILENAME,
     FILIGREE_DIR_NAME,
     FiligreeDB,
+    ForeignDatabaseError,
     ProjectNotInitialisedError,
     WrongProjectError,
     find_filigree_anchor,
@@ -208,6 +209,153 @@ class TestFindFiligreeAnchor:
     def test_raises_when_neither_anchor_anywhere(self, tmp_path: Path) -> None:
         with pytest.raises(ProjectNotInitialisedError):
             find_filigree_anchor(tmp_path)
+
+
+# ---------------------------------------------------------------------------
+# Foreign-database detection: refuse to latch onto an ancestor project's DB
+# when the cwd is inside a git repo that has no anchor of its own.
+# ---------------------------------------------------------------------------
+
+
+class TestForeignDatabaseDetection:
+    """When filigree is installed globally, a naïve walk-up lets an LLM in a
+    directory with no ``.filigree.conf`` silently open whichever parent
+    project's database it finds. The fix is a runtime guard: if discovery
+    walks past a ``.git/`` boundary before finding an anchor, refuse with a
+    ``ForeignDatabaseError`` whose message tells the caller to run
+    ``filigree init`` (and restart MCP) in the current project.
+    """
+
+    def test_refuses_when_git_sits_below_ancestor_conf(self, tmp_path: Path) -> None:
+        """cwd is inside its own git repo; the ancestor has the conf."""
+        # Ancestor: foreign project with .filigree.conf
+        write_conf(
+            tmp_path / CONF_FILENAME,
+            {"version": 1, "project_name": "outer", "prefix": "outer", "db": ".filigree/filigree.db"},
+        )
+        # Inner: separate git repo, no conf of its own
+        inner = tmp_path / "inner-repo"
+        inner.mkdir()
+        (inner / ".git").mkdir()
+
+        with pytest.raises(ForeignDatabaseError) as excinfo:
+            find_filigree_anchor(inner)
+
+        exc = excinfo.value
+        assert exc.cwd == inner.resolve()
+        assert exc.found_anchor == tmp_path / CONF_FILENAME
+        assert exc.git_boundary == inner.resolve()
+        # The message carries actionable guidance for the LLM.
+        msg = str(exc)
+        assert "filigree init" in msg
+        assert "MCP" in msg or "mcp" in msg
+        assert str(inner.resolve()) in msg
+
+    def test_refuses_for_legacy_ancestor_beyond_git_boundary(self, tmp_path: Path) -> None:
+        """Same refusal applies to legacy ``.filigree/`` ancestors."""
+        (tmp_path / FILIGREE_DIR_NAME).mkdir()
+        inner = tmp_path / "inner-repo"
+        inner.mkdir()
+        (inner / ".git").mkdir()
+
+        with pytest.raises(ForeignDatabaseError):
+            find_filigree_anchor(inner)
+
+    def test_refuses_from_deep_subdir_past_git_boundary(self, tmp_path: Path) -> None:
+        """Walk-up from several levels deep still detects the boundary."""
+        write_conf(
+            tmp_path / CONF_FILENAME,
+            {"version": 1, "project_name": "outer", "prefix": "outer", "db": ".filigree/filigree.db"},
+        )
+        inner = tmp_path / "repo"
+        inner.mkdir()
+        (inner / ".git").mkdir()
+        deep = inner / "src" / "pkg"
+        deep.mkdir(parents=True)
+
+        with pytest.raises(ForeignDatabaseError) as excinfo:
+            find_filigree_anchor(deep)
+        # The git_boundary is the inner repo, not the deeper subdir.
+        assert excinfo.value.git_boundary == inner.resolve()
+
+    def test_allows_conf_at_same_level_as_git(self, tmp_path: Path) -> None:
+        """Monorepo case: conf sits at the git root — no boundary crossed."""
+        (tmp_path / ".git").mkdir()
+        conf = tmp_path / CONF_FILENAME
+        write_conf(conf, {"version": 1, "project_name": "p", "prefix": "p", "db": ".filigree/filigree.db"})
+
+        project_root, conf_path = find_filigree_anchor(tmp_path)
+        assert project_root == tmp_path
+        assert conf_path == conf
+
+    def test_allows_conf_at_git_root_from_subdir(self, tmp_path: Path) -> None:
+        """Walking up from inside the repo finds conf at the git root, OK."""
+        (tmp_path / ".git").mkdir()
+        conf = tmp_path / CONF_FILENAME
+        write_conf(conf, {"version": 1, "project_name": "p", "prefix": "p", "db": ".filigree/filigree.db"})
+        sub = tmp_path / "src" / "deep"
+        sub.mkdir(parents=True)
+
+        project_root, conf_path = find_filigree_anchor(sub)
+        assert project_root == tmp_path
+        assert conf_path == conf
+
+    def test_allows_walk_up_when_no_git_in_ancestry(self, tmp_path: Path) -> None:
+        """No ``.git/`` anywhere → no boundary to enforce; walk-up is allowed."""
+        write_conf(
+            tmp_path / CONF_FILENAME,
+            {"version": 1, "project_name": "p", "prefix": "p", "db": ".filigree/filigree.db"},
+        )
+        sub = tmp_path / "sub"
+        sub.mkdir()
+
+        project_root, _conf_path = find_filigree_anchor(sub)
+        assert project_root == tmp_path
+
+    def test_find_filigree_conf_also_enforces_boundary(self, tmp_path: Path) -> None:
+        """The strict variant (``find_filigree_conf``) must apply the same guard."""
+        write_conf(
+            tmp_path / CONF_FILENAME,
+            {"version": 1, "project_name": "outer", "prefix": "outer", "db": ".filigree/filigree.db"},
+        )
+        inner = tmp_path / "repo"
+        inner.mkdir()
+        (inner / ".git").mkdir()
+
+        with pytest.raises(ForeignDatabaseError):
+            find_filigree_conf(inner)
+
+    def test_git_file_submodule_is_also_a_boundary(self, tmp_path: Path) -> None:
+        """A git submodule has ``.git`` as a file, not a directory — still a boundary."""
+        write_conf(
+            tmp_path / CONF_FILENAME,
+            {"version": 1, "project_name": "outer", "prefix": "outer", "db": ".filigree/filigree.db"},
+        )
+        submodule = tmp_path / "submodule"
+        submodule.mkdir()
+        (submodule / ".git").write_text("gitdir: ../.git/modules/submodule\n")
+
+        with pytest.raises(ForeignDatabaseError):
+            find_filigree_anchor(submodule)
+
+    def test_foreign_database_error_is_project_not_initialised(self, tmp_path: Path) -> None:
+        """Existing generic handlers that catch ``ProjectNotInitialisedError``
+        (and transitively ``FileNotFoundError``) continue to work — callers
+        opt in to the richer behaviour by catching ``ForeignDatabaseError``
+        specifically.
+        """
+        write_conf(
+            tmp_path / CONF_FILENAME,
+            {"version": 1, "project_name": "outer", "prefix": "outer", "db": ".filigree/filigree.db"},
+        )
+        inner = tmp_path / "inner"
+        inner.mkdir()
+        (inner / ".git").mkdir()
+
+        with pytest.raises(ProjectNotInitialisedError):
+            find_filigree_anchor(inner)
+        with pytest.raises(FileNotFoundError):
+            find_filigree_anchor(inner)
 
 
 # ---------------------------------------------------------------------------
