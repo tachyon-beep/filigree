@@ -13,7 +13,7 @@ if TYPE_CHECKING:
     from starlette.requests import Request
 
 from filigree.core import FiligreeDB, read_config
-from filigree.types.api import ErrorCode
+from filigree.types.api import ErrorCode, ErrorResponse
 from filigree.validation import sanitize_actor as _sanitize_actor
 
 logger = logging.getLogger(__name__)
@@ -41,14 +41,27 @@ def _error_response(
     """Return a flat 2.0 ErrorResponse and log the error.
 
     Shape: ``{"error": str, "code": ErrorCode, "details"?: dict}``.
+    Construction goes through the ErrorResponse TypedDict so mypy gates
+    the wire shape at every call site; the cast to dict is only to
+    satisfy JSONResponse's content-type annotation.
     """
     from fastapi.responses import JSONResponse
 
-    logger.warning("API error [%s] %s: %s", status_code, code, error)
-    body: dict[str, Any] = {"error": error, "code": str(code)}
+    # 5xx means a server-side problem we should be able to investigate —
+    # log at error level. 4xx is client-caused (bad input, missing id,
+    # conflict) — warning is enough. exc_info=True captures the active
+    # exception if we're inside an except block; otherwise it's a no-op.
+    log = logger.error if status_code >= 500 else logger.warning
+    log("API error [%s] %s: %s", status_code, code, error, exc_info=status_code >= 500)
+
+    body: ErrorResponse
     if details is not None:
-        body["details"] = details
-    return JSONResponse(body, status_code=status_code)
+        body = {"error": error, "code": code, "details": details}
+    else:
+        body = {"error": error, "code": code}
+    # JSONResponse accepts any JSON-serializable mapping; StrEnum values
+    # round-trip correctly because ErrorCode inherits from str.
+    return JSONResponse(dict(body), status_code=status_code)
 
 
 async def _parse_json_body(request: Request) -> dict[str, Any] | JSONResponse:
