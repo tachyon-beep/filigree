@@ -246,7 +246,13 @@ def create_plan(ctx: click.Context, file_path: str | None, as_json: bool) -> Non
     with get_db() as db:
         try:
             result = db.create_plan(data["milestone"], data["phases"], actor=ctx.obj["actor"])  # type: ignore[arg-type]
-        except (ValueError, IndexError, TypeError, AttributeError) as e:
+        except (ValueError, TypeError) as e:
+            # Narrowed from a 4-exception tuple that included IndexError and
+            # AttributeError: both of those indicate a bug (missing fields
+            # would raise KeyError before reaching create_plan; attribute
+            # access on validated JSON dicts is programmer error). Let them
+            # crash so the bug is visible, rather than being misclassified
+            # as a validation error.
             if as_json:
                 click.echo(json_mod.dumps({"error": str(e), "code": ErrorCode.VALIDATION}))
             else:
