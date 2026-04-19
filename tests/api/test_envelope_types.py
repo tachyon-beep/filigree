@@ -107,3 +107,30 @@ def test_transition_errors_exist() -> None:
 
     exc2 = InvalidTransitionError("X", "confirmed")
     assert "confirmed" in str(exc2)
+
+
+def test_errorcode_to_http_status_is_exhaustive() -> None:
+    """Every ErrorCode member maps to a sensible HTTP status.
+
+    The function uses ``match`` + ``assert_never`` so adding a new member
+    without extending the match fails mypy. This test complements that
+    by verifying the runtime output shape at test-time (in case
+    ``assert_never`` is disabled in production).
+    """
+    from filigree.types.api import ErrorCode, errorcode_to_http_status
+
+    for code in ErrorCode:
+        status = errorcode_to_http_status(code)
+        assert isinstance(status, int)
+        assert 400 <= status < 600, f"{code} maps to non-error status {status}"
+
+    # Spot-check a few specific mappings that back-compat depends on.
+    assert errorcode_to_http_status(ErrorCode.NOT_FOUND) == 404
+    assert errorcode_to_http_status(ErrorCode.CONFLICT) == 409
+    assert errorcode_to_http_status(ErrorCode.INVALID_TRANSITION) == 409
+    assert errorcode_to_http_status(ErrorCode.VALIDATION) == 400
+    assert errorcode_to_http_status(ErrorCode.PERMISSION) == 403
+    assert errorcode_to_http_status(ErrorCode.NOT_INITIALIZED) == 503
+    assert errorcode_to_http_status(ErrorCode.SCHEMA_MISMATCH) == 503
+    assert errorcode_to_http_status(ErrorCode.INTERNAL) == 500
+    assert errorcode_to_http_status(ErrorCode.IO) == 500

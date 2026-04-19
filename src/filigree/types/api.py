@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import Any, Generic, Literal, NotRequired, TypedDict, TypeVar
+from typing import Any, Generic, Literal, NotRequired, TypedDict, TypeVar, assert_never
 
 from filigree.types.core import ISOTimestamp, IssueDict, StatusCategory
 from filigree.types.events import EventType
@@ -521,6 +521,34 @@ class InvalidTransitionError(Exception):
         self.type_name = type_name
         self.current_status = current_status
         super().__init__(f"No wip-category transition from {current_status!r} for type {type_name!r}.")
+
+
+def errorcode_to_http_status(code: ErrorCode) -> int:
+    """Map an ErrorCode to the HTTP status the dashboard should return.
+
+    Exhaustive match: adding an ErrorCode member without extending this
+    function fails mypy via ``assert_never``. Dashboard routes are free
+    to choose a more specific status (e.g. 409 for a particular conflict)
+    but should never invent a status that disagrees with this default.
+    """
+    match code:
+        case ErrorCode.VALIDATION | ErrorCode.INVALID_API_URL:
+            return 400
+        case ErrorCode.PERMISSION:
+            return 403
+        case ErrorCode.NOT_FOUND:
+            return 404
+        case ErrorCode.CONFLICT | ErrorCode.INVALID_TRANSITION:
+            return 409
+        case ErrorCode.NOT_INITIALIZED | ErrorCode.SCHEMA_MISMATCH:
+            # Service exists but is not in a state where it can answer —
+            # 503 lets clients retry once the project is initialized or
+            # the schema is migrated.
+            return 503
+        case ErrorCode.IO | ErrorCode.STOP_FAILED | ErrorCode.INTERNAL:
+            return 500
+        case _:
+            assert_never(code)
 
 
 # Mapping used only during Stage 2a rollout for developer reference.
