@@ -10,7 +10,7 @@ import pytest
 from click.testing import CliRunner
 
 from filigree.cli import cli
-from tests._seeds import SeededProject
+from tests._seeds import SeededProject, seed_bugs, seed_observations, seed_open_bug
 
 
 @pytest.fixture
@@ -42,8 +42,8 @@ def initialized_project_with_bug(initialized_project: Path) -> SeededProject:
     os.chdir(str(initialized_project))
     try:
         with get_db() as db:
-            bug = db.create_issue("Test bug", type="bug", priority=2)
-        return SeededProject(path=initialized_project, bug_id=bug.id)
+            bug_id = seed_open_bug(db)
+        return SeededProject(path=initialized_project, bug_id=bug_id)
     finally:
         os.chdir(original)
 
@@ -55,10 +55,8 @@ def initialized_project_with_bugs(initialized_project: Path) -> SeededProject:
     original = os.getcwd()
     os.chdir(str(initialized_project))
     try:
-        ids: list[str] = []
         with get_db() as db:
-            for i in range(3):
-                ids.append(db.create_issue(f"Bug {i}", type="bug", priority=2).id)
+            ids = seed_bugs(db, count=3)
         return SeededProject(path=initialized_project, bug_ids=ids)
     finally:
         os.chdir(original)
@@ -72,8 +70,10 @@ def initialized_project_with_observation(initialized_project: Path) -> SeededPro
     os.chdir(str(initialized_project))
     try:
         with get_db() as db:
-            rec = db.create_observation("note", actor="test")
-        return SeededProject(path=initialized_project, obs_id=rec["id"])
+            # Single-obs scenario uses the canonical "note" text for parity
+            # with the prior inline fixture — tests assert on the text.
+            obs_id = db.create_observation("note", actor="test")["id"]
+        return SeededProject(path=initialized_project, obs_id=obs_id)
     finally:
         os.chdir(original)
 
@@ -85,10 +85,8 @@ def initialized_project_with_many_obs(initialized_project: Path) -> SeededProjec
     original = os.getcwd()
     os.chdir(str(initialized_project))
     try:
-        ids: list[str] = []
         with get_db() as db:
-            for i in range(3):
-                ids.append(db.create_observation(f"note {i}", actor="test")["id"])
+            ids = seed_observations(db, count=3)
         return SeededProject(path=initialized_project, obs_ids=ids)
     finally:
         os.chdir(original)

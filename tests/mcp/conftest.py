@@ -9,7 +9,7 @@ from typing import Any
 import pytest
 
 from filigree.core import DB_FILENAME, FILIGREE_DIR_NAME, SUMMARY_FILENAME, FiligreeDB, write_config
-from tests._seeds import SeededMCPClient
+from tests._seeds import SeededMCPClient, seed_bugs, seed_observations, seed_open_bug
 
 # Re-export _parse so existing ``from tests.mcp.conftest import _parse``
 # imports continue to work during migration.  New code should import from
@@ -92,8 +92,8 @@ def mcp_client_for_empty_project(mcp_db: FiligreeDB) -> SeededMCPClient:
 @pytest.fixture
 def mcp_client_with_open_bug(mcp_db: FiligreeDB) -> SeededMCPClient:
     """One open, unclaimed bug."""
-    bug = mcp_db.create_issue("Test bug", type="bug", priority=2)
-    return SeededMCPClient(client=_InProcessMCPClient(mcp_db), bug_id=bug.id)
+    bug_id = seed_open_bug(mcp_db)
+    return SeededMCPClient(client=_InProcessMCPClient(mcp_db), bug_id=bug_id)
 
 
 @pytest.fixture
@@ -183,12 +183,7 @@ def mcp_client_with_two_issues(mcp_db: FiligreeDB) -> SeededMCPClient:
 
 @pytest.fixture
 def mcp_client_with_observations(mcp_db: FiligreeDB) -> SeededMCPClient:
-    obs_ids: list[str] = []
-    for i in range(3):
-        # create_observation(summary, *, actor=..., ...) — summary is
-        # positional; there is no `observation=` kwarg.
-        rec = mcp_db.create_observation(f"obs {i}", actor="test")
-        obs_ids.append(rec["id"])
+    obs_ids = seed_observations(mcp_db, count=3)
     return SeededMCPClient(client=_InProcessMCPClient(mcp_db), obs_ids=obs_ids)
 
 

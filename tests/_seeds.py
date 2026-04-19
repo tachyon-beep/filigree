@@ -1,10 +1,19 @@
-"""Shared dataclasses for fixture handles used across mcp/cli/workflows tests."""
+"""Shared seed helpers + dataclasses for mcp/cli/workflows fixtures.
+
+Seed functions take a FiligreeDB and populate known-shape scenarios. They
+are used by fixtures in tests/mcp/conftest.py and tests/cli/conftest.py so
+both surfaces exercise the same seed data — diverging conftests were
+previously maintaining near-identical copies of these setups.
+"""
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from filigree.core import FiligreeDB
 
 
 @dataclass
@@ -46,3 +55,22 @@ class SeededProject:
     obs_id: str | None = None
     bug_ids: list[str] = field(default_factory=list)
     obs_ids: list[str] = field(default_factory=list)
+
+
+def seed_open_bug(db: FiligreeDB, *, title: str = "Test bug", priority: int = 2) -> str:
+    """Seed one open, unclaimed bug. Returns the issue id.
+
+    Shared between MCP and CLI conftests so both surfaces see the same
+    scenario shape.
+    """
+    return db.create_issue(title, type="bug", priority=priority).id
+
+
+def seed_bugs(db: FiligreeDB, *, count: int = 3, priority: int = 2) -> list[str]:
+    """Seed ``count`` open bugs. Returns the list of ids."""
+    return [db.create_issue(f"Bug {i}", type="bug", priority=priority).id for i in range(count)]
+
+
+def seed_observations(db: FiligreeDB, *, count: int = 3, actor: str = "test") -> list[str]:
+    """Seed ``count`` observations. Returns the list of observation ids."""
+    return [db.create_observation(f"note {i}", actor=actor)["id"] for i in range(count)]
