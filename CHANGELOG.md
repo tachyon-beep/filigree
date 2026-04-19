@@ -44,6 +44,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Unified error envelope (2.0 wire shape).** Every error response across MCP tools, dashboard routes, and CLI `--json` output now emits the same flat shape: `{"error": "<message>", "code": "<UPPERCASE_CODE>", "details"?: {…}}`. The 11-member `ErrorCode` enum (`VALIDATION`, `NOT_FOUND`, `CONFLICT`, `INVALID_TRANSITION`, `PERMISSION`, `NOT_INITIALIZED`, `IO`, `INVALID_API_URL`, `STOP_FAILED`, `SCHEMA_MISMATCH`, `INTERNAL`) replaces 27 ad-hoc lowercase codes that previously differed per surface. `ErrorResponse` is defined as a `TypedDict` and the dashboard helper `_error_response` now constructs through it so mypy gates the shape at every emit site; a new `errorcode_to_http_status()` function uses `match` + `assert_never` so adding a 12th member fails the build.
+- **New envelope TypedDicts** for future use: `BatchResponse[_T]`, `BatchFailure`, `ListResponse[_T]`. Shape contracts are pinned by `tests/api/test_envelope_types.py`; consumer wiring lands in Stage 2b.
+- **Typed exceptions** `SchemaVersionMismatchError`, `AmbiguousTransitionError`, `InvalidTransitionError`. Structured carriers for installed/database versions, ambiguous transition candidates, and invalid-transition context respectively. Raise sites land in Stage 2b / Stage 3 — defined here so the exception type and fields are stable.
 - **`ForeignDatabaseError`** — runtime guard against cross-project latch-on.
   Discovery now tracks the first ``.git/`` directory it sees during walk-up;
   if it subsequently finds a ``.filigree.conf`` (or legacy ``.filigree/``)
@@ -66,6 +69,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`filigree doctor`** flags `~/.filigree.conf` if present (a conf at `$HOME` claims everything beneath it; almost always a mistake) and reports whether the project's `.filigree.conf` anchor exists.
 
 ### Changed
+
+- **Wire-shape unification (breaking for callers branching on error `code`).**
+  - `GET /api/release/{id}/tree` on a non-release issue now returns `code: "NOT_FOUND"` (was `"VALIDATION"`). Status remains 404.
+  - `GET /api/type/{type_name}` on an unknown type now returns status 400 + `code: "VALIDATION"` (was 404 + `"NOT_FOUND"`). `details.valid_types` lists the registered types.
+  - MCP `trigger_scan` rate-limited responses now emit `code: "CONFLICT"` (was `"IO"`). The blocking run id is in `details.blocking_run_id`; the cooldown window is retriable when the blocking run completes.
+  - MCP `restart_dashboard` failure paths now include a `code` field (previously absent). `ErrorCode.STOP_FAILED` for the dead-process-won't-die case, `ErrorCode.PERMISSION` for SIGTERM/SIGKILL denied, `ErrorCode.INTERNAL` for unexpected exception, and `ErrorCode.IO` when the spawn succeeds but returns no URL.
+  - MCP `_build_transition_error` now emits `code: "INVALID_TRANSITION"` (uppercase) instead of `"invalid_transition"`. Previously sibling emit sites (e.g. `reopen_issue`) were already uppercase, so a case-sensitive client saw two codes for the same logical error.
+  - MCP scanner error responses (`trigger_scan`, `trigger_scan_batch`) now nest extras (`blocking_run_id`, `available_scanners`, `scanner`, `spawn_errors`, `batch_id`, `scan_run_ids`, `per_file`, `exit_code`, `log_path`, `skipped`) inside `details` instead of as top-level keys. Clients that read these fields must now read `payload["details"]["<key>"]`.
+
+- **Known limitation (deferred to Stage 2b.0).** `BatchFailureDetail.code` — the per-item error code inside the `failed[]` list returned by batch operations (`batch_close`, `batch_update`, `batch_add_label`, `batch_add_comment`) — still emits lowercase legacy strings (`"not_found"`, `"invalid_transition"`, `"validation_error"`). The enclosing top-level `code` is uppercase, so a single batch response mixes the two cases. The migration path retires `BatchFailureDetail` in favour of `BatchFailure` (which already uses `ErrorCode`); this is Stage 2b.0's headline task. Until then, clients iterating batch `failed[]` must still match the legacy lowercase strings.
 
 - **`filigree init`** writes `.filigree.conf` alongside `.filigree/`.
 - **Discovery** is split: `find_filigree_conf` is strict (returns the conf path or raises) and `find_filigree_anchor` walks up for either a `.filigree.conf` or a legacy `.filigree/` directory, returning `(project_root, conf_path_or_None)`. Both are pure reads — discovery never writes. Legacy installs are still discoverable; the conf is created only by explicit init/install paths so inspection commands work on read-only mounts.

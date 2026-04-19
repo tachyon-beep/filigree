@@ -477,8 +477,7 @@ async def _handle_trigger_scan(arguments: dict[str, Any]) -> list[TextContent]:
         return _text(
             ErrorResponse(
                 error=(
-                    f"Scanner {scanner_name!r} was already triggered for {file_path!r} recently. "
-                    f"Retry after the blocking run completes."
+                    f"Scanner {scanner_name!r} was already triggered for {file_path!r} recently. Retry after the blocking run completes."
                 ),
                 code=ErrorCode.CONFLICT,
                 details={"blocking_run_id": blocking_run["id"]},

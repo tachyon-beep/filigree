@@ -29,9 +29,7 @@ def test_all_values_are_real_errorcode_members() -> None:
     """Every mapping target must be a live ErrorCode member."""
     members = set(ErrorCode)
     for legacy, target in LEGACY_CODE_TO_ERRORCODE.items():
-        assert target in members, (
-            f"LEGACY_CODE_TO_ERRORCODE[{legacy!r}] = {target!r} is not an ErrorCode member"
-        )
+        assert target in members, f"LEGACY_CODE_TO_ERRORCODE[{legacy!r}] = {target!r} is not an ErrorCode member"
 
 
 def test_all_keys_are_snake_case() -> None:
@@ -39,8 +37,7 @@ def test_all_keys_are_snake_case() -> None:
     pattern = re.compile(r"^[a-z][a-z0-9_]*$")
     for legacy in LEGACY_CODE_TO_ERRORCODE:
         assert pattern.fullmatch(legacy), (
-            f"Legacy key {legacy!r} is not snake_case — "
-            "this dict documents the pre-2.0 wire shape, which was all lowercase."
+            f"Legacy key {legacy!r} is not snake_case — this dict documents the pre-2.0 wire shape, which was all lowercase."
         )
 
 
@@ -55,8 +52,7 @@ def test_no_duplicate_keys() -> None:
     # Grab lines that look like legacy-code mapping entries.
     entries = re.findall(r'^\s*"([a-z][a-z0-9_]*)":\s*ErrorCode\.[A-Z_]+', source, re.MULTILINE)
     assert len(entries) == len(set(entries)), (
-        f"Duplicate legacy codes in LEGACY_CODE_TO_ERRORCODE source: "
-        f"{sorted({e for e in entries if entries.count(e) > 1})}"
+        f"Duplicate legacy codes in LEGACY_CODE_TO_ERRORCODE source: {sorted({e for e in entries if entries.count(e) > 1})}"
     )
 
 
@@ -95,7 +91,7 @@ def test_no_legacy_code_literals_in_source(legacy_code: str) -> None:
         if pattern.search(text):
             hits.append(str(path.relative_to(SRC_ROOT)))
     assert not hits, (
-        f"Legacy code {legacy_code!r} still appears as a literal \"code\" value in: "
+        f'Legacy code {legacy_code!r} still appears as a literal "code" value in: '
         f"{hits}. Replace with the corresponding ErrorCode member "
         f"({LEGACY_CODE_TO_ERRORCODE[legacy_code].name})."
     )

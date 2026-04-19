@@ -43,9 +43,7 @@ def _assert_flat_envelope(payload: dict, *, surface: str) -> None:
     assert "code" in payload, f"[{surface}] missing 'code' key: {payload!r}"
 
     # error is a string, not a nested dict (old shape)
-    assert isinstance(payload["error"], str), (
-        f"[{surface}] 'error' is not a string — old nested shape detected: {payload!r}"
-    )
+    assert isinstance(payload["error"], str), f"[{surface}] 'error' is not a string — old nested shape detected: {payload!r}"
     assert payload["error"], f"[{surface}] 'error' is empty: {payload!r}"
 
     # code is a valid ErrorCode member value
@@ -55,9 +53,7 @@ def _assert_flat_envelope(payload: dict, *, surface: str) -> None:
 
     # No legacy fields at the top level
     assert "message" not in payload, f"[{surface}] legacy 'message' key present: {payload!r}"
-    assert "message_detail" not in payload, (
-        f"[{surface}] legacy 'message_detail' key present: {payload!r}"
-    )
+    assert "message_detail" not in payload, f"[{surface}] legacy 'message_detail' key present: {payload!r}"
 
     # Allowed keys: error, code, optional details. Anything else is either
     # a per-surface carve-out (batch results with succeeded/failed) or a
@@ -68,10 +64,7 @@ def _assert_flat_envelope(payload: dict, *, surface: str) -> None:
     # TransitionError carries them as top-level optional fields. Anything
     # else is a violation.
     extra -= {"valid_transitions", "hint"}
-    assert not extra, (
-        f"[{surface}] unexpected top-level keys {extra!r} — extras should be in 'details': "
-        f"{payload!r}"
-    )
+    assert not extra, f"[{surface}] unexpected top-level keys {extra!r} — extras should be in 'details': {payload!r}"
 
 
 # ---------------------------------------------------------------------------
