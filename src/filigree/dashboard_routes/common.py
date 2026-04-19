@@ -54,11 +54,11 @@ def _error_response(
     log = logger.error if status_code >= 500 else logger.warning
     log("API error [%s] %s: %s", status_code, code, error, exc_info=status_code >= 500)
 
-    body: ErrorResponse
-    if details is not None:
-        body = {"error": error, "code": code, "details": details}
-    else:
-        body = {"error": error, "code": code}
+    body: ErrorResponse = (
+        {"error": error, "code": code, "details": details}
+        if details is not None
+        else {"error": error, "code": code}
+    )
     # JSONResponse accepts any JSON-serializable mapping; StrEnum values
     # round-trip correctly because ErrorCode inherits from str.
     return JSONResponse(dict(body), status_code=status_code)

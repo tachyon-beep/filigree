@@ -9,7 +9,7 @@ from typing import Any
 import pytest
 
 from filigree.core import DB_FILENAME, FILIGREE_DIR_NAME, SUMMARY_FILENAME, FiligreeDB, write_config
-from tests._seeds import SeededMCPClient, seed_bugs, seed_observations, seed_open_bug
+from tests._seeds import SeededMCPClient, seed_observations, seed_open_bug
 
 # Re-export _parse so existing ``from tests.mcp.conftest import _parse``
 # imports continue to work during migration.  New code should import from
