@@ -464,7 +464,10 @@ def create_mcp_app(
             from starlette.responses import JSONResponse
 
             resp = JSONResponse(
-                {"error": "MCP session manager not initialized"},
+                {
+                    "error": "MCP session manager not initialized",
+                    "code": ErrorCode.NOT_INITIALIZED,
+                },
                 status_code=503,
             )
             await resp(scope, receive, send)
