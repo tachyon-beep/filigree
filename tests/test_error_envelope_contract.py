@@ -25,7 +25,7 @@ import filigree.dashboard as dash
 from filigree.cli import cli
 from filigree.core import DB_FILENAME, FILIGREE_DIR_NAME, SUMMARY_FILENAME, FiligreeDB, write_config
 from filigree.dashboard import create_app
-from filigree.mcp_tools.issues import _handle_get_issue
+from filigree.mcp_tools.issues import _handle_get_issue, _handle_update_issue
 from filigree.types.api import ErrorCode
 
 _VALID_CODES: frozenset[str] = frozenset(e.value for e in ErrorCode)
@@ -169,5 +169,65 @@ class TestCLISurface:
             payload = json.loads(result.output)
             _assert_flat_envelope(payload, surface="cli")
             assert payload["code"] == ErrorCode.NOT_FOUND
+        finally:
+            os.chdir(original)
+
+
+# ---------------------------------------------------------------------------
+# TransitionError — regression-pin PR #1 (a762547) across every surface.
+# Pre-fix, _build_transition_error emitted lowercase "invalid_transition"
+# while the 2.0 contract requires the uppercase ErrorCode member. The three
+# tests below catch a repeat regression regardless of which surface it hits.
+# ---------------------------------------------------------------------------
+
+
+class TestTransitionErrorSurfaceContract:
+    def test_dashboard_invalid_transition_is_uppercase(self, dashboard_client: TestClient) -> None:
+        """Dashboard PATCH /api/issue/{id} returns INVALID_TRANSITION uppercase."""
+        # Seed an issue via the CLI-created DB path
+        import filigree.dashboard as dash
+
+        assert dash._db is not None
+        issue = dash._db.create_issue("Transition contract probe", type="bug")
+
+        resp = dashboard_client.patch(
+            f"/api/issue/{issue.id}",
+            json={"status": "nonexistent_state"},
+        )
+        assert resp.status_code == 409
+        payload = resp.json()
+        _assert_flat_envelope(payload, surface="dashboard")
+        assert payload["code"] == ErrorCode.INVALID_TRANSITION
+
+    async def test_mcp_invalid_transition_is_uppercase(self, envelope_mcp_db: FiligreeDB) -> None:
+        """MCP update_issue emits INVALID_TRANSITION uppercase + valid_transitions hint."""
+        import json as json_mod
+
+        issue = envelope_mcp_db.create_issue("MCP transition probe", type="bug")
+        result = await _handle_update_issue({"id": issue.id, "status": "nonexistent_state"})
+        payload = json_mod.loads(result[0].text)
+        _assert_flat_envelope(payload, surface="mcp")
+        assert payload["code"] == ErrorCode.INVALID_TRANSITION
+        assert "valid_transitions" in payload
+
+    def test_cli_invalid_transition_is_uppercase(self, initialized_project: Path) -> None:
+        """`filigree update <id> --status=invalid --json` emits INVALID_TRANSITION uppercase."""
+        import os
+
+        original = os.getcwd()
+        os.chdir(initialized_project)
+        try:
+            runner = CliRunner()
+            # Seed an issue first
+            create_result = runner.invoke(cli, ["create", "CLI transition probe", "--type", "bug", "--json"])
+            assert create_result.exit_code == 0, create_result.output
+            issue_id = json.loads(create_result.output)["id"]
+
+            # Attempt the invalid transition
+            result = runner.invoke(cli, ["update", issue_id, "--status", "nonexistent_state", "--json"])
+            assert result.exit_code != 0
+            payload = json.loads(result.output)
+            _assert_flat_envelope(payload, surface="cli")
+            assert payload["code"] == ErrorCode.INVALID_TRANSITION
         finally:
             os.chdir(original)
