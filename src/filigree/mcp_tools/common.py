@@ -148,7 +148,7 @@ def _build_transition_error(
     must not mask the caller's original invalid_transition payload (see
     filigree-55c5347992).
     """
-    data: TransitionError = {"error": error, "code": "invalid_transition"}
+    data: TransitionError = {"error": error, "code": ErrorCode.INVALID_TRANSITION}
     try:
         transitions = tracker.get_valid_transitions(issue_id)
         if include_ready:

@@ -974,7 +974,7 @@ class TestMCPMutationEnhancements:
         # Try an invalid status
         result = await call_tool("update_issue", {"id": issue.id, "status": "nonexistent_state"})
         data = _parse(result)
-        assert data["code"] == "invalid_transition"
+        assert data["code"] == ErrorCode.INVALID_TRANSITION
         assert "valid_transitions" in data
         assert "hint" in data
 
@@ -991,7 +991,7 @@ class TestMCPMutationEnhancements:
             side_effect=sqlite3.OperationalError("database is locked"),
         ):
             data = _build_transition_error(mcp_db, issue.id, "bad state")
-        assert data["code"] == "invalid_transition"
+        assert data["code"] == ErrorCode.INVALID_TRANSITION
         assert data["error"] == "bad state"
         # Enrichment fields are absent — lookup failed, but original error is preserved.
         assert "valid_transitions" not in data

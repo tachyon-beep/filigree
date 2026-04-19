@@ -83,10 +83,13 @@ class TransitionError(TypedDict):
     """Extended error for invalid status transitions.
 
     Includes valid_transitions hint to guide the caller toward correct states.
+    ``code`` matches the 2.0 uppercase ErrorCode.INVALID_TRANSITION so this
+    envelope is indistinguishable from the regular ErrorResponse for case-
+    sensitive consumers.
     """
 
     error: str
-    code: Literal["invalid_transition"]
+    code: Literal[ErrorCode.INVALID_TRANSITION]
     valid_transitions: NotRequired[list[TransitionHint]]
     hint: NotRequired[str]
 

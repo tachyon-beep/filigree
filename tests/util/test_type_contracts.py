@@ -24,6 +24,7 @@ from filigree.types.api import (
     DepDetail,
     DependencyActionResponse,
     EnrichedIssueDetail,
+    ErrorCode,
     ErrorResponse,
     IssueDetailEvent,
     IssueListResponse,
@@ -964,9 +965,10 @@ class TestErrorResponseShape:
 
 class TestTransitionErrorShape:
     def test_keys_match(self) -> None:
-        result = TransitionError(error="bad", code="invalid_transition")
+        result = TransitionError(error="bad", code=ErrorCode.INVALID_TRANSITION)
         # NotRequired keys may be absent — check required subset
         assert {"error", "code"} <= set(result.keys())
+        assert result["code"] == ErrorCode.INVALID_TRANSITION
 
 
 class TestDepDetailShape:
