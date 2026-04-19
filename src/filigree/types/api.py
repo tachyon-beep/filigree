@@ -552,7 +552,9 @@ LEGACY_CODE_TO_ERRORCODE: dict[str, ErrorCode] = {
     "file_not_found": ErrorCode.NOT_FOUND,
     "promotion_error": ErrorCode.VALIDATION,
     "spawn_failed": ErrorCode.IO,
-    "rate_limited": ErrorCode.IO,
+    # rate_limited is a cooldown conflict, not an IO failure — clients
+    # should retry when the blocking run completes (check details.blocking_run_id).
+    "rate_limited": ErrorCode.CONFLICT,
     "no_eligible_files": ErrorCode.VALIDATION,
     "project_not_found": ErrorCode.NOT_FOUND,
     "project_unavailable": ErrorCode.NOT_INITIALIZED,

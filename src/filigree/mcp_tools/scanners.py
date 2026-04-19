@@ -240,11 +240,11 @@ def _load_scanner_or_error(filigree_dir: Path, scanner_name: str) -> tuple[Any |
     if cfg is None:
         available = [s.name for s in _list_scanners(scanners_dir)]
         return None, _text(
-            {
-                "error": f"Scanner {scanner_name!r} not found",
-                "code": ErrorCode.NOT_FOUND,
-                "available_scanners": available,
-            }
+            ErrorResponse(
+                error=f"Scanner {scanner_name!r} not found",
+                code=ErrorCode.NOT_FOUND,
+                details={"available_scanners": available},
+            )
         )
     return cfg, None
 
@@ -303,11 +303,11 @@ def _spawn_scan(
         )
     except (OSError, ValueError, TypeError) as e:
         return _text(
-            {
-                "error": f"Failed to spawn scanner process: {e}",
-                "code": ErrorCode.IO,
-                "scanner": cfg.name,
-            }
+            ErrorResponse(
+                error=f"Failed to spawn scanner process: {e}",
+                code=ErrorCode.IO,
+                details={"scanner": cfg.name},
+            )
         )
     finally:
         if scan_log_fd is not None:
@@ -470,12 +470,19 @@ async def _handle_trigger_scan(arguments: dict[str, Any]) -> list[TextContent]:
             )
         )
     if blocking_run is not None:
+        # Cooldown conflict: a prior run for this (scanner, file) is still
+        # within the cooldown window. CONFLICT (not IO) is the correct
+        # retriable-soon semantic — clients can poll the blocking run's
+        # status via details.blocking_run_id and retry when it completes.
         return _text(
-            {
-                "error": f"Scanner {scanner_name!r} was already triggered for {file_path!r} recently.",
-                "code": ErrorCode.IO,
-                "blocking_run_id": blocking_run["id"],
-            }
+            ErrorResponse(
+                error=(
+                    f"Scanner {scanner_name!r} was already triggered for {file_path!r} recently. "
+                    f"Retry after the blocking run completes."
+                ),
+                code=ErrorCode.CONFLICT,
+                details={"blocking_run_id": blocking_run["id"]},
+            )
         )
     assert created is not None  # noqa: S101  -- exactly one of (created, blocking) is set
 
@@ -535,15 +542,17 @@ async def _handle_trigger_scan(arguments: dict[str, Any]) -> list[TextContent]:
         elif spawn_result.get("log_warning"):
             log_hint = f" Note: {spawn_result['log_warning']}"
         return _text(
-            {
-                "error": f"Scanner process exited immediately with code {exit_code}.{log_hint}",
-                "code": ErrorCode.IO,
-                "scanner": scanner_name,
-                "file_id": file_record.id,
-                "scan_run_id": scan_run_id,
-                "exit_code": exit_code,
-                "log_path": log_rel,
-            }
+            ErrorResponse(
+                error=f"Scanner process exited immediately with code {exit_code}.{log_hint}",
+                code=ErrorCode.IO,
+                details={
+                    "scanner": scanner_name,
+                    "file_id": file_record.id,
+                    "scan_run_id": scan_run_id,
+                    "exit_code": exit_code,
+                    "log_path": log_rel,
+                },
+            )
         )
 
     _logger.info(
@@ -642,11 +651,11 @@ async def _handle_trigger_scan_batch(arguments: dict[str, Any]) -> list[TextCont
 
     if not canonical_paths:
         return _text(
-            {
-                "error": "No files eligible for scanning",
-                "code": ErrorCode.VALIDATION,
-                "skipped": skipped,
-            }
+            ErrorResponse(
+                error="No files eligible for scanning",
+                code=ErrorCode.VALIDATION,
+                details={"skipped": skipped},
+            )
         )
 
     project_root = filigree_dir.parent
@@ -691,11 +700,11 @@ async def _handle_trigger_scan_batch(arguments: dict[str, Any]) -> list[TextCont
 
     if not reserved:
         return _text(
-            {
-                "error": "No files eligible for scanning",
-                "code": ErrorCode.VALIDATION,
-                "skipped": skipped,
-            }
+            ErrorResponse(
+                error="No files eligible for scanning",
+                code=ErrorCode.VALIDATION,
+                details={"skipped": skipped},
+            )
         )
 
     # Spawn one scanner process per reserved run.  On failure, transition
@@ -734,13 +743,15 @@ async def _handle_trigger_scan_batch(arguments: dict[str, Any]) -> list[TextCont
 
     if not spawned:
         return _text(
-            {
-                "error": "All scanner processes failed to spawn",
-                "code": ErrorCode.IO,
-                "spawn_errors": spawn_errors,
-                "skipped": skipped,
-                "batch_id": batch_id,
-            }
+            ErrorResponse(
+                error="All scanner processes failed to spawn",
+                code=ErrorCode.IO,
+                details={
+                    "spawn_errors": spawn_errors,
+                    "skipped": skipped,
+                    "batch_id": batch_id,
+                },
+            )
         )
 
     # Backfill pid/log_path onto each reservation and transition to running.
@@ -772,13 +783,15 @@ async def _handle_trigger_scan_batch(arguments: dict[str, Any]) -> list[TextCont
 
     if not finalized:
         return _text(
-            {
-                "error": "All scanner processes spawned but DB tracking failed",
-                "code": ErrorCode.IO,
-                "spawn_errors": spawn_errors,
-                "skipped": skipped,
-                "batch_id": batch_id,
-            }
+            ErrorResponse(
+                error="All scanner processes spawned but DB tracking failed",
+                code=ErrorCode.IO,
+                details={
+                    "spawn_errors": spawn_errors,
+                    "skipped": skipped,
+                    "batch_id": batch_id,
+                },
+            )
         )
 
     # Quick check: did any process exit immediately with error?
@@ -811,13 +824,15 @@ async def _handle_trigger_scan_batch(arguments: dict[str, Any]) -> list[TextCont
 
     if immediate_failures == len(finalized):
         return _text(
-            {
-                "error": f"All {len(finalized)} scanner processes exited immediately.",
-                "code": ErrorCode.IO,
-                "batch_id": batch_id,
-                "scan_run_ids": scan_run_ids,
-                "per_file": per_file,
-            }
+            ErrorResponse(
+                error=f"All {len(finalized)} scanner processes exited immediately.",
+                code=ErrorCode.IO,
+                details={
+                    "batch_id": batch_id,
+                    "scan_run_ids": scan_run_ids,
+                    "per_file": per_file,
+                },
+            )
         )
 
     result: dict[str, Any] = {

@@ -1683,7 +1683,8 @@ class TestScannerTools:
                 )
             )
             assert result["code"] == ErrorCode.NOT_FOUND
-            assert "bad" not in result.get("available_scanners", [])
+            # Extras are in details under the 2.0 envelope shape.
+            assert "bad" not in result.get("details", {}).get("available_scanners", [])
         finally:
             target.unlink(missing_ok=True)
             (scanners_dir / "bad.toml").unlink(missing_ok=True)
@@ -1853,7 +1854,8 @@ class TestScannerTools:
             )
             assert result1.get("status") == "triggered"
 
-            # Immediate second call should be rate-limited
+            # Immediate second call should be rate-limited: CONFLICT
+            # (cooldown conflict), with the blocking run id in details.
             result2 = _parse(
                 await call_tool(
                     "trigger_scan",
@@ -1863,7 +1865,8 @@ class TestScannerTools:
                     },
                 )
             )
-            assert result2["code"] == ErrorCode.IO
+            assert result2["code"] == ErrorCode.CONFLICT
+            assert result2["details"]["blocking_run_id"] == result1["scan_run_id"]
         finally:
             target.unlink(missing_ok=True)
             # Clear cooldown state for test isolation
@@ -2304,14 +2307,15 @@ class TestTriggerScanCooldownDB:
             )
             assert result.get("status") == "triggered"
 
-            # Second trigger should be rate-limited
+            # Second trigger should be rate-limited (CONFLICT under 2.0 —
+            # cooldown is a retriable conflict, not an IO failure).
             result2 = _parse(
                 await call_tool(
                     "trigger_scan",
                     {"scanner": "echo-scanner", "file_path": "cooldown_test.py"},
                 )
             )
-            assert result2["code"] == ErrorCode.IO
+            assert result2["code"] == ErrorCode.CONFLICT
         finally:
             target.unlink(missing_ok=True)
             (scanners_dir / "echo-scanner.toml").unlink(missing_ok=True)

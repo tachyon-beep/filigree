@@ -507,7 +507,9 @@ class TestBatchScanDbTrackingFailure:
             # No files eligible (all reservations failed); no processes spawned.
             assert data["code"] == ErrorCode.VALIDATION
             popen_mock.assert_not_called()
-            assert all("reservation_failed" in s["reason"] for s in data["skipped"])
+            # Extras are in details under the 2.0 envelope shape.
+            skipped = data["details"]["skipped"]
+            assert all("reservation_failed" in s["reason"] for s in skipped)
         finally:
             _cleanup_files(mcp_db, files)
 
@@ -558,8 +560,8 @@ class TestTriggerScanCooldownReservation:
                         {"scanner": "test-scanner", "file_path": "reserve_target.py"},
                     )
                 )
-            assert second["code"] == ErrorCode.IO
-            assert second["blocking_run_id"] == first["scan_run_id"]
+            assert second["code"] == ErrorCode.CONFLICT
+            assert second["details"]["blocking_run_id"] == first["scan_run_id"]
         finally:
             _cleanup_files(mcp_db, files)
 
