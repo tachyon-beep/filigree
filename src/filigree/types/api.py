@@ -470,14 +470,17 @@ class ListResponse(TypedDict, Generic[_T]):
 # ---------------------------------------------------------------------------
 
 
-class SchemaVersionMismatchError(Exception):
-    """Raised when installed filigree is older than the project's DB schema.
+class SchemaVersionMismatchError(ValueError):
+    """Raised by ``FiligreeDB.initialize`` when the on-disk schema version is
+    newer than the installed filigree's ``CURRENT_SCHEMA_VERSION`` — the binary
+    cannot safely downgrade the database.
 
-    Structured carrier for installed/database version numbers — callers
-    that catch this can read the fields directly rather than parsing the
-    message string. Stage 2b will wire the catch sites at the MCP and
-    dashboard startup boundaries; until then only the type + fields are
-    defined.
+    Structured carrier for installed/database version numbers — callers can
+    read ``.installed`` and ``.database`` directly rather than parsing the
+    message string. Inherits from ``ValueError`` so pre-Stage-1 ``except
+    ValueError`` catches (including upstream tests) continue to work.
+    Stage 5 wires the MCP + dashboard startup boundaries to catch this
+    type specifically and surface it as ``ErrorCode.SCHEMA_MISMATCH``.
     """
 
     def __init__(self, *, installed: int, database: int) -> None:
