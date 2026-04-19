@@ -157,9 +157,9 @@ class TestErrorMessagesIncludeValidOptions:
 
     async def test_unknown_type_lists_valid_types(self, client: AsyncClient) -> None:
         resp = await client.get("/api/type/bogus_type")
-        assert resp.status_code == 404
+        assert resp.status_code == 400
         body = resp.json()
-        assert body["code"] == "NOT_FOUND"
+        assert body["code"] == "VALIDATION"
         assert '"bogus_type"' in body["error"]
         # Must include at least some known types
         for expected in ("task", "bug", "feature"):

@@ -124,11 +124,15 @@ def create_router() -> APIRouter:
         """Workflow template for a given issue type."""
         tpl = db.templates.get_type(type_name)
         if tpl is None:
+            # Unknown type_name is input validation (rejected-enum-value),
+            # not resource-lookup, so VALIDATION + 400 matches the pattern
+            # used everywhere else in this file for rejected enum values.
             valid_types = [t.type for t in db.templates.list_types()]
             return _error_response(
                 f'Unknown type "{type_name}". Valid types: {", ".join(valid_types)}',
-                ErrorCode.NOT_FOUND,
-                404,
+                ErrorCode.VALIDATION,
+                400,
+                {"param": "type_name", "value": type_name, "valid_types": valid_types},
             )
         return JSONResponse(
             {

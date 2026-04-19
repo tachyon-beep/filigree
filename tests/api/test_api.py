@@ -184,13 +184,20 @@ class TestTypeTemplateAPI:
 
     async def test_type_template_not_found(self, client: AsyncClient) -> None:
         resp = await client.get("/api/type/nonexistent")
-        assert resp.status_code == 404
+        # Unknown type_name is rejected-enum-value input validation, so
+        # VALIDATION + 400 — same pattern as other unknown-enum-value
+        # responses elsewhere in the dashboard API.
+        assert resp.status_code == 400
         body = resp.json()
-        assert body["code"] == "NOT_FOUND"
-        # Error message must include the invalid value and valid types
+        assert body["code"] == "VALIDATION"
         assert "nonexistent" in body["error"]
         assert "task" in body["error"]
         assert "bug" in body["error"]
+        # Structured details carry the invalid value and the valid set.
+        details = body.get("details", {})
+        assert details.get("param") == "type_name"
+        assert details.get("value") == "nonexistent"
+        assert "bug" in details.get("valid_types", [])
 
 
 class TestWorkflowAwareAPI:
