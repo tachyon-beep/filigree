@@ -562,9 +562,12 @@ async def _handle_promote_finding(arguments: dict[str, Any]) -> list[TextContent
         obs = tracker.promote_finding_to_observation(finding_id, priority=priority, actor=actor)
     except KeyError:
         return _text(ErrorResponse(error=f"Finding not found: {finding_id}", code=ErrorCode.NOT_FOUND))
-    except (ValueError, sqlite3.Error) as exc:
+    except ValueError as exc:
         _logger.warning("Failed to promote finding %s: %s", finding_id, exc)
         return _text(ErrorResponse(error=f"Failed to promote finding: {exc}", code=ErrorCode.VALIDATION))
+    except sqlite3.Error as exc:
+        _logger.exception("Database error promoting finding %s", finding_id)
+        return _text(ErrorResponse(error=f"Database error promoting finding: {exc}", code=ErrorCode.IO))
     return _text(obs)
 
 
@@ -583,6 +586,9 @@ async def _handle_dismiss_finding(arguments: dict[str, Any]) -> list[TextContent
         updated = tracker.update_finding(finding_id, status="false_positive", dismiss_reason=reason or None)
     except KeyError:
         return _text(ErrorResponse(error=f"Finding not found: {finding_id}", code=ErrorCode.NOT_FOUND))
-    except (ValueError, sqlite3.Error) as e:
+    except ValueError as e:
         return _text(ErrorResponse(error=str(e), code=ErrorCode.VALIDATION))
+    except sqlite3.Error as e:
+        _logger.exception("Database error dismissing finding %s", finding_id)
+        return _text(ErrorResponse(error=f"Database error dismissing finding: {e}", code=ErrorCode.IO))
     return _text(updated)
