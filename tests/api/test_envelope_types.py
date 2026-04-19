@@ -35,7 +35,9 @@ def test_batch_response_is_generic() -> None:
 def test_error_code_enum_members() -> None:
     from filigree.types.api import ErrorCode
 
-    # Exact 9-member set — locked by spec §1e
+    # Exact 11-member set. SCHEMA_MISMATCH and INTERNAL were added so the
+    # typed SchemaVersionMismatchError and the catch-all except-Exception
+    # paths have dedicated codes rather than aliasing onto IO/VALIDATION.
     expected = {
         "VALIDATION",
         "NOT_FOUND",
@@ -46,6 +48,8 @@ def test_error_code_enum_members() -> None:
         "IO",
         "INVALID_API_URL",
         "STOP_FAILED",
+        "SCHEMA_MISMATCH",
+        "INTERNAL",
     }
     assert {e.name for e in ErrorCode} == expected
 

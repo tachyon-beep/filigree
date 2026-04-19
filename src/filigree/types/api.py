@@ -399,19 +399,23 @@ _T = TypeVar("_T")
 class ErrorCode(StrEnum):
     """Closed set of error codes for MCP + dashboard + CLI.
 
-    Consolidated from 15+ ad-hoc strings into 9 stable members. Callers
-    branch on these values; retry / UX policies depend on them.
+    Callers branch on these values; retry / UX policies depend on them.
+    The full legacy-code → ErrorCode mapping lives in
+    ``LEGACY_CODE_TO_ERRORCODE`` below — that dict is the single source of
+    truth so inline comments here don't drift when new codes are collapsed.
     """
 
-    VALIDATION = "VALIDATION"  # replaces: invalid, validation_error, invalid_path, invalid_command, batch_all_failed
-    NOT_FOUND = "NOT_FOUND"  # replaces: not_found, scanner_not_found, unknown_tool, command_not_found
-    CONFLICT = "CONFLICT"  # claim races, optimistic-lock miss
+    VALIDATION = "VALIDATION"
+    NOT_FOUND = "NOT_FOUND"
+    CONFLICT = "CONFLICT"
     INVALID_TRANSITION = "INVALID_TRANSITION"
-    PERMISSION = "PERMISSION"  # replaces: permission_error
-    NOT_INITIALIZED = "NOT_INITIALIZED"  # replaces: not_initialized
-    IO = "IO"  # replaces: io_error, db_error, database_error, import_error
+    PERMISSION = "PERMISSION"
+    NOT_INITIALIZED = "NOT_INITIALIZED"
+    IO = "IO"
     INVALID_API_URL = "INVALID_API_URL"
     STOP_FAILED = "STOP_FAILED"
+    SCHEMA_MISMATCH = "SCHEMA_MISMATCH"
+    INTERNAL = "INTERNAL"
 
 
 class BatchFailure(TypedDict):
@@ -466,9 +470,11 @@ class ListResponse(TypedDict, Generic[_T]):
 class SchemaVersionMismatchError(Exception):
     """Raised when installed filigree is older than the project's DB schema.
 
-    Both ``filigree doctor`` and the dashboard/mcp_server catch this by
-    type, so callers can pattern-match on it without string-matching the
-    message.
+    Structured carrier for installed/database version numbers — callers
+    that catch this can read the fields directly rather than parsing the
+    message string. Stage 2b will wire the catch sites at the MCP and
+    dashboard startup boundaries; until then only the type + fields are
+    defined.
     """
 
     def __init__(self, *, installed: int, database: int) -> None:
@@ -481,7 +487,13 @@ class SchemaVersionMismatchError(Exception):
 
 class AmbiguousTransitionError(Exception):
     """Raised by WorkflowPack.canonical_working_status when multiple
-    wip-category targets exist from the current status."""
+    wip-category targets exist from the current status.
+
+    Carries the ambiguous type_name plus the full list of candidate
+    target states so callers can render a disambiguation prompt. Stage 3
+    will wire this into the ``start_work`` path; the type is defined now
+    so the mapping is stable when the raise sites land.
+    """
 
     def __init__(self, type_name: str, candidates: list[str]) -> None:
         self.type_name = type_name
@@ -495,7 +507,12 @@ class AmbiguousTransitionError(Exception):
 
 class InvalidTransitionError(Exception):
     """Raised by WorkflowPack.canonical_working_status when no wip-category
-    target is reachable from the current status."""
+    target is reachable from the current status.
+
+    Carries type_name + current_status so callers can show *why* no
+    work-state transition is available. Stage 3 wires the raise site;
+    defined here for stable mapping.
+    """
 
     def __init__(self, type_name: str, current_status: str) -> None:
         self.type_name = type_name
