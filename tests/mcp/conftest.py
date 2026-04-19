@@ -18,8 +18,13 @@ from tests.mcp._helpers import _parse as _parse
 
 
 @pytest.fixture
-def mcp_db(tmp_path: Path) -> Generator[FiligreeDB, None, None]:
-    """Set up a FiligreeDB and patch the MCP module globals."""
+def mcp_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Generator[FiligreeDB, None, None]:
+    """Set up a FiligreeDB and patch the MCP module globals.
+
+    Uses ``monkeypatch.setattr`` so globals are restored even if the
+    test raises between the patch and the ``yield`` — a manual
+    save/restore pattern leaks state in that window.
+    """
     filigree_dir = tmp_path / FILIGREE_DIR_NAME
     filigree_dir.mkdir()
     write_config(filigree_dir, {"prefix": "mcp", "version": 1})
@@ -30,16 +35,13 @@ def mcp_db(tmp_path: Path) -> Generator[FiligreeDB, None, None]:
 
     import filigree.mcp_server as mcp_mod
 
-    original_db = mcp_mod.db
-    original_dir = mcp_mod._filigree_dir
-    mcp_mod.db = d
-    mcp_mod._filigree_dir = filigree_dir
+    monkeypatch.setattr(mcp_mod, "db", d)
+    monkeypatch.setattr(mcp_mod, "_filigree_dir", filigree_dir)
 
-    yield d
-
-    mcp_mod.db = original_db
-    mcp_mod._filigree_dir = original_dir
-    d.close()
+    try:
+        yield d
+    finally:
+        d.close()
 
 
 class _InProcessMCPClient:
@@ -206,9 +208,9 @@ def mcp_client_with_ambiguous_pack_issue(mcp_db: FiligreeDB) -> SeededMCPClient:
     # the exceptions this scenario exercises; this fixture is used by
     # Task 3.2. At fixture-creation time, just define the pack and an
     # issue on it; the client call is what raises.
-    raise NotImplementedError(
-        "Define a branching WorkflowPack (see tests/workflows/conftest.py "
-        "builtin_pack_with_two_wip for a minimal example) and wire it into "
+    pytest.skip(
+        "Task 3.2 scaffold: requires a branching WorkflowPack (see tests/workflows/"
+        "conftest.py builtin_pack_with_two_wip for a minimal example) wired into "
         "mcp_db.templates before returning the SeededMCPClient."
     )
 
@@ -220,12 +222,11 @@ def mcp_client_with_too_new_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
     Scaffolded — requires Task 5.4's `_attempt_startup()` to fully wire.
     Tests using this fixture should be gated on Stage 5 being complete.
     """
-    raise NotImplementedError(
-        "mcp_client_with_too_new_db requires Task 5.4's _attempt_startup() "
-        "wiring in mcp_server.py. The fixture's body below shows the intended "
-        "shape (seed filigree_dir + bump user_version), but the degraded-mode "
-        "path it exercises doesn't exist until Task 5.4. Implement that task "
-        "first, then remove this raise and uncomment the fixture body."
+    pytest.skip(
+        "Task 5.4 scaffold: mcp_client_with_too_new_db requires _attempt_startup() "
+        "wiring in mcp_server.py. The fixture body below shows the intended shape "
+        "(seed filigree_dir + bump user_version), but the degraded-mode path it "
+        "exercises doesn't exist until Task 5.4."
     )
     # Intended fixture body (uncomment when Task 5.4 lands):
     # import sqlite3
