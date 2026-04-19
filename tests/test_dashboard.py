@@ -294,7 +294,9 @@ class TestGetDbErrorPaths:
             async with AsyncClient(transport=transport, base_url="http://test") as client:
                 resp = await client.get("/api/stats")
             assert resp.status_code == 500
-            assert "Database not initialized" in resp.json().get("detail", "")
+            body = resp.json()
+            assert body.get("code") == "INTERNAL", f"wrong code: {body!r}"
+            assert "Database not initialized" in body.get("error", "")
         finally:
             dash_module._db = saved
 

@@ -261,12 +261,12 @@ class TestMultiProjectRouting:
         assert len(data) == 3  # 2 issues + auto-seeded Future release
 
     async def test_unknown_project_404(self, multi_client: AsyncClient) -> None:
-        """GET /api/p/nonexistent/issues returns structured 404, not raw stack trace."""
+        """GET /api/p/nonexistent/issues returns 2.0 envelope 404, not raw stack trace."""
         resp = await multi_client.get("/api/p/nonexistent/issues")
         assert resp.status_code == 404
         data = resp.json()
-        assert "detail" in data
-        assert "nonexistent" in data["detail"]
+        assert data.get("code") == "NOT_FOUND", f"wrong envelope: {data!r}"
+        assert "nonexistent" in data.get("error", ""), f"missing project key in error: {data!r}"
 
     async def test_empty_project_key_returns_404(self, multi_client: AsyncClient) -> None:
         """GET /api/p//issues with empty key does not match any route."""
@@ -310,13 +310,13 @@ class TestMultiProjectRouting:
             app = create_app(server_mode=True)
             transport = ASGITransport(app=app)
             async with AsyncClient(transport=transport, base_url="http://test") as client:
-                # Verify multiple endpoints return 503 with correct detail message
+                # Verify multiple endpoints return 503 with 2.0 flat envelope
                 for endpoint in ("/api/issues", "/api/stats", "/api/graph"):
                     resp = await client.get(endpoint)
                     assert resp.status_code == 503, f"{endpoint} returned {resp.status_code}, expected 503"
                     body = resp.json()
-                    assert "detail" in body, f"{endpoint} missing 'detail' key"
-                    assert "No projects registered" in body["detail"]
+                    assert body.get("code") == "NOT_INITIALIZED", f"{endpoint} missing/wrong code: {body!r}"
+                    assert "No projects registered" in body.get("error", ""), f"{endpoint} missing 'error' text: {body!r}"
         finally:
             dash_module._project_store = None
 

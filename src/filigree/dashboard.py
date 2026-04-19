@@ -259,6 +259,8 @@ def create_app(*, server_mode: bool = False) -> ASGIApp:
     from fastapi import FastAPI
     from fastapi.responses import HTMLResponse, JSONResponse
 
+    from filigree.types.api import ErrorCode
+
     # --- MCP streamable-HTTP setup (optional) ---
     _mcp_handler: ASGIApp | None = None
     _mcp_lifespan_factory: Callable[..., Any] | None = None
@@ -290,6 +292,33 @@ def create_app(*, server_mode: bool = False) -> ASGIApp:
             yield
 
     app = FastAPI(title="Filigree Dashboard", docs_url=None, redoc_url=None, lifespan=_lifespan)
+
+    # HTTPException handler — rewrite FastAPI's default ``{"detail": "..."}``
+    # to the 2.0 flat envelope ``{"error", "code", ...}``. Maps HTTP status
+    # codes to ErrorCode members; preserves any explicit ``{"error","code"}``
+    # detail dict a route may pass.
+    from starlette.exceptions import HTTPException as _StarletteHTTPException
+
+    _status_to_errorcode: dict[int, ErrorCode] = {
+        400: ErrorCode.VALIDATION,
+        403: ErrorCode.PERMISSION,
+        404: ErrorCode.NOT_FOUND,
+        409: ErrorCode.CONFLICT,
+        500: ErrorCode.INTERNAL,
+        503: ErrorCode.NOT_INITIALIZED,
+    }
+
+    @app.exception_handler(_StarletteHTTPException)
+    async def _http_exception_to_envelope(_request: Any, exc: _StarletteHTTPException) -> JSONResponse:
+        detail = exc.detail
+        if isinstance(detail, dict) and "error" in detail and "code" in detail:
+            body: dict[str, Any] = dict(detail)
+        else:
+            body = {
+                "error": str(detail) if detail is not None else "Request failed",
+                "code": _status_to_errorcode.get(exc.status_code, ErrorCode.INTERNAL),
+            }
+        return JSONResponse(body, status_code=exc.status_code)
 
     # CORS — restrict to localhost origins only (this is a local dev tool)
     from starlette.middleware.cors import CORSMiddleware
