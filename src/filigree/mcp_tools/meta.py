@@ -686,14 +686,22 @@ async def _handle_restart_dashboard(arguments: dict[str, Any]) -> list[TextConte
     try:
         url = ensure_dashboard_running()
     except Exception as exc:
-        logger.error("restart_dashboard: %s", exc)
-        return _text({"status": "failed", "error": f"Dashboard restart failed: {exc}"})
+        logger.exception("restart_dashboard: ensure_dashboard_running raised")
+        return _text(
+            ErrorResponse(
+                error=f"Dashboard restart failed: {exc}",
+                code=ErrorCode.INTERNAL,
+            )
+        )
 
     result: dict[str, Any] = {"status": "restarted" if stopped else "started"}
     if url:
         result["url"] = url
-    else:
-        logger.warning("restart_dashboard: ensure_dashboard_running returned no URL")
-        result["status"] = "failed"
-        result["error"] = "Dashboard did not start"
-    return _text(result)
+        return _text(result)
+    logger.warning("restart_dashboard: ensure_dashboard_running returned no URL")
+    return _text(
+        ErrorResponse(
+            error="Dashboard did not start",
+            code=ErrorCode.IO,
+        )
+    )
