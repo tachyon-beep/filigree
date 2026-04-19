@@ -158,7 +158,10 @@ class TestGetReleaseTreeEndpoint:
 
         resp = await release_client.get(f"/api/release/{epic.id}/tree")
         assert resp.status_code == 404
-        assert resp.json()["code"] == "VALIDATION"
+        # Code matches status — asking for the release tree of an
+        # id-that-exists-but-is-not-a-release is a "release not found at this
+        # id" from the caller's perspective.
+        assert resp.json()["code"] == "NOT_FOUND"
 
     async def test_tree_structure_shape(self, release_client: AsyncClient, release_dashboard_db: FiligreeDB) -> None:
         db = release_dashboard_db

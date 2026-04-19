@@ -127,7 +127,11 @@ def create_router() -> APIRouter:
         except KeyError:
             return _error_response(f"Release not found: {release_id}", ErrorCode.NOT_FOUND, 404)
         except NotAReleaseError as e:
-            return _error_response(str(e), ErrorCode.VALIDATION, 404)
+            # Asking for a /release/<id>/tree on an id that exists but is not
+            # a release is still a "not a release of that id" — matching the
+            # 404 status with NOT_FOUND keeps the envelope internally
+            # consistent (status and code agree).
+            return _error_response(str(e), ErrorCode.NOT_FOUND, 404)
         except sqlite3.Error:
             logger.exception("Database error loading release tree for %s", release_id)
             return _error_response("Database error loading release tree", ErrorCode.IO, 500)
