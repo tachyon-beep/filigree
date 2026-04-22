@@ -9,7 +9,7 @@ from typing import Any
 import click
 
 from filigree.cli_common import get_db, refresh_summary
-from filigree.types.api import ErrorCode
+from filigree.types.api import ErrorCode, classify_value_error
 
 
 @click.command()
@@ -262,7 +262,8 @@ def update(
             sys.exit(1)
         except ValueError as e:
             if as_json:
-                click.echo(json_mod.dumps({"error": str(e), "code": ErrorCode.INVALID_TRANSITION}))
+                code = classify_value_error(str(e))
+                click.echo(json_mod.dumps({"error": str(e), "code": code}))
             else:
                 click.echo(f"Error: {e}", err=True)
             sys.exit(1)
@@ -293,7 +294,7 @@ def close(ctx: click.Context, issue_ids: tuple[str, ...], reason: str, as_json: 
                 if not as_json:
                     click.echo(f"Not found: {issue_id}", err=True)
             except ValueError as e:
-                errors.append({"id": issue_id, "error": str(e), "code": ErrorCode.INVALID_TRANSITION})
+                errors.append({"id": issue_id, "error": str(e), "code": classify_value_error(str(e))})
                 if not as_json:
                     click.echo(str(e), err=True)
         if as_json:
@@ -330,7 +331,7 @@ def reopen(ctx: click.Context, issue_ids: tuple[str, ...], as_json: bool) -> Non
                 if not as_json:
                     click.echo(f"Not found: {issue_id}", err=True)
             except ValueError as e:
-                errors.append({"id": issue_id, "error": str(e), "code": ErrorCode.INVALID_TRANSITION})
+                errors.append({"id": issue_id, "error": str(e), "code": classify_value_error(str(e))})
                 if not as_json:
                     click.echo(f"Error reopening {issue_id}: {e}", err=True)
         if as_json:

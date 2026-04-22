@@ -62,11 +62,8 @@ _LEGACY_CODES = set(LEGACY_CODE_TO_ERRORCODE.keys())
 
 # Files and directories that are allowed to mention legacy codes.
 # - types/api.py owns the mapping dict itself
-# - db_issues.py intentionally emits lowercase codes inside BatchFailureDetail
-#   (deferred to Stage 2b.0 — see CHANGELOG)
 _EXEMPT_FILES = {
     SRC_ROOT / "types" / "api.py",
-    SRC_ROOT / "db_issues.py",
 }
 
 

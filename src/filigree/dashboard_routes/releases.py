@@ -112,10 +112,10 @@ def create_router() -> APIRouter:
             releases.sort(key=_semver_sort_key)
         except sqlite3.Error:
             logger.exception("Database error loading releases summary")
-            return _error_response("Database error loading releases", ErrorCode.IO, 500)
+            return _error_response("Database error loading releases", ErrorCode.IO, 500, exc_info=False)
         except Exception:
             logger.exception("BUG: Unexpected error loading releases summary")
-            return _error_response("Internal error loading releases", ErrorCode.IO, 500)
+            return _error_response("Internal error loading releases", ErrorCode.INTERNAL, 500, exc_info=False)
 
         return JSONResponse({"releases": releases})
 
@@ -134,12 +134,12 @@ def create_router() -> APIRouter:
             return _error_response(str(e), ErrorCode.NOT_FOUND, 404)
         except sqlite3.Error:
             logger.exception("Database error loading release tree for %s", release_id)
-            return _error_response("Database error loading release tree", ErrorCode.IO, 500)
+            return _error_response("Database error loading release tree", ErrorCode.IO, 500, exc_info=False)
         except Exception:
             # Includes bare ValueError from corrupt imported data (e.g. Issue.__post_init__)
             # — that is data corruption, not a release-type mismatch.
             logger.exception("BUG: Unexpected error loading release tree for %s", release_id)
-            return _error_response("Internal error loading release tree", ErrorCode.IO, 500)
+            return _error_response("Internal error loading release tree", ErrorCode.INTERNAL, 500, exc_info=False)
         return JSONResponse(tree)
 
     return router

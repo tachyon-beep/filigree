@@ -260,8 +260,9 @@ class TestReleasesRobustnessAgainstCorruptData:
         is not a release" path, AND any future data-invariant failure
         (e.g. ``Issue.__post_init__`` rejecting corrupt imported rows).
         The route must only map the former to 404 NOT_A_RELEASE; unrelated
-        ValueErrors should surface as 500 TREE_LOAD_ERROR so the error
-        message is not misleading.
+        ValueErrors reach the ``except Exception`` branch and surface as
+        500 INTERNAL (bug/data-corruption) rather than IO (transient), so
+        clients don't retry what can only be fixed by inspection.
         """
         from unittest.mock import patch
 
@@ -275,7 +276,7 @@ class TestReleasesRobustnessAgainstCorruptData:
             resp = await release_client.get(f"/api/release/{r.id}/tree")
         assert resp.status_code == 500
         body = resp.json()
-        assert body["code"] == "IO"
+        assert body["code"] == "INTERNAL"
 
     async def test_high_semver_sorts_before_non_semver(self, release_client: AsyncClient, release_dashboard_db: FiligreeDB) -> None:
         """Regression: filigree-2fc4203a63. Version ``v999999.0.1`` is a

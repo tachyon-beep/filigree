@@ -199,6 +199,71 @@ class TestGetBoolParam:
 
 
 # ---------------------------------------------------------------------------
+# _error_response tests (filigree-0e6c3fa4d2)
+# ---------------------------------------------------------------------------
+
+
+class TestErrorResponseLogging:
+    """Unit tests for traceback logging behavior in _error_response."""
+
+    def test_500_without_active_exception_omits_exc_info(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from filigree.dashboard_routes import common as common_routes
+        from filigree.types.api import ErrorCode
+
+        calls: list[dict[str, object]] = []
+
+        def fake_error(msg: str, *args: object, **kwargs: object) -> None:
+            calls.append({"msg": msg, "args": args, "kwargs": kwargs})
+
+        monkeypatch.setattr(common_routes.logger, "error", fake_error)
+        resp = common_routes._error_response("boom", ErrorCode.INTERNAL, 500)
+
+        assert resp.status_code == 500
+        assert calls, "expected logger.error to be called"
+        assert calls[0]["kwargs"]["exc_info"] is False
+
+    def test_500_with_active_exception_includes_exc_info(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from filigree.dashboard_routes import common as common_routes
+        from filigree.types.api import ErrorCode
+
+        calls: list[dict[str, object]] = []
+
+        def fake_error(msg: str, *args: object, **kwargs: object) -> None:
+            calls.append({"msg": msg, "args": args, "kwargs": kwargs})
+
+        monkeypatch.setattr(common_routes.logger, "error", fake_error)
+
+        try:
+            raise ValueError("bad")
+        except ValueError:
+            resp = common_routes._error_response("boom", ErrorCode.INTERNAL, 500)
+
+        assert resp.status_code == 500
+        assert calls, "expected logger.error to be called"
+        assert calls[0]["kwargs"]["exc_info"] is True
+
+    def test_explicit_exc_info_false_overrides_active_exception(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from filigree.dashboard_routes import common as common_routes
+        from filigree.types.api import ErrorCode
+
+        calls: list[dict[str, object]] = []
+
+        def fake_error(msg: str, *args: object, **kwargs: object) -> None:
+            calls.append({"msg": msg, "args": args, "kwargs": kwargs})
+
+        monkeypatch.setattr(common_routes.logger, "error", fake_error)
+
+        try:
+            raise RuntimeError("duplicate")
+        except RuntimeError:
+            resp = common_routes._error_response("boom", ErrorCode.INTERNAL, 500, exc_info=False)
+
+        assert resp.status_code == 500
+        assert calls, "expected logger.error to be called"
+        assert calls[0]["kwargs"]["exc_info"] is False
+
+
+# ---------------------------------------------------------------------------
 # _resolve_graph_runtime tests (filigree-fb93e0350a)
 # ---------------------------------------------------------------------------
 

@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING, Any
 from filigree.db_base import AGE_BUCKETS, DBMixinProtocol, _escape_like, _escape_like_chars, _now_iso, _safe_json_loads
 from filigree.models import Issue
 from filigree.templates import validate_field_pattern
-from filigree.types.api import BatchFailureDetail
+from filigree.types.api import BatchFailureDetail, ErrorCode
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -889,9 +889,9 @@ class IssuesMixin(DBMixinProtocol):
             try:
                 results.append(action(issue_id))
             except KeyError:
-                errors.append(BatchFailureDetail(id=issue_id, error=f"Not found: {issue_id}", code="not_found"))
+                errors.append(BatchFailureDetail(id=issue_id, error=f"Not found: {issue_id}", code=ErrorCode.NOT_FOUND))
             except ValueError as e:
-                err = BatchFailureDetail(id=issue_id, error=str(e), code="invalid_transition")
+                err = BatchFailureDetail(id=issue_id, error=str(e), code=ErrorCode.INVALID_TRANSITION)
                 try:
                     transitions = self.get_valid_transitions(issue_id)
                     err["valid_transitions"] = [{"to": t.to, "category": t.category} for t in transitions]
@@ -956,9 +956,9 @@ class IssuesMixin(DBMixinProtocol):
                 added, _canonical = self.add_label(issue_id, label)
                 results.append({"id": issue_id, "status": "added" if added else "already_exists"})
             except KeyError:
-                errors.append(BatchFailureDetail(id=issue_id, error=f"Not found: {issue_id}", code="not_found"))
+                errors.append(BatchFailureDetail(id=issue_id, error=f"Not found: {issue_id}", code=ErrorCode.NOT_FOUND))
             except ValueError as e:
-                errors.append(BatchFailureDetail(id=issue_id, error=str(e), code="validation_error"))
+                errors.append(BatchFailureDetail(id=issue_id, error=str(e), code=ErrorCode.VALIDATION))
         return results, errors
 
     def batch_add_comment(
@@ -985,9 +985,9 @@ class IssuesMixin(DBMixinProtocol):
                 comment_id = self.add_comment(issue_id, text, author=author)
                 results.append({"id": issue_id, "comment_id": comment_id})
             except KeyError:
-                errors.append(BatchFailureDetail(id=issue_id, error=f"Not found: {issue_id}", code="not_found"))
+                errors.append(BatchFailureDetail(id=issue_id, error=f"Not found: {issue_id}", code=ErrorCode.NOT_FOUND))
             except ValueError as e:
-                errors.append(BatchFailureDetail(id=issue_id, error=str(e), code="validation_error"))
+                errors.append(BatchFailureDetail(id=issue_id, error=str(e), code=ErrorCode.VALIDATION))
         return results, errors
 
     def list_issues(

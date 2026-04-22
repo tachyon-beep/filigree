@@ -55,6 +55,28 @@ class TestDashboardPriorityValidation:
         resp = await client.post("/api/issues", json={"title": "Bad", "priority": True})
         assert resp.status_code == 400
 
+    async def test_create_issue_priority_null_rejected(self, client: AsyncClient) -> None:
+        resp = await client.post("/api/issues", json={"title": "Bad", "priority": None})
+        assert resp.status_code == 400
+        assert resp.json()["code"] == "VALIDATION"
+
+    async def test_update_issue_priority_null_rejected(self, client: AsyncClient) -> None:
+        resp = await client.post("/api/issues", json={"title": "Target"})
+        issue_id = resp.json()["id"]
+        resp = await client.patch(f"/api/issue/{issue_id}", json={"priority": None})
+        assert resp.status_code == 400
+        assert resp.json()["code"] == "VALIDATION"
+
+    async def test_batch_update_priority_null_rejected(self, client: AsyncClient) -> None:
+        resp = await client.post("/api/issues", json={"title": "Target"})
+        issue_id = resp.json()["id"]
+        resp = await client.post(
+            "/api/batch/update",
+            json={"issue_ids": [issue_id], "priority": None},
+        )
+        assert resp.status_code == 400
+        assert resp.json()["code"] == "VALIDATION"
+
 
 class TestDashboardActorValidation:
     """Actor validation in dashboard routes."""

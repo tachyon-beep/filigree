@@ -98,6 +98,30 @@ class TestIssuesAPI:
         assert isinstance(data, list)
         assert len(data) == 5  # epic + A + B + C + auto-seeded Future release
 
+    async def test_list_all_issues_paginates_beyond_single_page(
+        self,
+        client: AsyncClient,
+        dashboard_db: PopulatedDB,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Regression: /api/issues must paginate instead of truncating silently."""
+        from filigree.dashboard_routes import issues as issue_routes
+
+        monkeypatch.setattr(issue_routes, "_ISSUES_LIST_PAGE_SIZE", 3)
+
+        created_ids: list[str] = []
+        for i in range(7):
+            new_issue = dashboard_db.db.create_issue(f"Beyond preload page {i}", type="task", priority=2)
+            created_ids.append(new_issue.id)
+
+        resp = await client.get("/api/issues")
+        assert resp.status_code == 200
+        data = resp.json()
+        issue_ids = {issue["id"] for issue in data}
+
+        for issue_id in created_ids:
+            assert issue_id in issue_ids, f"Issue {issue_id} missing — /api/issues pagination failed"
+
     async def test_issue_structure(self, client: AsyncClient) -> None:
         resp = await client.get("/api/issues")
         data = resp.json()

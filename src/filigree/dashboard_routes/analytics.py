@@ -478,7 +478,7 @@ def create_router() -> APIRouter:
             stats = db.observation_stats(sweep=False)
         except sqlite3.Error:
             logger.warning("observation_stats unavailable", exc_info=True)
-            return _error_response("observation stats unavailable", ErrorCode.IO, 503)
+            return _error_response("observation stats unavailable", ErrorCode.IO, 503, exc_info=False)
         return JSONResponse(stats)
 
     @router.get("/critical-path")

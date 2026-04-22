@@ -9,19 +9,78 @@ from starlette.requests import Request
 
 if TYPE_CHECKING:
     from fastapi import APIRouter
+    from fastapi.responses import JSONResponse
 
 from filigree.core import FiligreeDB
 from filigree.dashboard_routes.common import (
     _error_response,
     _parse_json_body,
     _validate_actor,
-    _validate_priority,
+    _validate_priority_field,
 )
-from filigree.types.api import DepDetail, EnrichedIssueDetail, ErrorCode, IssueDetailEvent
+from filigree.models import Issue
+from filigree.types.api import (
+    DepDetail,
+    EnrichedIssueDetail,
+    ErrorCode,
+    IssueDetailEvent,
+    classify_value_error,
+    errorcode_to_http_status,
+)
 from filigree.types.core import ISOTimestamp
 from filigree.types.planning import CommentRecord
 
 logger = logging.getLogger(__name__)
+
+# Page size used when streaming every issue into the dashboard preload.
+# Exposed at module scope so tests can shrink it to exercise pagination.
+_ISSUES_LIST_PAGE_SIZE = 1000
+_MISSING = object()
+
+
+def _fetch_all_issues(db: FiligreeDB) -> list[Issue]:
+    """Return every issue in the DB by paginating list_issues.
+
+    The dashboard preload previously called ``list_issues(limit=10000)``,
+    which silently truncated large projects. Pagination removes that hidden
+    ceiling while preserving the response shape.
+    """
+    all_issues: list[Issue] = []
+    offset = 0
+    while True:
+        page = db.list_issues(limit=_ISSUES_LIST_PAGE_SIZE, offset=offset)
+        all_issues.extend(page)
+        if len(page) < _ISSUES_LIST_PAGE_SIZE:
+            break
+        offset += _ISSUES_LIST_PAGE_SIZE
+    return all_issues
+
+
+def _validate_body_string_field(
+    body: dict[str, object],
+    field: str,
+    *,
+    allow_null: bool = False,
+    default: str | None = None,
+) -> str | None | JSONResponse:
+    """Validate a JSON body field expected to be a string.
+
+    Missing fields fall back to ``default`` so callers can preserve existing
+    create/patch semantics. Present fields must be strings, except when
+    ``allow_null`` is set, in which case explicit ``null`` is accepted.
+    """
+    value = body.get(field, _MISSING)
+    if value is _MISSING:
+        return default
+    if value is None:
+        if allow_null:
+            return None
+        return _error_response(f"{field} must be a string", ErrorCode.VALIDATION, 400)
+    if not isinstance(value, str):
+        suffix = " or null" if allow_null else ""
+        return _error_response(f"{field} must be a string{suffix}", ErrorCode.VALIDATION, 400)
+    return value
+
 
 # ---------------------------------------------------------------------------
 # Router factory
@@ -44,7 +103,7 @@ def create_router() -> APIRouter:
 
     @router.get("/issues")
     async def api_issues(db: FiligreeDB = Depends(_get_db)) -> JSONResponse:
-        issues = db.list_issues(limit=10000)
+        issues = _fetch_all_issues(db)
         return JSONResponse([i.to_dict() for i in issues])
 
     @router.get("/ready")
@@ -195,21 +254,30 @@ def create_router() -> APIRouter:
         if actor_err:
             return actor_err
         body.pop("actor", None)
-        priority = _validate_priority(body.get("priority"))
+        priority = _validate_priority_field(body)
         if isinstance(priority, JSONResponse):
             return priority
-        parent_id = body.get("parent_id")
-        if parent_id is not None and not isinstance(parent_id, str):
-            return _error_response("parent_id must be a string or null", ErrorCode.VALIDATION, 400)
+        title = _validate_body_string_field(body, "title", default=None)
+        if isinstance(title, JSONResponse):
+            return title
+        description = _validate_body_string_field(body, "description", default=None)
+        if isinstance(description, JSONResponse):
+            return description
+        notes = _validate_body_string_field(body, "notes", default=None)
+        if isinstance(notes, JSONResponse):
+            return notes
+        parent_id = _validate_body_string_field(body, "parent_id", allow_null=True, default=None)
+        if isinstance(parent_id, JSONResponse):
+            return parent_id
         try:
             issue = db.update_issue(
                 issue_id,
                 status=body.get("status"),
                 priority=priority,
                 assignee=body.get("assignee"),
-                title=body.get("title"),
-                description=body.get("description"),
-                notes=body.get("notes"),
+                title=title,
+                description=description,
+                notes=notes,
                 parent_id=parent_id,
                 fields=body.get("fields"),
                 actor=actor,
@@ -219,7 +287,8 @@ def create_router() -> APIRouter:
         except TypeError as e:
             return _error_response(str(e), ErrorCode.VALIDATION, 400)
         except ValueError as e:
-            return _error_response(str(e), ErrorCode.INVALID_TRANSITION, 409)
+            code = classify_value_error(str(e))
+            return _error_response(str(e), code, errorcode_to_http_status(code))
         return JSONResponse(issue.to_dict())
 
     @router.post("/issue/{issue_id}/close")
@@ -240,7 +309,8 @@ def create_router() -> APIRouter:
         except TypeError as e:
             return _error_response(str(e), ErrorCode.VALIDATION, 400)
         except ValueError as e:
-            return _error_response(str(e), ErrorCode.INVALID_TRANSITION, 409)
+            code = classify_value_error(str(e))
+            return _error_response(str(e), code, errorcode_to_http_status(code))
         return JSONResponse(issue.to_dict())
 
     @router.post("/issue/{issue_id}/reopen")
@@ -257,7 +327,8 @@ def create_router() -> APIRouter:
         except KeyError:
             return _error_response(f"Issue not found: {issue_id}", ErrorCode.NOT_FOUND, 404)
         except ValueError as e:
-            return _error_response(str(e), ErrorCode.INVALID_TRANSITION, 409)
+            code = classify_value_error(str(e))
+            return _error_response(str(e), code, errorcode_to_http_status(code))
         return JSONResponse(issue.to_dict())
 
     @router.post("/issue/{issue_id}/comments", status_code=201)
@@ -285,7 +356,7 @@ def create_router() -> APIRouter:
         if row is None:
             logger = logging.getLogger(__name__)
             logger.error("Comment %d not found immediately after INSERT for issue %s", comment_id, issue_id)
-            return _error_response("Internal error: comment created but not retrievable", ErrorCode.IO, 500)
+            return _error_response("Internal error: comment created but not retrievable", ErrorCode.INTERNAL, 500)
         created_at = ISOTimestamp(row["created_at"])
         return JSONResponse(
             CommentRecord(id=comment_id, author=author, text=text, created_at=created_at),
@@ -326,7 +397,7 @@ def create_router() -> APIRouter:
         actor, actor_err = _validate_actor(body.get("actor", "dashboard"))
         if actor_err:
             return actor_err
-        priority = _validate_priority(body.get("priority"))
+        priority = _validate_priority_field(body)
         if isinstance(priority, JSONResponse):
             return priority
         try:
@@ -398,20 +469,33 @@ def create_router() -> APIRouter:
         actor, actor_err = _validate_actor(body.get("actor", "dashboard"))
         if actor_err:
             return actor_err
-        priority = _validate_priority(body.get("priority", 2))
+        priority = _validate_priority_field(body, default=2)
         if isinstance(priority, JSONResponse):
             return priority
-        if priority is None:  # pragma: no cover — always set via default=2
+        if priority is None:
             priority = 2
+        parent_id = _validate_body_string_field(body, "parent_id", allow_null=True, default=None)
+        if isinstance(parent_id, JSONResponse):
+            return parent_id
+        description = _validate_body_string_field(body, "description", default="")
+        if isinstance(description, JSONResponse):
+            return description
+        if description is None:
+            description = ""
+        notes = _validate_body_string_field(body, "notes", default="")
+        if isinstance(notes, JSONResponse):
+            return notes
+        if notes is None:
+            notes = ""
         try:
             issue = db.create_issue(
                 title,
                 type=body.get("type", "task"),
                 priority=priority,
-                parent_id=body.get("parent_id"),
+                parent_id=parent_id,
                 assignee=body.get("assignee", ""),
-                description=body.get("description", ""),
-                notes=body.get("notes", ""),
+                description=description,
+                notes=notes,
                 fields=body.get("fields"),
                 labels=body.get("labels"),
                 deps=body.get("deps"),

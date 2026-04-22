@@ -218,11 +218,15 @@ class BatchFailureDetail(TypedDict):
 
     All batch failures share this {id, error, code} shape.  Batch update/close
     may also include valid_transitions when the failure is an invalid transition.
+
+    ``code`` is a closed ``ErrorCode`` member; it serializes to its uppercase
+    string name on the wire so batch responses match the rest of the 2.0
+    envelope surface.
     """
 
     id: str
     error: str
-    code: str
+    code: ErrorCode
     valid_transitions: NotRequired[list[TransitionHint]]
 
 
@@ -552,6 +556,26 @@ def errorcode_to_http_status(code: ErrorCode) -> int:
             return 500
         case _:
             assert_never(code)
+
+
+def classify_value_error(message: str) -> ErrorCode:
+    """Classify a ``ValueError`` message as INVALID_TRANSITION or VALIDATION.
+
+    Substring heuristic on the exception message: presence of ``status``,
+    ``transition``, or ``state`` means the core rejected a status-machine
+    transition (409 on the wire); anything else is generic input validation
+    (400). Used identically by the MCP, dashboard, and CLI surfaces so the
+    same input produces the same code everywhere.
+
+    This heuristic is a bridge until Stage 3 introduces typed raise sites
+    (``InvalidTransitionError``, ``AmbiguousTransitionError``) in the data
+    layer; once those land, ValueError handlers will catch the typed
+    subclass explicitly and this function retires.
+    """
+    lowered = message.lower()
+    if "status" in lowered or "transition" in lowered or "state" in lowered:
+        return ErrorCode.INVALID_TRANSITION
+    return ErrorCode.VALIDATION
 
 
 # Mapping used only during Stage 2a rollout for developer reference.

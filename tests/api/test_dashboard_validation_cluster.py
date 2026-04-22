@@ -57,6 +57,56 @@ class TestPostNonStringFields:
 
 
 # ---------------------------------------------------------------------------
+# filigree-4e0f3d7a3b — create/patch validate scalar string fields
+# ---------------------------------------------------------------------------
+
+
+class TestIssueScalarStringValidation:
+    @pytest.mark.parametrize(
+        ("field", "value", "expected_error"),
+        [
+            ("parent_id", 123, "parent_id must be a string or null"),
+            ("description", {"bad": True}, "description must be a string"),
+            ("notes", ["oops"], "notes must be a string"),
+        ],
+    )
+    async def test_create_issue_rejects_invalid_stringish_fields(
+        self,
+        client: AsyncClient,
+        field: str,
+        value: object,
+        expected_error: str,
+    ) -> None:
+        resp = await client.post("/api/issues", json={"title": "Target", field: value})
+        assert resp.status_code == 400
+        body = resp.json()
+        assert body["code"] == "VALIDATION"
+        assert body["error"] == expected_error
+
+    @pytest.mark.parametrize(
+        ("field", "value", "expected_error"),
+        [
+            ("title", {"bad": True}, "title must be a string"),
+            ("description", ["oops"], "description must be a string"),
+            ("notes", 123, "notes must be a string"),
+        ],
+    )
+    async def test_patch_issue_rejects_invalid_stringish_fields(
+        self,
+        client: AsyncClient,
+        field: str,
+        value: object,
+        expected_error: str,
+    ) -> None:
+        issue = (await client.post("/api/issues", json={"title": "Target"})).json()
+        resp = await client.patch(f"/api/issue/{issue['id']}", json={field: value})
+        assert resp.status_code == 400
+        body = resp.json()
+        assert body["code"] == "VALIDATION"
+        assert body["error"] == expected_error
+
+
+# ---------------------------------------------------------------------------
 # filigree-6c21f57786 — POST associations type-checks
 # ---------------------------------------------------------------------------
 

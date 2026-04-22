@@ -486,7 +486,7 @@ class TestBatchClose:
         data = _parse(result)
         assert data["count"] == 0
         assert len(data["failed"]) == 1
-        assert data["failed"][0]["code"] == "not_found"
+        assert data["failed"][0]["code"] == "NOT_FOUND"
 
 
 class TestBatchUpdate:
@@ -513,7 +513,7 @@ class TestBatchUpdate:
         data = _parse(result)
         assert data["count"] == 0
         assert len(data["failed"]) == 1
-        assert data["failed"][0]["code"] == "not_found"
+        assert data["failed"][0]["code"] == "NOT_FOUND"
 
 
 class TestBatchAddLabel:
@@ -534,7 +534,7 @@ class TestBatchAddLabel:
         assert data["count"] == 1
         assert a.id in data["succeeded"]
         assert len(data["failed"]) == 1
-        assert data["failed"][0]["code"] == "not_found"
+        assert data["failed"][0]["code"] == "NOT_FOUND"
 
     async def test_batch_add_label_validation_error(self, mcp_db: FiligreeDB) -> None:
         a = mcp_db.create_issue("Label A")
@@ -542,7 +542,7 @@ class TestBatchAddLabel:
         data = _parse(result)
         assert data["count"] == 0
         assert len(data["failed"]) == 1
-        assert data["failed"][0]["code"] == "validation_error"
+        assert data["failed"][0]["code"] == "VALIDATION"
 
 
 class TestBatchAddComment:
@@ -563,7 +563,7 @@ class TestBatchAddComment:
         assert data["count"] == 1
         assert a.id in data["succeeded"]
         assert len(data["failed"]) == 1
-        assert data["failed"][0]["code"] == "not_found"
+        assert data["failed"][0]["code"] == "NOT_FOUND"
 
     async def test_batch_add_comment_validation_error(self, mcp_db: FiligreeDB) -> None:
         a = mcp_db.create_issue("Comment A")
@@ -571,7 +571,7 @@ class TestBatchAddComment:
         data = _parse(result)
         assert data["count"] == 0
         assert len(data["failed"]) == 1
-        assert data["failed"][0]["code"] == "validation_error"
+        assert data["failed"][0]["code"] == "VALIDATION"
 
 
 class TestClaimIssue:

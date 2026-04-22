@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import sys
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -17,6 +18,7 @@ from filigree.types.api import ErrorCode, ErrorResponse
 from filigree.validation import sanitize_actor as _sanitize_actor
 
 logger = logging.getLogger(__name__)
+_MISSING = object()
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -37,6 +39,8 @@ def _error_response(
     code: ErrorCode,
     status_code: int,
     details: dict[str, Any] | None = None,
+    *,
+    exc_info: bool | None = None,
 ) -> JSONResponse:
     """Return a flat 2.0 ErrorResponse and log the error.
 
@@ -49,10 +53,13 @@ def _error_response(
 
     # 5xx means a server-side problem we should be able to investigate —
     # log at error level. 4xx is client-caused (bad input, missing id,
-    # conflict) — warning is enough. exc_info=True captures the active
-    # exception if we're inside an except block; otherwise it's a no-op.
+    # conflict) — warning is enough. By default we only attach traceback
+    # info for 5xx responses when an exception is actually active; callers
+    # that already logged the traceback can force exc_info=False.
     log = logger.error if status_code >= 500 else logger.warning
-    log("API error [%s] %s: %s", status_code, code, error, exc_info=status_code >= 500)
+    if exc_info is None:
+        exc_info = status_code >= 500 and sys.exc_info()[0] is not None
+    log("API error [%s] %s: %s", status_code, code, error, exc_info=exc_info)
 
     body: ErrorResponse = {"error": error, "code": code, "details": details} if details is not None else {"error": error, "code": code}
     # JSONResponse accepts any JSON-serializable mapping; StrEnum values
@@ -273,6 +280,30 @@ def _validate_priority(value: Any, *, required: bool = False) -> int | None | JS
     if not (0 <= value <= 4):
         return _error_response(f"priority must be between 0 and 4, got {value}", ErrorCode.VALIDATION, 400)
     return value
+
+
+def _validate_priority_field(
+    body: Mapping[str, Any],
+    *,
+    key: str = "priority",
+    default: object = _MISSING,
+    required: bool = False,
+) -> int | None | JSONResponse:
+    """Validate a priority field while distinguishing missing from explicit null.
+
+    Route handlers often need to preserve semantics like "omitted means leave
+    unchanged" or "omitted means use default 2". Using ``dict.get()`` erases
+    the difference between a missing key and an explicit JSON ``null``; this
+    helper preserves that distinction so ``null`` can be rejected cleanly.
+    """
+    raw = body.get(key, _MISSING)
+    if raw is _MISSING:
+        if default is not _MISSING:
+            return default if isinstance(default, int) else None
+        return _validate_priority(None, required=required)
+    if raw is None:
+        return _error_response("priority must be an integer between 0 and 4", ErrorCode.VALIDATION, 400)
+    return _validate_priority(raw, required=required)
 
 
 def _validate_actor(value: Any) -> tuple[str, JSONResponse | None]:

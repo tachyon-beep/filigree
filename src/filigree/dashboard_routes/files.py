@@ -349,7 +349,7 @@ def create_router() -> APIRouter:
             runs = db.get_scan_runs(limit=limit)
         except sqlite3.Error:
             logger.exception("Failed to query scan runs")
-            return _error_response("Failed to query scan runs", ErrorCode.IO, 500)
+            return _error_response("Failed to query scan runs", ErrorCode.IO, 500, exc_info=False)
         return JSONResponse({"scan_runs": runs}, headers={"Cache-Control": "no-cache"})
 
     return router

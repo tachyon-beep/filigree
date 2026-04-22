@@ -301,9 +301,11 @@ def create_app(*, server_mode: bool = False) -> ASGIApp:
 
     _status_to_errorcode: dict[int, ErrorCode] = {
         400: ErrorCode.VALIDATION,
+        401: ErrorCode.PERMISSION,
         403: ErrorCode.PERMISSION,
         404: ErrorCode.NOT_FOUND,
         409: ErrorCode.CONFLICT,
+        422: ErrorCode.VALIDATION,
         500: ErrorCode.INTERNAL,
         503: ErrorCode.NOT_INITIALIZED,
     }
@@ -314,9 +316,20 @@ def create_app(*, server_mode: bool = False) -> ASGIApp:
         if isinstance(detail, dict) and "error" in detail and "code" in detail:
             body: dict[str, Any] = dict(detail)
         else:
+            code = _status_to_errorcode.get(exc.status_code)
+            if code is None:
+                # An unmapped status reaching this handler means either a new
+                # Starlette/FastAPI status or a route raising an unusual code.
+                # Log so it's discoverable rather than silently coerced to
+                # INTERNAL — clients branching on ``code`` deserve to know.
+                logger.warning(
+                    "HTTPException with unmapped status_code=%s; coercing code to INTERNAL",
+                    exc.status_code,
+                )
+                code = ErrorCode.INTERNAL
             body = {
                 "error": str(detail) if detail is not None else "Request failed",
-                "code": _status_to_errorcode.get(exc.status_code, ErrorCode.INTERNAL),
+                "code": code,
             }
         return JSONResponse(body, status_code=exc.status_code)
 
