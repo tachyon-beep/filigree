@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Cross-surface error-envelope parity test module (`tests/util/test_cross_surface_parity.py`).** Sixteen tests fire the same logical bad input at dashboard (`AsyncClient`), MCP (in-process tool handler), and CLI (`CliRunner --json`) and assert the three surfaces emit the same `ErrorCode`. Covers the seven bed-down cases from Stages 1 + 2a (`NOT_FOUND` on get, `VALIDATION` on out-of-range priority / unknown type / blank actor / blank assignee, `INVALID_TRANSITION` on bad status, `CONFLICT`/`INVALID_TRANSITION` on already-closed, batch-per-item envelopes) plus four `POST /api/v1/scan-results` envelope pins — the dashboard-only route is the highest-risk Clarion-facing hop for Stage 2B and has no staging environment, so these tests are the pre-release contract. Twelve tests pass; four are strict `xfail` marking 2B worklist items (CLI `--priority`/`--actor` Click-layer validators bypassing the 2.0 envelope; CLI `close --json` emitting a batch-shape wrapper for single-id close; dashboard `batch_update` returning `errors` while MCP returns `failed` — wire-contract unification scope for 2B). Each divergence is also filed as an `observe` for the 2B rebaseline's work list.
+
 ### Fixed
 
 - **2.0 envelope bed-down — residual cross-surface parity fixes.**
