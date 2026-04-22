@@ -381,6 +381,20 @@ class TestClaimCli:
         result = runner.invoke(cli, ["claim", "test-nonexistent", "--assignee", "a"])
         assert result.exit_code == 1
 
+    def test_claim_whitespace_assignee_json_is_validation(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        """Cross-surface parity: MCP pre-validates assignee to VALIDATION.
+
+        CLI must match. Previously, a blank assignee fell through to db.claim_issue,
+        raised "Assignee cannot be empty", and was miscoded as CONFLICT.
+        """
+        runner, _ = cli_in_project
+        r = runner.invoke(cli, ["create", "Claimable"])
+        issue_id = _extract_id(r.output)
+        result = runner.invoke(cli, ["claim", issue_id, "--assignee", "   ", "--json"])
+        assert result.exit_code == 1
+        data = json.loads(result.output)
+        assert data["code"] == "VALIDATION"
+
 
 class TestClaimNextCli:
     def test_claim_next_basic(self, cli_in_project: tuple[CliRunner, Path]) -> None:
@@ -422,6 +436,18 @@ class TestClaimNextCli:
         result = runner.invoke(cli, ["claim-next", "--assignee", "   "])
         assert result.exit_code == 1
         assert "Traceback" not in (result.output or "")
+
+    def test_claim_next_whitespace_assignee_json_is_validation(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        """Cross-surface parity: MCP returns VALIDATION for blank assignee.
+
+        CLI must match — blank assignee is bad user input, not a race condition.
+        """
+        runner, _ = cli_in_project
+        runner.invoke(cli, ["create", "A task"])
+        result = runner.invoke(cli, ["claim-next", "--assignee", "   ", "--json"])
+        assert result.exit_code == 1
+        data = json.loads(result.output)
+        assert data["code"] == "VALIDATION"
 
 
 class TestReleaseCli:

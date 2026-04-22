@@ -351,6 +351,14 @@ def reopen(ctx: click.Context, issue_ids: tuple[str, ...], as_json: bool) -> Non
 @click.pass_context
 def claim(ctx: click.Context, issue_id: str, assignee: str, as_json: bool) -> None:
     """Atomically claim an open issue (optimistic locking)."""
+    # Mirror the MCP handler's assignee pre-validation (mcp_tools/issues.py
+    # lines 603-604) so a blank value surfaces as VALIDATION, not CONFLICT.
+    if not assignee.strip():
+        if as_json:
+            click.echo(json_mod.dumps({"error": "assignee must be a non-empty string", "code": ErrorCode.VALIDATION}))
+        else:
+            click.echo("Error: assignee must be a non-empty string", err=True)
+        sys.exit(1)
     with get_db() as db:
         try:
             issue = db.claim_issue(issue_id, assignee=assignee, actor=ctx.obj["actor"])
@@ -390,6 +398,15 @@ def claim_next(
     as_json: bool,
 ) -> None:
     """Claim the highest-priority ready issue matching filters."""
+    # Mirror the MCP handler (mcp_tools/issues.py lines 646-647): blank assignee
+    # is bad user input, not a race. The only ValueError db.claim_next propagates
+    # is "Assignee cannot be empty" (inner claim_issue errors are swallowed).
+    if not assignee.strip():
+        if as_json:
+            click.echo(json_mod.dumps({"error": "assignee must be a non-empty string", "code": ErrorCode.VALIDATION}))
+        else:
+            click.echo("Error: assignee must be a non-empty string", err=True)
+        sys.exit(1)
     with get_db() as db:
         try:
             issue = db.claim_next(
@@ -401,7 +418,7 @@ def claim_next(
             )
         except ValueError as e:
             if as_json:
-                click.echo(json_mod.dumps({"error": str(e), "code": ErrorCode.CONFLICT}))
+                click.echo(json_mod.dumps({"error": str(e), "code": ErrorCode.VALIDATION}))
             else:
                 click.echo(f"Error: {e}", err=True)
             sys.exit(1)

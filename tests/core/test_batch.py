@@ -168,3 +168,39 @@ class TestBatchTransitionEnrichmentRace:
         assert errors[0]["code"] == "INVALID_TRANSITION"
         # Should NOT have valid_transitions key since the lookup failed
         assert "valid_transitions" not in errors[0]
+
+    def test_batch_update_validation_valueerror_classified_as_validation(self, db: FiligreeDB) -> None:
+        """Non-transition ValueErrors (e.g. field validation) must be VALIDATION, not INVALID_TRANSITION.
+
+        _batch_with_transition_errors previously labelled every ValueError as
+        INVALID_TRANSITION, but update_issue also raises validation-class errors
+        ("Field validation failed: ...", "Priority must be between 0 and 4").
+        Those are not state-machine rejections and must surface as VALIDATION so
+        clients can distinguish "fix your input" from "pick a different transition".
+        """
+        from unittest.mock import patch
+
+        issue = db.create_issue("Test")
+        with patch.object(
+            db,
+            "update_issue",
+            side_effect=ValueError("Field validation failed: priority: must be positive"),
+        ):
+            _results, errors = db.batch_update([issue.id], priority=2)
+        assert len(errors) == 1
+        assert errors[0]["code"] == "VALIDATION"
+        # Validation-class failures should not be enriched with valid_transitions
+        assert "valid_transitions" not in errors[0]
+
+    def test_batch_close_transition_valueerror_still_enriched(self, db: FiligreeDB) -> None:
+        """Transition ValueErrors (contain 'status'/'transition'/'state') keep enrichment.
+
+        Classifying doesn't change behaviour for the common already-closed case;
+        it still surfaces INVALID_TRANSITION with valid_transitions attached.
+        """
+        issue = db.create_issue("Test")
+        db.close_issue(issue.id)
+        _results, errors = db.batch_close([issue.id])
+        assert len(errors) == 1
+        assert errors[0]["code"] == "INVALID_TRANSITION"
+        assert "valid_transitions" in errors[0]

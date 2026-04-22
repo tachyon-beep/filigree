@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING, Any
 from filigree.db_base import AGE_BUCKETS, DBMixinProtocol, _escape_like, _escape_like_chars, _now_iso, _safe_json_loads
 from filigree.models import Issue
 from filigree.templates import validate_field_pattern
-from filigree.types.api import BatchFailureDetail, ErrorCode
+from filigree.types.api import BatchFailureDetail, ErrorCode, classify_value_error
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -891,12 +891,14 @@ class IssuesMixin(DBMixinProtocol):
             except KeyError:
                 errors.append(BatchFailureDetail(id=issue_id, error=f"Not found: {issue_id}", code=ErrorCode.NOT_FOUND))
             except ValueError as e:
-                err = BatchFailureDetail(id=issue_id, error=str(e), code=ErrorCode.INVALID_TRANSITION)
-                try:
-                    transitions = self.get_valid_transitions(issue_id)
-                    err["valid_transitions"] = [{"to": t.to, "category": t.category} for t in transitions]
-                except KeyError:
-                    logger.debug("batch: could not enrich error with transitions for %s", issue_id)
+                code = classify_value_error(str(e))
+                err = BatchFailureDetail(id=issue_id, error=str(e), code=code)
+                if code == ErrorCode.INVALID_TRANSITION:
+                    try:
+                        transitions = self.get_valid_transitions(issue_id)
+                        err["valid_transitions"] = [{"to": t.to, "category": t.category} for t in transitions]
+                    except KeyError:
+                        logger.debug("batch: could not enrich error with transitions for %s", issue_id)
                 errors.append(err)
         return results, errors
 
