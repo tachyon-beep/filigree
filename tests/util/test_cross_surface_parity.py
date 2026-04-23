@@ -663,3 +663,60 @@ class TestScanResultsEnvelope:
         assert resp.status_code == 400
         payload = resp.json()
         _assert_flat_envelope(payload, surface="scan-results")
+
+    async def test_success_shape_empty_findings(self, dashboard_surface: AsyncClient) -> None:
+        """Stage 2B task 2b.-1: pin the 200 success shape.
+
+        Error paths are pinned by the four tests above. This pins the
+        200 shape — the dict returned by ``db.process_scan_results``
+        (``ScanIngestResult`` in src/filigree/types/files.py). A 2B task
+        that changes this shape must update the test in the same commit
+        and list the breakage in CHANGELOG [Unreleased] ### Changed.
+        This is the Clarion-facing gate; there is no staging env.
+        """
+        resp = await dashboard_surface.post(
+            "/api/v1/scan-results",
+            json={"scan_source": "parity-success-pin", "findings": []},
+        )
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert isinstance(body, dict), f"scan-results success body is not a dict: {body!r}"
+
+        # Exact key set from ScanIngestResult (types/files.py:138). If you
+        # see this assertion fail, either the test is wrong or the route's
+        # return shape changed — in which case Clarion consumers break.
+        expected_keys = {
+            "files_created",
+            "files_updated",
+            "findings_created",
+            "findings_updated",
+            "new_finding_ids",
+            "observations_created",
+            "observations_failed",
+            "warnings",
+        }
+        assert set(body.keys()) == expected_keys, (
+            f"scan-results success-shape drift: missing={expected_keys - set(body.keys())} extra={set(body.keys()) - expected_keys}"
+        )
+
+        # Value-type invariants.
+        for int_key in (
+            "files_created",
+            "files_updated",
+            "findings_created",
+            "findings_updated",
+            "observations_created",
+            "observations_failed",
+        ):
+            assert isinstance(body[int_key], int), f"{int_key} is not int: {body[int_key]!r}"
+        assert isinstance(body["new_finding_ids"], list), body["new_finding_ids"]
+        assert isinstance(body["warnings"], list), body["warnings"]
+
+        # Empty-findings semantics: no files, no findings, no observations.
+        assert body["files_created"] == 0
+        assert body["files_updated"] == 0
+        assert body["findings_created"] == 0
+        assert body["findings_updated"] == 0
+        assert body["new_finding_ids"] == []
+        assert body["observations_created"] == 0
+        assert body["observations_failed"] == 0
