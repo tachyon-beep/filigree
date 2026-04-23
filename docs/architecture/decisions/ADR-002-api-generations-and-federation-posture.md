@@ -49,14 +49,14 @@ Named generations provide that primitive. `/api/loom/scan-results` is a stable, 
 
 ### 1. Named API generations at the HTTP surface
 
-Filigree's HTTP surface exposes **named API generations**, each with a stable URL prefix:
+Filigree's HTTP surface exposes **named API generations**, each with a stable routing identity:
 
-- `/api/v1/*` — the **classic** generation. Represents the pre-federation filigree HTTP API as it existed through the 1.x series. Frozen: no new operations, no shape changes. Continues to be fully supported.
-- `/api/loom/*` — the **loom** generation. Introduced in 2.0. Represents filigree's participation in the Loom federation. Uses the unified envelope shapes (`BatchResponse[T]`, `ListResponse[T]`), the closed `ErrorCode` enum, the `issue_id` vocabulary, and the composed operations (`start_work`, etc.).
+- **classic** — the pre-federation filigree HTTP API as it existed through the 1.x series. URL layout: the currently-existing `/api/*` surface, with one `/api/v1/` outlier (`POST /api/v1/scan-results`). Classic is not uniformly under a `/v1/` prefix; that was the break-and-bundle plan's aspiration, not the historical reality. Frozen: no new operations, no shape changes, no URL moves. Continues to be fully supported.
+- **loom** — new in 2.0, at `/api/loom/*`. Represents filigree's participation in the Loom federation. Uses the unified envelope shapes (`BatchResponse[T]`, `ListResponse[T]`), the closed `ErrorCode` enum, the `issue_id` vocabulary, and the composed operations (`start_work`, etc.).
 
 ### 2. Living surface alongside generations
 
-A **living surface** at `/api/*` (no generation prefix) always aliases the current recommended generation. Today: `/api/scan-results` is routed to the same handler as `/api/loom/scan-results`. When a future generation replaces `loom` as recommended, the living surface moves with it.
+A **living surface** at `/api/*` (no generation prefix) aliases the current recommended generation. For loom endpoints that have no classic counterpart (e.g. new composed operations like `/api/loom/issues/{id}/start-work`), the living-surface alias lands at `/api/<path>` and routes to the loom handler. For endpoints where classic and loom *both* exist, `/api/<path>` continues to serve classic (because classic is frozen and its URLs are already there) until a per-endpoint living-surface decision is made. See the 2.0 work package Phase B3 amendment for the deferral rationale and Phase C for the per-endpoint resolution.
 
 The living surface is explicitly **non-stability**: it is for callers who want "whatever filigree's current standard interface is" — prototypes, local dev tools, hooks, scripts that are updated alongside filigree itself. Production integrations across version boundaries must pin to a named generation.
 
