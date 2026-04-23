@@ -332,16 +332,11 @@ class TestBlankActorUpdateParity:
 
         assert dash_env["code"] == mcp_env["code"] == ErrorCode.VALIDATION, f"dashboard={dash_env['code']} mcp={mcp_env['code']}"
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "CLI `--actor` is a top-level group option whose Click-layer validator "
-            "emits a usage error on stderr with exit 2 before any command body runs; "
-            "no 2.0 envelope is emitted. Stage 2B scope — same remediation class as "
-            "the --priority IntRange case."
-        ),
-    )
     async def test_cli_emits_envelope(self, cli_surface: Callable[..., Any]) -> None:
+        # Was strict-xfail before Stage 2B task 2b.3b. The cli group
+        # callback in cli.py now sniffs ``ctx.args`` for --json when
+        # sanitize_actor fails and emits the 2.0 envelope instead of
+        # raising click.BadParameter.
         def cli_action(runner: CliRunner, _: Path) -> Any:
             create = runner.invoke(cli, ["create", "Target", "--json"])
             assert create.exit_code == 0, create.output
