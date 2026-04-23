@@ -45,8 +45,10 @@ A consumer-side pinning test therefore asserts these five properties against par
 
 ### Recommended consumer-side pattern
 
+The sketch below is **illustrative pseudocode**, not a maintained or tested recipe — it shows the pinning *pattern* (load fixture, replay request, assert shape). Adapt it to your language, test framework, and HTTP client; copy-pasting without adaptation is not supported.
+
 ```python
-# consumer CI sketch
+# consumer CI sketch — illustrative
 import json, pytest, requests
 
 FIXTURE = json.load(open("path/to/filigree/tests/fixtures/contracts/classic/scan-results.json"))
