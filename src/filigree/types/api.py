@@ -577,6 +577,34 @@ def classify_value_error(message: str) -> ErrorCode:
     (``InvalidTransitionError``, ``AmbiguousTransitionError``) in the data
     layer; once those land, ValueError handlers will catch the typed
     subclass explicitly and this function retires.
+
+    Boundary rule (documented in 2B rebaseline §Task 2b.4):
+
+    - **State-machine sites MUST use this helper.** Currently:
+      ``db._batch_with_transition_errors`` (db_issues.py:894),
+      ``_handle_update_issue`` / ``_handle_close_issue`` /
+      ``_handle_reopen_issue`` (mcp_tools/issues.py), CLI ``update`` /
+      ``close`` / ``reopen`` ``--json`` paths (cli_commands/issues.py),
+      dashboard PATCH / close / reopen routes
+      (dashboard_routes/issues.py). These wrap a ``db.*`` method that
+      raises ``ValueError`` for multiple classes of issue: transition
+      failure, already-closed, dependency conflict, or validation. The
+      helper routes correctly across these.
+
+    - **Input-validation sites MUST hardcode VALIDATION.** Currently:
+      ``_safe_path`` / URL parsing (dashboard_routes/common.py), schema
+      validation in ``mcp_tools/meta.py``, ``mcp_tools/files.py``,
+      ``mcp_tools/scanners.py``, ``mcp_tools/observations.py``. These
+      catch ``ValueError`` for one class only (bad input from the
+      caller); using the helper would mis-classify future error-message
+      additions containing the keyword "status" or "state" (e.g. a
+      scanner complaining about a bad "status filter" arg would land
+      as INVALID_TRANSITION, which is wrong).
+
+    The enforcement test at ``tests/util/test_classify_value_error_boundary.py``
+    greps the input-validation modules listed above for
+    ``classify_value_error`` imports and fails if any appear — so
+    breaking this rule in a future change trips CI.
     """
     lowered = message.lower()
     if "status" in lowered or "transition" in lowered or "state" in lowered:
