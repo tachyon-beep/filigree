@@ -12,6 +12,29 @@ from filigree.cli_common import get_db, refresh_summary
 from filigree.types.api import ErrorCode, classify_value_error
 
 
+def _range_check_priority(priority: int, *, as_json: bool) -> None:
+    """Validate ``--priority`` is in the 0..4 range.
+
+    Run in the command body (not as a Click callback or IntRange type)
+    because the 2.0 envelope emission depends on ``as_json``, which is
+    only reliably available after all options have been parsed. Click
+    callbacks fire in cmdline order (``--priority 99 --json`` processes
+    priority first), so at callback time ``as_json`` may not yet be in
+    ``ctx.params``; doing the check here is honest about the ordering
+    constraint.
+
+    On failure, either emits the 2.0 envelope (``--json``) or a plain
+    error (``-f``) and exits 1.
+    """
+    if not 0 <= priority <= 4:
+        msg = f"Priority must be between 0 and 4, got {priority}"
+        if as_json:
+            click.echo(json_mod.dumps({"error": msg, "code": ErrorCode.VALIDATION}))
+        else:
+            click.echo(f"Error: {msg}", err=True)
+        sys.exit(1)
+
+
 @click.command()
 @click.argument("title")
 @click.option(
@@ -20,7 +43,7 @@ from filigree.types.api import ErrorCode, classify_value_error
     default="task",
     help="Issue type (task, bug, feature, epic, milestone, phase, step, requirement)",
 )
-@click.option("--priority", "-p", default=2, type=click.IntRange(0, 4), help="Priority 0-4 (0=critical)")
+@click.option("--priority", "-p", default=2, type=int, help="Priority 0-4 (0=critical)")
 @click.option("--parent", default=None, help="Parent issue ID")
 @click.option("--assignee", default="", help="Assignee")
 @click.option("--description", "-d", default="", help="Description")
@@ -45,6 +68,7 @@ def create(
     as_json: bool,
 ) -> None:
     """Create a new issue."""
+    _range_check_priority(priority, as_json=as_json)
     fields = {}
     for f in field:
         if "=" not in f:

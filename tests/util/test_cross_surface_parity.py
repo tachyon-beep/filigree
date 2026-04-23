@@ -255,18 +255,11 @@ class TestPriorityOutOfRangeCreateParity:
 
         assert dash_env["code"] == mcp_env["code"] == ErrorCode.VALIDATION, f"dashboard={dash_env['code']} mcp={mcp_env['code']}"
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "CLI `--priority` uses click.IntRange(0, 4) (cli_commands/issues.py:23); "
-            "Click emits a usage error on stderr with exit 2 before the command body "
-            "runs, so no 2.0 envelope is emitted. Stage 2B scope: replace IntRange "
-            "with a callback that honours --json, or add a group-level Click-error "
-            "→ envelope shim. When fixed, strict=True makes this xfail → xpass and "
-            "CI will fail; remove the marker."
-        ),
-    )
     async def test_cli_emits_envelope(self, cli_surface: Callable[..., Any]) -> None:
+        # Was strict-xfail before Stage 2B task 2b.3a. The --priority option
+        # now routes through _validate_priority_range callback
+        # (cli_commands/issues.py) which emits the 2.0 envelope when
+        # json_flag_in_argv() is true.
         def cli_action(runner: CliRunner, _: Path) -> Any:
             return runner.invoke(cli, ["create", "Bad", "--priority", "99", "--json"])
 
