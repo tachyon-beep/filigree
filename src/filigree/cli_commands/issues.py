@@ -322,6 +322,16 @@ def close(ctx: click.Context, issue_ids: tuple[str, ...], reason: str, as_json: 
                 if not as_json:
                     click.echo(str(e), err=True)
         if as_json:
+            # Stage 2B task 2b.3c: when the call was ``close <id>`` with a
+            # single id and it failed, emit the flat 2.0 envelope instead
+            # of the batch-shape wrapper. ``filigree close a b --json``
+            # keeps the batch shape (``{closed, unblocked, errors?}``)
+            # because batching is the documented behaviour for N≥2.
+            if len(issue_ids) == 1 and errors and not closed:
+                err = errors[0]
+                click.echo(json_mod.dumps({"error": err["error"], "code": err["code"]}))
+                refresh_summary(db)
+                sys.exit(1)
             # Only issues that became ready *after* the close (per docs/cli.md).
             ready = db.get_ready()
             unblocked = [{"id": i.id, "title": i.title, "priority": i.priority, "type": i.type} for i in ready if i.id not in ready_before]

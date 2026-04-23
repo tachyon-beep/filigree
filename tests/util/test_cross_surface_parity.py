@@ -469,18 +469,10 @@ class TestAlreadyClosedParity:
         # catches silent drift to VALIDATION/IO.
         assert dash_env["code"] in {ErrorCode.CONFLICT, ErrorCode.INVALID_TRANSITION}
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "CLI `filigree close <id> --json` always returns a batch-shape wrapper "
-            "({closed, unblocked, errors:[...]}) even for a single id; the per-item "
-            "envelope is correct but the top-level is not the 2.0 flat ErrorResponse. "
-            "Stage 2B scope: unify to a flat envelope for N=1 close, or formally "
-            "declare CLI close always batch-shaped (and shift the parity test). "
-            "Bed-down round 2 did not touch this; this xfail is the marker."
-        ),
-    )
     async def test_cli_emits_flat_envelope(self, cli_surface: Callable[..., Any]) -> None:
+        # Was strict-xfail before Stage 2B task 2b.3c. `filigree close <id>
+        # --json` now emits the flat envelope when len(issue_ids)==1 and
+        # the close fails; N≥2 close calls keep the batch-shape wrapper.
         def cli_action(runner: CliRunner, _: Path) -> Any:
             create = runner.invoke(cli, ["create", "C", "--json"])
             issue_id = json.loads(create.output)["id"]
