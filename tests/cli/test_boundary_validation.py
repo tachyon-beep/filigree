@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
-from click.testing import CliRunner
+from click.testing import CliRunner, Result
 
 from filigree.cli import cli
+from filigree.types.api import ErrorCode
 from tests.cli.conftest import _extract_id
 
 
@@ -90,6 +92,109 @@ class TestCLIActorValidation:
         runner, _ = cli_in_project
         result = runner.invoke(cli, ["create", "Test"])
         assert result.exit_code == 0
+
+
+class TestCLIPriorityEnvelopeEmission:
+    """2b.3a: --priority out-of-range with --json emits the 2.0 flat envelope.
+
+    The existing cross-surface parity scenario covers the high end (99) on
+    ``create``. These tests pin the low-end boundary (-1) and keep the envelope
+    shape explicit — a regression that reverted ``_range_check_priority`` to
+    a Click callback or IntRange type would emit Click's stderr usage error
+    instead of the 2.0 envelope, and existing exit-code-only tests would
+    still pass.
+    """
+
+    def test_create_priority_neg1_json_envelope(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        runner, _ = cli_in_project
+        result = runner.invoke(cli, ["create", "Bad", "--priority", "-1", "--json"])
+        assert result.exit_code != 0
+        payload = json.loads(result.output)
+        assert payload["code"] == ErrorCode.VALIDATION
+        assert "-1" in payload["error"]
+
+    def test_create_priority_5_json_envelope(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        runner, _ = cli_in_project
+        result = runner.invoke(cli, ["create", "Bad", "--priority", "5", "--json"])
+        assert result.exit_code != 0
+        payload = json.loads(result.output)
+        assert payload["code"] == ErrorCode.VALIDATION
+
+
+class TestCLIActorEnvelopeEmission:
+    """2b.3b: group-level ``--actor`` validation emits 2.0 envelope for every subcommand.
+
+    The parity module only exercises ``update``, but the ``--actor`` option
+    is defined on the Click group in ``src/filigree/cli.py:39`` — the same
+    callback runs before every subcommand. These tests pin the envelope for
+    the other ``--json``-capable subcommands that rely on ``ctx.obj["actor"]``.
+    Without them, a regression that moved the envelope emission into the
+    ``update`` body (instead of the group callback) would pass parity and
+    the existing exit-code checks, but silently break every other subcommand.
+    """
+
+    @staticmethod
+    def _assert_actor_envelope(result: Result) -> None:
+        assert result.exit_code != 0, result.output
+        payload = json.loads(result.output)
+        assert payload["code"] == ErrorCode.VALIDATION, payload
+        assert "actor" in payload["error"].lower(), payload
+
+    def test_actor_whitespace_close_json_envelope(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        runner, _ = cli_in_project
+        result = runner.invoke(cli, ["--actor", "   ", "close", "test-ffffffffff", "--json"])
+        self._assert_actor_envelope(result)
+
+    def test_actor_whitespace_claim_json_envelope(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        runner, _ = cli_in_project
+        result = runner.invoke(cli, ["--actor", "   ", "claim", "test-ffffffffff", "--assignee", "bot", "--json"])
+        self._assert_actor_envelope(result)
+
+    def test_actor_whitespace_reopen_json_envelope(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        runner, _ = cli_in_project
+        result = runner.invoke(cli, ["--actor", "   ", "reopen", "test-ffffffffff", "--json"])
+        self._assert_actor_envelope(result)
+
+    def test_actor_whitespace_add_comment_json_envelope(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        runner, _ = cli_in_project
+        result = runner.invoke(cli, ["--actor", "   ", "add-comment", "test-ffffffffff", "note", "--json"])
+        self._assert_actor_envelope(result)
+
+
+class TestCLICloseJSONBatchBoundary:
+    """2b.3c: ``close --json`` with N=1 emits flat envelope; N≥2 keeps batch wrapper.
+
+    The boundary is ``len(issue_ids) == 1`` at ``cli_commands/issues.py:330``.
+    Flipping ``==`` to ``<=`` (or inverting the condition) would silently drop
+    all but the first error on ``close a b --json``. The existing parity test
+    only exercises N=1; this pins the other side.
+    """
+
+    def test_close_n2_both_failing_keeps_batch_wrapper(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        runner, _ = cli_in_project
+        result = runner.invoke(cli, ["close", "test-ffffffffff", "test-eeeeeeeeee", "--json"])
+        assert result.exit_code != 0, result.output
+        payload = json.loads(result.output)
+        # Batch-shape wrapper: {closed, unblocked, errors} — NOT the flat
+        # {error, code} envelope that N=1 produces.
+        assert "closed" in payload, payload
+        assert "errors" in payload, payload
+        assert "code" not in payload, f"N≥2 close must keep batch wrapper; flat envelope would have top-level 'code': {payload!r}"
+        assert len(payload["errors"]) == 2, payload
+        for err in payload["errors"]:
+            assert set(err.keys()) >= {"id", "error", "code"}, err
+            assert err["code"] == ErrorCode.NOT_FOUND, err
+
+    def test_close_n1_failing_emits_flat_envelope(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        # Positive companion to the N=2 test: pins that N=1 still emits the
+        # flat envelope. Keeps both sides of the boundary nailed down together
+        # so a future refactor has to break both tests to flip the shape.
+        runner, _ = cli_in_project
+        result = runner.invoke(cli, ["close", "test-ffffffffff", "--json"])
+        assert result.exit_code != 0, result.output
+        payload = json.loads(result.output)
+        assert payload["code"] == ErrorCode.NOT_FOUND, payload
+        assert "closed" not in payload, payload
 
 
 class TestCLILabelsTopValidation:

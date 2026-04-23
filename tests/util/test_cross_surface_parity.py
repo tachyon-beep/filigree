@@ -533,7 +533,14 @@ class TestBatchMixedValidityParity:
             json={"issue_ids": [dash_real, dash_missing], "priority": 1},
         )
         assert dash_resp.status_code == 200, dash_resp.text
-        dash_failed = _dashboard_batch_failed(dash_resp.json())
+        dash_body = dash_resp.json()
+        # Container-key pin: dashboard uses "errors" pre-2b.1. When 2b.1 lands
+        # and unifies both surfaces to "failed", flip this and the mcp pin
+        # below together. Without this inline assertion, a silent drift that
+        # emits both keys ({"errors": [], "failed": [...]}) would satisfy the
+        # helper (which only checks "errors" is a list) and pass.
+        assert "errors" in dash_body, f"dashboard batch must keep 'errors' container key pre-2b.1: keys={sorted(dash_body.keys())!r}"
+        dash_failed = _dashboard_batch_failed(dash_body)
         assert len(dash_failed) == 1
         dash_item = dash_failed[0]
         assert set(dash_item.keys()) >= {"id", "error", "code"}, f"dashboard per-item missing keys: {dash_item!r}"
@@ -547,6 +554,9 @@ class TestBatchMixedValidityParity:
         # That arg-name divergence is a separate 2B concern, documented as an
         # observation — this test focuses on envelope shape only.
         mcp_body = _mcp_envelope(await _handle_batch_update({"ids": [mcp_real, mcp_missing], "priority": 1}))
+        # Container-key pin: MCP uses "failed" pre-2b.1. Paired with the
+        # dashboard pin above — both flip together when 2b.1 unifies.
+        assert "failed" in mcp_body, f"mcp batch must keep 'failed' container key: keys={sorted(mcp_body.keys())!r}"
         mcp_failed = _mcp_batch_failed(mcp_body)
         assert len(mcp_failed) == 1, f"MCP batch failed list: {mcp_failed!r}"
         mcp_item = mcp_failed[0]
