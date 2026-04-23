@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING, Any
 from filigree.db_base import AGE_BUCKETS, DBMixinProtocol, _escape_like, _escape_like_chars, _now_iso, _safe_json_loads
 from filigree.models import Issue
 from filigree.templates import validate_field_pattern
-from filigree.types.api import BatchFailureDetail, ErrorCode, classify_value_error
+from filigree.types.api import BatchFailure, ErrorCode, classify_value_error
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -880,19 +880,19 @@ class IssuesMixin(DBMixinProtocol):
         self,
         issue_ids: list[str],
         action: Callable[[str], Issue],
-    ) -> tuple[list[Issue], list[BatchFailureDetail]]:
+    ) -> tuple[list[Issue], list[BatchFailure]]:
         """Run *action(issue_id)* per item with transition-enriched error handling."""
         _validate_string_list(issue_ids, "issue_ids")
         results: list[Issue] = []
-        errors: list[BatchFailureDetail] = []
+        errors: list[BatchFailure] = []
         for issue_id in issue_ids:
             try:
                 results.append(action(issue_id))
             except KeyError:
-                errors.append(BatchFailureDetail(id=issue_id, error=f"Not found: {issue_id}", code=ErrorCode.NOT_FOUND))
+                errors.append(BatchFailure(id=issue_id, error=f"Not found: {issue_id}", code=ErrorCode.NOT_FOUND))
             except ValueError as e:
                 code = classify_value_error(str(e))
-                err = BatchFailureDetail(id=issue_id, error=str(e), code=code)
+                err = BatchFailure(id=issue_id, error=str(e), code=code)
                 if code == ErrorCode.INVALID_TRANSITION:
                     try:
                         transitions = self.get_valid_transitions(issue_id)
@@ -908,7 +908,7 @@ class IssuesMixin(DBMixinProtocol):
         *,
         reason: str = "",
         actor: str = "",
-    ) -> tuple[list[Issue], list[BatchFailureDetail]]:
+    ) -> tuple[list[Issue], list[BatchFailure]]:
         """Close multiple issues with per-item error handling. Returns (closed, errors)."""
         return self._batch_with_transition_errors(
             issue_ids,
@@ -924,7 +924,7 @@ class IssuesMixin(DBMixinProtocol):
         assignee: str | None = None,
         fields: dict[str, Any] | None = None,
         actor: str = "",
-    ) -> tuple[list[Issue], list[BatchFailureDetail]]:
+    ) -> tuple[list[Issue], list[BatchFailure]]:
         """Update multiple issues with the same changes. Returns (updated, errors)."""
         return self._batch_with_transition_errors(
             issue_ids,
@@ -943,7 +943,7 @@ class IssuesMixin(DBMixinProtocol):
         issue_ids: list[str],
         *,
         label: str,
-    ) -> tuple[list[dict[str, str]], list[BatchFailureDetail]]:
+    ) -> tuple[list[dict[str, str]], list[BatchFailure]]:
         """Add the same label to multiple issues. Returns (labeled, errors)."""
         _validate_string_list(issue_ids, "issue_ids")
         if not isinstance(label, str):
@@ -951,16 +951,16 @@ class IssuesMixin(DBMixinProtocol):
             raise TypeError(msg)
 
         results: list[dict[str, str]] = []
-        errors: list[BatchFailureDetail] = []
+        errors: list[BatchFailure] = []
         for issue_id in issue_ids:
             try:
                 self.get_issue(issue_id)
                 added, _canonical = self.add_label(issue_id, label)
                 results.append({"id": issue_id, "status": "added" if added else "already_exists"})
             except KeyError:
-                errors.append(BatchFailureDetail(id=issue_id, error=f"Not found: {issue_id}", code=ErrorCode.NOT_FOUND))
+                errors.append(BatchFailure(id=issue_id, error=f"Not found: {issue_id}", code=ErrorCode.NOT_FOUND))
             except ValueError as e:
-                errors.append(BatchFailureDetail(id=issue_id, error=str(e), code=ErrorCode.VALIDATION))
+                errors.append(BatchFailure(id=issue_id, error=str(e), code=ErrorCode.VALIDATION))
         return results, errors
 
     def batch_add_comment(
@@ -969,7 +969,7 @@ class IssuesMixin(DBMixinProtocol):
         *,
         text: str,
         author: str = "",
-    ) -> tuple[list[dict[str, str | int]], list[BatchFailureDetail]]:
+    ) -> tuple[list[dict[str, str | int]], list[BatchFailure]]:
         """Add the same comment to multiple issues. Returns (commented, errors)."""
         _validate_string_list(issue_ids, "issue_ids")
         if not isinstance(text, str):
@@ -980,16 +980,16 @@ class IssuesMixin(DBMixinProtocol):
             raise TypeError(msg)
 
         results: list[dict[str, str | int]] = []
-        errors: list[BatchFailureDetail] = []
+        errors: list[BatchFailure] = []
         for issue_id in issue_ids:
             try:
                 self.get_issue(issue_id)
                 comment_id = self.add_comment(issue_id, text, author=author)
                 results.append({"id": issue_id, "comment_id": comment_id})
             except KeyError:
-                errors.append(BatchFailureDetail(id=issue_id, error=f"Not found: {issue_id}", code=ErrorCode.NOT_FOUND))
+                errors.append(BatchFailure(id=issue_id, error=f"Not found: {issue_id}", code=ErrorCode.NOT_FOUND))
             except ValueError as e:
-                errors.append(BatchFailureDetail(id=issue_id, error=str(e), code=ErrorCode.VALIDATION))
+                errors.append(BatchFailure(id=issue_id, error=str(e), code=ErrorCode.VALIDATION))
         return results, errors
 
     def list_issues(

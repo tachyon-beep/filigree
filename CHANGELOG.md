@@ -13,6 +13,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Stage 2B task 2b.-1 — `POST /api/v1/scan-results` success-shape pin.** `TestScanResultsEnvelope::test_success_shape_empty_findings` asserts the exact `ScanIngestResult` key set (eight keys) and value-type invariants returned on 200 for a valid empty-findings body. Closes the gap identified in the 2B rebaseline §4: the four pre-existing error-path tests pinned 400+`VALIDATION` shapes, but the 200 shape was unpinned. Any 2B task that changes `db.process_scan_results(...)`'s return dict must update this test in the same commit; absent a Clarion staging environment, this is the concrete pre-release contract.
 
+### Changed
+
+- **Stage 2B task 2b.0 — `BatchFailureDetail` retired in favour of `BatchFailure` (Python API only; no wire-contract change).** The unused Stage 1 `BatchFailure.item_id` field reverted to `id` before the type got any live wire consumers, so `db_issues.py` batch constructions, the three legacy response types (`BatchUpdateResponse`, `BatchCloseResponse`, `BatchActionResponse`), and the `valid_transitions` enrichment at `db_issues.py:899` all migrate cleanly. The HTTP/MCP/CLI surfaces emit the same `{id, error, code, valid_transitions?}` shape for batch failures. `BatchFailure` gains the optional `valid_transitions: NotRequired[list[TransitionHint]]` field that `BatchFailureDetail` previously carried. Python consumers importing `BatchFailureDetail` from `filigree.types.api` now raise `ImportError`; migrate to `BatchFailure`.
+
 ### Fixed
 
 - **2.0 envelope bed-down — residual cross-surface parity fixes.**

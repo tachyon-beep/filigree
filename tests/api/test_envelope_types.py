@@ -16,7 +16,11 @@ def test_batch_response_fields() -> None:
 
 def test_batch_failure_fields() -> None:
     hints = get_type_hints(BatchFailure)
-    assert set(hints.keys()) == {"item_id", "error", "code"}
+    # ``valid_transitions`` is NotRequired but get_type_hints still lists it.
+    # Field name ``id`` was reverted from the Stage 1 ``item_id`` during
+    # Stage 2B task 2b.0 to match the retired BatchFailureDetail's wire
+    # shape and avoid a gratuitous wire-contract break.
+    assert set(hints.keys()) == {"id", "error", "code", "valid_transitions"}
 
 
 def test_list_response_fields() -> None:

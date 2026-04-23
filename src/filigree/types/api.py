@@ -213,40 +213,34 @@ class SearchResponse(TypedDict):
     has_more: bool
 
 
-class BatchFailureDetail(TypedDict):
-    """Error detail for a single failed item in a batch operation.
+class BatchUpdateResponse(TypedDict):
+    """Batch update result with succeeded IDs and failures.
 
-    All batch failures share this {id, error, code} shape.  Batch update/close
-    may also include valid_transitions when the failure is an invalid transition.
-
-    ``code`` is a closed ``ErrorCode`` member; it serializes to its uppercase
-    string name on the wire so batch responses match the rest of the 2.0
-    envelope surface.
+    Superseded by ``BatchResponse[SlimIssue]`` — kept as the wire shape
+    emitted by MCP ``batch_update`` until Stage 2B's full-stage
+    rewrite migrates call sites. ``failed`` uses ``BatchFailure``
+    (formerly ``BatchFailureDetail``, retired in task 2b.0).
     """
 
-    id: str
-    error: str
-    code: ErrorCode
-    valid_transitions: NotRequired[list[TransitionHint]]
-
-
-class BatchUpdateResponse(TypedDict):
-    """Batch update result with succeeded IDs and failures."""
-
     succeeded: list[str]
-    failed: list[BatchFailureDetail]
+    failed: list[BatchFailure]
     count: int
 
 
 class BatchCloseResponse(TypedDict):
     """Batch close result with optional newly-unblocked list.
 
+    Superseded by ``BatchResponse[SlimIssue]`` — kept as the wire shape
+    emitted by MCP ``batch_close`` until Stage 2B's full-stage
+    rewrite migrates call sites.
+
     ``succeeded``, ``failed``, and ``count`` are always present.
-    ``newly_unblocked`` is only included when issues were actually unblocked.
+    ``newly_unblocked`` is only included when issues were actually
+    unblocked.
     """
 
     succeeded: list[str]
-    failed: list[BatchFailureDetail]
+    failed: list[BatchFailure]
     count: int
     newly_unblocked: NotRequired[list[SlimIssue]]
 
@@ -282,11 +276,14 @@ class BatchActionResponse(TypedDict):
 
     ``results`` varies by operation (label adds: {id, status}, comment adds:
     {id, comment_id}), so it remains list[dict[str, Any]].
+
+    Superseded by ``BatchResponse`` — kept as the wire shape emitted by
+    MCP until Stage 2B's full-stage rewrite migrates call sites.
     """
 
     succeeded: list[str]
     results: list[dict[str, Any]]
-    failed: list[BatchFailureDetail]
+    failed: list[BatchFailure]
     count: int
 
 
@@ -428,14 +425,23 @@ class ErrorCode(StrEnum):
 class BatchFailure(TypedDict):
     """One failed item inside a BatchResponse.failed list.
 
-    ``item_id`` is deliberately generic — batch operations exist for
-    issues, findings, and observations; this field carries whichever id
-    shape the specific batch tool operates on.
+    ``id`` holds whichever id shape the specific batch tool operates on
+    (issue-id, finding-id, observation-id); the consumer disambiguates
+    by context. The field was originally named ``item_id`` when this
+    type was introduced in Stage 1, but had no live wire consumers at
+    that time; it was renamed to ``id`` during Stage 2B task 2b.0 to
+    match the wire shape of the retired ``BatchFailureDetail`` and
+    avoid a gratuitous wire-contract break.
+
+    ``valid_transitions`` is populated by
+    ``db._batch_with_transition_errors`` when the per-item failure is
+    an invalid transition; callers can use it to guide the retry.
     """
 
-    item_id: str
+    id: str
     error: str
     code: ErrorCode
+    valid_transitions: NotRequired[list[TransitionHint]]
 
 
 class BatchResponse(TypedDict, Generic[_T]):
