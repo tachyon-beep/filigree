@@ -226,17 +226,39 @@ def _get_db() -> FiligreeDB:
 def _create_project_router() -> APIRouter:
     """Build the APIRouter containing all project-scoped endpoints.
 
-    Delegates to domain-specific sub-routers in ``dashboard_routes/``.
+    Composes two named API generations per ADR-002:
+
+    - **classic** — every currently-existing endpoint at its existing
+      path (mostly unprefixed, with the ``POST /v1/scan-results``
+      outlier). Frozen; no URL moves, no shape changes.
+    - **loom** — new in 2.0, attached under a ``/loom`` sub-prefix so
+      the full path becomes ``/api/loom/<endpoint>`` after the
+      app-level ``/api`` prefix. Empty in Phase B of the federation
+      work package; Phase C fills it endpoint-by-endpoint.
+
+    Server-mode and ethereal-mode ``/api`` mounts (and the
+    ``/api/p/{project_key}`` server-mode mount) both include this
+    router, so the generation split is inherited by every mount point
+    automatically.
     """
     from fastapi import APIRouter
 
     from filigree.dashboard_routes import analytics, files, issues, releases
 
     router = APIRouter()
-    router.include_router(analytics.create_router())
-    router.include_router(issues.create_router())
-    router.include_router(files.create_router())
-    router.include_router(releases.create_router())
+
+    # Classic generation — existing routes at their existing paths.
+    router.include_router(analytics.create_classic_router())
+    router.include_router(issues.create_classic_router())
+    router.include_router(files.create_classic_router())
+    router.include_router(releases.create_classic_router())
+
+    # Loom generation — new in 2.0 under /loom. Empty in Phase B.
+    router.include_router(analytics.create_loom_router(), prefix="/loom")
+    router.include_router(issues.create_loom_router(), prefix="/loom")
+    router.include_router(files.create_loom_router(), prefix="/loom")
+    router.include_router(releases.create_loom_router(), prefix="/loom")
+
     return router
 
 

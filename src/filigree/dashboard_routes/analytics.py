@@ -323,8 +323,9 @@ def _filter_graph_edges(
 # ---------------------------------------------------------------------------
 
 
-def create_router() -> APIRouter:
-    """Build the APIRouter for analytics, graph, and metrics endpoints.
+def create_classic_router() -> APIRouter:
+    """Build the classic-generation APIRouter for analytics, graph, and
+    metrics endpoints.
 
     NOTE: All handlers are intentionally async despite doing synchronous
     SQLite I/O. This serializes DB access on the event loop thread,
@@ -507,3 +508,15 @@ def create_router() -> APIRouter:
         return JSONResponse(events)
 
     return router
+
+
+def create_loom_router() -> APIRouter:
+    """Build the loom-generation APIRouter for analytics, graph, and
+    metrics endpoints.
+
+    Empty in Phase B of the 2.0 federation work package; Phase C fills
+    loom analytics endpoints as they are implemented.
+    """
+    from fastapi import APIRouter
+
+    return APIRouter()

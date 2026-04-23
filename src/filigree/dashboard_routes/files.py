@@ -33,8 +33,9 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
-def create_router() -> APIRouter:
-    """Build the APIRouter for file tracking and scan findings endpoints.
+def create_classic_router() -> APIRouter:
+    """Build the classic-generation APIRouter for file tracking and scan
+    findings endpoints.
 
     NOTE: All handlers are intentionally async despite doing synchronous
     SQLite I/O. This serializes DB access on the event loop thread,
@@ -353,3 +354,16 @@ def create_router() -> APIRouter:
         return JSONResponse({"scan_runs": runs}, headers={"Cache-Control": "no-cache"})
 
     return router
+
+
+def create_loom_router() -> APIRouter:
+    """Build the loom-generation APIRouter for file tracking and scan
+    findings endpoints.
+
+    Empty in Phase B of the 2.0 federation work package; Phase C1 adds
+    ``POST /api/loom/scan-results`` per the fixture at
+    ``tests/fixtures/contracts/loom/scan-results.json``.
+    """
+    from fastapi import APIRouter
+
+    return APIRouter()

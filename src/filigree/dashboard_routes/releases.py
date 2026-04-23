@@ -82,12 +82,15 @@ def _semver_sort_key(release: ReleaseSummaryItem) -> _SemverSortKey:
 # ---------------------------------------------------------------------------
 
 
-def create_router() -> APIRouter:
-    """Build the APIRouter for release endpoints.
+def create_classic_router() -> APIRouter:
+    """Build the classic-generation APIRouter for release endpoints.
 
     NOTE: All handlers are intentionally async despite doing synchronous
     SQLite I/O. This serializes DB access on the event loop thread,
     avoiding concurrent multi-thread access to the shared DB connection.
+
+    Classic routes live at their existing unprefixed paths. See ADR-002
+    for the generation naming and lifecycle rules.
     """
     from fastapi import APIRouter, Depends
     from fastapi.responses import JSONResponse
@@ -143,3 +146,16 @@ def create_router() -> APIRouter:
         return JSONResponse(tree)
 
     return router
+
+
+def create_loom_router() -> APIRouter:
+    """Build the loom-generation APIRouter for release endpoints.
+
+    Empty in Phase B of the 2.0 federation work package; Phase C fills
+    loom release endpoints as they are implemented. See ADR-002 for the
+    generation framing and docs/federation/contracts.md for the stability
+    guarantee.
+    """
+    from fastapi import APIRouter
+
+    return APIRouter()

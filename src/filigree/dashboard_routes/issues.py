@@ -87,8 +87,9 @@ def _validate_body_string_field(
 # ---------------------------------------------------------------------------
 
 
-def create_router() -> APIRouter:
-    """Build the APIRouter for issue, workflow, and dependency endpoints.
+def create_classic_router() -> APIRouter:
+    """Build the classic-generation APIRouter for issue, workflow, and
+    dependency endpoints.
 
     NOTE: All handlers are intentionally async despite doing synchronous
     SQLite I/O. This serializes DB access on the event loop thread,
@@ -603,3 +604,16 @@ def create_router() -> APIRouter:
         return JSONResponse({"removed": removed})
 
     return router
+
+
+def create_loom_router() -> APIRouter:
+    """Build the loom-generation APIRouter for issue, workflow, and
+    dependency endpoints.
+
+    Empty in Phase B of the 2.0 federation work package; Phase C fills
+    loom issue endpoints as they are implemented. See ADR-002 for the
+    generation framing.
+    """
+    from fastapi import APIRouter
+
+    return APIRouter()
