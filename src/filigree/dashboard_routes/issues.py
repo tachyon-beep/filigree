@@ -641,15 +641,30 @@ def create_loom_router() -> APIRouter:
     dependency endpoints.
 
     Phase C2 mounts the batch endpoints (``/batch/update``,
-    ``/batch/close``); subsequent C tasks add the rest of the loom
-    issue surface. See ADR-002 for the generation framing and
-    ``tests/fixtures/contracts/loom/`` for the response-shape pins.
+    ``/batch/close``); Phase C3 adds the single-issue surface (GET,
+    create, update, close, reopen, claim, release, claim-next,
+    comments, dependencies). See ADR-002 for the generation framing
+    and ``tests/fixtures/contracts/loom/`` for the response-shape
+    pins.
+
+    Path conventions: loom uses ``/issues/{issue_id}`` (plural,
+    symmetric with the ``/issues`` collection); classic uses
+    ``/issue/{issue_id}`` (singular). The two never collide so
+    living-surface aliases at ``/api/issues/{issue_id}`` could land
+    later — they are deliberately not added in C3 to keep the loom
+    surface as the single recommended entry point until federation
+    consumers stabilise.
     """
     from fastapi import APIRouter, Depends
     from fastapi.responses import JSONResponse
 
     from filigree.dashboard import _get_db
-    from filigree.generations.loom.adapters import slim_issue_to_loom
+    from filigree.dashboard_routes.common import _get_bool_param
+    from filigree.generations.loom.adapters import (
+        issue_to_loom,
+        slim_issue_to_loom,
+    )
+    from filigree.generations.loom.types import CommentRecordLoom
 
     router = APIRouter()
 
@@ -701,5 +716,315 @@ def create_loom_router() -> APIRouter:
         if newly_unblocked:
             response["newly_unblocked"] = [slim_issue_to_loom(i) for i in newly_unblocked]
         return JSONResponse(response)
+
+    @router.get("/issues/{issue_id}")
+    async def api_loom_get_issue(issue_id: str, request: Request, db: FiligreeDB = Depends(_get_db)) -> JSONResponse:
+        """Get a single issue — IssueLoom (or IssueLoomWithFiles when
+        ``include_files=true``).
+
+        Loom defaults ``include_files`` to ``False`` (federation
+        consumers usually want a clean issue projection without the
+        file-association payload). Classic ``GET /api/issue/{id}`` does
+        not expose ``include_files`` and continues to return its
+        existing ``EnrichedIssueDetail`` envelope.
+        """
+        include_files = _get_bool_param(request.query_params, "include_files", default=False)
+        if isinstance(include_files, JSONResponse):
+            return include_files
+        try:
+            issue = db.get_issue(issue_id)
+        except KeyError:
+            return _error_response(f"Issue not found: {issue_id}", ErrorCode.NOT_FOUND, 404)
+        body: dict[str, Any] = dict(issue_to_loom(issue))
+        if include_files:
+            body["files"] = db.get_issue_files(issue_id)
+        return JSONResponse(body)
+
+    @router.post("/issues", status_code=201)
+    async def api_loom_create_issue(request: Request, db: FiligreeDB = Depends(_get_db)) -> JSONResponse:
+        """Create an issue — returns ``IssueLoom``."""
+        body = await _parse_json_body(request)
+        if isinstance(body, JSONResponse):
+            return body
+        title = body.get("title", "")
+        if not isinstance(title, str):
+            return _error_response("title must be a string", ErrorCode.VALIDATION, 400)
+        actor, actor_err = _validate_actor(body.get("actor", "dashboard"))
+        if actor_err:
+            return actor_err
+        priority = _validate_priority_field(body, default=2)
+        if isinstance(priority, JSONResponse):
+            return priority
+        if priority is None:
+            priority = 2
+        parent_id = _validate_body_string_field(body, "parent_id", allow_null=True, default=None)
+        if isinstance(parent_id, JSONResponse):
+            return parent_id
+        description = _validate_body_string_field(body, "description", default="")
+        if isinstance(description, JSONResponse):
+            return description
+        if description is None:
+            description = ""
+        notes = _validate_body_string_field(body, "notes", default="")
+        if isinstance(notes, JSONResponse):
+            return notes
+        if notes is None:
+            notes = ""
+        try:
+            issue = db.create_issue(
+                title,
+                type=body.get("type", "task"),
+                priority=priority,
+                parent_id=parent_id,
+                assignee=body.get("assignee", ""),
+                description=description,
+                notes=notes,
+                fields=body.get("fields"),
+                labels=body.get("labels"),
+                deps=body.get("deps"),
+                actor=actor,
+            )
+        except (TypeError, ValueError) as e:
+            return _error_response(str(e), ErrorCode.VALIDATION, 400)
+        return JSONResponse(issue_to_loom(issue), status_code=201)
+
+    @router.patch("/issues/{issue_id}")
+    async def api_loom_update_issue(issue_id: str, request: Request, db: FiligreeDB = Depends(_get_db)) -> JSONResponse:
+        """Update issue fields — returns ``IssueLoom``."""
+        body = await _parse_json_body(request)
+        if isinstance(body, JSONResponse):
+            return body
+        actor, actor_err = _validate_actor(body.get("actor", "dashboard"))
+        if actor_err:
+            return actor_err
+        body.pop("actor", None)
+        priority = _validate_priority_field(body)
+        if isinstance(priority, JSONResponse):
+            return priority
+        title = _validate_body_string_field(body, "title", default=None)
+        if isinstance(title, JSONResponse):
+            return title
+        description = _validate_body_string_field(body, "description", default=None)
+        if isinstance(description, JSONResponse):
+            return description
+        notes = _validate_body_string_field(body, "notes", default=None)
+        if isinstance(notes, JSONResponse):
+            return notes
+        parent_id = _validate_body_string_field(body, "parent_id", allow_null=True, default=None)
+        if isinstance(parent_id, JSONResponse):
+            return parent_id
+        try:
+            issue = db.update_issue(
+                issue_id,
+                status=body.get("status"),
+                priority=priority,
+                assignee=body.get("assignee"),
+                title=title,
+                description=description,
+                notes=notes,
+                parent_id=parent_id,
+                fields=body.get("fields"),
+                actor=actor,
+            )
+        except KeyError:
+            return _error_response(f"Issue not found: {issue_id}", ErrorCode.NOT_FOUND, 404)
+        except TypeError as e:
+            return _error_response(str(e), ErrorCode.VALIDATION, 400)
+        except ValueError as e:
+            code = classify_value_error(str(e))
+            return _error_response(str(e), code, errorcode_to_http_status(code))
+        return JSONResponse(issue_to_loom(issue))
+
+    @router.post("/issues/{issue_id}/close")
+    async def api_loom_close_issue(issue_id: str, request: Request, db: FiligreeDB = Depends(_get_db)) -> JSONResponse:
+        """Close an issue — returns ``IssueLoom`` (or
+        ``IssueLoomWithUnblocked`` when at least one issue became ready
+        as a result, mirroring MCP ``close_issue``).
+        """
+        body = await _parse_json_body(request)
+        if isinstance(body, JSONResponse):
+            return body
+        actor, actor_err = _validate_actor(body.get("actor", "dashboard"))
+        if actor_err:
+            return actor_err
+        reason = body.get("reason", "")
+        fields = body.get("fields")
+        ready_before = {i.id for i in db.get_ready()}
+        try:
+            issue = db.close_issue(issue_id, reason=reason, actor=actor, fields=fields)
+        except KeyError:
+            return _error_response(f"Issue not found: {issue_id}", ErrorCode.NOT_FOUND, 404)
+        except TypeError as e:
+            return _error_response(str(e), ErrorCode.VALIDATION, 400)
+        except ValueError as e:
+            code = classify_value_error(str(e))
+            return _error_response(str(e), code, errorcode_to_http_status(code))
+        ready_after = db.get_ready()
+        newly_unblocked = [i for i in ready_after if i.id not in ready_before]
+        result: dict[str, Any] = dict(issue_to_loom(issue))
+        if newly_unblocked:
+            result["newly_unblocked"] = [slim_issue_to_loom(i) for i in newly_unblocked]
+        return JSONResponse(result)
+
+    @router.post("/issues/{issue_id}/reopen")
+    async def api_loom_reopen_issue(issue_id: str, request: Request, db: FiligreeDB = Depends(_get_db)) -> JSONResponse:
+        """Reopen a closed issue — returns ``IssueLoom``."""
+        body = await _parse_json_body(request)
+        if isinstance(body, JSONResponse):
+            return body
+        actor, actor_err = _validate_actor(body.get("actor", "dashboard"))
+        if actor_err:
+            return actor_err
+        try:
+            issue = db.reopen_issue(issue_id, actor=actor)
+        except KeyError:
+            return _error_response(f"Issue not found: {issue_id}", ErrorCode.NOT_FOUND, 404)
+        except ValueError as e:
+            code = classify_value_error(str(e))
+            return _error_response(str(e), code, errorcode_to_http_status(code))
+        return JSONResponse(issue_to_loom(issue))
+
+    @router.post("/issues/{issue_id}/claim")
+    async def api_loom_claim_issue(issue_id: str, request: Request, db: FiligreeDB = Depends(_get_db)) -> JSONResponse:
+        """Claim an issue — returns ``IssueLoom``."""
+        body = await _parse_json_body(request)
+        if isinstance(body, JSONResponse):
+            return body
+        assignee = body.get("assignee", "")
+        if not isinstance(assignee, str):
+            return _error_response("assignee must be a string", ErrorCode.VALIDATION, 400)
+        if not assignee or not assignee.strip():
+            return _error_response("assignee is required and cannot be empty", ErrorCode.VALIDATION, 400)
+        actor, actor_err = _validate_actor(body.get("actor", "dashboard"))
+        if actor_err:
+            return actor_err
+        try:
+            issue = db.claim_issue(issue_id, assignee=assignee, actor=actor)
+        except KeyError:
+            return _error_response(f"Issue not found: {issue_id}", ErrorCode.NOT_FOUND, 404)
+        except ValueError as e:
+            return _error_response(str(e), ErrorCode.CONFLICT, 409)
+        return JSONResponse(issue_to_loom(issue))
+
+    @router.post("/issues/{issue_id}/release")
+    async def api_loom_release_claim(issue_id: str, request: Request, db: FiligreeDB = Depends(_get_db)) -> JSONResponse:
+        """Release a claimed issue — returns ``IssueLoom``."""
+        body = await _parse_json_body(request)
+        if isinstance(body, JSONResponse):
+            return body
+        actor, actor_err = _validate_actor(body.get("actor", "dashboard"))
+        if actor_err:
+            return actor_err
+        try:
+            issue = db.release_claim(issue_id, actor=actor)
+        except KeyError:
+            return _error_response(f"Issue not found: {issue_id}", ErrorCode.NOT_FOUND, 404)
+        except ValueError as e:
+            return _error_response(str(e), ErrorCode.CONFLICT, 409)
+        return JSONResponse(issue_to_loom(issue))
+
+    @router.post("/claim-next")
+    async def api_loom_claim_next(request: Request, db: FiligreeDB = Depends(_get_db)) -> JSONResponse:
+        """Claim the highest-priority ready issue — returns ``IssueLoom``,
+        or 404 ``ErrorCode.NOT_FOUND`` when nothing is ready (matching
+        classic).
+        """
+        body = await _parse_json_body(request)
+        if isinstance(body, JSONResponse):
+            return body
+        assignee = body.get("assignee", "")
+        if not isinstance(assignee, str):
+            return _error_response("assignee must be a string", ErrorCode.VALIDATION, 400)
+        if not assignee or not assignee.strip():
+            return _error_response("assignee is required and cannot be empty", ErrorCode.VALIDATION, 400)
+        actor, actor_err = _validate_actor(body.get("actor", "dashboard"))
+        if actor_err:
+            return actor_err
+        try:
+            issue = db.claim_next(assignee, actor=actor)
+        except ValueError as e:
+            return _error_response(str(e), ErrorCode.CONFLICT, 409)
+        if issue is None:
+            return _error_response("No ready issues to claim", ErrorCode.NOT_FOUND, 404)
+        return JSONResponse(issue_to_loom(issue))
+
+    @router.post("/issues/{issue_id}/comments", status_code=201)
+    async def api_loom_add_comment(issue_id: str, request: Request, db: FiligreeDB = Depends(_get_db)) -> JSONResponse:
+        """Add a comment — returns ``CommentRecordLoom`` (``comment_id``
+        replaces classic's ``id``).
+        """
+        try:
+            db.get_issue(issue_id)
+        except KeyError:
+            return _error_response(f"Issue not found: {issue_id}", ErrorCode.NOT_FOUND, 404)
+        body = await _parse_json_body(request)
+        if isinstance(body, JSONResponse):
+            return body
+        text = body.get("text", "")
+        if not isinstance(text, str):
+            return _error_response("text must be a string", ErrorCode.VALIDATION, 400)
+        author, author_err = _validate_actor(body.get("author", "dashboard"))
+        if author_err:
+            return author_err
+        try:
+            comment_id = db.add_comment(issue_id, text, author=author)
+        except ValueError as e:
+            return _error_response(str(e), ErrorCode.VALIDATION, 400)
+        row = db.conn.execute("SELECT created_at FROM comments WHERE id = ?", (comment_id,)).fetchone()
+        if row is None:
+            logger.error("Comment %d not found immediately after INSERT for issue %s", comment_id, issue_id)
+            return _error_response("Internal error: comment created but not retrievable", ErrorCode.INTERNAL, 500)
+        return JSONResponse(
+            CommentRecordLoom(
+                comment_id=comment_id,
+                author=author,
+                text=text,
+                created_at=ISOTimestamp(row["created_at"]),
+            ),
+            status_code=201,
+        )
+
+    @router.post("/issues/{issue_id}/dependencies")
+    async def api_loom_add_dependency(issue_id: str, request: Request, db: FiligreeDB = Depends(_get_db)) -> JSONResponse:
+        """Add a dependency. Body: ``{depends_on: str}``. Response:
+        ``{added: bool}`` (matches classic; the loom envelope adds no
+        rename here because there are no entity primary keys to relabel).
+        """
+        body = await _parse_json_body(request)
+        if isinstance(body, JSONResponse):
+            return body
+        depends_on = body.get("depends_on", "")
+        if not depends_on or not isinstance(depends_on, str) or not depends_on.strip():
+            return _error_response("depends_on is required and must be a non-empty string", ErrorCode.VALIDATION, 400)
+        actor, actor_err = _validate_actor(body.get("actor", "dashboard"))
+        if actor_err:
+            return actor_err
+        try:
+            added = db.add_dependency(issue_id, depends_on, actor=actor)
+        except KeyError as e:
+            return _error_response(str(e), ErrorCode.NOT_FOUND, 404)
+        except ValueError as e:
+            return _error_response(str(e), ErrorCode.CONFLICT, 409)
+        return JSONResponse({"added": added})
+
+    @router.delete("/issues/{issue_id}/dependencies/{dep_issue_id}")
+    async def api_loom_remove_dependency(
+        issue_id: str,
+        dep_issue_id: str,
+        actor: str = "dashboard",
+        db: FiligreeDB = Depends(_get_db),
+    ) -> JSONResponse:
+        """Remove a dependency. Path uses ``dep_issue_id`` (loom
+        vocabulary); classic ``DELETE /api/issue/{id}/dependencies/{dep_id}``
+        keeps its ``dep_id`` parameter name unchanged.
+        """
+        clean_actor, actor_err = _validate_actor(actor)
+        if actor_err:
+            return actor_err
+        try:
+            removed = db.remove_dependency(issue_id, dep_issue_id, actor=clean_actor)
+        except KeyError as e:
+            return _error_response(str(e), ErrorCode.NOT_FOUND, 404)
+        return JSONResponse({"removed": removed})
 
     return router

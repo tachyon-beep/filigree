@@ -7,16 +7,18 @@ fixtures published under ``tests/fixtures/contracts/<generation>/``.
 
 Shape-reference, not byte-equality, per ``docs/federation/contracts.md``:
 a response matches a fixture example if status codes agree, the body's
-JSON type agrees at every level, dicts have the exact key set, lists
-are empty-or-nonempty as declared, scalars have the declared Python
-type, and ``ErrorCode`` values match exactly (enum closure).
+JSON type agrees at every level, non-empty dicts in the fixture have
+the exact key set (empty dicts mean "any keys" — a soft check used
+for open-ended payloads such as ``IssueDict.fields``), non-empty lists
+have at least one element with matching shape, scalars have the
+declared Python type, and ``ErrorCode`` values match exactly (enum
+closure).
 
-Phase C1 scope: classic + loom scan-results both pass against their
-fixtures, and a living-surface equivalence test pins
-``/api/scan-results`` against ``/api/loom/scan-results``. As later
-Phase C tasks land each loom endpoint, they remove the corresponding
-``pytest.mark.skip`` here (the conversion is the per-endpoint gate)
-and add their own equivalence test if a living-surface alias lands.
+Phase C scope (cumulative): scan-results (C1, with living-surface
+alias), batch update/close (C2), single-issue CRUD (C3 — get,
+create, patch, close, reopen, claim, release, claim-next, comments,
+dependencies). Living-surface aliases land per-endpoint; each
+decision is recorded in ``docs/federation/contracts.md``.
 """
 
 from __future__ import annotations
@@ -66,8 +68,12 @@ def _assert_shape_matches(actual: Any, expected: Any, path: str = "$") -> None:
 
     Shape rules (see docs/federation/contracts.md):
     - Same JSON type at each level (dict/list/scalar).
-    - Dicts have the exact key set; values recurse.
-    - Lists: if ``expected`` is empty, ``actual`` must be empty; if
+    - Dicts: if ``expected`` is empty, ``actual`` only needs to be a
+      dict (any key set allowed) — used for open-ended payloads such
+      as ``IssueDict.fields`` whose keys are caller-supplied. If
+      ``expected`` is non-empty, the key set must match exactly and
+      values recurse.
+    - Lists: if ``expected`` is empty, ``actual`` may be any list; if
       ``expected`` is non-empty, the first element of ``actual`` is
       checked against the first element of ``expected``.
     - Scalars: same Python type (``bool`` is not ``int`` for the type
@@ -75,12 +81,15 @@ def _assert_shape_matches(actual: Any, expected: Any, path: str = "$") -> None:
     """
     if isinstance(expected, dict):
         assert isinstance(actual, dict), f"{path}: expected dict, got {type(actual).__name__}"
-        assert set(actual.keys()) == set(expected.keys()), (
-            f"{path}: key-set mismatch; missing={set(expected.keys()) - set(actual.keys())} "
-            f"extra={set(actual.keys()) - set(expected.keys())}"
-        )
-        for key, sub_expected in expected.items():
-            _assert_shape_matches(actual[key], sub_expected, f"{path}.{key}")
+        if expected:
+            assert set(actual.keys()) == set(expected.keys()), (
+                f"{path}: key-set mismatch; missing={set(expected.keys()) - set(actual.keys())} "
+                f"extra={set(actual.keys()) - set(expected.keys())}"
+            )
+            for key, sub_expected in expected.items():
+                _assert_shape_matches(actual[key], sub_expected, f"{path}.{key}")
+        # Empty expected dict is a soft check: any dict shape allowed.
+        # Mirrors the empty-list rule above.
     elif isinstance(expected, list):
         assert isinstance(actual, list), f"{path}: expected list, got {type(actual).__name__}"
         if expected:
@@ -464,3 +473,219 @@ class TestLoomGenerationParityBatchClose:
         unblocked = body["newly_unblocked"][0]
         _assert_slim_issue_loom(unblocked, path="newly_unblocked[0]")
         assert unblocked["issue_id"] == b_id
+
+
+# ---------------------------------------------------------------------------
+# Loom generation — single-issue CRUD (Phase C3)
+# ---------------------------------------------------------------------------
+
+
+_LOOM_ISSUE_FIXTURE_SLUGS: list[str] = [
+    "issues-get",
+    "issues-create",
+    "issues-patch",
+    "issues-close",
+    "issues-reopen",
+    "issues-claim",
+    "issues-release",
+    "issues-claim-next",
+    "issues-comments",
+    "issues-dep-add",
+    "issues-dep-remove",
+]
+
+
+_LOOM_ISSUE_EXAMPLES: list[tuple[str, dict[str, Any]]] = [
+    (slug, ex) for slug in _LOOM_ISSUE_FIXTURE_SLUGS for ex in _examples_for("loom", slug)
+]
+
+
+_ISSUE_LOOM_KEYS: frozenset[str] = frozenset(
+    {
+        "issue_id",
+        "title",
+        "status",
+        "status_category",
+        "priority",
+        "type",
+        "parent_id",
+        "assignee",
+        "created_at",
+        "updated_at",
+        "closed_at",
+        "description",
+        "notes",
+        "fields",
+        "labels",
+        "blocks",
+        "blocked_by",
+        "is_ready",
+        "children",
+        "data_warnings",
+    }
+)
+
+
+def _assert_issue_loom_shape(body: Any, *, path: str = "$") -> None:
+    """Assert ``body`` is an ``IssueLoom`` (20 keys, types match the TypedDict).
+
+    Allows extra keys to support the ``WithFiles`` / ``WithUnblocked`` subtypes
+    (the test bodies that hit those paths assert the extra keys themselves).
+    """
+    assert isinstance(body, dict), f"{path}: expected dict, got {type(body).__name__}"
+    missing = _ISSUE_LOOM_KEYS - set(body.keys())
+    assert not missing, f"{path}: IssueLoom missing keys {missing}; got {sorted(body.keys())}"
+    assert isinstance(body["issue_id"], str), f"{path}: issue_id must be str"
+    assert "id" not in body, f"{path}: classic 'id' leaked into loom shape"
+    assert isinstance(body["title"], str), f"{path}: title must be str"
+    assert isinstance(body["status"], str), f"{path}: status must be str"
+    assert isinstance(body["status_category"], str), f"{path}: status_category must be str"
+    assert isinstance(body["priority"], int), f"{path}: priority must be int"
+    assert not isinstance(body["priority"], bool), f"{path}: priority must be int (not bool)"
+    assert isinstance(body["type"], str), f"{path}: type must be str"
+    assert body["parent_id"] is None or isinstance(body["parent_id"], str), f"{path}: parent_id must be str|None"
+    assert isinstance(body["assignee"], str), f"{path}: assignee must be str"
+    assert isinstance(body["fields"], dict), f"{path}: fields must be dict"
+    for list_key in ("labels", "blocks", "blocked_by", "children", "data_warnings"):
+        assert isinstance(body[list_key], list), f"{path}: {list_key} must be list"
+    assert isinstance(body["is_ready"], bool), f"{path}: is_ready must be bool"
+
+
+@pytest.mark.asyncio
+class TestLoomGenerationParityIssues:
+    """Phase C3 single-issue CRUD parity. Each fixture in
+    ``tests/fixtures/contracts/loom/issues-*.json`` is replayed against
+    the live dashboard; status code + body shape (or error envelope)
+    must match the fixture declaration.
+
+    Fixture coverage is intentionally narrow — most are 404/400 cases
+    that exercise the path/validation surface without seeded state.
+    The populated-success ``IssueLoom`` shape and the
+    ``newly_unblocked`` cascade are pinned by
+    ``test_full_lifecycle_pins_issue_loom_shape`` below, which seeds
+    real issues and exercises the entire surface in one test.
+    """
+
+    @pytest.mark.parametrize(
+        ("slug", "example"),
+        _LOOM_ISSUE_EXAMPLES,
+        ids=[f"{s}::{e['name']}" for s, e in _LOOM_ISSUE_EXAMPLES],
+    )
+    async def test_example_matches_fixture(
+        self,
+        dashboard_surface: AsyncClient,
+        slug: str,
+        example: dict[str, Any],
+    ) -> None:
+        req = example["request"]
+        expected_resp = example["response"]
+        kwargs: dict[str, Any] = {}
+        if req.get("body") is not None:
+            kwargs["json"] = req["body"]
+        resp = await dashboard_surface.request(req["method"], req["path"], **kwargs)
+        assert resp.status_code == expected_resp["status"], (
+            f"{slug}::{example['name']}: status {resp.status_code} != fixture {expected_resp['status']}; body={resp.text!r}"
+        )
+        body = resp.json()
+        if expected_resp["status"] >= 400:
+            _assert_error_envelope(body, expected_code=expected_resp["body"]["code"], path=f"{slug}::{example['name']}")
+        else:
+            _assert_shape_matches(body, expected_resp["body"], path=f"{slug}::{example['name']}")
+
+    async def test_full_lifecycle_pins_issue_loom_shape(
+        self,
+        dashboard_surface: AsyncClient,
+    ) -> None:
+        """Seed two issues + a dependency, then exercise every loom CRUD
+        endpoint that returns an ``IssueLoom`` and assert the shape pin
+        on each response. Covers what fixture replay can't seed.
+        """
+        # Create
+        c_resp = await dashboard_surface.post("/api/loom/issues", json={"title": "blocker", "priority": 2})
+        assert c_resp.status_code == 201, c_resp.text
+        a_body = c_resp.json()
+        _assert_issue_loom_shape(a_body, path="create")
+        a_id = a_body["issue_id"]
+
+        c2 = await dashboard_surface.post("/api/loom/issues", json={"title": "blocked", "priority": 1})
+        assert c2.status_code == 201, c2.text
+        b_id = c2.json()["issue_id"]
+
+        # GET (default include_files=False)
+        g = await dashboard_surface.get(f"/api/loom/issues/{a_id}")
+        assert g.status_code == 200
+        _assert_issue_loom_shape(g.json(), path="get")
+        assert "files" not in g.json(), "include_files=false must omit files"
+
+        # GET with include_files=true
+        gf = await dashboard_surface.get(f"/api/loom/issues/{a_id}?include_files=true")
+        assert gf.status_code == 200
+        gf_body = gf.json()
+        _assert_issue_loom_shape(gf_body, path="get_with_files")
+        assert "files" in gf_body
+        assert isinstance(gf_body["files"], list)
+
+        # PATCH
+        p = await dashboard_surface.patch(f"/api/loom/issues/{a_id}", json={"priority": 0})
+        assert p.status_code == 200, p.text
+        _assert_issue_loom_shape(p.json(), path="patch")
+        assert p.json()["priority"] == 0
+
+        # CLAIM
+        cl = await dashboard_surface.post(f"/api/loom/issues/{a_id}/claim", json={"assignee": "tester"})
+        assert cl.status_code == 200, cl.text
+        _assert_issue_loom_shape(cl.json(), path="claim")
+        assert cl.json()["assignee"] == "tester"
+
+        # RELEASE
+        rl = await dashboard_surface.post(f"/api/loom/issues/{a_id}/release", json={})
+        assert rl.status_code == 200, rl.text
+        _assert_issue_loom_shape(rl.json(), path="release")
+
+        # COMMENT (CommentRecordLoom shape)
+        cm = await dashboard_surface.post(
+            f"/api/loom/issues/{a_id}/comments",
+            json={"text": "lifecycle test"},
+        )
+        assert cm.status_code == 201, cm.text
+        cm_body = cm.json()
+        assert set(cm_body.keys()) == {"comment_id", "author", "text", "created_at"}, cm_body
+        assert isinstance(cm_body["comment_id"], int)
+        assert "id" not in cm_body, "classic 'id' leaked into CommentRecordLoom"
+
+        # DEPENDENCY ADD (b depends on a)
+        da = await dashboard_surface.post(
+            f"/api/loom/issues/{b_id}/dependencies",
+            json={"depends_on": a_id},
+        )
+        assert da.status_code == 200, da.text
+        assert da.json() == {"added": True}
+
+        # CLOSE (with newly_unblocked: a's close unblocks b)
+        cl2 = await dashboard_surface.post(f"/api/loom/issues/{a_id}/close", json={"reason": "done"})
+        assert cl2.status_code == 200, cl2.text
+        cl2_body = cl2.json()
+        _assert_issue_loom_shape(cl2_body, path="close")
+        assert cl2_body["status"] == "closed"
+        assert "newly_unblocked" in cl2_body, "newly_unblocked must be present when an issue was unblocked"
+        assert isinstance(cl2_body["newly_unblocked"], list)
+        assert len(cl2_body["newly_unblocked"]) == 1
+        _assert_slim_issue_loom(cl2_body["newly_unblocked"][0], path="close.newly_unblocked[0]")
+        assert cl2_body["newly_unblocked"][0]["issue_id"] == b_id
+
+        # REOPEN (no newly_unblocked since reopen is the inverse)
+        ro = await dashboard_surface.post(f"/api/loom/issues/{a_id}/reopen", json={})
+        assert ro.status_code == 200, ro.text
+        _assert_issue_loom_shape(ro.json(), path="reopen")
+        assert ro.json()["status"] == "open"
+
+        # CLAIM-NEXT (a is now ready again after reopen+release; expect IssueLoom)
+        cn = await dashboard_surface.post("/api/loom/claim-next", json={"assignee": "tester2"})
+        assert cn.status_code == 200, cn.text
+        _assert_issue_loom_shape(cn.json(), path="claim_next")
+        assert cn.json()["assignee"] == "tester2"
+
+        # DEPENDENCY REMOVE (b → a)
+        dr = await dashboard_surface.delete(f"/api/loom/issues/{b_id}/dependencies/{a_id}")
+        assert dr.status_code == 200, dr.text
+        assert dr.json() == {"removed": True}

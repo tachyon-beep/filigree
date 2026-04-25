@@ -13,9 +13,17 @@ not here.
 
 from __future__ import annotations
 
-from filigree.generations.loom.types import ScanIngestResponseLoom, ScanStats, SlimIssueLoom
+from filigree.generations.loom.types import (
+    CommentRecordLoom,
+    IssueLoom,
+    ScanIngestResponseLoom,
+    ScanStats,
+    SlimIssueLoom,
+)
 from filigree.models import Issue
+from filigree.types.core import ISOTimestamp
 from filigree.types.files import ScanIngestResult
+from filigree.types.planning import CommentRecord
 
 
 def slim_issue_to_loom(issue: Issue) -> SlimIssueLoom:
@@ -32,6 +40,61 @@ def slim_issue_to_loom(issue: Issue) -> SlimIssueLoom:
         status=issue.status,
         priority=issue.priority,
         type=issue.type,
+    )
+
+
+def issue_to_loom(issue: Issue) -> IssueLoom:
+    """Project an ``Issue`` into the full loom-vocab issue shape.
+
+    Mirrors ``Issue.to_dict()`` (returning ``IssueDict``) except the
+    issue's own primary key is renamed ``id`` → ``issue_id``. Reference
+    fields holding other issues' ids (``parent_id``, ``blocks``,
+    ``blocked_by``, ``children``) keep their existing names per the
+    loom-vocabulary scope (only the entity's own primary key is renamed).
+
+    Used by every single-issue loom endpoint that returns a full issue
+    projection (GET, PATCH, close, reopen, claim, release, claim-next,
+    create).
+    """
+    classic = issue.to_dict()
+    return IssueLoom(
+        issue_id=classic["id"],
+        title=classic["title"],
+        status=classic["status"],
+        status_category=classic["status_category"],
+        priority=classic["priority"],
+        type=classic["type"],
+        parent_id=classic["parent_id"],
+        assignee=classic["assignee"],
+        created_at=classic["created_at"],
+        updated_at=classic["updated_at"],
+        closed_at=classic["closed_at"],
+        description=classic["description"],
+        notes=classic["notes"],
+        fields=classic["fields"],
+        labels=classic["labels"],
+        blocks=classic["blocks"],
+        blocked_by=classic["blocked_by"],
+        is_ready=classic["is_ready"],
+        children=classic["children"],
+        data_warnings=classic["data_warnings"],
+    )
+
+
+def comment_record_to_loom(record: CommentRecord, *, created_at: ISOTimestamp | None = None) -> CommentRecordLoom:
+    """Project a classic ``CommentRecord`` (``id``) into the loom shape
+    (``comment_id``).
+
+    The ``created_at`` override exists because the dashboard's
+    ``add_comment`` handler fetches the timestamp separately after
+    insert (rather than reading it from a CommentRecord); callers can
+    pass the freshly-fetched timestamp through this argument.
+    """
+    return CommentRecordLoom(
+        comment_id=record["id"],
+        author=record["author"],
+        text=record["text"],
+        created_at=created_at if created_at is not None else record["created_at"],
     )
 
 
