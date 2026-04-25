@@ -66,6 +66,16 @@ def test_scan_results_success_shape(filigree_url):
 
 (Rust / Go / TypeScript analogues follow the same shape.)
 
+## Living-surface alias decisions
+
+Living-surface aliases (`/api/<endpoint>` with no generation prefix) land per-endpoint as Phase C of the 2.0 federation work package mounts each loom endpoint. Each decision is recorded here so the precedent for "alias vs. classic-only" is auditable.
+
+| Endpoint | Living-surface path | Loom path | Classic path | Status | Decision rationale |
+| --- | --- | --- | --- | --- | --- |
+| `POST` scan-results | `/api/scan-results` | `/api/loom/scan-results` | `/api/v1/scan-results` | aliased (2026-04-26, Phase C1) | Loom and classic publish at distinct paths (`/v1/` vs. `/loom/`), so the un-prefixed `/api/scan-results` does not collide with classic. Aliasing it to loom gives federation consumers (Clarion, Wardline, Shuttle) the recommended generation at the canonical path without hard-coding the `/loom/` prefix. The handler is wire-identical to `/api/loom/scan-results`; equivalence is pinned by `tests/util/test_generation_parity.py::TestLivingSurfaceEquivalenceScanResults`. |
+
+The pattern is illustrative for later C tasks: where a loom endpoint has no classic counterpart at the un-prefixed path, prefer aliasing; where classic and loom would collide, classic stays at `/api/<endpoint>` and loom is reachable only at `/api/loom/<endpoint>`. The decision for each endpoint lands in the commit that mounts the loom handler.
+
 ## When a contract evolves
 
 **Non-breaking additions** (new optional response fields, new optional request parameters with safe defaults) may land in-place without a new generation. Fixtures are updated to reflect the new shape; the `_meta.updated` field moves.

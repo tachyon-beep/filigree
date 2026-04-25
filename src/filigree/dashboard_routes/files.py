@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import sqlite3
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
     from fastapi import APIRouter
@@ -27,6 +27,51 @@ from filigree.types.api import ErrorCode
 from filigree.types.core import AssocType, FindingStatus, Severity
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Shared request parsing
+# ---------------------------------------------------------------------------
+
+
+def _parse_scan_results_body(body: dict[str, Any]) -> dict[str, Any] | str:
+    """Validate the scan-results request body.
+
+    Shared by the classic ``POST /api/v1/scan-results`` handler and the loom
+    ``POST /api/loom/scan-results`` handler — both generations accept the
+    same request shape; only the response envelope differs (per ADR-002 §6
+    and the loom contract fixture). Returns the kwargs dict to splat into
+    ``db.process_scan_results`` on success, or an error string on validation
+    failure (caller wraps it in a 400 ``ErrorCode.VALIDATION`` response).
+    """
+    scan_source = body.get("scan_source", "")
+    if not isinstance(scan_source, str) or not scan_source:
+        return "scan_source is required and must be a string"
+    if "findings" not in body:
+        return "findings is required (use [] for a clean scan)"
+    findings = body["findings"]
+    if not isinstance(findings, list):
+        return "findings must be a JSON array"
+    mark_unseen = body.get("mark_unseen", False)
+    if not isinstance(mark_unseen, bool):
+        return "mark_unseen must be a boolean"
+    create_observations = body.get("create_observations", False)
+    if not isinstance(create_observations, bool):
+        return "create_observations must be a boolean"
+    complete_scan_run = body.get("complete_scan_run", True)
+    if not isinstance(complete_scan_run, bool):
+        return "complete_scan_run must be a boolean"
+    scan_run_id = body.get("scan_run_id", "")
+    if not isinstance(scan_run_id, str):
+        return "scan_run_id must be a string"
+    return {
+        "scan_source": scan_source,
+        "findings": findings,
+        "scan_run_id": scan_run_id,
+        "mark_unseen": mark_unseen,
+        "create_observations": create_observations,
+        "complete_scan_run": complete_scan_run,
+    }
+
 
 # ---------------------------------------------------------------------------
 # Router factory
@@ -301,43 +346,14 @@ def create_classic_router() -> APIRouter:
         body = await _parse_json_body(request)
         if isinstance(body, JSONResponse):
             return body
-        scan_source = body.get("scan_source", "")
-        if not isinstance(scan_source, str) or not scan_source:
-            return _error_response("scan_source is required and must be a string", ErrorCode.VALIDATION, 400)
-        if "findings" not in body:
-            return _error_response(
-                "findings is required (use [] for a clean scan)",
-                ErrorCode.VALIDATION,
-                400,
-            )
-        findings = body["findings"]
-        if not isinstance(findings, list):
-            return _error_response("findings must be a JSON array", ErrorCode.VALIDATION, 400)
-        mark_unseen = body.get("mark_unseen", False)
-        if not isinstance(mark_unseen, bool):
-            return _error_response("mark_unseen must be a boolean", ErrorCode.VALIDATION, 400)
-        create_observations = body.get("create_observations", False)
-        if not isinstance(create_observations, bool):
-            return _error_response("create_observations must be a boolean", ErrorCode.VALIDATION, 400)
-        complete_scan_run = body.get("complete_scan_run", True)
-        if not isinstance(complete_scan_run, bool):
-            return _error_response("complete_scan_run must be a boolean", ErrorCode.VALIDATION, 400)
-        scan_run_id = body.get("scan_run_id", "")
-        if not isinstance(scan_run_id, str):
-            return _error_response("scan_run_id must be a string", ErrorCode.VALIDATION, 400)
-        status_code = 200
+        parsed = _parse_scan_results_body(body)
+        if isinstance(parsed, str):
+            return _error_response(parsed, ErrorCode.VALIDATION, 400)
         try:
-            result = db.process_scan_results(
-                scan_source=scan_source,
-                findings=findings,
-                scan_run_id=scan_run_id,
-                mark_unseen=mark_unseen,
-                create_observations=create_observations,
-                complete_scan_run=complete_scan_run,
-            )
+            result = db.process_scan_results(**parsed)
         except ValueError as e:
             return _error_response(str(e), ErrorCode.VALIDATION, 400)
-        return JSONResponse(result, status_code=status_code)
+        return JSONResponse(result)
 
     @router.get("/scan-runs")
     async def api_scan_runs(request: Request, db: FiligreeDB = Depends(_get_db)) -> JSONResponse:
@@ -360,10 +376,78 @@ def create_loom_router() -> APIRouter:
     """Build the loom-generation APIRouter for file tracking and scan
     findings endpoints.
 
-    Empty in Phase B of the 2.0 federation work package; Phase C1 adds
-    ``POST /api/loom/scan-results`` per the fixture at
-    ``tests/fixtures/contracts/loom/scan-results.json``.
+    Phase C1 mounts ``POST /api/loom/scan-results`` per the fixture at
+    ``tests/fixtures/contracts/loom/scan-results.json``. Subsequent
+    Phase C tasks add the rest of the loom file/findings surface.
     """
-    from fastapi import APIRouter
+    from fastapi import APIRouter, Depends
+    from fastapi.responses import JSONResponse
 
-    return APIRouter()
+    from filigree.dashboard import _get_db
+    from filigree.generations.loom.adapters import scan_ingest_result_to_loom
+
+    router = APIRouter()
+
+    @router.post("/scan-results")
+    async def api_loom_scan_results(request: Request, db: FiligreeDB = Depends(_get_db)) -> JSONResponse:
+        """Ingest scan results — loom envelope.
+
+        Equivalent to /api/scan-results as of 2026-04-26.
+        """
+        body = await _parse_json_body(request)
+        if isinstance(body, JSONResponse):
+            return body
+        parsed = _parse_scan_results_body(body)
+        if isinstance(parsed, str):
+            return _error_response(parsed, ErrorCode.VALIDATION, 400)
+        try:
+            result = db.process_scan_results(**parsed)
+        except ValueError as e:
+            return _error_response(str(e), ErrorCode.VALIDATION, 400)
+        return JSONResponse(scan_ingest_result_to_loom(result))
+
+    return router
+
+
+def create_living_surface_router() -> APIRouter:
+    """Build the living-surface APIRouter for file tracking and scan
+    findings endpoints.
+
+    Per ``docs/federation/contracts.md``, the living surface at
+    ``/api/*`` (no generation prefix) aliases the current recommended
+    generation — as of 2026-04-26 that is loom. Living-surface aliases
+    are added per-endpoint in Phase C wherever there is no classic
+    counterpart at the same path (so no ambiguity is created for
+    pre-2.0 callers).
+
+    Phase C1: ``POST /api/scan-results`` aliases the loom handler.
+    Classic publishes ``POST /api/v1/scan-results`` (different path), so
+    the alias is unambiguous.
+    """
+    from fastapi import APIRouter, Depends
+    from fastapi.responses import JSONResponse
+
+    from filigree.dashboard import _get_db
+    from filigree.generations.loom.adapters import scan_ingest_result_to_loom
+
+    router = APIRouter()
+
+    @router.post("/scan-results")
+    async def api_living_scan_results(request: Request, db: FiligreeDB = Depends(_get_db)) -> JSONResponse:
+        """Ingest scan results — living surface (loom envelope).
+
+        Equivalent to /api/loom/scan-results as of 2026-04-26.
+        """
+        body = await _parse_json_body(request)
+        if isinstance(body, JSONResponse):
+            return body
+        parsed = _parse_scan_results_body(body)
+        if isinstance(parsed, str):
+            return _error_response(parsed, ErrorCode.VALIDATION, 400)
+        try:
+            result = db.process_scan_results(**parsed)
+        except ValueError as e:
+            return _error_response(str(e), ErrorCode.VALIDATION, 400)
+        return JSONResponse(scan_ingest_result_to_loom(result))
+
+    return router

@@ -235,6 +235,12 @@ def _create_project_router() -> APIRouter:
       the full path becomes ``/api/loom/<endpoint>`` after the
       app-level ``/api`` prefix. Empty in Phase B of the federation
       work package; Phase C fills it endpoint-by-endpoint.
+    - **living surface** — un-prefixed ``/api/<endpoint>`` aliases of
+      the current recommended generation (loom as of 2026-04-26), per
+      ``docs/federation/contracts.md``. Added per-endpoint in Phase C
+      where the path does not collide with classic. Each module
+      contributes only the aliases it owns; only ``files`` participates
+      in Phase C1.
 
     Server-mode and ethereal-mode ``/api`` mounts (and the
     ``/api/p/{project_key}`` server-mode mount) both include this
@@ -258,6 +264,9 @@ def _create_project_router() -> APIRouter:
     router.include_router(issues.create_loom_router(), prefix="/loom")
     router.include_router(files.create_loom_router(), prefix="/loom")
     router.include_router(releases.create_loom_router(), prefix="/loom")
+
+    # Living surface — un-prefixed loom aliases; per-endpoint adoption.
+    router.include_router(files.create_living_surface_router())
 
     return router
 
