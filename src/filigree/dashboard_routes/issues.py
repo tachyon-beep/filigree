@@ -659,14 +659,165 @@ def create_loom_router() -> APIRouter:
     from fastapi.responses import JSONResponse
 
     from filigree.dashboard import _get_db
-    from filigree.dashboard_routes.common import _get_bool_param
+    from filigree.dashboard_routes.common import _get_bool_param, _parse_pagination
     from filigree.generations.loom.adapters import (
+        blocked_issue_to_loom,
+        comment_record_to_loom,
+        file_assoc_to_loom,
+        issue_event_to_loom,
         issue_to_loom,
+        list_response,
+        pack_to_loom,
         slim_issue_to_loom,
+        type_template_to_loom,
     )
     from filigree.generations.loom.types import CommentRecordLoom
 
     router = APIRouter()
+
+    @router.get("/issues")
+    async def api_loom_list_issues(request: Request, db: FiligreeDB = Depends(_get_db)) -> JSONResponse:
+        """List issues — ``ListResponse[IssueLoom]`` with real pagination.
+
+        Loom adds ``?limit=&offset=`` (default limit=100). Classic
+        ``GET /api/issues`` returns every row in one shot and stays
+        unchanged. The loom variant overfetches by 1 to detect
+        ``has_more`` without a separate COUNT query.
+        """
+        params = request.query_params
+        pagination = _parse_pagination(params)
+        if isinstance(pagination, JSONResponse):
+            return pagination
+        limit, offset = pagination
+        try:
+            page = db.list_issues(limit=limit + 1, offset=offset)
+        except ValueError as e:
+            return _error_response(str(e), ErrorCode.VALIDATION, 400)
+        has_more = len(page) > limit
+        if has_more:
+            page = page[:limit]
+        items = [issue_to_loom(i) for i in page]
+        return JSONResponse(list_response(items, limit=limit, offset=offset, has_more=has_more))
+
+    @router.get("/ready")
+    async def api_loom_ready(db: FiligreeDB = Depends(_get_db)) -> JSONResponse:
+        """Issues ready to work (no open blockers) — ``ListResponse[IssueLoom]``.
+
+        Returns the full result set — ``get_ready()`` is unbounded today
+        and ``has_more`` is always ``false``.
+        """
+        issues = db.get_ready()
+        items = [issue_to_loom(i) for i in issues]
+        return JSONResponse(list_response(items, limit=len(items), offset=0, has_more=False))
+
+    @router.get("/blocked")
+    async def api_loom_blocked(db: FiligreeDB = Depends(_get_db)) -> JSONResponse:
+        """Issues with at least one open blocker — ``ListResponse[BlockedIssueLoom]``.
+
+        Loom-only (no classic counterpart). Returns the full result set
+        — ``get_blocked()`` is unbounded today and ``has_more`` is
+        always ``false``.
+        """
+        issues = db.get_blocked()
+        items = [blocked_issue_to_loom(i) for i in issues]
+        return JSONResponse(list_response(items, limit=len(items), offset=0, has_more=False))
+
+    @router.get("/search")
+    async def api_loom_search(
+        q: str = "",
+        limit: int = 50,
+        offset: int = 0,
+        db: FiligreeDB = Depends(_get_db),
+    ) -> JSONResponse:
+        """Full-text search — ``ListResponse[IssueLoom]``.
+
+        Classic ``GET /api/search`` returns ``{results, total}``. Loom
+        drops the running total to keep the unified envelope (consumers
+        needing total can hit ``/api/stats``).
+        """
+        limit = min(max(limit, 1), 1000)
+        offset = max(offset, 0)
+        if not q.strip():
+            return JSONResponse(list_response([], limit=limit, offset=offset, has_more=False))
+        total = db.count_search_results(q)
+        page = db.search_issues(q, limit=limit, offset=offset)
+        items = [issue_to_loom(i) for i in page]
+        return JSONResponse(list_response(items, limit=limit, offset=offset, total=total))
+
+    @router.get("/types")
+    async def api_loom_list_types(db: FiligreeDB = Depends(_get_db)) -> JSONResponse:
+        """List registered issue types — ``ListResponse[TypeSummaryLoom]``."""
+        types = db.templates.list_types()
+        items = [type_template_to_loom(t) for t in types]
+        return JSONResponse(list_response(items, limit=len(items), offset=0, has_more=False))
+
+    @router.get("/packs")
+    async def api_loom_list_packs(db: FiligreeDB = Depends(_get_db)) -> JSONResponse:
+        """List enabled workflow packs — ``ListResponse[PackLoom]``.
+
+        Loom-only (no classic dashboard counterpart). Mirrors MCP's
+        ``list_packs`` projection.
+        """
+        packs = sorted(db.templates.list_packs(), key=lambda p: p.pack)
+        items = [pack_to_loom(p) for p in packs]
+        return JSONResponse(list_response(items, limit=len(items), offset=0, has_more=False))
+
+    @router.get("/issues/{issue_id}/comments")
+    async def api_loom_get_comments(issue_id: str, db: FiligreeDB = Depends(_get_db)) -> JSONResponse:
+        """Comments for an issue — ``ListResponse[CommentRecordLoom]``.
+
+        Validates the issue exists (404 ``NOT_FOUND`` if not) so missing
+        issues do not silently return an empty list. ``db.get_comments``
+        itself returns ``[]`` for unknown ids; the parent check matches
+        the pattern used by ``GET /api/issue/{id}/files`` and
+        ``POST /api/issue/{id}/comments``.
+        """
+        try:
+            db.get_issue(issue_id)
+        except KeyError:
+            return _error_response(f"Issue not found: {issue_id}", ErrorCode.NOT_FOUND, 404)
+        comments = db.get_comments(issue_id)
+        items = [comment_record_to_loom(c) for c in comments]
+        return JSONResponse(list_response(items, limit=len(items), offset=0, has_more=False))
+
+    @router.get("/issues/{issue_id}/events")
+    async def api_loom_get_issue_events(issue_id: str, request: Request, db: FiligreeDB = Depends(_get_db)) -> JSONResponse:
+        """Event history for an issue — ``ListResponse[IssueEventLoom]``.
+
+        ``db.get_issue_events`` validates the issue exists (raises
+        ``KeyError``) and accepts a ``limit``. Default 50 to match MCP
+        defaults; classic dashboard has no counterpart for this endpoint.
+        """
+        params = request.query_params
+        pagination = _parse_pagination(params, default_limit=50)
+        if isinstance(pagination, JSONResponse):
+            return pagination
+        limit, _ = pagination
+        try:
+            events = db.get_issue_events(issue_id, limit=limit + 1)
+        except KeyError:
+            return _error_response(f"Issue not found: {issue_id}", ErrorCode.NOT_FOUND, 404)
+        has_more = len(events) > limit
+        if has_more:
+            events = events[:limit]
+        items = [issue_event_to_loom(e) for e in events]
+        return JSONResponse(list_response(items, limit=limit, offset=0, has_more=has_more))
+
+    @router.get("/issues/{issue_id}/files")
+    async def api_loom_get_issue_files(issue_id: str, db: FiligreeDB = Depends(_get_db)) -> JSONResponse:
+        """File associations for an issue — ``ListResponse[FileAssocLoom]``.
+
+        Validates the issue exists (404 ``NOT_FOUND`` if not) — the
+        underlying ``db.get_issue_files`` does not. Matches the classic
+        ``GET /api/issue/{id}/files`` validation pattern.
+        """
+        try:
+            db.get_issue(issue_id)
+        except KeyError:
+            return _error_response(f"Issue not found: {issue_id}", ErrorCode.NOT_FOUND, 404)
+        assocs = db.get_issue_files(issue_id)
+        items = [file_assoc_to_loom(a) for a in assocs]
+        return JSONResponse(list_response(items, limit=len(items), offset=0, has_more=False))
 
     @router.post("/batch/update")
     async def api_loom_batch_update(request: Request, db: FiligreeDB = Depends(_get_db)) -> JSONResponse:

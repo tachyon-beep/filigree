@@ -16,7 +16,15 @@ from __future__ import annotations
 from typing import Any, NotRequired, TypedDict
 
 from filigree.types.api import BatchFailure, BatchResponse
-from filigree.types.core import ISOTimestamp, StatusCategory
+from filigree.types.core import (
+    AssocType,
+    FindingStatus,
+    ISOTimestamp,
+    Severity,
+    StatusCategory,
+)
+from filigree.types.events import EventType
+from filigree.types.files import FindingsSummary
 
 
 class SlimIssueLoom(TypedDict):
@@ -144,6 +152,204 @@ class CommentRecordLoom(TypedDict):
     author: str
     text: str
     created_at: ISOTimestamp
+
+
+class BlockedIssueLoom(SlimIssueLoom):
+    """SlimIssueLoom + ``blocked_by`` for ``GET /api/loom/blocked``.
+
+    Mirrors classic ``BlockedIssue`` (which extends ``SlimIssue``) but uses
+    the loom ``issue_id`` vocabulary for the entity primary key. Reference
+    ids in ``blocked_by`` keep their existing names per the loom-vocabulary
+    scope (only the entity's own primary key is renamed).
+
+    Pinned by ``tests/fixtures/contracts/loom/blocked.json``.
+    """
+
+    blocked_by: list[str]
+
+
+class FileRecordLoom(TypedDict):
+    """File record with summary counts — items in ``GET /api/loom/files``.
+
+    Mirrors classic ``EnrichedFileItem`` (FileRecordDict + summary +
+    associations_count + observation_count) except the file's own primary
+    key is renamed ``id`` → ``file_id``. Defined independently rather than
+    extending ``FileRecordDict`` because TypedDict inheritance cannot drop
+    the inherited ``id`` key — the loom wire shape must contain
+    ``file_id`` exclusively.
+
+    Pinned by ``tests/fixtures/contracts/loom/files.json``.
+    """
+
+    file_id: str
+    path: str
+    language: str
+    file_type: str
+    first_seen: ISOTimestamp
+    updated_at: ISOTimestamp
+    metadata: dict[str, Any]
+    data_warnings: list[str]
+    summary: FindingsSummary
+    associations_count: int
+    observation_count: int
+
+
+class FileAssocLoom(TypedDict):
+    """Issue-to-file association row — items in ``GET /api/loom/issues/{issue_id}/files``.
+
+    Mirrors classic ``IssueFileAssociation`` except the association row's
+    own primary key is renamed ``id`` → ``assoc_id``. The cross-entity
+    references (``file_id``, ``issue_id``) keep their existing names per
+    the loom-vocabulary scope.
+
+    Pinned by ``tests/fixtures/contracts/loom/issue-files.json``.
+    """
+
+    assoc_id: int
+    file_id: str
+    issue_id: str
+    assoc_type: AssocType
+    created_at: ISOTimestamp
+    file_path: str
+    file_language: str | None
+
+
+class ScanFindingLoom(TypedDict):
+    """Scan finding row — items in ``GET /api/loom/findings`` and the
+    embedded findings list inside file/finding details.
+
+    Mirrors classic ``ScanFindingDict`` except the finding's own primary
+    key is renamed ``id`` → ``finding_id``. Cross-entity refs (``file_id``,
+    ``issue_id``) keep their existing names.
+
+    Pinned by ``tests/fixtures/contracts/loom/findings.json``.
+    """
+
+    finding_id: str
+    file_id: str
+    severity: Severity
+    status: FindingStatus
+    scan_source: str
+    rule_id: str
+    message: str
+    suggestion: str
+    scan_run_id: str
+    line_start: int | None
+    line_end: int | None
+    issue_id: str | None
+    seen_count: int
+    first_seen: ISOTimestamp
+    updated_at: ISOTimestamp
+    last_seen_at: ISOTimestamp | None
+    metadata: dict[str, Any]
+    data_warnings: list[str]
+
+
+class ObservationLoom(TypedDict):
+    """Observation row — items in ``GET /api/loom/observations``.
+
+    Mirrors classic ``ObservationDict`` except the observation's own
+    primary key is renamed ``id`` → ``observation_id``. Cross-entity refs
+    (``file_id``, ``source_issue_id``) keep their existing names.
+
+    Pinned by ``tests/fixtures/contracts/loom/observations.json``.
+    """
+
+    observation_id: str
+    summary: str
+    detail: str
+    file_id: str | None
+    file_path: str
+    line: int | None
+    source_issue_id: str
+    priority: int
+    actor: str
+    created_at: ISOTimestamp
+    expires_at: ISOTimestamp
+
+
+class ScannerLoom(TypedDict):
+    """Scanner registration entry — items in ``GET /api/loom/scanners``.
+
+    Mirrors the dict produced by ``ScannerConfig.to_dict()``. ``name`` is
+    the scanner's primary key but is already a string-name (not a uuid),
+    so no rename is needed for the loom vocabulary.
+
+    Pinned by ``tests/fixtures/contracts/loom/scanners.json``.
+    """
+
+    name: str
+    description: str
+    file_types: list[str]
+
+
+class PackLoom(TypedDict):
+    """Workflow pack entry — items in ``GET /api/loom/packs``.
+
+    Mirrors MCP's ``PackListItem``. ``pack`` is the entity's logical
+    primary key; renaming it would harm readability (federation consumers
+    branching on pack name still want to see ``pack``), so it is kept.
+    Defined here rather than reused from ``filigree.types.api`` so the
+    loom surface owns its wire shape independently.
+
+    Pinned by ``tests/fixtures/contracts/loom/packs.json``.
+    """
+
+    pack: str
+    version: str
+    display_name: str
+    description: str
+    types: list[str]
+    requires_packs: list[str]
+
+
+class TypeSummaryLoom(TypedDict):
+    """Issue-type summary entry — items in ``GET /api/loom/types``.
+
+    Mirrors the classic ``/api/types`` shape. ``type`` is the entity's
+    logical primary key (a string name like ``task``); no rename per the
+    loom scope.
+
+    Pinned by ``tests/fixtures/contracts/loom/types.json``.
+    """
+
+    type: str
+    display_name: str
+    pack: str
+    initial_state: str
+
+
+class IssueEventLoom(TypedDict):
+    """Event row for ``GET /api/loom/issues/{issue_id}/events``.
+
+    Mirrors classic ``EventRecord`` except the event's own primary key
+    is renamed ``id`` → ``event_id``. ``issue_id`` is a cross-entity
+    reference and keeps its name.
+
+    Pinned by ``tests/fixtures/contracts/loom/issue-events.json``.
+    """
+
+    event_id: int
+    issue_id: str
+    event_type: EventType
+    actor: str
+    old_value: str | None
+    new_value: str | None
+    comment: str
+    created_at: ISOTimestamp
+
+
+class ChangeRecordLoom(IssueEventLoom):
+    """Cross-issue event row for ``GET /api/loom/changes``.
+
+    Extends ``IssueEventLoom`` with the joined ``issue_title`` column —
+    matches the structural difference between ``EventRecord`` and
+    ``EventRecordWithTitle`` in ``filigree.types.events``.
+
+    Pinned by ``tests/fixtures/contracts/loom/changes.json``.
+    """
+
+    issue_title: str
 
 
 class ScanIngestResponseLoom(BatchResponse[str]):

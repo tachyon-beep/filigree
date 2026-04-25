@@ -384,7 +384,14 @@ def create_loom_router() -> APIRouter:
     from fastapi.responses import JSONResponse
 
     from filigree.dashboard import _get_db
-    from filigree.generations.loom.adapters import scan_ingest_result_to_loom
+    from filigree.generations.loom.adapters import (
+        file_record_to_loom,
+        list_response,
+        scan_finding_to_loom,
+        scan_ingest_result_to_loom,
+        scanner_config_to_loom,
+    )
+    from filigree.scanners import list_scanners
 
     router = APIRouter()
 
@@ -405,6 +412,88 @@ def create_loom_router() -> APIRouter:
         except ValueError as e:
             return _error_response(str(e), ErrorCode.VALIDATION, 400)
         return JSONResponse(scan_ingest_result_to_loom(result))
+
+    @router.get("/files")
+    async def api_loom_list_files(request: Request, db: FiligreeDB = Depends(_get_db)) -> JSONResponse:
+        """List tracked files — ``ListResponse[FileRecordLoom]``.
+
+        Classic ``GET /api/files`` returns ``PaginatedResult`` with
+        ``{results, total, limit, offset, has_more}``. Loom drops
+        ``total``, ``limit``, ``offset`` from the envelope per the
+        unified ``ListResponse`` contract — consumers paginate via
+        ``next_offset``. Filter query params (``language``,
+        ``path_prefix``, ``min_findings``, ``has_severity``,
+        ``scan_source``, ``sort``, ``direction``) match classic.
+        """
+        params = request.query_params
+        pagination = _parse_pagination(params)
+        if isinstance(pagination, JSONResponse):
+            return pagination
+        limit, offset = pagination
+        min_findings = _safe_int(params.get("min_findings", "0"), "min_findings", min_value=0)
+        if isinstance(min_findings, JSONResponse):
+            return min_findings
+        try:
+            result = db.list_files_paginated(
+                limit=limit,
+                offset=offset,
+                language=params.get("language"),
+                path_prefix=params.get("path_prefix"),
+                min_findings=min_findings if min_findings > 0 else None,
+                has_severity=params.get("has_severity"),
+                scan_source=params.get("scan_source"),
+                sort=params.get("sort", "updated_at"),
+                direction=params.get("direction"),
+            )
+        except ValueError as e:
+            return _error_response(str(e), ErrorCode.VALIDATION, 400)
+        items = [file_record_to_loom(r) for r in result["results"]]
+        return JSONResponse(list_response(items, limit=limit, offset=offset, total=result["total"]))
+
+    @router.get("/findings")
+    async def api_loom_list_findings(request: Request, db: FiligreeDB = Depends(_get_db)) -> JSONResponse:
+        """Project-wide findings list — ``ListResponse[ScanFindingLoom]``.
+
+        Loom-only (no classic dashboard counterpart at this path).
+        Mirrors MCP ``list_findings`` filters: ``severity``, ``status``,
+        ``scan_source``, ``scan_run_id``, ``file_id``, ``issue_id``.
+        Drops MCP's ``total`` field per the unified envelope.
+        """
+        params = request.query_params
+        pagination = _parse_pagination(params)
+        if isinstance(pagination, JSONResponse):
+            return pagination
+        limit, offset = pagination
+        filters: dict[str, Any] = {}
+        for key in ("severity", "status", "scan_source", "scan_run_id", "file_id", "issue_id"):
+            val = params.get(key)
+            if val is not None:
+                filters[key] = val
+        try:
+            result = db.list_findings_global(limit=limit, offset=offset, **filters)
+        except ValueError as e:
+            return _error_response(str(e), ErrorCode.VALIDATION, 400)
+        items = [scan_finding_to_loom(f) for f in result["findings"]]
+        return JSONResponse(list_response(items, limit=limit, offset=offset, total=result["total"]))
+
+    @router.get("/scanners")
+    async def api_loom_list_scanners(db: FiligreeDB = Depends(_get_db)) -> JSONResponse:
+        """List registered scanner configs — ``ListResponse[ScannerLoom]``.
+
+        Loom-only (no classic dashboard counterpart). Drops MCP's
+        ``errors`` and ``hint`` siblings per the strict envelope —
+        scanner load errors are logged at the boundary; consumers that
+        need the diagnostic UI remain on the MCP surface. Resolves
+        ``scanners/`` relative to the active database's directory; the
+        MCP tool uses an explicit ``filigree_dir`` accessor instead.
+        """
+        scanners_dir = db.db_path.parent / "scanners"
+        load_errors: list[str] = []
+        scanners = list_scanners(scanners_dir, errors=load_errors)
+        if load_errors:
+            logger.warning("scanner load errors during /api/loom/scanners: %s", load_errors)
+        items = [scanner_config_to_loom(s) for s in scanners]
+        return JSONResponse(list_response(items, limit=len(items), offset=0, has_more=False))
 
     return router
 

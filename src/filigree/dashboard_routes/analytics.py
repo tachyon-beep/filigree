@@ -514,9 +514,84 @@ def create_loom_router() -> APIRouter:
     """Build the loom-generation APIRouter for analytics, graph, and
     metrics endpoints.
 
-    Empty in Phase B of the 2.0 federation work package; Phase C fills
-    loom analytics endpoints as they are implemented.
+    Phase C4 mounts the cross-issue ``GET /changes`` and project-wide
+    ``GET /observations`` list endpoints; both are loom-only (no
+    classic dashboard counterpart) and live behind ``/api/loom/`` plus
+    living-surface aliases at ``/api/changes`` and ``/api/observations``
+    per the C4 aliasing rule (no classic counterpart → alias).
     """
-    from fastapi import APIRouter
+    from fastapi import APIRouter, Depends
+    from fastapi.responses import JSONResponse
 
-    return APIRouter()
+    from filigree.dashboard import _get_db
+    from filigree.dashboard_routes.common import _parse_pagination
+    from filigree.generations.loom.adapters import (
+        change_record_to_loom,
+        list_response,
+        observation_to_loom,
+    )
+
+    router = APIRouter()
+
+    @router.get("/changes")
+    async def api_loom_changes(request: Request, db: FiligreeDB = Depends(_get_db)) -> JSONResponse:
+        """Cross-issue events since a timestamp — ``ListResponse[ChangeRecordLoom]``.
+
+        Loom-only (no classic dashboard counterpart). Mirrors MCP's
+        ``get_changes`` semantics: pass ``?since=<ISO timestamp>`` and
+        optional ``?limit=`` (default 100). Overfetches by 1 to detect
+        ``has_more``. ``offset`` is not exposed — the cursor is the
+        ``since`` timestamp.
+        """
+        params = request.query_params
+        since = params.get("since", "")
+        if not since:
+            return _error_response("since query parameter is required", ErrorCode.VALIDATION, 400)
+        since_normalized = since.replace("Z", "+00:00") if since.endswith("Z") else since
+        try:
+            datetime.fromisoformat(since_normalized)
+        except ValueError:
+            return _error_response(
+                f"Invalid ISO timestamp: {since!r}. Expected format: 2026-01-15T10:30:00",
+                ErrorCode.VALIDATION,
+                400,
+            )
+        pagination = _parse_pagination(params, default_limit=100)
+        if isinstance(pagination, JSONResponse):
+            return pagination
+        limit, _ = pagination
+        events = db.get_events_since(since_normalized, limit=limit + 1)
+        has_more = len(events) > limit
+        if has_more:
+            events = events[:limit]
+        items = [change_record_to_loom(e) for e in events]
+        return JSONResponse(list_response(items, limit=limit, offset=0, has_more=has_more))
+
+    @router.get("/observations")
+    async def api_loom_list_observations(request: Request, db: FiligreeDB = Depends(_get_db)) -> JSONResponse:
+        """List pending observations — ``ListResponse[ObservationLoom]``.
+
+        Loom-only (no classic dashboard counterpart). Drops MCP's
+        ``stats`` sibling per the strict ``ListResponse[T]`` envelope —
+        consumers needing aggregate counts hit ``/api/observations/stats``.
+        ``?file_path=`` and ``?file_id=`` filters mirror the MCP tool;
+        ``?limit=&offset=`` paginate.
+        """
+        params = request.query_params
+        pagination = _parse_pagination(params)
+        if isinstance(pagination, JSONResponse):
+            return pagination
+        limit, offset = pagination
+        observations = db.list_observations(
+            limit=limit + 1,
+            offset=offset,
+            file_path=params.get("file_path", ""),
+            file_id=params.get("file_id", ""),
+        )
+        has_more = len(observations) > limit
+        if has_more:
+            observations = observations[:limit]
+        items = [observation_to_loom(o) for o in observations]
+        return JSONResponse(list_response(items, limit=limit, offset=offset, has_more=has_more))
+
+    return router

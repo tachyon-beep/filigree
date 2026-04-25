@@ -689,3 +689,278 @@ class TestLoomGenerationParityIssues:
         dr = await dashboard_surface.delete(f"/api/loom/issues/{b_id}/dependencies/{a_id}")
         assert dr.status_code == 200, dr.text
         assert dr.json() == {"removed": True}
+
+
+# ---------------------------------------------------------------------------
+# Loom generation — list endpoints (Phase C4)
+# ---------------------------------------------------------------------------
+
+
+_LOOM_LIST_FIXTURE_SLUGS: list[str] = [
+    "blocked",
+    "issues",
+    "ready",
+    "search",
+    "files",
+    "findings",
+    "observations",
+    "scanners",
+    "packs",
+    "types",
+    "changes",
+    "issue-comments",
+    "issue-events",
+    "issue-files",
+]
+
+
+_LOOM_LIST_EXAMPLES: list[tuple[str, dict[str, Any]]] = [
+    (slug, ex) for slug in _LOOM_LIST_FIXTURE_SLUGS for ex in _examples_for("loom", slug)
+]
+
+
+_LIST_RESPONSE_REQUIRED_KEYS: frozenset[str] = frozenset({"items", "has_more"})
+
+
+def _assert_list_response_shape(body: Any, *, path: str = "$") -> None:
+    """Assert ``body`` is a ``ListResponse[T]`` envelope.
+
+    Pins the unified envelope: ``items`` is a list, ``has_more`` is a
+    bool, ``next_offset`` is present iff ``has_more`` is True. Item
+    shape is checked separately by the per-endpoint helpers.
+    """
+    assert isinstance(body, dict), f"{path}: expected dict, got {type(body).__name__}"
+    missing = _LIST_RESPONSE_REQUIRED_KEYS - set(body.keys())
+    assert not missing, f"{path}: ListResponse missing keys {missing}; got {sorted(body.keys())}"
+    assert isinstance(body["items"], list), f"{path}: items must be list"
+    assert isinstance(body["has_more"], bool), f"{path}: has_more must be bool"
+    if body["has_more"]:
+        assert "next_offset" in body, f"{path}: next_offset must be present when has_more is True"
+        assert isinstance(body["next_offset"], int), f"{path}: next_offset must be int"
+        assert not isinstance(body["next_offset"], bool), f"{path}: next_offset must be int (not bool)"
+    else:
+        assert "next_offset" not in body, f"{path}: next_offset must be omitted when has_more is False"
+
+
+_BLOCKED_ISSUE_LOOM_KEYS: frozenset[str] = frozenset({"issue_id", "title", "status", "priority", "type", "blocked_by"})
+
+
+def _assert_blocked_issue_loom(item: Any, *, path: str = "$") -> None:
+    """Assert ``item`` is a BlockedIssueLoom (SlimIssueLoom + blocked_by)."""
+    assert isinstance(item, dict), f"{path}: expected dict, got {type(item).__name__}"
+    assert set(item.keys()) == _BLOCKED_ISSUE_LOOM_KEYS, (
+        f"{path}: BlockedIssueLoom key-set mismatch; "
+        f"missing={_BLOCKED_ISSUE_LOOM_KEYS - set(item.keys())} "
+        f"extra={set(item.keys()) - _BLOCKED_ISSUE_LOOM_KEYS}"
+    )
+    assert isinstance(item["issue_id"], str), f"{path}: issue_id must be str"
+    assert "id" not in item, f"{path}: classic 'id' leaked into BlockedIssueLoom"
+    assert isinstance(item["blocked_by"], list), f"{path}: blocked_by must be list"
+    for blocker in item["blocked_by"]:
+        assert isinstance(blocker, str), f"{path}: blocked_by entries must be str"
+
+
+@pytest.mark.asyncio
+class TestLoomGenerationParityLists:
+    """Phase C4 list-endpoint parity. Each fixture in
+    ``tests/fixtures/contracts/loom/<list-endpoint>.json`` is replayed
+    against the live dashboard; status code + body shape (or error
+    envelope) must match the fixture declaration.
+
+    Fixtures pin the empty/error cases. Populated-success shape pins
+    live in seeded methods below — fixture replay can't seed real rows
+    that satisfy item-shape assertions.
+    """
+
+    @pytest.mark.parametrize(
+        ("slug", "example"),
+        _LOOM_LIST_EXAMPLES,
+        ids=[f"{s}::{e['name']}" for s, e in _LOOM_LIST_EXAMPLES],
+    )
+    async def test_example_matches_fixture(
+        self,
+        dashboard_surface: AsyncClient,
+        slug: str,
+        example: dict[str, Any],
+    ) -> None:
+        req = example["request"]
+        expected_resp = example["response"]
+        kwargs: dict[str, Any] = {}
+        if req.get("body") is not None:
+            kwargs["json"] = req["body"]
+        resp = await dashboard_surface.request(req["method"], req["path"], **kwargs)
+        assert resp.status_code == expected_resp["status"], (
+            f"{slug}::{example['name']}: status {resp.status_code} != fixture {expected_resp['status']}; body={resp.text!r}"
+        )
+        body = resp.json()
+        if expected_resp["status"] >= 400:
+            _assert_error_envelope(body, expected_code=expected_resp["body"]["code"], path=f"{slug}::{example['name']}")
+        else:
+            _assert_shape_matches(body, expected_resp["body"], path=f"{slug}::{example['name']}")
+            _assert_list_response_shape(body, path=f"{slug}::{example['name']}")
+
+    async def test_blocked_populated_shape(self, dashboard_surface: AsyncClient) -> None:
+        """Seed A blocking B, then assert ``GET /api/loom/blocked`` returns
+        B as a ``BlockedIssueLoom`` with ``blocked_by=[A]``.
+        """
+        a_resp = await dashboard_surface.post("/api/issues", json={"title": "blocker"})
+        b_resp = await dashboard_surface.post("/api/issues", json={"title": "blocked"})
+        assert a_resp.status_code in (200, 201), a_resp.text
+        assert b_resp.status_code in (200, 201), b_resp.text
+        a_id = a_resp.json()["id"]
+        b_id = b_resp.json()["id"]
+        dep = await dashboard_surface.post(f"/api/issue/{b_id}/dependencies", json={"depends_on": a_id})
+        assert dep.status_code in (200, 201), dep.text
+
+        resp = await dashboard_surface.get("/api/loom/blocked")
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        _assert_list_response_shape(body, path="blocked")
+        # Find B in the items (auto-seeded "Future" release won't be blocked).
+        blocked_ids = [item["issue_id"] for item in body["items"]]
+        assert b_id in blocked_ids, f"expected {b_id} in blocked items, got {blocked_ids}"
+        b_item = next(item for item in body["items"] if item["issue_id"] == b_id)
+        _assert_blocked_issue_loom(b_item, path="blocked.items[B]")
+        assert b_item["blocked_by"] == [a_id]
+
+    async def test_issues_pagination_and_shape(self, dashboard_surface: AsyncClient) -> None:
+        """Seed three issues, then exercise ``GET /api/loom/issues`` with
+        a ``limit=1`` page boundary so the overfetch-by-1 has_more
+        detection actually triggers. Asserts ``IssueLoom`` shape on the
+        item plus ``next_offset`` semantics on subsequent pages.
+        """
+        for n in range(3):
+            r = await dashboard_surface.post("/api/issues", json={"title": f"page-test-{n}"})
+            assert r.status_code in (200, 201), r.text
+
+        resp = await dashboard_surface.get("/api/loom/issues?limit=1&offset=0")
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        _assert_list_response_shape(body, path="issues.page1")
+        assert body["has_more"] is True
+        assert body["next_offset"] == 1
+        assert len(body["items"]) == 1
+        _assert_issue_loom_shape(body["items"][0], path="issues.page1.items[0]")
+
+    async def test_search_drops_total(self, dashboard_surface: AsyncClient) -> None:
+        """Pin that the search response wraps in ListResponse and does
+        NOT carry the classic 'total' field.
+        """
+        await dashboard_surface.post("/api/issues", json={"title": "needle in haystack"})
+        resp = await dashboard_surface.get("/api/loom/search?q=needle")
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        _assert_list_response_shape(body, path="search")
+        assert "total" not in body, "loom search must drop classic 'total' field"
+        assert "results" not in body, "loom search must use 'items' not 'results'"
+        assert len(body["items"]) >= 1
+        _assert_issue_loom_shape(body["items"][0], path="search.items[0]")
+
+    async def test_files_findings_observations_populated(self, dashboard_surface: AsyncClient) -> None:
+        """One seeded scan-results ingest populates files, findings, and
+        observations in a single shot — exercise the three list endpoints
+        and pin the loom item shape on each.
+        """
+        # Ingest a scan with one finding + create_observations=true so we
+        # populate three tables in one POST.
+        ingest = await dashboard_surface.post(
+            "/api/loom/scan-results",
+            json={
+                "scan_source": "C4-test-scan",
+                "create_observations": True,
+                "findings": [
+                    {
+                        "path": "src/example.py",
+                        "rule_id": "C4-rule",
+                        "message": "C4 seeded finding",
+                        "severity": "high",
+                        "line_start": 10,
+                        "line_end": 12,
+                    }
+                ],
+            },
+        )
+        assert ingest.status_code == 200, ingest.text
+
+        # Files
+        files_resp = await dashboard_surface.get("/api/loom/files")
+        assert files_resp.status_code == 200, files_resp.text
+        files_body = files_resp.json()
+        _assert_list_response_shape(files_body, path="files")
+        assert len(files_body["items"]) >= 1
+        f0 = files_body["items"][0]
+        assert "file_id" in f0, f"FileRecordLoom must use file_id, got keys: {sorted(f0.keys())}"
+        assert "id" not in f0, "classic 'id' leaked into FileRecordLoom"
+        assert isinstance(f0["file_id"], str)
+        assert isinstance(f0["path"], str)
+        assert isinstance(f0["summary"], dict)
+        assert isinstance(f0["associations_count"], int)
+        assert isinstance(f0["observation_count"], int)
+
+        # Findings
+        findings_resp = await dashboard_surface.get("/api/loom/findings")
+        assert findings_resp.status_code == 200, findings_resp.text
+        findings_body = findings_resp.json()
+        _assert_list_response_shape(findings_body, path="findings")
+        assert len(findings_body["items"]) >= 1
+        sf0 = findings_body["items"][0]
+        assert "finding_id" in sf0, f"ScanFindingLoom must use finding_id, got keys: {sorted(sf0.keys())}"
+        assert "id" not in sf0, "classic 'id' leaked into ScanFindingLoom"
+        assert isinstance(sf0["finding_id"], str)
+        assert sf0["severity"] == "high"
+        assert sf0["rule_id"] == "C4-rule"
+
+        # Observations
+        obs_resp = await dashboard_surface.get("/api/loom/observations")
+        assert obs_resp.status_code == 200, obs_resp.text
+        obs_body = obs_resp.json()
+        _assert_list_response_shape(obs_body, path="observations")
+        assert len(obs_body["items"]) >= 1
+        ob0 = obs_body["items"][0]
+        assert "observation_id" in ob0, f"ObservationLoom must use observation_id, got keys: {sorted(ob0.keys())}"
+        assert "id" not in ob0, "classic 'id' leaked into ObservationLoom"
+        assert isinstance(ob0["observation_id"], str)
+        # Pin that loom drops MCP's 'stats' sibling.
+        assert "stats" not in obs_body, "loom observations must drop MCP's 'stats' field"
+
+    async def test_per_issue_endpoints_populated(self, dashboard_surface: AsyncClient) -> None:
+        """Seed an issue + comment + event, then hit the per-issue
+        list endpoints and pin item shapes."""
+        c_resp = await dashboard_surface.post("/api/issues", json={"title": "C4 per-issue test"})
+        assert c_resp.status_code in (200, 201), c_resp.text
+        issue_id = c_resp.json()["id"]
+        cm_resp = await dashboard_surface.post(
+            f"/api/loom/issues/{issue_id}/comments",
+            json={"text": "hello"},
+        )
+        assert cm_resp.status_code == 201, cm_resp.text
+
+        # Comments — CommentRecordLoom item.
+        comments_resp = await dashboard_surface.get(f"/api/loom/issues/{issue_id}/comments")
+        assert comments_resp.status_code == 200, comments_resp.text
+        cb = comments_resp.json()
+        _assert_list_response_shape(cb, path="issue-comments")
+        assert len(cb["items"]) == 1
+        c0 = cb["items"][0]
+        assert set(c0.keys()) == {"comment_id", "author", "text", "created_at"}, c0
+        assert isinstance(c0["comment_id"], int)
+        assert "id" not in c0, "classic 'id' leaked into CommentRecordLoom"
+
+        # Events — IssueEventLoom item. Issue creation generated at least one event.
+        events_resp = await dashboard_surface.get(f"/api/loom/issues/{issue_id}/events")
+        assert events_resp.status_code == 200, events_resp.text
+        eb = events_resp.json()
+        _assert_list_response_shape(eb, path="issue-events")
+        assert len(eb["items"]) >= 1
+        e0 = eb["items"][0]
+        assert "event_id" in e0, f"IssueEventLoom must use event_id, got keys: {sorted(e0.keys())}"
+        assert "id" not in e0, "classic 'id' leaked into IssueEventLoom"
+        assert isinstance(e0["event_id"], int)
+        assert e0["issue_id"] == issue_id
+
+        # Files (empty list since no associations created).
+        files_resp = await dashboard_surface.get(f"/api/loom/issues/{issue_id}/files")
+        assert files_resp.status_code == 200, files_resp.text
+        fb = files_resp.json()
+        _assert_list_response_shape(fb, path="issue-files")
+        assert fb["items"] == []
