@@ -287,3 +287,180 @@ class TestLivingSurfaceEquivalenceScanResults:
             f"{example['name']}: loom={loom_resp.status_code} living={living_resp.status_code}"
         )
         _assert_structural_equivalence(living_resp.json(), loom_resp.json(), path=example["name"])
+
+
+# ---------------------------------------------------------------------------
+# Loom generation — batch/update (Phase C2)
+# ---------------------------------------------------------------------------
+
+
+_LOOM_BATCH_UPDATE_EXAMPLES = _examples_for("loom", "batch-update")
+
+
+_SLIM_ISSUE_LOOM_KEYS = frozenset({"issue_id", "title", "status", "priority", "type"})
+
+
+def _assert_slim_issue_loom(item: Any, path: str = "$") -> None:
+    """Assert ``item`` is a SlimIssueLoom (5 keys, all the expected types)."""
+    assert isinstance(item, dict), f"{path}: expected dict, got {type(item).__name__}"
+    assert set(item.keys()) == _SLIM_ISSUE_LOOM_KEYS, (
+        f"{path}: SlimIssueLoom key-set mismatch; "
+        f"missing={_SLIM_ISSUE_LOOM_KEYS - set(item.keys())} "
+        f"extra={set(item.keys()) - _SLIM_ISSUE_LOOM_KEYS}"
+    )
+    assert isinstance(item["issue_id"], str), f"{path}: issue_id must be str"
+    assert isinstance(item["title"], str), f"{path}: title must be str"
+    assert isinstance(item["status"], str), f"{path}: status must be str"
+    assert isinstance(item["priority"], int), f"{path}: priority must be int"
+    assert not isinstance(item["priority"], bool), f"{path}: priority must be int (not bool)"
+    assert isinstance(item["type"], str), f"{path}: type must be str"
+
+
+@pytest.mark.asyncio
+class TestLoomGenerationParityBatchUpdate:
+    """Loom batch/update parity. Phase C2 mounts
+    ``POST /api/loom/batch/update`` returning ``BatchResponse[SlimIssueLoom]``.
+
+    Fixture replay covers error envelopes and the all-missing 200 case
+    (which pins ``BatchFailure`` shape on ``failed[0]``). The populated-
+    success path needs a real seeded issue id, so the
+    ``test_succeeded_populated_shape`` method covers it directly.
+    """
+
+    @pytest.mark.parametrize(
+        "example",
+        _LOOM_BATCH_UPDATE_EXAMPLES,
+        ids=[e["name"] for e in _LOOM_BATCH_UPDATE_EXAMPLES],
+    )
+    async def test_example_matches_fixture(
+        self,
+        dashboard_surface: AsyncClient,
+        example: dict[str, Any],
+    ) -> None:
+        req = example["request"]
+        expected_resp = example["response"]
+        resp = await dashboard_surface.request(req["method"], req["path"], json=req["body"])
+        assert resp.status_code == expected_resp["status"], (
+            f"{example['name']}: status {resp.status_code} != fixture {expected_resp['status']}; body={resp.text!r}"
+        )
+        body = resp.json()
+        if expected_resp["status"] >= 400:
+            _assert_error_envelope(body, expected_code=expected_resp["body"]["code"], path=example["name"])
+        else:
+            _assert_shape_matches(body, expected_resp["body"], path=example["name"])
+
+    async def test_succeeded_populated_shape(self, dashboard_surface: AsyncClient) -> None:
+        """Pin ``succeeded[0]`` as a SlimIssueLoom against a real update.
+
+        Fixture replay can't populate ``succeeded`` (the fixture body uses
+        non-existent ids), so this test seeds a real issue and asserts
+        the loom slim shape end-to-end.
+        """
+        create = await dashboard_surface.post("/api/issues", json={"title": "C2 batch update seed"})
+        assert create.status_code in (200, 201), create.text
+        issue_id = create.json()["id"]
+        resp = await dashboard_surface.post(
+            "/api/loom/batch/update",
+            json={"issue_ids": [issue_id], "priority": 1},
+        )
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert set(body.keys()) == {"succeeded", "failed"}, body
+        assert isinstance(body["failed"], list)
+        assert body["failed"] == []
+        assert isinstance(body["succeeded"], list)
+        assert len(body["succeeded"]) == 1
+        _assert_slim_issue_loom(body["succeeded"][0], path="succeeded[0]")
+        assert body["succeeded"][0]["issue_id"] == issue_id
+        assert body["succeeded"][0]["priority"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Loom generation — batch/close (Phase C2)
+# ---------------------------------------------------------------------------
+
+
+_LOOM_BATCH_CLOSE_EXAMPLES = _examples_for("loom", "batch-close")
+
+
+@pytest.mark.asyncio
+class TestLoomGenerationParityBatchClose:
+    """Loom batch/close parity. Phase C2 mounts
+    ``POST /api/loom/batch/close`` returning ``BatchCloseResponseLoom``
+    (BatchResponse[SlimIssueLoom] plus optional ``newly_unblocked``).
+
+    Fixture replay covers errors + all-missing. The seeded test methods
+    pin the populated-success shape and the ``newly_unblocked``
+    omitted-when-empty rule.
+    """
+
+    @pytest.mark.parametrize(
+        "example",
+        _LOOM_BATCH_CLOSE_EXAMPLES,
+        ids=[e["name"] for e in _LOOM_BATCH_CLOSE_EXAMPLES],
+    )
+    async def test_example_matches_fixture(
+        self,
+        dashboard_surface: AsyncClient,
+        example: dict[str, Any],
+    ) -> None:
+        req = example["request"]
+        expected_resp = example["response"]
+        resp = await dashboard_surface.request(req["method"], req["path"], json=req["body"])
+        assert resp.status_code == expected_resp["status"], (
+            f"{example['name']}: status {resp.status_code} != fixture {expected_resp['status']}; body={resp.text!r}"
+        )
+        body = resp.json()
+        if expected_resp["status"] >= 400:
+            _assert_error_envelope(body, expected_code=expected_resp["body"]["code"], path=example["name"])
+        else:
+            _assert_shape_matches(body, expected_resp["body"], path=example["name"])
+
+    async def test_succeeded_populated_shape(self, dashboard_surface: AsyncClient) -> None:
+        """Close one isolated (no dependents) issue. ``succeeded[0]`` is a
+        ``SlimIssueLoom``; ``newly_unblocked`` MUST be omitted because no
+        issue was waiting on this one (per the BatchResponse §C2 rule).
+        """
+        create = await dashboard_surface.post("/api/issues", json={"title": "C2 batch close seed"})
+        assert create.status_code in (200, 201), create.text
+        issue_id = create.json()["id"]
+        resp = await dashboard_surface.post(
+            "/api/loom/batch/close",
+            json={"issue_ids": [issue_id], "reason": "C2 test"},
+        )
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert "newly_unblocked" not in body, f"newly_unblocked must be omitted when empty: {body!r}"
+        assert set(body.keys()) == {"succeeded", "failed"}
+        assert body["failed"] == []
+        assert len(body["succeeded"]) == 1
+        _assert_slim_issue_loom(body["succeeded"][0], path="succeeded[0]")
+        assert body["succeeded"][0]["issue_id"] == issue_id
+
+    async def test_newly_unblocked_populated_shape(self, dashboard_surface: AsyncClient) -> None:
+        """Wire up a dependency (B blocked by A), close A, assert
+        ``newly_unblocked`` is present and contains B as a SlimIssueLoom.
+        """
+        a_resp = await dashboard_surface.post("/api/issues", json={"title": "blocker"})
+        b_resp = await dashboard_surface.post("/api/issues", json={"title": "blocked"})
+        assert a_resp.status_code in (200, 201), a_resp.text
+        assert b_resp.status_code in (200, 201), b_resp.text
+        a_id = a_resp.json()["id"]
+        b_id = b_resp.json()["id"]
+        dep = await dashboard_surface.post(f"/api/issue/{b_id}/dependencies", json={"depends_on": a_id})
+        assert dep.status_code in (200, 201), dep.text
+
+        resp = await dashboard_surface.post(
+            "/api/loom/batch/close",
+            json={"issue_ids": [a_id], "reason": "unblock"},
+        )
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert set(body.keys()) == {"succeeded", "failed", "newly_unblocked"}, body
+        assert len(body["succeeded"]) == 1
+        assert body["succeeded"][0]["issue_id"] == a_id
+        assert isinstance(body["newly_unblocked"], list)
+        assert len(body["newly_unblocked"]) == 1
+        unblocked = body["newly_unblocked"][0]
+        _assert_slim_issue_loom(unblocked, path="newly_unblocked[0]")
+        assert unblocked["issue_id"] == b_id

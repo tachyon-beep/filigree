@@ -569,12 +569,16 @@ class TestBatchMixedValidityParity:
     @pytest.mark.xfail(
         strict=True,
         reason=(
-            "Container key diverges: dashboard returns {updated, errors} (see "
-            "dashboard_routes/issues.py:417), MCP returns {updated, failed} (see "
-            "mcp_tools/issues.py:744). Stage 2B wire-contract unification to the "
-            "generic BatchResponse[_T] in types/api.py will align both surfaces to "
-            "`failed`. Note: this IS a wire-contract change for any existing "
-            "dashboard client — track in the 2B rebaseline doc as breaking."
+            "Permanent: classic dashboard returns {updated, errors} (see "
+            "dashboard_routes/issues.py::api_batch_update); MCP returns "
+            "{succeeded, failed, count}. ADR-002 freezes classic for the "
+            "1.x lifetime, so this divergence is the wire contract — not a "
+            "bug to fix. The unified envelope ships at /api/loom/batch/* "
+            "(BatchResponse[SlimIssueLoom]); see "
+            "test_container_key_parity_loom for the loom-side resolution. "
+            "This xfail stays in place to flag any accidental drift in "
+            "classic's container keys (which would also flip the xfail to a "
+            "pass and surface the breakage)."
         ),
     )
     async def test_container_key_parity(
@@ -600,6 +604,47 @@ class TestBatchMixedValidityParity:
         mcp_keys = set(mcp_body.keys())
         assert ("failed" in dash_keys) == ("failed" in mcp_keys), f"dashboard keys={dash_keys!r} mcp keys={mcp_keys!r}"
         assert ("errors" in dash_keys) == ("errors" in mcp_keys), f"dashboard keys={dash_keys!r} mcp keys={mcp_keys!r}"
+
+    async def test_container_key_parity_loom(
+        self,
+        dashboard_surface: AsyncClient,
+        mcp_surface: FiligreeDB,
+    ) -> None:
+        """Loom-side resolution of the classic dashboard/MCP container-key
+        divergence: ``/api/loom/batch/update`` and MCP ``batch_update``
+        both expose ``{succeeded, failed}`` (BatchResponse[SlimIssueLoom]
+        on the dashboard side, BatchUpdateResponse on the MCP side). The
+        ``count`` extra MCP exposes is allowed-by-construction
+        (BatchResponse permits supersets); what matters is that BOTH
+        publish ``succeeded`` and ``failed`` and that NEITHER publishes
+        the classic-only ``updated``/``errors`` keys.
+        """
+        dash_create = await dashboard_surface.post("/api/issues", json={"title": "Real"})
+        dash_real = dash_create.json()["id"]
+        dash_resp = await dashboard_surface.post(
+            "/api/loom/batch/update",
+            json={"issue_ids": [dash_real, "dash-ffffffffff"], "priority": 1},
+        )
+        assert dash_resp.status_code == 200, dash_resp.text
+        dash_body = dash_resp.json()
+        dash_keys = set(dash_body.keys())
+
+        mcp_real = mcp_surface.create_issue("Real").id
+        from filigree.mcp_tools.issues import _handle_batch_update
+
+        mcp_body = _mcp_envelope(await _handle_batch_update({"ids": [mcp_real, "mcp-ffffffffff"], "priority": 1}))
+        mcp_keys = set(mcp_body.keys())
+
+        # Both surfaces publish the unified container keys.
+        assert "succeeded" in dash_keys, f"loom dashboard missing 'succeeded': {dash_keys!r}"
+        assert "failed" in dash_keys, f"loom dashboard missing 'failed': {dash_keys!r}"
+        assert "succeeded" in mcp_keys, f"mcp missing 'succeeded': {mcp_keys!r}"
+        assert "failed" in mcp_keys, f"mcp missing 'failed': {mcp_keys!r}"
+        # And neither emits the classic-only keys (which would indicate drift).
+        assert "updated" not in dash_keys, f"loom dashboard leaked classic 'updated': {dash_keys!r}"
+        assert "errors" not in dash_keys, f"loom dashboard leaked classic 'errors': {dash_keys!r}"
+        assert "updated" not in mcp_keys, f"mcp emitted unexpected 'updated': {mcp_keys!r}"
+        assert "errors" not in mcp_keys, f"mcp emitted unexpected 'errors': {mcp_keys!r}"
 
 
 # ---------------------------------------------------------------------------

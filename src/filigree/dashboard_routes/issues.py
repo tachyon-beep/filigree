@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from starlette.requests import Request
 
@@ -80,6 +80,55 @@ def _validate_body_string_field(
         suffix = " or null" if allow_null else ""
         return _error_response(f"{field} must be a string{suffix}", ErrorCode.VALIDATION, 400)
     return value
+
+
+def _parse_batch_update_body(body: dict[str, Any]) -> dict[str, Any] | JSONResponse:
+    """Validate the batch-update request body.
+
+    Shared by classic ``POST /api/batch/update`` and loom
+    ``POST /api/loom/batch/update``; both generations accept the same
+    request shape (``issue_ids``, ``status``, ``priority``, ``assignee``,
+    ``fields``, ``actor``). Returns the kwargs dict for
+    ``db.batch_update`` on success, or a 400 ``JSONResponse`` on error.
+    """
+    issue_ids = body.get("issue_ids")
+    if not isinstance(issue_ids, list):
+        return _error_response("issue_ids must be a JSON array", ErrorCode.VALIDATION, 400)
+    if not all(isinstance(i, str) for i in issue_ids):
+        return _error_response("All issue_ids must be strings", ErrorCode.VALIDATION, 400)
+    actor, actor_err = _validate_actor(body.get("actor", "dashboard"))
+    if actor_err:
+        return actor_err
+    priority = _validate_priority_field(body)
+    if not isinstance(priority, int) and priority is not None:
+        return priority  # JSONResponse error
+    return {
+        "issue_ids": issue_ids,
+        "status": body.get("status"),
+        "priority": priority,
+        "assignee": body.get("assignee"),
+        "fields": body.get("fields"),
+        "actor": actor,
+    }
+
+
+def _parse_batch_close_body(body: dict[str, Any]) -> dict[str, Any] | JSONResponse:
+    """Validate the batch-close request body.
+
+    Shared by classic ``POST /api/batch/close`` and loom
+    ``POST /api/loom/batch/close``. Returns kwargs for ``db.batch_close``
+    on success, or a 400 ``JSONResponse`` on error.
+    """
+    issue_ids = body.get("issue_ids")
+    if not isinstance(issue_ids, list):
+        return _error_response("issue_ids must be a JSON array", ErrorCode.VALIDATION, 400)
+    if not all(isinstance(i, str) for i in issue_ids):
+        return _error_response("All issue_ids must be strings", ErrorCode.VALIDATION, 400)
+    reason = body.get("reason", "")
+    actor, actor_err = _validate_actor(body.get("actor", "dashboard"))
+    if actor_err:
+        return actor_err
+    return {"issue_ids": issue_ids, "reason": reason, "actor": actor}
 
 
 # ---------------------------------------------------------------------------
@@ -390,26 +439,12 @@ def create_classic_router() -> APIRouter:
         body = await _parse_json_body(request)
         if isinstance(body, JSONResponse):
             return body
-        issue_ids = body.get("issue_ids")
-        if not isinstance(issue_ids, list):
-            return _error_response("issue_ids must be a JSON array", ErrorCode.VALIDATION, 400)
-        if not all(isinstance(i, str) for i in issue_ids):
-            return _error_response("All issue_ids must be strings", ErrorCode.VALIDATION, 400)
-        actor, actor_err = _validate_actor(body.get("actor", "dashboard"))
-        if actor_err:
-            return actor_err
-        priority = _validate_priority_field(body)
-        if isinstance(priority, JSONResponse):
-            return priority
+        parsed = _parse_batch_update_body(body)
+        if isinstance(parsed, JSONResponse):
+            return parsed
+        issue_ids = parsed.pop("issue_ids")
         try:
-            updated, errors = db.batch_update(
-                issue_ids,
-                status=body.get("status"),
-                priority=priority,
-                assignee=body.get("assignee"),
-                fields=body.get("fields"),
-                actor=actor,
-            )
+            updated, errors = db.batch_update(issue_ids, **parsed)
         except TypeError as e:
             return _error_response(str(e), ErrorCode.VALIDATION, 400)
         return JSONResponse(
@@ -425,16 +460,11 @@ def create_classic_router() -> APIRouter:
         body = await _parse_json_body(request)
         if isinstance(body, JSONResponse):
             return body
-        issue_ids = body.get("issue_ids")
-        if not isinstance(issue_ids, list):
-            return _error_response("issue_ids must be a JSON array", ErrorCode.VALIDATION, 400)
-        if not all(isinstance(i, str) for i in issue_ids):
-            return _error_response("All issue_ids must be strings", ErrorCode.VALIDATION, 400)
-        reason = body.get("reason", "")
-        actor, actor_err = _validate_actor(body.get("actor", "dashboard"))
-        if actor_err:
-            return actor_err
-        closed, errors = db.batch_close(issue_ids, reason=reason, actor=actor)
+        parsed = _parse_batch_close_body(body)
+        if isinstance(parsed, JSONResponse):
+            return parsed
+        issue_ids = parsed.pop("issue_ids")
+        closed, errors = db.batch_close(issue_ids, **parsed)
         return JSONResponse(
             {
                 "closed": [i.to_dict() for i in closed],
@@ -610,10 +640,66 @@ def create_loom_router() -> APIRouter:
     """Build the loom-generation APIRouter for issue, workflow, and
     dependency endpoints.
 
-    Empty in Phase B of the 2.0 federation work package; Phase C fills
-    loom issue endpoints as they are implemented. See ADR-002 for the
-    generation framing.
+    Phase C2 mounts the batch endpoints (``/batch/update``,
+    ``/batch/close``); subsequent C tasks add the rest of the loom
+    issue surface. See ADR-002 for the generation framing and
+    ``tests/fixtures/contracts/loom/`` for the response-shape pins.
     """
-    from fastapi import APIRouter
+    from fastapi import APIRouter, Depends
+    from fastapi.responses import JSONResponse
 
-    return APIRouter()
+    from filigree.dashboard import _get_db
+    from filigree.generations.loom.adapters import slim_issue_to_loom
+
+    router = APIRouter()
+
+    @router.post("/batch/update")
+    async def api_loom_batch_update(request: Request, db: FiligreeDB = Depends(_get_db)) -> JSONResponse:
+        """Batch update issues — loom envelope (BatchResponse[SlimIssueLoom])."""
+        body = await _parse_json_body(request)
+        if isinstance(body, JSONResponse):
+            return body
+        parsed = _parse_batch_update_body(body)
+        if isinstance(parsed, JSONResponse):
+            return parsed
+        issue_ids = parsed.pop("issue_ids")
+        try:
+            updated, errors = db.batch_update(issue_ids, **parsed)
+        except TypeError as e:
+            return _error_response(str(e), ErrorCode.VALIDATION, 400)
+        return JSONResponse(
+            {
+                "succeeded": [slim_issue_to_loom(i) for i in updated],
+                "failed": errors,
+            }
+        )
+
+    @router.post("/batch/close")
+    async def api_loom_batch_close(request: Request, db: FiligreeDB = Depends(_get_db)) -> JSONResponse:
+        """Batch close issues — loom envelope (BatchCloseResponseLoom).
+
+        Includes ``newly_unblocked`` (omitted when empty) computed the
+        same way MCP ``batch_close`` does it: diff ``get_ready()``
+        before vs. after. Classic ``/api/batch/close`` does not surface
+        ``newly_unblocked`` and stays unchanged.
+        """
+        body = await _parse_json_body(request)
+        if isinstance(body, JSONResponse):
+            return body
+        parsed = _parse_batch_close_body(body)
+        if isinstance(parsed, JSONResponse):
+            return parsed
+        issue_ids = parsed.pop("issue_ids")
+        ready_before = {i.id for i in db.get_ready()}
+        closed, errors = db.batch_close(issue_ids, **parsed)
+        ready_after = db.get_ready()
+        newly_unblocked = [i for i in ready_after if i.id not in ready_before]
+        response: dict[str, Any] = {
+            "succeeded": [slim_issue_to_loom(i) for i in closed],
+            "failed": errors,
+        }
+        if newly_unblocked:
+            response["newly_unblocked"] = [slim_issue_to_loom(i) for i in newly_unblocked]
+        return JSONResponse(response)
+
+    return router

@@ -13,8 +13,26 @@ not here.
 
 from __future__ import annotations
 
-from filigree.generations.loom.types import ScanIngestResponseLoom, ScanStats
+from filigree.generations.loom.types import ScanIngestResponseLoom, ScanStats, SlimIssueLoom
+from filigree.models import Issue
 from filigree.types.files import ScanIngestResult
+
+
+def slim_issue_to_loom(issue: Issue) -> SlimIssueLoom:
+    """Project an ``Issue`` into the loom slim shape.
+
+    Renames ``id`` to ``issue_id`` per the Phase D vocabulary shift and
+    keeps the same five-field projection as classic ``SlimIssue`` (title,
+    status, priority, type). Used by every loom batch handler whose
+    ``succeeded`` and ``newly_unblocked`` lists return slim issues.
+    """
+    return SlimIssueLoom(
+        issue_id=issue.id,
+        title=issue.title,
+        status=issue.status,
+        priority=issue.priority,
+        type=issue.type,
+    )
 
 
 def scan_ingest_result_to_loom(result: ScanIngestResult) -> ScanIngestResponseLoom:

@@ -13,9 +13,9 @@ does not belong here.
 
 from __future__ import annotations
 
-from typing import TypedDict
+from typing import NotRequired, TypedDict
 
-from filigree.types.api import BatchResponse
+from filigree.types.api import BatchFailure, BatchResponse
 
 
 class SlimIssueLoom(TypedDict):
@@ -47,6 +47,23 @@ class ScanStats(TypedDict):
     findings_updated: int
     observations_created: int
     observations_failed: int
+
+
+class BatchCloseResponseLoom(TypedDict):
+    """Response shape for ``POST /api/loom/batch/close``.
+
+    Functionally a ``BatchResponse[SlimIssueLoom]`` except
+    ``newly_unblocked`` carries ``SlimIssueLoom`` rather than the
+    classic ``SlimIssue`` that ``BatchResponse[_T]``'s definition
+    hard-codes — newly-unblocked issues use the loom vocabulary
+    (``issue_id``) too.
+
+    Pinned by ``tests/fixtures/contracts/loom/batch-close.json``.
+    """
+
+    succeeded: list[SlimIssueLoom]
+    failed: list[BatchFailure]
+    newly_unblocked: NotRequired[list[SlimIssueLoom]]
 
 
 class ScanIngestResponseLoom(BatchResponse[str]):
