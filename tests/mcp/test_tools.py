@@ -76,7 +76,8 @@ class TestCreateAndGet:
             raise sqlite3.OperationalError("no such table: file_associations")
 
         with patch.object(mcp_db, "get_issue_files", side_effect=_raise), pytest.raises(sqlite3.OperationalError):
-            await call_tool("get_issue", {"issue_id": issue.id})
+            # include_files=True is required post-Phase D4: the default flipped to False
+            await call_tool("get_issue", {"issue_id": issue.id, "include_files": True})
 
     async def test_get_issue_without_files_skips_lookup(self, mcp_db: FiligreeDB) -> None:
         """include_files=False must not call get_issue_files at all."""

@@ -71,8 +71,13 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
                     },
                     "include_files": {
                         "type": "boolean",
-                        "default": True,
-                        "description": "Include file associations in response (default true)",
+                        "default": False,
+                        "description": (
+                            "Include file associations in response (default false; pass true to "
+                            "include the files list). Federation consumers typically want a clean "
+                            "issue projection — this aligns with /api/loom/issues/{issue_id} which "
+                            "has defaulted include_files to false since Phase C3."
+                        ),
                     },
                 },
                 "required": ["issue_id"],
@@ -362,6 +367,7 @@ async def _handle_get_issue(arguments: dict[str, Any]) -> list[TextContent]:
 
     args = _parse_args(arguments, GetIssueArgs)
     tracker = _get_db()
+    include_files = bool(args.get("include_files", False))
     try:
         issue = tracker.get_issue(args["issue_id"])
         issue_dict = issue.to_dict()
@@ -369,7 +375,7 @@ async def _handle_get_issue(arguments: dict[str, Any]) -> list[TextContent]:
         # Fail-fast to match dashboard and get_issue_files MCP tool; see
         # filigree-c6c7842661 for why swallowing sqlite3.Error is wrong.
         file_assocs: list[Any] = []
-        if args.get("include_files", True):
+        if include_files:
             file_assocs = tracker.get_issue_files(args["issue_id"])
 
         if args.get("include_transitions"):
@@ -389,11 +395,11 @@ async def _handle_get_issue(arguments: dict[str, Any]) -> list[TextContent]:
                 ],
             )
             out: dict[str, Any] = dict(result)
-            if args.get("include_files", True):
+            if include_files:
                 out["files"] = file_assocs
             return _text(out)
         out = dict(issue_dict)
-        if args.get("include_files", True):
+        if include_files:
             out["files"] = file_assocs
         return _text(out)
     except KeyError:
