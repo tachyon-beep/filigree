@@ -21,11 +21,13 @@ from filigree.mcp_tools.common import (
     _validate_int_range,
 )
 from filigree.types.api import (
+    AmbiguousTransitionError,
     BatchResponse,
     ClaimNextEmptyResponse,
     ClaimNextResponse,
     ErrorCode,
     ErrorResponse,
+    InvalidTransitionError,
     IssueWithChangedFields,
     IssueWithTransitions,
     IssueWithUnblocked,
@@ -46,6 +48,8 @@ from filigree.types.inputs import (
     ReleaseClaimArgs,
     ReopenIssueArgs,
     SearchIssuesArgs,
+    StartNextWorkArgs,
+    StartWorkArgs,
     UpdateIssueArgs,
 )
 
@@ -298,6 +302,68 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
             },
         ),
         Tool(
+            name="start_work",
+            description=(
+                "Atomically claim an issue and transition it to a working status. "
+                "target_status defaults to the type's canonical wip-category status; "
+                "AmbiguousTransitionError surfaces if the type has multiple wip statuses "
+                "(specify target_status explicitly). On transition failure the claim is rolled back."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "issue_id": {"type": "string", "description": "Issue ID to claim and transition"},
+                    "assignee": {"type": "string", "minLength": 1, "description": "Who is starting work (agent name)"},
+                    "target_status": {
+                        "type": "string",
+                        "description": (
+                            "Optional target status. Defaults to the type's unique wip-category status; "
+                            "required when the type defines multiple wip statuses."
+                        ),
+                    },
+                    "actor": {
+                        "type": "string",
+                        "description": "Agent/user identity for audit trail (defaults to assignee)",
+                    },
+                },
+                "required": ["issue_id", "assignee"],
+            },
+        ),
+        Tool(
+            name="start_next_work",
+            description=(
+                "Claim the highest-priority ready issue and atomically transition it to a working status. "
+                "Tie-break ordering: priority asc, created_at asc, issue_id asc (same as claim_next). "
+                "Returns the transitioned issue, or {status: 'empty'} when no ready issue matches."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "assignee": {"type": "string", "minLength": 1, "description": "Who is starting work (agent name)"},
+                    "type": {"type": "string", "description": "Filter by issue type"},
+                    "priority_min": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 4,
+                        "description": "Minimum priority (0=critical)",
+                    },
+                    "priority_max": {"type": "integer", "minimum": 0, "maximum": 4, "description": "Maximum priority"},
+                    "target_status": {
+                        "type": "string",
+                        "description": (
+                            "Optional target status. Defaults to the type's unique wip-category status; "
+                            "required when the type defines multiple wip statuses."
+                        ),
+                    },
+                    "actor": {
+                        "type": "string",
+                        "description": "Agent/user identity for audit trail (defaults to assignee)",
+                    },
+                },
+                "required": ["assignee"],
+            },
+        ),
+        Tool(
             name="batch_close",
             description="Close multiple issues in one call. Returns BatchResponse[SlimIssue] (succeeded/failed) plus newly_unblocked when applicable.",
             inputSchema={
@@ -352,6 +418,8 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
         "claim_next": _handle_claim_next,
         "batch_close": _handle_batch_close,
         "batch_update": _handle_batch_update,
+        "start_work": _handle_start_work,
+        "start_next_work": _handle_start_next_work,
     }
 
     return tools, handlers
@@ -740,3 +808,73 @@ async def _handle_batch_update(arguments: dict[str, Any]) -> list[TextContent]:
         failed=update_failed,
     )
     return _text(result)
+
+
+async def _handle_start_work(arguments: dict[str, Any]) -> list[TextContent]:
+    from filigree.mcp_server import _get_db, _refresh_summary
+
+    args = _parse_args(arguments, StartWorkArgs)
+    assignee = args.get("assignee")
+    if not isinstance(assignee, str) or not assignee.strip():
+        return _text(ErrorResponse(error="assignee must be a non-empty string", code=ErrorCode.VALIDATION))
+    actor, actor_err = _validate_actor(args.get("actor", assignee))
+    if actor_err:
+        return actor_err
+    tracker = _get_db()
+    try:
+        issue = tracker.start_work(
+            args["issue_id"],
+            assignee=assignee,
+            target_status=args.get("target_status"),
+            actor=actor,
+        )
+    except KeyError:
+        return _text(ErrorResponse(error=f"Issue not found: {args['issue_id']}", code=ErrorCode.NOT_FOUND))
+    except (AmbiguousTransitionError, InvalidTransitionError) as e:
+        return _text(ErrorResponse(error=str(e), code=ErrorCode.INVALID_TRANSITION))
+    except ValueError as e:
+        msg = str(e)
+        code = classify_value_error(msg)
+        if code == ErrorCode.INVALID_TRANSITION:
+            return _text(_build_transition_error(tracker, args["issue_id"], msg))
+        return _text(ErrorResponse(error=msg, code=ErrorCode.CONFLICT))
+    _refresh_summary()
+    return _text(issue.to_dict())
+
+
+async def _handle_start_next_work(arguments: dict[str, Any]) -> list[TextContent]:
+    from filigree.mcp_server import _get_db, _refresh_summary
+
+    args = _parse_args(arguments, StartNextWorkArgs)
+    assignee = args.get("assignee")
+    if not isinstance(assignee, str) or not assignee.strip():
+        return _text(ErrorResponse(error="assignee must be a non-empty string", code=ErrorCode.VALIDATION))
+    actor, actor_err = _validate_actor(args.get("actor", assignee))
+    if actor_err:
+        return actor_err
+    priority_min = args.get("priority_min")
+    pmin_err = _validate_int_range(priority_min, "priority_min", min_val=0, max_val=4)
+    if pmin_err:
+        return pmin_err
+    priority_max = args.get("priority_max")
+    pmax_err = _validate_int_range(priority_max, "priority_max", min_val=0, max_val=4)
+    if pmax_err:
+        return pmax_err
+    tracker = _get_db()
+    try:
+        claimed = tracker.start_next_work(
+            assignee=assignee,
+            type_filter=args.get("type"),
+            priority_min=priority_min,
+            priority_max=priority_max,
+            target_status=args.get("target_status"),
+            actor=actor,
+        )
+    except (AmbiguousTransitionError, InvalidTransitionError) as e:
+        return _text(ErrorResponse(error=str(e), code=ErrorCode.INVALID_TRANSITION))
+    except ValueError as e:
+        return _text(ErrorResponse(error=str(e), code=ErrorCode.VALIDATION))
+    if claimed is None:
+        return _text(ClaimNextEmptyResponse(status="empty", reason="No ready issues matching filters"))
+    _refresh_summary()
+    return _text(claimed.to_dict())

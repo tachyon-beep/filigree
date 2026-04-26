@@ -575,6 +575,52 @@ class TestBatchAddComment:
         assert data["failed"][0]["code"] == "VALIDATION"
 
 
+class TestStartWork:
+    """MCP wrapper coverage for the D6 composed operations."""
+
+    async def test_start_work_via_mcp(self, mcp_db: FiligreeDB) -> None:
+        issue = mcp_db.create_issue("mcp-d6-start", type="task")
+        result = await call_tool("start_work", {"issue_id": issue.id, "assignee": "bob"})
+        data = _parse(result)
+        assert data["assignee"] == "bob"
+        assert data["status"] == "in_progress"
+
+    async def test_start_work_explicit_target(self, mcp_db: FiligreeDB) -> None:
+        issue = mcp_db.create_issue("mcp-d6-explicit", type="task")
+        result = await call_tool(
+            "start_work",
+            {"issue_id": issue.id, "assignee": "bob", "target_status": "in_progress"},
+        )
+        data = _parse(result)
+        assert data["status"] == "in_progress"
+
+    async def test_start_work_blank_assignee_rejected(self, mcp_db: FiligreeDB) -> None:
+        issue = mcp_db.create_issue("mcp-d6-blank", type="task")
+        result = await call_tool("start_work", {"issue_id": issue.id, "assignee": ""})
+        data = _parse(result)
+        assert data["code"] == ErrorCode.VALIDATION
+
+    async def test_start_work_not_found(self, mcp_db: FiligreeDB) -> None:
+        result = await call_tool("start_work", {"issue_id": "mcp-nonexistent", "assignee": "bob"})
+        data = _parse(result)
+        assert data["code"] == ErrorCode.NOT_FOUND
+
+    async def test_start_next_work_picks_highest_priority(self, mcp_db: FiligreeDB) -> None:
+        mcp_db.create_issue("mcp-d6-next-low", type="task", priority=4)
+        high = mcp_db.create_issue("mcp-d6-next-high", type="task", priority=0)
+        result = await call_tool("start_next_work", {"assignee": "carol"})
+        data = _parse(result)
+        assert data["id"] == high.id
+        assert data["assignee"] == "carol"
+        assert data["status"] == "in_progress"
+
+    async def test_start_next_work_no_match_returns_empty(self, mcp_db: FiligreeDB) -> None:
+        mcp_db.create_issue("mcp-d6-only-task", type="task", priority=2)
+        result = await call_tool("start_next_work", {"assignee": "dan", "type": "nonexistent_type"})
+        data = _parse(result)
+        assert data["status"] == "empty"
+
+
 class TestClaimIssue:
     async def test_claim_success(self, mcp_db: FiligreeDB) -> None:
         issue = mcp_db.create_issue("Claimable")

@@ -115,6 +115,22 @@ class ClaimNextArgs(TypedDict):
     actor: NotRequired[str]
 
 
+class StartWorkArgs(TypedDict):
+    issue_id: str
+    assignee: str
+    target_status: NotRequired[str]
+    actor: NotRequired[str]
+
+
+class StartNextWorkArgs(TypedDict):
+    assignee: str
+    type: NotRequired[str]
+    priority_min: NotRequired[int]
+    priority_max: NotRequired[int]
+    target_status: NotRequired[str]
+    actor: NotRequired[str]
+
+
 class BatchCloseArgs(TypedDict):
     issue_ids: list[str]
     reason: NotRequired[str]
@@ -466,6 +482,8 @@ TOOL_ARGS_MAP: dict[str, type] = {
     "claim_next": ClaimNextArgs,
     "batch_close": BatchCloseArgs,
     "batch_update": BatchUpdateArgs,
+    "start_work": StartWorkArgs,
+    "start_next_work": StartNextWorkArgs,
     # meta.py
     "add_comment": AddCommentArgs,
     "get_comments": GetCommentsArgs,

@@ -876,6 +876,117 @@ class IssuesMixin(DBMixinProtocol):
             logger.warning("claim_next: all %d candidate(s) failed to claim for '%s'", skipped, assignee)
         return None
 
+    def start_work(
+        self,
+        issue_id: str,
+        *,
+        assignee: str,
+        target_status: str | None = None,
+        actor: str = "",
+    ) -> Issue:
+        """Atomically claim an issue and transition it to a working status.
+
+        Phase D6 composed operation. Performs ``claim_issue`` followed by
+        ``update_issue(status=target_status)`` with a compensating-action
+        rollback: if the transition fails, the claim is released so the
+        issue's ``assignee`` returns to its prior value.
+
+        ``target_status`` defaults to the type's
+        ``canonical_working_status()``. If the type defines multiple wip
+        statuses an ``AmbiguousTransitionError`` surfaces (caller must
+        specify ``target_status`` explicitly); if zero,
+        ``InvalidTransitionError``.
+
+        Note: rollback uses ``release_claim``, which itself may fail (e.g.
+        a concurrent reassignment). The audit trail preserves both the
+        ``claimed`` and ``released`` events even on rollback — auditability
+        is preserved at the cost of leaving a brief observable window
+        where the issue is claimed but not transitioned.
+        """
+        actor = actor or assignee
+        issue = self.claim_issue(issue_id, assignee=assignee, actor=actor)
+
+        if target_status is None:
+            tpl = self.templates.get_type(issue.type)
+            if tpl is None:
+                # Roll back the claim before surfacing the error.
+                from filigree.types.api import InvalidTransitionError
+
+                self._safe_release_claim(issue_id, actor=actor)
+                raise InvalidTransitionError(issue.type, issue.status)
+            try:
+                target_status = tpl.canonical_working_status()
+            except Exception:
+                self._safe_release_claim(issue_id, actor=actor)
+                raise
+
+        try:
+            return self.update_issue(issue_id, status=target_status, actor=actor)
+        except Exception:
+            self._safe_release_claim(issue_id, actor=actor)
+            raise
+
+    def start_next_work(
+        self,
+        *,
+        assignee: str,
+        type_filter: str | None = None,
+        priority_min: int | None = None,
+        priority_max: int | None = None,
+        target_status: str | None = None,
+        actor: str = "",
+    ) -> Issue | None:
+        """Claim the highest-priority ready issue (filtered) and atomically
+        transition it to a working status.
+
+        Phase D6 composed operation: ``claim_next`` + atomic transition with
+        compensating rollback (see ``start_work`` for the rollback contract).
+        Returns ``None`` if no ready issue matches the filters.
+
+        Tie-break ordering inherits from ``claim_next``: priority asc,
+        created_at asc, issue_id asc.
+        """
+        actor = actor or assignee
+        claimed = self.claim_next(
+            assignee,
+            type_filter=type_filter,
+            priority_min=priority_min,
+            priority_max=priority_max,
+            actor=actor,
+        )
+        if claimed is None:
+            return None
+
+        if target_status is None:
+            tpl = self.templates.get_type(claimed.type)
+            if tpl is None:
+                from filigree.types.api import InvalidTransitionError
+
+                self._safe_release_claim(claimed.id, actor=actor)
+                raise InvalidTransitionError(claimed.type, claimed.status)
+            try:
+                target_status = tpl.canonical_working_status()
+            except Exception:
+                self._safe_release_claim(claimed.id, actor=actor)
+                raise
+
+        try:
+            return self.update_issue(claimed.id, status=target_status, actor=actor)
+        except Exception:
+            self._safe_release_claim(claimed.id, actor=actor)
+            raise
+
+    def _safe_release_claim(self, issue_id: str, *, actor: str) -> None:
+        """Best-effort claim rollback for start_work / start_next_work.
+
+        Used in compensating-action paths — never raises; logs at WARN if
+        the rollback itself fails so operators can spot leaked claims.
+        """
+        try:
+            self.release_claim(issue_id, actor=actor)
+        except (KeyError, ValueError) as exc:
+            logger.warning("start_work compensating release_claim failed for %s: %s", issue_id, exc)
+
     def _batch_with_transition_errors(
         self,
         issue_ids: list[str],
