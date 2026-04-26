@@ -17,7 +17,7 @@ from typing import Any
 from mcp.types import TextContent, Tool
 
 from filigree.core import VALID_SEVERITIES
-from filigree.mcp_tools.common import _parse_args, _text, _validate_int_range
+from filigree.mcp_tools.common import _list_response, _parse_args, _text, _validate_int_range
 from filigree.scanners import list_scanners as _list_scanners
 from filigree.scanners import load_scanner, validate_scanner_command
 from filigree.types.api import ErrorCode, ErrorResponse
@@ -337,12 +337,14 @@ async def _handle_list_scanners(arguments: dict[str, Any]) -> list[TextContent]:
         return _text(ErrorResponse(error="Project directory not initialized", code=ErrorCode.NOT_INITIALIZED))
     load_errors: list[str] = []
     scanners = _list_scanners(scanners_dir, errors=load_errors)
-    result_data: dict[str, Any] = {"scanners": [s.to_dict() for s in scanners]}
     if load_errors:
-        result_data["errors"] = load_errors
-    if not scanners:
-        result_data["hint"] = "No scanners registered. Add TOML files to .filigree/scanners/"
-    return _text(result_data)
+        # Surface load errors via the logger now that the response envelope is
+        # the strict ListResponse[T]. Drops the legacy ``errors`` and ``hint``
+        # siblings per the loom precedent.
+        for msg in load_errors:
+            _logger.warning("list_scanners load error: %s", msg)
+    items = [s.to_dict() for s in scanners]
+    return _text(_list_response(items, has_more=False))
 
 
 async def _handle_report_finding(arguments: dict[str, Any]) -> list[TextContent]:

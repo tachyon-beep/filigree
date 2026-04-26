@@ -10,7 +10,14 @@ from typing import Any
 from mcp.types import TextContent, Tool
 
 from filigree.core import VALID_ASSOC_TYPES, VALID_FINDING_STATUSES, VALID_SEVERITIES
-from filigree.mcp_tools.common import _parse_args, _text, _validate_actor, _validate_int_range, _validate_str
+from filigree.mcp_tools.common import (
+    _list_response,
+    _parse_args,
+    _text,
+    _validate_actor,
+    _validate_int_range,
+    _validate_str,
+)
 from filigree.types.api import BatchFailure, BatchResponse, ErrorCode, ErrorResponse
 from filigree.types.inputs import (
     AddFileAssociationArgs,
@@ -286,7 +293,10 @@ async def _handle_list_files(arguments: dict[str, Any]) -> list[TextContent]:
         sort=sort,
         direction=direction,
     )
-    return _text(files_result)
+    items = list(files_result["results"])
+    has_more = bool(files_result["has_more"])
+    next_offset = offset + len(items) if has_more else None
+    return _text(_list_response(items, has_more=has_more, next_offset=next_offset))
 
 
 async def _handle_get_file(arguments: dict[str, Any]) -> list[TextContent]:
@@ -476,7 +486,11 @@ async def _handle_list_findings(arguments: dict[str, Any]) -> list[TextContent]:
         result = tracker.list_findings_global(limit=limit, offset=offset, **filters)
     except ValueError as e:
         return _text(ErrorResponse(error=str(e), code=ErrorCode.VALIDATION))
-    return _text(result)
+    findings = list(result["findings"])
+    total = int(result["total"])
+    has_more = (offset + len(findings)) < total
+    next_offset = offset + len(findings) if has_more else None
+    return _text(_list_response(findings, has_more=has_more, next_offset=next_offset))
 
 
 async def _handle_update_finding(arguments: dict[str, Any]) -> list[TextContent]:

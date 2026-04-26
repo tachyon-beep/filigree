@@ -66,37 +66,37 @@ class TestListObservationsTool:
     async def test_list_empty(self, mcp_db: FiligreeDB) -> None:
         result = await call_tool("list_observations", {})
         data = _parse(result)
-        assert data["observations"] == []
-        assert data["stats"]["count"] == 0
+        assert data["items"] == []
+        assert data["has_more"] is False
 
     async def test_list_returns_observations(self, mcp_db: FiligreeDB) -> None:
         mcp_db.create_observation("First")
         mcp_db.create_observation("Second")
         result = await call_tool("list_observations", {})
         data = _parse(result)
-        assert len(data["observations"]) == 2
+        assert len(data["items"]) == 2
 
     async def test_list_with_file_path_filter(self, mcp_db: FiligreeDB) -> None:
         mcp_db.create_observation("api bug", file_path="src/api/routes.py")
         mcp_db.create_observation("core bug", file_path="src/core.py")
         result = await call_tool("list_observations", {"file_path": "src/api"})
         data = _parse(result)
-        assert len(data["observations"]) == 1
-        assert data["observations"][0]["summary"] == "api bug"
+        assert len(data["items"]) == 1
+        assert data["items"][0]["summary"] == "api bug"
 
     async def test_list_with_limit(self, mcp_db: FiligreeDB) -> None:
         for i in range(5):
             mcp_db.create_observation(f"Obs {i}")
         result = await call_tool("list_observations", {"limit": 2})
         data = _parse(result)
-        assert len(data["observations"]) == 2
+        assert len(data["items"]) == 2
 
     async def test_list_has_more_true_when_more_results(self, mcp_db: FiligreeDB) -> None:
         for i in range(5):
             mcp_db.create_observation(f"Obs {i}")
         result = await call_tool("list_observations", {"limit": 2})
         data = _parse(result)
-        assert len(data["observations"]) == 2
+        assert len(data["items"]) == 2
         assert data["has_more"] is True
 
     async def test_list_has_more_false_when_no_more_results(self, mcp_db: FiligreeDB) -> None:
@@ -104,7 +104,7 @@ class TestListObservationsTool:
             mcp_db.create_observation(f"Obs {i}")
         result = await call_tool("list_observations", {"limit": 5})
         data = _parse(result)
-        assert len(data["observations"]) == 2
+        assert len(data["items"]) == 2
         assert data["has_more"] is False
 
     async def test_list_with_file_id_filter(self, mcp_db: FiligreeDB) -> None:
@@ -112,8 +112,8 @@ class TestListObservationsTool:
         mcp_db.create_observation("other bug", file_path="src/other.py")
         result = await call_tool("list_observations", {"file_id": obs["file_id"]})
         data = _parse(result)
-        assert len(data["observations"]) == 1
-        assert data["observations"][0]["summary"] == "api bug"
+        assert len(data["items"]) == 1
+        assert data["items"][0]["summary"] == "api bug"
 
 
 class TestDismissObservationTool:
@@ -298,20 +298,13 @@ class TestPromoteObservationTool:
 
 
 class TestListObservationsStatsGuard:
-    """Verify _handle_list_observations handles observation_stats() failures."""
+    """Verify _handle_list_observations handles list_observations() DB failures.
 
-    async def test_list_observations_stats_failure_returns_fallback(self, mcp_db: FiligreeDB) -> None:
-        """If observation_stats() raises sqlite3.Error, list still returns with fallback stats."""
-        import sqlite3
-        from unittest.mock import patch
-
-        mcp_db.create_observation("test obs")
-        with patch.object(mcp_db, "observation_stats", side_effect=sqlite3.OperationalError("no such table")):
-            result = await call_tool("list_observations", {})
-        data = _parse(result)
-        assert len(data["observations"]) == 1
-        assert data["stats"]["count"] is None  # Total unknown when stats query fails
-        assert data["stats"]["page_count"] == 1  # Page count still available
+    The stats-fallback path was removed in Phase D2 (MCP list_observations no
+    longer surfaces a ``stats`` sibling — consumers needing observation
+    statistics use ``observation_stats`` directly via the dashboard or a
+    future dedicated tool). The IO-error path remains relevant.
+    """
 
     async def test_list_observations_catches_sqlite_error(self, mcp_db: FiligreeDB) -> None:
         """sqlite3.Error from list_observations itself returns error response."""

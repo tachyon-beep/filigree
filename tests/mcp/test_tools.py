@@ -109,7 +109,7 @@ class TestListAndSearch:
         result = await call_tool("list_issues", {})
         data = _parse(result)
         # +1 for the auto-seeded "Future" release singleton
-        assert len(data["issues"]) == 3
+        assert len(data["items"]) == 3
         assert data["has_more"] is False
 
     async def test_list_issues_filter(self, mcp_db: FiligreeDB) -> None:
@@ -120,15 +120,15 @@ class TestListAndSearch:
         data = _parse(result)
         # +1 for the auto-seeded "Future" release (status "planning" is in
         # the "open" category, so it matches the status="open" filter)
-        assert len(data["issues"]) == 2
+        assert len(data["items"]) == 2
 
     async def test_search(self, mcp_db: FiligreeDB) -> None:
         mcp_db.create_issue("Authentication bug")
         mcp_db.create_issue("Something else")
         result = await call_tool("search_issues", {"query": "auth"})
         data = _parse(result)
-        assert len(data["issues"]) == 1
-        assert data["issues"][0]["title"] == "Authentication bug"
+        assert len(data["items"]) == 1
+        assert data["items"][0]["title"] == "Authentication bug"
         assert data["has_more"] is False
 
 
@@ -141,10 +141,9 @@ class TestListPagination:
             mcp_db.create_issue(f"Issue {i}")
         result = await call_tool("list_issues", {})
         data = _parse(result)
-        assert len(data["issues"]) == _MAX_LIST_RESULTS
+        assert len(data["items"]) == _MAX_LIST_RESULTS
         assert data["has_more"] is True
-        assert data["limit"] == _MAX_LIST_RESULTS
-        assert data["offset"] == 0
+        assert data["next_offset"] == _MAX_LIST_RESULTS
 
     async def test_list_issues_no_limit(self, mcp_db: FiligreeDB) -> None:
         """no_limit=true bypasses the cap."""
@@ -153,7 +152,7 @@ class TestListPagination:
         result = await call_tool("list_issues", {"no_limit": True})
         data = _parse(result)
         # +1 for the auto-seeded "Future" release singleton
-        assert len(data["issues"]) == _MAX_LIST_RESULTS + 5 + 1
+        assert len(data["items"]) == _MAX_LIST_RESULTS + 5 + 1
         assert data["has_more"] is False
 
     async def test_list_issues_no_limit_with_explicit_limit_has_more(self, mcp_db: FiligreeDB) -> None:
@@ -162,9 +161,9 @@ class TestListPagination:
             mcp_db.create_issue(f"Issue {i}")
         result = await call_tool("list_issues", {"no_limit": True, "limit": 5})
         data = _parse(result)
-        assert len(data["issues"]) == 5
+        assert len(data["items"]) == 5
         assert data["has_more"] is True
-        assert data["limit"] == 5
+        assert data["next_offset"] == 5
 
     async def test_list_issues_offset(self, mcp_db: FiligreeDB) -> None:
         """Offset works with the capped limit."""
@@ -173,9 +172,9 @@ class TestListPagination:
         result = await call_tool("list_issues", {"offset": _MAX_LIST_RESULTS})
         data = _parse(result)
         # +1 for the auto-seeded "Future" release singleton
-        assert len(data["issues"]) == 11
+        assert len(data["items"]) == 11
         assert data["has_more"] is False
-        assert data["offset"] == _MAX_LIST_RESULTS
+        assert "next_offset" not in data
 
     async def test_list_issues_requested_limit_below_cap(self, mcp_db: FiligreeDB) -> None:
         """Explicit limit below _MAX_LIST_RESULTS is respected."""
@@ -183,9 +182,9 @@ class TestListPagination:
             mcp_db.create_issue(f"Issue {i}")
         result = await call_tool("list_issues", {"limit": 3})
         data = _parse(result)
-        assert len(data["issues"]) == 3
+        assert len(data["items"]) == 3
         assert data["has_more"] is True
-        assert data["limit"] == 3
+        assert data["next_offset"] == 3
 
     async def test_search_issues_capped(self, mcp_db: FiligreeDB) -> None:
         """search_issues respects the same cap."""
@@ -193,7 +192,7 @@ class TestListPagination:
             mcp_db.create_issue(f"Bug {i}")
         result = await call_tool("search_issues", {"query": "Bug"})
         data = _parse(result)
-        assert len(data["issues"]) == _MAX_LIST_RESULTS
+        assert len(data["items"]) == _MAX_LIST_RESULTS
         assert data["has_more"] is True
 
     async def test_search_issues_no_limit(self, mcp_db: FiligreeDB) -> None:
@@ -202,7 +201,7 @@ class TestListPagination:
             mcp_db.create_issue(f"Bug {i}")
         result = await call_tool("search_issues", {"query": "Bug", "no_limit": True})
         data = _parse(result)
-        assert len(data["issues"]) == _MAX_LIST_RESULTS + 5
+        assert len(data["items"]) == _MAX_LIST_RESULTS + 5
         assert data["has_more"] is False
 
     async def test_search_issues_no_limit_with_explicit_limit_has_more(self, mcp_db: FiligreeDB) -> None:
@@ -211,7 +210,7 @@ class TestListPagination:
             mcp_db.create_issue(f"Bug {i}")
         result = await call_tool("search_issues", {"query": "Bug", "no_limit": True, "limit": 5})
         data = _parse(result)
-        assert len(data["issues"]) == 5
+        assert len(data["items"]) == 5
         assert data["has_more"] is True
 
 
@@ -272,8 +271,8 @@ class TestReadyAndBlocked:
         data = _parse(result)
         # +1 for the auto-seeded "Future" release singleton (status "planning"
         # is in the "open" category, so it counts as ready)
-        assert len(data) == 2
-        titles = {d["title"] for d in data}
+        assert len(data["items"]) == 2
+        titles = {d["title"] for d in data["items"]}
         assert "Ready one" in titles
 
     async def test_get_ready_shape(self, mcp_db: FiligreeDB) -> None:
@@ -282,7 +281,7 @@ class TestReadyAndBlocked:
         result = await call_tool("get_ready", {})
         data = _parse(result)
         expected_keys = {"id", "title", "status", "priority", "type"}
-        assert set(data[0].keys()) == expected_keys
+        assert set(data["items"][0].keys()) == expected_keys
 
     async def test_get_blocked(self, mcp_db: FiligreeDB) -> None:
         a = mcp_db.create_issue("Blocked")
@@ -290,9 +289,9 @@ class TestReadyAndBlocked:
         mcp_db.add_dependency(a.id, b.id)
         result = await call_tool("get_blocked", {})
         data = _parse(result)
-        assert len(data) == 1
-        assert data[0]["id"] == a.id
-        assert b.id in data[0]["blocked_by"]
+        assert len(data["items"]) == 1
+        assert data["items"][0]["id"] == a.id
+        assert b.id in data["items"][0]["blocked_by"]
 
     async def test_get_blocked_shape(self, mcp_db: FiligreeDB) -> None:
         """get_blocked must return BlockedIssue shape (SlimIssue + blocked_by)."""
@@ -302,7 +301,7 @@ class TestReadyAndBlocked:
         result = await call_tool("get_blocked", {})
         data = _parse(result)
         expected_keys = {"id", "title", "status", "priority", "type", "blocked_by"}
-        assert set(data[0].keys()) == expected_keys
+        assert set(data["items"][0].keys()) == expected_keys
 
 
 class TestPlan:
@@ -336,8 +335,8 @@ class TestComments:
         mcp_db.add_comment(issue.id, "Second", author="bob")
         result = await call_tool("get_comments", {"issue_id": issue.id})
         data = _parse(result)
-        assert len(data) == 2
-        assert data[0]["text"] == "First"
+        assert len(data["items"]) == 2
+        assert data["items"][0]["text"] == "First"
 
 
 class TestTemplateAndSummary:
@@ -602,20 +601,21 @@ class TestGetChanges:
         mcp_db.update_issue(issue.id, status="in_progress")
         result = await call_tool("get_changes", {"since": "2000-01-01T00:00:00+00:00"})
         data = _parse(result)
-        assert len(data) >= 2  # created + status_changed
-        assert any(e["event_type"] == "status_changed" for e in data)
+        assert len(data["items"]) >= 2  # created + status_changed
+        assert any(e["event_type"] == "status_changed" for e in data["items"])
 
     async def test_get_changes_empty(self, mcp_db: FiligreeDB) -> None:
         result = await call_tool("get_changes", {"since": "2099-01-01T00:00:00+00:00"})
         data = _parse(result)
-        assert data == []
+        assert data["items"] == []
+        assert data["has_more"] is False
 
     async def test_get_changes_with_limit(self, mcp_db: FiligreeDB) -> None:
         for i in range(5):
             mcp_db.create_issue(f"Issue {i}")
         result = await call_tool("get_changes", {"since": "2000-01-01T00:00:00+00:00", "limit": 2})
         data = _parse(result)
-        assert len(data) == 2
+        assert len(data["items"]) == 2
 
 
 class TestActorIdentity:
@@ -769,13 +769,14 @@ class TestWorkflowTemplateTools:
     async def test_list_types(self, mcp_db: FiligreeDB) -> None:
         result = await call_tool("list_types", {})
         data = _parse(result)
-        assert isinstance(data, list)
-        assert len(data) >= 2  # At least task and bug from core pack
-        type_names = [t["type"] for t in data]
+        items = data["items"]
+        assert isinstance(items, list)
+        assert len(items) >= 2  # At least task and bug from core pack
+        type_names = [t["type"] for t in items]
         assert "task" in type_names
         assert "bug" in type_names
         # Each type has required fields
-        for t in data:
+        for t in items:
             assert "display_name" in t
             assert "pack" in t
             assert "states" in t
@@ -784,7 +785,7 @@ class TestWorkflowTemplateTools:
     async def test_list_types_sorted(self, mcp_db: FiligreeDB) -> None:
         result = await call_tool("list_types", {})
         data = _parse(result)
-        type_names = [t["type"] for t in data]
+        type_names = [t["type"] for t in data["items"]]
         assert type_names == sorted(type_names)
 
     async def test_get_type_info_task(self, mcp_db: FiligreeDB) -> None:
@@ -811,11 +812,12 @@ class TestWorkflowTemplateTools:
     async def test_list_packs(self, mcp_db: FiligreeDB) -> None:
         result = await call_tool("list_packs", {})
         data = _parse(result)
-        assert isinstance(data, list)
-        assert len(data) >= 2  # core + planning
-        pack_names = [p["pack"] for p in data]
+        items = data["items"]
+        assert isinstance(items, list)
+        assert len(items) >= 2  # core + planning
+        pack_names = [p["pack"] for p in items]
         assert "core" in pack_names
-        for p in data:
+        for p in items:
             assert "version" in p
             assert "types" in p
             assert "requires_packs" in p
@@ -909,7 +911,7 @@ class TestWorkflowTemplateTools:
         # Templates should still work after reload
         result2 = await call_tool("list_types", {})
         data2 = _parse(result2)
-        assert len(data2) >= 2
+        assert len(data2["items"]) >= 2
 
     async def test_reload_templates_corrupt_config_returns_structured_error(self, mcp_db: FiligreeDB) -> None:
         """Bug filigree-5c9f9aa7c2: corrupt config.json must not crash the MCP tool."""
@@ -964,7 +966,7 @@ class TestMCPMutationEnhancements:
         mcp_db.update_issue(b.id, status="in_progress")
         result = await call_tool("list_issues", {"status_category": "open"})
         data = _parse(result)
-        issues = data["issues"]
+        issues = data["items"]
         # Should return open issues (not in_progress ones)
         statuses = {d["status"] for d in issues}
         assert "in_progress" not in statuses
@@ -1510,8 +1512,9 @@ class TestFileTools:
         await call_tool("register_file", {"path": "src/a.py", "language": "python"})
         await call_tool("register_file", {"path": "docs/readme.md", "language": "markdown"})
         result = _parse(await call_tool("list_files", {"path_prefix": "src/", "limit": 10}))
-        assert result["total"] == 1
-        assert result["results"][0]["path"] == "src/a.py"
+        assert len(result["items"]) == 1
+        assert result["items"][0]["path"] == "src/a.py"
+        assert result["has_more"] is False
 
     async def test_list_files_invalid_sort_rejected(self, mcp_db: FiligreeDB) -> None:
         result = _parse(await call_tool("list_files", {"sort": "bad_sort"}))
@@ -1639,13 +1642,14 @@ class TestScannerTools:
 
     async def test_list_scanners_empty(self, mcp_db: FiligreeDB) -> None:
         result = _parse(await call_tool("list_scanners", {}))
-        assert result["scanners"] == []
+        assert result["items"] == []
+        assert result["has_more"] is False
 
     async def test_list_scanners_with_registry(self, mcp_db: FiligreeDB) -> None:
         self._write_scanner_toml(mcp_db)
         result = _parse(await call_tool("list_scanners", {}))
-        assert len(result["scanners"]) == 1
-        assert result["scanners"][0]["name"] == "test-scanner"
+        assert len(result["items"]) == 1
+        assert result["items"][0]["name"] == "test-scanner"
 
     async def test_trigger_scan_scanner_not_found(self, mcp_db: FiligreeDB) -> None:
         result = _parse(
@@ -2225,7 +2229,7 @@ class TestListIssuesStatusCategoryEmpty:
         mcp_db.create_issue("Should not appear")
         result = await call_tool("list_issues", {"status_category": "nonexistent"})
         data = _parse(result)
-        assert data["issues"] == [], f"Expected empty results for unknown category, got {len(data['issues'])} issues"
+        assert data["items"] == [], f"Expected empty results for unknown category, got {len(data['items'])} issues"
 
     async def test_valid_category_still_filters(self, mcp_db: FiligreeDB) -> None:
         """A valid category with matching issues should still work correctly."""
@@ -2234,7 +2238,7 @@ class TestListIssuesStatusCategoryEmpty:
         mcp_db.update_issue(b.id, status="in_progress")
         result = await call_tool("list_issues", {"status_category": "wip"})
         data = _parse(result)
-        ids = [i["id"] for i in data["issues"]]
+        ids = [i["id"] for i in data["items"]]
         assert b.id in ids
 
 
@@ -2560,21 +2564,23 @@ class TestListLabels:
         mcp_db.create_issue("A", labels=["cluster:broad-except"])
         result = await call_tool("list_labels", {})
         data = _parse(result)
-        assert "namespaces" in data
-        assert "cluster" in data["namespaces"]
+        ns_names = {item["namespace"] for item in data["items"]}
+        assert "cluster" in ns_names
 
     async def test_list_labels_with_namespace_filter(self, mcp_db: FiligreeDB) -> None:
         mcp_db.create_issue("A", labels=["cluster:x", "effort:m"])
         result = await call_tool("list_labels", {"namespace": "cluster"})
         data = _parse(result)
-        assert "cluster" in data["namespaces"]
-        assert "effort" not in data["namespaces"]
+        ns_names = {item["namespace"] for item in data["items"]}
+        assert "cluster" in ns_names
+        assert "effort" not in ns_names
 
     async def test_list_labels_includes_virtual(self, mcp_db: FiligreeDB) -> None:
         result = await call_tool("list_labels", {})
         data = _parse(result)
-        assert "age" in data["namespaces"]
-        assert "has" in data["namespaces"]
+        ns_names = {item["namespace"] for item in data["items"]}
+        assert "age" in ns_names
+        assert "has" in ns_names
 
 
 class TestGetLabelTaxonomy:

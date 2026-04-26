@@ -12,6 +12,7 @@ from filigree.mcp_tools.common import (
     _MAX_LIST_RESULTS,
     _apply_has_more,
     _build_transition_error,
+    _list_response,
     _parse_args,
     _resolve_pagination,
     _slim_issue,
@@ -25,11 +26,9 @@ from filigree.types.api import (
     ClaimNextResponse,
     ErrorCode,
     ErrorResponse,
-    IssueListResponse,
     IssueWithChangedFields,
     IssueWithTransitions,
     IssueWithUnblocked,
-    SearchResponse,
     SlimIssue,
     TransitionDetail,
     classify_value_error,
@@ -434,14 +433,9 @@ async def _handle_list_issues(arguments: dict[str, Any]) -> list[TextContent]:
     except ValueError as e:
         return _text(ErrorResponse(error=str(e), code=ErrorCode.VALIDATION))
     issues, has_more = _apply_has_more(issues, effective_limit)
-    return _text(
-        IssueListResponse(
-            issues=[i.to_dict() for i in issues],
-            limit=effective_limit,
-            offset=offset,
-            has_more=has_more,
-        )
-    )
+    items = [i.to_dict() for i in issues]
+    next_offset = offset + len(items) if has_more else None
+    return _text(_list_response(items, has_more=has_more, next_offset=next_offset))
 
 
 async def _handle_create_issue(arguments: dict[str, Any]) -> list[TextContent]:
@@ -585,14 +579,9 @@ async def _handle_search_issues(arguments: dict[str, Any]) -> list[TextContent]:
         offset=offset,
     )
     issues, has_more = _apply_has_more(issues, effective_limit)
-    return _text(
-        SearchResponse(
-            issues=[_slim_issue(i) for i in issues],
-            limit=effective_limit,
-            offset=offset,
-            has_more=has_more,
-        )
-    )
+    items = [_slim_issue(i) for i in issues]
+    next_offset = offset + len(items) if has_more else None
+    return _text(_list_response(items, has_more=has_more, next_offset=next_offset))
 
 
 async def _handle_claim_issue(arguments: dict[str, Any]) -> list[TextContent]:

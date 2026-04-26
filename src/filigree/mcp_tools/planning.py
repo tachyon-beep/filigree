@@ -7,7 +7,14 @@ from typing import Any, cast
 
 from mcp.types import TextContent, Tool
 
-from filigree.mcp_tools.common import _parse_args, _slim_issue, _text, _validate_actor, _validate_int_range
+from filigree.mcp_tools.common import (
+    _list_response,
+    _parse_args,
+    _slim_issue,
+    _text,
+    _validate_actor,
+    _validate_int_range,
+)
 from filigree.types.api import BlockedIssue, CriticalPathResponse, DependencyActionResponse, ErrorCode, ErrorResponse, PlanResponse
 from filigree.types.inputs import (
     AddDependencyArgs,
@@ -194,7 +201,8 @@ async def _handle_get_ready(arguments: dict[str, Any]) -> list[TextContent]:
 
     tracker = _get_db()
     issues = tracker.get_ready()
-    return _text([_slim_issue(i) for i in issues])
+    items = [_slim_issue(i) for i in issues]
+    return _text(_list_response(items, has_more=False))
 
 
 async def _handle_get_blocked(arguments: dict[str, Any]) -> list[TextContent]:
@@ -202,7 +210,8 @@ async def _handle_get_blocked(arguments: dict[str, Any]) -> list[TextContent]:
 
     tracker = _get_db()
     issues = tracker.get_blocked()
-    return _text([BlockedIssue(**_slim_issue(i), blocked_by=i.blocked_by) for i in issues])
+    items = [BlockedIssue(**_slim_issue(i), blocked_by=i.blocked_by) for i in issues]
+    return _text(_list_response(items, has_more=False))
 
 
 async def _handle_get_plan(arguments: dict[str, Any]) -> list[TextContent]:

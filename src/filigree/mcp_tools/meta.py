@@ -9,7 +9,7 @@ from typing import Any
 
 from mcp.types import TextContent, Tool
 
-from filigree.mcp_tools.common import _parse_args, _text, _validate_actor, _validate_int_range
+from filigree.mcp_tools.common import _list_response, _parse_args, _text, _validate_actor, _validate_int_range
 from filigree.types.api import (
     AddCommentResult,
     ArchiveClosedResponse,
@@ -343,7 +343,7 @@ async def _handle_get_comments(arguments: dict[str, Any]) -> list[TextContent]:
     except KeyError:
         return _text(ErrorResponse(error=f"Issue not found: {args['issue_id']}", code=ErrorCode.NOT_FOUND))
     comments = tracker.get_comments(args["issue_id"])
-    return _text(comments)
+    return _text(_list_response(list(comments), has_more=False))
 
 
 async def _handle_add_label(arguments: dict[str, Any]) -> list[TextContent]:
@@ -445,11 +445,13 @@ async def _handle_get_changes(arguments: dict[str, Any]) -> list[TextContent]:
             ErrorResponse(error=f"Invalid ISO timestamp: {since!r}. Expected format: 2026-01-15T10:30:00", code=ErrorCode.VALIDATION)
         )
     tracker = _get_db()
-    events = tracker.get_events_since(
-        since_normalized,
-        limit=args.get("limit", 100),
-    )
-    return _text(events)
+    limit = args.get("limit", 100)
+    # Overfetch by 1 to detect has_more, matching list_issues / search_issues.
+    events = tracker.get_events_since(since_normalized, limit=limit + 1)
+    has_more = len(events) > limit
+    if has_more:
+        events = events[:limit]
+    return _text(_list_response(list(events), has_more=has_more))
 
 
 async def _handle_get_summary(arguments: dict[str, Any]) -> list[TextContent]:
@@ -568,14 +570,15 @@ async def _handle_get_issue_events(arguments: dict[str, Any]) -> list[TextConten
 
     args = _parse_args(arguments, GetIssueEventsArgs)
     tracker = _get_db()
+    limit = args.get("limit", 50)
     try:
-        events = tracker.get_issue_events(
-            args["issue_id"],
-            limit=args.get("limit", 50),
-        )
-        return _text(events)
+        events = tracker.get_issue_events(args["issue_id"], limit=limit + 1)
     except KeyError:
         return _text(ErrorResponse(error=f"Issue not found: {args['issue_id']}", code=ErrorCode.NOT_FOUND))
+    has_more = len(events) > limit
+    if has_more:
+        events = events[:limit]
+    return _text(_list_response(list(events), has_more=has_more))
 
 
 async def _handle_list_labels(arguments: dict[str, Any]) -> list[TextContent]:
@@ -590,7 +593,13 @@ async def _handle_list_labels(arguments: dict[str, Any]) -> list[TextContent]:
         )
     except (sqlite3.Error, ValueError) as exc:
         return _text(ErrorResponse(error=f"Failed to list labels: {exc}", code=ErrorCode.IO))
-    return _text(result)
+    # ``tracker.list_labels`` returns ``{namespaces: {ns: {type, writable,
+    # labels}}, total_in_result}``. Flatten the namespaces map to a list of
+    # entries so list_labels matches the ListResponse[T] envelope used by
+    # every other MCP list tool. The bounded total is recoverable by the
+    # caller as ``sum(len(item['labels']) for item in items)``.
+    items: list[dict[str, Any]] = [{"namespace": ns, **ns_data} for ns, ns_data in result["namespaces"].items()]
+    return _text(_list_response(items, has_more=False))
 
 
 async def _handle_get_label_taxonomy(arguments: dict[str, Any]) -> list[TextContent]:

@@ -185,34 +185,6 @@ class EnrichedIssueDetail(IssueDict):
 # ---------------------------------------------------------------------------
 
 
-class IssueListResponse(TypedDict):
-    """Paginated issue list (MCP list_issues).
-
-    Does not use ``PaginatedResult`` because the list key is ``issues``
-    (not ``results``) for wire-format compatibility, and ``total`` is
-    omitted because counting all matching issues is expensive for large
-    projects. File pagination uses ``PaginatedResult`` with ``total``
-    because file counts are bounded.
-    """
-
-    issues: list[IssueDict]
-    limit: int
-    offset: int
-    has_more: bool
-
-
-class SearchResponse(TypedDict):
-    """Paginated search results with slim issues (MCP search_issues).
-
-    Same pagination divergence as ``IssueListResponse`` — see its docstring.
-    """
-
-    issues: list[SlimIssue]
-    limit: int
-    offset: int
-    has_more: bool
-
-
 class PlanResponse(PlanTree):
     """Plan tree with computed progress percentage (MCP get_plan)."""
 

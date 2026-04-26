@@ -12,6 +12,7 @@ from mcp.types import TextContent, Tool
 from filigree.mcp_tools.common import (
     _MAX_LIST_RESULTS,
     _apply_has_more,
+    _list_response,
     _parse_args,
     _resolve_pagination,
     _text,
@@ -207,20 +208,11 @@ async def _handle_list_observations(arguments: dict[str, Any]) -> list[TextConte
     except sqlite3.Error as e:
         return _text(ErrorResponse(error=f"Database error: {e}", code=ErrorCode.IO))
     observations, has_more = _apply_has_more(observations, effective_limit)
-    stats: dict[str, object]
-    try:
-        stats = dict(tracker.observation_stats(sweep=False))
-    except sqlite3.Error as e:
-        logger.warning("observation_stats failed, returning degraded response", exc_info=True)
-        stats = {
-            "count": None,
-            "page_count": len(observations),
-            "stale_count": None,
-            "oldest_hours": None,
-            "expiring_soon_count": None,
-            "stats_error": f"observation stats temporarily unavailable ({type(e).__name__})",
-        }
-    return _text({"observations": observations, "stats": stats, "has_more": has_more})
+    next_offset = offset + len(observations) if has_more else None
+    # Drops the legacy ``stats`` sibling per the loom precedent (Phase C4 dropped
+    # it on the HTTP side); consumers needing observation stats use
+    # ``tracker.observation_stats()`` via a dedicated tool.
+    return _text(_list_response(list(observations), has_more=has_more, next_offset=next_offset))
 
 
 async def _handle_dismiss_observation(arguments: dict[str, Any]) -> list[TextContent]:

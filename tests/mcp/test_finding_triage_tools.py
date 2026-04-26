@@ -52,25 +52,25 @@ class TestListFindingsTool:
     async def test_list_all(self, mcp_db: FiligreeDB) -> None:
         _seed_findings(mcp_db)
         data = _parse(await call_tool("list_findings", {}))
-        assert len(data["findings"]) == 3
+        assert len(data["items"]) == 3
 
     async def test_filter_by_severity(self, mcp_db: FiligreeDB) -> None:
         _seed_findings(mcp_db)
         data = _parse(await call_tool("list_findings", {"severity": "critical"}))
-        assert len(data["findings"]) == 1
-        assert data["findings"][0]["rule_id"] == "injection"
+        assert len(data["items"]) == 1
+        assert data["items"][0]["rule_id"] == "injection"
 
     async def test_filter_by_status(self, mcp_db: FiligreeDB) -> None:
         _seed_findings(mcp_db)
         data = _parse(await call_tool("list_findings", {"status": "open"}))
-        assert len(data["findings"]) == 3
+        assert len(data["items"]) == 3
 
     async def test_pagination(self, mcp_db: FiligreeDB) -> None:
         _seed_findings(mcp_db)
         page1 = _parse(await call_tool("list_findings", {"limit": 2, "offset": 0}))
-        assert len(page1["findings"]) == 2
+        assert len(page1["items"]) == 2
         page2 = _parse(await call_tool("list_findings", {"limit": 2, "offset": 2}))
-        assert len(page2["findings"]) == 1
+        assert len(page2["items"]) == 1
 
 
 class TestUpdateFindingTool:

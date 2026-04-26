@@ -24,7 +24,6 @@ from filigree.types.api import (
     ErrorCode,
     ErrorResponse,
     IssueDetailEvent,
-    IssueListResponse,
     IssueWithChangedFields,
     IssueWithTransitions,
     IssueWithUnblocked,
@@ -33,7 +32,6 @@ from filigree.types.api import (
     OutboundTransitionInfo,
     PackListItem,
     PlanResponse,
-    SearchResponse,
     SlimIssue,
     StateExplanation,
     StatsWithPrefix,
@@ -885,35 +883,6 @@ class TestClaimNextResponseShape:
         assert isinstance(result["selection_reason"], str)
 
 
-class TestIssueListResponseShape:
-    def test_keys_match(self, db: FiligreeDB) -> None:
-        db.create_issue("Test", type="task")
-        issues = db.list_issues(limit=1)
-        result = IssueListResponse(
-            issues=[i.to_dict() for i in issues],
-            limit=1,
-            offset=0,
-            has_more=False,
-        )
-        hints = get_type_hints(IssueListResponse)
-        assert set(result.keys()) == set(hints.keys())
-
-
-class TestSearchResponseShape:
-    def test_keys_match(self, db: FiligreeDB) -> None:
-        from filigree.mcp_tools.common import _slim_issue
-
-        issue = db.create_issue("Searchable", type="task")
-        result = SearchResponse(
-            issues=[_slim_issue(issue)],
-            limit=10,
-            offset=0,
-            has_more=False,
-        )
-        hints = get_type_hints(SearchResponse)
-        assert set(result.keys()) == set(hints.keys())
-
-
 class TestErrorResponseShape:
     def test_required_keys(self) -> None:
         """Required keys (error, code) always present; details is NotRequired."""
@@ -1062,7 +1031,7 @@ class TestAddCommentResultShape:
 
         await call_tool("create_issue", {"title": "Comment target"})
         issues = _parse(await call_tool("list_issues", {}))
-        issue_id = issues["issues"][0]["id"]
+        issue_id = issues["items"][0]["id"]
         result = _parse(await call_tool("add_comment", {"issue_id": issue_id, "text": "hello"}))
         hints = get_type_hints(AddCommentResult)
         assert set(result.keys()) == set(hints.keys())
@@ -1073,7 +1042,7 @@ class TestAddCommentResultShape:
 
         await call_tool("create_issue", {"title": "Comment target"})
         issues = _parse(await call_tool("list_issues", {}))
-        issue_id = issues["issues"][0]["id"]
+        issue_id = issues["items"][0]["id"]
         result = _parse(await call_tool("add_comment", {"issue_id": issue_id, "text": "hello"}))
         assert isinstance(result["status"], str)
         assert isinstance(result["comment_id"], int)
@@ -1086,7 +1055,7 @@ class TestLabelActionResponseShape:
 
         await call_tool("create_issue", {"title": "Label target"})
         issues = _parse(await call_tool("list_issues", {}))
-        issue_id = issues["issues"][0]["id"]
+        issue_id = issues["items"][0]["id"]
         result = _parse(await call_tool("add_label", {"issue_id": issue_id, "label": "test-label"}))
         hints = get_type_hints(LabelActionResponse)
         assert set(result.keys()) == set(hints.keys())
@@ -1097,7 +1066,7 @@ class TestLabelActionResponseShape:
 
         await call_tool("create_issue", {"title": "Label target"})
         issues = _parse(await call_tool("list_issues", {}))
-        issue_id = issues["issues"][0]["id"]
+        issue_id = issues["items"][0]["id"]
         result = _parse(await call_tool("add_label", {"issue_id": issue_id, "label": "test-label"}))
         assert isinstance(result["status"], str)
         assert isinstance(result["issue_id"], str)
@@ -1209,17 +1178,18 @@ class TestPackListItemShape:
         from tests.mcp._helpers import _parse
 
         result = _parse(await call_tool("list_packs", {}))
-        assert isinstance(result, list)
-        assert len(result) >= 1
+        items = result["items"]
+        assert isinstance(items, list)
+        assert len(items) >= 1
         hints = get_type_hints(PackListItem)
-        assert set(result[0].keys()) == set(hints.keys())
+        assert set(items[0].keys()) == set(hints.keys())
 
     async def test_value_types(self, mcp_db: FiligreeDB) -> None:
         from filigree.mcp_server import call_tool
         from tests.mcp._helpers import _parse
 
         result = _parse(await call_tool("list_packs", {}))
-        pack = result[0]
+        pack = result["items"][0]
         assert isinstance(pack["pack"], str)
         assert isinstance(pack["version"], str)
         assert isinstance(pack["display_name"], str)

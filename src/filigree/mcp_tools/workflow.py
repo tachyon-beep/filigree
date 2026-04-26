@@ -7,7 +7,7 @@ from typing import Any
 
 from mcp.types import TextContent, Tool
 
-from filigree.mcp_tools.common import _parse_args, _text
+from filigree.mcp_tools.common import _list_response, _parse_args, _text
 from filigree.types.api import (
     ErrorCode,
     ErrorResponse,
@@ -194,7 +194,8 @@ async def _handle_list_types(arguments: dict[str, Any]) -> list[TextContent]:
                 initial_state=tt.initial_state,
             )
         )
-    return _text(sorted(types_list, key=lambda t: str(t["type"])))
+    items = sorted(types_list, key=lambda t: str(t["type"]))
+    return _text(_list_response(list(items), has_more=False))
 
 
 async def _handle_get_type_info(arguments: dict[str, Any]) -> list[TextContent]:
@@ -241,7 +242,8 @@ async def _handle_list_packs(arguments: dict[str, Any]) -> list[TextContent]:
                 requires_packs=list(pack.requires_packs),
             )
         )
-    return _text(sorted(packs_list, key=lambda p: str(p["pack"])))
+    items = sorted(packs_list, key=lambda p: str(p["pack"]))
+    return _text(_list_response(list(items), has_more=False))
 
 
 async def _handle_get_valid_transitions(arguments: dict[str, Any]) -> list[TextContent]:
