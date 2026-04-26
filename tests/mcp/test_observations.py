@@ -119,7 +119,7 @@ class TestListObservationsTool:
 class TestDismissObservationTool:
     async def test_dismiss(self, mcp_db: FiligreeDB) -> None:
         obs = mcp_db.create_observation("To dismiss")
-        result = await call_tool("dismiss_observation", {"id": obs["id"]})
+        result = await call_tool("dismiss_observation", {"observation_id": obs["id"]})
         data = _parse(result)
         assert data["status"] == "dismissed"
 
@@ -128,7 +128,7 @@ class TestDismissObservationTool:
         result = await call_tool(
             "dismiss_observation",
             {
-                "id": obs["id"],
+                "observation_id": obs["id"],
                 "reason": "false positive",
                 "actor": "tester",
             },
@@ -138,7 +138,7 @@ class TestDismissObservationTool:
         assert row["reason"] == "false positive"
 
     async def test_dismiss_nonexistent_fails(self, mcp_db: FiligreeDB) -> None:
-        result = await call_tool("dismiss_observation", {"id": "nope-123"})
+        result = await call_tool("dismiss_observation", {"observation_id": "nope-123"})
         data = _parse(result)
         assert data["code"] == ErrorCode.NOT_FOUND
 
@@ -201,7 +201,7 @@ class TestSummaryRefreshOnObservationMutations:
     async def test_dismiss_refreshes_summary(self, mcp_db: FiligreeDB) -> None:
         obs = mcp_db.create_observation("will dismiss")
         with patch("filigree.mcp_server.write_summary") as mock_write:
-            await call_tool("dismiss_observation", {"id": obs["id"]})
+            await call_tool("dismiss_observation", {"observation_id": obs["id"]})
         assert mock_write.called, "dismiss_observation must call _refresh_summary"
 
     async def test_batch_dismiss_refreshes_summary(self, mcp_db: FiligreeDB) -> None:
@@ -223,7 +223,7 @@ class TestPromoteObservationTool:
         result = await call_tool(
             "promote_observation",
             {
-                "id": obs["id"],
+                "observation_id": obs["id"],
                 "type": "bug",
             },
         )
@@ -236,7 +236,7 @@ class TestPromoteObservationTool:
         obs = mcp_db.create_observation("Original summary")
         result = await call_tool(
             "promote_observation",
-            {"id": obs["id"], "title": "Better title"},
+            {"observation_id": obs["id"], "title": "Better title"},
         )
         data = _parse(result)
         assert data["issue"]["title"] == "Better title"
@@ -248,7 +248,7 @@ class TestPromoteObservationTool:
         )
         result = await call_tool(
             "promote_observation",
-            {"id": obs["id"], "description": "Extra context from review"},
+            {"observation_id": obs["id"], "description": "Extra context from review"},
         )
         data = _parse(result)
         assert "Extra context from review" in data["issue"]["description"]
@@ -259,7 +259,7 @@ class TestPromoteObservationTool:
         result = await call_tool(
             "promote_observation",
             {
-                "id": obs["id"],
+                "observation_id": obs["id"],
                 "title": "Custom title",
                 "description": "Prepended context",
             },
@@ -269,7 +269,7 @@ class TestPromoteObservationTool:
         assert "Prepended context" in data["issue"]["description"]
 
     async def test_promote_nonexistent_fails(self, mcp_db: FiligreeDB) -> None:
-        result = await call_tool("promote_observation", {"id": "nope-123"})
+        result = await call_tool("promote_observation", {"observation_id": "nope-123"})
         data = _parse(result)
         assert data["code"] == ErrorCode.NOT_FOUND
 
@@ -278,7 +278,7 @@ class TestPromoteObservationTool:
         obs = mcp_db.create_observation("test obs for type validation")
         result = await call_tool(
             "promote_observation",
-            {"id": obs["id"], "type": "nonexistent_type"},
+            {"observation_id": obs["id"], "type": "nonexistent_type"},
         )
         data = _parse(result)
         assert data["code"] == ErrorCode.VALIDATION
@@ -290,7 +290,7 @@ class TestPromoteObservationTool:
 
         obs = mcp_db.create_observation("will warn")
         with patch.object(mcp_db, "add_label", side_effect=sqlite3.OperationalError("label boom")):
-            result = await call_tool("promote_observation", {"id": obs["id"]})
+            result = await call_tool("promote_observation", {"observation_id": obs["id"]})
         data = _parse(result)
         assert "issue" in data
         assert "warnings" in data
@@ -328,6 +328,6 @@ class TestPromoteExpiredObservationMCP:
             (obs["id"],),
         )
         mcp_db.conn.commit()
-        result = await call_tool("promote_observation", {"id": obs["id"]})
+        result = await call_tool("promote_observation", {"observation_id": obs["id"]})
         data = _parse(result)
         assert data["code"] == ErrorCode.VALIDATION

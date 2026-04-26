@@ -211,7 +211,7 @@ class TestUnknownIdGetParity:
         _assert_flat_envelope(dash_env, surface="dashboard")
         assert dash_resp.status_code == 404
 
-        mcp_env = _mcp_envelope(await _handle_get_issue({"id": missing}))
+        mcp_env = _mcp_envelope(await _handle_get_issue({"issue_id": missing}))
         _assert_flat_envelope(mcp_env, surface="mcp")
 
         def cli_action(runner: CliRunner, _: Path) -> Any:
@@ -327,7 +327,7 @@ class TestBlankActorUpdateParity:
         assert dash_resp.status_code == 400
 
         mcp_issue = mcp_surface.create_issue("Target")
-        mcp_env = _mcp_envelope(await _handle_update_issue({"id": mcp_issue.id, "title": "x", "actor": "   "}))
+        mcp_env = _mcp_envelope(await _handle_update_issue({"issue_id": mcp_issue.id, "title": "x", "actor": "   "}))
         _assert_flat_envelope(mcp_env, surface="mcp")
 
         assert dash_env["code"] == mcp_env["code"] == ErrorCode.VALIDATION, f"dashboard={dash_env['code']} mcp={mcp_env['code']}"
@@ -370,7 +370,7 @@ class TestBlankAssigneeClaimParity:
         assert dash_resp.status_code == 400
 
         mcp_issue = mcp_surface.create_issue("Claimable")
-        mcp_env = _mcp_envelope(await _handle_claim_issue({"id": mcp_issue.id, "assignee": "   "}))
+        mcp_env = _mcp_envelope(await _handle_claim_issue({"issue_id": mcp_issue.id, "assignee": "   "}))
         _assert_flat_envelope(mcp_env, surface="mcp")
 
         def cli_action(runner: CliRunner, _: Path) -> Any:
@@ -413,7 +413,7 @@ class TestInvalidTransitionParity:
         _assert_flat_envelope(dash_env, surface="dashboard")
 
         mcp_issue = mcp_surface.create_issue("Probe", type="bug")
-        mcp_env = _mcp_envelope(await _handle_update_issue({"id": mcp_issue.id, "status": "nonexistent_state"}))
+        mcp_env = _mcp_envelope(await _handle_update_issue({"issue_id": mcp_issue.id, "status": "nonexistent_state"}))
         _assert_flat_envelope(mcp_env, surface="mcp")
 
         def cli_action(runner: CliRunner, _: Path) -> Any:
@@ -461,7 +461,7 @@ class TestAlreadyClosedParity:
 
         mcp_issue = mcp_surface.create_issue("C")
         mcp_surface.close_issue(mcp_issue.id)
-        mcp_env = _mcp_envelope(await _handle_close_issue({"id": mcp_issue.id}))
+        mcp_env = _mcp_envelope(await _handle_close_issue({"issue_id": mcp_issue.id}))
         _assert_flat_envelope(mcp_env, surface="mcp")
 
         assert dash_env["code"] == mcp_env["code"], f"dashboard={dash_env['code']} mcp={mcp_env['code']}"

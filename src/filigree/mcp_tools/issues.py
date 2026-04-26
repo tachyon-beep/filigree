@@ -63,7 +63,7 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "id": {"type": "string", "description": "Issue ID"},
+                    "issue_id": {"type": "string", "description": "Issue ID"},
                     "include_transitions": {
                         "type": "boolean",
                         "default": False,
@@ -75,7 +75,7 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
                         "description": "Include file associations in response (default true)",
                     },
                 },
-                "required": ["id"],
+                "required": ["issue_id"],
             },
         ),
         Tool(
@@ -98,7 +98,7 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
                         "description": "Filter by type (use list_types for available types)",
                     },
                     "priority": {"type": "integer", "minimum": 0, "maximum": 4, "description": "Filter by priority"},
-                    "parent_id": {"type": "string", "description": "Filter by parent issue ID"},
+                    "parent_issue_id": {"type": "string", "description": "Filter by parent issue ID"},
                     "assignee": {"type": "string", "description": "Filter by assignee"},
                     "label": {
                         "oneOf": [
@@ -148,7 +148,7 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
                         "maximum": 4,
                         "description": "Priority 0-4 (0=critical)",
                     },
-                    "parent_id": {"type": "string", "description": "Parent issue ID (for hierarchy)"},
+                    "parent_issue_id": {"type": "string", "description": "Parent issue ID (for hierarchy)"},
                     "description": {"type": "string", "description": "Issue description"},
                     "notes": {"type": "string", "description": "Additional notes"},
                     "fields": {"type": "object", "description": "Custom fields (from template schema)"},
@@ -169,7 +169,7 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "id": {"type": "string", "description": "Issue ID"},
+                    "issue_id": {"type": "string", "description": "Issue ID"},
                     "status": {
                         "type": "string",
                         "description": "New status (use get_valid_transitions for allowed values)",
@@ -179,11 +179,14 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
                     "assignee": {"type": "string", "description": "New assignee"},
                     "description": {"type": "string", "description": "New description"},
                     "notes": {"type": "string", "description": "New notes"},
-                    "parent_id": {"type": "string", "description": "New parent issue ID (empty string to clear)"},
+                    "parent_issue_id": {
+                        "type": "string",
+                        "description": "New parent issue ID (empty string to clear)",
+                    },
                     "fields": {"type": "object", "description": "Fields to merge into existing fields"},
                     "actor": {"type": "string", "description": "Agent/user identity for audit trail"},
                 },
-                "required": ["id"],
+                "required": ["issue_id"],
             },
         ),
         Tool(
@@ -192,12 +195,12 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "id": {"type": "string", "description": "Issue ID"},
+                    "issue_id": {"type": "string", "description": "Issue ID"},
                     "reason": {"type": "string", "description": "Close reason"},
                     "actor": {"type": "string", "description": "Agent/user identity for audit trail"},
                     "fields": {"type": "object", "description": "Custom fields to set (e.g. root_cause for incidents)"},
                 },
-                "required": ["id"],
+                "required": ["issue_id"],
             },
         ),
         Tool(
@@ -206,10 +209,10 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "id": {"type": "string", "description": "Issue ID"},
+                    "issue_id": {"type": "string", "description": "Issue ID"},
                     "actor": {"type": "string", "description": "Agent/user identity for audit trail"},
                 },
-                "required": ["id"],
+                "required": ["issue_id"],
             },
         ),
         Tool(
@@ -244,14 +247,14 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "id": {"type": "string", "description": "Issue ID to claim"},
+                    "issue_id": {"type": "string", "description": "Issue ID to claim"},
                     "assignee": {"type": "string", "minLength": 1, "description": "Who is claiming (agent name)"},
                     "actor": {
                         "type": "string",
                         "description": "Agent/user identity for audit trail (defaults to assignee)",
                     },
                 },
-                "required": ["id", "assignee"],
+                "required": ["issue_id", "assignee"],
             },
         ),
         Tool(
@@ -260,10 +263,10 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "id": {"type": "string", "description": "Issue ID to release"},
+                    "issue_id": {"type": "string", "description": "Issue ID to release"},
                     "actor": {"type": "string", "description": "Agent/user identity for audit trail"},
                 },
-                "required": ["id"],
+                "required": ["issue_id"],
             },
         ),
         Tool(
@@ -360,17 +363,17 @@ async def _handle_get_issue(arguments: dict[str, Any]) -> list[TextContent]:
     args = _parse_args(arguments, GetIssueArgs)
     tracker = _get_db()
     try:
-        issue = tracker.get_issue(args["id"])
+        issue = tracker.get_issue(args["issue_id"])
         issue_dict = issue.to_dict()
 
         # Fail-fast to match dashboard and get_issue_files MCP tool; see
         # filigree-c6c7842661 for why swallowing sqlite3.Error is wrong.
         file_assocs: list[Any] = []
         if args.get("include_files", True):
-            file_assocs = tracker.get_issue_files(args["id"])
+            file_assocs = tracker.get_issue_files(args["issue_id"])
 
         if args.get("include_transitions"):
-            transitions = tracker.get_valid_transitions(args["id"])
+            transitions = tracker.get_valid_transitions(args["issue_id"])
             result = IssueWithTransitions(
                 **issue_dict,
                 valid_transitions=[
@@ -394,7 +397,7 @@ async def _handle_get_issue(arguments: dict[str, Any]) -> list[TextContent]:
             out["files"] = file_assocs
         return _text(out)
     except KeyError:
-        return _text(ErrorResponse(error=f"Issue not found: {args['id']}", code=ErrorCode.NOT_FOUND))
+        return _text(ErrorResponse(error=f"Issue not found: {args['issue_id']}", code=ErrorCode.NOT_FOUND))
 
 
 async def _handle_list_issues(arguments: dict[str, Any]) -> list[TextContent]:
@@ -422,7 +425,7 @@ async def _handle_list_issues(arguments: dict[str, Any]) -> list[TextContent]:
             status=status_filter,
             type=args.get("type"),
             priority=priority,
-            parent_id=args.get("parent_id"),
+            parent_id=args.get("parent_issue_id"),
             assignee=args.get("assignee"),
             label=args.get("label"),
             label_prefix=args.get("label_prefix"),
@@ -455,7 +458,7 @@ async def _handle_create_issue(arguments: dict[str, Any]) -> list[TextContent]:
             args["title"],
             type=args.get("type", "task"),
             priority=priority,
-            parent_id=args.get("parent_id"),
+            parent_id=args.get("parent_issue_id"),
             description=args.get("description", ""),
             notes=args.get("notes", ""),
             fields=args.get("fields"),
@@ -482,19 +485,19 @@ async def _handle_update_issue(arguments: dict[str, Any]) -> list[TextContent]:
         return priority_err
     tracker = _get_db()
     try:
-        before = tracker.get_issue(args["id"])
+        before = tracker.get_issue(args["issue_id"])
     except KeyError:
-        return _text(ErrorResponse(error=f"Issue not found: {args['id']}", code=ErrorCode.NOT_FOUND))
+        return _text(ErrorResponse(error=f"Issue not found: {args['issue_id']}", code=ErrorCode.NOT_FOUND))
     try:
         issue = tracker.update_issue(
-            args["id"],
+            args["issue_id"],
             status=args.get("status"),
             priority=priority,
             title=args.get("title"),
             assignee=args.get("assignee"),
             description=args.get("description"),
             notes=args.get("notes"),
-            parent_id=args.get("parent_id"),
+            parent_id=args.get("parent_issue_id"),
             fields=args.get("fields"),
             actor=actor,
         )
@@ -503,11 +506,11 @@ async def _handle_update_issue(arguments: dict[str, Any]) -> list[TextContent]:
         result = IssueWithChangedFields(**issue.to_dict(), changed_fields=changed)
         return _text(result)
     except KeyError:
-        return _text(ErrorResponse(error=f"Issue not found: {args['id']}", code=ErrorCode.NOT_FOUND))
+        return _text(ErrorResponse(error=f"Issue not found: {args['issue_id']}", code=ErrorCode.NOT_FOUND))
     except ValueError as e:
         msg = str(e)
         if classify_value_error(msg) == ErrorCode.INVALID_TRANSITION:
-            return _text(_build_transition_error(tracker, args["id"], msg))
+            return _text(_build_transition_error(tracker, args["issue_id"], msg))
         return _text(ErrorResponse(error=msg, code=ErrorCode.VALIDATION))
 
 
@@ -522,7 +525,7 @@ async def _handle_close_issue(arguments: dict[str, Any]) -> list[TextContent]:
     try:
         ready_before = {i.id for i in tracker.get_ready()}
         issue = tracker.close_issue(
-            args["id"],
+            args["issue_id"],
             reason=args.get("reason", ""),
             actor=actor,
             fields=args.get("fields"),
@@ -538,9 +541,9 @@ async def _handle_close_issue(arguments: dict[str, Any]) -> list[TextContent]:
             result = issue.to_dict()
         return _text(result)
     except KeyError:
-        return _text(ErrorResponse(error=f"Issue not found: {args['id']}", code=ErrorCode.NOT_FOUND))
+        return _text(ErrorResponse(error=f"Issue not found: {args['issue_id']}", code=ErrorCode.NOT_FOUND))
     except ValueError as e:
-        return _text(_build_transition_error(tracker, args["id"], str(e)))
+        return _text(_build_transition_error(tracker, args["issue_id"], str(e)))
 
 
 async def _handle_reopen_issue(arguments: dict[str, Any]) -> list[TextContent]:
@@ -553,13 +556,13 @@ async def _handle_reopen_issue(arguments: dict[str, Any]) -> list[TextContent]:
     tracker = _get_db()
     try:
         issue = tracker.reopen_issue(
-            args["id"],
+            args["issue_id"],
             actor=actor,
         )
         _refresh_summary()
         return _text(issue.to_dict())
     except KeyError:
-        return _text(ErrorResponse(error=f"Issue not found: {args['id']}", code=ErrorCode.NOT_FOUND))
+        return _text(ErrorResponse(error=f"Issue not found: {args['issue_id']}", code=ErrorCode.NOT_FOUND))
     except ValueError as e:
         return _text(ErrorResponse(error=str(e), code=ErrorCode.INVALID_TRANSITION))
 
@@ -597,14 +600,14 @@ async def _handle_claim_issue(arguments: dict[str, Any]) -> list[TextContent]:
     tracker = _get_db()
     try:
         issue = tracker.claim_issue(
-            args["id"],
+            args["issue_id"],
             assignee=assignee,
             actor=actor,
         )
         _refresh_summary()
         return _text(issue.to_dict())
     except KeyError:
-        return _text(ErrorResponse(error=f"Issue not found: {args['id']}", code=ErrorCode.NOT_FOUND))
+        return _text(ErrorResponse(error=f"Issue not found: {args['issue_id']}", code=ErrorCode.NOT_FOUND))
     except ValueError as e:
         return _text(ErrorResponse(error=str(e), code=ErrorCode.CONFLICT))
 
@@ -618,11 +621,11 @@ async def _handle_release_claim(arguments: dict[str, Any]) -> list[TextContent]:
         return actor_err
     tracker = _get_db()
     try:
-        issue = tracker.release_claim(args["id"], actor=actor)
+        issue = tracker.release_claim(args["issue_id"], actor=actor)
         _refresh_summary()
         return _text(issue.to_dict())
     except KeyError:
-        return _text(ErrorResponse(error=f"Issue not found: {args['id']}", code=ErrorCode.NOT_FOUND))
+        return _text(ErrorResponse(error=f"Issue not found: {args['issue_id']}", code=ErrorCode.NOT_FOUND))
     except ValueError as e:
         return _text(ErrorResponse(error=str(e), code=ErrorCode.CONFLICT))
 

@@ -48,7 +48,7 @@ def _text(content: object) -> list[TextContent]:
 def _slim_issue(issue: Issue) -> SlimIssue:
     """Return a lightweight dict for search result listings."""
     return SlimIssue(
-        id=issue.id,
+        issue_id=issue.id,
         title=issue.title,
         status=issue.status,
         priority=issue.priority,

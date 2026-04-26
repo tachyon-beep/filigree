@@ -227,10 +227,10 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "id": {"type": "string", "description": "Issue ID"},
+                    "issue_id": {"type": "string", "description": "Issue ID"},
                     "actor": {"type": "string", "description": "Agent/user identity for audit trail"},
                 },
-                "required": ["id"],
+                "required": ["issue_id"],
             },
         ),
         Tool(
@@ -557,12 +557,12 @@ async def _handle_undo_last(arguments: dict[str, Any]) -> list[TextContent]:
         return actor_err
     tracker = _get_db()
     try:
-        result = tracker.undo_last(args["id"], actor=actor)
+        result = tracker.undo_last(args["issue_id"], actor=actor)
         if result["undone"]:
             _refresh_summary()
         return _text(result)
     except KeyError:
-        return _text(ErrorResponse(error=f"Issue not found: {args['id']}", code=ErrorCode.NOT_FOUND))
+        return _text(ErrorResponse(error=f"Issue not found: {args['issue_id']}", code=ErrorCode.NOT_FOUND))
 
 
 async def _handle_get_issue_events(arguments: dict[str, Any]) -> list[TextContent]:

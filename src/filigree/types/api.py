@@ -52,9 +52,17 @@ class OutboundTransitionInfo(TypedDict):
 
 
 class SlimIssue(TypedDict):
-    """Reduced 5-key issue shape for search results and unblocked lists."""
+    """Reduced 5-key issue shape for search results and unblocked lists.
 
-    id: str
+    Per Phase D3 of the 2.0 federation work package, the entity's own
+    primary key is named ``issue_id`` (matching the loom vocabulary used
+    by ``SlimIssueLoom`` since Phase C). Cross-entity references inside
+    response payloads (``parent_id``, ``blocks``, ``blocked_by``,
+    ``children``) keep their existing names — only the entity's own
+    primary key is renamed.
+    """
+
+    issue_id: str
     title: str
     status: str
     priority: int

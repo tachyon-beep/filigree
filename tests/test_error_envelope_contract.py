@@ -143,7 +143,7 @@ class TestMCPSurface:
         """MCP NOT_FOUND emits the same envelope as dashboard + CLI."""
         import json as json_mod
 
-        result = await _handle_get_issue({"id": "env-ffffffffff"})
+        result = await _handle_get_issue({"issue_id": "env-ffffffffff"})
         # _text returns list[TextContent]; .text is the JSON-serialised payload.
         payload = json_mod.loads(result[0].text)
         _assert_flat_envelope(payload, surface="mcp")
@@ -204,7 +204,7 @@ class TestTransitionErrorSurfaceContract:
         import json as json_mod
 
         issue = envelope_mcp_db.create_issue("MCP transition probe", type="bug")
-        result = await _handle_update_issue({"id": issue.id, "status": "nonexistent_state"})
+        result = await _handle_update_issue({"issue_id": issue.id, "status": "nonexistent_state"})
         payload = json_mod.loads(result[0].text)
         _assert_flat_envelope(payload, surface="mcp")
         assert payload["code"] == ErrorCode.INVALID_TRANSITION

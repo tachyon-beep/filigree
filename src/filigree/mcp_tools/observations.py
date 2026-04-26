@@ -87,11 +87,11 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "id": {"type": "string", "description": "Observation ID"},
+                    "observation_id": {"type": "string", "description": "Observation ID"},
                     "reason": {"type": "string", "description": "Reason for dismissal"},
                     "actor": {"type": "string", "description": "Agent/user identity for audit trail"},
                 },
-                "required": ["id"],
+                "required": ["observation_id"],
             },
         ),
         Tool(
@@ -117,7 +117,7 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "id": {"type": "string", "description": "Observation ID"},
+                    "observation_id": {"type": "string", "description": "Observation ID"},
                     "type": {
                         "type": "string",
                         "default": "task",
@@ -133,7 +133,7 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
                     "description": {"type": "string", "description": "Extra description to prepend"},
                     "actor": {"type": "string", "description": "Agent/user identity for audit trail"},
                 },
-                "required": ["id"],
+                "required": ["observation_id"],
             },
         ),
     ]
@@ -226,7 +226,7 @@ async def _handle_dismiss_observation(arguments: dict[str, Any]) -> list[TextCon
     tracker = _get_db()
     try:
         tracker.dismiss_observation(
-            args["id"],
+            args["observation_id"],
             actor=actor,
             reason=args.get("reason", ""),
         )
@@ -235,7 +235,7 @@ async def _handle_dismiss_observation(arguments: dict[str, Any]) -> list[TextCon
     except sqlite3.Error as e:
         return _text(ErrorResponse(error=f"Database error: {e}", code=ErrorCode.IO))
     _refresh_summary()
-    return _text({"status": "dismissed", "id": args["id"]})
+    return _text({"status": "dismissed", "observation_id": args["observation_id"]})
 
 
 async def _handle_batch_dismiss_observations(arguments: dict[str, Any]) -> list[TextContent]:
@@ -294,7 +294,7 @@ async def _handle_promote_observation(arguments: dict[str, Any]) -> list[TextCon
     tracker = _get_db()
     try:
         result = tracker.promote_observation(
-            args["id"],
+            args["observation_id"],
             issue_type=args.get("type", "task"),
             priority=priority,
             title=args.get("title"),

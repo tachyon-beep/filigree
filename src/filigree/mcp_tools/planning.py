@@ -31,15 +31,15 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
     tools = [
         Tool(
             name="add_dependency",
-            description="Add dependency: from_id depends on to_id (to_id blocks from_id)",
+            description="Add dependency: from_issue_id depends on to_issue_id (to_issue_id blocks from_issue_id)",
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "from_id": {"type": "string", "description": "Issue that is blocked"},
-                    "to_id": {"type": "string", "description": "Issue that blocks"},
+                    "from_issue_id": {"type": "string", "description": "Issue that is blocked"},
+                    "to_issue_id": {"type": "string", "description": "Issue that blocks"},
                     "actor": {"type": "string", "description": "Agent/user identity for audit trail"},
                 },
-                "required": ["from_id", "to_id"],
+                "required": ["from_issue_id", "to_issue_id"],
             },
         ),
         Tool(
@@ -48,11 +48,11 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "from_id": {"type": "string", "description": "Issue that was blocked"},
-                    "to_id": {"type": "string", "description": "Issue that was blocking"},
+                    "from_issue_id": {"type": "string", "description": "Issue that was blocked"},
+                    "to_issue_id": {"type": "string", "description": "Issue that was blocking"},
                     "actor": {"type": "string", "description": "Agent/user identity for audit trail"},
                 },
-                "required": ["from_id", "to_id"],
+                "required": ["from_issue_id", "to_issue_id"],
             },
         ),
         Tool(
@@ -164,15 +164,15 @@ async def _handle_add_dependency(arguments: dict[str, Any]) -> list[TextContent]
     tracker = _get_db()
     try:
         added = tracker.add_dependency(
-            args["from_id"],
-            args["to_id"],
+            args["from_issue_id"],
+            args["to_issue_id"],
             actor=actor,
         )
     except (ValueError, KeyError) as e:
         return _text(ErrorResponse(error=str(e), code=ErrorCode.VALIDATION))
     _refresh_summary()
     status = "added" if added else "already_exists"
-    return _text(DependencyActionResponse(status=status, from_id=args["from_id"], to_id=args["to_id"]))
+    return _text(DependencyActionResponse(status=status, from_id=args["from_issue_id"], to_id=args["to_issue_id"]))
 
 
 async def _handle_remove_dependency(arguments: dict[str, Any]) -> list[TextContent]:
@@ -185,15 +185,15 @@ async def _handle_remove_dependency(arguments: dict[str, Any]) -> list[TextConte
     tracker = _get_db()
     try:
         removed = tracker.remove_dependency(
-            args["from_id"],
-            args["to_id"],
+            args["from_issue_id"],
+            args["to_issue_id"],
             actor=actor,
         )
     except (ValueError, KeyError) as e:
         return _text(ErrorResponse(error=str(e), code=ErrorCode.VALIDATION))
     _refresh_summary()
     status = "removed" if removed else "not_found"
-    return _text(DependencyActionResponse(status=status, from_id=args["from_id"], to_id=args["to_id"]))
+    return _text(DependencyActionResponse(status=status, from_id=args["from_issue_id"], to_id=args["to_issue_id"]))
 
 
 async def _handle_get_ready(arguments: dict[str, Any]) -> list[TextContent]:

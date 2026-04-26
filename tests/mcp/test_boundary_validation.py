@@ -38,13 +38,13 @@ class TestMCPActorValidation:
 
     async def test_update_issue_empty_actor(self, mcp_db: FiligreeDB) -> None:
         issue = mcp_db.create_issue("Target")
-        result = await call_tool("update_issue", {"id": issue.id, "title": "New", "actor": ""})
+        result = await call_tool("update_issue", {"issue_id": issue.id, "title": "New", "actor": ""})
         data = _parse(result)
         assert data["code"] == ErrorCode.VALIDATION
 
     async def test_close_issue_bom_actor(self, mcp_db: FiligreeDB) -> None:
         issue = mcp_db.create_issue("Target")
-        result = await call_tool("close_issue", {"id": issue.id, "actor": "\ufeff"})
+        result = await call_tool("close_issue", {"issue_id": issue.id, "actor": "\ufeff"})
         data = _parse(result)
         assert data["code"] == ErrorCode.VALIDATION
 
@@ -53,7 +53,7 @@ class TestMCPActorValidation:
         b = mcp_db.create_issue("B")
         result = await call_tool(
             "add_dependency",
-            {"from_id": a.id, "to_id": b.id, "actor": "\nbad"},
+            {"from_issue_id": a.id, "to_issue_id": b.id, "actor": "\nbad"},
         )
         data = _parse(result)
         assert data["code"] == ErrorCode.VALIDATION
@@ -71,7 +71,7 @@ class TestMCPActorValidation:
         issue = mcp_db.create_issue("Target")
         result = await call_tool(
             "undo_last",
-            {"id": issue.id, "actor": "a" * 129},
+            {"issue_id": issue.id, "actor": "a" * 129},
         )
         data = _parse(result)
         assert data["code"] == ErrorCode.VALIDATION
@@ -80,7 +80,7 @@ class TestMCPActorValidation:
     async def test_reopen_issue_control_char_actor(self, mcp_db: FiligreeDB) -> None:
         issue = mcp_db.create_issue("Target")
         mcp_db.close_issue(issue.id, reason="done")
-        result = await call_tool("reopen_issue", {"id": issue.id, "actor": "\x00evil"})
+        result = await call_tool("reopen_issue", {"issue_id": issue.id, "actor": "\x00evil"})
         data = _parse(result)
         assert data["code"] == ErrorCode.VALIDATION
         assert "control" in data["error"].lower()
@@ -88,21 +88,21 @@ class TestMCPActorValidation:
     async def test_reopen_issue_empty_actor(self, mcp_db: FiligreeDB) -> None:
         issue = mcp_db.create_issue("Target")
         mcp_db.close_issue(issue.id, reason="done")
-        result = await call_tool("reopen_issue", {"id": issue.id, "actor": ""})
+        result = await call_tool("reopen_issue", {"issue_id": issue.id, "actor": ""})
         data = _parse(result)
         assert data["code"] == ErrorCode.VALIDATION
 
     async def test_release_claim_control_char_actor(self, mcp_db: FiligreeDB) -> None:
         issue = mcp_db.create_issue("Target")
         mcp_db.claim_issue(issue.id, assignee="agent-1")
-        result = await call_tool("release_claim", {"id": issue.id, "actor": "\nbad"})
+        result = await call_tool("release_claim", {"issue_id": issue.id, "actor": "\nbad"})
         data = _parse(result)
         assert data["code"] == ErrorCode.VALIDATION
 
     async def test_release_claim_empty_actor(self, mcp_db: FiligreeDB) -> None:
         issue = mcp_db.create_issue("Target")
         mcp_db.claim_issue(issue.id, assignee="agent-1")
-        result = await call_tool("release_claim", {"id": issue.id, "actor": ""})
+        result = await call_tool("release_claim", {"issue_id": issue.id, "actor": ""})
         data = _parse(result)
         assert data["code"] == ErrorCode.VALIDATION
 
@@ -165,7 +165,7 @@ class TestMCPPriorityValidation:
 
     async def test_update_issue_priority_out_of_range(self, mcp_db: FiligreeDB) -> None:
         issue = mcp_db.create_issue("Target")
-        result = await call_tool("update_issue", {"id": issue.id, "priority": 99})
+        result = await call_tool("update_issue", {"issue_id": issue.id, "priority": 99})
         data = _parse(result)
         assert data["code"] == ErrorCode.VALIDATION
 
@@ -268,7 +268,7 @@ class TestMCPPriorityValidation:
     async def test_update_issue_priority_none_allowed(self, mcp_db: FiligreeDB) -> None:
         """Not providing priority should be fine (optional)."""
         issue = mcp_db.create_issue("Target")
-        result = await call_tool("update_issue", {"id": issue.id, "title": "New"})
+        result = await call_tool("update_issue", {"issue_id": issue.id, "title": "New"})
         data = _parse(result)
         assert "error" not in data
         assert data.get("title") == "New"

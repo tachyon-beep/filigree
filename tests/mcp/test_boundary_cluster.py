@@ -30,7 +30,7 @@ class TestRemoveDependencyWrongProject:
         # mcp_db uses prefix "mcp"; a foreign-prefix id triggers WrongProjectError
         result = await call_tool(
             "remove_dependency",
-            {"from_id": a.id, "to_id": "other-deadbeef12"},
+            {"from_issue_id": a.id, "to_issue_id": "other-deadbeef12"},
         )
         data = _parse(result)
         assert isinstance(data, dict), f"expected error dict, got {data!r}"
@@ -42,7 +42,7 @@ class TestRemoveDependencyWrongProject:
         b = mcp_db.create_issue("B")
         result = await call_tool(
             "remove_dependency",
-            {"from_id": a.id, "to_id": b.id},
+            {"from_issue_id": a.id, "to_issue_id": b.id},
         )
         data = _parse(result)
         assert data.get("status") == "not_found"

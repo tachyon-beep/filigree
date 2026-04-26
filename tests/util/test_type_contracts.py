@@ -809,7 +809,7 @@ class TestSlimIssueShape:
 
         issue = db.create_issue("Test", type="task")
         result = _slim_issue(issue)
-        assert isinstance(result["id"], str)
+        assert isinstance(result["issue_id"], str)
         assert isinstance(result["priority"], int)
 
 

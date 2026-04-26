@@ -29,7 +29,7 @@ from filigree.types.core import AssocType, FindingStatus, ISOTimestamp, Severity
 
 
 class GetIssueArgs(TypedDict):
-    id: str
+    issue_id: str
     include_transitions: NotRequired[bool]
     include_files: NotRequired[bool]
 
@@ -41,7 +41,7 @@ class ListIssuesArgs(TypedDict):
     status_category: NotRequired[StatusCategory]
     type: NotRequired[str]
     priority: NotRequired[int]
-    parent_id: NotRequired[str]
+    parent_issue_id: NotRequired[str]
     assignee: NotRequired[str]
     label: NotRequired[str | list[str]]
     label_prefix: NotRequired[str]
@@ -55,7 +55,7 @@ class CreateIssueArgs(TypedDict):
     title: str
     type: NotRequired[str]
     priority: NotRequired[int]
-    parent_id: NotRequired[str]
+    parent_issue_id: NotRequired[str]
     description: NotRequired[str]
     notes: NotRequired[str]
     fields: NotRequired[dict[str, Any]]
@@ -65,27 +65,27 @@ class CreateIssueArgs(TypedDict):
 
 
 class UpdateIssueArgs(TypedDict):
-    id: str
+    issue_id: str
     status: NotRequired[str]
     priority: NotRequired[int]
     title: NotRequired[str]
     assignee: NotRequired[str]
     description: NotRequired[str]
     notes: NotRequired[str]
-    parent_id: NotRequired[str]
+    parent_issue_id: NotRequired[str]
     fields: NotRequired[dict[str, Any]]
     actor: NotRequired[str]
 
 
 class CloseIssueArgs(TypedDict):
-    id: str
+    issue_id: str
     reason: NotRequired[str]
     actor: NotRequired[str]
     fields: NotRequired[dict[str, Any]]
 
 
 class ReopenIssueArgs(TypedDict):
-    id: str
+    issue_id: str
     actor: NotRequired[str]
 
 
@@ -97,13 +97,13 @@ class SearchIssuesArgs(TypedDict):
 
 
 class ClaimIssueArgs(TypedDict):
-    id: str
+    issue_id: str
     assignee: str
     actor: NotRequired[str]
 
 
 class ReleaseClaimArgs(TypedDict):
-    id: str
+    issue_id: str
     actor: NotRequired[str]
 
 
@@ -200,7 +200,7 @@ class CompactEventsArgs(TypedDict):
 
 
 class UndoLastArgs(TypedDict):
-    id: str
+    issue_id: str
     actor: NotRequired[str]
 
 
@@ -215,14 +215,14 @@ class GetIssueEventsArgs(TypedDict):
 
 
 class AddDependencyArgs(TypedDict):
-    from_id: str
-    to_id: str
+    from_issue_id: str
+    to_issue_id: str
     actor: NotRequired[str]
 
 
 class RemoveDependencyArgs(TypedDict):
-    from_id: str
-    to_id: str
+    from_issue_id: str
+    to_issue_id: str
     actor: NotRequired[str]
 
 
@@ -429,7 +429,7 @@ class ListObservationsArgs(TypedDict):
 
 
 class DismissObservationArgs(TypedDict):
-    id: str
+    observation_id: str
     reason: NotRequired[str]
     actor: NotRequired[str]
 
@@ -441,7 +441,7 @@ class BatchDismissObservationsArgs(TypedDict):
 
 
 class PromoteObservationArgs(TypedDict):
-    id: str
+    observation_id: str
     type: NotRequired[str]
     priority: NotRequired[int]
     title: NotRequired[str]
