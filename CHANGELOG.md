@@ -7,7 +7,87 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (BREAKING — MCP)
+
+- **MCP forward-migrated to the loom vocabulary (Phase D of the 2.0 federation work package).**
+  - **Single-issue tool input field renamed.** ``id`` → ``issue_id`` across
+    ``get_issue`` / ``update_issue`` / ``close_issue`` / ``reopen_issue`` /
+    ``claim_issue`` / ``release_claim`` / ``undo_last`` / ``add_comment`` /
+    ``get_comments`` / ``add_label`` / ``remove_label`` /
+    ``get_issue_events``. ``list_issues.parent_id`` filter renamed to
+    ``parent_issue_id``.
+  - **Batch tool input field renamed.** ``ids`` → ``issue_ids``
+    (``batch_update`` / ``batch_close`` / ``batch_add_label`` /
+    ``batch_add_comment``); ``ids`` → ``observation_ids``
+    (``batch_dismiss_observations``). ``batch_update_findings`` already used
+    ``finding_ids`` — no change.
+  - **Dependency tools renamed.** ``add_dependency`` /
+    ``remove_dependency`` take ``from_issue_id`` / ``to_issue_id`` (was
+    ``from_id`` / ``to_id``).
+  - **Observation tools renamed.** ``dismiss_observation`` /
+    ``promote_observation`` take ``observation_id`` (was ``id``).
+  - **Create-issue parent rename.** ``create_issue.parent_id`` /
+    ``update_issue.parent_id`` input fields renamed to ``parent_issue_id``.
+  - **SlimIssue projection.** ``SlimIssue.id`` renamed to
+    ``SlimIssue.issue_id``. Affects every MCP tool emitting slim
+    projections (``search_issues``, ``get_ready``, ``get_blocked``, batch
+    response ``succeeded[]`` / ``newly_unblocked[]``, ``close_issue``
+    response ``newly_unblocked[]``).
+  - **Batch container keys unified.** Legacy
+    ``{updated|closed, errors, count}`` and ``BatchActionResponse.results``
+    consolidated to ``{succeeded, failed}`` per ``BatchResponse[T]``.
+    ``batch_close`` / ``batch_update`` return
+    ``BatchResponse[SlimIssue]`` (succeeded carries slim projections);
+    ``batch_add_label`` / ``batch_add_comment`` /
+    ``batch_dismiss_observations`` / ``batch_update_findings`` return
+    ``BatchResponse[str]``.
+  - **List response envelope unified.** Every MCP list tool
+    (``list_issues`` / ``search_issues`` / ``get_ready`` / ``get_blocked`` /
+    ``get_comments`` / ``get_issue_events`` / ``get_changes`` /
+    ``list_files`` / ``list_findings`` / ``list_observations`` /
+    ``list_scanners`` / ``list_packs`` / ``list_types`` / ``list_labels``)
+    returns ``ListResponse[T] = {items, has_more, next_offset?}``. Drops
+    legacy siblings (``total``, ``stats``, ``errors``, ``hint``,
+    ``limit``, ``offset``); ``list_labels`` flattens its
+    dict-of-namespaces to a list of ``{namespace, type, writable,
+    labels}`` entries.
+  - **Workflow tools renamed.** ``get_workflow_states`` →
+    ``get_workflow_statuses`` (response key ``states`` → ``statuses``);
+    ``explain_state`` → ``explain_status`` (input arg ``state`` →
+    ``status``, response key ``state`` → ``status``). CLI commands
+    follow: ``workflow-states`` → ``workflow-statuses``,
+    ``explain-state`` → ``explain-status``.
+  - **``get_issue.include_files`` defaults to ``False``.** Aligns with the
+    loom HTTP ``GET /api/loom/issues/{issue_id}`` contract; consumers
+    needing the file-association payload pass ``include_files=true``.
+
 ### Added
+
+- **MCP composed operations: ``start_work`` and ``start_next_work``.**
+  Atomic claim+transition tools backed by ``FiligreeDB.start_work`` /
+  ``FiligreeDB.start_next_work``. ``target_status`` defaults to the
+  type's ``canonical_working_status()``; ambiguous (multi-wip) types
+  raise ``AmbiguousTransitionError`` so the caller specifies. Rollback
+  uses compensating actions — if the transition fails after a
+  successful claim, ``release_claim`` is called to restore the prior
+  assignee, and the audit trail preserves both ``claimed`` and
+  ``released`` events.
+- **``TypeTemplate.canonical_working_status()`` helper.** Returns the
+  unique wip-category status name; raises
+  ``AmbiguousTransitionError`` on multi-wip types and
+  ``InvalidTransitionError`` on no-wip types.
+
+### Notes
+
+- **Classic HTTP unchanged.** Federation consumers using
+  ``/api/loom/*`` are unaffected (the loom shape has been the
+  contract since Phase C).
+- **MCP clients pinning to legacy schemas** (``id`` / ``ids`` /
+  ``{updated, errors}``, ``state`` arg, ``WorkflowStatesResponse``,
+  ``StateExplanation``, ``IssueListResponse``, ``SearchResponse``,
+  ``BatchUpdateResponse``, ``BatchCloseResponse``,
+  ``BatchActionResponse``) must update to the new shapes. The
+  legacy TypedDicts have been removed from ``filigree.types.api``.
 
 - **Cross-surface error-envelope parity test module (`tests/util/test_cross_surface_parity.py`).** Sixteen tests fire the same logical bad input at dashboard (`AsyncClient`), MCP (in-process tool handler), and CLI (`CliRunner --json`) and assert the three surfaces emit the same `ErrorCode`. Covers the seven bed-down cases from Stages 1 + 2a (`NOT_FOUND` on get, `VALIDATION` on out-of-range priority / unknown type / blank actor / blank assignee, `INVALID_TRANSITION` on bad status, `CONFLICT`/`INVALID_TRANSITION` on already-closed, batch-per-item envelopes) plus four `POST /api/v1/scan-results` envelope pins — the dashboard-only route is the highest-risk Clarion-facing hop for Stage 2B and has no staging environment, so these tests are the pre-release contract. Twelve tests pass; four are strict `xfail` marking 2B worklist items (CLI `--priority`/`--actor` Click-layer validators bypassing the 2.0 envelope; CLI `close --json` emitting a batch-shape wrapper for single-id close; dashboard `batch_update` returning `errors` while MCP returns `failed` — wire-contract unification scope for 2B). Each divergence is also filed as an `observe` for the 2B rebaseline's work list.
 

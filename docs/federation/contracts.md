@@ -97,6 +97,77 @@ Classic batch endpoints do NOT accept `response_detail`. The parameter is a loom
 
 Validation order: `response_detail` is parsed BEFORE the request body, so an invalid value (`?response_detail=banana`) returns 400 `VALIDATION` even on a malformed body. Pinned by the `response_detail_invalid` fixture example in `tests/fixtures/contracts/loom/batch-{update,close}.json`.
 
+## Phase D — MCP forward-migration (2026-04-27)
+
+Phase D landed the per-ADR-002 §5 commitment that **MCP reflects the
+living surface only**. Every MCP tool now mirrors the loom HTTP
+vocabulary that landed in Phase C:
+
+- **Vocabulary.** Single-issue MCP tools (`get_issue`, `update_issue`,
+  `close_issue`, `reopen_issue`, `claim_issue`, `release_claim`,
+  `undo_last`, `add_comment`, `get_comments`, `add_label`,
+  `remove_label`, `get_issue_events`) take `issue_id` as the input
+  field name (was `id`). `create_issue.parent_id` and
+  `update_issue.parent_id` input fields renamed to `parent_issue_id`.
+  `add_dependency` / `remove_dependency` take `from_issue_id` /
+  `to_issue_id` (was `from_id` / `to_id`). `dismiss_observation` /
+  `promote_observation` take `observation_id`. The
+  `SlimIssue.id` projection field renamed to `SlimIssue.issue_id`,
+  matching `SlimIssueLoom`.
+
+- **Batch tools.** Issue-batch input field unified to `issue_ids` —
+  `batch_update`, `batch_close`, `batch_add_label`, `batch_add_comment`.
+  Observation/finding batches use `observation_ids` / `finding_ids`
+  per the entity-PK rule. Container keys unified to
+  `{succeeded, failed}` (`BatchResponse[T]`); legacy
+  `{updated|closed, errors, count}` and `BatchActionResponse.results`
+  removed. `batch_close` / `batch_update` return
+  `BatchResponse[SlimIssue]`; label/comment/observation/finding batches
+  return `BatchResponse[str]`.
+
+- **List tools.** Every MCP list tool (`list_issues`, `search_issues`,
+  `get_ready`, `get_blocked`, `get_comments`, `get_issue_events`,
+  `get_changes`, `list_files`, `list_findings`, `list_observations`,
+  `list_scanners`, `list_packs`, `list_types`, `list_labels`) returns
+  the unified `ListResponse[T]` envelope: `{items, has_more,
+  next_offset?}`. Loose siblings (`stats`, `total`, `errors`, `hint`,
+  `limit`, `offset`) dropped per the loom precedent.
+
+- **Workflow tool rename.** `get_workflow_states` →
+  `get_workflow_statuses` (response key `states` → `statuses`).
+  `explain_state` → `explain_status` (input arg `state` → `status`,
+  response key `state` → `status`). CLI commands follow:
+  `workflow-states` → `workflow-statuses`, `explain-state` →
+  `explain-status`. Internal types (`StateCategory`,
+  `StateDefinition`, `state_changed` event, `issues.status` column)
+  keep their existing names — the rename is only at the MCP/CLI
+  surface.
+
+- **`get_issue.include_files` defaults to `False`.** Aligns MCP with
+  the loom HTTP `GET /api/loom/issues/{issue_id}` contract (defaulted
+  to `False` since Phase C3). Federation consumers needing the
+  file-association payload pass `include_files=true` explicitly.
+
+- **Composed operations.** New atomic MCP tools `start_work` and
+  `start_next_work` claim an issue and transition it to a working
+  status in one call. `target_status` defaults to the type's
+  `canonical_working_status()`; ambiguous (multi-wip) types raise
+  `AmbiguousTransitionError` so the caller specifies. Backed by core
+  methods on `FiligreeDB` with compensating-action rollback (the
+  claim is released if the transition fails) so the assignee/status
+  pair returns to its prior state on error.
+
+**Forward-only.** MCP does not accept dual vocabularies. Federation
+consumers using HTTP have used the loom vocabulary (`issue_id`,
+unified envelopes) since Phase C; MCP clients re-pin against the new
+schema. The Phase E milestone (CLI forward-migration + parity
+fill-in) is the next step.
+
+**Classic HTTP unchanged.** The C2 `test_container_key_parity` strict
+xfail in `tests/util/test_cross_surface_parity.py` remains
+strict-xfailed — its job is to flag classic drift, and Phase D did
+not touch classic.
+
 ## When a contract evolves
 
 **Non-breaking additions** (new optional response fields, new optional request parameters with safe defaults) may land in-place without a new generation. Fixtures are updated to reflect the new shape; the `_meta.updated` field moves.
