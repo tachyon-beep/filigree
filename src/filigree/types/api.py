@@ -213,38 +213,6 @@ class SearchResponse(TypedDict):
     has_more: bool
 
 
-class BatchUpdateResponse(TypedDict):
-    """Batch update result with succeeded IDs and failures.
-
-    Superseded by ``BatchResponse[SlimIssue]`` — kept as the wire shape
-    emitted by MCP ``batch_update`` until Stage 2B's full-stage
-    rewrite migrates call sites. ``failed`` uses ``BatchFailure``
-    (formerly ``BatchFailureDetail``, retired in task 2b.0).
-    """
-
-    succeeded: list[str]
-    failed: list[BatchFailure]
-    count: int
-
-
-class BatchCloseResponse(TypedDict):
-    """Batch close result with optional newly-unblocked list.
-
-    Superseded by ``BatchResponse[SlimIssue]`` — kept as the wire shape
-    emitted by MCP ``batch_close`` until Stage 2B's full-stage
-    rewrite migrates call sites.
-
-    ``succeeded``, ``failed``, and ``count`` are always present.
-    ``newly_unblocked`` is only included when issues were actually
-    unblocked.
-    """
-
-    succeeded: list[str]
-    failed: list[BatchFailure]
-    count: int
-    newly_unblocked: NotRequired[list[SlimIssue]]
-
-
 class PlanResponse(PlanTree):
     """Plan tree with computed progress percentage (MCP get_plan)."""
 
@@ -269,22 +237,6 @@ class CriticalPathResponse(TypedDict):
 
     path: list[CriticalPathNode]
     length: int
-
-
-class BatchActionResponse(TypedDict):
-    """Shared response shape for batch_add_label / batch_add_comment.
-
-    ``results`` varies by operation (label adds: {id, status}, comment adds:
-    {id, comment_id}), so it remains list[dict[str, Any]].
-
-    Superseded by ``BatchResponse`` — kept as the wire shape emitted by
-    MCP until Stage 2B's full-stage rewrite migrates call sites.
-    """
-
-    succeeded: list[str]
-    results: list[dict[str, Any]]
-    failed: list[BatchFailure]
-    count: int
 
 
 # ---------------------------------------------------------------------------

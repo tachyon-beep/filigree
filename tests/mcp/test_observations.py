@@ -151,35 +151,39 @@ class TestBatchDismissTool:
         result = await call_tool(
             "batch_dismiss_observations",
             {
-                "ids": [o1["id"], o2["id"]],
+                "observation_ids": [o1["id"], o2["id"]],
             },
         )
         data = _parse(result)
         remaining = mcp_db.list_observations()
         assert len(remaining) == 1
         assert remaining[0]["summary"] == "Three"
-        assert data.get("dismissed") == 2
+        assert len(data["succeeded"]) == 2
+        assert set(data["succeeded"]) == {o1["id"], o2["id"]}
+        assert data["failed"] == []
 
     async def test_batch_dismiss_empty_list(self, mcp_db: FiligreeDB) -> None:
-        result = await call_tool("batch_dismiss_observations", {"ids": []})
+        result = await call_tool("batch_dismiss_observations", {"observation_ids": []})
         data = _parse(result)
-        assert data.get("dismissed", 0) == 0
+        assert data["succeeded"] == []
+        assert data["failed"] == []
 
     async def test_batch_dismiss_invalid_ids_reports_not_found(self, mcp_db: FiligreeDB) -> None:
-        result = await call_tool("batch_dismiss_observations", {"ids": ["nope-1", "nope-2"]})
+        result = await call_tool("batch_dismiss_observations", {"observation_ids": ["nope-1", "nope-2"]})
         data = _parse(result)
-        assert data.get("dismissed", 0) == 0
-        assert set(data.get("not_found", [])) == {"nope-1", "nope-2"}
+        assert data["succeeded"] == []
+        assert {f["id"] for f in data["failed"]} == {"nope-1", "nope-2"}
+        assert all(f["code"] == ErrorCode.NOT_FOUND for f in data["failed"])
 
     async def test_batch_dismiss_rejects_bare_string_ids(self, mcp_db: FiligreeDB) -> None:
         """filigree-45580755aa: bare string must not be iterated char-by-char."""
-        result = await call_tool("batch_dismiss_observations", {"ids": "obs-123"})
+        result = await call_tool("batch_dismiss_observations", {"observation_ids": "obs-123"})
         data = _parse(result)
         assert data.get("code") == ErrorCode.VALIDATION
 
     async def test_batch_dismiss_rejects_non_string_members(self, mcp_db: FiligreeDB) -> None:
         """filigree-45580755aa: non-string ids rejected up front."""
-        result = await call_tool("batch_dismiss_observations", {"ids": [1, 2, 3]})
+        result = await call_tool("batch_dismiss_observations", {"observation_ids": [1, 2, 3]})
         data = _parse(result)
         assert data.get("code") == ErrorCode.VALIDATION
 
@@ -204,7 +208,7 @@ class TestSummaryRefreshOnObservationMutations:
         o1 = mcp_db.create_observation("A")
         o2 = mcp_db.create_observation("B")
         with patch("filigree.mcp_server.write_summary") as mock_write:
-            await call_tool("batch_dismiss_observations", {"ids": [o1["id"], o2["id"]]})
+            await call_tool("batch_dismiss_observations", {"observation_ids": [o1["id"], o2["id"]]})
         assert mock_write.called, "batch_dismiss_observations must call _refresh_summary"
 
 

@@ -11,7 +11,7 @@ from mcp.types import TextContent, Tool
 
 from filigree.core import VALID_ASSOC_TYPES, VALID_FINDING_STATUSES, VALID_SEVERITIES
 from filigree.mcp_tools.common import _parse_args, _text, _validate_actor, _validate_int_range, _validate_str
-from filigree.types.api import ErrorCode, ErrorResponse
+from filigree.types.api import BatchFailure, BatchResponse, ErrorCode, ErrorResponse
 from filigree.types.inputs import (
     AddFileAssociationArgs,
     BatchUpdateFindingsArgs,
@@ -521,14 +521,17 @@ async def _handle_batch_update_findings(arguments: dict[str, Any]) -> list[TextC
 
     tracker = _get_db()
     updated: list[str] = []
-    errors: list[dict[str, str]] = []
+    errors: list[BatchFailure] = []
     for fid in finding_ids:
         try:
             tracker.update_finding(fid, status=status)
             updated.append(fid)
-        except (KeyError, ValueError) as e:
+        except KeyError as e:
             _logger.warning("batch_update_findings: failed for %s: %s", fid, e)
-            errors.append({"finding_id": fid, "error": str(e)})
+            errors.append(BatchFailure(id=fid, error=str(e), code=ErrorCode.NOT_FOUND))
+        except ValueError as e:
+            _logger.warning("batch_update_findings: failed for %s: %s", fid, e)
+            errors.append(BatchFailure(id=fid, error=str(e), code=ErrorCode.VALIDATION))
     if not updated and errors:
         return _text(
             ErrorResponse(
@@ -536,9 +539,7 @@ async def _handle_batch_update_findings(arguments: dict[str, Any]) -> list[TextC
                 code=ErrorCode.VALIDATION,
             )
         )
-    result: dict[str, Any] = {"updated": updated, "errors": errors}
-    if updated and errors:
-        result["partial"] = True
+    result: BatchResponse[str] = BatchResponse(succeeded=updated, failed=errors)
     return _text(result)
 
 

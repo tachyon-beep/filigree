@@ -550,10 +550,9 @@ class TestBatchMixedValidityParity:
         mcp_missing = "mcp-ffffffffff"
         from filigree.mcp_tools.issues import _handle_batch_update
 
-        # MCP batch_update uses "ids" as the arg name; dashboard uses "issue_ids".
-        # That arg-name divergence is a separate 2B concern, documented as an
-        # observation — this test focuses on envelope shape only.
-        mcp_body = _mcp_envelope(await _handle_batch_update({"ids": [mcp_real, mcp_missing], "priority": 1}))
+        # MCP batch_update uses "issue_ids" matching the loom HTTP /api/loom/batch/update
+        # vocabulary (Phase D1 alignment). This test focuses on envelope shape only.
+        mcp_body = _mcp_envelope(await _handle_batch_update({"issue_ids": [mcp_real, mcp_missing], "priority": 1}))
         # Container-key pin: MCP uses "failed" pre-2b.1. Paired with the
         # dashboard pin above — both flip together when 2b.1 unifies.
         assert "failed" in mcp_body, f"mcp batch must keep 'failed' container key: keys={sorted(mcp_body.keys())!r}"
@@ -571,9 +570,10 @@ class TestBatchMixedValidityParity:
         reason=(
             "Permanent: classic dashboard returns {updated, errors} (see "
             "dashboard_routes/issues.py::api_batch_update); MCP returns "
-            "{succeeded, failed, count}. ADR-002 freezes classic for the "
-            "1.x lifetime, so this divergence is the wire contract — not a "
-            "bug to fix. The unified envelope ships at /api/loom/batch/* "
+            "{succeeded, failed} (BatchResponse[SlimIssue] post-Phase D1). "
+            "ADR-002 freezes classic for the 1.x lifetime, so this "
+            "divergence is the wire contract — not a bug to fix. The "
+            "unified envelope ships at /api/loom/batch/* "
             "(BatchResponse[SlimIssueLoom]); see "
             "test_container_key_parity_loom for the loom-side resolution. "
             "This xfail stays in place to flag any accidental drift in "
@@ -597,7 +597,7 @@ class TestBatchMixedValidityParity:
         mcp_real = mcp_surface.create_issue("Real").id
         from filigree.mcp_tools.issues import _handle_batch_update
 
-        mcp_body = _mcp_envelope(await _handle_batch_update({"ids": [mcp_real, "mcp-ffffffffff"], "priority": 1}))
+        mcp_body = _mcp_envelope(await _handle_batch_update({"issue_ids": [mcp_real, "mcp-ffffffffff"], "priority": 1}))
 
         # Parity: both use the same container key for the failed-items list.
         dash_keys = set(dash_body.keys())
@@ -612,12 +612,11 @@ class TestBatchMixedValidityParity:
     ) -> None:
         """Loom-side resolution of the classic dashboard/MCP container-key
         divergence: ``/api/loom/batch/update`` and MCP ``batch_update``
-        both expose ``{succeeded, failed}`` (BatchResponse[SlimIssueLoom]
-        on the dashboard side, BatchUpdateResponse on the MCP side). The
-        ``count`` extra MCP exposes is allowed-by-construction
-        (BatchResponse permits supersets); what matters is that BOTH
-        publish ``succeeded`` and ``failed`` and that NEITHER publishes
-        the classic-only ``updated``/``errors`` keys.
+        both expose ``{succeeded, failed}`` (``BatchResponse[SlimIssueLoom]``
+        on the dashboard side, ``BatchResponse[SlimIssue]`` on the MCP
+        side after Phase D1). What matters is that BOTH publish
+        ``succeeded`` and ``failed`` and that NEITHER publishes the
+        classic-only ``updated``/``errors`` keys.
         """
         dash_create = await dashboard_surface.post("/api/issues", json={"title": "Real"})
         dash_real = dash_create.json()["id"]
@@ -632,7 +631,7 @@ class TestBatchMixedValidityParity:
         mcp_real = mcp_surface.create_issue("Real").id
         from filigree.mcp_tools.issues import _handle_batch_update
 
-        mcp_body = _mcp_envelope(await _handle_batch_update({"ids": [mcp_real, "mcp-ffffffffff"], "priority": 1}))
+        mcp_body = _mcp_envelope(await _handle_batch_update({"issue_ids": [mcp_real, "mcp-ffffffffff"], "priority": 1}))
         mcp_keys = set(mcp_body.keys())
 
         # Both surfaces publish the unified container keys.

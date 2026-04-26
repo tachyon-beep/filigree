@@ -19,7 +19,7 @@ from filigree.mcp_tools.common import (
     _validate_int_range,
     _validate_str,
 )
-from filigree.types.api import ErrorCode, ErrorResponse
+from filigree.types.api import BatchFailure, BatchResponse, ErrorCode, ErrorResponse
 from filigree.types.inputs import (
     BatchDismissObservationsArgs,
     DismissObservationArgs,
@@ -95,11 +95,11 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
         ),
         Tool(
             name="batch_dismiss_observations",
-            description="Dismiss multiple observations in one call.",
+            description="Dismiss multiple observations in one call. Returns BatchResponse[str] (succeeded observation IDs / failed).",
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "ids": {
+                    "observation_ids": {
                         "type": "array",
                         "items": {"type": "string"},
                         "description": "Observation IDs to dismiss",
@@ -107,7 +107,7 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
                     "reason": {"type": "string", "default": "", "description": "Reason for dismissal"},
                     "actor": {"type": "string", "description": "Agent/user identity for audit trail"},
                 },
-                "required": ["ids"],
+                "required": ["observation_ids"],
             },
         ),
         Tool(
@@ -254,14 +254,14 @@ async def _handle_batch_dismiss_observations(arguments: dict[str, Any]) -> list[
     if actor_err:
         return actor_err
 
-    # Validate ids is a list of strings up front — a bare string would
-    # otherwise be iterated char-by-char and produce bogus per-character
+    # Validate observation_ids is a list of strings up front — a bare string
+    # would otherwise be iterated char-by-char and produce bogus per-character
     # not_found results (see filigree-45580755aa).
-    raw_ids = args.get("ids", [])
+    raw_ids = args.get("observation_ids", [])
     if not isinstance(raw_ids, list):
-        return _text(ErrorResponse(error="'ids' must be an array of strings", code=ErrorCode.VALIDATION))
+        return _text(ErrorResponse(error="'observation_ids' must be an array of strings", code=ErrorCode.VALIDATION))
     if not all(isinstance(x, str) for x in raw_ids):
-        return _text(ErrorResponse(error="'ids' must contain only string values", code=ErrorCode.VALIDATION))
+        return _text(ErrorResponse(error="'observation_ids' must contain only string values", code=ErrorCode.VALIDATION))
 
     tracker = _get_db()
     try:
@@ -273,9 +273,15 @@ async def _handle_batch_dismiss_observations(arguments: dict[str, Any]) -> list[
     except sqlite3.Error as e:
         return _text(ErrorResponse(error=f"Database error: {e}", code=ErrorCode.IO))
     _refresh_summary()
-    resp: dict[str, object] = {"dismissed": result["dismissed"], "ok": True}
-    if result["not_found"]:
-        resp["not_found"] = result["not_found"]
+    not_found_set = set(result["not_found"])
+    # Preserve input order, deduped, for the succeeded list — db returns a
+    # row-count plus the not-found ids, so the dismissed-id list is computed
+    # here as: unique inputs minus not-found.
+    succeeded = [oid for oid in dict.fromkeys(raw_ids) if oid not in not_found_set]
+    failed: list[BatchFailure] = [
+        BatchFailure(id=oid, error=f"Observation not found: {oid}", code=ErrorCode.NOT_FOUND) for oid in result["not_found"]
+    ]
+    resp: BatchResponse[str] = BatchResponse(succeeded=succeeded, failed=failed)
     return _text(resp)
 
 

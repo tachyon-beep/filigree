@@ -20,8 +20,7 @@ from filigree.mcp_tools.common import (
     _validate_int_range,
 )
 from filigree.types.api import (
-    BatchCloseResponse,
-    BatchUpdateResponse,
+    BatchResponse,
     ClaimNextEmptyResponse,
     ClaimNextResponse,
     ErrorCode,
@@ -31,6 +30,7 @@ from filigree.types.api import (
     IssueWithTransitions,
     IssueWithUnblocked,
     SearchResponse,
+    SlimIssue,
     TransitionDetail,
     classify_value_error,
 )
@@ -292,11 +292,11 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
         ),
         Tool(
             name="batch_close",
-            description="Close multiple issues in one call. Returns list of closed issues.",
+            description="Close multiple issues in one call. Returns BatchResponse[SlimIssue] (succeeded/failed) plus newly_unblocked when applicable.",
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "ids": {
+                    "issue_ids": {
                         "type": "array",
                         "items": {"type": "string"},
                         "description": "Issue IDs to close",
@@ -304,16 +304,16 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
                     "reason": {"type": "string", "default": "", "description": "Close reason"},
                     "actor": {"type": "string", "description": "Agent/user identity for audit trail"},
                 },
-                "required": ["ids"],
+                "required": ["issue_ids"],
             },
         ),
         Tool(
             name="batch_update",
-            description="Update multiple issues with the same changes in one call.",
+            description="Update multiple issues with the same changes in one call. Returns BatchResponse[SlimIssue] (succeeded/failed).",
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "ids": {
+                    "issue_ids": {
                         "type": "array",
                         "items": {"type": "string"},
                         "description": "Issue IDs to update",
@@ -327,7 +327,7 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
                     "fields": {"type": "object", "description": "Fields to merge"},
                     "actor": {"type": "string", "description": "Agent/user identity for audit trail"},
                 },
-                "required": ["ids"],
+                "required": ["issue_ids"],
             },
         ),
     ]
@@ -689,22 +689,21 @@ async def _handle_batch_close(arguments: dict[str, Any]) -> list[TextContent]:
     if actor_err:
         return actor_err
     tracker = _get_db()
-    ids = args["ids"]
-    if not all(isinstance(i, str) for i in ids):
+    issue_ids = args["issue_ids"]
+    if not all(isinstance(i, str) for i in issue_ids):
         return _text(ErrorResponse(error="All issue IDs must be strings", code=ErrorCode.VALIDATION))
     ready_before = {i.id for i in tracker.get_ready()}
     closed, failed = tracker.batch_close(
-        ids,
+        issue_ids,
         reason=args.get("reason", ""),
         actor=actor,
     )
     _refresh_summary()
     ready_after = tracker.get_ready()
     newly_unblocked = [i for i in ready_after if i.id not in ready_before]
-    batch_result = BatchCloseResponse(
-        succeeded=[i.id for i in closed],
+    batch_result: BatchResponse[SlimIssue] = BatchResponse(
+        succeeded=[_slim_issue(i) for i in closed],
         failed=failed,
-        count=len(closed),
     )
     if newly_unblocked:
         batch_result["newly_unblocked"] = [_slim_issue(i) for i in newly_unblocked]
@@ -723,14 +722,14 @@ async def _handle_batch_update(arguments: dict[str, Any]) -> list[TextContent]:
     if priority_err:
         return priority_err
     tracker = _get_db()
-    u_ids = args["ids"]
-    if not all(isinstance(i, str) for i in u_ids):
+    issue_ids = args["issue_ids"]
+    if not all(isinstance(i, str) for i in issue_ids):
         return _text(ErrorResponse(error="All issue IDs must be strings", code=ErrorCode.VALIDATION))
     u_fields = args.get("fields")
     if u_fields is not None and not isinstance(u_fields, dict):
         return _text(ErrorResponse(error="fields must be a JSON object", code=ErrorCode.VALIDATION))
     updated, update_failed = tracker.batch_update(
-        u_ids,
+        issue_ids,
         status=args.get("status"),
         priority=priority,
         assignee=args.get("assignee"),
@@ -738,10 +737,8 @@ async def _handle_batch_update(arguments: dict[str, Any]) -> list[TextContent]:
         actor=actor,
     )
     _refresh_summary()
-    return _text(
-        BatchUpdateResponse(
-            succeeded=[i.id for i in updated],
-            failed=update_failed,
-            count=len(updated),
-        )
+    result: BatchResponse[SlimIssue] = BatchResponse(
+        succeeded=[_slim_issue(i) for i in updated],
+        failed=update_failed,
     )
+    return _text(result)

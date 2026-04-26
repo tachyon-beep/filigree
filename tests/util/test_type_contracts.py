@@ -13,9 +13,6 @@ from filigree.core import FileRecord, FiligreeDB
 from filigree.types.api import (
     AddCommentResult,
     ArchiveClosedResponse,
-    BatchActionResponse,
-    BatchCloseResponse,
-    BatchUpdateResponse,
     BlockedIssue,
     ClaimNextEmptyResponse,
     ClaimNextResponse,
@@ -917,31 +914,6 @@ class TestSearchResponseShape:
         assert set(result.keys()) == set(hints.keys())
 
 
-class TestBatchUpdateResponseShape:
-    def test_keys_match(self, db: FiligreeDB) -> None:
-        result = BatchUpdateResponse(succeeded=["a"], failed=[], count=1)
-        hints = get_type_hints(BatchUpdateResponse)
-        assert set(result.keys()) == set(hints.keys())
-
-
-class TestBatchCloseResponseShape:
-    def test_required_keys(self, db: FiligreeDB) -> None:
-        """Required keys (succeeded, failed, count) are always present."""
-        result = BatchCloseResponse(succeeded=["a"], failed=[], count=1)
-        assert {"succeeded", "failed", "count"} <= set(result.keys())
-
-    def test_with_newly_unblocked(self, db: FiligreeDB) -> None:
-        """All 4 keys present when newly_unblocked is populated."""
-        result = BatchCloseResponse(
-            succeeded=["a"],
-            failed=[],
-            count=1,
-            newly_unblocked=[SlimIssue(id="x", title="t", status="open", priority=2, type="task")],
-        )
-        hints = get_type_hints(BatchCloseResponse)
-        assert set(result.keys()) == set(hints.keys())
-
-
 class TestErrorResponseShape:
     def test_required_keys(self) -> None:
         """Required keys (error, code) always present; details is NotRequired."""
@@ -1040,18 +1012,6 @@ class TestCriticalPathResponseShape:
             length=1,
         )
         hints = get_type_hints(CriticalPathResponse)
-        assert set(result.keys()) == set(hints.keys())
-
-
-class TestBatchActionResponseShape:
-    def test_keys_match(self) -> None:
-        result = BatchActionResponse(
-            succeeded=["a"],
-            results=[{"id": "a", "status": "added"}],
-            failed=[],
-            count=1,
-        )
-        hints = get_type_hints(BatchActionResponse)
         assert set(result.keys()) == set(hints.keys())
 
 

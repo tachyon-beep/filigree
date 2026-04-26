@@ -116,13 +116,13 @@ class ClaimNextArgs(TypedDict):
 
 
 class BatchCloseArgs(TypedDict):
-    ids: list[str]
+    issue_ids: list[str]
     reason: NotRequired[str]
     actor: NotRequired[str]
 
 
 class BatchUpdateArgs(TypedDict):
-    ids: list[str]
+    issue_ids: list[str]
     status: NotRequired[str]
     priority: NotRequired[int]
     assignee: NotRequired[str]
@@ -161,13 +161,13 @@ class ListLabelsArgs(TypedDict):
 
 
 class BatchAddLabelArgs(TypedDict):
-    ids: list[str]
+    issue_ids: list[str]
     label: str
     actor: NotRequired[str]
 
 
 class BatchAddCommentArgs(TypedDict):
-    ids: list[str]
+    issue_ids: list[str]
     text: str
     actor: NotRequired[str]
 
@@ -435,7 +435,7 @@ class DismissObservationArgs(TypedDict):
 
 
 class BatchDismissObservationsArgs(TypedDict):
-    ids: list[str]
+    observation_ids: list[str]
     reason: NotRequired[str]
     actor: NotRequired[str]
 

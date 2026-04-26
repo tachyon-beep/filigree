@@ -13,7 +13,7 @@ from filigree.mcp_tools.common import _parse_args, _text, _validate_actor, _vali
 from filigree.types.api import (
     AddCommentResult,
     ArchiveClosedResponse,
-    BatchActionResponse,
+    BatchResponse,
     CompactEventsResponse,
     ErrorCode,
     ErrorResponse,
@@ -94,11 +94,11 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
         ),
         Tool(
             name="batch_add_label",
-            description="Add the same label to multiple issues in one call.",
+            description="Add the same label to multiple issues in one call. Returns BatchResponse[SlimIssue] (succeeded/failed).",
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "ids": {
+                    "issue_ids": {
                         "type": "array",
                         "items": {"type": "string"},
                         "description": "Issue IDs to update",
@@ -106,16 +106,16 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
                     "label": {"type": "string", "description": "Label to add"},
                     "actor": {"type": "string", "description": "Agent/user identity for audit trail"},
                 },
-                "required": ["ids", "label"],
+                "required": ["issue_ids", "label"],
             },
         ),
         Tool(
             name="batch_add_comment",
-            description="Add the same comment to multiple issues in one call.",
+            description="Add the same comment to multiple issues in one call. Returns BatchResponse[SlimIssue] (succeeded/failed).",
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "ids": {
+                    "issue_ids": {
                         "type": "array",
                         "items": {"type": "string"},
                         "description": "Issue IDs to update",
@@ -123,7 +123,7 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
                     "text": {"type": "string", "description": "Comment text"},
                     "actor": {"type": "string", "description": "Agent/user identity for audit trail"},
                 },
-                "required": ["ids", "text"],
+                "required": ["issue_ids", "text"],
             },
         ),
         Tool(
@@ -390,21 +390,18 @@ async def _handle_batch_add_label(arguments: dict[str, Any]) -> list[TextContent
     if actor_err:
         return actor_err
     tracker = _get_db()
-    label_ids = args["ids"]
-    if not all(isinstance(i, str) for i in label_ids):
+    issue_ids = args["issue_ids"]
+    if not all(isinstance(i, str) for i in issue_ids):
         return _text(ErrorResponse(error="All issue IDs must be strings", code=ErrorCode.VALIDATION))
     if not isinstance(args["label"], str):
         return _text(ErrorResponse(error="label must be a string", code=ErrorCode.VALIDATION))
-    label_succeeded, label_failed = tracker.batch_add_label(label_ids, label=args["label"])
+    label_succeeded, label_failed = tracker.batch_add_label(issue_ids, label=args["label"])
     _refresh_summary()
-    return _text(
-        BatchActionResponse(
-            succeeded=[row["id"] for row in label_succeeded],
-            results=label_succeeded,
-            failed=label_failed,
-            count=len(label_succeeded),
-        )
+    result: BatchResponse[str] = BatchResponse(
+        succeeded=[row["id"] for row in label_succeeded],
+        failed=label_failed,
     )
+    return _text(result)
 
 
 async def _handle_batch_add_comment(arguments: dict[str, Any]) -> list[TextContent]:
@@ -415,25 +412,22 @@ async def _handle_batch_add_comment(arguments: dict[str, Any]) -> list[TextConte
     if actor_err:
         return actor_err
     tracker = _get_db()
-    comment_ids = args["ids"]
-    if not all(isinstance(i, str) for i in comment_ids):
+    issue_ids = args["issue_ids"]
+    if not all(isinstance(i, str) for i in issue_ids):
         return _text(ErrorResponse(error="All issue IDs must be strings", code=ErrorCode.VALIDATION))
     if not isinstance(args["text"], str):
         return _text(ErrorResponse(error="text must be a string", code=ErrorCode.VALIDATION))
     comment_succeeded, comment_failed = tracker.batch_add_comment(
-        comment_ids,
+        issue_ids,
         text=args["text"],
         author=actor,
     )
     _refresh_summary()
-    return _text(
-        BatchActionResponse(
-            succeeded=[str(row["id"]) for row in comment_succeeded],
-            results=comment_succeeded,
-            failed=comment_failed,
-            count=len(comment_succeeded),
-        )
+    result: BatchResponse[str] = BatchResponse(
+        succeeded=[str(row["id"]) for row in comment_succeeded],
+        failed=comment_failed,
     )
+    return _text(result)
 
 
 async def _handle_get_changes(arguments: dict[str, Any]) -> list[TextContent]:

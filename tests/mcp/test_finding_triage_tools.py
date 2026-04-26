@@ -111,8 +111,8 @@ class TestBatchUpdateFindingsTool:
                 {"finding_ids": [ids["obo"], ids["type"]], "status": "acknowledged"},
             )
         )
-        assert len(data["updated"]) == 2
-        assert data["errors"] == []
+        assert len(data["succeeded"]) == 2
+        assert data["failed"] == []
 
     async def test_batch_update_partial_failure(self, mcp_db: FiligreeDB) -> None:
         ids = _seed_findings(mcp_db)
@@ -122,9 +122,10 @@ class TestBatchUpdateFindingsTool:
                 {"finding_ids": [ids["obo"], "nonexistent"], "status": "acknowledged"},
             )
         )
-        assert len(data["updated"]) == 1
-        assert len(data["errors"]) == 1
-        assert data["errors"][0]["finding_id"] == "nonexistent"
+        assert len(data["succeeded"]) == 1
+        assert len(data["failed"]) == 1
+        assert data["failed"][0]["id"] == "nonexistent"
+        assert data["failed"][0]["code"] == ErrorCode.NOT_FOUND
 
     async def test_batch_update_empty_ids_rejected(self, mcp_db: FiligreeDB) -> None:
         data = _parse(await call_tool("batch_update_findings", {"finding_ids": [], "status": "acknowledged"}))

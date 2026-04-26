@@ -110,7 +110,7 @@ class TestMCPActorValidation:
         issue = mcp_db.create_issue("Label target")
         result = await call_tool(
             "batch_add_label",
-            {"ids": [issue.id], "label": "security", "actor": ""},
+            {"issue_ids": [issue.id], "label": "security", "actor": ""},
         )
         data = _parse(result)
         assert data["code"] == ErrorCode.VALIDATION
@@ -120,7 +120,7 @@ class TestMCPActorValidation:
         issue = mcp_db.create_issue("Label target")
         result = await call_tool(
             "batch_add_label",
-            {"ids": [issue.id], "label": "security", "actor": "\x00bad"},
+            {"issue_ids": [issue.id], "label": "security", "actor": "\x00bad"},
         )
         data = _parse(result)
         assert data["code"] == ErrorCode.VALIDATION
@@ -131,11 +131,11 @@ class TestMCPActorValidation:
         issue = mcp_db.create_issue("Label target")
         result = await call_tool(
             "batch_add_label",
-            {"ids": [issue.id], "label": "reviewed", "actor": "ci-bot"},
+            {"issue_ids": [issue.id], "label": "reviewed", "actor": "ci-bot"},
         )
         data = _parse(result)
         assert "error" not in data
-        assert data["count"] == 1
+        assert len(data["succeeded"]) == 1
 
 
 class TestMCPPriorityValidation:
@@ -176,7 +176,7 @@ class TestMCPPriorityValidation:
 
     async def test_batch_update_priority_out_of_range(self, mcp_db: FiligreeDB) -> None:
         issue = mcp_db.create_issue("Target")
-        result = await call_tool("batch_update", {"ids": [issue.id], "priority": 5})
+        result = await call_tool("batch_update", {"issue_ids": [issue.id], "priority": 5})
         data = _parse(result)
         assert data["code"] == ErrorCode.VALIDATION
 

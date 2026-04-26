@@ -474,17 +474,18 @@ class TestBatchClose:
     async def test_batch_close(self, mcp_db: FiligreeDB) -> None:
         a = mcp_db.create_issue("Close A")
         b = mcp_db.create_issue("Close B")
-        result = await call_tool("batch_close", {"ids": [a.id, b.id], "reason": "done"})
+        result = await call_tool("batch_close", {"issue_ids": [a.id, b.id], "reason": "done"})
         data = _parse(result)
-        assert data["count"] == 2
-        assert a.id in data["succeeded"]
-        assert b.id in data["succeeded"]
+        assert len(data["succeeded"]) == 2
+        succeeded_ids = {s["id"] for s in data["succeeded"]}
+        assert a.id in succeeded_ids
+        assert b.id in succeeded_ids
         assert data["failed"] == []
 
     async def test_batch_close_not_found(self, mcp_db: FiligreeDB) -> None:
-        result = await call_tool("batch_close", {"ids": ["mcp-nonexistent"]})
+        result = await call_tool("batch_close", {"issue_ids": ["mcp-nonexistent"]})
         data = _parse(result)
-        assert data["count"] == 0
+        assert data["succeeded"] == []
         assert len(data["failed"]) == 1
         assert data["failed"][0]["code"] == "NOT_FOUND"
 
@@ -493,25 +494,25 @@ class TestBatchUpdate:
     async def test_batch_update_status(self, mcp_db: FiligreeDB) -> None:
         a = mcp_db.create_issue("Update A")
         b = mcp_db.create_issue("Update B")
-        result = await call_tool("batch_update", {"ids": [a.id, b.id], "status": "in_progress"})
+        result = await call_tool("batch_update", {"issue_ids": [a.id, b.id], "status": "in_progress"})
         data = _parse(result)
-        assert data["count"] == 2
-        assert a.id in data["succeeded"]
+        assert len(data["succeeded"]) == 2
+        assert a.id in {s["id"] for s in data["succeeded"]}
         assert mcp_db.get_issue(a.id).status == "in_progress"
         assert mcp_db.get_issue(b.id).status == "in_progress"
 
     async def test_batch_update_priority(self, mcp_db: FiligreeDB) -> None:
         a = mcp_db.create_issue("Priority A")
         b = mcp_db.create_issue("Priority B")
-        result = await call_tool("batch_update", {"ids": [a.id, b.id], "priority": 0})
+        result = await call_tool("batch_update", {"issue_ids": [a.id, b.id], "priority": 0})
         data = _parse(result)
-        assert data["count"] == 2
+        assert len(data["succeeded"]) == 2
         assert mcp_db.get_issue(a.id).priority == 0
 
     async def test_batch_update_not_found(self, mcp_db: FiligreeDB) -> None:
-        result = await call_tool("batch_update", {"ids": ["mcp-nonexistent"], "status": "closed"})
+        result = await call_tool("batch_update", {"issue_ids": ["mcp-nonexistent"], "status": "closed"})
         data = _parse(result)
-        assert data["count"] == 0
+        assert data["succeeded"] == []
         assert len(data["failed"]) == 1
         assert data["failed"][0]["code"] == "NOT_FOUND"
 
@@ -520,27 +521,27 @@ class TestBatchAddLabel:
     async def test_batch_add_label(self, mcp_db: FiligreeDB) -> None:
         a = mcp_db.create_issue("Label A")
         b = mcp_db.create_issue("Label B")
-        result = await call_tool("batch_add_label", {"ids": [a.id, b.id], "label": "security"})
+        result = await call_tool("batch_add_label", {"issue_ids": [a.id, b.id], "label": "security"})
         data = _parse(result)
-        assert data["count"] == 2
+        assert len(data["succeeded"]) == 2
         assert a.id in data["succeeded"]
         assert b.id in data["succeeded"]
         assert data["failed"] == []
 
     async def test_batch_add_label_partial_failure(self, mcp_db: FiligreeDB) -> None:
         a = mcp_db.create_issue("Label A")
-        result = await call_tool("batch_add_label", {"ids": [a.id, "mcp-nonexistent"], "label": "security"})
+        result = await call_tool("batch_add_label", {"issue_ids": [a.id, "mcp-nonexistent"], "label": "security"})
         data = _parse(result)
-        assert data["count"] == 1
+        assert len(data["succeeded"]) == 1
         assert a.id in data["succeeded"]
         assert len(data["failed"]) == 1
         assert data["failed"][0]["code"] == "NOT_FOUND"
 
     async def test_batch_add_label_validation_error(self, mcp_db: FiligreeDB) -> None:
         a = mcp_db.create_issue("Label A")
-        result = await call_tool("batch_add_label", {"ids": [a.id], "label": "bug"})
+        result = await call_tool("batch_add_label", {"issue_ids": [a.id], "label": "bug"})
         data = _parse(result)
-        assert data["count"] == 0
+        assert data["succeeded"] == []
         assert len(data["failed"]) == 1
         assert data["failed"][0]["code"] == "VALIDATION"
 
@@ -549,27 +550,27 @@ class TestBatchAddComment:
     async def test_batch_add_comment(self, mcp_db: FiligreeDB) -> None:
         a = mcp_db.create_issue("Comment A")
         b = mcp_db.create_issue("Comment B")
-        result = await call_tool("batch_add_comment", {"ids": [a.id, b.id], "text": "triage complete"})
+        result = await call_tool("batch_add_comment", {"issue_ids": [a.id, b.id], "text": "triage complete"})
         data = _parse(result)
-        assert data["count"] == 2
+        assert len(data["succeeded"]) == 2
         assert a.id in data["succeeded"]
         assert b.id in data["succeeded"]
         assert data["failed"] == []
 
     async def test_batch_add_comment_partial_failure(self, mcp_db: FiligreeDB) -> None:
         a = mcp_db.create_issue("Comment A")
-        result = await call_tool("batch_add_comment", {"ids": [a.id, "mcp-nonexistent"], "text": "triage complete"})
+        result = await call_tool("batch_add_comment", {"issue_ids": [a.id, "mcp-nonexistent"], "text": "triage complete"})
         data = _parse(result)
-        assert data["count"] == 1
+        assert len(data["succeeded"]) == 1
         assert a.id in data["succeeded"]
         assert len(data["failed"]) == 1
         assert data["failed"][0]["code"] == "NOT_FOUND"
 
     async def test_batch_add_comment_validation_error(self, mcp_db: FiligreeDB) -> None:
         a = mcp_db.create_issue("Comment A")
-        result = await call_tool("batch_add_comment", {"ids": [a.id], "text": "   "})
+        result = await call_tool("batch_add_comment", {"issue_ids": [a.id], "text": "   "})
         data = _parse(result)
-        assert data["count"] == 0
+        assert data["succeeded"] == []
         assert len(data["failed"]) == 1
         assert data["failed"][0]["code"] == "VALIDATION"
 
@@ -704,7 +705,7 @@ class TestProactiveContext:
         blocked = mcp_db.create_issue("Doubly blocked")
         mcp_db.add_dependency(blocked.id, b1.id)
         mcp_db.add_dependency(blocked.id, b2.id)
-        result = await call_tool("batch_close", {"ids": [b1.id, b2.id]})
+        result = await call_tool("batch_close", {"issue_ids": [b1.id, b2.id]})
         data = _parse(result)
         assert "newly_unblocked" in data
         assert any(item["id"] == blocked.id for item in data["newly_unblocked"])
@@ -1033,19 +1034,19 @@ class TestMCPMutationEnhancements:
 
     async def test_batch_close_partial_failure(self, mcp_db: FiligreeDB) -> None:
         a = mcp_db.create_issue("Closeable")
-        result = await call_tool("batch_close", {"ids": [a.id, "mcp-nonexistent"]})
+        result = await call_tool("batch_close", {"issue_ids": [a.id, "mcp-nonexistent"]})
         data = _parse(result)
-        assert data["count"] == 1
-        assert a.id in data["succeeded"]
+        assert len(data["succeeded"]) == 1
+        assert a.id in {s["id"] for s in data["succeeded"]}
         assert len(data["failed"]) == 1
         assert data["failed"][0]["id"] == "mcp-nonexistent"
 
     async def test_batch_update_partial_failure(self, mcp_db: FiligreeDB) -> None:
         a = mcp_db.create_issue("Updatable")
-        result = await call_tool("batch_update", {"ids": [a.id, "mcp-nonexistent"], "priority": 0})
+        result = await call_tool("batch_update", {"issue_ids": [a.id, "mcp-nonexistent"], "priority": 0})
         data = _parse(result)
-        assert data["count"] == 1
-        assert a.id in data["succeeded"]
+        assert len(data["succeeded"]) == 1
+        assert a.id in {s["id"] for s in data["succeeded"]}
         assert len(data["failed"]) == 1
 
 
