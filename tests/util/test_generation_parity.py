@@ -383,6 +383,43 @@ class TestLoomGenerationParityBatchUpdate:
         assert body["succeeded"][0]["issue_id"] == issue_id
         assert body["succeeded"][0]["priority"] == 1
 
+    async def test_response_detail_full_succeeded_shape(self, dashboard_surface: AsyncClient) -> None:
+        """``?response_detail=full`` upgrades ``succeeded[0]`` from a slim
+        5-key projection to a full ``IssueLoom`` (20 keys). Pins the C5
+        shape contract for federation consumers that opt in.
+        """
+        create = await dashboard_surface.post("/api/issues", json={"title": "C5 batch update full seed"})
+        assert create.status_code in (200, 201), create.text
+        issue_id = create.json()["id"]
+        resp = await dashboard_surface.post(
+            "/api/loom/batch/update?response_detail=full",
+            json={"issue_ids": [issue_id], "priority": 1},
+        )
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert set(body.keys()) == {"succeeded", "failed"}, body
+        assert body["failed"] == []
+        assert len(body["succeeded"]) == 1
+        _assert_issue_loom_shape(body["succeeded"][0], path="succeeded[0]")
+        assert body["succeeded"][0]["issue_id"] == issue_id
+        assert body["succeeded"][0]["priority"] == 1
+
+    async def test_response_detail_default_is_slim(self, dashboard_surface: AsyncClient) -> None:
+        """No ``?response_detail`` param → succeeded[] items are
+        ``SlimIssueLoom`` (default). Pins the backwards-compat guarantee.
+        """
+        create = await dashboard_surface.post("/api/issues", json={"title": "C5 default slim"})
+        assert create.status_code in (200, 201), create.text
+        issue_id = create.json()["id"]
+        resp = await dashboard_surface.post(
+            "/api/loom/batch/update",
+            json={"issue_ids": [issue_id], "priority": 1},
+        )
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert len(body["succeeded"]) == 1
+        _assert_slim_issue_loom(body["succeeded"][0], path="succeeded[0]")
+
 
 # ---------------------------------------------------------------------------
 # Loom generation — batch/close (Phase C2)
@@ -471,6 +508,63 @@ class TestLoomGenerationParityBatchClose:
         assert isinstance(body["newly_unblocked"], list)
         assert len(body["newly_unblocked"]) == 1
         unblocked = body["newly_unblocked"][0]
+        _assert_slim_issue_loom(unblocked, path="newly_unblocked[0]")
+        assert unblocked["issue_id"] == b_id
+
+    async def test_response_detail_full_succeeded_shape(self, dashboard_surface: AsyncClient) -> None:
+        """``?response_detail=full`` on batch/close upgrades succeeded[0]
+        to a full ``IssueLoom``. Single isolated close, no
+        newly_unblocked path exercised here.
+        """
+        create = await dashboard_surface.post("/api/issues", json={"title": "C5 batch close full seed"})
+        assert create.status_code in (200, 201), create.text
+        issue_id = create.json()["id"]
+        resp = await dashboard_surface.post(
+            "/api/loom/batch/close?response_detail=full",
+            json={"issue_ids": [issue_id], "reason": "C5 full"},
+        )
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert "newly_unblocked" not in body, "no dependents → newly_unblocked omitted"
+        assert len(body["succeeded"]) == 1
+        _assert_issue_loom_shape(body["succeeded"][0], path="succeeded[0]")
+        assert body["succeeded"][0]["status"] == "closed"
+        assert body["succeeded"][0]["issue_id"] == issue_id
+
+    async def test_newly_unblocked_stays_slim_under_response_detail_full(
+        self,
+        dashboard_surface: AsyncClient,
+    ) -> None:
+        """Even with ``?response_detail=full``, ``newly_unblocked[]``
+        items stay ``SlimIssueLoom`` per the locked C5 decision (see
+        docs/federation/contracts.md). Set up B blocked by A, close A
+        with ``?response_detail=full``, and assert succeeded[0] is full
+        IssueLoom while newly_unblocked[0] is slim.
+        """
+        a_resp = await dashboard_surface.post("/api/issues", json={"title": "blocker C5"})
+        b_resp = await dashboard_surface.post("/api/issues", json={"title": "blocked C5"})
+        assert a_resp.status_code in (200, 201), a_resp.text
+        assert b_resp.status_code in (200, 201), b_resp.text
+        a_id = a_resp.json()["id"]
+        b_id = b_resp.json()["id"]
+        dep = await dashboard_surface.post(f"/api/issue/{b_id}/dependencies", json={"depends_on": a_id})
+        assert dep.status_code in (200, 201), dep.text
+
+        resp = await dashboard_surface.post(
+            "/api/loom/batch/close?response_detail=full",
+            json={"issue_ids": [a_id], "reason": "C5 unblock"},
+        )
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert set(body.keys()) == {"succeeded", "failed", "newly_unblocked"}, body
+        assert len(body["succeeded"]) == 1
+        _assert_issue_loom_shape(body["succeeded"][0], path="succeeded[0]")
+        assert body["succeeded"][0]["issue_id"] == a_id
+
+        assert isinstance(body["newly_unblocked"], list)
+        assert len(body["newly_unblocked"]) == 1
+        unblocked = body["newly_unblocked"][0]
+        # Locked C5 rule: newly_unblocked stays slim regardless of response_detail.
         _assert_slim_issue_loom(unblocked, path="newly_unblocked[0]")
         assert unblocked["issue_id"] == b_id
 

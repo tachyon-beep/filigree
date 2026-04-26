@@ -2,7 +2,7 @@
   "_meta": {
     "contract": "filigree-loom",
     "endpoint": "POST /api/loom/batch/update",
-    "status": "live as of Phase C2 of the 2.0 federation work package.",
+    "status": "live as of Phase C2; ?response_detail=slim|full added in Phase C5.",
     "stability": "Frozen for the loom-generation lifetime per ADR-002. Shape additions that preserve wire compatibility (new optional response fields) are allowed; breaking changes require a new generation.",
     "authority": [
       "docs/architecture/decisions/ADR-002-api-generations-and-federation-posture.md",
@@ -20,7 +20,7 @@
       "succeeded": "list[SlimIssueLoom]  # {issue_id, title, status, priority, type}",
       "failed": "list[BatchFailure]  # {id, error, code: ErrorCode, valid_transitions?}"
     },
-    "rationale": "BatchResponse[_T] (types/api.py) specialised to SlimIssueLoom. Container keys succeeded/failed match MCP batch_update; classic dashboard's {updated, errors} stays frozen for backwards compatibility. Closes the per-generation half of the dashboard-vs-MCP container-key divergence (test_container_key_parity)."
+    "rationale": "BatchResponse[_T] (types/api.py) specialised to SlimIssueLoom. Container keys succeeded/failed match MCP batch_update; classic dashboard's {updated, errors} stays frozen for backwards compatibility. Closes the per-generation half of the dashboard-vs-MCP container-key divergence (test_container_key_parity). ?response_detail=full upgrades succeeded[] items to full IssueLoom (Phase C5); default is slim per the original C2 contract."
   },
   "examples": [
     {
@@ -75,6 +75,48 @@
           "issue_ids": ["genp-deadbeef00", "genp-deadbeef01"],
           "priority": 1
         }
+      },
+      "response": {
+        "status": 200,
+        "headers": {"Content-Type": "application/json"},
+        "body": {
+          "succeeded": [],
+          "failed": [
+            {
+              "id": "genp-deadbeef00",
+              "error": "Not found: genp-deadbeef00",
+              "code": "NOT_FOUND"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "response_detail_invalid",
+      "note": "Unknown response_detail value rejected before body parsing — 400 VALIDATION (Phase C5).",
+      "request": {
+        "method": "POST",
+        "path": "/api/loom/batch/update?response_detail=banana",
+        "headers": {"Content-Type": "application/json"},
+        "body": {"issue_ids": ["genp-deadbeef00"], "priority": 1}
+      },
+      "response": {
+        "status": 400,
+        "headers": {"Content-Type": "application/json"},
+        "body": {
+          "error": "Invalid value for response_detail: 'banana'. Must be 'slim' or 'full'.",
+          "code": "VALIDATION"
+        }
+      }
+    },
+    {
+      "name": "response_detail_full_all_missing",
+      "note": "response_detail=full with all-missing ids: response shape stays {succeeded:[], failed:[BatchFailure...]} — the param affects succeeded[] item shape only, not envelope keys. Populated-success shape (full IssueLoom) is pinned by test_response_detail_full_succeeded_shape (seeded test).",
+      "request": {
+        "method": "POST",
+        "path": "/api/loom/batch/update?response_detail=full",
+        "headers": {"Content-Type": "application/json"},
+        "body": {"issue_ids": ["genp-deadbeef00"], "priority": 1}
       },
       "response": {
         "status": 200,

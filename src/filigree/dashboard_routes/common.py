@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import os
 import sys
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -95,6 +95,29 @@ def _parse_pagination(
     if not isinstance(offset, int):
         return offset
     return limit, offset
+
+
+def _parse_response_detail(
+    params: Mapping[str, str],
+) -> Literal["slim", "full"] | JSONResponse:
+    """Parse the ``response_detail`` query parameter.
+
+    Returns the literal ``"slim"`` (default) or ``"full"``, or a 400
+    ``JSONResponse`` if the parameter is present with an unknown value.
+    Used by loom batch endpoints to let federation consumers opt into
+    receiving full ``IssueLoom`` items in ``succeeded[]`` instead of
+    the default ``SlimIssueLoom``.
+    """
+    raw = params.get("response_detail")
+    if raw is None or raw == "slim":
+        return "slim"
+    if raw == "full":
+        return "full"
+    return _error_response(
+        f"Invalid value for response_detail: {raw!r}. Must be 'slim' or 'full'.",
+        ErrorCode.VALIDATION,
+        400,
+    )
 
 
 def _safe_int(value: str, name: str, *, min_value: int | None = None) -> int | JSONResponse:

@@ -659,7 +659,7 @@ def create_loom_router() -> APIRouter:
     from fastapi.responses import JSONResponse
 
     from filigree.dashboard import _get_db
-    from filigree.dashboard_routes.common import _get_bool_param, _parse_pagination
+    from filigree.dashboard_routes.common import _get_bool_param, _parse_pagination, _parse_response_detail
     from filigree.generations.loom.adapters import (
         blocked_issue_to_loom,
         comment_record_to_loom,
@@ -821,7 +821,17 @@ def create_loom_router() -> APIRouter:
 
     @router.post("/batch/update")
     async def api_loom_batch_update(request: Request, db: FiligreeDB = Depends(_get_db)) -> JSONResponse:
-        """Batch update issues — loom envelope (BatchResponse[SlimIssueLoom])."""
+        """Batch update issues — loom envelope.
+
+        ``response_detail=slim`` (default) keeps the historical C2 shape
+        (``BatchResponse[SlimIssueLoom]``); ``response_detail=full``
+        upgrades ``succeeded[]`` items to full ``IssueLoom``. Validation
+        of the query param runs before body parsing so a malformed
+        ``response_detail`` returns 400 even on a malformed body.
+        """
+        detail = _parse_response_detail(request.query_params)
+        if isinstance(detail, JSONResponse):
+            return detail
         body = await _parse_json_body(request)
         if isinstance(body, JSONResponse):
             return body
@@ -833,22 +843,34 @@ def create_loom_router() -> APIRouter:
             updated, errors = db.batch_update(issue_ids, **parsed)
         except TypeError as e:
             return _error_response(str(e), ErrorCode.VALIDATION, 400)
+        project = issue_to_loom if detail == "full" else slim_issue_to_loom
         return JSONResponse(
             {
-                "succeeded": [slim_issue_to_loom(i) for i in updated],
+                "succeeded": [project(i) for i in updated],
                 "failed": errors,
             }
         )
 
     @router.post("/batch/close")
     async def api_loom_batch_close(request: Request, db: FiligreeDB = Depends(_get_db)) -> JSONResponse:
-        """Batch close issues — loom envelope (BatchCloseResponseLoom).
+        """Batch close issues — loom envelope.
+
+        ``response_detail=slim`` (default) returns ``SlimIssueLoom`` in
+        ``succeeded[]``; ``response_detail=full`` returns ``IssueLoom``.
+        ``newly_unblocked[]`` stays ``SlimIssueLoom`` regardless — it
+        represents *secondary* state (consumers branch on its presence
+        to decide whether to refetch); upgrading would inflate the
+        response without buying federation consumers anything new. See
+        ``docs/federation/contracts.md`` for the locked C5 rule.
 
         Includes ``newly_unblocked`` (omitted when empty) computed the
         same way MCP ``batch_close`` does it: diff ``get_ready()``
         before vs. after. Classic ``/api/batch/close`` does not surface
         ``newly_unblocked`` and stays unchanged.
         """
+        detail = _parse_response_detail(request.query_params)
+        if isinstance(detail, JSONResponse):
+            return detail
         body = await _parse_json_body(request)
         if isinstance(body, JSONResponse):
             return body
@@ -860,8 +882,9 @@ def create_loom_router() -> APIRouter:
         closed, errors = db.batch_close(issue_ids, **parsed)
         ready_after = db.get_ready()
         newly_unblocked = [i for i in ready_after if i.id not in ready_before]
+        project = issue_to_loom if detail == "full" else slim_issue_to_loom
         response: dict[str, Any] = {
-            "succeeded": [slim_issue_to_loom(i) for i in closed],
+            "succeeded": [project(i) for i in closed],
             "failed": errors,
         }
         if newly_unblocked:

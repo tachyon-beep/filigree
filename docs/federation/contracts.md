@@ -87,6 +87,16 @@ Living-surface aliases (`/api/<endpoint>` with no generation prefix) land per-en
 
 The pattern is illustrative for later C tasks: where a loom endpoint has no classic counterpart at the un-prefixed path, prefer aliasing **unless** the endpoint is on a coupled surface where pinning the generation matters more (single-issue surface in C3; per-issue list endpoints in C4); where classic and loom would collide, classic stays at `/api/<endpoint>` and loom is reachable only at `/api/loom/<endpoint>`. The decision for each endpoint lands in the commit that mounts the loom handler.
 
+### C5 — `response_detail` query param on loom batch endpoints (2026-04-26)
+
+Loom batch endpoints `POST /api/loom/batch/update` and `POST /api/loom/batch/close` accept a `response_detail=slim|full` query parameter. Default is `slim` — preserves the C2 wire shape (`SlimIssueLoom` items in `succeeded[]`). Federation consumers needing the full issue projection without a follow-up GET pass `response_detail=full` to receive `IssueLoom` items in `succeeded[]`.
+
+**Locked rule: `newly_unblocked[]` stays `SlimIssueLoom` regardless of `response_detail`.** It represents *secondary* state — consumers branch on its presence to decide whether to refetch. Upgrading every entry to a full `IssueLoom` would inflate the response without buying federation consumers anything new. This rule applies to the loom batch endpoints (C2/C5) AND the loom single-issue close endpoint (`POST /api/loom/issues/{issue_id}/close`, C3) — both compute `newly_unblocked` and both keep it slim.
+
+Classic batch endpoints do NOT accept `response_detail`. The parameter is a loom-only addition.
+
+Validation order: `response_detail` is parsed BEFORE the request body, so an invalid value (`?response_detail=banana`) returns 400 `VALIDATION` even on a malformed body. Pinned by the `response_detail_invalid` fixture example in `tests/fixtures/contracts/loom/batch-{update,close}.json`.
+
 ## When a contract evolves
 
 **Non-breaking additions** (new optional response fields, new optional request parameters with safe defaults) may land in-place without a new generation. Fixtures are updated to reflect the new shape; the `_meta.updated` field moves.
