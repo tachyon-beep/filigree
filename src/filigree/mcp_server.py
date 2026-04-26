@@ -214,7 +214,7 @@ Filigree data lives in `.filigree/` and is accessed via these MCP tools.
 - **create_issue / update_issue / close_issue** — mutate issues
 - **claim_issue / claim_next** — atomic claim with optimistic locking
 - **get_valid_transitions / validate_issue** — workflow-aware state management
-- **list_types / get_type_info / explain_state** — discover type workflows
+- **list_types / get_type_info / explain_status** — discover type workflows
 - **list_packs / get_workflow_guide** — workflow pack documentation
 - **add_dependency / remove_dependency** — manage blockers
 - **get_plan / create_plan** — milestone/phase/step hierarchies

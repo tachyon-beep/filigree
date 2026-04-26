@@ -885,23 +885,23 @@ class TestWorkflowTemplateTools:
         data = _parse(result)
         assert data["code"] == ErrorCode.NOT_FOUND
 
-    async def test_explain_state(self, mcp_db: FiligreeDB) -> None:
-        result = await call_tool("explain_state", {"type": "task", "state": "open"})
+    async def test_explain_status(self, mcp_db: FiligreeDB) -> None:
+        result = await call_tool("explain_status", {"type": "task", "status": "open"})
         data = _parse(result)
-        assert data["state"] == "open"
+        assert data["status"] == "open"
         assert data["category"] == "open"
         assert data["type"] == "task"
         assert "inbound_transitions" in data
         assert "outbound_transitions" in data
         assert "required_fields" in data
 
-    async def test_explain_state_unknown_type(self, mcp_db: FiligreeDB) -> None:
-        result = await call_tool("explain_state", {"type": "nonexistent", "state": "open"})
+    async def test_explain_status_unknown_type(self, mcp_db: FiligreeDB) -> None:
+        result = await call_tool("explain_status", {"type": "nonexistent", "status": "open"})
         data = _parse(result)
         assert data["code"] == ErrorCode.NOT_FOUND
 
-    async def test_explain_state_unknown_state(self, mcp_db: FiligreeDB) -> None:
-        result = await call_tool("explain_state", {"type": "task", "state": "nonexistent"})
+    async def test_explain_status_unknown_status(self, mcp_db: FiligreeDB) -> None:
+        result = await call_tool("explain_status", {"type": "task", "status": "nonexistent"})
         data = _parse(result)
         assert data["code"] == ErrorCode.NOT_FOUND
 

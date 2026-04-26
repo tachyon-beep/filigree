@@ -143,9 +143,9 @@ class TestJsonRetrofit:
         data = json.loads(result.output)
         assert data["status"] == "removed"
 
-    def test_workflow_states_json(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+    def test_workflow_statuses_json(self, cli_in_project: tuple[CliRunner, Path]) -> None:
         runner, _ = cli_in_project
-        result = runner.invoke(cli, ["workflow-states", "--json"])
+        result = runner.invoke(cli, ["workflow-statuses", "--json"])
         assert result.exit_code == 0
         data = json.loads(result.output)
         assert "open" in data

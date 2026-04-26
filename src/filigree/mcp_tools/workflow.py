@@ -14,14 +14,14 @@ from filigree.types.api import (
     InboundTransitionInfo,
     OutboundTransitionInfo,
     PackListItem,
-    StateExplanation,
+    StatusExplanation,
     TransitionDetail,
     ValidationResult,
     WorkflowGuideResponse,
-    WorkflowStatesResponse,
+    WorkflowStatusesResponse,
 )
 from filigree.types.inputs import (
-    ExplainStateArgs,
+    ExplainStatusArgs,
     GetTemplateArgs,
     GetTypeInfoArgs,
     GetValidTransitionsArgs,
@@ -54,8 +54,8 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
             },
         ),
         Tool(
-            name="get_workflow_states",
-            description="Return workflow states by category (open/wip/done) from enabled templates.",
+            name="get_workflow_statuses",
+            description="Return workflow statuses by category (open/wip/done) from enabled templates.",
             inputSchema={"type": "object", "properties": {}},
         ),
         Tool(
@@ -113,15 +113,15 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
             },
         ),
         Tool(
-            name="explain_state",
-            description="Explain a state within a type's workflow: its category, inbound/outbound transitions, and fields required at this state.",
+            name="explain_status",
+            description="Explain a status within a type's workflow: its category, inbound/outbound transitions, and fields required at this status.",
             inputSchema={
                 "type": "object",
                 "properties": {
                     "type": {"type": "string", "description": "Issue type name"},
-                    "state": {"type": "string", "description": "State name to explain"},
+                    "status": {"type": "string", "description": "Status name to explain"},
                 },
-                "required": ["type", "state"],
+                "required": ["type", "status"],
             },
         ),
         Tool(
@@ -133,14 +133,14 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
 
     handlers: dict[str, Callable[..., Any]] = {
         "get_template": _handle_get_template,
-        "get_workflow_states": _handle_get_workflow_states,
+        "get_workflow_statuses": _handle_get_workflow_statuses,
         "list_types": _handle_list_types,
         "get_type_info": _handle_get_type_info,
         "list_packs": _handle_list_packs,
         "get_valid_transitions": _handle_get_valid_transitions,
         "validate_issue": _handle_validate_issue,
         "get_workflow_guide": _handle_get_workflow_guide,
-        "explain_state": _handle_explain_state,
+        "explain_status": _handle_explain_status,
         "reload_templates": _handle_reload_templates,
     }
 
@@ -163,13 +163,13 @@ async def _handle_get_template(arguments: dict[str, Any]) -> list[TextContent]:
     return _text(tpl)
 
 
-async def _handle_get_workflow_states(arguments: dict[str, Any]) -> list[TextContent]:
+async def _handle_get_workflow_statuses(arguments: dict[str, Any]) -> list[TextContent]:
     from filigree.mcp_server import _get_db
 
     tracker = _get_db()
     return _text(
-        WorkflowStatesResponse(
-            states={
+        WorkflowStatusesResponse(
+            statuses={
                 "open": tracker._get_states_for_category("open"),
                 "wip": tracker._get_states_for_category("wip"),
                 "done": tracker._get_states_for_category("done"),
@@ -320,37 +320,42 @@ async def _handle_get_workflow_guide(arguments: dict[str, Any]) -> list[TextCont
     return _text(result)
 
 
-async def _handle_explain_state(arguments: dict[str, Any]) -> list[TextContent]:
+async def _handle_explain_status(arguments: dict[str, Any]) -> list[TextContent]:
     from filigree.mcp_server import _get_db
 
-    args = _parse_args(arguments, ExplainStateArgs)
+    args = _parse_args(arguments, ExplainStatusArgs)
     tracker = _get_db()
-    state_tpl = tracker.templates.get_type(args["type"])
-    if state_tpl is None:
+    type_tpl = tracker.templates.get_type(args["type"])
+    if type_tpl is None:
         return _text(ErrorResponse(error=f"Unknown type: {args['type']}", code=ErrorCode.NOT_FOUND))
-    state_name = args["state"]
-    state_def = None
-    for s in state_tpl.states:
-        if s.name == state_name:
-            state_def = s
+    status_name = args["status"]
+    status_def = None
+    for s in type_tpl.states:
+        if s.name == status_name:
+            status_def = s
             break
-    if state_def is None:
-        return _text(ErrorResponse(error=f"Unknown state '{state_name}' for type '{args['type']}'", code=ErrorCode.NOT_FOUND))
+    if status_def is None:
+        return _text(
+            ErrorResponse(
+                error=f"Unknown status {status_name!r} for type {args['type']!r}",
+                code=ErrorCode.NOT_FOUND,
+            )
+        )
     inbound: list[InboundTransitionInfo] = [
         InboundTransitionInfo(**{"from": td.from_state, "enforcement": td.enforcement})
-        for td in state_tpl.transitions
-        if td.to_state == state_name
+        for td in type_tpl.transitions
+        if td.to_state == status_name
     ]
     outbound: list[OutboundTransitionInfo] = [
         OutboundTransitionInfo(to=td.to_state, enforcement=td.enforcement, requires_fields=list(td.requires_fields))
-        for td in state_tpl.transitions
-        if td.from_state == state_name
+        for td in type_tpl.transitions
+        if td.from_state == status_name
     ]
-    required_fields = [fd.name for fd in state_tpl.fields_schema if state_name in fd.required_at]
+    required_fields = [fd.name for fd in type_tpl.fields_schema if status_name in fd.required_at]
     return _text(
-        StateExplanation(
-            state=state_name,
-            category=state_def.category,
+        StatusExplanation(
+            status=status_name,
+            category=status_def.category,
             type=args["type"],
             inbound_transitions=inbound,
             outbound_transitions=outbound,

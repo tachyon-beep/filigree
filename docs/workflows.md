@@ -592,19 +592,19 @@ filigree types                       # List all types with state flows
 filigree type-info task              # Full definition: states, transitions, fields
 filigree guide core                  # Workflow guide for the core pack
 filigree transitions <id>            # Valid next states for a specific issue
-filigree explain-state bug triage    # What "triage" means for bugs
-filigree workflow-states             # All states grouped by category (open/wip/done)
+filigree explain-status bug triage   # What "triage" means for bugs
+filigree workflow-statuses           # All statuses grouped by category (open/wip/done)
 ```
 
 Or via MCP tools:
 
 ```
-list_types           → All types with pack info
-get_type_info        → Full workflow definition
-get_workflow_guide   → Pack documentation
-get_valid_transitions → Valid next states for an issue
-explain_state        → State details and transitions
-get_workflow_states  → States by category
+list_types             → All types with pack info
+get_type_info          → Full workflow definition
+get_workflow_guide     → Pack documentation
+get_valid_transitions  → Valid next statuses for an issue
+explain_status         → Status details and transitions
+get_workflow_statuses  → Statuses by category
 ```
 
 ## Priority Scale

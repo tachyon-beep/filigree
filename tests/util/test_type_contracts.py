@@ -33,14 +33,14 @@ from filigree.types.api import (
     PackListItem,
     PlanResponse,
     SlimIssue,
-    StateExplanation,
     StatsWithPrefix,
+    StatusExplanation,
     TransitionDetail,
     TransitionError,
     TransitionHint,
     ValidationResult,
     WorkflowGuideResponse,
-    WorkflowStatesResponse,
+    WorkflowStatusesResponse,
 )
 from filigree.types.core import (
     BatchDismissResult,
@@ -1153,23 +1153,23 @@ class TestClaimNextEmptyResponseShape:
         assert isinstance(result["reason"], str)
 
 
-class TestWorkflowStatesResponseShape:
+class TestWorkflowStatusesResponseShape:
     async def test_keys_match(self, mcp_db: FiligreeDB) -> None:
         from filigree.mcp_server import call_tool
         from tests.mcp._helpers import _parse
 
-        result = _parse(await call_tool("get_workflow_states", {}))
-        hints = get_type_hints(WorkflowStatesResponse)
+        result = _parse(await call_tool("get_workflow_statuses", {}))
+        hints = get_type_hints(WorkflowStatusesResponse)
         assert set(result.keys()) == set(hints.keys())
 
     async def test_value_types(self, mcp_db: FiligreeDB) -> None:
         from filigree.mcp_server import call_tool
         from tests.mcp._helpers import _parse
 
-        result = _parse(await call_tool("get_workflow_states", {}))
-        assert isinstance(result["states"], dict)
+        result = _parse(await call_tool("get_workflow_statuses", {}))
+        assert isinstance(result["statuses"], dict)
         for category in ("open", "wip", "done"):
-            assert isinstance(result["states"][category], list)
+            assert isinstance(result["statuses"][category], list)
 
 
 class TestPackListItemShape:
@@ -1240,21 +1240,21 @@ class TestWorkflowGuideResponseShape:
         assert result["guide"] is None or isinstance(result["guide"], dict)
 
 
-class TestStateExplanationShape:
+class TestStatusExplanationShape:
     async def test_keys_match(self, mcp_db: FiligreeDB) -> None:
         from filigree.mcp_server import call_tool
         from tests.mcp._helpers import _parse
 
-        result = _parse(await call_tool("explain_state", {"type": "task", "state": "open"}))
-        hints = get_type_hints(StateExplanation)
+        result = _parse(await call_tool("explain_status", {"type": "task", "status": "open"}))
+        hints = get_type_hints(StatusExplanation)
         assert set(result.keys()) == set(hints.keys())
 
     async def test_value_types(self, mcp_db: FiligreeDB) -> None:
         from filigree.mcp_server import call_tool
         from tests.mcp._helpers import _parse
 
-        result = _parse(await call_tool("explain_state", {"type": "task", "state": "open"}))
-        assert isinstance(result["state"], str)
+        result = _parse(await call_tool("explain_status", {"type": "task", "status": "open"}))
+        assert isinstance(result["status"], str)
         assert isinstance(result["category"], str)
         assert isinstance(result["type"], str)
         assert isinstance(result["inbound_transitions"], list)
@@ -1311,7 +1311,7 @@ class TestOutboundTransitionInfoShape:
         from filigree.mcp_server import call_tool
         from tests.mcp._helpers import _parse
 
-        result = _parse(await call_tool("explain_state", {"type": "task", "state": "open"}))
+        result = _parse(await call_tool("explain_status", {"type": "task", "status": "open"}))
         outbound = result["outbound_transitions"]
         assert isinstance(outbound, list)
         assert len(outbound) >= 1
@@ -1322,7 +1322,7 @@ class TestOutboundTransitionInfoShape:
         from filigree.mcp_server import call_tool
         from tests.mcp._helpers import _parse
 
-        result = _parse(await call_tool("explain_state", {"type": "task", "state": "open"}))
+        result = _parse(await call_tool("explain_status", {"type": "task", "status": "open"}))
         t = result["outbound_transitions"][0]
         assert isinstance(t["to"], str)
         assert isinstance(t["enforcement"], str)

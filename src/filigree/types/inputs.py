@@ -281,9 +281,9 @@ class GetWorkflowGuideArgs(TypedDict):
     pack: str
 
 
-class ExplainStateArgs(TypedDict):
+class ExplainStatusArgs(TypedDict):
     type: str
-    state: str
+    status: str
 
 
 # ---------------------------------------------------------------------------
@@ -493,7 +493,7 @@ TOOL_ARGS_MAP: dict[str, type] = {
     "get_valid_transitions": GetValidTransitionsArgs,
     "validate_issue": ValidateIssueArgs,
     "get_workflow_guide": GetWorkflowGuideArgs,
-    "explain_state": ExplainStateArgs,
+    "explain_status": ExplainStatusArgs,
     # files.py
     "list_files": ListFilesArgs,
     "get_file": GetFileArgs,

@@ -44,7 +44,7 @@ InboundTransitionInfo = TypedDict("InboundTransitionInfo", {"from": str, "enforc
 
 
 class OutboundTransitionInfo(TypedDict):
-    """Outbound transition info returned by explain_state."""
+    """Outbound transition info returned by explain_status."""
 
     to: str
     enforcement: str
@@ -275,10 +275,10 @@ class ClaimNextEmptyResponse(TypedDict):
 # ---------------------------------------------------------------------------
 
 
-class WorkflowStatesResponse(TypedDict):
-    """Response for get_workflow_states MCP tool."""
+class WorkflowStatusesResponse(TypedDict):
+    """Response for get_workflow_statuses MCP tool (D5: state→status rename)."""
 
-    states: dict[str, list[str]]
+    statuses: dict[str, list[str]]
 
 
 class PackListItem(TypedDict):
@@ -314,10 +314,15 @@ class WorkflowGuideResponse(TypedDict):
     note: NotRequired[str]
 
 
-class StateExplanation(TypedDict):
-    """Response for explain_state MCP tool."""
+class StatusExplanation(TypedDict):
+    """Response for explain_status MCP tool (D5: state→status rename).
 
-    state: str
+    The ``status`` key replaces the legacy ``state`` key on this response
+    payload — only the surface-level vocabulary changed; the underlying
+    workflow data is unchanged.
+    """
+
+    status: str
     category: str
     type: str
     inbound_transitions: list[InboundTransitionInfo]

@@ -698,34 +698,34 @@ class TestEventsCli:
         assert result.exit_code == 1
 
 
-class TestExplainStateCli:
-    def test_explain_state_basic(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+class TestExplainStatusCli:
+    def test_explain_status_basic(self, cli_in_project: tuple[CliRunner, Path]) -> None:
         runner, _ = cli_in_project
-        result = runner.invoke(cli, ["explain-state", "task", "open"])
+        result = runner.invoke(cli, ["explain-status", "task", "open"])
         assert result.exit_code == 0
         assert "open" in result.output
 
-    def test_explain_state_json(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+    def test_explain_status_json(self, cli_in_project: tuple[CliRunner, Path]) -> None:
         runner, _ = cli_in_project
-        result = runner.invoke(cli, ["explain-state", "task", "open", "--json"])
+        result = runner.invoke(cli, ["explain-status", "task", "open", "--json"])
         assert result.exit_code == 0
         data = json.loads(result.output)
-        assert data["state"] == "open"
+        assert data["status"] == "open"
         assert "category" in data
         assert "inbound_transitions" in data
         assert "outbound_transitions" in data
 
-    def test_explain_state_unknown_type(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+    def test_explain_status_unknown_type(self, cli_in_project: tuple[CliRunner, Path]) -> None:
         runner, _ = cli_in_project
-        result = runner.invoke(cli, ["explain-state", "nonexistent", "open"])
+        result = runner.invoke(cli, ["explain-status", "nonexistent", "open"])
         assert result.exit_code == 1
         assert "Unknown type" in result.output
 
-    def test_explain_state_unknown_state(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+    def test_explain_status_unknown_status(self, cli_in_project: tuple[CliRunner, Path]) -> None:
         runner, _ = cli_in_project
-        result = runner.invoke(cli, ["explain-state", "task", "nonexistent"])
+        result = runner.invoke(cli, ["explain-status", "task", "nonexistent"])
         assert result.exit_code == 1
-        assert "Unknown state" in result.output
+        assert "Unknown status" in result.output
 
 
 class TestLabelsCommand:

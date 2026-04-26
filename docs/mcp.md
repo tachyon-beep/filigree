@@ -340,8 +340,8 @@ Step deps within a phase use integer indices. Cross-phase deps use `"phase_idx.s
 | `validate_issue` | Validate against template (warnings for missing fields) |
 | `list_packs` | Enabled workflow packs |
 | `get_workflow_guide` | Pack documentation |
-| `get_workflow_states` | States by category (open/wip/done) |
-| `explain_state` | State transitions and required fields |
+| `get_workflow_statuses` | Statuses by category (open/wip/done) |
+| `explain_status` | Status transitions and required fields |
 | `reload_templates` | Refresh templates from disk |
 
 #### `get_type_info`
@@ -374,12 +374,12 @@ Step deps within a phase use integer indices. Cross-phase deps use `"phase_idx.s
 |-----------|------|----------|-------------|
 | `pack` | string | yes | Pack name (e.g., `core`, `planning`) |
 
-#### `explain_state`
+#### `explain_status`
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `type` | string | yes | Issue type name |
-| `state` | string | yes | State name |
+| `status` | string | yes | Status name |
 
 ### Analytics
 

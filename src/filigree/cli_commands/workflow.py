@@ -1,4 +1,4 @@
-"""CLI commands for workflow: templates, types, transitions, packs, validate, guide, explain-state."""
+"""CLI commands for workflow: templates, types, transitions, packs, validate, guide, explain-status."""
 
 from __future__ import annotations
 
@@ -45,10 +45,10 @@ def templates_reload() -> None:
         click.echo("Templates reloaded")
 
 
-@click.command("workflow-states")
+@click.command("workflow-statuses")
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON")
-def workflow_states(as_json: bool) -> None:
-    """Show workflow states by category from enabled templates."""
+def workflow_statuses(as_json: bool) -> None:
+    """Show workflow statuses by category from enabled templates."""
     with get_db() as db:
         data = {}
         for category in ("open", "wip", "done"):
@@ -56,8 +56,8 @@ def workflow_states(as_json: bool) -> None:
         if as_json:
             click.echo(json_mod.dumps(data, indent=2))
             return
-        for category, states in data.items():
-            click.echo(f"{category}: {', '.join(states) if states else '(none)'}")
+        for category, statuses in data.items():
+            click.echo(f"{category}: {', '.join(statuses) if statuses else '(none)'}")
 
 
 @click.command("types")
@@ -295,41 +295,41 @@ def guide_cmd(pack_name: str, as_json: bool) -> None:
                 click.echo(f"  - {mistake}")
 
 
-@click.command("explain-state")
+@click.command("explain-status")
 @click.argument("type_name")
-@click.argument("state_name")
+@click.argument("status_name")
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON")
-def explain_state(type_name: str, state_name: str, as_json: bool) -> None:
-    """Explain a state's transitions and required fields."""
+def explain_status(type_name: str, status_name: str, as_json: bool) -> None:
+    """Explain a status's transitions and required fields."""
     with get_db() as db:
         tpl = db.templates.get_type(type_name)
         if tpl is None:
             click.echo(f"Unknown type: {type_name}", err=True)
             sys.exit(1)
 
-        state_def = None
+        status_def = None
         for s in tpl.states:
-            if s.name == state_name:
-                state_def = s
+            if s.name == status_name:
+                status_def = s
                 break
-        if state_def is None:
-            click.echo(f"Unknown state '{state_name}' for type '{type_name}'", err=True)
+        if status_def is None:
+            click.echo(f"Unknown status '{status_name}' for type '{type_name}'", err=True)
             sys.exit(1)
 
-        inbound = [{"from": t.from_state, "enforcement": t.enforcement} for t in tpl.transitions if t.to_state == state_name]
+        inbound = [{"from": t.from_state, "enforcement": t.enforcement} for t in tpl.transitions if t.to_state == status_name]
         outbound: list[dict[str, Any]] = [
             {"to": t.to_state, "enforcement": t.enforcement, "requires_fields": list(t.requires_fields)}
             for t in tpl.transitions
-            if t.from_state == state_name
+            if t.from_state == status_name
         ]
-        required_fields = [f.name for f in tpl.fields_schema if state_name in f.required_at]
+        required_fields = [f.name for f in tpl.fields_schema if status_name in f.required_at]
 
         if as_json:
             click.echo(
                 json_mod.dumps(
                     {
-                        "state": state_name,
-                        "category": state_def.category,
+                        "status": status_name,
+                        "category": status_def.category,
                         "type": type_name,
                         "inbound_transitions": inbound,
                         "outbound_transitions": outbound,
@@ -340,13 +340,13 @@ def explain_state(type_name: str, state_name: str, as_json: bool) -> None:
             )
             return
 
-        click.echo(f"State: {state_name} [{state_def.category}] (type: {type_name})")
+        click.echo(f"Status: {status_name} [{status_def.category}] (type: {type_name})")
         if inbound:
             click.echo("\nInbound transitions:")
             for t in inbound:
                 click.echo(f"  <- {t['from']} [{t['enforcement']}]")
         else:
-            click.echo("\nNo inbound transitions (initial state)")
+            click.echo("\nNo inbound transitions (initial status)")
         if outbound:
             click.echo("\nOutbound transitions:")
             for ot in outbound:
@@ -354,19 +354,19 @@ def explain_state(type_name: str, state_name: str, as_json: bool) -> None:
                 fields_note = f" (requires: {', '.join(req_fields)})" if req_fields else ""
                 click.echo(f"  -> {ot['to']} [{ot['enforcement']}]{fields_note}")
         else:
-            click.echo("\nNo outbound transitions (terminal state)")
+            click.echo("\nNo outbound transitions (terminal status)")
         if required_fields:
-            click.echo(f"\nRequired fields at this state: {', '.join(required_fields)}")
+            click.echo(f"\nRequired fields at this status: {', '.join(required_fields)}")
 
 
 def register(cli: click.Group) -> None:
     """Register workflow commands with the CLI group."""
     cli.add_command(templates)
-    cli.add_command(workflow_states)
+    cli.add_command(workflow_statuses)
     cli.add_command(types_cmd)
     cli.add_command(type_info)
     cli.add_command(transitions_cmd)
     cli.add_command(packs_cmd)
     cli.add_command(validate_cmd)
     cli.add_command(guide_cmd)
-    cli.add_command(explain_state)
+    cli.add_command(explain_status)
