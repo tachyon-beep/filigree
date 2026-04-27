@@ -34,10 +34,7 @@ def _normalize_iso_timestamp(raw: str) -> str:
     return normalized
 
 
-@click.command()
-@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
-def ready(as_json: bool) -> None:
-    """Show issues ready to work on (no blockers)."""
+def _ready_impl(as_json: bool) -> None:
     with get_db() as db:
         issues = db.get_ready()
 
@@ -70,8 +67,19 @@ def ready(as_json: bool) -> None:
 
 @click.command()
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON")
-def blocked(as_json: bool) -> None:
-    """Show blocked issues."""
+def ready(as_json: bool) -> None:
+    """Show issues ready to work on (no blockers)."""
+    _ready_impl(as_json)
+
+
+@click.command("get-ready")
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+def get_ready(as_json: bool) -> None:
+    """Show issues ready to work on (no blockers). Alias for `ready`."""
+    _ready_impl(as_json)
+
+
+def _blocked_impl(as_json: bool) -> None:
     with get_db() as db:
         issues = db.get_blocked()
 
@@ -105,10 +113,20 @@ def blocked(as_json: bool) -> None:
 
 
 @click.command()
-@click.argument("milestone_id")
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON")
-def plan(milestone_id: str, as_json: bool) -> None:
-    """Show milestone plan tree with progress."""
+def blocked(as_json: bool) -> None:
+    """Show blocked issues."""
+    _blocked_impl(as_json)
+
+
+@click.command("get-blocked")
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+def get_blocked(as_json: bool) -> None:
+    """Show blocked issues. Alias for `blocked`."""
+    _blocked_impl(as_json)
+
+
+def _plan_impl(milestone_id: str, as_json: bool) -> None:
     with get_db() as db:
         try:
             p = db.get_plan(milestone_id)
@@ -147,6 +165,22 @@ def plan(milestone_id: str, as_json: bool) -> None:
                 icon = status_icon.get(step_dict["status_category"], "?")
                 ready_mark = " *" if step_dict["is_ready"] else ""
                 click.echo(f"    [{icon}] {step_dict['id']} {step_dict['title']}{ready_mark}")
+
+
+@click.command()
+@click.argument("milestone_id")
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+def plan(milestone_id: str, as_json: bool) -> None:
+    """Show milestone plan tree with progress."""
+    _plan_impl(milestone_id, as_json)
+
+
+@click.command("get-plan")
+@click.argument("milestone_id")
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+def get_plan(milestone_id: str, as_json: bool) -> None:
+    """Show milestone plan tree with progress. Alias for `plan`."""
+    _plan_impl(milestone_id, as_json)
 
 
 @click.command("add-dep")
@@ -209,10 +243,7 @@ def remove_dep(ctx: click.Context, issue_id: str, depends_on_id: str, as_json: b
         refresh_summary(db)
 
 
-@click.command("critical-path")
-@click.option("--json", "as_json", is_flag=True, help="JSON output")
-def critical_path(as_json: bool) -> None:
-    """Show the longest dependency chain among open issues."""
+def _critical_path_impl(as_json: bool) -> None:
     with get_db() as db:
         path = db.get_critical_path()
 
@@ -228,6 +259,20 @@ def critical_path(as_json: bool) -> None:
     for i, item in enumerate(path):
         prefix = "  -> " if i > 0 else "  "
         click.echo(f'{prefix}P{item["priority"]} {item["id"]} [{item["type"]}] "{item["title"]}"')
+
+
+@click.command("critical-path")
+@click.option("--json", "as_json", is_flag=True, help="JSON output")
+def critical_path(as_json: bool) -> None:
+    """Show the longest dependency chain among open issues."""
+    _critical_path_impl(as_json)
+
+
+@click.command("get-critical-path")
+@click.option("--json", "as_json", is_flag=True, help="JSON output")
+def get_critical_path(as_json: bool) -> None:
+    """Show the longest dependency chain among open issues. Alias for `critical-path`."""
+    _critical_path_impl(as_json)
 
 
 @click.command("create-plan")
@@ -301,12 +346,7 @@ def create_plan(ctx: click.Context, file_path: str | None, as_json: bool) -> Non
         refresh_summary(db)
 
 
-@click.command("changes")
-@click.option("--since", required=True, help="ISO timestamp to get events after")
-@click.option("--limit", default=100, type=int, help="Max events (default 100)")
-@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
-def changes(since: str, limit: int, as_json: bool) -> None:
-    """Get events since a timestamp (for session resumption)."""
+def _changes_impl(since: str, limit: int, as_json: bool) -> None:
     since = _normalize_iso_timestamp(since)
     with get_db() as db:
         # Overfetch by 1 to detect has_more without an offset param.
@@ -329,13 +369,36 @@ def changes(since: str, limit: int, as_json: bool) -> None:
         click.echo(f"\n{len(events)} events")
 
 
+@click.command("changes")
+@click.option("--since", required=True, help="ISO timestamp to get events after")
+@click.option("--limit", default=100, type=int, help="Max events (default 100)")
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+def changes(since: str, limit: int, as_json: bool) -> None:
+    """Get events since a timestamp (for session resumption)."""
+    _changes_impl(since, limit, as_json)
+
+
+@click.command("get-changes")
+@click.option("--since", required=True, help="ISO timestamp to get events after")
+@click.option("--limit", default=100, type=int, help="Max events (default 100)")
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+def get_changes(since: str, limit: int, as_json: bool) -> None:
+    """Get events since a timestamp (for session resumption). Alias for `changes`."""
+    _changes_impl(since, limit, as_json)
+
+
 def register(cli: click.Group) -> None:
     """Register planning commands with the CLI group."""
     cli.add_command(ready)
+    cli.add_command(get_ready)
     cli.add_command(blocked)
+    cli.add_command(get_blocked)
     cli.add_command(plan)
+    cli.add_command(get_plan)
     cli.add_command(add_dep)
     cli.add_command(remove_dep)
     cli.add_command(critical_path)
+    cli.add_command(get_critical_path)
     cli.add_command(create_plan)
     cli.add_command(changes)
+    cli.add_command(get_changes)

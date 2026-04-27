@@ -184,12 +184,7 @@ def search(query: str, limit: int, offset: int, as_json: bool) -> None:
         click.echo(f"\n{len(issues)} results")
 
 
-@click.command("events")
-@click.argument("issue_id")
-@click.option("--limit", default=50, type=click.IntRange(min=0), help="Max events (default 50)")
-@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
-def events_cmd(issue_id: str, limit: int, as_json: bool) -> None:
-    """Get event history for a specific issue, newest first."""
+def _events_impl(issue_id: str, limit: int, as_json: bool) -> None:
     with get_db() as db:
         try:
             # Overfetch by 1 to detect has_more without an offset param.
@@ -221,6 +216,24 @@ def events_cmd(issue_id: str, limit: int, as_json: bool) -> None:
             actor_str = f" by {ev['actor']}" if ev.get("actor") else ""
             click.echo(f"  #{ev['id']}  {ev['created_at']}  {ev['event_type']}{detail}{actor_str}")
         click.echo(f"\n{len(event_list)} events")
+
+
+@click.command("events")
+@click.argument("issue_id")
+@click.option("--limit", default=50, type=click.IntRange(min=0), help="Max events (default 50)")
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+def events_cmd(issue_id: str, limit: int, as_json: bool) -> None:
+    """Get event history for a specific issue, newest first."""
+    _events_impl(issue_id, limit, as_json)
+
+
+@click.command("get-issue-events")
+@click.argument("issue_id")
+@click.option("--limit", default=50, type=click.IntRange(min=0), help="Max events (default 50)")
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+def get_issue_events_cmd(issue_id: str, limit: int, as_json: bool) -> None:
+    """Get event history for a specific issue, newest first. Alias for `events`."""
+    _events_impl(issue_id, limit, as_json)
 
 
 @click.command("batch-update")
@@ -410,12 +423,7 @@ def batch_add_comment(ctx: click.Context, text: str, issue_ids: tuple[str, ...],
             sys.exit(1)
 
 
-@click.command("labels")
-@click.option("--namespace", "-n", default=None, help="Filter to a namespace")
-@click.option("--top", default=10, type=click.IntRange(min=0), help="Max labels per namespace (0 for unlimited)")
-@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
-def list_labels_cmd(namespace: str | None, top: int, as_json: bool) -> None:
-    """List all labels grouped by namespace with counts."""
+def _list_labels_impl(namespace: str | None, top: int, as_json: bool) -> None:
     with get_db() as db:
         result = db.list_labels(namespace=namespace, top=top)
         if as_json:
@@ -429,10 +437,25 @@ def list_labels_cmd(namespace: str | None, top: int, as_json: bool) -> None:
                 click.echo(f"  {item['label']}  ({item['count']})")
 
 
-@click.command("taxonomy")
+@click.command("labels")
+@click.option("--namespace", "-n", default=None, help="Filter to a namespace")
+@click.option("--top", default=10, type=click.IntRange(min=0), help="Max labels per namespace (0 for unlimited)")
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON")
-def taxonomy_cmd(as_json: bool) -> None:
-    """Show the label taxonomy vocabulary."""
+def list_labels_cmd(namespace: str | None, top: int, as_json: bool) -> None:
+    """List all labels grouped by namespace with counts."""
+    _list_labels_impl(namespace, top, as_json)
+
+
+@click.command("list-labels")
+@click.option("--namespace", "-n", default=None, help="Filter to a namespace")
+@click.option("--top", default=10, type=click.IntRange(min=0), help="Max labels per namespace (0 for unlimited)")
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+def list_labels_alias_cmd(namespace: str | None, top: int, as_json: bool) -> None:
+    """List all labels grouped by namespace with counts. Alias for `labels`."""
+    _list_labels_impl(namespace, top, as_json)
+
+
+def _taxonomy_impl(as_json: bool) -> None:
     with get_db() as db:
         result = db.get_label_taxonomy()
         if as_json:
@@ -448,6 +471,20 @@ def taxonomy_cmd(as_json: bool) -> None:
                     click.echo(f"  {ns}: {info['description']}  [{', '.join(str(v) for v in vals)}]")
 
 
+@click.command("taxonomy")
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+def taxonomy_cmd(as_json: bool) -> None:
+    """Show the label taxonomy vocabulary."""
+    _taxonomy_impl(as_json)
+
+
+@click.command("get-label-taxonomy")
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+def get_label_taxonomy_cmd(as_json: bool) -> None:
+    """Show the label taxonomy vocabulary. Alias for `taxonomy`."""
+    _taxonomy_impl(as_json)
+
+
 def register(cli: click.Group) -> None:
     """Register metadata commands with the CLI group."""
     cli.add_command(add_comment)
@@ -455,10 +492,13 @@ def register(cli: click.Group) -> None:
     cli.add_command(add_label)
     cli.add_command(remove_label)
     cli.add_command(list_labels_cmd)
+    cli.add_command(list_labels_alias_cmd)
     cli.add_command(taxonomy_cmd)
+    cli.add_command(get_label_taxonomy_cmd)
     cli.add_command(stats)
     cli.add_command(search)
     cli.add_command(events_cmd)
+    cli.add_command(get_issue_events_cmd)
     cli.add_command(batch_update)
     cli.add_command(batch_close)
     cli.add_command(batch_add_label)

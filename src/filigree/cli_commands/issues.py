@@ -112,17 +112,7 @@ def create(
         refresh_summary(db)
 
 
-@click.command()
-@click.argument("issue_id")
-@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
-@click.option(
-    "--with-files/--no-files",
-    "with_files",
-    default=False,
-    help="Include file associations (default: off)",
-)
-def show(issue_id: str, as_json: bool, with_files: bool) -> None:
-    """Show issue details."""
+def _show_impl(issue_id: str, as_json: bool, with_files: bool) -> None:
     with get_db() as db:
         try:
             issue = db.get_issue(issue_id)
@@ -178,19 +168,35 @@ def show(issue_id: str, as_json: bool, with_files: bool) -> None:
                 click.echo(f"  [{assoc['assoc_type']}] {assoc['file_path']} (file_id={assoc['file_id']})")
 
 
-@click.command("list")
-@click.option("--status", default=None, help="Filter by status")
-@click.option("--type", "issue_type", default=None, help="Filter by type")
-@click.option("--priority", "-p", default=None, type=click.IntRange(0, 4), help="Filter by priority")
-@click.option("--parent", default=None, help="Filter by parent ID")
-@click.option("--assignee", default=None, help="Filter by assignee")
-@click.option("--label", "-l", multiple=True, help="Filter by label (repeatable, AND logic). Supports virtuals.")
-@click.option("--label-prefix", default=None, help="Filter by label namespace prefix (include trailing colon)")
-@click.option("--not-label", default=None, help="Exclude issues with this label")
-@click.option("--limit", default=100, type=click.IntRange(min=0), help="Max results (default 100)")
-@click.option("--offset", default=0, type=click.IntRange(min=0), help="Skip first N results")
+@click.command()
+@click.argument("issue_id")
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON")
-def list_issues(
+@click.option(
+    "--with-files/--no-files",
+    "with_files",
+    default=False,
+    help="Include file associations (default: off)",
+)
+def show(issue_id: str, as_json: bool, with_files: bool) -> None:
+    """Show issue details."""
+    _show_impl(issue_id, as_json, with_files)
+
+
+@click.command("get-issue")
+@click.argument("issue_id")
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+@click.option(
+    "--with-files/--no-files",
+    "with_files",
+    default=False,
+    help="Include file associations (default: off)",
+)
+def get_issue_cmd(issue_id: str, as_json: bool, with_files: bool) -> None:
+    """Show issue details. Alias for `show`."""
+    _show_impl(issue_id, as_json, with_files)
+
+
+def _list_issues_impl(
     status: str | None,
     issue_type: str | None,
     priority: int | None,
@@ -203,7 +209,6 @@ def list_issues(
     offset: int,
     as_json: bool,
 ) -> None:
-    """List issues with optional filters."""
     with get_db() as db:
         label_filter = list(label) if label else None
         try:
@@ -239,21 +244,66 @@ def list_issues(
         click.echo(f"\n{len(issues)} issues")
 
 
-@click.command()
-@click.argument("issue_id")
-@click.option("--status", default=None, help="New status")
-@click.option("--priority", "-p", default=None, type=click.IntRange(0, 4), help="New priority")
-@click.option("--title", default=None, help="New title")
-@click.option("--assignee", default=None, help="New assignee")
-@click.option("--description", "-d", default=None, help="New description")
-@click.option("--notes", default=None, help="New notes")
-@click.option("--parent", default=None, help="New parent issue ID (empty string to clear)")
-@click.option("--design", default=None, help="New design field")
-@click.option("--field", "-f", multiple=True, help="Custom field as key=value (repeatable)")
+@click.command("list")
+@click.option("--status", default=None, help="Filter by status")
+@click.option("--type", "issue_type", default=None, help="Filter by type")
+@click.option("--priority", "-p", default=None, type=click.IntRange(0, 4), help="Filter by priority")
+@click.option("--parent", default=None, help="Filter by parent ID")
+@click.option("--assignee", default=None, help="Filter by assignee")
+@click.option("--label", "-l", multiple=True, help="Filter by label (repeatable, AND logic). Supports virtuals.")
+@click.option("--label-prefix", default=None, help="Filter by label namespace prefix (include trailing colon)")
+@click.option("--not-label", default=None, help="Exclude issues with this label")
+@click.option("--limit", default=100, type=click.IntRange(min=0), help="Max results (default 100)")
+@click.option("--offset", default=0, type=click.IntRange(min=0), help="Skip first N results")
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON")
-@click.pass_context
-def update(
-    ctx: click.Context,
+def list_cmd(
+    status: str | None,
+    issue_type: str | None,
+    priority: int | None,
+    parent: str | None,
+    assignee: str | None,
+    label: tuple[str, ...],
+    label_prefix: str | None,
+    not_label: str | None,
+    limit: int,
+    offset: int,
+    as_json: bool,
+) -> None:
+    """List issues with optional filters."""
+    _list_issues_impl(status, issue_type, priority, parent, assignee, label, label_prefix, not_label, limit, offset, as_json)
+
+
+@click.command("list-issues")
+@click.option("--status", default=None, help="Filter by status")
+@click.option("--type", "issue_type", default=None, help="Filter by type")
+@click.option("--priority", "-p", default=None, type=click.IntRange(0, 4), help="Filter by priority")
+@click.option("--parent", default=None, help="Filter by parent ID")
+@click.option("--assignee", default=None, help="Filter by assignee")
+@click.option("--label", "-l", multiple=True, help="Filter by label (repeatable, AND logic). Supports virtuals.")
+@click.option("--label-prefix", default=None, help="Filter by label namespace prefix (include trailing colon)")
+@click.option("--not-label", default=None, help="Exclude issues with this label")
+@click.option("--limit", default=100, type=click.IntRange(min=0), help="Max results (default 100)")
+@click.option("--offset", default=0, type=click.IntRange(min=0), help="Skip first N results")
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+def list_issues_cmd(
+    status: str | None,
+    issue_type: str | None,
+    priority: int | None,
+    parent: str | None,
+    assignee: str | None,
+    label: tuple[str, ...],
+    label_prefix: str | None,
+    not_label: str | None,
+    limit: int,
+    offset: int,
+    as_json: bool,
+) -> None:
+    """List issues with optional filters. Alias for `list`."""
+    _list_issues_impl(status, issue_type, priority, parent, assignee, label, label_prefix, not_label, limit, offset, as_json)
+
+
+def _update_impl(
+    actor: str,
     issue_id: str,
     status: str | None,
     priority: int | None,
@@ -266,7 +316,6 @@ def update(
     field: tuple[str, ...],
     as_json: bool,
 ) -> None:
-    """Update an issue."""
     fields = None
     # Truthiness gates would silently drop `--design=` (empty-string clear);
     # see filigree-613e9f5f66.  Distinguish unset (None) from cleared ("").
@@ -296,7 +345,7 @@ def update(
                 notes=notes,
                 parent_id=parent,
                 fields=fields,
-                actor=ctx.obj["actor"],
+                actor=actor,
             )
             if as_json:
                 click.echo(json_mod.dumps(issue.to_dict(), indent=2, default=str))
@@ -317,6 +366,68 @@ def update(
             sys.exit(1)
 
         refresh_summary(db)
+
+
+@click.command()
+@click.argument("issue_id")
+@click.option("--status", default=None, help="New status")
+@click.option("--priority", "-p", default=None, type=click.IntRange(0, 4), help="New priority")
+@click.option("--title", default=None, help="New title")
+@click.option("--assignee", default=None, help="New assignee")
+@click.option("--description", "-d", default=None, help="New description")
+@click.option("--notes", default=None, help="New notes")
+@click.option("--parent", default=None, help="New parent issue ID (empty string to clear)")
+@click.option("--design", default=None, help="New design field")
+@click.option("--field", "-f", multiple=True, help="Custom field as key=value (repeatable)")
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+@click.pass_context
+def update(
+    ctx: click.Context,
+    issue_id: str,
+    status: str | None,
+    priority: int | None,
+    title: str | None,
+    assignee: str | None,
+    description: str | None,
+    notes: str | None,
+    parent: str | None,
+    design: str | None,
+    field: tuple[str, ...],
+    as_json: bool,
+) -> None:
+    """Update an issue."""
+    _update_impl(ctx.obj["actor"], issue_id, status, priority, title, assignee, description, notes, parent, design, field, as_json)
+
+
+@click.command("update-issue")
+@click.argument("issue_id")
+@click.option("--status", default=None, help="New status")
+@click.option("--priority", "-p", default=None, type=click.IntRange(0, 4), help="New priority")
+@click.option("--title", default=None, help="New title")
+@click.option("--assignee", default=None, help="New assignee")
+@click.option("--description", "-d", default=None, help="New description")
+@click.option("--notes", default=None, help="New notes")
+@click.option("--parent", default=None, help="New parent issue ID (empty string to clear)")
+@click.option("--design", default=None, help="New design field")
+@click.option("--field", "-f", multiple=True, help="Custom field as key=value (repeatable)")
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+@click.pass_context
+def update_issue_cmd(
+    ctx: click.Context,
+    issue_id: str,
+    status: str | None,
+    priority: int | None,
+    title: str | None,
+    assignee: str | None,
+    description: str | None,
+    notes: str | None,
+    parent: str | None,
+    design: str | None,
+    field: tuple[str, ...],
+    as_json: bool,
+) -> None:
+    """Update an issue. Alias for `update`."""
+    _update_impl(ctx.obj["actor"], issue_id, status, priority, title, assignee, description, notes, parent, design, field, as_json)
 
 
 @click.command()
@@ -509,15 +620,10 @@ def claim_next(
         refresh_summary(db)
 
 
-@click.command("release")
-@click.argument("issue_id")
-@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
-@click.pass_context
-def release(ctx: click.Context, issue_id: str, as_json: bool) -> None:
-    """Release a claimed issue by clearing its assignee."""
+def _release_impl(actor: str, issue_id: str, as_json: bool) -> None:
     with get_db() as db:
         try:
-            issue = db.release_claim(issue_id, actor=ctx.obj["actor"])
+            issue = db.release_claim(issue_id, actor=actor)
             if as_json:
                 click.echo(json_mod.dumps(issue.to_dict(), indent=2, default=str))
             else:
@@ -537,15 +643,28 @@ def release(ctx: click.Context, issue_id: str, as_json: bool) -> None:
         refresh_summary(db)
 
 
-@click.command()
+@click.command("release")
 @click.argument("issue_id")
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON")
 @click.pass_context
-def undo(ctx: click.Context, issue_id: str, as_json: bool) -> None:
-    """Undo the most recent reversible action on an issue."""
+def release(ctx: click.Context, issue_id: str, as_json: bool) -> None:
+    """Release a claimed issue by clearing its assignee."""
+    _release_impl(ctx.obj["actor"], issue_id, as_json)
+
+
+@click.command("release-claim")
+@click.argument("issue_id")
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+@click.pass_context
+def release_claim_cmd(ctx: click.Context, issue_id: str, as_json: bool) -> None:
+    """Release a claimed issue by clearing its assignee. Alias for `release`."""
+    _release_impl(ctx.obj["actor"], issue_id, as_json)
+
+
+def _undo_impl(actor: str, issue_id: str, as_json: bool) -> None:
     with get_db() as db:
         try:
-            result = db.undo_last(issue_id, actor=ctx.obj["actor"])
+            result = db.undo_last(issue_id, actor=actor)
         except KeyError:
             if as_json:
                 click.echo(json_mod.dumps({"error": f"Not found: {issue_id}", "code": ErrorCode.NOT_FOUND}))
@@ -564,6 +683,24 @@ def undo(ctx: click.Context, issue_id: str, as_json: bool) -> None:
                 click.echo(f"Cannot undo: {result['reason']}", err=True)
                 sys.exit(1)
         refresh_summary(db)
+
+
+@click.command()
+@click.argument("issue_id")
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+@click.pass_context
+def undo(ctx: click.Context, issue_id: str, as_json: bool) -> None:
+    """Undo the most recent reversible action on an issue."""
+    _undo_impl(ctx.obj["actor"], issue_id, as_json)
+
+
+@click.command("undo-last")
+@click.argument("issue_id")
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+@click.pass_context
+def undo_last_cmd(ctx: click.Context, issue_id: str, as_json: bool) -> None:
+    """Undo the most recent reversible action on an issue. Alias for `undo`."""
+    _undo_impl(ctx.obj["actor"], issue_id, as_json)
 
 
 @click.command("start-work")
@@ -706,13 +843,18 @@ def register(cli: click.Group) -> None:
     """Register issue commands with the CLI group."""
     cli.add_command(create)
     cli.add_command(show)
-    cli.add_command(list_issues, "list")
+    cli.add_command(get_issue_cmd)
+    cli.add_command(list_cmd)
+    cli.add_command(list_issues_cmd)
     cli.add_command(update)
+    cli.add_command(update_issue_cmd)
     cli.add_command(close)
     cli.add_command(reopen)
     cli.add_command(claim)
     cli.add_command(claim_next)
     cli.add_command(release)
+    cli.add_command(release_claim_cmd)
     cli.add_command(undo)
+    cli.add_command(undo_last_cmd)
     cli.add_command(start_work)
     cli.add_command(start_next_work)

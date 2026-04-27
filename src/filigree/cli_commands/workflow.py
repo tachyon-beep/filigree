@@ -60,10 +60,7 @@ def workflow_statuses(as_json: bool) -> None:
             click.echo(f"{category}: {', '.join(statuses) if statuses else '(none)'}")
 
 
-@click.command("types")
-@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
-def types_cmd(as_json: bool) -> None:
-    """List all registered issue types with pack info."""
+def _types_impl(as_json: bool) -> None:
     with get_db() as db:
         types_list: list[dict[str, Any]] = []
         for tpl in db.templates.list_types():
@@ -88,11 +85,21 @@ def types_cmd(as_json: bool) -> None:
             click.echo(f"  {t['type']:<15} [{t['pack']}] {states}")
 
 
-@click.command("type-info")
-@click.argument("type_name")
+@click.command("types")
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON")
-def type_info(type_name: str, as_json: bool) -> None:
-    """Show full workflow definition for an issue type."""
+def types_cmd(as_json: bool) -> None:
+    """List all registered issue types with pack info."""
+    _types_impl(as_json)
+
+
+@click.command("list-types")
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+def list_types_cmd(as_json: bool) -> None:
+    """List all registered issue types with pack info. Alias for `types`."""
+    _types_impl(as_json)
+
+
+def _type_info_impl(type_name: str, as_json: bool) -> None:
     with get_db() as db:
         tpl = db.templates.get_type(type_name)
         if tpl is None:
@@ -145,11 +152,23 @@ def type_info(type_name: str, as_json: bool) -> None:
                 click.echo(f"    {f.name}: {f.type} — {f.description}{suffix}")
 
 
-@click.command("transitions")
-@click.argument("issue_id")
+@click.command("type-info")
+@click.argument("type_name")
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON")
-def transitions_cmd(issue_id: str, as_json: bool) -> None:
-    """Show valid next states for an issue."""
+def type_info(type_name: str, as_json: bool) -> None:
+    """Show full workflow definition for an issue type."""
+    _type_info_impl(type_name, as_json)
+
+
+@click.command("get-type-info")
+@click.argument("type_name")
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+def get_type_info(type_name: str, as_json: bool) -> None:
+    """Show full workflow definition for an issue type. Alias for `type-info`."""
+    _type_info_impl(type_name, as_json)
+
+
+def _transitions_impl(issue_id: str, as_json: bool) -> None:
     with get_db() as db:
         try:
             transitions = db.get_valid_transitions(issue_id)
@@ -188,10 +207,23 @@ def transitions_cmd(issue_id: str, as_json: bool) -> None:
             click.echo(f"  → {t.to:<20} [{t.category}] {t.enforcement}{missing}{ready_mark}")
 
 
-@click.command("packs")
+@click.command("transitions")
+@click.argument("issue_id")
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON")
-def packs_cmd(as_json: bool) -> None:
-    """List enabled workflow packs."""
+def transitions_cmd(issue_id: str, as_json: bool) -> None:
+    """Show valid next states for an issue."""
+    _transitions_impl(issue_id, as_json)
+
+
+@click.command("get-valid-transitions")
+@click.argument("issue_id")
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+def get_valid_transitions(issue_id: str, as_json: bool) -> None:
+    """Show valid next states for an issue. Alias for `transitions`."""
+    _transitions_impl(issue_id, as_json)
+
+
+def _packs_impl(as_json: bool) -> None:
     with get_db() as db:
         packs = db.templates.list_packs()
 
@@ -222,11 +254,21 @@ def packs_cmd(as_json: bool) -> None:
             click.echo(f"  {p.pack:<15} v{p.version}  {type_names}")
 
 
-@click.command("validate")
-@click.argument("issue_id")
+@click.command("packs")
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON")
-def validate_cmd(issue_id: str, as_json: bool) -> None:
-    """Validate an issue against its type template."""
+def packs_cmd(as_json: bool) -> None:
+    """List enabled workflow packs."""
+    _packs_impl(as_json)
+
+
+@click.command("list-packs")
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+def list_packs_cmd(as_json: bool) -> None:
+    """List enabled workflow packs. Alias for `packs`."""
+    _packs_impl(as_json)
+
+
+def _validate_impl(issue_id: str, as_json: bool) -> None:
     with get_db() as db:
         try:
             result = db.validate_issue(issue_id)
@@ -259,11 +301,23 @@ def validate_cmd(issue_id: str, as_json: bool) -> None:
                 click.echo(f"  X {e}")
 
 
-@click.command("guide")
-@click.argument("pack_name")
+@click.command("validate")
+@click.argument("issue_id")
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON")
-def guide_cmd(pack_name: str, as_json: bool) -> None:
-    """Display workflow guide for a pack."""
+def validate_cmd(issue_id: str, as_json: bool) -> None:
+    """Validate an issue against its type template."""
+    _validate_impl(issue_id, as_json)
+
+
+@click.command("validate-issue")
+@click.argument("issue_id")
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+def validate_issue_cmd(issue_id: str, as_json: bool) -> None:
+    """Validate an issue against its type template. Alias for `validate`."""
+    _validate_impl(issue_id, as_json)
+
+
+def _guide_impl(pack_name: str, as_json: bool) -> None:
     with get_db() as db:
         pack = db.templates.get_pack(pack_name)
         if pack is None:
@@ -298,6 +352,22 @@ def guide_cmd(pack_name: str, as_json: bool) -> None:
             click.echo("\n## Common Mistakes")
             for mistake in guide["common_mistakes"]:
                 click.echo(f"  - {mistake}")
+
+
+@click.command("guide")
+@click.argument("pack_name")
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+def guide_cmd(pack_name: str, as_json: bool) -> None:
+    """Display workflow guide for a pack."""
+    _guide_impl(pack_name, as_json)
+
+
+@click.command("get-workflow-guide")
+@click.argument("pack_name")
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+def get_workflow_guide(pack_name: str, as_json: bool) -> None:
+    """Display workflow guide for a pack. Alias for `guide`."""
+    _guide_impl(pack_name, as_json)
 
 
 @click.command("explain-status")
@@ -369,9 +439,15 @@ def register(cli: click.Group) -> None:
     cli.add_command(templates)
     cli.add_command(workflow_statuses)
     cli.add_command(types_cmd)
+    cli.add_command(list_types_cmd)
     cli.add_command(type_info)
+    cli.add_command(get_type_info)
     cli.add_command(transitions_cmd)
+    cli.add_command(get_valid_transitions)
     cli.add_command(packs_cmd)
+    cli.add_command(list_packs_cmd)
     cli.add_command(validate_cmd)
+    cli.add_command(validate_issue_cmd)
     cli.add_command(guide_cmd)
+    cli.add_command(get_workflow_guide)
     cli.add_command(explain_status)
