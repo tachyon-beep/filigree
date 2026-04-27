@@ -112,7 +112,13 @@ def create(
 @click.command()
 @click.argument("issue_id")
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON")
-def show(issue_id: str, as_json: bool) -> None:
+@click.option(
+    "--with-files/--no-files",
+    "with_files",
+    default=False,
+    help="Include file associations (default: off)",
+)
+def show(issue_id: str, as_json: bool, with_files: bool) -> None:
     """Show issue details."""
     with get_db() as db:
         try:
@@ -124,8 +130,13 @@ def show(issue_id: str, as_json: bool) -> None:
                 click.echo(f"Not found: {issue_id}", err=True)
             sys.exit(1)
 
+        file_assocs = db.get_issue_files(issue_id) if with_files else []
+
         if as_json:
-            click.echo(json_mod.dumps(issue.to_dict(), indent=2, default=str))
+            out: dict[str, Any] = dict(issue.to_dict())
+            if with_files:
+                out["files"] = file_assocs
+            click.echo(json_mod.dumps(out, indent=2, default=str))
             return
 
         click.echo(f"ID:       {issue.id}")
@@ -158,6 +169,10 @@ def show(issue_id: str, as_json: bool) -> None:
             click.echo("\n--- Fields ---")
             for k, v in issue.fields.items():
                 click.echo(f"  {k}: {v}")
+        if with_files and file_assocs:
+            click.echo("\n--- Files ---")
+            for assoc in file_assocs:
+                click.echo(f"  [{assoc['assoc_type']}] {assoc['file_path']} (file_id={assoc['file_id']})")
 
 
 @click.command("list")

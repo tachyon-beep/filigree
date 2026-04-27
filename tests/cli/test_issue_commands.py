@@ -119,6 +119,27 @@ class TestShowAndList:
         # 1 open task + auto-seeded "Future" release (planning = open category) = 2
         assert "2 issues" in result.output
 
+    def test_show_with_files_json_has_files_key(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        """--with-files --json includes a 'files' key (even if empty list)."""
+        runner, _ = cli_in_project
+        r = runner.invoke(cli, ["create", "Files test issue"])
+        issue_id = _extract_id(r.output)
+        result = runner.invoke(cli, ["show", issue_id, "--with-files", "--json"])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert "files" in data
+        assert isinstance(data["files"], list)
+
+    def test_show_without_files_json_has_no_files_key(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        """Default show --json does NOT include a 'files' key."""
+        runner, _ = cli_in_project
+        r = runner.invoke(cli, ["create", "No files key issue"])
+        issue_id = _extract_id(r.output)
+        result = runner.invoke(cli, ["show", issue_id, "--json"])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert "files" not in data
+
 
 class TestUpdateAndClose:
     def test_update_status(self, cli_in_project: tuple[CliRunner, Path]) -> None:
