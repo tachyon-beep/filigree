@@ -197,13 +197,12 @@ def events_cmd(issue_id: str, limit: int, as_json: bool) -> None:
                 click.echo(f"Not found: {issue_id}", err=True)
             sys.exit(1)
 
+        has_more = limit > 0 and len(raw_events) > limit
+        event_list = raw_events[:limit] if has_more else raw_events
         if as_json:
-            has_more = limit > 0 and len(raw_events) > limit
-            event_list = raw_events[:limit] if has_more else raw_events
             events_payload: dict[str, Any] = {"items": event_list, "has_more": has_more}
             click.echo(json_mod.dumps(events_payload, indent=2, default=str))
             return
-        event_list = raw_events
 
         if not event_list:
             click.echo(f"No events for {issue_id}.")
