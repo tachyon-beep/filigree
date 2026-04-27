@@ -33,8 +33,8 @@ class TestReopenExitCode:
         result = runner.invoke(cli, ["reopen", "test-nonexistent", "--json"])
         assert result.exit_code != 0
         data = json.loads(result.output)
-        assert "errors" in data
-        assert len(data["errors"]) == 1
+        assert "failed" in data
+        assert len(data["failed"]) == 1
 
     def test_reopen_open_issue_exits_nonzero(self, cli_in_project: tuple[CliRunner, Path]) -> None:
         """Reopening an already-open issue should fail (ValueError path)."""

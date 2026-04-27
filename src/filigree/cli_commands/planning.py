@@ -42,7 +42,7 @@ def ready(as_json: bool) -> None:
         issues = db.get_ready()
 
         if as_json:
-            click.echo(json_mod.dumps([i.to_dict() for i in issues], indent=2, default=str))
+            click.echo(json_mod.dumps({"items": [i.to_dict() for i in issues], "has_more": False}, indent=2, default=str))
             return
 
         for issue in issues:
@@ -65,7 +65,7 @@ def blocked(as_json: bool) -> None:
         issues = db.get_blocked()
 
         if as_json:
-            click.echo(json_mod.dumps([i.to_dict() for i in issues], indent=2, default=str))
+            click.echo(json_mod.dumps({"items": [i.to_dict() for i in issues], "has_more": False}, indent=2, default=str))
             return
 
         for issue in issues:
@@ -279,10 +279,13 @@ def changes(since: str, limit: int, as_json: bool) -> None:
     """Get events since a timestamp (for session resumption)."""
     since = _normalize_iso_timestamp(since)
     with get_db() as db:
-        events = db.get_events_since(since, limit=limit)
+        # Overfetch by 1 to detect has_more without an offset param.
+        raw = db.get_events_since(since, limit=limit + 1 if limit > 0 else limit)
+        has_more = limit > 0 and len(raw) > limit
+        events = raw[:limit] if has_more else raw
 
         if as_json:
-            click.echo(json_mod.dumps(events, indent=2, default=str))
+            click.echo(json_mod.dumps({"items": events, "has_more": has_more}, indent=2, default=str))
             return
 
         if not events:

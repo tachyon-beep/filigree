@@ -83,9 +83,9 @@ class TestJsonRetrofit:
         assert result.exit_code == 0
         data = json.loads(result.output)
         assert isinstance(data, dict)
-        assert "closed" in data
-        assert "unblocked" in data
-        assert data["closed"][0]["id"] == issue_id
+        assert "succeeded" in data
+        assert "newly_unblocked" in data
+        assert data["succeeded"][0]["issue_id"] == issue_id
 
     def test_reopen_json(self, cli_in_project: tuple[CliRunner, Path]) -> None:
         runner, _ = cli_in_project
@@ -96,8 +96,8 @@ class TestJsonRetrofit:
         assert result.exit_code == 0
         data = json.loads(result.output)
         assert isinstance(data, dict)
-        assert "reopened" in data
-        assert isinstance(data["reopened"], list)
+        assert "succeeded" in data
+        assert isinstance(data["succeeded"], list)
 
     def test_comment_json(self, cli_in_project: tuple[CliRunner, Path]) -> None:
         runner, _ = cli_in_project
@@ -148,9 +148,10 @@ class TestJsonRetrofit:
         result = runner.invoke(cli, ["workflow-statuses", "--json"])
         assert result.exit_code == 0
         data = json.loads(result.output)
-        assert "open" in data
-        assert "wip" in data
-        assert "done" in data
+        assert "statuses" in data
+        assert "open" in data["statuses"]
+        assert "wip" in data["statuses"]
+        assert "done" in data["statuses"]
 
     def test_undo_json(self, cli_in_project: tuple[CliRunner, Path]) -> None:
         runner, _ = cli_in_project

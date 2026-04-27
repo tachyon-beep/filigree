@@ -54,7 +54,7 @@ def workflow_statuses(as_json: bool) -> None:
         for category in ("open", "wip", "done"):
             data[category] = list(db._get_states_for_category(category))
         if as_json:
-            click.echo(json_mod.dumps(data, indent=2))
+            click.echo(json_mod.dumps({"statuses": data}, indent=2))
             return
         for category, statuses in data.items():
             click.echo(f"{category}: {', '.join(statuses) if statuses else '(none)'}")
@@ -79,7 +79,7 @@ def types_cmd(as_json: bool) -> None:
         types_list.sort(key=lambda t: str(t["type"]))
 
         if as_json:
-            click.echo(json_mod.dumps(types_list, indent=2))
+            click.echo(json_mod.dumps({"items": types_list, "has_more": False}, indent=2))
             return
 
         for t in types_list:
@@ -197,16 +197,19 @@ def packs_cmd(as_json: bool) -> None:
         if as_json:
             click.echo(
                 json_mod.dumps(
-                    [
-                        {
-                            "pack": p.pack,
-                            "version": p.version,
-                            "display_name": p.display_name,
-                            "description": p.description,
-                            "types": sorted(p.types.keys()),
-                        }
-                        for p in sorted(packs, key=lambda p: p.pack)
-                    ],
+                    {
+                        "items": [
+                            {
+                                "pack": p.pack,
+                                "version": p.version,
+                                "display_name": p.display_name,
+                                "description": p.description,
+                                "types": sorted(p.types.keys()),
+                            }
+                            for p in sorted(packs, key=lambda p: p.pack)
+                        ],
+                        "has_more": False,
+                    },
                     indent=2,
                 )
             )

@@ -27,10 +27,11 @@ class TestWorkflowCli:
         result = runner.invoke(cli, ["types", "--json"])
         assert result.exit_code == 0
         data = json.loads(result.output)
-        assert isinstance(data, list)
-        type_names = {t["type"] for t in data}
+        assert "items" in data
+        assert not data["has_more"]
+        type_names = {t["type"] for t in data["items"]}
         assert "task" in type_names
-        assert all("states" in t for t in data)
+        assert all("states" in t for t in data["items"])
 
     def test_type_info_shows_workflow(self, cli_in_project: tuple[CliRunner, Path]) -> None:
         runner, _ = cli_in_project
@@ -109,8 +110,9 @@ class TestWorkflowCli:
         result = runner.invoke(cli, ["packs", "--json"])
         assert result.exit_code == 0
         data = json.loads(result.output)
-        assert isinstance(data, list)
-        pack_names = {p["pack"] for p in data}
+        assert "items" in data
+        assert not data["has_more"]
+        pack_names = {p["pack"] for p in data["items"]}
         assert "core" in pack_names
 
     def test_validate_clean_issue(self, cli_in_project: tuple[CliRunner, Path]) -> None:
@@ -490,8 +492,8 @@ class TestBatchCli:
         assert result.exit_code == 0
         data = json.loads(result.output)
         assert isinstance(data, dict)
-        assert "updated" in data
-        assert "errors" in data
+        assert "succeeded" in data
+        assert "failed" in data
 
     def test_batch_update_json_malformed_field_returns_json(self, cli_in_project: tuple[CliRunner, Path]) -> None:
         """batch-update --json with bad --field must emit JSON error, not plain text."""
@@ -509,8 +511,8 @@ class TestBatchCli:
         result = runner.invoke(cli, ["batch-update", id1, "nonexistent-abc", "--priority", "1", "--json"])
         assert result.exit_code == 1
         data = json.loads(result.output)
-        assert len(data["updated"]) == 1
-        assert len(data["errors"]) == 1
+        assert len(data["succeeded"]) == 1
+        assert len(data["failed"]) == 1
 
     def test_batch_close(self, cli_in_project: tuple[CliRunner, Path]) -> None:
         runner, _ = cli_in_project
@@ -529,8 +531,8 @@ class TestBatchCli:
         result = runner.invoke(cli, ["batch-close", id1, "--json"])
         assert result.exit_code == 0
         data = json.loads(result.output)
-        assert "closed" in data
-        assert "errors" in data
+        assert "succeeded" in data
+        assert "failed" in data
 
     def test_batch_close_partial_failure(self, cli_in_project: tuple[CliRunner, Path]) -> None:
         runner, _ = cli_in_project
@@ -539,8 +541,8 @@ class TestBatchCli:
         result = runner.invoke(cli, ["batch-close", id1, "nonexistent-abc", "--json"])
         assert result.exit_code == 1
         data = json.loads(result.output)
-        assert len(data["closed"]) == 1
-        assert len(data["errors"]) == 1
+        assert len(data["succeeded"]) == 1
+        assert len(data["failed"]) == 1
 
     def test_batch_add_label_json(self, cli_in_project: tuple[CliRunner, Path]) -> None:
         runner, _ = cli_in_project
@@ -552,12 +554,12 @@ class TestBatchCli:
         result = runner.invoke(cli, ["batch-add-label", "security", id1, id2, "--json"])
         assert result.exit_code == 0
         data = json.loads(result.output)
-        assert len(data["labeled"]) == 2
-        assert data["errors"] == []
+        assert len(data["succeeded"]) == 2
+        assert data["failed"] == []
 
         listed = runner.invoke(cli, ["list", "--label", "security", "--json"])
         listed_data = json.loads(listed.output)
-        listed_ids = {row["id"] for row in listed_data}
+        listed_ids = {row["id"] for row in listed_data["items"]}
         assert id1 in listed_ids
         assert id2 in listed_ids
 
@@ -568,9 +570,9 @@ class TestBatchCli:
         result = runner.invoke(cli, ["batch-add-label", "security", id1, "nonexistent-abc", "--json"])
         assert result.exit_code == 1
         data = json.loads(result.output)
-        assert len(data["labeled"]) == 1
-        assert len(data["errors"]) == 1
-        assert data["errors"][0]["id"] == "nonexistent-abc"
+        assert len(data["succeeded"]) == 1
+        assert len(data["failed"]) == 1
+        assert data["failed"][0]["id"] == "nonexistent-abc"
 
     def test_batch_add_comment_json(self, cli_in_project: tuple[CliRunner, Path]) -> None:
         runner, _ = cli_in_project
@@ -582,8 +584,8 @@ class TestBatchCli:
         result = runner.invoke(cli, ["batch-add-comment", "triage-complete", id1, id2, "--json"])
         assert result.exit_code == 0
         data = json.loads(result.output)
-        assert len(data["commented"]) == 2
-        assert data["errors"] == []
+        assert len(data["succeeded"]) == 2
+        assert data["failed"] == []
 
         comments = runner.invoke(cli, ["get-comments", id1, "--json"])
         comments_data = json.loads(comments.output)
@@ -596,9 +598,9 @@ class TestBatchCli:
         result = runner.invoke(cli, ["batch-add-comment", "triage-complete", id1, "nonexistent-abc", "--json"])
         assert result.exit_code == 1
         data = json.loads(result.output)
-        assert len(data["commented"]) == 1
-        assert len(data["errors"]) == 1
-        assert data["errors"][0]["id"] == "nonexistent-abc"
+        assert len(data["succeeded"]) == 1
+        assert len(data["failed"]) == 1
+        assert data["failed"][0]["id"] == "nonexistent-abc"
 
 
 class TestEventsCli:
@@ -615,8 +617,8 @@ class TestEventsCli:
         result = runner.invoke(cli, ["changes", "--since", "2020-01-01T00:00:00", "--json"])
         assert result.exit_code == 0
         data = json.loads(result.output)
-        assert isinstance(data, list)
-        assert len(data) >= 1
+        assert "items" in data
+        assert len(data["items"]) >= 1
 
     def test_changes_empty(self, cli_in_project: tuple[CliRunner, Path]) -> None:
         runner, _ = cli_in_project
@@ -632,7 +634,7 @@ class TestEventsCli:
         result = runner.invoke(cli, ["changes", "--since", "2020-01-01T00:00:00Z", "--json"])
         assert result.exit_code == 0, f"Z-suffix must be accepted: {result.output}"
         data = json.loads(result.output)
-        assert len(data) >= 1, "Z-suffixed --since should match stored +00:00 timestamps"
+        assert len(data["items"]) >= 1, "Z-suffixed --since should match stored +00:00 timestamps"
 
     def test_changes_z_suffix_boundary_matches_plus_zero(self, cli_in_project: tuple[CliRunner, Path]) -> None:
         """Z-suffix at a precision boundary must behave as +00:00 would.
@@ -664,7 +666,7 @@ class TestEventsCli:
         assert result.exit_code == 0, f"CLI error: {result.output}"
         data = json.loads(result.output)
         # The boundary event must be returned (it's 0.123s after --since).
-        issue_ids = {e["issue_id"] for e in data}
+        issue_ids = {e["issue_id"] for e in data["items"]}
         assert issue.id in issue_ids, f"Z-suffix boundary must match fractional +00:00 timestamp; got {data}"
 
     def test_changes_malformed_since_rejected(self, cli_in_project: tuple[CliRunner, Path]) -> None:
@@ -690,7 +692,7 @@ class TestEventsCli:
         result = runner.invoke(cli, ["events", issue_id, "--json"])
         assert result.exit_code == 0
         data = json.loads(result.output)
-        assert isinstance(data, list)
+        assert "items" in data
 
     def test_events_not_found(self, cli_in_project: tuple[CliRunner, Path]) -> None:
         runner, _ = cli_in_project
@@ -742,7 +744,7 @@ class TestLabelsCommand:
         result = runner.invoke(cli, ["labels", "--json"])
         assert result.exit_code == 0
         data = json.loads(result.output)
-        assert "namespaces" in data
+        assert "items" in data
 
     def test_labels_namespace_filter(self, cli_in_project: tuple[CliRunner, Path]) -> None:
         runner, _ = cli_in_project

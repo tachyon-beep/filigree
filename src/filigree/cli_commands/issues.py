@@ -220,7 +220,11 @@ def list_issues(
             raise click.ClickException(str(e)) from e
 
         if as_json:
-            click.echo(json_mod.dumps([i.to_dict() for i in issues], indent=2, default=str))
+            has_more = limit > 0 and len(issues) == limit
+            list_payload: dict[str, Any] = {"items": [i.to_dict() for i in issues], "has_more": has_more}
+            if has_more:
+                list_payload["next_offset"] = offset + len(issues)
+            click.echo(json_mod.dumps(list_payload, indent=2, default=str))
             return
 
         for issue in issues:
@@ -318,14 +322,22 @@ def update(
 def close(ctx: click.Context, issue_ids: tuple[str, ...], reason: str, as_json: bool) -> None:
     """Close one or more issues."""
     with get_db() as db:
-        closed: list[dict[str, Any]] = []
+        succeeded: list[dict[str, Any]] = []
         errors: list[dict[str, str]] = []
         ready_before = {i.id for i in db.get_ready()} if as_json else set()
         for issue_id in issue_ids:
             try:
                 issue = db.close_issue(issue_id, reason=reason, actor=ctx.obj["actor"])
                 if as_json:
-                    closed.append(dict(issue.to_dict()))
+                    succeeded.append(
+                        {
+                            "issue_id": issue.id,
+                            "title": issue.title,
+                            "status": issue.status,
+                            "priority": issue.priority,
+                            "type": issue.type,
+                        }
+                    )
                 else:
                     click.echo(f"Closed {issue.id}: {issue.title}")
             except KeyError:
@@ -340,19 +352,21 @@ def close(ctx: click.Context, issue_ids: tuple[str, ...], reason: str, as_json: 
             # Stage 2B task 2b.3c: when the call was ``close <id>`` with a
             # single id and it failed, emit the flat 2.0 envelope instead
             # of the batch-shape wrapper. ``filigree close a b --json``
-            # keeps the batch shape (``{closed, unblocked, errors?}``)
-            # because batching is the documented behaviour for N≥2.
-            if len(issue_ids) == 1 and errors and not closed:
+            # keeps the batch shape because batching is the documented
+            # behaviour for N≥2.
+            if len(issue_ids) == 1 and errors and not succeeded:
                 err = errors[0]
                 click.echo(json_mod.dumps({"error": err["error"], "code": err["code"]}))
                 refresh_summary(db)
                 sys.exit(1)
             # Only issues that became ready *after* the close (per docs/cli.md).
             ready = db.get_ready()
-            unblocked = [{"id": i.id, "title": i.title, "priority": i.priority, "type": i.type} for i in ready if i.id not in ready_before]
-            payload: dict[str, Any] = {"closed": closed, "unblocked": unblocked}
-            if errors:
-                payload["errors"] = errors
+            newly_unblocked = [
+                {"issue_id": i.id, "title": i.title, "status": i.status, "priority": i.priority, "type": i.type}
+                for i in ready
+                if i.id not in ready_before
+            ]
+            payload: dict[str, Any] = {"succeeded": succeeded, "failed": errors, "newly_unblocked": newly_unblocked}
             click.echo(json_mod.dumps(payload, indent=2, default=str))
         refresh_summary(db)
         if errors:
@@ -372,7 +386,15 @@ def reopen(ctx: click.Context, issue_ids: tuple[str, ...], as_json: bool) -> Non
             try:
                 issue = db.reopen_issue(issue_id, actor=ctx.obj["actor"])
                 if as_json:
-                    reopened.append(dict(issue.to_dict()))
+                    reopened.append(
+                        {
+                            "issue_id": issue.id,
+                            "title": issue.title,
+                            "status": issue.status,
+                            "priority": issue.priority,
+                            "type": issue.type,
+                        }
+                    )
                 else:
                     click.echo(f"Reopened {issue.id}: {issue.title} [{issue.status}]")
             except KeyError:
@@ -384,9 +406,7 @@ def reopen(ctx: click.Context, issue_ids: tuple[str, ...], as_json: bool) -> Non
                 if not as_json:
                     click.echo(f"Error reopening {issue_id}: {e}", err=True)
         if as_json:
-            payload: dict[str, Any] = {"reopened": reopened}
-            if errors:
-                payload["errors"] = errors
+            payload: dict[str, Any] = {"succeeded": reopened, "failed": errors}
             click.echo(json_mod.dumps(payload, indent=2, default=str))
         refresh_summary(db)
         if errors:

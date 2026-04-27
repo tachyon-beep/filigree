@@ -135,7 +135,7 @@ class TestJsonOutput:
         assert result.exit_code == 0
         data = json.loads(result.output)
         # 2 created + auto-seeded "Future" release = 3
-        assert len(data) == 3
+        assert len(data["items"]) == 3
 
     def test_ready_json(self, cli_in_project: tuple[CliRunner, Path]) -> None:
         runner, _ = cli_in_project
@@ -144,7 +144,7 @@ class TestJsonOutput:
         assert result.exit_code == 0
         data = json.loads(result.output)
         # 1 created + auto-seeded "Future" release = 2 ready
-        assert len(data) == 2
+        assert len(data["items"]) == 2
 
     def test_stats_json(self, cli_in_project: tuple[CliRunner, Path]) -> None:
         runner, _ = cli_in_project
@@ -160,7 +160,7 @@ class TestJsonOutput:
         result = runner.invoke(cli, ["search", "searchable", "--json"])
         assert result.exit_code == 0
         data = json.loads(result.output)
-        assert len(data) == 1
+        assert len(data["items"]) == 1
 
 
 class TestBlockedJson:
@@ -174,7 +174,7 @@ class TestBlockedJson:
         result = runner.invoke(cli, ["blocked", "--json"])
         assert result.exit_code == 0
         data = json.loads(result.output)
-        assert len(data) == 1
+        assert len(data["items"]) == 1
 
 
 class TestCycleTimeDisplay:

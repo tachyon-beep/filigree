@@ -210,10 +210,10 @@ class TestUpdateAndClose:
         result = runner.invoke(cli, ["close", good_id, "test-nonexistent", "--json"])
         assert result.exit_code == 1
         data = json.loads(result.output)
-        assert len(data["closed"]) == 1
-        assert data["closed"][0]["id"] == good_id
-        assert len(data["errors"]) == 1
-        assert data["errors"][0]["id"] == "test-nonexistent"
+        assert len(data["succeeded"]) == 1
+        assert data["succeeded"][0]["issue_id"] == good_id
+        assert len(data["failed"]) == 1
+        assert data["failed"][0]["id"] == "test-nonexistent"
 
     def test_close_json_all_success(self, cli_in_project: tuple[CliRunner, Path]) -> None:
         runner, _ = cli_in_project
@@ -223,8 +223,8 @@ class TestUpdateAndClose:
         result = runner.invoke(cli, ["close", id1, id2, "--json"])
         assert result.exit_code == 0
         data = json.loads(result.output)
-        assert len(data["closed"]) == 2
-        assert "errors" not in data
+        assert len(data["succeeded"]) == 2
+        assert data["failed"] == []
 
     def test_close_json_unblocked_only_newly_unblocked(self, cli_in_project: tuple[CliRunner, Path]) -> None:
         """`unblocked` must contain only issues that became ready from this close, not pre-existing ready issues."""
@@ -237,9 +237,9 @@ class TestUpdateAndClose:
         result = runner.invoke(cli, ["close", dep, "--json"])
         assert result.exit_code == 0
         data = json.loads(result.output)
-        unblocked_ids = {i["id"] for i in data["unblocked"]}
-        assert blocked in unblocked_ids, "issue whose only dep closed must appear in unblocked"
-        assert already_ready not in unblocked_ids, f"pre-existing ready issue must NOT appear in unblocked; got {unblocked_ids}"
+        unblocked_ids = {i["issue_id"] for i in data["newly_unblocked"]}
+        assert blocked in unblocked_ids, "issue whose only dep closed must appear in newly_unblocked"
+        assert already_ready not in unblocked_ids, f"pre-existing ready issue must NOT appear in newly_unblocked; got {unblocked_ids}"
 
 
 class TestReopen:
@@ -267,9 +267,9 @@ class TestReopen:
         result = runner.invoke(cli, ["reopen", good_id, "test-nonexistent", "--json"])
         assert result.exit_code == 1
         data = json.loads(result.output)
-        assert len(data["reopened"]) == 1
-        assert data["reopened"][0]["id"] == good_id
-        assert len(data["errors"]) == 1
+        assert len(data["succeeded"]) == 1
+        assert data["succeeded"][0]["issue_id"] == good_id
+        assert len(data["failed"]) == 1
 
     def test_reopen_json_all_success(self, cli_in_project: tuple[CliRunner, Path]) -> None:
         runner, _ = cli_in_project
@@ -281,8 +281,8 @@ class TestReopen:
         result = runner.invoke(cli, ["reopen", id1, id2, "--json"])
         assert result.exit_code == 0
         data = json.loads(result.output)
-        assert len(data["reopened"]) == 2
-        assert "errors" not in data
+        assert len(data["succeeded"]) == 2
+        assert data["failed"] == []
 
 
 class TestCommentsCli:

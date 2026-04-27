@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json as json_mod
 import sys
+from typing import Any
 
 import click
 
@@ -167,7 +168,11 @@ def search(query: str, limit: int, offset: int, as_json: bool) -> None:
         issues = db.search_issues(query, limit=limit, offset=offset)
 
         if as_json:
-            click.echo(json_mod.dumps([i.to_dict() for i in issues], indent=2, default=str))
+            has_more = limit > 0 and len(issues) == limit
+            search_payload: dict[str, Any] = {"items": [i.to_dict() for i in issues], "has_more": has_more}
+            if has_more:
+                search_payload["next_offset"] = offset + len(issues)
+            click.echo(json_mod.dumps(search_payload, indent=2, default=str))
             return
 
         for issue in issues:
@@ -183,7 +188,8 @@ def events_cmd(issue_id: str, limit: int, as_json: bool) -> None:
     """Get event history for a specific issue, newest first."""
     with get_db() as db:
         try:
-            event_list = db.get_issue_events(issue_id, limit=limit)
+            # Overfetch by 1 to detect has_more without an offset param.
+            raw_events = db.get_issue_events(issue_id, limit=limit + 1 if limit > 0 else limit)
         except KeyError:
             if as_json:
                 click.echo(json_mod.dumps({"error": f"Not found: {issue_id}", "code": ErrorCode.NOT_FOUND}))
@@ -192,8 +198,12 @@ def events_cmd(issue_id: str, limit: int, as_json: bool) -> None:
             sys.exit(1)
 
         if as_json:
-            click.echo(json_mod.dumps(event_list, indent=2, default=str))
+            has_more = limit > 0 and len(raw_events) > limit
+            event_list = raw_events[:limit] if has_more else raw_events
+            events_payload: dict[str, Any] = {"items": event_list, "has_more": has_more}
+            click.echo(json_mod.dumps(events_payload, indent=2, default=str))
             return
+        event_list = raw_events
 
         if not event_list:
             click.echo(f"No events for {issue_id}.")
@@ -254,8 +264,11 @@ def batch_update(
             click.echo(
                 json_mod.dumps(
                     {
-                        "updated": [i.to_dict() for i in results],
-                        "errors": errors,
+                        "succeeded": [
+                            {"issue_id": i.id, "title": i.title, "status": i.status, "priority": i.priority, "type": i.type}
+                            for i in results
+                        ],
+                        "failed": errors,
                     },
                     indent=2,
                     default=str,
@@ -283,6 +296,7 @@ def batch_update(
 def batch_close(ctx: click.Context, issue_ids: tuple[str, ...], reason: str, as_json: bool) -> None:
     """Close multiple issues with per-item error reporting."""
     with get_db() as db:
+        ready_before_batch = {i.id for i in db.get_ready()} if as_json else set()
         closed, errors = db.batch_close(
             list(issue_ids),
             reason=reason,
@@ -290,11 +304,20 @@ def batch_close(ctx: click.Context, issue_ids: tuple[str, ...], reason: str, as_
         )
 
         if as_json:
+            ready_after_batch = db.get_ready() if as_json else []
+            newly_unblocked_batch = [
+                {"issue_id": i.id, "title": i.title, "status": i.status, "priority": i.priority, "type": i.type}
+                for i in ready_after_batch
+                if i.id not in ready_before_batch
+            ]
             click.echo(
                 json_mod.dumps(
                     {
-                        "closed": [{"id": i.id, "title": i.title, "priority": i.priority, "type": i.type} for i in closed],
-                        "errors": errors,
+                        "succeeded": [
+                            {"issue_id": i.id, "title": i.title, "status": i.status, "priority": i.priority, "type": i.type} for i in closed
+                        ],
+                        "failed": errors,
+                        "newly_unblocked": newly_unblocked_batch,
                     },
                     indent=2,
                     default=str,
@@ -327,8 +350,8 @@ def batch_add_label(label_name: str, issue_ids: tuple[str, ...], as_json: bool) 
             click.echo(
                 json_mod.dumps(
                     {
-                        "labeled": labeled,
-                        "errors": errors,
+                        "succeeded": [row["id"] for row in labeled],
+                        "failed": errors,
                     },
                     indent=2,
                     default=str,
@@ -366,8 +389,8 @@ def batch_add_comment(ctx: click.Context, text: str, issue_ids: tuple[str, ...],
             click.echo(
                 json_mod.dumps(
                     {
-                        "commented": commented,
-                        "errors": errors,
+                        "succeeded": [str(row["comment_id"]) for row in commented],
+                        "failed": errors,
                     },
                     indent=2,
                     default=str,
@@ -393,7 +416,8 @@ def list_labels_cmd(namespace: str | None, top: int, as_json: bool) -> None:
     with get_db() as db:
         result = db.list_labels(namespace=namespace, top=top)
         if as_json:
-            click.echo(json_mod.dumps(result, indent=2))
+            items = [{"namespace": ns, **ns_data} for ns, ns_data in result["namespaces"].items()]
+            click.echo(json_mod.dumps({"items": items, "has_more": False}, indent=2))
             return
         for ns_name, ns_data in sorted(result["namespaces"].items()):
             writable = "rw" if ns_data["writable"] else "ro"

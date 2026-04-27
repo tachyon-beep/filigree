@@ -175,13 +175,13 @@ class TestCLICloseJSONBatchBoundary:
         result = runner.invoke(cli, ["close", "test-ffffffffff", "test-eeeeeeeeee", "--json"])
         assert result.exit_code != 0, result.output
         payload = json.loads(result.output)
-        # Batch-shape wrapper: {closed, unblocked, errors} — NOT the flat
+        # Batch-shape wrapper: {succeeded, failed, newly_unblocked} — NOT the flat
         # {error, code} envelope that N=1 produces.
-        assert "closed" in payload, payload
-        assert "errors" in payload, payload
+        assert "succeeded" in payload, payload
+        assert "failed" in payload, payload
         assert "code" not in payload, f"N≥2 close must keep batch wrapper; flat envelope would have top-level 'code': {payload!r}"
-        assert len(payload["errors"]) == 2, payload
-        for err in payload["errors"]:
+        assert len(payload["failed"]) == 2, payload
+        for err in payload["failed"]:
             assert set(err.keys()) >= {"id", "error", "code"}, err
             assert err["code"] == ErrorCode.NOT_FOUND, err
 
@@ -194,7 +194,7 @@ class TestCLICloseJSONBatchBoundary:
         assert result.exit_code != 0, result.output
         payload = json.loads(result.output)
         assert payload["code"] == ErrorCode.NOT_FOUND, payload
-        assert "closed" not in payload, payload
+        assert "succeeded" not in payload, payload
 
 
 class TestCLILabelsTopValidation:
