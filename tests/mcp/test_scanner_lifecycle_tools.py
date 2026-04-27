@@ -152,7 +152,7 @@ class TestTriggerScanBatchTool:
         _write_scanner_toml(mcp_db)
         try:
             with patch(
-                "filigree.mcp_tools.scanners.subprocess.Popen",
+                "filigree.scanner_runtime.subprocess.Popen",
                 side_effect=[_FakeProc(100), _FakeProc(101)],
             ):
                 data = _parse(
@@ -183,7 +183,7 @@ class TestTriggerScanBatchTool:
         _write_scanner_toml(mcp_db)
         try:
             with patch(
-                "filigree.mcp_tools.scanners.subprocess.Popen",
+                "filigree.scanner_runtime.subprocess.Popen",
                 side_effect=[_FakeProc(100), OSError("mock fail")],
             ):
                 data = _parse(
@@ -212,7 +212,7 @@ class TestTriggerScanBatchTool:
         _write_scanner_toml(mcp_db)
         try:
             with patch(
-                "filigree.mcp_tools.scanners.subprocess.Popen",
+                "filigree.scanner_runtime.subprocess.Popen",
                 side_effect=OSError("mock fail"),
             ):
                 data = _parse(
@@ -267,7 +267,7 @@ class TestTriggerScanBatchTool:
         _write_scanner_toml(mcp_db)
         try:
             with patch(
-                "filigree.mcp_tools.scanners.subprocess.Popen",
+                "filigree.scanner_runtime.subprocess.Popen",
                 return_value=_FakeProc(100),
             ):
                 data = _parse(
@@ -293,7 +293,7 @@ class TestTriggerScanBatchTool:
         _write_scanner_toml(mcp_db)
         try:
             with patch(
-                "filigree.mcp_tools.scanners.subprocess.Popen",
+                "filigree.scanner_runtime.subprocess.Popen",
                 side_effect=[_FakeProc(100), _FakeProc(101)],
             ):
                 data = _parse(
@@ -320,7 +320,7 @@ class TestTriggerScanBatchTool:
         _write_scanner_toml(mcp_db)
         try:
             with patch(
-                "filigree.mcp_tools.scanners.subprocess.Popen",
+                "filigree.scanner_runtime.subprocess.Popen",
                 side_effect=[_FakeProc(100), _FakeProc(101), _FakeProc(102)],
             ):
                 data = _parse(
@@ -346,7 +346,7 @@ class TestTriggerScanBatchTool:
         _write_scanner_toml(mcp_db)
         try:
             with patch(
-                "filigree.mcp_tools.scanners.subprocess.Popen",
+                "filigree.scanner_runtime.subprocess.Popen",
                 side_effect=[_FakeProc(100)],
             ):
                 data = _parse(
@@ -432,8 +432,10 @@ class TestValidateLocalhostUrl:
     def test_non_localhost_urls_rejected(self, url: str) -> None:
         result = _validate_localhost_url(url)
         assert result is not None
-        # Should be an error response (list of TextContent)
-        assert isinstance(result, list)
+        # Should be an ErrorResponse dict
+        assert isinstance(result, dict)
+        assert "error" in result
+        assert "code" in result
 
     @pytest.mark.parametrize(
         "url",
@@ -452,7 +454,9 @@ class TestValidateLocalhostUrl:
         helper can't build a usable POST target from them."""
         result = _validate_localhost_url(url)
         assert result is not None
-        assert isinstance(result, list)
+        assert isinstance(result, dict)
+        assert "error" in result
+        assert "code" in result
 
 
 class TestSpawnScanLogFileFailure:
@@ -470,7 +474,7 @@ class TestSpawnScanLogFileFailure:
                 return real_open(path, *a, **kw)
 
             with (
-                patch("filigree.mcp_tools.scanners.subprocess.Popen", return_value=_FakeProc(100)),
+                patch("filigree.scanner_runtime.subprocess.Popen", return_value=_FakeProc(100)),
                 patch("builtins.open", side_effect=mock_open_fail),
             ):
                 data = _parse(
@@ -495,7 +499,7 @@ class TestBatchScanDbTrackingFailure:
         _write_scanner_toml(mcp_db)
         try:
             with (
-                patch("filigree.mcp_tools.scanners.subprocess.Popen") as popen_mock,
+                patch("filigree.scanner_runtime.subprocess.Popen") as popen_mock,
                 patch.object(mcp_db, "reserve_scan_run", side_effect=sqlite3.OperationalError("DB broken")),
             ):
                 data = _parse(
@@ -520,7 +524,7 @@ class TestBatchScanDbTrackingFailure:
         proc = MagicMock(pid=100, poll=MagicMock(return_value=None))
         try:
             with (
-                patch("filigree.mcp_tools.scanners.subprocess.Popen", return_value=proc),
+                patch("filigree.scanner_runtime.subprocess.Popen", return_value=proc),
                 patch.object(mcp_db, "set_scan_run_spawn_info", side_effect=sqlite3.OperationalError("DB broken")),
             ):
                 data = _parse(
@@ -544,7 +548,7 @@ class TestTriggerScanCooldownReservation:
         files = _make_target_files(mcp_db, ["reserve_target.py"])
         _write_scanner_toml(mcp_db)
         try:
-            with patch("filigree.mcp_tools.scanners.subprocess.Popen", return_value=_FakeProc(100)):
+            with patch("filigree.scanner_runtime.subprocess.Popen", return_value=_FakeProc(100)):
                 first = _parse(
                     await call_tool(
                         "trigger_scan",
@@ -572,7 +576,7 @@ class TestTriggerScanCooldownReservation:
         _write_scanner_toml(mcp_db)
         try:
             with patch(
-                "filigree.mcp_tools.scanners.subprocess.Popen",
+                "filigree.scanner_runtime.subprocess.Popen",
                 side_effect=OSError("can't fork"),
             ):
                 data = _parse(

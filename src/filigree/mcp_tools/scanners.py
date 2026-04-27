@@ -4,12 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import json
 import logging
 import secrets
 import shlex
 import sqlite3
-import subprocess
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -18,6 +16,7 @@ from mcp.types import TextContent, Tool
 
 from filigree.core import VALID_SEVERITIES
 from filigree.mcp_tools.common import _list_response, _parse_args, _text, _validate_int_range
+from filigree.scanner_runtime import ScannerSpawnError, _spawn_scan
 from filigree.scanners import list_scanners as _list_scanners
 from filigree.scanners import load_scanner, validate_scanner_command
 from filigree.types.api import ErrorCode, ErrorResponse
@@ -184,8 +183,8 @@ def register(
 # ---------------------------------------------------------------------------
 
 
-def _validate_localhost_url(api_url: str) -> list[TextContent] | None:
-    """Return an error response if *api_url* is not a usable localhost HTTP URL, else ``None``.
+def _validate_localhost_url(api_url: str) -> ErrorResponse | None:
+    """Return an ErrorResponse if *api_url* is not a usable localhost HTTP URL, else ``None``.
 
     Rejects empty strings, URLs without an ``http``/``https`` scheme, and any
     hostname outside the fixed localhost set. Scanner helper code assembles
@@ -196,131 +195,47 @@ def _validate_localhost_url(api_url: str) -> list[TextContent] | None:
     from urllib.parse import urlparse
 
     if not isinstance(api_url, str) or not api_url.strip():
-        return _text(
-            ErrorResponse(
-                error="api_url is required and must be a non-empty http(s) URL pointing at localhost.",
-                code=ErrorCode.INVALID_API_URL,
-            )
+        return ErrorResponse(
+            error="api_url is required and must be a non-empty http(s) URL pointing at localhost.",
+            code=ErrorCode.INVALID_API_URL,
         )
 
     try:
         parsed = urlparse(api_url)
     except ValueError as exc:
-        return _text(
-            ErrorResponse(
-                error=f"api_url could not be parsed: {exc}",
-                code=ErrorCode.INVALID_API_URL,
-            )
+        return ErrorResponse(
+            error=f"api_url could not be parsed: {exc}",
+            code=ErrorCode.INVALID_API_URL,
         )
 
     scheme = (parsed.scheme or "").lower()
     if scheme not in _ALLOWED_URL_SCHEMES:
-        return _text(
-            ErrorResponse(
-                error=f"api_url scheme {scheme!r} not allowed; expected one of {sorted(_ALLOWED_URL_SCHEMES)}.",
-                code=ErrorCode.INVALID_API_URL,
-            )
+        return ErrorResponse(
+            error=f"api_url scheme {scheme!r} not allowed; expected one of {sorted(_ALLOWED_URL_SCHEMES)}.",
+            code=ErrorCode.INVALID_API_URL,
         )
 
     host = (parsed.hostname or "").lower()
     if host not in _LOCALHOST_HOSTS:
-        return _text(
-            ErrorResponse(
-                error=f"Non-localhost api_url not allowed: {host!r}. Scanner results would be sent to an external host.",
-                code=ErrorCode.INVALID_API_URL,
-            )
+        return ErrorResponse(
+            error=f"Non-localhost api_url not allowed: {host!r}. Scanner results would be sent to an external host.",
+            code=ErrorCode.INVALID_API_URL,
         )
     return None
 
 
-def _load_scanner_or_error(filigree_dir: Path, scanner_name: str) -> tuple[Any | None, list[TextContent] | None]:
-    """Load scanner config or return an error response."""
+def _load_scanner_or_error(filigree_dir: Path, scanner_name: str) -> tuple[Any | None, ErrorResponse | None]:
+    """Load scanner config or return an ErrorResponse."""
     scanners_dir = filigree_dir / "scanners"
     cfg = load_scanner(scanners_dir, scanner_name)
     if cfg is None:
         available = [s.name for s in _list_scanners(scanners_dir)]
-        return None, _text(
-            ErrorResponse(
-                error=f"Scanner {scanner_name!r} not found",
-                code=ErrorCode.NOT_FOUND,
-                details={"available_scanners": available},
-            )
+        return None, ErrorResponse(
+            error=f"Scanner {scanner_name!r} not found",
+            code=ErrorCode.NOT_FOUND,
+            details={"available_scanners": available},
         )
     return cfg, None
-
-
-def _spawn_scan(
-    *,
-    cfg: Any,
-    canonical_path: str,
-    api_url: str,
-    project_root: Path,
-    scan_run_id: str,
-    filigree_dir: Path,
-    log_suffix: str = "",
-) -> dict[str, Any] | list[TextContent]:
-    """Build command, validate, and spawn scanner process.
-
-    Returns ``{'proc': Popen, 'scan_log_path': Path, 'cmd': list[str],
-    'log_warning'?: str}`` on success, or a ``list[TextContent]`` error
-    response.
-
-    *log_suffix* disambiguates log files when multiple processes share
-    a scan_run_id (batch mode).
-    """
-    try:
-        cmd = cfg.build_command(
-            file_path=canonical_path,
-            api_url=api_url,
-            project_root=str(project_root),
-            scan_run_id=scan_run_id,
-        )
-    except ValueError as e:
-        return _text(ErrorResponse(error=str(e), code=ErrorCode.VALIDATION))
-
-    cmd_err = validate_scanner_command(cmd, project_root=project_root)
-    if cmd_err is not None:
-        return _text(ErrorResponse(error=cmd_err, code=ErrorCode.NOT_FOUND))
-
-    scan_log_dir = filigree_dir / "scans"
-    scan_log_dir.mkdir(parents=True, exist_ok=True)
-    log_name = f"{scan_run_id}{log_suffix}.log"
-    scan_log_path = scan_log_dir / log_name
-    log_warning: str | None = None
-    try:
-        scan_log_fd = open(scan_log_path, "w")  # noqa: SIM115
-    except OSError as log_err:
-        scan_log_fd = None
-        log_warning = f"Scan log could not be created at {scan_log_path}: {log_err}. Scanner stderr will be discarded."
-        _logger.warning("Cannot open scan log %s: %s", scan_log_path, log_err)
-    try:
-        proc = subprocess.Popen(
-            cmd,
-            cwd=str(project_root),
-            stdout=subprocess.DEVNULL,
-            stderr=scan_log_fd if scan_log_fd is not None else subprocess.DEVNULL,
-            start_new_session=True,
-        )
-    except (OSError, ValueError, TypeError) as e:
-        return _text(
-            ErrorResponse(
-                error=f"Failed to spawn scanner process: {e}",
-                code=ErrorCode.IO,
-                details={"scanner": cfg.name},
-            )
-        )
-    finally:
-        if scan_log_fd is not None:
-            scan_log_fd.close()
-
-    result: dict[str, Any] = {
-        "proc": proc,
-        "scan_log_path": scan_log_path,
-        "cmd": cmd,
-    }
-    if log_warning:
-        result["log_warning"] = log_warning
-    return result
 
 
 # ---------------------------------------------------------------------------
@@ -422,7 +337,7 @@ async def _handle_trigger_scan(arguments: dict[str, Any]) -> list[TextContent]:
 
     url_err = _validate_localhost_url(api_url)
     if url_err is not None:
-        return url_err
+        return _text(url_err)
 
     try:
         target = _safe_path(file_path)
@@ -431,7 +346,7 @@ async def _handle_trigger_scan(arguments: dict[str, Any]) -> list[TextContent]:
 
     cfg, err = _load_scanner_or_error(filigree_dir, scanner_name)
     if err is not None:
-        return err
+        return _text(err)
     assert cfg is not None  # noqa: S101  -- narrowing after error-check
 
     if not target.is_file():
@@ -487,22 +402,22 @@ async def _handle_trigger_scan(arguments: dict[str, Any]) -> list[TextContent]:
         )
     assert created is not None  # noqa: S101  -- exactly one of (created, blocking) is set
 
-    spawn_result = _spawn_scan(
-        cfg=cfg,
-        canonical_path=canonical_path,
-        api_url=api_url,
-        project_root=project_root,
-        scan_run_id=scan_run_id,
-        filigree_dir=filigree_dir,
-    )
-    if isinstance(spawn_result, list):
+    try:
+        spawn_result = _spawn_scan(
+            cfg=cfg,
+            canonical_path=canonical_path,
+            api_url=api_url,
+            project_root=project_root,
+            scan_run_id=scan_run_id,
+            filigree_dir=filigree_dir,
+        )
+    except ScannerSpawnError as exc:
         with contextlib.suppress(sqlite3.Error, KeyError, ValueError):
-            tracker.update_scan_run_status(
-                scan_run_id,
-                "failed",
-                error_message="Scanner process failed to spawn",
-            )
-        return spawn_result
+            tracker.update_scan_run_status(scan_run_id, "failed", error_message="Scanner process failed to spawn")
+        err_resp = ErrorResponse(error=str(exc), code=exc.code)
+        if exc.details:
+            err_resp["details"] = exc.details
+        return _text(err_resp)
 
     proc = spawn_result["proc"]
     scan_log_path = spawn_result["scan_log_path"]
@@ -618,11 +533,11 @@ async def _handle_trigger_scan_batch(arguments: dict[str, Any]) -> list[TextCont
 
     url_err = _validate_localhost_url(api_url)
     if url_err is not None:
-        return url_err
+        return _text(url_err)
 
     cfg, err = _load_scanner_or_error(filigree_dir, scanner_name)
     if err is not None:
-        return err
+        return _text(err)
     assert cfg is not None  # noqa: S101  -- narrowing after error-check
 
     # Validate and resolve all paths. Dedupe repeated file_paths in the
@@ -715,22 +630,18 @@ async def _handle_trigger_scan_batch(arguments: dict[str, Any]) -> list[TextCont
     for entry in reserved:
         cp = entry["canonical_path"]
         child_run_id = entry["scan_run_id"]
-        spawn_result = _spawn_scan(
-            cfg=cfg,
-            canonical_path=cp,
-            api_url=api_url,
-            project_root=project_root,
-            scan_run_id=child_run_id,
-            filigree_dir=filigree_dir,
-            log_suffix=f"-{entry['index']}",
-        )
-        if isinstance(spawn_result, list):
-            reason = "spawn_failed"
-            try:
-                detail = json.loads(spawn_result[0].text)
-                reason = detail.get("error", reason)
-            except (ValueError, IndexError, AttributeError, TypeError):
-                pass
+        try:
+            spawn_result = _spawn_scan(
+                cfg=cfg,
+                canonical_path=cp,
+                api_url=api_url,
+                project_root=project_root,
+                scan_run_id=child_run_id,
+                filigree_dir=filigree_dir,
+                log_suffix=f"-{entry['index']}",
+            )
+        except ScannerSpawnError as exc:
+            reason = str(exc)
             spawn_errors.append({"file_path": cp, "reason": reason})
             with contextlib.suppress(sqlite3.Error, KeyError, ValueError):
                 tracker.update_scan_run_status(
@@ -899,7 +810,7 @@ async def _handle_preview_scan(arguments: dict[str, Any]) -> list[TextContent]:
 
     cfg, err = _load_scanner_or_error(filigree_dir, scanner_name)
     if err is not None:
-        return err
+        return _text(err)
     assert cfg is not None  # noqa: S101  -- narrowing after error-check
 
     canonical_path = str(target.relative_to(filigree_dir.resolve().parent))

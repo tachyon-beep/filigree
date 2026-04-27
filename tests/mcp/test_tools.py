@@ -1849,7 +1849,7 @@ class TestScannerTools:
         try:
             target.write_text("x = 1\n")
             self._write_scanner_toml(mcp_db)
-            with patch("filigree.mcp_tools.scanners.subprocess.Popen", return_value=_Proc()) as popen:
+            with patch("filigree.scanner_runtime.subprocess.Popen", return_value=_Proc()) as popen:
                 result = _parse(
                     await call_tool(
                         "trigger_scan",
@@ -2078,7 +2078,7 @@ class TestScannerTools:
                 return original_open(path, *args, **kwargs)
 
             with (
-                patch("filigree.mcp_tools.scanners.subprocess.Popen", return_value=_Proc()),
+                patch("filigree.scanner_runtime.subprocess.Popen", return_value=_Proc()),
                 patch("builtins.open", side_effect=_spy_open),
             ):
                 result = _parse(
@@ -2388,7 +2388,7 @@ class TestTriggerScanCooldownDB:
         (scanners_dir / "spawn-fail.toml").write_text('[scanner]\nname = "spawn-fail"\ncommand = "echo"\nargs = ["{file_path}"]\n')
         try:
             target.write_text("y = 1\n")
-            with patch("filigree.mcp_tools.scanners.subprocess.Popen", side_effect=OSError("mock spawn fail")):
+            with patch("filigree.scanner_runtime.subprocess.Popen", side_effect=OSError("mock spawn fail")):
                 result = _parse(
                     await call_tool(
                         "trigger_scan",
