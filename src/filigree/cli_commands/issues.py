@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import json as json_mod
+import logging
 import sys
 from typing import Any
 
 import click
 
 from filigree.cli_common import get_db, refresh_summary
-from filigree.types.api import ErrorCode, classify_value_error
+from filigree.types.api import AmbiguousTransitionError, ErrorCode, InvalidTransitionError, classify_value_error
+
+logger = logging.getLogger(__name__)
 
 
 def _range_check_priority(priority: int, *, as_json: bool) -> None:
@@ -563,6 +566,142 @@ def undo(ctx: click.Context, issue_id: str, as_json: bool) -> None:
         refresh_summary(db)
 
 
+@click.command("start-work")
+@click.argument("issue_id")
+@click.option("--assignee", required=True, help="Who is starting work (agent name)")
+@click.option("--target-status", default=None, help="Override wip status (defaults to type's canonical wip)")
+@click.option("--actor", default=None, help="Actor for audit trail (defaults to --assignee)")
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+def start_work(
+    issue_id: str,
+    assignee: str,
+    target_status: str | None,
+    actor: str | None,
+    as_json: bool,
+) -> None:
+    """Atomically claim an issue and transition it to its wip status."""
+    # Mirror MCP: blank assignee is bad user input, not a race.
+    if not assignee.strip():
+        if as_json:
+            click.echo(json_mod.dumps({"error": "assignee must be a non-empty string", "code": ErrorCode.VALIDATION}))
+        else:
+            click.echo("Error: assignee must be a non-empty string", err=True)
+        sys.exit(1)
+    # Mirror MCP: actor defaults to assignee when not specified.
+    resolved_actor = actor if actor is not None else assignee
+    with get_db() as db:
+        try:
+            issue = db.start_work(
+                issue_id,
+                assignee=assignee,
+                target_status=target_status,
+                actor=resolved_actor,
+            )
+        except KeyError:
+            if as_json:
+                click.echo(json_mod.dumps({"error": f"Issue not found: {issue_id}", "code": ErrorCode.NOT_FOUND}))
+            else:
+                click.echo(f"Error: Issue not found: {issue_id}", err=True)
+            sys.exit(1)
+        except (AmbiguousTransitionError, InvalidTransitionError) as e:
+            if as_json:
+                click.echo(json_mod.dumps({"error": str(e), "code": ErrorCode.INVALID_TRANSITION}))
+            else:
+                click.echo(f"Error: {e}", err=True)
+            sys.exit(1)
+        except ValueError as e:
+            msg = str(e)
+            code = classify_value_error(msg)
+            if as_json:
+                if code == ErrorCode.INVALID_TRANSITION:
+                    # Build enriched transition error (best-effort).
+                    payload: dict[str, Any] = {"error": msg, "code": ErrorCode.INVALID_TRANSITION}
+                    try:
+                        transitions = db.get_valid_transitions(issue_id)
+                        payload["valid_transitions"] = [{"to": t.to, "category": t.category, "ready": t.ready} for t in transitions]
+                        payload["hint"] = "Use get_valid_transitions to see allowed state changes"
+                    except Exception:
+                        # Enrichment is best-effort — must never mask the original error.
+                        logger.debug("Could not resolve transitions for %s", issue_id, exc_info=True)
+                    click.echo(json_mod.dumps(payload))
+                else:
+                    click.echo(json_mod.dumps({"error": msg, "code": ErrorCode.CONFLICT}))
+            else:
+                click.echo(f"Error: {e}", err=True)
+            sys.exit(1)
+
+        if as_json:
+            click.echo(json_mod.dumps(issue.to_dict(), indent=2, default=str))
+        else:
+            click.echo(f"Started work on {issue.id}: status={issue.status}, assignee={issue.assignee}")
+        refresh_summary(db)
+
+
+@click.command("start-next-work")
+@click.option("--assignee", required=True, help="Who is starting work (agent name)")
+@click.option("--type", "type_filter", default=None, help="Filter by issue type")
+@click.option("--priority-min", default=None, type=click.IntRange(0, 4), help="Minimum priority (0=critical)")
+@click.option("--priority-max", default=None, type=click.IntRange(0, 4), help="Maximum priority")
+@click.option("--target-status", default=None, help="Override wip status (defaults to type's canonical wip)")
+@click.option("--actor", default=None, help="Actor for audit trail (defaults to --assignee)")
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+def start_next_work(
+    assignee: str,
+    type_filter: str | None,
+    priority_min: int | None,
+    priority_max: int | None,
+    target_status: str | None,
+    actor: str | None,
+    as_json: bool,
+) -> None:
+    """Claim and start the highest-priority ready issue matching filters."""
+    # Mirror MCP: blank assignee is bad user input, not a race.
+    if not assignee.strip():
+        if as_json:
+            click.echo(json_mod.dumps({"error": "assignee must be a non-empty string", "code": ErrorCode.VALIDATION}))
+        else:
+            click.echo("Error: assignee must be a non-empty string", err=True)
+        sys.exit(1)
+    # Mirror MCP: actor defaults to assignee when not specified.
+    resolved_actor = actor if actor is not None else assignee
+    with get_db() as db:
+        try:
+            claimed = db.start_next_work(
+                assignee=assignee,
+                type_filter=type_filter,
+                priority_min=priority_min,
+                priority_max=priority_max,
+                target_status=target_status,
+                actor=resolved_actor,
+            )
+        except (AmbiguousTransitionError, InvalidTransitionError) as e:
+            if as_json:
+                click.echo(json_mod.dumps({"error": str(e), "code": ErrorCode.INVALID_TRANSITION}))
+            else:
+                click.echo(f"Error: {e}", err=True)
+            sys.exit(1)
+        except ValueError as e:
+            if as_json:
+                click.echo(json_mod.dumps({"error": str(e), "code": ErrorCode.VALIDATION}))
+            else:
+                click.echo(f"Error: {e}", err=True)
+            sys.exit(1)
+
+        if claimed is None:
+            if as_json:
+                click.echo(json_mod.dumps({"status": "empty", "reason": "No ready issues matching filters"}, indent=2))
+            else:
+                click.echo("No ready issues matching filters")
+            # Empty is not an error — exit 0.
+            return
+
+        if as_json:
+            click.echo(json_mod.dumps(claimed.to_dict(), indent=2, default=str))
+        else:
+            click.echo(f"Started work on {claimed.id}: status={claimed.status}, assignee={claimed.assignee}")
+        refresh_summary(db)
+
+
 def register(cli: click.Group) -> None:
     """Register issue commands with the CLI group."""
     cli.add_command(create)
@@ -575,3 +714,5 @@ def register(cli: click.Group) -> None:
     cli.add_command(claim_next)
     cli.add_command(release)
     cli.add_command(undo)
+    cli.add_command(start_work)
+    cli.add_command(start_next_work)

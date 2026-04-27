@@ -1,0 +1,242 @@
+"""CLI tests for composed operations: start-work and start-next-work (Phase E4).
+
+These commands wrap FiligreeDB.start_work / start_next_work (D6) and must
+mirror the MCP handler shapes exactly.
+"""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+from click.testing import CliRunner
+
+from filigree.cli import cli
+from tests.cli.conftest import _extract_id
+
+
+class TestStartWorkCli:
+    def test_happy_path_json(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        """start-work --json returns a full IssueDict with status and assignee set."""
+        runner, _ = cli_in_project
+        r = runner.invoke(cli, ["create", "Work item"])
+        issue_id = _extract_id(r.output)
+
+        result = runner.invoke(cli, ["start-work", issue_id, "--assignee", "alice", "--json"])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        # Must return full IssueDict (has id, title, status, assignee, etc.)
+        assert data["id"] == issue_id
+        assert data["assignee"] == "alice"
+        # Default task type canonical wip status
+        assert data["status"] == "in_progress"
+        # Full IssueDict keys present
+        assert "title" in data
+        assert "type" in data
+        assert "priority" in data
+
+    def test_happy_path_with_target_status(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        """--target-status lets caller override the canonical wip status."""
+        runner, _ = cli_in_project
+        r = runner.invoke(cli, ["create", "Work item with target"])
+        issue_id = _extract_id(r.output)
+
+        result = runner.invoke(
+            cli,
+            ["start-work", issue_id, "--assignee", "bob", "--target-status", "in_progress", "--json"],
+        )
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["status"] == "in_progress"
+        assert data["assignee"] == "bob"
+
+    def test_plain_text_output(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        """Without --json, emits 'Started work on ...' message on stdout."""
+        runner, _ = cli_in_project
+        r = runner.invoke(cli, ["create", "Plain text work"])
+        issue_id = _extract_id(r.output)
+
+        result = runner.invoke(cli, ["start-work", issue_id, "--assignee", "carol"])
+        assert result.exit_code == 0
+        assert "Started work on" in result.output
+        assert issue_id in result.output
+        assert "status=" in result.output
+        assert "assignee=" in result.output
+
+    def test_unknown_issue_not_found_json(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        """Unknown issue_id emits NOT_FOUND envelope and exit 1."""
+        runner, _ = cli_in_project
+        result = runner.invoke(cli, ["start-work", "test-deadbeef00", "--assignee", "dan", "--json"])
+        assert result.exit_code == 1
+        data = json.loads(result.output)
+        assert data["code"] == "NOT_FOUND"
+        assert "not found" in data["error"].lower() or "deadbeef" in data["error"]
+
+    def test_unknown_issue_plain_text(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        """Unknown issue_id exits 1 with error on stderr (plain text)."""
+        runner, _ = cli_in_project
+        result = runner.invoke(cli, ["start-work", "test-deadbeef00", "--assignee", "dan"])
+        assert result.exit_code == 1
+
+    def test_invalid_transition_json(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        """An invalid target_status produces INVALID_TRANSITION envelope."""
+        runner, _ = cli_in_project
+        r = runner.invoke(cli, ["create", "Transition test"])
+        issue_id = _extract_id(r.output)
+
+        result = runner.invoke(
+            cli,
+            ["start-work", issue_id, "--assignee", "erin", "--target-status", "nonexistent_status", "--json"],
+        )
+        assert result.exit_code == 1
+        data = json.loads(result.output)
+        assert data["code"] == "INVALID_TRANSITION"
+        assert "error" in data
+
+    def test_actor_defaults_to_assignee(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        """When --actor is omitted, the audit-trail actor should be the assignee.
+
+        We verify by reading events after the command and checking that the
+        'claimed' event has actor == assignee.
+        """
+        runner, _ = cli_in_project
+        r = runner.invoke(cli, ["create", "Actor default test"])
+        issue_id = _extract_id(r.output)
+
+        # Run without --actor; the group-level default is "cli", but
+        # start-work must override this with the assignee.
+        result = runner.invoke(cli, ["start-work", issue_id, "--assignee", "frank", "--json"])
+        assert result.exit_code == 0
+
+        # Check the events for this issue via CLI.
+        events_result = runner.invoke(cli, ["events", issue_id, "--json"])
+        assert events_result.exit_code == 0
+        events_data = json.loads(events_result.output)
+        events = events_data.get("items", []) if isinstance(events_data, dict) else events_data
+        claimed_events = [e for e in events if e.get("event_type") == "claimed"]
+        assert claimed_events, f"No 'claimed' event found; all events: {events}"
+        assert claimed_events[0]["actor"] == "frank"
+
+    def test_blank_assignee_validation_json(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        """Blank assignee emits VALIDATION envelope (not a server error)."""
+        runner, _ = cli_in_project
+        r = runner.invoke(cli, ["create", "Blank assignee test"])
+        issue_id = _extract_id(r.output)
+
+        result = runner.invoke(cli, ["start-work", issue_id, "--assignee", "   ", "--json"])
+        assert result.exit_code == 1
+        data = json.loads(result.output)
+        assert data["code"] == "VALIDATION"
+
+
+class TestStartNextWorkCli:
+    def test_happy_path_claims_highest_priority(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        """start-next-work claims the highest-priority ready issue."""
+        runner, _ = cli_in_project
+
+        # Use --type task to avoid auto-seeded release issues (which have
+        # ambiguous wip statuses and would cause INVALID_TRANSITION).
+        runner.invoke(cli, ["create", "Low priority task", "-p", "4", "--type", "task"])
+        r_high = runner.invoke(cli, ["create", "High priority task", "-p", "0", "--type", "task"])
+        high_id = _extract_id(r_high.output)
+
+        result = runner.invoke(cli, ["start-next-work", "--assignee", "grace", "--type", "task", "--json"])
+        assert result.exit_code == 0, f"Expected exit 0, got {result.exit_code}: {result.output}"
+        data = json.loads(result.output)
+        assert data["assignee"] == "grace"
+        assert data["status"] == "in_progress"
+        assert data["id"] == high_id
+
+    def test_no_match_returns_empty_json(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        """When no issues match, emits empty envelope with exit 0."""
+        runner, _ = cli_in_project
+        # Create a task but filter for a nonexistent type
+        runner.invoke(cli, ["create", "A task", "--type", "task"])
+
+        result = runner.invoke(cli, ["start-next-work", "--assignee", "henry", "--type", "nonexistent_type", "--json"])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["status"] == "empty"
+        assert data["reason"] == "No ready issues matching filters"
+
+    def test_no_match_plain_text(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        """When no issues match, plain-text mode prints message to stdout and exits 0."""
+        runner, _ = cli_in_project
+        runner.invoke(cli, ["create", "A task", "--type", "task"])
+
+        result = runner.invoke(cli, ["start-next-work", "--assignee", "ivan", "--type", "nonexistent_type"])
+        assert result.exit_code == 0
+        assert "No ready issues matching filters" in result.output
+
+    def test_priority_max_filter(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        """--priority-max skips issues with priority > max (numerically).
+
+        Uses --type task to avoid auto-seeded release issues (ambiguous wip).
+        """
+        runner, _ = cli_in_project
+        runner.invoke(cli, ["create", "Low-pri (P4)", "-p", "4", "--type", "task"])
+        r_med = runner.invoke(cli, ["create", "Med-pri (P2)", "-p", "2", "--type", "task"])
+        med_id = _extract_id(r_med.output)
+
+        # --priority-max 2 means P0/P1/P2 are eligible; P4 is not.
+        result = runner.invoke(
+            cli,
+            [
+                "start-next-work",
+                "--assignee",
+                "judy",
+                "--type",
+                "task",
+                "--priority-max",
+                "2",
+                "--target-status",
+                "in_progress",
+                "--json",
+            ],
+        )
+        assert result.exit_code == 0, f"Expected exit 0, got {result.exit_code}: {result.output}"
+        data = json.loads(result.output)
+        # Must have claimed med_id (P2), not low_id (P4)
+        assert data["id"] == med_id
+        assert data["assignee"] == "judy"
+
+    def test_type_filter(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        """--type filters candidates to matching issue type only.
+
+        Uses 'task' (unique wip) with --target-status to avoid ambiguity.
+        Creates two tasks and verifies the claimed issue has type='task'.
+        """
+        runner, _ = cli_in_project
+        r_task = runner.invoke(cli, ["create", "A task to claim", "--type", "task", "-p", "1"])
+        task_id = _extract_id(r_task.output)
+        # Create another task at lower priority — only one should be claimed.
+        runner.invoke(cli, ["create", "Another task", "--type", "task", "-p", "3"])
+
+        result = runner.invoke(
+            cli,
+            ["start-next-work", "--assignee", "kate", "--type", "task", "--target-status", "in_progress", "--json"],
+        )
+        assert result.exit_code == 0, f"Expected exit 0, got {result.exit_code}: {result.output}"
+        data = json.loads(result.output)
+        assert data["type"] == "task"
+        assert data["assignee"] == "kate"
+        assert data["id"] == task_id
+
+    def test_happy_path_plain_text(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        """Plain-text success prints 'Started work on ...' line."""
+        runner, _ = cli_in_project
+        runner.invoke(cli, ["create", "Plain text next work", "-p", "0", "--type", "task"])
+
+        result = runner.invoke(cli, ["start-next-work", "--assignee", "lena", "--type", "task", "--target-status", "in_progress"])
+        assert result.exit_code == 0
+        assert "Started work on" in result.output
+        assert "status=" in result.output
+        assert "assignee=" in result.output
+
+    def test_blank_assignee_validation_json(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        """Blank assignee emits VALIDATION envelope (parity with MCP)."""
+        runner, _ = cli_in_project
+        result = runner.invoke(cli, ["start-next-work", "--assignee", "   ", "--json"])
+        assert result.exit_code == 1
+        data = json.loads(result.output)
+        assert data["code"] == "VALIDATION"
