@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json as json_mod
+import sqlite3
 import sys
 from typing import Any
 
@@ -79,7 +80,7 @@ def list_observations_cmd(
 ) -> None:
     """List pending observations with optional filtering."""
     with get_db() as db:
-        effective_limit = limit if not no_limit else 10_000
+        effective_limit = limit if not no_limit else 10_000_000
         observations = db.list_observations(
             limit=effective_limit + 1,
             offset=offset,
@@ -218,7 +219,7 @@ def batch_dismiss_observations_cmd(
                 actor=ctx.obj["actor"],
                 reason=reason,
             )
-        except Exception as e:
+        except sqlite3.Error as e:
             if as_json:
                 click.echo(json_mod.dumps({"error": f"Database error: {e}", "code": ErrorCode.IO}))
             else:
