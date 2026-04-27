@@ -11,7 +11,7 @@ import json as json_mod
 import click
 
 from filigree import __version__
-from filigree.cli_commands import admin, issues, meta, planning, server, workflow
+from filigree.cli_commands import admin, issues, meta, observations, planning, server, workflow
 from filigree.types.api import ErrorCode
 from filigree.validation import sanitize_actor
 
@@ -58,7 +58,7 @@ def cli(ctx: click.Context, actor: str) -> None:
 
 
 # Register domain command modules
-for _mod in (issues, planning, meta, workflow, admin, server):
+for _mod in (issues, planning, meta, workflow, admin, server, observations):
     _mod.register(cli)
 
 

@@ -1,0 +1,483 @@
+"""CLI tests for observation commands: observe, list-observations, dismiss-observation,
+promote-observation, batch-dismiss-observations.
+
+MCP shape verification:
+- observe: {"id", "summary", "detail", "file_id", "file_path", "line",
+            "source_issue_id", "priority", "actor", "created_at", "expires_at"}
+- list-observations: ListResponse — {"items": [...], "has_more": bool} + "next_offset" when has_more
+- dismiss-observation: {"status": "dismissed", "observation_id": <str>}
+- promote-observation: {"issue": <IssueDict>} + optional "warnings"
+- batch-dismiss-observations: BatchResponse[str] — {"succeeded": [...], "failed": [...]}
+"""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+from click.testing import CliRunner
+
+from filigree.cli import cli
+from tests.cli.conftest import SeededProject
+
+# ---------------------------------------------------------------------------
+# Canonical MCP key-sets (verified against mcp_tools/observations.py handlers)
+# ---------------------------------------------------------------------------
+
+_OBSERVE_KEYS = frozenset(
+    {
+        "id",
+        "summary",
+        "detail",
+        "file_id",
+        "file_path",
+        "line",
+        "source_issue_id",
+        "priority",
+        "actor",
+        "created_at",
+        "expires_at",
+    }
+)
+
+_LIST_ENVELOPE_KEYS_NO_MORE = frozenset({"items", "has_more"})
+_LIST_ENVELOPE_KEYS_HAS_MORE = frozenset({"items", "has_more", "next_offset"})
+
+_DISMISS_KEYS = frozenset({"status", "observation_id"})
+
+_BATCH_DISMISS_KEYS = frozenset({"succeeded", "failed"})
+
+_PROMOTE_KEYS_MIN = frozenset({"issue"})  # warnings is optional
+
+
+# ---------------------------------------------------------------------------
+# TestObserveCommand
+# ---------------------------------------------------------------------------
+
+
+class TestObserveCommand:
+    def test_observe_happy_path_json(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        runner, _ = cli_in_project
+        result = runner.invoke(cli, ["observe", "spotted a code smell", "--json"])
+        assert result.exit_code == 0, result.output
+        data = json.loads(result.output)
+        # Exact MCP key-set
+        assert set(data.keys()) == _OBSERVE_KEYS, f"Shape mismatch: {set(data.keys()) ^ _OBSERVE_KEYS}"
+        assert data["summary"] == "spotted a code smell"
+        assert data["priority"] == 2  # CLI default
+
+    def test_observe_with_all_options(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        runner, _ = cli_in_project
+        result = runner.invoke(
+            cli,
+            [
+                "observe",
+                "suspicious loop",
+                "--detail",
+                "may be O(n^2)",
+                "--file-path",
+                "src/foo.py",
+                "--line",
+                "42",
+                "--source-issue-id",
+                "test-abc",
+                "--priority",
+                "1",
+                "--json",
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        data = json.loads(result.output)
+        assert data["summary"] == "suspicious loop"
+        assert data["detail"] == "may be O(n^2)"
+        assert data["line"] == 42
+        assert data["priority"] == 1
+        assert data["source_issue_id"] == "test-abc"
+
+    def test_observe_plain_text_output(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        runner, _ = cli_in_project
+        result = runner.invoke(cli, ["observe", "plain text test"])
+        assert result.exit_code == 0, result.output
+        assert "Observed" in result.output
+
+    def test_observe_empty_summary_exits_1(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        """Empty summary should fail — db raises ValueError."""
+        runner, _ = cli_in_project
+        result = runner.invoke(cli, ["observe", "   ", "--json"])
+        assert result.exit_code == 1
+        data = json.loads(result.output)
+        assert "error" in data
+        assert data["code"] == "VALIDATION"
+
+    def test_observe_required_arg_missing(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        """Omitting the required summary positional arg exits non-zero."""
+        runner, _ = cli_in_project
+        result = runner.invoke(cli, ["observe"])
+        assert result.exit_code != 0
+
+
+# ---------------------------------------------------------------------------
+# TestListObservationsCommand
+# ---------------------------------------------------------------------------
+
+
+class TestListObservationsCommand:
+    def test_list_empty_returns_envelope(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        runner, _ = cli_in_project
+        result = runner.invoke(cli, ["list-observations", "--json"])
+        assert result.exit_code == 0, result.output
+        data = json.loads(result.output)
+        assert data["items"] == []
+        assert data["has_more"] is False
+        # next_offset must be absent when has_more is False
+        assert "next_offset" not in data
+
+    def test_list_populated_has_correct_item_shape(self, initialized_project_with_observation: SeededProject) -> None:
+        """Items must have the exact MCP observe-dict key-set."""
+        import os
+
+        runner = CliRunner()
+        original = os.getcwd()
+        os.chdir(str(initialized_project_with_observation.path))
+        try:
+            result = runner.invoke(cli, ["list-observations", "--json"])
+            assert result.exit_code == 0, result.output
+            data = json.loads(result.output)
+            assert len(data["items"]) == 1
+            item = data["items"][0]
+            # Every key the MCP emits must be present; no extra keys allowed.
+            assert set(item.keys()) == _OBSERVE_KEYS, f"Item key mismatch: {set(item.keys()) ^ _OBSERVE_KEYS}"
+        finally:
+            os.chdir(original)
+
+    def test_list_envelope_keys_no_more(self, initialized_project_with_observation: SeededProject) -> None:
+        """When has_more is False, envelope must have exactly {items, has_more}."""
+        import os
+
+        runner = CliRunner()
+        original = os.getcwd()
+        os.chdir(str(initialized_project_with_observation.path))
+        try:
+            result = runner.invoke(cli, ["list-observations", "--json"])
+            assert result.exit_code == 0
+            data = json.loads(result.output)
+            assert set(data.keys()) == _LIST_ENVELOPE_KEYS_NO_MORE
+        finally:
+            os.chdir(original)
+
+    def test_list_pagination_boundary_overfetch(self, initialized_project_with_many_obs: SeededProject) -> None:
+        """With limit=2 and 3 obs seeded, has_more=True and next_offset is present."""
+        import os
+
+        runner = CliRunner()
+        original = os.getcwd()
+        os.chdir(str(initialized_project_with_many_obs.path))
+        try:
+            result = runner.invoke(cli, ["list-observations", "--limit", "2", "--json"])
+            assert result.exit_code == 0, result.output
+            data = json.loads(result.output)
+            assert data["has_more"] is True
+            assert len(data["items"]) == 2
+            assert "next_offset" in data
+            assert data["next_offset"] == 2
+            assert set(data.keys()) == _LIST_ENVELOPE_KEYS_HAS_MORE
+        finally:
+            os.chdir(original)
+
+    def test_list_pagination_second_page(self, initialized_project_with_many_obs: SeededProject) -> None:
+        """Second page with offset=2, limit=2 against 3 obs returns last 1, has_more=False."""
+        import os
+
+        runner = CliRunner()
+        original = os.getcwd()
+        os.chdir(str(initialized_project_with_many_obs.path))
+        try:
+            result = runner.invoke(cli, ["list-observations", "--limit", "2", "--offset", "2", "--json"])
+            assert result.exit_code == 0
+            data = json.loads(result.output)
+            assert len(data["items"]) == 1
+            assert data["has_more"] is False
+            assert "next_offset" not in data
+        finally:
+            os.chdir(original)
+
+    def test_list_plain_text_empty(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        runner, _ = cli_in_project
+        result = runner.invoke(cli, ["list-observations"])
+        assert result.exit_code == 0
+        assert "No observations" in result.output
+
+    def test_list_plain_text_populated(self, initialized_project_with_observation: SeededProject) -> None:
+        import os
+
+        runner = CliRunner()
+        original = os.getcwd()
+        os.chdir(str(initialized_project_with_observation.path))
+        try:
+            result = runner.invoke(cli, ["list-observations"])
+            assert result.exit_code == 0
+            assert "note" in result.output  # the seed obs summary is "note"
+        finally:
+            os.chdir(original)
+
+
+# ---------------------------------------------------------------------------
+# TestDismissObservationCommand
+# ---------------------------------------------------------------------------
+
+
+class TestDismissObservationCommand:
+    def test_dismiss_happy_path_json(self, initialized_project_with_observation: SeededProject) -> None:
+        import os
+
+        runner = CliRunner()
+        original = os.getcwd()
+        os.chdir(str(initialized_project_with_observation.path))
+        try:
+            obs_id = initialized_project_with_observation.obs_id
+            result = runner.invoke(cli, ["dismiss-observation", obs_id, "--json"])
+            assert result.exit_code == 0, result.output
+            data = json.loads(result.output)
+            # Exact MCP shape
+            assert set(data.keys()) == _DISMISS_KEYS, f"Shape mismatch: {set(data.keys()) ^ _DISMISS_KEYS}"
+            assert data["status"] == "dismissed"
+            assert data["observation_id"] == obs_id
+        finally:
+            os.chdir(original)
+
+    def test_dismiss_plain_text(self, initialized_project_with_observation: SeededProject) -> None:
+        import os
+
+        runner = CliRunner()
+        original = os.getcwd()
+        os.chdir(str(initialized_project_with_observation.path))
+        try:
+            obs_id = initialized_project_with_observation.obs_id
+            result = runner.invoke(cli, ["dismiss-observation", obs_id])
+            assert result.exit_code == 0
+            assert "Dismissed" in result.output
+        finally:
+            os.chdir(original)
+
+    def test_dismiss_not_found_json_returns_error_envelope(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        runner, _ = cli_in_project
+        result = runner.invoke(cli, ["dismiss-observation", "obs-nonexistent", "--json"])
+        assert result.exit_code == 1
+        data = json.loads(result.output)
+        assert "error" in data
+        assert data["code"] == "NOT_FOUND"
+
+    def test_dismiss_not_found_plain_text_to_stderr(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        runner, _ = cli_in_project
+        result = runner.invoke(cli, ["dismiss-observation", "obs-nonexistent"])
+        assert result.exit_code == 1
+
+    def test_dismiss_with_reason(self, initialized_project_with_observation: SeededProject) -> None:
+        import os
+
+        runner = CliRunner()
+        original = os.getcwd()
+        os.chdir(str(initialized_project_with_observation.path))
+        try:
+            obs_id = initialized_project_with_observation.obs_id
+            result = runner.invoke(cli, ["dismiss-observation", obs_id, "--reason", "false positive", "--json"])
+            assert result.exit_code == 0
+            data = json.loads(result.output)
+            assert data["status"] == "dismissed"
+        finally:
+            os.chdir(original)
+
+
+# ---------------------------------------------------------------------------
+# TestPromoteObservationCommand
+# ---------------------------------------------------------------------------
+
+
+class TestPromoteObservationCommand:
+    def test_promote_happy_path_json(self, initialized_project_with_observation: SeededProject) -> None:
+        import os
+
+        runner = CliRunner()
+        original = os.getcwd()
+        os.chdir(str(initialized_project_with_observation.path))
+        try:
+            obs_id = initialized_project_with_observation.obs_id
+            result = runner.invoke(cli, ["promote-observation", obs_id, "--json"])
+            assert result.exit_code == 0, result.output
+            data = json.loads(result.output)
+            # Mirror MCP: {"issue": <IssueDict>} + optional "warnings"
+            assert "issue" in data
+            issue = data["issue"]
+            # Issue dict must have the core IssueDict keys
+            assert "id" in issue
+            assert "title" in issue
+            assert "status" in issue
+            assert "priority" in issue
+            assert "type" in issue
+        finally:
+            os.chdir(original)
+
+    def test_promote_returns_issue_dict_not_issue_object(self, initialized_project_with_observation: SeededProject) -> None:
+        """Regression guard: issue must be a serialized dict, not an Issue object repr."""
+        import os
+
+        runner = CliRunner()
+        original = os.getcwd()
+        os.chdir(str(initialized_project_with_observation.path))
+        try:
+            obs_id = initialized_project_with_observation.obs_id
+            result = runner.invoke(cli, ["promote-observation", obs_id, "--json"])
+            assert result.exit_code == 0
+            # Must be parseable JSON — confirms it's a dict, not repr(object)
+            data = json.loads(result.output)
+            assert isinstance(data["issue"], dict)
+        finally:
+            os.chdir(original)
+
+    def test_promote_not_found_json_error_envelope(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        runner, _ = cli_in_project
+        result = runner.invoke(cli, ["promote-observation", "obs-nonexistent", "--json"])
+        assert result.exit_code == 1
+        data = json.loads(result.output)
+        assert "error" in data
+        assert data["code"] == "NOT_FOUND"
+
+    def test_promote_with_type_and_priority(self, initialized_project_with_observation: SeededProject) -> None:
+        import os
+
+        runner = CliRunner()
+        original = os.getcwd()
+        os.chdir(str(initialized_project_with_observation.path))
+        try:
+            obs_id = initialized_project_with_observation.obs_id
+            result = runner.invoke(
+                cli,
+                ["promote-observation", obs_id, "--type", "bug", "--priority", "1", "--json"],
+            )
+            assert result.exit_code == 0, result.output
+            data = json.loads(result.output)
+            assert data["issue"]["type"] == "bug"
+            assert data["issue"]["priority"] == 1
+        finally:
+            os.chdir(original)
+
+    def test_promote_plain_text(self, initialized_project_with_observation: SeededProject) -> None:
+        import os
+
+        runner = CliRunner()
+        original = os.getcwd()
+        os.chdir(str(initialized_project_with_observation.path))
+        try:
+            obs_id = initialized_project_with_observation.obs_id
+            result = runner.invoke(cli, ["promote-observation", obs_id])
+            assert result.exit_code == 0
+            assert "Promoted" in result.output
+            assert obs_id in result.output
+        finally:
+            os.chdir(original)
+
+
+# ---------------------------------------------------------------------------
+# TestBatchDismissObservationsCommand
+# ---------------------------------------------------------------------------
+
+
+class TestBatchDismissObservationsCommand:
+    def test_batch_dismiss_all_valid_json(self, initialized_project_with_many_obs: SeededProject) -> None:
+        import os
+
+        runner = CliRunner()
+        original = os.getcwd()
+        os.chdir(str(initialized_project_with_many_obs.path))
+        try:
+            ids = initialized_project_with_many_obs.obs_ids
+            result = runner.invoke(cli, ["batch-dismiss-observations", *ids, "--json"])
+            assert result.exit_code == 0, result.output
+            data = json.loads(result.output)
+            # Exact BatchResponse[str] shape
+            assert set(data.keys()) == _BATCH_DISMISS_KEYS, f"Shape mismatch: {set(data.keys()) ^ _BATCH_DISMISS_KEYS}"
+            assert len(data["succeeded"]) == len(ids)
+            assert data["failed"] == []
+        finally:
+            os.chdir(original)
+
+    def test_batch_dismiss_mixed_valid_invalid(self, initialized_project_with_observation: SeededProject) -> None:
+        """Mixed valid + invalid IDs produce succeeded + failed lists."""
+        import os
+
+        runner = CliRunner()
+        original = os.getcwd()
+        os.chdir(str(initialized_project_with_observation.path))
+        try:
+            obs_id = initialized_project_with_observation.obs_id
+            result = runner.invoke(
+                cli,
+                ["batch-dismiss-observations", obs_id, "obs-nonexistent", "--json"],
+            )
+            assert result.exit_code == 1  # partial failure exits 1
+            data = json.loads(result.output)
+            assert set(data.keys()) == _BATCH_DISMISS_KEYS
+            assert obs_id in data["succeeded"]
+            assert len(data["failed"]) == 1
+            assert data["failed"][0]["id"] == "obs-nonexistent"
+            assert data["failed"][0]["code"] == "NOT_FOUND"
+        finally:
+            os.chdir(original)
+
+    def test_batch_dismiss_all_invalid(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        runner, _ = cli_in_project
+        result = runner.invoke(cli, ["batch-dismiss-observations", "obs-bad-1", "obs-bad-2", "--json"])
+        assert result.exit_code == 1
+        data = json.loads(result.output)
+        assert data["succeeded"] == []
+        assert len(data["failed"]) == 2
+
+    def test_batch_dismiss_preserves_input_order_in_succeeded(self, initialized_project_with_many_obs: SeededProject) -> None:
+        """succeeded list must preserve the input order of IDs (mirrors MCP dict.fromkeys)."""
+        import os
+
+        runner = CliRunner()
+        original = os.getcwd()
+        os.chdir(str(initialized_project_with_many_obs.path))
+        try:
+            ids = initialized_project_with_many_obs.obs_ids
+            # Pass in reverse order — succeeded must reflect that order
+            reversed_ids = list(reversed(ids))
+            result = runner.invoke(cli, ["batch-dismiss-observations", *reversed_ids, "--json"])
+            assert result.exit_code == 0, result.output
+            data = json.loads(result.output)
+            assert data["succeeded"] == reversed_ids
+        finally:
+            os.chdir(original)
+
+    def test_batch_dismiss_plain_text(self, initialized_project_with_observation: SeededProject) -> None:
+        import os
+
+        runner = CliRunner()
+        original = os.getcwd()
+        os.chdir(str(initialized_project_with_observation.path))
+        try:
+            obs_id = initialized_project_with_observation.obs_id
+            result = runner.invoke(cli, ["batch-dismiss-observations", obs_id])
+            assert result.exit_code == 0
+            assert "Dismissed" in result.output
+        finally:
+            os.chdir(original)
+
+    def test_batch_dismiss_with_reason(self, initialized_project_with_observation: SeededProject) -> None:
+        import os
+
+        runner = CliRunner()
+        original = os.getcwd()
+        os.chdir(str(initialized_project_with_observation.path))
+        try:
+            obs_id = initialized_project_with_observation.obs_id
+            result = runner.invoke(
+                cli,
+                ["batch-dismiss-observations", obs_id, "--reason", "bulk cleanup", "--json"],
+            )
+            assert result.exit_code == 0
+            data = json.loads(result.output)
+            assert obs_id in data["succeeded"]
+        finally:
+            os.chdir(original)

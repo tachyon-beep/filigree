@@ -1,0 +1,260 @@
+"""CLI commands for observations (agent scratchpad): observe, list, dismiss, promote, batch-dismiss."""
+
+from __future__ import annotations
+
+import json as json_mod
+import sys
+from typing import Any
+
+import click
+
+from filigree.cli_common import get_db, refresh_summary
+from filigree.types.api import BatchFailure, ErrorCode
+
+
+@click.command("observe")
+@click.argument("summary")
+@click.option("--detail", default="", help="Longer explanation or context")
+@click.option("--file-path", default="", help="File path (relative to project root)")
+@click.option("--line", default=None, type=click.IntRange(min=0), help="Line number in file (1-indexed)")
+@click.option("--source-issue-id", default="", help="Issue ID that prompted this observation")
+@click.option(
+    "--priority",
+    "-p",
+    default=2,  # CLI default is 2; MCP default is 3 — intentional per-surface divergence
+    type=click.IntRange(0, 4),
+    help="Priority 0-4 (default 2)",
+)
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+@click.pass_context
+def observe_cmd(
+    ctx: click.Context,
+    summary: str,
+    detail: str,
+    file_path: str,
+    line: int | None,
+    source_issue_id: str,
+    priority: int,
+    as_json: bool,
+) -> None:
+    """Record an observation (agent scratchpad note, fire-and-forget)."""
+    with get_db() as db:
+        try:
+            obs = db.create_observation(
+                summary,
+                detail=detail,
+                file_path=file_path,
+                line=line,
+                source_issue_id=source_issue_id,
+                priority=priority,
+                actor=ctx.obj["actor"],
+            )
+        except ValueError as e:
+            if as_json:
+                click.echo(json_mod.dumps({"error": str(e), "code": ErrorCode.VALIDATION}))
+            else:
+                click.echo(f"Error: {e}", err=True)
+            sys.exit(1)
+        if as_json:
+            click.echo(json_mod.dumps(obs, indent=2, default=str))
+        else:
+            click.echo(f"Observed {obs['id']}: {obs['summary']}")
+        refresh_summary(db)
+
+
+@click.command("list-observations")
+@click.option("--limit", default=50, type=click.IntRange(min=1), help="Max results (default 50)")
+@click.option("--offset", default=0, type=click.IntRange(min=0), help="Skip first N results")
+@click.option("--no-limit", "no_limit", is_flag=True, help="Return all results without cap")
+@click.option("--file-path", default="", help="Filter by substring in file path")
+@click.option("--file-id", default="", help="Filter by exact file ID")
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+def list_observations_cmd(
+    limit: int,
+    offset: int,
+    no_limit: bool,
+    file_path: str,
+    file_id: str,
+    as_json: bool,
+) -> None:
+    """List pending observations with optional filtering."""
+    with get_db() as db:
+        effective_limit = limit if not no_limit else 10_000
+        observations = db.list_observations(
+            limit=effective_limit + 1,
+            offset=offset,
+            file_path=file_path,
+            file_id=file_id,
+        )
+        has_more = len(observations) > effective_limit
+        if has_more:
+            observations = observations[:effective_limit]
+        next_offset = offset + len(observations) if has_more else None
+
+        if as_json:
+            payload: dict[str, Any] = {"items": list(observations), "has_more": has_more}
+            if has_more and next_offset is not None:
+                payload["next_offset"] = next_offset
+            click.echo(json_mod.dumps(payload, indent=2, default=str))
+            return
+
+        if not observations:
+            click.echo("No observations.")
+            return
+        for obs in observations:
+            loc = f" {obs['file_path']}" if obs.get("file_path") else ""
+            if loc and obs.get("line") is not None:
+                loc += f":{obs['line']}"
+            click.echo(f"P{obs['priority']} {obs['id']}{loc}  {obs['summary']}")
+        click.echo(f"\n{len(observations)} observation(s)")
+
+
+@click.command("dismiss-observation")
+@click.argument("observation_id")
+@click.option("--reason", default="", help="Reason for dismissal")
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+@click.pass_context
+def dismiss_observation_cmd(
+    ctx: click.Context,
+    observation_id: str,
+    reason: str,
+    as_json: bool,
+) -> None:
+    """Dismiss a single observation."""
+    with get_db() as db:
+        try:
+            db.dismiss_observation(
+                observation_id,
+                actor=ctx.obj["actor"],
+                reason=reason,
+            )
+        except ValueError as e:
+            if as_json:
+                click.echo(json_mod.dumps({"error": str(e), "code": ErrorCode.NOT_FOUND}))
+            else:
+                click.echo(f"Error: {e}", err=True)
+            sys.exit(1)
+        if as_json:
+            click.echo(json_mod.dumps({"status": "dismissed", "observation_id": observation_id}))
+        else:
+            click.echo(f"Dismissed {observation_id}")
+        refresh_summary(db)
+
+
+@click.command("promote-observation")
+@click.argument("observation_id")
+@click.option("--type", "issue_type", default="task", help="Issue type (bug, task, feature, requirement)")
+@click.option(
+    "--priority",
+    "-p",
+    default=None,
+    type=click.IntRange(0, 4),
+    help="Override priority (default: observation priority)",
+)
+@click.option("--title", default=None, help="Override title (default: observation summary)")
+@click.option("--description", default="", help="Extra description to prepend")
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+@click.pass_context
+def promote_observation_cmd(
+    ctx: click.Context,
+    observation_id: str,
+    issue_type: str,
+    priority: int | None,
+    title: str | None,
+    description: str,
+    as_json: bool,
+) -> None:
+    """Promote an observation to a real issue."""
+    with get_db() as db:
+        try:
+            result = db.promote_observation(
+                observation_id,
+                issue_type=issue_type,
+                priority=priority,
+                title=title,
+                extra_description=description,
+                actor=ctx.obj["actor"],
+            )
+        except ValueError as e:
+            msg = str(e)
+            err_code = ErrorCode.NOT_FOUND if "not found" in msg.lower() else ErrorCode.VALIDATION
+            if as_json:
+                click.echo(json_mod.dumps({"error": msg, "code": err_code}))
+            else:
+                click.echo(f"Error: {msg}", err=True)
+            sys.exit(1)
+        # Mirror MCP: issue is an Issue object, call .to_dict()
+        resp: dict[str, Any] = {"issue": result["issue"].to_dict()}
+        if result.get("warnings"):
+            resp["warnings"] = result["warnings"]
+        if as_json:
+            click.echo(json_mod.dumps(resp, indent=2, default=str))
+        else:
+            issue = result["issue"]
+            click.echo(f"Promoted {observation_id} → {issue.id}: {issue.title}")
+            if result.get("warnings"):
+                for w in result["warnings"]:
+                    click.echo(f"  Warning: {w}", err=True)
+        refresh_summary(db)
+
+
+@click.command("batch-dismiss-observations")
+@click.argument("observation_ids", nargs=-1, required=True)
+@click.option("--reason", default="", help="Reason for dismissal")
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+@click.pass_context
+def batch_dismiss_observations_cmd(
+    ctx: click.Context,
+    observation_ids: tuple[str, ...],
+    reason: str,
+    as_json: bool,
+) -> None:
+    """Dismiss multiple observations in one call."""
+    with get_db() as db:
+        raw_ids = list(observation_ids)
+        try:
+            result = db.batch_dismiss_observations(
+                raw_ids,
+                actor=ctx.obj["actor"],
+                reason=reason,
+            )
+        except Exception as e:
+            if as_json:
+                click.echo(json_mod.dumps({"error": f"Database error: {e}", "code": ErrorCode.IO}))
+            else:
+                click.echo(f"Error: {e}", err=True)
+            sys.exit(1)
+
+        # Mirror MCP: compute succeeded as unique inputs minus not_found, preserving order
+        not_found_set = set(result["not_found"])
+        succeeded = [oid for oid in dict.fromkeys(raw_ids) if oid not in not_found_set]
+        failed: list[BatchFailure] = [
+            BatchFailure(id=oid, error=f"Observation not found: {oid}", code=ErrorCode.NOT_FOUND) for oid in result["not_found"]
+        ]
+
+        if as_json:
+            click.echo(
+                json_mod.dumps(
+                    {"succeeded": succeeded, "failed": list(failed)},
+                    indent=2,
+                    default=str,
+                )
+            )
+        else:
+            for oid in succeeded:
+                click.echo(f"  Dismissed {oid}")
+            for f_item in failed:
+                click.echo(f"  Error {f_item['id']}: {f_item['error']}", err=True)
+            click.echo(f"Dismissed {len(succeeded)}/{len(observation_ids)} observations")
+        refresh_summary(db)
+        if failed:
+            sys.exit(1)
+
+
+def register(cli: click.Group) -> None:
+    """Register observation commands with the CLI group."""
+    cli.add_command(observe_cmd)
+    cli.add_command(list_observations_cmd)
+    cli.add_command(dismiss_observation_cmd)
+    cli.add_command(promote_observation_cmd)
+    cli.add_command(batch_dismiss_observations_cmd)
