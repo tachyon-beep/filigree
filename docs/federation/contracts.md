@@ -168,6 +168,66 @@ xfail in `tests/util/test_cross_surface_parity.py` remains
 strict-xfailed — its job is to flag classic drift, and Phase D did
 not touch classic.
 
+## Phase E — CLI forward-migration (2026-04-28)
+
+Phase E completed the per-ADR-002 §5 commitment that **MCP and CLI
+reflect the living surface only**. After Phase E, every MCP tool has a
+CLI counterpart with a matching `--json` envelope. The CLI surface is
+now at full parity with MCP and loom HTTP.
+
+- **New CLI modules.** Three new modules added in Phase E2 bring the
+  CLI surface to parity with MCP:
+  - `cli_commands/observations.py` — 5 commands: `observe`,
+    `list-observations`, `dismiss-observation`, `promote-observation`,
+    `batch-dismiss-observations`.
+  - `cli_commands/files.py` — 12 commands covering the full file and
+    finding lifecycle: `list-files`, `get-file`, `get-file-timeline`,
+    `get-issue-files`, `add-file-association`, `register-file`,
+    `list-findings`, `get-finding`, `update-finding`, `promote-finding`,
+    `dismiss-finding`, `batch-update-findings`.
+  - `cli_commands/scanners.py` — 6 commands: `trigger-scan`,
+    `trigger-scan-batch`, `get-scan-status`, `preview-scan`,
+    `report-finding`, `list-scanners`.
+
+- **Verb-noun aliases (permanent).** Phase E3 adds permanent verb-noun
+  aliases for every short-form CLI command so they mirror the MCP tool
+  names (e.g. `ready` → `get-ready`, `labels` → `list-labels`,
+  `update` → `update-issue`). Both names appear in `--help` and
+  produce identical output. No deprecation cycle — the short forms are
+  stable.
+
+- **Composed CLI operations.** Phase E4 adds `start-work` and
+  `start-next-work` — CLI wrappers for the D6 `FiligreeDB.start_work` /
+  `start_next_work` composed operations. Backed by the same core
+  methods the MCP tools call.
+
+- **`filigree show --with-files` flag.** Phase E5 aligns `filigree
+  show <id>` with `get_issue.include_files=False` (D4 default): file
+  associations are omitted unless `--with-files` is passed.
+
+- **`--json` envelopes unified.** Phase E1 aligned remaining CLI
+  `--json` outputs with the loom/MCP shapes: list commands wrap items
+  in `ListResponse[T]` (`{items, has_more}`), slim-issue projections
+  use `issue_id`, batch commands emit `{succeeded, failed}`.
+
+- **`add-label` arg-order alignment (BREAKING).** Phase E6 flips
+  `filigree add-label` to `<label> <issue_id>` order, matching
+  `batch-add-label`'s existing order. Scripts using the old
+  `<issue_id> <label>` positional order must update.
+
+- **CLI↔MCP↔HTTP parity battery extended.** `tests/util/
+  test_cross_surface_parity.py` now includes Phase E parity tests:
+  `list-observations` CLI↔MCP, `list-files` CLI↔loom-HTTP,
+  `start-work` CLI↔MCP (error and success shapes). The Phase D gate
+  ("MCP↔HTTP parity") expands to "CLI↔MCP↔HTTP parity".
+
+- **Classic HTTP unchanged.** The C2 `test_container_key_parity`
+  strict xfail remains strict-xfailed — Phase E did not touch classic.
+
+**Forward-only.** CLI does not accept dual vocabularies. The loom
+envelope shape (`--json` output) replaces legacy shapes outright;
+clients pinning to old `--json` output re-pin against the new schema.
+
 ## When a contract evolves
 
 **Non-breaking additions** (new optional response fields, new optional request parameters with safe defaults) may land in-place without a new generation. Fixtures are updated to reflect the new shape; the `_meta.updated` field moves.

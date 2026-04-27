@@ -754,3 +754,193 @@ class TestScanResultsEnvelope:
         assert body["new_finding_ids"] == []
         assert body["observations_created"] == 0
         assert body["observations_failed"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Phase E — CLI↔MCP↔HTTP parity battery
+#
+# Three scenarios verifying that the new E2 CLI commands and the E4
+# start-work command emit the same envelope shapes as the MCP tools and
+# (where applicable) the loom HTTP endpoints. Each test asserts:
+#   (a) the envelope keys are correct for the surface,
+#   (b) the shapes agree across surfaces,
+#   (c) error envelopes use a valid ErrorCode.
+#
+# Only surfaces where the command exists are compared:
+#   list-observations: CLI ↔ MCP  (no loom HTTP route)
+#   list-files:        CLI ↔ loom HTTP  (no MCP list-files wrapper)
+#   start-work:        CLI ↔ MCP  (no HTTP composed-op route)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+class TestListObservationsEnvelopeParity:
+    """CLI ``list-observations --json`` and MCP ``list_observations`` agree on
+    ``ListResponse[T]`` shape: ``{items, has_more}`` with no legacy siblings."""
+
+    async def test_cli_mcp_envelope_parity(
+        self,
+        mcp_surface: FiligreeDB,
+        cli_surface: Callable[..., Any],
+    ) -> None:
+        from filigree.mcp_tools.observations import _handle_list_observations
+
+        # MCP surface: empty project → zero items.
+        mcp_body = _mcp_envelope(await _handle_list_observations({}))
+        assert "items" in mcp_body, f"mcp list-observations missing 'items': {mcp_body!r}"
+        assert "has_more" in mcp_body, f"mcp list-observations missing 'has_more': {mcp_body!r}"
+        assert isinstance(mcp_body["items"], list)
+        assert isinstance(mcp_body["has_more"], bool)
+        # No legacy siblings.
+        for legacy_key in ("observations", "total", "stats", "errors"):
+            assert legacy_key not in mcp_body, f"mcp emitted legacy key '{legacy_key}': {mcp_body!r}"
+
+        # CLI surface: empty project → zero items; exit 0.
+        def cli_action(runner: CliRunner, _: Path) -> Any:
+            return runner.invoke(cli, ["list-observations", "--json"])
+
+        cli_result = cli_surface(cli_action)
+        assert cli_result.exit_code == 0, cli_result.output
+        cli_body = json.loads(cli_result.output)
+        assert "items" in cli_body, f"cli list-observations missing 'items': {cli_body!r}"
+        assert "has_more" in cli_body, f"cli list-observations missing 'has_more': {cli_body!r}"
+        assert isinstance(cli_body["items"], list)
+        assert isinstance(cli_body["has_more"], bool)
+        for legacy_key in ("observations", "total", "stats", "errors"):
+            assert legacy_key not in cli_body, f"cli emitted legacy key '{legacy_key}': {cli_body!r}"
+
+        # Shape parity.
+        assert set(mcp_body.keys()) == set(cli_body.keys()), (
+            f"list-observations key set mismatch: mcp={set(mcp_body.keys())} cli={set(cli_body.keys())}"
+        )
+
+    async def test_error_envelope_parity_not_found(
+        self,
+        mcp_surface: FiligreeDB,
+        cli_surface: Callable[..., Any],
+    ) -> None:
+        """Both surfaces emit a valid error envelope for a missing observation_id."""
+        from filigree.mcp_tools.observations import _handle_dismiss_observation
+
+        # MCP: dismiss a non-existent observation (ID format does not require a DB prefix
+        # — observation IDs are UUIDs, not project-prefixed).
+        mcp_body = _mcp_envelope(await _handle_dismiss_observation({"observation_id": "00000000-0000-0000-0000-000000000000"}))
+        _assert_flat_envelope(mcp_body, surface="mcp")
+        assert mcp_body["code"] == ErrorCode.NOT_FOUND
+
+        # CLI: dismiss a non-existent observation → NOT_FOUND.
+        def cli_action(runner: CliRunner, _: Path) -> Any:
+            return runner.invoke(cli, ["dismiss-observation", "00000000-0000-0000-0000-000000000000", "--json"])
+
+        cli_result = cli_surface(cli_action)
+        cli_body = _cli_envelope(cli_result)
+        _assert_flat_envelope(cli_body, surface="cli")
+        assert cli_body["code"] == ErrorCode.NOT_FOUND
+        assert mcp_body["code"] == cli_body["code"]
+
+
+@pytest.mark.asyncio
+class TestListFilesEnvelopeParity:
+    """CLI ``list-files --json`` and loom HTTP ``GET /api/loom/files`` agree on
+    ``ListResponse[T]`` shape: ``{items, has_more}`` with no legacy siblings."""
+
+    async def test_cli_loom_http_envelope_parity(
+        self,
+        dashboard_surface: AsyncClient,
+        cli_surface: Callable[..., Any],
+    ) -> None:
+        # Loom HTTP: empty project → zero items.
+        resp = await dashboard_surface.get("/api/loom/files")
+        assert resp.status_code == 200, resp.text
+        http_body = resp.json()
+        assert "items" in http_body, f"loom-http list-files missing 'items': {http_body!r}"
+        assert "has_more" in http_body, f"loom-http list-files missing 'has_more': {http_body!r}"
+        assert isinstance(http_body["items"], list)
+        assert isinstance(http_body["has_more"], bool)
+        for legacy_key in ("results", "total", "limit", "offset", "errors"):
+            assert legacy_key not in http_body, f"loom-http emitted legacy key '{legacy_key}': {http_body!r}"
+
+        # CLI surface: empty project → zero items; exit 0.
+        def cli_action(runner: CliRunner, _: Path) -> Any:
+            return runner.invoke(cli, ["list-files", "--json"])
+
+        cli_result = cli_surface(cli_action)
+        assert cli_result.exit_code == 0, cli_result.output
+        cli_body = json.loads(cli_result.output)
+        assert "items" in cli_body, f"cli list-files missing 'items': {cli_body!r}"
+        assert "has_more" in cli_body, f"cli list-files missing 'has_more': {cli_body!r}"
+        for legacy_key in ("results", "total", "limit", "offset", "errors"):
+            assert legacy_key not in cli_body, f"cli emitted legacy key '{legacy_key}': {cli_body!r}"
+
+        # Shape parity: both have the same top-level keys.
+        assert set(http_body.keys()) == set(cli_body.keys()), (
+            f"list-files key set mismatch: loom-http={set(http_body.keys())} cli={set(cli_body.keys())}"
+        )
+
+
+@pytest.mark.asyncio
+class TestStartWorkEnvelopeParity:
+    """CLI ``start-work --json`` and MCP ``start_work`` agree:
+    success path emits a full issue dict; NOT_FOUND error paths agree on code."""
+
+    async def test_error_envelope_parity(
+        self,
+        mcp_surface: FiligreeDB,
+        cli_surface: Callable[..., Any],
+    ) -> None:
+        """Both surfaces emit NOT_FOUND for an unknown issue_id."""
+        from filigree.mcp_tools.issues import _handle_start_work
+
+        # Use prefix-matching IDs to avoid WrongProjectError (which lands as CONFLICT).
+        mcp_missing = "mcp-ffffffffff"
+        cli_missing = "cli-ffffffffff"
+
+        # MCP: start-work on missing mcp-prefixed issue → NOT_FOUND.
+        mcp_body = _mcp_envelope(await _handle_start_work({"issue_id": mcp_missing, "assignee": "bot"}))
+        _assert_flat_envelope(mcp_body, surface="mcp")
+        assert mcp_body["code"] == ErrorCode.NOT_FOUND
+
+        # CLI: start-work on missing cli-prefixed issue → NOT_FOUND.
+        def cli_action(runner: CliRunner, _: Path) -> Any:
+            return runner.invoke(cli, ["start-work", cli_missing, "--assignee", "bot", "--json"])
+
+        cli_result = cli_surface(cli_action)
+        cli_body = _cli_envelope(cli_result)
+        _assert_flat_envelope(cli_body, surface="cli")
+        assert cli_body["code"] == ErrorCode.NOT_FOUND
+        assert mcp_body["code"] == cli_body["code"]
+
+    async def test_success_shape_parity(
+        self,
+        mcp_surface: FiligreeDB,
+        cli_surface: Callable[..., Any],
+    ) -> None:
+        """Both surfaces return an issue dict with the same structural keys on success."""
+        from filigree.mcp_tools.issues import _handle_start_work
+
+        # MCP: seed an issue and start-work on it.
+        mcp_issue = mcp_surface.create_issue("MCP start-work target", type="task")
+        mcp_body = _mcp_envelope(await _handle_start_work({"issue_id": mcp_issue.id, "assignee": "bot"}))
+        # On success, MCP returns a full issue dict (not an error envelope).
+        assert "id" in mcp_body, f"mcp start-work success missing 'id': {mcp_body!r}"
+        assert "status" in mcp_body, f"mcp start-work success missing 'status': {mcp_body!r}"
+        assert "assignee" in mcp_body, f"mcp start-work success missing 'assignee': {mcp_body!r}"
+
+        # CLI: seed an independent issue and start-work on it.
+        def cli_action(runner: CliRunner, _: Path) -> Any:
+            create = runner.invoke(cli, ["create", "CLI start-work target", "--type", "task", "--json"])
+            assert create.exit_code == 0, create.output
+            issue_id = json.loads(create.output)["id"]
+            return runner.invoke(cli, ["start-work", issue_id, "--assignee", "bot", "--json"])
+
+        cli_result = cli_surface(cli_action)
+        assert cli_result.exit_code == 0, cli_result.output
+        cli_body = json.loads(cli_result.output)
+        assert "id" in cli_body, f"cli start-work success missing 'id': {cli_body!r}"
+        assert "status" in cli_body, f"cli start-work success missing 'status': {cli_body!r}"
+        assert "assignee" in cli_body, f"cli start-work success missing 'assignee': {cli_body!r}"
+
+        # Structural parity: both surfaces agree on the same top-level key set.
+        mcp_keys = set(mcp_body.keys())
+        cli_keys = set(cli_body.keys())
+        assert mcp_keys == cli_keys, f"start-work success key set mismatch: mcp={mcp_keys} cli={cli_keys}"

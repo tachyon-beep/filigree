@@ -15,7 +15,38 @@ All commands support `--json` for machine-readable output. The global `--actor` 
 - [Planning](#planning)
 - [Workflow Templates](#workflow-templates)
 - [Analytics and Events](#analytics-and-events)
+- [Observations](#observations)
+- [Files and Findings](#files-and-findings)
+- [Scanners](#scanners)
 - [Data Management](#data-management)
+
+## Verb-Noun Aliases (Phase E3)
+
+Every short-form CLI command has a permanent verb-noun alias that matches the corresponding MCP tool name. Both forms appear in `--help` and produce identical output.
+
+| Short form | Verb-noun alias |
+|---|---|
+| `ready` | `get-ready` |
+| `blocked` | `get-blocked` |
+| `plan` | `get-plan` |
+| `changes` | `get-changes` |
+| `critical-path` | `get-critical-path` |
+| `transitions` | `get-valid-transitions` |
+| `validate` | `validate-issue` |
+| `guide` | `get-workflow-guide` |
+| `type-info` | `get-type-info` |
+| `types` | `list-types` |
+| `packs` | `list-packs` |
+| `labels` | `list-labels` |
+| `taxonomy` | `get-label-taxonomy` |
+| `update` | `update-issue` |
+| `show` | `get-issue` |
+| `list` | `list-issues` |
+| `release` | `release-claim` |
+| `events` | `get-issue-events` |
+| `undo` | `undo-last` |
+
+The short forms are stable — no deprecation cycle.
 
 ```bash
 filigree --actor bot-1 create "Title"   # Set actor identity
@@ -236,11 +267,12 @@ List issues with optional filters.
 
 ### `show`
 
-Show full details for an issue including deps, labels, children, and ready status.
+Show full details for an issue including deps, labels, children, and ready status. File associations are omitted by default (Phase E5); pass `--with-files` to include them.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `id` | string | Issue ID (positional) |
+| `--with-files` | flag | Include file associations (default: off) |
 
 ### `search`
 
@@ -333,6 +365,8 @@ filigree claim <id> --assignee agent-1          # Claim specific issue
 filigree claim-next --assignee agent-1          # Claim highest-priority ready issue
 filigree claim-next --assignee agent-1 --type=bug --priority-max=1
 filigree release <id>                           # Release back to open
+filigree start-work <id> --assignee agent-1     # Claim + transition to wip in one call
+filigree start-next-work --assignee agent-1     # Claim + transition highest-priority ready
 ```
 
 ### `claim`
@@ -362,6 +396,30 @@ Release a claimed issue back to open.
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `id` | string | Issue ID (positional) |
+
+### `start-work`
+
+Atomically claim an issue AND transition it to its working status in a single call. Backs `FiligreeDB.start_work` with compensating-action rollback — if the transition fails, the claim is released. Returns the full updated issue dict.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `id` | string | Issue ID (positional) |
+| `--assignee` | string | Who is claiming (required) |
+| `--target-status` | string | Target wip status (default: type's canonical wip state) |
+| `--actor` | string | Audit trail actor (default: assignee) |
+
+### `start-next-work`
+
+Claim AND transition the highest-priority ready issue. Returns `{status: "empty", reason: ...}` when no matching issue exists.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `--assignee` | string | Who is claiming (required) |
+| `--type` | string | Filter by issue type |
+| `--priority-min` | 0-4 | Minimum priority filter |
+| `--priority-max` | 0-4 | Maximum priority filter |
+| `--target-status` | string | Target wip status (default: type's canonical wip state) |
+| `--actor` | string | Audit trail actor (default: assignee) |
 
 ## Batch Operations
 
@@ -563,6 +621,280 @@ Event history for a specific issue, newest first.
 |-----------|------|-------------|
 | `id` | string | Issue ID (positional) |
 | `--limit` | integer | Max events (default 50) |
+
+## Observations
+
+Agent scratchpad — fire-and-forget notes that expire after 14 days. Use `list-observations` with `--label=from-observation` after promoting to find resulting issues.
+
+```bash
+filigree observe "Possible auth race" --file-path src/auth.py --line 42
+filigree list-observations
+filigree list-observations --file-path src/auth.py
+filigree dismiss-observation <obs-id> --reason "Already fixed"
+filigree promote-observation <obs-id> --type bug --priority 1
+filigree batch-dismiss-observations <id1> <id2> --reason "Stale"
+```
+
+### `observe`
+
+Record a quick observation note.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `summary` | string | Observation summary (positional) |
+| `--detail` | string | Extended detail |
+| `--file-path` | string | Anchor to source file path |
+| `--line` | integer | Line number anchor |
+| `--source-issue-id` | string | Link to a related issue |
+| `--priority` | 0-4 | Observation priority |
+
+### `list-observations`
+
+List observations with optional filters. Output: `ListResponse[T]` (`{items, has_more}`).
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `--limit` | integer | Max results (default 50) |
+| `--offset` | integer | Skip first N results |
+| `--file-path` | string | Filter by file path |
+| `--file-id` | string | Filter by file record ID |
+
+### `dismiss-observation`
+
+Dismiss an observation (will not generate an issue).
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `observation-id` | string | Observation ID (positional) |
+| `--reason` | string | Dismissal reason |
+
+### `promote-observation`
+
+Promote an observation to a tracked issue.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `observation-id` | string | Observation ID (positional) |
+| `--type` | string | Issue type for the new issue |
+| `--priority` | 0-4 | Priority for the new issue |
+| `--title` | string | Override title (default: observation summary) |
+| `--description` | string | Override description |
+
+### `batch-dismiss-observations`
+
+Dismiss multiple observations in one call.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `observation-ids` | string... | Observation IDs (positional, multiple) |
+| `--reason` | string | Dismissal reason |
+
+## Files and Findings
+
+Track source files and code-health findings from automated scanners.
+
+```bash
+filigree list-files
+filigree list-files --language python --min-findings 1
+filigree get-file <file-id>
+filigree get-file-timeline <file-id>
+filigree get-issue-files <issue-id>
+filigree add-file-association <file-id> <issue-id> <assoc-type>
+filigree register-file src/auth.py --language python
+filigree list-findings --status open
+filigree get-finding <finding-id>
+filigree update-finding <finding-id> --status fixed
+filigree promote-finding <finding-id> --priority 1
+filigree dismiss-finding <finding-id> --reason "False positive"
+filigree batch-update-findings <id1> <id2> --status fixed
+```
+
+### `list-files`
+
+List tracked files. Output: `ListResponse[T]` (`{items, has_more}`).
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `--language` | string | Filter by language |
+| `--path-prefix` | string | Filter by file path prefix |
+| `--min-findings` | integer | Min finding count filter |
+| `--has-severity` | string | Filter by finding severity |
+| `--scan-source` | string | Filter by scanner name |
+| `--sort` | string | Sort field |
+| `--direction` | `asc`/`desc` | Sort direction |
+| `--limit` | integer | Max results |
+| `--offset` | integer | Skip first N results |
+
+### `get-file`
+
+Get details for a single tracked file.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `file-id` | string | File record ID (positional) |
+
+### `get-file-timeline`
+
+Get the event timeline for a tracked file.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `file-id` | string | File record ID (positional) |
+| `--event-type` | string | Filter by event type |
+| `--limit` | integer | Max results |
+| `--offset` | integer | Skip first N results |
+
+### `get-issue-files`
+
+List files associated with an issue.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `issue-id` | string | Issue ID (positional) |
+
+### `add-file-association`
+
+Associate a tracked file with an issue.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `file-id` | string | File record ID (positional) |
+| `issue-id` | string | Issue ID (positional) |
+| `assoc-type` | string | Association type (positional) |
+
+### `register-file`
+
+Register a source file in the file inventory.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `path` | string | File path (positional) |
+| `--language` | string | Language override |
+| `--file-type` | string | File type classification |
+| `--metadata` | JSON string | Extra metadata |
+
+### `list-findings`
+
+List code-health findings. Output: `ListResponse[T]` (`{items, has_more}`).
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `--file-id` | string | Filter by file |
+| `--status` | string | Filter by status |
+| `--severity` | string | Filter by severity |
+| `--scan-source` | string | Filter by scanner |
+| `--limit` | integer | Max results |
+| `--offset` | integer | Skip first N results |
+
+### `get-finding`
+
+Get a single finding by ID.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `finding-id` | string | Finding ID (positional) |
+
+### `update-finding`
+
+Update a finding's status or linked issue.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `finding-id` | string | Finding ID (positional) |
+| `--status` | string | New status |
+| `--issue-id` | string | Link to issue |
+
+### `promote-finding`
+
+Promote a finding to an observation.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `finding-id` | string | Finding ID (positional) |
+| `--priority` | 0-4 | Priority for the created observation |
+
+### `dismiss-finding`
+
+Dismiss a finding (marks as not worth tracking).
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `finding-id` | string | Finding ID (positional) |
+| `--reason` | string | Dismissal reason |
+
+### `batch-update-findings`
+
+Update multiple findings in one call.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `finding-ids` | string... | Finding IDs (positional, multiple) |
+| `--status` | string | New status (required) |
+
+## Scanners
+
+Trigger and monitor automated code scanners.
+
+```bash
+filigree list-scanners
+filigree trigger-scan <scanner> <file-path>
+filigree trigger-scan-batch <scanner> <file1> <file2>
+filigree get-scan-status <scan-run-id>
+filigree preview-scan <scanner> <file-path>
+filigree report-finding --file finding.json
+cat finding.json | filigree report-finding   # Read from stdin
+```
+
+### `list-scanners`
+
+List configured scanners from the `scanners/` directory.
+
+### `trigger-scan`
+
+Trigger a single-file scan.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `scanner` | string | Scanner name (positional) |
+| `file-path` | string | File to scan (positional) |
+| `--api-url` | string | Dashboard URL override |
+
+### `trigger-scan-batch`
+
+Trigger a scanner on multiple files.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `scanner` | string | Scanner name (positional) |
+| `file-paths` | string... | Files to scan (positional, multiple) |
+| `--api-url` | string | Dashboard URL override |
+
+### `get-scan-status`
+
+Check the status of a scan run.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `scan-run-id` | string | Scan run ID (positional) |
+| `--log-lines` | integer | Number of log lines to include |
+
+### `preview-scan`
+
+Preview the shell command a scanner would run (without executing it).
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `scanner` | string | Scanner name (positional) |
+| `file-path` | string | File to preview (positional) |
+
+### `report-finding`
+
+Ingest a finding in loom-shape JSON format. Reads from stdin by default; `--file` overrides. Returns `ScanIngestResponseLoom` with counts and any warnings.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `--file` | path | JSON finding file (optional; reads from stdin if omitted) |
+| `--api-url` | string | Dashboard URL override |
 
 ## Data Management
 

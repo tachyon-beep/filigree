@@ -101,6 +101,80 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Stage 2B task 2b.-1 — `POST /api/v1/scan-results` success-shape pin.** `TestScanResultsEnvelope::test_success_shape_empty_findings` asserts the exact `ScanIngestResult` key set (eight keys) and value-type invariants returned on 200 for a valid empty-findings body. Closes the gap identified in the 2B rebaseline §4: the four pre-existing error-path tests pinned 400+`VALIDATION` shapes, but the 200 shape was unpinned. Any 2B task that changes `db.process_scan_results(...)`'s return dict must update this test in the same commit; absent a Clarion staging environment, this is the concrete pre-release contract.
 
+### Changed (BREAKING — CLI)
+
+- **CLI forward-migrated to the loom vocabulary (Phase E of the 2.0 federation work package).**
+  - **`add-label` arg order reversed.** ``filigree add-label <label>
+    <issue_id>`` (was: ``<issue_id> <label>``). Aligns with the
+    already-correct ``batch-add-label <label> <issue_ids...>`` order.
+    Scripts using the old positional order must update. This is the
+    only positional-arg break in Phase E.
+  - **`--json` list envelopes unified.** All CLI list commands now emit
+    ``{items, has_more, next_offset?}`` (``ListResponse[T]``) on
+    ``--json``. Previously some emitted bare lists or legacy shapes
+    (``{issues: [...]}``, ``{observations: [...]}``). Clients pinning
+    to legacy ``--json`` list output must re-pin.
+  - **Slim-issue ``--json`` projection uses ``issue_id``.** Slim
+    projections in ``ready --json``, ``blocked --json``,
+    ``search --json``, ``batch-update --json``, ``batch-close --json``
+    now use ``issue_id`` (was ``id``), matching the loom/MCP shape.
+
+### Added (CLI)
+
+- **Phase E CLI commands — observations, files, scanners (Phase E2).**
+  Every MCP tool now has a CLI counterpart. New modules:
+  - ``cli_commands/observations.py`` — ``observe``,
+    ``list-observations``, ``dismiss-observation``,
+    ``promote-observation``, ``batch-dismiss-observations``.
+  - ``cli_commands/files.py`` — ``list-files``, ``get-file``,
+    ``get-file-timeline``, ``get-issue-files``,
+    ``add-file-association``, ``register-file``, ``list-findings``,
+    ``get-finding``, ``update-finding``, ``promote-finding``,
+    ``dismiss-finding``, ``batch-update-findings``.
+  - ``cli_commands/scanners.py`` — ``trigger-scan``,
+    ``trigger-scan-batch``, ``get-scan-status``, ``preview-scan``,
+    ``report-finding``, ``list-scanners``.
+  All commands emit loom-shape JSON on ``--json``.
+
+- **Verb-noun CLI aliases (Phase E3, permanent).** Every existing
+  short-form CLI command gains a permanent verb-noun alias matching the
+  MCP tool name: ``get-ready``, ``get-blocked``, ``get-plan``,
+  ``get-changes``, ``get-critical-path``, ``get-valid-transitions``,
+  ``validate-issue``, ``get-workflow-guide``, ``get-type-info``,
+  ``list-types``, ``list-packs``, ``list-labels``,
+  ``get-label-taxonomy``, ``update-issue``, ``get-issue``,
+  ``list-issues``, ``release-claim``, ``get-issue-events``,
+  ``undo-last``. Both names appear in ``--help``; both are stable.
+
+- **``filigree start-work`` and ``filigree start-next-work`` (Phase E4).**
+  CLI wrappers for the D6 composed operations. Backed by
+  ``FiligreeDB.start_work`` / ``start_next_work`` (same path MCP uses).
+  Returns the updated issue dict on success; ``ErrorResponse`` on
+  failure.
+
+- **``filigree show --with-files`` flag (Phase E5).** ``filigree show
+  <id>`` no longer includes file associations by default — matches
+  ``get_issue.include_files=False`` (D4) and loom HTTP
+  ``GET /api/loom/issues/{issue_id}`` (since C3). Pass ``--with-files``
+  to opt in.
+
+- **CLI↔MCP↔HTTP parity battery (Phase E7).** ``tests/util/
+  test_cross_surface_parity.py`` extended with five new envelope-
+  equivalence tests covering the new CLI commands:
+  ``list-observations`` CLI↔MCP, ``list-files`` CLI↔loom-HTTP,
+  ``start-work`` error and success shapes CLI↔MCP. The Phase D gate
+  ("MCP↔HTTP parity") is now "CLI↔MCP↔HTTP parity".
+
+### Notes (Phase E)
+
+- **Classic HTTP unchanged.** The C2 ``test_container_key_parity``
+  strict xfail remains strict-xfailed; Phase E did not touch classic.
+- **CLI clients pinning to legacy ``--json`` shapes** (bare lists,
+  ``{issues: [...]}``, ``{id: ...}`` in slim projections,
+  ``<issue_id> <label>`` positional order on ``add-label``) must
+  update. The new loom-shape envelopes are the stable forms going
+  forward.
+
 ### Changed
 
 - **Stage 2B task 2b.0 — `BatchFailureDetail` retired in favour of `BatchFailure` (Python API only; no wire-contract change).** The unused Stage 1 `BatchFailure.item_id` field reverted to `id` before the type got any live wire consumers, so `db_issues.py` batch constructions, the three legacy response types (`BatchUpdateResponse`, `BatchCloseResponse`, `BatchActionResponse`), and the `valid_transitions` enrichment at `db_issues.py:899` all migrate cleanly. The HTTP/MCP/CLI surfaces emit the same `{id, error, code, valid_transitions?}` shape for batch failures. `BatchFailure` gains the optional `valid_transitions: NotRequired[list[TransitionHint]]` field that `BatchFailureDetail` previously carried. Python consumers importing `BatchFailureDetail` from `filigree.types.api` now raise `ImportError`; migrate to `BatchFailure`.
