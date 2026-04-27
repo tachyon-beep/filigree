@@ -137,6 +137,21 @@ class TestJsonOutput:
         # 2 created + auto-seeded "Future" release = 3
         assert len(data["items"]) == 3
 
+    def test_list_json_has_more_no_false_positive(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        """Overfetch-by-1: when DB has exactly limit rows, has_more must be False."""
+        runner, _ = cli_in_project
+        # The project has 1 auto-seeded "Future" release.  Add 2 more → 3 total.
+        runner.invoke(cli, ["create", "Boundary A"])
+        runner.invoke(cli, ["create", "Boundary B"])
+        # Query with limit=3: DB has exactly 3 rows.  Old code returns has_more=True;
+        # correct overfetch-by-1 returns has_more=False.
+        result = runner.invoke(cli, ["list", "--limit", "3", "--json"])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert len(data["items"]) == 3
+        assert data["has_more"] is False
+        assert "next_offset" not in data
+
     def test_ready_json(self, cli_in_project: tuple[CliRunner, Path]) -> None:
         runner, _ = cli_in_project
         runner.invoke(cli, ["create", "Ready JSON"])
