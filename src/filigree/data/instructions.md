@@ -68,7 +68,7 @@ filigree blocked                            # Show blocked issues
 # Comments & labels
 filigree add-comment <id> "text"            # Add comment
 filigree get-comments <id>                  # List comments
-filigree add-label <id> <label>             # Add label
+filigree add-label <label> <id>             # Add label
 filigree remove-label <id> <label>          # Remove label
 filigree labels                             # List all labels by namespace
 filigree taxonomy                           # Show reserved namespaces and vocabulary
