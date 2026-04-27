@@ -324,7 +324,7 @@ class TestLabelCli:
         runner, _ = cli_in_project
         r = runner.invoke(cli, ["create", "Label me"])
         issue_id = _extract_id(r.output)
-        result = runner.invoke(cli, ["add-label", issue_id, "urgent"])
+        result = runner.invoke(cli, ["add-label", "urgent", issue_id])
         assert result.exit_code == 0
         assert "Added label" in result.output
 
@@ -340,13 +340,13 @@ class TestLabelCli:
         runner, _ = cli_in_project
         r = runner.invoke(cli, ["create", "Label me"])
         issue_id = _extract_id(r.output)
-        result = runner.invoke(cli, ["add-label", issue_id, "bug"])
+        result = runner.invoke(cli, ["add-label", "bug", issue_id])
         assert result.exit_code == 1
         assert "reserved as an issue type" in result.output
 
     def test_label_add_not_found(self, cli_in_project: tuple[CliRunner, Path]) -> None:
         runner, _ = cli_in_project
-        result = runner.invoke(cli, ["add-label", "test-nonexistent", "bug"])
+        result = runner.invoke(cli, ["add-label", "bug", "test-nonexistent"])
         assert result.exit_code == 1
 
     def test_label_add_echoes_canonical_form(self, cli_in_project: tuple[CliRunner, Path]) -> None:
@@ -354,7 +354,7 @@ class TestLabelCli:
         runner, _ = cli_in_project
         r = runner.invoke(cli, ["create", "Label echo"])
         issue_id = _extract_id(r.output)
-        result = runner.invoke(cli, ["add-label", issue_id, "  urgent  "])
+        result = runner.invoke(cli, ["add-label", "  urgent  ", issue_id])
         assert result.exit_code == 0
         assert "'urgent'" in result.output, f"expected canonical 'urgent' in output, got: {result.output!r}"
         assert "  urgent  " not in result.output

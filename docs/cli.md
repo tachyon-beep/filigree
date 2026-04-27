@@ -291,7 +291,7 @@ Remove a dependency between two issues.
 ```bash
 filigree add-comment <id> "Found the root cause"
 filigree get-comments <id>
-filigree add-label <id> backend
+filigree add-label backend <id>
 filigree remove-label <id> backend
 ```
 
@@ -310,10 +310,12 @@ filigree remove-label <id> backend
 
 ### `add-label`
 
+**Breaking change in 2.0 E6:** arg order is now `<label> <issue_id>`, matching `batch-add-label`.
+
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `id` | string | Issue ID (positional) |
-| `label` | string | Label name (positional) |
+| `label` | string | Label name (positional, first) |
+| `id` | string | Issue ID (positional, second) |
 
 ### `remove-label`
 

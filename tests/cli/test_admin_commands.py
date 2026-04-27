@@ -208,7 +208,7 @@ class TestJsonRetrofit:
         runner, _ = cli_in_project
         r = runner.invoke(cli, ["create", "Label JSON"])
         issue_id = _extract_id(r.output)
-        result = runner.invoke(cli, ["add-label", issue_id, "urgent", "--json"])
+        result = runner.invoke(cli, ["add-label", "urgent", issue_id, "--json"])
         assert result.exit_code == 0
         data = json.loads(result.output)
         assert data["status"] == "added"
@@ -227,7 +227,7 @@ class TestJsonRetrofit:
         runner, _ = cli_in_project
         r = runner.invoke(cli, ["create", "Label JSON"])
         issue_id = _extract_id(r.output)
-        result = runner.invoke(cli, ["add-label", issue_id, "  urgent  ", "--json"])
+        result = runner.invoke(cli, ["add-label", "  urgent  ", issue_id, "--json"])
         assert result.exit_code == 0
         data = json.loads(result.output)
         assert data["label"] == "urgent", f"expected canonical 'urgent', got {data['label']!r}"

@@ -68,11 +68,11 @@ def get_comments(issue_id: str, as_json: bool) -> None:
 
 
 @click.command("add-label")
-@click.argument("issue_id")
 @click.argument("label_name")
+@click.argument("issue_id")
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON")
-def add_label(issue_id: str, label_name: str, as_json: bool) -> None:
-    """Add a label to an issue."""
+def add_label(label_name: str, issue_id: str, as_json: bool) -> None:
+    """Add a label to an issue. Usage: add-label <label> <issue_id>"""
     with get_db() as db:
         try:
             db.get_issue(issue_id)
