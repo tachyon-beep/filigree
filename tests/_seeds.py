@@ -53,8 +53,12 @@ class SeededProject:
     path: Path
     bug_id: str | None = None
     obs_id: str | None = None
+    file_id: str | None = None
+    finding_id: str | None = None
     bug_ids: list[str] = field(default_factory=list)
     obs_ids: list[str] = field(default_factory=list)
+    file_ids: list[str] = field(default_factory=list)
+    finding_ids: list[str] = field(default_factory=list)
 
 
 def seed_open_bug(db: FiligreeDB, *, title: str = "Test bug", priority: int = 2) -> str:
@@ -74,3 +78,32 @@ def seed_bugs(db: FiligreeDB, *, count: int = 3, priority: int = 2) -> list[str]
 def seed_observations(db: FiligreeDB, *, count: int = 3, actor: str = "test") -> list[str]:
     """Seed ``count`` observations. Returns the list of observation ids."""
     return [db.create_observation(f"note {i}", actor=actor)["id"] for i in range(count)]
+
+
+def seed_file(db: FiligreeDB, *, path: str = "src/foo.py", language: str = "python") -> str:
+    """Seed one file record. Returns the file id."""
+    return db.register_file(path, language=language).id
+
+
+def seed_finding(
+    db: FiligreeDB,
+    *,
+    file_id: str,
+    severity: str = "high",
+    scan_source: str = "test-scanner",
+    rule_id: str = "test-rule",
+    message: str = "Test finding",
+) -> str:
+    """Seed one scan finding via process_scan_results. Returns the finding id."""
+    result = db.process_scan_results(
+        scan_source=scan_source,
+        findings=[
+            {
+                "path": db.get_file(file_id).path,
+                "rule_id": rule_id,
+                "message": message,
+                "severity": severity,
+            }
+        ],
+    )
+    return result["new_finding_ids"][0]

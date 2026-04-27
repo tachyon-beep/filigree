@@ -10,7 +10,7 @@ import pytest
 from click.testing import CliRunner
 
 from filigree.cli import cli
-from tests._seeds import SeededProject, seed_bugs, seed_observations, seed_open_bug
+from tests._seeds import SeededProject, seed_bugs, seed_file, seed_finding, seed_observations, seed_open_bug
 
 
 @pytest.fixture
@@ -88,5 +88,49 @@ def initialized_project_with_many_obs(initialized_project: Path) -> SeededProjec
         with get_db() as db:
             ids = seed_observations(db, count=3)
         return SeededProject(path=initialized_project, obs_ids=ids)
+    finally:
+        os.chdir(original)
+
+
+@pytest.fixture
+def initialized_project_with_file(initialized_project: Path) -> SeededProject:
+    from filigree.cli_common import get_db
+
+    original = os.getcwd()
+    os.chdir(str(initialized_project))
+    try:
+        with get_db() as db:
+            fid = seed_file(db)
+        return SeededProject(path=initialized_project, file_id=fid)
+    finally:
+        os.chdir(original)
+
+
+@pytest.fixture
+def initialized_project_with_finding(initialized_project: Path) -> SeededProject:
+    from filigree.cli_common import get_db
+
+    original = os.getcwd()
+    os.chdir(str(initialized_project))
+    try:
+        with get_db() as db:
+            fid = seed_file(db)
+            finding_id = seed_finding(db, file_id=fid)
+        return SeededProject(path=initialized_project, file_id=fid, finding_id=finding_id)
+    finally:
+        os.chdir(original)
+
+
+@pytest.fixture
+def initialized_project_with_many_findings(initialized_project: Path) -> SeededProject:
+    from filigree.cli_common import get_db
+
+    original = os.getcwd()
+    os.chdir(str(initialized_project))
+    try:
+        with get_db() as db:
+            fid = seed_file(db)
+            finding_ids = [seed_finding(db, file_id=fid, rule_id=f"rule-{i}", message=f"Finding {i}") for i in range(3)]
+        return SeededProject(path=initialized_project, file_id=fid, finding_ids=finding_ids)
     finally:
         os.chdir(original)
