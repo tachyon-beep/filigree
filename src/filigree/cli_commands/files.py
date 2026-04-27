@@ -17,7 +17,8 @@ from typing import Any, cast
 import click
 
 from filigree.cli_common import get_db
-from filigree.core import VALID_ASSOC_TYPES, VALID_FINDING_STATUSES, VALID_SEVERITIES
+from filigree.core import VALID_ASSOC_TYPES, VALID_FINDING_STATUSES, VALID_SEVERITIES, find_filigree_anchor
+from filigree.paths import safe_path
 from filigree.types.api import BatchFailure, ErrorCode
 from filigree.types.core import AssocType, FindingStatus
 
@@ -330,10 +331,30 @@ def register_file_cmd(
                 click.echo(f"Error: Invalid metadata JSON: {e}", err=True)
             sys.exit(1)
 
+    # Validate the path before opening the DB: reject absolute paths and traversals.
+    try:
+        project_root, _ = find_filigree_anchor()
+    except Exception:
+        # Let get_db() surface the proper error below.
+        project_root = None
+
+    if project_root is not None:
+        try:
+            resolved = safe_path(path, project_root)
+            canonical_path = str(resolved.relative_to(project_root.resolve()))
+        except ValueError as e:
+            if as_json:
+                click.echo(json_mod.dumps({"error": str(e), "code": ErrorCode.VALIDATION}))
+            else:
+                click.echo(f"Error: {e}", err=True)
+            sys.exit(1)
+    else:
+        canonical_path = path
+
     with get_db() as db:
         try:
             file_record = db.register_file(
-                path,
+                canonical_path,
                 language=language or "",
                 file_type=file_type or "",
                 metadata=parsed_metadata,

@@ -478,6 +478,24 @@ class TestRegisterFileCommand:
         assert "error" in data
         assert data["code"] == "VALIDATION"
 
+    def test_register_file_absolute_path_rejected(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        """Absolute paths must be rejected with VALIDATION error, matching MCP contract."""
+        runner, _ = cli_in_project
+        result = runner.invoke(cli, ["register-file", "/etc/passwd", "--json"])
+        assert result.exit_code == 1
+        data = json.loads(result.output)
+        assert "error" in data
+        assert data["code"] == "VALIDATION"
+
+    def test_register_file_traversal_rejected(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        """Path traversal (../../escape) must be rejected with VALIDATION error, matching MCP contract."""
+        runner, _ = cli_in_project
+        result = runner.invoke(cli, ["register-file", "../../escape", "--json"])
+        assert result.exit_code == 1
+        data = json.loads(result.output)
+        assert "error" in data
+        assert data["code"] == "VALIDATION"
+
 
 # ---------------------------------------------------------------------------
 # TestListFindingsCommand

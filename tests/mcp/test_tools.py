@@ -1599,9 +1599,11 @@ class TestFileTools:
         assert created["status"] == "created"
 
         files = _parse(await call_tool("get_issue_files", {"issue_id": issue.id}))
-        assert len(files) == 1
-        assert files[0]["file_id"] == file_data["id"]
-        assert files[0]["assoc_type"] == "task_for"
+        assert "items" in files
+        assert files["has_more"] is False
+        assert len(files["items"]) == 1
+        assert files["items"][0]["file_id"] == file_data["id"]
+        assert files["items"][0]["assoc_type"] == "task_for"
 
     async def test_add_file_association_invalid_assoc_type(self, mcp_db: FiligreeDB) -> None:
         issue = mcp_db.create_issue("Issue for invalid assoc")
@@ -1656,8 +1658,10 @@ class TestFileTools:
                 {"file_id": file_data["id"], "event_type": "association"},
             )
         )
-        assert timeline["total"] >= 1
-        assert any(e["type"] == "association_created" for e in timeline["results"])
+        assert "items" in timeline
+        assert timeline["has_more"] is False
+        assert len(timeline["items"]) >= 1
+        assert any(e["type"] == "association_created" for e in timeline["items"])
 
     async def test_get_file_timeline_invalid_event_type(self, mcp_db: FiligreeDB) -> None:
         file_data = _parse(await call_tool("register_file", {"path": "src/timeline_invalid.py"}))

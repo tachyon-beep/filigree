@@ -112,28 +112,16 @@ def _safe_path(raw: str) -> Path:
     """Resolve a user-supplied path safely within the project root.
 
     Raises ValueError for paths that escape the project directory.
+    Delegates to :func:`filigree.paths.safe_path` so the same logic is
+    shared with the CLI surface.
     """
-    if Path(raw).is_absolute():
-        msg = f"Absolute paths not allowed: {raw}"
-        raise ValueError(msg)
+    from filigree.paths import safe_path
 
     filigree_dir = _get_filigree_dir()
     if filigree_dir is None:
         msg = "Project directory not initialized"
         raise ValueError(msg)
-
-    # Resolve relative to project root (parent of .filigree/)
-    base = filigree_dir.resolve().parent
-    resolved = (base / raw).resolve()
-
-    # Ensure resolved path is under the project root
-    try:
-        resolved.relative_to(base)
-    except ValueError:
-        msg = f"Path escapes project directory: {raw}"
-        raise ValueError(msg) from None
-
-    return resolved
+    return safe_path(raw, filigree_dir.parent)
 
 
 # ---------------------------------------------------------------------------

@@ -343,7 +343,10 @@ async def _handle_get_file_timeline(arguments: dict[str, Any]) -> list[TextConte
         timeline_result = tracker.get_file_timeline(file_id, limit=limit, offset=offset, event_type=event_type)
     except KeyError:
         return _text(ErrorResponse(error=f"File not found: {file_id}", code=ErrorCode.NOT_FOUND))
-    return _text(timeline_result)
+    items = timeline_result["results"]
+    has_more = timeline_result["has_more"]
+    next_offset = (offset + len(items)) if has_more else None
+    return _text(_list_response(items, has_more=has_more, next_offset=next_offset))
 
 
 async def _handle_get_issue_files(arguments: dict[str, Any]) -> list[TextContent]:
@@ -358,7 +361,8 @@ async def _handle_get_issue_files(arguments: dict[str, Any]) -> list[TextContent
         tracker.get_issue(issue_id)
     except KeyError:
         return _text(ErrorResponse(error=f"Issue not found: {issue_id}", code=ErrorCode.NOT_FOUND))
-    return _text(tracker.get_issue_files(issue_id))
+    items = tracker.get_issue_files(issue_id)
+    return _text(_list_response(items, has_more=False))
 
 
 async def _handle_add_file_association(arguments: dict[str, Any]) -> list[TextContent]:
