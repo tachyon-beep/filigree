@@ -65,7 +65,7 @@ def workflow_statuses(as_json: bool) -> None:
 def types_cmd(as_json: bool) -> None:
     """List all registered issue types with pack info."""
     with get_db() as db:
-        types_list = []
+        types_list: list[dict[str, Any]] = []
         for tpl in db.templates.list_types():
             types_list.append(
                 {
@@ -73,7 +73,8 @@ def types_cmd(as_json: bool) -> None:
                     "display_name": tpl.display_name,
                     "description": tpl.description,
                     "pack": tpl.pack,
-                    "states": [s.name for s in tpl.states],
+                    "initial_state": tpl.initial_state,
+                    "states": [{"name": s.name, "category": s.category} for s in tpl.states],
                 }
             )
         types_list.sort(key=lambda t: str(t["type"]))
@@ -83,7 +84,7 @@ def types_cmd(as_json: bool) -> None:
             return
 
         for t in types_list:
-            states = " → ".join(t["states"])
+            states = " → ".join(s["name"] for s in t["states"])
             click.echo(f"  {t['type']:<15} [{t['pack']}] {states}")
 
 
@@ -205,6 +206,7 @@ def packs_cmd(as_json: bool) -> None:
                                 "display_name": p.display_name,
                                 "description": p.description,
                                 "types": sorted(p.types.keys()),
+                                "requires_packs": list(p.requires_packs),
                             }
                             for p in sorted(packs, key=lambda p: p.pack)
                         ],

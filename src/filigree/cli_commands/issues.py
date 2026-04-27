@@ -213,14 +213,16 @@ def list_issues(
                 label=label_filter,
                 label_prefix=label_prefix,
                 not_label=not_label,
-                limit=limit,
+                limit=limit + 1 if limit > 0 else limit,
                 offset=offset,
             )
         except ValueError as e:
             raise click.ClickException(str(e)) from e
 
+        has_more = limit > 0 and len(issues) > limit
+        issues = issues[:limit] if has_more else issues
+
         if as_json:
-            has_more = limit > 0 and len(issues) == limit
             list_payload: dict[str, Any] = {"items": [i.to_dict() for i in issues], "has_more": has_more}
             if has_more:
                 list_payload["next_offset"] = offset + len(issues)

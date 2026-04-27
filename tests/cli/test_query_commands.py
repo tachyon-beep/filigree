@@ -145,6 +145,9 @@ class TestJsonOutput:
         data = json.loads(result.output)
         # 1 created + auto-seeded "Future" release = 2 ready
         assert len(data["items"]) == 2
+        # Items must be SlimIssue shape (5 keys): no full IssueDict.
+        item = data["items"][0]
+        assert set(item.keys()) == {"issue_id", "title", "status", "priority", "type"}
 
     def test_stats_json(self, cli_in_project: tuple[CliRunner, Path]) -> None:
         runner, _ = cli_in_project
@@ -161,6 +164,9 @@ class TestJsonOutput:
         assert result.exit_code == 0
         data = json.loads(result.output)
         assert len(data["items"]) == 1
+        # Items must be SlimIssue shape (5 keys): no full IssueDict.
+        item = data["items"][0]
+        assert set(item.keys()) == {"issue_id", "title", "status", "priority", "type"}
 
 
 class TestBlockedJson:
@@ -175,6 +181,10 @@ class TestBlockedJson:
         assert result.exit_code == 0
         data = json.loads(result.output)
         assert len(data["items"]) == 1
+        # Items must be BlockedIssue shape: SlimIssue + blocked_by (no full IssueDict).
+        item = data["items"][0]
+        assert "blocked_by" in item
+        assert "description" not in item  # absence check catches IssueDict drift
 
 
 class TestCycleTimeDisplay:

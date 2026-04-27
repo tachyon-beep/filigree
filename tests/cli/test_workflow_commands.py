@@ -31,7 +31,13 @@ class TestWorkflowCli:
         assert not data["has_more"]
         type_names = {t["type"] for t in data["items"]}
         assert "task" in type_names
-        assert all("states" in t for t in data["items"])
+        # Each item must include initial_state and states as {name, category} dicts.
+        for t in data["items"]:
+            assert "initial_state" in t, f"initial_state missing from type {t['type']}"
+            assert "states" in t
+            assert len(t["states"]) > 0
+            assert isinstance(t["states"][0], dict), "states[0] must be a dict with name/category"
+            assert {"name", "category"} <= set(t["states"][0].keys())
 
     def test_type_info_shows_workflow(self, cli_in_project: tuple[CliRunner, Path]) -> None:
         runner, _ = cli_in_project
@@ -114,6 +120,10 @@ class TestWorkflowCli:
         assert not data["has_more"]
         pack_names = {p["pack"] for p in data["items"]}
         assert "core" in pack_names
+        # Each item must include requires_packs (matching PackListItem TypedDict).
+        for p in data["items"]:
+            assert "requires_packs" in p, f"requires_packs missing from pack {p['pack']}"
+            assert isinstance(p["requires_packs"], list)
 
     def test_validate_clean_issue(self, cli_in_project: tuple[CliRunner, Path]) -> None:
         runner, _ = cli_in_project
@@ -585,6 +595,8 @@ class TestBatchCli:
         assert result.exit_code == 0
         data = json.loads(result.output)
         assert len(data["succeeded"]) == 2
+        # succeeded must contain issue_ids (not comment_ids) to match MCP shape.
+        assert set(data["succeeded"]) == {id1, id2}
         assert data["failed"] == []
 
         comments = runner.invoke(cli, ["get-comments", id1, "--json"])

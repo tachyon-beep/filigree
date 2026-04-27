@@ -42,7 +42,18 @@ def ready(as_json: bool) -> None:
         issues = db.get_ready()
 
         if as_json:
-            click.echo(json_mod.dumps({"items": [i.to_dict() for i in issues], "has_more": False}, indent=2, default=str))
+            click.echo(
+                json_mod.dumps(
+                    {
+                        "items": [
+                            {"issue_id": i.id, "title": i.title, "status": i.status, "priority": i.priority, "type": i.type} for i in issues
+                        ],
+                        "has_more": False,
+                    },
+                    indent=2,
+                    default=str,
+                )
+            )
             return
 
         for issue in issues:
@@ -65,7 +76,26 @@ def blocked(as_json: bool) -> None:
         issues = db.get_blocked()
 
         if as_json:
-            click.echo(json_mod.dumps({"items": [i.to_dict() for i in issues], "has_more": False}, indent=2, default=str))
+            click.echo(
+                json_mod.dumps(
+                    {
+                        "items": [
+                            {
+                                "issue_id": i.id,
+                                "title": i.title,
+                                "status": i.status,
+                                "priority": i.priority,
+                                "type": i.type,
+                                "blocked_by": i.blocked_by,
+                            }
+                            for i in issues
+                        ],
+                        "has_more": False,
+                    },
+                    indent=2,
+                    default=str,
+                )
+            )
             return
 
         for issue in issues:

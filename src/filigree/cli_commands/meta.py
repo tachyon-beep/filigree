@@ -165,11 +165,15 @@ def stats(as_json: bool) -> None:
 def search(query: str, limit: int, offset: int, as_json: bool) -> None:
     """Search issues by title/description."""
     with get_db() as db:
-        issues = db.search_issues(query, limit=limit, offset=offset)
+        issues = db.search_issues(query, limit=limit + 1 if limit > 0 else limit, offset=offset)
+        has_more = limit > 0 and len(issues) > limit
+        issues = issues[:limit] if has_more else issues
 
         if as_json:
-            has_more = limit > 0 and len(issues) == limit
-            search_payload: dict[str, Any] = {"items": [i.to_dict() for i in issues], "has_more": has_more}
+            search_payload: dict[str, Any] = {
+                "items": [{"issue_id": i.id, "title": i.title, "status": i.status, "priority": i.priority, "type": i.type} for i in issues],
+                "has_more": has_more,
+            }
             if has_more:
                 search_payload["next_offset"] = offset + len(issues)
             click.echo(json_mod.dumps(search_payload, indent=2, default=str))
@@ -388,7 +392,7 @@ def batch_add_comment(ctx: click.Context, text: str, issue_ids: tuple[str, ...],
             click.echo(
                 json_mod.dumps(
                     {
-                        "succeeded": [str(row["comment_id"]) for row in commented],
+                        "succeeded": [str(row["id"]) for row in commented],
                         "failed": errors,
                     },
                     indent=2,
