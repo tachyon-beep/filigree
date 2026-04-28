@@ -1,9 +1,11 @@
 1. This project uses UV like millions of other projects. Use uv run rather than trying literally nothing and then saying its broken.
 
-<!-- filigree:instructions:v2.0.0:9a4b7a16 -->
+<!-- filigree:instructions:v2.0.0:1e923b63 -->
 ## Filigree Issue Tracker
 
 Use `filigree` for all task tracking in this project. Data lives in `.filigree/`.
+
+Filigree is a component of the Loom federation. The HTTP `loom` generation at `/api/loom/*` is the stable contract; classic at `/api/v1/*` is frozen. See ADR-002.
 
 ### If you see a `ForeignDatabaseError`
 
@@ -56,6 +58,7 @@ filigree list --label=bug --label=P1        # Filter by multiple labels (AND)
 filigree list --label-prefix=cluster:       # Filter by label namespace prefix
 filigree list --not-label=wontfix           # Exclude issues with label
 filigree show <id>                          # Detailed issue view
+filigree show <id> --with-files             # Include file associations (off by default)
 
 # Creating & updating
 filigree create "Title" --type=task --priority=2          # New issue
@@ -71,7 +74,7 @@ filigree blocked                            # Show blocked issues
 # Comments & labels
 filigree add-comment <id> "text"            # Add comment
 filigree get-comments <id>                  # List comments
-filigree add-label <id> <label>             # Add label
+filigree add-label <label> <id>             # Add label
 filigree remove-label <id> <label>          # Remove label
 filigree labels                             # List all labels by namespace
 filigree taxonomy                           # Show reserved namespaces and vocabulary
@@ -87,6 +90,8 @@ filigree guide <pack>                       # Display workflow guide for a pack
 # Atomic claiming
 filigree claim <id> --assignee <name>            # Claim issue (optimistic lock)
 filigree claim-next --assignee <name>            # Claim highest-priority ready issue
+filigree start-work <id> --assignee <name>       # Claim + transition to in_progress
+filigree start-next-work --assignee <name>       # Claim-next + transition to in_progress
 
 # Batch operations
 filigree batch-update <ids...> --priority=0      # Update multiple issues
@@ -100,6 +105,36 @@ filigree changes --since 2026-01-01T00:00:00    # Events since timestamp
 filigree events <id>                             # Event history for issue
 filigree explain-state <type> <state>            # Explain a workflow state
 
+# Observations (agent scratchpad)
+filigree observe "note" --file=src/foo.py --line=42      # Fire-and-forget note
+filigree list-observations                               # List active observations
+filigree dismiss-observation <id>                        # Drop a single observation
+filigree promote-observation <id>                        # Promote to a tracked issue
+filigree batch-dismiss-observations <ids...>             # Drop several at once
+
+# Files
+filigree list-files                                      # List tracked file records
+filigree get-file <file_id>                              # File detail with associations
+filigree get-file-timeline <file_id>                     # Per-file event timeline
+filigree register-file <path>                            # Register a file record
+filigree add-file-association <file_id> <issue_id>       # Link file to issue
+
+# Findings (scan-result triage)
+filigree list-findings                                   # List scan findings
+filigree get-finding <id>                                # Finding detail
+filigree update-finding <id> --status=...                # Update finding state
+filigree promote-finding <id>                            # Promote finding to issue
+filigree dismiss-finding <id>                            # Dismiss finding
+filigree batch-update-findings <ids...> --status=...     # Update many at once
+
+# Scanners
+filigree list-scanners                                   # Registered scanners
+filigree trigger-scan <scanner>                          # Run a scanner
+filigree trigger-scan-batch <scanners...>                # Run several scanners
+filigree preview-scan <scanner>                          # Dry-run a scanner
+filigree get-scan-status <scan_id>                       # Scan progress / results
+filigree report-finding ...                              # Report a finding from a scanner
+
 # All commands support --json and --actor flags
 filigree --actor bot-1 create "Title"            # Specify actor identity
 filigree list --json                             # Machine-readable output
@@ -109,6 +144,10 @@ filigree stats                              # Project statistics
 filigree search "query"                     # Search issues
 filigree doctor                             # Health check
 ```
+
+Every short-form CLI command (e.g. `ready`, `labels`, `update`) has a permanent
+verb-noun alias matching the MCP tool name (`get-ready`, `list-labels`,
+`update-issue`). Both forms are stable — pick whichever reads better.
 
 ### File Records & Scan Findings (API)
 
