@@ -81,3 +81,81 @@ def test_run_doctor_sets_schema_mismatch_forward_code(
     schema_result = schema_results[0]
     assert schema_result.passed is False
     assert schema_result.code == "schema_mismatch_forward"
+
+
+# ---------------------------------------------------------------------------
+# F2: Dashboard startup + per-project schema-mismatch handling
+# ---------------------------------------------------------------------------
+
+
+def test_dashboard_main_exits_3_on_forward_mismatch(
+    v_plus_one_project: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """``filigree dashboard`` (ethereal mode) must exit 3 with stderr
+    guidance — no Python stack trace — when the project DB is v+1.
+
+    Calls :func:`filigree.dashboard.main` directly; ``find_filigree_root``
+    resolves to the fixture via ``monkeypatch.chdir``. uvicorn never gets
+    a chance to start because :class:`SchemaVersionMismatchError` is
+    caught at the ``from_filigree_dir`` call before app construction.
+    """
+    from filigree import dashboard
+
+    monkeypatch.chdir(v_plus_one_project)
+    with pytest.raises(SystemExit) as excinfo:
+        dashboard.main(no_browser=True)
+
+    assert excinfo.value.code == 3, f"expected exit 3 for forward schema mismatch, got {excinfo.value.code}"
+    captured = capsys.readouterr()
+    assert "Downgrade is not supported" in captured.err
+    # Confirm we did not fall through to uvicorn / app construction
+    assert "Filigree" not in captured.out or "Dashboard" not in captured.out
+
+
+def test_dashboard_server_mode_returns_409_for_v_plus_one_project(
+    v_plus_one_project: Path,
+) -> None:
+    """Server-mode lazy open: a v+1 project returns a structured 409
+    SCHEMA_MISMATCH on the project-scoped route, NOT a 500 stack trace.
+
+    Other projects in the same server are unaffected — verified by the
+    explicit-key route returning the schema-mismatch envelope while the
+    server itself stays up.
+    """
+    from fastapi.testclient import TestClient
+
+    import filigree.dashboard as dash
+    from filigree.dashboard import ProjectStore, create_app
+
+    # Build a ProjectStore manually pointing at the v+1 fixture, bypassing
+    # server.json — the fixture's ``.filigree/`` is the project record.
+    store = ProjectStore()
+    filigree_path = v_plus_one_project / FILIGREE_DIR_NAME
+    store._projects = {"badproj": {"name": "badproj", "path": str(filigree_path)}}
+
+    original_db = dash._db
+    original_store = dash._project_store
+    dash._db = None
+    dash._project_store = store
+    try:
+        app = create_app(server_mode=True)
+        client = TestClient(app, raise_server_exceptions=False)
+        # Hit a project-scoped endpoint via /api/p/{key}/… — this triggers
+        # ProjectStore.get_db which raises SchemaVersionMismatchError, which
+        # the registered exception handler converts to 409 SCHEMA_MISMATCH.
+        resp = client.get("/api/p/badproj/issues")
+
+        assert resp.status_code == 409, f"expected 409, got {resp.status_code}: {resp.text}"
+        body = resp.json()
+        assert body["code"] == "SCHEMA_MISMATCH"
+        assert "Downgrade is not supported" in body["error"]
+
+        # Server is still alive — health check works
+        health = client.get("/api/health")
+        assert health.status_code == 200
+    finally:
+        dash._db = original_db
+        dash._project_store = original_store
+        store.close_all()

@@ -25,6 +25,7 @@ import json
 import logging
 import os
 import signal
+import sys
 import threading
 import time
 import webbrowser
@@ -50,6 +51,8 @@ from filigree.core import (
 
 # Re-export so test imports continue to work.
 from filigree.dashboard_routes.common import _safe_bounded_int as _safe_bounded_int
+from filigree.install_support.version_marker import format_schema_mismatch_guidance
+from filigree.types.api import SchemaVersionMismatchError
 
 STATIC_DIR = Path(__file__).parent / "static"
 DEFAULT_PORT = 8377
@@ -133,6 +136,22 @@ class ProjectStore:
             try:
                 db = FiligreeDB.from_filigree_dir(filigree_path, check_same_thread=False)
                 self._dbs[key] = db
+            except SchemaVersionMismatchError as exc:
+                # Operator-visible expected condition (project DB written by a
+                # newer filigree); log at WARNING and re-raise so the FastAPI
+                # exception handler converts it to a 409 SCHEMA_MISMATCH for
+                # this project only — other projects in the server keep
+                # working.
+                logger.warning(
+                    "Project DB schema mismatch for key=%r path=%s: installed=v%d database=v%d",
+                    key,
+                    filigree_path,
+                    exc.installed,
+                    exc.database,
+                )
+                if db is not None:
+                    db.close()
+                raise
             except Exception:
                 logger.error("Failed to open project DB for key=%r path=%s", key, filigree_path, exc_info=True)
                 if db is not None:
@@ -341,6 +360,20 @@ def create_app(*, server_mode: bool = False) -> ASGIApp:
         503: ErrorCode.NOT_INITIALIZED,
     }
 
+    @app.exception_handler(SchemaVersionMismatchError)
+    async def _schema_mismatch_to_envelope(_request: Any, exc: SchemaVersionMismatchError) -> JSONResponse:
+        # 409 Conflict — the request can't be served until the version
+        # mismatch is resolved (upgrade filigree or use a matching project).
+        # Server-mode: only the bad project's requests get this; others
+        # continue serving normally.
+        return JSONResponse(
+            {
+                "error": format_schema_mismatch_guidance(exc.installed, exc.database),
+                "code": ErrorCode.SCHEMA_MISMATCH,
+            },
+            status_code=409,
+        )
+
     @app.exception_handler(_StarletteHTTPException)
     async def _http_exception_to_envelope(_request: Any, exc: _StarletteHTTPException) -> JSONResponse:
         detail = exc.detail
@@ -543,7 +576,15 @@ def main(port: int = DEFAULT_PORT, *, no_browser: bool = False, server_mode: boo
         filigree_dir = find_filigree_root()
         config = read_config(filigree_dir)
         _config.update(config)
-        _db = FiligreeDB.from_filigree_dir(filigree_dir, check_same_thread=False)
+        try:
+            _db = FiligreeDB.from_filigree_dir(filigree_dir, check_same_thread=False)
+        except SchemaVersionMismatchError as exc:
+            # Forward schema mismatch — exit cleanly (code 3, matching
+            # `filigree doctor`) with the shared guidance text instead of
+            # dumping a Python stack trace. F1 owns the helper; F2 owns
+            # this dashboard-startup branch.
+            print(format_schema_mismatch_guidance(exc.installed, exc.database), file=sys.stderr)
+            sys.exit(3)
 
     app = create_app(server_mode=server_mode)
 
