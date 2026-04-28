@@ -56,6 +56,7 @@ class CheckResult:
     passed: bool
     message: str
     fix_hint: str = ""
+    code: str | None = None  # machine-readable check identifier; e.g. "schema_mismatch_forward"
 
     @property
     def icon(self) -> str:
@@ -391,12 +392,15 @@ def run_doctor(project_root: Path | None = None) -> list[CheckResult]:
             schema_version = conn.execute("PRAGMA user_version").fetchone()[0]
             results.append(CheckResult("filigree.db", True, f"{count} issues"))
             if schema_version > CURRENT_SCHEMA_VERSION:
+                from filigree.install_support.version_marker import format_schema_mismatch_guidance
+
                 results.append(
                     CheckResult(
                         "Schema version",
                         False,
                         f"v{schema_version} (this filigree supports v{CURRENT_SCHEMA_VERSION})",
-                        fix_hint="Database was created by a newer filigree version. Upgrade filigree.",
+                        fix_hint=format_schema_mismatch_guidance(CURRENT_SCHEMA_VERSION, schema_version),
+                        code="schema_mismatch_forward",
                     )
                 )
             elif schema_version < CURRENT_SCHEMA_VERSION:

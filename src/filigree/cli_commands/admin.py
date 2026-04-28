@@ -262,6 +262,12 @@ def doctor(fix: bool, verbose: bool) -> None:
         if not r.passed and r.fix_hint:
             click.echo(f"       -> {r.fix_hint}")
 
+    # Schema-mismatch (v+1) is a distinct exit code (3) from generic check
+    # failures (1). Don't attempt --fix on this — there's nothing to fix
+    # forward when the DB is newer than the installed filigree.
+    if any(r.code == "schema_mismatch_forward" for r in results):
+        sys.exit(3)
+
     if fix and failed > 0:
         click.echo("\nApplying fixes...")
         try:
