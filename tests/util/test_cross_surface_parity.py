@@ -565,58 +565,53 @@ class TestBatchMixedValidityParity:
         # Parity: both surfaces agree per-item that the missing id is NOT_FOUND.
         assert dash_item["code"] == mcp_item["code"] == ErrorCode.NOT_FOUND, f"dashboard={dash_item['code']!r} mcp={mcp_item['code']!r}"
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "Permanent: classic dashboard returns {updated, errors} (see "
-            "dashboard_routes/issues.py::api_batch_update); MCP returns "
-            "{succeeded, failed} (BatchResponse[SlimIssue] post-Phase D1). "
-            "ADR-002 freezes classic for the 1.x lifetime, so this "
-            "divergence is the wire contract — not a bug to fix. The "
-            "unified envelope ships at /api/loom/batch/* "
-            "(BatchResponse[SlimIssueLoom]); see "
-            "test_container_key_parity_loom for the loom-side resolution. "
-            "This xfail stays in place to flag any accidental drift in "
-            "classic's container keys (which would also flip the xfail to a "
-            "pass and surface the breakage)."
-        ),
-    )
-    async def test_container_key_parity(
+    async def test_classic_container_keys_frozen(
         self,
         dashboard_surface: AsyncClient,
-        mcp_surface: FiligreeDB,
     ) -> None:
+        """Classic dashboard ``/api/batch/update`` returns the frozen
+        ``{updated, errors}`` envelope per ADR-002 §8 (classic 1.x is
+        contract-frozen for the 1.x lifetime). This positive-shape pin
+        replaces the divergence-flagging strict-xfail
+        ``test_container_key_parity``: instead of asserting parity that
+        cannot exist (the two surfaces speak different generations on
+        purpose), we pin each surface's wire shape independently. Drift
+        in the classic shape — which would constitute a breaking change
+        to a frozen contract — fails this test.
+        """
         dash_create = await dashboard_surface.post("/api/issues", json={"title": "Real"})
         dash_real = dash_create.json()["id"]
         dash_resp = await dashboard_surface.post(
             "/api/batch/update",
             json={"issue_ids": [dash_real, "dash-ffffffffff"], "priority": 1},
         )
+        assert dash_resp.status_code == 200, dash_resp.text
         dash_body = dash_resp.json()
-
-        mcp_real = mcp_surface.create_issue("Real").id
-        from filigree.mcp_tools.issues import _handle_batch_update
-
-        mcp_body = _mcp_envelope(await _handle_batch_update({"issue_ids": [mcp_real, "mcp-ffffffffff"], "priority": 1}))
-
-        # Parity: both use the same container key for the failed-items list.
         dash_keys = set(dash_body.keys())
-        mcp_keys = set(mcp_body.keys())
-        assert ("failed" in dash_keys) == ("failed" in mcp_keys), f"dashboard keys={dash_keys!r} mcp keys={mcp_keys!r}"
-        assert ("errors" in dash_keys) == ("errors" in mcp_keys), f"dashboard keys={dash_keys!r} mcp keys={mcp_keys!r}"
 
-    async def test_container_key_parity_loom(
+        # Classic frozen shape: {updated, errors}. ADR-002 §8.
+        assert "updated" in dash_keys, f"classic dashboard missing 'updated': {dash_keys!r}"
+        assert "errors" in dash_keys, f"classic dashboard missing 'errors': {dash_keys!r}"
+        # And MUST NOT carry the unified-envelope keys (that's the loom
+        # surface's job; leakage here would mean the frozen contract
+        # changed).
+        assert "succeeded" not in dash_keys, f"classic dashboard leaked loom 'succeeded': {dash_keys!r}"
+        assert "failed" not in dash_keys, f"classic dashboard leaked loom 'failed': {dash_keys!r}"
+
+    async def test_loom_container_keys_unified(
         self,
         dashboard_surface: AsyncClient,
         mcp_surface: FiligreeDB,
     ) -> None:
-        """Loom-side resolution of the classic dashboard/MCP container-key
-        divergence: ``/api/loom/batch/update`` and MCP ``batch_update``
-        both expose ``{succeeded, failed}`` (``BatchResponse[SlimIssueLoom]``
-        on the dashboard side, ``BatchResponse[SlimIssue]`` on the MCP
-        side after Phase D1). What matters is that BOTH publish
-        ``succeeded`` and ``failed`` and that NEITHER publishes the
-        classic-only ``updated``/``errors`` keys.
+        """Loom-side positive-shape pin: ``/api/loom/batch/update`` and
+        MCP ``batch_update`` both expose ``{succeeded, failed}``
+        (``BatchResponse[SlimIssueLoom]`` on the dashboard side,
+        ``BatchResponse[SlimIssue]`` on the MCP side after Phase D1).
+        What matters is that BOTH publish ``succeeded`` and ``failed``
+        and that NEITHER publishes the classic-only
+        ``updated``/``errors`` keys. Paired with
+        ``test_classic_container_keys_frozen`` to codify ADR-002's
+        "classic is frozen, loom is the new wire shape" stance.
         """
         dash_create = await dashboard_surface.post("/api/issues", json={"title": "Real"})
         dash_real = dash_create.json()["id"]
