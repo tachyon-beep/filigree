@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+_No changes yet._
+
+## [2.0.0] — 2026-04-28 — The Filigree Component of Loom
+
+Filigree 2.0 reframes the product from "standalone issue tracker with an HTTP API"
+to "standalone issue tracker, plus a loosely-coupled component of the Loom federation."
+This release adds a stable HTTP generation contract (`/api/loom/*`), forward-migrates
+MCP and CLI to the loom vocabulary, ships composed operations (`start_work` /
+`start_next_work`), brings CLI to full parity with MCP, and adds schema-mismatch UX
+across every entry point.
+
 ### Changed (BREAKING — MCP)
 
 - **MCP forward-migrated to the loom vocabulary (Phase D of the 2.0 federation work package).**
@@ -216,8 +227,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **filigree-9fb21f2b4b**: `install_claude_code_hooks` no longer appends new `SessionStart` hooks to a user block that merely *mentions* "filigree" in a command. Reuse is now strict: only a block whose `matcher` is empty/missing AND that already holds a recognised filigree hook command (via `_hook_cmd_matches`) is a valid reuse target. Otherwise a dedicated unscoped block is created, so `session-context` and `ensure-dashboard` fire for every session source (startup, resume, clear, compact) instead of inheriting a narrower user matcher.
   - **filigree-09d0dff729**: `_find_filigree_mcp_command` now probes both `filigree-mcp` and `filigree-mcp.exe` in the uv-tool branch. Previously the Windows filename was skipped in favour of the bare-`filigree-mcp` fallback, even when an absolute `~/.local/bin/filigree-mcp.exe` existed.
 
-## [2.0.0] - Unreleased
-
 ### Added
 
 - **Unified error envelope (2.0 wire shape).** Every error response across MCP tools, dashboard routes, and CLI `--json` output — including the per-item `failed[]` entries inside batch responses — now emits the same flat shape: `{"error": "<message>", "code": "<UPPERCASE_CODE>", "details"?: {…}}`. The 11-member `ErrorCode` enum (`VALIDATION`, `NOT_FOUND`, `CONFLICT`, `INVALID_TRANSITION`, `PERMISSION`, `NOT_INITIALIZED`, `IO`, `INVALID_API_URL`, `STOP_FAILED`, `SCHEMA_MISMATCH`, `INTERNAL`) replaces 27 ad-hoc lowercase codes that previously differed per surface. `ErrorResponse` is defined as a `TypedDict` and the dashboard helper `_error_response` now constructs through it so mypy gates the shape at every emit site; a new `errorcode_to_http_status()` function uses `match` + `assert_never` so adding a 12th member fails the build.
@@ -336,6 +345,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **filigree-910f1cb024**: `validate_issue` no longer returns `valid=True` for issues whose type isn't in the active registry or whose current status isn't a declared state for that type. Both cases are reachable via bulk import, migration, and pack disable after creation; the previous short-circuit on `tpl is None` plus the missing state-membership check meant the CLI and MCP `validate_issue` quietly rubber-stamped structurally broken rows. `ValidationResult.errors` now surfaces both conditions with actionable messages listing the valid state names.
   - **filigree-5c9f9aa7c2**: MCP `reload_templates` no longer propagates `ValueError` as an internal server error when `.filigree/config.json` is corrupt. `_refresh_enabled_packs` raises on malformed JSON, and `mcp_server.call_tool` re-raises unhandled exceptions — the handler now catches `ValueError` and returns a structured `validation_error` response, matching the contract of every other MCP tool.
   - **filigree-33e7bf9947**: MCP `reload_templates` now calls `_refresh_summary()` after a successful reload, so `context.md` reflects the new enabled-packs state. Every other MCP mutation refreshes the summary; this one skipped, so the `In Progress` and `Needs Attention` sections (both template-derived) went stale until the next unrelated mutation.
+
+### Frozen (no changes)
+
+- **The `classic` generation at `/api/v1/*`** continues to work unchanged.
+  Existing 1.x integrations require no code changes for filigree 2.0
+  compatibility at the HTTP surface. ADR-002 §8 specifies the retirement
+  process — none planned.
+
+### Stability posture
+
+- `classic` generation: frozen indefinitely. Retirement requires a new
+  ADR (ADR-002 §8).
+- `loom` generation: stable contract. Additions must preserve wire
+  compatibility; breaking evolution introduces a new named generation.
+- MCP and CLI: reflect the living surface. Shape evolves alongside
+  filigree releases; pinning consumers should use HTTP generations.
+- Schema versions: forward-migration only. Downgrade is not supported;
+  schema-mismatch surfaces as `ErrorCode.SCHEMA_MISMATCH` (CLI / dashboard
+  / MCP) or a stderr warning + `.filigree/INSTALL_VERSION` marker
+  (`filigree init`).
 
 ## [1.6.1] - 2026-04-01
 
