@@ -186,11 +186,11 @@ across every entry point.
   update. The new loom-shape envelopes are the stable forms going
   forward.
 
-### Changed
+### Changed (envelope unification)
 
 - **Stage 2B task 2b.0 — `BatchFailureDetail` retired in favour of `BatchFailure` (Python API only; no wire-contract change).** The unused Stage 1 `BatchFailure.item_id` field reverted to `id` before the type got any live wire consumers, so `db_issues.py` batch constructions, the three legacy response types (`BatchUpdateResponse`, `BatchCloseResponse`, `BatchActionResponse`), and the `valid_transitions` enrichment at `db_issues.py:899` all migrate cleanly. The HTTP/MCP/CLI surfaces emit the same `{id, error, code, valid_transitions?}` shape for batch failures. `BatchFailure` gains the optional `valid_transitions: NotRequired[list[TransitionHint]]` field that `BatchFailureDetail` previously carried. Python consumers importing `BatchFailureDetail` from `filigree.types.api` now raise `ImportError`; migrate to `BatchFailure`.
 
-### Fixed
+### Fixed (envelope bed-down)
 
 - **2.0 envelope bed-down — residual cross-surface parity fixes.**
   - `db._batch_with_transition_errors` (used by `batch_close` and `batch_update`) now routes per-item `ValueError`s through `classify_value_error` instead of hardcoding `ErrorCode.INVALID_TRANSITION`. Validation-class errors (`"Field validation failed: …"`, `"Priority must be between 0 and 4"`, `"Cannot close issue {id}: hard-enforcement gate requires fields: …"`) now surface as `VALIDATION` across dashboard batch endpoints, MCP `batch_*` tools, and CLI `--json` output. `valid_transitions` enrichment is gated on `code == INVALID_TRANSITION`, so validation failures no longer get a meaningless transition list attached.
@@ -227,7 +227,7 @@ across every entry point.
   - **filigree-9fb21f2b4b**: `install_claude_code_hooks` no longer appends new `SessionStart` hooks to a user block that merely *mentions* "filigree" in a command. Reuse is now strict: only a block whose `matcher` is empty/missing AND that already holds a recognised filigree hook command (via `_hook_cmd_matches`) is a valid reuse target. Otherwise a dedicated unscoped block is created, so `session-context` and `ensure-dashboard` fire for every session source (startup, resume, clear, compact) instead of inheriting a narrower user matcher.
   - **filigree-09d0dff729**: `_find_filigree_mcp_command` now probes both `filigree-mcp` and `filigree-mcp.exe` in the uv-tool branch. Previously the Windows filename was skipped in favour of the bare-`filigree-mcp` fallback, even when an absolute `~/.local/bin/filigree-mcp.exe` existed.
 
-### Added
+### Added (2.0 foundations)
 
 - **Unified error envelope (2.0 wire shape).** Every error response across MCP tools, dashboard routes, and CLI `--json` output — including the per-item `failed[]` entries inside batch responses — now emits the same flat shape: `{"error": "<message>", "code": "<UPPERCASE_CODE>", "details"?: {…}}`. The 11-member `ErrorCode` enum (`VALIDATION`, `NOT_FOUND`, `CONFLICT`, `INVALID_TRANSITION`, `PERMISSION`, `NOT_INITIALIZED`, `IO`, `INVALID_API_URL`, `STOP_FAILED`, `SCHEMA_MISMATCH`, `INTERNAL`) replaces 27 ad-hoc lowercase codes that previously differed per surface. `ErrorResponse` is defined as a `TypedDict` and the dashboard helper `_error_response` now constructs through it so mypy gates the shape at every emit site; a new `errorcode_to_http_status()` function uses `match` + `assert_never` so adding a 12th member fails the build.
 - **`classify_value_error(message)`** helper in `filigree.types.api` — substring heuristic that maps `ValueError` messages mentioning `status`/`transition`/`state` to `ErrorCode.INVALID_TRANSITION` and everything else to `ErrorCode.VALIDATION`. Previously the MCP surface used the heuristic inline while dashboard and CLI blanket-classified every `ValueError` as `INVALID_TRANSITION`, producing different codes for the same input. The three surfaces now share one implementation; the heuristic retires once Stage 3 introduces typed `InvalidTransitionError` raise sites.
@@ -254,7 +254,7 @@ across every entry point.
 - **`ProjectNotInitialisedError`** (`FileNotFoundError` subclass) — raised when no `.filigree.conf` is found anywhere up to `/`. Error message points at `filigree init` and `filigree doctor`.
 - **`filigree doctor`** flags `~/.filigree.conf` if present (a conf at `$HOME` claims everything beneath it; almost always a mistake) and reports whether the project's `.filigree.conf` anchor exists.
 
-### Changed
+### Changed (HTTP wire-shape)
 
 - **Wire-shape unification (breaking for callers branching on error `code`).**
   - `GET /api/release/{id}/tree` on a non-release issue now returns `code: "NOT_FOUND"` (was `"VALIDATION"`). Status remains 404.
@@ -273,7 +273,7 @@ across every entry point.
 - `FiligreeDB.from_project` now resolves via `find_filigree_anchor`, falling back to `from_filigree_dir` for legacy installs.
 - Error messages for "project not initialised" now point at `filigree init` and `filigree doctor` explicitly.
 
-### Fixed
+### Fixed (early 2.0 bug-fix wave)
 
 - **filigree-7840eae0bd**: agents in a directory with no `.filigree/` would silently walk up into a parent's `.filigree/` and write tickets into the wrong DB. Mitigated by the explicit `.filigree.conf` claim model plus the `WrongProjectError` write guard.
 - `WrongProjectError` no longer rejects legitimate IDs from projects whose prefix contains a hyphen. The check is now anchored on `startswith(prefix + "-")` instead of splitting the ID on the first `-` (which broke any project initialised with a hyphenated `cwd.name`, e.g. `my-app/` generating IDs like `my-app-abc1234567`).
