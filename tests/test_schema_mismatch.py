@@ -114,6 +114,149 @@ def test_dashboard_main_exits_3_on_forward_mismatch(
     assert "Filigree" not in captured.out or "Dashboard" not in captured.out
 
 
+def test_mcp_server_warm_degraded_on_v_plus_one(
+    v_plus_one_project: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """MCP server stays warm on a v+1 DB:
+
+    * ``_attempt_startup`` does not raise.
+    * ``list_tools`` returns the full tool registry (no DB needed).
+    * Every ``call_tool`` invocation returns a structured
+      ``SCHEMA_MISMATCH`` envelope carrying the shared guidance text,
+      regardless of the tool's normal arity / requirements.
+
+    Tests three representative tools — a read (``get_issue``), a list
+    (``list_issues``), and a write (``create_issue``) — to confirm the
+    guard sits at the dispatcher entry, before any per-tool dispatch.
+    """
+    import asyncio
+
+    import filigree.mcp_server as mcp_mod
+
+    filigree_dir = v_plus_one_project / FILIGREE_DIR_NAME
+
+    # Reset/restore module globals via monkeypatch so this test cannot
+    # leak state into siblings even if it raises mid-flight.
+    monkeypatch.setattr(mcp_mod, "db", None)
+    monkeypatch.setattr(mcp_mod, "_filigree_dir", None)
+    monkeypatch.setattr(mcp_mod, "_schema_mismatch", None)
+
+    # The startup helper must catch SchemaVersionMismatchError and set
+    # the flag rather than letting it escape.
+    mcp_mod._attempt_startup(filigree_dir)
+    assert mcp_mod.db is None, "db should remain unset on schema mismatch"
+    assert mcp_mod._schema_mismatch is not None, "schema-mismatch flag must be set"
+    assert mcp_mod._schema_mismatch.database == CURRENT_SCHEMA_VERSION + 1
+    assert mcp_mod._schema_mismatch.installed == CURRENT_SCHEMA_VERSION
+
+    # list_tools must still work — it touches no DB state.
+    tools = asyncio.run(mcp_mod.list_tools())
+    assert len(tools) > 0, "list_tools should expose the full registry"
+    tool_names = {t.name for t in tools}
+    assert {"get_issue", "list_issues", "create_issue"}.issubset(tool_names)
+
+    # Every call_tool must short-circuit to SCHEMA_MISMATCH — exercise
+    # a read, a list, and a write to prove the guard is dispatcher-wide,
+    # not handler-local.
+    import json as _json
+
+    for tool_name, args in (
+        ("get_issue", {"issue_id": "anything"}),
+        ("list_issues", {}),
+        ("create_issue", {"title": "x", "type": "task"}),
+    ):
+        result = asyncio.run(mcp_mod.call_tool(tool_name, args))
+        assert len(result) == 1, f"{tool_name}: expected single TextContent reply"
+        payload = _json.loads(result[0].text)
+        assert payload["code"] == "SCHEMA_MISMATCH", f"{tool_name}: expected SCHEMA_MISMATCH envelope, got {payload}"
+        assert "Downgrade is not supported" in payload["error"], f"{tool_name}: missing guidance text in error: {payload['error']}"
+
+    # An unknown tool should also short-circuit to SCHEMA_MISMATCH —
+    # the guard runs before the unknown-tool fast-path, so degraded mode
+    # is the more informative signal for the client.
+    result = asyncio.run(mcp_mod.call_tool("nonexistent_tool", {}))
+    payload = _json.loads(result[0].text)
+    assert payload["code"] == "SCHEMA_MISMATCH"
+
+
+def test_mcp_server_logs_degraded_warning_on_v_plus_one(
+    v_plus_one_project: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Operators tailing the MCP server log must see a WARNING when the
+    server starts in degraded mode — not learn about it only when a
+    client invokes a tool.
+
+    The warning is emitted by ``_log_startup_status`` (called from
+    ``_run`` right after ``setup_logging``), so we drive it directly to
+    avoid spinning up the async ``stdio_server`` loop. This still
+    exercises the degraded-mode branch end-to-end on the helper.
+    """
+    import logging as _logging
+
+    import filigree.mcp_server as mcp_mod
+
+    filigree_dir = v_plus_one_project / FILIGREE_DIR_NAME
+
+    monkeypatch.setattr(mcp_mod, "db", None)
+    monkeypatch.setattr(mcp_mod, "_filigree_dir", None)
+    monkeypatch.setattr(mcp_mod, "_schema_mismatch", None)
+
+    mcp_mod._attempt_startup(filigree_dir)
+    assert mcp_mod._schema_mismatch is not None
+
+    logger = _logging.getLogger("filigree.mcp_server.test")
+    with caplog.at_level(_logging.WARNING, logger=logger.name):
+        mcp_mod._log_startup_status(logger)
+
+    degraded_records = [r for r in caplog.records if r.message == "mcp_server_degraded"]
+    assert degraded_records, f"expected mcp_server_degraded WARNING, got: {[r.message for r in caplog.records]}"
+    rec = degraded_records[0]
+    assert rec.levelno == _logging.WARNING
+    # Structured fields must carry both schema versions so the operator
+    # knows which side is ahead without grepping further.
+    assert getattr(rec, "args_data", None) == {
+        "installed": CURRENT_SCHEMA_VERSION,
+        "database": CURRENT_SCHEMA_VERSION + 1,
+    }
+
+
+def test_mcp_server_log_startup_status_silent_on_clean_open(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Negative case: when the DB opens cleanly, ``_log_startup_status``
+    must NOT emit the degraded warning. Guards against a future refactor
+    flipping the guard's polarity and spamming the log on every start.
+    """
+    import logging as _logging
+
+    import filigree.mcp_server as mcp_mod
+
+    filigree_dir = tmp_path / FILIGREE_DIR_NAME
+    filigree_dir.mkdir()
+    write_config(filigree_dir, {"prefix": "ok", "version": 1})
+    db = FiligreeDB(filigree_dir / DB_FILENAME, prefix="ok")
+    db.initialize()
+    db.close()
+
+    monkeypatch.setattr(mcp_mod, "db", None)
+    monkeypatch.setattr(mcp_mod, "_filigree_dir", None)
+    monkeypatch.setattr(mcp_mod, "_schema_mismatch", None)
+
+    mcp_mod._attempt_startup(filigree_dir)
+    assert mcp_mod._schema_mismatch is None
+
+    logger = _logging.getLogger("filigree.mcp_server.test_clean")
+    with caplog.at_level(_logging.WARNING, logger=logger.name):
+        mcp_mod._log_startup_status(logger)
+
+    assert not [r for r in caplog.records if r.message == "mcp_server_degraded"]
+
+
 def test_dashboard_server_mode_returns_409_for_v_plus_one_project(
     v_plus_one_project: Path,
 ) -> None:

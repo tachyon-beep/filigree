@@ -42,12 +42,13 @@ from filigree.core import (
     FiligreeDB,
     find_filigree_root,
 )
+from filigree.install_support.version_marker import format_schema_mismatch_guidance
 from filigree.mcp_tools.common import (  # noqa: F401  — re-exported for backward compat
     _MAX_LIST_RESULTS,
     _text,
 )
 from filigree.summary import generate_summary, write_summary
-from filigree.types.api import ErrorCode
+from filigree.types.api import ErrorCode, ErrorResponse, SchemaVersionMismatchError
 
 # ---------------------------------------------------------------------------
 # Module globals (state accessors depend on these)
@@ -59,6 +60,12 @@ _filigree_dir: Path | None = None
 _logger: logging.Logger | None = None
 _request_db: ContextVar[FiligreeDB | None] = ContextVar("filigree_request_db", default=None)
 _request_filigree_dir: ContextVar[Path | None] = ContextVar("filigree_request_dir", default=None)
+
+# Set when startup detects an on-disk schema newer than the installed
+# filigree (forward mismatch). When non-None the server stays up — list_tools
+# still works for introspection — but every call_tool short-circuits to a
+# structured ErrorResponse(code=SCHEMA_MISMATCH). Cleared on successful init.
+_schema_mismatch: SchemaVersionMismatchError | None = None
 
 # Per-DB async lock serialising ``call_tool`` execution. The MCP SDK dispatches
 # tool invocations concurrently via ``tg.start_soon``; without serialisation two
@@ -333,6 +340,23 @@ async def list_tools() -> list[Tool]:
 async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
     t0 = time.monotonic()
 
+    # Warm-but-degraded mode: if startup detected a v+1 DB, every call_tool
+    # short-circuits to a structured SCHEMA_MISMATCH envelope. list_tools
+    # still works (introspection needs no DB), so agents get a clean signal
+    # instead of seeing a connection drop. See F3 of the 2.0 release plan.
+    if _schema_mismatch is not None:
+        from filigree.mcp_tools.common import _text as _common_text
+
+        return _common_text(
+            ErrorResponse(
+                error=format_schema_mismatch_guidance(
+                    _schema_mismatch.installed,
+                    _schema_mismatch.database,
+                ),
+                code=ErrorCode.SCHEMA_MISMATCH,
+            )
+        )
+
     # Fast-path: unknown tool returns an error response before any DB contact
     # and without holding the serialisation lock.
     handler = _all_handlers.get(name)
@@ -475,8 +499,28 @@ def create_mcp_app(
 # ---------------------------------------------------------------------------
 
 
+def _attempt_startup(filigree_dir: Path) -> None:
+    """Open the project DB, falling back to warm-but-degraded mode on v+1.
+
+    On a forward schema mismatch the server stays up: ``db`` remains ``None``,
+    ``_schema_mismatch`` is set, and every ``call_tool`` short-circuits to a
+    structured ``SCHEMA_MISMATCH`` envelope. ``list_tools`` continues to work
+    (it touches no DB state). This lets MCP clients render a clean error
+    instead of seeing a connection drop. See F3 of the 2.0 release plan.
+    """
+    global db, _filigree_dir, _schema_mismatch
+
+    _filigree_dir = filigree_dir
+    try:
+        db = FiligreeDB.from_filigree_dir(filigree_dir)
+        _schema_mismatch = None
+    except SchemaVersionMismatchError as exc:
+        db = None
+        _schema_mismatch = exc
+
+
 async def _run(project_path: Path | None) -> None:
-    global db, _filigree_dir, _logger
+    global _logger
 
     if project_path:
         filigree_dir = project_path / FILIGREE_DIR_NAME
@@ -492,13 +536,13 @@ async def _run(project_path: Path | None) -> None:
             print(f"Error: {exc}", file=sys.stderr)
             sys.exit(1)
 
-    _filigree_dir = filigree_dir
-    db = FiligreeDB.from_filigree_dir(filigree_dir)
+    _attempt_startup(filigree_dir)
 
     from filigree.logging import setup_logging
 
     _logger = setup_logging(filigree_dir)
     _logger.info("mcp_server_start", extra={"tool": "server", "args_data": {"project": str(filigree_dir.parent)}})
+    _log_startup_status(_logger)
 
     try:
         async with stdio_server() as (read_stream, write_stream):
@@ -506,6 +550,28 @@ async def _run(project_path: Path | None) -> None:
     finally:
         if db is not None:
             db.close()
+
+
+def _log_startup_status(logger: logging.Logger) -> None:
+    """Emit a WARNING when the server is starting in degraded (v+1) mode.
+
+    Operators tailing the MCP server log should immediately see that the
+    process is up but degraded — without having to wait for a client to
+    invoke a tool and read the ``SCHEMA_MISMATCH`` envelope. Split out as
+    a tiny helper so a unit test can drive this branch synchronously
+    without entering the async ``stdio_server`` event loop in :func:`_run`.
+    """
+    if _schema_mismatch is not None:
+        logger.warning(
+            "mcp_server_degraded",
+            extra={
+                "tool": "server",
+                "args_data": {
+                    "installed": _schema_mismatch.installed,
+                    "database": _schema_mismatch.database,
+                },
+            },
+        )
 
 
 def main() -> None:
