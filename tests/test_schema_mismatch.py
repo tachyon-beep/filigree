@@ -302,3 +302,119 @@ def test_dashboard_server_mode_returns_409_for_v_plus_one_project(
         dash._db = original_db
         dash._project_store = original_store
         store.close_all()
+
+
+# ---------------------------------------------------------------------------
+# F4: filigree init forward-warning + INSTALL_VERSION marker
+# ---------------------------------------------------------------------------
+
+
+def test_install_version_marker_roundtrip(tmp_path: Path) -> None:
+    """Unit test: ``write_install_version`` and ``read_install_version``
+    round-trip the integer; missing/invalid markers return ``None``.
+    """
+    from filigree.install_support.version_marker import (
+        MARKER_NAME,
+        read_install_version,
+        write_install_version,
+    )
+
+    filigree_dir = tmp_path / FILIGREE_DIR_NAME
+    filigree_dir.mkdir()
+
+    # Missing marker -> None
+    assert read_install_version(filigree_dir) is None
+
+    # Round-trip
+    write_install_version(filigree_dir, 7)
+    assert read_install_version(filigree_dir) == 7
+    assert (filigree_dir / MARKER_NAME).read_text() == "7\n"
+
+    # Invalid contents -> None (defensive parse)
+    (filigree_dir / MARKER_NAME).write_text("not-a-number\n")
+    assert read_install_version(filigree_dir) is None
+
+
+def test_init_fresh_writes_marker_no_warning(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Fresh ``filigree init`` writes the marker at CURRENT_SCHEMA_VERSION
+    and does not emit a cross-tool skew warning."""
+    from filigree.cli_commands.admin import init
+    from filigree.install_support.version_marker import (
+        MARKER_NAME,
+        read_install_version,
+    )
+
+    monkeypatch.chdir(tmp_path)
+    runner = CliRunner()
+    result = runner.invoke(init, [])
+
+    assert result.exit_code == 0, f"init failed: {result.output}\nstderr:\n{result.stderr}"
+
+    filigree_dir = tmp_path / FILIGREE_DIR_NAME
+    assert (filigree_dir / MARKER_NAME).exists(), "INSTALL_VERSION marker not created"
+    assert (filigree_dir / MARKER_NAME).read_text() == f"{CURRENT_SCHEMA_VERSION}\n"
+    assert read_install_version(filigree_dir) == CURRENT_SCHEMA_VERSION
+
+    # No skew warning on a fresh init.
+    assert "SCHEMA_MISMATCH" not in result.stderr
+    assert "Other tools" not in result.stderr
+
+
+def test_init_reinit_with_older_marker_warns_and_bumps(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Re-running ``filigree init`` in a project whose recorded
+    INSTALL_VERSION is older than the installed schema must:
+
+    * emit a stderr warning about cross-tool skew, and
+    * bump the marker to the current schema version.
+    """
+    from filigree.cli_commands.admin import init
+    from filigree.install_support.version_marker import MARKER_NAME
+
+    # Bootstrap a real project first (so the re-init path is exercised).
+    monkeypatch.chdir(tmp_path)
+    runner = CliRunner()
+    bootstrap = runner.invoke(init, [])
+    assert bootstrap.exit_code == 0, f"bootstrap init failed: {bootstrap.output}"
+
+    filigree_dir = tmp_path / FILIGREE_DIR_NAME
+    older = CURRENT_SCHEMA_VERSION - 1
+    # Forcibly age the marker to simulate a previous install at v-1.
+    (filigree_dir / MARKER_NAME).write_text(f"{older}\n")
+
+    result = runner.invoke(init, [])
+    assert result.exit_code == 0, f"reinit failed: {result.output}\nstderr:\n{result.stderr}"
+
+    # Warning must surface on stderr (so it doesn't pollute scripted stdout).
+    assert "SCHEMA_MISMATCH" in result.stderr, f"missing skew warning in stderr:\n{result.stderr}"
+
+    # Marker bumped to current.
+    assert (filigree_dir / MARKER_NAME).read_text() == f"{CURRENT_SCHEMA_VERSION}\n"
+
+
+def test_init_reinit_with_current_marker_no_warning(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Re-running ``filigree init`` when the marker already matches the
+    installed schema must NOT emit the cross-tool skew warning.
+
+    Guards against a future regression where the warning fires on every
+    re-init (e.g., guard polarity flipped).
+    """
+    from filigree.cli_commands.admin import init
+
+    monkeypatch.chdir(tmp_path)
+    runner = CliRunner()
+    bootstrap = runner.invoke(init, [])
+    assert bootstrap.exit_code == 0
+
+    result = runner.invoke(init, [])
+    assert result.exit_code == 0, f"reinit failed: {result.output}\nstderr:\n{result.stderr}"
+    assert "SCHEMA_MISMATCH" not in result.stderr
+    assert "Other tools" not in result.stderr

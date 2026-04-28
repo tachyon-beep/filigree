@@ -25,6 +25,11 @@ from filigree.core import (
     write_conf,
     write_config,
 )
+from filigree.db_schema import CURRENT_SCHEMA_VERSION
+from filigree.install_support.version_marker import (
+    read_install_version,
+    write_install_version,
+)
 from filigree.summary import write_summary
 
 
@@ -44,6 +49,7 @@ def init(prefix: str | None, name: str | None, mode: str | None) -> None:
 
     if filigree_dir.exists():
         click.echo(f"{FILIGREE_DIR_NAME}/ already exists in {cwd}")
+        previous_marker = read_install_version(filigree_dir)
         # Still ensure DB is initialized and migrated
         config = read_config(filigree_dir)
         db = FiligreeDB(
@@ -60,6 +66,18 @@ def init(prefix: str | None, name: str | None, mode: str | None) -> None:
         if new_version > old_version:
             click.echo(f"  Schema upgraded v{old_version} → v{new_version}")
         (filigree_dir / "scanners").mkdir(exist_ok=True)
+        # Cross-tool skew warning: if a previous marker recorded an older
+        # schema, other tools / sessions pinned to that version will now
+        # report SCHEMA_MISMATCH against this DB.
+        if previous_marker is not None and previous_marker < CURRENT_SCHEMA_VERSION:
+            click.echo(
+                f"Note: this project's previous .filigree/ used schema v{previous_marker}; "
+                f"the new DB is at v{CURRENT_SCHEMA_VERSION}. Other tools or sessions "
+                f"pinned to filigree v{previous_marker} will report SCHEMA_MISMATCH against "
+                f"this DB.",
+                err=True,
+            )
+        write_install_version(filigree_dir, CURRENT_SCHEMA_VERSION)
         # Update name/mode if explicitly provided
         updated = False
         if name is not None:
@@ -100,6 +118,10 @@ def init(prefix: str | None, name: str | None, mode: str | None) -> None:
     db.initialize()
     write_summary(db, filigree_dir / SUMMARY_FILENAME)
     db.close()
+
+    # Record the schema version this project was last initialized at — used
+    # by future `init` runs to warn about cross-tool schema skew.
+    write_install_version(filigree_dir, CURRENT_SCHEMA_VERSION)
 
     click.echo(f"Initialized {FILIGREE_DIR_NAME}/ in {cwd}")
     click.echo(f"  Prefix: {prefix}")
