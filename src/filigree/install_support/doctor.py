@@ -24,6 +24,7 @@ from filigree.core import (
     ForeignDatabaseError,
     find_filigree_root,
     read_conf,
+    read_schema_version,
 )
 from filigree.db_schema import CURRENT_SCHEMA_VERSION
 from filigree.install_support import (
@@ -387,11 +388,28 @@ def run_doctor(project_root: Path | None = None) -> list[CheckResult]:
         conn: sqlite3.Connection | None = None
         try:
             conn = sqlite3.connect(str(db_path))
-            count = conn.execute("SELECT COUNT(*) FROM issues").fetchone()[0]
-            # 3b. Check schema version
-            schema_version = conn.execute("PRAGMA user_version").fetchone()[0]
-            results.append(CheckResult("filigree.db", True, f"{count} issues"))
-            if schema_version > CURRENT_SCHEMA_VERSION:
+            # Resolve schema version FIRST in its own try block so a v+1
+            # mismatch is reported as schema-mismatch even if a subsequent
+            # query (e.g. ``SELECT COUNT(*) FROM issues``) fails because of
+            # an as-yet-unmigrated table change. Without this ordering,
+            # users on a v+1 DB would see "Database may be corrupted.
+            # Restore from backup." instead of "upgrade filigree". Routed
+            # through ``read_schema_version`` so doctor and FiligreeDB
+            # share one source of truth.
+            schema_version: int | None = None
+            try:
+                schema_version = read_schema_version(conn)
+            except sqlite3.Error as e:
+                results.append(
+                    CheckResult(
+                        "filigree.db",
+                        False,
+                        f"Cannot read schema version: {e}",
+                        fix_hint="Database may be corrupted. Restore from backup.",
+                    )
+                )
+
+            if schema_version is not None and schema_version > CURRENT_SCHEMA_VERSION:
                 from filigree.install_support.version_marker import format_schema_mismatch_guidance
 
                 results.append(
@@ -403,17 +421,34 @@ def run_doctor(project_root: Path | None = None) -> list[CheckResult]:
                         code="schema_mismatch_forward",
                     )
                 )
-            elif schema_version < CURRENT_SCHEMA_VERSION:
-                results.append(
-                    CheckResult(
-                        "Schema version",
-                        False,
-                        f"v{schema_version} (current: v{CURRENT_SCHEMA_VERSION})",
-                        fix_hint="Database schema is outdated. Run: filigree doctor --fix",
+                # Skip the COUNT(*) probe — querying tables on a v+1 DB
+                # may itself fail and would only yield duplicate noise.
+            elif schema_version is not None:
+                # Schema is at-or-behind installed; safe to probe rows.
+                try:
+                    count = conn.execute("SELECT COUNT(*) FROM issues").fetchone()[0]
+                    results.append(CheckResult("filigree.db", True, f"{count} issues"))
+                except sqlite3.Error as e:
+                    results.append(
+                        CheckResult(
+                            "filigree.db",
+                            False,
+                            f"Database error: {e}",
+                            fix_hint="Database may be corrupted. Restore from backup.",
+                        )
                     )
-                )
-            else:
-                results.append(CheckResult("Schema version", True, f"v{schema_version}"))
+
+                if schema_version < CURRENT_SCHEMA_VERSION:
+                    results.append(
+                        CheckResult(
+                            "Schema version",
+                            False,
+                            f"v{schema_version} (current: v{CURRENT_SCHEMA_VERSION})",
+                            fix_hint="Database schema is outdated. Run: filigree doctor --fix",
+                        )
+                    )
+                else:
+                    results.append(CheckResult("Schema version", True, f"v{schema_version}"))
         except sqlite3.Error as e:
             results.append(
                 CheckResult(

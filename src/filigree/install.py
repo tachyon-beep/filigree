@@ -203,21 +203,27 @@ _FILIGREE_IGNORE_RULES: frozenset[str] = frozenset({".filigree", ".filigree/", "
 def _has_active_filigree_ignore(content: str) -> bool:
     """Return True if *content* has an active ignore rule for the project-root ``.filigree/``.
 
-    Honours gitignore syntax: blank lines and ``#`` comments are skipped, ``!``
-    negations are rejected (they un-ignore, not ignore), and trailing whitespace
-    is stripped. Substring matches (``src/.filigree/cache/``, ``#.filigree/``)
-    do not count.
+    Honours gitignore syntax: blank lines and ``#`` comments are skipped,
+    trailing whitespace is stripped. ``!``-prefixed negations are processed
+    in declaration order — a later ``!.filigree/`` un-ignores an earlier
+    ``.filigree/`` rule, matching ``git``'s actual semantics. Substring
+    matches (``src/.filigree/cache/``, ``#.filigree/``) do not count.
     """
+    # Track the latest matching directive: True = ignored, False = un-ignored,
+    # None = no rule has matched yet. Last-write-wins per gitignore semantics.
+    state: bool | None = None
     for raw_line in content.splitlines():
         line = raw_line.rstrip()
         if not line:
             continue
         stripped = line.lstrip()
-        if stripped.startswith(("#", "!")):
+        if stripped.startswith("#"):
             continue
-        if stripped in _FILIGREE_IGNORE_RULES:
-            return True
-    return False
+        negated = stripped.startswith("!")
+        candidate = stripped[1:] if negated else stripped
+        if candidate in _FILIGREE_IGNORE_RULES:
+            state = not negated
+    return state is True
 
 
 def ensure_gitignore(project_root: Path) -> tuple[bool, str]:

@@ -289,7 +289,10 @@ class TestDoctorDatabase:
         results = run_doctor(tmp_path)
         db_result = next(r for r in results if r.name == "filigree.db")
         assert db_result.passed is False
-        assert "error" in db_result.message.lower()
+        # Either the schema-version probe fails first (post-PR-#33 ordering)
+        # or a later table query fails — both produce a corrupted-DB hint.
+        assert "error" in db_result.message.lower() or "schema version" in db_result.message.lower()
+        assert "corrupted" in (db_result.fix_hint or "").lower()
 
     def test_schema_version_current(self, tmp_path: Path) -> None:
         _make_project(tmp_path)

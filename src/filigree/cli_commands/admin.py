@@ -27,10 +27,12 @@ from filigree.core import (
 )
 from filigree.db_schema import CURRENT_SCHEMA_VERSION
 from filigree.install_support.version_marker import (
+    format_schema_mismatch_guidance,
     read_install_version,
     write_install_version,
 )
 from filigree.summary import write_summary
+from filigree.types.api import SchemaVersionMismatchError
 
 
 @click.command()
@@ -59,7 +61,19 @@ def init(prefix: str | None, name: str | None, mode: str | None) -> None:
         )
         try:
             old_version = db.get_schema_version()
-            db.initialize()
+            try:
+                db.initialize()
+            except SchemaVersionMismatchError as exc:
+                # The DB was written by a newer filigree; this older binary
+                # cannot safely touch it. Emit the same guidance text and
+                # exit code (3) used by `filigree doctor` / `filigree
+                # dashboard`, and do NOT update INSTALL_VERSION (which would
+                # falsely advertise this older version against a v+1 DB).
+                click.echo(
+                    format_schema_mismatch_guidance(exc.installed, exc.database),
+                    err=True,
+                )
+                sys.exit(3)
             new_version = db.get_schema_version()
         finally:
             db.close()

@@ -89,9 +89,12 @@ class ScansMixin(DBMixinProtocol):
         both spawn a scanner for the same file.
         """
         # If another call left an open implicit transaction, roll it back
-        # first so BEGIN IMMEDIATE can take the writer lock cleanly.
+        # first so BEGIN IMMEDIATE can take the writer lock cleanly. Use
+        # rollback (not commit): committing here would persist whatever
+        # pending writes that earlier caller left behind, which is not our
+        # work to keep.
         if self.conn.in_transaction:
-            self.conn.commit()
+            self.conn.rollback()
         self.conn.execute("BEGIN IMMEDIATE")
         try:
             blocking = self.check_scan_cooldown(scanner_name, file_path)

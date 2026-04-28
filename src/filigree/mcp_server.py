@@ -67,6 +67,12 @@ _request_filigree_dir: ContextVar[Path | None] = ContextVar("filigree_request_di
 # structured ErrorResponse(code=SCHEMA_MISMATCH). Cleared on successful init.
 _schema_mismatch: SchemaVersionMismatchError | None = None
 
+# Set when startup hits a non-mismatch DB-open failure (locked file, missing
+# file, permission denied, on-disk corruption). The server cannot run without
+# a DB; ``_run`` checks this and exits cleanly with a structured log line and
+# a stderr message — no Python traceback. F3-followup, GH PR #33 review.
+_db_open_error: Exception | None = None
+
 # Per-DB async lock serialising ``call_tool`` execution. The MCP SDK dispatches
 # tool invocations concurrently via ``tg.start_soon``; without serialisation two
 # coroutines share the single cached ``sqlite3.Connection`` on ``FiligreeDB``
@@ -507,16 +513,28 @@ def _attempt_startup(filigree_dir: Path) -> None:
     structured ``SCHEMA_MISMATCH`` envelope. ``list_tools`` continues to work
     (it touches no DB state). This lets MCP clients render a clean error
     instead of seeing a connection drop. See F3 of the 2.0 release plan.
+
+    For non-mismatch open failures (locked file, permission denied, missing
+    file, on-disk corruption) the helper records ``_db_open_error`` instead
+    of letting the exception propagate — the F3 promise of "clean signal
+    instead of connection drop" was one bug-class wide before this fix.
+    ``_run`` consults the sentinel after calling us and exits cleanly.
     """
-    global db, _filigree_dir, _schema_mismatch
+    global db, _filigree_dir, _schema_mismatch, _db_open_error
 
     _filigree_dir = filigree_dir
     try:
         db = FiligreeDB.from_filigree_dir(filigree_dir)
         _schema_mismatch = None
+        _db_open_error = None
     except SchemaVersionMismatchError as exc:
         db = None
         _schema_mismatch = exc
+        _db_open_error = None
+    except (OSError, sqlite3.Error) as exc:
+        db = None
+        _schema_mismatch = None
+        _db_open_error = exc
 
 
 async def _run(project_path: Path | None) -> None:
@@ -544,6 +562,15 @@ async def _run(project_path: Path | None) -> None:
     _logger.info("mcp_server_start", extra={"tool": "server", "args_data": {"project": str(filigree_dir.parent)}})
     _log_startup_status(_logger)
 
+    if _db_open_error is not None:
+        # Locked DB / permission denied / missing file / corruption — the
+        # server cannot proceed. Exit cleanly with a structured log line so
+        # operators see a single failure event instead of a Python
+        # traceback dumped to stderr by asyncio.
+        print(f"Error opening project database: {_db_open_error}", file=sys.stderr)
+        print("Run `filigree doctor` for diagnosis.", file=sys.stderr)
+        sys.exit(1)
+
     try:
         async with stdio_server() as (read_stream, write_stream):
             await server.run(read_stream, write_stream, server.create_initialization_options())
@@ -570,6 +597,14 @@ def _log_startup_status(logger: logging.Logger) -> None:
                     "installed": _schema_mismatch.installed,
                     "database": _schema_mismatch.database,
                 },
+            },
+        )
+    elif _db_open_error is not None:
+        logger.warning(
+            "mcp_server_db_open_failed",
+            extra={
+                "tool": "server",
+                "args_data": {"error": str(_db_open_error)},
             },
         )
 

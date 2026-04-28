@@ -35,7 +35,10 @@ def get_db() -> FiligreeDB:
 
     Surfaces corrupt-conf / unreadable-DB / schema-mismatch failures as clean
     ``ClickException``-style exits (stderr + exit 1) rather than letting raw
-    ValueError / OSError / sqlite3.Error tracebacks escape from every command.
+    ValueError / OSError / sqlite3.Error / TypeError / KeyError tracebacks
+    escape from every command. ``TypeError`` and ``KeyError`` cover
+    malformed-but-JSON-valid configs (e.g. non-string ``db``, non-list
+    ``enabled_packs``, missing required keys) — see GH PR #33 review.
     """
     try:
         project_root, conf_path = find_filigree_anchor()
@@ -46,7 +49,7 @@ def get_db() -> FiligreeDB:
         if conf_path is not None:
             return FiligreeDB.from_conf(conf_path)
         return FiligreeDB.from_filigree_dir(project_root / FILIGREE_DIR_NAME)
-    except (ValueError, OSError, sqlite3.Error) as exc:
+    except (ValueError, OSError, sqlite3.Error, TypeError, KeyError) as exc:
         click.echo(f"Error opening project database: {exc}", err=True)
         sys.exit(1)
 

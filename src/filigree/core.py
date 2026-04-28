@@ -89,6 +89,19 @@ SUMMARY_FILENAME = "context.md"
 CONF_VERSION = 1
 
 
+def read_schema_version(conn: sqlite3.Connection) -> int:
+    """Return the on-disk schema version for *conn*.
+
+    Single source of truth for "what schema version is this DB?". Called by
+    :meth:`FiligreeDB.get_schema_version` and by ``filigree doctor``'s raw
+    ``sqlite3.connect`` path so a future migration that changes how the
+    version is stored only has to update this one function — the alternative
+    (each surface inlining ``PRAGMA user_version``) silently drifts.
+    """
+    result: int = conn.execute("PRAGMA user_version").fetchone()[0]
+    return result
+
+
 # ---------------------------------------------------------------------------
 # Exceptions
 # ---------------------------------------------------------------------------
@@ -648,8 +661,7 @@ class FiligreeDB(FilesMixin, ScansMixin, IssuesMixin, EventsMixin, WorkflowMixin
 
     def get_schema_version(self) -> int:
         """Return the current schema version from PRAGMA user_version."""
-        result: int = self.conn.execute("PRAGMA user_version").fetchone()[0]
-        return result
+        return read_schema_version(self.conn)
 
     def reconnect(self, *, check_same_thread: bool = True) -> None:
         """Close the current connection so the next access reopens it with a new ``check_same_thread`` setting.

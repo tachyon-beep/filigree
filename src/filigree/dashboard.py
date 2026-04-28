@@ -25,6 +25,7 @@ import json
 import logging
 import os
 import signal
+import sqlite3
 import sys
 import threading
 import time
@@ -582,9 +583,31 @@ def main(port: int = DEFAULT_PORT, *, no_browser: bool = False, server_mode: boo
             # Forward schema mismatch — exit cleanly (code 3, matching
             # `filigree doctor`) with the shared guidance text instead of
             # dumping a Python stack trace. F1 owns the helper; F2 owns
-            # this dashboard-startup branch.
+            # this dashboard-startup branch. Log a WARNING with structured
+            # fields so operators tailing the filigree log see the failure
+            # even if stderr is captured / redirected by the launcher.
+            logger.warning(
+                "dashboard_schema_mismatch",
+                extra={
+                    "tool": "dashboard",
+                    "args_data": {"installed": exc.installed, "database": exc.database},
+                },
+            )
             print(format_schema_mismatch_guidance(exc.installed, exc.database), file=sys.stderr)
             sys.exit(3)
+        except (OSError, sqlite3.Error) as exc:
+            # Locked DB / permission denied / on-disk corruption etc. The
+            # F2 fix only covered v+1; this sibling branch keeps the same
+            # "no Python traceback at startup" UX promise for the more
+            # common adjacent failures. Exit 1 (generic failure) — exit 3
+            # is reserved for forward schema mismatch.
+            logger.warning(
+                "dashboard_db_open_failed",
+                extra={"tool": "dashboard", "args_data": {"error": str(exc)}},
+            )
+            print(f"Error opening project database: {exc}", file=sys.stderr)
+            print("Run `filigree doctor` for diagnosis.", file=sys.stderr)
+            sys.exit(1)
 
     app = create_app(server_mode=server_mode)
 

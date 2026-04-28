@@ -418,3 +418,39 @@ def test_init_reinit_with_current_marker_no_warning(
     assert result.exit_code == 0, f"reinit failed: {result.output}\nstderr:\n{result.stderr}"
     assert "SCHEMA_MISMATCH" not in result.stderr
     assert "Other tools" not in result.stderr
+
+
+def test_init_on_v_plus_one_db_exits_3_with_guidance(
+    v_plus_one_project: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Re-running ``filigree init`` against a v+1 DB must exit 3 with the
+    shared schema-mismatch guidance — same UX as ``filigree doctor`` and
+    ``filigree dashboard`` rather than dumping a Python traceback.
+
+    Regression guard for GH PR #33 review CRITICAL #1: previously the
+    re-init path called ``db.initialize()`` without catching
+    ``SchemaVersionMismatchError``, so the most common entry point (re-running
+    init in an existing project) was the only Phase F surface that didn't
+    handle the v+1 case cleanly.
+    """
+    from filigree.cli_commands.admin import init
+    from filigree.install_support.version_marker import MARKER_NAME
+
+    monkeypatch.chdir(v_plus_one_project)
+    runner = CliRunner()
+    result = runner.invoke(init, [])
+
+    assert result.exit_code == 3, f"expected exit 3 for v+1 DB, got {result.exit_code}\noutput:\n{result.output}\nstderr:\n{result.stderr}"
+    assert "Downgrade is not supported" in result.stderr
+
+    # The marker must NOT be advertised as the current version: writing it
+    # against a v+1 DB would falsely claim this older filigree owns the DB.
+    filigree_dir = v_plus_one_project / FILIGREE_DIR_NAME
+    marker_path = filigree_dir / MARKER_NAME
+    if marker_path.exists():
+        from filigree.db_schema import CURRENT_SCHEMA_VERSION
+
+        assert marker_path.read_text().strip() != str(CURRENT_SCHEMA_VERSION), (
+            "INSTALL_VERSION must not be advertised as current after a v+1 init failure"
+        )

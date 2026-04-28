@@ -237,6 +237,30 @@ class TestEnsureGitignore:
         assert ok
         assert "already" in msg
 
+    def test_later_negation_unignores_earlier_rule(self, tmp_path: Path) -> None:
+        """`.filigree/` followed by `!.filigree/` un-ignores per gitignore semantics.
+
+        The check must add a new active rule rather than treating the file
+        as already ignored. Regression guard for GH PR #33 review #3.
+        """
+        gitignore = tmp_path / ".gitignore"
+        gitignore.write_text(".filigree/\n!.filigree/\n")
+        ok, msg = ensure_gitignore(tmp_path)
+        assert ok
+        # Should NOT be treated as already-ignored — the negation cancelled it.
+        assert "already" not in msg
+        # New active rule must be appended.
+        content = gitignore.read_text()
+        assert content.count(".filigree/") >= 3  # original, negation, plus appended
+
+    def test_negation_then_reignore_counts_as_ignored(self, tmp_path: Path) -> None:
+        """`!.filigree/` followed by `.filigree/` re-ignores — last rule wins."""
+        gitignore = tmp_path / ".gitignore"
+        gitignore.write_text("!.filigree/\n.filigree/\n")
+        ok, msg = ensure_gitignore(tmp_path)
+        assert ok
+        assert "already" in msg
+
 
 class TestRunDoctor:
     def test_healthy_project(self, filigree_project: Path) -> None:
@@ -331,7 +355,14 @@ class TestRunDoctor:
         assert "Missing" in db_check.message
 
     def test_db_error(self, filigree_project: Path) -> None:
-        """Doctor should detect corrupted db."""
+        """Doctor should detect corrupted db.
+
+        After GH PR #33 (schema-version read first), the message wording
+        is "Cannot read schema version: ..." for files that aren't a
+        valid sqlite database, and "Database error: ..." for failures
+        on later queries. Either is acceptable; both must restate the
+        ``corrupted / restore from backup`` guidance.
+        """
         db_path = filigree_project / FILIGREE_DIR_NAME / DB_FILENAME
         # Overwrite with invalid data
         db_path.write_text("not a sqlite database")
@@ -339,7 +370,8 @@ class TestRunDoctor:
         db_check = next((r for r in results if r.name == "filigree.db"), None)
         assert db_check is not None
         assert not db_check.passed
-        assert "Database error" in db_check.message
+        assert "Database error" in db_check.message or "schema version" in db_check.message
+        assert "corrupted" in (db_check.fix_hint or "")
 
     def test_missing_gitignore(self, filigree_project: Path) -> None:
         """Doctor should warn when .gitignore is missing."""
