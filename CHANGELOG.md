@@ -20,6 +20,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ``ValueError``/``TypeError``/``KeyError`` → ``VALIDATION``. Plain-text
   output (without ``--json``) is unchanged. (filigree-3741fc571b)
 
+- **``--json`` detection ignores tokens after Click's ``--`` terminator.**
+  The raw-argv scan that drives JSON-mode envelope emission previously
+  matched any literal ``--json`` token, including positional values that
+  follow ``--`` (e.g. ``filigree create -- --json`` makes the title
+  ``"--json"``). Group-level ``--actor`` validation and ``get_db()``
+  startup failures now share one helper that slices at the first ``--``
+  before the membership test, so non-JSON invocations get plain Click
+  usage / stderr output. (filigree-df988a37fc)
+
 ## [2.0.0] — 2026-04-28 — The Filigree Component of Loom
 
 Filigree 2.0 reframes the product from "standalone issue tracker with an HTTP API"

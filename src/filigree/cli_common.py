@@ -34,13 +34,19 @@ def _wants_json() -> bool:
     The root group stashes the literal argv list in ``ctx.meta`` from
     ``_FiligreeGroup.parse_args`` so shared startup helpers can honour the
     2.0 flat envelope contract before the subcommand callback runs.
-    Mirrors the existing check in ``cli.py`` for ``--actor`` validation.
+
+    Tokens after Click's ``--`` option terminator are positional values,
+    not flags — e.g. ``filigree create -- --json`` makes the issue title
+    literally ``"--json"``, with no real JSON-mode flag. We slice at the
+    first ``--`` so a positional that happens to spell ``--json`` does
+    not flip startup errors into the JSON envelope. (filigree-df988a37fc)
     """
     ctx = click.get_current_context(silent=True)
     if ctx is None:
         return False
     raw_args = ctx.find_root().meta.get("filigree_raw_args", [])
-    return "--json" in raw_args
+    end = raw_args.index("--") if "--" in raw_args else len(raw_args)
+    return "--json" in raw_args[:end]
 
 
 def _emit_startup_failure(exc: Exception, code: ErrorCode, *, human_prefix: str = "") -> None:

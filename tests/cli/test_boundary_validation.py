@@ -160,6 +160,19 @@ class TestCLIActorEnvelopeEmission:
         result = runner.invoke(cli, ["--actor", "   ", "add-comment", "test-ffffffffff", "note", "--json"])
         self._assert_actor_envelope(result)
 
+    def test_actor_envelope_ignores_double_dash_positional(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        """Click's `--` terminator means trailing tokens are positional, not flags.
+
+        Regression for filigree-df988a37fc: ``--json`` after ``--`` is the
+        ``create`` title, not the JSON-mode flag, so the actor failure must
+        surface as a plain Click usage error rather than the JSON envelope.
+        """
+        runner, _ = cli_in_project
+        result = runner.invoke(cli, ["--actor", "   ", "create", "--", "--json"])
+        assert result.exit_code != 0
+        assert not result.output.strip().startswith("{"), result.output
+        assert "Usage:" in result.output or "actor" in result.output.lower(), result.output
+
 
 class TestCLICloseJSONBatchBoundary:
     """2b.3c: ``close --json`` with N=1 emits flat envelope; N≥2 keeps batch wrapper.

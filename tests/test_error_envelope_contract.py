@@ -314,3 +314,19 @@ class TestCLIStartupEnvelope:
         # Plain text — must not be a JSON envelope (no leading '{').
         assert not result.output.strip().startswith("{"), result.output
         assert "filigree" in result.output
+
+    def test_double_dash_positional_does_not_trigger_envelope(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """`--json` after Click's `--` terminator is positional, not the flag.
+
+        Regression for filigree-df988a37fc: get_db's --json detection must
+        ignore tokens after the option terminator, otherwise non-JSON
+        invocations whose title happens to be the literal string `--json`
+        receive a JSON envelope on startup failure.
+        """
+        monkeypatch.chdir(tmp_path)
+        runner = CliRunner()
+        # `create -- --json` makes the issue title literally "--json" — there
+        # is no real --json flag in the invocation.
+        result = runner.invoke(cli, ["create", "--", "--json"])
+        assert result.exit_code == 1
+        assert not result.output.strip().startswith("{"), result.output
