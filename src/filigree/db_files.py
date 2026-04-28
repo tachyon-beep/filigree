@@ -80,7 +80,13 @@ class FilesMixin(DBMixinProtocol):
 
     @staticmethod
     def _parse_metadata(raw: str | None, context_id: str) -> dict[str, Any]:
-        """Parse a JSON metadata column, returning ``{_metadata_error: True}`` on corrupt data."""
+        """Parse a JSON metadata column.
+
+        Returns a ``_ParsedJson`` (dict subclass) — corrupt input yields an
+        empty dict with ``_filigree_corrupt=True`` instead of an in-band
+        sentinel key, so user metadata named ``_metadata_error`` round-trips
+        unchanged (filigree-7ea6b80f3b).
+        """
         return _safe_json_loads(raw, context_id)
 
     def _build_file_record(self, row: sqlite3.Row) -> FileRecord:

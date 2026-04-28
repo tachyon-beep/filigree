@@ -97,8 +97,13 @@ def _resolve_virtual_label(
 
 
 def _safe_fields_json(raw: str | None, issue_id: str) -> dict[str, Any]:
-    """Parse issue fields JSON, returning error sentinel on corrupt data."""
-    return _safe_json_loads(raw, f"issue {issue_id} fields", error_key="_fields_error")
+    """Parse issue fields JSON.
+
+    Returns a ``_ParsedJson`` (dict subclass). On corrupt JSON it returns
+    an empty dict with ``_filigree_corrupt=True``; ``Issue.to_dict()`` reads
+    that flag to derive ``data_warnings``.
+    """
+    return _safe_json_loads(raw, f"issue {issue_id} fields")
 
 
 def _validate_string_list(value: object, name: str) -> None:

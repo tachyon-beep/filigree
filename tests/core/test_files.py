@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import sqlite3
+
 import pytest
 
 from filigree.core import FiligreeDB, ScanFinding, _normalize_scan_path
@@ -1486,10 +1488,10 @@ class TestTerminalFindingStatusesConstant:
 
 
 class TestCorruptFindingMetadata:
-    """L2 bugfix: corrupt metadata should include programmatic indicator."""
+    """L2 bugfix: corrupt metadata should signal corruption out-of-band."""
 
-    def test_corrupt_metadata_includes_error_key(self, db: FiligreeDB) -> None:
-        """When finding metadata is corrupt JSON, result should include _metadata_error."""
+    def test_corrupt_metadata_sets_corrupt_flag(self, db: FiligreeDB) -> None:
+        """When finding metadata is corrupt JSON, the result carries the out-of-band flag."""
         db.process_scan_results(
             scan_source="ruff",
             findings=[{"path": "a.py", "rule_id": "E501", "severity": "low", "message": "m"}],
@@ -1505,7 +1507,8 @@ class TestCorruptFindingMetadata:
         db.conn.commit()
 
         findings = db.get_findings(f.id)
-        assert findings[0].metadata.get("_metadata_error") is True
+        assert findings[0].metadata == {}
+        assert getattr(findings[0].metadata, "_filigree_corrupt", False) is True
 
     def test_corrupt_file_record_metadata_does_not_crash(self, db: FiligreeDB) -> None:
         """When file_records.metadata is corrupt JSON, _build_file_record should not crash."""
@@ -1519,7 +1522,8 @@ class TestCorruptFindingMetadata:
 
         result = db.get_file_by_path("corrupt_meta.py")
         assert result is not None
-        assert result.metadata.get("_metadata_error") is True
+        assert result.metadata == {}
+        assert getattr(result.metadata, "_filigree_corrupt", False) is True
 
     def test_corrupt_timeline_data_json_does_not_crash(self, db: FiligreeDB) -> None:
         """When timeline data_json is corrupt, get_file_timeline should not crash."""
@@ -2377,33 +2381,70 @@ class TestCreateObservationsPartialFailure:
 
 
 class TestSafeJsonLoads:
-    """filigree-ef3925404b and filigree-769a192252: _safe_json_loads edge cases."""
+    """filigree-ef3925404b, filigree-769a192252, filigree-7ea6b80f3b: _safe_json_loads edge cases.
+
+    ``_safe_json_loads`` returns a ``_ParsedJson`` (dict subclass) carrying an
+    out-of-band ``_filigree_corrupt`` flag instead of an in-band sentinel key.
+    These assertions cover both the parsed payload and the flag.
+    """
 
     def test_none_input_returns_empty_dict(self) -> None:
-        assert _safe_json_loads(None, "test") == {}
+        result = _safe_json_loads(None, "test")
+        assert result == {}
+        assert getattr(result, "_filigree_corrupt", False) is False
 
     def test_empty_string_returns_empty_dict(self) -> None:
-        assert _safe_json_loads("", "test") == {}
+        result = _safe_json_loads("", "test")
+        assert result == {}
+        assert getattr(result, "_filigree_corrupt", False) is False
 
-    def test_non_dict_json_array_surfaces_error_marker(self) -> None:
+    def test_non_dict_json_array_surfaces_corrupt_flag(self) -> None:
         result = _safe_json_loads("[1,2,3]", "test")
-        assert result == {"_metadata_error": True}
+        assert result == {}
+        assert getattr(result, "_filigree_corrupt", False) is True
 
-    def test_non_dict_json_scalar_surfaces_error_marker(self) -> None:
+    def test_non_dict_json_scalar_surfaces_corrupt_flag(self) -> None:
         result = _safe_json_loads("42", "test")
-        assert result == {"_metadata_error": True}
-
-    def test_non_dict_json_honours_error_key(self) -> None:
-        result = _safe_json_loads("[1,2,3]", "test", error_key="_fields_error")
-        assert result == {"_fields_error": True}
+        assert result == {}
+        assert getattr(result, "_filigree_corrupt", False) is True
 
     def test_valid_dict_returns_parsed(self) -> None:
         result = _safe_json_loads('{"key": "value", "num": 42}', "test")
         assert result == {"key": "value", "num": 42}
+        assert getattr(result, "_filigree_corrupt", False) is False
 
-    def test_invalid_json_returns_error_marker(self) -> None:
+    def test_invalid_json_returns_corrupt_flag(self) -> None:
         result = _safe_json_loads("{not valid json}", "test")
-        assert result == {"_metadata_error": True}
+        assert result == {}
+        assert getattr(result, "_filigree_corrupt", False) is True
+
+    def test_undecodable_bytes_become_corrupt_flag(self) -> None:
+        """Bug 2 (filigree-7ea6b80f3b): UnicodeDecodeError must not leak.
+
+        SQLite-flexible-typed JSON columns can return ``bytes`` for BLOB
+        rows. Invalid-UTF-8 input previously raised ``UnicodeDecodeError``
+        past the ``(JSONDecodeError, TypeError)`` arm; the contract says
+        all corruption should surface as the flag.
+        """
+        result = _safe_json_loads(b"\xff", "test")
+        assert result == {}
+        assert getattr(result, "_filigree_corrupt", False) is True
+
+    def test_user_field_named_like_legacy_sentinel_round_trips(self, db: FiligreeDB) -> None:
+        """Bug 1 (filigree-7ea6b80f3b): a custom field named ``_fields_error`` must NOT be stripped."""
+        issue = db.create_issue("repro", type="bug", fields={"_fields_error": True, "keep": "value"})
+        out = db.get_issue(issue.id).to_dict()
+        assert out["fields"] == {"_fields_error": True, "keep": "value"}
+        assert out["data_warnings"] == []
+
+    def test_user_metadata_named_like_legacy_sentinel_round_trips(self, db: FiligreeDB) -> None:
+        """Bug 1 (filigree-7ea6b80f3b): file metadata key ``_metadata_error`` must NOT be stripped."""
+        fr = db.register_file("user_meta.py", metadata={"_metadata_error": True, "owner": "bot"})
+        out = db.get_file(fr.id)
+        assert out is not None
+        d = out.to_dict()
+        assert d["metadata"] == {"_metadata_error": True, "owner": "bot"}
+        assert d["data_warnings"] == []
 
     def test_non_dict_file_metadata_surfaces_data_warning(self, db: FiligreeDB) -> None:
         """End-to-end: array JSON in file_records.metadata must yield a data_warning."""
@@ -2418,6 +2459,22 @@ class TestSafeJsonLoads:
         assert result is not None
         d = result.to_dict()
         assert "_metadata_error" not in d["metadata"]
+        assert len(d["data_warnings"]) == 1
+        assert "corrupt" in d["data_warnings"][0].lower()
+
+    def test_blob_metadata_surfaces_data_warning(self, db: FiligreeDB) -> None:
+        """End-to-end (Bug 2): BLOB-typed garbage in metadata must become a data_warning, not raise."""
+        fr = db.register_file("blob_meta.py")
+        db.conn.execute(
+            "UPDATE file_records SET metadata = ? WHERE id = ?",
+            (sqlite3.Binary(b"\xff\xfe\xfd"), fr.id),
+        )
+        db.conn.commit()
+
+        result = db.get_file_by_path("blob_meta.py")
+        assert result is not None
+        d = result.to_dict()
+        assert d["metadata"] == {}
         assert len(d["data_warnings"]) == 1
         assert "corrupt" in d["data_warnings"][0].lower()
 

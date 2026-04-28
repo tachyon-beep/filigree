@@ -37,23 +37,46 @@ def _now_iso() -> ISOTimestamp:
     return ISOTimestamp(datetime.now(UTC).isoformat())
 
 
-def _safe_json_loads(raw: str | None, context: str, *, error_key: str = "_metadata_error") -> dict[str, Any]:
-    """Parse JSON from a database column, returning an error marker on corrupt data.
+class _ParsedJson(dict[str, Any]):
+    """``dict`` subclass carrying an out-of-band JSON-parse-failure flag.
 
-    Used by DB mixins to safely handle corrupt JSON in issue fields, file metadata,
-    and scan finding metadata.  On failure, returns ``{error_key: True}`` — callers
-    can check for the sentinel key (``_metadata_error`` or ``_fields_error``) to
-    detect corrupt records.
+    Returned by :func:`_safe_json_loads`. The ``_filigree_corrupt`` attribute
+    signals corruption without occupying a user-visible dict key, so a custom
+    field or metadata entry that happens to be named ``_fields_error`` or
+    ``_metadata_error`` is not falsely stripped by Issue / FileRecord /
+    ScanFinding ``to_dict()``. Consumers duck-type the attribute via
+    ``getattr(value, "_filigree_corrupt", False)`` (filigree-7ea6b80f3b).
     """
+
+    _filigree_corrupt: bool = False
+
+
+def _safe_json_loads(raw: str | bytes | None, context: str) -> _ParsedJson:
+    """Parse JSON from a database column, returning an out-of-band corrupt flag.
+
+    Used by DB mixins to handle corrupt JSON in issue fields, file metadata,
+    and scan finding metadata. On failure — invalid JSON, undecodable bytes,
+    or a non-dict top-level value — returns an empty ``_ParsedJson`` with
+    ``_filigree_corrupt=True``. SQLite's flexible typing can hand back
+    ``bytes`` for BLOB-typed JSON columns, so undecodable bytes
+    (``UnicodeDecodeError``) are treated as corrupt rather than allowed to
+    propagate (filigree-7ea6b80f3b).
+    """
+    if not raw:
+        return _ParsedJson()
     try:
-        result = json.loads(raw) if raw else {}
-    except (json.JSONDecodeError, TypeError):
-        logger.warning("Corrupt JSON (%s): %r", context, str(raw)[:200] if raw else raw)
-        return {error_key: True}
+        result = json.loads(raw)
+    except (json.JSONDecodeError, TypeError, UnicodeDecodeError):
+        logger.warning("Corrupt JSON (%s): %r", context, str(raw)[:200])
+        out = _ParsedJson()
+        out._filigree_corrupt = True
+        return out
     if not isinstance(result, dict):
         logger.warning("JSON (%s) parsed but is not a dict (got %s): %r", context, type(result).__name__, str(raw)[:200])
-        return {error_key: True}
-    return result
+        out = _ParsedJson()
+        out._filigree_corrupt = True
+        return out
+    return _ParsedJson(result)
 
 
 def _escape_like_chars(value: str) -> str:

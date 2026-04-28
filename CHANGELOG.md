@@ -20,6 +20,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ``ValueError``/``TypeError``/``KeyError`` → ``VALIDATION``. Plain-text
   output (without ``--json``) is unchanged. (filigree-3741fc571b)
 
+- **``_safe_json_loads``: out-of-band corruption flag, no in-band sentinel keys.**
+  ``Issue`` / ``FileRecord`` / ``ScanFinding`` no longer falsely strip user
+  data named ``_fields_error`` or ``_metadata_error``. The helper now
+  returns a ``_ParsedJson`` (``dict`` subclass) carrying a
+  ``_filigree_corrupt`` attribute; ``models.py::to_dict()`` consults the
+  attribute via duck-typing rather than mining a user-visible dict key.
+  Custom fields/metadata with those legacy names round-trip unchanged.
+  (filigree-7ea6b80f3b §1)
+
+- **``_safe_json_loads`` handles undecodable bytes from BLOB-typed columns.**
+  SQLite's flexible typing can return ``bytes`` for JSON-text columns when
+  the row contains BLOB data; invalid-UTF-8 input previously raised
+  ``UnicodeDecodeError`` past the safety net. The helper now accepts
+  ``str | bytes | None`` and treats ``UnicodeDecodeError`` as corruption,
+  matching the documented contract. (filigree-7ea6b80f3b §2)
+
 - **``--json`` detection ignores tokens after Click's ``--`` terminator.**
   The raw-argv scan that drives JSON-mode envelope emission previously
   matched any literal ``--json`` token, including positional values that

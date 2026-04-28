@@ -97,14 +97,17 @@ class TestSafeFieldsJson:
         """When raw is a non-string (e.g. int from DB corruption), log should not TypeError."""
         from filigree.db_issues import _safe_fields_json
 
-        # Should return error sentinel without raising TypeError on the log truncation
+        # Should return empty dict with corrupt flag set, without raising TypeError on the log truncation
         result = _safe_fields_json(42, "test-issue-001")  # type: ignore[arg-type]
-        assert result == {"_fields_error": True}
+        assert result == {}
+        assert getattr(result, "_filigree_corrupt", False) is True
 
-    def test_corrupt_json_returns_error_sentinel(self) -> None:
+    def test_corrupt_json_returns_corrupt_flag(self) -> None:
         from filigree.db_issues import _safe_fields_json
 
-        assert _safe_fields_json("{bad json", "test-issue-002") == {"_fields_error": True}
+        result = _safe_fields_json("{bad json", "test-issue-002")
+        assert result == {}
+        assert getattr(result, "_filigree_corrupt", False) is True
 
     def test_valid_json_returns_dict(self) -> None:
         from filigree.db_issues import _safe_fields_json
@@ -400,10 +403,11 @@ class TestIssueToDictRoundTrip:
         )
         db.conn.commit()
 
-        # Should not raise — gracefully degrade with error sentinel
+        # Should not raise — gracefully degrade with empty dict + out-of-band corrupt flag.
         result = db.get_issue(issue.id)
         assert result is not None
-        assert result.fields == {"_fields_error": True}
+        assert result.fields == {}
+        assert getattr(result.fields, "_filigree_corrupt", False) is True
 
     def test_corrupt_fields_to_dict_surfaces_data_warning(self, db: FiligreeDB) -> None:
         """to_dict() should strip _fields_error and produce a data_warnings entry."""
