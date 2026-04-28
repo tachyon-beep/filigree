@@ -7,6 +7,7 @@ without circular imports.
 
 from __future__ import annotations
 
+import json as json_mod
 import logging
 import sqlite3
 import sys
@@ -22,8 +23,32 @@ from filigree.core import (
     find_filigree_root,
 )
 from filigree.summary import write_summary
+from filigree.types.api import ErrorCode, SchemaVersionMismatchError
 
 logger = logging.getLogger(__name__)
+
+
+def _wants_json() -> bool:
+    """Return True when the active CLI invocation passed ``--json``.
+
+    The root group stashes the literal argv list in ``ctx.meta`` from
+    ``_FiligreeGroup.parse_args`` so shared startup helpers can honour the
+    2.0 flat envelope contract before the subcommand callback runs.
+    Mirrors the existing check in ``cli.py`` for ``--actor`` validation.
+    """
+    ctx = click.get_current_context(silent=True)
+    if ctx is None:
+        return False
+    raw_args = ctx.find_root().meta.get("filigree_raw_args", [])
+    return "--json" in raw_args
+
+
+def _emit_startup_failure(exc: Exception, code: ErrorCode, *, human_prefix: str = "") -> None:
+    """Render a ``get_db`` failure as JSON envelope (--json) or plain stderr."""
+    if _wants_json():
+        click.echo(json_mod.dumps({"error": str(exc), "code": code}))
+    else:
+        click.echo(f"{human_prefix}{exc}" if human_prefix else str(exc), err=True)
 
 
 def get_db() -> FiligreeDB:
@@ -34,23 +59,33 @@ def get_db() -> FiligreeDB:
     by explicit init/install paths, not by discovery.
 
     Surfaces corrupt-conf / unreadable-DB / schema-mismatch failures as clean
-    ``ClickException``-style exits (stderr + exit 1) rather than letting raw
-    ValueError / OSError / sqlite3.Error / TypeError / KeyError tracebacks
-    escape from every command. ``TypeError`` and ``KeyError`` cover
-    malformed-but-JSON-valid configs (e.g. non-string ``db``, non-list
-    ``enabled_packs``, missing required keys) — see GH PR #33 review.
+    ``ClickException``-style exits (stderr + exit 1), or — when the active
+    invocation passed ``--json`` — as the 2.0 flat envelope on stdout, rather
+    than letting raw ValueError / OSError / sqlite3.Error / TypeError /
+    KeyError tracebacks escape from every command. ``TypeError`` and
+    ``KeyError`` cover malformed-but-JSON-valid configs (e.g. non-string
+    ``db``, non-list ``enabled_packs``, missing required keys) — see GH PR
+    #33 review. ``SchemaVersionMismatchError`` is a ``ValueError`` subclass
+    and so must be caught before the broader ``ValueError`` arm to map to
+    its own ``SCHEMA_MISMATCH`` code.
     """
     try:
         project_root, conf_path = find_filigree_anchor()
     except ProjectNotInitialisedError as exc:
-        click.echo(str(exc), err=True)
+        _emit_startup_failure(exc, ErrorCode.NOT_INITIALIZED)
         sys.exit(1)
     try:
         if conf_path is not None:
             return FiligreeDB.from_conf(conf_path)
         return FiligreeDB.from_filigree_dir(project_root / FILIGREE_DIR_NAME)
-    except (ValueError, OSError, sqlite3.Error, TypeError, KeyError) as exc:
-        click.echo(f"Error opening project database: {exc}", err=True)
+    except SchemaVersionMismatchError as exc:
+        _emit_startup_failure(exc, ErrorCode.SCHEMA_MISMATCH, human_prefix="Error opening project database: ")
+        sys.exit(1)
+    except (OSError, sqlite3.Error) as exc:
+        _emit_startup_failure(exc, ErrorCode.IO, human_prefix="Error opening project database: ")
+        sys.exit(1)
+    except (ValueError, TypeError, KeyError) as exc:
+        _emit_startup_failure(exc, ErrorCode.VALIDATION, human_prefix="Error opening project database: ")
         sys.exit(1)
 
 

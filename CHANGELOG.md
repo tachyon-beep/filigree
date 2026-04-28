@@ -7,7 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-_No changes yet._
+### Fixed
+
+- **CLI startup failures honour ``--json`` envelope.**
+  ``cli_common.get_db()`` now emits the 2.0 flat ``{error, code}`` envelope on
+  stdout when the active invocation passed ``--json`` and project discovery
+  or DB-open fails — instead of leaking a plain-text stderr message that
+  every JSON-capable command (e.g. ``stats --json``) inherited at startup.
+  Mapping: ``ProjectNotInitialisedError`` → ``NOT_INITIALIZED``,
+  ``SchemaVersionMismatchError`` → ``SCHEMA_MISMATCH``,
+  ``OSError``/``sqlite3.Error`` → ``IO``,
+  ``ValueError``/``TypeError``/``KeyError`` → ``VALIDATION``. Plain-text
+  output (without ``--json``) is unchanged. (filigree-3741fc571b)
 
 ## [2.0.0] — 2026-04-28 — The Filigree Component of Loom
 

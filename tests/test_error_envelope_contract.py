@@ -23,7 +23,14 @@ from fastapi.testclient import TestClient
 
 import filigree.dashboard as dash
 from filigree.cli import cli
-from filigree.core import DB_FILENAME, FILIGREE_DIR_NAME, SUMMARY_FILENAME, FiligreeDB, write_config
+from filigree.core import (
+    CONF_FILENAME,
+    DB_FILENAME,
+    FILIGREE_DIR_NAME,
+    SUMMARY_FILENAME,
+    FiligreeDB,
+    write_config,
+)
 from filigree.dashboard import create_app
 from filigree.mcp_tools.issues import _handle_get_issue, _handle_update_issue
 from filigree.types.api import ErrorCode
@@ -231,3 +238,79 @@ class TestTransitionErrorSurfaceContract:
             assert payload["code"] == ErrorCode.INVALID_TRANSITION
         finally:
             os.chdir(original)
+
+
+# ---------------------------------------------------------------------------
+# CLI startup-failure envelope (filigree-3741fc571b).
+# ``cli_common.get_db()`` runs before any subcommand can render its own JSON
+# body, so it must honour ``--json`` itself for project-discovery, schema-
+# mismatch, and config/DB-open failures — otherwise every JSON-capable
+# command leaks plain-text errors when invoked outside an initialised
+# project or against a forward-mismatched DB.
+# ---------------------------------------------------------------------------
+
+
+class TestCLIStartupEnvelope:
+    def test_not_initialized_emits_envelope(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """`stats --json` outside any filigree project emits NOT_INITIALIZED."""
+        monkeypatch.chdir(tmp_path)
+        runner = CliRunner()
+        result = runner.invoke(cli, ["stats", "--json"])
+        assert result.exit_code == 1, result.output
+        payload = json.loads(result.output)
+        _assert_flat_envelope(payload, surface="cli")
+        assert payload["code"] == ErrorCode.NOT_INITIALIZED
+
+    def test_schema_mismatch_emits_envelope(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """`stats --json` against a v+1 DB emits SCHEMA_MISMATCH."""
+        import sqlite3
+
+        from filigree.db_schema import CURRENT_SCHEMA_VERSION
+
+        filigree_dir = tmp_path / FILIGREE_DIR_NAME
+        filigree_dir.mkdir()
+        write_config(filigree_dir, {"prefix": "proj", "version": 1})
+
+        db_path = filigree_dir / DB_FILENAME
+        d = FiligreeDB(db_path, prefix="proj")
+        d.initialize()
+        d.close()
+
+        conn = sqlite3.connect(str(db_path))
+        try:
+            conn.execute(f"PRAGMA user_version = {CURRENT_SCHEMA_VERSION + 1}")
+            conn.commit()
+        finally:
+            conn.close()
+
+        monkeypatch.chdir(tmp_path)
+        runner = CliRunner()
+        result = runner.invoke(cli, ["stats", "--json"])
+        assert result.exit_code == 1, result.output
+        payload = json.loads(result.output)
+        _assert_flat_envelope(payload, surface="cli")
+        assert payload["code"] == ErrorCode.SCHEMA_MISMATCH
+
+    def test_corrupt_conf_emits_envelope(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """`stats --json` against a malformed `.filigree.conf` emits VALIDATION."""
+        # `.filigree.conf` exists (so discovery anchors here) but is invalid JSON.
+        # `read_conf` raises ValueError → routed to VALIDATION envelope.
+        (tmp_path / CONF_FILENAME).write_text("{not valid json")
+
+        monkeypatch.chdir(tmp_path)
+        runner = CliRunner()
+        result = runner.invoke(cli, ["stats", "--json"])
+        assert result.exit_code == 1, result.output
+        payload = json.loads(result.output)
+        _assert_flat_envelope(payload, surface="cli")
+        assert payload["code"] == ErrorCode.VALIDATION
+
+    def test_human_readable_path_unchanged(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Without --json, startup errors stay plain-text (no JSON regression)."""
+        monkeypatch.chdir(tmp_path)
+        runner = CliRunner()
+        result = runner.invoke(cli, ["stats"])
+        assert result.exit_code == 1
+        # Plain text — must not be a JSON envelope (no leading '{').
+        assert not result.output.strip().startswith("{"), result.output
+        assert "filigree" in result.output
