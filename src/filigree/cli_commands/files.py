@@ -21,6 +21,7 @@ from filigree.core import VALID_ASSOC_TYPES, VALID_FINDING_STATUSES, VALID_SEVER
 from filigree.paths import safe_path
 from filigree.types.api import BatchFailure, ErrorCode
 from filigree.types.core import AssocType, FindingStatus
+from filigree.validation import sanitize_actor
 
 # ---------------------------------------------------------------------------
 # File commands
@@ -87,9 +88,15 @@ def list_files_cmd(
                 sort=sort,
                 direction=direction,
             )
-        except (ValueError, sqlite3.Error) as e:
+        except ValueError as e:
             if as_json:
                 click.echo(json_mod.dumps({"error": str(e), "code": ErrorCode.VALIDATION}))
+            else:
+                click.echo(f"Error: {e}", err=True)
+            sys.exit(1)
+        except sqlite3.Error as e:
+            if as_json:
+                click.echo(json_mod.dumps({"error": str(e), "code": ErrorCode.IO}))
             else:
                 click.echo(f"Error: {e}", err=True)
             sys.exit(1)
@@ -186,9 +193,15 @@ def get_file_timeline_cmd(
             else:
                 click.echo(f"Error: File not found: {file_id}", err=True)
             sys.exit(1)
-        except (ValueError, sqlite3.Error) as e:
+        except ValueError as e:
             if as_json:
                 click.echo(json_mod.dumps({"error": str(e), "code": ErrorCode.VALIDATION}))
+            else:
+                click.echo(f"Error: {e}", err=True)
+            sys.exit(1)
+        except sqlite3.Error as e:
+            if as_json:
+                click.echo(json_mod.dumps({"error": str(e), "code": ErrorCode.IO}))
             else:
                 click.echo(f"Error: {e}", err=True)
             sys.exit(1)
@@ -221,6 +234,7 @@ def get_issue_files_cmd(issue_id: str, as_json: bool) -> None:
     with get_db() as db:
         try:
             db.get_issue(issue_id)
+            items = db.get_issue_files(issue_id)
         except KeyError:
             if as_json:
                 click.echo(json_mod.dumps({"error": f"Issue not found: {issue_id}", "code": ErrorCode.NOT_FOUND}))
@@ -233,8 +247,6 @@ def get_issue_files_cmd(issue_id: str, as_json: bool) -> None:
             else:
                 click.echo(f"Error: {e}", err=True)
             sys.exit(1)
-
-        items = db.get_issue_files(issue_id)
 
         # Normalize raw list → ListResponse (CLI surface normalization; MCP returns raw list)
         if as_json:
@@ -272,6 +284,12 @@ def add_file_association_cmd(
             else:
                 click.echo(f"Error: File not found: {file_id}", err=True)
             sys.exit(1)
+        except sqlite3.Error as e:
+            if as_json:
+                click.echo(json_mod.dumps({"error": f"Database error: {e}", "code": ErrorCode.IO}))
+            else:
+                click.echo(f"Error: {e}", err=True)
+            sys.exit(1)
 
         # Validate issue exists
         try:
@@ -281,6 +299,12 @@ def add_file_association_cmd(
                 click.echo(json_mod.dumps({"error": f"Issue not found: {issue_id}", "code": ErrorCode.NOT_FOUND}))
             else:
                 click.echo(f"Error: Issue not found: {issue_id}", err=True)
+            sys.exit(1)
+        except sqlite3.Error as e:
+            if as_json:
+                click.echo(json_mod.dumps({"error": f"Database error: {e}", "code": ErrorCode.IO}))
+            else:
+                click.echo(f"Error: {e}", err=True)
             sys.exit(1)
 
         try:
@@ -430,9 +454,15 @@ def list_findings_cmd(
                 file_id=file_id,
                 issue_id=issue_id,
             )
-        except (ValueError, sqlite3.Error) as e:
+        except ValueError as e:
             if as_json:
                 click.echo(json_mod.dumps({"error": str(e), "code": ErrorCode.VALIDATION}))
+            else:
+                click.echo(f"Error: {e}", err=True)
+            sys.exit(1)
+        except sqlite3.Error as e:
+            if as_json:
+                click.echo(json_mod.dumps({"error": str(e), "code": ErrorCode.IO}))
             else:
                 click.echo(f"Error: {e}", err=True)
             sys.exit(1)
@@ -556,18 +586,31 @@ def update_finding_cmd(
     type=click.IntRange(0, 4),
     help="Override priority (default: inferred from severity)",
 )
-@click.option("--actor", default="cli", help="Actor identity")
+@click.option("--actor", default=None, help="Actor identity (defaults to global --actor)")
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+@click.pass_context
 def promote_finding_cmd(
+    ctx: click.Context,
     finding_id: str,
     priority: int | None,
-    actor: str,
+    actor: str | None,
     as_json: bool,
 ) -> None:
     """Promote a scan finding to an observation for triage tracking."""
+    if actor is None:
+        resolved_actor = ctx.obj["actor"]
+    else:
+        cleaned, err = sanitize_actor(actor)
+        if err:
+            if as_json:
+                click.echo(json_mod.dumps({"error": err, "code": ErrorCode.VALIDATION}))
+            else:
+                click.echo(f"Error: {err}", err=True)
+            sys.exit(1)
+        resolved_actor = cleaned
     with get_db() as db:
         try:
-            obs = db.promote_finding_to_observation(finding_id, priority=priority, actor=actor)
+            obs = db.promote_finding_to_observation(finding_id, priority=priority, actor=resolved_actor)
         except KeyError:
             if as_json:
                 click.echo(json_mod.dumps({"error": f"Finding not found: {finding_id}", "code": ErrorCode.NOT_FOUND}))

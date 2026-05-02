@@ -113,6 +113,22 @@ class TestRegisterFile:
         with pytest.raises(ValueError, match="empty after normalization"):
             db.register_file(".")
 
+    def test_register_explicit_empty_metadata_clears_existing(self, db: FiligreeDB) -> None:
+        """filigree-822d514ec7: register_file(metadata={}) must clear stored metadata.
+
+        `metadata=None` means leave unchanged; `metadata={}` means set to empty.
+        """
+        f1 = db.register_file("src/main.py", metadata={"owner": "team-a"})
+        assert f1.metadata == {"owner": "team-a"}
+        f2 = db.register_file("src/main.py", metadata={})
+        assert f2.metadata == {}
+
+    def test_register_metadata_none_preserves_existing(self, db: FiligreeDB) -> None:
+        """metadata=None on re-register must preserve existing metadata."""
+        db.register_file("src/main.py", metadata={"owner": "team-a"})
+        f = db.register_file("src/main.py")
+        assert f.metadata == {"owner": "team-a"}
+
 
 class TestListFiles:
     """Tests for listing file records."""
@@ -511,6 +527,36 @@ class TestProcessScanResults:
                 scan_source="ruff",
                 findings=[
                     {"path": "a.py", "rule_id": "E1", "severity": "low", "message": "m", "line_end": False},
+                ],
+            )
+
+    def test_negative_line_start_rejected(self, db: FiligreeDB) -> None:
+        """filigree-8383bb4462: negative line_start collides with -1 dedup sentinel."""
+        with pytest.raises(ValueError, match="line_start must be >= 0"):
+            db.process_scan_results(
+                scan_source="ruff",
+                findings=[
+                    {"path": "a.py", "rule_id": "E1", "severity": "low", "message": "m", "line_start": -1},
+                ],
+            )
+
+    def test_negative_line_end_rejected(self, db: FiligreeDB) -> None:
+        """filigree-8383bb4462: negative line_end likewise rejected for symmetry."""
+        with pytest.raises(ValueError, match="line_end must be >= 0"):
+            db.process_scan_results(
+                scan_source="ruff",
+                findings=[
+                    {"path": "a.py", "rule_id": "E1", "severity": "low", "message": "m", "line_end": -5},
+                ],
+            )
+
+    def test_non_dict_metadata_rejected(self, db: FiligreeDB) -> None:
+        """filigree-ff98665ca3: list metadata must be rejected at ingest."""
+        with pytest.raises(ValueError, match="metadata must be a JSON object"):
+            db.process_scan_results(
+                scan_source="ruff",
+                findings=[
+                    {"path": "a.py", "rule_id": "E1", "severity": "low", "message": "m", "metadata": [1, 2]},
                 ],
             )
 
@@ -2344,6 +2390,34 @@ class TestGetScanRunsCore:
             )
         runs = db.get_scan_runs(limit=2)
         assert len(runs) == 2
+
+    def test_clean_run_with_zero_findings_appears_in_history(self, db: FiligreeDB) -> None:
+        """filigree-ff340d965f: a completed clean scan run must show in history.
+
+        Pre-fix, get_scan_runs() derived history from scan_findings only, so a
+        run that completed with zero findings was invisible despite the
+        scan_runs row existing.
+        """
+        db.create_scan_run(
+            scan_run_id="clean-run",
+            scanner_name="codex",
+            scan_source="codex",
+            file_paths=["a.py"],
+            file_ids=["f-1"],
+        )
+        db.update_scan_run_status("clean-run", "running")
+        db.process_scan_results(
+            scan_source="codex",
+            findings=[],
+            scan_run_id="clean-run",
+            complete_scan_run=True,
+        )
+        runs = db.get_scan_runs()
+        assert len(runs) == 1
+        assert runs[0]["scan_run_id"] == "clean-run"
+        assert runs[0]["total_findings"] == 0
+        assert runs[0]["files_scanned"] == 0
+        assert runs[0]["completed_at"]  # non-empty
 
 
 class TestCreateObservationsPartialFailure:

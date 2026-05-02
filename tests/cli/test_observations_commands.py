@@ -13,8 +13,10 @@ MCP shape verification:
 from __future__ import annotations
 
 import json
+import sqlite3
 from pathlib import Path
 
+import pytest
 from click.testing import CliRunner
 
 from filigree.cli import cli
@@ -481,3 +483,106 @@ class TestBatchDismissObservationsCommand:
             assert obs_id in data["succeeded"]
         finally:
             os.chdir(original)
+
+
+# ---------------------------------------------------------------------------
+# Regression: documented `--file` alias for `observe` (filigree-6f8d9816b7)
+# ---------------------------------------------------------------------------
+
+
+class TestObserveFileAlias:
+    """`instructions.md` documents `filigree observe "note" --file=src/foo.py`.
+    The `--file` alias must be accepted alongside `--file-path`.
+    """
+
+    def test_observe_accepts_file_alias(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        runner, _ = cli_in_project
+        result = runner.invoke(
+            cli,
+            ["observe", "alias test", "--file", "src/foo.py", "--line", "42", "--json"],
+        )
+        assert result.exit_code == 0, result.output
+        data = json.loads(result.output)
+        assert data["file_path"] == "src/foo.py"
+        assert data["line"] == 42
+
+    def test_observe_file_path_long_form_still_works(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        """Sanity: original `--file-path` spelling still works."""
+        runner, _ = cli_in_project
+        result = runner.invoke(
+            cli,
+            ["observe", "long form", "--file-path", "src/bar.py", "--json"],
+        )
+        assert result.exit_code == 0, result.output
+        data = json.loads(result.output)
+        assert data["file_path"] == "src/bar.py"
+
+
+# ---------------------------------------------------------------------------
+# Regression: sqlite3.Error → ErrorCode.IO envelope (filigree-9ca1f5ace8)
+# ---------------------------------------------------------------------------
+
+
+class TestObservationDbErrorEnvelope:
+    """sqlite3.Error from observation DB calls must surface as ErrorCode.IO
+    JSON envelopes (mirroring mcp_tools/observations.py and cli_commands/files.py)."""
+
+    def test_observe_sqlite_error_returns_io_envelope(
+        self, cli_in_project: tuple[CliRunner, Path], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        runner, _ = cli_in_project
+
+        def _raise(*_a: object, **_kw: object) -> None:
+            raise sqlite3.OperationalError("database is locked")
+
+        monkeypatch.setattr("filigree.core.FiligreeDB.create_observation", _raise)
+        result = runner.invoke(cli, ["observe", "x", "--json"])
+        assert result.exit_code == 1
+        data = json.loads(result.output)
+        assert data["code"] == "IO"
+        assert "database is locked" in data["error"]
+
+    def test_list_observations_sqlite_error_returns_io_envelope(
+        self, cli_in_project: tuple[CliRunner, Path], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        runner, _ = cli_in_project
+
+        def _raise(*_a: object, **_kw: object) -> None:
+            raise sqlite3.OperationalError("database is locked")
+
+        monkeypatch.setattr("filigree.core.FiligreeDB.list_observations", _raise)
+        result = runner.invoke(cli, ["list-observations", "--json"])
+        assert result.exit_code == 1
+        data = json.loads(result.output)
+        assert data["code"] == "IO"
+        assert "database is locked" in data["error"]
+
+    def test_dismiss_observation_sqlite_error_returns_io_envelope(
+        self, cli_in_project: tuple[CliRunner, Path], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        runner, _ = cli_in_project
+
+        def _raise(*_a: object, **_kw: object) -> None:
+            raise sqlite3.OperationalError("database is locked")
+
+        monkeypatch.setattr("filigree.core.FiligreeDB.dismiss_observation", _raise)
+        result = runner.invoke(cli, ["dismiss-observation", "obs-anything", "--json"])
+        assert result.exit_code == 1
+        data = json.loads(result.output)
+        assert data["code"] == "IO"
+        assert "database is locked" in data["error"]
+
+    def test_promote_observation_sqlite_error_returns_io_envelope(
+        self, cli_in_project: tuple[CliRunner, Path], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        runner, _ = cli_in_project
+
+        def _raise(*_a: object, **_kw: object) -> None:
+            raise sqlite3.OperationalError("database is locked")
+
+        monkeypatch.setattr("filigree.core.FiligreeDB.promote_observation", _raise)
+        result = runner.invoke(cli, ["promote-observation", "obs-anything", "--json"])
+        assert result.exit_code == 1
+        data = json.loads(result.output)
+        assert data["code"] == "IO"
+        assert "database is locked" in data["error"]

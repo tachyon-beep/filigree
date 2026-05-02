@@ -409,64 +409,83 @@ class ObservationsMixin(DBMixinProtocol):
         # obs_id (recorded in issue.fields.source_observation_id), return that
         # issue instead of creating a duplicate.  Handles the retry case where
         # the observation delete failed after the issue was committed.
+        #
+        # The check + create_issue is wrapped in BEGIN IMMEDIATE so two
+        # concurrent promoters cannot both pass the check and both insert an
+        # issue (mirrors the cooldown-check pattern in db_scans.py).
+        # ``json_valid(fields)`` skips rows whose fields JSON is corrupt —
+        # without it, one malformed row anywhere in the issues table makes
+        # ``json_extract`` raise OperationalError and breaks every promote.
         warnings: list[str] = []
-        existing_issue_row = self.conn.execute(
-            "SELECT id FROM issues WHERE json_extract(fields, '$.source_observation_id') = ?",
-            (obs_id,),
-        ).fetchone()
-        if existing_issue_row is not None:
-            existing_issue = self.get_issue(existing_issue_row["id"])
-            # Clean up lingering observation from prior failed promote (best-effort).
-            try:
+        if self.conn.in_transaction:
+            self.conn.rollback()
+        self.conn.execute("BEGIN IMMEDIATE")
+        try:
+            existing_issue_row = self.conn.execute(
+                "SELECT id FROM issues WHERE json_valid(fields) AND json_extract(fields, '$.source_observation_id') = ?",
+                (obs_id,),
+            ).fetchone()
+            if existing_issue_row is not None:
+                # Best-effort cleanup of lingering observation from prior failed promote.
+                # Lives inside the BEGIN IMMEDIATE so a single commit covers both reads
+                # and the cleanup write atomically.
                 self.conn.execute("DELETE FROM observations WHERE id = ?", (obs_id,))
                 self.conn.commit()
-            except sqlite3.Error:
+                existing_issue = self.get_issue(existing_issue_row["id"])
+                msg = f"Observation {obs_id} was already promoted to issue {existing_issue.id} (returning existing)"
+                logger.info(msg)
+                warnings.append(msg)
+                idem_result = cast(PromoteObservationResult, {"issue": existing_issue, "warnings": warnings})
+                return idem_result
+
+            # 1. Read observation (don't delete yet)
+            row = self.conn.execute("SELECT * FROM observations WHERE id = ?", (obs_id,)).fetchone()
+            if row is None:
                 self.conn.rollback()
-                logger.warning("Failed to clean up observation %s on idempotent retry", obs_id, exc_info=True)
-            msg = f"Observation {obs_id} was already promoted to issue {existing_issue.id} (returning existing)"
-            logger.info(msg)
-            warnings.append(msg)
-            idem_result = cast(PromoteObservationResult, {"issue": existing_issue, "warnings": warnings})
-            return idem_result
+                raise ValueError(f"Observation not found: {obs_id}")
+            obs = dict(row)
 
-        # 1. Read observation (don't delete yet)
-        row = self.conn.execute("SELECT * FROM observations WHERE id = ?", (obs_id,)).fetchone()
-        if row is None:
-            raise ValueError(f"Observation not found: {obs_id}")
-        obs = dict(row)
+            # Reject expired observations — consistent with TTL enforcement elsewhere.
+            if obs["expires_at"] <= _now_iso():
+                self.conn.rollback()
+                raise ValueError(f"Observation {obs_id} has expired and cannot be promoted")
 
-        # Reject expired observations — consistent with TTL enforcement elsewhere.
-        if obs["expires_at"] <= _now_iso():
-            raise ValueError(f"Observation {obs_id} has expired and cannot be promoted")
+            # 2. Build issue fields
+            issue_title = title or obs["summary"]
+            desc_parts = []
+            if extra_description:
+                desc_parts.append(extra_description)
+            if obs["detail"]:
+                desc_parts.append(obs["detail"])
+            if obs["file_path"]:
+                loc = f"`{obs['file_path']}`"
+                if obs["line"] is not None:
+                    loc += f":{obs['line']}"
+                desc_parts.append(f"Observed in: {loc}")
+            if obs.get("source_issue_id"):
+                desc_parts.append(f"Observed while working on: {obs['source_issue_id']}")
+            description = "\n\n".join(desc_parts)
 
-        # 2. Build issue fields
-        issue_title = title or obs["summary"]
-        desc_parts = []
-        if extra_description:
-            desc_parts.append(extra_description)
-        if obs["detail"]:
-            desc_parts.append(obs["detail"])
-        if obs["file_path"]:
-            loc = f"`{obs['file_path']}`"
-            if obs["line"] is not None:
-                loc += f":{obs['line']}"
-            desc_parts.append(f"Observed in: {loc}")
-        if obs.get("source_issue_id"):
-            desc_parts.append(f"Observed while working on: {obs['source_issue_id']}")
-        description = "\n\n".join(desc_parts)
-
-        # 3. Create issue first — if this fails, observation is untouched.
-        #    The source_observation_id field is the durable idempotency key:
-        #    retries after a cleanup failure see the existing issue and return
-        #    it instead of creating a duplicate.
-        issue = self.create_issue(
-            issue_title,
-            type=issue_type,
-            priority=priority if priority is not None else obs["priority"],
-            description=description,
-            actor=actor or obs["actor"],
-            fields={"source_observation_id": obs_id},
-        )
+            # 3. Create issue first — if this fails, observation is untouched.
+            #    The source_observation_id field is the durable idempotency key:
+            #    retries after a cleanup failure see the existing issue and return
+            #    it instead of creating a duplicate.  ``create_issue`` commits
+            #    internally, which closes the BEGIN IMMEDIATE transaction; that's
+            #    fine — the writer lock has been held continuously from BEGIN
+            #    through the INSERT, so any peer waiting on BEGIN IMMEDIATE will
+            #    see this issue's row when their idempotency check runs.
+            issue = self.create_issue(
+                issue_title,
+                type=issue_type,
+                priority=priority if priority is not None else obs["priority"],
+                description=description,
+                actor=actor or obs["actor"],
+                fields={"source_observation_id": obs_id},
+            )
+        except Exception:
+            if self.conn.in_transaction:
+                self.conn.rollback()
+            raise
 
         # 4. Issue created successfully — now clean up the observation.
         #    Delete the observation FIRST (prevents double-promotion on retry),

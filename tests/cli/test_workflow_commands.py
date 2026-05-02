@@ -206,6 +206,128 @@ class TestWorkflowCli:
         assert component_line is not None
         assert "required" not in component_line
 
+    def test_templates_reload_corrupt_config_emits_envelope(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        """Bug filigree-259e5b58ef: corrupt config.json must surface as a structured error, not a traceback.
+
+        Mirrors tests/mcp/test_tools.py::test_reload_templates_corrupt_config_returns_structured_error.
+        """
+        from filigree.types.api import ErrorCode
+
+        runner, project_root = cli_in_project
+        config_path = project_root / ".filigree" / "config.json"
+        config_path.write_text("{not valid json")
+
+        result = runner.invoke(cli, ["templates", "reload", "--json"])
+        assert result.exit_code == 1
+        payload = json.loads(result.output)
+        assert payload["code"] == ErrorCode.VALIDATION
+        assert "config.json" in payload["error"]
+
+    def test_templates_reload_corrupt_config_plain_text(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        """Bug filigree-259e5b58ef: without --json, corrupt config still exits non-zero with a clean message."""
+        runner, project_root = cli_in_project
+        config_path = project_root / ".filigree" / "config.json"
+        config_path.write_text("{not valid json")
+
+        result = runner.invoke(cli, ["templates", "reload"])
+        assert result.exit_code == 1
+        assert "config.json" in result.output
+        assert "Traceback" not in result.output
+
+    def test_templates_reload_refreshes_context_md(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        """Bug filigree-00359c8498: reload must regenerate context.md, not just invalidate the cache.
+
+        Mirrors tests/mcp/test_tools.py::test_reload_templates_refreshes_context_md.
+        """
+        runner, project_root = cli_in_project
+        summary_path = project_root / ".filigree" / "context.md"
+        summary_path.write_text("STALE-MARKER-BEFORE-RELOAD")
+
+        result = runner.invoke(cli, ["templates", "reload"])
+        assert result.exit_code == 0
+        assert summary_path.read_text() != "STALE-MARKER-BEFORE-RELOAD"
+
+    def test_templates_reload_json_success(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        """Bug filigree-dfbcc84687: templates reload --json emits a structured success body."""
+        runner, _ = cli_in_project
+        result = runner.invoke(cli, ["templates", "reload", "--json"])
+        assert result.exit_code == 0
+        payload = json.loads(result.output)
+        assert payload == {"status": "ok"}
+
+    def test_type_info_unknown_json_envelope(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        """Bug filigree-dfbcc84687: type-info --json on unknown type emits the 2.0 envelope."""
+        from filigree.types.api import ErrorCode
+
+        runner, _ = cli_in_project
+        result = runner.invoke(cli, ["type-info", "nonexistent_type", "--json"])
+        assert result.exit_code == 1
+        payload = json.loads(result.output)
+        assert payload["code"] == ErrorCode.NOT_FOUND
+        assert "nonexistent_type" in payload["error"]
+
+    def test_transitions_not_found_json_envelope(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        """Bug filigree-dfbcc84687: transitions --json on missing issue emits the envelope."""
+        from filigree.types.api import ErrorCode
+
+        runner, _ = cli_in_project
+        result = runner.invoke(cli, ["transitions", "nonexistent-abc", "--json"])
+        assert result.exit_code == 1
+        payload = json.loads(result.output)
+        assert payload["code"] == ErrorCode.NOT_FOUND
+
+    def test_validate_not_found_json_envelope(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        """Bug filigree-dfbcc84687: validate --json on missing issue emits the envelope."""
+        from filigree.types.api import ErrorCode
+
+        runner, _ = cli_in_project
+        result = runner.invoke(cli, ["validate", "nonexistent-abc", "--json"])
+        assert result.exit_code == 1
+        payload = json.loads(result.output)
+        assert payload["code"] == ErrorCode.NOT_FOUND
+
+    def test_explain_status_unknown_type_json_envelope(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        """Bug filigree-dfbcc84687: explain-status --json on unknown type emits the envelope."""
+        from filigree.types.api import ErrorCode
+
+        runner, _ = cli_in_project
+        result = runner.invoke(cli, ["explain-status", "nonexistent_type", "open", "--json"])
+        assert result.exit_code == 1
+        payload = json.loads(result.output)
+        assert payload["code"] == ErrorCode.NOT_FOUND
+
+    def test_explain_status_unknown_status_json_envelope(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        """Bug filigree-dfbcc84687: explain-status --json on unknown status emits the envelope."""
+        from filigree.types.api import ErrorCode
+
+        runner, _ = cli_in_project
+        result = runner.invoke(cli, ["explain-status", "task", "nonexistent_status", "--json"])
+        assert result.exit_code == 1
+        payload = json.loads(result.output)
+        assert payload["code"] == ErrorCode.NOT_FOUND
+
+    def test_get_template_alias_known_type(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        """Bug filigree-6213766f9b: get-template <type> mirrors the MCP get_template tool."""
+        runner, _ = cli_in_project
+        result = runner.invoke(cli, ["get-template", "bug", "--json"])
+        assert result.exit_code == 0
+        payload = json.loads(result.output)
+        assert payload["type"] == "bug"
+        assert "fields_schema" in payload
+        assert "states" in payload
+        assert "initial_state" in payload
+
+    def test_get_template_alias_unknown_type_envelope(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        """Bug filigree-6213766f9b: get-template --json on unknown type emits the 2.0 envelope."""
+        from filigree.types.api import ErrorCode
+
+        runner, _ = cli_in_project
+        result = runner.invoke(cli, ["get-template", "nonexistent_type", "--json"])
+        assert result.exit_code == 1
+        payload = json.loads(result.output)
+        assert payload["code"] == ErrorCode.NOT_FOUND
+        assert "nonexistent_type" in payload["error"]
+
 
 class TestCreatePlanCli:
     def test_create_plan_from_stdin(self, cli_in_project: tuple[CliRunner, Path]) -> None:
@@ -283,6 +405,77 @@ class TestCreatePlanCli:
         result = runner.invoke(cli, ["create-plan"], input=plan_json)
         assert result.exit_code == 1
         assert "error" in result.output.lower()
+
+    def test_create_plan_step_not_object_clean_error(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        """Regression: a non-dict step (e.g. a JSON string) used to surface as
+        an uncaught ``AttributeError`` inside ``db.create_plan``. CLI must
+        reject it up front.
+        """
+        runner, _ = cli_in_project
+        plan_json = json.dumps(
+            {
+                "milestone": {"title": "MS"},
+                "phases": [{"title": "P1", "steps": ["bad-step"]}],
+            }
+        )
+        result = runner.invoke(cli, ["create-plan"], input=plan_json)
+        assert result.exit_code == 1
+        assert "Traceback" not in result.output
+        assert "Step 1" in result.output
+        assert "object" in result.output.lower()
+
+    def test_create_plan_dep_float_rejected(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        """Regression: JSON float dep like 0.1 used to be ``str()``ed to
+        ``"0.1"`` and silently interpreted as cross-phase ref ``phase 0,
+        step 1``. CLI must reject non-int/non-string dep types.
+        """
+        runner, _ = cli_in_project
+        plan_json = json.dumps(
+            {
+                "milestone": {"title": "MS"},
+                "phases": [
+                    {
+                        "title": "P1",
+                        "steps": [{"title": "S0"}, {"title": "S1", "deps": [0.1]}],
+                    }
+                ],
+            }
+        )
+        result = runner.invoke(cli, ["create-plan"], input=plan_json)
+        assert result.exit_code == 1
+        assert "Traceback" not in result.output
+        assert "dep" in result.output.lower()
+
+    def test_create_plan_dep_bool_rejected(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        """``True``/``False`` are ``int`` subclasses in Python; without an
+        explicit bool check ``str(True)`` becomes ``"True"`` and ``int()`` raises.
+        """
+        runner, _ = cli_in_project
+        plan_json = json.dumps(
+            {
+                "milestone": {"title": "MS"},
+                "phases": [{"title": "P1", "steps": [{"title": "S1", "deps": [True]}]}],
+            }
+        )
+        result = runner.invoke(cli, ["create-plan"], input=plan_json)
+        assert result.exit_code == 1
+        assert "Traceback" not in result.output
+        assert "bool" in result.output.lower()
+
+    def test_create_plan_steps_not_list_clean_error(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        """A non-list ``steps`` value (e.g. a dict) must produce a clean error."""
+        runner, _ = cli_in_project
+        plan_json = json.dumps(
+            {
+                "milestone": {"title": "MS"},
+                "phases": [{"title": "P1", "steps": {"oops": "not a list"}}],
+            }
+        )
+        result = runner.invoke(cli, ["create-plan"], input=plan_json)
+        assert result.exit_code == 1
+        assert "Traceback" not in result.output
+        assert "steps" in result.output.lower()
+        assert "list" in result.output.lower()
 
 
 class TestPlanCli:
@@ -554,6 +747,32 @@ class TestBatchCli:
         assert len(data["succeeded"]) == 1
         assert len(data["failed"]) == 1
 
+    def test_batch_close_omits_newly_unblocked_when_empty(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        # filigree-893edb553a: BatchResponse contract — newly_unblocked is
+        # NotRequired and must be OMITTED entirely when empty (not emitted as []).
+        runner, _ = cli_in_project
+        r1 = runner.invoke(cli, ["create", "A"])
+        id1 = _extract_id(r1.output)
+        result = runner.invoke(cli, ["batch-close", id1, "--json"])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert "newly_unblocked" not in data, f"expected omission, got {data!r}"
+
+    def test_batch_close_emits_newly_unblocked_when_present(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        # filigree-893edb553a: when closing a blocker actually unblocks something,
+        # newly_unblocked MUST be present in the payload.
+        runner, _ = cli_in_project
+        r1 = runner.invoke(cli, ["create", "Blocker"])
+        blocker_id = _extract_id(r1.output)
+        r2 = runner.invoke(cli, ["create", "Dependent"])
+        dep_id = _extract_id(r2.output)
+        runner.invoke(cli, ["add-dep", dep_id, blocker_id])
+        result = runner.invoke(cli, ["batch-close", blocker_id, "--json"])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert "newly_unblocked" in data, f"expected presence, got {data!r}"
+        assert any(i["issue_id"] == dep_id for i in data["newly_unblocked"])
+
     def test_batch_add_label_json(self, cli_in_project: tuple[CliRunner, Path]) -> None:
         runner, _ = cli_in_project
         r1 = runner.invoke(cli, ["create", "A"])
@@ -601,7 +820,8 @@ class TestBatchCli:
 
         comments = runner.invoke(cli, ["get-comments", id1, "--json"])
         comments_data = json.loads(comments.output)
-        assert any(c["text"] == "triage-complete" for c in comments_data)
+        # filigree-d2263e721d: ListResponse envelope, not a bare list.
+        assert any(c["text"] == "triage-complete" for c in comments_data["items"])
 
     def test_batch_add_comment_partial_failure(self, cli_in_project: tuple[CliRunner, Path]) -> None:
         runner, _ = cli_in_project
@@ -680,6 +900,51 @@ class TestEventsCli:
         # The boundary event must be returned (it's 0.123s after --since).
         issue_ids = {e["issue_id"] for e in data["items"]}
         assert issue.id in issue_ids, f"Z-suffix boundary must match fractional +00:00 timestamp; got {data}"
+
+    def test_changes_non_utc_offset_normalized(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        """Non-UTC offset --since must be converted to UTC before SQLite text compare.
+
+        Regression: ``_normalize_iso_timestamp`` previously returned the offset
+        unchanged. A cursor like ``2026-06-15T13:00:00+01:00`` (chronologically
+        12:00 UTC) is lexically AFTER a stored event ``2026-06-15T12:30:00+00:00``,
+        so ``WHERE created_at > ?`` silently dropped events that were actually
+        chronologically after the cursor.
+        """
+        from filigree.core import FiligreeDB
+
+        runner, project_root = cli_in_project
+        db = FiligreeDB.from_filigree_dir(project_root / ".filigree")
+        issue = db.create_issue("non-utc test")
+        # Event at 12:30 UTC, half an hour after the cursor's chronological time.
+        db.conn.execute(
+            "UPDATE events SET created_at = ? WHERE issue_id = ?",
+            ("2026-06-15T12:30:00+00:00", issue.id),
+        )
+        db.conn.commit()
+        db.close()
+
+        # Cursor at 13:00 +01:00 == 12:00 UTC, 30min before the event.
+        result = runner.invoke(cli, ["changes", "--since", "2026-06-15T13:00:00+01:00", "--json"])
+        assert result.exit_code == 0, f"CLI error: {result.output}"
+        data = json.loads(result.output)
+        issue_ids = {e["issue_id"] for e in data["items"]}
+        assert issue.id in issue_ids, f"non-UTC offset cursor must be normalized to UTC before lexical compare; got {data}"
+
+    def test_changes_negative_limit_rejected(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        """``--limit`` declares a positive-events maximum; SQLite treats
+        ``LIMIT -1`` as unbounded, contradicting the contract.
+        """
+        runner, _ = cli_in_project
+        result = runner.invoke(cli, ["changes", "--since", "2020-01-01T00:00:00", "--limit", "-1"])
+        assert result.exit_code != 0
+        # Click's IntRange emits "Invalid value for '--limit'..."
+        assert "limit" in result.output.lower() or "limit" in (result.stderr or "").lower()
+
+    def test_changes_zero_limit_rejected(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        """``--limit=0`` is a degenerate query; reject as invalid."""
+        runner, _ = cli_in_project
+        result = runner.invoke(cli, ["changes", "--since", "2020-01-01T00:00:00", "--limit", "0"])
+        assert result.exit_code != 0
 
     def test_changes_malformed_since_rejected(self, cli_in_project: tuple[CliRunner, Path]) -> None:
         """Malformed --since input must produce a clean error, not silent empty result."""

@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 
+import pytest
 from click.testing import CliRunner
 
 from filigree.cli import cli
@@ -310,6 +311,26 @@ class TestCommentsCli:
         result = runner.invoke(cli, ["add-comment", "test-nonexistent", "text"])
         assert result.exit_code == 1
 
+    def test_add_comment_refreshes_context_md(
+        self,
+        cli_in_project: tuple[CliRunner, Path],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """filigree-8188eb6fe7: add-comment must refresh context.md like other CLI mutations."""
+        runner, _ = cli_in_project
+        r = runner.invoke(cli, ["create", "Refresh me"])
+        issue_id = _extract_id(r.output)
+
+        calls: list[tuple[object, object]] = []
+
+        def spy(db: object, path: object) -> None:
+            calls.append((db, path))
+
+        monkeypatch.setattr("filigree.cli_common.write_summary", spy)
+        result = runner.invoke(cli, ["add-comment", issue_id, "needs refresh"])
+        assert result.exit_code == 0
+        assert calls, "add-comment must call refresh_summary (write_summary was never invoked)"
+
     def test_comments_empty(self, cli_in_project: tuple[CliRunner, Path]) -> None:
         runner, _ = cli_in_project
         r = runner.invoke(cli, ["create", "No comments"])
@@ -543,3 +564,27 @@ class TestListLabelQuery:
         result = runner.invoke(cli, ["list", "-l", "age:fresh"])
         assert result.exit_code == 0
         assert "Fresh issue" in result.output
+
+    def test_list_invalid_virtual_label_emits_json_envelope(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        """`list --json` must emit a 2.0 envelope on invalid label, not a Click string.
+
+        Regression for filigree-d87fd24b12.
+        """
+        runner, _ = cli_in_project
+        result = runner.invoke(cli, ["list", "-l", "age:bogus", "--json"])
+        assert result.exit_code == 1, result.output
+        data = json.loads(result.output)
+        assert data["code"] == "VALIDATION", data
+        assert "age" in data["error"].lower() or "bogus" in data["error"].lower()
+
+    def test_list_malformed_label_prefix_emits_json_envelope(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        """`list --json` must emit a 2.0 envelope on malformed --label-prefix.
+
+        Regression for filigree-d87fd24b12.
+        """
+        runner, _ = cli_in_project
+        result = runner.invoke(cli, ["list", "--label-prefix", "missing-colon", "--json"])
+        assert result.exit_code == 1, result.output
+        data = json.loads(result.output)
+        assert data["code"] == "VALIDATION", data
+        assert "label_prefix" in data["error"].lower() or "colon" in data["error"].lower()

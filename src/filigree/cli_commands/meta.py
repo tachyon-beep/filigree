@@ -40,6 +40,7 @@ def add_comment(ctx: click.Context, issue_id: str, text: str, as_json: bool) -> 
             click.echo(json_mod.dumps({"comment_id": comment_id, "issue_id": issue_id}))
         else:
             click.echo(f"Added comment {comment_id} to {issue_id}")
+        refresh_summary(db)
 
 
 @click.command("get-comments")
@@ -58,7 +59,9 @@ def get_comments(issue_id: str, as_json: bool) -> None:
             sys.exit(1)
         result = db.get_comments(issue_id)
         if as_json:
-            click.echo(json_mod.dumps(result, indent=2, default=str))
+            # Phase E1: list --json wraps items in ListResponse[T] ({items, has_more}).
+            # Mirrors mcp_tools/meta.py::_handle_get_comments which uses _list_response().
+            click.echo(json_mod.dumps({"items": list(result), "has_more": False}, indent=2, default=str))
             return
         if not result:
             click.echo("No comments.")
@@ -326,19 +329,18 @@ def batch_close(ctx: click.Context, issue_ids: tuple[str, ...], reason: str, as_
                 for i in ready_after_batch
                 if i.id not in ready_before_batch
             ]
-            click.echo(
-                json_mod.dumps(
-                    {
-                        "succeeded": [
-                            {"issue_id": i.id, "title": i.title, "status": i.status, "priority": i.priority, "type": i.type} for i in closed
-                        ],
-                        "failed": errors,
-                        "newly_unblocked": newly_unblocked_batch,
-                    },
-                    indent=2,
-                    default=str,
-                )
-            )
+            # BatchResponse contract: newly_unblocked is NotRequired and must be
+            # OMITTED when empty (not emitted as []). Mirrors
+            # mcp_tools/issues.py::_handle_batch_close.
+            payload: dict[str, Any] = {
+                "succeeded": [
+                    {"issue_id": i.id, "title": i.title, "status": i.status, "priority": i.priority, "type": i.type} for i in closed
+                ],
+                "failed": errors,
+            }
+            if newly_unblocked_batch:
+                payload["newly_unblocked"] = newly_unblocked_batch
+            click.echo(json_mod.dumps(payload, indent=2, default=str))
         else:
             for issue in closed:
                 click.echo(f"  Closed {issue.id}: {issue.title}")

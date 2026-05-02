@@ -15,6 +15,7 @@ import os
 import shutil
 import sqlite3
 import sys
+import tempfile
 import uuid as _uuid
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -272,7 +273,13 @@ def read_conf(conf_path: Path) -> dict[str, Any]:
     """Read and validate a ``.filigree.conf`` file.
 
     Returns the parsed JSON dict. Raises ``ValueError`` if the file is not a
-    JSON object or is missing required keys (``prefix``, ``db``).
+    JSON object, is missing required keys (``prefix``, ``db``), or contains
+    malformed values for ``prefix``, ``db``, or ``enabled_packs``.
+
+    Type validation here ensures downstream callers (notably
+    :meth:`FiligreeDB.from_conf`, which evaluates ``Path / data["db"]``) get
+    a well-formed dict instead of raw ``TypeError`` from the wrong scalar
+    type.
     """
     raw: Any = json.loads(conf_path.read_text())
     if not isinstance(raw, dict):
@@ -282,6 +289,16 @@ def read_conf(conf_path: Path) -> dict[str, Any]:
     if missing:
         msg = f"{conf_path}: missing required keys: {', '.join(missing)}"
         raise ValueError(msg)
+    for key in ("prefix", "db"):
+        value = raw[key]
+        if not isinstance(value, str) or not value:
+            msg = f"{conf_path}: {key!r} must be a non-empty string, got {type(value).__name__}: {value!r}"
+            raise ValueError(msg)
+    if "enabled_packs" in raw:
+        packs = raw["enabled_packs"]
+        if not isinstance(packs, list) or not all(isinstance(p, str) for p in packs):
+            msg = f"{conf_path}: 'enabled_packs' must be a list of strings, got {type(packs).__name__}: {packs!r}"
+            raise ValueError(msg)
     return raw
 
 
@@ -350,8 +367,8 @@ def get_mode(filigree_dir: Path) -> str:
     Raises ValueError if the config contains an explicit but invalid mode string.
     """
     config = read_config(filigree_dir)
-    mode: str = config.get("mode", "ethereal")
-    if mode not in VALID_MODES:
+    mode: Any = config.get("mode", "ethereal")
+    if not isinstance(mode, str) or mode not in VALID_MODES:
         raise ValueError(f"Unknown mode {mode!r} in config. Valid modes: {sorted(VALID_MODES)}")
     return mode
 
@@ -389,10 +406,22 @@ def find_filigree_command() -> list[str]:
 
 
 def write_atomic(path: Path, content: str) -> None:
-    """Write content to path atomically via temp file + os.replace()."""
-    tmp = path.with_suffix(path.suffix + ".tmp")
+    """Write content to path atomically via temp file + os.replace().
+
+    Uses a unique per-writer temp file in ``path.parent`` so that concurrent
+    writers to the same target cannot collide on a shared staging path.
+    """
+    fd, tmp_name = tempfile.mkstemp(dir=path.parent, prefix=path.name + ".", suffix=".tmp")
+    tmp = Path(tmp_name)
     try:
-        tmp.write_text(content, encoding="utf-8")
+        try:
+            f = os.fdopen(fd, "w", encoding="utf-8")
+        except BaseException:
+            with contextlib.suppress(OSError):
+                os.close(fd)
+            raise
+        with f:
+            f.write(content)
         os.replace(tmp, path)
     except BaseException:
         with contextlib.suppress(OSError):
@@ -642,8 +671,12 @@ class FiligreeDB(FilesMixin, ScansMixin, IssuesMixin, EventsMixin, WorkflowMixin
             logger.warning("Release pack enabled but 'release' type not registered — skipping Future release seed")
             return
 
+        # Guard json_extract with json_valid: a single corrupt fields row would
+        # otherwise raise ``OperationalError: malformed JSON`` and abort init.
+        # Migrations already tolerate corrupt fields elsewhere; the
+        # Future-singleton check must do the same.
         existing = self.conn.execute(
-            "SELECT id FROM issues WHERE type = 'release' AND json_extract(fields, '$.version') = 'Future'"
+            "SELECT id FROM issues WHERE type = 'release' AND json_valid(fields) AND json_extract(fields, '$.version') = 'Future'"
         ).fetchone()
         if existing is not None:
             return

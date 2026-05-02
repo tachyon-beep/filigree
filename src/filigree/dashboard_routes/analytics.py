@@ -98,6 +98,7 @@ def _parse_graph_v2_params(
     params: Mapping[str, str],
     issues: list[Issue],
     issue_map: dict[str, Issue],
+    registered_types: set[str],
 ) -> _GraphV2Params | JSONResponse:
     """Parse and validate all graph v2 query parameters.
 
@@ -174,12 +175,15 @@ def _parse_graph_v2_params(
                 {"param": "scope_radius", "value": scope_radius_raw},
             )
 
-    # Type filter
+    # Type filter — validate against the workflow template registry, not the
+    # set of types in the current issue list.  A registered type with zero
+    # current issues is still a valid filter (yields an empty node list);
+    # rejecting it conflated "registered" with "currently observed".
+    # (filigree-68c24cee62)
     type_filter_raw = params.get("types")
     gp.type_filter = set(_parse_csv_param(type_filter_raw)) if type_filter_raw else set()
     if gp.type_filter:
-        known_types = {i.type for i in issues}
-        unknown_types = sorted(gp.type_filter - known_types)
+        unknown_types = sorted(gp.type_filter - registered_types)
         if unknown_types:
             return _error_response(
                 f"Unknown types: {', '.join(unknown_types)}",
@@ -380,7 +384,8 @@ def create_classic_router() -> APIRouter:
         started = perf_counter()
         issue_map = {i.id: i for i in issues}
 
-        gp = _parse_graph_v2_params(request.query_params, issues, issue_map)
+        registered_types = {t.type for t in db.templates.list_types()}
+        gp = _parse_graph_v2_params(request.query_params, issues, issue_map, registered_types)
         if isinstance(gp, JSONResponse):
             return gp
 
@@ -524,7 +529,7 @@ def create_loom_router() -> APIRouter:
     from fastapi.responses import JSONResponse
 
     from filigree.dashboard import _get_db
-    from filigree.dashboard_routes.common import _parse_pagination
+    from filigree.dashboard_routes.common import _MAX_PAGINATION_LIMIT, _parse_pagination
     from filigree.generations.loom.adapters import (
         change_record_to_loom,
         list_response,
@@ -547,19 +552,40 @@ def create_loom_router() -> APIRouter:
         since = params.get("since", "")
         if not since:
             return _error_response("since query parameter is required", ErrorCode.VALIDATION, 400)
-        since_normalized = since.replace("Z", "+00:00") if since.endswith("Z") else since
         try:
-            datetime.fromisoformat(since_normalized)
+            parsed = datetime.fromisoformat(since.replace("Z", "+00:00"))
         except ValueError:
             return _error_response(
                 f"Invalid ISO timestamp: {since!r}. Expected format: 2026-01-15T10:30:00",
                 ErrorCode.VALIDATION,
                 400,
             )
-        pagination = _parse_pagination(params, default_limit=100)
-        if isinstance(pagination, JSONResponse):
-            return pagination
-        limit, _ = pagination
+        # Stored timestamps are ISO with explicit ``+00:00`` offset; SQLite
+        # compares them as text. Canonicalize ``since`` to UTC isoformat so
+        # offset-bearing and naive inputs compare correctly. Mirrors the
+        # classic ``/api/activity`` route. (filigree-d808d8b70f)
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=UTC)
+        since_normalized = parsed.astimezone(UTC).isoformat()
+        # ``offset`` is not part of this endpoint's surface — the cursor is
+        # ``since``.  Reject any offset query param rather than silently
+        # discarding it. (filigree-f0f47f5b9d)
+        if "offset" in params:
+            return _error_response(
+                "offset is not supported on /api/loom/changes; the cursor is the 'since' timestamp.",
+                ErrorCode.VALIDATION,
+                400,
+                {"param": "offset"},
+            )
+        limit_or_err = _safe_bounded_int(
+            params.get("limit", "100"),
+            name="limit",
+            min_value=1,
+            max_value=_MAX_PAGINATION_LIMIT,
+        )
+        if not isinstance(limit_or_err, int):
+            return limit_or_err
+        limit = limit_or_err
         events = db.get_events_since(since_normalized, limit=limit + 1)
         has_more = len(events) > limit
         if has_more:

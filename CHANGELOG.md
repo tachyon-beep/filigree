@@ -7,7 +7,556 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **CLI ``get-template <type>`` verb-noun alias.** Mirrors the MCP
+  ``get_template`` tool and the existing pattern (``get-type-info``,
+  ``get-valid-transitions``, ``get-workflow-guide``). Supports ``--json``
+  and emits the 2.0 flat error envelope (``ErrorCode.NOT_FOUND``) on
+  unknown types. (filigree-6213766f9b)
+
 ### Fixed
+
+- **``write_atomic()`` no longer collides on a shared temp filename.**
+  Concurrent writers to the same target both staged through
+  ``target.tmp``: the second writer's ``open(...)`` truncated the first
+  writer's in-flight stage, ``os.replace()`` could then install partial
+  content or fail spuriously, and the failure-path ``unlink()`` could
+  delete the other writer's stage. ``write_atomic`` now allocates a
+  unique per-writer temp file via ``tempfile.mkstemp(dir=path.parent)``,
+  matching the pattern already used by ``write_summary``. The error
+  cleanup test was also tightened to ignore unique temp suffixes.
+  (filigree-9bb033331a)
+
+- **``get_mode()`` raises ``ValueError`` on non-string ``mode`` values.**
+  A JSON-valid but non-hashable ``mode`` (e.g. ``"mode": []``) used to
+  raise ``TypeError: unhashable type`` from the ``frozenset`` membership
+  test, escaping the ``ValueError`` recovery paths in ``hooks.py``,
+  ``cli_commands/admin.py``, and ``install_support/doctor.py``.
+  ``get_mode`` now ``isinstance``-checks the value and raises the same
+  invalid-mode ``ValueError`` for any non-string. (filigree-cff0de463f)
+
+- **``read_conf()`` rejects malformed ``prefix``/``db``/``enabled_packs``
+  values.** A ``.filigree.conf`` with ``{"prefix":"x","db":[]}`` used
+  to round-trip through ``read_conf`` and then crash downstream when
+  ``FiligreeDB.from_conf`` evaluated ``Path / data["db"]`` —
+  ``TypeError: unsupported operand type(s) for /: 'PosixPath' and
+  'list'``. Doctor's handled-failure path catches ``ValueError`` only,
+  so the ``TypeError`` surfaced as an unhandled crash. ``read_conf``
+  now type-checks ``prefix`` and ``db`` (non-empty strings) and
+  ``enabled_packs`` (list of strings, when present). (filigree-0f0e76f4b6)
+
+- **``_seed_future_release()`` tolerates corrupt ``fields`` JSON.**
+  ``FiligreeDB.initialize()`` queries release rows with
+  ``json_extract(fields, '$.version')``; a single release row with
+  malformed ``fields`` raised ``OperationalError: malformed JSON`` and
+  aborted the entire DB open, leaving the project unrecoverable
+  without manual SQL surgery. The Future-singleton check is an
+  idempotent maintenance step, not a place to enforce schema integrity,
+  so it now guards ``json_extract`` with ``json_valid(fields)`` —
+  matching the defensive handling already applied during migrations.
+  (filigree-20ea5411e1)
+
+- **Category SQL predicates now compare ``(type, status)`` pairs.**
+  ``list_issues`` status-as-category filters and every blocker query
+  (``_build_issues_batch`` blocked_by / open-blocker counts /
+  ``is_ready``, ``has:blockers`` virtual label, ``get_ready`` /
+  ``get_blocked`` / ``get_critical_path``, ``get_stats`` /
+  ``_compute_virtual_has_counts``, ``archive_closed``) compared status
+  names against a deduplicated category-state list. Once two enabled
+  packs share a state name with different categories — the bundled
+  templates already do this: ``incident.resolved`` is ``wip``,
+  ``debt_item.resolved`` is ``done`` — an ``incident`` row in
+  ``resolved`` matched both ``status="wip"`` and ``status="done"``
+  filters, and dependents of an ``incident.resolved`` blocker
+  hydrated with ``blocked_by=[]`` and ``is_ready=True``. New
+  ``_get_type_states_for_category`` and ``_category_predicate_sql``
+  helpers build type-aware predicates; the synthetic ``'archived'``
+  blocker semantic is preserved. (filigree-b55aa3191f)
+
+- **``claim_issue()`` normalizes the assignee identity.** Validation
+  used ``assignee.strip()`` but the original padded value was stored
+  and used as the CAS guard, so claiming with ``"  bob  "`` blocked a
+  later canonical ``"bob"`` claim with "already assigned to '  bob  '".
+  ``claim_issue`` now runs the same ``_normalize_assignee`` step that
+  ``create_issue`` / ``update_issue`` already applied.
+  (filigree-694f7e9bf8)
+
+- **``start_work()`` rollback only releases claims it acquired.**
+  ``claim_issue`` is idempotent for the same identity, so calling
+  ``start_work`` against an issue you already own and hitting a
+  transition failure used to wipe out the pre-existing claim
+  (``release_claim`` clears the assignee unconditionally). The
+  rollback path now captures the prior assignee and skips the
+  release when the row was already claimed by the same identity
+  before the call. (filigree-31404d228f)
+
+- **``update_issue()`` rejects empty / whitespace-only titles.**
+  ``create_issue`` rejected them; ``update_issue`` had no
+  equivalent guard, so ``title=""`` or ``title="   "`` silently
+  overwrote a valid title. The same invariant now applies on update.
+  (filigree-365dff403e)
+
+- **``ProjectStore.get_db()`` no longer races on first open.** In server
+  mode, the lazy-open path was a check-then-open-then-assign with no
+  lock, so two concurrent first requests for the same project key could
+  both pass the cache-miss check, both run ``FiligreeDB.from_filigree_dir``
+  (which migrates and seeds), and silently leak the loser's handle —
+  only the winner of the assign race was cached. Adds an internal
+  ``threading.Lock`` with a fast-path cache hit, double-checked open,
+  and lock-guarded ``reload()`` eviction and ``close_all()``.
+  (filigree-732f6b31e4)
+
+- **Dashboard ``/api/reload`` response now matches the frontend contract.**
+  Backend returned ``{"status": "ok", **diff}``; the shipped UI checks
+  ``data.ok`` and ``data.projects``, so a successful reload rendered
+  "Reload failed" and skipped the post-reload data refresh. The
+  endpoint now returns ``{"ok": True, "status": "ok", "projects": N,
+  **diff}`` — preserving every existing field for any direct API
+  consumer. (filigree-173e76a28a)
+
+- **Dashboard ``main()`` clears module-level ``_config`` on start and
+  in ``finally``.** ``_config`` is a persistent dict; previously
+  ``main()`` reset ``_db`` and ``_project_store`` but only
+  ``dict.update()``-ed ``_config``, so any keys absent from the next
+  project's config (notably ``name``, which ``read_config`` does not
+  default) leaked from the previous run. ``/api/projects`` prefers
+  ``_config["name"]`` over the live DB prefix, so a second in-process
+  ethereal run could serve a stale project name.
+  (filigree-154a23794c)
+
+- **``filigree doctor`` now exits ``1`` when non-schema checks fail.**
+  Previously the command counted failures, printed them, and fell through
+  with exit code ``0`` — silently green for CI scripts and ``set -e``
+  shells even when ``config.json`` was missing or ``context.md`` was
+  stale. The schema-mismatch (v+1) exit code ``3`` still wins precedence;
+  ``1`` is reserved for generic unfixed failures. ``--fix`` exits ``0``
+  only when every fixable failure was repaired. (filigree-467d1e7487)
+
+- **``filigree init`` and ``filigree doctor --fix`` now honour the
+  ``.filigree.conf`` ``db`` path.** Both paths previously constructed
+  ``FiligreeDB`` directly against the legacy ``.filigree/filigree.db``,
+  bypassing the v2.0 anchor-aware constructors. On installs that
+  relocate the DB via the conf, ``init`` re-runs and schema repairs
+  silently created or migrated a phantom legacy DB while the project's
+  actual DB stayed un-migrated. Both surfaces now use
+  ``FiligreeDB.from_conf()`` when an anchor exists, falling back to
+  ``FiligreeDB.from_filigree_dir()`` for legacy installs.
+  (filigree-fa6309d551)
+
+- **``filigree init`` on a legacy install now backfills
+  ``.filigree.conf``.** The existing-project branch previously returned
+  without writing the v2.0 anchor — only the fresh-init path created it
+  — so re-running ``init`` to "upgrade" a legacy install left
+  conf-anchored discovery (the strict ``find_filigree_conf`` walk-up)
+  unable to locate the project. Re-init now writes the anchor when
+  missing and never overwrites an existing custom anchor.
+  (filigree-f22fc98687)
+
+- **``filigree install --mode server`` now reloads a running daemon.**
+  ``install`` called ``register_project()`` to write into ``server.json``
+  but never POSTed ``/api/reload``, so the daemon kept serving the stale
+  registry until manually restarted. Now matches the behaviour of
+  ``filigree server register`` (which already calls
+  ``_reload_server_daemon_if_running()``); reload failure is reported as
+  a warning since registration is already committed.
+  (filigree-80753e4b54)
+
+- **``filigree dashboard --port`` and ``filigree ensure-dashboard
+  --port`` now validate at the CLI boundary.** Both flags were declared
+  as plain ``int`` and accepted ``0``, negative, and out-of-range
+  values; in ``--server-mode`` the bogus value could be persisted into
+  daemon state before the bind failed. They now use
+  ``click.IntRange(1, 65535)``, mirroring ``filigree server start``.
+  (filigree-31da65493c)
+
+- **``filigree.__version__`` no longer reports ``"0.0.0-dev"`` in
+  source-only execution paths.** When ``importlib.metadata.version``
+  raises ``PackageNotFoundError`` (no installed ``dist-info``),
+  ``src/filigree/__init__.py`` now falls through to ``tomllib`` and
+  reads ``[project].version`` from the checkout's ``pyproject.toml``,
+  gated on ``[project].name == "filigree"`` so a parent project's
+  ``pyproject.toml`` cannot shadow ours. ``"0.0.0-dev"`` is reserved
+  as the final fallback when neither installed metadata nor a source
+  ``pyproject.toml`` is reachable. Affects the ``filigree --version``
+  output and the ``/api/health`` ``version`` field for vendored or
+  embedded deploys. (filigree-694e4821bd)
+
+- **``filigree templates reload`` no longer crashes with a raw
+  ``ValueError`` when ``.filigree/config.json`` is malformed.** The CLI
+  path now mirrors the MCP handler: corrupt config surfaces as
+  ``ErrorCode.VALIDATION`` (``--json``) or a clean stderr message
+  (default), with exit code 1 in either case — no traceback. The reload
+  also forces ``templates.list_types()`` to materialise the new registry
+  and calls ``cli_common.refresh_summary`` so persistent ``context.md``
+  reflects the change before the CLI process exits, closing the gap
+  where ``Templates reloaded`` printed success while ``context.md``
+  stayed stale. ``templates reload`` now accepts ``--json``, emitting
+  ``{"status": "ok"}`` on success. (filigree-259e5b58ef,
+  filigree-00359c8498)
+
+- **Workflow CLI ``--json`` error paths now emit the 2.0 flat error
+  envelope.** ``type-info``, ``transitions``, ``validate``, and
+  ``explain-status`` previously printed plain stderr text on missing
+  arguments even when ``--json`` was set, leaking format-violating
+  output into JSON-consuming pipelines. All four now route through a
+  shared ``_emit_error`` helper that emits ``{error, code}`` with
+  ``ErrorCode.NOT_FOUND`` on ``--json`` and falls back to plain stderr
+  otherwise. ``_guide_impl`` already followed this pattern; it now uses
+  the same helper for consistency. (filigree-dfbcc84687)
+
+- **``undo_last`` now reaches earlier reversible events when the newest
+  reversible event has already been undone.** ``db_events.py::undo_last``
+  selected the latest reversible event and then returned "already undone"
+  if it had a covering ``undone`` marker, leaving older reversible
+  history unreachable. Repro: change title, change priority, undo
+  (priority restored), undo again returned "already undone" instead of
+  restoring the title. The candidate-selection query now filters out
+  already-undone events via ``NOT EXISTS`` so the fall-through to older
+  history works. The post-select check is removed; the surfaced
+  no-result reason changes from "Most recent reversible event already
+  undone" to "No reversible events to undo". (filigree-a849860f2e)
+
+- **Archived blockers no longer re-block dependents in readiness,
+  hydration, and ``has:blockers``.** ``archive_closed`` writes the
+  literal status ``'archived'`` (preserving ``closed_at``), but no
+  bundled workflow declares ``'archived'`` as a done state. The
+  blocker-active queries in ``db_planning.get_ready``, ``db_meta``
+  (``get_stats``, ``_compute_virtual_has_counts``), and ``db_issues``
+  (``blocked_by`` hydration, open-blocker counts, ``has:blockers``
+  virtual label) all checked ``blocker.status NOT IN done_states``, so
+  archiving a closed blocker re-blocked its dependents — every
+  dependent that became ready when the blocker closed flipped back to
+  blocked once archival ran. A new ``_blocker_done_states()`` helper
+  returns the workflow done states plus ``'archived'`` and is used at
+  every blocker-check call site; ``_get_states_for_category("done")``
+  is preserved for archive selection (which must not include
+  ``'archived'``) and label semantics. Mirrors the analytics-side fix
+  shipped earlier in this section. (filigree-42045dd065)
+
+- **``parent_changed`` events are now undoable.** The reparenting event
+  was added to update/audit paths but ``_REVERSIBLE_EVENTS`` and the
+  ``undo_last`` ``match`` ladder both omitted it, so ``undo_last`` on a
+  reparented child returned "No reversible events" while the parent
+  pointer remained set. ``parent_changed`` joins the reversible set
+  and a new ``case`` restores ``parent_id`` from the event's
+  ``old_value`` — empty/None becomes ``NULL``, a non-empty value is
+  validated to still exist before being written back (we refuse rather
+  than re-pointing at a deleted issue). (filigree-fc6bb28c23)
+
+- **``import_jsonl`` now normalizes ISO timestamps to canonical UTC.**
+  ``_now_iso`` always emits ``+00:00``, but the import boundary in
+  ``db_meta.import_jsonl`` preserved ``created_at`` / ``updated_at`` /
+  ``closed_at`` as supplied. SQLite TEXT compares lexicographically, so
+  an imported ``2026-01-01T01:00:00+02:00`` (chronologically equal to
+  ``2025-12-31T23:00:00+00:00``) sorted *after* ``2026-01-01T00:00:00+00:00``
+  in ``get_events_since`` and ``archive_closed``'s ``closed_at < ?``
+  cutoff — events were returned out of chronological order, and
+  archival cutoffs miscompared. New ``db_base._normalize_iso_to_utc``
+  applies on the import path to the columns these queries read:
+  ``issues.created_at`` / ``updated_at`` / ``closed_at`` and
+  ``events.created_at``. Other timestamp columns
+  (``dependencies.created_at``, ``scan_runs.*_at``, ``scan_findings.*_at``,
+  ``file_*.created_at``, ``comments.created_at``) are not yet
+  normalized — extend the helper if a future query reads them
+  lexicographically. Naive inputs are treated as UTC, ``Z`` suffixes
+  are accepted. Existing rows with non-UTC TEXT remain in the DB
+  as-is — re-import to canonicalize if needed; no automatic data
+  migration is performed.
+  (filigree-20911dfe6d)
+
+- **Dependency undo handles ``dep_type`` values containing ``':'``.**
+  ``db_planning.add_dependency`` and ``remove_dependency`` record event
+  payloads as ``f"{dep_type}:{depends_on_id}"``; the corresponding undo
+  cases in ``db_events.undo_last`` parsed via ``split(":", 1)``, which
+  assigned the wrong target when ``dep_type`` itself contained ``':'``
+  (a namespaced dep type round-trips back as a malformed payload).
+  ``rsplit(":", 1)`` puts the issue ID on the right side regardless;
+  the legacy "no colon" branch is preserved for older event rows. No
+  CLI/MCP/HTTP surface currently exposes a non-default ``dep_type``,
+  so the practical exposure is via ``import_jsonl`` of foreign-source
+  events; the parse is now correct regardless of source.
+  (filigree-2cd923c1d8)
+
+- **CLI ``promote-finding`` now honours the global ``--actor`` flag.**
+  ``cli_commands/files.py::promote_finding_cmd`` declared a command-local
+  ``--actor`` defaulting to ``"cli"`` and skipped ``@click.pass_context``,
+  so ``filigree --actor bot-1 promote-finding <id>`` silently recorded
+  ``"cli"`` in the audit trail — every other write-path command pulls
+  the sanitized actor from ``ctx.obj["actor"]`` set in ``cli.py``. The
+  command now defaults the local option to ``None`` and falls back to
+  the group actor; an explicit local ``--actor`` is sanitized through
+  ``filigree.validation.sanitize_actor`` so blank/control/overlong
+  values are rejected at the CLI boundary instead of reaching the
+  observation row. (filigree-cb82dc6b37)
+
+- **CLI ``list-files``, ``get-file-timeline``, ``list-findings``
+  classify ``sqlite3.Error`` as ``IO``, not ``VALIDATION``.** Three
+  read commands in ``cli_commands/files.py`` collapsed
+  ``(ValueError, sqlite3.Error)`` into a single ``ErrorCode.VALIDATION``
+  envelope. The unified envelope contract in ``types/api.py`` lets
+  callers branch on ``ErrorCode``, so misclassifying transient infra
+  failures (locked database, table missing) as caller-input errors
+  prevented retry logic from kicking in. The handlers now split
+  ``ValueError`` (``VALIDATION``) and ``sqlite3.Error`` (``IO``),
+  matching the sibling ``get-file`` / ``get-finding`` pattern.
+  (filigree-ef5db29b89)
+
+- **CLI ``get-issue-files`` and ``add-file-association`` no longer
+  leak raw SQLite tracebacks past the JSON envelope.**
+  ``get-issue-files`` called ``db.get_issue_files()`` outside its
+  ``sqlite3.Error`` handler, and ``add-file-association`` only caught
+  ``KeyError`` around its ``db.get_file()`` / ``db.get_issue()``
+  existence checks. A locked or corrupt database at those lines
+  bypassed ``--json`` envelope handling and surfaced an uncaught
+  ``OperationalError``. The lookups now share a single ``try`` block
+  (or ``sqlite3.Error`` handler) so failures are reported as the
+  ``ErrorCode.IO`` envelope consistently. (filigree-c7f94428c4)
+
+- **``analytics.lead_time`` now treats archived issues as completed.**
+  ``archive_closed()`` rewrites done-category status to the synthetic
+  literal ``'archived'`` while preserving ``closed_at``. No bundled
+  template declares ``'archived'``, so ``_resolve_status_category`` fell
+  through to ``'open'`` and ``lead_time()`` returned ``None`` for those
+  rows. ``get_flow_metrics()`` still counted them in ``throughput`` (via
+  the dual-bucket scan) but silently dropped them from the lead-time
+  average — the displayed mean was biased toward unarchived recent work.
+  ``lead_time()`` now accepts ``status='archived'`` with non-null
+  ``closed_at`` as completed, restoring symmetry between the throughput
+  and lead-time aggregates. (filigree-93777393d7)
+
+- **``analytics.get_flow_metrics`` ``by_type[t]['count']`` now reports
+  the closed-issue count, not the cycle-time-sample count.** ``by_type``
+  was built by appending only when ``_cycle_time_from_events`` returned
+  a value, so a closed issue without a WIP→done transition (allowed by
+  the task workflow's direct ``open → closed`` path in
+  ``templates_data.py``) was silently absent from ``by_type`` even
+  though it counted toward overall throughput. The CLI labels the field
+  as ``"X closed"`` (``cli_commands/admin.py``) and the dashboard
+  renders it under "Count", so the displayed number under-reported real
+  closed work for any type with direct-close issues. ``get_flow_metrics``
+  now tracks per-type closed counts independently from cycle-time
+  samples and emits ``avg_cycle_time_hours=None`` when no samples
+  exist. (filigree-744c36d621)
+
+- **CLI ``changes --since`` normalizes non-UTC offsets to UTC.**
+  ``cli_commands/planning.py::_normalize_iso_timestamp`` parsed the input
+  but then returned the raw string, preserving its original offset.
+  Stored events use ``datetime.now(UTC).isoformat()`` (always ``+00:00``)
+  and ``db_events.get_events_since`` compares them as SQLite TEXT, so a
+  cursor like ``2026-06-15T13:00:00+01:00`` was lexically *after* a
+  stored event ``2026-06-15T12:30:00+00:00`` even though chronologically
+  the event was 30 minutes later — events were silently skipped. The
+  normalizer now parses, attaches UTC if naive, and returns
+  ``parsed.astimezone(UTC).isoformat()``, mirroring the dashboard
+  ``/activity`` route. (filigree-9aacfcd253)
+
+- **CLI ``create-plan`` recursively validates ``steps`` and ``deps``.**
+  ``cli_commands/planning.py::create_plan`` validated only the
+  top-level shape, then handed unvalidated nested data to
+  ``db.create_plan``. A non-dict step (``"steps": ["bad"]``) leaked an
+  ``AttributeError`` traceback because ``step_data.get(...)`` was called
+  on a string, and a JSON float dep like ``0.1`` was silently
+  ``str()``-ed to ``"0.1"`` and reinterpreted as cross-phase ref
+  ``phase 0, step 1``. The CLI now mirrors the MCP-layer rules
+  (``mcp_tools/planning.py::_validate_plan_deps``): each step must be an
+  object, ``steps`` must be a list, and each dep must be ``int >= 0`` or
+  an ``"N"``/``"P.S"`` string — bools, floats, dicts, and malformed
+  strings are rejected with a clean error. (filigree-c8eeb8f825)
+
+- **CLI ``changes --limit`` rejects non-positive values.**
+  The option was a plain ``int`` and ``_changes_impl`` passed
+  non-positive values straight through to SQLite, which treats
+  ``LIMIT -1`` as unbounded (and combined with the post-fetch
+  ``raw[:limit]`` slice, ``--limit=-5`` returned all-but-the-last-5
+  rows). The option now uses ``click.IntRange(min=1)`` on both the
+  ``changes`` and ``get-changes`` commands, matching the positive-limit
+  contract used by the dashboard and MCP surfaces.
+  (filigree-302ab21704)
+
+- **JSONL export/import now round-trips ``scan_runs``.**
+  ``db_meta.py::_EXPORT_TABLES`` listed every persisted table except
+  ``scan_runs``, and the corresponding import bucket was missing too. A
+  full export/import cycle silently dropped scan-run history, status, and
+  cooldown anchors — ``get_scan_run("run-1")`` raised ``KeyError`` after the
+  round trip. The export now emits ``scan_run`` records and the importer
+  rejects unknown ``status`` values up front (``pending``/``running``/
+  ``completed``/``failed``/``timeout``) before inserting all 15 columns.
+  (filigree-6160591254)
+
+- **``import_jsonl()`` enforces the same label-namespace invariants as
+  ``add_label()``.** The importer raw-inserted any label record, so a
+  hand-crafted JSONL containing ``age:older_than_30d`` (a reserved virtual
+  namespace) bypassed ``_validate_label_name()`` and shadowed the computed
+  ``age:`` virtuals — ``list_labels()`` populates physical namespaces first,
+  then ``setdefault("age", …)`` becomes a no-op. The label import loop now
+  validates each row, skips invalid ones with a logger warning, and counts
+  them under ``skipped_types["<invalid_label>"]`` so the failure is visible.
+  (filigree-22ed219abc)
+
+- **``add_label("review:foo")`` reports ``added=False`` on no-op re-adds.**
+  The mutual-exclusivity DELETE for the ``review:`` namespace turned an
+  idempotent re-add into delete-then-reinsert, so ``cursor.rowcount`` was
+  always 1 and the function returned ``(True, "review:foo")`` — propagating
+  to ``cli_commands/meta.py`` and ``mcp_tools/meta.py`` as a false
+  ``"added"`` status. ``add_label()`` now short-circuits when the existing
+  ``review:%`` set is exactly ``{normalized}``, returning
+  ``(False, normalized)`` without touching the table. Genuine replacements
+  still return ``(True, …)``. (filigree-c9d223e24e)
+
+- **``observe`` CLI accepts the documented ``--file`` alias.**
+  ``src/filigree/data/instructions.md`` documented
+  ``filigree observe "note" --file=src/foo.py --line=42``, but
+  ``cli_commands/observations.py`` only registered ``--file-path``, so the
+  documented form failed with ``Error: No such option: --file``. The option
+  now declares both ``--file-path`` and ``--file`` against the same
+  ``file_path`` parameter. (filigree-6f8d9816b7)
+
+- **Observation CLI commands surface ``sqlite3.Error`` as ``ErrorCode.IO``.**
+  ``observe``, ``list-observations``, ``dismiss-observation``, and
+  ``promote-observation`` only caught ``ValueError`` (or had no exception
+  handler at all), so a transient SQLite failure (e.g.
+  ``OperationalError("database is locked")``) escaped uncaught and
+  ``--json`` callers got an empty stdout plus an unhandled traceback instead
+  of the ``{"error": ..., "code": "IO"}`` envelope already used by
+  ``mcp_tools/observations.py``, ``cli_commands/files.py``, and the
+  neighboring ``batch-dismiss-observations`` command. Each affected handler
+  now wraps its DB call in ``except sqlite3.Error`` and emits
+  ``{"error": f"Database error: {e}", "code": ErrorCode.IO}``.
+  (filigree-9ca1f5ace8)
+
+- **``/api/loom/changes`` canonicalizes ``since`` to UTC before SQLite text-compare.**
+  ``dashboard_routes/analytics.py::api_loom_changes`` only rewrote a trailing
+  ``Z`` to ``+00:00`` and passed the raw offset string to
+  ``db.get_events_since()``, which compares against stored ``+00:00`` ISO
+  timestamps lexically.  Two ``since`` values representing the same instant
+  but with different offsets returned different events.  The handler now
+  parses ``since``, treats naive timestamps as UTC, and passes
+  ``parsed.astimezone(UTC).isoformat()`` to the DB — mirroring the classic
+  ``/api/activity`` route. (filigree-d808d8b70f)
+
+- **``/api/loom/changes`` rejects ``?offset=`` query param.**
+  The loom contract (``tests/fixtures/contracts/loom/changes.json``) declares
+  the cursor is the ``since`` timestamp; ``offset`` is not exposed.  The
+  handler reused the generic offset-pagination helper, validating ``offset``
+  but then discarding it.  Any caller passing ``?offset=`` got an undocumented
+  silent no-op.  ``api_loom_changes`` now parses only ``limit`` and rejects
+  ``offset`` with a 400 ``VALIDATION``. (filigree-f0f47f5b9d)
+
+- **Graph v2 ``?types=`` validates against registered template types.**
+  ``dashboard_routes/analytics.py::_parse_graph_v2_params`` validated the
+  filter against ``{i.type for i in issues}``, so a registered type with no
+  current issues (e.g. ``release`` in a fresh project, or ``bug`` after all
+  bugs are closed) was rejected as "Unknown".  Validation now uses
+  ``db.templates.list_types()`` — the canonical source already used for
+  ``/api/types`` and issue creation. (filigree-68c24cee62)
+
+- **Scanner CLI surfaces ``ForeignDatabaseError`` instead of a generic "not initialized" line.**
+  ``cli_commands/scanners.py::_get_filigree_dir`` caught
+  ``(ProjectNotInitialisedError, Exception)`` and returned ``None``, which
+  every caller then converted into ``"Project directory not initialized"``
+  with ``ErrorCode.NOT_INITIALIZED``. Because ``ForeignDatabaseError`` is a
+  ``ProjectNotInitialisedError`` subclass, the rich "Refusing to latch onto
+  another project's filigree database…" diagnostic — explicitly contracted by
+  ``test_doctor.py::test_foreign_database_is_reported_with_specific_message``
+  — was silently dropped for ``list-scanners``, ``trigger-scan``,
+  ``trigger-scan-batch``, and ``preview-scan``. The helper now raises and a
+  new ``_resolve_filigree_dir_or_die`` emits ``str(exc)`` so the rich message
+  reaches the user. (filigree-ae5a8db639)
+
+- **``report-finding`` validates field types and maps ``ValueError`` to ``VALIDATION``.**
+  ``cli_commands/scanners.py::report_finding_cmd`` only checked truthiness,
+  so a JSON ``"severity": []`` raised ``TypeError`` from ``severity not in
+  VALID_SEVERITIES`` (unhashable membership), and non-string-but-truthy
+  ``path`` / ``rule_id`` / ``message`` / ``line_start`` / ``line_end`` slipped
+  past to the DB validator — whose ``ValueError`` was then mismapped to
+  ``ErrorCode.IO`` (the HTTP route at ``dashboard_routes/files.py`` already
+  mapped the same exception to ``VALIDATION``). The CLI now isinstance-checks
+  every field, splits the ``ValueError`` and ``sqlite3.Error`` branches, and
+  emits ``VALIDATION`` for caller-side malformed input. (filigree-a59f82c87b)
+
+- **``_read_graph_runtime_config`` reads ``.filigree/config.json`` from the project root, not the DB's parent.**
+  ``dashboard_routes/common.py::_read_graph_runtime_config`` derived the config
+  directory from ``db.db_path.parent``, which is the ``.filigree/`` metadata dir
+  only for the legacy ``.filigree/filigree.db`` layout. For ``.filigree.conf``
+  projects with a relocated DB (e.g. ``storage/track.db``), ``read_config``
+  silently looked in ``storage/`` and fell back to defaults — so
+  ``graph_v2_enabled`` / ``graph_api_mode`` from ``.filigree/config.json`` were
+  ignored on ``/api/config`` and ``/api/graph``. Now derives the config
+  directory from ``db.project_root / FILIGREE_DIR_NAME`` when present, falling
+  back to ``db.db_path.parent`` for direct construction. (filigree-a9bedb09a9)
+
+- **``/api/files/hotspots`` and ``/api/scan-runs`` cap ``limit`` at ``_MAX_PAGINATION_LIMIT``.**
+  Both endpoints parsed ``limit`` via ``_safe_int`` with only ``min_value=1`` —
+  the same bypass-of-``_parse_pagination`` pattern fixed in filigree-393cfab62c
+  for ``/api/files``. A request like ``?limit=9223372036854775808`` passed route
+  validation and then crashed sqlite3 binding with ``OverflowError: Python int
+  too large to convert to SQLite INTEGER``, surfacing as 500. The two limit-only
+  routes now pass ``max_value=_MAX_PAGINATION_LIMIT`` so oversize values return
+  a 400 ``VALIDATION`` response before reaching the database layer.
+  (filigree-873962aa58)
+
+- **``promote_observation`` now serializes the idempotency check + create_issue.**
+  ``db_observations.py:promote_observation`` checked ``json_extract(fields,
+  '$.source_observation_id')`` with a plain read on an autocommit transaction,
+  then called ``create_issue`` — two concurrent ``FiligreeDB`` connections could
+  both pass the check and both insert, leaving two issues for one observation
+  (no UNIQUE constraint backstop). The check + insert is now wrapped in
+  ``BEGIN IMMEDIATE`` so peers queue on the writer lock and see the committed
+  row when they retry the check (mirrors ``db_scans.py:trigger_scan_locked``).
+  (filigree-58aa8fb4ac)
+
+- **``promote_observation`` tolerates corrupt ``issues.fields`` JSON on unrelated rows.**
+  The idempotency lookup ran ``json_extract`` over the entire ``issues`` table,
+  so one malformed ``fields`` row anywhere — the kind ``_safe_fields_json``
+  exists to absorb at the read path (``db_issues.py:99``) — raised
+  ``OperationalError: malformed JSON`` and broke every promote. The query now
+  guards with ``json_valid(fields)``, restoring the project-wide convention of
+  surviving corrupt JSON. (filigree-9bb842088d)
+
+- **Pagination params can no longer overflow SQLite ``LIMIT``/``OFFSET`` binds.**
+  ``dashboard_routes/common.py::_parse_pagination`` only enforced minimums, so
+  ``?limit=9223372036854775807`` (or any ``offset`` past int64 max) propagated
+  unchecked into ``LIMIT ? OFFSET ?`` — and even at int64 max the routes that
+  overfetch by ``limit + 1`` (``dashboard_routes/issues.py:693``) overflowed on
+  bind, raising an uncaught ``OverflowError`` from ``sqlite3`` and surfacing as
+  500. Added module caps ``_MAX_PAGINATION_LIMIT = 10_000`` and
+  ``_MAX_PAGINATION_OFFSET = 2**63 - 2``; extended ``_safe_int`` with an
+  optional ``max_value``. Pagination violations now return 400 ``VALIDATION``.
+  (filigree-393cfab62c)
+
+- **``_semver_sort_key`` falls back to title when ``version`` is non-empty but unparseable.**
+  ``dashboard_routes/releases.py`` previously gated title-based Future detection on
+  ``not version`` and built ``text = version or title`` for loose-semver fallback,
+  so any non-empty junk string in the imported ``version`` field blocked both
+  paths. Releases with ``{"version": "planned", "title": "v2.0.0"}`` or
+  ``{"version": "junk", "title": "Future"}`` now sort correctly. Priority is
+  reordered: version Future → version semver (strict, then loose) → title
+  Future → title loose semver → non-semver. Whitespace-only ``version`` is
+  treated as absent. (filigree-5e1e2e0eae)
+
+- **``filigree get-comments --json`` wraps items in the ListResponse envelope.**
+  ``get-comments`` was missed by the Phase E1 ``--json`` migration and emitted a
+  bare JSON list instead of ``{items, has_more}``. The CLI now matches MCP's
+  ``_list_response(...)`` shape and the loom HTTP ``GET /api/loom/issues/{id}/comments``
+  contract. Per-item shape (classic ``CommentRecord`` with ``id``) is preserved
+  to maintain CLI↔MCP parity. (filigree-d2263e721d)
+
+- **``filigree batch-close --json`` omits ``newly_unblocked`` when empty.**
+  The CLI emitted ``"newly_unblocked": []`` unconditionally, contradicting
+  ``BatchResponse``'s ``NotRequired`` rule (``types/api.py:392-398``) and the
+  loom ``POST /api/loom/batch/close`` fixture, both of which require the field
+  to be omitted entirely when no issue was unblocked. The CLI now mirrors
+  ``mcp_tools/issues.py::_handle_batch_close``: present only when at least one
+  issue became ready as a result of the close. (filigree-893edb553a)
+
+- **``filigree server start --port`` validates the TCP range at the CLI boundary.**
+  The Click option used bare ``type=int``, so ``--port 0`` silently fell
+  through ``port or config.port`` (server.py:248) and out-of-range values
+  (negative or >65535) bypassed ``ServerConfig.__post_init__`` because the
+  daemon path assigns to ``config.port`` after construction. ``--port`` now
+  uses ``click.IntRange(1, 65535)`` and rejects invalid input with a clear
+  usage error before reaching the daemon launch path. (filigree-1e1cb5eeeb)
 
 - **CLI startup failures honour ``--json`` envelope.**
   ``cli_common.get_db()`` now emits the 2.0 flat ``{error, code}`` envelope on

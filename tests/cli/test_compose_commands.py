@@ -240,3 +240,91 @@ class TestStartNextWorkCli:
         assert result.exit_code == 1
         data = json.loads(result.output)
         assert data["code"] == "VALIDATION"
+
+    def test_invalid_target_status_classified_as_invalid_transition_json(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        """start-next-work with bogus --target-status emits INVALID_TRANSITION.
+
+        Mirrors start-work's classify_value_error handling — sibling commands
+        must agree on error codes for the same class of failure.
+        Regression for filigree-eed112d722.
+        """
+        runner, _ = cli_in_project
+        runner.invoke(cli, ["create", "Some task", "-p", "0", "--type", "task"])
+        result = runner.invoke(
+            cli,
+            [
+                "start-next-work",
+                "--assignee",
+                "alice",
+                "--type",
+                "task",
+                "--target-status",
+                "nonexistent_status",
+                "--json",
+            ],
+        )
+        assert result.exit_code == 1, result.output
+        data = json.loads(result.output)
+        assert data["code"] == "INVALID_TRANSITION", data
+
+
+class TestComposeActorSanitization:
+    """Regression for filigree-d9fae9d8f0:
+
+    The composed start-work / start-next-work commands declare a local
+    ``--actor`` option that bypassed sanitize_actor — blank/control/overlong
+    values were previously persisted to the audit trail.
+    """
+
+    def test_start_work_blank_actor_rejected_json(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        runner, _ = cli_in_project
+        r = runner.invoke(cli, ["create", "Actor blank target"])
+        issue_id = _extract_id(r.output)
+
+        result = runner.invoke(cli, ["start-work", issue_id, "--assignee", "alice", "--actor", "   ", "--json"])
+        assert result.exit_code == 1, result.output
+        data = json.loads(result.output)
+        assert data["code"] == "VALIDATION", data
+        assert "actor" in data["error"].lower()
+
+    def test_start_work_control_char_actor_rejected_json(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        runner, _ = cli_in_project
+        r = runner.invoke(cli, ["create", "Actor control target"])
+        issue_id = _extract_id(r.output)
+
+        result = runner.invoke(cli, ["start-work", issue_id, "--assignee", "alice", "--actor", "bad\nactor", "--json"])
+        assert result.exit_code == 1, result.output
+        data = json.loads(result.output)
+        assert data["code"] == "VALIDATION", data
+
+    def test_start_next_work_blank_actor_rejected_json(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        runner, _ = cli_in_project
+        runner.invoke(cli, ["create", "Some task", "-p", "0", "--type", "task"])
+
+        result = runner.invoke(
+            cli,
+            [
+                "start-next-work",
+                "--assignee",
+                "alice",
+                "--type",
+                "task",
+                "--actor",
+                "   ",
+                "--json",
+            ],
+        )
+        assert result.exit_code == 1, result.output
+        data = json.loads(result.output)
+        assert data["code"] == "VALIDATION", data
+
+    def test_start_work_overlong_actor_rejected_json(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        runner, _ = cli_in_project
+        r = runner.invoke(cli, ["create", "Actor overlong target"])
+        issue_id = _extract_id(r.output)
+
+        long_actor = "a" * 200
+        result = runner.invoke(cli, ["start-work", issue_id, "--assignee", "alice", "--actor", long_actor, "--json"])
+        assert result.exit_code == 1, result.output
+        data = json.loads(result.output)
+        assert data["code"] == "VALIDATION", data

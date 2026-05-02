@@ -218,6 +218,53 @@ class TestProjectStore:
         project_store.close_all()  # second call is a no-op
         assert project_store._dbs == {}
 
+    def test_get_db_concurrent_first_open_serialized(self, project_store: ProjectStore) -> None:
+        """filigree-732f6b31e4: concurrent first get_db() must open exactly once.
+
+        Without the internal lock, two threads each pass the cache-miss check
+        and each call ``FiligreeDB.from_filigree_dir`` (which migrates and
+        seeds-inserts), only the loser's handle gets cached, and the winner's
+        handle is leaked unclosed.
+        """
+        import threading
+        from unittest.mock import patch
+
+        original = FiligreeDB.from_filigree_dir
+        opened: list[FiligreeDB] = []
+        opened_lock = threading.Lock()
+        gate = threading.Event()
+
+        def slow_open(*args: object, **kwargs: object) -> FiligreeDB:
+            # Block until both threads are inside the open path so they race.
+            gate.wait(timeout=2.0)
+            db = original(*args, **kwargs)  # type: ignore[arg-type]
+            with opened_lock:
+                opened.append(db)
+            return db
+
+        results: list[FiligreeDB] = []
+        results_lock = threading.Lock()
+
+        def worker() -> None:
+            db = project_store.get_db("alpha")
+            with results_lock:
+                results.append(db)
+
+        with patch.object(FiligreeDB, "from_filigree_dir", side_effect=slow_open):
+            t1 = threading.Thread(target=worker)
+            t2 = threading.Thread(target=worker)
+            t1.start()
+            t2.start()
+            # Let both threads converge on the get_db call.
+            gate.set()
+            t1.join(timeout=5.0)
+            t2.join(timeout=5.0)
+
+        assert len(opened) == 1, f"from_filigree_dir called {len(opened)}x, expected 1 (race / leak)"
+        assert len(results) == 2
+        assert results[0] is results[1], "both threads must observe the same cached handle"
+        assert project_store._dbs["alpha"] is opened[0]
+
     def test_prefix_collision_raises(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         import json
 
@@ -339,6 +386,10 @@ class TestMultiProjectManagement:
         assert "status" in data
         assert "added" in data
         assert "removed" in data
+        # filigree-173e76a28a: frontend ui.js reads data.ok and data.projects.
+        assert data["ok"] is True
+        assert data["projects"] == 2
+        assert data["status"] == "ok"
 
     async def test_reload_endpoint_surfaces_errors(self, multi_client: AsyncClient, tmp_path: Path) -> None:
         config_dir = tmp_path / ".config" / "filigree"

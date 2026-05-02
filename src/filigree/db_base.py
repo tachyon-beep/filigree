@@ -21,7 +21,16 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # Shared internal API — used by DB mixins across modules.
-__all__ = ["AGE_BUCKETS", "DBMixinProtocol", "StatusCategory", "_escape_like", "_escape_like_chars", "_now_iso", "_safe_json_loads"]
+__all__ = [
+    "AGE_BUCKETS",
+    "DBMixinProtocol",
+    "StatusCategory",
+    "_escape_like",
+    "_escape_like_chars",
+    "_normalize_iso_to_utc",
+    "_now_iso",
+    "_safe_json_loads",
+]
 
 # Virtual label dispatch — explicit allowlist, no prefix matching
 AGE_BUCKETS: dict[str, tuple[int, int]] = {
@@ -35,6 +44,32 @@ AGE_BUCKETS: dict[str, tuple[int, int]] = {
 
 def _now_iso() -> ISOTimestamp:
     return ISOTimestamp(datetime.now(UTC).isoformat())
+
+
+def _normalize_iso_to_utc(raw: object) -> str | None:
+    """Canonicalize an ISO-8601 timestamp to ``+00:00`` UTC text.
+
+    Returns ``None`` for ``None`` or empty input. Naive timestamps are
+    treated as UTC (matching the convention of ``_now_iso``). A trailing
+    ``Z`` is accepted. Unparseable input raises ``ValueError``.
+
+    SQLite TEXT compares lexicographically: rows whose stored text uses a
+    non-zero offset (e.g. ``+02:00``) miscompare against the canonical
+    ``+00:00`` written by ``_now_iso``. The internal write paths always
+    emit canonical text; the import boundary must too. (filigree-20911dfe6d)
+    """
+    if raw is None:
+        return None
+    if not isinstance(raw, str):
+        msg = f"timestamp must be a string, got {type(raw).__name__}"
+        raise ValueError(msg)
+    if raw == "":
+        return None
+    candidate = raw.replace("Z", "+00:00") if raw.endswith("Z") else raw
+    parsed = datetime.fromisoformat(candidate)
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC).isoformat()
 
 
 class _ParsedJson(dict[str, Any]):
@@ -129,6 +164,16 @@ class DBMixinProtocol(Protocol):
     def _validate_parent_id(self, parent_id: str | None) -> None: ...
     def _validate_label_name(self, label: str) -> str: ...
     def _get_states_for_category(self, category: str) -> list[str]: ...
+    def _get_type_states_for_category(self, category: str) -> list[tuple[str, str]]: ...
+    def _category_predicate_sql(
+        self,
+        category: str,
+        *,
+        type_col: str,
+        status_col: str,
+        include_archived: bool = False,
+    ) -> tuple[str, list[str]]: ...
+    def _blocker_done_states(self) -> list[str]: ...
     def _resolve_status_category(self, issue_type: str, status: str) -> StatusCategory: ...
     def get_valid_transitions(self, issue_id: str) -> list[TransitionOption]: ...
 
@@ -192,7 +237,9 @@ class DBMixinProtocol(Protocol):
     # -- PlanningMixin -------------------------------------------------------
 
     def get_ready(self) -> list[Issue]: ...
-    def _resolve_open_done_states(self) -> tuple[list[str], list[str], str, str]: ...
+    def _resolve_open_blocker_predicates(
+        self,
+    ) -> tuple[tuple[str, list[str]], tuple[str, list[str]]] | None: ...
 
     # -- FilesMixin ----------------------------------------------------------
 

@@ -13,7 +13,7 @@ if TYPE_CHECKING:
     from fastapi.responses import JSONResponse
     from starlette.requests import Request
 
-from filigree.core import FiligreeDB, read_config
+from filigree.core import FILIGREE_DIR_NAME, FiligreeDB, read_config
 from filigree.types.api import ErrorCode, ErrorResponse
 from filigree.validation import sanitize_actor as _sanitize_actor
 
@@ -28,6 +28,13 @@ _GRAPH_MODE_VALUES = frozenset({"legacy", "v2"})
 _GRAPH_STATUS_CATEGORIES = frozenset({"open", "wip", "done"})
 _BOOL_TRUE_VALUES = frozenset({"1", "true", "yes", "on"})
 _BOOL_FALSE_VALUES = frozenset({"0", "false", "no", "off"})
+
+# Pagination caps. Routes that overfetch by `limit + 1` must stay safely
+# under SQLite's signed-int64 bind limit (2**63 - 1); _MAX_PAGINATION_LIMIT
+# is also a product cap that prevents runaway response sizes. Offset stops
+# one short of int64 max so any future +1 arithmetic still binds.
+_MAX_PAGINATION_LIMIT = 10_000
+_MAX_PAGINATION_OFFSET = 9_223_372_036_854_775_806  # 2**63 - 2
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -87,11 +94,25 @@ def _parse_pagination(
     """Extract ``limit`` and ``offset`` from query params with validation.
 
     Returns ``(limit, offset)`` on success or a 400 ``JSONResponse`` on error.
+
+    Both values are bounded so they (and ``limit + 1`` overfetch) bind safely
+    into SQLite's signed-int64 LIMIT/OFFSET. See ``_MAX_PAGINATION_LIMIT`` /
+    ``_MAX_PAGINATION_OFFSET``.
     """
-    limit = _safe_int(params.get("limit", str(default_limit)), "limit", min_value=1)
+    limit = _safe_int(
+        params.get("limit", str(default_limit)),
+        "limit",
+        min_value=1,
+        max_value=_MAX_PAGINATION_LIMIT,
+    )
     if not isinstance(limit, int):
         return limit
-    offset = _safe_int(params.get("offset", "0"), "offset", min_value=0)
+    offset = _safe_int(
+        params.get("offset", "0"),
+        "offset",
+        min_value=0,
+        max_value=_MAX_PAGINATION_OFFSET,
+    )
     if not isinstance(offset, int):
         return offset
     return limit, offset
@@ -120,10 +141,17 @@ def _parse_response_detail(
     )
 
 
-def _safe_int(value: str, name: str, *, min_value: int | None = None) -> int | JSONResponse:
+def _safe_int(
+    value: str,
+    name: str,
+    *,
+    min_value: int | None = None,
+    max_value: int | None = None,
+) -> int | JSONResponse:
     """Parse a query-param string to int, returning a 400 error response on failure.
 
     When *min_value* is set, values below that floor are rejected with 400.
+    When *max_value* is set, values above that ceiling are rejected with 400.
     """
     try:
         result = int(value)
@@ -136,6 +164,12 @@ def _safe_int(value: str, name: str, *, min_value: int | None = None) -> int | J
     if min_value is not None and result < min_value:
         return _error_response(
             f"Invalid value for {name}: {result}. Must be >= {min_value}.",
+            ErrorCode.VALIDATION,
+            400,
+        )
+    if max_value is not None and result > max_value:
+        return _error_response(
+            f"Invalid value for {name}: {result}. Must be <= {max_value}.",
             ErrorCode.VALIDATION,
             400,
         )
@@ -170,7 +204,14 @@ def _read_graph_runtime_config(db: FiligreeDB) -> dict[str, Any]:
     Note: read_config() already handles JSONDecodeError/OSError internally
     and returns defaults, so no outer try/except is needed here.
     """
-    return dict(read_config(db.db_path.parent))
+    # ``read_config`` expects the ``.filigree/`` metadata directory.
+    # For ``.filigree.conf`` projects the DB may be relocated (e.g.
+    # ``storage/track.db``), so ``db_path.parent`` is not the metadata
+    # dir — derive it from ``project_root`` when present, and only fall
+    # back to ``db_path.parent`` for the legacy ``.filigree/filigree.db``
+    # layout where they coincide.
+    config_dir = db.project_root / FILIGREE_DIR_NAME if db.project_root is not None else db.db_path.parent
+    return dict(read_config(config_dir))
 
 
 def _coerce_config_bool(value: Any, name: str) -> bool:

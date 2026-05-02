@@ -30,6 +30,7 @@ _REVERSIBLE_EVENTS = frozenset(
         "description_changed",
         "notes_changed",
         "fields_changed",
+        "parent_changed",
     }
 )
 
@@ -130,11 +131,18 @@ class EventsMixin(DBMixinProtocol):
         current = self.get_issue(issue_id)
         now = _now_iso()
 
-        # Find the most recent reversible event directly (skips non-reversible events
-        # like 'created', 'released', 'archived' so undo can reach earlier reversible ones)
+        # Find the most recent reversible event that has not already been
+        # covered by an 'undone' marker. Filtering already-undone events at
+        # SELECT time (not after) lets undo fall back to earlier reversible
+        # history when the newest reversible event has been undone already.
         rev_ph = ",".join("?" * len(_REVERSIBLE_EVENTS))
         row = self.conn.execute(
-            f"SELECT * FROM events WHERE issue_id = ? AND event_type IN ({rev_ph}) ORDER BY created_at DESC, id DESC LIMIT 1",
+            f"SELECT * FROM events e WHERE e.issue_id = ? AND e.event_type IN ({rev_ph}) "
+            f"AND NOT EXISTS ("
+            f"  SELECT 1 FROM events u WHERE u.issue_id = e.issue_id "
+            f"  AND u.event_type = 'undone' AND u.new_value = CAST(e.id AS TEXT)"
+            f") "
+            f"ORDER BY e.created_at DESC, e.id DESC LIMIT 1",
             (issue_id, *_REVERSIBLE_EVENTS),
         ).fetchone()
 
@@ -143,14 +151,6 @@ class EventsMixin(DBMixinProtocol):
 
         event_type = row["event_type"]
         event_id = row["id"]
-
-        # Check if this event was already undone (an 'undone' event references it)
-        already_undone = self.conn.execute(
-            "SELECT 1 FROM events WHERE issue_id = ? AND event_type = 'undone' AND new_value = ?",
-            (issue_id, str(event_id)),
-        ).fetchone()
-        if already_undone:
-            return {"undone": False, "reason": "Most recent reversible event already undone"}
 
         # Apply reverse action — wrapped in try/except for rollback safety
         try:
@@ -215,9 +215,10 @@ class EventsMixin(DBMixinProtocol):
 
                 case "dependency_added":
                     # Event: issue_id=from_id, new_value="type:depends_on_id"
+                    # rsplit so a dep_type that itself contains ':' still rounds-trips.
                     if row["new_value"] is None:
                         return {"undone": False, "reason": "Cannot undo: event has no new_value"}
-                    dep_target = row["new_value"].split(":", 1)[-1] if ":" in row["new_value"] else row["new_value"]
+                    dep_target = row["new_value"].rsplit(":", 1)[-1] if ":" in row["new_value"] else row["new_value"]
                     self.conn.execute(
                         "DELETE FROM dependencies WHERE issue_id = ? AND depends_on_id = ?",
                         (issue_id, dep_target),
@@ -225,11 +226,12 @@ class EventsMixin(DBMixinProtocol):
 
                 case "dependency_removed":
                     # Event: issue_id=from_id, old_value="dep_type:depends_on_id" or legacy "depends_on_id"
+                    # rsplit because dep_type may contain ':'; issue IDs do not.
                     if row["old_value"] is None:
                         return {"undone": False, "reason": "Cannot undo: event has no old_value"}
                     old_val = row["old_value"]
                     if ":" in old_val:
-                        dep_type, dep_target = old_val.split(":", 1)
+                        dep_type, dep_target = old_val.rsplit(":", 1)
                     else:
                         dep_type, dep_target = "blocks", old_val
                     # Check for cycles before re-inserting (inline DFS
@@ -279,6 +281,28 @@ class EventsMixin(DBMixinProtocol):
                         (old_fields, now, issue_id),
                     )
 
+                case "parent_changed":
+                    # Event: old_value is the previous parent_id, "" or None for root.
+                    # Restore: empty/None → NULL; non-empty → verify the issue still
+                    # exists, otherwise refuse rather than dangling-pointer the FK.
+                    old_parent = row["old_value"]
+                    if old_parent in (None, ""):
+                        self.conn.execute(
+                            "UPDATE issues SET parent_id = NULL, updated_at = ? WHERE id = ?",
+                            (now, issue_id),
+                        )
+                    else:
+                        exists = self.conn.execute("SELECT 1 FROM issues WHERE id = ?", (old_parent,)).fetchone()
+                        if exists is None:
+                            return {
+                                "undone": False,
+                                "reason": f"Cannot undo: prior parent {old_parent!r} no longer exists",
+                            }
+                        self.conn.execute(
+                            "UPDATE issues SET parent_id = ?, updated_at = ? WHERE id = ?",
+                            (old_parent, now, issue_id),
+                        )
+
             # Record the undo event
             self._record_event(
                 issue_id,
@@ -316,12 +340,17 @@ class EventsMixin(DBMixinProtocol):
         cutoff_dt = datetime.now(UTC) - timedelta(days=days_old)
         cutoff = cutoff_dt.isoformat()
 
-        # Requires WorkflowMixin._get_states_for_category via self
-        done_states = self._get_states_for_category("done") or ["closed"]
-        done_ph = ",".join("?" * len(done_states))
+        # Match (type, status) pairs so a state name shared across types in
+        # different categories is classified per type (filigree-b55aa3191f).
+        # Archive_closed selects done-category rows only — not the synthetic
+        # 'archived' status, which would re-archive already-archived rows.
+        done_sql, done_params = self._category_predicate_sql("done", type_col="type", status_col="status")
+        if not done_params:
+            # No done-category states registered; nothing to archive.
+            return []
         rows = self.conn.execute(
-            f"SELECT id FROM issues WHERE status IN ({done_ph}) AND closed_at < ? AND closed_at IS NOT NULL",
-            [*done_states, cutoff],
+            f"SELECT id FROM issues WHERE ({done_sql}) AND closed_at < ? AND closed_at IS NOT NULL",
+            [*done_params, cutoff],
         ).fetchall()
 
         archived_ids = [r["id"] for r in rows]

@@ -139,6 +139,40 @@ class TestSemverSortKey:
         release_title = {"version": "", "title": "future"}
         assert _semver_sort_key(release_title) == _FUTURE_KEY
 
+    # filigree-5e1e2e0eae: title fallback must remain reachable when version
+    # field is a non-empty string that does not parse as semver. Previously
+    # `if not version` gated title-Future detection and `text = version or title`
+    # blocked loose-semver fallback whenever version was truthy.
+
+    def test_title_semver_fallback_when_version_is_unparseable_string(self) -> None:
+        """Junk version string must not block title's loose-semver fallback."""
+        from filigree.dashboard_routes.releases import _semver_sort_key
+
+        release = {"version": "planned", "title": "v2.0.0 - Big Release"}
+        assert _semver_sort_key(release) == (0, 2, 0, 0)
+
+    def test_title_future_fallback_when_version_is_unparseable_string(self) -> None:
+        """Junk version string must not block title-based Future detection."""
+        from filigree.dashboard_routes.releases import _FUTURE_KEY, _semver_sort_key
+
+        release = {"version": "junk", "title": "Future"}
+        assert _semver_sort_key(release) == _FUTURE_KEY
+
+    def test_whitespace_only_version_is_treated_as_absent(self) -> None:
+        """Whitespace-only version must allow title fallback (semver and Future)."""
+        from filigree.dashboard_routes.releases import _FUTURE_KEY, _semver_sort_key
+
+        # whitespace + title semver
+        assert _semver_sort_key({"version": "   ", "title": "v1.0.0"}) == (0, 1, 0, 0)
+        # whitespace + title Future
+        assert _semver_sort_key({"version": "  ", "title": "Future"}) == _FUTURE_KEY
+
+    def test_whitespace_padded_future_in_version_field(self) -> None:
+        """A version field of '  Future  ' is the user's Future intent — not non-semver."""
+        from filigree.dashboard_routes.releases import _FUTURE_KEY, _semver_sort_key
+
+        assert _semver_sort_key({"version": "  Future  ", "title": ""}) == _FUTURE_KEY
+
 
 # ---------------------------------------------------------------------------
 # _parse_bool_value / _get_bool_param tests (filigree-4f2e6e099c)
@@ -325,6 +359,87 @@ class TestResolveGraphRuntime:
         assert result["compatibility_mode"] == "legacy"
 
 
+class TestReadGraphRuntimeConfigConfLayout:
+    """Bug filigree-a9bedb09a9: ``_read_graph_runtime_config`` must read
+    ``.filigree/config.json`` from the project root, not from the SQLite
+    DB's parent directory.
+
+    For ``.filigree.conf`` projects the DB can be relocated (e.g.
+    ``storage/track.db``); deriving the config dir from ``db_path.parent``
+    would silently miss the real config and fall back to defaults.
+    """
+
+    def test_reads_config_from_project_root_when_db_relocated(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        from filigree.core import CONF_FILENAME, FILIGREE_DIR_NAME, write_conf, write_config
+        from filigree.dashboard_routes.common import _resolve_graph_runtime
+
+        monkeypatch.delenv("FILIGREE_GRAPH_V2_ENABLED", raising=False)
+        monkeypatch.delenv("FILIGREE_GRAPH_API_MODE", raising=False)
+
+        filigree_dir = tmp_path / FILIGREE_DIR_NAME
+        filigree_dir.mkdir()
+        storage_dir = tmp_path / "storage"
+        storage_dir.mkdir()
+
+        write_config(
+            filigree_dir,
+            {
+                "prefix": "tst",
+                "version": 1,
+                "graph_v2_enabled": True,
+                "graph_api_mode": "v2",
+            },
+        )
+        write_conf(
+            tmp_path / CONF_FILENAME,
+            {"version": 1, "project_name": "tst", "prefix": "tst", "db": "storage/track.db"},
+        )
+
+        db = FiligreeDB.from_conf(tmp_path / CONF_FILENAME)
+        try:
+            result = _resolve_graph_runtime(db)
+        finally:
+            db.close()
+
+        assert result["v2_enabled"] is True
+        assert result["configured_mode"] == "v2"
+
+    def test_legacy_layout_still_reads_config(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Legacy ``.filigree/filigree.db`` layout (no .filigree.conf) must
+        keep working. Here ``db_path.parent`` *is* the .filigree dir, so the
+        fallback path used when ``project_root`` is unset must still resolve
+        config correctly.
+        """
+        from filigree.core import DB_FILENAME, FILIGREE_DIR_NAME, write_config
+        from filigree.dashboard_routes.common import _resolve_graph_runtime
+
+        monkeypatch.delenv("FILIGREE_GRAPH_V2_ENABLED", raising=False)
+        monkeypatch.delenv("FILIGREE_GRAPH_API_MODE", raising=False)
+
+        filigree_dir = tmp_path / FILIGREE_DIR_NAME
+        filigree_dir.mkdir()
+        write_config(
+            filigree_dir,
+            {
+                "prefix": "tst",
+                "version": 1,
+                "graph_v2_enabled": True,
+                "graph_api_mode": "v2",
+            },
+        )
+
+        # Construct directly without project_root to exercise the legacy fallback.
+        db = FiligreeDB(filigree_dir / DB_FILENAME, prefix="tst")
+        db.initialize()
+        try:
+            result = _resolve_graph_runtime(db)
+        finally:
+            db.close()
+
+        assert result["v2_enabled"] is True
+        assert result["configured_mode"] == "v2"
+
+
 # ---------------------------------------------------------------------------
 # Structural import tests (filigree-878b1e0c40)
 # ---------------------------------------------------------------------------
@@ -371,6 +486,31 @@ class TestSafeInt:
         from filigree.dashboard_routes.common import _safe_int
 
         assert _safe_int("-999", "x") == -999
+
+    # filigree-393cfab62c: optional max_value caps integer input.
+
+    def test_above_max_value_returns_400(self) -> None:
+        from filigree.dashboard_routes.common import _safe_int
+
+        result = _safe_int("101", "x", max_value=100)
+        assert not isinstance(result, int)
+        assert result.status_code == 400
+
+    def test_at_max_value_succeeds(self) -> None:
+        from filigree.dashboard_routes.common import _safe_int
+
+        assert _safe_int("100", "x", max_value=100) == 100
+
+    def test_min_and_max_value_together(self) -> None:
+        from filigree.dashboard_routes.common import _safe_int
+
+        assert _safe_int("50", "x", min_value=1, max_value=100) == 50
+        result_lo = _safe_int("0", "x", min_value=1, max_value=100)
+        assert not isinstance(result_lo, int)
+        assert result_lo.status_code == 400
+        result_hi = _safe_int("101", "x", min_value=1, max_value=100)
+        assert not isinstance(result_hi, int)
+        assert result_hi.status_code == 400
 
 
 class TestSafeBoundedInt:
@@ -452,6 +592,40 @@ class TestParsePagination:
         from filigree.dashboard_routes.common import _parse_pagination
 
         result = _parse_pagination({"limit": "xyz"})
+        assert not isinstance(result, tuple)
+        assert result.status_code == 400
+
+    # filigree-393cfab62c: _parse_pagination must cap limit and offset to
+    # values that bind safely into SQLite's signed-int64 LIMIT/OFFSET.
+
+    def test_limit_exceeding_max_pagination_returns_400(self) -> None:
+        """limit > _MAX_PAGINATION_LIMIT must reject at the boundary, not 500 in SQLite."""
+        from filigree.dashboard_routes.common import _MAX_PAGINATION_LIMIT, _parse_pagination
+
+        result = _parse_pagination({"limit": str(_MAX_PAGINATION_LIMIT + 1)})
+        assert not isinstance(result, tuple)
+        assert result.status_code == 400
+
+    def test_limit_at_max_pagination_succeeds(self) -> None:
+        """limit at the documented cap is accepted (not off-by-one rejected)."""
+        from filigree.dashboard_routes.common import _MAX_PAGINATION_LIMIT, _parse_pagination
+
+        result = _parse_pagination({"limit": str(_MAX_PAGINATION_LIMIT)})
+        assert result == (_MAX_PAGINATION_LIMIT, 0)
+
+    def test_int64_max_limit_rejected_to_avoid_overfetch_overflow(self) -> None:
+        """SQLite's signed-int64 max would overflow 'limit + 1' overfetch — must 400."""
+        from filigree.dashboard_routes.common import _parse_pagination
+
+        result = _parse_pagination({"limit": "9223372036854775807"})
+        assert not isinstance(result, tuple)
+        assert result.status_code == 400
+
+    def test_offset_exceeding_int64_max_returns_400(self) -> None:
+        """offset above SQLite's signed-int64 cap must reject before SQL bind."""
+        from filigree.dashboard_routes.common import _parse_pagination
+
+        result = _parse_pagination({"limit": "10", "offset": "9223372036854775808"})
         assert not isinstance(result, tuple)
         assert result.status_code == 400
 

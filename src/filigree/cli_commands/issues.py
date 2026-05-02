@@ -11,6 +11,25 @@ import click
 
 from filigree.cli_common import get_db, refresh_summary
 from filigree.types.api import AmbiguousTransitionError, ErrorCode, InvalidTransitionError, classify_value_error
+from filigree.validation import sanitize_actor
+
+
+def _resolve_and_sanitize_actor(actor: str | None, assignee: str, *, as_json: bool) -> str:
+    """Default actor to assignee, then sanitize. Exit 1 on validation failure.
+
+    The group-level ``cli --actor`` already runs through ``sanitize_actor``
+    (cli.py), but composed subcommands like ``start-work`` / ``start-next-work``
+    own their own ``--actor`` option and bypass that path. Without this re-run,
+    blank/control/overlong values reach the audit trail unchecked.
+    """
+    cleaned, err = sanitize_actor(actor if actor is not None else assignee)
+    if err:
+        if as_json:
+            click.echo(json_mod.dumps({"error": err, "code": ErrorCode.VALIDATION}))
+            sys.exit(1)
+        raise click.BadParameter(err, param_hint="'--actor'")
+    return cleaned
+
 
 logger = logging.getLogger(__name__)
 
@@ -225,6 +244,12 @@ def _list_issues_impl(
                 offset=offset,
             )
         except ValueError as e:
+            # Validation errors reach here from db_issues for unknown virtual
+            # labels and malformed label_prefix. JSON callers expect the 2.0
+            # envelope shape; only the plain-text path keeps Click's default.
+            if as_json:
+                click.echo(json_mod.dumps({"error": str(e), "code": ErrorCode.VALIDATION}))
+                sys.exit(1)
             raise click.ClickException(str(e)) from e
 
         has_more = limit > 0 and len(issues) > limit
@@ -724,8 +749,9 @@ def start_work(
         else:
             click.echo("Error: assignee must be a non-empty string", err=True)
         sys.exit(1)
-    # Mirror MCP: actor defaults to assignee when not specified.
-    resolved_actor = actor if actor is not None else assignee
+    # Mirror MCP: actor defaults to assignee when not specified, and is
+    # sanitized through the same validator the group-level --actor uses.
+    resolved_actor = _resolve_and_sanitize_actor(actor, assignee, as_json=as_json)
     with get_db() as db:
         try:
             issue = db.start_work(
@@ -799,8 +825,9 @@ def start_next_work(
         else:
             click.echo("Error: assignee must be a non-empty string", err=True)
         sys.exit(1)
-    # Mirror MCP: actor defaults to assignee when not specified.
-    resolved_actor = actor if actor is not None else assignee
+    # Mirror MCP: actor defaults to assignee when not specified, and is
+    # sanitized through the same validator the group-level --actor uses.
+    resolved_actor = _resolve_and_sanitize_actor(actor, assignee, as_json=as_json)
     with get_db() as db:
         try:
             claimed = db.start_next_work(
@@ -818,8 +845,14 @@ def start_next_work(
                 click.echo(f"Error: {e}", err=True)
             sys.exit(1)
         except ValueError as e:
+            # Parity with start-work: classify status/transition/state errors
+            # as INVALID_TRANSITION rather than the generic VALIDATION code.
+            # No issue_id is available here (start-next-work claims one), so
+            # valid_transitions enrichment is not applicable — bare envelope.
+            msg = str(e)
+            code = classify_value_error(msg)
             if as_json:
-                click.echo(json_mod.dumps({"error": str(e), "code": ErrorCode.VALIDATION}))
+                click.echo(json_mod.dumps({"error": msg, "code": code}))
             else:
                 click.echo(f"Error: {e}", err=True)
             sys.exit(1)

@@ -31,19 +31,31 @@ logger = logging.getLogger(__name__)
 def _wants_json() -> bool:
     """Return True when the active CLI invocation passed ``--json``.
 
-    The root group stashes the literal argv list in ``ctx.meta`` from
-    ``_FiligreeGroup.parse_args`` so shared startup helpers can honour the
-    2.0 flat envelope contract before the subcommand callback runs.
+    Prefers Click's already-parsed ``as_json`` from the active context
+    stack — this is correct in every case where the subcommand callback
+    is running (including the ``get_db`` startup-failure path), because
+    Click has already distinguished ``--`` as its option terminator from
+    ``--`` as the value of a value-taking option (e.g.
+    ``--description --``). The convention ``"--json", "as_json"`` is
+    used uniformly for the JSON-mode binding across the CLI.
 
-    Tokens after Click's ``--`` option terminator are positional values,
-    not flags — e.g. ``filigree create -- --json`` makes the issue title
-    literally ``"--json"``, with no real JSON-mode flag. We slice at the
-    first ``--`` so a positional that happens to spell ``--json`` does
-    not flip startup errors into the JSON envelope. (filigree-df988a37fc)
+    Falls back to a raw ``--``-bounded scan of ``filigree_raw_args``
+    (stashed by ``_FiligreeGroup.parse_args``) only when no ancestor
+    context has parsed ``as_json`` yet — e.g. an ``--actor`` validation
+    failure inside the group callback, before the subcommand is parsed.
+    The fallback over-corrects when ``--`` is consumed as an option
+    value but only the contrived
+    ``--actor "" create T --description -- --json`` case can reach it.
+    (filigree-df988a37fc, filigree-e2cbfb247b)
     """
     ctx = click.get_current_context(silent=True)
     if ctx is None:
         return False
+    cur: click.Context | None = ctx
+    while cur is not None:
+        if "as_json" in cur.params:
+            return bool(cur.params["as_json"])
+        cur = cur.parent
     raw_args = ctx.find_root().meta.get("filigree_raw_args", [])
     end = raw_args.index("--") if "--" in raw_args else len(raw_args)
     return "--json" in raw_args[:end]

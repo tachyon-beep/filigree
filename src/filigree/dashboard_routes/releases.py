@@ -36,44 +36,51 @@ _FUTURE_KEY: _SemverSortKey = (2, 0, 0, 0)
 def _semver_sort_key(release: ReleaseSummaryItem) -> _SemverSortKey:
     """Extract a tagged sort key ``(kind, major, minor, patch)`` from a release.
 
-    Priority order for "Future" detection:
-      1. ``version == "Future"`` (exact match on version field)
-      2. Title matches "future" (case-insensitive, backward compat)
+    Priority (each step independent — failure to parse falls through to the next):
+      1. ``version`` strip-equals ``"Future"`` → FUTURE.
+      2. Strict semver on ``version``.
+      3. Loose semver on ``version``.
+      4. ``title`` (case-insensitive, whitespace-stripped) equals ``"future"`` → FUTURE.
+      5. Loose semver on ``title``.
+      6. Otherwise non-semver.
 
-    For semver parsing, checks version field first (strict 3-part),
-    then falls back to title (loose matching).
-    Non-semver releases sort after all semver releases but before "future".
+    Non-empty-but-unparseable ``version`` does NOT block title fallbacks: it
+    must yield to title-based Future detection (step 4) and title-based loose
+    semver (step 5). Whitespace-only ``version`` is treated as absent.
 
     Non-string ``version``/``title`` values (possible via ``import_jsonl``,
     which stores ``fields`` verbatim) are treated as absent rather than being
     passed through to ``re.match``.
     """
     version_raw = release.get("version")
-    version = version_raw if isinstance(version_raw, str) else ""
+    version = version_raw.strip() if isinstance(version_raw, str) else ""
     title_raw = release.get("title", "")
     title = title_raw if isinstance(title_raw, str) else ""
 
-    # Check version field for exact "Future" first
+    # 1. Exact "Future" on version field
     if version == "Future":
         return _FUTURE_KEY
 
-    # Backward compat: title-based Future detection
-    if not version and title.strip().lower() == "future":
-        return _FUTURE_KEY
-
-    # Try strict semver on version field
+    # 2-3. Try parsing version: strict 3-part, then loose
     if version:
         m = _SEMVER_STRICT_RE.match(version)
         if m:
             return (0, int(m.group(1)), int(m.group(2)), int(m.group(3)))
+        m = _SEMVER_LOOSE_RE.search(version)
+        if m:
+            return (0, int(m.group(1)), int(m.group(2)), int(m.group(3) or 0))
 
-    # Fallback: loose semver on version or title
-    text = version or title
-    m = _SEMVER_LOOSE_RE.search(text)
-    if m:
-        return (0, int(m.group(1)), int(m.group(2)), int(m.group(3) or 0))
+    # 4. Title-based Future detection (backward compat)
+    if title.strip().lower() == "future":
+        return _FUTURE_KEY
 
-    # Fallback: after semver releases, before future
+    # 5. Loose semver on title
+    if title:
+        m = _SEMVER_LOOSE_RE.search(title)
+        if m:
+            return (0, int(m.group(1)), int(m.group(2)), int(m.group(3) or 0))
+
+    # 6. Non-semver fallback (between semver and Future)
     return _NON_SEMVER_KEY
 
 

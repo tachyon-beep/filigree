@@ -34,13 +34,32 @@ _logger = logging.getLogger(__name__)
 _DEFAULT_API_URL = "http://localhost:8377"
 
 
-def _get_filigree_dir() -> Path | None:
-    """Discover .filigree/ directory or return None."""
+def _get_filigree_dir() -> Path:
+    """Discover .filigree/ directory.
+
+    Raises ``ProjectNotInitialisedError`` (including its
+    ``ForeignDatabaseError`` subclass) so callers can surface the rich
+    diagnostic with ``str(exc)``. Don't broaden the catch to ``Exception``
+    here — silently turning a foreign-database refusal into a generic
+    "not initialized" message regresses the contract asserted in
+    ``tests/test_doctor.py::test_foreign_database_is_reported_with_specific_message``.
+    """
+    project_root, _ = find_filigree_anchor()
+    return project_root / FILIGREE_DIR_NAME
+
+
+def _resolve_filigree_dir_or_die(as_json: bool) -> Path:
+    """Resolve .filigree/ or emit a NOT_INITIALIZED error envelope and exit.
+
+    Surfaces ``str(exc)`` so ``ForeignDatabaseError``'s rich message
+    ("Refusing to latch onto another project's filigree database…") reaches
+    the user instead of being collapsed into a generic line.
+    """
     try:
-        project_root, _ = find_filigree_anchor()
-        return project_root / FILIGREE_DIR_NAME
-    except (ProjectNotInitialisedError, Exception):
-        return None
+        return _get_filigree_dir()
+    except ProjectNotInitialisedError as exc:
+        _emit_error(str(exc), ErrorCode.NOT_INITIALIZED, as_json=as_json)
+        raise AssertionError("unreachable: _emit_error calls sys.exit(1)") from None  # pragma: no cover
 
 
 def _emit_error(msg: str, code: Any, *, as_json: bool, details: dict[str, Any] | None = None) -> None:
@@ -64,11 +83,7 @@ def _emit_error(msg: str, code: Any, *, as_json: bool, details: dict[str, Any] |
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON")
 def list_scanners_cmd(as_json: bool) -> None:
     """List registered scanners from .filigree/scanners/*.toml."""
-    filigree_dir = _get_filigree_dir()
-    if filigree_dir is None:
-        _emit_error("Project directory not initialized", ErrorCode.NOT_INITIALIZED, as_json=as_json)
-
-    assert filigree_dir is not None  # noqa: S101
+    filigree_dir = _resolve_filigree_dir_or_die(as_json)
     scanners_dir = filigree_dir / "scanners"
     load_errors: list[str] = []
     scanners = _list_scanners(scanners_dir, errors=load_errors)
@@ -104,10 +119,7 @@ def trigger_scan_cmd(scanner: str, file_path: str, api_url: str, as_json: bool) 
     """Trigger an async scan on a single file. Returns immediately with a scan_run_id."""
     from datetime import UTC, datetime
 
-    filigree_dir = _get_filigree_dir()
-    if filigree_dir is None:
-        _emit_error("Project directory not initialized", ErrorCode.NOT_INITIALIZED, as_json=as_json)
-    assert filigree_dir is not None  # noqa: S101
+    filigree_dir = _resolve_filigree_dir_or_die(as_json)
 
     url_err = _validate_localhost_url(api_url)
     if url_err is not None:
@@ -273,10 +285,7 @@ def trigger_scan_batch_cmd(scanner: str, file_paths: tuple[str, ...], api_url: s
     """Trigger a scanner on multiple files. Returns batch_id and per-file scan_run_ids."""
     from datetime import UTC, datetime
 
-    filigree_dir = _get_filigree_dir()
-    if filigree_dir is None:
-        _emit_error("Project directory not initialized", ErrorCode.NOT_INITIALIZED, as_json=as_json)
-    assert filigree_dir is not None  # noqa: S101
+    filigree_dir = _resolve_filigree_dir_or_die(as_json)
 
     fp_list = list(file_paths)
     if not fp_list:
@@ -548,11 +557,7 @@ def get_scan_status_cmd(scan_run_id: str, log_lines: int, as_json: bool) -> None
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON")
 def preview_scan_cmd(scanner: str, file_path: str, as_json: bool) -> None:
     """Preview the command that would be executed for a scan, without spawning a process."""
-    filigree_dir = _get_filigree_dir()
-    if filigree_dir is None:
-        _emit_error("Project directory not initialized", ErrorCode.NOT_INITIALIZED, as_json=as_json)
-    assert filigree_dir is not None  # noqa: S101
-
+    filigree_dir = _resolve_filigree_dir_or_die(as_json)
     project_root = filigree_dir.parent
     try:
         target = safe_path(file_path, project_root)
@@ -620,7 +625,10 @@ def report_finding_cmd(file_path: str | None, as_json: bool) -> None:
         project_root: Path | None
         try:
             project_root, _ = find_filigree_anchor()
-        except (ProjectNotInitialisedError, Exception):
+        except ProjectNotInitialisedError:
+            # Best-effort — `get_db()` below still surfaces ForeignDatabaseError
+            # before we touch the database, so falling back to a raw Path here
+            # only affects --file path resolution.
             project_root = None
         try:
             resolved = safe_path(file_path, project_root) if project_root is not None else Path(file_path)
@@ -642,20 +650,60 @@ def report_finding_cmd(file_path: str | None, as_json: bool) -> None:
         _emit_error("Finding must be a JSON object", ErrorCode.VALIDATION, as_json=as_json)
         return
 
-    # Validate required fields — MCP uses file_path/rule_id/message but db expects path
-    # Accept both "path" and "file_path" to be ergonomic
-    path = finding.get("path") or finding.get("file_path", "")
-    rule_id = finding.get("rule_id", "")
-    message = finding.get("message", "")
-
-    if not path or not rule_id or not message:
-        _emit_error("path (or file_path), rule_id, and message are required", ErrorCode.VALIDATION, as_json=as_json)
-        return
+    # Validate types up front. Without isinstance checks, an unhashable value
+    # (`"severity": []`) would crash the membership test below with a raw
+    # TypeError, and non-string-but-truthy values (`"path": [1, 2]`) would slip
+    # past a bare falsy guard and only fail in the DB layer — where the CLI
+    # would mismap the resulting ValueError to ErrorCode.IO.
+    path = finding.get("path")
+    if path is None:
+        path = finding.get("file_path")
+    for field_name, value in (("path (or file_path)", path), ("rule_id", finding.get("rule_id")), ("message", finding.get("message"))):
+        if not isinstance(value, str):
+            _emit_error(
+                f"{field_name} must be a non-empty string, got {type(value).__name__}",
+                ErrorCode.VALIDATION,
+                as_json=as_json,
+            )
+            return
+        if not value:
+            _emit_error(
+                f"{field_name} is required",
+                ErrorCode.VALIDATION,
+                as_json=as_json,
+            )
+            return
+    rule_id = finding["rule_id"]
+    message = finding["message"]
 
     severity = finding.get("severity", "info")
+    if not isinstance(severity, str):
+        _emit_error(
+            f"severity must be a string, got {type(severity).__name__}",
+            ErrorCode.VALIDATION,
+            as_json=as_json,
+        )
+        return
     if severity not in VALID_SEVERITIES:
         _emit_error(
             f"Invalid severity: {severity!r}. Valid: {', '.join(sorted(VALID_SEVERITIES))}",
+            ErrorCode.VALIDATION,
+            as_json=as_json,
+        )
+        return
+
+    line_start = finding.get("line_start")
+    if line_start is not None and (isinstance(line_start, bool) or not isinstance(line_start, int)):
+        _emit_error(
+            f"line_start must be an integer or null, got {type(line_start).__name__}",
+            ErrorCode.VALIDATION,
+            as_json=as_json,
+        )
+        return
+    line_end = finding.get("line_end")
+    if line_end is not None and (isinstance(line_end, bool) or not isinstance(line_end, int)):
+        _emit_error(
+            f"line_end must be an integer or null, got {type(line_end).__name__}",
             ErrorCode.VALIDATION,
             as_json=as_json,
         )
@@ -668,10 +716,10 @@ def report_finding_cmd(file_path: str | None, as_json: bool) -> None:
         "message": message,
         "severity": severity,
     }
-    if finding.get("line_start") is not None:
-        finding_record["line_start"] = finding["line_start"]
-    if finding.get("line_end") is not None:
-        finding_record["line_end"] = finding["line_end"]
+    if line_start is not None:
+        finding_record["line_start"] = line_start
+    if line_end is not None:
+        finding_record["line_end"] = line_end
     if finding.get("category"):
         finding_record["metadata"] = {"category": finding["category"]}
 
@@ -683,8 +731,15 @@ def report_finding_cmd(file_path: str | None, as_json: bool) -> None:
                 scan_run_id="",
                 create_observations=True,
             )
-        except (ValueError, sqlite3.Error) as exc:
-            _logger.error("report_finding failed: %s", exc)
+        except ValueError as exc:
+            # Mirrors the HTTP route at dashboard_routes/files.py: a ValueError
+            # from process_scan_results is caller-side malformed-input, not a
+            # storage failure.
+            _logger.warning("report_finding validation failed: %s", exc)
+            _emit_error(f"Failed to report finding: {exc}", ErrorCode.VALIDATION, as_json=as_json)
+            return
+        except sqlite3.Error as exc:
+            _logger.error("report_finding storage failure: %s", exc)
             _emit_error(f"Failed to report finding: {exc}", ErrorCode.IO, as_json=as_json)
             return
 

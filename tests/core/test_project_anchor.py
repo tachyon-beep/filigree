@@ -123,6 +123,27 @@ class TestConfIO:
         with pytest.raises(ValueError, match=r"prefix|db"):
             read_conf(conf)
 
+    @pytest.mark.parametrize(
+        ("payload", "match"),
+        [
+            ({"prefix": "x", "db": []}, r"'db'"),
+            ({"prefix": "x", "db": ""}, r"'db'"),
+            ({"prefix": [], "db": "filigree.db"}, r"'prefix'"),
+            ({"prefix": "", "db": "filigree.db"}, r"'prefix'"),
+            ({"prefix": "x", "db": "filigree.db", "enabled_packs": "core"}, r"enabled_packs"),
+            ({"prefix": "x", "db": "filigree.db", "enabled_packs": [1, 2]}, r"enabled_packs"),
+        ],
+        ids=["db-list", "db-empty", "prefix-list", "prefix-empty", "packs-string", "packs-non-string-items"],
+    )
+    def test_read_rejects_malformed_field_types(self, tmp_path: Path, payload: dict[str, object], match: str) -> None:
+        """Bug filigree-0f0e76f4b6: type-check ``prefix``/``db``/``enabled_packs``
+        in the validator instead of letting downstream raise ``TypeError``.
+        """
+        conf = tmp_path / CONF_FILENAME
+        conf.write_text(json.dumps(payload))
+        with pytest.raises(ValueError, match=match):
+            read_conf(conf)
+
 
 # ---------------------------------------------------------------------------
 # find_filigree_anchor — discovery that tolerates legacy installs without writing

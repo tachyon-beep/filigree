@@ -406,9 +406,6 @@ def estimate_tokens(files: list[Path], context_overhead: int = 2000) -> int:
 
 PROMPT_TEMPLATE = """\
 You are a static analysis agent doing a deep bug audit.
-Target file: {file_path}
-
-{context}
 
 Instructions:
 - Analyse the target file for real, concrete bugs.
@@ -416,7 +413,7 @@ Instructions:
 - Report bugs only if the primary fix belongs in the target file.
 - If you find multiple distinct bugs, separate them with a line containing only '---'.
 - If you find no credible bug, output exactly:
-  "No concrete bug found in {file_path}"
+  "No concrete bug found in target file"
 - Cite file paths and line numbers in evidence.
 
 Bug categories to check (use these exact rule_id values):
@@ -447,6 +444,12 @@ For each bug found, use this format:
 
 ## Suggested Fix
 <concrete fix>
+
+Repository context:
+{context}
+
+Target file:
+{file_path}
 """
 
 

@@ -18,6 +18,7 @@ from filigree.core import (
     FiligreeDB,
 )
 from filigree.dashboard_routes.common import (
+    _MAX_PAGINATION_LIMIT,
     _error_response,
     _parse_json_body,
     _parse_pagination,
@@ -127,7 +128,7 @@ def create_classic_router() -> APIRouter:
     async def api_file_hotspots(request: Request, db: FiligreeDB = Depends(_get_db)) -> JSONResponse:
         """Files ranked by weighted finding severity score."""
         params = request.query_params
-        limit = _safe_int(params.get("limit", "10"), "limit", min_value=1)
+        limit = _safe_int(params.get("limit", "10"), "limit", min_value=1, max_value=_MAX_PAGINATION_LIMIT)
         if isinstance(limit, JSONResponse):
             return limit
         result = db.get_file_hotspots(limit=limit)
@@ -359,7 +360,7 @@ def create_classic_router() -> APIRouter:
     async def api_scan_runs(request: Request, db: FiligreeDB = Depends(_get_db)) -> JSONResponse:
         """Get scan run history from scan_findings grouped by scan_run_id."""
         params = request.query_params
-        limit = _safe_int(params.get("limit", "10"), "limit", min_value=1)
+        limit = _safe_int(params.get("limit", "10"), "limit", min_value=1, max_value=_MAX_PAGINATION_LIMIT)
         if isinstance(limit, JSONResponse):
             return limit
         try:

@@ -2026,21 +2026,57 @@ class TestCodexTomlPresenceCheck:
 
 
 class TestPackageNotFoundError:
-    def test_import_works_without_package_metadata(self) -> None:
-        """Importing filigree should work even when package metadata is unavailable."""
+    def test_import_falls_back_to_source_pyproject_when_metadata_missing(self) -> None:
+        """Source-only execution recovers the real version from pyproject.toml."""
+        import tomllib
         from importlib.metadata import PackageNotFoundError
+        from pathlib import Path
+
+        repo_pyproject = Path(__file__).resolve().parents[2] / "pyproject.toml"
+        expected = tomllib.loads(repo_pyproject.read_text(encoding="utf-8"))["project"]["version"]
 
         with patch(
             "importlib.metadata.version",
             side_effect=PackageNotFoundError("filigree"),
         ):
-            # Re-import the module to trigger the version lookup
             import importlib
 
             import filigree
 
             importlib.reload(filigree)
-            assert filigree.__version__ == "0.0.0-dev"
+            try:
+                assert filigree.__version__ == expected
+            finally:
+                importlib.reload(filigree)
+
+    def test_falls_back_to_dev_when_no_metadata_and_no_pyproject(self) -> None:
+        """Final fallback to 0.0.0-dev when neither metadata nor pyproject exists."""
+        import tomllib
+        from importlib.metadata import PackageNotFoundError
+
+        # Force _read_source_version to return None by making tomllib.loads fail.
+        # Patching tomllib (module-global) survives importlib.reload, unlike
+        # patching the bound function in filigree's namespace.
+        with (
+            patch(
+                "importlib.metadata.version",
+                side_effect=PackageNotFoundError("filigree"),
+            ),
+            patch.object(
+                tomllib,
+                "loads",
+                side_effect=tomllib.TOMLDecodeError("forced", "", 0),
+            ),
+        ):
+            import importlib
+
+            import filigree
+
+            importlib.reload(filigree)
+            try:
+                assert filigree.__version__ == "0.0.0-dev"
+            finally:
+                importlib.reload(filigree)
 
     def test_version_set_when_installed(self) -> None:
         """When package is installed, __version__ should be set from metadata."""

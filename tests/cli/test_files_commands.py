@@ -30,8 +30,10 @@ from __future__ import annotations
 
 import json
 import os
+import sqlite3
 from pathlib import Path
 
+import pytest
 from click.testing import CliRunner
 
 from filigree.cli import cli
@@ -856,5 +858,180 @@ class TestBatchUpdateFindingsCommand:
             result = runner.invoke(cli, ["batch-update-findings", finding_id, "--status", "fixed"])
             assert result.exit_code == 0
             assert "Updated" in result.output
+        finally:
+            os.chdir(original)
+
+
+# ---------------------------------------------------------------------------
+# Bug-fix regressions: actor propagation and error-code classification.
+# ---------------------------------------------------------------------------
+
+
+class TestPromoteFindingHonoursGlobalActor:
+    """`filigree --actor X promote-finding ID` must record actor X.
+
+    Regression: the command previously declared a local ``--actor`` defaulting
+    to ``"cli"`` and skipped ``@click.pass_context``, so the validated group
+    actor in ``ctx.obj["actor"]`` was silently dropped. (filigree-cb82dc6b37)
+    """
+
+    def test_global_actor_is_recorded_on_observation(self, initialized_project_with_finding: SeededProject) -> None:
+        runner = CliRunner()
+        original = os.getcwd()
+        os.chdir(str(initialized_project_with_finding.path))
+        try:
+            finding_id = initialized_project_with_finding.finding_id
+            result = runner.invoke(cli, ["--actor", "bot-1", "promote-finding", finding_id, "--json"])
+            assert result.exit_code == 0, result.output
+            data = json.loads(result.output)
+            assert data["actor"] == "bot-1", f"global --actor was dropped; observation.actor={data['actor']!r}"
+        finally:
+            os.chdir(original)
+
+    def test_local_actor_overrides_global(self, initialized_project_with_finding: SeededProject) -> None:
+        """Command-local ``--actor`` still wins when explicitly supplied."""
+        runner = CliRunner()
+        original = os.getcwd()
+        os.chdir(str(initialized_project_with_finding.path))
+        try:
+            finding_id = initialized_project_with_finding.finding_id
+            result = runner.invoke(
+                cli,
+                [
+                    "--actor",
+                    "bot-1",
+                    "promote-finding",
+                    finding_id,
+                    "--actor",
+                    "bot-2",
+                    "--json",
+                ],
+            )
+            assert result.exit_code == 0, result.output
+            data = json.loads(result.output)
+            assert data["actor"] == "bot-2"
+        finally:
+            os.chdir(original)
+
+    def test_local_actor_is_sanitized(self, initialized_project_with_finding: SeededProject) -> None:
+        """A local ``--actor`` with invalid characters must fail validation,
+        not be silently written to the audit trail."""
+        runner = CliRunner()
+        original = os.getcwd()
+        os.chdir(str(initialized_project_with_finding.path))
+        try:
+            finding_id = initialized_project_with_finding.finding_id
+            result = runner.invoke(
+                cli,
+                ["promote-finding", finding_id, "--actor", "  ", "--json"],
+            )
+            assert result.exit_code == 1
+            data = json.loads(result.output)
+            assert data["code"] == "VALIDATION"
+        finally:
+            os.chdir(original)
+
+
+class TestSqliteErrorClassification:
+    """Read commands must classify ``sqlite3.Error`` as ``ErrorCode.IO``,
+    not ``VALIDATION``. (filigree-ef5db29b89)"""
+
+    def test_list_files_sqlite_error_is_io(self, cli_in_project: tuple[CliRunner, Path], monkeypatch: pytest.MonkeyPatch) -> None:
+        runner, _ = cli_in_project
+
+        def _raise(*_a: object, **_kw: object) -> None:
+            raise sqlite3.OperationalError("database is locked")
+
+        monkeypatch.setattr("filigree.core.FiligreeDB.list_files_paginated", _raise)
+        result = runner.invoke(cli, ["list-files", "--json"])
+        assert result.exit_code == 1
+        data = json.loads(result.output)
+        assert data["code"] == "IO", f"expected IO, got {data['code']}"
+        assert "database is locked" in data["error"]
+
+    def test_get_file_timeline_sqlite_error_is_io(self, cli_in_project: tuple[CliRunner, Path], monkeypatch: pytest.MonkeyPatch) -> None:
+        runner, _ = cli_in_project
+
+        def _raise(*_a: object, **_kw: object) -> None:
+            raise sqlite3.OperationalError("database is locked")
+
+        monkeypatch.setattr("filigree.core.FiligreeDB.get_file_timeline", _raise)
+        result = runner.invoke(cli, ["get-file-timeline", "file-anything", "--json"])
+        assert result.exit_code == 1
+        data = json.loads(result.output)
+        assert data["code"] == "IO"
+        assert "database is locked" in data["error"]
+
+    def test_list_findings_sqlite_error_is_io(self, cli_in_project: tuple[CliRunner, Path], monkeypatch: pytest.MonkeyPatch) -> None:
+        runner, _ = cli_in_project
+
+        def _raise(*_a: object, **_kw: object) -> None:
+            raise sqlite3.OperationalError("database is locked")
+
+        monkeypatch.setattr("filigree.core.FiligreeDB.list_findings_global", _raise)
+        result = runner.invoke(cli, ["list-findings", "--json"])
+        assert result.exit_code == 1
+        data = json.loads(result.output)
+        assert data["code"] == "IO"
+        assert "database is locked" in data["error"]
+
+
+class TestAssociationLookupErrorEnvelope:
+    """Existence-check DB calls in association commands must surface
+    ``sqlite3.Error`` as the IO envelope, not as an uncaught traceback.
+    (filigree-c7f94428c4)"""
+
+    def test_get_issue_files_sqlite_error_is_io(self, initialized_project_with_bug: SeededProject, monkeypatch: pytest.MonkeyPatch) -> None:
+        runner = CliRunner()
+        original = os.getcwd()
+        os.chdir(str(initialized_project_with_bug.path))
+        try:
+
+            def _raise(*_a: object, **_kw: object) -> None:
+                raise sqlite3.OperationalError("database is locked")
+
+            monkeypatch.setattr("filigree.core.FiligreeDB.get_issue_files", _raise)
+            issue_id = initialized_project_with_bug.bug_id
+            result = runner.invoke(cli, ["get-issue-files", issue_id, "--json"])
+            assert result.exit_code == 1
+            data = json.loads(result.output)
+            assert data["code"] == "IO"
+            assert "database is locked" in data["error"]
+        finally:
+            os.chdir(original)
+
+    def test_add_file_association_get_file_sqlite_error_is_io(
+        self, cli_in_project: tuple[CliRunner, Path], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        runner, _ = cli_in_project
+
+        def _raise(*_a: object, **_kw: object) -> None:
+            raise sqlite3.OperationalError("database is locked")
+
+        monkeypatch.setattr("filigree.core.FiligreeDB.get_file", _raise)
+        result = runner.invoke(cli, ["add-file-association", "file-x", "issue-x", "bug_in", "--json"])
+        assert result.exit_code == 1
+        data = json.loads(result.output)
+        assert data["code"] == "IO"
+        assert "database is locked" in data["error"]
+
+    def test_add_file_association_get_issue_sqlite_error_is_io(
+        self, initialized_project_with_file: SeededProject, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        runner = CliRunner()
+        original = os.getcwd()
+        os.chdir(str(initialized_project_with_file.path))
+        try:
+            file_id = initialized_project_with_file.file_id
+
+            def _raise(*_a: object, **_kw: object) -> None:
+                raise sqlite3.OperationalError("database is locked")
+
+            monkeypatch.setattr("filigree.core.FiligreeDB.get_issue", _raise)
+            result = runner.invoke(cli, ["add-file-association", file_id, "issue-x", "bug_in", "--json"])
+            assert result.exit_code == 1
+            data = json.loads(result.output)
+            assert data["code"] == "IO"
+            assert "database is locked" in data["error"]
         finally:
             os.chdir(original)

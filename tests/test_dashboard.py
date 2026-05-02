@@ -281,6 +281,58 @@ class TestMainGlobalReset:
         assert dash_module._project_store is None, "finally must reset _project_store"
         assert dash_module._db is None, "finally must reset _db"
 
+    def test_main_clears_stale_config_on_restart(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """filigree-154a23794c: a previous run's _config["name"] must not leak.
+
+        Scenario: ethereal run #1 against a project whose config has
+        ``name="Old Project"``; ethereal run #2 against a project whose
+        config omits ``name`` (read_config only defaults prefix and version).
+        /api/projects must serve the new project's prefix, not "Old Project".
+        """
+        # Run #1: project with explicit name.
+        proj_a = _create_filigree_dir(tmp_path, "proj-old", "old")
+        # Overwrite config to include a name.
+        write_config(proj_a, {"prefix": "old", "version": 1, "name": "Old Project"})
+
+        captured: dict[str, dict[str, object]] = {}
+
+        def fake_uvicorn_run_a(*args: object, **kwargs: object) -> None:
+            captured["after_run_a"] = dict(dash_module._config)
+
+        monkeypatch.setattr(dash_module, "find_filigree_root", lambda: proj_a)
+        monkeypatch.setattr("uvicorn.run", fake_uvicorn_run_a)
+        monkeypatch.setattr("filigree.dashboard.webbrowser.open", lambda *a, **kw: None)
+
+        dash_module.main(port=9999, no_browser=True, server_mode=False)
+        assert captured["after_run_a"].get("name") == "Old Project"
+
+        # Run #2: minimal config (no name key).
+        proj_b = _create_filigree_dir(tmp_path, "proj-new", "new")
+        # write_config in _create_filigree_dir already wrote {prefix, version}; no name.
+
+        def fake_uvicorn_run_b(*args: object, **kwargs: object) -> None:
+            captured["after_run_b"] = dict(dash_module._config)
+
+        monkeypatch.setattr(dash_module, "find_filigree_root", lambda: proj_b)
+        monkeypatch.setattr("uvicorn.run", fake_uvicorn_run_b)
+
+        dash_module.main(port=9999, no_browser=True, server_mode=False)
+
+        # _config["name"] from run #1 must be gone.
+        assert "name" not in captured["after_run_b"], f"stale 'name' from prior run leaked into _config: {captured['after_run_b']!r}"
+
+    def test_main_clears_config_in_finally(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """filigree-154a23794c: finally block must clear _config too."""
+        proj = _create_filigree_dir(tmp_path, "proj-fin", "fin")
+        write_config(proj, {"prefix": "fin", "version": 1, "name": "Finalize"})
+        monkeypatch.setattr(dash_module, "find_filigree_root", lambda: proj)
+        monkeypatch.setattr("uvicorn.run", lambda *a, **kw: None)
+        monkeypatch.setattr("filigree.dashboard.webbrowser.open", lambda *a, **kw: None)
+
+        dash_module.main(port=9999, no_browser=True, server_mode=False)
+
+        assert dash_module._config == {}, f"finally must clear _config; got {dash_module._config!r}"
+
 
 class TestGetDbErrorPaths:
     async def test_returns_500_when_db_is_none_in_ethereal_mode(self) -> None:

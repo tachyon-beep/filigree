@@ -186,51 +186,66 @@ class PlanningMixin(DBMixinProtocol):
 
     # -- Ready / Blocked -----------------------------------------------------
 
-    def _resolve_open_done_states(self) -> tuple[list[str], list[str], str, str]:
-        """Return (open_states, done_states, open_placeholders, done_placeholders).
+    def _resolve_open_blocker_predicates(self) -> tuple[tuple[str, list[str]], tuple[str, list[str]]] | None:
+        """Return ``(open_predicate, blocker_done_predicate)`` SQL fragments.
 
-        ``done_states`` falls back to ``["closed"]`` when no templates define done states.
+        Returns ``None`` when no open-category states are registered — callers
+        treat that as "nothing can be ready".
+
+        - ``open_predicate`` matches an issue row aliased ``i`` whose
+          ``(type, status)`` is open-category.
+        - ``blocker_done_predicate`` matches a blocker row aliased ``blocker``
+          whose ``(type, status)`` is done-category, plus the synthetic
+          ``'archived'`` terminal state (filigree-42045dd065).
+
+        Type-aware (filigree-b55aa3191f): replaces the prior status-name list
+        approach so colliding state names across types are classified per type.
         """
-        open_states = self._get_states_for_category("open")
-        done_states = self._get_states_for_category("done") or ["closed"]
-        open_ph = ",".join("?" * len(open_states))
-        done_ph = ",".join("?" * len(done_states))
-        return open_states, done_states, open_ph, done_ph
+        open_pred = self._category_predicate_sql("open", type_col="i.type", status_col="i.status")
+        if not open_pred[1]:
+            return None
+        blocker_done_pred = self._category_predicate_sql(
+            "done",
+            type_col="blocker.type",
+            status_col="blocker.status",
+            include_archived=True,
+        )
+        return open_pred, blocker_done_pred
 
     def get_ready(self) -> list[Issue]:
         """Issues in open-category states with no open blockers."""
-        open_states, done_states, open_ph, done_ph = self._resolve_open_done_states()
-
-        if not open_states:
+        preds = self._resolve_open_blocker_predicates()
+        if preds is None:
             return []
+        (open_sql, open_params), (blocker_done_sql, blocker_done_params) = preds
 
         rows = self.conn.execute(
             f"SELECT i.id FROM issues i "
-            f"WHERE i.status IN ({open_ph}) "
+            f"WHERE {open_sql} "
             f"AND NOT EXISTS ("
             f"  SELECT 1 FROM dependencies d "
             f"  JOIN issues blocker ON d.depends_on_id = blocker.id "
-            f"  WHERE d.issue_id = i.id AND blocker.status NOT IN ({done_ph})"
+            f"  WHERE d.issue_id = i.id AND NOT ({blocker_done_sql})"
             f") ORDER BY i.priority, i.created_at",
-            [*open_states, *done_states],
+            [*open_params, *blocker_done_params],
         ).fetchall()
 
         return self._build_issues_batch([r["id"] for r in rows])
 
     def get_blocked(self) -> list[Issue]:
         """Issues in open-category states that have at least one non-done blocker."""
-        open_states, done_states, open_ph, done_ph = self._resolve_open_done_states()
-
-        if not open_states:
+        preds = self._resolve_open_blocker_predicates()
+        if preds is None:
             return []
+        (open_sql, open_params), (blocker_done_sql, blocker_done_params) = preds
 
         rows = self.conn.execute(
             f"SELECT DISTINCT i.id FROM issues i "
             f"JOIN dependencies d ON d.issue_id = i.id "
             f"JOIN issues blocker ON d.depends_on_id = blocker.id "
-            f"WHERE i.status IN ({open_ph}) AND blocker.status NOT IN ({done_ph}) "
+            f"WHERE {open_sql} AND NOT ({blocker_done_sql}) "
             f"ORDER BY i.priority, i.created_at",
-            [*open_states, *done_states],
+            [*open_params, *blocker_done_params],
         ).fetchall()
 
         return self._build_issues_batch([r["id"] for r in rows])
@@ -244,12 +259,19 @@ class PlanningMixin(DBMixinProtocol):
         Returns the chain as a list of {id, title, priority, type} dicts, ordered
         from the root blocker to the final blocked issue.
         """
-        done_states = self._get_states_for_category("done")
-
-        done_ph = ",".join("?" * len(done_states)) if done_states else "'__none__'"
+        # Treat archived as done here: an archived issue has reached terminal
+        # state and must not appear as an open node on the critical path.
+        # (filigree-42045dd065). Match by (type, status) so colliding state
+        # names across types are classified per type (filigree-b55aa3191f).
+        not_done_sql, not_done_params = self._category_predicate_sql(
+            "done",
+            type_col="type",
+            status_col="status",
+            include_archived=True,
+        )
         open_rows = self.conn.execute(
-            f"SELECT id, title, priority, type FROM issues WHERE status NOT IN ({done_ph})",
-            done_states if done_states else [],
+            f"SELECT id, title, priority, type FROM issues WHERE NOT ({not_done_sql})",
+            not_done_params,
         ).fetchall()
         open_ids = {r["id"] for r in open_rows}
         info = {r["id"]: CriticalPathNode(id=r["id"], title=r["title"], priority=r["priority"], type=r["type"]) for r in open_rows}

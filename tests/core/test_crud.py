@@ -90,6 +90,54 @@ class TestAssigneeNormalization:
         assert claimed.assignee == "bob"
 
 
+class TestClaimAssigneeNormalization:
+    """filigree-694f7e9bf8: claim_issue must normalize assignee like create/update."""
+
+    def test_claim_trims_assignee(self, db: FiligreeDB) -> None:
+        issue = db.create_issue("T")
+        claimed = db.claim_issue(issue.id, assignee="  bob  ")
+        assert claimed.assignee == "bob"
+
+    def test_claim_then_reclaim_with_canonical_form_succeeds(self, db: FiligreeDB) -> None:
+        """Padded claim then canonical claim by the same identity is idempotent."""
+        issue = db.create_issue("T")
+        db.claim_issue(issue.id, assignee="  bob  ")
+        result = db.claim_issue(issue.id, assignee="bob")
+        assert result.assignee == "bob"
+
+
+class TestUpdateIssueTitleValidation:
+    """filigree-365dff403e: update_issue must reject empty/whitespace-only title."""
+
+    @pytest.mark.parametrize("title", ["", "   "], ids=["empty", "whitespace"])
+    def test_update_empty_title_raises(self, db: FiligreeDB, title: str) -> None:
+        issue = db.create_issue("Original")
+        with pytest.raises(ValueError, match="Title cannot be empty"):
+            db.update_issue(issue.id, title=title)
+        # And the stored title must be unchanged.
+        assert db.get_issue(issue.id).title == "Original"
+
+
+class TestStartWorkRollbackPreservesPriorClaim:
+    """filigree-31404d228f: start_work must not erase a pre-existing same-assignee claim on rollback."""
+
+    def test_failed_transition_preserves_prior_claim(self, db: FiligreeDB) -> None:
+        issue = db.create_issue("Already mine")
+        db.claim_issue(issue.id, assignee="alice")
+
+        with pytest.raises(ValueError, match="Invalid status"):
+            db.start_work(issue.id, assignee="alice", target_status="nonexistent_status")
+
+        assert db.get_issue(issue.id).assignee == "alice"
+
+    def test_failed_transition_releases_newly_acquired_claim(self, db: FiligreeDB) -> None:
+        """Regression guard: when start_work itself acquires the claim, rollback must still release."""
+        issue = db.create_issue("Newly claimed")
+        with pytest.raises(ValueError, match="Invalid status"):
+            db.start_work(issue.id, assignee="alice", target_status="nonexistent_status")
+        assert db.get_issue(issue.id).assignee == ""
+
+
 class TestSafeFieldsJson:
     """Bug filigree-58ce3d9da4: _safe_fields_json must handle non-string raw values."""
 
@@ -1542,6 +1590,89 @@ class TestArchival:
         assert db.get_issue(b.id).status != "archived", "Second issue should not be archived after rollback"
 
 
+class TestArchivedDoesNotReblockDependents:
+    """filigree-42045dd065: archive_closed sets status='archived', which is
+    not in any workflow's done states. Without explicit handling, readiness
+    and blocked_by hydration treat archived blockers as still-blocking,
+    re-blocking dependents that were ready."""
+
+    def test_archived_blocker_keeps_dependent_ready(self, db: FiligreeDB) -> None:
+        """A depends on B; close B → A ready; archive B → A still ready."""
+        a = db.create_issue("Dependent A")
+        b = db.create_issue("Blocker B")
+        db.add_dependency(a.id, b.id)
+        # While B is open, A is blocked
+        assert a.id not in [r.id for r in db.get_ready()]
+        db.close_issue(b.id)
+        # After B closes, A is ready
+        ready_ids = [r.id for r in db.get_ready()]
+        assert a.id in ready_ids, f"A should be ready after B closes; got {ready_ids}"
+        # Archive B (closed_at is now, days_old=0)
+        archived = db.archive_closed(days_old=0)
+        assert b.id in archived
+        assert db.get_issue(b.id).status == "archived"
+        # A must still be ready — archive must not undo the unblocking
+        ready_ids_after = [r.id for r in db.get_ready()]
+        assert a.id in ready_ids_after, f"A re-blocked after B was archived; ready={ready_ids_after}"
+
+    def test_archived_blocker_not_in_blocked_by_hydration(self, db: FiligreeDB) -> None:
+        """blocked_by on an issue must not list archived blockers."""
+        a = db.create_issue("Dependent A")
+        b = db.create_issue("Blocker B")
+        db.add_dependency(a.id, b.id)
+        db.close_issue(b.id)
+        db.archive_closed(days_old=0)
+        # Re-fetch A — its blocked_by must not contain B
+        refreshed = db.get_issue(a.id)
+        assert b.id not in refreshed.blocked_by, f"Archived blocker {b.id} should not appear in blocked_by; got {refreshed.blocked_by}"
+        # And is_ready must reflect that
+        assert refreshed.is_ready is True, "A.is_ready must be True after blocker archived"
+
+
+class TestImportNormalizesNonUtcTimestamps:
+    """filigree-20911dfe6d: imported timestamps with non-UTC offsets must be
+    normalized to canonical UTC so SQLite TEXT comparisons (used by
+    get_events_since and archive_closed) work chronologically."""
+
+    def test_get_events_since_handles_non_utc_imported_event(self, db: FiligreeDB, tmp_path: Path) -> None:
+        """Import an event whose created_at carries +02:00. A cursor at
+        the same chronological instant in +00:00 must NOT return it."""
+        # Seed an issue so the event has a valid issue_id
+        issue = db.create_issue("Anchor")
+        # Hand-write a JSONL bundle: one event whose stored timestamp uses +02:00.
+        # 2026-01-01T01:00:00+02:00 == 2025-12-31T23:00:00+00:00 (chronologically earlier).
+        # The CLI cursor at 2026-01-01T00:00:00+00:00 is chronologically AFTER the event,
+        # so post-fix get_events_since must NOT return it. Pre-fix, lexicographic comparison
+        # of the raw stored "...01:00:00+02:00" string is greater than "...00:00:00+00:00",
+        # so the event would be returned.
+        bundle = (
+            json.dumps(
+                {
+                    "_type": "event",
+                    "issue_id": issue.id,
+                    "event_type": "title_changed",
+                    "actor": "import",
+                    "old_value": "old",
+                    "new_value": "new",
+                    "created_at": "2026-01-01T01:00:00+02:00",
+                }
+            )
+            + "\n"
+        )
+        path = tmp_path / "bundle.jsonl"
+        path.write_text(bundle)
+        db.import_jsonl(str(path), merge=True)
+        # Cursor at 2026-01-01T00:00:00+00:00 — chronologically AFTER the event
+        # (event is 23:00 UTC the previous day). After normalization, the event's
+        # stored created_at is "2025-12-31T23:00:00+00:00", which lexicographically
+        # is BEFORE the cursor — the event must NOT be returned.
+        events_after = db.get_events_since("2026-01-01T00:00:00+00:00")
+        imported = [e for e in events_after if e["event_type"] == "title_changed" and e["issue_id"] == issue.id]
+        assert imported == [], (
+            f"Non-UTC imported event should normalize to chronologically-earlier UTC and be excluded by post-cursor query; got {imported}"
+        )
+
+
 class TestCompaction:
     def test_compact_archived_events(self, db: FiligreeDB) -> None:
         issue = db.create_issue("Compact me")
@@ -2306,3 +2437,159 @@ class TestReviewMutualExclusivity:
         assert "review:rework" in refreshed.labels
         assert "review:needed" not in refreshed.labels
         assert "tech-debt" in refreshed.labels
+
+    def test_idempotent_review_re_add_returns_added_false(self, db: FiligreeDB) -> None:
+        """filigree-c9d223e24e: re-adding the same review:* label must report
+        added=False — the mutual-exclusivity DELETE used to reinsert and
+        falsely report added=True."""
+        issue = db.create_issue("Test")
+        added1, _ = db.add_label(issue.id, "review:needed")
+        assert added1 is True
+        added2, canonical = db.add_label(issue.id, "review:needed")
+        assert added2 is False
+        assert canonical == "review:needed"
+        # State invariant: still exactly one review label
+        rows = db.conn.execute(
+            "SELECT label FROM labels WHERE issue_id = ? AND label LIKE 'review:%'",
+            (issue.id,),
+        ).fetchall()
+        assert [r["label"] for r in rows] == ["review:needed"]
+
+    def test_replacing_review_label_still_returns_added_true(self, db: FiligreeDB) -> None:
+        """The idempotency short-circuit must NOT swallow real replacements."""
+        issue = db.create_issue("Test")
+        db.add_label(issue.id, "review:needed")
+        added, canonical = db.add_label(issue.id, "review:done")
+        assert added is True
+        assert canonical == "review:done"
+
+
+class TestScanRunsExportImport:
+    """filigree-6160591254: scan_runs must round-trip through JSONL export/import."""
+
+    def test_export_includes_scan_run_records(self, db: FiligreeDB, tmp_path: Path) -> None:
+        db.conn.execute(
+            "INSERT INTO scan_runs (id, scanner_name, status, file_paths, file_ids, started_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                "run-export-1",
+                "test_scanner",
+                "completed",
+                "[]",
+                "[]",
+                "2026-05-01T00:00:00+00:00",
+                "2026-05-01T00:00:01+00:00",
+            ),
+        )
+        db.conn.commit()
+        out = tmp_path / "scans.jsonl"
+        db.export_jsonl(out)
+        types_seen = {json.loads(line)["_type"] for line in out.read_text().strip().split("\n") if line}
+        assert "scan_run" in types_seen
+
+    def test_roundtrip_preserves_scan_run_fields(self, db: FiligreeDB, tmp_path: Path) -> None:
+        db.conn.execute(
+            "INSERT INTO scan_runs (id, scanner_name, scan_source, status, file_paths, file_ids, "
+            "pid, api_url, log_path, started_at, updated_at, completed_at, "
+            "exit_code, findings_count, error_message) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                "run-rt-1",
+                "ruff",
+                "ci",
+                "completed",
+                '["src/foo.py"]',
+                '["test-f-1"]',
+                12345,
+                "https://example.test",
+                "/var/log/filigree/scan.log",
+                "2026-05-01T00:00:00+00:00",
+                "2026-05-01T00:00:05+00:00",
+                "2026-05-01T00:00:05+00:00",
+                0,
+                3,
+                "",
+            ),
+        )
+        db.conn.commit()
+        out = tmp_path / "rt.jsonl"
+        db.export_jsonl(out)
+
+        fresh = FiligreeDB(tmp_path / "fresh.db", prefix="test")
+        fresh.initialize()
+        fresh.import_jsonl(out)
+
+        row = fresh.conn.execute(
+            "SELECT scanner_name, scan_source, status, file_paths, file_ids, pid, "
+            "api_url, log_path, completed_at, exit_code, findings_count "
+            "FROM scan_runs WHERE id = ?",
+            ("run-rt-1",),
+        ).fetchone()
+        assert row is not None, "scan_run row lost on import"
+        assert row["scanner_name"] == "ruff"
+        assert row["scan_source"] == "ci"
+        assert row["status"] == "completed"
+        assert row["file_paths"] == '["src/foo.py"]'
+        assert row["pid"] == 12345
+        assert row["api_url"] == "https://example.test"
+        assert row["completed_at"] == "2026-05-01T00:00:05+00:00"
+        assert row["exit_code"] == 0
+        assert row["findings_count"] == 3
+        fresh.close()
+
+    def test_import_rejects_invalid_scan_run_status(self, db: FiligreeDB, tmp_path: Path) -> None:
+        bad = tmp_path / "bad.jsonl"
+        bad.write_text(
+            json.dumps(
+                {
+                    "_type": "scan_run",
+                    "id": "run-bad-1",
+                    "scanner_name": "x",
+                    "status": "bogus",
+                    "started_at": "2026-05-01T00:00:00+00:00",
+                    "updated_at": "2026-05-01T00:00:00+00:00",
+                }
+            )
+            + "\n"
+        )
+        with pytest.raises(ValueError, match="Invalid scan_run status"):
+            db.import_jsonl(bad, allow_foreign_ids=True)
+
+
+class TestImportLabelValidation:
+    """filigree-22ed219abc: import_jsonl must reject reserved-namespace labels."""
+
+    def test_import_skips_virtual_namespace_label(self, db: FiligreeDB, tmp_path: Path) -> None:
+        """A physical 'age:older_than_30d' row would shadow the computed
+        virtual 'age' namespace in list_labels(). The importer must skip it."""
+        issue = db.create_issue("Anchor")
+        bad = tmp_path / "evil.jsonl"
+        bad.write_text(json.dumps({"_type": "label", "issue_id": issue.id, "label": "age:older_than_30d"}) + "\n")
+        result = db.import_jsonl(bad, merge=True)
+        assert result["skipped_types"].get("<invalid_label>") == 1
+        # Physical labels table is empty for this issue
+        rows = db.conn.execute("SELECT label FROM labels WHERE issue_id = ?", (issue.id,)).fetchall()
+        assert rows == []
+        # Virtual age namespace is intact
+        info = db.list_labels(namespace="age")
+        assert info["namespaces"]["age"]["type"] == "virtual"
+        assert any(label["label"].startswith("age:") for label in info["namespaces"]["age"]["labels"])
+
+    def test_import_skips_auto_namespace_label(self, db: FiligreeDB, tmp_path: Path) -> None:
+        """Same protection for the 'has:' auto namespace."""
+        issue = db.create_issue("Anchor")
+        bad = tmp_path / "evil2.jsonl"
+        bad.write_text(json.dumps({"_type": "label", "issue_id": issue.id, "label": "has:fake_marker"}) + "\n")
+        result = db.import_jsonl(bad, merge=True)
+        assert result["skipped_types"].get("<invalid_label>") == 1
+        rows = db.conn.execute("SELECT label FROM labels WHERE issue_id = ?", (issue.id,)).fetchall()
+        assert rows == []
+
+    def test_import_accepts_normal_namespaced_label(self, db: FiligreeDB, tmp_path: Path) -> None:
+        """Round-trip a label that is NOT in a reserved namespace."""
+        issue = db.create_issue("Anchor")
+        good = tmp_path / "good.jsonl"
+        good.write_text(json.dumps({"_type": "label", "issue_id": issue.id, "label": "cluster:auth"}) + "\n")
+        result = db.import_jsonl(good, merge=True)
+        assert result["skipped_types"] == {}
+        labels = {r["label"] for r in db.conn.execute("SELECT label FROM labels WHERE issue_id = ?", (issue.id,)).fetchall()}
+        assert "cluster:auth" in labels

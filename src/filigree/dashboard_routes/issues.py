@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, overload
 
 from starlette.requests import Request
 
@@ -11,8 +11,9 @@ if TYPE_CHECKING:
     from fastapi import APIRouter
     from fastapi.responses import JSONResponse
 
-from filigree.core import FiligreeDB
+from filigree.core import FiligreeDB, WrongProjectError
 from filigree.dashboard_routes.common import (
+    _MAX_PAGINATION_OFFSET,
     _error_response,
     _parse_json_body,
     _validate_actor,
@@ -56,6 +57,26 @@ def _fetch_all_issues(db: FiligreeDB) -> list[Issue]:
     return all_issues
 
 
+@overload
+def _validate_body_string_field(
+    body: dict[str, object],
+    field: str,
+    *,
+    allow_null: bool = ...,
+    default: str,
+) -> str | JSONResponse: ...
+
+
+@overload
+def _validate_body_string_field(
+    body: dict[str, object],
+    field: str,
+    *,
+    allow_null: bool = ...,
+    default: None = ...,
+) -> str | None | JSONResponse: ...
+
+
 def _validate_body_string_field(
     body: dict[str, object],
     field: str,
@@ -68,6 +89,10 @@ def _validate_body_string_field(
     Missing fields fall back to ``default`` so callers can preserve existing
     create/patch semantics. Present fields must be strings, except when
     ``allow_null`` is set, in which case explicit ``null`` is accepted.
+
+    Overloads narrow the return when ``default`` is a non-None ``str`` —
+    ``None`` is unreachable in that case, so callers that pass ``default=""``
+    can use the result without an extra ``None`` guard.
     """
     value = body.get(field, _MISSING)
     if value is _MISSING:
@@ -124,7 +149,13 @@ def _parse_batch_close_body(body: dict[str, Any]) -> dict[str, Any] | JSONRespon
         return _error_response("issue_ids must be a JSON array", ErrorCode.VALIDATION, 400)
     if not all(isinstance(i, str) for i in issue_ids):
         return _error_response("All issue_ids must be strings", ErrorCode.VALIDATION, 400)
-    reason = body.get("reason", "")
+    # default="" means the helper returns str on success and JSONResponse on
+    # type error — so the not-a-str branch carries the validation response.
+    # (JSONResponse is only TYPE_CHECKING-imported at module scope; we can't
+    # name it for isinstance() here without forcing a runtime import.)
+    reason = _validate_body_string_field(body, "reason", default="")
+    if not isinstance(reason, str):
+        return reason
     actor, actor_err = _validate_actor(body.get("actor", "dashboard"))
     if actor_err:
         return actor_err
@@ -350,7 +381,12 @@ def create_classic_router() -> APIRouter:
         actor, actor_err = _validate_actor(body.get("actor", "dashboard"))
         if actor_err:
             return actor_err
-        reason = body.get("reason", "")
+        # default="" with allow_null=False means the helper returns str on
+        # success and JSONResponse on type error; narrow on `not isinstance
+        # str` so mypy keeps the `str` branch through the close call.
+        reason = _validate_body_string_field(body, "reason", default="")
+        if not isinstance(reason, str):
+            return reason
         fields = body.get("fields")
         try:
             issue = db.close_issue(issue_id, reason=reason, actor=actor, fields=fields)
@@ -418,6 +454,16 @@ def create_classic_router() -> APIRouter:
         """Full-text search across issues."""
         limit = min(max(limit, 1), 1000)
         offset = max(offset, 0)
+        # Reject offsets that won't bind into SQLite's signed-int64 OFFSET.
+        # Lower-bound clamping is intentionally lenient (pinned by tests),
+        # but the upper bound has no clamp-friendly meaning — a typoed
+        # 10**22 is a client bug, not a request to skip everything.
+        if offset > _MAX_PAGINATION_OFFSET:
+            return _error_response(
+                f"offset must be at most {_MAX_PAGINATION_OFFSET}, got {offset}",
+                ErrorCode.VALIDATION,
+                400,
+            )
         if not q.strip():
             return JSONResponse({"results": [], "total": 0})
         total = db.count_search_results(q)
@@ -631,6 +677,8 @@ def create_classic_router() -> APIRouter:
             removed = db.remove_dependency(issue_id, dep_id, actor=clean_actor)
         except KeyError as e:
             return _error_response(str(e), ErrorCode.NOT_FOUND, 404)
+        except WrongProjectError as e:
+            return _error_response(str(e), ErrorCode.VALIDATION, 400)
         return JSONResponse({"removed": removed})
 
     return router
@@ -737,6 +785,14 @@ def create_loom_router() -> APIRouter:
         """
         limit = min(max(limit, 1), 1000)
         offset = max(offset, 0)
+        # Mirror classic /api/search: reject offsets that won't bind into
+        # SQLite's signed-int64 OFFSET. See filigree-0ad97ea6e0.
+        if offset > _MAX_PAGINATION_OFFSET:
+            return _error_response(
+                f"offset must be at most {_MAX_PAGINATION_OFFSET}, got {offset}",
+                ErrorCode.VALIDATION,
+                400,
+            )
         if not q.strip():
             return JSONResponse(list_response([], limit=limit, offset=offset, has_more=False))
         total = db.count_search_results(q)
@@ -1021,7 +1077,11 @@ def create_loom_router() -> APIRouter:
         actor, actor_err = _validate_actor(body.get("actor", "dashboard"))
         if actor_err:
             return actor_err
-        reason = body.get("reason", "")
+        # See classic close handler: narrow on `not isinstance str`
+        # to keep mypy's str-branch through the close call.
+        reason = _validate_body_string_field(body, "reason", default="")
+        if not isinstance(reason, str):
+            return reason
         fields = body.get("fields")
         ready_before = {i.id for i in db.get_ready()}
         try:
@@ -1199,6 +1259,8 @@ def create_loom_router() -> APIRouter:
             removed = db.remove_dependency(issue_id, dep_issue_id, actor=clean_actor)
         except KeyError as e:
             return _error_response(str(e), ErrorCode.NOT_FOUND, 404)
+        except WrongProjectError as e:
+            return _error_response(str(e), ErrorCode.VALIDATION, 400)
         return JSONResponse({"removed": removed})
 
     return router

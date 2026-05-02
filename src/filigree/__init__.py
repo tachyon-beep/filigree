@@ -5,10 +5,34 @@ from __future__ import annotations
 from importlib.metadata import PackageNotFoundError, version
 from typing import TYPE_CHECKING, Any
 
+
+def _read_source_version() -> str | None:
+    # Fallback for source-only execution (no installed dist-info): read the
+    # checkout's pyproject.toml so vendored / unbuilt deploys don't advertise
+    # "0.0.0-dev" via --version and /api/health. Gated on [project].name
+    # matching this package so a parent project's pyproject can't shadow ours.
+    import tomllib
+    from pathlib import Path
+
+    try:
+        candidate = Path(__file__).resolve().parents[2] / "pyproject.toml"
+    except (OSError, IndexError):
+        return None
+    try:
+        data = tomllib.loads(candidate.read_text(encoding="utf-8"))
+    except (OSError, tomllib.TOMLDecodeError, UnicodeDecodeError):
+        return None
+    project = data.get("project")
+    if not isinstance(project, dict) or project.get("name") != "filigree":
+        return None
+    declared = project.get("version")
+    return declared if isinstance(declared, str) else None
+
+
 try:
     __version__ = version("filigree")
 except PackageNotFoundError:
-    __version__ = "0.0.0-dev"
+    __version__ = _read_source_version() or "0.0.0-dev"
 
 __all__ = ["FiligreeDB", "Issue", "__version__"]
 

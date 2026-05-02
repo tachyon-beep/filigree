@@ -608,3 +608,22 @@ class TestGraphAPI:
         assert data["limits"]["truncated"] is True
         assert len(data["nodes"]) == 50
         assert "query_ms" in data["telemetry"]
+
+    async def test_graph_v2_types_filter_accepts_registered_but_absent_type(self, client: AsyncClient, dashboard_db: PopulatedDB) -> None:
+        """Filter validation must use registered template types, not the set
+        of types currently held by issues.  ``release`` is a registered type
+        in the default packs but the populated_db fixture seeds none — the
+        request should still validate (returning an empty node list), not
+        400 with "Unknown types: release".  (filigree-68c24cee62)
+        """
+        registered = {t.type for t in dashboard_db.db.templates.list_types()}
+        observed = {i.type for i in dashboard_db.db.list_issues()}
+        unused = sorted(registered - observed)
+        assert unused, "test fixture changed: no registered-but-unused type to exercise"
+        target = unused[0]
+
+        resp = await client.get(f"/api/graph?mode=v2&types={target}")
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        # No issue currently has this type, so the node list is empty.
+        assert data["nodes"] == []

@@ -16,7 +16,13 @@ from filigree.types.api import BatchFailure, ErrorCode
 @click.command("observe")
 @click.argument("summary")
 @click.option("--detail", default="", help="Longer explanation or context")
-@click.option("--file-path", default="", help="File path (relative to project root)")
+@click.option(
+    "--file-path",
+    "--file",
+    "file_path",
+    default="",
+    help="File path (relative to project root)",
+)
 @click.option("--line", default=None, type=click.IntRange(min=0), help="Line number in file (1-indexed)")
 @click.option("--source-issue-id", default="", help="Issue ID that prompted this observation")
 @click.option(
@@ -56,6 +62,12 @@ def observe_cmd(
             else:
                 click.echo(f"Error: {e}", err=True)
             sys.exit(1)
+        except sqlite3.Error as e:
+            if as_json:
+                click.echo(json_mod.dumps({"error": f"Database error: {e}", "code": ErrorCode.IO}))
+            else:
+                click.echo(f"Error: {e}", err=True)
+            sys.exit(1)
         if as_json:
             click.echo(json_mod.dumps(obs, indent=2, default=str))
         else:
@@ -81,12 +93,19 @@ def list_observations_cmd(
     """List pending observations with optional filtering."""
     with get_db() as db:
         effective_limit = limit if not no_limit else 10_000_000
-        observations = db.list_observations(
-            limit=effective_limit + 1,
-            offset=offset,
-            file_path=file_path,
-            file_id=file_id,
-        )
+        try:
+            observations = db.list_observations(
+                limit=effective_limit + 1,
+                offset=offset,
+                file_path=file_path,
+                file_id=file_id,
+            )
+        except sqlite3.Error as e:
+            if as_json:
+                click.echo(json_mod.dumps({"error": f"Database error: {e}", "code": ErrorCode.IO}))
+            else:
+                click.echo(f"Error: {e}", err=True)
+            sys.exit(1)
         has_more = len(observations) > effective_limit
         if has_more:
             observations = observations[:effective_limit]
@@ -132,6 +151,12 @@ def dismiss_observation_cmd(
         except ValueError as e:
             if as_json:
                 click.echo(json_mod.dumps({"error": str(e), "code": ErrorCode.NOT_FOUND}))
+            else:
+                click.echo(f"Error: {e}", err=True)
+            sys.exit(1)
+        except sqlite3.Error as e:
+            if as_json:
+                click.echo(json_mod.dumps({"error": f"Database error: {e}", "code": ErrorCode.IO}))
             else:
                 click.echo(f"Error: {e}", err=True)
             sys.exit(1)
@@ -183,6 +208,12 @@ def promote_observation_cmd(
                 click.echo(json_mod.dumps({"error": msg, "code": err_code}))
             else:
                 click.echo(f"Error: {msg}", err=True)
+            sys.exit(1)
+        except sqlite3.Error as e:
+            if as_json:
+                click.echo(json_mod.dumps({"error": f"Database error: {e}", "code": ErrorCode.IO}))
+            else:
+                click.echo(f"Error: {e}", err=True)
             sys.exit(1)
         # Mirror MCP: issue is an Issue object, call .to_dict()
         resp: dict[str, Any] = {"issue": result["issue"].to_dict()}

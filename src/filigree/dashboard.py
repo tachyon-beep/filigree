@@ -86,6 +86,13 @@ class ProjectStore:
     def __init__(self) -> None:
         self._projects: dict[str, dict[str, str]] = {}  # key -> {name, path}
         self._dbs: dict[str, FiligreeDB] = {}
+        # Serialises cache mutations (get_db lazy-open, reload eviction,
+        # close_all). Without this two concurrent first requests for the
+        # same key both pass the membership check, both run
+        # FiligreeDB.from_filigree_dir (which migrates and seeds), and
+        # only the loser is cached — the winner's handle leaks unclosed.
+        # filigree-732f6b31e4
+        self._lock = threading.Lock()
 
     # -- public API --
 
@@ -130,7 +137,14 @@ class ProjectStore:
         """Return (lazily opening) the DB for *key*. Raises ``KeyError``."""
         if key not in self._projects:
             raise KeyError(key)
-        if key not in self._dbs:
+        # Fast path: cache hit, no lock needed (dict reads are atomic under GIL).
+        cached = self._dbs.get(key)
+        if cached is not None:
+            return cached
+        with self._lock:
+            cached = self._dbs.get(key)
+            if cached is not None:
+                return cached
             info = self._projects[key]
             filigree_path = Path(info["path"])
             db: FiligreeDB | None = None
@@ -178,11 +192,12 @@ class ProjectStore:
         path_changed = sorted(key for key in (old_keys & new_keys) if old_projects[key].get("path") != self._projects[key].get("path"))
 
         # Close and evict stale DB handles for removed projects and projects
-        # whose path changed under the same key.
-        for key in [*removed, *path_changed]:
-            db = self._dbs.pop(key, None)
-            if db is None:
-                continue
+        # whose path changed under the same key. Lock-guarded so a concurrent
+        # get_db() either sees the old handle (and returns it) or sees a clean
+        # cache and reopens fresh — never a closed handle. (filigree-732f6b31e4)
+        with self._lock:
+            evict = [(key, self._dbs.pop(key)) for key in [*removed, *path_changed] if key in self._dbs]
+        for key, db in evict:
             try:
                 db.close()
             except Exception:
@@ -196,12 +211,16 @@ class ProjectStore:
 
     def close_all(self) -> None:
         """Close all open DB connections."""
-        for key, db in self._dbs.items():
+        # Lock-guarded so a concurrent get_db() can't sneak in between the
+        # close loop and the clear. (filigree-732f6b31e4)
+        with self._lock:
+            handles = list(self._dbs.items())
+            self._dbs.clear()
+        for key, db in handles:
             try:
                 db.close()
             except Exception:
                 logger.warning("Error closing DB for project %s", key, exc_info=True)
-        self._dbs.clear()
 
     @property
     def default_key(self) -> str:
@@ -495,7 +514,18 @@ def create_app(*, server_mode: bool = False) -> ASGIApp:
                     409,
                 )
             logger.info("Project store reloaded: %s", diff)
-            return JSONResponse({"status": "ok", **diff})
+            # Frontend ui.js reloadServer() reads ``data.ok`` and
+            # ``data.projects``; without these it renders "Reload failed"
+            # even on a successful backend reload. ``status`` retained for
+            # any direct API consumer. (filigree-173e76a28a)
+            return JSONResponse(
+                {
+                    "ok": True,
+                    "status": "ok",
+                    "projects": len(_project_store.list_projects()),
+                    **diff,
+                }
+            )
 
     # Serve static JS modules (ES modules for dashboard components)
     from starlette.staticfiles import StaticFiles
@@ -565,8 +595,13 @@ def main(port: int = DEFAULT_PORT, *, no_browser: bool = False, server_mode: boo
     # routes to the intended mode (filigree-bff063de18). Without this, a
     # server-mode run followed by an ethereal run (or vice versa) can serve
     # the wrong database because ``_get_db`` keys off ``_project_store``.
+    # ``_config`` is dict-mutable (so no ``global`` declaration); clearing it
+    # here prevents stale keys (notably ``name``, which read_config does not
+    # default) from leaking into the next run's /api/projects response.
+    # (filigree-154a23794c)
     _project_store = None
     _db = None
+    _config.clear()
 
     if server_mode:
         _project_store = ProjectStore()
@@ -642,6 +677,9 @@ def main(port: int = DEFAULT_PORT, *, no_browser: bool = False, server_mode: boo
             for name in ("ephemeral.pid", "ephemeral.port"):
                 (filigree_dir / name).unlink(missing_ok=True)
         # Reset both globals so a later in-process ``main()`` call starts
-        # from a clean slate (filigree-bff063de18).
+        # from a clean slate (filigree-bff063de18). Also clear ``_config``
+        # so server-mode (or a subsequent ethereal run with a minimal config)
+        # cannot serve a stale ``name`` (filigree-154a23794c).
         _project_store = None
         _db = None
+        _config.clear()

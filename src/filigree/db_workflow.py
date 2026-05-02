@@ -205,6 +205,13 @@ class WorkflowMixin(DBMixinProtocol):
         """Collect all state names that map to a category across enabled types.
 
         Returns deduplicated list. Empty if no types are registered.
+
+        Note: this dedups by state name, so when two types share a state
+        name with the same category (e.g. 'open') it appears once. It is
+        unsafe for SQL category filtering when state names collide across
+        categories (e.g. ``incident.resolved`` is wip, ``debt_item.resolved``
+        is done) — use ``_get_type_states_for_category`` /
+        ``_category_predicate_sql`` for that. (filigree-b55aa3191f)
         """
         seen: set[str] = set()
         states: list[str] = []
@@ -214,6 +221,67 @@ class WorkflowMixin(DBMixinProtocol):
                     seen.add(s.name)
                     states.append(s.name)
         return states
+
+    def _get_type_states_for_category(self, category: str) -> list[tuple[str, str]]:
+        """Collect ``(type, state_name)`` pairs whose category matches.
+
+        Type-aware companion to ``_get_states_for_category``. Used for SQL
+        predicates that must respect the type when state names collide
+        across categories (filigree-b55aa3191f).
+        """
+        return [(tpl.type, s.name) for tpl in self.templates.list_types() for s in tpl.states if s.category == category]
+
+    def _category_predicate_sql(
+        self,
+        category: str,
+        *,
+        type_col: str,
+        status_col: str,
+        include_archived: bool = False,
+    ) -> tuple[str, list[str]]:
+        """Build a SQL fragment matching rows whose ``(type, status)`` maps to *category*.
+
+        Returns ``(sql, params)``. ``include_archived`` ORs in the synthetic
+        ``status='archived'`` terminal status — used only by blocker
+        semantics, where ``archive_closed()`` rows must count as no-longer-
+        blocking even though ``'archived'`` is not a workflow state.
+
+        When no ``(type, state)`` pair matches the requested category (and
+        ``include_archived`` is false), returns ``("0", [])`` — a SQL-valid
+        always-false predicate — so callers do not need to special-case
+        empty registries.
+        """
+        pairs = self._get_type_states_for_category(category)
+        parts: list[str] = []
+        params: list[str] = []
+        if include_archived:
+            parts.append(f"{status_col} = 'archived'")
+        if pairs:
+            ors = " OR ".join(f"({type_col} = ? AND {status_col} = ?)" for _ in pairs)
+            parts.append(f"({ors})")
+            for t, s in pairs:
+                params.extend([t, s])
+        if not parts:
+            return ("0", [])
+        if len(parts) == 1:
+            return (parts[0], params)
+        return ("(" + " OR ".join(parts) + ")", params)
+
+    def _blocker_done_states(self) -> list[str]:
+        """States that count as 'no longer blocking dependents'.
+
+        This is the workflow's done states plus the synthetic ``'archived'``
+        produced by ``archive_closed()``. Use this for readiness queries,
+        ``blocked_by`` hydration, and virtual ``has:blockers`` resolution
+        — anything that asks "is this blocker still active?". Use the
+        plain ``_get_states_for_category("done")`` for archival selection
+        (which must not include ``'archived'`` or it would re-archive
+        already-archived rows) and for label semantics.
+        """
+        base = self._get_states_for_category("done") or ["closed"]
+        if "archived" in base:
+            return base
+        return [*base, "archived"]
 
     @staticmethod
     def _infer_status_category(issue_type: str, status: str) -> StatusCategory:

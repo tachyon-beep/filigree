@@ -598,3 +598,131 @@ class TestTriggerScanBatchCommand:
             assert data["code"] == "INVALID_API_URL"
         finally:
             os.chdir(original)
+
+
+# ---------------------------------------------------------------------------
+# TestForeignDatabaseDiagnostic — bug fix: scanner CLI must surface the rich
+# ForeignDatabaseError message, not collapse it into a generic
+# "Project directory not initialized" line. Mirrors the regression contract
+# in tests/test_doctor.py::test_foreign_database_is_reported_with_specific_message.
+# ---------------------------------------------------------------------------
+
+
+class TestForeignDatabaseDiagnostic:
+    @staticmethod
+    def _make_foreign_layout(tmp_path: Path) -> Path:
+        """Outer project has .filigree/, inner is a separate git repo with no anchor."""
+        outer = tmp_path / "outer"
+        outer.mkdir()
+        (outer / ".git").mkdir()
+        (outer / ".filigree.conf").write_text("[filigree]\n", encoding="utf-8")
+        (outer / ".filigree").mkdir()
+        inner = outer / "inner-repo"
+        inner.mkdir()
+        (inner / ".git").mkdir()
+        return inner
+
+    def _assert_foreign_message(self, output: str) -> None:
+        data = json.loads(output)
+        assert data["code"] == "NOT_INITIALIZED"
+        # The whole point: the rich diagnostic survives, not the old generic line.
+        assert "Refusing to latch" in data["error"]
+        assert "filigree init" in data["error"]
+        assert data["error"] != "Project directory not initialized"
+
+    @pytest.mark.parametrize(
+        "argv",
+        [
+            ["list-scanners", "--json"],
+            ["preview-scan", "any-scanner", "any-file.py", "--json"],
+            ["trigger-scan", "any-scanner", "any-file.py", "--json"],
+            ["trigger-scan-batch", "any-scanner", "any-file.py", "--json"],
+        ],
+    )
+    def test_foreign_database_message_survives(self, tmp_path: Path, argv: list[str]) -> None:
+        inner = self._make_foreign_layout(tmp_path)
+        runner = CliRunner()
+        original = os.getcwd()
+        os.chdir(str(inner))
+        try:
+            result = runner.invoke(cli, argv)
+            assert result.exit_code == 1, result.output
+            self._assert_foreign_message(result.output)
+        finally:
+            os.chdir(original)
+
+
+# ---------------------------------------------------------------------------
+# TestReportFindingTypeValidation — bug fix: malformed JSON field types must
+# yield ErrorCode.VALIDATION envelopes, never raw TypeError or ErrorCode.IO.
+# ---------------------------------------------------------------------------
+
+
+class TestReportFindingTypeValidation:
+    @staticmethod
+    def _invoke(initialized_project: Path, payload: dict[str, object]) -> tuple[int, dict[str, object]]:
+        runner = CliRunner()
+        original = os.getcwd()
+        os.chdir(str(initialized_project))
+        try:
+            result = runner.invoke(cli, ["report-finding", "--json"], input=json.dumps(payload))
+            return result.exit_code, json.loads(result.output)
+        finally:
+            os.chdir(original)
+
+    def test_severity_unhashable_does_not_crash(self, initialized_project: Path) -> None:
+        """`"severity": []` used to raise TypeError from `not in VALID_SEVERITIES`."""
+        code, data = self._invoke(
+            initialized_project,
+            {"path": "foo.py", "rule_id": "r", "message": "m", "severity": []},
+        )
+        assert code == 1
+        assert data["code"] == "VALIDATION"
+        assert "severity" in str(data["error"])
+
+    def test_path_must_be_string(self, initialized_project: Path) -> None:
+        """A truthy non-string path used to slip past the falsy guard and surface as IO."""
+        code, data = self._invoke(
+            initialized_project,
+            {"path": [1, 2], "rule_id": "r", "message": "m"},
+        )
+        assert code == 1
+        assert data["code"] == "VALIDATION"
+        assert "path" in str(data["error"])
+
+    def test_rule_id_must_be_string(self, initialized_project: Path) -> None:
+        code, data = self._invoke(
+            initialized_project,
+            {"path": "foo.py", "rule_id": 42, "message": "m"},
+        )
+        assert code == 1
+        assert data["code"] == "VALIDATION"
+        assert "rule_id" in str(data["error"])
+
+    def test_message_must_be_string(self, initialized_project: Path) -> None:
+        code, data = self._invoke(
+            initialized_project,
+            {"path": "foo.py", "rule_id": "r", "message": {"nested": "no"}},
+        )
+        assert code == 1
+        assert data["code"] == "VALIDATION"
+        assert "message" in str(data["error"])
+
+    def test_line_start_non_int_validation(self, initialized_project: Path) -> None:
+        """line_start used to reach the DB layer and surface as ErrorCode.IO."""
+        code, data = self._invoke(
+            initialized_project,
+            {"path": "foo.py", "rule_id": "r", "message": "m", "line_start": "ten"},
+        )
+        assert code == 1
+        assert data["code"] == "VALIDATION"
+        assert "line_start" in str(data["error"])
+
+    def test_line_end_non_int_validation(self, initialized_project: Path) -> None:
+        code, data = self._invoke(
+            initialized_project,
+            {"path": "foo.py", "rule_id": "r", "message": "m", "line_end": 1.5},
+        )
+        assert code == 1
+        assert data["code"] == "VALIDATION"
+        assert "line_end" in str(data["error"])

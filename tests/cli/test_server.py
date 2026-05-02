@@ -44,6 +44,45 @@ class TestServerStart:
         assert result.exit_code == 1
         assert "bind error" in result.output
 
+    def test_start_rejects_port_zero(self, cli_runner: CliRunner) -> None:
+        # filigree-1e1cb5eeeb: --port 0 used to fall through `port or config.port`
+        # and silently use the configured port. Must now fail at the CLI boundary.
+        with patch("filigree.server.start_daemon") as mock_start:
+            result = cli_runner.invoke(cli, ["server", "start", "--port", "0"])
+        assert result.exit_code != 0
+        assert "1<=x<=65535" in result.output or "1 and 65535" in result.output
+        mock_start.assert_not_called()
+
+    def test_start_rejects_negative_port(self, cli_runner: CliRunner) -> None:
+        with patch("filigree.server.start_daemon") as mock_start:
+            result = cli_runner.invoke(cli, ["server", "start", "--port", "-1"])
+        assert result.exit_code != 0
+        mock_start.assert_not_called()
+
+    def test_start_rejects_port_above_max(self, cli_runner: CliRunner) -> None:
+        with patch("filigree.server.start_daemon") as mock_start:
+            result = cli_runner.invoke(cli, ["server", "start", "--port", "65536"])
+        assert result.exit_code != 0
+        mock_start.assert_not_called()
+
+    def test_start_accepts_port_min_boundary(self, cli_runner: CliRunner) -> None:
+        with patch(
+            "filigree.server.start_daemon",
+            return_value=DaemonResult(True, "Started filigree daemon (pid 1) on port 1"),
+        ) as mock_start:
+            result = cli_runner.invoke(cli, ["server", "start", "--port", "1"])
+        assert result.exit_code == 0
+        mock_start.assert_called_once_with(port=1)
+
+    def test_start_accepts_port_max_boundary(self, cli_runner: CliRunner) -> None:
+        with patch(
+            "filigree.server.start_daemon",
+            return_value=DaemonResult(True, "Started filigree daemon (pid 1) on port 65535"),
+        ) as mock_start:
+            result = cli_runner.invoke(cli, ["server", "start", "--port", "65535"])
+        assert result.exit_code == 0
+        mock_start.assert_called_once_with(port=65535)
+
 
 class TestServerStop:
     def test_stop_success(self, cli_runner: CliRunner) -> None:

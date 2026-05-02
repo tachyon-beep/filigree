@@ -752,6 +752,78 @@ class TestPromoteObservation:
         with pytest.raises(ValueError, match="expired"):
             db.promote_observation(obs["id"])
 
+    def test_concurrent_promote_creates_only_one_issue(self, db: FiligreeDB) -> None:
+        """Two threads racing to promote the same observation must produce one issue.
+
+        Regression for filigree-58aa8fb4ac (TOCTOU at db_observations.py:413-416):
+        the idempotency SELECT + create_issue must be serialized via BEGIN
+        IMMEDIATE so concurrent callers can't both pass the check.
+        """
+        import threading
+
+        obs = db.create_observation("racey finding")
+        obs_id = obs["id"]
+        db_path = db.db_path
+        # Release fixture's connection so peer connections can take the writer lock.
+        db.close()
+
+        peer_a = FiligreeDB(db_path, prefix="test", check_same_thread=False)
+        peer_b = FiligreeDB(db_path, prefix="test", check_same_thread=False)
+        try:
+            barrier = threading.Barrier(2)
+            results: list[str] = []
+            errors: list[BaseException] = []
+
+            def run(peer: FiligreeDB) -> None:
+                try:
+                    barrier.wait()
+                    r = peer.promote_observation(obs_id)
+                    results.append(r["issue"].id)
+                except BaseException as e:
+                    errors.append(e)
+
+            t1 = threading.Thread(target=run, args=(peer_a,))
+            t2 = threading.Thread(target=run, args=(peer_b,))
+            t1.start()
+            t2.start()
+            t1.join()
+            t2.join()
+
+            assert errors == [], f"Unexpected errors: {errors}"
+            assert len(results) == 2
+            assert results[0] == results[1], f"Both threads must converge on the same issue id; got {results}"
+
+            audit = FiligreeDB(db_path, prefix="test", check_same_thread=False)
+            try:
+                rows = audit.conn.execute(
+                    "SELECT id FROM issues WHERE json_extract(fields, '$.source_observation_id') = ?",
+                    (obs_id,),
+                ).fetchall()
+            finally:
+                audit.close()
+            assert len(rows) == 1, f"Expected exactly one issue per observation, got {[r['id'] for r in rows]}"
+        finally:
+            peer_a.close()
+            peer_b.close()
+
+    def test_promote_tolerates_corrupt_fields_on_unrelated_issue(self, db: FiligreeDB) -> None:
+        """Corrupt fields JSON on an unrelated issue must not block promotion.
+
+        Regression for filigree-9bb842088d: the idempotency lookup uses
+        json_extract over the full issues table, which raises OperationalError
+        on malformed rows. The query must guard with json_valid(fields) so
+        corrupt rows are skipped (matches the _safe_fields_json convention).
+        """
+        bystander = db.create_issue("bystander")
+        db.conn.execute("UPDATE issues SET fields = '{bad json' WHERE id = ?", (bystander.id,))
+        db.conn.commit()
+
+        obs = db.create_observation("valid promotion path")
+        result = db.promote_observation(obs["id"])
+        assert result["issue"].id != bystander.id
+        # Issue's own source_observation_id round-trips intact
+        assert result["issue"].fields.get("source_observation_id") == obs["id"]
+
 
 class TestObservationStats:
     def test_count_empty(self, db: FiligreeDB) -> None:

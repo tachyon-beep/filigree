@@ -128,3 +128,52 @@ class TestDashboardActorValidation:
             json={"assignee": "bot", "actor": "test-agent"},
         )
         assert resp.status_code == 200
+
+
+class TestPaginationOverflowBoundary:
+    """filigree-393cfab62c: pagination params must reject before SQLite bind overflow."""
+
+    async def test_classic_files_rejects_huge_limit_with_400(self, client: AsyncClient) -> None:
+        # Without the cap, 'limit + 1' overfetch on int64 max raised an
+        # uncaught OverflowError from sqlite3 and surfaced as 500.
+        resp = await client.get("/api/files", params={"limit": "9223372036854775807"})
+        assert resp.status_code == 400
+        assert resp.json()["code"] == "VALIDATION"
+
+    async def test_classic_files_rejects_above_max_pagination_limit(self, client: AsyncClient) -> None:
+        from filigree.dashboard_routes.common import _MAX_PAGINATION_LIMIT
+
+        resp = await client.get("/api/files", params={"limit": str(_MAX_PAGINATION_LIMIT + 1)})
+        assert resp.status_code == 400
+        assert resp.json()["code"] == "VALIDATION"
+
+    async def test_classic_files_rejects_huge_offset_with_400(self, client: AsyncClient) -> None:
+        resp = await client.get("/api/files", params={"limit": "10", "offset": "99999999999999999999"})
+        assert resp.status_code == 400
+        assert resp.json()["code"] == "VALIDATION"
+
+    async def test_hotspots_rejects_huge_limit_with_400(self, client: AsyncClient) -> None:
+        # filigree-873962aa58: limit-only endpoints bypassed _parse_pagination
+        # and bound 2**63 directly into SQLite, raising OverflowError -> 500.
+        resp = await client.get("/api/files/hotspots", params={"limit": "9223372036854775808"})
+        assert resp.status_code == 400
+        assert resp.json()["code"] == "VALIDATION"
+
+    async def test_hotspots_rejects_above_max_pagination_limit(self, client: AsyncClient) -> None:
+        from filigree.dashboard_routes.common import _MAX_PAGINATION_LIMIT
+
+        resp = await client.get("/api/files/hotspots", params={"limit": str(_MAX_PAGINATION_LIMIT + 1)})
+        assert resp.status_code == 400
+        assert resp.json()["code"] == "VALIDATION"
+
+    async def test_scan_runs_rejects_huge_limit_with_400(self, client: AsyncClient) -> None:
+        resp = await client.get("/api/scan-runs", params={"limit": "9223372036854775808"})
+        assert resp.status_code == 400
+        assert resp.json()["code"] == "VALIDATION"
+
+    async def test_scan_runs_rejects_above_max_pagination_limit(self, client: AsyncClient) -> None:
+        from filigree.dashboard_routes.common import _MAX_PAGINATION_LIMIT
+
+        resp = await client.get("/api/scan-runs", params={"limit": str(_MAX_PAGINATION_LIMIT + 1)})
+        assert resp.status_code == 400
+        assert resp.json()["code"] == "VALIDATION"

@@ -159,7 +159,9 @@ class FilesMixin(DBMixinProtocol):
                 updates.append("file_type = ?")
                 params.append(file_type)
                 changes.append(("file_type", existing["file_type"] or "", file_type))
-            if metadata:
+            # `is not None` (not truthy) so `metadata={}` can explicitly clear
+            # existing metadata; `metadata=None` means "leave unchanged".
+            if metadata is not None:
                 old_meta_raw = existing["metadata"] or "{}"
                 try:
                     old_meta_parsed = json.loads(old_meta_raw)
@@ -413,9 +415,16 @@ class FilesMixin(DBMixinProtocol):
                 ln_val = f.get(ln_field)
                 if ln_val is not None and (isinstance(ln_val, bool) or not isinstance(ln_val, int)):
                     raise ValueError(f"findings[{i}] {ln_field} must be an integer or null, got {type(ln_val).__name__}")
+                # Reject negatives — `-1` is the dedup sentinel for missing line in
+                # the unique index `coalesce(line_start, -1)` (db_schema.py:159-160).
+                if isinstance(ln_val, int) and not isinstance(ln_val, bool) and ln_val < 0:
+                    raise ValueError(f"findings[{i}] {ln_field} must be >= 0, got {ln_val}")
             suggestion = f.get("suggestion")
             if suggestion is not None and not isinstance(suggestion, str):
                 raise ValueError(f"findings[{i}] suggestion must be a string, got {type(suggestion).__name__}")
+            metadata = f.get("metadata")
+            if metadata is not None and not isinstance(metadata, dict):
+                raise ValueError(f"findings[{i}] metadata must be a JSON object or null, got {type(metadata).__name__}")
             # Normalize severity
             normalized = severity.strip().lower()
             if normalized in VALID_SEVERITIES:
@@ -743,22 +752,37 @@ class FilesMixin(DBMixinProtocol):
         return stats
 
     def get_scan_runs(self, *, limit: int = 10) -> list[ScanRunRecord]:
-        """Query scan run history from scan_findings grouped by scan_run_id.
+        """Query scan run history from the union of scan_runs and scan_findings.
 
         Returns a list of scan run summaries, ordered by most recent activity.
-        Findings with empty scan_run_id are excluded.
+        Runs are sourced from both `scan_runs` (lifecycle table -- preserves
+        clean runs with zero findings) and `scan_findings.scan_run_id`
+        (legacy/orphan ingestion paths that never created a scan_runs row).
+        Empty scan_run_ids are excluded from both sides.
         """
         rows = self.conn.execute(
-            "SELECT scan_run_id, scan_source, "
-            "MIN(first_seen) AS started_at, "
-            "MAX(updated_at) AS completed_at, "
-            "COUNT(*) AS total_findings, "
-            "COUNT(DISTINCT file_id) AS files_scanned "
-            "FROM scan_findings "
-            "WHERE scan_run_id != '' "
-            "GROUP BY scan_run_id, scan_source "
-            "ORDER BY MAX(updated_at) DESC "
-            "LIMIT ?",
+            """
+            WITH all_runs AS (
+                SELECT id AS scan_run_id, scan_source FROM scan_runs WHERE id != ''
+                UNION
+                SELECT scan_run_id, scan_source FROM scan_findings WHERE scan_run_id != ''
+            )
+            SELECT
+                ar.scan_run_id AS scan_run_id,
+                ar.scan_source AS scan_source,
+                coalesce(sr.started_at, MIN(sf.first_seen)) AS started_at,
+                coalesce(sr.completed_at, sr.updated_at, MAX(sf.updated_at)) AS completed_at,
+                COUNT(sf.id) AS total_findings,
+                COUNT(DISTINCT sf.file_id) AS files_scanned
+            FROM all_runs ar
+            LEFT JOIN scan_runs sr
+                ON sr.id = ar.scan_run_id AND sr.scan_source = ar.scan_source
+            LEFT JOIN scan_findings sf
+                ON sf.scan_run_id = ar.scan_run_id AND sf.scan_source = ar.scan_source
+            GROUP BY ar.scan_run_id, ar.scan_source
+            ORDER BY completed_at DESC
+            LIMIT ?
+            """,
             (limit,),
         ).fetchall()
         return [
@@ -836,11 +860,13 @@ class FilesMixin(DBMixinProtocol):
                 msg = "dismiss_reason requires status to also be provided"
                 raise ValueError(msg)
             old_meta_raw = self.conn.execute("SELECT metadata FROM scan_findings WHERE id = ?", (finding_id,)).fetchone()
-            try:
-                old_meta = json.loads(old_meta_raw["metadata"]) if old_meta_raw and old_meta_raw["metadata"] else {}
-            except (json.JSONDecodeError, TypeError):
-                logger.warning("Corrupt metadata JSON in finding %s, resetting to empty", finding_id)
-                old_meta = {}
+            # Use _safe_json_loads so corrupt JSON or non-dict top-level values
+            # (e.g. legacy rows containing JSON arrays) reset to {} instead of
+            # crashing with TypeError on the dict assignment below.
+            old_meta = _safe_json_loads(
+                old_meta_raw["metadata"] if old_meta_raw else None,
+                f"scan_finding:{finding_id}",
+            )
             old_meta["dismiss_reason"] = dismiss_reason
             updates.append("metadata = ?")
             params.append(json.dumps(old_meta))

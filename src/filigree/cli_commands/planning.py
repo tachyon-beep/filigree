@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json as json_mod
 import sys
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 import click
@@ -16,22 +16,52 @@ from filigree.types.api import ErrorCode
 def _normalize_iso_timestamp(raw: str) -> str:
     """Normalize user-supplied ISO-8601 to the form stored in the DB.
 
-    Stored timestamps use ``datetime.now(UTC).isoformat()`` which emits
-    ``+00:00`` offsets, not ``Z``. SQLite compares TEXT lexically, so
-    ``Z`` would miscompare against ``+00:00``-suffixed rows. Rejects
-    unparseable input with a SystemExit+stderr message (not a silent
-    miscomparison).
+    Stored timestamps use ``datetime.now(UTC).isoformat()`` which always
+    emits ``+00:00``. SQLite compares TEXT lexically, so any non-UTC
+    offset (or trailing ``Z``) would miscompare against ``+00:00`` rows.
+    Naive input is treated as UTC (matching the CLI's stored convention).
+    Rejects unparseable input with a SystemExit+stderr message (not a
+    silent miscomparison).
     """
-    normalized = raw.replace("Z", "+00:00") if raw.endswith("Z") else raw
+    candidate = raw.replace("Z", "+00:00") if raw.endswith("Z") else raw
     try:
-        datetime.fromisoformat(normalized)
+        parsed = datetime.fromisoformat(candidate)
     except (ValueError, TypeError):
         click.echo(
             f"Error: Invalid ISO timestamp: {raw!r}. Expected format: 2026-01-15T10:30:00 or 2026-01-15T10:30:00+00:00",
             err=True,
         )
         sys.exit(1)
-    return normalized
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC).isoformat()
+
+
+def _validate_plan_dep_refs(deps: object, label: str) -> str | None:
+    """Reject dep values that ``db_planning.create_plan`` would silently misinterpret.
+
+    The DB layer does ``str(dep_ref)`` and treats any string containing ``"."``
+    as ``"phase_idx.step_idx"``. A JSON float like ``0.1`` would resolve to
+    phase 0 step 1; a bool would hit ``int('True')`` and raise. Mirrors the
+    MCP-layer rules in ``mcp_tools/planning.py::_validate_plan_deps``.
+    """
+    if not isinstance(deps, list):
+        return f"{label} 'deps' must be a list, got {type(deps).__name__}"
+    for k, dep in enumerate(deps):
+        ref = f"{label}, dep[{k}]"
+        if isinstance(dep, bool):
+            return f"{ref} must be integer or 'P.S' string, not bool"
+        if isinstance(dep, int):
+            if dep < 0:
+                return f"{ref} must be >= 0, got {dep}"
+            continue
+        if isinstance(dep, str):
+            parts = dep.split(".")
+            if len(parts) > 2 or any(not p.lstrip("-").isdigit() for p in parts):
+                return f"{ref} must be 'N' or 'P.S' with integer components, got {dep!r}"
+            continue
+        return f"{ref} must be integer or 'P.S' string, got {type(dep).__name__}"
+    return None
 
 
 def _ready_impl(as_json: bool) -> None:
@@ -317,6 +347,21 @@ def create_plan(ctx: click.Context, file_path: str | None, as_json: bool) -> Non
         if not isinstance(phase, dict):
             click.echo(f"Phase {i + 1} must be an object, got {type(phase).__name__}", err=True)
             sys.exit(1)
+        steps = phase.get("steps", [])
+        if not isinstance(steps, list):
+            click.echo(f"Phase {i + 1} 'steps' must be a list, got {type(steps).__name__}", err=True)
+            sys.exit(1)
+        for j, step in enumerate(steps):
+            if not isinstance(step, dict):
+                click.echo(
+                    f"Phase {i + 1}, Step {j + 1} must be an object, got {type(step).__name__}",
+                    err=True,
+                )
+                sys.exit(1)
+            err = _validate_plan_dep_refs(step.get("deps", []), f"Phase {i + 1}, Step {j + 1}")
+            if err is not None:
+                click.echo(err, err=True)
+                sys.exit(1)
 
     with get_db() as db:
         try:
@@ -371,7 +416,12 @@ def _changes_impl(since: str, limit: int, as_json: bool) -> None:
 
 @click.command("changes")
 @click.option("--since", required=True, help="ISO timestamp to get events after")
-@click.option("--limit", default=100, type=int, help="Max events (default 100)")
+@click.option(
+    "--limit",
+    default=100,
+    type=click.IntRange(min=1),
+    help="Max events (default 100, must be >= 1)",
+)
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON")
 def changes(since: str, limit: int, as_json: bool) -> None:
     """Get events since a timestamp (for session resumption)."""
@@ -380,7 +430,12 @@ def changes(since: str, limit: int, as_json: bool) -> None:
 
 @click.command("get-changes")
 @click.option("--since", required=True, help="ISO timestamp to get events after")
-@click.option("--limit", default=100, type=int, help="Max events (default 100)")
+@click.option(
+    "--limit",
+    default=100,
+    type=click.IntRange(min=1),
+    help="Max events (default 100, must be >= 1)",
+)
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON")
 def get_changes(since: str, limit: int, as_json: bool) -> None:
     """Get events since a timestamp (for session resumption). Alias for `changes`."""

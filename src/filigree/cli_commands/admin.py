@@ -21,7 +21,9 @@ from filigree.core import (
     FiligreeDB,
     find_filigree_root,
     get_mode,
+    read_conf,
     read_config,
+    read_schema_version,
     write_conf,
     write_config,
 )
@@ -54,32 +56,68 @@ def init(prefix: str | None, name: str | None, mode: str | None) -> None:
         previous_marker = read_install_version(filigree_dir)
         # Still ensure DB is initialized and migrated
         config = read_config(filigree_dir)
-        db = FiligreeDB(
-            filigree_dir / DB_FILENAME,
-            prefix=config.get("prefix", "filigree"),
-            enabled_packs=config.get("enabled_packs"),
-        )
-        try:
-            old_version = db.get_schema_version()
+        # filigree-fa6309d551: route DB open through the v2.0 anchor-aware
+        # constructors so a custom .filigree.conf `db` path is honoured.
+        # Without this, init silently migrates the legacy
+        # .filigree/filigree.db while the project's actual DB (declared in
+        # the conf) stays un-migrated.
+        conf_path = cwd / CONF_FILENAME
+        if conf_path.is_file():
             try:
-                db.initialize()
-            except SchemaVersionMismatchError as exc:
-                # The DB was written by a newer filigree; this older binary
-                # cannot safely touch it. Emit the same guidance text and
-                # exit code (3) used by `filigree doctor` / `filigree
-                # dashboard`, and do NOT update INSTALL_VERSION (which would
-                # falsely advertise this older version against a v+1 DB).
-                click.echo(
-                    format_schema_mismatch_guidance(exc.installed, exc.database),
-                    err=True,
-                )
-                sys.exit(3)
+                existing_conf = read_conf(conf_path)
+                db_path = (conf_path.parent / existing_conf["db"]).resolve()
+            except (json_mod.JSONDecodeError, ValueError, OSError) as exc:
+                click.echo(f"Cannot read {conf_path}: {exc}", err=True)
+                sys.exit(1)
+        else:
+            db_path = filigree_dir / DB_FILENAME
+        # Read pre-init schema version directly so we can detect upgrades —
+        # the from_* constructors call initialize() internally, which would
+        # mask the old version.
+        old_version: int | None = None
+        if db_path.exists():
+            raw_conn = sqlite3.connect(str(db_path))
+            try:
+                old_version = read_schema_version(raw_conn)
+            finally:
+                raw_conn.close()
+        try:
+            db = FiligreeDB.from_conf(conf_path) if conf_path.is_file() else FiligreeDB.from_filigree_dir(filigree_dir)
+        except SchemaVersionMismatchError as exc:
+            # The DB was written by a newer filigree; this older binary
+            # cannot safely touch it. Emit the same guidance text and
+            # exit code (3) used by `filigree doctor` / `filigree
+            # dashboard`, and do NOT update INSTALL_VERSION (which would
+            # falsely advertise this older version against a v+1 DB).
+            click.echo(
+                format_schema_mismatch_guidance(exc.installed, exc.database),
+                err=True,
+            )
+            sys.exit(3)
+        try:
             new_version = db.get_schema_version()
         finally:
             db.close()
-        if new_version > old_version:
+        if old_version is not None and new_version > old_version:
             click.echo(f"  Schema upgraded v{old_version} → v{new_version}")
         (filigree_dir / "scanners").mkdir(exist_ok=True)
+        # filigree-f22fc98687: backfill the v2.0 anchor on legacy installs
+        # where the existing-project branch was reached without a conf. Do
+        # not overwrite an existing custom anchor.
+        if not conf_path.exists():
+            project_name = config.get("name") or cwd.name
+            project_prefix = config.get("prefix") or cwd.name
+            backfill_conf: dict[str, object] = {
+                "version": CONF_VERSION,
+                "project_name": project_name,
+                "prefix": project_prefix,
+                "db": f"{FILIGREE_DIR_NAME}/{DB_FILENAME}",
+            }
+            conf_mode = config.get("mode")
+            if conf_mode and conf_mode != "ethereal":
+                backfill_conf["mode"] = conf_mode
+            write_conf(conf_path, backfill_conf)
+            click.echo(f"  Backfilled v2.0 anchor: {conf_path}")
         # Cross-tool skew warning: if a previous marker recorded an older
         # schema, other tools / sessions pinned to that version will now
         # report SCHEMA_MISMATCH against this DB.
@@ -255,13 +293,21 @@ def install(
     # Server mode: register project in server.json
     if mode == "server":
         try:
-            from filigree.server import daemon_status, register_project
+            from filigree.cli_commands.server import _reload_server_daemon_if_running
+            from filigree.server import register_project
 
             register_project(filigree_dir)
             results.append(("Server registration", True, "Registered in server.json"))
-            status = daemon_status()
-            if not status.running:
+            # filigree-80753e4b54: ask any running daemon to reload its
+            # registry; otherwise it serves a stale view until restart.
+            # Helper short-circuits cleanly when the daemon isn't running.
+            ok, reason = _reload_server_daemon_if_running()
+            if not ok:
+                results.append(("Server reload", False, reason))
+            elif reason == "daemon_not_running":
                 click.echo('\nNote: start the daemon with "filigree server start"')
+            else:
+                results.append(("Server reload", True, "Reloaded running daemon"))
         except Exception as e:
             results.append(("Server registration", False, str(e)))
 
@@ -304,6 +350,7 @@ def doctor(fix: bool, verbose: bool) -> None:
     if any(r.code == "schema_mismatch_forward" for r in results):
         sys.exit(3)
 
+    fixed = 0
     if fix and failed > 0:
         click.echo("\nApplying fixes...")
         try:
@@ -351,7 +398,6 @@ def doctor(fix: bool, verbose: bool) -> None:
             "AGENTS.md": ("agents_md",),
         }
 
-        fixed = 0
         for r in results:
             if r.passed or r.name not in fixable:
                 continue
@@ -365,15 +411,24 @@ def doctor(fix: bool, verbose: bool) -> None:
                     click.echo(f"  OK  Fixed: {r.name}")
                     ok = True
                 elif fix_key == "schema":
-                    config = read_config(filigree_dir)
-                    db = FiligreeDB(
-                        filigree_dir / DB_FILENAME,
-                        prefix=config.get("prefix", "filigree"),
-                        enabled_packs=config.get("enabled_packs"),
-                    )
+                    # filigree-fa6309d551: route DB open through the v2.0
+                    # anchor-aware constructors. Without this, --fix would
+                    # initialize/migrate a phantom .filigree/filigree.db
+                    # while the project's actual DB (declared in the conf)
+                    # stays un-migrated.
+                    conf_path = project_root / CONF_FILENAME
+                    if conf_path.is_file():
+                        conf_data = read_conf(conf_path)
+                        db_path = (conf_path.parent / conf_data["db"]).resolve()
+                    else:
+                        db_path = filigree_dir / DB_FILENAME
+                    raw_conn = sqlite3.connect(str(db_path))
                     try:
-                        old_ver = db.get_schema_version()
-                        db.initialize()
+                        old_ver = read_schema_version(raw_conn)
+                    finally:
+                        raw_conn.close()
+                    db = FiligreeDB.from_conf(conf_path) if conf_path.is_file() else FiligreeDB.from_filigree_dir(filigree_dir)
+                    try:
                         new_ver = db.get_schema_version()
                     finally:
                         db.close()
@@ -417,6 +472,15 @@ def doctor(fix: bool, verbose: bool) -> None:
 
     if failed == 0:
         click.echo("\nAll checks passed.")
+        return
+
+    # filigree-467d1e7487: surface non-schema failures as a non-zero exit
+    # so CI scripts and `set -e` shells can detect breakage. Schema-mismatch
+    # already exited(3) above; here we own exit(1) for the generic case.
+    # Without --fix, every failure is unresolved. With --fix, only failures
+    # the fixer could not address remain.
+    if not fix or (failed - fixed) > 0:
+        sys.exit(1)
 
 
 @click.command()
@@ -445,8 +509,11 @@ def migrate(from_beads: bool, beads_db: str | None) -> None:
 @click.option(
     "--port",
     default=None,
-    type=int,
-    help="Server port (defaults to configured daemon port in --server-mode, else 8377)",
+    # filigree-31da65493c: validate at the CLI boundary (mirrors `server
+    # start` at server.py:43-49). Without this, `--server-mode --port 0`
+    # would persist a bogus port into daemon state before bind failed.
+    type=click.IntRange(1, 65535),
+    help="Server port (valid TCP range: 1-65535; defaults to configured daemon port in --server-mode, else 8377)",
 )
 @click.option("--no-browser", is_flag=True, help="Don't auto-open browser")
 @click.option("--server-mode", is_flag=True, help="Multi-project server mode (reads server.json)")
@@ -499,7 +566,13 @@ def session_context() -> None:
 
 
 @click.command("ensure-dashboard")
-@click.option("--port", default=None, type=int, help="Dashboard port override (server mode)")
+@click.option(
+    "--port",
+    default=None,
+    # filigree-31da65493c: same boundary validation as `dashboard --port`.
+    type=click.IntRange(1, 65535),
+    help="Dashboard port override (valid TCP range: 1-65535; server mode)",
+)
 def ensure_dashboard_cmd(port: int | None) -> None:
     """Ensure the filigree dashboard is running."""
     try:

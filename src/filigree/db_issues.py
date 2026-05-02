@@ -35,11 +35,20 @@ def _resolve_virtual_label(
     label: str,
     *,
     negate: bool = False,
-    done_states: list[str] | None = None,
+    blocker_done_predicate: tuple[str, list[Any]] | None = None,
 ) -> tuple[str, list[Any]] | None:
     """Resolve a virtual label to a SQL condition + params.
 
     Returns (sql_fragment, params) or None if not a virtual label.
+
+    ``blocker_done_predicate`` is a ``(sql, params)`` fragment that
+    matches a "done" blocker row aliased ``blocker`` (for ``has:blockers``).
+    Build it at the call site via ``_category_predicate_sql("done",
+    type_col="blocker.type", status_col="blocker.status",
+    include_archived=True)``. When ``None``, falls back to a safe
+    name-only predicate using ``blocker.status IN ('closed', 'archived')``;
+    the typed form is preferred so state-name collisions across types
+    (filigree-b55aa3191f) do not erroneously treat a wip blocker as done.
     """
     if label.startswith("age:"):
         value = label.split(":", 1)[1]
@@ -61,14 +70,17 @@ def _resolve_virtual_label(
     if label.startswith("has:"):
         value = label.split(":", 1)[1]
         exists_op = "NOT EXISTS" if negate else "EXISTS"
-        effective_done = done_states or ["closed"]
-        done_ph = ",".join("?" * len(effective_done))
+        if blocker_done_predicate is None:
+            blocker_done_sql = "blocker.status IN ('closed', 'archived')"
+            blocker_done_params: list[Any] = []
+        else:
+            blocker_done_sql, blocker_done_params = blocker_done_predicate
         subqueries: dict[str, tuple[str, list[Any]]] = {
             "blockers": (
                 f"{exists_op} (SELECT 1 FROM dependencies d "
                 "JOIN issues blocker ON d.depends_on_id = blocker.id "
-                f"WHERE d.issue_id = i.id AND blocker.status NOT IN ({done_ph}))",
-                list(effective_done),
+                f"WHERE d.issue_id = i.id AND NOT ({blocker_done_sql}))",
+                list(blocker_done_params),
             ),
             "children": (
                 f"{exists_op} (SELECT 1 FROM issues child WHERE child.parent_id = i.id)",
@@ -372,15 +384,24 @@ class IssuesMixin(DBMixinProtocol):
         ).fetchall():
             blocks_by_id[r["depends_on_id"]].append(r["issue_id"])
 
-        # 4. Batch fetch "blocked_by" — only open (non-done) blockers
-        done_states = self._get_states_for_category("done") or ["closed"]
-        done_ph = ",".join("?" * len(done_states))
+        # 4. Batch fetch "blocked_by" — only open (non-done, non-archived) blockers.
+        # Archived blockers must not appear here (filigree-42045dd065): archive_closed
+        # writes status='archived' which is not a workflow done state.
+        # filigree-b55aa3191f: match by (blocker.type, blocker.status) so a state
+        # name shared across types in different categories (e.g.
+        # incident.resolved=wip, debt_item.resolved=done) is classified per type.
+        blocker_done_sql, blocker_done_params = self._category_predicate_sql(
+            "done",
+            type_col="blocker.type",
+            status_col="blocker.status",
+            include_archived=True,
+        )
         blocked_by_id: dict[str, list[str]] = {iid: [] for iid in issue_ids}
         for r in self.conn.execute(
             f"SELECT d.issue_id, d.depends_on_id FROM dependencies d "
             f"JOIN issues blocker ON d.depends_on_id = blocker.id "
-            f"WHERE d.issue_id IN ({placeholders}) AND blocker.status NOT IN ({done_ph})",
-            [*issue_ids, *done_states],
+            f"WHERE d.issue_id IN ({placeholders}) AND NOT ({blocker_done_sql})",
+            [*issue_ids, *blocker_done_params],
         ).fetchall():
             blocked_by_id[r["issue_id"]].append(r["depends_on_id"])
 
@@ -389,19 +410,16 @@ class IssuesMixin(DBMixinProtocol):
         for r in self.conn.execute(f"SELECT id, parent_id FROM issues WHERE parent_id IN ({placeholders})", issue_ids).fetchall():
             children_by_id[r["parent_id"]].append(r["id"])
 
-        # 6. Batch compute open blocker counts (reuses done_states/done_ph from step 4)
+        # 6. Batch compute open blocker counts — same blocker semantics as step 4.
         open_blockers_by_id: dict[str, int] = dict.fromkeys(issue_ids, 0)
         for r in self.conn.execute(
             f"SELECT d.issue_id, COUNT(*) as cnt FROM dependencies d "
-            f"JOIN issues i ON d.depends_on_id = i.id "
-            f"WHERE d.issue_id IN ({placeholders}) AND i.status NOT IN ({done_ph}) "
+            f"JOIN issues blocker ON d.depends_on_id = blocker.id "
+            f"WHERE d.issue_id IN ({placeholders}) AND NOT ({blocker_done_sql}) "
             f"GROUP BY d.issue_id",
-            [*issue_ids, *done_states],
+            [*issue_ids, *blocker_done_params],
         ).fetchall():
             open_blockers_by_id[r["issue_id"]] = r["cnt"]
-
-        # 7. Compute open states for is_ready check
-        open_states_set = set(self._get_states_for_category("open")) or {"open"}
 
         # Build Issue objects preserving input order
         result: list[Issue] = []
@@ -427,7 +445,13 @@ class IssuesMixin(DBMixinProtocol):
                     labels=labels_by_id.get(iid, []),
                     blocks=blocks_by_id.get(iid, []),
                     blocked_by=blocked_by_id.get(iid, []),
-                    is_ready=(row["status"] in open_states_set and open_blockers_by_id.get(iid, 0) == 0),
+                    is_ready=(
+                        # filigree-b55aa3191f: resolve category per (type, status)
+                        # rather than via a deduplicated open-state name set, so a
+                        # state name shared across types in different categories
+                        # is classified correctly.
+                        self._resolve_status_category(row["type"], row["status"]) == "open" and open_blockers_by_id.get(iid, 0) == 0
+                    ),
                     children=children_by_id.get(iid, []),
                     status_category=self._resolve_status_category(row["type"], row["status"]),
                 )
@@ -457,6 +481,10 @@ class IssuesMixin(DBMixinProtocol):
         if fields is not None and not isinstance(fields, dict):
             msg = "fields must be a dict"
             raise TypeError(msg)
+        if title is not None and not title.strip():
+            # filigree-365dff403e: mirror create_issue's invariant on update.
+            msg = "Title cannot be empty"
+            raise ValueError(msg)
         if priority is not None and priority != current.priority and not (0 <= priority <= 4):
             msg = f"Priority must be between 0 and 4, got {priority}"
             raise ValueError(msg)
@@ -751,7 +779,12 @@ class IssuesMixin(DBMixinProtocol):
         Uses a single atomic UPDATE with WHERE guard to prevent race conditions
         where two agents try to claim the same issue concurrently.
         """
-        if not assignee or not assignee.strip():
+        # filigree-694f7e9bf8: enforce the same trimmed-identity invariant as
+        # create_issue/update_issue. Without normalization, claiming with
+        # "  bob  " stores the padded form and a later canonical "bob" claim
+        # falsely reports "already assigned to '  bob  '".
+        assignee = _normalize_assignee(assignee)
+        if not assignee:
             msg = "Assignee cannot be empty"
             raise ValueError(msg)
         self._check_id_prefix(issue_id)
@@ -907,9 +940,27 @@ class IssuesMixin(DBMixinProtocol):
         ``claimed`` and ``released`` events even on rollback — auditability
         is preserved at the cost of leaving a brief observable window
         where the issue is claimed but not transitioned.
+
+        Rollback only releases the claim when *this* invocation acquired
+        it (filigree-31404d228f). ``claim_issue`` is idempotent for the
+        same identity — if the issue was already owned by ``assignee``
+        before the call, a transition failure must leave the claim in
+        place rather than wiping out an unrelated, pre-existing claim.
         """
         actor = actor or assignee
+
+        # Capture the prior assignee so rollback knows whether THIS call
+        # acquired the claim. Read directly to avoid building a full Issue;
+        # if the row is missing, claim_issue will raise the canonical KeyError.
+        row = self.conn.execute("SELECT assignee FROM issues WHERE id = ?", (issue_id,)).fetchone()
+        prior_assignee = (row["assignee"] if row is not None else "") or ""
+
         issue = self.claim_issue(issue_id, assignee=assignee, actor=actor)
+        newly_acquired_claim = prior_assignee == ""
+
+        def _rollback_claim() -> None:
+            if newly_acquired_claim:
+                self._safe_release_claim(issue_id, actor=actor)
 
         if target_status is None:
             tpl = self.templates.get_type(issue.type)
@@ -917,18 +968,18 @@ class IssuesMixin(DBMixinProtocol):
                 # Roll back the claim before surfacing the error.
                 from filigree.types.api import InvalidTransitionError
 
-                self._safe_release_claim(issue_id, actor=actor)
+                _rollback_claim()
                 raise InvalidTransitionError(issue.type, issue.status)
             try:
                 target_status = tpl.canonical_working_status()
             except Exception:
-                self._safe_release_claim(issue_id, actor=actor)
+                _rollback_claim()
                 raise
 
         try:
             return self.update_issue(issue_id, status=target_status, actor=actor)
         except Exception:
-            self._safe_release_claim(issue_id, actor=actor)
+            _rollback_claim()
             raise
 
     def start_next_work(
@@ -1137,21 +1188,35 @@ class IssuesMixin(DBMixinProtocol):
         conditions: list[str] = []
         params: list[Any] = []
 
-        # Get done states once for virtual has:blockers
-        done_states = self._get_states_for_category("done")
+        # Build the type-aware blocker-done predicate once for virtual
+        # has:blockers. Blocker semantics (filigree-42045dd065): archived
+        # blockers do not block dependents. (filigree-b55aa3191f): match by
+        # ``(blocker.type, blocker.status)`` rather than status name alone, so
+        # an ``incident.resolved`` (wip) is correctly seen as still-blocking.
+        blocker_done_predicate = self._category_predicate_sql(
+            "done",
+            type_col="blocker.type",
+            status_col="blocker.status",
+            include_archived=True,
+        )
 
         if status is not None:
             # Check if status is a category name (with aliases)
             category_aliases = {"in_progress": "wip", "closed": "done"}
             category_key = category_aliases.get(status, status)
-            category_states: list[str] = []
+            cat_pred: tuple[str, list[str]] | None = None
             if category_key in ("open", "wip", "done"):
-                category_states = self._get_states_for_category(category_key)
+                # filigree-b55aa3191f: compare (type, status) pairs so a state
+                # name shared across types in different categories (e.g.
+                # incident.resolved=wip vs debt_item.resolved=done) routes only
+                # to the right type.
+                pred_sql, pred_params = self._category_predicate_sql(category_key, type_col="i.type", status_col="i.status")
+                if pred_params:
+                    cat_pred = (pred_sql, pred_params)
 
-            if category_states:
-                placeholders = ",".join("?" * len(category_states))
-                conditions.append(f"i.status IN ({placeholders})")
-                params.extend(category_states)
+            if cat_pred is not None:
+                conditions.append(cat_pred[0])
+                params.extend(cat_pred[1])
             else:
                 # Literal state match (either not a category, or W7 empty guard)
                 conditions.append("i.status = ?")
@@ -1172,7 +1237,7 @@ class IssuesMixin(DBMixinProtocol):
         # Label filters (array, AND logic)
         if label:
             for lbl in label:
-                virtual = _resolve_virtual_label(lbl, negate=False, done_states=done_states)
+                virtual = _resolve_virtual_label(lbl, negate=False, blocker_done_predicate=blocker_done_predicate)
                 if virtual is not None:
                     sql_frag, vparams = virtual
                     conditions.append(f"({sql_frag})")
@@ -1199,7 +1264,7 @@ class IssuesMixin(DBMixinProtocol):
                 conditions.append("i.id NOT IN (SELECT issue_id FROM labels WHERE label LIKE ? ESCAPE '\\')")
                 params.append(escaped + "%")
             else:
-                virtual = _resolve_virtual_label(not_label, negate=True, done_states=done_states)
+                virtual = _resolve_virtual_label(not_label, negate=True, blocker_done_predicate=blocker_done_predicate)
                 if virtual is not None:
                     sql_frag, vparams = virtual
                     conditions.append(f"({sql_frag})")

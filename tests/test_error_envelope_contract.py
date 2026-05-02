@@ -330,3 +330,22 @@ class TestCLIStartupEnvelope:
         result = runner.invoke(cli, ["create", "--", "--json"])
         assert result.exit_code == 1
         assert not result.output.strip().startswith("{"), result.output
+
+    def test_double_dash_as_option_value_still_detects_json(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """When `--` is the value of a value-taking option, a trailing `--json` is the real flag.
+
+        Regression for filigree-e2cbfb247b: the previous fix sliced raw_args
+        at the first literal `--`, but Click can legally consume `--` as the
+        value of a value-taking option (e.g. `--description --`), so the
+        subsequent `--json` is the real JSON-mode flag and the startup
+        failure must surface as the JSON envelope, not plain text.
+        """
+        monkeypatch.chdir(tmp_path)
+        runner = CliRunner()
+        # `create T --description -- --json`: Click parses description="--",
+        # as_json=True. get_db fails (no project). Expected: JSON envelope.
+        result = runner.invoke(cli, ["create", "T", "--description", "--", "--json"])
+        assert result.exit_code == 1, result.output
+        payload = json.loads(result.output)
+        _assert_flat_envelope(payload, surface="cli")
+        assert payload["code"] == ErrorCode.NOT_INITIALIZED

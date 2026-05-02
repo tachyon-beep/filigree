@@ -41,7 +41,12 @@ def server() -> None:
 
 
 @server.command("start")
-@click.option("--port", default=None, type=int, help="Override port")
+@click.option(
+    "--port",
+    default=None,
+    type=click.IntRange(1, 65535),
+    help="Override port (valid TCP range: 1-65535)",
+)
 def server_start(port: int | None) -> None:
     """Start the filigree daemon."""
     from filigree.server import start_daemon

@@ -116,9 +116,12 @@ class TestJsonRetrofit:
         runner.invoke(cli, ["add-comment", issue_id, "A comment"])
         result = runner.invoke(cli, ["get-comments", issue_id, "--json"])
         assert result.exit_code == 0
+        # filigree-d2263e721d: Phase E1 ListResponse envelope, not a bare list.
         data = json.loads(result.output)
-        assert isinstance(data, list)
-        assert len(data) == 1
+        assert isinstance(data, dict)
+        assert data["has_more"] is False
+        assert len(data["items"]) == 1
+        assert data["items"][0]["text"] == "A comment"
 
     def test_dep_add_json(self, cli_in_project: tuple[CliRunner, Path]) -> None:
         runner, _ = cli_in_project
@@ -363,21 +366,45 @@ class TestInstallCli:
 
 
 class TestDoctorCli:
-    def test_doctor_basic(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+    def test_doctor_basic(self, cli_in_project: tuple[CliRunner, Path], monkeypatch: pytest.MonkeyPatch) -> None:
         runner, _ = cli_in_project
+
+        from filigree.install_support.doctor import CheckResult
+
+        # Mock to all-passing — the fresh-init fixture intentionally skips
+        # `install`, so a real run_doctor would (correctly) report missing
+        # CLAUDE.md / MCP / hooks. This test covers output formatting only.
+        monkeypatch.setattr(
+            "filigree.install.run_doctor",
+            lambda **_kw: [CheckResult(".filigree/", True, "ok")],
+        )
         result = runner.invoke(cli, ["doctor"])
         assert result.exit_code == 0
         assert "filigree doctor" in result.output
 
-    def test_doctor_verbose(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+    def test_doctor_verbose(self, cli_in_project: tuple[CliRunner, Path], monkeypatch: pytest.MonkeyPatch) -> None:
         runner, _ = cli_in_project
+
+        from filigree.install_support.doctor import CheckResult
+
+        monkeypatch.setattr(
+            "filigree.install.run_doctor",
+            lambda **_kw: [CheckResult(".filigree/", True, "ok")],
+        )
         result = runner.invoke(cli, ["doctor", "--verbose"])
         assert result.exit_code == 0
         # Verbose should show all checks including passed ones
         assert "OK" in result.output
 
-    def test_doctor_fix(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+    def test_doctor_fix(self, cli_in_project: tuple[CliRunner, Path], monkeypatch: pytest.MonkeyPatch) -> None:
         runner, _ = cli_in_project
+
+        from filigree.install_support.doctor import CheckResult
+
+        monkeypatch.setattr(
+            "filigree.install.run_doctor",
+            lambda **_kw: [CheckResult(".filigree/", True, "ok")],
+        )
         result = runner.invoke(cli, ["doctor", "--fix"])
         assert result.exit_code == 0
 
@@ -410,6 +437,63 @@ class TestDoctorCli:
         assert "OK CLAUDE.md: Injected" in result.output
         assert "Fixed 1/2 issues" in result.output
         assert "1 require manual intervention" in result.output
+
+    def test_doctor_exits_nonzero_on_failed_checks(self, cli_in_project: tuple[CliRunner, Path], monkeypatch: pytest.MonkeyPatch) -> None:
+        # filigree-467d1e7487: doctor used to exit 0 even when non-schema
+        # checks failed, leaving CI scripts unable to detect breakage.
+        runner, _ = cli_in_project
+
+        from filigree.install_support.doctor import CheckResult
+
+        monkeypatch.setattr(
+            "filigree.install.run_doctor",
+            lambda **_kw: [CheckResult(".gitignore", False, "missing", fix_hint="hint")],
+        )
+        result = runner.invoke(cli, ["doctor"])
+
+        assert result.exit_code == 1, f"expected exit 1 on failed check, got {result.exit_code}\n{result.output}"
+
+    def test_doctor_fix_exits_nonzero_when_unfixed_remain(
+        self, cli_in_project: tuple[CliRunner, Path], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # filigree-467d1e7487: --fix that leaves failures behind must surface
+        # exit 1 so scripts don't mistake "tried" for "succeeded".
+        runner, _ = cli_in_project
+
+        from filigree.install_support.doctor import CheckResult
+
+        monkeypatch.setattr(
+            "filigree.install.run_doctor",
+            lambda **_kw: [CheckResult(".gitignore", False, "missing", fix_hint="hint")],
+        )
+        monkeypatch.setattr(
+            "filigree.install.ensure_gitignore",
+            lambda _root: (False, "Permission denied"),
+        )
+
+        result = runner.invoke(cli, ["doctor", "--fix"])
+
+        assert result.exit_code == 1, f"expected exit 1 with unfixed failures, got {result.exit_code}\n{result.output}"
+        assert "1 require manual intervention" in result.output
+
+    def test_doctor_fix_exits_zero_when_all_fixed(self, cli_in_project: tuple[CliRunner, Path], monkeypatch: pytest.MonkeyPatch) -> None:
+        # filigree-467d1e7487: --fix that resolves everything still exits 0.
+        runner, _ = cli_in_project
+
+        from filigree.install_support.doctor import CheckResult
+
+        monkeypatch.setattr(
+            "filigree.install.run_doctor",
+            lambda **_kw: [CheckResult(".gitignore", False, "missing", fix_hint="hint")],
+        )
+        monkeypatch.setattr(
+            "filigree.install.ensure_gitignore",
+            lambda _root: (True, "Added .filigree/ to .gitignore"),
+        )
+
+        result = runner.invoke(cli, ["doctor", "--fix"])
+
+        assert result.exit_code == 0, f"expected exit 0 when all fixed, got {result.exit_code}\n{result.output}"
 
 
 class TestShowDetailedOutput:
@@ -615,6 +699,44 @@ def _downgrade_db(tmp_path: Path, target_version: int = 1) -> None:
     conn.close()
 
 
+class TestInitConfBackfill:
+    """filigree-f22fc98687: re-init on a legacy install must write .filigree.conf."""
+
+    def test_init_existing_writes_conf_when_missing(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cli_runner: CliRunner) -> None:
+        monkeypatch.chdir(tmp_path)
+        cli_runner.invoke(cli, ["init"])
+
+        # Simulate a legacy install: remove the v2.0 anchor, leave .filigree/.
+        conf = tmp_path / ".filigree.conf"
+        conf.unlink()
+        assert not conf.exists()
+
+        result = cli_runner.invoke(cli, ["init"])
+        assert result.exit_code == 0, result.output
+        assert conf.exists(), "re-init should backfill the v2.0 .filigree.conf anchor"
+
+        data = json.loads(conf.read_text())
+        assert data["prefix"]
+        assert data["db"]
+        assert data["project_name"]
+
+    def test_init_existing_preserves_custom_conf(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cli_runner: CliRunner) -> None:
+        monkeypatch.chdir(tmp_path)
+        cli_runner.invoke(cli, ["init"])
+
+        # User customised the conf — re-init must not clobber it.
+        conf = tmp_path / ".filigree.conf"
+        custom = {"version": 1, "project_name": "custom", "prefix": "custom", "db": ".filigree/filigree.db"}
+        conf.write_text(json.dumps(custom))
+
+        result = cli_runner.invoke(cli, ["init"])
+        assert result.exit_code == 0, result.output
+
+        data = json.loads(conf.read_text())
+        assert data["prefix"] == "custom", "re-init must not overwrite an existing anchor"
+        assert data["project_name"] == "custom"
+
+
 class TestInitSchemaMigration:
     """Test that `filigree init` on existing installs reports schema upgrades."""
 
@@ -642,6 +764,53 @@ class TestInitSchemaMigration:
         assert "Schema upgraded" not in result.output
 
 
+class TestDoctorFixHonoursConfDbPath:
+    """filigree-fa6309d551: --fix schema repair must use the conf-declared DB."""
+
+    def test_doctor_fix_migrates_conf_relocated_db(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cli_runner: CliRunner) -> None:
+        import shutil
+        import sqlite3
+
+        monkeypatch.chdir(tmp_path)
+        cli_runner.invoke(cli, ["init"])
+
+        # Move the DB to a custom location and update the conf to point at it.
+        # This mirrors a v2.0 install where users relocate the DB out of .filigree/.
+        legacy_db = tmp_path / ".filigree" / "filigree.db"
+        custom_db = tmp_path / "custom-data.db"
+        shutil.move(str(legacy_db), str(custom_db))
+
+        conf_path = tmp_path / ".filigree.conf"
+        conf_data = json.loads(conf_path.read_text())
+        conf_data["db"] = "custom-data.db"
+        conf_path.write_text(json.dumps(conf_data))
+
+        # Downgrade the *custom* DB so doctor sees an outdated schema.
+        conn = sqlite3.connect(str(custom_db))
+        conn.execute("PRAGMA user_version = 1")
+        conn.commit()
+        conn.close()
+
+        # Sanity: legacy path must not exist (so an accidental bypass fails loud).
+        assert not legacy_db.exists()
+
+        result = cli_runner.invoke(cli, ["doctor", "--fix"])
+        # Either exits 0 (all fixed) or 1 (env-level unfixable) — but must NOT
+        # touch the legacy path and must NOT raise.
+        assert result.exit_code in (0, 1), result.output
+        assert not legacy_db.exists(), "doctor --fix must not create a phantom legacy DB"
+
+        # The custom DB should now be at the current schema.
+        conn = sqlite3.connect(str(custom_db))
+        try:
+            from filigree.db_schema import CURRENT_SCHEMA_VERSION
+
+            ver = conn.execute("PRAGMA user_version").fetchone()[0]
+            assert ver == CURRENT_SCHEMA_VERSION, f"custom DB still at v{ver}"
+        finally:
+            conn.close()
+
+
 class TestDoctorFixSchema:
     """Test that `filigree doctor --fix` can repair outdated schemas."""
 
@@ -652,7 +821,10 @@ class TestDoctorFixSchema:
         _downgrade_db(tmp_path, target_version=1)
 
         result = cli_runner.invoke(cli, ["doctor", "--fix"])
-        assert result.exit_code == 0
+        # filigree-467d1e7487: doctor exits 1 when unfixable env checks
+        # remain (e.g. duplicate venv+uv-tool install in test env). Assert
+        # the schema-fix payload happened, not the global exit code.
+        assert result.exit_code in (0, 1)
         assert "Schema upgraded v1" in result.output
 
     def test_doctor_fix_no_schema_issue_when_current(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cli_runner: CliRunner) -> None:
@@ -661,7 +833,8 @@ class TestDoctorFixSchema:
         cli_runner.invoke(cli, ["init"])
 
         result = cli_runner.invoke(cli, ["doctor", "--fix"])
-        assert result.exit_code == 0
+        # See note in test_doctor_fix_upgrades_outdated_schema (filigree-467d1e7487).
+        assert result.exit_code in (0, 1)
         assert "Schema upgraded" not in result.output
 
 
@@ -776,6 +949,76 @@ class TestInstallModeIntegration:
         prefix = json.loads((tmp_path / ".filigree" / "config.json").read_text())["prefix"]
         assert mcp["mcpServers"]["filigree"]["type"] == "streamable-http"
         assert mcp["mcpServers"]["filigree"]["url"] == f"http://localhost:9911/mcp/?project={prefix}"
+
+
+class TestDashboardPortValidation:
+    """filigree-31da65493c: --port must reject invalid TCP values at the boundary."""
+
+    @pytest.mark.parametrize("bad_port", ["0", "-1", "65536"])
+    def test_dashboard_rejects_invalid_port(self, bad_port: str, cli_runner: CliRunner) -> None:
+        result = cli_runner.invoke(cli, ["dashboard", "--port", bad_port])
+        assert result.exit_code != 0, f"port {bad_port} should be rejected\n{result.output}"
+
+    @pytest.mark.parametrize("bad_port", ["0", "-1", "65536"])
+    def test_ensure_dashboard_rejects_invalid_port(self, bad_port: str, cli_runner: CliRunner) -> None:
+        result = cli_runner.invoke(cli, ["ensure-dashboard", "--port", bad_port])
+        assert result.exit_code != 0, f"port {bad_port} should be rejected\n{result.output}"
+
+
+class TestInstallServerModeReload:
+    """filigree-80753e4b54: install --mode server must reload a running daemon."""
+
+    def test_install_server_mode_reloads_running_daemon(
+        self, cli_in_project: tuple[CliRunner, Path], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        runner, _ = cli_in_project
+
+        from filigree.server import DaemonStatus
+
+        observed: dict[str, object] = {}
+
+        def _register(filigree_dir: Path) -> None:
+            observed["registered"] = str(filigree_dir)
+
+        class _Resp:
+            status = 200
+
+            def __enter__(self) -> _Resp:
+                return self
+
+            def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
+                pass
+
+        def _urlopen(req: object, timeout: int = 0) -> _Resp:
+            observed["reload_url"] = getattr(req, "full_url", "")
+            return _Resp()
+
+        # Stub out per-target installers that touch real $HOME state, so we
+        # focus the test on the registration+reload flow.
+        for target in (
+            "install_claude_code_mcp",
+            "install_codex_mcp",
+            "install_claude_code_hooks",
+            "install_skills",
+            "install_codex_skills",
+        ):
+            monkeypatch.setattr(f"filigree.install.{target}", lambda *_a, **_kw: (True, "stubbed"))
+        monkeypatch.setattr("filigree.install.inject_instructions", lambda _p: (True, "stubbed"))
+        monkeypatch.setattr("filigree.install.ensure_gitignore", lambda _p: (True, "stubbed"))
+
+        monkeypatch.setattr("filigree.server.register_project", _register)
+        monkeypatch.setattr(
+            "filigree.server.daemon_status",
+            lambda: DaemonStatus(running=True, pid=123, port=9911, project_count=1),
+        )
+        monkeypatch.setattr("urllib.request.urlopen", _urlopen)
+
+        result = runner.invoke(cli, ["install", "--mode", "server"])
+        assert result.exit_code == 0, result.output
+        assert observed.get("registered"), "register_project was not called"
+        assert observed.get("reload_url") == "http://127.0.0.1:9911/api/reload", (
+            f"daemon was not asked to reload; observed={observed}\n{result.output}"
+        )
 
 
 class TestServerRegisterReload:

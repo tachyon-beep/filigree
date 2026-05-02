@@ -243,6 +243,24 @@ class TestLeadTime:
         assert lt is not None
         assert len(calls) == 0, f"get_issue called {len(calls)} times with Issue object"
 
+    def test_lead_time_archived_issue(self, db: FiligreeDB) -> None:
+        """Archived issues retain closed_at and should count as completed.
+
+        ``archive_closed()`` writes literal status='archived', which is not a
+        template-defined done category — but the issue is still completed work
+        with a real closed_at. lead_time must not silently drop these.
+        """
+        issue = db.create_issue("Will archive")
+        db.update_issue(issue.id, status="in_progress")
+        db.close_issue(issue.id)
+        db.archive_closed(days_old=0)
+        refreshed = db.get_issue(issue.id)
+        assert refreshed.status == "archived"
+
+        lt = lead_time(db, issue=refreshed)
+        assert lt is not None, "Archived issue with closed_at must contribute to lead time"
+        assert lt >= 0
+
 
 class TestFlowMetrics:
     def test_flow_metrics_structure(self, db: FiligreeDB) -> None:
@@ -430,6 +448,61 @@ class TestFlowMetrics:
 
         assert data["throughput"] == 1, f"Same issue in both buckets should be counted once, got {data['throughput']}"
         assert data["by_type"].get("task", {}).get("count", 0) <= 1
+
+    def test_flow_metrics_archived_issues_contribute_to_lead_time(self, db: FiligreeDB) -> None:
+        """Archived issues are counted in throughput; they must also feed avg_lead_time.
+
+        Regression: lead_time() rejected status='archived' because the synthetic
+        status resolves to category 'open', so archived issues' lead times were
+        silently dropped from the average even though throughput included them.
+        """
+        issue = db.create_issue("Archived metric")
+        db.update_issue(issue.id, status="in_progress")
+        db.close_issue(issue.id)
+        db.archive_closed(days_old=0)
+        assert db.get_issue(issue.id).status == "archived"
+
+        data = get_flow_metrics(db, days=30)
+        assert data["throughput"] >= 1
+        assert data["avg_lead_time_hours"] is not None, "Archived issue must contribute to avg_lead_time"
+
+    def test_flow_metrics_by_type_count_is_closed_count_not_cycle_samples(self, db: FiligreeDB) -> None:
+        """by_type[t]['count'] is the closed-issue count for type t, not the cycle-time sample count.
+
+        Regression: count was len(cycle_time_samples), so issues closed without a
+        WIP transition (allowed by the task workflow's open->closed direct path)
+        were silently absent from by_type even though they're real throughput.
+        The CLI labels this field "closed" — keep the displayed count honest.
+        """
+        # Direct open->closed: no WIP event, so cycle_time will be None
+        no_wip = db.create_issue("Direct close", type="task")
+        db.close_issue(no_wip.id)
+        # Normal WIP->closed: contributes a cycle-time sample
+        with_wip = db.create_issue("WIP close", type="task")
+        db.update_issue(with_wip.id, status="in_progress")
+        db.close_issue(with_wip.id)
+
+        data = get_flow_metrics(db, days=30)
+        task_metrics = data["by_type"].get("task")
+        assert task_metrics is not None, f"task type missing from by_type: {data['by_type']}"
+        assert task_metrics["count"] == 2, f"expected 2 closed tasks, got {task_metrics['count']}"
+        # avg_cycle_time_hours derives from the one WIP->closed issue only
+        assert task_metrics["avg_cycle_time_hours"] is not None
+
+    def test_flow_metrics_by_type_count_present_with_no_cycle_samples(self, db: FiligreeDB) -> None:
+        """A type with closed issues but zero cycle-time samples still appears in by_type.
+
+        Edge case of the count-vs-samples bug: previously, a type whose only
+        closed issues lacked WIP transitions was missing from by_type entirely.
+        """
+        issue = db.create_issue("No-WIP only", type="task")
+        db.close_issue(issue.id)
+
+        data = get_flow_metrics(db, days=30)
+        task_metrics = data["by_type"].get("task")
+        assert task_metrics is not None
+        assert task_metrics["count"] == 1
+        assert task_metrics["avg_cycle_time_hours"] is None
 
 
 # ---------------------------------------------------------------------------

@@ -60,16 +60,17 @@ async def run_codex(
     ]
     if model:
         cmd.extend(["--model", model])
-    cmd.append(prompt)
+    cmd.append("-")
 
     proc = await asyncio.create_subprocess_exec(
         *cmd,
         cwd=repo_root,
+        stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
     try:
-        _, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+        _, stderr = await asyncio.wait_for(proc.communicate(input=prompt.encode("utf-8")), timeout=timeout)
     except TimeoutError:
         proc.kill()
         await proc.wait()

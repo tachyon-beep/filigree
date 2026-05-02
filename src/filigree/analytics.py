@@ -133,7 +133,13 @@ def lead_time(
         if issue_id is None:
             return None
         issue = db.get_issue(issue_id)
-    if issue.status_category != "done" or issue.closed_at is None:
+    if issue.closed_at is None:
+        return None
+    # Treat archive_closed()'s synthetic status='archived' as completed.
+    # It preserves closed_at but strips the done-category, so a strict
+    # status_category=='done' check would silently drop archived issues
+    # from averages even though throughput includes them.
+    if issue.status_category != "done" and issue.status != "archived":
         return None
     created = _parse_iso(issue.created_at)
     closed = _parse_iso(issue.closed_at)
@@ -185,7 +191,12 @@ def get_flow_metrics(db: FiligreeDB, *, days: int = 30) -> FlowMetrics:
 
     cycle_times: list[float] = []
     lead_times: list[float] = []
-    by_type: dict[str, list[float]] = {}
+    # Track per-type closed counts independently from cycle-time samples:
+    # an issue closed without a WIP transition (allowed by the task workflow)
+    # is real throughput but yields no cycle-time sample. Conflating them
+    # under-reports the per-type "closed" count the CLI/dashboard display.
+    type_counts: dict[str, int] = {}
+    type_cycle_times: dict[str, list[float]] = {}
     status_events = _fetch_status_events_by_issue(db, [issue.id for issue in recent_closed])
 
     def _make_resolver(issue_type: str) -> Callable[[str], str]:
@@ -197,17 +208,19 @@ def get_flow_metrics(db: FiligreeDB, *, days: int = 30) -> FlowMetrics:
             _make_resolver(issue.type),
         )
         lt = lead_time(db, issue=issue)
+        type_counts[issue.type] = type_counts.get(issue.type, 0) + 1
         if ct is not None:
             cycle_times.append(ct)
-            by_type.setdefault(issue.type, []).append(ct)
+            type_cycle_times.setdefault(issue.type, []).append(ct)
         if lt is not None:
             lead_times.append(lt)
 
     type_metrics: dict[str, TypeMetrics] = {}
-    for issue_type, times in by_type.items():
+    for issue_type, count in type_counts.items():
+        times = type_cycle_times.get(issue_type, [])
         type_metrics[issue_type] = {
             "avg_cycle_time_hours": round(sum(times) / len(times), 1) if times else None,
-            "count": len(times),
+            "count": count,
         }
 
     return {
