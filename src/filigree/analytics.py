@@ -165,6 +165,10 @@ def get_flow_metrics(db: FiligreeDB, *, days: int = 30) -> FlowMetrics:
     """
     from datetime import timedelta
 
+    if days < 1:
+        msg = f"days must be >= 1, got {days}"
+        raise ValueError(msg)
+
     cutoff_dt = datetime.now(UTC) - timedelta(days=days)
 
     # Paginate through all done issues to avoid silent truncation.

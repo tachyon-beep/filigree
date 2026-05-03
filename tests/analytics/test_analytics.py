@@ -5,6 +5,8 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from unittest.mock import patch
 
+import pytest
+
 from filigree.analytics import _parse_iso as analytics_parse_iso
 from filigree.analytics import cycle_time, get_flow_metrics, lead_time
 from filigree.core import FiligreeDB, Issue
@@ -345,6 +347,13 @@ class TestFlowMetrics:
         data_7 = get_flow_metrics(db, days=7)
         assert data_7["period_days"] == 7
         assert data_7["throughput"] >= 1  # recently closed, still in 7d window
+
+    def test_flow_metrics_rejects_non_positive_days(self, db: FiligreeDB) -> None:
+        """get_flow_metrics must reject days < 1 — a negative cutoff silently
+        excludes all real issues and returns period_days=N to callers."""
+        for bad in (-1, 0, -365):
+            with pytest.raises(ValueError, match="days"):
+                get_flow_metrics(db, days=bad)
 
     def test_flow_metrics_uses_high_limit(self, db: FiligreeDB) -> None:
         """get_flow_metrics must not use default limit=100 for list_issues."""
