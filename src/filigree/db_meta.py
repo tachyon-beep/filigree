@@ -154,10 +154,6 @@ class MetaMixin(DBMixinProtocol):
 
             namespaces[ns]["labels"].append({"label": lbl, "count": cnt})
 
-        if top > 0:
-            for ns_data in namespaces.values():
-                ns_data["labels"] = ns_data["labels"][:top]
-
         # Add virtual namespaces with computed counts
         if namespace is None or namespace == "age":
             age_labels = self._compute_virtual_age_counts()
@@ -166,6 +162,12 @@ class MetaMixin(DBMixinProtocol):
         if namespace is None or namespace == "has":
             has_labels = self._compute_virtual_has_counts()
             namespaces.setdefault("has", {"type": "virtual", "writable": False, "labels": has_labels})
+
+        # Truncate after virtual namespaces are added so the per-namespace
+        # cap applies uniformly. top=0 stays unlimited.
+        if top > 0:
+            for ns_data in namespaces.values():
+                ns_data["labels"] = ns_data["labels"][:top]
 
         total = sum(len(ns["labels"]) for ns in namespaces.values())
         return {"namespaces": namespaces, "total_in_result": total}
