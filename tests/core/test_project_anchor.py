@@ -144,6 +144,24 @@ class TestConfIO:
         with pytest.raises(ValueError, match=match):
             read_conf(conf)
 
+    @pytest.mark.parametrize(
+        "db_value",
+        ["/tmp/escape.db", "../escape.db", "subdir/../../escape.db"],  # noqa: S108 — path strings, not real /tmp use
+        ids=["absolute", "parent-traversal", "nested-traversal"],
+    )
+    def test_read_rejects_db_path_outside_project(self, tmp_path: Path, db_value: str) -> None:
+        """Bug filigree-4a40b58dce: ``db`` must stay under the conf's directory.
+
+        A crafted ``.filigree.conf`` with an absolute path or ``..`` traversal
+        could otherwise cause ordinary CLI commands to open a SQLite database
+        anywhere on the user's filesystem — silent injection via a checked-in
+        config file.
+        """
+        conf = tmp_path / CONF_FILENAME
+        conf.write_text(json.dumps({"prefix": "x", "db": db_value}))
+        with pytest.raises(ValueError, match=r"'db'"):
+            read_conf(conf)
+
 
 # ---------------------------------------------------------------------------
 # find_filigree_anchor — discovery that tolerates legacy installs without writing

@@ -299,6 +299,20 @@ def read_conf(conf_path: Path) -> dict[str, Any]:
         if not isinstance(packs, list) or not all(isinstance(p, str) for p in packs):
             msg = f"{conf_path}: 'enabled_packs' must be a list of strings, got {type(packs).__name__}: {packs!r}"
             raise ValueError(msg)
+    # Trust boundary: a checked-in .filigree.conf must not be able to redirect
+    # the database to an arbitrary filesystem path. Reject absolute paths and
+    # any path whose resolved location escapes the conf's directory.
+    db_value: str = raw["db"]
+    if Path(db_value).is_absolute():
+        msg = f"{conf_path}: 'db' must be a project-relative path, got absolute: {db_value!r}"
+        raise ValueError(msg)
+    project_root = conf_path.parent.resolve()
+    db_resolved = (conf_path.parent / db_value).resolve()
+    try:
+        db_resolved.relative_to(project_root)
+    except ValueError as exc:
+        msg = f"{conf_path}: 'db' must resolve under the project root {project_root}, got {db_resolved}"
+        raise ValueError(msg) from exc
     return raw
 
 
