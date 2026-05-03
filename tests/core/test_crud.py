@@ -24,7 +24,7 @@ class TestCreateIssueValidation:
 
     @pytest.mark.parametrize("priority", [-1, 5, 100], ids=["neg1", "five", "hundred"])
     def test_bad_priority_raises(self, db: FiligreeDB, priority: int) -> None:
-        with pytest.raises(ValueError, match="Priority must be between 0 and 4"):
+        with pytest.raises(ValueError, match="Priority must be"):
             db.create_issue("Valid title", priority=priority)
 
     @pytest.mark.parametrize("key", ["", "  "], ids=["empty", "whitespace"])
@@ -136,6 +136,77 @@ class TestStartWorkRollbackPreservesPriorClaim:
         with pytest.raises(ValueError, match="Invalid status"):
             db.start_work(issue.id, assignee="alice", target_status="nonexistent_status")
         assert db.get_issue(issue.id).assignee == ""
+
+
+class TestStartNextWorkRollbackPreservesPriorClaim:
+    """filigree-fa01508ee2: start_next_work must not erase a pre-existing same-assignee claim on rollback.
+
+    claim_issue is intentionally idempotent for the same identity, and claim_next
+    inherits that. start_next_work previously called _safe_release_claim
+    unconditionally on transition failure, wiping a claim that was already held
+    by ``assignee`` before the call. Mirrors the start_work contract.
+    """
+
+    def test_failed_target_status_preserves_prior_claim(self, db: FiligreeDB) -> None:
+        issue = db.create_issue("Pre-owned ready", priority=1)
+        db.claim_issue(issue.id, assignee="alice")
+
+        with pytest.raises(ValueError, match="Invalid status"):
+            db.start_next_work(assignee="alice", target_status="nonexistent_status")
+
+        assert db.get_issue(issue.id).assignee == "alice"
+
+    def test_failed_target_status_releases_newly_acquired_claim(self, db: FiligreeDB) -> None:
+        issue = db.create_issue("Unclaimed ready", priority=1)
+        with pytest.raises(ValueError, match="Invalid status"):
+            db.start_next_work(assignee="alice", target_status="nonexistent_status")
+        assert db.get_issue(issue.id).assignee == ""
+
+
+class TestPriorityTypeValidation:
+    """filigree-fa01508ee2: priority must reject non-int (incl. bool) before any write.
+
+    The Issue model rejects floats at hydration but only after commit, so
+    ``create_issue(priority=2.5)`` would raise while leaving a row with
+    ``typeof(priority)='real'`` durably stored. ``bool`` slips past
+    ``isinstance(_, int)`` because Python's bool is an int subclass, and
+    update_issue's ``priority != current.priority`` short-circuit allowed
+    ``update_issue(priority=True)`` on a P1 issue to silently no-op.
+    """
+
+    @pytest.mark.parametrize("priority", [2.5, 3.5, 0.0], ids=["mid_float", "high_float", "zero_float"])
+    def test_create_rejects_float_and_leaves_no_row(self, db: FiligreeDB, priority: float) -> None:
+        before = len(db.list_issues())
+        with pytest.raises(ValueError, match="Priority must be an integer"):
+            db.create_issue("Float priority", priority=priority)  # type: ignore[arg-type]
+        # No partial row committed.
+        assert len(db.list_issues()) == before
+        rows = db.conn.execute("SELECT id FROM issues WHERE title = 'Float priority'").fetchall()
+        assert rows == []
+
+    @pytest.mark.parametrize("priority", [True, False], ids=["true", "false"])
+    def test_create_rejects_bool(self, db: FiligreeDB, priority: bool) -> None:
+        with pytest.raises(ValueError, match="Priority must be an integer"):
+            db.create_issue("Bool priority", priority=priority)  # type: ignore[arg-type]
+
+    @pytest.mark.parametrize("priority", [2.5, 3.5], ids=["mid_float", "high_float"])
+    def test_update_rejects_float_and_leaves_row_unchanged(self, db: FiligreeDB, priority: float) -> None:
+        issue = db.create_issue("Baseline", priority=2)
+        with pytest.raises(ValueError, match="Priority must be an integer"):
+            db.update_issue(issue.id, priority=priority)  # type: ignore[arg-type]
+        # Stored value unchanged AND still typed as integer.
+        row = db.conn.execute("SELECT typeof(priority), priority FROM issues WHERE id = ?", (issue.id,)).fetchone()
+        assert row[0] == "integer"
+        assert row[1] == 2
+
+    def test_update_rejects_bool_even_when_equal_to_current(self, db: FiligreeDB) -> None:
+        """Regression: ``priority != current.priority`` short-circuit allowed
+        ``update_issue(priority=True)`` on a P1 issue to skip both validation AND
+        the write — silent no-op. Validation must run for any non-None priority.
+        """
+        issue = db.create_issue("P1 issue", priority=1)
+        with pytest.raises(ValueError, match="Priority must be an integer"):
+            db.update_issue(issue.id, priority=True)  # type: ignore[arg-type]
 
 
 class TestSafeFieldsJson:
@@ -836,7 +907,7 @@ class TestUpdateIssuePartialEventRollback:
         issue = db.create_issue("Original title")
         events_before = db.conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]
 
-        with pytest.raises(ValueError, match="Priority must be between 0 and 4"):
+        with pytest.raises(ValueError, match="Priority must be"):
             db.update_issue(issue.id, title="New title", priority=99)
 
         # Force commit to simulate MCP long-lived connection

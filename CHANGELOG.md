@@ -17,6 +17,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Priority validators now reject non-int (incl. ``bool``) before any
+  write, and ``update_issue`` validates regardless of equality with
+  current.** ``create_issue`` and ``update_issue`` previously enforced
+  only ``0 <= priority <= 4``. Float priorities (``2.5``, ``3.5``) passed
+  the range check and were INSERTed before ``Issue.__post_init__``
+  rejected them at hydration, leaving a row with
+  ``typeof(priority)='real'`` durably committed while the caller saw a
+  ``ValueError``. Bool priorities (``True``/``False``) slipped through
+  both layers because Python's ``bool`` is an ``int`` subclass and
+  ``0 <= True <= 4`` is ``0 <= 1 <= 4`` — silently coercing ``True`` to
+  ``1``. Additionally, ``update_issue``'s short-circuit
+  ``priority is not None and priority != current.priority and not
+  (0 <= priority <= 4)`` skipped validation entirely when the new value
+  equalled the current one by Python ``==``; because ``True == 1``,
+  ``update_issue(priority=True)`` on a P1 issue was a silent no-op that
+  looked successful. A new module-level ``_validate_priority_value`` is
+  now invoked from ``create_issue`` and from ``update_issue`` whenever
+  ``priority is not None``. (filigree-fa01508ee2)
+
+- **``start_next_work`` no longer erases a pre-existing same-assignee
+  claim on transition failure.** ``claim_issue`` is intentionally
+  idempotent for the same identity (existing same-assignee claims
+  re-claim successfully without changing the row), and ``claim_next``
+  inherits that. ``start_next_work`` previously called
+  ``_safe_release_claim`` unconditionally on any failure path —
+  default-target template missing, ``canonical_working_status()`` raising,
+  or the ``update_issue`` transition raising — wiping out a claim that
+  ``alice`` had owned before the call. ``start_work`` already mirrors
+  this scenario via ``newly_acquired_claim`` ownership tracking
+  (filigree-31404d228f); ``start_next_work`` now uses the same contract
+  via a new private ``_claim_next_with_prior`` helper that returns
+  ``(Issue, prior_assignee)`` so the rollback closure can release only
+  when this invocation acquired the claim. (filigree-fa01508ee2)
+
 - **``SCHEMA_V1_SQL`` test fixture restored to faithful v1 shape.** The
   legacy v1-schema constant used by the migration test suite had drifted
   from what real v1 databases actually looked like: it was missing the

@@ -31,6 +31,22 @@ def _escape_like_prefix(value: str) -> str:
     return _escape_like_chars(value)
 
 
+def _validate_priority_value(priority: Any) -> None:
+    """Reject non-int (including bool) and out-of-range priorities before any write.
+
+    The Issue model's ``__post_init__`` validates type and range during hydration
+    (models.py: ``isinstance(self.priority, int)`` and 0..4). Without this
+    pre-write guard, float priorities pass the previous range-only check and are
+    INSERTed before hydration raises — leaving a row with
+    ``typeof(priority) = 'real'`` durably committed. ``bool`` slips past
+    ``isinstance(_, int)`` because Python's ``bool`` is an ``int`` subclass and
+    ``0 <= True <= 4`` is ``0 <= 1 <= 4``, so it must be rejected explicitly first.
+    """
+    if isinstance(priority, bool) or not isinstance(priority, int) or not (0 <= priority <= 4):
+        msg = f"Priority must be an integer between 0 and 4, got {priority!r}"
+        raise ValueError(msg)
+
+
 def _resolve_virtual_label(
     label: str,
     *,
@@ -158,6 +174,27 @@ class IssuesMixin(DBMixinProtocol):
     Actual implementations provided by ``FiligreeDB`` at composition time via MRO.
     """
 
+    # -- Parent hierarchy invariants -----------------------------------------
+
+    def _would_create_parent_cycle(self, child_id: str, proposed_parent_id: str) -> bool:
+        """Return True if setting ``child_id``'s parent to ``proposed_parent_id``
+        would create a circular parent chain. Walks the proposed parent's
+        ancestor chain looking for the child. Shared by ``update_issue`` and
+        ``EventsMixin.undo_last`` so both write paths enforce the same
+        hierarchy invariant (filigree-0a8c3d38d7).
+        """
+        if not proposed_parent_id or proposed_parent_id == child_id:
+            return proposed_parent_id == child_id
+        ancestor: str | None = proposed_parent_id
+        while ancestor is not None:
+            row = self.conn.execute("SELECT parent_id FROM issues WHERE id = ?", (ancestor,)).fetchone()
+            if row is None:
+                return False
+            ancestor = row["parent_id"]
+            if ancestor == child_id:
+                return True
+        return False
+
     # -- Field validation ----------------------------------------------------
 
     def _validate_field_values(self, issue_type: str, fields: dict[str, Any]) -> list[str]:
@@ -248,9 +285,7 @@ class IssuesMixin(DBMixinProtocol):
         if not title or not title.strip():
             msg = "Title cannot be empty"
             raise ValueError(msg)
-        if not (0 <= priority <= 4):
-            msg = f"Priority must be between 0 and 4, got {priority}"
-            raise ValueError(msg)
+        _validate_priority_value(priority)
         if fields is not None and not isinstance(fields, dict):
             msg = "fields must be a dict"
             raise TypeError(msg)
@@ -485,9 +520,8 @@ class IssuesMixin(DBMixinProtocol):
             # filigree-365dff403e: mirror create_issue's invariant on update.
             msg = "Title cannot be empty"
             raise ValueError(msg)
-        if priority is not None and priority != current.priority and not (0 <= priority <= 4):
-            msg = f"Priority must be between 0 and 4, got {priority}"
-            raise ValueError(msg)
+        if priority is not None:
+            _validate_priority_value(priority)
         if assignee is not None:
             assignee = _normalize_assignee(assignee)
 
@@ -496,16 +530,9 @@ class IssuesMixin(DBMixinProtocol):
                 msg = f"Issue {issue_id} cannot be its own parent"
                 raise ValueError(msg)
             self._validate_parent_id(parent_id)
-            # Check for circular parent chain
-            ancestor = parent_id
-            while ancestor is not None:
-                row = self.conn.execute("SELECT parent_id FROM issues WHERE id = ?", (ancestor,)).fetchone()
-                if row is None:
-                    break
-                ancestor = row["parent_id"]
-                if ancestor == issue_id:
-                    msg = f"Setting parent_id to '{parent_id}' would create a circular parent chain"
-                    raise ValueError(msg)
+            if self._would_create_parent_cycle(issue_id, parent_id):
+                msg = f"Setting parent_id to '{parent_id}' would create a circular parent chain"
+                raise ValueError(msg)
 
         # Cache transition validation result for reuse in write phase (warnings)
         _transition_result = None
@@ -891,6 +918,34 @@ class IssuesMixin(DBMixinProtocol):
         on each until one succeeds (handles race conditions with retry).
         Returns None if no matching ready issues exist.
         """
+        result = self._claim_next_with_prior(
+            assignee,
+            type_filter=type_filter,
+            priority_min=priority_min,
+            priority_max=priority_max,
+            actor=actor,
+        )
+        return result[0] if result is not None else None
+
+    def _claim_next_with_prior(
+        self,
+        assignee: str,
+        *,
+        type_filter: str | None = None,
+        priority_min: int | None = None,
+        priority_max: int | None = None,
+        actor: str = "",
+    ) -> tuple[Issue, str] | None:
+        """Internal: claim_next that also returns the candidate's prior assignee.
+
+        Returns ``(claimed_issue, prior_assignee)`` so composed callers
+        (start_next_work) can distinguish a freshly-acquired claim from a
+        same-assignee re-claim and decide whether a compensating release is
+        appropriate. ``prior_assignee`` is read transactionally just before
+        ``claim_issue`` so a concurrent reassignment landing between the read
+        and the UPDATE will surface as the same race ``claim_issue`` already
+        handles (skip and continue).
+        """
         if not assignee or not assignee.strip():
             msg = "Assignee cannot be empty"
             raise ValueError(msg)
@@ -905,11 +960,14 @@ class IssuesMixin(DBMixinProtocol):
             if priority_max is not None and issue.priority > priority_max:
                 continue
             try:
-                return self.claim_issue(issue.id, assignee=assignee, actor=actor or assignee)
+                row = self.conn.execute("SELECT assignee FROM issues WHERE id = ?", (issue.id,)).fetchone()
+                prior_assignee = (row["assignee"] if row is not None else "") or ""
+                claimed = self.claim_issue(issue.id, assignee=assignee, actor=actor or assignee)
             except (ValueError, KeyError) as exc:
                 skipped += 1
                 logger.debug("claim_next: skipping %s: %s", issue.id, exc)
                 continue  # Race condition, status mismatch, or deleted issue
+            return claimed, prior_assignee
         if skipped:
             logger.warning("claim_next: all %d candidate(s) failed to claim for '%s'", skipped, assignee)
         return None
@@ -999,37 +1057,49 @@ class IssuesMixin(DBMixinProtocol):
         compensating rollback (see ``start_work`` for the rollback contract).
         Returns ``None`` if no ready issue matches the filters.
 
+        Rollback only releases the claim when *this* invocation acquired it.
+        ``claim_next`` reuses an existing same-assignee claim (claim_issue is
+        idempotent for the same identity), so an unconditional release on
+        transition failure would wipe out a pre-existing, unrelated claim.
+        Mirrors ``start_work``'s ownership-tracking contract.
+
         Tie-break ordering inherits from ``claim_next``: priority asc,
         created_at asc, issue_id asc.
         """
         actor = actor or assignee
-        claimed = self.claim_next(
+        claimed_with_prior = self._claim_next_with_prior(
             assignee,
             type_filter=type_filter,
             priority_min=priority_min,
             priority_max=priority_max,
             actor=actor,
         )
-        if claimed is None:
+        if claimed_with_prior is None:
             return None
+        claimed, prior_assignee = claimed_with_prior
+        newly_acquired_claim = prior_assignee == ""
+
+        def _rollback_claim() -> None:
+            if newly_acquired_claim:
+                self._safe_release_claim(claimed.id, actor=actor)
 
         if target_status is None:
             tpl = self.templates.get_type(claimed.type)
             if tpl is None:
                 from filigree.types.api import InvalidTransitionError
 
-                self._safe_release_claim(claimed.id, actor=actor)
+                _rollback_claim()
                 raise InvalidTransitionError(claimed.type, claimed.status)
             try:
                 target_status = tpl.canonical_working_status()
             except Exception:
-                self._safe_release_claim(claimed.id, actor=actor)
+                _rollback_claim()
                 raise
 
         try:
             return self.update_issue(claimed.id, status=target_status, actor=actor)
         except Exception:
-            self._safe_release_claim(claimed.id, actor=actor)
+            _rollback_claim()
             raise
 
     def _safe_release_claim(self, issue_id: str, *, actor: str) -> None:
