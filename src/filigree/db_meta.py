@@ -508,8 +508,8 @@ class MetaMixin(DBMixinProtocol):
                 path,
                 record.get("language", ""),
                 record.get("file_type", ""),
-                record.get("first_seen", _now_iso()),
-                record.get("updated_at", _now_iso()),
+                _normalize_iso_to_utc(record.get("first_seen")) or _now_iso(),
+                _normalize_iso_to_utc(record.get("updated_at")) or _now_iso(),
                 self._json_text(record.get("metadata", {})),
             ),
         )
@@ -811,9 +811,9 @@ class MetaMixin(DBMixinProtocol):
                         record.get("pid"),
                         record.get("api_url", ""),
                         record.get("log_path", ""),
-                        record.get("started_at", _now_iso()),
-                        record.get("updated_at", _now_iso()),
-                        record.get("completed_at"),
+                        _normalize_iso_to_utc(record.get("started_at")) or _now_iso(),
+                        _normalize_iso_to_utc(record.get("updated_at")) or _now_iso(),
+                        _normalize_iso_to_utc(record.get("completed_at")),
                         record.get("exit_code"),
                         record.get("findings_count", 0),
                         record.get("error_message", ""),
@@ -853,9 +853,9 @@ class MetaMixin(DBMixinProtocol):
                         record.get("line_start"),
                         record.get("line_end"),
                         record.get("seen_count", 1),
-                        record.get("first_seen", _now_iso()),
-                        record.get("updated_at", _now_iso()),
-                        record.get("last_seen_at"),
+                        _normalize_iso_to_utc(record.get("first_seen")) or _now_iso(),
+                        _normalize_iso_to_utc(record.get("updated_at")) or _now_iso(),
+                        _normalize_iso_to_utc(record.get("last_seen_at")),
                         self._json_text(record.get("metadata", {})),
                     ),
                 )
@@ -869,7 +869,7 @@ class MetaMixin(DBMixinProtocol):
                         record["issue_id"],
                         record["depends_on_id"],
                         record.get("type", "blocks"),
-                        record.get("created_at", _now_iso()),
+                        _normalize_iso_to_utc(record.get("created_at")) or _now_iso(),
                     ),
                 )
                 count += cursor.rowcount
@@ -901,7 +901,7 @@ class MetaMixin(DBMixinProtocol):
             _import_stage = "comment"
             for _import_index, record in enumerate(comments):
                 if merge:
-                    created = record.get("created_at", _now_iso())
+                    created = _normalize_iso_to_utc(record.get("created_at")) or _now_iso()
                     cursor = self.conn.execute(
                         "INSERT INTO comments (issue_id, author, text, created_at) "
                         "SELECT ?, ?, ?, ? "
@@ -926,7 +926,7 @@ class MetaMixin(DBMixinProtocol):
                             record.get("issue_id", ""),
                             record.get("author", ""),
                             record.get("text", ""),
-                            record.get("created_at", _now_iso()),
+                            _normalize_iso_to_utc(record.get("created_at")) or _now_iso(),
                         ),
                     )
                 count += cursor.rowcount
@@ -962,7 +962,7 @@ class MetaMixin(DBMixinProtocol):
                         file_id,
                         record["issue_id"],
                         record.get("assoc_type", "bug_in"),
-                        record.get("created_at", _now_iso()),
+                        _normalize_iso_to_utc(record.get("created_at")) or _now_iso(),
                     ),
                 )
                 count += cursor.rowcount
@@ -971,7 +971,7 @@ class MetaMixin(DBMixinProtocol):
             for _import_index, record in enumerate(file_events):
                 file_id = self._remap_file_id(record["file_id"], file_id_map)
                 if merge:
-                    created = record.get("created_at", _now_iso())
+                    created = _normalize_iso_to_utc(record.get("created_at")) or _now_iso()
                     cursor = self.conn.execute(
                         "INSERT INTO file_events (file_id, event_type, field, old_value, new_value, created_at) "
                         "SELECT ?, ?, ?, ?, ?, ? "
@@ -1003,7 +1003,7 @@ class MetaMixin(DBMixinProtocol):
                             record.get("field", ""),
                             record.get("old_value", ""),
                             record.get("new_value", ""),
-                            record.get("created_at", _now_iso()),
+                            _normalize_iso_to_utc(record.get("created_at")) or _now_iso(),
                         ),
                     )
                 count += cursor.rowcount
@@ -1031,8 +1031,8 @@ class MetaMixin(DBMixinProtocol):
                         record.get("source_issue_id", ""),
                         record.get("priority", 3),
                         record.get("actor", ""),
-                        record.get("created_at", _now_iso()),
-                        record.get("expires_at") or _expires_iso(),
+                        _normalize_iso_to_utc(record.get("created_at")) or _now_iso(),
+                        _normalize_iso_to_utc(record.get("expires_at")) or _expires_iso(),
                     ),
                 )
                 count += cursor.rowcount
@@ -1043,7 +1043,7 @@ class MetaMixin(DBMixinProtocol):
                 summary = record["summary"]
                 actor_val = record.get("actor", "")
                 reason = record.get("reason", "")
-                dismissed_at = record.get("dismissed_at", _now_iso())
+                dismissed_at = _normalize_iso_to_utc(record.get("dismissed_at")) or _now_iso()
                 # dismissed_observations has no unique content constraint (only
                 # an auto-increment PK), so OR IGNORE won't deduplicate on
                 # content.  In merge mode, skip rows that already exist.

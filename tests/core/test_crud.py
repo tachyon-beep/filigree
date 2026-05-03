@@ -1672,6 +1672,53 @@ class TestImportNormalizesNonUtcTimestamps:
             f"Non-UTC imported event should normalize to chronologically-earlier UTC and be excluded by post-cursor query; got {imported}"
         )
 
+    def test_imported_observation_expires_at_normalized_so_expired_is_swept(self, db: FiligreeDB, tmp_path: Path) -> None:
+        """filigree-cfada09a36: Import an observation whose expires_at is
+        chronologically expired but whose ``+02:00`` text representation
+        lex-sorts AFTER a canonical ``+00:00`` cursor at the same instant.
+
+        Concretely: ``2030-01-01T01:00:00+02:00`` == ``2029-12-31T23:00:00+00:00``
+        (chronologically *before* ``2030-01-01T00:00:00+00:00``), but the raw
+        text ``"2030-01-01T01:00:00+02:00"`` lex-compares *greater than*
+        ``"2030-01-01T00:00:00+00:00"``. Pre-fix, ``list_observations`` (which
+        first sweeps via ``expires_at <= now`` then alive-filters via
+        ``expires_at > now``) keeps the row alive based on raw text. Post-fix,
+        the import boundary normalizes to canonical UTC and the row is
+        correctly classified as expired."""
+        bundle = (
+            json.dumps(
+                {
+                    "_type": "observation",
+                    "id": "obs-import-tz",
+                    "summary": "imported with +02:00 expires_at",
+                    "detail": "",
+                    "file_path": "",
+                    "priority": 3,
+                    "actor": "import",
+                    "created_at": "2026-01-01T01:00:00+02:00",
+                    "expires_at": "2030-01-01T01:00:00+02:00",
+                }
+            )
+            + "\n"
+        )
+        path = tmp_path / "obs-bundle.jsonl"
+        path.write_text(bundle)
+        db.import_jsonl(str(path), merge=True)
+
+        # Freeze "now" to 2030-01-01T00:00:00+00:00 — chronologically AFTER
+        # the imported expires_at instant (UTC 2029-12-31T23:00:00) but
+        # lex-BEFORE the raw "+02:00" stored text.
+        with patch("filigree.db_observations._now_iso", return_value="2030-01-01T00:00:00+00:00"):
+            alive = db.list_observations()
+
+        ids = [o["id"] for o in alive]
+        assert "obs-import-tz" not in ids, (
+            f"Imported observation with non-UTC expires_at chronologically before "
+            f"the cursor must be normalized to canonical UTC at import so the alive "
+            f"filter excludes it. Got ids={ids} — pre-fix, raw '+02:00' text "
+            f"lex-sorted greater than '+00:00' cursor and the row stayed alive."
+        )
+
 
 class TestCompaction:
     def test_compact_archived_events(self, db: FiligreeDB) -> None:
