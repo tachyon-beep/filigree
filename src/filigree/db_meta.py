@@ -589,6 +589,7 @@ class MetaMixin(DBMixinProtocol):
         events: list[dict[str, Any]],
         file_associations: list[dict[str, Any]],
         scan_findings: list[dict[str, Any]],
+        observations: list[dict[str, Any]],
     ) -> None:
         """Raise WrongProjectError if any imported record references an
         issue ID whose prefix doesn't match this DB.
@@ -627,6 +628,8 @@ class MetaMixin(DBMixinProtocol):
             check(rec.get("issue_id"))
         for rec in scan_findings:
             check(rec.get("issue_id"))
+        for rec in observations:
+            check(rec.get("source_issue_id"))
 
         if not foreign:
             return
@@ -729,6 +732,7 @@ class MetaMixin(DBMixinProtocol):
                 events=events,
                 file_associations=file_associations,
                 scan_findings=scan_findings,
+                observations=observations,
             )
 
         inserted_issue_ids: set[str] = set()

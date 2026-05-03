@@ -1252,6 +1252,44 @@ class TestImportJsonl:
         assert foreign_rows == 0
         fresh.close()
 
+    def test_import_cross_prefix_rejects_observation_source_issue_id(self, tmp_path: Path) -> None:
+        """filigree-b5c304cc75: foreign-prefix preflight must catch
+        observation.source_issue_id, not just issue/event/etc IDs. Otherwise
+        a foreign source_issue_id slips into observations and the row sits
+        as readable-but-unwritable through prefix-guarded write paths."""
+        from filigree.core import WrongProjectError
+
+        fresh = FiligreeDB(tmp_path / "dest-obs-foreign.db", prefix="dst")
+        fresh.initialize()
+
+        bundle = (
+            json.dumps(
+                {
+                    "_type": "observation",
+                    "id": "obs-foreign",
+                    "summary": "from a foreign project",
+                    "detail": "",
+                    "file_path": "",
+                    "priority": 3,
+                    "actor": "import",
+                    "source_issue_id": "src-abc1234567",
+                    "created_at": "2026-01-01T00:00:00+00:00",
+                    "expires_at": "2030-01-01T00:00:00+00:00",
+                }
+            )
+            + "\n"
+        )
+        path = tmp_path / "obs-foreign.jsonl"
+        path.write_text(bundle)
+
+        with pytest.raises(WrongProjectError, match=r"src-abc1234567"):
+            fresh.import_jsonl(path, merge=True)
+
+        # No observation row should have leaked through.
+        leaked = fresh.conn.execute("SELECT COUNT(*) FROM observations WHERE id = ?", ("obs-foreign",)).fetchone()[0]
+        assert leaked == 0
+        fresh.close()
+
     def test_import_merge_reconciles_file_ids_by_path(self, tmp_path: Path) -> None:
         source = FiligreeDB(tmp_path / "source.db", prefix="src")
         source.initialize()
