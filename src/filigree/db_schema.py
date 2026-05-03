@@ -260,8 +260,15 @@ CREATE TABLE IF NOT EXISTS issues (
     updated_at  TEXT NOT NULL,
     closed_at   TEXT,
     description TEXT DEFAULT '',
-    notes       TEXT DEFAULT ''
+    notes       TEXT DEFAULT '',
+    fields      TEXT DEFAULT '{}'
 );
+
+CREATE INDEX IF NOT EXISTS idx_issues_status ON issues(status);
+CREATE INDEX IF NOT EXISTS idx_issues_type ON issues(type);
+CREATE INDEX IF NOT EXISTS idx_issues_parent ON issues(parent_id);
+CREATE INDEX IF NOT EXISTS idx_issues_priority ON issues(priority);
+CREATE INDEX IF NOT EXISTS idx_issues_status_priority ON issues(status, priority, created_at);
 
 CREATE TABLE IF NOT EXISTS dependencies (
     issue_id       TEXT NOT NULL REFERENCES issues(id),
@@ -270,6 +277,9 @@ CREATE TABLE IF NOT EXISTS dependencies (
     created_at     TEXT NOT NULL,
     PRIMARY KEY (issue_id, depends_on_id)
 );
+
+CREATE INDEX IF NOT EXISTS idx_deps_depends_on ON dependencies(depends_on_id);
+CREATE INDEX IF NOT EXISTS idx_deps_issue_depends ON dependencies(issue_id, depends_on_id);
 
 CREATE TABLE IF NOT EXISTS events (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,

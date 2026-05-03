@@ -17,6 +17,84 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **``SCHEMA_V1_SQL`` test fixture restored to faithful v1 shape.** The
+  legacy v1-schema constant used by the migration test suite had drifted
+  from what real v1 databases actually looked like: it was missing the
+  ``issues.fields`` column and the seven core ``issues`` /
+  ``dependencies`` indexes. ``migrate_v4_to_v5`` reads ``fields``, so
+  applying the migration chain to an unpatched fixture failed with
+  ``MigrationError: Migration v4 → v5 failed: no such column: fields``;
+  ``tests/core/test_schema.py`` was masking this with a manual
+  ``ALTER TABLE issues ADD COLUMN fields`` workaround. ``migrate_v5_to_v6``
+  only adds the missing indexes inside its rebuild path, which is
+  short-circuited when the parent self-FK is already correct (as it is in
+  the fixture), so the indexes never reappeared. This is fixture-fidelity
+  drift only — real v1 databases were created from the v1-era
+  ``SCHEMA_SQL`` and already had these columns and indexes — but the
+  drift hid whether migrations would self-heal a degraded database.
+  ``SCHEMA_V1_SQL`` now matches the real v1 shape, the workaround
+  ``ALTER TABLE`` is removed, and a new ``test_migrated_v1_matches_fresh_schema``
+  asserts column- and index-level equivalence between a v1→CURRENT
+  migrated database and a fresh ``SCHEMA_SQL`` to prevent recurrence.
+  (filigree-c35e6fe9e9)
+
+- **``undo_last()`` no longer restores a parent that creates a circular
+  parent chain.** The ``parent_changed`` undo branch only checked that
+  the previous parent still existed, bypassing the ancestor-walk cycle
+  check that ``update_issue()`` enforces on the normal write path. With
+  an interleaved sequence — ``C`` reparented ``A→B``, then ``A``
+  reparented under ``C`` — undoing ``C``'s last reparent would set
+  ``C.parent_id = A`` and form an ``A↔C`` cycle that subsequently
+  truncated subtrees in ``get_release_tree``. The cycle check is now
+  factored into ``IssuesMixin._would_create_parent_cycle()`` and called
+  from both write paths. (filigree-0a8c3d38d7)
+
+- **``undo_last()`` serializes the candidate-selection read against
+  concurrent callers.** The SELECT-then-write candidate query used
+  ``NOT EXISTS`` to skip already-undone events, but the ``undone``
+  marker insert happened later — so two concurrent ``undo_last`` calls
+  on separate connections could both pass the check and both write
+  markers for the same target event, silently consuming one entry from
+  the user's undo history. ``undo_last`` now opens a ``BEGIN IMMEDIATE``
+  transaction at entry to acquire SQLite's write lock before the SELECT,
+  with a ``finally`` clause that rolls back the lock on every
+  ``undone=False`` early-return path. (filigree-f38d4e2874)
+
+- **``fields_changed`` undo rejects ``NULL`` and non-object stored
+  values.** The handler treated a missing ``old_value`` as ``"{}"`` and
+  only validated that the value was parseable JSON — so an imported or
+  hand-edited event with ``old_value=NULL``, ``"[]"``, or ``"text"``
+  could make ``undo_last`` report success while clearing
+  ``issues.fields`` to ``{}`` or writing a non-object JSON shape into
+  the column, violating the model invariant. The handler now requires
+  ``old_value`` to be present, parses it, asserts ``isinstance(parsed,
+  dict)``, and persists a canonical ``json.dumps(parsed)``; otherwise it
+  returns ``undone=False`` without writing. (filigree-cb4cd68f80)
+
+- **``check_scan_cooldown()`` blocks active runs regardless of age.** The
+  cooldown query applied a single 30-second ``updated_at`` cutoff to
+  ``pending``, ``running``, and ``completed`` rows. Because ``updated_at``
+  is only refreshed on status transitions, a scanner that ran longer
+  than ``SCAN_COOLDOWN_SECONDS`` fell outside the cutoff and a duplicate
+  trigger for the same ``(scanner, file_path)`` would pass the cooldown
+  check and spawn a parallel process. The query now treats active rows
+  (``pending``/``running``) as a singleton lock that always blocks, while
+  ``completed`` rows continue to use the timestamp cutoff as a debounce
+  window. (filigree-254e1299a3)
+
+- **``update_scan_run_status()`` uses compare-and-swap on the prior
+  status.** The method read the current status, validated the transition
+  in Python, then issued ``UPDATE scan_runs SET ... WHERE id = ?`` —
+  with no guard against the row changing between read and write. Two
+  concurrent writers (dead-PID auto-fail in ``get_scan_status``,
+  result-ingestion completion in ``db_files``) could both observe
+  ``running``, both pass validation, and the second commit would
+  silently overwrite the first writer's terminal state. The UPDATE now
+  includes ``AND status = ?`` (the previously-observed value) and
+  raises a stale-transition ``ValueError`` when ``rowcount == 0``, which
+  the existing retry mitigation in ``process_scan_results`` already
+  handles. (filigree-c835e730fb)
+
 - **``write_atomic()`` no longer collides on a shared temp filename.**
   Concurrent writers to the same target both staged through
   ``target.tmp``: the second writer's ``open(...)`` truncated the first
