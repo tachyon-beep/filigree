@@ -637,6 +637,9 @@ class TestForeignDatabaseDiagnostic:
             ["preview-scan", "any-scanner", "any-file.py", "--json"],
             ["trigger-scan", "any-scanner", "any-file.py", "--json"],
             ["trigger-scan-batch", "any-scanner", "any-file.py", "--json"],
+            # report-finding --file used to read/validate the file before
+            # resolving the project, masking ForeignDatabaseError as VALIDATION.
+            ["report-finding", "--file", "missing.json", "--json"],
         ],
     )
     def test_foreign_database_message_survives(self, tmp_path: Path, argv: list[str]) -> None:
@@ -648,6 +651,25 @@ class TestForeignDatabaseDiagnostic:
             result = runner.invoke(cli, argv)
             assert result.exit_code == 1, result.output
             self._assert_foreign_message(result.output)
+        finally:
+            os.chdir(original)
+
+    def test_trigger_scan_batch_empty_filepaths_returns_validation_envelope(self, initialized_project: Path) -> None:
+        """`trigger-scan-batch <scanner> --json` (no file paths) must emit a
+        structured VALIDATION envelope, matching the MCP batch handler's
+        contract. Click's variadic ``required=True`` previously preempted the
+        in-callback empty-list guard with raw usage text on stderr.
+        """
+        _write_scanner_toml(initialized_project)
+        runner = CliRunner()
+        original = os.getcwd()
+        os.chdir(str(initialized_project))
+        try:
+            result = runner.invoke(cli, ["trigger-scan-batch", "test-scanner", "--json"])
+            assert result.exit_code == 1, result.output
+            data = json.loads(result.output)
+            assert data["code"] == "VALIDATION"
+            assert "non-empty" in data["error"]
         finally:
             os.chdir(original)
 

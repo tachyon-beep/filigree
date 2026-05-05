@@ -20,6 +20,17 @@ from filigree.types.api import ErrorCode
 def add_comment(ctx: click.Context, issue_id: str, text: str, as_json: bool) -> None:
     """Add a comment to an issue."""
     with get_db() as db:
+        # Prefix check first — db.get_issue() ignores prefix on reads, so a
+        # foreign-project ID would otherwise be reported as NOT_FOUND, masking
+        # the WrongProjectError the write would raise. See filigree-f8861115a9.
+        try:
+            db._check_id_prefix(issue_id)
+        except ValueError as e:
+            if as_json:
+                click.echo(json_mod.dumps({"error": str(e), "code": ErrorCode.VALIDATION}))
+            else:
+                click.echo(f"Error: {e}", err=True)
+            sys.exit(1)
         try:
             db.get_issue(issue_id)
         except KeyError:
@@ -77,6 +88,15 @@ def get_comments(issue_id: str, as_json: bool) -> None:
 def add_label(label_name: str, issue_id: str, as_json: bool) -> None:
     """Add a label to an issue. Usage: add-label <label> <issue_id>"""
     with get_db() as db:
+        # Prefix check before existence precheck — see filigree-f8861115a9.
+        try:
+            db._check_id_prefix(issue_id)
+        except ValueError as e:
+            if as_json:
+                click.echo(json_mod.dumps({"error": str(e), "code": ErrorCode.VALIDATION}))
+            else:
+                click.echo(f"Error: {e}", err=True)
+            sys.exit(1)
         try:
             db.get_issue(issue_id)
         except KeyError:
@@ -111,6 +131,15 @@ def add_label(label_name: str, issue_id: str, as_json: bool) -> None:
 def remove_label(issue_id: str, label_name: str, as_json: bool) -> None:
     """Remove a label from an issue."""
     with get_db() as db:
+        # Prefix check before existence precheck — see filigree-f8861115a9.
+        try:
+            db._check_id_prefix(issue_id)
+        except ValueError as e:
+            if as_json:
+                click.echo(json_mod.dumps({"error": str(e), "code": ErrorCode.VALIDATION}))
+            else:
+                click.echo(f"Error: {e}", err=True)
+            sys.exit(1)
         try:
             db.get_issue(issue_id)
         except KeyError:

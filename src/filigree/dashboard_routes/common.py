@@ -316,18 +316,20 @@ def _safe_bounded_int(raw: str, *, name: str, min_value: int, max_value: int) ->
 
 
 def _coerce_graph_mode(raw: str | None, db: FiligreeDB) -> str | JSONResponse:
+    # Explicit `?mode=` wins over compatibility/feature-flag defaults, so skip
+    # the runtime-config disk read on the override path. See filigree-1eaf84f2c3.
+    if raw is not None:
+        mode = raw.strip().lower()
+        if mode not in _GRAPH_MODE_VALUES:
+            return _error_response(
+                f'Invalid value for mode: "{raw}". Must be one of: legacy, v2.',
+                ErrorCode.VALIDATION,
+                400,
+                {"param": "mode", "value": raw},
+            )
+        return mode
     runtime = _resolve_graph_runtime(db)
-    if raw is None:
-        return str(runtime["compatibility_mode"])
-    mode = raw.strip().lower()
-    if mode not in _GRAPH_MODE_VALUES:
-        return _error_response(
-            f'Invalid value for mode: "{raw}". Must be one of: legacy, v2.',
-            ErrorCode.VALIDATION,
-            400,
-            {"param": "mode", "value": raw},
-        )
-    return mode
+    return str(runtime["compatibility_mode"])
 
 
 def _validate_priority(value: Any, *, required: bool = False) -> int | None | JSONResponse:

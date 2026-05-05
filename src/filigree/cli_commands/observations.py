@@ -13,6 +13,44 @@ from filigree.cli_common import get_db, refresh_summary
 from filigree.types.api import BatchFailure, ErrorCode
 
 
+def _emit_validation_error(msg: str, *, as_json: bool) -> None:
+    """Emit a 2.0 envelope (or plain text) for a numeric-range failure and exit 1.
+
+    Run inside the command body — not as a Click ``IntRange`` type — because
+    the JSON envelope contract requires ``as_json`` to be parsed before the
+    error is shaped. Click rejects ``IntRange`` violations before the body
+    runs, which would emit a stderr usage error with exit 2 instead.
+    """
+    if as_json:
+        click.echo(json_mod.dumps({"error": msg, "code": ErrorCode.VALIDATION}))
+    else:
+        click.echo(f"Error: {msg}", err=True)
+    sys.exit(1)
+
+
+def _validate_priority(priority: int | None, *, as_json: bool) -> None:
+    if priority is not None and not 0 <= priority <= 4:
+        _emit_validation_error(
+            f"Priority must be between 0 and 4, got {priority}",
+            as_json=as_json,
+        )
+
+
+def _validate_line(line: int | None, *, as_json: bool) -> None:
+    if line is not None and line < 0:
+        _emit_validation_error(f"Line must be >= 0, got {line}", as_json=as_json)
+
+
+def _validate_limit(limit: int, *, as_json: bool) -> None:
+    if limit < 1:
+        _emit_validation_error(f"Limit must be >= 1, got {limit}", as_json=as_json)
+
+
+def _validate_offset(offset: int, *, as_json: bool) -> None:
+    if offset < 0:
+        _emit_validation_error(f"Offset must be >= 0, got {offset}", as_json=as_json)
+
+
 @click.command("observe")
 @click.argument("summary")
 @click.option("--detail", default="", help="Longer explanation or context")
@@ -23,13 +61,13 @@ from filigree.types.api import BatchFailure, ErrorCode
     default="",
     help="File path (relative to project root)",
 )
-@click.option("--line", default=None, type=click.IntRange(min=0), help="Line number in file (1-indexed)")
+@click.option("--line", default=None, type=int, help="Line number in file (1-indexed)")
 @click.option("--source-issue-id", default="", help="Issue ID that prompted this observation")
 @click.option(
     "--priority",
     "-p",
     default=2,  # CLI default is 2; MCP default is 3 — intentional per-surface divergence
-    type=click.IntRange(0, 4),
+    type=int,
     help="Priority 0-4 (default 2)",
 )
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON")
@@ -45,6 +83,8 @@ def observe_cmd(
     as_json: bool,
 ) -> None:
     """Record an observation (agent scratchpad note, fire-and-forget)."""
+    _validate_line(line, as_json=as_json)
+    _validate_priority(priority, as_json=as_json)
     with get_db() as db:
         try:
             obs = db.create_observation(
@@ -76,8 +116,8 @@ def observe_cmd(
 
 
 @click.command("list-observations")
-@click.option("--limit", default=50, type=click.IntRange(min=1), help="Max results (default 50)")
-@click.option("--offset", default=0, type=click.IntRange(min=0), help="Skip first N results")
+@click.option("--limit", default=50, type=int, help="Max results (default 50)")
+@click.option("--offset", default=0, type=int, help="Skip first N results")
 @click.option("--no-limit", "no_limit", is_flag=True, help="Return all results without cap")
 @click.option("--file-path", default="", help="Filter by substring in file path")
 @click.option("--file-id", default="", help="Filter by exact file ID")
@@ -91,6 +131,8 @@ def list_observations_cmd(
     as_json: bool,
 ) -> None:
     """List pending observations with optional filtering."""
+    _validate_limit(limit, as_json=as_json)
+    _validate_offset(offset, as_json=as_json)
     with get_db() as db:
         effective_limit = limit if not no_limit else 10_000_000
         try:
@@ -174,7 +216,7 @@ def dismiss_observation_cmd(
     "--priority",
     "-p",
     default=None,
-    type=click.IntRange(0, 4),
+    type=int,
     help="Override priority (default: observation priority)",
 )
 @click.option("--title", default=None, help="Override title (default: observation summary)")
@@ -191,6 +233,7 @@ def promote_observation_cmd(
     as_json: bool,
 ) -> None:
     """Promote an observation to a real issue."""
+    _validate_priority(priority, as_json=as_json)
     with get_db() as db:
         try:
             result = db.promote_observation(

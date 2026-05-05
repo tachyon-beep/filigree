@@ -37,10 +37,11 @@ from mcp.types import (
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from filigree.core import (
+    CONF_FILENAME,
     FILIGREE_DIR_NAME,
     SUMMARY_FILENAME,
     FiligreeDB,
-    find_filigree_root,
+    find_filigree_anchor,
 )
 from filigree.install_support.version_marker import format_schema_mismatch_guidance
 from filigree.mcp_tools.common import (  # noqa: F401  — re-exported for backward compat
@@ -104,6 +105,23 @@ def _get_db() -> FiligreeDB:
 
 def _get_filigree_dir() -> Path | None:
     return _request_filigree_dir.get() or _filigree_dir
+
+
+def _resolve_request_filigree_dir(active_db: FiligreeDB) -> Path:
+    """Return the project metadata directory (``project_root/.filigree``)
+    for the active per-request DB, used to anchor ``_safe_path()``.
+
+    For v2.0 conf-built DBs the ``db`` may be relocated outside ``.filigree/``,
+    so ``db_path.parent`` is the project root, not the metadata dir; using it
+    as the anchor would let ``_safe_path()`` resolve up one level into the
+    project's parent. ``FiligreeDB.project_root`` is the source of truth — both
+    ``from_filigree_dir`` and ``from_conf`` set it. Fall back to
+    ``db_path.parent`` only for legacy direct ``FiligreeDB(...)`` constructions
+    that did not set ``project_root`` (chiefly older tests).
+    """
+    if active_db.project_root is not None:
+        return active_db.project_root / FILIGREE_DIR_NAME
+    return active_db.db_path.parent
 
 
 def _refresh_summary() -> None:
@@ -470,7 +488,7 @@ def create_mcp_app(
                 await resp(scope, receive, send)
                 return
             db_token = _request_db.set(resolved)
-            dir_token = _request_filigree_dir.set(resolved.db_path.parent)
+            dir_token = _request_filigree_dir.set(_resolve_request_filigree_dir(resolved))
         try:
             await session_manager.handle_request(scope, receive, send)
         except RuntimeError as exc:
@@ -505,8 +523,16 @@ def create_mcp_app(
 # ---------------------------------------------------------------------------
 
 
-def _attempt_startup(filigree_dir: Path) -> None:
+def _attempt_startup(filigree_dir: Path, conf_path: Path | None = None) -> None:
     """Open the project DB, falling back to warm-but-degraded mode on v+1.
+
+    When ``conf_path`` is provided, opens the DB declared by ``.filigree.conf``
+    via :meth:`FiligreeDB.from_conf` so v2.0 relocated layouts (e.g.
+    ``db: "track.db"``) are honoured. Otherwise opens the legacy
+    ``.filigree/filigree.db`` via :meth:`FiligreeDB.from_filigree_dir`.
+    ``filigree_dir`` always remains the metadata directory
+    (``project_root/.filigree``) and anchors logs / summary / ephemeral PID
+    regardless of where the DB itself lives.
 
     On a forward schema mismatch the server stays up: ``db`` remains ``None``,
     ``_schema_mismatch`` is set, and every ``call_tool`` short-circuits to a
@@ -524,7 +550,7 @@ def _attempt_startup(filigree_dir: Path) -> None:
 
     _filigree_dir = filigree_dir
     try:
-        db = FiligreeDB.from_filigree_dir(filigree_dir)
+        db = FiligreeDB.from_conf(conf_path) if conf_path is not None else FiligreeDB.from_filigree_dir(filigree_dir)
         _schema_mismatch = None
         _db_open_error = None
     except SchemaVersionMismatchError as exc:
@@ -541,20 +567,25 @@ async def _run(project_path: Path | None) -> None:
     global _logger
 
     if project_path:
+        # Honour ``.filigree.conf`` even when ``--project`` is supplied: the
+        # CLI surface (cli_common.get_db) does and stdio MCP must agree, or
+        # a v2.0 conf-relocated project gets two divergent databases.
+        conf_path: Path | None = (project_path / CONF_FILENAME) if (project_path / CONF_FILENAME).is_file() else None
         filigree_dir = project_path / FILIGREE_DIR_NAME
         if not filigree_dir.is_dir():
             print(f"Error: {filigree_dir} not found. Run 'filigree init' first.", file=sys.stderr)
             sys.exit(1)
     else:
         try:
-            filigree_dir = find_filigree_root()
+            project_root, conf_path = find_filigree_anchor()
         except FileNotFoundError as exc:
             # ProjectNotInitialisedError carries a message that points at
             # `filigree init` and `filigree doctor`.
             print(f"Error: {exc}", file=sys.stderr)
             sys.exit(1)
+        filigree_dir = project_root / FILIGREE_DIR_NAME
 
-    _attempt_startup(filigree_dir)
+    _attempt_startup(filigree_dir, conf_path=conf_path)
 
     from filigree.logging import setup_logging
 

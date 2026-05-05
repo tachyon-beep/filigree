@@ -975,6 +975,33 @@ class TestSqliteErrorClassification:
         assert data["code"] == "IO"
         assert "database is locked" in data["error"]
 
+    def test_batch_update_findings_all_io_failures_envelope_is_io(
+        self,
+        initialized_project_with_many_findings: SeededProject,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # Regression for filigree-c2aeba2946: when every per-item failure in
+        # batch-update-findings is sqlite3.Error (code=IO), the all-failed
+        # JSON envelope must surface IO so callers can retry, not VALIDATION.
+        runner = CliRunner()
+        original = os.getcwd()
+        os.chdir(str(initialized_project_with_many_findings.path))
+        try:
+            ids = initialized_project_with_many_findings.finding_ids
+
+            def _raise(*_a: object, **_kw: object) -> None:
+                raise sqlite3.OperationalError("database is locked")
+
+            monkeypatch.setattr("filigree.core.FiligreeDB.update_finding", _raise)
+            result = runner.invoke(cli, ["batch-update-findings", *ids, "--status", "fixed", "--json"])
+            assert result.exit_code == 1, result.output
+            data = json.loads(result.output)
+            assert "error" in data
+            assert "code" in data
+            assert data["code"] == "IO", f"expected IO, got {data['code']}"
+        finally:
+            os.chdir(original)
+
 
 class TestAssociationLookupErrorEnvelope:
     """Existence-check DB calls in association commands must surface

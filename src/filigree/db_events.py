@@ -131,29 +131,39 @@ class EventsMixin(DBMixinProtocol):
         current = self.get_issue(issue_id)
         now = _now_iso()
 
-        # Find the most recent reversible event that has not already been
-        # covered by an 'undone' marker. Filtering already-undone events at
-        # SELECT time (not after) lets undo fall back to earlier reversible
-        # history when the newest reversible event has been undone already.
-        rev_ph = ",".join("?" * len(_REVERSIBLE_EVENTS))
-        row = self.conn.execute(
-            f"SELECT * FROM events e WHERE e.issue_id = ? AND e.event_type IN ({rev_ph}) "
-            f"AND NOT EXISTS ("
-            f"  SELECT 1 FROM events u WHERE u.issue_id = e.issue_id "
-            f"  AND u.event_type = 'undone' AND u.new_value = CAST(e.id AS TEXT)"
-            f") "
-            f"ORDER BY e.created_at DESC, e.id DESC LIMIT 1",
-            (issue_id, *_REVERSIBLE_EVENTS),
-        ).fetchone()
+        # Acquire SQLite's write lock before the candidate SELECT so the
+        # read-check-write sequence is atomic. Without this, two connections
+        # can both pass the NOT EXISTS check and both write 'undone' markers
+        # for the same target event (filigree-f38d4e2874). The try/finally
+        # below releases the lock on every exit path, including the
+        # ``undone=False`` early returns inside the match block.
+        opened_txn = False
+        if not self.conn.in_transaction:
+            self.conn.execute("BEGIN IMMEDIATE")
+            opened_txn = True
 
-        if row is None:
-            return {"undone": False, "reason": "No reversible events to undo"}
-
-        event_type = row["event_type"]
-        event_id = row["id"]
-
-        # Apply reverse action — wrapped in try/except for rollback safety
         try:
+            # Find the most recent reversible event that has not already been
+            # covered by an 'undone' marker. Filtering already-undone events at
+            # SELECT time (not after) lets undo fall back to earlier reversible
+            # history when the newest reversible event has been undone already.
+            rev_ph = ",".join("?" * len(_REVERSIBLE_EVENTS))
+            row = self.conn.execute(
+                f"SELECT * FROM events e WHERE e.issue_id = ? AND e.event_type IN ({rev_ph}) "
+                f"AND NOT EXISTS ("
+                f"  SELECT 1 FROM events u WHERE u.issue_id = e.issue_id "
+                f"  AND u.event_type = 'undone' AND u.new_value = CAST(e.id AS TEXT)"
+                f") "
+                f"ORDER BY e.created_at DESC, e.id DESC LIMIT 1",
+                (issue_id, *_REVERSIBLE_EVENTS),
+            ).fetchone()
+
+            if row is None:
+                return {"undone": False, "reason": "No reversible events to undo"}
+
+            event_type = row["event_type"]
+            event_id = row["id"]
+
             match event_type:
                 case "status_changed":
                     old_status = row["old_value"]
@@ -271,14 +281,22 @@ class EventsMixin(DBMixinProtocol):
                     )
 
                 case "fields_changed":
-                    old_fields = row["old_value"] or "{}"
+                    # filigree-cb4cd68f80: require old_value to be present and
+                    # to decode to a JSON object. Treating NULL as ``{}`` or
+                    # accepting list/string JSON would silently violate the
+                    # ``issues.fields`` invariant (always a JSON object).
+                    raw_fields = row["old_value"]
+                    if raw_fields is None:
+                        return {"undone": False, "reason": "Cannot undo: event has no old_value"}
                     try:
-                        json.loads(old_fields)
+                        parsed_fields = json.loads(raw_fields)
                     except (json.JSONDecodeError, TypeError):
                         return {"undone": False, "reason": "Cannot undo: stored fields JSON is corrupt"}
+                    if not isinstance(parsed_fields, dict):
+                        return {"undone": False, "reason": "Cannot undo: stored fields is not a JSON object"}
                     self.conn.execute(
                         "UPDATE issues SET fields = ?, updated_at = ? WHERE id = ?",
-                        (old_fields, now, issue_id),
+                        (json.dumps(parsed_fields), now, issue_id),
                     )
 
                 case "parent_changed":
@@ -298,6 +316,15 @@ class EventsMixin(DBMixinProtocol):
                                 "undone": False,
                                 "reason": f"Cannot undo: prior parent {old_parent!r} no longer exists",
                             }
+                        # filigree-0a8c3d38d7: re-run the same cycle check
+                        # update_issue() enforces. Interleaved reparents can
+                        # make the previously-valid parent into an ancestor
+                        # of this issue, so restoring it would form a loop.
+                        if self._would_create_parent_cycle(issue_id, old_parent):
+                            return {
+                                "undone": False,
+                                "reason": f"Cannot undo: restoring parent {old_parent!r} would create a circular parent chain",
+                            }
                         self.conn.execute(
                             "UPDATE issues SET parent_id = ?, updated_at = ? WHERE id = ?",
                             (old_parent, now, issue_id),
@@ -315,6 +342,12 @@ class EventsMixin(DBMixinProtocol):
         except Exception:
             self.conn.rollback()
             raise
+        finally:
+            # Release the write lock on any early-return path that left the
+            # transaction we opened uncommitted (e.g. row is None, or a
+            # ``undone=False`` branch inside the match block).
+            if opened_txn and self.conn.in_transaction:
+                self.conn.rollback()
 
         return {
             "undone": True,

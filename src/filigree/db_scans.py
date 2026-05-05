@@ -195,20 +195,45 @@ class ScansMixin(DBMixinProtocol):
         if error_message is not None:
             updates.append("error_message = ?")
             params.append(error_message)
-        params.append(scan_run_id)
-        self.conn.execute(
-            f"UPDATE scan_runs SET {', '.join(updates)} WHERE id = ?",
+        # Compare-and-swap on the previously-observed status. Without this
+        # guard, two writers that both see `running` (e.g. dead-PID auto-fail
+        # in get_scan_status and result-ingestion completion in db_files) can
+        # both pass python validation and the second commit would silently
+        # overwrite the first writer's terminal state.
+        params.extend([scan_run_id, current_status])
+        cursor = self.conn.execute(
+            f"UPDATE scan_runs SET {', '.join(updates)} WHERE id = ? AND status = ?",
             params,
         )
+        if cursor.rowcount == 0:
+            self.conn.rollback()
+            actual = self.get_scan_run(scan_run_id)
+            logger.warning(
+                "Stale scan_run transition for %s: expected %r, found %r",
+                scan_run_id,
+                current_status,
+                actual["status"],
+            )
+            raise ValueError(
+                f"Stale transition for {scan_run_id!r}: expected status {current_status!r}, "
+                f"found {actual['status']!r} (concurrent writer changed the row)"
+            )
         self.conn.commit()
         return self.get_scan_run(scan_run_id)
 
     def check_scan_cooldown(self, scanner_name: str, file_path: str) -> ScanRunDict | None:
-        """Check if a recent non-failed scan blocks triggering.
+        """Check if a prior scan blocks triggering.
 
         Returns the blocking scan run dict, or ``None`` if trigger is allowed.
-        A scan blocks if it was updated within the last ``SCAN_COOLDOWN_SECONDS``
-        and has status 'pending', 'running', or 'completed'.
+        Two distinct invariants apply here:
+
+        - ``pending`` and ``running`` rows are a singleton lock on the active
+          run for ``(scanner_name, file_path)``. They block regardless of age:
+          ``updated_at`` is only refreshed on status transitions, so a
+          long-running scan would otherwise fall outside the cutoff and a
+          duplicate trigger could spawn a parallel process.
+        - ``completed`` rows act as a debounce window — they block for
+          ``SCAN_COOLDOWN_SECONDS`` after completion, then trigger is allowed.
         """
         row = self.conn.execute(
             "SELECT sr.* FROM scan_runs sr "
@@ -217,8 +242,13 @@ class ScansMixin(DBMixinProtocol):
             "AND EXISTS ("
             "  SELECT 1 FROM json_each(sr.file_paths) je WHERE je.value = ?"
             ") "
-            "AND sr.status IN ('pending', 'running', 'completed') "
-            "AND sr.updated_at >= strftime('%Y-%m-%dT%H:%M:%S+00:00', 'now', ?) "
+            "AND ("
+            "  sr.status IN ('pending', 'running') "
+            "  OR ("
+            "    sr.status = 'completed' "
+            "    AND sr.updated_at >= strftime('%Y-%m-%dT%H:%M:%S+00:00', 'now', ?) "
+            "  )"
+            ") "
             "ORDER BY sr.updated_at DESC LIMIT 1",
             (scanner_name, file_path, f"-{SCAN_COOLDOWN_SECONDS} seconds"),
         ).fetchone()

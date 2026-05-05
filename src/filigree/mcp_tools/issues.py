@@ -736,13 +736,9 @@ async def _handle_claim_next(arguments: dict[str, Any]) -> list[TextContent]:
     if claimed is None:
         return _text(ClaimNextEmptyResponse(status="empty", reason="No ready issues matching filters"))
     _refresh_summary()
-    parts = [f"P{claimed.priority}"]
-    if claimed.type != "task":
-        parts.append(f"type={claimed.type}")
-    parts.append("ready issue (no blockers)")
     result = ClaimNextResponse(
         **claimed.to_dict(),
-        selection_reason=f"Highest-priority {', '.join(parts)}",
+        selection_reason=claimed.format_claim_next_reason(),
     )
     return _text(result)
 

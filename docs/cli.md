@@ -34,6 +34,7 @@ Every short-form CLI command has a permanent verb-noun alias that matches the co
 | `transitions` | `get-valid-transitions` |
 | `validate` | `validate-issue` |
 | `guide` | `get-workflow-guide` |
+| `workflow-statuses` | `get-workflow-statuses` |
 | `type-info` | `get-type-info` |
 | `types` | `list-types` |
 | `packs` | `list-packs` |

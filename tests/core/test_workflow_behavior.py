@@ -1067,3 +1067,45 @@ class TestInferStatusCategoryFallback:
             assert fetched.to_dict()["status_category"] == "done"
         finally:
             d2.close()
+
+    def test_disabled_pack_blocker_not_blocking_in_sql(self, tmp_path: Path) -> None:
+        """Bug filigree-c9af813900: SQL category predicate must agree with
+        ``_resolve_status_category`` for disabled-pack rows. Otherwise a
+        release/released blocker is hydrated as ``status_category='done'``
+        but still appears as blocking in readiness SQL.
+        """
+        d = make_db(tmp_path, packs=["core", "planning", "release"])
+        try:
+            release = d.create_issue("Rel", type="release")
+            d.conn.execute("UPDATE issues SET status = ? WHERE id = ?", ("released", release.id))
+            d.conn.commit()
+            task = d.create_issue("Dependent", type="task")
+            d.add_dependency(task.id, release.id)
+        finally:
+            d.close()
+
+        d2 = make_db(tmp_path, packs=["core", "planning"])
+        try:
+            sql, params = d2._category_predicate_sql("done", type_col="type", status_col="status", include_archived=True)
+            row = d2.conn.execute(
+                f"SELECT id FROM issues WHERE id = ? AND ({sql})",  # noqa: S608 — sql/params come from _category_predicate_sql
+                [release.id, *params],
+            ).fetchone()
+            assert row is not None, "disabled-pack done state must match SQL category predicate"
+            assert d2.get_issue(task.id).blocked_by == []
+        finally:
+            d2.close()
+
+    def test_active_type_undeclared_status_is_open(self, tmp_path: Path) -> None:
+        """Bug filigree-c9af813900: when the type is active but the state is
+        undeclared, the unambiguous-name fallback must NOT fire — otherwise a
+        ``task`` with corrupt status ``released`` is silently classified as done.
+        """
+        d = make_db(tmp_path, packs=["core", "planning", "release"])
+        try:
+            assert d._resolve_status_category("task", "released") == "open"
+            assert d._resolve_status_category("task", "verified") == "open"
+            assert d._resolve_status_category("release", "released") == "done"
+            assert d._resolve_status_category("totally_unknown_type", "released") == "done"
+        finally:
+            d.close()

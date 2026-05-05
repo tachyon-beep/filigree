@@ -1,40 +1,55 @@
 # Team Coordination
 
-Multi-agent swarm protocols for filigree. Load this reference when coordinating
+Multi-agent swarm protocols for filigree 2.0. Load this reference when coordinating
 work across multiple agents.
 
-## Atomic Claiming
+## Atomic Start
 
 ### The Race Condition Problem
 
-When multiple agents call `filigree update <id> --status=in_progress`
-simultaneously, both think they own the issue. Filigree solves this with
-optimistic-locking claims.
+When multiple agents call `filigree update <issue-id> --status=in_progress`
+simultaneously, both think they own the issue. Filigree 2.0 solves this with
+`start-work`, which atomically claims the issue *and* transitions it to
+`in_progress` in a single DB transaction with optimistic locking on the
+assignee.
 
-### Claiming Protocol
+### Start Protocol
 
 ```bash
-# Option A: Claim a specific issue
-filigree claim <id> --assignee <agent-name>
+# Option A: Start a specific issue
+filigree start-work <issue-id> --assignee <agent-name>
 
-# Option B: Claim the highest-priority ready issue
+# Option B: Start the highest-priority ready issue
+filigree start-next-work --assignee <agent-name>
+```
+
+If another agent already claimed the issue, the call fails with
+`code: CONFLICT` (CLI exit 4). No silent overwrite, no half-claimed state —
+either both the claim and the transition land, or neither does.
+
+`start-next-work` accepts the same filters as `claim-next`
+(`--type`, `--priority-min`, `--priority-max`, `--target-status`) so
+specialised agents can scope their work.
+
+### Niche: Claim Without Transitioning
+
+If a coordinator wants to reserve an issue without advancing its status
+(e.g. earmarking it for a downstream worker), use the atomic primitives:
+
+```bash
+filigree claim <issue-id> --assignee <agent-name>
 filigree claim-next --assignee <agent-name>
 ```
 
-If another agent already claimed the issue, the claim fails with an error.
-After a successful claim, advance the state:
-
-```bash
-filigree update <id> --status=in_progress
-```
+These are kept for niche use; `start-work` is the default in 2.0.
 
 ### Releasing Claims
 
 If an agent cannot finish the work:
 
 ```bash
-filigree add-comment <id> "Releasing: blocked on X, needs Y to continue"
-filigree release <id>
+filigree add-comment <issue-id> "Releasing: blocked on X, needs Y to continue"
+filigree release <issue-id>
 ```
 
 Always add a comment before releasing — the next agent needs context.
@@ -51,7 +66,7 @@ When passing work between agents, follow this sequence:
 3. **Flag blockers**: Create blocker issues and add dependencies if needed
 
 ```bash
-filigree add-comment <id> "Completed: API endpoints for auth.
+filigree add-comment <issue-id> "Completed: API endpoints for auth.
 Remaining: frontend login page needs the /api/token response format.
 Decision: used JWT not sessions — see commit abc123.
 Blocker: need CORS config before frontend can call API."
@@ -59,9 +74,9 @@ Blocker: need CORS config before frontend can call API."
 
 ### Incoming Agent (Picking Up)
 
-1. **Read context**: `filigree show <id>` and `filigree get-comments <id>`
+1. **Read context**: `filigree show <issue-id>` and `filigree get-comments <issue-id>`
 2. **Check dependencies**: Look at `blocked_by` in the show output
-3. **Claim**: `filigree claim <id> --assignee <name>`
+3. **Start**: `filigree start-work <issue-id> --assignee <name>`
 4. **Continue**: Build on the previous agent's work, don't restart
 
 ## Status Update Conventions
@@ -70,7 +85,7 @@ Blocker: need CORS config before frontend can call API."
 
 | Event | Action |
 |-------|--------|
-| Starting work | `update --status=in_progress` |
+| Starting work | `start-work <issue-id> --assignee <name>` (atomic claim + transition) |
 | Hit a blocker | Add comment, create blocker issue, add dep |
 | Completed the work | `close --reason="..."` |
 | Can't finish, releasing | Comment + `release` |
@@ -81,10 +96,10 @@ Blocker: need CORS config before frontend can call API."
 Prefix comments with context markers for quick scanning:
 
 ```bash
-filigree add-comment <id> "PROGRESS: implemented X and Y, Z remaining"
-filigree add-comment <id> "BLOCKED: waiting on <blocker-id> for API schema"
-filigree add-comment <id> "DECISION: chose approach A because of B"
-filigree add-comment <id> "HANDOFF: releasing, next agent should start at Z"
+filigree add-comment <issue-id> "PROGRESS: implemented X and Y, Z remaining"
+filigree add-comment <issue-id> "BLOCKED: waiting on <blocker-id> for API schema"
+filigree add-comment <issue-id> "DECISION: chose approach A because of B"
+filigree add-comment <issue-id> "HANDOFF: releasing, next agent should start at Z"
 ```
 
 ## Swarm Work Distribution
@@ -93,8 +108,8 @@ filigree add-comment <id> "HANDOFF: releasing, next agent should start at Z"
 
 One agent acts as coordinator:
 
-1. **Leader** runs `filigree ready` and assigns work
-2. **Followers** use `filigree claim <id> --assignee <name>` to accept
+1. **Leader** runs `filigree ready` and assigns work (or pre-claims via `claim`)
+2. **Followers** use `filigree start-work <issue-id> --assignee <name>` to take it on
 3. **Followers** report back via comments when done
 4. **Leader** monitors `filigree stats` and `filigree list --status=in_progress`
 
@@ -102,26 +117,31 @@ One agent acts as coordinator:
 
 All agents are peers:
 
-1. Each agent runs `filigree claim-next --assignee <name>`
-2. Works on the claimed issue independently
-3. Closes and immediately claims next
+1. Each agent runs `filigree start-next-work --assignee <name>`
+2. Works on the started issue independently
+3. Closes and immediately calls `start-next-work` again
 4. No central coordinator needed
 
 This works best when:
 - Issues are well-defined and independent
-- Dependencies are properly wired (so `claim-next` only returns unblocked work)
+- Dependencies are properly wired (so `start-next-work` only returns unblocked work)
 - Priority ordering reflects actual importance
+
+Tie-break ordering for `start-next-work` (and `claim-next`):
+1. `priority` ascending (0 = critical first)
+2. `created_at` ascending (oldest first within a priority tier)
+3. `issue_id` ascending (deterministic tie-break)
 
 ### Filtering by Type
 
-Specialised agents can filter claims:
+Specialised agents can filter their start calls:
 
 ```bash
 # Backend agent
-filigree claim-next --assignee backend-1 --type task
+filigree start-next-work --assignee backend-1 --type task
 
 # Bug-fixing agent
-filigree claim-next --assignee bugfix-1 --type bug --priority-max 1
+filigree start-next-work --assignee bugfix-1 --type bug --priority-max 1
 ```
 
 ## Conflict Resolution
@@ -147,9 +167,16 @@ If an agent disappears without completing work:
 
 ```bash
 filigree list --status=in_progress --assignee <missing-agent>
-filigree release <id>                    # free the claim
-filigree add-comment <id> "Released: previous agent did not complete"
+filigree release <issue-id>                         # free the claim
+filigree add-comment <issue-id> "Released: previous agent did not complete"
 ```
+
+### CONFLICT Responses
+
+A `start-work` (or `claim`) call that loses the race returns
+`{error: ..., code: "CONFLICT", details: {current_assignee: "..."}}` and
+exits with code 4. This is distinct from operational errors (exit 1) so
+automated callers can retry against a different issue without escalating.
 
 ## Session Resumption
 

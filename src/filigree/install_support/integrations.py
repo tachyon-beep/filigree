@@ -116,32 +116,67 @@ def _codex_server_block(server_config: dict[str, Any]) -> str:
     return "\n".join(lines) + "\n"
 
 
+_TOML_HEADER_RE = re.compile(r"(?m)^\[([^\r\n\]]+)\][ \t]*(?:#[^\r\n]*)?(?:\r\n|\n|\r)")
+
+
+def _parse_toml_header_path(inner: str) -> tuple[str, ...] | None:
+    """Return the dotted-key path of a TOML table header's inner contents.
+
+    Accepts any header form ``tomllib`` accepts — bare keys, quoted keys, and
+    whitespace around dots — and normalizes them to a tuple of unquoted parts.
+    Returns ``None`` when the contents are not a valid table key path.
+    """
+    try:
+        parsed = tomllib.loads(f"[{inner}]\n")
+    except tomllib.TOMLDecodeError:
+        return None
+    path: list[str] = []
+    cur: Any = parsed
+    while True:
+        if not isinstance(cur, dict):
+            return None
+        if not cur:
+            return tuple(path) if path else None
+        if len(cur) != 1:
+            return None
+        key, value = next(iter(cur.items()))
+        path.append(key)
+        cur = value
+
+
 def _upsert_toml_table(content: str, table_name: str, table_block: str) -> str:
     """Replace or append a top-level TOML table without disturbing other content.
 
-    Note: The regex-based approach assumes simple TOML structure (no multiline
-    strings containing bare ``[`` at line start). Suitable for machine-generated
-    configs like Codex MCP config.
+    Locates the existing block by parsing each ``^\\[...\\]`` header through
+    ``tomllib`` and matching the dotted key path semantically — so equivalent
+    spellings (``[mcp_servers."filigree"]``, ``[mcp_servers . filigree]``)
+    are replaced in place rather than duplicated. Without this normalization,
+    ``tomllib`` rejects the resulting file under its duplicate-table rule.
 
-    TOML permits trailing whitespace and an inline ``#`` comment between the
-    closing ``]`` and the line terminator — the header match must accept both
-    so hand-annotated configs are replaced in place instead of being duplicated
-    (which would render the file unparseable under tomllib's duplicate-table
-    rule).
+    Assumes simple TOML structure (no multiline strings containing bare ``[``
+    at line start). Suitable for machine-generated configs like Codex MCP.
     """
     newline_match = re.search(r"\r\n|\n|\r", content)
     newline = newline_match.group(0) if newline_match else "\n"
     rendered_block = newline.join(table_block.splitlines())
     if table_block.endswith(("\r\n", "\n", "\r")):
         rendered_block += newline
-    pattern = re.compile(
-        rf"(?ms)^\[{re.escape(table_name)}\][ \t]*(?:#[^\r\n]*)?(?:\r\n|\n|\r).*?(?=^\[|\Z)",
-    )
-    if pattern.search(content):
-        updated = pattern.sub(rendered_block, content, count=1)
+
+    target_path = tuple(table_name.split("."))
+    match_span: tuple[int, int] | None = None
+    for header in _TOML_HEADER_RE.finditer(content):
+        if _parse_toml_header_path(header.group(1)) != target_path:
+            continue
+        next_header = _TOML_HEADER_RE.search(content, header.end())
+        end = next_header.start() if next_header else len(content)
+        match_span = (header.start(), end)
+        break
+
+    if match_span is not None:
+        start, end = match_span
+        updated = content[:start] + rendered_block + content[end:]
     else:
         updated = content
-        # Ensure a blank line separates existing content from the new table
         if updated and not updated.endswith(("\r\n", "\n", "\r")):
             updated += newline
         updated += newline

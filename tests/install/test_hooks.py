@@ -126,14 +126,15 @@ class TestBuildContext:
 
 class TestGenerateSessionContext:
     def test_returns_none_without_filigree_dir(self, tmp_path: Path) -> None:
-        with patch("filigree.hooks.find_filigree_root", side_effect=FileNotFoundError):
+        with patch("filigree.hooks.find_filigree_anchor", side_effect=FileNotFoundError):
             assert generate_session_context() is None
 
     def test_returns_context_string(self, tmp_path: Path, db: FiligreeDB) -> None:
         """Smoke test that generate_session_context returns a string when a project exists."""
-        # We mock find_filigree_root to return the db's directory
+        # We mock find_filigree_anchor to return the project root + no conf
+        # (legacy install), which routes DB init through ``from_filigree_dir``.
         db_dir = Path(db.db_path).parent
-        with patch("filigree.hooks.find_filigree_root", return_value=db_dir):
+        with patch("filigree.hooks.find_filigree_anchor", return_value=(db_dir.parent, None)):
             result = generate_session_context()
         assert result is not None
         assert "Filigree Project Snapshot" in result
@@ -545,7 +546,7 @@ class TestGenerateSessionContextFreshness:
         # Create a stale CLAUDE.md in the project root
         claude_md = project_root / "CLAUDE.md"
         claude_md.write_text("<!-- filigree:instructions:v0.0.0:00000000 -->\nold\n<!-- /filigree:instructions -->\n")
-        with patch("filigree.hooks.find_filigree_root", return_value=db_dir):
+        with patch("filigree.hooks.find_filigree_anchor", return_value=(db_dir.parent, None)):
             result = generate_session_context()
         assert result is not None
         assert "Updated filigree instructions in CLAUDE.md" in result
@@ -553,7 +554,7 @@ class TestGenerateSessionContextFreshness:
     def test_context_without_stale_instructions(self, tmp_path: Path, db: FiligreeDB) -> None:
         """generate_session_context should not include update messages when everything is fresh."""
         db_dir = Path(db.db_path).parent
-        with patch("filigree.hooks.find_filigree_root", return_value=db_dir):
+        with patch("filigree.hooks.find_filigree_anchor", return_value=(db_dir.parent, None)):
             result = generate_session_context()
         assert result is not None
         assert "Updated" not in result
@@ -572,6 +573,9 @@ class TestSessionContextDashboardUrl:
         db.initialize()
 
         monkeypatch.setattr("filigree.hooks._is_port_listening", lambda *a: True)
+        # Identity check now goes through ``verify_pid_ownership`` so a PID
+        # recycled to another process can't be misreported (filigree-aa38935c28).
+        monkeypatch.setattr("filigree.ephemeral.verify_pid_ownership", lambda *_a, **_k: True)
         context = _build_context(db, filigree_dir)
         db.close()
 
@@ -904,7 +908,7 @@ class TestFreshnessCheckLogLevel:
         db.close()
 
         with (
-            patch("filigree.hooks.find_filigree_root", return_value=db_dir),
+            patch("filigree.hooks.find_filigree_anchor", return_value=(db_dir.parent, None)),
             patch("filigree.hooks._check_instructions_freshness", side_effect=OSError("disk full")),
             patch("filigree.hooks.logger") as mock_logger,
         ):
@@ -923,7 +927,7 @@ class TestFreshnessCheckLogLevel:
         db.close()
 
         with (
-            patch("filigree.hooks.find_filigree_root", return_value=db_dir),
+            patch("filigree.hooks.find_filigree_anchor", return_value=(db_dir.parent, None)),
             patch("filigree.hooks._check_instructions_freshness", side_effect=RuntimeError("boom")),
             pytest.raises(RuntimeError, match="boom"),
         ):

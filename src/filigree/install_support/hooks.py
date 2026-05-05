@@ -35,11 +35,16 @@ def _hook_cmd_matches(hook_command: str, bare_command: str) -> bool:
     Uses ``shlex.split`` so paths containing spaces (common on Windows)
     are handled correctly.
 
-    Matches:
+    Accepts only these shapes (everything else is rejected so that incidental
+    user commands like ``echo filigree session-context`` don't get rewritten):
+
     - Exact: ``"filigree session-context"``
     - Path:  ``"/path/to/filigree session-context"``
     - Quoted path: ``"'/path with spaces/filigree' session-context"``
-    - Module: ``"/path/to/python -m filigree session-context"``
+    - Module: ``"<python> -m filigree session-context"`` — interpreter token
+      is unconstrained because ``-m filigree`` is itself the discriminator
+      (works for ``python``, ``python3``, ``pypy3``, ``uv run python``-style
+      wrappers, etc.).
     """
     if hook_command == bare_command:
         return True
@@ -51,24 +56,32 @@ def _hook_cmd_matches(hook_command: str, bare_command: str) -> bool:
     if not hook_tokens or not bare_tokens:
         return False
     n = len(bare_tokens)
-    if len(hook_tokens) < n:
-        return False
-    # Subcommand tokens (everything after the binary) must match exactly
-    if n > 1 and hook_tokens[-(n - 1) :] != bare_tokens[1:]:
-        return False
-    # Binary token: allow exact match or path-qualified match
     bare_bin = bare_tokens[0]  # e.g. "filigree"
-    hook_bin = hook_tokens[-n]  # token in the matching position
-    if hook_bin == bare_bin:
-        return True
-    hook_base = hook_bin.rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
-    hook_base_lower = hook_base.lower()
-    bare_bin_lower = bare_bin.lower()
-    return hook_base_lower in {bare_bin_lower, f"{bare_bin_lower}.exe"}
+
+    # Bare/path form: single binary token followed by the bare subcommand args.
+    if len(hook_tokens) == n:
+        if hook_tokens[1:] != bare_tokens[1:]:
+            return False
+        hook_bin = hook_tokens[0]
+        if hook_bin == bare_bin:
+            return True
+        hook_base = hook_bin.rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
+        return hook_base.lower() in {bare_bin.lower(), f"{bare_bin.lower()}.exe"}
+
+    # Module form: ``<python> -m <bare_bin> <subcommand args>``. The pair
+    # ``-m <bare_bin>`` is the sole discriminator — anything else with a
+    # ``filigree`` token in the prefix (``echo filigree``, ``time filigree``,
+    # ``env FOO=bar filigree``, ``bash filigree``) is rejected.
+    if len(hook_tokens) == n + 2:
+        if hook_tokens[1] != "-m" or hook_tokens[2] != bare_bin:
+            return False
+        return hook_tokens[3:] == bare_tokens[1:]
+
+    return False
 
 
 def _has_hook_command(settings: dict[str, Any], command: str) -> bool:
-    """Check whether *command* already appears in SessionStart hooks."""
+    """Check whether *command* already appears in SessionStart hooks (any scope)."""
     if not isinstance(settings, dict):
         return False
     hooks = settings.get("hooks", {})
@@ -79,6 +92,37 @@ def _has_hook_command(settings: dict[str, Any], command: str) -> bool:
         return False
     for matcher in session_start:
         if not isinstance(matcher, dict):
+            continue
+        hook_list = matcher.get("hooks", [])
+        if not isinstance(hook_list, list):
+            continue
+        for hook in hook_list:
+            if isinstance(hook, dict) and _hook_cmd_matches(hook.get("command", ""), command):
+                return True
+    return False
+
+
+def _has_unscoped_session_start_hook(settings: dict[str, Any], command: str) -> bool:
+    """Check whether *command* appears in an unscoped/wildcard SessionStart block.
+
+    The reuse-block logic in :func:`install_claude_code_hooks` only treats
+    matcher-less or ``"*"`` blocks as authoritative for cold-start coverage;
+    the install-time gate must use the same rule, otherwise a user's scoped
+    ``{"matcher":"resume"}`` entry suppresses the unscoped install and the
+    hook silently never fires on cold startup (bug filigree-48d6f0d8da).
+    """
+    if not isinstance(settings, dict):
+        return False
+    hooks = settings.get("hooks", {})
+    if not isinstance(hooks, dict):
+        return False
+    session_start = hooks.get("SessionStart", [])
+    if not isinstance(session_start, list):
+        return False
+    for matcher in session_start:
+        if not isinstance(matcher, dict):
+            continue
+        if "matcher" in matcher and matcher.get("matcher") not in (None, "*"):
             continue
         hook_list = matcher.get("hooks", [])
         if not isinstance(hook_list, list):
@@ -186,15 +230,19 @@ def _ensure_pre_tool_use_hook(settings: dict[str, Any], ensure_dashboard_cmd: st
     This restarts the dashboard if idle-shutdown killed it mid-session.
     Only fires when filigree MCP tools are invoked, not on every tool call.
 
-    Idempotent and self-repairing: walks existing PreToolUse entries with
-    :func:`_hook_cmd_matches` so bare-form or stale-absolute-path commands
-    (e.g. after a binary move) are upgraded to ``ensure_dashboard_cmd`` in
-    place. Also repairs the enclosing ``matcher`` to the expected
-    ``mcp__filigree__.*`` scope when it has drifted. Only appends a fresh
-    entry when no matching command is found.
+    Idempotent and self-repairing:
 
-    Returns ``True`` if the settings dict was mutated (added, repaired, or
-    matcher rewritten), ``False`` if it was already correct.
+    - In a *Filigree-only* block, upgrade stale commands and repair a drifted
+      ``matcher`` to ``mcp__filigree__.*`` in place.
+    - In a *mixed* block (Filigree's hook sharing a block with user hooks),
+      do NOT rewrite the matcher — that would silently demote the user
+      hooks from their original tool scope (bug filigree-53fb9d5906).
+      Instead, extract Filigree's hook out and ensure a dedicated
+      ``mcp__filigree__.*`` block exists.
+    - Append a fresh dedicated block only when no Filigree-only block already
+      satisfies the scope.
+
+    Returns ``True`` if the settings dict was mutated.
     """
     changed = False
     if "hooks" not in settings or not isinstance(settings.get("hooks"), dict):
@@ -204,27 +252,41 @@ def _ensure_pre_tool_use_hook(settings: dict[str, Any], ensure_dashboard_cmd: st
         pre_hooks = []
         settings["hooks"]["PreToolUse"] = pre_hooks
 
-    found = False
-    for matcher in pre_hooks:
-        if not isinstance(matcher, dict):
+    has_correctly_scoped_filigree_only_block = False
+    for block in pre_hooks:
+        if not isinstance(block, dict):
             continue
-        hook_list = matcher.get("hooks", [])
+        hook_list = block.get("hooks", [])
         if not isinstance(hook_list, list):
             continue
-        for hook in hook_list:
-            if not isinstance(hook, dict):
-                continue
-            cmd = hook.get("command", "")
-            if _hook_cmd_matches(cmd, ENSURE_DASHBOARD_COMMAND):
-                found = True
-                if cmd != ensure_dashboard_cmd:
-                    hook["command"] = ensure_dashboard_cmd
-                    changed = True
-                if matcher.get("matcher") != PRE_TOOL_USE_MATCHER:
-                    matcher["matcher"] = PRE_TOOL_USE_MATCHER
-                    changed = True
 
-    if not found:
+        filigree_hooks = [h for h in hook_list if isinstance(h, dict) and _hook_cmd_matches(h.get("command", ""), ENSURE_DASHBOARD_COMMAND)]
+        if not filigree_hooks:
+            continue
+
+        # Upgrade stale absolute paths / bare commands in place — even in
+        # mixed blocks, until the hook is moved.
+        for h in filigree_hooks:
+            if h.get("command") != ensure_dashboard_cmd:
+                h["command"] = ensure_dashboard_cmd
+                changed = True
+
+        non_filigree_count = sum(1 for h in hook_list if h not in filigree_hooks)
+        if non_filigree_count > 0:
+            # Mixed block — don't rewrite the matcher; lift Filigree hooks out
+            # so the user's block keeps its original scope.
+            for h in filigree_hooks:
+                hook_list.remove(h)
+            changed = True
+            continue
+
+        # Filigree-only block — repair the matcher in place if it has drifted.
+        if block.get("matcher") != PRE_TOOL_USE_MATCHER:
+            block["matcher"] = PRE_TOOL_USE_MATCHER
+            changed = True
+        has_correctly_scoped_filigree_only_block = True
+
+    if not has_correctly_scoped_filigree_only_block:
         pre_hooks.append(
             {
                 "matcher": PRE_TOOL_USE_MATCHER,
@@ -283,11 +345,13 @@ def install_claude_code_hooks(project_root: Path) -> tuple[bool, str]:
     if _upgrade_hook_commands(settings, ENSURE_DASHBOARD_COMMAND, ensure_dashboard_cmd):
         upgraded.append(ENSURE_DASHBOARD_COMMAND)
 
-    # Build list of commands to add (those not already present)
+    # Build list of commands to add (those not already present in an unscoped
+    # block — a hook in {"matcher":"resume"} or similar doesn't cover cold
+    # startup and so doesn't satisfy this install).
     commands_to_add: list[str] = []
-    if not _has_hook_command(settings, SESSION_CONTEXT_COMMAND):
+    if not _has_unscoped_session_start_hook(settings, SESSION_CONTEXT_COMMAND):
         commands_to_add.append(session_context_cmd)
-    if not _has_hook_command(settings, ENSURE_DASHBOARD_COMMAND):
+    if not _has_unscoped_session_start_hook(settings, ENSURE_DASHBOARD_COMMAND):
         commands_to_add.append(ensure_dashboard_cmd)
 
     # Ensure PreToolUse hook for dashboard auto-restart on MCP tool calls

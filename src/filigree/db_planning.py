@@ -53,6 +53,37 @@ def _validate_priority(value: Any, label: str) -> None:
         raise ValueError(msg)
 
 
+def _normalize_dep_ref(dep_ref: Any) -> str:
+    """Validate a step ``dep_ref`` and return its canonical string form.
+
+    Accepts:
+    - ``int`` (excluding ``bool``): same-phase step index, must be non-negative.
+    - ``str`` matching ``"N"`` or ``"P.S"`` where each part is a non-negative
+      decimal integer literal.
+
+    Rejects floats, booleans, malformed strings, negatives, and anything else
+    with ``ValueError``. ``str()`` coercion at the parsing site silently
+    accepted floats like ``0.1`` as ``phase 0 step 1``; this guard runs first
+    so the DB API surface matches the validation already done by CLI/MCP.
+    """
+    if isinstance(dep_ref, bool):
+        msg = f"dep_ref must be int or str, got bool: {dep_ref!r}"
+        raise ValueError(msg)
+    if isinstance(dep_ref, int):
+        if dep_ref < 0:
+            msg = f"Negative dep index not allowed: {dep_ref}"
+            raise ValueError(msg)
+        return str(dep_ref)
+    if isinstance(dep_ref, str):
+        parts = dep_ref.split(".")
+        if len(parts) > 2 or any(not p.isdigit() for p in parts):
+            msg = f"dep_ref must be 'N' or 'P.S' with non-negative integer parts, got {dep_ref!r}"
+            raise ValueError(msg)
+        return dep_ref
+    msg = f"dep_ref must be int or str, got {type(dep_ref).__name__}: {dep_ref!r}"
+    raise ValueError(msg)
+
+
 class NotAReleaseError(ValueError):
     """Raised by ``get_release_tree`` when the issue exists but is not a release.
 
@@ -123,6 +154,10 @@ class PlanningMixin(DBMixinProtocol):
                 (issue_id, depends_on_id, dep_type, now),
             )
             if cursor.rowcount == 0:
+                # INSERT OR IGNORE still opens an implicit write transaction even
+                # when no row changes; without an explicit rollback the lock
+                # lingers and blocks other connections.
+                self.conn.rollback()
                 return False  # Already exists — no-op, no event
             self._record_event(issue_id, "dependency_added", actor=actor, new_value=f"{dep_type}:{depends_on_id}")
             self.conn.commit()
@@ -324,11 +359,24 @@ class PlanningMixin(DBMixinProtocol):
 
     # -- Plan tree -----------------------------------------------------------
 
+    def _list_all_children(self, parent_id: str) -> list[Issue]:
+        """Return every direct child of ``parent_id`` — no pagination.
+
+        Tree construction (``get_plan``, ``_build_tree``) needs the complete
+        child set; using the paginated ``list_issues`` (default ``limit=100``)
+        silently truncates large plans/releases.
+        """
+        rows = self.conn.execute(
+            "SELECT id FROM issues WHERE parent_id = ? ORDER BY priority, created_at",
+            (parent_id,),
+        ).fetchall()
+        return self._build_issues_batch([r["id"] for r in rows])
+
     def get_plan(self, milestone_id: str) -> PlanTree:
         """Get milestone->phase->step tree with progress stats."""
         milestone = self.get_issue(milestone_id)
 
-        phases = self.list_issues(parent_id=milestone_id)
+        phases = self._list_all_children(milestone_id)
         phases.sort(key=lambda p: p.fields.get("sequence", 999))
 
         phase_list: list[PlanPhase] = []
@@ -336,7 +384,7 @@ class PlanningMixin(DBMixinProtocol):
         completed_steps = 0
 
         for phase in phases:
-            steps = self.list_issues(parent_id=phase.id)
+            steps = self._list_all_children(phase.id)
             steps.sort(key=lambda s: s.fields.get("sequence", 999))
 
             completed = sum(1 for s in steps if s.status_category == "done")
@@ -484,7 +532,7 @@ class PlanningMixin(DBMixinProtocol):
                 steps = phase_data.get("steps") or []
                 for step_idx, step_data in enumerate(steps):
                     for dep_ref in step_data.get("deps", []):
-                        dep_ref_str = str(dep_ref)
+                        dep_ref_str = _normalize_dep_ref(dep_ref)
                         if "." in dep_ref_str:
                             # Cross-phase: "phase_idx.step_idx"
                             p_idx_str, s_idx_str = dep_ref_str.split(".", 1)
@@ -594,7 +642,7 @@ class PlanningMixin(DBMixinProtocol):
             logger.warning("_build_tree: depth limit reached at parent_id=%s", parent_id)
             return [TreeNode(issue=_truncated_issue_sentinel(parent_id), progress=None, children=[], truncated=True)]
 
-        children = self.list_issues(parent_id=parent_id)
+        children = self._list_all_children(parent_id)
         nodes: list[TreeNode] = []
         for child in children:
             subtree = self._build_tree(child.id, _depth=_depth + 1)

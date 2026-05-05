@@ -90,10 +90,7 @@ def get_template_cmd(type_name: str, as_json: bool) -> None:
             click.echo(f"    {f['name']}: {f['type']}{req} — {f['description']}")
 
 
-@click.command("workflow-statuses")
-@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
-def workflow_statuses(as_json: bool) -> None:
-    """Show workflow statuses by category from enabled templates."""
+def _workflow_statuses_impl(as_json: bool) -> None:
     with get_db() as db:
         data = {}
         for category in ("open", "wip", "done"):
@@ -103,6 +100,20 @@ def workflow_statuses(as_json: bool) -> None:
             return
         for category, statuses in data.items():
             click.echo(f"{category}: {', '.join(statuses) if statuses else '(none)'}")
+
+
+@click.command("workflow-statuses")
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+def workflow_statuses(as_json: bool) -> None:
+    """Show workflow statuses by category from enabled templates."""
+    _workflow_statuses_impl(as_json)
+
+
+@click.command("get-workflow-statuses")
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+def get_workflow_statuses(as_json: bool) -> None:
+    """Show workflow statuses by category from enabled templates. Alias for `workflow-statuses`."""
+    _workflow_statuses_impl(as_json)
 
 
 def _types_impl(as_json: bool) -> None:
@@ -479,6 +490,7 @@ def register(cli: click.Group) -> None:
     cli.add_command(templates)
     cli.add_command(get_template_cmd)
     cli.add_command(workflow_statuses)
+    cli.add_command(get_workflow_statuses)
     cli.add_command(types_cmd)
     cli.add_command(list_types_cmd)
     cli.add_command(type_info)

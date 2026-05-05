@@ -6,6 +6,7 @@ import json as json_mod
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import NoReturn
 
 import click
 
@@ -13,25 +14,39 @@ from filigree.cli_common import get_db, refresh_summary
 from filigree.types.api import ErrorCode
 
 
-def _normalize_iso_timestamp(raw: str) -> str:
+def _emit_error(message: str, code: ErrorCode, as_json: bool) -> NoReturn:
+    """Emit a CLI error in the right format for the caller's mode and exit 1.
+
+    JSON mode uses the flat ``{error, code}`` envelope shared with the MCP
+    server and dashboard; plain mode keeps the legacy ``Error: ...`` line so
+    interactive output stays unchanged.
+    """
+    if as_json:
+        click.echo(json_mod.dumps({"error": message, "code": code}))
+    else:
+        click.echo(f"Error: {message}", err=True)
+    sys.exit(1)
+
+
+def _normalize_iso_timestamp(raw: str, as_json: bool) -> str:
     """Normalize user-supplied ISO-8601 to the form stored in the DB.
 
     Stored timestamps use ``datetime.now(UTC).isoformat()`` which always
     emits ``+00:00``. SQLite compares TEXT lexically, so any non-UTC
     offset (or trailing ``Z``) would miscompare against ``+00:00`` rows.
     Naive input is treated as UTC (matching the CLI's stored convention).
-    Rejects unparseable input with a SystemExit+stderr message (not a
-    silent miscomparison).
+    Rejects unparseable input with a SystemExit+stderr (or JSON envelope
+    if ``as_json``) message — not a silent miscomparison.
     """
     candidate = raw.replace("Z", "+00:00") if raw.endswith("Z") else raw
     try:
         parsed = datetime.fromisoformat(candidate)
     except (ValueError, TypeError):
-        click.echo(
-            f"Error: Invalid ISO timestamp: {raw!r}. Expected format: 2026-01-15T10:30:00 or 2026-01-15T10:30:00+00:00",
-            err=True,
+        _emit_error(
+            f"Invalid ISO timestamp: {raw!r}. Expected format: 2026-01-15T10:30:00 or 2026-01-15T10:30:00+00:00",
+            ErrorCode.VALIDATION,
+            as_json,
         )
-        sys.exit(1)
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=UTC)
     return parsed.astimezone(UTC).isoformat()
@@ -161,8 +176,7 @@ def _plan_impl(milestone_id: str, as_json: bool) -> None:
         try:
             p = db.get_plan(milestone_id)
         except KeyError:
-            click.echo(f"Not found: {milestone_id}", err=True)
-            sys.exit(1)
+            _emit_error(f"Not found: {milestone_id}", ErrorCode.NOT_FOUND, as_json)
 
         if as_json:
             click.echo(json_mod.dumps(p, indent=2, default=str))
@@ -318,50 +332,70 @@ def create_plan(ctx: click.Context, file_path: str | None, as_json: bool) -> Non
     try:
         raw = Path(file_path).read_text() if file_path else click.get_text_stream("stdin").read()
     except (OSError, UnicodeDecodeError) as e:
-        click.echo(f"Error reading file: {e}", err=True)
-        sys.exit(1)
+        _emit_error(f"reading file: {e}", ErrorCode.IO, as_json)
 
     try:
         data = json_mod.loads(raw)
     except json_mod.JSONDecodeError as e:
-        click.echo(f"Invalid JSON: {e}", err=True)
-        sys.exit(1)
+        _emit_error(f"Invalid JSON: {e}", ErrorCode.VALIDATION, as_json)
 
     if not isinstance(data, dict):
-        click.echo("JSON must be an object, not a list or scalar", err=True)
-        sys.exit(1)
+        _emit_error("JSON must be an object, not a list or scalar", ErrorCode.VALIDATION, as_json)
 
     if "milestone" not in data or "phases" not in data:
-        click.echo("JSON must contain 'milestone' and 'phases' keys", err=True)
-        sys.exit(1)
+        _emit_error("JSON must contain 'milestone' and 'phases' keys", ErrorCode.VALIDATION, as_json)
 
     if not isinstance(data["milestone"], dict):
-        click.echo("'milestone' must be an object with at least a 'title' key", err=True)
-        sys.exit(1)
+        _emit_error("'milestone' must be an object with at least a 'title' key", ErrorCode.VALIDATION, as_json)
 
     if not isinstance(data["phases"], list):
-        click.echo("'phases' must be a list of phase objects", err=True)
-        sys.exit(1)
+        _emit_error("'phases' must be a list of phase objects", ErrorCode.VALIDATION, as_json)
+
+    # Title must be a string at every level — db_planning calls .strip() on it,
+    # which would otherwise raise AttributeError (e.g. for JSON numbers/bools).
+    if not isinstance(data["milestone"].get("title"), str):
+        _emit_error(
+            f"Milestone 'title' must be a string, got {type(data['milestone'].get('title')).__name__}",
+            ErrorCode.VALIDATION,
+            as_json,
+        )
 
     for i, phase in enumerate(data["phases"]):
         if not isinstance(phase, dict):
-            click.echo(f"Phase {i + 1} must be an object, got {type(phase).__name__}", err=True)
-            sys.exit(1)
+            _emit_error(
+                f"Phase {i + 1} must be an object, got {type(phase).__name__}",
+                ErrorCode.VALIDATION,
+                as_json,
+            )
+        if not isinstance(phase.get("title"), str):
+            _emit_error(
+                f"Phase {i + 1} 'title' must be a string, got {type(phase.get('title')).__name__}",
+                ErrorCode.VALIDATION,
+                as_json,
+            )
         steps = phase.get("steps", [])
         if not isinstance(steps, list):
-            click.echo(f"Phase {i + 1} 'steps' must be a list, got {type(steps).__name__}", err=True)
-            sys.exit(1)
+            _emit_error(
+                f"Phase {i + 1} 'steps' must be a list, got {type(steps).__name__}",
+                ErrorCode.VALIDATION,
+                as_json,
+            )
         for j, step in enumerate(steps):
             if not isinstance(step, dict):
-                click.echo(
+                _emit_error(
                     f"Phase {i + 1}, Step {j + 1} must be an object, got {type(step).__name__}",
-                    err=True,
+                    ErrorCode.VALIDATION,
+                    as_json,
                 )
-                sys.exit(1)
+            if not isinstance(step.get("title"), str):
+                _emit_error(
+                    f"Phase {i + 1}, Step {j + 1} 'title' must be a string, got {type(step.get('title')).__name__}",
+                    ErrorCode.VALIDATION,
+                    as_json,
+                )
             err = _validate_plan_dep_refs(step.get("deps", []), f"Phase {i + 1}, Step {j + 1}")
             if err is not None:
-                click.echo(err, err=True)
-                sys.exit(1)
+                _emit_error(err, ErrorCode.VALIDATION, as_json)
 
     with get_db() as db:
         try:
@@ -373,11 +407,7 @@ def create_plan(ctx: click.Context, file_path: str | None, as_json: bool) -> Non
             # access on validated JSON dicts is programmer error). Let them
             # crash so the bug is visible, rather than being misclassified
             # as a validation error.
-            if as_json:
-                click.echo(json_mod.dumps({"error": str(e), "code": ErrorCode.VALIDATION}))
-            else:
-                click.echo(f"Error: {e}", err=True)
-            sys.exit(1)
+            _emit_error(str(e), ErrorCode.VALIDATION, as_json)
 
         if as_json:
             click.echo(json_mod.dumps(result, indent=2, default=str))
@@ -392,7 +422,7 @@ def create_plan(ctx: click.Context, file_path: str | None, as_json: bool) -> Non
 
 
 def _changes_impl(since: str, limit: int, as_json: bool) -> None:
-    since = _normalize_iso_timestamp(since)
+    since = _normalize_iso_timestamp(since, as_json)
     with get_db() as db:
         # Overfetch by 1 to detect has_more without an offset param.
         raw = db.get_events_since(since, limit=limit + 1 if limit > 0 else limit)

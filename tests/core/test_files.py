@@ -570,6 +570,45 @@ class TestProcessScanResults:
                 ],
             )
 
+    def test_null_suggestion_rejected(self, db: FiligreeDB) -> None:
+        """filigree-e74fecddd4: explicit None suggestion must raise ValueError, not crash _upsert_finding with TypeError."""
+        with pytest.raises(ValueError, match="suggestion must be a string"):
+            db.process_scan_results(
+                scan_source="ruff",
+                findings=[
+                    {"path": "a.py", "rule_id": "E1", "severity": "low", "message": "m", "suggestion": None},
+                ],
+            )
+
+    def test_non_string_language_rejected(self, db: FiligreeDB) -> None:
+        """filigree-2134b23fb9: non-string language must raise ValueError, not leak sqlite errors."""
+        with pytest.raises(ValueError, match="language must be a string"):
+            db.process_scan_results(
+                scan_source="ruff",
+                findings=[
+                    {"path": "a.py", "rule_id": "E1", "severity": "low", "message": "m", "language": ["py"]},
+                ],
+            )
+        with pytest.raises(ValueError, match="language must be a string"):
+            db.process_scan_results(
+                scan_source="ruff",
+                findings=[
+                    {"path": "b.py", "rule_id": "E1", "severity": "low", "message": "m", "language": 42},
+                ],
+            )
+
+    def test_null_language_normalized_to_empty(self, db: FiligreeDB) -> None:
+        """filigree-2134b23fb9: explicit None language is treated like missing (becomes "")."""
+        db.process_scan_results(
+            scan_source="ruff",
+            findings=[
+                {"path": "c.py", "rule_id": "E1", "severity": "low", "message": "m", "language": None},
+            ],
+        )
+        f = db.get_file_by_path("c.py")
+        assert f is not None
+        assert f.language == ""
+
     def test_scan_metadata_persisted_on_create(self, db: FiligreeDB) -> None:
         db.process_scan_results(
             scan_source="ruff",
@@ -708,6 +747,45 @@ class TestScanRunId:
         )
         row = db.conn.execute("SELECT scan_run_id FROM scan_findings").fetchone()
         assert row["scan_run_id"] == "run-001"
+
+    def test_findings_count_reflects_observations_not_attribution(self, db: FiligreeDB) -> None:
+        """filigree-f84f141e86: scan_runs.findings_count must reflect findings observed
+        by THIS run, not findings whose first-attribution scan_run_id matches.
+
+        With first-attribution-wins on scan_findings.scan_run_id, a re-scan that only
+        re-sees existing findings would otherwise report findings_count=0 even though
+        it observed them.
+        """
+        db.create_scan_run(
+            scan_run_id="run-A",
+            scanner_name="codex",
+            scan_source="codex",
+            file_paths=["a.py"],
+            file_ids=[],
+        )
+        db.update_scan_run_status("run-A", "running")
+        db.process_scan_results(
+            scan_source="codex",
+            scan_run_id="run-A",
+            findings=[{"path": "a.py", "rule_id": "R1", "severity": "low", "message": "m"}],
+        )
+        db.create_scan_run(
+            scan_run_id="run-B",
+            scanner_name="codex",
+            scan_source="codex",
+            file_paths=["a.py"],
+            file_ids=[],
+        )
+        db.update_scan_run_status("run-B", "running")
+        db.process_scan_results(
+            scan_source="codex",
+            scan_run_id="run-B",
+            findings=[{"path": "a.py", "rule_id": "R1", "severity": "low", "message": "m2"}],
+        )
+        run_a = db.conn.execute("SELECT findings_count FROM scan_runs WHERE id='run-A'").fetchone()
+        run_b = db.conn.execute("SELECT findings_count FROM scan_runs WHERE id='run-B'").fetchone()
+        assert run_a["findings_count"] == 1
+        assert run_b["findings_count"] == 1, f"run-B observed 1 finding but reports findings_count={run_b['findings_count']}"
 
 
 class TestSuggestionField:
@@ -2297,6 +2375,20 @@ class TestPaginationMetadata:
         db.register_file("a.py")
         with pytest.raises(ValueError, match="Invalid severity"):
             db.list_files_paginated(has_severity="ultra_critical")
+
+    def test_list_files_paginated_invalid_direction_raises(self, db: FiligreeDB) -> None:
+        """filigree-e53ce98110: invalid direction must raise ValueError, not silently fall back to default order."""
+        db.register_file("a.py")
+        with pytest.raises(ValueError, match="Invalid direction"):
+            db.list_files_paginated(direction="SIDEWAYS")
+
+    def test_list_files_paginated_valid_directions_accepted(self, db: FiligreeDB) -> None:
+        """ASC/DESC/asc/desc must all be accepted for direction."""
+        db.register_file("a.py")
+        for d in ("ASC", "DESC", "asc", "desc"):
+            db.list_files_paginated(direction=d)
+        # None still means "use default"
+        db.list_files_paginated(direction=None)
 
 
 # ---------------------------------------------------------------------------

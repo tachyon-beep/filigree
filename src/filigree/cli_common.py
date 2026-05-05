@@ -11,6 +11,7 @@ import json as json_mod
 import logging
 import sqlite3
 import sys
+import warnings
 
 import click
 
@@ -31,21 +32,22 @@ logger = logging.getLogger(__name__)
 def _wants_json() -> bool:
     """Return True when the active CLI invocation passed ``--json``.
 
-    Prefers Click's already-parsed ``as_json`` from the active context
-    stack — this is correct in every case where the subcommand callback
-    is running (including the ``get_db`` startup-failure path), because
-    Click has already distinguished ``--`` as its option terminator from
-    ``--`` as the value of a value-taking option (e.g.
-    ``--description --``). The convention ``"--json", "as_json"`` is
-    used uniformly for the JSON-mode binding across the CLI.
+    Fast path — walk the active context stack for an already-parsed
+    ``as_json``. Correct any time a subcommand callback (or anything it
+    calls, including ``get_db``) is running, because Click has already
+    distinguished ``--`` as its option terminator from ``--`` as the
+    value of a value-taking option (e.g. ``--description --``). The
+    convention ``"--json", "as_json"`` is used uniformly for the
+    JSON-mode binding across the CLI.
 
-    Falls back to a raw ``--``-bounded scan of ``filigree_raw_args``
-    (stashed by ``_FiligreeGroup.parse_args``) only when no ancestor
-    context has parsed ``as_json`` yet — e.g. an ``--actor`` validation
-    failure inside the group callback, before the subcommand is parsed.
-    The fallback over-corrects when ``--`` is consumed as an option
-    value but only the contrived
-    ``--actor "" create T --description -- --json`` case can reach it.
+    Slow path — when no ancestor context has parsed ``as_json`` yet
+    (e.g. an ``--actor`` validation failure inside the group callback,
+    before any subcommand is parsed), reparse the raw argv stashed by
+    ``_FiligreeGroup.parse_args`` using Click's own parser with
+    ``resilient_parsing=True`` so the parse is option-aware (handles
+    ``--description --`` correctly) and side-effect-free (no callbacks
+    run, no errors raised for missing required args). The detector must
+    never raise, so the slow path is wrapped in a broad guard.
     (filigree-df988a37fc, filigree-e2cbfb247b)
     """
     ctx = click.get_current_context(silent=True)
@@ -56,9 +58,48 @@ def _wants_json() -> bool:
         if "as_json" in cur.params:
             return bool(cur.params["as_json"])
         cur = cur.parent
-    raw_args = ctx.find_root().meta.get("filigree_raw_args", [])
-    end = raw_args.index("--") if "--" in raw_args else len(raw_args)
-    return "--json" in raw_args[:end]
+    root_ctx = ctx.find_root()
+    raw_args = root_ctx.meta.get("filigree_raw_args", [])
+    if not raw_args:
+        return False
+    root_cmd = root_ctx.command
+    if not isinstance(root_cmd, click.Group):
+        return False
+    try:
+        return _detect_json_via_parse(root_cmd, list(raw_args))
+    except Exception:
+        # Detector must never raise; any parse failure means we cannot
+        # confirm --json so default to plain text.
+        return False
+
+
+def _detect_json_via_parse(group: click.Group, raw_args: list[str]) -> bool:
+    """Reparse ``raw_args`` with Click to determine if the subcommand has ``--json``.
+
+    ``resilient_parsing=True`` skips option callbacks (notably the
+    ``--actor`` validator we may be running inside) and tolerates
+    missing required args. Click 9 collapses ``protected_args`` into
+    ``args``, so the helper concatenates both for forward compatibility.
+    Nested groups are not currently used by filigree but are guarded
+    against — a sub-group has no ``--json`` of its own, so returning
+    False there is correct under today's surface.
+    """
+    with click.Context(group, resilient_parsing=True) as group_ctx:
+        group.parse_args(group_ctx, raw_args)
+        with warnings.catch_warnings():
+            # Click 8.x emits DeprecationWarning on protected_args access; the
+            # getattr keeps us correct after Click 9 removes the attribute.
+            warnings.simplefilter("ignore", DeprecationWarning)
+            protected = list(getattr(group_ctx, "protected_args", None) or [])
+        sub_tokens = protected + list(group_ctx.args)
+        if not sub_tokens:
+            return False
+        sub_cmd = group.get_command(group_ctx, sub_tokens[0])
+        if sub_cmd is None or isinstance(sub_cmd, click.Group):
+            return False
+        with click.Context(sub_cmd, parent=group_ctx, resilient_parsing=True) as sub_ctx:
+            sub_cmd.parse_args(sub_ctx, sub_tokens[1:])
+            return bool(sub_ctx.params.get("as_json", False))
 
 
 def _emit_startup_failure(exc: Exception, code: ErrorCode, *, human_prefix: str = "") -> None:

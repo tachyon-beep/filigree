@@ -34,27 +34,42 @@ def _resolve_and_sanitize_actor(actor: str | None, assignee: str, *, as_json: bo
 logger = logging.getLogger(__name__)
 
 
-def _range_check_priority(priority: int, *, as_json: bool) -> None:
-    """Validate ``--priority`` is in the 0..4 range.
+def _range_check_int(value: int | None, name: str, *, min_val: int, max_val: int, as_json: bool) -> None:
+    """Validate that ``value`` (when not ``None``) sits in ``[min_val, max_val]``.
 
-    Run in the command body (not as a Click callback or IntRange type)
-    because the 2.0 envelope emission depends on ``as_json``, which is
-    only reliably available after all options have been parsed. Click
+    Run in the command body — not as a Click callback or ``click.IntRange``
+    type — because the 2.0 envelope emission depends on ``as_json``, which
+    is only reliably available after all options have been parsed. Click
     callbacks fire in cmdline order (``--priority 99 --json`` processes
     priority first), so at callback time ``as_json`` may not yet be in
-    ``ctx.params``; doing the check here is honest about the ordering
-    constraint.
+    ``ctx.params``; running the check here is honest about that ordering
+    constraint and lets ``--json`` invocations emit the unified envelope
+    (Phase E §9) rather than Click's stderr usage error.
 
     On failure, either emits the 2.0 envelope (``--json``) or a plain
-    error (``-f``) and exits 1.
+    error (default) and exits 1. ``None`` values are treated as
+    "filter unset" and pass through unchanged.
     """
-    if not 0 <= priority <= 4:
-        msg = f"Priority must be between 0 and 4, got {priority}"
+    if value is None:
+        return
+    if not min_val <= value <= max_val:
+        msg = f"{name} must be between {min_val} and {max_val}, got {value}"
         if as_json:
             click.echo(json_mod.dumps({"error": msg, "code": ErrorCode.VALIDATION}))
         else:
             click.echo(f"Error: {msg}", err=True)
         sys.exit(1)
+
+
+def _range_check_priority(priority: int, *, as_json: bool) -> None:
+    """Validate required ``--priority`` is in the 0..4 range.
+
+    Thin wrapper over ``_range_check_int`` for the create-style commands
+    where ``--priority`` is a non-optional ``int``. The wrapper preserves
+    the existing error wording (``"Priority must be ..."``) that callers
+    and the boundary-validation tests pin.
+    """
+    _range_check_int(priority, "Priority", min_val=0, max_val=4, as_json=as_json)
 
 
 @click.command()
@@ -228,6 +243,7 @@ def _list_issues_impl(
     offset: int,
     as_json: bool,
 ) -> None:
+    _range_check_int(priority, "priority", min_val=0, max_val=4, as_json=as_json)
     with get_db() as db:
         label_filter = list(label) if label else None
         try:
@@ -272,7 +288,7 @@ def _list_issues_impl(
 @click.command("list")
 @click.option("--status", default=None, help="Filter by status")
 @click.option("--type", "issue_type", default=None, help="Filter by type")
-@click.option("--priority", "-p", default=None, type=click.IntRange(0, 4), help="Filter by priority")
+@click.option("--priority", "-p", default=None, type=int, help="Filter by priority")
 @click.option("--parent", default=None, help="Filter by parent ID")
 @click.option("--assignee", default=None, help="Filter by assignee")
 @click.option("--label", "-l", multiple=True, help="Filter by label (repeatable, AND logic). Supports virtuals.")
@@ -301,7 +317,7 @@ def list_cmd(
 @click.command("list-issues")
 @click.option("--status", default=None, help="Filter by status")
 @click.option("--type", "issue_type", default=None, help="Filter by type")
-@click.option("--priority", "-p", default=None, type=click.IntRange(0, 4), help="Filter by priority")
+@click.option("--priority", "-p", default=None, type=int, help="Filter by priority")
 @click.option("--parent", default=None, help="Filter by parent ID")
 @click.option("--assignee", default=None, help="Filter by assignee")
 @click.option("--label", "-l", multiple=True, help="Filter by label (repeatable, AND logic). Supports virtuals.")
@@ -341,6 +357,7 @@ def _update_impl(
     field: tuple[str, ...],
     as_json: bool,
 ) -> None:
+    _range_check_int(priority, "priority", min_val=0, max_val=4, as_json=as_json)
     fields = None
     # Truthiness gates would silently drop `--design=` (empty-string clear);
     # see filigree-613e9f5f66.  Distinguish unset (None) from cleared ("").
@@ -396,7 +413,7 @@ def _update_impl(
 @click.command()
 @click.argument("issue_id")
 @click.option("--status", default=None, help="New status")
-@click.option("--priority", "-p", default=None, type=click.IntRange(0, 4), help="New priority")
+@click.option("--priority", "-p", default=None, type=int, help="New priority")
 @click.option("--title", default=None, help="New title")
 @click.option("--assignee", default=None, help="New assignee")
 @click.option("--description", "-d", default=None, help="New description")
@@ -427,7 +444,7 @@ def update(
 @click.command("update-issue")
 @click.argument("issue_id")
 @click.option("--status", default=None, help="New status")
-@click.option("--priority", "-p", default=None, type=click.IntRange(0, 4), help="New priority")
+@click.option("--priority", "-p", default=None, type=int, help="New priority")
 @click.option("--title", default=None, help="New title")
 @click.option("--assignee", default=None, help="New assignee")
 @click.option("--description", "-d", default=None, help="New description")
@@ -595,8 +612,8 @@ def claim(ctx: click.Context, issue_id: str, assignee: str, as_json: bool) -> No
 @click.command("claim-next")
 @click.option("--assignee", required=True, help="Who is claiming")
 @click.option("--type", "type_filter", default=None, help="Filter by issue type")
-@click.option("--priority-min", default=None, type=click.IntRange(0, 4), help="Minimum priority (0=critical)")
-@click.option("--priority-max", default=None, type=click.IntRange(0, 4), help="Maximum priority")
+@click.option("--priority-min", default=None, type=int, help="Minimum priority (0=critical)")
+@click.option("--priority-max", default=None, type=int, help="Maximum priority")
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON")
 @click.pass_context
 def claim_next(
@@ -617,6 +634,8 @@ def claim_next(
         else:
             click.echo("Error: assignee must be a non-empty string", err=True)
         sys.exit(1)
+    _range_check_int(priority_min, "priority_min", min_val=0, max_val=4, as_json=as_json)
+    _range_check_int(priority_max, "priority_max", min_val=0, max_val=4, as_json=as_json)
     with get_db() as db:
         try:
             issue = db.claim_next(
@@ -634,12 +653,16 @@ def claim_next(
             sys.exit(1)
         if issue is None:
             if as_json:
-                click.echo(json_mod.dumps({"status": "empty"}))
+                # Mirror the MCP ClaimNextEmptyResponse shape (types/api.py:266).
+                click.echo(json_mod.dumps({"status": "empty", "reason": "No ready issues matching filters"}))
             else:
                 click.echo("No issues available")
         else:
             if as_json:
-                click.echo(json_mod.dumps(issue.to_dict(), indent=2, default=str))
+                # Mirror the MCP ClaimNextResponse shape (types/api.py:140) — emit
+                # the issue dict plus selection_reason via the shared formatter.
+                payload = {**issue.to_dict(), "selection_reason": issue.format_claim_next_reason()}
+                click.echo(json_mod.dumps(payload, indent=2, default=str))
             else:
                 click.echo(f"Claimed {issue.id}: {issue.title} [{issue.status}] -> {assignee}")
         refresh_summary(db)
@@ -803,8 +826,8 @@ def start_work(
 @click.command("start-next-work")
 @click.option("--assignee", required=True, help="Who is starting work (agent name)")
 @click.option("--type", "type_filter", default=None, help="Filter by issue type")
-@click.option("--priority-min", default=None, type=click.IntRange(0, 4), help="Minimum priority (0=critical)")
-@click.option("--priority-max", default=None, type=click.IntRange(0, 4), help="Maximum priority")
+@click.option("--priority-min", default=None, type=int, help="Minimum priority (0=critical)")
+@click.option("--priority-max", default=None, type=int, help="Maximum priority")
 @click.option("--target-status", default=None, help="Override wip status (defaults to type's canonical wip)")
 @click.option("--actor", default=None, help="Actor for audit trail (defaults to --assignee)")
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON")
@@ -825,6 +848,8 @@ def start_next_work(
         else:
             click.echo("Error: assignee must be a non-empty string", err=True)
         sys.exit(1)
+    _range_check_int(priority_min, "priority_min", min_val=0, max_val=4, as_json=as_json)
+    _range_check_int(priority_max, "priority_max", min_val=0, max_val=4, as_json=as_json)
     # Mirror MCP: actor defaults to assignee when not specified, and is
     # sanitized through the same validator the group-level --actor uses.
     resolved_actor = _resolve_and_sanitize_actor(actor, assignee, as_json=as_json)

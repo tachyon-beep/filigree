@@ -839,16 +839,29 @@ class TestDoctorFixSchema:
 
 
 class TestInstallMode:
+    @staticmethod
+    def _isolate_server_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Redirect SERVER_CONFIG_* to tmp_path so register_project doesn't
+        collide with the user's real ``~/.config/filigree/server.json`` or
+        with another test's stale entries — the same pattern
+        ``TestInstallModeIntegration`` already uses.
+        """
+        config_dir = tmp_path / ".server-config"
+        monkeypatch.setattr("filigree.server.SERVER_CONFIG_DIR", config_dir)
+        monkeypatch.setattr("filigree.server.SERVER_CONFIG_FILE", config_dir / "server.json")
+        monkeypatch.setattr("filigree.server.SERVER_PID_FILE", config_dir / "server.pid")
+
     def test_install_writes_mode_to_config(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cli_runner: CliRunner) -> None:
         """install --mode=server persists the mode to config.json."""
         monkeypatch.chdir(tmp_path)
         codex_home = tmp_path / ".test-home"
         codex_home.mkdir()
         monkeypatch.setattr("filigree.install_support.integrations.Path.home", lambda: codex_home)
+        self._isolate_server_config(tmp_path, monkeypatch)
         # Set up a minimal project
         cli_runner.invoke(cli, ["init"])
         result = cli_runner.invoke(cli, ["install", "--mode", "server"])
-        assert result.exit_code == 0
+        assert result.exit_code == 0, f"install failed:\n{result.output}\nexc={result.exception}"
         config = json.loads((tmp_path / ".filigree" / "config.json").read_text())
         assert config["mode"] == "server"
 
@@ -860,9 +873,10 @@ class TestInstallMode:
         codex_home = tmp_path / ".test-home"
         codex_home.mkdir()
         monkeypatch.setattr("filigree.install_support.integrations.Path.home", lambda: codex_home)
+        self._isolate_server_config(tmp_path, monkeypatch)
         cli_runner.invoke(cli, ["init", "--mode", "server"])
         result = cli_runner.invoke(cli, ["install"])
-        assert result.exit_code == 0
+        assert result.exit_code == 0, f"install failed:\n{result.output}\nexc={result.exception}"
         config = json.loads((tmp_path / ".filigree" / "config.json").read_text())
         assert config["mode"] == "server"
 
@@ -1266,3 +1280,122 @@ class TestExportImportCli:
         assert result.exit_code != 0
         assert "Import failed" in (result.output or "")
         assert "Traceback" not in (result.output or "")
+
+    def test_export_oserror_shows_clean_error(self, cli_in_project: tuple[CliRunner, Path], monkeypatch: pytest.MonkeyPatch) -> None:
+        # filigree-48613c1c55: export must surface OSError as a clean
+        # "Export failed: …" line and exit 1, not as a raw Python traceback —
+        # the contract already enforced for `import`.
+        runner, project_root = cli_in_project
+
+        def _raise_oserror(*a: object, **kw: object) -> None:
+            raise OSError("disk full")
+
+        monkeypatch.setattr("filigree.core.FiligreeDB.export_jsonl", _raise_oserror)
+        result = runner.invoke(cli, ["export", str(project_root / "out.jsonl")])
+        assert result.exit_code != 0
+        assert "Export failed" in (result.output or "")
+        assert "Traceback" not in (result.output or "")
+
+
+class TestInstallForeignDatabaseMessage:
+    """filigree-dad647cf35: install + doctor --fix must surface
+    ForeignDatabaseError's rich remediation message instead of swallowing
+    it into the generic FileNotFoundError handler.
+    """
+
+    def _raise_foreign(self, tmp_path: Path) -> object:
+        from filigree.core import ForeignDatabaseError
+
+        def _raiser(*_args: object, **_kwargs: object) -> None:
+            raise ForeignDatabaseError(
+                cwd=tmp_path / "inner",
+                found_anchor=tmp_path / "outer" / ".filigree.conf",
+                git_boundary=tmp_path / "inner",
+            )
+
+        return _raiser
+
+    def test_install_surfaces_foreign_database_message(
+        self, tmp_path: Path, cli_runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr("filigree.cli_commands.admin.find_filigree_root", self._raise_foreign(tmp_path))
+        original = os.getcwd()
+        os.chdir(str(tmp_path))
+        try:
+            result = cli_runner.invoke(cli, ["install"])
+        finally:
+            os.chdir(original)
+        assert result.exit_code == 1
+        assert "Refusing to latch" in (result.output or "")
+
+    def test_doctor_fix_surfaces_foreign_database_message(
+        self, tmp_path: Path, cli_runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from filigree.install_support.doctor import CheckResult
+
+        # run_doctor must return a fixable failure so doctor() enters the --fix
+        # block (where the bug lives). admin.py does ``from filigree.install
+        # import run_doctor`` inside the command, so patch at the source.
+        monkeypatch.setattr(
+            "filigree.install.run_doctor",
+            lambda: [CheckResult(name="config.json", passed=False, message="stub", fix_hint="run init")],
+        )
+        monkeypatch.setattr("filigree.cli_commands.admin.find_filigree_root", self._raise_foreign(tmp_path))
+
+        result = cli_runner.invoke(cli, ["doctor", "--fix"])
+        assert result.exit_code == 1
+        assert "Refusing to latch" in (result.output or "")
+        # Regression guard: the generic line must NOT appear after the fix.
+        assert "Cannot fix: no .filigree/ directory found" not in (result.output or "")
+
+
+class TestInstallStepFailureExitCode:
+    """filigree-ca4e5d28dd: install must exit non-zero when any selected
+    step failed, instead of always returning 0 with the "Next:" hint.
+    """
+
+    def test_install_exits_nonzero_when_step_fails(self, cli_in_project: tuple[CliRunner, Path], monkeypatch: pytest.MonkeyPatch) -> None:
+        runner, _project = cli_in_project
+
+        def _stub_failure(*_args: object, **_kwargs: object) -> tuple[bool, str]:
+            return (False, "stub failure")
+
+        # Pick an installer that's invoked unconditionally in install_all mode.
+        monkeypatch.setattr("filigree.install.ensure_gitignore", _stub_failure)
+
+        result = runner.invoke(cli, ["install", "--gitignore"])
+        assert result.exit_code != 0
+        assert "stub failure" in (result.output or "")
+        # The "Next:" hint must be suppressed when any step failed.
+        assert "Next: filigree create" not in (result.output or "")
+
+    def test_install_happy_path_still_exits_zero(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        runner, _project = cli_in_project
+        result = runner.invoke(cli, ["install", "--gitignore"])
+        assert result.exit_code == 0
+        assert "Next: filigree create" in (result.output or "")
+
+
+class TestMetricsDaysValidation:
+    """filigree-d9cf9d34b1: metrics --days must reject non-positive values
+    with a clean click error, not a Python traceback from analytics.
+    """
+
+    def test_metrics_rejects_negative_days(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        runner, _project = cli_in_project
+        result = runner.invoke(cli, ["metrics", "--days=-5"])
+        # Click UsageError (exit 2) — pre-fix this leaked a ValueError from
+        # analytics through to a Python traceback (exit 1).
+        assert result.exit_code == 2
+        assert "Invalid value for '--days'" in result.output
+
+    def test_metrics_rejects_zero_days(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        runner, _project = cli_in_project
+        result = runner.invoke(cli, ["metrics", "--days=0"])
+        assert result.exit_code == 2
+        assert "Invalid value for '--days'" in result.output
+
+    def test_metrics_accepts_positive_days(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        runner, _project = cli_in_project
+        result = runner.invoke(cli, ["metrics", "--days=30"])
+        assert result.exit_code == 0

@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from typing import Any, NotRequired, TypedDict
 
-from filigree.types.api import BatchFailure, BatchResponse
+from filigree.types.api import BatchFailure
 from filigree.types.core import (
     AssocType,
     FindingStatus,
@@ -61,16 +61,19 @@ class ScanStats(TypedDict):
 class BatchCloseResponseLoom(TypedDict):
     """Response shape for ``POST /api/loom/batch/close``.
 
-    Functionally a ``BatchResponse[SlimIssueLoom]`` except
-    ``newly_unblocked`` carries ``SlimIssueLoom`` rather than the
-    classic ``SlimIssue`` that ``BatchResponse[_T]``'s definition
-    hard-codes — newly-unblocked issues use the loom vocabulary
-    (``issue_id``) too.
+    ``succeeded`` carries ``SlimIssueLoom`` by default and ``IssueLoom``
+    when the request sets ``response_detail=full`` — the union covers
+    both projections the handler may emit (see C5 in
+    ``docs/federation/contracts.md``). ``newly_unblocked`` stays
+    ``SlimIssueLoom`` regardless of ``response_detail`` per the locked
+    C5 rule, and uses the loom vocabulary (``issue_id``) like every
+    other loom-shaped issue.
 
-    Pinned by ``tests/fixtures/contracts/loom/batch-close.json``.
+    Pinned by ``tests/fixtures/contracts/loom/batch-close.json`` and
+    the contract test in ``tests/api/test_envelope_types.py``.
     """
 
-    succeeded: list[SlimIssueLoom]
+    succeeded: list[SlimIssueLoom | IssueLoom]
     failed: list[BatchFailure]
     newly_unblocked: NotRequired[list[SlimIssueLoom]]
 
@@ -352,18 +355,29 @@ class ChangeRecordLoom(IssueEventLoom):
     issue_title: str
 
 
-class ScanIngestResponseLoom(BatchResponse[str]):
+class ScanIngestResponseLoom(TypedDict):
     """Response shape for ``POST /api/loom/scan-results``.
 
     ``succeeded`` contains server-generated finding ids for newly-created
     findings (classic called this ``new_finding_ids``). ``failed`` is
     always present as an empty list in 2.0; populated once per-finding
     ingest failure tracking lands (non-breaking addition). ``stats`` and
-    ``warnings`` are loom-specific additions on top of the generic batch
+    ``warnings`` are loom-specific additions on top of the batch
     envelope.
 
-    Pinned by ``tests/fixtures/contracts/loom/scan-results.json``.
+    Declared as a concrete ``TypedDict`` rather than subclassing
+    ``BatchResponse[str]``: at runtime, TypedDict + ``Generic`` does not
+    preserve the ``str`` substitution (``succeeded`` would resolve to
+    ``list[~_T]``), and parent ``NotRequired`` markers are stripped on a
+    ``total=True`` subclass, which would falsely make ``newly_unblocked``
+    a required key. Scan ingestion never unblocks issues, so
+    ``newly_unblocked`` is omitted entirely.
+
+    Pinned by ``tests/fixtures/contracts/loom/scan-results.json`` and the
+    contract test in ``tests/api/test_envelope_types.py``.
     """
 
+    succeeded: list[str]
+    failed: list[BatchFailure]
     stats: ScanStats
     warnings: list[str]

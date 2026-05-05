@@ -29,10 +29,24 @@ def _read_source_version() -> str | None:
     return declared if isinstance(declared, str) else None
 
 
-try:
-    __version__ = version("filigree")
-except PackageNotFoundError:
-    __version__ = _read_source_version() or "0.0.0-dev"
+def _resolve_version() -> str:
+    # Source pyproject wins when present: importlib.metadata.version() resolves
+    # by *distribution name* across sys.path, not by the imported module's
+    # filesystem location, so an older installed `filigree` dist-info would
+    # otherwise shadow the checkout being imported. _read_source_version()
+    # gates on [project].name == "filigree" and only finds a pyproject for
+    # source checkouts / editable installs, so installed-only layouts still
+    # fall through to the metadata lookup.
+    src = _read_source_version()
+    if src is not None:
+        return src
+    try:
+        return version("filigree")
+    except PackageNotFoundError:
+        return "0.0.0-dev"
+
+
+__version__ = _resolve_version()
 
 __all__ = ["FiligreeDB", "Issue", "__version__"]
 

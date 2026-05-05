@@ -410,6 +410,138 @@ class TestCooldownTimestampFormat:
         assert db.check_scan_cooldown("codex", "src/main.py") is None
 
 
+class TestCooldownActiveRunsBlockRegardlessOfAge:
+    """Regression for filigree-254e1299a3: pending/running rows are a singleton
+    lock, not a debounce — they must block duplicate triggers regardless of how
+    long the run has been active. Only `completed` rows use the timestamp cutoff.
+    """
+
+    def test_running_scan_blocks_after_cooldown_window(self, db: FiligreeDB) -> None:
+        """A scanner running longer than SCAN_COOLDOWN_SECONDS must still block
+        a duplicate trigger — the cooldown is only relevant for the debounce
+        window after a `completed` run, not for active singletons."""
+        from filigree.db_scans import SCAN_COOLDOWN_SECONDS
+
+        db.create_scan_run(
+            scan_run_id="long-running",
+            scanner_name="codex",
+            scan_source="codex",
+            file_paths=["src/main.py"],
+            file_ids=["f-1"],
+        )
+        db.update_scan_run_status("long-running", "running")
+        # Backdate updated_at past the cutoff to simulate a long-running scanner.
+        db.conn.execute(
+            "UPDATE scan_runs SET updated_at = strftime('%Y-%m-%dT%H:%M:%S+00:00', 'now', ?) WHERE id = ?",
+            (f"-{SCAN_COOLDOWN_SECONDS + 5} seconds", "long-running"),
+        )
+        db.conn.commit()
+        # Active run must still block, even though its updated_at is past cutoff.
+        blocking = db.check_scan_cooldown("codex", "src/main.py")
+        assert blocking is not None
+        assert blocking["id"] == "long-running"
+
+    def test_pending_scan_blocks_after_cooldown_window(self, db: FiligreeDB) -> None:
+        """Same invariant for a `pending` reservation that hasn't transitioned yet."""
+        from filigree.db_scans import SCAN_COOLDOWN_SECONDS
+
+        db.create_scan_run(
+            scan_run_id="long-pending",
+            scanner_name="codex",
+            scan_source="codex",
+            file_paths=["src/main.py"],
+            file_ids=["f-1"],
+        )
+        # Stays in 'pending' state (initial status from create_scan_run).
+        db.conn.execute(
+            "UPDATE scan_runs SET updated_at = strftime('%Y-%m-%dT%H:%M:%S+00:00', 'now', ?) WHERE id = ?",
+            (f"-{SCAN_COOLDOWN_SECONDS + 5} seconds", "long-pending"),
+        )
+        db.conn.commit()
+        blocking = db.check_scan_cooldown("codex", "src/main.py")
+        assert blocking is not None
+        assert blocking["id"] == "long-pending"
+
+    def test_completed_scan_still_obeys_timestamp_cutoff(self, db: FiligreeDB) -> None:
+        """Sanity check: the fix to active runs must not break the debounce
+        window for completed runs."""
+        from filigree.db_scans import SCAN_COOLDOWN_SECONDS
+
+        db.create_scan_run(
+            scan_run_id="old-completed",
+            scanner_name="codex",
+            scan_source="codex",
+            file_paths=["src/main.py"],
+            file_ids=["f-1"],
+        )
+        db.update_scan_run_status("old-completed", "running")
+        db.update_scan_run_status("old-completed", "completed")
+        db.conn.execute(
+            "UPDATE scan_runs SET updated_at = strftime('%Y-%m-%dT%H:%M:%S+00:00', 'now', ?) WHERE id = ?",
+            (f"-{SCAN_COOLDOWN_SECONDS + 5} seconds", "old-completed"),
+        )
+        db.conn.commit()
+        # Completed + past cutoff = no block (debounce expired).
+        assert db.check_scan_cooldown("codex", "src/main.py") is None
+
+
+class TestUpdateScanRunStatusCompareAndSwap:
+    """Regression for filigree-c835e730fb: status transitions must guard against
+    stale reads. Two writers that both observe `running` must not both succeed
+    in transitioning to a terminal state — the second one must raise rather
+    than silently overwrite."""
+
+    def test_concurrent_transition_does_not_overwrite_terminal_state(self, db: FiligreeDB) -> None:
+        """Simulate a TOCTOU race: caller reads `running`, validates, but
+        before its UPDATE commits, another writer transitions the row to
+        `failed`. The CAS UPDATE must match zero rows and raise, leaving
+        the prior terminal state intact."""
+        db.create_scan_run(
+            scan_run_id="cas-test",
+            scanner_name="codex",
+            scan_source="codex",
+            file_paths=["src/main.py"],
+            file_ids=["f-1"],
+        )
+        db.update_scan_run_status("cas-test", "running")
+
+        # Inject a stale snapshot: the first call inside update_scan_run_status
+        # returns 'running', but the row is concurrently mutated to 'failed'
+        # before the UPDATE statement runs.
+        real_get = db.get_scan_run
+        injected = [False]
+
+        def stale_then_real(run_id: str):
+            if not injected[0]:
+                injected[0] = True
+                # Simulate the "other writer" committing a terminal state
+                # between our read and our update.
+                db.conn.execute(
+                    "UPDATE scan_runs SET status = 'failed', "
+                    "completed_at = '2026-05-03T10:00:00+00:00', "
+                    "error_message = 'died' WHERE id = ?",
+                    (run_id,),
+                )
+                db.conn.commit()
+                # Return the pre-mutation snapshot the caller would have seen.
+                snapshot = real_get(run_id)
+                snapshot["status"] = "running"
+                return snapshot
+            return real_get(run_id)
+
+        db.get_scan_run = stale_then_real  # type: ignore[method-assign]
+        try:
+            with pytest.raises(ValueError, match=r"stale|concurrent|changed"):
+                db.update_scan_run_status("cas-test", "completed", findings_count=10)
+        finally:
+            db.get_scan_run = real_get  # type: ignore[method-assign]
+
+        # The terminal state set by the "other writer" must survive.
+        final = real_get("cas-test")
+        assert final["status"] == "failed"
+        assert final["error_message"] == "died"
+
+
 class TestProcessScanResultsCompleteScanRun:
     """Regression: complete_scan_run=False prevents premature batch completion."""
 

@@ -9,9 +9,12 @@ subcommands, which in turn are registered as Claude Code hooks by
 from __future__ import annotations
 
 import logging
+import os
+import signal
 import socket
 import sqlite3
 import subprocess
+import sys
 import time
 from pathlib import Path
 from urllib.error import URLError
@@ -19,7 +22,10 @@ from urllib.error import URLError
 import portalocker
 
 from filigree.core import (
+    FILIGREE_DIR_NAME,
     FiligreeDB,
+    ForeignDatabaseError,
+    find_filigree_anchor,
     find_filigree_command,
     find_filigree_root,
     get_mode,
@@ -62,13 +68,22 @@ def _build_context(db: FiligreeDB, filigree_dir: Path | None = None) -> str:
 
     # Dashboard URL — restart if idle-shutdown killed it
     if filigree_dir is not None:
-        from filigree.ephemeral import is_pid_alive, read_pid_file, read_port_file
+        from filigree.ephemeral import read_pid_file, read_port_file, verify_pid_ownership
 
         port_file = filigree_dir / "ephemeral.port"
         pid_file = filigree_dir / "ephemeral.pid"
         port = read_port_file(port_file)
         pid_info = read_pid_file(pid_file)
-        dashboard_alive = port and pid_info and is_pid_alive(pid_info["pid"]) and _is_port_listening(port)
+        # ``verify_pid_ownership`` re-reads the PID file and checks OS-level
+        # cmdline identity, so a recycled PID owned by another process is
+        # rejected before we emit a misleading DASHBOARD URL
+        # (filigree-aa38935c28).
+        dashboard_alive = (
+            port is not None
+            and pid_info is not None
+            and verify_pid_ownership(pid_file, expected_cmd="filigree", required_args=("dashboard",))
+            and _is_port_listening(port)
+        )
         if not dashboard_alive and (pid_info is not None or port is not None):
             # Dashboard was running but died (idle-shutdown, crash) — try to restart
             try:
@@ -173,36 +188,62 @@ def _check_instructions_freshness(project_root: Path) -> list[str]:
         inject_instructions(md_path)
         messages.append(f"Updated filigree instructions in {filename}")
 
-    # Check skill packs (Claude Code and Codex use different target dirs)
+    # Check skill packs (Claude Code and Codex use different target dirs).
+    # Hash the entire skill tree (relative path + bytes) rather than just
+    # SKILL.md — the installed skill pack ships companion files under
+    # ``examples/`` and ``references/`` that the freshness check would
+    # otherwise leave stale (filigree-4bd71d94c3).
     from filigree.install import _get_skills_source_dir
 
-    source_skill = _get_skills_source_dir() / "filigree-workflow" / "SKILL.md"
-    if source_skill.exists():
-        import hashlib
-
-        source_hash = hashlib.sha256(source_skill.read_bytes()).hexdigest()[:8]
+    source_root = _get_skills_source_dir() / "filigree-workflow"
+    if source_root.is_dir():
+        source_hash = _skill_tree_fingerprint(source_root)
 
         skill_targets = [
             (
-                project_root / ".claude" / "skills" / "filigree-workflow" / "SKILL.md",
+                project_root / ".claude" / "skills" / "filigree-workflow",
                 install_skills,
                 "Updated filigree skill pack",
             ),
             (
-                project_root / ".agents" / "skills" / "filigree-workflow" / "SKILL.md",
+                project_root / ".agents" / "skills" / "filigree-workflow",
                 install_codex_skills,
                 "Updated filigree Codex skill pack",
             ),
         ]
-        for target_path, installer, msg in skill_targets:
-            if not target_path.exists():
+        for target_root, installer, msg in skill_targets:
+            if not target_root.is_dir():
                 continue
-            target_hash = hashlib.sha256(target_path.read_bytes()).hexdigest()[:8]
+            target_hash = _skill_tree_fingerprint(target_root)
             if target_hash != source_hash:
                 installer(project_root)
                 messages.append(msg)
 
     return messages
+
+
+def _skill_tree_fingerprint(root: Path) -> str:
+    """Return a short hash of every file under *root* (path + bytes).
+
+    Sorted by relative POSIX path so the digest is stable across filesystems.
+    Used to detect whether an installed skill pack matches the bundled source.
+    """
+    import hashlib
+
+    digest = hashlib.sha256()
+    files = sorted(p for p in root.rglob("*") if p.is_file())
+    for path in files:
+        rel = path.relative_to(root).as_posix().encode("utf-8")
+        digest.update(rel)
+        digest.update(b"\0")
+        try:
+            digest.update(path.read_bytes())
+        except OSError:
+            # Unreadable file ⇒ treat as "differs" by mixing in path-only
+            # entropy; the installer will overwrite either way.
+            digest.update(b"<unreadable>")
+        digest.update(b"\0")
+    return digest.hexdigest()[:8]
 
 
 def generate_session_context() -> str | None:
@@ -214,11 +255,15 @@ def generate_session_context() -> str | None:
     Returns ``None`` when there is no filigree project (silent exit).
     """
     try:
-        filigree_dir = find_filigree_root()
+        project_root, conf_path = find_filigree_anchor()
+    except ForeignDatabaseError as exc:
+        # Surface the remediation message rather than swallowing it as a
+        # silent "no project" exit (filigree-acbacc5b3e).
+        return f"=== Filigree Project Snapshot ===\n\nWARNING: Refusing to open ancestor filigree database.\n\n{exc}"
     except FileNotFoundError:
         return None
 
-    project_root = filigree_dir.parent
+    filigree_dir = project_root / FILIGREE_DIR_NAME
 
     # Check instruction freshness (best-effort — don't let failures block context)
     freshness_messages: list[str] = []
@@ -228,7 +273,10 @@ def generate_session_context() -> str | None:
         logger.warning("Instructions freshness check failed for %s", project_root, exc_info=True)
 
     try:
-        db = FiligreeDB.from_filigree_dir(filigree_dir)
+        # Honour the conf's ``db`` field when present so a relocated DB is
+        # opened from its declared path; legacy installs (no conf) keep the
+        # ``.filigree/filigree.db`` default (filigree-4e28325279).
+        db = FiligreeDB.from_conf(conf_path) if conf_path is not None else FiligreeDB.from_filigree_dir(filigree_dir)
     except (sqlite3.Error, ValueError, OSError):
         logger.warning("Database init failed for %s", filigree_dir, exc_info=True)
         context = (
@@ -294,6 +342,11 @@ def ensure_dashboard_running(port: int | None = None) -> str:
     """
     try:
         filigree_dir = find_filigree_root()
+    except ForeignDatabaseError as exc:
+        # Don't silently spawn a dashboard against an ancestor's database
+        # (filigree-acbacc5b3e). ``ForeignDatabaseError`` subclasses
+        # ``FileNotFoundError`` so the catch order matters.
+        return f"Filigree dashboard: {exc}"
     except FileNotFoundError:
         return ""
 
@@ -332,6 +385,52 @@ def _acquire_port(filigree_dir: Path) -> int:
         raise RuntimeError(msg) from exc
 
 
+def _terminate_orphan_dashboard(pid: int, *, sigterm_grace: float = 2.0) -> None:
+    """Best-effort terminate an owned dashboard whose port never came up.
+
+    Signals SIGTERM, polls aliveness for ``sigterm_grace`` seconds, then
+    falls back to SIGKILL. On Windows the terminate is best-effort via
+    ``taskkill``. Errors are logged but never raised — leaking is preferable
+    to crashing the start path.
+    """
+    from filigree.ephemeral import is_pid_alive
+
+    if pid <= 0:
+        return
+    try:
+        if sys.platform == "win32":
+            subprocess.run(
+                ["taskkill", "/PID", str(pid), "/T"],
+                capture_output=True,
+                timeout=2.0,
+                check=False,
+            )
+        else:
+            os.kill(pid, signal.SIGTERM)
+    except (OSError, subprocess.SubprocessError):
+        logger.warning("Failed to signal orphan dashboard pid %d", pid, exc_info=True)
+        return
+
+    deadline = time.monotonic() + sigterm_grace
+    while time.monotonic() < deadline:
+        if not is_pid_alive(pid):
+            return
+        time.sleep(0.1)
+
+    try:
+        if sys.platform == "win32":
+            subprocess.run(
+                ["taskkill", "/F", "/PID", str(pid), "/T"],
+                capture_output=True,
+                timeout=2.0,
+                check=False,
+            )
+        else:
+            os.kill(pid, signal.SIGKILL)
+    except (OSError, subprocess.SubprocessError):
+        logger.warning("Failed to SIGKILL orphan dashboard pid %d", pid, exc_info=True)
+
+
 def _ensure_dashboard_ethereal_mode(filigree_dir: Path) -> str:
     """Ethereal mode: session-scoped dashboard on a deterministic port."""
     from filigree.ephemeral import (
@@ -351,14 +450,29 @@ def _ensure_dashboard_ethereal_mode(filigree_dir: Path) -> str:
     port_file = filigree_dir / "ephemeral.port"
     lock_file = filigree_dir / "ephemeral.lock"
 
-    def _reuse_running_dashboard() -> str | None:
+    def _probe_running_dashboard(*, allow_cleanup: bool) -> str | None:
+        """Check if a usable dashboard is already running.
+
+        When ``allow_cleanup`` is False (the pre-lock probe), this is purely
+        read-only: a stale or non-listening record reports "not usable" but
+        does not delete or terminate anything, so a concurrent peer's freshly
+        written metadata cannot be erased outside the lock
+        (filigree-48215e8343).
+
+        When ``allow_cleanup`` is True (under the lock), this also reaps
+        owned-but-non-listening dashboards whose startup grace expired —
+        ``cleanup_stale_pid`` would otherwise leave them in place because
+        the PID is still ours, leaking the old process when we respawn
+        (filigree-fd3ac0feec).
+        """
         pid_info = read_pid_file(pid_file)
         existing_port = read_port_file(port_file)
         if not pid_info or not existing_port:
             return None
         if not verify_pid_ownership(pid_file, expected_cmd="filigree", required_args=("dashboard",)):
-            pid_file.unlink(missing_ok=True)
-            port_file.unlink(missing_ok=True)
+            if allow_cleanup:
+                pid_file.unlink(missing_ok=True)
+                port_file.unlink(missing_ok=True)
             return None
         if _is_port_listening(existing_port):
             return f"Filigree dashboard running on http://localhost:{existing_port}"
@@ -370,15 +484,20 @@ def _ensure_dashboard_ethereal_mode(filigree_dir: Path) -> str:
         startup_ts = pid_info.get("startup_ts")
         if isinstance(startup_ts, (int, float)) and time.time() - startup_ts < DASHBOARD_STARTUP_GRACE_SECONDS:
             return f"Filigree dashboard starting on http://localhost:{existing_port} (initializing)"
+        if allow_cleanup:
+            _terminate_orphan_dashboard(pid_info["pid"])
+            pid_file.unlink(missing_ok=True)
+            port_file.unlink(missing_ok=True)
         return None
 
-    # Check if already running from a previous session
-    running_message = _reuse_running_dashboard()
+    # Pre-lock probe is read-only — a concurrent starter that races between
+    # our read and our verify must never have its fresh metadata deleted
+    # outside the lock (filigree-48215e8343). The destructive cleanup
+    # (`cleanup_stale_pid`, the unlink/terminate paths) all run under the
+    # lock below.
+    running_message = _probe_running_dashboard(allow_cleanup=False)
     if running_message:
         return running_message
-
-    # Clean up stale state
-    cleanup_stale_pid(pid_file)
 
     # Atomic start with lock
     lock_fd = None
@@ -389,8 +508,11 @@ def _ensure_dashboard_ethereal_mode(filigree_dir: Path) -> str:
         except (OSError, portalocker.LockException):
             return "Filigree dashboard: another session is starting it, skipping"
 
-        # Re-check after acquiring lock
-        running_message = _reuse_running_dashboard()
+        # Now under the lock — clean up stale or orphaned state, then re-probe
+        # in case a peer started a dashboard between our pre-lock probe and
+        # acquiring the lock.
+        cleanup_stale_pid(pid_file)
+        running_message = _probe_running_dashboard(allow_cleanup=True)
         if running_message:
             return running_message
 

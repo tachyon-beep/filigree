@@ -14,9 +14,398 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ``get-valid-transitions``, ``get-workflow-guide``). Supports ``--json``
   and emits the 2.0 flat error envelope (``ErrorCode.NOT_FOUND``) on
   unknown types. (filigree-6213766f9b)
+- **CLI ``get-workflow-statuses`` verb-noun alias.** Closes a hole in
+  the verb-noun alias convention (docs/cli.md): the MCP tool is
+  ``get_workflow_statuses`` but only the short form ``workflow-statuses``
+  was registered. Both forms now produce identical output; the alias
+  table in ``docs/cli.md`` is updated. (filigree-ca938979f4)
 
 ### Fixed
 
+- **``filigree install`` and ``filigree doctor --fix`` now surface
+  ``ForeignDatabaseError`` instead of swallowing it as a generic missing-project
+  error.** Both admin commands caught the bare ``FileNotFoundError`` raised by
+  ``find_filigree_root``, so the rich ``ForeignDatabaseError`` message
+  ("Refusing to latch onto another project's filigree database… ``cd <git
+  boundary> && filigree init``") never reached users running these commands
+  from inside an inner repo. The catch is now ``ProjectNotInitialisedError``
+  (the parent class of both ``ProjectNotInitialisedError`` and
+  ``ForeignDatabaseError``), and the exception's own message is emitted to
+  stderr — same contract as ``cli_commands/scanners.py`` and the session-hook
+  fix above. (filigree-dad647cf35)
+- **``filigree install`` now exits 1 when one or more selected install steps
+  failed.** The command accumulated per-step ``(name, ok, msg)`` tuples and
+  printed them, but never mapped any ``ok=False`` to a non-zero exit code, so
+  CI pipelines and shell scripts depending on the exit code treated partial
+  failures as success. The summary now exits 1 (with a "Some install steps
+  failed" stderr line and a suppressed "Next:" hint) whenever any step
+  returned ``False``. ``TestInstallMode`` tests gained the same
+  ``SERVER_CONFIG_DIR`` isolation that ``TestInstallModeIntegration`` already
+  used, since the exit-code change exposed pre-existing prefix-collision
+  pollution from the user's real ``~/.config/filigree/server.json``.
+  (filigree-ca4e5d28dd)
+- **``filigree metrics --days`` now rejects non-positive values via a
+  ``click.IntRange(1, 3650)``.** Without the range, ``--days=-5`` reached
+  ``get_flow_metrics``'s own ``ValueError`` and bubbled up as a Python
+  traceback. The range mirrors sibling admin commands (``archive``,
+  ``clean-stale-findings``, ``compact``) and the dashboard's own
+  ``api_metrics`` clamp at ``[1, 3650]``. (filigree-d9cf9d34b1)
+- **``filigree export`` now catches ``OSError``/``sqlite3.Error`` and emits a
+  clean "Export failed: …" line.** The command called ``db.export_jsonl``
+  unguarded, so missing parent directories, permission errors, or disk-full
+  conditions surfaced as raw Python tracebacks. The matching ``import``
+  command already had this contract (and a regression test); ``export``
+  now mirrors it. (filigree-48613c1c55)
+- **Session hooks and dashboard launcher honour ``.filigree.conf`` and
+  surface ``ForeignDatabaseError``.** ``generate_session_context`` walked
+  up via ``find_filigree_root`` and then opened
+  ``.filigree/filigree.db`` directly, ignoring any custom ``db`` path
+  declared in ``.filigree.conf``; ``ForeignDatabaseError`` (raised when
+  walk-up crosses a ``.git/`` boundary) was swallowed by the catch-all
+  ``FileNotFoundError`` handler, hiding the actionable remediation
+  message. Both session-context and ``ensure_dashboard_running`` now
+  resolve via ``find_filigree_anchor`` / ``find_filigree_root``, route DB
+  init through ``FiligreeDB.from_conf`` when a conf is present, and
+  surface the foreign-database message instead of exiting silently.
+  (filigree-4e28325279, filigree-acbacc5b3e)
+- **Dashboard URL emitted from session context now uses
+  ``verify_pid_ownership``.** The pre-existing fast path in
+  ``_build_context`` trusted raw ``is_pid_alive``, so a recycled PID
+  owned by an unrelated process could be reported as a live dashboard.
+  Session context now performs the same OS-cmdline identity check that
+  the reuse path and ``filigree doctor`` already use.
+  (filigree-aa38935c28)
+- **Ethereal dashboard reuse no longer races concurrent starts.** The
+  pre-lock probe in ``_ensure_dashboard_ethereal_mode`` unlinked
+  ``ephemeral.pid`` / ``ephemeral.port`` when ownership verification
+  failed, so a peer that wrote fresh metadata between our read and our
+  verify could have it erased outside ``ephemeral.lock``. The probe is
+  now read-only outside the lock; all destructive cleanup runs after
+  the lock is held. The post-lock cleanup also terminates an owned
+  dashboard whose port never came up past the startup grace window
+  before respawning, so the orphan process is no longer leaked.
+  (filigree-48215e8343, filigree-fd3ac0feec)
+- **Skill-pack freshness check now hashes the entire skill tree.** The
+  hook compared only ``SKILL.md`` between source and installed copies,
+  so changes to companion files under ``examples/`` and ``references/``
+  could leave installed skill packs stale indefinitely. The freshness
+  check now computes a sorted ``(relative path, bytes)`` digest across
+  the whole ``filigree-workflow`` directory and reinstalls when any
+  file differs. (filigree-4bd71d94c3)
+- **CLI `--priority*` ranges now emit the 2.0 envelope instead of Click
+  usage errors.** `list`, `list-issues`, `update`, `update-issue`,
+  `claim-next`, and `start-next-work` declared bounded numeric options as
+  `click.IntRange(0, 4)`, which made Click reject out-of-range values with
+  a `BadParameter` plain-text usage error before the command body could
+  emit `{"error", "code"}` (Phase E §9 envelope contract). The
+  `_range_check_priority` body-time helper that `create` already used for
+  the same reason is generalised to `_range_check_int(value, name, ...)`,
+  and the affected options now parse as plain `int` and validate after
+  `--json` has been observed. (filigree-ff324e6a96)
+- **CLI `claim-next --json` now emits the documented `ClaimNextResponse` /
+  `ClaimNextEmptyResponse` shapes.** Empty replies gain `reason: "No ready
+  issues matching filters"`; successful replies gain `selection_reason`
+  built from the new shared `Issue.format_claim_next_reason()` helper, so
+  CLI / MCP / HTTP all agree on the wire shape (the MCP handler is
+  refactored to use the same helper to keep parity by construction).
+  (filigree-0e8dadbfcc)
+- **`/api/loom/scanners` now resolves scanner TOMLs from the project root,
+  not the DB directory.** The route built ``scanners_dir = db.db_path.parent /
+  "scanners"`` (`src/filigree/dashboard_routes/files.py`), which only matched
+  the legacy `.filigree/filigree.db` layout. For `.filigree.conf` projects
+  with a relocated `db = "data/track.db"`, the route looked at
+  `<project>/data/scanners` instead of `<project>/.filigree/scanners` and
+  returned an empty list — even though the CLI `list-scanners` and MCP
+  `list_scanners` correctly enumerated them. Same family as filigree-da8d5aba0f
+  (dashboard opens conf-declared DB path). The route now anchors to
+  `db.project_root / ".filigree" / "scanners"` when `project_root` is set
+  (always the case for `from_filigree_dir` and `from_conf`), and falls back
+  to `db.db_path.parent / "scanners"` only for bare `FiligreeDB(...)`
+  construction. Regression tests in
+  `tests/test_dashboard.py::TestLoomScannersRelocatedDB`.
+  (filigree-641037692a)
+- **Dashboard now opens the conf-declared DB path.** Both ethereal mode
+  (`main()`) and server mode (`ProjectStore.get_db`) called
+  `FiligreeDB.from_filigree_dir`, which hardcodes `.filigree/filigree.db` and
+  ignores the `db` field in `.filigree.conf`. Custom-DB projects (e.g.
+  `db = "storage/track.db"`) were silently displayed and mutated through the
+  wrong (default) database, while the CLI/MCP — which goes through
+  `cli_common.py` — opened the correct path. A new
+  `_open_db_for_filigree_dir` helper now uses `from_conf` when a
+  `.filigree.conf` sits next to the directory and falls back to
+  `from_filigree_dir` only for legacy installs (the same shape as
+  `cli_common.py:_build_db` and the doctor fix in filigree-3572d3b273).
+  Regression test in
+  `tests/api/test_multi_project.py::TestProjectStore::test_get_db_honors_custom_db_path_from_conf`.
+  (filigree-da8d5aba0f)
+- **Dashboard `ProjectStore.reload()` is now atomic and serves consistent
+  handles under concurrent reads.** Two race windows existed: (1) `load()`
+  published `_projects` *before* `reload()` evicted stale `_dbs` under the
+  lock, leaving a window where `_projects[key]` referenced the new path
+  while `_dbs[key]` was the old handle (request handlers got the wrong DB);
+  (2) `get_db()` had an unlocked fast path that could hand out a handle
+  immediately before `reload()` popped and closed it (request handlers got
+  a closed `sqlite3.Connection`). The fix factors `load()` into a
+  `_compute_projects()` helper, performs an atomic state swap in `reload()`
+  under one lock acquisition, removes the unlocked fast path in `get_db()`,
+  and parks evicted handles on `_evicted_dbs` so they are closed only at
+  `close_all()` (process shutdown) — sidestepping the close-while-in-use
+  hazard without introducing a refcount/lease mechanism. New regression
+  test
+  `tests/api/test_multi_project.py::TestProjectStore::test_reload_atomic_under_concurrent_get_db`
+  exercises a reader against a path-rotating reloader and asserts no torn
+  views and no closed handles. (filigree-e43edbc067)
+- **`report-finding --file` now surfaces the foreign-database diagnostic.**
+  The command read and validated the `--file` payload before resolving the
+  filigree project, so a `ForeignDatabaseError` (cwd inside a git repo whose
+  nearest filigree anchor sits across a `.git/` boundary) was masked by the
+  next available file/JSON `VALIDATION` envelope. Project resolution now
+  runs at the top of the callback via `_resolve_filigree_dir_or_die`,
+  matching every other command in this module. The
+  `TestForeignDatabaseDiagnostic` matrix in `tests/cli/test_scanners_commands.py`
+  gains a `report-finding --file <missing> --json` parametrize case.
+  (filigree-08ed302942)
+- **`trigger-scan-batch <scanner> --json` now returns a structured envelope
+  on empty file lists.** The variadic `file_paths` argument was declared
+  `required=True`, so Click rejected an empty invocation with raw usage text
+  before the callback ran — making the in-callback `VALIDATION` envelope
+  (and its match with the MCP `mcp_tools/scanners.py` contract) unreachable
+  from the CLI. The argument is now `required=False`; the existing empty-list
+  guard emits `{"error": "file_paths must be a non-empty list", "code":
+  "VALIDATION"}` as intended. New regression test in
+  `tests/cli/test_scanners_commands.py::TestForeignDatabaseDiagnostic::test_trigger_scan_batch_empty_filepaths_returns_validation_envelope`.
+  (filigree-9b04b0aca9)
+- **Graph v2: archived issues no longer leak through `include_done=false`
+  and `status_categories` filters.** `archive_closed()` writes
+  `status='archived'` while preserving `closed_at`, but the synthetic
+  status resolves to category `open`, not `done`. The graph route
+  filtered only on `status_category == 'done'`, so archived issues
+  appeared in `include_done=false` results, matched
+  `status_categories=open`, and inflated `blocks_open_count` (the
+  `.blocks` adjacency list, unlike `.blocked_by`, isn't pre-filtered for
+  archived members). A new `_graph_status_category()` helper normalizes
+  archived to `done` for filter predicates, blocker/dependent counts,
+  and the serialized node payload. (filigree-b6cacfce72)
+- **Graph v2: shortcut edges between non-adjacent critical-path nodes
+  are no longer flagged `is_critical_path`.** `db.get_critical_path()`
+  returns an ordered chain (longest-path DP). The route collapsed it
+  into a node-id set and marked any edge between two members critical,
+  so a chain `A→B→C→D` plus shortcut `A→D` mis-flagged the shortcut
+  even though it isn't part of the chain. The route now keeps the
+  ordered list and builds adjacent `(source, target)` pairs;
+  `_filter_graph_edges` flags only those pairs.
+  (filigree-c9b08d1363)
+- **`install_codex_mcp`: replace TOML-equivalent header forms in place
+  instead of duplicating them.** `_upsert_toml_table` matched the
+  existing `mcp_servers.filigree` block with a literal regex
+  (`^\[mcp_servers\.filigree\]`), so valid equivalent forms accepted by
+  `tomllib` — `[mcp_servers."filigree"]`, `[mcp_servers . filigree]`,
+  `["mcp_servers".filigree]` — bypassed replacement and took the append
+  branch. The resulting file then contained two semantically identical
+  tables, which `tomllib` rejects under its duplicate-table rule,
+  breaking subsequent `install_codex_mcp` runs with "malformed TOML;
+  fix or remove it." The matcher now parses each `^\[...\]` header
+  through `tomllib` and compares the normalized key path, so any
+  TOML-equivalent spelling is replaced in place. (filigree-32fe96222e)
+- **`_install_skill_to`: concurrent installs no longer race on a shared
+  staging directory.** The old implementation reused a deterministic
+  `<skill>.installing` sibling path for every invocation; two Claude Code
+  sessions starting near-simultaneously (each firing the SessionStart
+  stale-skill auto-refresh in `hooks.py`) could clobber each other's
+  staging area, producing `FileExistsError` or leaving the target
+  directory absent between rmtree and rename. Each call now stages into
+  a unique `tempfile.mkdtemp` directory and the swap tolerates a peer
+  winning the rename race (their staged content is identical).
+  (filigree-86b73c3d6c)
+- **`_atomic_write_text`: preserves destination permissions on rewrite.**
+  `tempfile.mkstemp()` creates files with mode 0o600; the previous
+  implementation's `os.replace()` would silently downgrade existing
+  files (CLAUDE.md, AGENTS.md, .gitignore) from 0o644 to 0o600 on every
+  install or update. The helper now captures the existing mode before
+  the swap and chmods the temp file to match. New files respect the
+  process umask. (filigree-156023f053)
+- **Doctor: `.gitignore` check now uses the same gitignore-aware parser
+  as `ensure_gitignore`, instead of substring matching.** Previously a
+  `.gitignore` containing only a comment (`# .filigree/ ...`), only a
+  negation (`!.filigree/`), or only a non-root substring
+  (`src/.filigree/cache/`) would be reported as healthy even though git
+  did not actually ignore the project-root `.filigree/`. The parser was
+  extracted into `install_support/gitignore.py` so install and doctor
+  share one implementation. (filigree-bc5d2af1ef)
+- **Doctor: malformed `mcpServers.filigree` entries in `.mcp.json` are
+  now flagged invalid.** A truthy non-dict value (string, bool, list)
+  used to silently report "Configured in .mcp.json" because the
+  per-server schema was never validated — `command` was coerced to
+  `""`, both absolute-path branches were skipped, and the success
+  branch caught the fall-through. Doctor now requires the entry to be
+  a dict and validates the stdio (non-empty `command`, list `args`)
+  and streamable-http (non-empty `url`) shapes the installer emits.
+  (filigree-466bcb6279)
+- **Doctor no longer subprocess-runs the hook-configured Python
+  interpreter.** When the SessionStart hook in `.claude/settings.json`
+  used module form (`<abs-path> -m filigree …`), `filigree doctor`
+  used to execute `<abs-path> -c "import filigree"` to detect a
+  venv-purged install (filigree-36539914b3). Because
+  `.claude/settings.json` is project-controlled, a hostile or
+  compromised repo could plant a binary at that path and get arbitrary
+  code executed under anyone running `filigree doctor` on a fresh
+  clone. The probe is removed; module-form hooks now get structural
+  validation only. The original venv-purge case still surfaces as a
+  SessionStart failure on the next session and is repaired by
+  `filigree install --hooks`. (filigree-e6828dcdb1)
+- **Scan ingest: `process_scan_results` rejects `suggestion=None` with
+  `ValueError` instead of crashing with `TypeError`.** The validator
+  in `_validate_scan_findings` (db_files.py:422) only rejected
+  non-string suggestions when the value was not `None`, but the write
+  path (`_upsert_finding`) called `len(suggestion)` unconditionally
+  via `f.get("suggestion", "")` — and `dict.get` returns the explicit
+  `None`, not the default. The HTTP routes only translate `ValueError`
+  → 400, so a `null` suggestion became a 500. The validator now treats
+  `None` the same as any other non-string value.
+  (filigree-e74fecddd4)
+- **Scan ingest: `finding.language` is validated.** The validator
+  hardened every documented finding field except `language`. A
+  non-string value either silently coerced to a string (SQLite type
+  affinity on `int`) — violating the `FileRecordDict.language: str`
+  contract — or leaked a raw `sqlite3.ProgrammingError` to the API
+  consumer (on `list`/`dict`). `language` is now required to be a
+  string when present; `None` is normalized to `""` for symmetry with
+  the existing `f.get("language", "")` default.
+  (filigree-2134b23fb9)
+- **`scan_runs.findings_count` reflects findings observed by this
+  run, not first-attribution membership.** `scan_findings.scan_run_id`
+  is first-attribution-wins (set on insert, preserved on update by
+  `_update_existing_finding`). The completion path counted via
+  `SELECT COUNT(*) FROM scan_findings WHERE scan_run_id = ?`, so a
+  re-scan that only re-saw existing findings reported
+  `findings_count=0`. The count is now accumulated incrementally on
+  the `scan_runs` row per batch (`findings_created + findings_updated`),
+  which fixes both the re-scan case AND preserves the existing
+  multi-batch contract where the orchestrator's final
+  `complete_scan_run=True` call has empty findings.
+  (filigree-f84f141e86)
+- **`list_files_paginated` rejects invalid sort `direction`.** The
+  rest of the query-shaping params raise `ValueError` for unknown
+  values, but `direction` silently fell back to the default order:
+  `direction='SIDEWAYS'` returned a default-ordered result instead of
+  erroring. MCP's wrapper already validates strictly — this brings
+  the core API in line, so HTTP/CLI callers get the same 400 the
+  MCP surface returns. `None` still means "use default."
+  (filigree-e53ce98110)
+- **``setup_logging()`` always normalizes the surviving handler.** If
+  another import attached a bare ``RotatingFileHandler`` for the target
+  path before ``setup_logging()`` ran, the dedup loop reused that
+  handler and returned early — leaving ``logger.level`` at ``NOTSET``
+  (effective ``WARNING``) and the formatter unset, so MCP startup INFO
+  events were silently dropped and warning/error records were written
+  as plain text instead of JSONL. The function now applies
+  ``_JsonFormatter`` and ``logger.setLevel(logging.INFO)``
+  unconditionally on the surviving handler. Regression test pre-attaches
+  an unconfigured matching handler and asserts the level/formatter and
+  that an ``info`` emit lands as a single JSON line.
+  (filigree-1ba7d648c6)
+- **``batch-update-findings --json`` all-failed envelope no longer
+  misclassifies storage failures as ``VALIDATION``.** The per-item
+  loop already classifies failures as ``NOT_FOUND``/``VALIDATION``/
+  ``IO``, but the all-failed branch hard-coded
+  ``ErrorCode.VALIDATION`` for the envelope, breaking the closed-set
+  contract callers branch on for retry policy: an ``sqlite3.Error``
+  burst was reported as a client-input error. The envelope now
+  derives its code from the per-item codes — ``IO`` wins (retryable);
+  a single homogeneous code is preserved; only genuinely mixed
+  failures fall back to ``VALIDATION``. Regression monkeypatches
+  ``update_finding`` to raise ``sqlite3.OperationalError`` and asserts
+  ``code == "IO"``. (filigree-c2aeba2946)
+- **``add_dependency()`` no longer leaks an open SQLite write
+  transaction on the duplicate path.** The idempotent ``INSERT OR
+  IGNORE`` opens an implicit write transaction even when no row
+  changes; the early ``return False`` skipped both ``commit()`` and
+  ``rollback()``, so the lock lingered and any other connection's
+  write failed with ``database is locked``. Now the duplicate path
+  explicitly rolls back before returning. Regression covers
+  ``conn.in_transaction`` and a second-connection write.
+  (filigree-a0fc2b4ecc)
+- **``get_plan()`` and ``get_release_tree()`` no longer silently
+  truncate after 100 children.** Both delegated to
+  ``list_issues(parent_id=...)``, which defaults to ``limit=100`` and
+  always applies ``LIMIT ? OFFSET ?``; plans/releases with more than
+  100 children lost the rest from the tree and from
+  ``total_steps``/progress. Tree builders now use a private
+  ``_list_all_children()`` that issues an unbounded child query.
+  Regression covers 101 phases, 101 steps, and 101 release children.
+  (filigree-07d55ee5e5)
+- **``create_plan()`` rejects float and other non-int/non-str
+  ``dep_ref`` values instead of silently misrouting.** Parsing
+  coerced every ref through ``str(dep_ref)``, so ``0.1`` became
+  ``"0.1"`` → ``phase 0 step 1`` — a real dependency on the wrong
+  step instead of a ``ValueError``. Booleans and oddly-formatted
+  strings (``"+0"``, ``" 1 "``) followed the same path. A new
+  ``_normalize_dep_ref`` validator runs first: accepts ``int``
+  (excluding ``bool``, non-negative) and ``str`` matching ``"N"`` or
+  ``"P.S"`` with non-negative integer parts; rejects everything else
+  with ``ValueError``. (filigree-6802ed02e0)
+- **``verify_pid_ownership`` PID-file fallback no longer rejects the
+  dashboard's own record when the port was stored as a separate
+  metadata field.** When the OS-argv lookup is unavailable
+  (constrained sandboxes without ``/proc``/``ps``/``wmic``), the
+  fallback re-validated against ``cmd`` plus the appended
+  ``--port <N>`` requirement — but callers (``hooks.py:420``,
+  ``server.py:269``/``393``) record ``cmd="filigree dashboard"`` and
+  the port in a separate ``port`` field, so the requirement could
+  never match and live dashboards were misclassified as stale. The
+  fallback now validates ``cmd`` against caller-supplied
+  ``required_args`` only, trusting the parsed ``port`` field as
+  metadata. The strict ``--port <N>`` match is retained on the
+  OS-argv path, where the live argv actually carries the
+  token. (filigree-403dd029c3)
+- **``cleanup_stale_pid`` no longer clobbers a newer primary PID
+  file on POSIX during quarantine restore.** The restore path used
+  ``Path.rename(quarantine, pid_file)``, which on POSIX overwrites
+  the destination — the comment claimed the rename would fail when a
+  fresh primary already existed. Combined with a shared
+  ``.removing`` quarantine name, two concurrent cleaners could
+  collide and overwrite each other, and a newer writer's PID record
+  could be replaced by an older quarantined copy. The quarantine
+  filename is now unique per cleaner (suffix +
+  ``os.getpid()`` + ``time.monotonic_ns()``), and the restore uses
+  ``os.link``, which atomically fails with ``FileExistsError`` if
+  the destination already exists; the quarantined copy is dropped in
+  that case so the newer primary stands. (filigree-5aa3dc590a)
+- **``read_pid_file`` no longer truncates float PIDs/ports or leaks
+  ``OverflowError`` on non-finite JSON.** ``int(data["pid"])`` /
+  ``int(raw_port)`` accepted ``float`` (silently truncating ``12.9``
+  to ``12``), accepted ``bool`` (``True`` became PID ``1``), and
+  raised ``OverflowError`` on values like ``1e999`` (parsed by
+  ``json.loads`` as ``inf``) — and the outer handler caught only
+  ``(ValueError, OSError)``. ``read_pid_file`` now uses a strict
+  ``_coerce_pos_int`` helper that rejects ``bool``, ``float``, and
+  non-digit strings, and only accepts integers in range; the outer
+  handler also catches ``OverflowError`` for defense-in-depth. The
+  documented contract that corrupt PID files return ``None`` now
+  holds. (filigree-626c12d368)
+- **Concurrent ``create_observation`` calls now return the existing live
+  duplicate instead of raising ``IntegrityError``.** The dedup path was
+  ``SELECT … if existing: return … else INSERT`` with no writer lock
+  under ``isolation_level="DEFERRED"``, so two callers could pass the
+  pre-insert SELECT, one INSERT would succeed and the other would
+  surface ``UNIQUE constraint failed: index 'idx_observations_dedup'``
+  through MCP as a generic database error — contradicting the
+  documented contract. ``create_observation`` cannot wrap the whole
+  function in ``BEGIN IMMEDIATE`` because callers invoke it with
+  ``auto_commit=False`` inside their own transactions; instead, it now
+  catches ``IntegrityError`` on the dedup index, rolls back, re-SELECTs
+  the live duplicate, and returns it. Other ``IntegrityError`` causes
+  (e.g. the still-present ``register_file`` race) propagate
+  unchanged. (filigree-248ca4ff3f)
+- **Concurrent ``dismiss_observation`` and
+  ``batch_dismiss_observations`` no longer write duplicate audit rows.**
+  Both paths read-then-deleted without serialization, so racing dismiss
+  callers all wrote to ``dismissed_observations`` (no ``obs_id``
+  uniqueness) and all reported success even though only one ``DELETE``
+  actually removed a row. The SELECT/INSERT/DELETE sequence is now
+  wrapped in ``BEGIN IMMEDIATE``. **Behavior change:** a concurrent
+  second dismiss now raises ``ValueError("Observation not found")``
+  instead of silently succeeding. (filigree-fd77d71a49)
 - **Priority validators now reject non-int (incl. ``bool``) before any
   write, and ``update_issue`` validates regardless of equality with
   current.** ``create_issue`` and ``update_issue`` previously enforced

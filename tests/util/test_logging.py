@@ -176,6 +176,32 @@ class TestSetupLogging:
         # Stale must be closed.
         assert stale.stream is None
 
+    def test_configures_pre_existing_matching_handler(self, tmp_path: Path) -> None:
+        """A pre-attached but unconfigured matching handler must end up configured."""
+        target = tmp_path / "filigree.log"
+        logger = logging.getLogger("filigree")
+        # Pre-attach an unconfigured matching handler (no formatter, logger level NOTSET).
+        pre = logging.handlers.RotatingFileHandler(str(target))
+        logger.addHandler(pre)
+
+        setup_logging(tmp_path)
+
+        # Logger must be at INFO level so info events are not dropped.
+        assert logger.level == logging.INFO
+        # The surviving handler must have the JSON formatter applied.
+        surviving = [h for h in logger.handlers if isinstance(h, logging.handlers.RotatingFileHandler)]
+        assert len(surviving) == 1
+        formatter = surviving[0].formatter
+        assert formatter is not None
+        # End-to-end: an INFO emit must land as a single JSON line.
+        logger.info("info_event", extra={"tool": "t"})
+        for h in logger.handlers:
+            h.flush()
+        line = target.read_text().strip().splitlines()[-1]
+        record = json.loads(line)
+        assert record["msg"] == "info_event"
+        assert record["level"] == "INFO"
+
     def teardown_method(self) -> None:
         """Clean up the filigree logger handlers between tests."""
         logger = logging.getLogger("filigree")

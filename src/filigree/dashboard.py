@@ -45,8 +45,10 @@ if TYPE_CHECKING:
 
 from filigree import __version__
 from filigree.core import (
+    CONF_FILENAME,
+    FILIGREE_DIR_NAME,
     FiligreeDB,
-    find_filigree_root,
+    find_filigree_anchor,
     read_config,
 )
 
@@ -76,6 +78,23 @@ _last_request_time: float = 0.0  # monotonic clock; set at startup
 _current_project_key: ContextVar[str] = ContextVar("project_key", default="")
 
 
+def _open_db_for_filigree_dir(filigree_dir: Path, *, check_same_thread: bool = True) -> FiligreeDB:
+    """Open the project DB for *filigree_dir*, honouring ``.filigree.conf``.
+
+    Mirrors the canonical CLI pattern (``cli_common._build_db``): when a
+    ``.filigree.conf`` sits next to the directory, use ``FiligreeDB.from_conf``
+    so a relocated ``db`` field is honoured (e.g. ``db = "storage/track.db"``).
+    Fall back to ``from_filigree_dir`` for legacy installs without a conf.
+    Without this, the dashboard silently opened ``.filigree/filigree.db`` while
+    the CLI/MCP — which goes through ``cli_common.py`` — opened the conf-
+    declared path, producing a split-brain view. (filigree-da8d5aba0f)
+    """
+    conf_path = filigree_dir.parent / CONF_FILENAME
+    if conf_path.is_file():
+        return FiligreeDB.from_conf(conf_path, check_same_thread=check_same_thread)
+    return FiligreeDB.from_filigree_dir(filigree_dir, check_same_thread=check_same_thread)
+
+
 class ProjectStore:
     """Manages multiple FiligreeDB connections for server mode.
 
@@ -86,21 +105,30 @@ class ProjectStore:
     def __init__(self) -> None:
         self._projects: dict[str, dict[str, str]] = {}  # key -> {name, path}
         self._dbs: dict[str, FiligreeDB] = {}
-        # Serialises cache mutations (get_db lazy-open, reload eviction,
-        # close_all). Without this two concurrent first requests for the
-        # same key both pass the membership check, both run
-        # FiligreeDB.from_filigree_dir (which migrates and seeds), and
-        # only the loser is cached — the winner's handle leaks unclosed.
-        # filigree-732f6b31e4
+        # Handles evicted by reload() (removed/path-changed projects). They are
+        # NOT closed at eviction time because a concurrent request handler may
+        # still be using one — closing under it would race with a SQLite call.
+        # close_all() (process shutdown) is the single drain point.
+        # (filigree-e43edbc067)
+        self._evicted_dbs: list[FiligreeDB] = []
+        # Serialises ALL reads and writes of (_projects, _dbs, _evicted_dbs):
+        # - get_db lazy-open and cache lookup (filigree-732f6b31e4: serialise
+        #   first opens; filigree-e43edbc067: removed unlocked fast path so a
+        #   reader can never hand out a handle that reload just popped).
+        # - reload's atomic state swap (filigree-e43edbc067).
+        # - close_all drain.
         self._lock = threading.Lock()
 
     # -- public API --
 
-    def load(self) -> None:
-        """Read server.json and populate the project map.
+    def _compute_projects(self) -> dict[str, dict[str, str]]:
+        """Read server.json and return a fresh project map.
 
-        Skips directories that don't exist (logs warning).
-        Raises ``ValueError`` on prefix collision.
+        Pure: never assigns to self. ``load()`` and ``reload()`` use this to
+        decouple "build the new map" (slow, can fail) from the atomic state
+        swap. Skips directories that don't exist (logs warning). Raises
+        ``ValueError`` on corrupt JSON or prefix collision so ``reload()`` can
+        retain existing state.
         """
         from filigree.server import SERVER_CONFIG_FILE, read_server_config
 
@@ -131,17 +159,32 @@ class ProjectStore:
             proj_config = read_config(filigree_path)
             display_name = proj_config.get("name") or prefix
             projects[prefix] = {"name": display_name, "path": filigree_path_str}
-        self._projects = projects
+        return projects
+
+    def load(self) -> None:
+        """Read server.json and populate the project map.
+
+        Skips directories that don't exist (logs warning).
+        Raises ``ValueError`` on prefix collision or corrupt JSON.
+        """
+        new_projects = self._compute_projects()
+        with self._lock:
+            self._projects = new_projects
 
     def get_db(self, key: str) -> FiligreeDB:
-        """Return (lazily opening) the DB for *key*. Raises ``KeyError``."""
-        if key not in self._projects:
-            raise KeyError(key)
-        # Fast path: cache hit, no lock needed (dict reads are atomic under GIL).
-        cached = self._dbs.get(key)
-        if cached is not None:
-            return cached
+        """Return (lazily opening) the DB for *key*. Raises ``KeyError``.
+
+        The lock guards the whole operation: membership check, cache lookup,
+        and lazy open all happen under the same lock that ``reload()`` uses
+        for its atomic state swap. This means a reader either observes the
+        old (consistent) ``(_projects, _dbs)`` pair or the new pair, never a
+        torn view where ``_projects[key]`` points at a new path while
+        ``_dbs[key]`` is still the handle for the old path.
+        (filigree-e43edbc067)
+        """
         with self._lock:
+            if key not in self._projects:
+                raise KeyError(key)
             cached = self._dbs.get(key)
             if cached is not None:
                 return cached
@@ -149,7 +192,7 @@ class ProjectStore:
             filigree_path = Path(info["path"])
             db: FiligreeDB | None = None
             try:
-                db = FiligreeDB.from_filigree_dir(filigree_path, check_same_thread=False)
+                db = _open_db_for_filigree_dir(filigree_path, check_same_thread=False)
                 self._dbs[key] = db
             except SchemaVersionMismatchError as exc:
                 # Operator-visible expected condition (project DB written by a
@@ -172,36 +215,40 @@ class ProjectStore:
                 if db is not None:
                     db.close()
                 raise
-        return self._dbs[key]
+            return self._dbs[key]
 
     def list_projects(self) -> list[dict[str, str]]:
         """Return ``[{key, name, path}]`` for the frontend."""
-        return [{"key": k, **v} for k, v in self._projects.items()]
+        with self._lock:
+            return [{"key": k, **v} for k, v in self._projects.items()]
 
     def reload(self) -> dict[str, Any]:
-        """Re-read server.json. On read failure, retains existing state."""
-        old_projects = dict(self._projects)
-        old_keys = set(old_projects)
+        """Re-read server.json. On read failure, retains existing state.
+
+        Atomic: builds the new project map locally, then under one lock
+        acquisition (a) swaps ``_projects`` and (b) evicts stale ``_dbs``
+        entries. Evicted handles are stashed on ``_evicted_dbs`` for
+        ``close_all`` to drain at shutdown — closing them synchronously here
+        would race with any in-flight request handler that already holds the
+        handle. (filigree-e43edbc067)
+        """
         try:
-            self.load()
+            new_projects = self._compute_projects()
         except Exception as exc:
             logger.error("Failed to reload server.json — retaining existing state", exc_info=True)
             return {"added": [], "removed": [], "error": str(exc)}
-        new_keys = set(self._projects)
-        removed = sorted(old_keys - new_keys)
-        path_changed = sorted(key for key in (old_keys & new_keys) if old_projects[key].get("path") != self._projects[key].get("path"))
 
-        # Close and evict stale DB handles for removed projects and projects
-        # whose path changed under the same key. Lock-guarded so a concurrent
-        # get_db() either sees the old handle (and returns it) or sees a clean
-        # cache and reopens fresh — never a closed handle. (filigree-732f6b31e4)
         with self._lock:
-            evict = [(key, self._dbs.pop(key)) for key in [*removed, *path_changed] if key in self._dbs]
-        for key, db in evict:
-            try:
-                db.close()
-            except Exception:
-                logger.warning("Error closing removed project DB for key=%r", key, exc_info=True)
+            old_projects = self._projects
+            old_keys = set(old_projects)
+            new_keys = set(new_projects)
+            removed = sorted(old_keys - new_keys)
+            path_changed = sorted(key for key in (old_keys & new_keys) if old_projects[key].get("path") != new_projects[key].get("path"))
+            self._projects = new_projects
+            for key in [*removed, *path_changed]:
+                handle = self._dbs.pop(key, None)
+                if handle is not None:
+                    self._evicted_dbs.append(handle)
 
         return {
             "added": sorted(new_keys - old_keys),
@@ -210,24 +257,35 @@ class ProjectStore:
         }
 
     def close_all(self) -> None:
-        """Close all open DB connections."""
-        # Lock-guarded so a concurrent get_db() can't sneak in between the
-        # close loop and the clear. (filigree-732f6b31e4)
+        """Close all open DB connections, including handles previously
+        evicted by ``reload()``.
+
+        Single drain point for SQLite handles managed by the store. Called
+        on dashboard shutdown. (filigree-e43edbc067)
+        """
         with self._lock:
-            handles = list(self._dbs.items())
+            handles: list[tuple[str, FiligreeDB]] = list(self._dbs.items())
+            evicted = list(self._evicted_dbs)
             self._dbs.clear()
+            self._evicted_dbs.clear()
         for key, db in handles:
             try:
                 db.close()
             except Exception:
                 logger.warning("Error closing DB for project %s", key, exc_info=True)
+        for db in evicted:
+            try:
+                db.close()
+            except Exception:
+                logger.warning("Error closing evicted project DB", exc_info=True)
 
     @property
     def default_key(self) -> str:
         """First loaded project's key, or ``""`` if empty."""
-        if not self._projects:
-            return ""
-        return next(iter(self._projects))
+        with self._lock:
+            if not self._projects:
+                return ""
+            return next(iter(self._projects))
 
 
 _project_store: ProjectStore | None = None
@@ -609,11 +667,12 @@ def main(port: int = DEFAULT_PORT, *, no_browser: bool = False, server_mode: boo
         n = len(_project_store.list_projects())
         logger.info("Server mode: loaded %d project(s)", n)
     else:
-        filigree_dir = find_filigree_root()
+        project_root, _conf_path = find_filigree_anchor()
+        filigree_dir = project_root / FILIGREE_DIR_NAME
         config = read_config(filigree_dir)
         _config.update(config)
         try:
-            _db = FiligreeDB.from_filigree_dir(filigree_dir, check_same_thread=False)
+            _db = _open_db_for_filigree_dir(filigree_dir, check_same_thread=False)
         except SchemaVersionMismatchError as exc:
             # Forward schema mismatch — exit cleanly (code 3, matching
             # `filigree doctor`) with the shared guidance text instead of

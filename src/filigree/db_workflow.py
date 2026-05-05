@@ -228,8 +228,29 @@ class WorkflowMixin(DBMixinProtocol):
         Type-aware companion to ``_get_states_for_category``. Used for SQL
         predicates that must respect the type when state names collide
         across categories (filigree-b55aa3191f).
+
+        Mirrors the correctness floor in ``_infer_status_category``: types
+        that are not in the active registry (e.g. their pack was disabled
+        after issues were created) still contribute their bundled
+        ``(type, state)`` pairs, so SQL category predicates agree with the
+        Python-level ``_resolve_status_category`` for those rows
+        (filigree-c9af813900). Without this, a hydrated blocker shows
+        ``status_category="done"`` while readiness/hydration SQL still
+        treats it as active.
         """
-        return [(tpl.type, s.name) for tpl in self.templates.list_types() for s in tpl.states if s.category == category]
+        active_types: set[str] = set()
+        pairs: list[tuple[str, str]] = []
+        for tpl in self.templates.list_types():
+            active_types.add(tpl.type)
+            for s in tpl.states:
+                if s.category == category:
+                    pairs.append((tpl.type, s.name))
+        for (type_name, state_name), cat in _BUILTIN_CATEGORY_BY_TYPE_STATE.items():
+            if type_name in active_types:
+                continue
+            if cat == category:
+                pairs.append((type_name, state_name))
+        return pairs
 
     def _category_predicate_sql(
         self,
@@ -304,10 +325,22 @@ class WorkflowMixin(DBMixinProtocol):
         return "open"
 
     def _resolve_status_category(self, issue_type: str, status: str) -> StatusCategory:
-        """Resolve status category via template or fallback heuristic for unknown types."""
+        """Resolve status category via template or fallback heuristic for unknown types.
+
+        The name-only fallback in ``_infer_status_category`` is intended for
+        types that are not in the active registry (disabled pack, custom type
+        with no template). When the type *is* active but the state is
+        undeclared, the row carries invalid template state — running the
+        unambiguous-name path would silently classify e.g. a ``task`` with
+        status ``released`` as done. Stay conservative and return ``"open"``
+        for active-type / undeclared-state pairs; ``validate_issue()``
+        surfaces the schema error (filigree-c9af813900).
+        """
         cat = self.templates.get_category(issue_type, status)
         if cat is not None:
             return cat
+        if self.templates.get_type(issue_type) is not None:
+            return "open"
         return self._infer_status_category(issue_type, status)
 
     # Namespace reservation — auto-tag and virtual namespaces are system-managed

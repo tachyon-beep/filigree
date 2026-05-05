@@ -20,7 +20,8 @@ faster and return structured data. Key tools:
 - `get_ready` / `get_blocked` — find available work
 - `get_issue` / `list_issues` / `search_issues` — read issues
 - `create_issue` / `update_issue` / `close_issue` — manage issues
-- `claim_issue` / `claim_next` — atomic claiming
+- `start_work` / `start_next_work` — atomically claim and transition to in-progress (the usual way to pick up work in 2.0)
+- `claim_issue` / `claim_next` — atomic claim only, no transition (niche; prefer `start_work`)
 - `add_comment` / `add_label` — metadata
 - `list_labels` / `get_label_taxonomy` — discover labels and reserved namespaces
 - `create_plan` / `get_plan` — milestone planning
@@ -44,6 +45,18 @@ either `dismiss_observation` (not worth tracking) or `promote_observation`
 
 Fall back to CLI (`filigree <command>`) when MCP is unavailable.
 
+### Response shapes (for `--json` and MCP)
+
+Filigree 2.0 unifies response envelopes across MCP and CLI:
+
+- **Batch ops** return `{succeeded: [...], failed: [{id, error, code}, ...], newly_unblocked?: [...]}`. `failed` is always present (empty list if none); `newly_unblocked` is omitted when the op cannot unblock. Pass `response_detail="full"` (MCP) or `--detail=full` (CLI) to get full records back instead of slim summaries.
+- **List ops** return `{items: [...], has_more: bool, next_offset?: int}`. `has_more` is always present; `next_offset` appears only when there is a next page.
+- **Errors** return `{error: str, code: ErrorCode, details?: dict}` where `code` is one of: `VALIDATION`, `NOT_FOUND`, `CONFLICT`, `INVALID_TRANSITION`, `PERMISSION`, `NOT_INITIALIZED`, `IO`, `INVALID_API_URL`, `STOP_FAILED`, `SCHEMA_MISMATCH`, `INTERNAL`.
+
+### Schema-mismatch (warm-but-degraded MCP)
+
+When the installed `filigree` is older than the project's database, the MCP server still launches but every tool call returns an `ErrorResponse` with `code: SCHEMA_MISMATCH` and upgrade guidance. Surface that message to the user — do not retry. The fix is `uv tool install --upgrade filigree` (or whatever installed it).
+
 ### CLI Quick Reference
 
 ```bash
@@ -59,7 +72,7 @@ filigree show <id> --with-files             # Include file associations (off by 
 
 # Creating & updating
 filigree create "Title" --type=task --priority=2          # New issue
-filigree update <id> --status=in_progress                # Claim work
+filigree update <id> --status=<status>                   # Update status (free-form; prefer `start-work` for open→in_progress)
 filigree close <id>                                      # Mark complete
 filigree close <id> --reason="explanation"               # Close with reason
 
@@ -77,9 +90,11 @@ filigree labels                             # List all labels by namespace
 filigree taxonomy                           # Show reserved namespaces and vocabulary
 
 # Workflow templates
-filigree types                              # List registered types with state flows
+filigree types                              # List registered types with status flows
 filigree type-info <type>                   # Full workflow definition for a type
-filigree transitions <id>                   # Valid next states for an issue
+filigree transitions <id>                   # Valid next statuses for an issue
+filigree workflow-statuses                  # All statuses by category from enabled templates
+filigree explain-status <type> <status>     # Explain a status's transitions and required fields
 filigree packs                              # List enabled workflow packs
 filigree validate <id>                      # Validate issue against template
 filigree guide <pack>                       # Display workflow guide for a pack
@@ -100,7 +115,6 @@ filigree create-plan --file plan.json            # Create milestone/phase/step h
 # Event history
 filigree changes --since 2026-01-01T00:00:00    # Events since timestamp
 filigree events <id>                             # Event history for issue
-filigree explain-state <type> <state>            # Explain a workflow state
 
 # Observations (agent scratchpad)
 filigree observe "note" --file=src/foo.py --line=42      # Fire-and-forget note
@@ -119,7 +133,7 @@ filigree add-file-association <file_id> <issue_id>       # Link file to issue
 # Findings (scan-result triage)
 filigree list-findings                                   # List scan findings
 filigree get-finding <id>                                # Finding detail
-filigree update-finding <id> --status=...                # Update finding state
+filigree update-finding <id> --status=...                # Update finding status
 filigree promote-finding <id>                            # Promote finding to issue
 filigree dismiss-finding <id>                            # Dismiss finding
 filigree batch-update-findings <ids...> --status=...     # Update many at once
@@ -151,18 +165,25 @@ verb-noun alias matching the MCP tool name (`get-ready`, `list-labels`,
 The dashboard exposes REST endpoints for file tracking and scan result ingestion.
 Use `GET /api/files/_schema` for available endpoints and valid field values.
 
+API generations: `loom` (`/api/loom/*`) is the stable 2.0 federation contract;
+`classic` (`/api/v1/*`) is frozen but supported. The un-prefixed living surface
+(`/api/<endpoint>`) aliases the recommended generation (`loom` as of 2.0). New
+emitters should target `loom` or the living surface; `classic` exists for
+existing integrations only. See ADR-002 and `docs/federation/contracts.md`.
+
 Key endpoints:
 - `GET /api/files/_schema` — Discovery: valid enums, endpoint catalog
-- `POST /api/v1/scan-results` — Ingest scan results (SARIF-lite format)
-- `GET /api/files` — List tracked files with filtering and sorting
-- `GET /api/files/{file_id}` — File detail with associations and findings summary
-- `GET /api/files/{file_id}/findings` — Findings for a specific file
+- `POST /api/loom/scan-results` (or `/api/scan-results`) — Ingest scan results (loom envelope)
+- `POST /api/v1/scan-results` — Same intake, classic frozen response shape
+- `GET /api/loom/files` (or `/api/files`) — List tracked files with filtering and sorting
+- `GET /api/loom/files/{file_id}` — File detail with associations and findings summary
+- `GET /api/loom/files/{file_id}/findings` — Findings for a specific file
 
 ### Workflow
 1. `filigree ready` to find available work
 2. `filigree show <id>` to review details
-3. `filigree transitions <id>` to see valid state changes
-4. `filigree update <id> --status=in_progress` to claim it
+3. `filigree transitions <id>` to see valid status transitions
+4. `filigree start-work <issue-id> --assignee <name>` to atomically claim and transition to in-progress (or `filigree start-next-work --assignee <name>` to skip steps 1–3 and grab the highest-priority ready issue)
 5. Do the work, commit code
 6. `filigree close <id>` when done
 

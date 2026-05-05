@@ -113,6 +113,70 @@ def test_transition_errors_exist() -> None:
     assert "confirmed" in str(exc2)
 
 
+def test_scan_ingest_response_loom_concrete_shape() -> None:
+    """Regression: subclassing ``BatchResponse[str]`` did two bad things at
+    runtime — it (1) left ``succeeded`` as ``list[~_T]`` instead of
+    ``list[str]`` because TypedDict + ``Generic`` substitution is not
+    preserved through subclassing, and (2) promoted ``newly_unblocked``
+    from ``NotRequired`` to *required* in the subclass, exposing an
+    impossible contract for scan ingestion (which never unblocks issues).
+
+    Pin the concrete shape: exactly four required keys, ``succeeded``
+    typed as ``list[str]``, no ``newly_unblocked``.
+    """
+    from filigree.generations.loom.types import ScanIngestResponseLoom, ScanStats
+
+    hints = get_type_hints(ScanIngestResponseLoom)
+    assert set(hints.keys()) == {"succeeded", "failed", "stats", "warnings"}
+    assert hints["succeeded"] == list[str]
+    assert hints["failed"] == list[BatchFailure]
+    assert hints["stats"] is ScanStats
+    assert hints["warnings"] == list[str]
+    # newly_unblocked must NOT appear — scan ingest cannot unblock issues.
+    assert "newly_unblocked" not in hints
+    assert ScanIngestResponseLoom.__required_keys__ == {
+        "succeeded",
+        "failed",
+        "stats",
+        "warnings",
+    }
+    assert ScanIngestResponseLoom.__optional_keys__ == frozenset()
+
+
+def test_batch_close_response_loom_succeeded_supports_full() -> None:
+    """Regression: ``BatchCloseResponseLoom.succeeded`` was pinned to
+    ``list[SlimIssueLoom]`` even though the C5 contract (and the handler
+    in ``dashboard_routes/issues.py``) returns full ``IssueLoom`` items
+    when ``response_detail=full``. ``newly_unblocked[]`` stays slim per
+    the locked C5 rule (``docs/federation/contracts.md`` §C5).
+    """
+    from typing import get_args, get_origin
+
+    from filigree.generations.loom.types import (
+        BatchCloseResponseLoom,
+        IssueLoom,
+        SlimIssueLoom,
+    )
+
+    hints = get_type_hints(BatchCloseResponseLoom)
+    assert set(hints.keys()) == {"succeeded", "failed", "newly_unblocked"}
+
+    # succeeded is list[SlimIssueLoom | IssueLoom] — both projections legal.
+    # PEP 604 unions surface as types.UnionType, while typing.Union[...] is
+    # typing.Union; comparing get_args(elem) is robust to both.
+    succeeded_t = hints["succeeded"]
+    assert get_origin(succeeded_t) is list
+    (elem_t,) = get_args(succeeded_t)
+    assert set(get_args(elem_t)) == {SlimIssueLoom, IssueLoom}
+
+    # newly_unblocked stays slim-only by C5 contract.
+    # (Optionality is asserted at the wire-shape level by the parity test
+    # in tests/util/test_generation_parity.py — `from __future__ import
+    # annotations` strips PEP 655 ``NotRequired`` markers from
+    # ``__optional_keys__`` so we cannot check optionality here.)
+    assert hints["newly_unblocked"] == list[SlimIssueLoom]
+
+
 def test_errorcode_to_http_status_is_exhaustive() -> None:
     """Every ErrorCode member maps to a sensible HTTP status.
 

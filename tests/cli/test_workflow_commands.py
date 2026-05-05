@@ -676,6 +676,111 @@ class TestCreatePlanFileErrors:
         assert result.exception is None or isinstance(result.exception, SystemExit)
 
 
+class TestCreatePlanTitleTypeValidation:
+    """Bug filigree-401a96653b: non-string title raised AttributeError from db_planning's
+    ``.strip()`` call instead of producing a clean validation error.
+    """
+
+    def test_milestone_title_int_clean_error(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        runner, _ = cli_in_project
+        plan_json = json.dumps({"milestone": {"title": 123}, "phases": []})
+        result = runner.invoke(cli, ["create-plan"], input=plan_json)
+        assert result.exit_code == 1
+        assert "Traceback" not in result.output
+        assert "title" in result.output.lower()
+        assert "string" in result.output.lower() or "str" in result.output.lower()
+
+    def test_milestone_title_int_json_envelope(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        runner, _ = cli_in_project
+        plan_json = json.dumps({"milestone": {"title": 123}, "phases": []})
+        result = runner.invoke(cli, ["create-plan", "--json"], input=plan_json)
+        assert result.exit_code == 1
+        data = json.loads(result.output)
+        assert data["code"] == "VALIDATION"
+        assert "title" in data["error"].lower()
+
+    def test_phase_title_bool_clean_error(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        runner, _ = cli_in_project
+        plan_json = json.dumps(
+            {
+                "milestone": {"title": "MS"},
+                "phases": [{"title": True, "steps": []}],
+            }
+        )
+        result = runner.invoke(cli, ["create-plan"], input=plan_json)
+        assert result.exit_code == 1
+        assert "Traceback" not in result.output
+        assert "phase 1" in result.output.lower()
+        assert "title" in result.output.lower()
+
+    def test_step_title_none_clean_error(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        runner, _ = cli_in_project
+        plan_json = json.dumps(
+            {
+                "milestone": {"title": "MS"},
+                "phases": [{"title": "P1", "steps": [{"title": None}]}],
+            }
+        )
+        result = runner.invoke(cli, ["create-plan"], input=plan_json)
+        assert result.exit_code == 1
+        assert "Traceback" not in result.output
+        assert "step 1" in result.output.lower()
+        assert "title" in result.output.lower()
+
+
+class TestPlanningCliJsonErrorEnvelope:
+    """Bug filigree-f099dedc5d: --json validation/not-found paths must emit the
+    flat ``{error, code}`` envelope, not plain text.
+    """
+
+    def test_plan_not_found_json_envelope(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        runner, _ = cli_in_project
+        result = runner.invoke(cli, ["plan", "demo-nope", "--json"])
+        assert result.exit_code == 1
+        data = json.loads(result.output)
+        assert data["code"] == "NOT_FOUND"
+        assert "demo-nope" in data["error"]
+
+    def test_create_plan_invalid_json_envelope(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        runner, _ = cli_in_project
+        result = runner.invoke(cli, ["create-plan", "--json"], input="not json")
+        assert result.exit_code == 1
+        data = json.loads(result.output)
+        assert data["code"] == "VALIDATION"
+        assert "JSON" in data["error"] or "json" in data["error"].lower()
+
+    def test_create_plan_top_level_list_json_envelope(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        runner, _ = cli_in_project
+        result = runner.invoke(cli, ["create-plan", "--json"], input=json.dumps([1, 2, 3]))
+        assert result.exit_code == 1
+        data = json.loads(result.output)
+        assert data["code"] == "VALIDATION"
+
+    def test_create_plan_missing_keys_json_envelope(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        runner, _ = cli_in_project
+        result = runner.invoke(cli, ["create-plan", "--json"], input=json.dumps({"phases": []}))
+        assert result.exit_code == 1
+        data = json.loads(result.output)
+        assert data["code"] == "VALIDATION"
+
+    def test_create_plan_phase_not_object_json_envelope(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        runner, _ = cli_in_project
+        plan_json = json.dumps({"milestone": {"title": "MS"}, "phases": ["bad"]})
+        result = runner.invoke(cli, ["create-plan", "--json"], input=plan_json)
+        assert result.exit_code == 1
+        data = json.loads(result.output)
+        assert data["code"] == "VALIDATION"
+        assert "phase 1" in data["error"].lower()
+
+    def test_changes_invalid_timestamp_json_envelope(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        runner, _ = cli_in_project
+        result = runner.invoke(cli, ["changes", "--since", "not-a-timestamp", "--json"])
+        assert result.exit_code == 1
+        data = json.loads(result.output)
+        assert data["code"] == "VALIDATION"
+        assert "timestamp" in data["error"].lower() or "iso" in data["error"].lower()
+
+
 class TestBatchCli:
     def test_batch_update(self, cli_in_project: tuple[CliRunner, Path]) -> None:
         runner, _ = cli_in_project

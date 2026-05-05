@@ -77,7 +77,14 @@ class TestProjectStore:
         assert "bravo" in diff["removed"]
         assert len(project_store.list_projects()) == 1
 
-    def test_reload_closes_removed_project_db_handles(self, project_store: ProjectStore, tmp_path: Path) -> None:
+    def test_reload_evicts_removed_project_db_handles_close_deferred_to_close_all(
+        self, project_store: ProjectStore, tmp_path: Path
+    ) -> None:
+        """filigree-e43edbc067: reload evicts removed handles from ``_dbs`` but
+        does NOT close them synchronously — closing under a concurrent request
+        would race with that request's SQLite call. The single drain point is
+        ``close_all`` (process shutdown).
+        """
         import json
 
         bravo_db = project_store.get_db("bravo")
@@ -94,10 +101,22 @@ class TestProjectStore:
 
         assert "bravo" in diff["removed"]
         assert "bravo" not in project_store._dbs
-        assert bravo_db._conn is None
+        # Handle is parked for deferred close, not closed yet.
+        assert bravo_db in project_store._evicted_dbs
+        assert bravo_db._conn is not None
 
-    def test_reload_logs_db_close_error_at_warning(self, project_store: ProjectStore, tmp_path: Path) -> None:
-        """Bug filigree-191611: reload must log DB close errors at warning, not debug."""
+        # close_all is the drain point.
+        project_store.close_all()
+        assert bravo_db._conn is None
+        assert project_store._evicted_dbs == []
+
+    def test_close_all_logs_db_close_error_at_warning(self, project_store: ProjectStore, tmp_path: Path) -> None:
+        """Bug filigree-191611: close failures must log at WARNING (not DEBUG).
+
+        After filigree-e43edbc067 the actual close happens in ``close_all``,
+        not ``reload``. Drain reload's eviction first (via close_all) and
+        verify the warning surfaces from close_all.
+        """
         import json
         from unittest.mock import patch
 
@@ -109,7 +128,7 @@ class TestProjectStore:
         original_close = bravo_db.close
         bravo_db.close = lambda: (_ for _ in ()).throw(RuntimeError("close failed"))  # type: ignore[method-assign]
 
-        # Remove bravo from config so reload tries to close it
+        # Remove bravo from config so reload evicts it
         config_dir = tmp_path / ".config" / "filigree"
         existing = json.loads((config_dir / "server.json").read_text())
         to_remove = [k for k, v in existing["projects"].items() if v["prefix"] == "bravo"]
@@ -117,14 +136,20 @@ class TestProjectStore:
             del existing["projects"][k]
         (config_dir / "server.json").write_text(json.dumps(existing))
 
+        project_store.reload()
         with patch("filigree.dashboard.logger") as mock_logger:
-            project_store.reload()
+            project_store.close_all()
 
         mock_logger.warning.assert_called_once()
-        assert "bravo" in str(mock_logger.warning.call_args)
+        assert "evicted" in str(mock_logger.warning.call_args).lower()
         bravo_db.close = original_close  # type: ignore[method-assign]
 
     def test_reload_evicts_db_handle_when_project_path_changes(self, project_store: ProjectStore, tmp_path: Path) -> None:
+        """Path-changed projects evict the old handle from ``_dbs`` and the
+        next ``get_db`` opens the new path. Old handle stays alive on
+        ``_evicted_dbs`` until ``close_all`` (filigree-e43edbc067), so
+        an in-flight request that already holds it does not race a close.
+        """
         import json
 
         bravo_db = project_store.get_db("bravo")
@@ -146,11 +171,16 @@ class TestProjectStore:
         assert diff["added"] == []
         assert diff["removed"] == []
         assert "bravo" not in project_store._dbs
-        assert bravo_db._conn is None
+        # Old handle parked, NOT closed — concurrent readers can finish using it.
+        assert bravo_db in project_store._evicted_dbs
+        assert bravo_db._conn is not None
 
         reopened = project_store.get_db("bravo")
         assert reopened.db_path != old_db_path
         assert reopened.db_path.parent == replacement_dir
+
+        project_store.close_all()
+        assert bravo_db._conn is None
 
     def test_reload_corrupt_file_retains_state(self, project_store: ProjectStore, tmp_path: Path) -> None:
         config_dir = tmp_path / ".config" / "filigree"
@@ -264,6 +294,114 @@ class TestProjectStore:
         assert len(results) == 2
         assert results[0] is results[1], "both threads must observe the same cached handle"
         assert project_store._dbs["alpha"] is opened[0]
+
+    def test_get_db_honors_custom_db_path_from_conf(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """filigree-da8d5aba0f: ProjectStore must open the conf-declared db
+        path, not silently fall back to ``.filigree/filigree.db``.
+
+        Mirrors ``tests/test_doctor.py::TestDoctorHonorsConfDbPath``.
+        """
+        import json
+
+        from filigree.core import CONF_FILENAME, FILIGREE_DIR_NAME, write_conf
+
+        config_dir = tmp_path / ".config" / "filigree"
+        config_dir.mkdir(parents=True)
+        monkeypatch.setattr("filigree.server.SERVER_CONFIG_DIR", config_dir)
+        monkeypatch.setattr("filigree.server.SERVER_CONFIG_FILE", config_dir / "server.json")
+
+        # Build a project whose DB lives at storage/track.db (not .filigree/filigree.db).
+        project_root = tmp_path / "custom-db-proj"
+        filigree_dir = project_root / FILIGREE_DIR_NAME
+        filigree_dir.mkdir(parents=True)
+        from filigree.core import write_config
+
+        write_config(filigree_dir, {"prefix": "tst", "version": 1})
+        storage_dir = project_root / "storage"
+        storage_dir.mkdir()
+        custom_db = storage_dir / "track.db"
+        db = FiligreeDB(custom_db, prefix="tst", check_same_thread=False)
+        db.initialize()
+        db.create_issue("issue in custom-path db")
+        db.close()
+        write_conf(
+            project_root / CONF_FILENAME,
+            {"version": 1, "project_name": "tst", "prefix": "tst", "db": "storage/track.db"},
+        )
+
+        (config_dir / "server.json").write_text(json.dumps({"port": 8377, "projects": {str(filigree_dir): {"prefix": "tst"}}}))
+
+        store = ProjectStore()
+        store.load()
+        try:
+            opened = store.get_db("tst")
+            assert opened.db_path == custom_db, f"dashboard opened {opened.db_path}, expected conf-declared {custom_db}"
+            # Sanity: issue created via the custom-path DB is visible.
+            assert any(i.title == "issue in custom-path db" for i in opened.list_issues())
+        finally:
+            store.close_all()
+
+    def test_reload_atomic_under_concurrent_get_db(self, project_store: ProjectStore, tmp_path: Path) -> None:
+        """filigree-e43edbc067: a reader concurrent with reload() must observe
+        a consistent ``(_projects[key], _dbs[key])`` pair — never a torn view
+        where ``_projects[key]`` points at the new path while ``_dbs[key]`` is
+        the old handle (or vice versa). The handle returned must also be open.
+        """
+        import json
+        import threading
+
+        # Prime alpha and bravo so the handles exist.
+        project_store.get_db("alpha")
+        old_bravo = project_store.get_db("bravo")
+
+        replacement_dir = _create_project(tmp_path, "proj-bravo-new", "bravo", 5)
+        config_dir = tmp_path / ".config" / "filigree"
+        existing = json.loads((config_dir / "server.json").read_text())
+        old_bravo_paths = [k for k, v in existing["projects"].items() if v["prefix"] == "bravo"]
+        del existing["projects"][old_bravo_paths[0]]
+        existing["projects"][str(replacement_dir)] = {"prefix": "bravo"}
+        (config_dir / "server.json").write_text(json.dumps(existing))
+
+        observations: list[tuple[Path, Path]] = []  # (projects[bravo].path, db.db_path.parent)
+        barrier = threading.Barrier(2)
+
+        def reader() -> None:
+            barrier.wait()
+            for _ in range(50):
+                try:
+                    db = project_store.get_db("bravo")
+                except KeyError:
+                    continue
+                # Snapshot the projects entry observed-by-the-store at this moment.
+                projects_snapshot = {p["key"]: Path(p["path"]) for p in project_store.list_projects()}
+                if "bravo" in projects_snapshot:
+                    observations.append((projects_snapshot["bravo"], db.db_path.parent))
+                # The handle we just got must be open.
+                assert db._conn is not None, "get_db returned a closed handle"
+
+        def reloader() -> None:
+            barrier.wait()
+            for _ in range(20):
+                project_store.reload()
+
+        t1 = threading.Thread(target=reader)
+        t2 = threading.Thread(target=reloader)
+        t1.start()
+        t2.start()
+        t1.join(timeout=10.0)
+        t2.join(timeout=10.0)
+        assert not t1.is_alive(), "reader thread did not finish"
+        assert not t2.is_alive(), "reloader thread did not finish"
+
+        # Every observation must be consistent: projects[bravo] path matches the
+        # parent of the DB path the store handed back. No torn views.
+        for projects_path, db_parent in observations:
+            assert projects_path == db_parent, f"torn view: projects[bravo]={projects_path} but db_path.parent={db_parent}"
+
+        # Old handle must still be alive (parked on _evicted_dbs); close_all drains.
+        assert old_bravo._conn is not None
+        project_store.close_all()
+        assert old_bravo._conn is None
 
     def test_prefix_collision_raises(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         import json

@@ -324,7 +324,12 @@ class FilesMixin(DBMixinProtocol):
             valid = ", ".join(sorted(self._VALID_FILE_SORTS))
             raise ValueError(f'Invalid sort field "{sort}". Must be one of: {valid}')
         default_order = "ASC" if sort == "path" else "DESC"
-        order = direction.upper() if direction and direction.upper() in ("ASC", "DESC") else default_order
+        if direction is None:
+            order = default_order
+        else:
+            order = direction.upper() if isinstance(direction, str) else ""
+            if order not in ("ASC", "DESC"):
+                raise ValueError(f'Invalid direction "{direction}". Must be "asc" or "desc".')
 
         _open = self._OPEN_FINDINGS_FILTER_SF
         _sev_cols = " ".join(
@@ -419,9 +424,16 @@ class FilesMixin(DBMixinProtocol):
                 # the unique index `coalesce(line_start, -1)` (db_schema.py:159-160).
                 if isinstance(ln_val, int) and not isinstance(ln_val, bool) and ln_val < 0:
                     raise ValueError(f"findings[{i}] {ln_field} must be >= 0, got {ln_val}")
-            suggestion = f.get("suggestion")
-            if suggestion is not None and not isinstance(suggestion, str):
-                raise ValueError(f"findings[{i}] suggestion must be a string, got {type(suggestion).__name__}")
+            if "suggestion" in f:
+                suggestion = f["suggestion"]
+                if not isinstance(suggestion, str):
+                    raise ValueError(f"findings[{i}] suggestion must be a string, got {type(suggestion).__name__}")
+            if "language" in f:
+                language = f["language"]
+                if language is None:
+                    f["language"] = ""
+                elif not isinstance(language, str):
+                    raise ValueError(f"findings[{i}] language must be a string, got {type(language).__name__}")
             metadata = f.get("metadata")
             if metadata is not None and not isinstance(metadata, dict):
                 raise ValueError(f"findings[{i}] metadata must be a JSON object or null, got {type(metadata).__name__}")
@@ -709,6 +721,20 @@ class FilesMixin(DBMixinProtocol):
                     now=now,
                 )
 
+            # Accumulate findings_count on the scan_run row per batch.
+            # Counting via SELECT ... WHERE scan_run_id = ? would undercount
+            # because scan_findings.scan_run_id is first-attribution-wins
+            # (see _update_existing_finding), so a re-scan that only re-sees
+            # existing findings would report 0. Incrementing here handles both
+            # the single-call case AND multi-batch case (the orchestrator's
+            # final complete_scan_run=True call may have empty findings).
+            run_observed_delta = stats["findings_created"] + stats["findings_updated"]
+            if scan_run_id and run_observed_delta:
+                self.conn.execute(
+                    "UPDATE scan_runs SET findings_count = findings_count + ? WHERE id = ?",
+                    (run_observed_delta, scan_run_id),
+                )
+
             self.conn.commit()
         except Exception:
             if self.conn.in_transaction:
@@ -716,16 +742,10 @@ class FilesMixin(DBMixinProtocol):
             raise
 
         if scan_run_id and complete_scan_run:
-            total_row = self.conn.execute(
-                "SELECT COUNT(*) AS n FROM scan_findings WHERE scan_run_id = ?",
-                (scan_run_id,),
-            ).fetchone()
-            total_findings = int(total_row["n"]) if total_row is not None else 0
             try:
                 self.update_scan_run_status(
                     scan_run_id,
                     "completed",
-                    findings_count=total_findings,
                 )
             except (KeyError, ValueError, sqlite3.Error) as exc:
                 # Check if the scan run is already in a terminal state by

@@ -121,6 +121,131 @@ class TestCLIPriorityEnvelopeEmission:
         assert payload["code"] == ErrorCode.VALIDATION
 
 
+class TestIssuePriorityFilterEnvelopeEmission:
+    """filigree-ff324e6a96: bounded ``--priority*`` options must emit the 2.0 envelope.
+
+    ``list``, ``update``, ``claim-next`` and ``start-next-work`` previously declared
+    ``--priority``/``--priority-min``/``--priority-max`` as ``click.IntRange(0, 4)``,
+    which causes Click to fail with a ``BadParameter`` plain-text usage error
+    *before* the command body runs — bypassing the unified ``{"error", "code"}``
+    envelope contract (Phase E §9). The fix moves range validation into the
+    command body via ``_range_check_int``, mirroring what ``create`` already
+    does for the same reason. These tests pin both that the error code is
+    ``VALIDATION`` and that the exit code is 1 (envelope path), not 2 (Click
+    usage error path).
+    """
+
+    @staticmethod
+    def _assert_validation_envelope(result: Result) -> None:
+        assert result.exit_code != 0, result.output
+        assert result.exit_code != 2, f"got Click usage error, not envelope: {result.output}"
+        payload = json.loads(result.output)
+        assert payload["code"] == ErrorCode.VALIDATION, payload
+
+    def test_list_priority_high_json_envelope(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        runner, _ = cli_in_project
+        result = runner.invoke(cli, ["list", "--priority", "5", "--json"])
+        self._assert_validation_envelope(result)
+
+    def test_list_priority_neg1_json_envelope(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        runner, _ = cli_in_project
+        result = runner.invoke(cli, ["list", "--priority", "-1", "--json"])
+        self._assert_validation_envelope(result)
+
+    def test_list_issues_alias_priority_high_json_envelope(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        runner, _ = cli_in_project
+        result = runner.invoke(cli, ["list-issues", "--priority", "5", "--json"])
+        self._assert_validation_envelope(result)
+
+    def test_update_priority_high_json_envelope(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        runner, _ = cli_in_project
+        create_result = runner.invoke(cli, ["create", "Target"])
+        assert create_result.exit_code == 0
+        issue_id = _extract_id(create_result.output)
+        result = runner.invoke(cli, ["update", issue_id, "--priority", "5", "--json"])
+        self._assert_validation_envelope(result)
+
+    def test_update_issue_alias_priority_high_json_envelope(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        runner, _ = cli_in_project
+        create_result = runner.invoke(cli, ["create", "Target"])
+        issue_id = _extract_id(create_result.output)
+        result = runner.invoke(cli, ["update-issue", issue_id, "--priority", "5", "--json"])
+        self._assert_validation_envelope(result)
+
+    def test_claim_next_priority_min_neg1_json_envelope(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        runner, _ = cli_in_project
+        result = runner.invoke(cli, ["claim-next", "--assignee", "bot", "--priority-min", "-1", "--json"])
+        self._assert_validation_envelope(result)
+
+    def test_claim_next_priority_max_high_json_envelope(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        runner, _ = cli_in_project
+        result = runner.invoke(cli, ["claim-next", "--assignee", "bot", "--priority-max", "5", "--json"])
+        self._assert_validation_envelope(result)
+
+    def test_start_next_work_priority_min_neg1_json_envelope(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        runner, _ = cli_in_project
+        result = runner.invoke(cli, ["start-next-work", "--assignee", "bot", "--priority-min", "-1", "--json"])
+        self._assert_validation_envelope(result)
+
+    def test_start_next_work_priority_max_high_json_envelope(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        runner, _ = cli_in_project
+        result = runner.invoke(cli, ["start-next-work", "--assignee", "bot", "--priority-max", "5", "--json"])
+        self._assert_validation_envelope(result)
+
+
+class TestObservationCLIEnvelopeEmission:
+    """Observation CLI numeric-range errors emit the 2.0 flat envelope under --json.
+
+    Mirrors ``TestCLIPriorityEnvelopeEmission`` for ``observe``,
+    ``list-observations``, and ``promote-observation``: range validation
+    must run inside the command body (after ``--json`` has been parsed),
+    not as a Click ``IntRange`` type — otherwise Click rejects the value
+    before the body runs and emits a stderr usage error with exit 2.
+    """
+
+    @staticmethod
+    def _assert_validation_envelope(result: Result) -> None:
+        assert result.exit_code != 0, result.output
+        assert result.exit_code != 2, f"got Click usage error, not envelope: {result.output}"
+        payload = json.loads(result.output)
+        assert payload["code"] == ErrorCode.VALIDATION, payload
+
+    def test_observe_priority_high_json_envelope(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        runner, _ = cli_in_project
+        result = runner.invoke(cli, ["observe", "x", "--priority", "9", "--json"])
+        self._assert_validation_envelope(result)
+
+    def test_observe_priority_neg1_json_envelope(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        runner, _ = cli_in_project
+        result = runner.invoke(cli, ["observe", "x", "--priority", "-1", "--json"])
+        self._assert_validation_envelope(result)
+
+    def test_observe_line_negative_json_envelope(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        runner, _ = cli_in_project
+        result = runner.invoke(cli, ["observe", "x", "--line", "-1", "--json"])
+        self._assert_validation_envelope(result)
+
+    def test_list_observations_limit_zero_json_envelope(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        runner, _ = cli_in_project
+        result = runner.invoke(cli, ["list-observations", "--limit", "0", "--json"])
+        self._assert_validation_envelope(result)
+
+    def test_list_observations_offset_negative_json_envelope(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        runner, _ = cli_in_project
+        result = runner.invoke(cli, ["list-observations", "--offset", "-1", "--json"])
+        self._assert_validation_envelope(result)
+
+    def test_promote_observation_priority_high_json_envelope(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        runner, _ = cli_in_project
+        result = runner.invoke(cli, ["promote-observation", "obs-nope", "--priority", "99", "--json"])
+        self._assert_validation_envelope(result)
+
+    def test_promote_observation_priority_neg1_json_envelope(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        runner, _ = cli_in_project
+        result = runner.invoke(cli, ["promote-observation", "obs-nope", "--priority", "-1", "--json"])
+        self._assert_validation_envelope(result)
+
+
 class TestCLIActorEnvelopeEmission:
     """2b.3b: group-level ``--actor`` validation emits 2.0 envelope for every subcommand.
 

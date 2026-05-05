@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import stat
 import time
 from collections.abc import Iterator
 from pathlib import Path
@@ -166,6 +167,65 @@ class TestInstructionsVersionFallback:
 
         # Avoid leaking patched module-level constants to later tests.
         importlib.reload(install_mod)
+
+
+class TestAtomicWritePermissions:
+    """Regression: _atomic_write_text must preserve permissions on existing files.
+
+    `tempfile.mkstemp()` creates files with mode 0o600 by design. Naive
+    write-temp + os.replace would leak that mode onto the destination,
+    making CLAUDE.md / AGENTS.md / .gitignore owner-only after each install.
+    """
+
+    def test_inject_instructions_preserves_existing_mode(self, tmp_path: Path) -> None:
+        target = tmp_path / "CLAUDE.md"
+        target.write_text("# pre-existing\n")
+        os.chmod(target, 0o644)
+        before = stat.S_IMODE(target.stat().st_mode)
+        assert before == 0o644, "test setup failed to chmod 0o644"
+
+        ok, _msg = inject_instructions(target)
+        assert ok
+        after = stat.S_IMODE(target.stat().st_mode)
+        assert after == before, f"expected mode preserved as 0o644, got {oct(after)}"
+
+    def test_inject_instructions_preserves_executable_mode(self, tmp_path: Path) -> None:
+        """Even unusual modes (e.g. 0o755) must be preserved on rewrite."""
+        target = tmp_path / "AGENTS.md"
+        target.write_text("# pre-existing\n")
+        os.chmod(target, 0o755)  # noqa: S103 — exercising mode preservation
+        before = stat.S_IMODE(target.stat().st_mode)
+
+        # Trigger a rewrite by injecting a second time (the marker is now present).
+        inject_instructions(target)
+        ok, _msg = inject_instructions(target)
+        assert ok
+        after = stat.S_IMODE(target.stat().st_mode)
+        assert after == before, f"expected mode preserved as 0o755, got {oct(after)}"
+
+    def test_ensure_gitignore_preserves_existing_mode(self, tmp_path: Path) -> None:
+        gitignore = tmp_path / ".gitignore"
+        gitignore.write_text("*.pyc\n")
+        os.chmod(gitignore, 0o644)
+        before = stat.S_IMODE(gitignore.stat().st_mode)
+
+        ok, _msg = ensure_gitignore(tmp_path)
+        assert ok
+        after = stat.S_IMODE(gitignore.stat().st_mode)
+        assert after == before, f"expected mode preserved as 0o644, got {oct(after)}"
+
+    def test_new_file_respects_umask(self, tmp_path: Path) -> None:
+        """Newly created files should be world-readable per default umask, not 0o600."""
+        target = tmp_path / "CLAUDE.md"
+        old_umask = os.umask(0o022)
+        try:
+            ok, _msg = inject_instructions(target)
+        finally:
+            os.umask(old_umask)
+        assert ok
+        mode = stat.S_IMODE(target.stat().st_mode)
+        # With umask 022, expect 0o644 (or at minimum: group/other readable).
+        assert mode & 0o044, f"new file created with overly restrictive mode {oct(mode)}"
 
 
 class TestEnsureGitignore:
@@ -427,11 +487,135 @@ class TestRunDoctor:
 
     def test_mcp_json_with_filigree(self, filigree_project: Path) -> None:
         """Doctor should pass when .mcp.json has filigree configured."""
-        (filigree_project / ".mcp.json").write_text(json.dumps({"mcpServers": {"filigree": {"type": "stdio"}}}))
+        (filigree_project / ".mcp.json").write_text(
+            json.dumps({"mcpServers": {"filigree": {"type": "stdio", "command": "filigree-mcp", "args": []}}})
+        )
         results = run_doctor(filigree_project)
         mcp_check = next((r for r in results if r.name == "Claude Code MCP"), None)
         assert mcp_check is not None
         assert mcp_check.passed
+
+    @pytest.mark.parametrize(
+        "entry",
+        [
+            "should-be-an-object",
+            True,
+            ["filigree-mcp"],
+            42,
+        ],
+    )
+    def test_mcp_json_filigree_entry_must_be_dict(self, filigree_project: Path, entry: object) -> None:
+        # filigree-466bcb6279: a truthy non-dict mcpServers.filigree used to
+        # report "Configured in .mcp.json" because the schema check coerced
+        # `command` to "" and fell through to the success branch.
+        (filigree_project / ".mcp.json").write_text(json.dumps({"mcpServers": {"filigree": entry}}))
+        results = run_doctor(filigree_project)
+        mcp_check = next((r for r in results if r.name == "Claude Code MCP"), None)
+        assert mcp_check is not None
+        assert not mcp_check.passed
+        assert "Invalid .mcp.json" in mcp_check.message
+
+    @pytest.mark.parametrize(
+        "entry",
+        [
+            {},
+            {"type": "stdio"},
+            {"type": "stdio", "command": ""},
+            {"type": "stdio", "command": "filigree-mcp", "args": "not-a-list"},
+            {"type": "streamable-http"},
+            {"type": "streamable-http", "url": ""},
+            {"type": "unknown-transport", "command": "filigree-mcp"},
+        ],
+    )
+    def test_mcp_json_filigree_entry_schema_rejected(self, filigree_project: Path, entry: dict) -> None:
+        # Companion to filigree-466bcb6279: dict entries that don't satisfy
+        # either the stdio or streamable-http schema must be flagged invalid.
+        (filigree_project / ".mcp.json").write_text(json.dumps({"mcpServers": {"filigree": entry}}))
+        results = run_doctor(filigree_project)
+        mcp_check = next((r for r in results if r.name == "Claude Code MCP"), None)
+        assert mcp_check is not None
+        assert not mcp_check.passed
+        assert "Invalid .mcp.json" in mcp_check.message
+
+    def test_mcp_json_streamable_http_passes(self, filigree_project: Path) -> None:
+        (filigree_project / ".mcp.json").write_text(
+            json.dumps({"mcpServers": {"filigree": {"type": "streamable-http", "url": "http://localhost:8377/mcp"}}})
+        )
+        results = run_doctor(filigree_project)
+        mcp_check = next((r for r in results if r.name == "Claude Code MCP"), None)
+        assert mcp_check is not None
+        assert mcp_check.passed
+
+    @pytest.mark.parametrize(
+        ("label", "gitignore"),
+        [
+            ("comment-only", "# .filigree/ should be ignored\nbuild/\n"),
+            ("negated-only", "!.filigree/\n"),
+            ("substring-only", "src/.filigree/cache/\n"),
+            ("comment-then-negation", ".filigree/\n!.filigree/\n"),
+        ],
+    )
+    def test_gitignore_inactive_rules_do_not_pass(self, filigree_project: Path, label: str, gitignore: str) -> None:
+        # filigree-bc5d2af1ef: doctor used naive substring matching that
+        # accepted comments, negations, and non-root substrings as evidence
+        # the project-root .filigree/ is ignored.
+        (filigree_project / ".gitignore").write_text(gitignore)
+        results = run_doctor(filigree_project)
+        gi = next((r for r in results if r.name == ".gitignore"), None)
+        assert gi is not None, label
+        assert not gi.passed, f"{label}: should fail but passed"
+        assert ".filigree/ not in .gitignore" in gi.message, label
+
+    @pytest.mark.parametrize(
+        ("label", "gitignore"),
+        [
+            ("plain rule", ".filigree/\n"),
+            ("rooted rule", "/.filigree/\n"),
+            ("no-trailing-slash", ".filigree\n"),
+            ("with comments and other rules", "# header\n*.pyc\n.filigree/\n"),
+            ("ignored then re-ignored", "!.filigree/\n.filigree/\n"),
+        ],
+    )
+    def test_gitignore_active_rules_pass(self, filigree_project: Path, label: str, gitignore: str) -> None:
+        # Control tests for filigree-bc5d2af1ef: real active rules still pass.
+        (filigree_project / ".gitignore").write_text(gitignore)
+        results = run_doctor(filigree_project)
+        gi = next((r for r in results if r.name == ".gitignore"), None)
+        assert gi is not None, label
+        assert gi.passed, f"{label}: should pass but did not"
+
+    def test_doctor_does_not_execute_hook_binary(self, filigree_project: Path) -> None:
+        # filigree-e6828dcdb1: filigree doctor used to subprocess-run the
+        # absolute interpreter path read from .claude/settings.json with
+        # `-c "import filigree"`. A hostile repo could ship a settings.json
+        # that points the SessionStart hook at an in-repo binary, getting
+        # arbitrary code executed under the user running `filigree doctor`.
+        repo_python = filigree_project / ".repo-python"
+        marker = filigree_project / "EXECUTED"
+        repo_python.write_text(f"#!/bin/sh\necho fired > {marker}\nexit 0\n")
+        repo_python.chmod(0o755)
+
+        settings = {
+            "hooks": {
+                "SessionStart": [
+                    {
+                        "hooks": [
+                            {
+                                "type": "command",
+                                "command": f"{repo_python} -m filigree session-context",
+                            }
+                        ]
+                    }
+                ]
+            }
+        }
+        claude_dir = filigree_project / ".claude"
+        claude_dir.mkdir()
+        (claude_dir / "settings.json").write_text(json.dumps(settings))
+
+        run_doctor(filigree_project)
+
+        assert not marker.exists(), "doctor must not execute hook-configured binaries"
 
     def test_codex_not_configured(self, filigree_project: Path) -> None:
         """Doctor should warn when ~/.codex/config.toml is absent."""
@@ -913,6 +1097,62 @@ class TestInstallCodexMcp:
         assert b"args = []\r\n" in raw
         assert b"[mcp_servers.other]\r\n" in raw
 
+    def test_replaces_quoted_key_header_without_duplication(self, tmp_path: Path) -> None:
+        """Bug filigree-32fe96222e: TOML allows quoted keys in headers
+        (``[mcp_servers."filigree"]``) and equivalent whitespace-around-dot
+        forms. The bare-header regex missed these and appended a literal
+        ``[mcp_servers.filigree]`` block, producing a duplicate-table file
+        that tomllib refuses on the next install run.
+        """
+        import tomllib
+
+        home = tmp_path / "home"
+        codex_dir = home / ".codex"
+        config_path = codex_dir / "config.toml"
+        home.mkdir()
+        codex_dir.mkdir()
+        config_path.write_text(
+            '[mcp_servers."filigree"]\n'
+            'command = "/old/venv/bin/filigree-mcp"\n'
+            'args = ["--project", "/srv/old"]\n'
+            "\n"
+            "[mcp_servers.other]\n"
+            'command = "other-mcp"\n'
+        )
+        with (
+            patch("filigree.install_support.integrations.Path.home", return_value=home),
+            patch("filigree.install_support.integrations.shutil.which", return_value=None),
+            patch("filigree.install_support.integrations._find_filigree_mcp_command", return_value="filigree-mcp"),
+        ):
+            ok, _msg = install_codex_mcp(tmp_path)
+        assert ok
+        text = config_path.read_text()
+        parsed = tomllib.loads(text)
+        assert parsed["mcp_servers"]["filigree"] == {"command": "filigree-mcp", "args": []}
+        assert parsed["mcp_servers"]["other"] == {"command": "other-mcp"}
+        assert "/srv/old" not in text
+
+    def test_replaces_whitespace_around_dot_header_without_duplication(self, tmp_path: Path) -> None:
+        """``[mcp_servers . filigree]`` is valid TOML equivalent to the bare form."""
+        import tomllib
+
+        home = tmp_path / "home"
+        codex_dir = home / ".codex"
+        config_path = codex_dir / "config.toml"
+        home.mkdir()
+        codex_dir.mkdir()
+        config_path.write_text('[mcp_servers . filigree]\ncommand = "/old/filigree-mcp"\nargs = []\n')
+        with (
+            patch("filigree.install_support.integrations.Path.home", return_value=home),
+            patch("filigree.install_support.integrations.shutil.which", return_value=None),
+            patch("filigree.install_support.integrations._find_filigree_mcp_command", return_value="filigree-mcp"),
+        ):
+            ok, _msg = install_codex_mcp(tmp_path)
+        assert ok
+        text = config_path.read_text()
+        parsed = tomllib.loads(text)  # must not raise duplicate-table
+        assert parsed["mcp_servers"]["filigree"]["command"] == "filigree-mcp"
+
 
 class TestInstallCodexMcpMalformedToml:
     """Bug filigree-d6bbbf: install_codex_mcp must fail on malformed TOML, not silently append."""
@@ -1232,7 +1472,18 @@ class TestInstallHooksMatcherIsolation:
         unscoped_blocks = [b for b in blocks if "matcher" not in b or b.get("matcher") in (None, "*")]
         assert unscoped_blocks, "filigree hooks must land in an unscoped block"
         cmds = [h["command"] for b in unscoped_blocks for h in b.get("hooks", [])]
+        # Bug filigree-48d6f0d8da: BOTH commands must be present in the unscoped
+        # block — the install-time gate must not treat a scoped session-context
+        # entry as authoritative, otherwise cold startup never triggers it.
         assert any("ensure-dashboard" in c for c in cmds)
+        assert any("session-context" in c for c in cmds), (
+            "session-context must land in the unscoped block too — the existing "
+            "scoped 'resume' entry doesn't count as installed for cold startup."
+        )
+        # User's scoped block is left exactly as-is.
+        resume_block = next(b for b in blocks if b.get("matcher") == "resume")
+        assert len(resume_block["hooks"]) == 1
+        assert resume_block["hooks"][0]["command"].endswith("session-context")
 
 
 class TestInstallHooksPreToolUseRepair:
@@ -1337,6 +1588,142 @@ class TestInstallHooksPreToolUseRepair:
         assert len(pre_tool_use) == 1
         assert pre_tool_use[0]["matcher"] == "mcp__filigree__.*"
         assert pre_tool_use[0]["hooks"][0]["command"] == f"{self.MOCK_BIN} ensure-dashboard"
+
+    def test_mixed_block_user_hook_keeps_original_matcher(self, tmp_path: Path) -> None:
+        """Bug filigree-53fb9d5906: a PreToolUse block with both a user hook
+        and filigree's ensure-dashboard hook must NOT have its matcher rewritten —
+        that would silently demote the user hook from its original tool scope.
+        """
+        claude_dir = tmp_path / ".claude"
+        claude_dir.mkdir()
+        settings = {
+            "hooks": {
+                "PreToolUse": [
+                    {
+                        "matcher": "Bash",
+                        "hooks": [
+                            {"type": "command", "command": "/usr/local/bin/user-bash-audit"},
+                            {"type": "command", "command": f"{self.MOCK_BIN} ensure-dashboard", "timeout": 5000},
+                        ],
+                    }
+                ]
+            }
+        }
+        (claude_dir / "settings.json").write_text(json.dumps(settings))
+        with patch("filigree.install_support.hooks.find_filigree_command", return_value=self.MOCK_TOKENS):
+            install_claude_code_hooks(tmp_path)
+        data = json.loads((claude_dir / "settings.json").read_text())
+        pre_tool_use = data["hooks"]["PreToolUse"]
+
+        # The user's Bash block must still be scoped to Bash and still contain
+        # the user-bash-audit hook.
+        bash_block = next(b for b in pre_tool_use if b.get("matcher") == "Bash")
+        bash_cmds = [h["command"] for h in bash_block["hooks"]]
+        assert "/usr/local/bin/user-bash-audit" in bash_cmds
+        # Filigree's hook must be moved out of the user block (otherwise it
+        # would still inherit the Bash matcher there).
+        assert all("ensure-dashboard" not in c for c in bash_cmds), "ensure-dashboard must not remain inside the user's Bash-scoped block"
+        # A dedicated mcp__filigree__.* block must hold ensure-dashboard.
+        filigree_blocks = [b for b in pre_tool_use if b.get("matcher") == "mcp__filigree__.*"]
+        assert len(filigree_blocks) == 1
+        assert any("ensure-dashboard" in h.get("command", "") for h in filigree_blocks[0]["hooks"])
+
+    def test_mixed_block_install_is_idempotent(self, tmp_path: Path) -> None:
+        """Running install twice on the mixed-block scenario must converge
+        to a stable shape — no oscillation, no drift.
+        """
+        claude_dir = tmp_path / ".claude"
+        claude_dir.mkdir()
+        settings = {
+            "hooks": {
+                "PreToolUse": [
+                    {
+                        "matcher": "Bash",
+                        "hooks": [
+                            {"type": "command", "command": "/usr/local/bin/user-bash-audit"},
+                            {"type": "command", "command": f"{self.MOCK_BIN} ensure-dashboard", "timeout": 5000},
+                        ],
+                    }
+                ]
+            }
+        }
+        (claude_dir / "settings.json").write_text(json.dumps(settings))
+        with patch("filigree.install_support.hooks.find_filigree_command", return_value=self.MOCK_TOKENS):
+            install_claude_code_hooks(tmp_path)
+            after_first = (claude_dir / "settings.json").read_text()
+            install_claude_code_hooks(tmp_path)
+            after_second = (claude_dir / "settings.json").read_text()
+        assert after_first == after_second, "second install must produce byte-identical settings"
+
+
+class TestHookCmdMatchesStrict:
+    """Bug filigree-2ba60d9970: _hook_cmd_matches must reject arbitrary
+    wrapper prefixes, accepting only bare/path form (single binary) and
+    explicit module form (``<python> -m filigree <subcommand>``).
+    """
+
+    BARE = "filigree session-context"
+
+    def test_exact_bare_matches(self) -> None:
+        from filigree.install_support.hooks import _hook_cmd_matches
+
+        assert _hook_cmd_matches(self.BARE, self.BARE) is True
+
+    def test_absolute_path_matches(self) -> None:
+        from filigree.install_support.hooks import _hook_cmd_matches
+
+        assert _hook_cmd_matches("/path/to/filigree session-context", self.BARE) is True
+
+    def test_quoted_path_with_spaces_matches(self) -> None:
+        import shlex
+
+        from filigree.install_support.hooks import _hook_cmd_matches
+
+        cmd = shlex.join(["/path with spaces/filigree"]) + " session-context"
+        assert _hook_cmd_matches(cmd, self.BARE) is True
+
+    def test_module_form_python3_matches(self) -> None:
+        from filigree.install_support.hooks import _hook_cmd_matches
+
+        assert _hook_cmd_matches("/usr/bin/python3 -m filigree session-context", self.BARE) is True
+
+    def test_module_form_arbitrary_interpreter_matches(self) -> None:
+        """`-m filigree` is the discriminator — any interpreter name should work
+        (pypy3, python3.13t, /custom/wrapper, etc.). This is intentional.
+        """
+        from filigree.install_support.hooks import _hook_cmd_matches
+
+        assert _hook_cmd_matches("/opt/pypy3.10/bin/pypy3 -m filigree session-context", self.BARE) is True
+
+    def test_echo_prefix_does_not_match(self) -> None:
+        from filigree.install_support.hooks import _hook_cmd_matches
+
+        assert _hook_cmd_matches("echo filigree session-context", self.BARE) is False
+
+    def test_time_prefix_does_not_match(self) -> None:
+        from filigree.install_support.hooks import _hook_cmd_matches
+
+        assert _hook_cmd_matches("time filigree session-context", self.BARE) is False
+
+    def test_env_prefix_does_not_match(self) -> None:
+        from filigree.install_support.hooks import _hook_cmd_matches
+
+        assert _hook_cmd_matches("env FOO=bar filigree session-context", self.BARE) is False
+
+    def test_bash_wrapper_does_not_match(self) -> None:
+        from filigree.install_support.hooks import _hook_cmd_matches
+
+        assert _hook_cmd_matches("bash filigree session-context", self.BARE) is False
+
+    def test_sudo_wrapper_does_not_match(self) -> None:
+        from filigree.install_support.hooks import _hook_cmd_matches
+
+        assert _hook_cmd_matches("sudo /path/to/filigree session-context", self.BARE) is False
+
+    def test_module_form_wrong_module_does_not_match(self) -> None:
+        from filigree.install_support.hooks import _hook_cmd_matches
+
+        assert _hook_cmd_matches("python -m otherthing session-context", self.BARE) is False
 
 
 class TestHasHookCommand:
@@ -1715,6 +2102,42 @@ class TestInstallSkills:
         assert examples.is_dir()
         assert (examples / "sprint-plan.json").exists()
 
+    def test_concurrent_installs_all_succeed(self, tmp_path: Path) -> None:
+        """Regression: concurrent installs must not race on a shared staging dir.
+
+        Two Claude Code sessions starting near-simultaneously both fire the
+        SessionStart hook, which calls install_skills via the stale-skill
+        auto-refresh path in hooks.py. With a deterministic ``.installing``
+        sibling directory, concurrent calls would clobber each other's
+        staging area; with per-call mkdtemp staging, they should all win.
+        """
+        import threading
+
+        results: list[tuple[bool, str]] = []
+        errors: list[BaseException] = []
+
+        def worker() -> None:
+            try:
+                results.append(install_skills(tmp_path))
+            except BaseException as exc:
+                errors.append(exc)
+
+        threads = [threading.Thread(target=worker) for _ in range(6)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert errors == [], f"concurrent install raised: {errors!r}"
+        assert all(ok for ok, _ in results), f"some installs reported failure: {results!r}"
+        # Final tree must be intact and parsable as a normal install.
+        skill_md = tmp_path / ".claude" / "skills" / SKILL_NAME / "SKILL.md"
+        assert skill_md.exists()
+        assert "filigree-workflow" in skill_md.read_text()
+        # No staging leftovers.
+        leftovers = list((tmp_path / ".claude" / "skills").glob(f"{SKILL_NAME}.*"))
+        assert leftovers == [], f"staging directories left behind: {leftovers!r}"
+
 
 class TestInstallCodexSkills:
     def test_installs_skill_pack(self, tmp_path: Path) -> None:
@@ -2085,6 +2508,30 @@ class TestPackageNotFoundError:
         # In our test environment, filigree should be installed
         assert filigree.__version__ is not None
         assert isinstance(filigree.__version__, str)
+
+    def test_source_pyproject_wins_over_stale_installed_metadata(self) -> None:
+        # When the source checkout is being imported but a stale `filigree`
+        # dist-info is also installed in the environment, `__version__` must
+        # reflect the source checkout — otherwise `filigree --version` and
+        # `/api/health` advertise whatever older release happens to share the
+        # `filigree` distribution name on this machine.
+        import tomllib
+        from pathlib import Path
+
+        repo_pyproject = Path(__file__).resolve().parents[2] / "pyproject.toml"
+        expected = tomllib.loads(repo_pyproject.read_text(encoding="utf-8"))["project"]["version"]
+        assert expected != "0.0.1-stale-fixture"
+
+        with patch("importlib.metadata.version", return_value="0.0.1-stale-fixture"):
+            import importlib
+
+            import filigree
+
+            importlib.reload(filigree)
+            try:
+                assert filigree.__version__ == expected
+            finally:
+                importlib.reload(filigree)
 
 
 class TestMalformedMcpJson:

@@ -334,3 +334,24 @@ class TestDependencyEdgeCases:
         # Dependency must still exist — DELETE was rolled back
         deps = db.get_all_dependencies()
         assert any(d["from"] == a.id and d["to"] == b.id for d in deps)
+
+    def test_add_dependency_duplicate_does_not_leak_transaction(self, db: FiligreeDB, tmp_path) -> None:
+        """Bug filigree-a0fc2b4ecc: idempotent path skipped commit/rollback.
+
+        ``INSERT OR IGNORE`` opens an implicit write transaction even when no
+        row changes. Without an explicit rollback, the lock lingers and any
+        other connection's write fails with ``database is locked``.
+        """
+        a = db.create_issue("A")
+        b = db.create_issue("B")
+        db.add_dependency(a.id, b.id)
+        assert db.add_dependency(a.id, b.id) is False
+        assert db.conn.in_transaction is False
+
+        # A second connection on the same DB file must be able to write.
+        second = sqlite3.connect(str(tmp_path / "filigree.db"), timeout=0.5)
+        try:
+            second.execute("BEGIN IMMEDIATE")
+            second.commit()
+        finally:
+            second.close()

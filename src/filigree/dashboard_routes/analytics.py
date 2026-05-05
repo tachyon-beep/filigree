@@ -233,6 +233,20 @@ def _issue_updated_at_utc(issue: Issue) -> datetime | None:
     return parsed.astimezone(UTC)
 
 
+def _graph_status_category(issue: Issue) -> str:
+    """Status category for graph filtering and serialization.
+
+    archive_closed() preserves closed_at but writes status='archived',
+    which is not a workflow done state — so the raw status_category
+    resolves to 'open' (filigree-42045dd065). For graph queries that
+    surface terminal-state filters (include_done, status_categories,
+    blocker counts), an archived issue must read as 'done'.
+    """
+    if issue.status == "archived":
+        return "done"
+    return issue.status_category
+
+
 def _filter_graph_nodes(
     issues: list[Issue],
     issue_map: dict[str, Issue],
@@ -247,7 +261,7 @@ def _filter_graph_nodes(
         total = 0
         for blocker_id in issue.blocked_by:
             blocker = issue_map.get(blocker_id)
-            if blocker and blocker.status_category != "done":
+            if blocker and _graph_status_category(blocker) != "done":
                 total += 1
         return total
 
@@ -256,19 +270,20 @@ def _filter_graph_nodes(
         total = 0
         for blocked_id in issue.blocks:
             blocked_issue = issue_map.get(blocked_id)
-            if blocked_issue and blocked_issue.status_category != "done":
+            if blocked_issue and _graph_status_category(blocked_issue) != "done":
                 total += 1
         return total
 
     filtered: list[dict[str, Any]] = []
     for issue in issues:
+        category = _graph_status_category(issue)
         if scoped_ids is not None and issue.id not in scoped_ids:
             continue
-        if not gp.include_done and issue.status_category == "done":
+        if not gp.include_done and category == "done":
             continue
         if gp.type_filter and issue.type not in gp.type_filter:
             continue
-        if gp.status_filter and issue.status_category not in gp.status_filter:
+        if gp.status_filter and category not in gp.status_filter:
             continue
         if gp.assignee_filter is not None and issue.assignee != gp.assignee_filter:
             continue
@@ -291,7 +306,7 @@ def _filter_graph_nodes(
                 "id": issue.id,
                 "title": issue.title,
                 "status": issue.status,
-                "status_category": issue.status_category,
+                "status_category": category,
                 "priority": issue.priority,
                 "type": issue.type,
                 "assignee": issue.assignee,
@@ -306,16 +321,23 @@ def _filter_graph_nodes(
 def _filter_graph_edges(
     deps: list[dict[str, Any]],
     visible_ids: set[str],
-    critical_path_ids: set[str],
+    critical_path_edges: set[tuple[str, str]],
 ) -> list[dict[str, Any]]:
-    """Build edge dicts for visible nodes."""
+    """Build edge dicts for visible nodes.
+
+    ``critical_path_edges`` is the set of adjacent ``(source, target)``
+    pairs along the ordered critical path chain — only those edges may
+    be flagged ``is_critical_path``. Marking on node-id membership alone
+    incorrectly flagged shortcut edges between non-adjacent path nodes
+    (filigree-c9b08d1363).
+    """
     return [
         {
             "id": f"{dep['to']}->{dep['from']}",
             "source": dep["to"],
             "target": dep["from"],
             "kind": dep["type"],
-            "is_critical_path": dep["to"] in critical_path_ids and dep["from"] in critical_path_ids,
+            "is_critical_path": (dep["to"], dep["from"]) in critical_path_edges,
         }
         for dep in deps
         if dep["to"] in visible_ids and dep["from"] in visible_ids
@@ -390,8 +412,14 @@ def create_classic_router() -> APIRouter:
             return gp
 
         critical_path_ids: set[str] = set()
+        critical_path_edges: set[tuple[str, str]] = set()
         if gp.critical_path_only:
-            critical_path_ids = {node["id"] for node in db.get_critical_path()}
+            ordered_path = [node["id"] for node in db.get_critical_path()]
+            critical_path_ids = set(ordered_path)
+            # Adjacent (source=blocker, target=blocked) pairs only — shortcut
+            # edges between non-adjacent path nodes are not part of the chain
+            # and must not be flagged is_critical_path (filigree-c9b08d1363).
+            critical_path_edges = {(ordered_path[i], ordered_path[i + 1]) for i in range(len(ordered_path) - 1)}
 
         # Scope neighborhood (undirected BFS around scope_root)
         scoped_ids: set[str] | None = None
@@ -421,7 +449,7 @@ def create_classic_router() -> APIRouter:
             truncated = True
 
         visible_ids = {node["id"] for node in filtered_nodes}
-        filtered_edges = _filter_graph_edges([dict(d) for d in deps], visible_ids, critical_path_ids)
+        filtered_edges = _filter_graph_edges([dict(d) for d in deps], visible_ids, critical_path_edges)
 
         total_edges_before_limit = len(filtered_edges)
         if len(filtered_edges) > gp.edge_limit:

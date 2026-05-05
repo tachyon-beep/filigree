@@ -278,7 +278,7 @@ def trigger_scan_cmd(scanner: str, file_path: str, api_url: str, as_json: bool) 
 
 @click.command("trigger-scan-batch")
 @click.argument("scanner")
-@click.argument("file_paths", nargs=-1, required=True)
+@click.argument("file_paths", nargs=-1)
 @click.option("--api-url", default=_DEFAULT_API_URL, help="Dashboard URL for scan result callbacks")
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON")
 def trigger_scan_batch_cmd(scanner: str, file_paths: tuple[str, ...], api_url: str, as_json: bool) -> None:
@@ -620,18 +620,17 @@ def report_finding_cmd(file_path: str | None, as_json: bool) -> None:
     The JSON must be an object with at minimum: path, rule_id, message.
     Optional fields: severity (default: info), line_start, line_end, category.
     """
+    # Resolve the project up front so a foreign-database refusal surfaces as
+    # NOT_INITIALIZED rather than getting masked by a downstream --file path
+    # error. This matches the rest of this module (list-scanners, trigger-scan,
+    # trigger-scan-batch, preview-scan).
+    filigree_dir = _resolve_filigree_dir_or_die(as_json)
+    project_root: Path = filigree_dir.parent
+
     # Read input
     if file_path is not None:
-        project_root: Path | None
         try:
-            project_root, _ = find_filigree_anchor()
-        except ProjectNotInitialisedError:
-            # Best-effort — `get_db()` below still surfaces ForeignDatabaseError
-            # before we touch the database, so falling back to a raw Path here
-            # only affects --file path resolution.
-            project_root = None
-        try:
-            resolved = safe_path(file_path, project_root) if project_root is not None else Path(file_path)
+            resolved = safe_path(file_path, project_root)
             raw = resolved.read_text(encoding="utf-8")
         except (OSError, ValueError) as e:
             _emit_error(str(e), ErrorCode.VALIDATION, as_json=as_json)

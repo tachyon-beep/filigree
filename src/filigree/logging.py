@@ -69,15 +69,18 @@ def setup_logging(filigree_dir: Path) -> logging.Logger:
             logger.removeHandler(h)
             h.close()
 
-        if surviving is not None:
-            return logger
+        if surviving is None:
+            surviving = RotatingFileHandler(
+                str(log_path),
+                maxBytes=_MAX_BYTES,
+                backupCount=_BACKUP_COUNT,
+            )
+            logger.addHandler(surviving)
 
-        handler = RotatingFileHandler(
-            str(log_path),
-            maxBytes=_MAX_BYTES,
-            backupCount=_BACKUP_COUNT,
-        )
-        handler.setFormatter(_JsonFormatter())
-        logger.addHandler(handler)
+        # Apply configuration unconditionally so a reused handler that was
+        # attached without a formatter or correct level still satisfies the
+        # function's contract (JSONL output, INFO level).
+        if not isinstance(surviving.formatter, _JsonFormatter):
+            surviving.setFormatter(_JsonFormatter())
         logger.setLevel(logging.INFO)
     return logger

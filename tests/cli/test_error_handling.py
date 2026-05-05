@@ -111,6 +111,60 @@ class TestRemoveDepWrongProjectError:
         assert "error" in data
 
 
+class TestMetaWrongProjectError:
+    """filigree-f8861115a9: add-comment / add-label / remove-label must surface
+    WrongProjectError as VALIDATION, not NOT_FOUND. The read-side precheck
+    (db.get_issue) intentionally ignores prefix, so foreign-prefix IDs were
+    being misreported as missing. Same-project missing IDs must still emit
+    NOT_FOUND.
+    """
+
+    def test_add_comment_foreign_prefix_json_is_validation(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        runner, _ = cli_in_project
+        result = runner.invoke(cli, ["add-comment", "foreign-abc1234567", "hello", "--json"])
+        assert result.exit_code == 1
+        data = json.loads(result.output)
+        assert data["code"] == "VALIDATION", data
+        assert "project" in data["error"].lower()
+
+    def test_add_comment_same_prefix_missing_still_not_found(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        runner, _ = cli_in_project
+        result = runner.invoke(cli, ["add-comment", "test-0000000000", "hello", "--json"])
+        assert result.exit_code == 1
+        data = json.loads(result.output)
+        assert data["code"] == "NOT_FOUND", data
+
+    def test_add_label_foreign_prefix_json_is_validation(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        runner, _ = cli_in_project
+        result = runner.invoke(cli, ["add-label", "needs-review", "foreign-abc1234567", "--json"])
+        assert result.exit_code == 1
+        data = json.loads(result.output)
+        assert data["code"] == "VALIDATION", data
+        assert "project" in data["error"].lower()
+
+    def test_add_label_same_prefix_missing_still_not_found(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        runner, _ = cli_in_project
+        result = runner.invoke(cli, ["add-label", "needs-review", "test-0000000000", "--json"])
+        assert result.exit_code == 1
+        data = json.loads(result.output)
+        assert data["code"] == "NOT_FOUND", data
+
+    def test_remove_label_foreign_prefix_json_is_validation(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        runner, _ = cli_in_project
+        result = runner.invoke(cli, ["remove-label", "foreign-abc1234567", "needs-review", "--json"])
+        assert result.exit_code == 1
+        data = json.loads(result.output)
+        assert data["code"] == "VALIDATION", data
+        assert "project" in data["error"].lower()
+
+    def test_remove_label_same_prefix_missing_still_not_found(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        runner, _ = cli_in_project
+        result = runner.invoke(cli, ["remove-label", "test-0000000000", "needs-review", "--json"])
+        assert result.exit_code == 1
+        data = json.loads(result.output)
+        assert data["code"] == "NOT_FOUND", data
+
+
 class TestRefreshSummaryOSError:
     """filigree-62c5b61f68: refresh_summary must not fail successful mutations on OSError."""
 

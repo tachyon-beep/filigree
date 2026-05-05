@@ -142,6 +142,13 @@ class TestWorkflowAliases:
         assert out_short.exit_code == out_alias.exit_code == 0
         assert json.loads(out_short.output) == json.loads(out_alias.output)
 
+    def test_workflow_statuses_get_workflow_statuses_parity(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        runner, _ = cli_in_project
+        out_short = runner.invoke(cli, ["workflow-statuses", "--json"])
+        out_alias = runner.invoke(cli, ["get-workflow-statuses", "--json"])
+        assert out_short.exit_code == out_alias.exit_code == 0
+        assert json.loads(out_short.output) == json.loads(out_alias.output)
+
 
 # ---------------------------------------------------------------------------
 # meta.py aliases

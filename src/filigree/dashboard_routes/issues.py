@@ -16,6 +16,7 @@ from filigree.dashboard_routes.common import (
     _MAX_PAGINATION_OFFSET,
     _error_response,
     _parse_json_body,
+    _safe_int,
     _validate_actor,
     _validate_priority_field,
 )
@@ -127,9 +128,16 @@ def _parse_batch_update_body(body: dict[str, Any]) -> dict[str, Any] | JSONRespo
     priority = _validate_priority_field(body)
     if not isinstance(priority, int) and priority is not None:
         return priority  # JSONResponse error
+    # See _parse_batch_close_body's reason-narrowing comment: JSONResponse is
+    # only TYPE_CHECKING-imported at module scope, so we narrow on the success
+    # types instead. ``status`` is ``str | None | JSONResponse``; a missing
+    # ``status`` falls through to ``None`` (no change).
+    status = _validate_body_string_field(body, "status", default=None)
+    if status is not None and not isinstance(status, str):
+        return status
     return {
         "issue_ids": issue_ids,
-        "status": body.get("status"),
+        "status": status,
         "priority": priority,
         "assignee": body.get("assignee"),
         "fields": body.get("fields"),
@@ -350,10 +358,13 @@ def create_classic_router() -> APIRouter:
         parent_id = _validate_body_string_field(body, "parent_id", allow_null=True, default=None)
         if isinstance(parent_id, JSONResponse):
             return parent_id
+        status = _validate_body_string_field(body, "status", default=None)
+        if isinstance(status, JSONResponse):
+            return status
         try:
             issue = db.update_issue(
                 issue_id,
-                status=body.get("status"),
+                status=status,
                 priority=priority,
                 assignee=body.get("assignee"),
                 title=title,
@@ -420,6 +431,14 @@ def create_classic_router() -> APIRouter:
     @router.post("/issue/{issue_id}/comments", status_code=201)
     async def api_add_comment(issue_id: str, request: Request, db: FiligreeDB = Depends(_get_db)) -> JSONResponse:
         """Add a comment to an issue."""
+        # Prefix check first — db.get_issue() ignores prefix on reads, so a
+        # foreign-project ID would otherwise be reported as NOT_FOUND, masking
+        # the WrongProjectError the write would raise. Mirrors meta CLI's
+        # add-comment fix; see filigree-25b44e65e2.
+        try:
+            db._check_id_prefix(issue_id)
+        except WrongProjectError as e:
+            return _error_response(str(e), ErrorCode.VALIDATION, 400)
         try:
             db.get_issue(issue_id)
         except KeyError:
@@ -450,10 +469,20 @@ def create_classic_router() -> APIRouter:
         )
 
     @router.get("/search")
-    async def api_search(q: str = "", limit: int = 50, offset: int = 0, db: FiligreeDB = Depends(_get_db)) -> JSONResponse:
+    async def api_search(request: Request, db: FiligreeDB = Depends(_get_db)) -> JSONResponse:
         """Full-text search across issues."""
-        limit = min(max(limit, 1), 1000)
-        offset = max(offset, 0)
+        params = request.query_params
+        # Parse without min/max so out-of-range values still clamp (pinned by
+        # tests/api/test_api.py::TestBoundaryClamping); we only want to reject
+        # malformed inputs (non-integer) with the flat 400 envelope.
+        limit_raw = _safe_int(params.get("limit", "50"), "limit")
+        if not isinstance(limit_raw, int):
+            return limit_raw
+        offset_raw = _safe_int(params.get("offset", "0"), "offset")
+        if not isinstance(offset_raw, int):
+            return offset_raw
+        limit = min(max(limit_raw, 1), 1000)
+        offset = max(offset_raw, 0)
         # Reject offsets that won't bind into SQLite's signed-int64 OFFSET.
         # Lower-bound clamping is intentionally lenient (pinned by tests),
         # but the upper bound has no clamp-friendly meaning — a typoed
@@ -464,6 +493,7 @@ def create_classic_router() -> APIRouter:
                 ErrorCode.VALIDATION,
                 400,
             )
+        q = params.get("q", "")
         if not q.strip():
             return JSONResponse({"results": [], "total": 0})
         total = db.count_search_results(q)
@@ -602,6 +632,8 @@ def create_classic_router() -> APIRouter:
             issue = db.claim_issue(issue_id, assignee=assignee, actor=actor)
         except KeyError:
             return _error_response(f"Issue not found: {issue_id}", ErrorCode.NOT_FOUND, 404)
+        except WrongProjectError as e:
+            return _error_response(str(e), ErrorCode.VALIDATION, 400)
         except ValueError as e:
             return _error_response(str(e), ErrorCode.CONFLICT, 409)
         return JSONResponse(issue.to_dict())
@@ -619,6 +651,8 @@ def create_classic_router() -> APIRouter:
             issue = db.release_claim(issue_id, actor=actor)
         except KeyError:
             return _error_response(f"Issue not found: {issue_id}", ErrorCode.NOT_FOUND, 404)
+        except WrongProjectError as e:
+            return _error_response(str(e), ErrorCode.VALIDATION, 400)
         except ValueError as e:
             return _error_response(str(e), ErrorCode.CONFLICT, 409)
         return JSONResponse(issue.to_dict())
@@ -661,6 +695,8 @@ def create_classic_router() -> APIRouter:
             added = db.add_dependency(issue_id, depends_on, actor=actor)
         except KeyError as e:
             return _error_response(str(e), ErrorCode.NOT_FOUND, 404)
+        except WrongProjectError as e:
+            return _error_response(str(e), ErrorCode.VALIDATION, 400)
         except ValueError as e:
             return _error_response(str(e), ErrorCode.CONFLICT, 409)
         return JSONResponse({"added": added})
@@ -772,9 +808,7 @@ def create_loom_router() -> APIRouter:
 
     @router.get("/search")
     async def api_loom_search(
-        q: str = "",
-        limit: int = 50,
-        offset: int = 0,
+        request: Request,
         db: FiligreeDB = Depends(_get_db),
     ) -> JSONResponse:
         """Full-text search — ``ListResponse[IssueLoom]``.
@@ -783,8 +817,17 @@ def create_loom_router() -> APIRouter:
         drops the running total to keep the unified envelope (consumers
         needing total can hit ``/api/stats``).
         """
-        limit = min(max(limit, 1), 1000)
-        offset = max(offset, 0)
+        params = request.query_params
+        # See classic /api/search: parse without min/max so clamp tests still
+        # pass; only malformed (non-integer) values produce 400.
+        limit_raw = _safe_int(params.get("limit", "50"), "limit")
+        if not isinstance(limit_raw, int):
+            return limit_raw
+        offset_raw = _safe_int(params.get("offset", "0"), "offset")
+        if not isinstance(offset_raw, int):
+            return offset_raw
+        limit = min(max(limit_raw, 1), 1000)
+        offset = max(offset_raw, 0)
         # Mirror classic /api/search: reject offsets that won't bind into
         # SQLite's signed-int64 OFFSET. See filigree-0ad97ea6e0.
         if offset > _MAX_PAGINATION_OFFSET:
@@ -793,6 +836,7 @@ def create_loom_router() -> APIRouter:
                 ErrorCode.VALIDATION,
                 400,
             )
+        q = params.get("q", "")
         if not q.strip():
             return JSONResponse(list_response([], limit=limit, offset=offset, has_more=False))
         total = db.count_search_results(q)
@@ -1043,10 +1087,13 @@ def create_loom_router() -> APIRouter:
         parent_id = _validate_body_string_field(body, "parent_id", allow_null=True, default=None)
         if isinstance(parent_id, JSONResponse):
             return parent_id
+        status = _validate_body_string_field(body, "status", default=None)
+        if isinstance(status, JSONResponse):
+            return status
         try:
             issue = db.update_issue(
                 issue_id,
-                status=body.get("status"),
+                status=status,
                 priority=priority,
                 assignee=body.get("assignee"),
                 title=title,
@@ -1136,6 +1183,8 @@ def create_loom_router() -> APIRouter:
             issue = db.claim_issue(issue_id, assignee=assignee, actor=actor)
         except KeyError:
             return _error_response(f"Issue not found: {issue_id}", ErrorCode.NOT_FOUND, 404)
+        except WrongProjectError as e:
+            return _error_response(str(e), ErrorCode.VALIDATION, 400)
         except ValueError as e:
             return _error_response(str(e), ErrorCode.CONFLICT, 409)
         return JSONResponse(issue_to_loom(issue))
@@ -1153,6 +1202,8 @@ def create_loom_router() -> APIRouter:
             issue = db.release_claim(issue_id, actor=actor)
         except KeyError:
             return _error_response(f"Issue not found: {issue_id}", ErrorCode.NOT_FOUND, 404)
+        except WrongProjectError as e:
+            return _error_response(str(e), ErrorCode.VALIDATION, 400)
         except ValueError as e:
             return _error_response(str(e), ErrorCode.CONFLICT, 409)
         return JSONResponse(issue_to_loom(issue))
@@ -1187,6 +1238,12 @@ def create_loom_router() -> APIRouter:
         """Add a comment — returns ``CommentRecordLoom`` (``comment_id``
         replaces classic's ``id``).
         """
+        # See classic add-comment: prefix check first so foreign-project IDs
+        # surface as 400 VALIDATION instead of 404 NOT_FOUND.
+        try:
+            db._check_id_prefix(issue_id)
+        except WrongProjectError as e:
+            return _error_response(str(e), ErrorCode.VALIDATION, 400)
         try:
             db.get_issue(issue_id)
         except KeyError:
@@ -1237,6 +1294,8 @@ def create_loom_router() -> APIRouter:
             added = db.add_dependency(issue_id, depends_on, actor=actor)
         except KeyError as e:
             return _error_response(str(e), ErrorCode.NOT_FOUND, 404)
+        except WrongProjectError as e:
+            return _error_response(str(e), ErrorCode.VALIDATION, 400)
         except ValueError as e:
             return _error_response(str(e), ErrorCode.CONFLICT, 409)
         return JSONResponse({"added": added})

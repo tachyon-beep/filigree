@@ -472,6 +472,42 @@ class TestClaimNextCli:
         data = json.loads(result.output)
         assert data["status"] == "empty"
 
+    def test_claim_next_json_empty_includes_reason(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        """filigree-0e8dadbfcc: empty --json must mirror MCP ClaimNextEmptyResponse.
+
+        types/api.py:266 declares ``reason`` alongside ``status``; the MCP
+        handler emits ``"No ready issues matching filters"``. CLI parity.
+        """
+        runner, _ = cli_in_project
+        runner.invoke(cli, ["claim-next", "--assignee", "drain"])
+        result = runner.invoke(cli, ["claim-next", "--assignee", "a", "--json"])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data == {"status": "empty", "reason": "No ready issues matching filters"}
+
+    def test_claim_next_json_success_includes_selection_reason(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        """filigree-0e8dadbfcc: successful --json must mirror MCP ClaimNextResponse.
+
+        types/api.py:140 declares ``selection_reason``; the MCP handler builds
+        it via ``Issue.format_claim_next_reason``. CLI parity is required by
+        Phase E §9 (envelope shape contract).
+        """
+        runner, _ = cli_in_project
+        runner.invoke(cli, ["create", "P1 task", "-p", "1"])
+        result = runner.invoke(cli, ["claim-next", "--assignee", "bot", "--type", "task", "--json"])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["selection_reason"] == "Highest-priority P1, ready issue (no blockers)"
+
+    def test_claim_next_json_success_selection_reason_includes_type_when_nondefault(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        """The seeded ``Future`` release issue exercises the ``type=`` branch."""
+        runner, _ = cli_in_project
+        result = runner.invoke(cli, ["claim-next", "--assignee", "bot", "--type", "release", "--json"])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["type"] == "release"
+        assert "type=release" in data["selection_reason"]
+
     def test_claim_next_whitespace_assignee_shows_clean_error(self, cli_in_project: tuple[CliRunner, Path]) -> None:
         runner, _ = cli_in_project
         runner.invoke(cli, ["create", "A task"])

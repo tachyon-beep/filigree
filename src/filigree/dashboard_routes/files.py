@@ -485,10 +485,14 @@ def create_loom_router() -> APIRouter:
         ``errors`` and ``hint`` siblings per the strict envelope —
         scanner load errors are logged at the boundary; consumers that
         need the diagnostic UI remain on the MCP surface. Resolves
-        ``scanners/`` relative to the active database's directory; the
-        MCP tool uses an explicit ``filigree_dir`` accessor instead.
+        ``scanners/`` against ``project_root / ".filigree"`` so
+        ``.filigree.conf`` projects with a relocated ``db = ...`` path
+        still find their scanner TOMLs (filigree-641037692a). Falls
+        back to ``db.db_path.parent / "scanners"`` only when
+        ``project_root`` was not set (bare ``FiligreeDB(...)``
+        construction without ``from_filigree_dir`` / ``from_conf``).
         """
-        scanners_dir = db.db_path.parent / "scanners"
+        scanners_dir = db.project_root / ".filigree" / "scanners" if db.project_root is not None else db.db_path.parent / "scanners"
         load_errors: list[str] = []
         scanners = list_scanners(scanners_dir, errors=load_errors)
         if load_errors:

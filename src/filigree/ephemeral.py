@@ -161,6 +161,36 @@ def write_pid_file(pid_file: Path, pid: int, *, cmd: str = "filigree", port: int
     write_atomic(pid_file, content)
 
 
+# PID upper bound: tolerate any plausible kernel value (Linux pid_max can be
+# raised to 2**22; some BSDs allow more). 2**31 - 1 is wide enough for any
+# documented kernel and still rejects pathological JSON.
+_PID_MAX = 2**31 - 1
+
+
+def _coerce_pos_int(raw: object, *, lo: int, hi: int) -> int | None:
+    """Strictly coerce a JSON value to an int in [lo, hi].
+
+    Rejects ``bool`` (int subclass), ``float`` (truncation hides bugs and
+    non-finite values raise ``OverflowError``), and any string that is not a
+    plain non-negative decimal. Returns None if the value cannot be safely
+    interpreted as an integer in range.
+    """
+    if isinstance(raw, bool):
+        return None
+    if isinstance(raw, int):
+        return raw if lo <= raw <= hi else None
+    if isinstance(raw, str):
+        s = raw.strip()
+        if not s or not s.isdigit():
+            return None
+        try:
+            v = int(s)
+        except ValueError:
+            return None
+        return v if lo <= v <= hi else None
+    return None
+
+
 def read_pid_file(pid_file: Path) -> PidInfo | None:
     """Read PID info from file. Returns None if missing or corrupt.
 
@@ -174,18 +204,18 @@ def read_pid_file(pid_file: Path) -> PidInfo | None:
         try:
             data = _json.loads(text)
             if isinstance(data, dict) and "pid" in data:
-                pid = int(data["pid"])
-                if pid <= 0:
+                pid = _coerce_pos_int(data["pid"], lo=1, hi=_PID_MAX)
+                if pid is None:
+                    logger.warning("PID file %s: invalid pid value %r", pid_file, data["pid"])
                     return None
                 info: PidInfo = {"pid": pid, "cmd": data.get("cmd", "unknown")}
                 raw_port = data.get("port")
                 if raw_port is not None:
-                    try:
-                        port_val = int(raw_port)
-                        if 1 <= port_val <= 65535:
-                            info["port"] = port_val
-                    except (TypeError, ValueError):
-                        logger.debug("PID file %s: ignoring non-integer port %r", pid_file, raw_port)
+                    port_val = _coerce_pos_int(raw_port, lo=1, hi=65535)
+                    if port_val is not None:
+                        info["port"] = port_val
+                    else:
+                        logger.debug("PID file %s: ignoring invalid port %r", pid_file, raw_port)
                 raw_ts = data.get("startup_ts")
                 if raw_ts is not None:
                     try:
@@ -207,11 +237,12 @@ def read_pid_file(pid_file: Path) -> PidInfo | None:
         except TypeError:
             pass  # json.loads returned something weird — try legacy
         # Fall back to plain integer (legacy format)
-        pid = int(text)
-        if pid <= 0:
+        pid = _coerce_pos_int(text, lo=1, hi=_PID_MAX)
+        if pid is None:
+            logger.warning("Corrupt PID file %s: not JSON and not a plain integer", pid_file)
             return None
         return {"pid": pid, "cmd": "unknown"}
-    except (ValueError, OSError) as exc:
+    except (ValueError, OSError, OverflowError) as exc:
         logger.warning("Corrupt PID file %s: %s", pid_file, exc)
         return None
 
@@ -342,7 +373,12 @@ def verify_pid_ownership(
         pid_tokens = shlex.split(pid_cmd, posix=os.name != "nt")
     except ValueError:
         pid_tokens = [pid_cmd]
-    return _matches_expected_process(pid_tokens, expected_cmd=expected_cmd, required_args=effective_required)
+    # Fallback path: PID-file `cmd` is recorded without the --port pair (port
+    # is persisted as a separate metadata field). Validate caller-supplied
+    # required_args only; trust the already-parsed `port` field as metadata.
+    # The strict ``--port <N>`` requirement still applies on the OS-argv path
+    # above, where the live process's actual argv is the source of truth.
+    return _matches_expected_process(pid_tokens, expected_cmd=expected_cmd, required_args=required_args)
 
 
 def cleanup_stale_pid(pid_file: Path) -> bool:
@@ -365,8 +401,9 @@ def cleanup_stale_pid(pid_file: Path) -> bool:
         return False  # Process is alive and ours — not stale
 
     # Atomically move the file aside so a concurrent writer cannot have its
-    # fresh record clobbered by our unlink.
-    quarantine = pid_file.with_suffix(pid_file.suffix + ".removing")
+    # fresh record clobbered by our unlink. The quarantine name is unique per
+    # cleaner so two cleaners on the same pid_file do not collide.
+    quarantine = pid_file.with_suffix(f"{pid_file.suffix}.removing.{os.getpid()}.{time.monotonic_ns()}")
     try:
         pid_file.rename(quarantine)
     except FileNotFoundError:
@@ -376,16 +413,19 @@ def cleanup_stale_pid(pid_file: Path) -> bool:
         return False
 
     # Re-verify the quarantined copy. If it still looks stale, drop it. If it
-    # now looks fresh (unlikely but possible if the writer raced with our
-    # first verify), restore it — they already hold ``ephemeral.lock`` so the
-    # current primary record should be theirs, not ours.
+    # now looks fresh (a writer raced between our first verify and our
+    # rename), try to restore it without clobbering any newer primary record:
+    # ``os.link`` fails atomically with ``FileExistsError`` when pid_file
+    # already exists, so a writer that filled the slot after our rename keeps
+    # priority. ``os.rename`` cannot do this on POSIX (it overwrites).
     if verify_pid_ownership(quarantine, expected_cmd="filigree", required_args=("dashboard",)):
         try:
-            quarantine.rename(pid_file)
+            os.link(quarantine, pid_file)
+        except FileExistsError:
+            logger.debug("cleanup_stale_pid: pid_file already rewritten by another writer; dropping our copy")
         except OSError:
-            # A fresh file already exists at pid_file — leave quarantine in
-            # place for manual inspection and drop our stale view.
-            quarantine.unlink(missing_ok=True)
+            logger.debug("cleanup_stale_pid: failed to restore quarantined pid_file", exc_info=True)
+        quarantine.unlink(missing_ok=True)
         return False
 
     quarantine.unlink(missing_ok=True)

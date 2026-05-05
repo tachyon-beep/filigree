@@ -199,6 +199,30 @@ class ObservationsMixin(DBMixinProtocol):
             )
             if auto_commit:
                 self.conn.commit()
+        except sqlite3.IntegrityError as e:
+            # Concurrent racer won the dedup slot between our SELECT and INSERT.
+            # The pre-insert SELECT cannot serialize writers under DEFERRED isolation,
+            # and we cannot wrap the whole function in BEGIN IMMEDIATE because callers
+            # invoke us with auto_commit=False inside their own transactions. So
+            # absorb the dedup IntegrityError, roll back our partial work, re-SELECT
+            # the live duplicate, and return it — preserving the documented contract
+            # that concurrent calls with the same dedup key all return the same row.
+            if "idx_observations_dedup" not in str(e):
+                # Some other integrity failure (e.g. file_records race) — surface it.
+                if auto_commit:
+                    self.conn.rollback()
+                raise
+            if auto_commit:
+                self.conn.rollback()
+            winner = self.conn.execute(
+                "SELECT * FROM observations WHERE summary = ? AND file_path = ? AND coalesce(line, -1) = ?",
+                (summary_stripped, file_path, line_cmp),
+            ).fetchone()
+            if winner is not None:
+                return cast(ObservationDict, dict(winner))
+            # Race resolved by deletion (sweep / dismiss between IntegrityError and re-SELECT).
+            # No live duplicate to return — re-raise so caller retries.
+            raise
         except sqlite3.Error:
             if auto_commit:
                 self.conn.rollback()
@@ -343,19 +367,30 @@ class ObservationsMixin(DBMixinProtocol):
         actor: str = "",
         reason: str = "",
     ) -> None:
-        row = self.conn.execute("SELECT id, summary FROM observations WHERE id = ?", (obs_id,)).fetchone()
-        if row is None:
-            raise ValueError(f"Observation not found: {obs_id}")
-        now = _now_iso()
+        # Serialize the SELECT/INSERT/DELETE so two concurrent dismissals don't
+        # both write audit rows for the same row. Without BEGIN IMMEDIATE the
+        # losing racer's stale pre-read still produces an audit insert and a
+        # no-op delete that silently reports success — masking the fact that
+        # the row was already gone. Contract change: concurrent second dismiss
+        # now correctly raises ``ValueError("Observation not found")``.
+        if self.conn.in_transaction:
+            self.conn.rollback()
+        self.conn.execute("BEGIN IMMEDIATE")
         try:
+            row = self.conn.execute("SELECT id, summary FROM observations WHERE id = ?", (obs_id,)).fetchone()
+            if row is None:
+                self.conn.rollback()
+                raise ValueError(f"Observation not found: {obs_id}")
+            now = _now_iso()
             self.conn.execute(
                 "INSERT INTO dismissed_observations (obs_id, summary, actor, reason, dismissed_at) VALUES (?, ?, ?, ?, ?)",
                 (obs_id, row["summary"], actor, reason, now),
             )
             self.conn.execute("DELETE FROM observations WHERE id = ?", (obs_id,))
             self.conn.commit()
-        except sqlite3.Error:
-            self.conn.rollback()
+        except Exception:
+            if self.conn.in_transaction:
+                self.conn.rollback()
             raise
 
     def batch_dismiss_observations(
@@ -371,8 +406,15 @@ class ObservationsMixin(DBMixinProtocol):
         unique_ids = list(dict.fromkeys(obs_ids))
         now = _now_iso()
         placeholders = ",".join("?" for _ in unique_ids)
+        # Same TOCTOU as single dismiss — under concurrent batch calls the
+        # found_ids/not_found computation must match the rows we actually
+        # delete, otherwise the audit table inflates and ``not_found`` lies.
+        # Hold a writer lock across the SELECT and the INSERT/DELETE.
+        if self.conn.in_transaction:
+            self.conn.rollback()
+        self.conn.execute("BEGIN IMMEDIATE")
         try:
-            # Find which IDs actually exist before deleting
+            # Find which IDs actually exist (under writer lock)
             found_rows = self.conn.execute(
                 f"SELECT id FROM observations WHERE id IN ({placeholders})",
                 unique_ids,
@@ -390,8 +432,9 @@ class ObservationsMixin(DBMixinProtocol):
                 unique_ids,
             )
             self.conn.commit()
-        except sqlite3.Error:
-            self.conn.rollback()
+        except Exception:
+            if self.conn.in_transaction:
+                self.conn.rollback()
             raise
         return {"dismissed": cursor.rowcount, "not_found": not_found}
 

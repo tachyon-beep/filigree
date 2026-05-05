@@ -349,3 +349,55 @@ class TestCLIStartupEnvelope:
         payload = json.loads(result.output)
         _assert_flat_envelope(payload, surface="cli")
         assert payload["code"] == ErrorCode.NOT_INITIALIZED
+
+
+# ---------------------------------------------------------------------------
+# Group-level --actor validation envelope. Distinct from the startup-failure
+# class above: this path fires from the *group* callback before any subcommand
+# has parsed its own args, so `_wants_json()` cannot rely on `as_json` being
+# present in any ctx.params yet and must fall back to parsing the raw argv.
+# ---------------------------------------------------------------------------
+
+
+class TestCLIActorValidationEnvelope:
+    def test_double_dash_as_option_value_with_actor_validation(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Group-level --actor failure must detect a real --json after a `--` consumed as an option value.
+
+        Twin of ``test_double_dash_as_option_value_still_detects_json`` for
+        the *group-callback* path: when ``--actor`` validation fails, Click
+        has not yet parsed the subcommand's options, so ``_wants_json()``
+        must reparse the raw invocation in a parser-aware way to know
+        ``--description --`` consumed the `--` as a value and that the
+        trailing ``--json`` is the real JSON-mode flag — otherwise the
+        validation error leaks Click's plain-text usage output.
+        """
+        monkeypatch.chdir(tmp_path)
+        runner = CliRunner()
+        # `--actor "   "` fails sanitize_actor in the group callback before
+        # the `create` subcommand parses its options. Expected: JSON envelope.
+        result = runner.invoke(cli, ["--actor", "   ", "create", "T", "--description", "--", "--json"])
+        assert result.exit_code == 1, result.output
+        payload = json.loads(result.output)
+        _assert_flat_envelope(payload, surface="cli")
+        assert payload["code"] == ErrorCode.VALIDATION
+        assert "actor" in payload["error"].lower()
+
+    def test_double_dash_positional_with_actor_validation_no_envelope(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Group-level --actor failure must NOT emit envelope when `--json` is positional after a real `--` terminator."""
+        monkeypatch.chdir(tmp_path)
+        runner = CliRunner()
+        # `create -- --json` makes the title literally "--json"; no real --json flag.
+        result = runner.invoke(cli, ["--actor", "   ", "create", "--", "--json"])
+        assert result.exit_code == 2, result.output
+        assert not result.output.strip().startswith("{"), result.output
+        assert "actor" in result.output.lower()
+
+    def test_simple_actor_validation_with_real_json_flag(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Sanity check: the simple ``--actor '' create --json`` case still emits the envelope."""
+        monkeypatch.chdir(tmp_path)
+        runner = CliRunner()
+        result = runner.invoke(cli, ["--actor", "   ", "create", "T", "--json"])
+        assert result.exit_code == 1, result.output
+        payload = json.loads(result.output)
+        _assert_flat_envelope(payload, surface="cli")
+        assert payload["code"] == ErrorCode.VALIDATION

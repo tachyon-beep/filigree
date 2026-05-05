@@ -701,14 +701,24 @@ def batch_update_findings_cmd(
             except sqlite3.Error as e:
                 errors.append(BatchFailure(id=fid, error=f"Database error: {e}", code=ErrorCode.IO))
 
-        # Mirror MCP: all-failed → ErrorResponse
+        # Mirror MCP: all-failed → ErrorResponse. Derive the envelope code
+        # from per-item codes so callers can apply the right retry policy:
+        # IO wins (it's retryable); else a homogeneous code is preserved;
+        # else fall back to VALIDATION for genuinely mixed failures.
         if not updated and errors:
+            err_codes = {f["code"] for f in errors}
+            if ErrorCode.IO in err_codes:
+                envelope_code = ErrorCode.IO
+            elif len(err_codes) == 1:
+                envelope_code = next(iter(err_codes))
+            else:
+                envelope_code = ErrorCode.VALIDATION
             if as_json:
                 click.echo(
                     json_mod.dumps(
                         {
                             "error": f"All {len(errors)} finding update(s) failed",
-                            "code": ErrorCode.VALIDATION,
+                            "code": envelope_code,
                         }
                     )
                 )

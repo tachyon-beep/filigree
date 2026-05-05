@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import sqlite3
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any
 
 import pytest
 
 from filigree.core import FiligreeDB
 from filigree.db_base import _now_iso
+
+from .._db_factory import make_db
 
 
 class TestCreateObservation:
@@ -1214,3 +1217,124 @@ class TestAuditTrailCap:
         # The oldest surviving entry should be newer than the very first entry we inserted
         first_ts = (now - timedelta(hours=cap + overflow)).isoformat()
         assert oldest[0] > first_ts
+
+
+def _shared_db_path(tmp_path: Path) -> Path:
+    # Initialize the schema once via an isolated connection, then hand the
+    # path to worker threads. Each worker opens its own FiligreeDB instance
+    # — no shared connection state.
+    seed = make_db(tmp_path)
+    path = seed.db_path
+    seed.close()
+    return path
+
+
+def _run_one_create_race(db_path: Path, n_threads: int) -> tuple[list[str], list[Exception]]:
+    import threading
+
+    from filigree.core import FiligreeDB
+
+    wipe = FiligreeDB(db_path, prefix="test")
+    wipe.initialize()
+    wipe.conn.execute("DELETE FROM observations")
+    wipe.conn.commit()
+    wipe.close()
+
+    errors: list[Exception] = []
+    ids: list[str] = []
+    barrier = threading.Barrier(n_threads)
+
+    def worker() -> None:
+        try:
+            d = FiligreeDB(db_path, prefix="test")
+            d.initialize()
+            barrier.wait(timeout=5)
+            obs = d.create_observation("dedup-race")
+            ids.append(obs["id"])
+            d.close()
+        except Exception as e:
+            errors.append(e)
+
+    threads = [threading.Thread(target=worker) for _ in range(n_threads)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    return ids, errors
+
+
+def _run_one_dismiss_race(db_path: Path, n_threads: int) -> tuple[str, list[str], list[Exception]]:
+    import threading
+
+    from filigree.core import FiligreeDB
+
+    seed = FiligreeDB(db_path, prefix="test")
+    seed.initialize()
+    seed.conn.execute("DELETE FROM observations")
+    seed.conn.execute("DELETE FROM dismissed_observations")
+    seed.conn.commit()
+    obs = seed.create_observation("dismiss-race")
+    obs_id = obs["id"]
+    seed.close()
+
+    successes: list[str] = []
+    errors: list[Exception] = []
+    barrier = threading.Barrier(n_threads)
+
+    def worker(name: str) -> None:
+        try:
+            d = FiligreeDB(db_path, prefix="test")
+            d.initialize()
+            barrier.wait(timeout=5)
+            d.dismiss_observation(obs_id, actor=name)
+            successes.append(name)
+            d.close()
+        except ValueError:
+            # Expected: races that lose see "Observation not found".
+            pass
+        except Exception as e:
+            errors.append(e)
+
+    threads = [threading.Thread(target=worker, args=(f"t{i}",)) for i in range(n_threads)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    return obs_id, successes, errors
+
+
+class TestObservationConcurrencyRegressions:
+    """Regression tests for filigree-248ca4ff3f and filigree-fd77d71a49.
+
+    Concurrency races are inherently flaky — each scenario is run in a loop
+    so a regression that flips the outcome 10% of the time still trips here.
+    Threads use separate FiligreeDB instances over the same on-disk DB to
+    exercise the WAL-mode path (mirrors MCP/CLI behavior).
+    """
+
+    def test_concurrent_create_returns_existing_under_dedup_race(self, tmp_path: Path) -> None:
+        db_path = _shared_db_path(tmp_path)
+        n_threads = 8
+        for _ in range(20):
+            ids, errors = _run_one_create_race(db_path, n_threads)
+            assert errors == [], f"unexpected errors: {errors!r}"
+            assert len(ids) == n_threads
+            assert len(set(ids)) == 1, f"racers should share one id, got {set(ids)!r}"
+
+    def test_concurrent_dismiss_writes_one_audit_row(self, tmp_path: Path) -> None:
+        from filigree.core import FiligreeDB
+
+        db_path = _shared_db_path(tmp_path)
+        n_threads = 5
+        for _ in range(20):
+            obs_id, successes, errors = _run_one_dismiss_race(db_path, n_threads)
+            assert errors == [], f"unexpected errors: {errors!r}"
+            assert len(successes) == 1, f"exactly one dismiss should win, got {successes!r}"
+
+            check = FiligreeDB(db_path, prefix="test")
+            check.initialize()
+            audit_count = check.conn.execute("SELECT COUNT(*) FROM dismissed_observations WHERE obs_id = ?", (obs_id,)).fetchone()[0]
+            remaining = check.conn.execute("SELECT COUNT(*) FROM observations WHERE id = ?", (obs_id,)).fetchone()[0]
+            check.close()
+            assert audit_count == 1, f"expected 1 audit row, got {audit_count}"
+            assert remaining == 0

@@ -99,6 +99,9 @@ filigree remove-dep <blocked> <blocker>
 create (open) → in_progress → closed
 ```
 
+Use `filigree start-work <issue-id> --assignee <name>` to make the
+`open → in_progress` transition atomically.
+
 ### With Verification
 
 For types that support it (check `filigree type-info bug`):
@@ -106,6 +109,9 @@ For types that support it (check `filigree type-info bug`):
 ```
 open → fixing → verifying → closed
 ```
+
+Pass `--target-status fixing` to `start-work` if the workflow has multiple
+`wip`-category targets and the resolver needs disambiguation.
 
 ### Bug Report Template
 

@@ -19,6 +19,7 @@ from filigree.core import (
     FILIGREE_DIR_NAME,
     SUMMARY_FILENAME,
     FiligreeDB,
+    ProjectNotInitialisedError,
     find_filigree_root,
     get_mode,
     read_conf,
@@ -227,8 +228,11 @@ def install(
 
     try:
         filigree_dir = find_filigree_root()
-    except FileNotFoundError:
-        click.echo(f"No {FILIGREE_DIR_NAME}/ found. Run 'filigree init' first.", err=True)
+    except ProjectNotInitialisedError as exc:
+        # filigree-dad647cf35: catch the rich subclass before the generic
+        # FileNotFoundError so ForeignDatabaseError's git-boundary remediation
+        # message reaches the user instead of "No .filigree/ found".
+        click.echo(str(exc), err=True)
         sys.exit(1)
 
     # Update mode in config if explicitly provided
@@ -317,6 +321,15 @@ def install(
 
     ok_count = sum(1 for _, ok, _ in results if ok)
     click.echo(f"\n{ok_count}/{len(results)} installed successfully")
+
+    # filigree-ca4e5d28dd: exit 1 if any selected installer step failed so
+    # callers (CI, shell pipelines) don't treat partial success as success.
+    # Also suppress the "Next:" hint, which would mislead the user into
+    # thinking the install completed.
+    if any(not ok for _, ok, _ in results):
+        click.echo("Some install steps failed. See messages above.", err=True)
+        sys.exit(1)
+
     click.echo('Next: filigree create "My first issue"')
 
 
@@ -355,8 +368,11 @@ def doctor(fix: bool, verbose: bool) -> None:
         click.echo("\nApplying fixes...")
         try:
             filigree_dir = find_filigree_root()
-        except FileNotFoundError:
-            click.echo("  !!  Cannot fix: no .filigree/ directory found", err=True)
+        except ProjectNotInitialisedError as exc:
+            # filigree-dad647cf35: surface the rich ForeignDatabaseError
+            # message instead of the generic "Cannot fix" line, matching
+            # scanners.py and the run_doctor() check above.
+            click.echo(str(exc), err=True)
             sys.exit(1)
 
         from filigree.install import (
@@ -588,7 +604,12 @@ def ensure_dashboard_cmd(port: int | None) -> None:
 
 @click.command()
 @click.option("--json", "as_json", is_flag=True, help="JSON output")
-@click.option("--days", default=30, help="Lookback window in days")
+@click.option(
+    "--days",
+    default=30,
+    type=click.IntRange(1, 3650),
+    help="Lookback window in days (1-3650)",
+)
 def metrics(as_json: bool, days: int) -> None:
     """Show flow metrics: cycle time, lead time, throughput."""
     from filigree.analytics import get_flow_metrics
@@ -618,7 +639,14 @@ def metrics(as_json: bool, days: int) -> None:
 def export_data(output: str) -> None:
     """Export full project data to a JSONL file."""
     with get_db() as db:
-        count = db.export_jsonl(output)
+        # filigree-48613c1c55: surface FS errors (missing parent dir,
+        # permission denied, disk full) and DB errors as a clean
+        # "Export failed: …" line, matching `import`'s contract.
+        try:
+            count = db.export_jsonl(output)
+        except (OSError, sqlite3.Error) as e:
+            click.echo(f"Export failed: {e}", err=True)
+            sys.exit(1)
         click.echo(f"Exported {count} records to {output}")
 
 

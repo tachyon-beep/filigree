@@ -205,7 +205,7 @@ class TestMainGlobalReset:
 
     def test_ethereal_main_clears_prior_project_store(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         filigree_dir = _create_filigree_dir(tmp_path, "proj-a", "a")
-        monkeypatch.setattr(dash_module, "find_filigree_root", lambda: filigree_dir)
+        monkeypatch.setattr(dash_module, "find_filigree_anchor", lambda: (filigree_dir.parent, None))
 
         # Simulate lingering server-mode global from a prior in-process run.
         leftover = ProjectStore()
@@ -268,7 +268,7 @@ class TestMainGlobalReset:
 
     def test_main_resets_both_globals_in_finally(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         filigree_dir = _create_filigree_dir(tmp_path, "proj-c", "c")
-        monkeypatch.setattr(dash_module, "find_filigree_root", lambda: filigree_dir)
+        monkeypatch.setattr(dash_module, "find_filigree_anchor", lambda: (filigree_dir.parent, None))
 
         dash_module._project_store = ProjectStore()
         dash_module._db = None
@@ -299,7 +299,7 @@ class TestMainGlobalReset:
         def fake_uvicorn_run_a(*args: object, **kwargs: object) -> None:
             captured["after_run_a"] = dict(dash_module._config)
 
-        monkeypatch.setattr(dash_module, "find_filigree_root", lambda: proj_a)
+        monkeypatch.setattr(dash_module, "find_filigree_anchor", lambda: (proj_a.parent, None))
         monkeypatch.setattr("uvicorn.run", fake_uvicorn_run_a)
         monkeypatch.setattr("filigree.dashboard.webbrowser.open", lambda *a, **kw: None)
 
@@ -313,7 +313,7 @@ class TestMainGlobalReset:
         def fake_uvicorn_run_b(*args: object, **kwargs: object) -> None:
             captured["after_run_b"] = dict(dash_module._config)
 
-        monkeypatch.setattr(dash_module, "find_filigree_root", lambda: proj_b)
+        monkeypatch.setattr(dash_module, "find_filigree_anchor", lambda: (proj_b.parent, None))
         monkeypatch.setattr("uvicorn.run", fake_uvicorn_run_b)
 
         dash_module.main(port=9999, no_browser=True, server_mode=False)
@@ -325,7 +325,7 @@ class TestMainGlobalReset:
         """filigree-154a23794c: finally block must clear _config too."""
         proj = _create_filigree_dir(tmp_path, "proj-fin", "fin")
         write_config(proj, {"prefix": "fin", "version": 1, "name": "Finalize"})
-        monkeypatch.setattr(dash_module, "find_filigree_root", lambda: proj)
+        monkeypatch.setattr(dash_module, "find_filigree_anchor", lambda: (proj.parent, None))
         monkeypatch.setattr("uvicorn.run", lambda *a, **kw: None)
         monkeypatch.setattr("filigree.dashboard.webbrowser.open", lambda *a, **kw: None)
 
@@ -529,3 +529,91 @@ class TestSafeBoundedIntReexport:
         from filigree.dashboard_routes.common import _safe_bounded_int as original
 
         assert via_dashboard is original
+
+
+# ---------------------------------------------------------------------------
+# /api/loom/scanners — relocated-DB resolution (filigree-641037692a)
+# ---------------------------------------------------------------------------
+
+
+class TestLoomScannersRelocatedDB:
+    """``GET /api/loom/scanners`` must resolve scanner TOMLs from
+    ``project_root / ".filigree" / "scanners"``, not ``db.db_path.parent /
+    "scanners"`` — otherwise ``.filigree.conf`` projects with a relocated
+    ``db = ...`` path return an empty scanner list while the CLI/MCP
+    surfaces correctly enumerate them.
+    """
+
+    async def test_relocated_db_finds_scanner_in_filigree_dir(self, tmp_path: Path) -> None:
+        from filigree.core import CONF_FILENAME, FILIGREE_DIR_NAME, write_conf
+
+        project_root = tmp_path / "relocated-proj"
+        filigree_dir = project_root / FILIGREE_DIR_NAME
+        filigree_dir.mkdir(parents=True)
+        write_config(filigree_dir, {"prefix": "rel", "version": 1})
+
+        # Scanner TOML lives in the conventional .filigree/scanners/ location.
+        scanners_dir = filigree_dir / "scanners"
+        scanners_dir.mkdir()
+        (scanners_dir / "demo.toml").write_text(
+            '[scanner]\nname = "demo"\ndisplay_name = "Demo"\nadapter = "command"\ncommand = "echo hi"\n'
+        )
+
+        # DB lives outside .filigree/, mimicking a v2.0 conf-relocated layout.
+        custom_db_dir = project_root / "data"
+        custom_db_dir.mkdir()
+        custom_db = custom_db_dir / "track.db"
+        seed = FiligreeDB(custom_db, prefix="rel", check_same_thread=False)
+        seed.initialize()
+        seed.close()
+        write_conf(
+            project_root / CONF_FILENAME,
+            {"version": 1, "project_name": "rel", "prefix": "rel", "db": "data/track.db"},
+        )
+
+        db = FiligreeDB.from_conf(project_root / CONF_FILENAME, check_same_thread=False)
+        # Sanity: DB path is outside .filigree/, so the legacy resolution would miss.
+        assert db.db_path.parent != filigree_dir
+        assert db.project_root == project_root.resolve()
+
+        dash_module._db = db
+        try:
+            app = create_app()
+            transport = ASGITransport(app=app)
+            async with AsyncClient(transport=transport, base_url="http://test") as client:
+                resp = await client.get("/api/loom/scanners")
+            assert resp.status_code == 200, resp.text
+            body = resp.json()
+            names = [item["name"] for item in body["items"]]
+            assert "demo" in names, f"scanners not found via /api/loom/scanners: {body!r}"
+        finally:
+            dash_module._db = None
+            db.close()
+
+    async def test_legacy_filigree_dir_install_still_finds_scanner(self, tmp_path: Path) -> None:
+        """Sanity: the fix must not regress the legacy
+        ``.filigree/filigree.db`` layout — both DB construction paths set
+        ``project_root`` (``from_filigree_dir`` resolves it from the dir's
+        parent), so the route still resolves to ``.filigree/scanners``.
+        """
+        filigree_dir = tmp_path / ".filigree"
+        filigree_dir.mkdir()
+        write_config(filigree_dir, {"prefix": "leg", "version": 1})
+        (filigree_dir / "scanners").mkdir()
+        (filigree_dir / "scanners" / "legacy.toml").write_text(
+            '[scanner]\nname = "legacy"\ndisplay_name = "Legacy"\nadapter = "command"\ncommand = "echo hi"\n'
+        )
+        db = FiligreeDB.from_filigree_dir(filigree_dir, check_same_thread=False)
+
+        dash_module._db = db
+        try:
+            app = create_app()
+            transport = ASGITransport(app=app)
+            async with AsyncClient(transport=transport, base_url="http://test") as client:
+                resp = await client.get("/api/loom/scanners")
+            assert resp.status_code == 200
+            names = [item["name"] for item in resp.json()["items"]]
+            assert "legacy" in names
+        finally:
+            dash_module._db = None
+            db.close()
