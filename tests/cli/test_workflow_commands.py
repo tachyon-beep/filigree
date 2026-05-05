@@ -893,7 +893,7 @@ class TestBatchCli:
 
         listed = runner.invoke(cli, ["list", "--label", "security", "--json"])
         listed_data = json.loads(listed.output)
-        listed_ids = {row["id"] for row in listed_data["items"]}
+        listed_ids = {row["issue_id"] for row in listed_data["items"]}
         assert id1 in listed_ids
         assert id2 in listed_ids
 

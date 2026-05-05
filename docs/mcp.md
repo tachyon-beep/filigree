@@ -70,7 +70,7 @@ Regenerated on every mutation. Agents read this at session start for instant ori
 
 ### `filigree-workflow`
 
-Workflow guide with optional live project context. Agents use this to understand how to interact with filigree — available types, state machines, transition rules.
+Workflow guide with optional live project context. Agents use this to understand how to interact with filigree — available types, status workflows, transition rules.
 
 ## Tools
 
@@ -83,14 +83,14 @@ Workflow guide with optional live project context. Agents use this to understand
 | `create_issue` | Create with type, priority, deps, labels, fields |
 | `update_issue` | Update status, priority, title, assignee, fields |
 | `close_issue` | Close with optional reason |
-| `reopen_issue` | Reopen a closed issue to its initial state |
+| `reopen_issue` | Reopen a closed issue to its initial status |
 | `undo_last` | Undo most recent reversible action |
 
 #### `get_issue`
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `id` | string | yes | Issue ID |
+| `issue_id` | string | yes | Issue ID |
 | `include_transitions` | boolean | no | Include valid next states in response |
 
 #### `list_issues`
@@ -124,7 +124,7 @@ Workflow guide with optional live project context. Agents use this to understand
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `id` | string | yes | Issue ID |
+| `issue_id` | string | yes | Issue ID |
 | `status` | string | no | New status |
 | `priority` | 0-4 | no | New priority |
 | `title` | string | no | New title |
@@ -139,7 +139,7 @@ Workflow guide with optional live project context. Agents use this to understand
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `id` | string | yes | Issue ID |
+| `issue_id` | string | yes | Issue ID |
 | `reason` | string | no | Close reason |
 | `fields` | object | no | Extra fields to set while closing (for enforced workflows) |
 | `actor` | string | no | Agent identity for audit trail |
@@ -148,14 +148,14 @@ Workflow guide with optional live project context. Agents use this to understand
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `id` | string | yes | Issue ID |
+| `issue_id` | string | yes | Issue ID |
 | `actor` | string | no | Agent identity for audit trail |
 
 #### `undo_last`
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `id` | string | yes | Issue ID |
+| `issue_id` | string | yes | Issue ID |
 | `actor` | string | no | Agent identity for audit trail |
 
 ### Ready and Blocked
@@ -256,15 +256,37 @@ Step deps within a phase use integer indices. Cross-phase deps use `"phase_idx.s
 
 | Tool | Description |
 |------|-------------|
-| `claim_issue` | Atomically claim with optimistic locking |
-| `claim_next` | Claim highest-priority ready issue |
+| `start_work` | Atomically claim and transition an issue into work |
+| `start_next_work` | Claim highest-priority ready issue and transition it into work |
+| `claim_issue` | Claim only, with optimistic locking |
+| `claim_next` | Claim highest-priority ready issue only |
 | `release_claim` | Release back to open |
+
+#### `start_work`
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `issue_id` | string | yes | Issue ID |
+| `assignee` | string | yes | Who is starting work |
+| `target_status` | string | no | Working status override |
+| `actor` | string | no | Agent identity (defaults to assignee) |
+
+#### `start_next_work`
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `assignee` | string | yes | Who is starting work |
+| `type` | string | no | Filter by issue type |
+| `priority_min` | 0-4 | no | Minimum priority |
+| `priority_max` | 0-4 | no | Maximum priority |
+| `target_status` | string | no | Working status override |
+| `actor` | string | no | Agent identity (defaults to assignee) |
 
 #### `claim_issue`
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `id` | string | yes | Issue ID |
+| `issue_id` | string | yes | Issue ID |
 | `assignee` | string | yes | Who is claiming |
 | `actor` | string | no | Agent identity (defaults to assignee) |
 
@@ -282,7 +304,7 @@ Step deps within a phase use integer indices. Cross-phase deps use `"phase_idx.s
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `id` | string | yes | Issue ID |
+| `issue_id` | string | yes | Issue ID |
 | `actor` | string | no | Agent identity for audit trail |
 
 ### Batch Operations
@@ -298,7 +320,7 @@ Step deps within a phase use integer indices. Cross-phase deps use `"phase_idx.s
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `ids` | string[] | yes | Issue IDs |
+| `issue_ids` | string[] | yes | Issue IDs |
 | `status` | string | no | New status |
 | `priority` | 0-4 | no | New priority |
 | `assignee` | string | no | New assignee |
@@ -309,7 +331,7 @@ Step deps within a phase use integer indices. Cross-phase deps use `"phase_idx.s
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `ids` | string[] | yes | Issue IDs |
+| `issue_ids` | string[] | yes | Issue IDs |
 | `reason` | string | no | Close reason |
 | `actor` | string | no | Agent identity for audit trail |
 
@@ -317,7 +339,7 @@ Step deps within a phase use integer indices. Cross-phase deps use `"phase_idx.s
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `ids` | string[] | yes | Issue IDs |
+| `issue_ids` | string[] | yes | Issue IDs |
 | `label` | string | yes | Label to add |
 | `actor` | string | no | Agent identity for audit trail |
 
@@ -325,7 +347,7 @@ Step deps within a phase use integer indices. Cross-phase deps use `"phase_idx.s
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `ids` | string[] | yes | Issue IDs |
+| `issue_ids` | string[] | yes | Issue IDs |
 | `text` | string | yes | Comment text |
 | `actor` | string | no | Agent identity for audit trail |
 

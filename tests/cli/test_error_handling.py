@@ -184,7 +184,8 @@ class TestRefreshSummaryOSError:
         assert result.exit_code == 0, f"Expected success, got {result.exit_code}: {result.output}"
         # The mutation result JSON must be on stdout — parse without stripping tracebacks
         data = json.loads(result.output)
-        assert "id" in data
+        assert "issue_id" in data
+        assert "id" not in data
 
 
 class TestGetDbCorruptConf:

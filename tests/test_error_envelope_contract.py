@@ -228,7 +228,7 @@ class TestTransitionErrorSurfaceContract:
             # Seed an issue first
             create_result = runner.invoke(cli, ["create", "CLI transition probe", "--type", "bug", "--json"])
             assert create_result.exit_code == 0, create_result.output
-            issue_id = json.loads(create_result.output)["id"]
+            issue_id = json.loads(create_result.output)["issue_id"]
 
             # Attempt the invalid transition
             result = runner.invoke(cli, ["update", issue_id, "--status", "nonexistent_state", "--json"])

@@ -10,6 +10,7 @@ from typing import Any
 import click
 
 from filigree.cli_common import get_db, refresh_summary
+from filigree.issue_payloads import issue_to_public, public_issue_with
 from filigree.types.api import AmbiguousTransitionError, ErrorCode, InvalidTransitionError, classify_value_error
 from filigree.validation import sanitize_actor
 
@@ -139,7 +140,7 @@ def create(
                 click.echo(f"Error: {e}", err=True)
             sys.exit(1)
         if as_json:
-            click.echo(json_mod.dumps(issue.to_dict(), indent=2, default=str))
+            click.echo(json_mod.dumps(issue_to_public(issue), indent=2, default=str))
         else:
             click.echo(f"Created {issue.id}: {issue.title}")
             click.echo("Next: filigree ready")
@@ -160,7 +161,7 @@ def _show_impl(issue_id: str, as_json: bool, with_files: bool) -> None:
         file_assocs = db.get_issue_files(issue_id) if with_files else []
 
         if as_json:
-            out: dict[str, Any] = dict(issue.to_dict())
+            out: dict[str, Any] = dict(issue_to_public(issue))
             if with_files:
                 out["files"] = file_assocs
             click.echo(json_mod.dumps(out, indent=2, default=str))
@@ -272,7 +273,7 @@ def _list_issues_impl(
         issues = issues[:limit] if has_more else issues
 
         if as_json:
-            list_payload: dict[str, Any] = {"items": [i.to_dict() for i in issues], "has_more": has_more}
+            list_payload: dict[str, Any] = {"items": [issue_to_public(i) for i in issues], "has_more": has_more}
             if has_more:
                 list_payload["next_offset"] = offset + len(issues)
             click.echo(json_mod.dumps(list_payload, indent=2, default=str))
@@ -390,7 +391,7 @@ def _update_impl(
                 actor=actor,
             )
             if as_json:
-                click.echo(json_mod.dumps(issue.to_dict(), indent=2, default=str))
+                click.echo(json_mod.dumps(issue_to_public(issue), indent=2, default=str))
             else:
                 click.echo(f"Updated {issue.id}: {issue.title} [{issue.status}]")
         except KeyError:
@@ -603,7 +604,7 @@ def claim(ctx: click.Context, issue_id: str, assignee: str, as_json: bool) -> No
             sys.exit(1)
 
         if as_json:
-            click.echo(json_mod.dumps(issue.to_dict(), indent=2, default=str))
+            click.echo(json_mod.dumps(issue_to_public(issue), indent=2, default=str))
         else:
             click.echo(f"Claimed {issue.id}: {issue.title} [{issue.status}] -> {assignee}")
         refresh_summary(db)
@@ -661,7 +662,7 @@ def claim_next(
             if as_json:
                 # Mirror the MCP ClaimNextResponse shape (types/api.py:140) — emit
                 # the issue dict plus selection_reason via the shared formatter.
-                payload = {**issue.to_dict(), "selection_reason": issue.format_claim_next_reason()}
+                payload = public_issue_with(issue, selection_reason=issue.format_claim_next_reason())
                 click.echo(json_mod.dumps(payload, indent=2, default=str))
             else:
                 click.echo(f"Claimed {issue.id}: {issue.title} [{issue.status}] -> {assignee}")
@@ -673,7 +674,7 @@ def _release_impl(actor: str, issue_id: str, as_json: bool) -> None:
         try:
             issue = db.release_claim(issue_id, actor=actor)
             if as_json:
-                click.echo(json_mod.dumps(issue.to_dict(), indent=2, default=str))
+                click.echo(json_mod.dumps(issue_to_public(issue), indent=2, default=str))
             else:
                 click.echo(f"Released {issue.id}: {issue.title} [{issue.status}]")
         except KeyError:
@@ -817,7 +818,7 @@ def start_work(
             sys.exit(1)
 
         if as_json:
-            click.echo(json_mod.dumps(issue.to_dict(), indent=2, default=str))
+            click.echo(json_mod.dumps(issue_to_public(issue), indent=2, default=str))
         else:
             click.echo(f"Started work on {issue.id}: status={issue.status}, assignee={issue.assignee}")
         refresh_summary(db)
@@ -891,7 +892,7 @@ def start_next_work(
             return
 
         if as_json:
-            click.echo(json_mod.dumps(claimed.to_dict(), indent=2, default=str))
+            click.echo(json_mod.dumps(issue_to_public(claimed), indent=2, default=str))
         else:
             click.echo(f"Started work on {claimed.id}: status={claimed.status}, assignee={claimed.assignee}")
         refresh_summary(db)

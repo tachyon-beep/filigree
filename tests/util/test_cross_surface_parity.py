@@ -340,7 +340,7 @@ class TestBlankActorUpdateParity:
         def cli_action(runner: CliRunner, _: Path) -> Any:
             create = runner.invoke(cli, ["create", "Target", "--json"])
             assert create.exit_code == 0, create.output
-            issue_id = json.loads(create.output)["id"]
+            issue_id = json.loads(create.output)["issue_id"]
             return runner.invoke(cli, ["--actor", "   ", "update", issue_id, "--title", "x", "--json"])
 
         cli_env = _cli_envelope(cli_surface(cli_action))
@@ -376,7 +376,7 @@ class TestBlankAssigneeClaimParity:
         def cli_action(runner: CliRunner, _: Path) -> Any:
             create = runner.invoke(cli, ["create", "Claimable", "--json"])
             assert create.exit_code == 0, create.output
-            issue_id = json.loads(create.output)["id"]
+            issue_id = json.loads(create.output)["issue_id"]
             return runner.invoke(cli, ["claim", issue_id, "--assignee", "   ", "--json"])
 
         cli_env = _cli_envelope(cli_surface(cli_action))
@@ -419,7 +419,7 @@ class TestInvalidTransitionParity:
         def cli_action(runner: CliRunner, _: Path) -> Any:
             create = runner.invoke(cli, ["create", "Probe", "--type", "bug", "--json"])
             assert create.exit_code == 0, create.output
-            issue_id = json.loads(create.output)["id"]
+            issue_id = json.loads(create.output)["issue_id"]
             return runner.invoke(cli, ["update", issue_id, "--status", "nonexistent_state", "--json"])
 
         cli_env = _cli_envelope(cli_surface(cli_action))
@@ -475,7 +475,7 @@ class TestAlreadyClosedParity:
         # the close fails; N≥2 close calls keep the batch-shape wrapper.
         def cli_action(runner: CliRunner, _: Path) -> Any:
             create = runner.invoke(cli, ["create", "C", "--json"])
-            issue_id = json.loads(create.output)["id"]
+            issue_id = json.loads(create.output)["issue_id"]
             close_once = runner.invoke(cli, ["close", issue_id])
             assert close_once.exit_code == 0, close_once.output
             return runner.invoke(cli, ["close", issue_id, "--json"])
@@ -876,7 +876,7 @@ class TestListFilesEnvelopeParity:
 @pytest.mark.asyncio
 class TestStartWorkEnvelopeParity:
     """CLI ``start-work --json`` and MCP ``start_work`` agree:
-    success path emits a full issue dict; NOT_FOUND error paths agree on code."""
+    success path emits a full public issue; NOT_FOUND error paths agree on code."""
 
     async def test_error_envelope_parity(
         self,
@@ -910,14 +910,15 @@ class TestStartWorkEnvelopeParity:
         mcp_surface: FiligreeDB,
         cli_surface: Callable[..., Any],
     ) -> None:
-        """Both surfaces return an issue dict with the same structural keys on success."""
+        """Both surfaces return a public issue with the same structural keys on success."""
         from filigree.mcp_tools.issues import _handle_start_work
 
         # MCP: seed an issue and start-work on it.
         mcp_issue = mcp_surface.create_issue("MCP start-work target", type="task")
         mcp_body = _mcp_envelope(await _handle_start_work({"issue_id": mcp_issue.id, "assignee": "bot"}))
-        # On success, MCP returns a full issue dict (not an error envelope).
-        assert "id" in mcp_body, f"mcp start-work success missing 'id': {mcp_body!r}"
+        # On success, MCP returns a full public issue (not an error envelope).
+        assert "issue_id" in mcp_body, f"mcp start-work success missing 'issue_id': {mcp_body!r}"
+        assert "id" not in mcp_body, f"mcp start-work success leaked internal 'id': {mcp_body!r}"
         assert "status" in mcp_body, f"mcp start-work success missing 'status': {mcp_body!r}"
         assert "assignee" in mcp_body, f"mcp start-work success missing 'assignee': {mcp_body!r}"
 
@@ -925,13 +926,14 @@ class TestStartWorkEnvelopeParity:
         def cli_action(runner: CliRunner, _: Path) -> Any:
             create = runner.invoke(cli, ["create", "CLI start-work target", "--type", "task", "--json"])
             assert create.exit_code == 0, create.output
-            issue_id = json.loads(create.output)["id"]
+            issue_id = json.loads(create.output)["issue_id"]
             return runner.invoke(cli, ["start-work", issue_id, "--assignee", "bot", "--json"])
 
         cli_result = cli_surface(cli_action)
         assert cli_result.exit_code == 0, cli_result.output
         cli_body = json.loads(cli_result.output)
-        assert "id" in cli_body, f"cli start-work success missing 'id': {cli_body!r}"
+        assert "issue_id" in cli_body, f"cli start-work success missing 'issue_id': {cli_body!r}"
+        assert "id" not in cli_body, f"cli start-work success leaked internal 'id': {cli_body!r}"
         assert "status" in cli_body, f"cli start-work success missing 'status': {cli_body!r}"
         assert "assignee" in cli_body, f"cli start-work success missing 'assignee': {cli_body!r}"
 

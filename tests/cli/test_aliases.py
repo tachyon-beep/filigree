@@ -24,7 +24,7 @@ def _create_issue(runner: CliRunner, title: str = "Alias test issue") -> str:
     """Create an issue and return its ID."""
     result = runner.invoke(cli, ["create", title, "--json"])
     assert result.exit_code == 0, result.output
-    return json.loads(result.output)["id"]
+    return json.loads(result.output)["issue_id"]
 
 
 # ---------------------------------------------------------------------------
@@ -198,7 +198,7 @@ class TestIssueAliases:
         # Structural parity (both are the same issue dict)
         d_short = json.loads(out_short.output)
         d_alias = json.loads(out_alias.output)
-        assert d_short["id"] == d_alias["id"] == issue_id
+        assert d_short["issue_id"] == d_alias["issue_id"] == issue_id
         assert d_short["title"] == d_alias["title"]
 
     def test_list_list_issues_parity(self, cli_in_project: tuple[CliRunner, Path]) -> None:
@@ -212,8 +212,8 @@ class TestIssueAliases:
         assert d_short["has_more"] == d_alias["has_more"]
         assert len(d_short["items"]) == len(d_alias["items"])
         # IDs must match (same order since same DB state)
-        short_ids = [i["id"] for i in d_short["items"]]
-        alias_ids = [i["id"] for i in d_alias["items"]]
+        short_ids = [i["issue_id"] for i in d_short["items"]]
+        alias_ids = [i["issue_id"] for i in d_alias["items"]]
         assert short_ids == alias_ids
 
     def test_update_update_issue_parity(self, cli_in_project: tuple[CliRunner, Path]) -> None:

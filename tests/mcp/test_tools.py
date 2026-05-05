@@ -34,7 +34,7 @@ class TestCreateAndGet:
         result = await call_tool("create_issue", {"title": "MCP test issue"})
         data = _parse(result)
         assert data["title"] == "MCP test issue"
-        assert data["id"].startswith("mcp-")
+        assert data["issue_id"].startswith("mcp-")
 
     async def test_create_issue_full(self, mcp_db: FiligreeDB) -> None:
         result = await call_tool(
@@ -96,10 +96,10 @@ class TestRefreshSummaryBestEffort:
             result = await call_tool("create_issue", {"title": "Should succeed"})
         data = _parse(result)
         # Mutation must succeed — the issue was created in the DB
-        assert "id" in data
+        assert "issue_id" in data
         assert data["title"] == "Should succeed"
         # Verify it's actually in the DB
-        issue = mcp_db.get_issue(data["id"])
+        issue = mcp_db.get_issue(data["issue_id"])
         assert issue.title == "Should succeed"
 
 
@@ -131,6 +131,36 @@ class TestListAndSearch:
         assert len(data["items"]) == 1
         assert data["items"][0]["title"] == "Authentication bug"
         assert data["has_more"] is False
+
+
+class TestPublicIssueVocabulary:
+    async def test_create_issue_uses_issue_id(self, mcp_db: FiligreeDB) -> None:
+        result = await call_tool("create_issue", {"title": "MCP public"})
+        data = _parse(result)
+        assert data["issue_id"].startswith("mcp-")
+        assert "id" not in data
+
+    async def test_get_issue_uses_issue_id(self, mcp_db: FiligreeDB) -> None:
+        issue = mcp_db.create_issue("MCP get public")
+        result = await call_tool("get_issue", {"issue_id": issue.id})
+        data = _parse(result)
+        assert data["issue_id"] == issue.id
+        assert "id" not in data
+
+    async def test_list_issues_uses_issue_id(self, mcp_db: FiligreeDB) -> None:
+        issue = mcp_db.create_issue("MCP list public")
+        result = await call_tool("list_issues", {"type": "task"})
+        data = _parse(result)
+        item = next(i for i in data["items"] if i["title"] == issue.title)
+        assert item["issue_id"] == issue.id
+        assert "id" not in item
+
+    async def test_start_next_work_uses_issue_id(self, mcp_db: FiligreeDB) -> None:
+        issue = mcp_db.create_issue("MCP start next public", priority=0)
+        result = await call_tool("start_next_work", {"assignee": "bot", "type": "task"})
+        data = _parse(result)
+        assert data["issue_id"] == issue.id
+        assert "id" not in data
 
 
 class TestListPagination:
@@ -610,7 +640,7 @@ class TestStartWork:
         high = mcp_db.create_issue("mcp-d6-next-high", type="task", priority=0)
         result = await call_tool("start_next_work", {"assignee": "carol"})
         data = _parse(result)
-        assert data["id"] == high.id
+        assert data["issue_id"] == high.id
         assert data["assignee"] == "carol"
         assert data["status"] == "in_progress"
 
@@ -725,6 +755,13 @@ class TestPrompt:
     async def test_workflow_prompt_excludes_context(self, mcp_db: FiligreeDB) -> None:
         result = await get_workflow_prompt("filigree-workflow", {"include_context": "false"})
         assert len(result.messages) == 1
+
+    async def test_workflow_prompt_recommends_start_work_flow(self, mcp_db: FiligreeDB) -> None:
+        result = await get_workflow_prompt("filigree-workflow", {"include_context": "false"})
+        text = result.messages[0].content.text
+        assert "Use `start_work` or `start_next_work`" in text
+        assert "`claim_issue` / `claim_next` — claim-only" in text
+        assert "Use `claim_issue` or `claim_next` to atomically claim a task" not in text
 
 
 class TestProactiveContext:
@@ -1017,7 +1054,7 @@ class TestMCPMutationEnhancements:
         # Should return open issues (not in_progress ones)
         statuses = {d["status"] for d in issues}
         assert "in_progress" not in statuses
-        assert a.id in [d["id"] for d in issues]
+        assert a.id in [d["issue_id"] for d in issues]
 
     async def test_update_issue_error_includes_transitions(self, mcp_db: FiligreeDB) -> None:
         issue = mcp_db.create_issue("Error test", type="bug")
@@ -1458,11 +1495,11 @@ class TestMCPTransactionSafety:
     async def test_failed_update_no_dirty_transaction(self, mcp_db: FiligreeDB) -> None:
         """update_issue with invalid priority returns error AND leaves no dirty txn."""
         create_result = await call_tool("create_issue", {"title": "Valid issue"})
-        issue_id = _parse(create_result)["id"]
+        issue_id = _parse(create_result)["issue_id"]
 
         result = await call_tool(
             "update_issue",
-            {"id": issue_id, "title": "New title", "priority": 99},
+            {"issue_id": issue_id, "title": "New title", "priority": 99},
         )
         data = _parse(result)
         assert "error" in data
@@ -2289,7 +2326,7 @@ class TestListIssuesStatusCategoryEmpty:
         mcp_db.update_issue(b.id, status="in_progress")
         result = await call_tool("list_issues", {"status_category": "wip"})
         data = _parse(result)
-        ids = [i["id"] for i in data["items"]]
+        ids = [i["issue_id"] for i in data["items"]]
         assert b.id in ids
 
 

@@ -17,7 +17,7 @@ from tests.cli.conftest import _extract_id
 
 class TestStartWorkCli:
     def test_happy_path_json(self, cli_in_project: tuple[CliRunner, Path]) -> None:
-        """start-work --json returns a full IssueDict with status and assignee set."""
+        """start-work --json returns a full public issue with status and assignee set."""
         runner, _ = cli_in_project
         r = runner.invoke(cli, ["create", "Work item"])
         issue_id = _extract_id(r.output)
@@ -25,12 +25,12 @@ class TestStartWorkCli:
         result = runner.invoke(cli, ["start-work", issue_id, "--assignee", "alice", "--json"])
         assert result.exit_code == 0
         data = json.loads(result.output)
-        # Must return full IssueDict (has id, title, status, assignee, etc.)
-        assert data["id"] == issue_id
+        assert data["issue_id"] == issue_id
+        assert "id" not in data
         assert data["assignee"] == "alice"
         # Default task type canonical wip status
         assert data["status"] == "in_progress"
-        # Full IssueDict keys present
+        # Full public issue keys present
         assert "title" in data
         assert "type" in data
         assert "priority" in data
@@ -145,7 +145,7 @@ class TestStartNextWorkCli:
         data = json.loads(result.output)
         assert data["assignee"] == "grace"
         assert data["status"] == "in_progress"
-        assert data["id"] == high_id
+        assert data["issue_id"] == high_id
 
     def test_no_match_returns_empty_json(self, cli_in_project: tuple[CliRunner, Path]) -> None:
         """When no issues match, emits empty envelope with exit 0."""
@@ -197,7 +197,7 @@ class TestStartNextWorkCli:
         assert result.exit_code == 0, f"Expected exit 0, got {result.exit_code}: {result.output}"
         data = json.loads(result.output)
         # Must have claimed med_id (P2), not low_id (P4)
-        assert data["id"] == med_id
+        assert data["issue_id"] == med_id
         assert data["assignee"] == "judy"
 
     def test_type_filter(self, cli_in_project: tuple[CliRunner, Path]) -> None:
@@ -220,7 +220,7 @@ class TestStartNextWorkCli:
         data = json.loads(result.output)
         assert data["type"] == "task"
         assert data["assignee"] == "kate"
-        assert data["id"] == task_id
+        assert data["issue_id"] == task_id
 
     def test_happy_path_plain_text(self, cli_in_project: tuple[CliRunner, Path]) -> None:
         """Plain-text success prints 'Started work on ...' line."""

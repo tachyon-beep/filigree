@@ -223,16 +223,17 @@ Filigree data lives in `.filigree/` and is accessed via these MCP tools.
 ## Quick start
 1. Read `filigree://context` resource for current project state (vitals, ready work, blockers)
 2. Use `get_ready` to find unblocked tasks sorted by priority
-3. Use `claim_issue` or `claim_next` to atomically claim a task (prevents double-work)
-4. Use `get_valid_transitions` to see allowed state changes before updating
+3. Use `start_work` or `start_next_work` to atomically claim and transition a task into work
+4. Use `get_valid_transitions` to see allowed status changes before manual updates
 5. Work on the task, use `add_comment` to log progress
 6. Use `close_issue` when done — response includes newly-unblocked items
 
 ## Key tools
 - **get_issue / list_issues / search_issues** — read project state
 - **create_issue / update_issue / close_issue** — mutate issues
-- **claim_issue / claim_next** — atomic claim with optimistic locking
-- **get_valid_transitions / validate_issue** — workflow-aware state management
+- **start_work / start_next_work** — usual path: atomic claim plus transition to work
+- `claim_issue` / `claim_next` — claim-only, niche path with optimistic locking
+- **get_valid_transitions / validate_issue** — workflow-aware status management
 - **list_types / get_type_info / explain_status** — discover type workflows
 - **list_packs / get_workflow_guide** — workflow pack documentation
 - **add_dependency / remove_dependency** — manage blockers
@@ -248,7 +249,7 @@ Filigree data lives in `.filigree/` and is accessed via these MCP tools.
 ## Conventions
 - Issue IDs: `{prefix}-{10hex}` (e.g., `myproj-a3f9b2e1c0`)
 - Priorities: P0 (critical) through P4 (low)
-- Each type has its own state machine — use `list_types` to discover
+- Each type has its own status workflow — use `list_types` to discover
 - Use `get_valid_transitions <id>` before status changes
 """
 

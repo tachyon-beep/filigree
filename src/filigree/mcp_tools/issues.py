@@ -8,6 +8,7 @@ from typing import Any
 
 from mcp.types import TextContent, Tool
 
+from filigree.issue_payloads import issue_to_public
 from filigree.mcp_tools.common import (
     _MAX_LIST_RESULTS,
     _apply_has_more,
@@ -30,12 +31,10 @@ from filigree.types.api import (
     InvalidTransitionError,
     IssueWithChangedFields,
     IssueWithTransitions,
-    IssueWithUnblocked,
     SlimIssue,
     TransitionDetail,
     classify_value_error,
 )
-from filigree.types.core import IssueDict
 from filigree.types.inputs import (
     BatchCloseArgs,
     BatchUpdateArgs,
@@ -438,7 +437,7 @@ async def _handle_get_issue(arguments: dict[str, Any]) -> list[TextContent]:
     include_files = bool(args.get("include_files", False))
     try:
         issue = tracker.get_issue(args["issue_id"])
-        issue_dict = issue.to_dict()
+        issue_payload = issue_to_public(issue)
 
         # Fail-fast to match dashboard and get_issue_files MCP tool; see
         # filigree-c6c7842661 for why swallowing sqlite3.Error is wrong.
@@ -449,7 +448,7 @@ async def _handle_get_issue(arguments: dict[str, Any]) -> list[TextContent]:
         if args.get("include_transitions"):
             transitions = tracker.get_valid_transitions(args["issue_id"])
             result = IssueWithTransitions(
-                **issue_dict,
+                **issue_payload,
                 valid_transitions=[
                     TransitionDetail(
                         to=t.to,
@@ -466,7 +465,7 @@ async def _handle_get_issue(arguments: dict[str, Any]) -> list[TextContent]:
             if include_files:
                 out["files"] = file_assocs
             return _text(out)
-        out = dict(issue_dict)
+        out = dict(issue_payload)
         if include_files:
             out["files"] = file_assocs
         return _text(out)
@@ -510,7 +509,7 @@ async def _handle_list_issues(arguments: dict[str, Any]) -> list[TextContent]:
     except ValueError as e:
         return _text(ErrorResponse(error=str(e), code=ErrorCode.VALIDATION))
     issues, has_more = _apply_has_more(issues, effective_limit)
-    items = [i.to_dict() for i in issues]
+    items = [issue_to_public(i) for i in issues]
     next_offset = offset + len(items) if has_more else None
     return _text(_list_response(items, has_more=has_more, next_offset=next_offset))
 
@@ -543,7 +542,7 @@ async def _handle_create_issue(arguments: dict[str, Any]) -> list[TextContent]:
     except ValueError as e:
         return _text(ErrorResponse(error=str(e), code=ErrorCode.VALIDATION))
     _refresh_summary()
-    return _text(issue.to_dict())
+    return _text(issue_to_public(issue))
 
 
 async def _handle_update_issue(arguments: dict[str, Any]) -> list[TextContent]:
@@ -577,7 +576,7 @@ async def _handle_update_issue(arguments: dict[str, Any]) -> list[TextContent]:
         )
         _refresh_summary()
         changed = [attr for attr in _UPDATE_TRACKED_FIELDS if getattr(issue, attr) != getattr(before, attr)]
-        result = IssueWithChangedFields(**issue.to_dict(), changed_fields=changed)
+        result = IssueWithChangedFields(**issue_to_public(issue), changed_fields=changed)
         return _text(result)
     except KeyError:
         return _text(ErrorResponse(error=f"Issue not found: {args['issue_id']}", code=ErrorCode.NOT_FOUND))
@@ -607,12 +606,9 @@ async def _handle_close_issue(arguments: dict[str, Any]) -> list[TextContent]:
         _refresh_summary()
         ready_after = tracker.get_ready()
         newly_unblocked = [i for i in ready_after if i.id not in ready_before]
+        result: dict[str, Any] = dict(issue_to_public(issue))
         if newly_unblocked:
-            result: IssueWithUnblocked | IssueDict = IssueWithUnblocked(
-                **issue.to_dict(), newly_unblocked=[_slim_issue(i) for i in newly_unblocked]
-            )
-        else:
-            result = issue.to_dict()
+            result["newly_unblocked"] = [_slim_issue(i) for i in newly_unblocked]
         return _text(result)
     except KeyError:
         return _text(ErrorResponse(error=f"Issue not found: {args['issue_id']}", code=ErrorCode.NOT_FOUND))
@@ -634,7 +630,7 @@ async def _handle_reopen_issue(arguments: dict[str, Any]) -> list[TextContent]:
             actor=actor,
         )
         _refresh_summary()
-        return _text(issue.to_dict())
+        return _text(issue_to_public(issue))
     except KeyError:
         return _text(ErrorResponse(error=f"Issue not found: {args['issue_id']}", code=ErrorCode.NOT_FOUND))
     except ValueError as e:
@@ -679,7 +675,7 @@ async def _handle_claim_issue(arguments: dict[str, Any]) -> list[TextContent]:
             actor=actor,
         )
         _refresh_summary()
-        return _text(issue.to_dict())
+        return _text(issue_to_public(issue))
     except KeyError:
         return _text(ErrorResponse(error=f"Issue not found: {args['issue_id']}", code=ErrorCode.NOT_FOUND))
     except ValueError as e:
@@ -697,7 +693,7 @@ async def _handle_release_claim(arguments: dict[str, Any]) -> list[TextContent]:
     try:
         issue = tracker.release_claim(args["issue_id"], actor=actor)
         _refresh_summary()
-        return _text(issue.to_dict())
+        return _text(issue_to_public(issue))
     except KeyError:
         return _text(ErrorResponse(error=f"Issue not found: {args['issue_id']}", code=ErrorCode.NOT_FOUND))
     except ValueError as e:
@@ -737,7 +733,7 @@ async def _handle_claim_next(arguments: dict[str, Any]) -> list[TextContent]:
         return _text(ClaimNextEmptyResponse(status="empty", reason="No ready issues matching filters"))
     _refresh_summary()
     result = ClaimNextResponse(
-        **claimed.to_dict(),
+        **issue_to_public(claimed),
         selection_reason=claimed.format_claim_next_reason(),
     )
     return _text(result)
@@ -835,7 +831,7 @@ async def _handle_start_work(arguments: dict[str, Any]) -> list[TextContent]:
             return _text(_build_transition_error(tracker, args["issue_id"], msg))
         return _text(ErrorResponse(error=msg, code=ErrorCode.CONFLICT))
     _refresh_summary()
-    return _text(issue.to_dict())
+    return _text(issue_to_public(issue))
 
 
 async def _handle_start_next_work(arguments: dict[str, Any]) -> list[TextContent]:
@@ -873,4 +869,4 @@ async def _handle_start_next_work(arguments: dict[str, Any]) -> list[TextContent
     if claimed is None:
         return _text(ClaimNextEmptyResponse(status="empty", reason="No ready issues matching filters"))
     _refresh_summary()
-    return _text(claimed.to_dict())
+    return _text(issue_to_public(claimed))

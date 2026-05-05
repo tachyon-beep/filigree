@@ -10,6 +10,7 @@ from typing import get_type_hints
 import pytest
 
 from filigree.core import FileRecord, FiligreeDB
+from filigree.issue_payloads import issue_to_public
 from filigree.types.api import (
     AddCommentResult,
     ArchiveClosedResponse,
@@ -32,6 +33,7 @@ from filigree.types.api import (
     OutboundTransitionInfo,
     PackListItem,
     PlanResponse,
+    PublicIssue,
     SlimIssue,
     StatsWithPrefix,
     StatusExplanation,
@@ -813,6 +815,25 @@ class TestSlimIssueShape:
         assert isinstance(result["priority"], int)
 
 
+class TestPublicIssueShape:
+    def test_keys_match(self, db: FiligreeDB) -> None:
+        issue = db.create_issue("Public issue", type="task")
+        result = issue_to_public(issue)
+        hints = get_type_hints(PublicIssue)
+        assert set(result.keys()) == set(hints.keys())
+        assert "issue_id" in result
+        assert "id" not in result
+
+    def test_value_types(self, db: FiligreeDB) -> None:
+        issue = db.create_issue("Public issue", type="task", priority=1, labels=["a"])
+        result = issue_to_public(issue)
+        assert isinstance(result["issue_id"], str)
+        assert isinstance(result["title"], str)
+        assert isinstance(result["priority"], int)
+        assert isinstance(result["is_ready"], bool)
+        assert isinstance(result["labels"], list)
+
+
 class TestBlockedIssueShape:
     def test_keys_match(self, db: FiligreeDB) -> None:
         from filigree.mcp_tools.common import _slim_issue
@@ -833,13 +854,13 @@ class TestBlockedIssueShape:
 class TestIssueWithTransitionsShape:
     def test_keys_without_transitions(self, db: FiligreeDB) -> None:
         issue = db.create_issue("Test", type="task")
-        result = IssueWithTransitions(**issue.to_dict())  # type: ignore[typeddict-item]
+        result = IssueWithTransitions(**issue_to_public(issue))  # type: ignore[typeddict-item]
         # NotRequired keys may be absent
-        assert {"id", "title", "status"} <= set(result.keys())
+        assert {"issue_id", "title", "status"} <= set(result.keys())
 
     def test_keys_with_transitions(self, db: FiligreeDB) -> None:
         issue = db.create_issue("Test", type="task")
-        result = IssueWithTransitions(**issue.to_dict(), valid_transitions=[])
+        result = IssueWithTransitions(**issue_to_public(issue), valid_transitions=[])
         hints = get_type_hints(IssueWithTransitions)
         assert set(result.keys()) == set(hints.keys())
 
@@ -849,7 +870,7 @@ class TestIssueWithChangedFieldsShape:
         issue = db.create_issue("Test", type="task")
         db.update_issue(issue.id, title="Updated")
         updated = db.get_issue(issue.id)
-        result = IssueWithChangedFields(**updated.to_dict(), changed_fields=["title"])
+        result = IssueWithChangedFields(**issue_to_public(updated), changed_fields=["title"])
         hints = get_type_hints(IssueWithChangedFields)
         assert set(result.keys()) == set(hints.keys())
 
@@ -857,14 +878,14 @@ class TestIssueWithChangedFieldsShape:
 class TestIssueWithUnblockedShape:
     def test_keys_without_unblocked(self, db: FiligreeDB) -> None:
         issue = db.create_issue("Test", type="task")
-        result = IssueWithUnblocked(**issue.to_dict())  # type: ignore[typeddict-item]
-        assert {"id", "title", "status"} <= set(result.keys())
+        result = IssueWithUnblocked(**issue_to_public(issue))  # type: ignore[typeddict-item]
+        assert {"issue_id", "title", "status"} <= set(result.keys())
 
     def test_keys_with_unblocked(self, db: FiligreeDB) -> None:
         issue = db.create_issue("Test", type="task")
         result = IssueWithUnblocked(
-            **issue.to_dict(),
-            newly_unblocked=[SlimIssue(id="x", title="t", status="open", priority=2, type="task")],
+            **issue_to_public(issue),
+            newly_unblocked=[SlimIssue(issue_id="x", title="t", status="open", priority=2, type="task")],
         )
         hints = get_type_hints(IssueWithUnblocked)
         assert set(result.keys()) == set(hints.keys())
@@ -873,13 +894,13 @@ class TestIssueWithUnblockedShape:
 class TestClaimNextResponseShape:
     def test_keys_match(self, db: FiligreeDB) -> None:
         issue = db.create_issue("Test", type="task")
-        result = ClaimNextResponse(**issue.to_dict(), selection_reason="P2 ready issue")
+        result = ClaimNextResponse(**issue_to_public(issue), selection_reason="P2 ready issue")
         hints = get_type_hints(ClaimNextResponse)
         assert set(result.keys()) == set(hints.keys())
 
     def test_value_types(self, db: FiligreeDB) -> None:
         issue = db.create_issue("Test", type="task")
-        result = ClaimNextResponse(**issue.to_dict(), selection_reason="P2 ready issue")
+        result = ClaimNextResponse(**issue_to_public(issue), selection_reason="P2 ready issue")
         assert isinstance(result["selection_reason"], str)
 
 
@@ -1031,7 +1052,7 @@ class TestAddCommentResultShape:
 
         await call_tool("create_issue", {"title": "Comment target"})
         issues = _parse(await call_tool("list_issues", {}))
-        issue_id = issues["items"][0]["id"]
+        issue_id = issues["items"][0]["issue_id"]
         result = _parse(await call_tool("add_comment", {"issue_id": issue_id, "text": "hello"}))
         hints = get_type_hints(AddCommentResult)
         assert set(result.keys()) == set(hints.keys())
@@ -1042,7 +1063,7 @@ class TestAddCommentResultShape:
 
         await call_tool("create_issue", {"title": "Comment target"})
         issues = _parse(await call_tool("list_issues", {}))
-        issue_id = issues["items"][0]["id"]
+        issue_id = issues["items"][0]["issue_id"]
         result = _parse(await call_tool("add_comment", {"issue_id": issue_id, "text": "hello"}))
         assert isinstance(result["status"], str)
         assert isinstance(result["comment_id"], int)
@@ -1055,7 +1076,7 @@ class TestLabelActionResponseShape:
 
         await call_tool("create_issue", {"title": "Label target"})
         issues = _parse(await call_tool("list_issues", {}))
-        issue_id = issues["items"][0]["id"]
+        issue_id = issues["items"][0]["issue_id"]
         result = _parse(await call_tool("add_label", {"issue_id": issue_id, "label": "test-label"}))
         hints = get_type_hints(LabelActionResponse)
         assert set(result.keys()) == set(hints.keys())
@@ -1066,7 +1087,7 @@ class TestLabelActionResponseShape:
 
         await call_tool("create_issue", {"title": "Label target"})
         issues = _parse(await call_tool("list_issues", {}))
-        issue_id = issues["items"][0]["id"]
+        issue_id = issues["items"][0]["issue_id"]
         result = _parse(await call_tool("add_label", {"issue_id": issue_id, "label": "test-label"}))
         assert isinstance(result["status"], str)
         assert isinstance(result["issue_id"], str)

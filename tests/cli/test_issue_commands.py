@@ -87,6 +87,53 @@ class TestCreate:
         assert result.exit_code == 1
 
 
+class TestCliPublicIssueVocabulary:
+    def test_create_json_uses_issue_id(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        runner, _ = cli_in_project
+        result = runner.invoke(cli, ["create", "Public create", "--json"])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["issue_id"]
+        assert "id" not in data
+
+    def test_show_json_uses_issue_id(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        runner, _ = cli_in_project
+        created = runner.invoke(cli, ["create", "Public show"])
+        issue_id = _extract_id(created.output)
+
+        result = runner.invoke(cli, ["show", issue_id, "--json"])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["issue_id"] == issue_id
+        assert "id" not in data
+
+    def test_list_json_uses_issue_id(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        runner, _ = cli_in_project
+        created = runner.invoke(cli, ["create", "Public list"])
+        issue_id = _extract_id(created.output)
+
+        result = runner.invoke(cli, ["list", "--type", "task", "--json"])
+        assert result.exit_code == 0
+        items = json.loads(result.output)["items"]
+        item = next(i for i in items if i["title"] == "Public list")
+        assert item["issue_id"] == issue_id
+        assert "id" not in item
+
+    def test_start_next_work_json_uses_issue_id(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        runner, _ = cli_in_project
+        created = runner.invoke(cli, ["create", "Public start next", "--type", "task", "--priority", "0"])
+        issue_id = _extract_id(created.output)
+
+        result = runner.invoke(
+            cli,
+            ["start-next-work", "--assignee", "agent-1", "--type", "task", "--json"],
+        )
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["issue_id"] == issue_id
+        assert "id" not in data
+
+
 class TestShowAndList:
     def test_show_issue(self, cli_in_project: tuple[CliRunner, Path]) -> None:
         runner, _ = cli_in_project
@@ -558,7 +605,8 @@ class TestReleaseCli:
         result = runner.invoke(cli, ["release", issue_id, "--json"])
         assert result.exit_code == 0
         data = json.loads(result.output)
-        assert data["id"] == issue_id
+        assert data["issue_id"] == issue_id
+        assert "id" not in data
         assert data["assignee"] == ""
 
     def test_release_json_not_found(self, cli_in_project: tuple[CliRunner, Path]) -> None:

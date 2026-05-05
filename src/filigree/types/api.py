@@ -69,6 +69,35 @@ class SlimIssue(TypedDict):
     type: str
 
 
+class PublicIssue(TypedDict):
+    """Full issue shape for MCP and CLI JSON responses.
+
+    Internal/classic code may still use IssueDict with ``id``; agent-facing
+    2.0 surfaces expose the entity primary key as ``issue_id``.
+    """
+
+    issue_id: str
+    title: str
+    status: str
+    status_category: StatusCategory
+    priority: int
+    type: str
+    parent_id: str | None
+    assignee: str
+    created_at: ISOTimestamp
+    updated_at: ISOTimestamp
+    closed_at: ISOTimestamp | None
+    description: str
+    notes: str
+    fields: dict[str, Any]
+    labels: list[str]
+    blocks: list[str]
+    blocked_by: list[str]
+    is_ready: bool
+    children: list[str]
+    data_warnings: list[str]
+
+
 class BlockedIssue(SlimIssue):
     """Slim issue with blocked_by list for get_blocked responses."""
 
@@ -119,25 +148,25 @@ class TransitionError(TypedDict):
 # ---------------------------------------------------------------------------
 
 
-class IssueWithTransitions(IssueDict):
+class IssueWithTransitions(PublicIssue):
     """Issue detail with optional valid_transitions (MCP get_issue)."""
 
     valid_transitions: NotRequired[list[TransitionDetail]]
 
 
-class IssueWithChangedFields(IssueDict):
+class IssueWithChangedFields(PublicIssue):
     """Issue update response with list of changed field names."""
 
     changed_fields: list[str]
 
 
-class IssueWithUnblocked(IssueDict):
+class IssueWithUnblocked(PublicIssue):
     """Issue close response with optional newly-unblocked issues."""
 
     newly_unblocked: NotRequired[list[SlimIssue]]
 
 
-class ClaimNextResponse(IssueDict):
+class ClaimNextResponse(PublicIssue):
     """Claimed issue with human-readable selection reason."""
 
     selection_reason: str

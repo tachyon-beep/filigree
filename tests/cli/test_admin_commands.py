@@ -73,7 +73,8 @@ class TestJsonRetrofit:
         assert result.exit_code == 0
         data = json.loads(result.output)
         assert data["title"] == "JSON create"
-        assert "id" in data
+        assert "issue_id" in data
+        assert "id" not in data
 
     def test_close_json(self, cli_in_project: tuple[CliRunner, Path]) -> None:
         runner, _ = cli_in_project

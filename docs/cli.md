@@ -406,7 +406,7 @@ Atomically claim an issue AND transition it to its working status in a single ca
 |-----------|------|-------------|
 | `id` | string | Issue ID (positional) |
 | `--assignee` | string | Who is claiming (required) |
-| `--target-status` | string | Target wip status (default: type's canonical wip state) |
+| `--target-status` | string | Target wip status (default: type's canonical wip status) |
 | `--actor` | string | Audit trail actor (default: assignee) |
 
 ### `start-next-work`
@@ -419,7 +419,7 @@ Claim AND transition the highest-priority ready issue. Returns `{status: "empty"
 | `--type` | string | Filter by issue type |
 | `--priority-min` | 0-4 | Minimum priority filter |
 | `--priority-max` | 0-4 | Maximum priority filter |
-| `--target-status` | string | Target wip status (default: type's canonical wip state) |
+| `--target-status` | string | Target wip status (default: type's canonical wip status) |
 | `--actor` | string | Audit trail actor (default: assignee) |
 
 ## Batch Operations
@@ -516,28 +516,28 @@ Show plan tree with progress for a milestone.
 ## Workflow Templates
 
 ```bash
-filigree types                              # List all types with state flows
+filigree types                              # List all types with status flows
 filigree type-info <type>                   # Full workflow definition
-filigree transitions <id>                   # Valid next states for an issue
+filigree transitions <id>                   # Valid next statuses for an issue
 filigree validate <id>                      # Validate against template
 filigree packs                              # List enabled packs
 filigree guide <pack>                       # Workflow guide for a pack
-filigree explain-state <type> <state>       # Explain a specific state
-filigree workflow-states                    # All states grouped by category
+filigree explain-status <type> <status>     # Explain a specific status
+filigree workflow-statuses                  # All statuses grouped by category
 filigree templates                          # List available templates
 filigree templates --type=bug               # Show specific template fields
 filigree templates reload                   # Reload templates from disk
 ```
 
-See [Workflow Templates](workflows.md) for details on types, packs, and state machines.
+See [Workflow Templates](workflows.md) for details on types, packs, and status workflows.
 
 ### `types`
 
-List all registered issue types with their pack and state flow.
+List all registered issue types with their pack and status flow.
 
 ### `type-info`
 
-Show the full workflow definition for an issue type: states, transitions, fields, and enforcement rules.
+Show the full workflow definition for an issue type: statuses, transitions, fields, and enforcement rules.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
@@ -545,7 +545,7 @@ Show the full workflow definition for an issue type: states, transitions, fields
 
 ### `transitions`
 
-Show valid next states for an issue, with readiness indicators and missing field warnings.
+Show valid next statuses for an issue, with readiness indicators and missing field warnings.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
@@ -565,24 +565,24 @@ List all enabled workflow packs with their types and metadata.
 
 ### `guide`
 
-Display the workflow guide for a pack, including state diagram, tips, and common mistakes.
+Display the workflow guide for a pack, including status diagram, tips, and common mistakes.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `pack` | string | Pack name (positional) |
 
-### `explain-state`
+### `explain-status`
 
-Explain a state within a type's workflow: its category, inbound/outbound transitions, and fields required at that state.
+Explain a status within a type's workflow: its category, inbound/outbound transitions, and fields required at that status.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `type` | string | Issue type name (positional) |
-| `state` | string | State name (positional) |
+| `status` | string | Status name (positional) |
 
-### `workflow-states`
+### `workflow-statuses`
 
-Show all workflow states grouped by category (open, wip, done) from enabled templates.
+Show all workflow statuses grouped by category (open, wip, done) from enabled templates.
 
 ## Analytics and Events
 
