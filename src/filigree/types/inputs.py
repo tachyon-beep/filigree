@@ -134,6 +134,7 @@ class StartNextWorkArgs(TypedDict):
 class BatchCloseArgs(TypedDict):
     issue_ids: list[str]
     reason: NotRequired[str]
+    response_detail: NotRequired[str]
     actor: NotRequired[str]
 
 
@@ -143,6 +144,7 @@ class BatchUpdateArgs(TypedDict):
     priority: NotRequired[int]
     assignee: NotRequired[str]
     fields: NotRequired[dict[str, Any]]
+    response_detail: NotRequired[str]
     actor: NotRequired[str]
 
 
@@ -179,12 +181,14 @@ class ListLabelsArgs(TypedDict):
 class BatchAddLabelArgs(TypedDict):
     issue_ids: list[str]
     label: str
+    response_detail: NotRequired[str]
     actor: NotRequired[str]
 
 
 class BatchAddCommentArgs(TypedDict):
     issue_ids: list[str]
     text: str
+    response_detail: NotRequired[str]
     actor: NotRequired[str]
 
 
@@ -377,6 +381,7 @@ class UpdateFindingArgs(TypedDict):
 class BatchUpdateFindingsArgs(TypedDict):
     finding_ids: list[str]
     status: FindingStatus
+    response_detail: NotRequired[str]
 
 
 class PromoteFindingArgs(TypedDict):
@@ -453,6 +458,7 @@ class DismissObservationArgs(TypedDict):
 class BatchDismissObservationsArgs(TypedDict):
     observation_ids: list[str]
     reason: NotRequired[str]
+    response_detail: NotRequired[str]
     actor: NotRequired[str]
 
 

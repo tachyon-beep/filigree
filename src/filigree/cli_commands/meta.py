@@ -9,6 +9,7 @@ from typing import Any
 import click
 
 from filigree.cli_common import get_db, refresh_summary
+from filigree.issue_payloads import issue_to_public
 from filigree.types.api import ErrorCode
 
 
@@ -274,6 +275,13 @@ def get_issue_events_cmd(issue_id: str, limit: int, as_json: bool) -> None:
 @click.option("--priority", "-p", default=None, type=click.IntRange(0, 4), help="New priority")
 @click.option("--assignee", default=None, help="New assignee")
 @click.option("--field", "-f", multiple=True, help="Custom field as key=value (repeatable)")
+@click.option(
+    "--detail",
+    "response_detail",
+    type=click.Choice(["slim", "full"]),
+    default="slim",
+    help="JSON shape for succeeded[]: 'slim' (default, 5-key SlimIssue) or 'full' (PublicIssue records).",
+)
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON")
 @click.pass_context
 def batch_update(
@@ -283,6 +291,7 @@ def batch_update(
     priority: int | None,
     assignee: str | None,
     field: tuple[str, ...],
+    response_detail: str,
     as_json: bool,
 ) -> None:
     """Update multiple issues with the same changes."""
@@ -309,13 +318,16 @@ def batch_update(
             actor=ctx.obj["actor"],
         )
         if as_json:
+            if response_detail == "full":
+                succeeded_payload: list[dict[str, Any]] = [dict(issue_to_public(i)) for i in results]
+            else:
+                succeeded_payload = [
+                    {"issue_id": i.id, "title": i.title, "status": i.status, "priority": i.priority, "type": i.type} for i in results
+                ]
             click.echo(
                 json_mod.dumps(
                     {
-                        "succeeded": [
-                            {"issue_id": i.id, "title": i.title, "status": i.status, "priority": i.priority, "type": i.type}
-                            for i in results
-                        ],
+                        "succeeded": succeeded_payload,
                         "failed": errors,
                     },
                     indent=2,
@@ -339,9 +351,22 @@ def batch_update(
 @click.command("batch-close")
 @click.argument("issue_ids", nargs=-1, required=True)
 @click.option("--reason", default="", help="Close reason")
+@click.option(
+    "--detail",
+    "response_detail",
+    type=click.Choice(["slim", "full"]),
+    default="slim",
+    help="JSON shape for succeeded[]: 'slim' (default, 5-key SlimIssue) or 'full' (PublicIssue records). newly_unblocked stays slim.",
+)
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON")
 @click.pass_context
-def batch_close(ctx: click.Context, issue_ids: tuple[str, ...], reason: str, as_json: bool) -> None:
+def batch_close(
+    ctx: click.Context,
+    issue_ids: tuple[str, ...],
+    reason: str,
+    response_detail: str,
+    as_json: bool,
+) -> None:
     """Close multiple issues with per-item error reporting."""
     with get_db() as db:
         ready_before_batch = {i.id for i in db.get_ready()} if as_json else set()
@@ -358,13 +383,17 @@ def batch_close(ctx: click.Context, issue_ids: tuple[str, ...], reason: str, as_
                 for i in ready_after_batch
                 if i.id not in ready_before_batch
             ]
+            if response_detail == "full":
+                succeeded_payload: list[dict[str, Any]] = [dict(issue_to_public(i)) for i in closed]
+            else:
+                succeeded_payload = [
+                    {"issue_id": i.id, "title": i.title, "status": i.status, "priority": i.priority, "type": i.type} for i in closed
+                ]
             # BatchResponse contract: newly_unblocked is NotRequired and must be
             # OMITTED when empty (not emitted as []). Mirrors
             # mcp_tools/issues.py::_handle_batch_close.
             payload: dict[str, Any] = {
-                "succeeded": [
-                    {"issue_id": i.id, "title": i.title, "status": i.status, "priority": i.priority, "type": i.type} for i in closed
-                ],
+                "succeeded": succeeded_payload,
                 "failed": errors,
             }
             if newly_unblocked_batch:
@@ -387,17 +416,28 @@ def batch_close(ctx: click.Context, issue_ids: tuple[str, ...], reason: str, as_
 @click.command("batch-add-label")
 @click.argument("label_name")
 @click.argument("issue_ids", nargs=-1, required=True)
+@click.option(
+    "--detail",
+    "response_detail",
+    type=click.Choice(["slim", "full"]),
+    default="slim",
+    help="JSON shape for succeeded[]: 'slim' (default, issue ID strings) or 'full' (PublicIssue records).",
+)
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON")
-def batch_add_label(label_name: str, issue_ids: tuple[str, ...], as_json: bool) -> None:
+def batch_add_label(label_name: str, issue_ids: tuple[str, ...], response_detail: str, as_json: bool) -> None:
     """Add the same label to multiple issues."""
     with get_db() as db:
         labeled, errors = db.batch_add_label(list(issue_ids), label=label_name)
 
         if as_json:
+            if response_detail == "full":
+                succeeded_payload: list[Any] = [dict(issue_to_public(db.get_issue(row["id"]))) for row in labeled]
+            else:
+                succeeded_payload = [row["id"] for row in labeled]
             click.echo(
                 json_mod.dumps(
                     {
-                        "succeeded": [row["id"] for row in labeled],
+                        "succeeded": succeeded_payload,
                         "failed": errors,
                     },
                     indent=2,
@@ -421,9 +461,22 @@ def batch_add_label(label_name: str, issue_ids: tuple[str, ...], as_json: bool) 
 @click.command("batch-add-comment")
 @click.argument("text")
 @click.argument("issue_ids", nargs=-1, required=True)
+@click.option(
+    "--detail",
+    "response_detail",
+    type=click.Choice(["slim", "full"]),
+    default="slim",
+    help="JSON shape for succeeded[]: 'slim' (default, issue ID strings) or 'full' (PublicIssue records of the commented-on issues).",
+)
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON")
 @click.pass_context
-def batch_add_comment(ctx: click.Context, text: str, issue_ids: tuple[str, ...], as_json: bool) -> None:
+def batch_add_comment(
+    ctx: click.Context,
+    text: str,
+    issue_ids: tuple[str, ...],
+    response_detail: str,
+    as_json: bool,
+) -> None:
     """Add the same comment to multiple issues."""
     with get_db() as db:
         commented, errors = db.batch_add_comment(
@@ -433,10 +486,14 @@ def batch_add_comment(ctx: click.Context, text: str, issue_ids: tuple[str, ...],
         )
 
         if as_json:
+            if response_detail == "full":
+                succeeded_payload: list[Any] = [dict(issue_to_public(db.get_issue(str(row["id"])))) for row in commented]
+            else:
+                succeeded_payload = [str(row["id"]) for row in commented]
             click.echo(
                 json_mod.dumps(
                     {
-                        "succeeded": [str(row["id"]) for row in commented],
+                        "succeeded": succeeded_payload,
                         "failed": errors,
                     },
                     indent=2,

@@ -18,7 +18,8 @@ from filigree.mcp_tools.common import (
     _validate_int_range,
     _validate_str,
 )
-from filigree.types.api import BatchFailure, BatchResponse, ErrorCode, ErrorResponse
+from filigree.types.api import BatchFailure, BatchResponse, ErrorCode, ErrorResponse, parse_response_detail
+from filigree.types.core import ScanFindingDict
 from filigree.types.inputs import (
     AddFileAssociationArgs,
     BatchUpdateFindingsArgs,
@@ -180,7 +181,12 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
         ),
         Tool(
             name="batch_update_findings",
-            description="Update the status of multiple findings at once.",
+            description=(
+                "Update the status of multiple findings at once. Returns "
+                "BatchResponse[str] (succeeded finding IDs) by default, or "
+                "BatchResponse[ScanFindingDict] when response_detail='full'. "
+                "failed[] is always present (empty if none)."
+            ),
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -190,6 +196,12 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
                         "description": "List of finding IDs to update",
                     },
                     "status": {"type": "string", "enum": sorted(VALID_FINDING_STATUSES), "description": "New status for all findings"},
+                    "response_detail": {
+                        "type": "string",
+                        "enum": ["slim", "full"],
+                        "default": "slim",
+                        "description": "'slim' (default) returns finding ID strings in succeeded[]; 'full' returns full ScanFindingDict records.",
+                    },
                 },
                 "required": ["finding_ids", "status"],
             },
@@ -536,28 +548,37 @@ async def _handle_batch_update_findings(arguments: dict[str, Any]) -> list[TextC
                 code=ErrorCode.VALIDATION,
             )
         )
+    detail = parse_response_detail(args.get("response_detail"))
+    if isinstance(detail, dict):
+        return _text(detail)
 
     tracker = _get_db()
-    updated: list[str] = []
+    updated_ids: list[str] = []
+    updated_records: list[ScanFindingDict] = []
     errors: list[BatchFailure] = []
     for fid in finding_ids:
         try:
-            tracker.update_finding(fid, status=status)
-            updated.append(fid)
+            record = tracker.update_finding(fid, status=status)
+            updated_ids.append(fid)
+            if detail == "full":
+                updated_records.append(record)
         except KeyError as e:
             _logger.warning("batch_update_findings: failed for %s: %s", fid, e)
             errors.append(BatchFailure(id=fid, error=str(e), code=ErrorCode.NOT_FOUND))
         except ValueError as e:
             _logger.warning("batch_update_findings: failed for %s: %s", fid, e)
             errors.append(BatchFailure(id=fid, error=str(e), code=ErrorCode.VALIDATION))
-    if not updated and errors:
+    if not updated_ids and errors:
         return _text(
             ErrorResponse(
                 error=f"All {len(errors)} finding update(s) failed",
                 code=ErrorCode.VALIDATION,
             )
         )
-    result: BatchResponse[str] = BatchResponse(succeeded=updated, failed=errors)
+    if detail == "full":
+        full_result: BatchResponse[ScanFindingDict] = BatchResponse(succeeded=updated_records, failed=errors)
+        return _text(full_result)
+    result: BatchResponse[str] = BatchResponse(succeeded=updated_ids, failed=errors)
     return _text(result)
 
 

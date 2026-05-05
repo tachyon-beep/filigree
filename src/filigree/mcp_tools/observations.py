@@ -20,7 +20,8 @@ from filigree.mcp_tools.common import (
     _validate_int_range,
     _validate_str,
 )
-from filigree.types.api import BatchFailure, BatchResponse, ErrorCode, ErrorResponse
+from filigree.types.api import BatchFailure, BatchResponse, ErrorCode, ErrorResponse, parse_response_detail
+from filigree.types.core import ObservationDict
 from filigree.types.inputs import (
     BatchDismissObservationsArgs,
     DismissObservationArgs,
@@ -96,7 +97,13 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
         ),
         Tool(
             name="batch_dismiss_observations",
-            description="Dismiss multiple observations in one call. Returns BatchResponse[str] (succeeded observation IDs / failed).",
+            description=(
+                "Dismiss multiple observations in one call. Returns "
+                "BatchResponse[str] (succeeded observation IDs) by default, or "
+                "BatchResponse[ObservationDict] when response_detail='full' "
+                "(succeeded[] then carries the pre-dismissal observation records). "
+                "failed[] is always present (empty if none)."
+            ),
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -106,6 +113,12 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
                         "description": "Observation IDs to dismiss",
                     },
                     "reason": {"type": "string", "default": "", "description": "Reason for dismissal"},
+                    "response_detail": {
+                        "type": "string",
+                        "enum": ["slim", "full"],
+                        "default": "slim",
+                        "description": "'slim' (default) returns observation ID strings in succeeded[]; 'full' returns the pre-dismissal ObservationDict records.",
+                    },
                     "actor": {"type": "string", "description": "Agent/user identity for audit trail"},
                 },
                 "required": ["observation_ids"],
@@ -254,8 +267,16 @@ async def _handle_batch_dismiss_observations(arguments: dict[str, Any]) -> list[
         return _text(ErrorResponse(error="'observation_ids' must be an array of strings", code=ErrorCode.VALIDATION))
     if not all(isinstance(x, str) for x in raw_ids):
         return _text(ErrorResponse(error="'observation_ids' must contain only string values", code=ErrorCode.VALIDATION))
+    detail = parse_response_detail(args.get("response_detail"))
+    if isinstance(detail, dict):
+        return _text(detail)
 
     tracker = _get_db()
+    # Snapshot pre-dismissal records for full mode — the rows are deleted by
+    # batch_dismiss_observations so the fetch must happen first.
+    full_records: list[ObservationDict] = []
+    if detail == "full":
+        full_records = tracker.get_observations_by_ids(raw_ids)
     try:
         result = tracker.batch_dismiss_observations(
             raw_ids,
@@ -269,11 +290,14 @@ async def _handle_batch_dismiss_observations(arguments: dict[str, Any]) -> list[
     # Preserve input order, deduped, for the succeeded list — db returns a
     # row-count plus the not-found ids, so the dismissed-id list is computed
     # here as: unique inputs minus not-found.
-    succeeded = [oid for oid in dict.fromkeys(raw_ids) if oid not in not_found_set]
+    succeeded_ids = [oid for oid in dict.fromkeys(raw_ids) if oid not in not_found_set]
     failed: list[BatchFailure] = [
         BatchFailure(id=oid, error=f"Observation not found: {oid}", code=ErrorCode.NOT_FOUND) for oid in result["not_found"]
     ]
-    resp: BatchResponse[str] = BatchResponse(succeeded=succeeded, failed=failed)
+    if detail == "full":
+        full_resp: BatchResponse[ObservationDict] = BatchResponse(succeeded=full_records, failed=failed)
+        return _text(full_resp)
+    resp: BatchResponse[str] = BatchResponse(succeeded=succeeded_ids, failed=failed)
     return _text(resp)
 
 

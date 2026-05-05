@@ -276,17 +276,30 @@ def promote_observation_cmd(
 @click.command("batch-dismiss-observations")
 @click.argument("observation_ids", nargs=-1, required=True)
 @click.option("--reason", default="", help="Reason for dismissal")
+@click.option(
+    "--detail",
+    "response_detail",
+    type=click.Choice(["slim", "full"]),
+    default="slim",
+    help="JSON shape for succeeded[]: 'slim' (default, observation ID strings) or 'full' (pre-dismissal ObservationDict records).",
+)
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON")
 @click.pass_context
 def batch_dismiss_observations_cmd(
     ctx: click.Context,
     observation_ids: tuple[str, ...],
     reason: str,
+    response_detail: str,
     as_json: bool,
 ) -> None:
     """Dismiss multiple observations in one call."""
     with get_db() as db:
         raw_ids = list(observation_ids)
+        # Snapshot pre-dismissal records for full mode — rows are deleted by
+        # batch_dismiss_observations so the fetch must happen first.
+        full_records: list[dict[str, Any]] = []
+        if response_detail == "full":
+            full_records = [dict(rec) for rec in db.get_observations_by_ids(raw_ids)]
         try:
             result = db.batch_dismiss_observations(
                 raw_ids,
@@ -302,25 +315,26 @@ def batch_dismiss_observations_cmd(
 
         # Mirror MCP: compute succeeded as unique inputs minus not_found, preserving order
         not_found_set = set(result["not_found"])
-        succeeded = [oid for oid in dict.fromkeys(raw_ids) if oid not in not_found_set]
+        succeeded_ids = [oid for oid in dict.fromkeys(raw_ids) if oid not in not_found_set]
         failed: list[BatchFailure] = [
             BatchFailure(id=oid, error=f"Observation not found: {oid}", code=ErrorCode.NOT_FOUND) for oid in result["not_found"]
         ]
 
         if as_json:
+            succeeded_payload: list[Any] = full_records if response_detail == "full" else succeeded_ids
             click.echo(
                 json_mod.dumps(
-                    {"succeeded": succeeded, "failed": list(failed)},
+                    {"succeeded": succeeded_payload, "failed": list(failed)},
                     indent=2,
                     default=str,
                 )
             )
         else:
-            for oid in succeeded:
+            for oid in succeeded_ids:
                 click.echo(f"  Dismissed {oid}")
             for f_item in failed:
                 click.echo(f"  Error {f_item['id']}: {f_item['error']}", err=True)
-            click.echo(f"Dismissed {len(succeeded)}/{len(observation_ids)} observations")
+            click.echo(f"Dismissed {len(succeeded_ids)}/{len(observation_ids)} observations")
         refresh_summary(db)
         if failed:
             sys.exit(1)

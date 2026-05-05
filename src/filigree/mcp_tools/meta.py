@@ -9,6 +9,7 @@ from typing import Any
 
 from mcp.types import TextContent, Tool
 
+from filigree.issue_payloads import issue_to_public
 from filigree.mcp_tools.common import _list_response, _parse_args, _text, _validate_actor, _validate_int_range
 from filigree.types.api import (
     AddCommentResult,
@@ -19,6 +20,8 @@ from filigree.types.api import (
     ErrorResponse,
     JsonlTransferResponse,
     LabelActionResponse,
+    PublicIssue,
+    parse_response_detail,
 )
 from filigree.types.inputs import (
     AddCommentArgs,
@@ -94,7 +97,12 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
         ),
         Tool(
             name="batch_add_label",
-            description="Add the same label to multiple issues in one call. Returns BatchResponse[SlimIssue] (succeeded/failed).",
+            description=(
+                "Add the same label to multiple issues in one call. Returns "
+                "BatchResponse[str] (succeeded issue IDs) by default, or "
+                "BatchResponse[PublicIssue] when response_detail='full'. "
+                "failed[] is always present (empty if none)."
+            ),
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -104,6 +112,12 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
                         "description": "Issue IDs to update",
                     },
                     "label": {"type": "string", "description": "Label to add"},
+                    "response_detail": {
+                        "type": "string",
+                        "enum": ["slim", "full"],
+                        "default": "slim",
+                        "description": "'slim' (default) returns issue ID strings in succeeded[]; 'full' returns full PublicIssue records.",
+                    },
                     "actor": {"type": "string", "description": "Agent/user identity for audit trail"},
                 },
                 "required": ["issue_ids", "label"],
@@ -111,7 +125,13 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
         ),
         Tool(
             name="batch_add_comment",
-            description="Add the same comment to multiple issues in one call. Returns BatchResponse[SlimIssue] (succeeded/failed).",
+            description=(
+                "Add the same comment to multiple issues in one call. Returns "
+                "BatchResponse[str] (succeeded issue IDs) by default, or "
+                "BatchResponse[PublicIssue] when response_detail='full' "
+                "(succeeded[] then carries the full commented-on issues). "
+                "failed[] is always present (empty if none)."
+            ),
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -121,6 +141,12 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
                         "description": "Issue IDs to update",
                     },
                     "text": {"type": "string", "description": "Comment text"},
+                    "response_detail": {
+                        "type": "string",
+                        "enum": ["slim", "full"],
+                        "default": "slim",
+                        "description": "'slim' (default) returns issue ID strings in succeeded[]; 'full' returns full PublicIssue records of the commented-on issues.",
+                    },
                     "actor": {"type": "string", "description": "Agent/user identity for audit trail"},
                 },
                 "required": ["issue_ids", "text"],
@@ -389,6 +415,9 @@ async def _handle_batch_add_label(arguments: dict[str, Any]) -> list[TextContent
     _actor, actor_err = _validate_actor(args.get("actor", "mcp"))  # validated for rejection only
     if actor_err:
         return actor_err
+    detail = parse_response_detail(args.get("response_detail"))
+    if isinstance(detail, dict):
+        return _text(detail)
     tracker = _get_db()
     issue_ids = args["issue_ids"]
     if not all(isinstance(i, str) for i in issue_ids):
@@ -397,6 +426,12 @@ async def _handle_batch_add_label(arguments: dict[str, Any]) -> list[TextContent
         return _text(ErrorResponse(error="label must be a string", code=ErrorCode.VALIDATION))
     label_succeeded, label_failed = tracker.batch_add_label(issue_ids, label=args["label"])
     _refresh_summary()
+    if detail == "full":
+        full_result: BatchResponse[PublicIssue] = BatchResponse(
+            succeeded=[issue_to_public(tracker.get_issue(row["id"])) for row in label_succeeded],
+            failed=label_failed,
+        )
+        return _text(full_result)
     result: BatchResponse[str] = BatchResponse(
         succeeded=[row["id"] for row in label_succeeded],
         failed=label_failed,
@@ -411,6 +446,9 @@ async def _handle_batch_add_comment(arguments: dict[str, Any]) -> list[TextConte
     actor, actor_err = _validate_actor(args.get("actor", "mcp"))
     if actor_err:
         return actor_err
+    detail = parse_response_detail(args.get("response_detail"))
+    if isinstance(detail, dict):
+        return _text(detail)
     tracker = _get_db()
     issue_ids = args["issue_ids"]
     if not all(isinstance(i, str) for i in issue_ids):
@@ -423,6 +461,12 @@ async def _handle_batch_add_comment(arguments: dict[str, Any]) -> list[TextConte
         author=actor,
     )
     _refresh_summary()
+    if detail == "full":
+        full_result: BatchResponse[PublicIssue] = BatchResponse(
+            succeeded=[issue_to_public(tracker.get_issue(str(row["id"]))) for row in comment_succeeded],
+            failed=comment_failed,
+        )
+        return _text(full_result)
     result: BatchResponse[str] = BatchResponse(
         succeeded=[str(row["id"]) for row in comment_succeeded],
         failed=comment_failed,

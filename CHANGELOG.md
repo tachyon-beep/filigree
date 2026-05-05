@@ -9,6 +9,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **``response_detail``/``--detail`` opt-in on MCP and CLI batch tools.**
+  Closes a documentation/implementation gap: the agent guidance
+  (``src/filigree/data/instructions.md``, the project ``CLAUDE.md`` and
+  ``AGENTS.md`` blocks, and the ``filigree-workflow`` skill pack)
+  promised ``response_detail="full"`` on every batch tool but only the
+  dashboard ``loom`` HTTP routes implemented it; MCP/CLI silently
+  ignored the parameter. The flag is now wired on the six batch tools
+  across all three surfaces:
+  - Issues: ``batch_close``/``batch-close`` and
+    ``batch_update``/``batch-update`` — slim ``BatchResponse[SlimIssue]``
+    (default) → full ``BatchResponse[PublicIssue]``.
+  - Meta: ``batch_add_label``/``batch-add-label`` and
+    ``batch_add_comment``/``batch-add-comment`` — slim
+    ``BatchResponse[str]`` (issue IDs) → full
+    ``BatchResponse[PublicIssue]``.
+  - Findings: ``batch_update_findings``/``batch-update-findings`` —
+    slim ``BatchResponse[str]`` (finding IDs) → full
+    ``BatchResponse[ScanFindingDict]``.
+  - Observations: ``batch_dismiss_observations``/
+    ``batch-dismiss-observations`` — slim ``BatchResponse[str]``
+    (observation IDs) → full ``BatchResponse[ObservationDict]``
+    (records snapshotted *before* dismissal so callers can audit what
+    they just dropped). Backed by a new
+    ``FiligreeDB.get_observations_by_ids`` helper.
+
+  Bad ``response_detail`` values return ``code: VALIDATION`` (MCP) or
+  exit 2 (CLI usage error). The shared ``parse_response_detail`` helper
+  in ``filigree.types.api`` is the single source of truth for the
+  slim/full vocabulary across MCP, CLI, and dashboard routes.
 - **CLI ``get-template <type>`` verb-noun alias.** Mirrors the MCP
   ``get_template`` tool and the existing pattern (``get-type-info``,
   ``get-valid-transitions``, ``get-workflow-guide``). Supports ``--json``

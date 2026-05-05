@@ -295,6 +295,26 @@ class ObservationsMixin(DBMixinProtocol):
             ).fetchall()
         return [cast(ObservationDict, dict(row)) for row in rows]
 
+    def get_observations_by_ids(self, obs_ids: list[str]) -> list[ObservationDict]:
+        """Return observation records for a list of IDs, in input order.
+
+        Used by ``batch_dismiss_observations`` callers that want full
+        records returned before dismissal (response_detail='full').
+        Missing IDs are silently skipped — pair with the not_found list
+        from ``batch_dismiss_observations`` to identify them. Does not
+        sweep expired observations.
+        """
+        if not obs_ids:
+            return []
+        unique_ids = list(dict.fromkeys(obs_ids))
+        placeholders = ",".join("?" for _ in unique_ids)
+        rows = self.conn.execute(
+            f"SELECT * FROM observations WHERE id IN ({placeholders})",
+            unique_ids,
+        ).fetchall()
+        by_id = {row["id"]: cast(ObservationDict, dict(row)) for row in rows}
+        return [by_id[oid] for oid in unique_ids if oid in by_id]
+
     def observation_count(self) -> int:
         """Return total observation count WITHOUT sweeping expired rows.
 

@@ -14,7 +14,7 @@ if TYPE_CHECKING:
     from starlette.requests import Request
 
 from filigree.core import FILIGREE_DIR_NAME, FiligreeDB, read_config
-from filigree.types.api import ErrorCode, ErrorResponse
+from filigree.types.api import ErrorCode, ErrorResponse, parse_response_detail
 from filigree.validation import sanitize_actor as _sanitize_actor
 
 logger = logging.getLogger(__name__)
@@ -123,22 +123,16 @@ def _parse_response_detail(
 ) -> Literal["slim", "full"] | JSONResponse:
     """Parse the ``response_detail`` query parameter.
 
-    Returns the literal ``"slim"`` (default) or ``"full"``, or a 400
-    ``JSONResponse`` if the parameter is present with an unknown value.
-    Used by loom batch endpoints to let federation consumers opt into
-    receiving full ``IssueLoom`` items in ``succeeded[]`` instead of
-    the default ``SlimIssueLoom``.
+    Thin HTTP wrapper around ``filigree.types.api.parse_response_detail`` —
+    converts an ``ErrorResponse`` from the shared parser into a 400
+    ``JSONResponse`` for FastAPI route consumption. The shared parser is
+    the single source of truth for the slim/full vocabulary; MCP and CLI
+    surfaces use it directly.
     """
-    raw = params.get("response_detail")
-    if raw is None or raw == "slim":
-        return "slim"
-    if raw == "full":
-        return "full"
-    return _error_response(
-        f"Invalid value for response_detail: {raw!r}. Must be 'slim' or 'full'.",
-        ErrorCode.VALIDATION,
-        400,
-    )
+    parsed = parse_response_detail(params.get("response_detail"))
+    if isinstance(parsed, dict):
+        return _error_response(parsed["error"], ErrorCode.VALIDATION, 400)
+    return parsed
 
 
 def _safe_int(

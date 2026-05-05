@@ -31,9 +31,11 @@ from filigree.types.api import (
     InvalidTransitionError,
     IssueWithChangedFields,
     IssueWithTransitions,
+    PublicIssue,
     SlimIssue,
     TransitionDetail,
     classify_value_error,
+    parse_response_detail,
 )
 from filigree.types.inputs import (
     BatchCloseArgs,
@@ -364,7 +366,13 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
         ),
         Tool(
             name="batch_close",
-            description="Close multiple issues in one call. Returns BatchResponse[SlimIssue] (succeeded/failed) plus newly_unblocked when applicable.",
+            description=(
+                "Close multiple issues in one call. Returns BatchResponse[SlimIssue] "
+                "(default) or BatchResponse[PublicIssue] when response_detail='full'. "
+                "failed[] is always present (empty if none); newly_unblocked is "
+                "included only when the close unblocks dependent issues; "
+                "valid_transitions appears on per-item failures with code=INVALID_TRANSITION."
+            ),
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -374,6 +382,12 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
                         "description": "Issue IDs to close",
                     },
                     "reason": {"type": "string", "default": "", "description": "Close reason"},
+                    "response_detail": {
+                        "type": "string",
+                        "enum": ["slim", "full"],
+                        "default": "slim",
+                        "description": "'slim' (default) returns SlimIssue items in succeeded[]; 'full' returns full PublicIssue records.",
+                    },
                     "actor": {"type": "string", "description": "Agent/user identity for audit trail"},
                 },
                 "required": ["issue_ids"],
@@ -381,7 +395,13 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
         ),
         Tool(
             name="batch_update",
-            description="Update multiple issues with the same changes in one call. Returns BatchResponse[SlimIssue] (succeeded/failed).",
+            description=(
+                "Update multiple issues with the same changes in one call. Returns "
+                "BatchResponse[SlimIssue] (default) or BatchResponse[PublicIssue] "
+                "when response_detail='full'. failed[] is always present (empty if "
+                "none); valid_transitions appears on per-item failures with "
+                "code=INVALID_TRANSITION."
+            ),
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -397,6 +417,12 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
                     "priority": {"type": "integer", "minimum": 0, "maximum": 4, "description": "New priority"},
                     "assignee": {"type": "string", "description": "New assignee"},
                     "fields": {"type": "object", "description": "Fields to merge"},
+                    "response_detail": {
+                        "type": "string",
+                        "enum": ["slim", "full"],
+                        "default": "slim",
+                        "description": "'slim' (default) returns SlimIssue items in succeeded[]; 'full' returns full PublicIssue records.",
+                    },
                     "actor": {"type": "string", "description": "Agent/user identity for audit trail"},
                 },
                 "required": ["issue_ids"],
@@ -746,6 +772,9 @@ async def _handle_batch_close(arguments: dict[str, Any]) -> list[TextContent]:
     actor, actor_err = _validate_actor(args.get("actor", "mcp"))
     if actor_err:
         return actor_err
+    detail = parse_response_detail(args.get("response_detail"))
+    if isinstance(detail, dict):
+        return _text(detail)
     tracker = _get_db()
     issue_ids = args["issue_ids"]
     if not all(isinstance(i, str) for i in issue_ids):
@@ -759,13 +788,21 @@ async def _handle_batch_close(arguments: dict[str, Any]) -> list[TextContent]:
     _refresh_summary()
     ready_after = tracker.get_ready()
     newly_unblocked = [i for i in ready_after if i.id not in ready_before]
-    batch_result: BatchResponse[SlimIssue] = BatchResponse(
+    if detail == "full":
+        full_result: BatchResponse[PublicIssue] = BatchResponse(
+            succeeded=[issue_to_public(i) for i in closed],
+            failed=failed,
+        )
+        if newly_unblocked:
+            full_result["newly_unblocked"] = [_slim_issue(i) for i in newly_unblocked]
+        return _text(full_result)
+    slim_result: BatchResponse[SlimIssue] = BatchResponse(
         succeeded=[_slim_issue(i) for i in closed],
         failed=failed,
     )
     if newly_unblocked:
-        batch_result["newly_unblocked"] = [_slim_issue(i) for i in newly_unblocked]
-    return _text(batch_result)
+        slim_result["newly_unblocked"] = [_slim_issue(i) for i in newly_unblocked]
+    return _text(slim_result)
 
 
 async def _handle_batch_update(arguments: dict[str, Any]) -> list[TextContent]:
@@ -779,6 +816,9 @@ async def _handle_batch_update(arguments: dict[str, Any]) -> list[TextContent]:
     priority_err = _validate_int_range(priority, "priority", min_val=0, max_val=4)
     if priority_err:
         return priority_err
+    detail = parse_response_detail(args.get("response_detail"))
+    if isinstance(detail, dict):
+        return _text(detail)
     tracker = _get_db()
     issue_ids = args["issue_ids"]
     if not all(isinstance(i, str) for i in issue_ids):
@@ -795,6 +835,12 @@ async def _handle_batch_update(arguments: dict[str, Any]) -> list[TextContent]:
         actor=actor,
     )
     _refresh_summary()
+    if detail == "full":
+        full_result: BatchResponse[PublicIssue] = BatchResponse(
+            succeeded=[issue_to_public(i) for i in updated],
+            failed=update_failed,
+        )
+        return _text(full_result)
     result: BatchResponse[SlimIssue] = BatchResponse(
         succeeded=[_slim_issue(i) for i in updated],
         failed=update_failed,

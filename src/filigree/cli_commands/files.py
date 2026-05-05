@@ -678,22 +678,33 @@ def dismiss_finding_cmd(finding_id: str, reason: str | None, as_json: bool) -> N
     type=click.Choice(sorted(VALID_FINDING_STATUSES)),
     help="New status for all findings",
 )
+@click.option(
+    "--detail",
+    "response_detail",
+    type=click.Choice(["slim", "full"]),
+    default="slim",
+    help="JSON shape for succeeded[]: 'slim' (default, finding ID strings) or 'full' (ScanFindingDict records).",
+)
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON")
 def batch_update_findings_cmd(
     finding_ids: tuple[str, ...],
     status: str,
+    response_detail: str,
     as_json: bool,
 ) -> None:
     """Update the status of multiple findings at once."""
     with get_db() as db:
         raw_ids = list(finding_ids)
-        updated: list[str] = []
+        updated_ids: list[str] = []
+        updated_records: list[dict[str, Any]] = []
         errors: list[BatchFailure] = []
 
         for fid in raw_ids:
             try:
-                db.update_finding(fid, status=cast(FindingStatus, status))
-                updated.append(fid)
+                record = db.update_finding(fid, status=cast(FindingStatus, status))
+                updated_ids.append(fid)
+                if response_detail == "full":
+                    updated_records.append(dict(record))
             except KeyError as e:
                 errors.append(BatchFailure(id=fid, error=str(e), code=ErrorCode.NOT_FOUND))
             except ValueError as e:
@@ -705,7 +716,7 @@ def batch_update_findings_cmd(
         # from per-item codes so callers can apply the right retry policy:
         # IO wins (it's retryable); else a homogeneous code is preserved;
         # else fall back to VALIDATION for genuinely mixed failures.
-        if not updated and errors:
+        if not updated_ids and errors:
             err_codes = {f["code"] for f in errors}
             if ErrorCode.IO in err_codes:
                 envelope_code = ErrorCode.IO
@@ -729,19 +740,20 @@ def batch_update_findings_cmd(
             sys.exit(1)
 
         if as_json:
+            succeeded_payload: list[Any] = updated_records if response_detail == "full" else updated_ids
             click.echo(
                 json_mod.dumps(
-                    {"succeeded": updated, "failed": list(errors)},
+                    {"succeeded": succeeded_payload, "failed": list(errors)},
                     indent=2,
                     default=str,
                 )
             )
         else:
-            for fid in updated:
+            for fid in updated_ids:
                 click.echo(f"  Updated {fid}")
             for f_item in errors:
                 click.echo(f"  Error {f_item['id']}: {f_item['error']}", err=True)
-            click.echo(f"Updated {len(updated)}/{len(raw_ids)} findings")
+            click.echo(f"Updated {len(updated_ids)}/{len(raw_ids)} findings")
 
         if errors:
             sys.exit(1)

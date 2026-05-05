@@ -442,6 +442,32 @@ class ListResponse(TypedDict, Generic[_T]):
 
 
 # ---------------------------------------------------------------------------
+# Response detail (slim/full) opt-in for batch ops
+# ---------------------------------------------------------------------------
+
+ResponseDetail = Literal["slim", "full"]
+
+
+def parse_response_detail(raw: str | None) -> ResponseDetail | ErrorResponse:
+    """Parse a ``response_detail`` value to the closed ``ResponseDetail`` literal.
+
+    Returns ``"slim"`` (default when ``raw`` is None or ``"slim"``) or
+    ``"full"``. Returns an ``ErrorResponse`` with ``code=VALIDATION`` for
+    any other value. Shared by MCP handlers, CLI commands, and the
+    dashboard query-param parser so the slim/full vocabulary is enforced
+    in one place.
+    """
+    if raw is None or raw == "slim":
+        return "slim"
+    if raw == "full":
+        return "full"
+    return ErrorResponse(
+        error=f"Invalid value for response_detail: {raw!r}. Must be 'slim' or 'full'.",
+        code=ErrorCode.VALIDATION,
+    )
+
+
+# ---------------------------------------------------------------------------
 # 2.0 typed exceptions
 # ---------------------------------------------------------------------------
 
