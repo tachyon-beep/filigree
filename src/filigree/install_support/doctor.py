@@ -16,11 +16,15 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from filigree.core import (
+    CONF_FILENAME,
     CONFIG_FILENAME,
     DB_FILENAME,
     FILIGREE_DIR_NAME,
     SUMMARY_FILENAME,
+    ForeignDatabaseError,
     find_filigree_root,
+    read_conf,
+    read_schema_version,
 )
 from filigree.db_schema import CURRENT_SCHEMA_VERSION
 from filigree.install_support import (
@@ -28,6 +32,7 @@ from filigree.install_support import (
     SKILL_MARKER,
     SKILL_NAME,
 )
+from filigree.install_support.gitignore import has_active_filigree_ignore
 from filigree.install_support.hooks import (
     SESSION_CONTEXT_COMMAND,
     _extract_hook_binary,
@@ -51,6 +56,7 @@ class CheckResult:
     passed: bool
     message: str
     fix_hint: str = ""
+    code: str | None = None  # machine-readable check identifier; e.g. "schema_mismatch_forward"
 
     @property
     def icon(self) -> str:
@@ -62,6 +68,40 @@ def _is_venv_binary(path: str) -> bool:
     p = Path(path)
     # Walk up looking for pyvenv.cfg (the marker for any venv/virtualenv)
     return any((parent / "pyvenv.cfg").exists() for parent in p.parents)
+
+
+def _validate_filigree_mcp_entry(entry: object) -> dict[str, object]:
+    """Return *entry* if valid, raise ``ValueError`` otherwise.
+
+    Accepts either of the two shapes the installer emits
+    (``install_support/integrations.py``):
+
+    * stdio: a dict with ``type == "stdio"`` (or no ``type``), a non-empty
+      string ``command``, and ``args`` as a list (when present).
+    * streamable-http: a dict with ``type == "streamable-http"`` and a
+      non-empty string ``url``.
+
+    Anything else (non-dict, missing/empty fields, unknown transport) flows
+    into the existing "Invalid .mcp.json" branch — see
+    filigree-466bcb6279 for the prior accept-anything-truthy behaviour.
+    """
+    if not isinstance(entry, dict):
+        raise ValueError("mcpServers.filigree must be a JSON object")
+    transport = entry.get("type", "stdio")
+    if transport == "stdio":
+        command = entry.get("command")
+        if not isinstance(command, str) or not command:
+            raise ValueError("mcpServers.filigree.command must be a non-empty string")
+        args = entry.get("args", [])
+        if not isinstance(args, list):
+            raise ValueError("mcpServers.filigree.args must be a list")
+    elif transport == "streamable-http":
+        url = entry.get("url")
+        if not isinstance(url, str) or not url:
+            raise ValueError("mcpServers.filigree.url must be a non-empty string")
+    else:
+        raise ValueError(f"unknown mcpServers.filigree.type: {transport!r}")
+    return entry
 
 
 def _is_absolute_command_path(path: str) -> bool:
@@ -83,7 +123,7 @@ def _is_absolute_command_path(path: str) -> bool:
 
 def _doctor_ethereal_checks(filigree_dir: Path) -> list[CheckResult]:
     """Ethereal mode health checks."""
-    from filigree.ephemeral import is_pid_alive, read_pid_file, read_port_file
+    from filigree.ephemeral import read_pid_file, read_port_file, verify_pid_ownership
 
     results: list[CheckResult] = []
     pid_file = filigree_dir / "ephemeral.pid"
@@ -91,7 +131,14 @@ def _doctor_ethereal_checks(filigree_dir: Path) -> list[CheckResult]:
 
     if pid_file.exists():
         info = read_pid_file(pid_file)
-        if info and is_pid_alive(info["pid"]):
+        # Ownership (liveness + argv identity + recorded-port) — not raw aliveness —
+        # so a recycled PID belonging to an unrelated process is reported as stale
+        # rather than as a healthy dashboard (filigree-aa80d21b97).
+        if info and verify_pid_ownership(
+            pid_file,
+            expected_cmd="filigree",
+            required_args=("dashboard",),
+        ):
             results.append(CheckResult("Ephemeral PID", True, f"Process {info['pid']} alive"))
         else:
             pid_val = info["pid"] if info else "unknown"
@@ -232,6 +279,21 @@ def run_doctor(project_root: Path | None = None) -> list[CheckResult]:
         # Try walking up
         try:
             filigree_dir = find_filigree_root(cwd)
+        except ForeignDatabaseError as exc:
+            # Walk-up crossed a .git/ boundary — surface the full message so
+            # users (and agents) see exactly why we refused to open the
+            # ancestor anchor.  ``ForeignDatabaseError`` is also a
+            # ``FileNotFoundError`` so the generic handler would otherwise
+            # swallow it into a bland "No .filigree/ found" line.
+            results.append(
+                CheckResult(
+                    ".filigree/ directory",
+                    False,
+                    str(exc),
+                    fix_hint=f"Run `filigree init` in {exc.git_boundary} (this project).",
+                )
+            )
+            return results  # Can't proceed without a local anchor
         except FileNotFoundError:
             results.append(
                 CheckResult(
@@ -243,6 +305,54 @@ def run_doctor(project_root: Path | None = None) -> list[CheckResult]:
             )
             return results  # Can't proceed without .filigree/
     results.append(CheckResult(".filigree/ directory", True, f"Found at {filigree_dir}"))
+
+    # 1b. Check .filigree.conf anchor (v2.0). Warn if missing — this means the
+    # project predates the conf anchor; running any filigree command will
+    # auto-backfill on first open, but flagging it lets users see it's pending.
+    project_root = filigree_dir.parent
+    conf_path = project_root / CONF_FILENAME
+    # conf_db_path is the authoritative DB location when the conf declares it;
+    # falls back to .filigree/DB_FILENAME for legacy installs or unreadable confs.
+    conf_db_path: Path | None = None
+    if conf_path.exists():
+        try:
+            conf_data = read_conf(conf_path)
+            conf_db_path = (conf_path.parent / conf_data["db"]).resolve()
+            results.append(CheckResult(".filigree.conf anchor", True, f"Found at {conf_path}"))
+        except (json.JSONDecodeError, ValueError, OSError) as exc:
+            results.append(
+                CheckResult(
+                    ".filigree.conf anchor",
+                    False,
+                    f"Found at {conf_path} but unreadable: {exc}",
+                    fix_hint=f"Fix or regenerate {conf_path}",
+                )
+            )
+    else:
+        results.append(
+            CheckResult(
+                ".filigree.conf anchor",
+                False,
+                f"Missing at {conf_path} — this v2.0 anchor will be auto-written on next use.",
+                fix_hint="No action required; run any filigree command to backfill.",
+            )
+        )
+
+    # 1c. Warn if ~/.filigree.conf exists. A conf at $HOME claims everything
+    # under $HOME — every uninitialised subdir falls into this DB unless the
+    # subdir has its own .filigree.conf. Almost certainly a mistake.
+    home_conf = Path.home() / CONF_FILENAME
+    if home_conf.exists() and home_conf.resolve() != conf_path.resolve():
+        results.append(
+            CheckResult(
+                "Home-directory .filigree.conf",
+                False,
+                f"{home_conf} exists. Any project under your home dir without its own {CONF_FILENAME} will fall into this database.",
+                fix_hint=f"Remove {home_conf} (and the sibling {FILIGREE_DIR_NAME}/) "
+                f"if it was created by accident, or `filigree init` in each "
+                f"subproject so they have their own anchor.",
+            )
+        )
 
     # 2. Check config.json
     config_path = filigree_dir / CONFIG_FILENAME
@@ -281,36 +391,75 @@ def run_doctor(project_root: Path | None = None) -> list[CheckResult]:
             )
         )
 
-    # 3. Check filigree.db exists and is accessible
-    db_path = filigree_dir / DB_FILENAME
+    # 3. Check filigree.db exists and is accessible. Prefer the DB path declared
+    # in .filigree.conf (v2.0 — users may relocate the DB); fall back to the
+    # legacy .filigree/filigree.db when no conf is present or it's unreadable.
+    db_path = conf_db_path if conf_db_path is not None else filigree_dir / DB_FILENAME
     if db_path.exists():
         conn: sqlite3.Connection | None = None
         try:
             conn = sqlite3.connect(str(db_path))
-            count = conn.execute("SELECT COUNT(*) FROM issues").fetchone()[0]
-            # 3b. Check schema version
-            schema_version = conn.execute("PRAGMA user_version").fetchone()[0]
-            results.append(CheckResult("filigree.db", True, f"{count} issues"))
-            if schema_version > CURRENT_SCHEMA_VERSION:
+            # Resolve schema version FIRST in its own try block so a v+1
+            # mismatch is reported as schema-mismatch even if a subsequent
+            # query (e.g. ``SELECT COUNT(*) FROM issues``) fails because of
+            # an as-yet-unmigrated table change. Without this ordering,
+            # users on a v+1 DB would see "Database may be corrupted.
+            # Restore from backup." instead of "upgrade filigree". Routed
+            # through ``read_schema_version`` so doctor and FiligreeDB
+            # share one source of truth.
+            schema_version: int | None = None
+            try:
+                schema_version = read_schema_version(conn)
+            except sqlite3.Error as e:
+                results.append(
+                    CheckResult(
+                        "filigree.db",
+                        False,
+                        f"Cannot read schema version: {e}",
+                        fix_hint="Database may be corrupted. Restore from backup.",
+                    )
+                )
+
+            if schema_version is not None and schema_version > CURRENT_SCHEMA_VERSION:
+                from filigree.install_support.version_marker import format_schema_mismatch_guidance
+
                 results.append(
                     CheckResult(
                         "Schema version",
                         False,
                         f"v{schema_version} (this filigree supports v{CURRENT_SCHEMA_VERSION})",
-                        fix_hint="Database was created by a newer filigree version. Upgrade filigree.",
+                        fix_hint=format_schema_mismatch_guidance(CURRENT_SCHEMA_VERSION, schema_version),
+                        code="schema_mismatch_forward",
                     )
                 )
-            elif schema_version < CURRENT_SCHEMA_VERSION:
-                results.append(
-                    CheckResult(
-                        "Schema version",
-                        False,
-                        f"v{schema_version} (current: v{CURRENT_SCHEMA_VERSION})",
-                        fix_hint="Database schema is outdated. Run: filigree doctor --fix",
+                # Skip the COUNT(*) probe — querying tables on a v+1 DB
+                # may itself fail and would only yield duplicate noise.
+            elif schema_version is not None:
+                # Schema is at-or-behind installed; safe to probe rows.
+                try:
+                    count = conn.execute("SELECT COUNT(*) FROM issues").fetchone()[0]
+                    results.append(CheckResult("filigree.db", True, f"{count} issues"))
+                except sqlite3.Error as e:
+                    results.append(
+                        CheckResult(
+                            "filigree.db",
+                            False,
+                            f"Database error: {e}",
+                            fix_hint="Database may be corrupted. Restore from backup.",
+                        )
                     )
-                )
-            else:
-                results.append(CheckResult("Schema version", True, f"v{schema_version}"))
+
+                if schema_version < CURRENT_SCHEMA_VERSION:
+                    results.append(
+                        CheckResult(
+                            "Schema version",
+                            False,
+                            f"v{schema_version} (current: v{CURRENT_SCHEMA_VERSION})",
+                            fix_hint="Database schema is outdated. Run: filigree doctor --fix",
+                        )
+                    )
+                else:
+                    results.append(CheckResult("Schema version", True, f"v{schema_version}"))
         except sqlite3.Error as e:
             results.append(
                 CheckResult(
@@ -360,10 +509,13 @@ def run_doctor(project_root: Path | None = None) -> list[CheckResult]:
         )
 
     # 5. Check .gitignore includes .filigree/
+    # Uses the same gitignore-aware parser as ``ensure_gitignore`` so the two
+    # paths can't drift on edge cases (comments, ``!``-negations, non-root
+    # substrings) — see filigree-bc5d2af1ef for the previous divergence.
     gitignore = (filigree_dir.parent) / ".gitignore"
     if gitignore.exists():
         content = gitignore.read_text()
-        if ".filigree/" in content or ".filigree" in content:
+        if has_active_filigree_ignore(content):
             results.append(CheckResult(".gitignore", True, ".filigree/ is ignored"))
         else:
             results.append(
@@ -394,10 +546,23 @@ def run_doctor(project_root: Path | None = None) -> list[CheckResult]:
             servers = mcp.get("mcpServers", {})
             if not isinstance(servers, dict):
                 raise ValueError("mcpServers must be a JSON object")
-            filigree_mcp_entry = servers.get("filigree")
-            if filigree_mcp_entry:
-                # Validate binary path if it's an absolute path
-                mcp_command = filigree_mcp_entry.get("command", "") if isinstance(filigree_mcp_entry, dict) else ""
+            if "filigree" not in servers:
+                results.append(
+                    CheckResult(
+                        "Claude Code MCP",
+                        False,
+                        "filigree not in .mcp.json",
+                        fix_hint="Run: filigree install --claude-code",
+                    )
+                )
+            else:
+                # Validate the per-server schema before declaring it healthy.
+                # Previously a truthy non-dict (e.g. a string or list) silently
+                # passed because ``command`` was coerced to "" and both
+                # absolute-path branches were skipped (filigree-466bcb6279).
+                filigree_mcp_entry = _validate_filigree_mcp_entry(servers["filigree"])
+                mcp_command_raw = filigree_mcp_entry.get("command", "")
+                mcp_command = mcp_command_raw if isinstance(mcp_command_raw, str) else ""
                 if _is_absolute_command_path(mcp_command) and not Path(mcp_command).exists():
                     results.append(
                         CheckResult(
@@ -422,15 +587,6 @@ def run_doctor(project_root: Path | None = None) -> list[CheckResult]:
                         results.append(CheckResult("Claude Code MCP", True, "Configured in .mcp.json (venv path)"))
                 else:
                     results.append(CheckResult("Claude Code MCP", True, "Configured in .mcp.json"))
-            else:
-                results.append(
-                    CheckResult(
-                        "Claude Code MCP",
-                        False,
-                        "filigree not in .mcp.json",
-                        fix_hint="Run: filigree install --claude-code",
-                    )
-                )
         except (json.JSONDecodeError, ValueError):
             results.append(
                 CheckResult(
@@ -459,7 +615,18 @@ def run_doctor(project_root: Path | None = None) -> list[CheckResult]:
         try:
             s = json.loads(settings_json.read_text())
             if _has_hook_command(s, SESSION_CONTEXT_COMMAND):
-                # Validate binary path if it's an absolute path
+                # Structural validation only: if the hook is a module-form
+                # invocation (``<abs-path> -m filigree …``), we used to also
+                # subprocess-run the interpreter with ``-c "import filigree"``
+                # to detect a venv-purged install (bug filigree-36539914b3).
+                # That probe was removed (filigree-e6828dcdb1) because the
+                # interpreter path is read from project-controlled
+                # ``.claude/settings.json`` — a hostile or compromised repo
+                # could plant a binary at that path and get arbitrary code
+                # executed under anyone running ``filigree doctor``. The
+                # original venv-purge case still surfaces as a SessionStart
+                # failure on the next session; running ``filigree install
+                # --hooks`` repairs it.
                 hook_binary = _extract_hook_binary(s, SESSION_CONTEXT_COMMAND)
                 if hook_binary and _is_absolute_command_path(hook_binary) and not Path(hook_binary).exists():
                     results.append(

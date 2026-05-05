@@ -20,13 +20,15 @@ agent or in a multi-agent swarm.
 Every task follows this lifecycle:
 
 ```
-filigree ready          → find available work (no blockers)
-filigree show <id>      → read requirements and context
-filigree transitions <id> → check valid state changes
-filigree update <id> --status=in_progress  → claim the work
+filigree ready                                      → find available work (no blockers)
+filigree show <issue-id>                            → read requirements and context
+filigree transitions <issue-id>                     → check valid status transitions
+filigree start-work <issue-id> --assignee <name>    → atomically claim + transition to in_progress
 [do the work, commit code]
-filigree close <id> --reason="summary of what was done"
+filigree close <issue-id> --reason="summary of what was done"
 ```
+
+Or skip steps 1–3 entirely with `filigree start-next-work --assignee <name>` to grab the highest-priority ready issue.
 
 Always close with a `--reason` — it becomes audit trail for the next agent.
 
@@ -42,23 +44,34 @@ Always close with a `--reason` — it becomes audit trail for the next agent.
 
 When triaging, use `filigree batch-update <ids...> --priority=N` for bulk changes.
 
-## Claiming Work
+## Starting Work
 
-### Solo Agent
+### Solo or Swarm — Same Tool
 
-Use `filigree update <id> --status=in_progress` to signal active work.
-
-### Multi-Agent Swarm
-
-Use atomic claiming to prevent races:
+Use `start-work` (or `start-next-work`) for the usual case. Both atomically
+claim the issue *and* transition it to `in_progress` in one DB transaction —
+optimistic-locking on the assignee, so concurrent callers can't both think
+they own the issue.
 
 ```bash
-filigree claim <id> --assignee <agent-name>     # specific issue
-filigree claim-next --assignee <agent-name>      # highest-priority ready
+filigree start-work <issue-id> --assignee <agent-name>     # specific issue
+filigree start-next-work --assignee <agent-name>           # highest-priority ready
 ```
 
-Claiming sets the assignee atomically — if two agents race, only one wins.
-After claiming, advance state with `update --status=in_progress`.
+If another agent already owns the claim, the call fails with `code: CONFLICT`
+(CLI exit 4). Safe to retry against a different issue.
+
+### Niche: Claim Without Transitioning
+
+`claim` and `claim-next` still exist for the rare case where you want to
+reserve an issue but not advance its status (e.g. a coordinator earmarking
+work for a worker that will pick it up later). Prefer `start-work` for
+normal flow.
+
+```bash
+filigree claim <issue-id> --assignee <agent-name>     # reserve only, no transition
+filigree claim-next --assignee <agent-name>
+```
 
 ## Key Commands
 
@@ -151,6 +164,27 @@ and a full endpoint catalog. When linking issues to files, use file associations
 | `scan_finding` | Automated scan finding |
 | `mentioned_in` | File referenced in issue |
 
+## Response Shapes (2.0)
+
+When parsing `--json` output or MCP responses, expect these unified envelopes:
+
+- **Batch ops** → `{succeeded: [...], failed: [{id, error, code}, ...], newly_unblocked?: [...]}`.
+  `failed` is always present (empty list if none); `newly_unblocked` is
+  omitted when the op cannot unblock. Pass `--detail=full` (CLI) or
+  `response_detail="full"` (MCP) to get full records back.
+- **List ops** → `{items: [...], has_more: bool, next_offset?: int}`.
+  `next_offset` only appears when there is a next page.
+- **Errors** → `{error: str, code: ErrorCode, details?: dict}`. `code` is
+  one of: `VALIDATION`, `NOT_FOUND`, `CONFLICT`, `INVALID_TRANSITION`,
+  `PERMISSION`, `NOT_INITIALIZED`, `IO`, `INVALID_API_URL`, `STOP_FAILED`,
+  `SCHEMA_MISMATCH`, `INTERNAL`. Branch on `code` for retry policy
+  (`CONFLICT` → exit 4, retryable; everything at exit 1 needs operator
+  intervention).
+
+The issue ID is always `issue_id` in 2.0 — in MCP inputs, response payloads,
+and CLI JSON. Status is always `status`; "state" was retired as a
+user-facing word.
+
 ## Health and Diagnostics
 
 ```bash
@@ -233,7 +267,7 @@ filigree search "from-observation"         # Search with context
 |-----------|--------|
 | "What should I work on?" | `filigree ready`, pick highest priority |
 | "Is this blocked?" | `filigree show <id>`, check blocked_by |
-| "Multiple agents need work" | `filigree claim-next --assignee <name>` |
+| "Multiple agents need work" | `filigree start-next-work --assignee <name>` |
 | "I found a new bug" | `filigree create "..." --type=bug --priority=1` |
 | "This task is bigger than expected" | Create sub-tasks, add deps |
 | "I'm done" | Comment, close with reason, check `ready` |

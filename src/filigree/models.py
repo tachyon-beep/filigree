@@ -64,10 +64,14 @@ class Issue:
             raise ValueError(f"Invalid priority {self.priority!r}, expected int 0-4")
 
     def to_dict(self) -> IssueDict:
+        # filigree-7ea6b80f3b: corruption is an out-of-band attribute on the
+        # _ParsedJson dict subclass returned by _safe_json_loads, duck-typed
+        # here to avoid a db_base→models import cycle. A user-supplied field
+        # literally named ``_fields_error`` no longer triggers a false strip.
         fields = self.fields
         warnings: list[str] = []
-        if fields.get("_fields_error"):
-            fields = {k: v for k, v in fields.items() if k != "_fields_error"}
+        if getattr(fields, "_filigree_corrupt", False):
+            fields = {}
             warnings.append("fields data was corrupt and could not be parsed")
         return IssueDict(
             id=self.id,
@@ -92,6 +96,18 @@ class Issue:
             data_warnings=warnings,
         )
 
+    def format_claim_next_reason(self) -> str:
+        """Build the ``selection_reason`` string for a successful claim_next.
+
+        Shared between the CLI command, MCP handler, and any HTTP surface so the
+        wire shape is identical across surfaces (Phase E §9 envelope parity).
+        """
+        parts = [f"P{self.priority}"]
+        if self.type != "task":
+            parts.append(f"type={self.type}")
+        parts.append("ready issue (no blockers)")
+        return f"Highest-priority {', '.join(parts)}"
+
 
 @dataclass
 class FileRecord:
@@ -104,10 +120,11 @@ class FileRecord:
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> FileRecordDict:
+        # filigree-7ea6b80f3b: out-of-band corruption flag (see Issue.to_dict).
         metadata = self.metadata
         warnings: list[str] = []
-        if metadata.get("_metadata_error"):
-            metadata = {k: v for k, v in metadata.items() if k != "_metadata_error"}
+        if getattr(metadata, "_filigree_corrupt", False):
+            metadata = {}
             warnings.append("metadata was corrupt and could not be parsed")
         return FileRecordDict(
             id=self.id,
@@ -148,10 +165,11 @@ class ScanFinding:
             raise ValueError(f"Invalid finding status {self.status!r}, expected one of {sorted(_VALID_FINDING_STATUSES)}")
 
     def to_dict(self) -> ScanFindingDict:
+        # filigree-7ea6b80f3b: out-of-band corruption flag (see Issue.to_dict).
         metadata = self.metadata
         warnings: list[str] = []
-        if metadata.get("_metadata_error"):
-            metadata = {k: v for k, v in metadata.items() if k != "_metadata_error"}
+        if getattr(metadata, "_filigree_corrupt", False):
+            metadata = {}
             warnings.append("metadata was corrupt and could not be parsed")
         return ScanFindingDict(
             id=self.id,

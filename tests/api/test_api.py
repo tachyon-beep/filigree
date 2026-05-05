@@ -98,6 +98,30 @@ class TestIssuesAPI:
         assert isinstance(data, list)
         assert len(data) == 5  # epic + A + B + C + auto-seeded Future release
 
+    async def test_list_all_issues_paginates_beyond_single_page(
+        self,
+        client: AsyncClient,
+        dashboard_db: PopulatedDB,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Regression: /api/issues must paginate instead of truncating silently."""
+        from filigree.dashboard_routes import issues as issue_routes
+
+        monkeypatch.setattr(issue_routes, "_ISSUES_LIST_PAGE_SIZE", 3)
+
+        created_ids: list[str] = []
+        for i in range(7):
+            new_issue = dashboard_db.db.create_issue(f"Beyond preload page {i}", type="task", priority=2)
+            created_ids.append(new_issue.id)
+
+        resp = await client.get("/api/issues")
+        assert resp.status_code == 200
+        data = resp.json()
+        issue_ids = {issue["id"] for issue in data}
+
+        for issue_id in created_ids:
+            assert issue_id in issue_ids, f"Issue {issue_id} missing — /api/issues pagination failed"
+
     async def test_issue_structure(self, client: AsyncClient) -> None:
         resp = await client.get("/api/issues")
         data = resp.json()
@@ -139,9 +163,9 @@ class TestIssueDetailAPI:
     async def test_issue_detail_not_found(self, client: AsyncClient) -> None:
         resp = await client.get("/api/issue/nonexistent")
         assert resp.status_code == 404
-        err = resp.json()["error"]
-        assert err["code"] == "ISSUE_NOT_FOUND"
-        assert "nonexistent" in err["message"]
+        body = resp.json()
+        assert body["code"] == "NOT_FOUND"
+        assert "nonexistent" in body["error"]
 
     async def test_issue_with_comments(self, client: AsyncClient, dashboard_db: PopulatedDB) -> None:
         ids = dashboard_db.ids
@@ -184,13 +208,20 @@ class TestTypeTemplateAPI:
 
     async def test_type_template_not_found(self, client: AsyncClient) -> None:
         resp = await client.get("/api/type/nonexistent")
-        assert resp.status_code == 404
-        err = resp.json()["error"]
-        assert err["code"] == "INVALID_TYPE"
-        # Error message must include the invalid value and valid types
-        assert "nonexistent" in err["message"]
-        assert "task" in err["message"]
-        assert "bug" in err["message"]
+        # Unknown type_name is rejected-enum-value input validation, so
+        # VALIDATION + 400 — same pattern as other unknown-enum-value
+        # responses elsewhere in the dashboard API.
+        assert resp.status_code == 400
+        body = resp.json()
+        assert body["code"] == "VALIDATION"
+        assert "nonexistent" in body["error"]
+        assert "task" in body["error"]
+        assert "bug" in body["error"]
+        # Structured details carry the invalid value and the valid set.
+        details = body.get("details", {})
+        assert details.get("param") == "type_name"
+        assert details.get("value") == "nonexistent"
+        assert "bug" in details.get("valid_types", [])
 
 
 class TestWorkflowAwareAPI:
@@ -306,9 +337,9 @@ class TestCreateIssueAPI:
             json={"title": "Bad fields", "fields": []},
         )
         assert resp.status_code == 400
-        err = resp.json()["error"]
-        assert err["code"] == "VALIDATION_ERROR"
-        assert "fields must be a dict" in err["message"]
+        body = resp.json()
+        assert body["code"] == "VALIDATION"
+        assert "fields must be a dict" in body["error"]
 
     async def test_create_invalid_type_returns_400(self, client: AsyncClient) -> None:
         resp = await client.post(
@@ -316,10 +347,10 @@ class TestCreateIssueAPI:
             json={"title": "Bad type", "type": "nonexistent_type"},
         )
         assert resp.status_code == 400
-        err = resp.json()["error"]
+        body = resp.json()
         # Error from core.py includes valid types
-        assert "nonexistent_type" in err["message"]
-        assert "task" in err["message"]
+        assert "nonexistent_type" in body["error"]
+        assert "task" in body["error"]
 
     async def test_create_with_parent(self, client: AsyncClient, dashboard_db: PopulatedDB) -> None:
         ids = dashboard_db.ids
@@ -400,9 +431,9 @@ class TestUpdateAPI:
             json={"fields": []},
         )
         assert resp.status_code == 400
-        err = resp.json()["error"]
-        assert err["code"] == "VALIDATION_ERROR"
-        assert "fields must be a dict" in err["message"]
+        body = resp.json()
+        assert body["code"] == "VALIDATION"
+        assert "fields must be a dict" in body["error"]
 
     async def test_update_invalid_transition(self, client: AsyncClient, dashboard_db: PopulatedDB) -> None:
         ids = dashboard_db.ids
@@ -564,13 +595,13 @@ class TestClaimEmptyAssigneeAPI:
         ids = dashboard_db.ids
         resp = await client.post(f"/api/issue/{ids['a']}/claim", json=body)
         assert resp.status_code == 400
-        assert "assignee" in resp.json()["error"]["message"].lower()
+        assert "assignee" in resp.json()["error"].lower()
 
     @pytest.mark.parametrize("body", [{"assignee": ""}, {}], ids=["empty", "missing"])
     async def test_claim_next_rejects_bad_assignee(self, client: AsyncClient, body: dict[str, str]) -> None:
         resp = await client.post("/api/claim-next", json=body)
         assert resp.status_code == 400
-        assert "assignee" in resp.json()["error"]["message"].lower()
+        assert "assignee" in resp.json()["error"].lower()
 
 
 class TestCommentAPI:
@@ -848,9 +879,9 @@ class TestBatchAPI:
             json={"issue_ids": [ids["a"]], "fields": []},
         )
         assert resp.status_code == 400
-        err = resp.json()["error"]
-        assert err["code"] == "VALIDATION_ERROR"
-        assert "fields must be a dict" in err["message"]
+        body = resp.json()
+        assert body["code"] == "VALIDATION"
+        assert "fields must be a dict" in body["error"]
 
     async def test_batch_close(self, client: AsyncClient, dashboard_db: PopulatedDB) -> None:
         ids = dashboard_db.ids
@@ -922,7 +953,7 @@ class TestBatchAPIInputValidation:
     async def test_null_issue_ids_returns_400(self, client: AsyncClient, endpoint: str, body: dict[str, Any]) -> None:
         resp = await client.post(endpoint, json=body)
         assert resp.status_code == 400
-        assert "issue_ids" in resp.json()["error"]["message"].lower()
+        assert "issue_ids" in resp.json()["error"].lower()
 
     @pytest.mark.parametrize(
         ("endpoint", "body", "check_message"),
@@ -953,7 +984,7 @@ class TestBatchAPIInputValidation:
         resp = await client.post(endpoint, json=body)
         assert resp.status_code == 400
         if check_message:
-            assert check_message in resp.json()["error"]["message"].lower()
+            assert check_message in resp.json()["error"].lower()
 
 
 class TestBatchClosePartialMutation:
@@ -1033,8 +1064,8 @@ class TestDependencyManagementAPI:
 
     async def test_add_dep_not_found(self, client: AsyncClient) -> None:
         resp = await client.post(
-            "/api/issue/nonexistent/dependencies",
-            json={"depends_on": "also-nonexistent"},
+            "/api/issue/test-nonexistent/dependencies",
+            json={"depends_on": "test-also-nonexistent"},
         )
         assert resp.status_code == 404
 

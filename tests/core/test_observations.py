@@ -4,11 +4,15 @@ from __future__ import annotations
 
 import sqlite3
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any
 
 import pytest
 
 from filigree.core import FiligreeDB
+from filigree.db_base import _now_iso
+
+from .._db_factory import make_db
 
 
 class TestCreateObservation:
@@ -165,6 +169,52 @@ class TestCreateObservation:
         f = db.get_file(obs["file_id"])
         assert f.path == "src/main.py"
 
+    def test_create_observation_insert_failure_removes_newly_created_file_record(self, db: FiligreeDB) -> None:
+        """filigree-8b285ec210: orphaned file_record must not linger when obs insert fails."""
+        real_conn = db._conn
+
+        def _fail_on_obs_insert(real: Any, sql: str, params: Any = ()) -> Any:
+            if "INSERT INTO observations" in sql and "dismissed_observations" not in sql:
+                raise sqlite3.OperationalError("disk I/O error on insert")
+            return real.execute(sql, params)
+
+        db._conn = _InterceptingConn(real_conn, _fail_on_obs_insert)  # type: ignore[assignment]
+        try:
+            with pytest.raises(sqlite3.OperationalError):
+                db.create_observation("will fail", file_path="src/new/file_orphan.py")
+        finally:
+            db._conn = real_conn
+
+        # No observation persisted
+        assert db.observation_count() == 0
+        # file_record must also be gone — would otherwise be orphaned
+        row = db.conn.execute("SELECT id FROM file_records WHERE path = ?", ("src/new/file_orphan.py",)).fetchone()
+        assert row is None, "file_record should have been compensated when observation insert failed"
+
+    def test_create_observation_insert_failure_keeps_preexisting_file_record(self, db: FiligreeDB) -> None:
+        """If the file_record already existed, a failed observation insert must NOT delete it."""
+        # Pre-register the file
+        pre = db.register_file("src/existing/keep.py")
+
+        real_conn = db._conn
+
+        def _fail_on_obs_insert(real: Any, sql: str, params: Any = ()) -> Any:
+            if "INSERT INTO observations" in sql and "dismissed_observations" not in sql:
+                raise sqlite3.OperationalError("disk I/O error on insert")
+            return real.execute(sql, params)
+
+        db._conn = _InterceptingConn(real_conn, _fail_on_obs_insert)  # type: ignore[assignment]
+        try:
+            with pytest.raises(sqlite3.OperationalError):
+                db.create_observation("will fail", file_path="src/existing/keep.py")
+        finally:
+            db._conn = real_conn
+
+        # Pre-existing file_record must still be there
+        row = db.conn.execute("SELECT id FROM file_records WHERE path = ?", ("src/existing/keep.py",)).fetchone()
+        assert row is not None, "pre-existing file_record must be preserved"
+        assert row["id"] == pre.id
+
 
 class TestListObservations:
     def test_list_empty(self, db: FiligreeDB) -> None:
@@ -298,6 +348,39 @@ class TestSweepExceptionSuppression:
         finally:
             db._conn = real_conn
         assert len(result) == 1
+
+    def test_sweep_failure_does_not_surface_expired_rows(self, db: FiligreeDB) -> None:
+        """filigree-6b05db86a3: when sweep fails, list_observations must still hide expired rows."""
+        import sqlite3
+
+        live = db.create_observation("live one")
+        expired = db.create_observation("expired one")
+        db.conn.execute(
+            "UPDATE observations SET expires_at = '2020-01-01T00:00:00+00:00' WHERE id = ?",
+            (expired["id"],),
+        )
+        db.conn.commit()
+
+        real_conn = db._conn
+
+        def _fail_on_sweep_delete(real: Any, sql: str, params: Any = ()) -> Any:
+            # Fail the sweep's DELETE, not any other DELETE
+            if "DELETE FROM observations WHERE expires_at" in sql:
+                raise sqlite3.OperationalError("disk I/O error")
+            return real.execute(sql, params)
+
+        db._conn = _InterceptingConn(real_conn, _fail_on_sweep_delete)  # type: ignore[assignment]
+        try:
+            result = db.list_observations()
+            stats = db.observation_stats(sweep=True)
+        finally:
+            db._conn = real_conn
+
+        ids = {o["id"] for o in result}
+        assert live["id"] in ids
+        assert expired["id"] not in ids, "expired row must not be returned as live when sweep failed"
+        # Stats count must match the visible rows (not include the expired row)
+        assert stats["count"] == 1
 
     def test_sweep_suppresses_integrity_error(self, db: FiligreeDB) -> None:
         """IntegrityError during sweep is suppressed — sweep is best-effort for all sqlite3.Error."""
@@ -477,11 +560,14 @@ class TestPromoteObservation:
             db.promote_observation("nope-123")
 
     def test_promote_is_atomic_no_double_promote(self, db: FiligreeDB) -> None:
-        """Second promote of same observation should fail."""
+        """Second promote of same observation is idempotent — returns the original issue."""
         obs = db.create_observation("Once only")
-        db.promote_observation(obs["id"])
-        with pytest.raises(ValueError, match="not found"):
-            db.promote_observation(obs["id"])
+        result1 = db.promote_observation(obs["id"])
+        # Second promote finds the existing issue via source_observation_id and returns it.
+        result2 = db.promote_observation(obs["id"])
+        assert result2["issue"].id == result1["issue"].id
+        assert "warnings" in result2
+        assert any("already promoted" in w for w in result2["warnings"])
 
     def test_promote_with_line_zero_includes_location(self, db: FiligreeDB) -> None:
         """line=0 is valid and must appear in the promoted issue description."""
@@ -580,19 +666,24 @@ class TestPromoteObservation:
         assert any("audit trail" in w.lower() for w in result["warnings"])
 
     def test_promote_cleanup_failure_prevents_double_promotion(self, db: FiligreeDB) -> None:
-        """If observation delete fails, a second promote attempt must NOT create a duplicate issue."""
+        """If observation delete fails, a second promote attempt must NOT create a duplicate issue.
+
+        Idempotency is provided by fields.source_observation_id on the created issue.
+        The second promote finds the existing issue and returns it, cleaning up the
+        lingering observation as a best-effort side effect.
+        """
         import sqlite3
 
         obs = db.create_observation("will survive first promote")
         real_conn = db._conn
-        delete_blocked = True
 
         def _fail_on_obs_delete(real: Any, sql: str, params: Any = ()) -> Any:
-            if delete_blocked and "DELETE FROM observations WHERE id" in sql and "expires_at" not in sql:
+            if "DELETE FROM observations WHERE id" in sql and "expires_at" not in sql:
                 raise sqlite3.OperationalError("disk I/O error")
             return real.execute(sql, params)
 
         # First promote — delete fails, issue is created, observation lingers
+        issues_before = db.conn.execute("SELECT COUNT(*) FROM issues").fetchone()[0]
         db._conn = _InterceptingConn(real_conn, _fail_on_obs_delete)  # type: ignore[assignment]
         try:
             result1 = db.promote_observation(obs["id"])
@@ -602,14 +693,26 @@ class TestPromoteObservation:
         assert first_issue is not None
         # Observation still exists because delete failed
         assert db.observation_count() == 1
+        # Exactly one new issue
+        issues_after_first = db.conn.execute("SELECT COUNT(*) FROM issues").fetchone()[0]
+        assert issues_after_first == issues_before + 1
 
-        # Second promote — delete succeeds, should create a second issue
-        # (this is the known trade-off: cleanup failure = potential duplicate)
+        # Second promote — should return the SAME issue (idempotent), not create a new one
         result2 = db.promote_observation(obs["id"])
-        assert result2["issue"] is not None
-        # Third promote should fail — observation is now deleted
-        with pytest.raises(ValueError, match="not found"):
-            db.promote_observation(obs["id"])
+        assert result2["issue"].id == first_issue.id, "Retry must return the same issue, not a duplicate"
+        # Still exactly one issue from this promotion
+        issues_after_second = db.conn.execute("SELECT COUNT(*) FROM issues").fetchone()[0]
+        assert issues_after_second == issues_before + 1
+        # Observation has been cleaned up by the idempotent retry
+        assert db.observation_count() == 0
+        # Warning surfaced to caller
+        assert "warnings" in result2
+        assert any("already promoted" in w for w in result2["warnings"])
+
+        # Third promote — source_observation_id lookup still finds the issue,
+        # so it remains idempotent (returns the same issue).
+        result3 = db.promote_observation(obs["id"])
+        assert result3["issue"].id == first_issue.id
 
     def test_promote_warns_when_observation_already_swept(self, db: FiligreeDB) -> None:
         """If a concurrent sweep deletes the observation between SELECT and DELETE,
@@ -651,6 +754,78 @@ class TestPromoteObservation:
         db.conn.commit()
         with pytest.raises(ValueError, match="expired"):
             db.promote_observation(obs["id"])
+
+    def test_concurrent_promote_creates_only_one_issue(self, db: FiligreeDB) -> None:
+        """Two threads racing to promote the same observation must produce one issue.
+
+        Regression for filigree-58aa8fb4ac (TOCTOU at db_observations.py:413-416):
+        the idempotency SELECT + create_issue must be serialized via BEGIN
+        IMMEDIATE so concurrent callers can't both pass the check.
+        """
+        import threading
+
+        obs = db.create_observation("racey finding")
+        obs_id = obs["id"]
+        db_path = db.db_path
+        # Release fixture's connection so peer connections can take the writer lock.
+        db.close()
+
+        peer_a = FiligreeDB(db_path, prefix="test", check_same_thread=False)
+        peer_b = FiligreeDB(db_path, prefix="test", check_same_thread=False)
+        try:
+            barrier = threading.Barrier(2)
+            results: list[str] = []
+            errors: list[BaseException] = []
+
+            def run(peer: FiligreeDB) -> None:
+                try:
+                    barrier.wait()
+                    r = peer.promote_observation(obs_id)
+                    results.append(r["issue"].id)
+                except BaseException as e:
+                    errors.append(e)
+
+            t1 = threading.Thread(target=run, args=(peer_a,))
+            t2 = threading.Thread(target=run, args=(peer_b,))
+            t1.start()
+            t2.start()
+            t1.join()
+            t2.join()
+
+            assert errors == [], f"Unexpected errors: {errors}"
+            assert len(results) == 2
+            assert results[0] == results[1], f"Both threads must converge on the same issue id; got {results}"
+
+            audit = FiligreeDB(db_path, prefix="test", check_same_thread=False)
+            try:
+                rows = audit.conn.execute(
+                    "SELECT id FROM issues WHERE json_extract(fields, '$.source_observation_id') = ?",
+                    (obs_id,),
+                ).fetchall()
+            finally:
+                audit.close()
+            assert len(rows) == 1, f"Expected exactly one issue per observation, got {[r['id'] for r in rows]}"
+        finally:
+            peer_a.close()
+            peer_b.close()
+
+    def test_promote_tolerates_corrupt_fields_on_unrelated_issue(self, db: FiligreeDB) -> None:
+        """Corrupt fields JSON on an unrelated issue must not block promotion.
+
+        Regression for filigree-9bb842088d: the idempotency lookup uses
+        json_extract over the full issues table, which raises OperationalError
+        on malformed rows. The query must guard with json_valid(fields) so
+        corrupt rows are skipped (matches the _safe_fields_json convention).
+        """
+        bystander = db.create_issue("bystander")
+        db.conn.execute("UPDATE issues SET fields = '{bad json' WHERE id = ?", (bystander.id,))
+        db.conn.commit()
+
+        obs = db.create_observation("valid promotion path")
+        result = db.promote_observation(obs["id"])
+        assert result["issue"].id != bystander.id
+        # Issue's own source_observation_id round-trips intact
+        assert result["issue"].fields.get("source_observation_id") == obs["id"]
 
 
 class TestObservationStats:
@@ -944,6 +1119,39 @@ class TestObservationJsonlRoundtrip:
 
         fresh.close()
 
+    def test_import_missing_expires_at_defaults_to_future_not_now(self, db: FiligreeDB, tmp_path: Any) -> None:
+        """filigree-13fccfce44: imported observations without expires_at must not be instantly expired.
+
+        Regression: missing expires_at used to default to _now_iso(), which made
+        every such observation sweep-eligible on the next read.
+        """
+        import json
+
+        out = tmp_path / "no-expires.jsonl"
+        # Hand-craft a JSONL file with an observation that lacks expires_at
+        record = {
+            "_type": "observation",
+            "id": "test-obs-noexp",
+            "summary": "legacy import",
+            "created_at": _now_iso(),
+        }
+        with out.open("w") as f:
+            f.write(json.dumps(record) + "\n")
+
+        fresh = FiligreeDB(tmp_path / "fresh-noexp.db", prefix="test")
+        fresh.initialize()
+        result = fresh.import_jsonl(out, merge=False)
+        assert result["count"] >= 1
+
+        # Row must be present with a future expires_at
+        row = fresh.conn.execute("SELECT id, expires_at FROM observations WHERE id = 'test-obs-noexp'").fetchone()
+        assert row is not None, "observation should have been imported"
+        assert row["expires_at"] > _now_iso(), "expires_at should default to future, not now"
+
+        # And list_observations should return it (not sweep it)
+        assert any(o["id"] == "test-obs-noexp" for o in fresh.list_observations())
+        fresh.close()
+
     def test_merge_import_dismissed_observations_idempotent(self, db: FiligreeDB, tmp_path: Any) -> None:
         """Importing the same JSONL twice with merge=True must not duplicate dismissed_observations rows."""
         obs = db.create_observation("Will dismiss for merge test")
@@ -1009,3 +1217,124 @@ class TestAuditTrailCap:
         # The oldest surviving entry should be newer than the very first entry we inserted
         first_ts = (now - timedelta(hours=cap + overflow)).isoformat()
         assert oldest[0] > first_ts
+
+
+def _shared_db_path(tmp_path: Path) -> Path:
+    # Initialize the schema once via an isolated connection, then hand the
+    # path to worker threads. Each worker opens its own FiligreeDB instance
+    # — no shared connection state.
+    seed = make_db(tmp_path)
+    path = seed.db_path
+    seed.close()
+    return path
+
+
+def _run_one_create_race(db_path: Path, n_threads: int) -> tuple[list[str], list[Exception]]:
+    import threading
+
+    from filigree.core import FiligreeDB
+
+    wipe = FiligreeDB(db_path, prefix="test")
+    wipe.initialize()
+    wipe.conn.execute("DELETE FROM observations")
+    wipe.conn.commit()
+    wipe.close()
+
+    errors: list[Exception] = []
+    ids: list[str] = []
+    barrier = threading.Barrier(n_threads)
+
+    def worker() -> None:
+        try:
+            d = FiligreeDB(db_path, prefix="test")
+            d.initialize()
+            barrier.wait(timeout=5)
+            obs = d.create_observation("dedup-race")
+            ids.append(obs["id"])
+            d.close()
+        except Exception as e:
+            errors.append(e)
+
+    threads = [threading.Thread(target=worker) for _ in range(n_threads)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    return ids, errors
+
+
+def _run_one_dismiss_race(db_path: Path, n_threads: int) -> tuple[str, list[str], list[Exception]]:
+    import threading
+
+    from filigree.core import FiligreeDB
+
+    seed = FiligreeDB(db_path, prefix="test")
+    seed.initialize()
+    seed.conn.execute("DELETE FROM observations")
+    seed.conn.execute("DELETE FROM dismissed_observations")
+    seed.conn.commit()
+    obs = seed.create_observation("dismiss-race")
+    obs_id = obs["id"]
+    seed.close()
+
+    successes: list[str] = []
+    errors: list[Exception] = []
+    barrier = threading.Barrier(n_threads)
+
+    def worker(name: str) -> None:
+        try:
+            d = FiligreeDB(db_path, prefix="test")
+            d.initialize()
+            barrier.wait(timeout=5)
+            d.dismiss_observation(obs_id, actor=name)
+            successes.append(name)
+            d.close()
+        except ValueError:
+            # Expected: races that lose see "Observation not found".
+            pass
+        except Exception as e:
+            errors.append(e)
+
+    threads = [threading.Thread(target=worker, args=(f"t{i}",)) for i in range(n_threads)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    return obs_id, successes, errors
+
+
+class TestObservationConcurrencyRegressions:
+    """Regression tests for filigree-248ca4ff3f and filigree-fd77d71a49.
+
+    Concurrency races are inherently flaky — each scenario is run in a loop
+    so a regression that flips the outcome 10% of the time still trips here.
+    Threads use separate FiligreeDB instances over the same on-disk DB to
+    exercise the WAL-mode path (mirrors MCP/CLI behavior).
+    """
+
+    def test_concurrent_create_returns_existing_under_dedup_race(self, tmp_path: Path) -> None:
+        db_path = _shared_db_path(tmp_path)
+        n_threads = 8
+        for _ in range(20):
+            ids, errors = _run_one_create_race(db_path, n_threads)
+            assert errors == [], f"unexpected errors: {errors!r}"
+            assert len(ids) == n_threads
+            assert len(set(ids)) == 1, f"racers should share one id, got {set(ids)!r}"
+
+    def test_concurrent_dismiss_writes_one_audit_row(self, tmp_path: Path) -> None:
+        from filigree.core import FiligreeDB
+
+        db_path = _shared_db_path(tmp_path)
+        n_threads = 5
+        for _ in range(20):
+            obs_id, successes, errors = _run_one_dismiss_race(db_path, n_threads)
+            assert errors == [], f"unexpected errors: {errors!r}"
+            assert len(successes) == 1, f"exactly one dismiss should win, got {successes!r}"
+
+            check = FiligreeDB(db_path, prefix="test")
+            check.initialize()
+            audit_count = check.conn.execute("SELECT COUNT(*) FROM dismissed_observations WHERE obs_id = ?", (obs_id,)).fetchone()[0]
+            remaining = check.conn.execute("SELECT COUNT(*) FROM observations WHERE id = ?", (obs_id,)).fetchone()[0]
+            check.close()
+            assert audit_count == 1, f"expected 1 audit row, got {audit_count}"
+            assert remaining == 0

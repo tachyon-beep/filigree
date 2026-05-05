@@ -27,9 +27,32 @@ from filigree.dashboard_routes.common import (
     _safe_bounded_int,
 )
 from filigree.models import Issue
-from filigree.types.api import StatsWithPrefix
+from filigree.types.api import ErrorCode, StatsWithPrefix
 
 logger = logging.getLogger(__name__)
+
+# Page size used when streaming every issue into the graph endpoint. Exposed
+# at module scope so tests can shrink it to exercise pagination boundaries.
+_GRAPH_LIST_PAGE_SIZE = 1000
+
+
+def _fetch_all_issues(db: FiligreeDB) -> list[Issue]:
+    """Return every issue in the DB by paginating list_issues.
+
+    The graph endpoint previously called list_issues(limit=10000), which
+    silently truncated large projects and caused scope_root false-404s for
+    any issue beyond the cap. Pagination removes the hidden ceiling.
+    """
+    all_issues: list[Issue] = []
+    offset = 0
+    while True:
+        page = db.list_issues(limit=_GRAPH_LIST_PAGE_SIZE, offset=offset)
+        all_issues.extend(page)
+        if len(page) < _GRAPH_LIST_PAGE_SIZE:
+            break
+        offset += _GRAPH_LIST_PAGE_SIZE
+    return all_issues
+
 
 # ---------------------------------------------------------------------------
 # Graph v2 helpers
@@ -75,6 +98,7 @@ def _parse_graph_v2_params(
     params: Mapping[str, str],
     issues: list[Issue],
     issue_map: dict[str, Issue],
+    registered_types: set[str],
 ) -> _GraphV2Params | JSONResponse:
     """Parse and validate all graph v2 query parameters.
 
@@ -106,7 +130,7 @@ def _parse_graph_v2_params(
     if gp.ready_only and gp.blocked_only:
         return _error_response(
             "ready_only and blocked_only cannot both be true.",
-            "GRAPH_INVALID_PARAM",
+            ErrorCode.VALIDATION,
             422,
             {"param": "ready_only,blocked_only"},
         )
@@ -131,7 +155,7 @@ def _parse_graph_v2_params(
     if gp.scope_root and gp.scope_root not in issue_map:
         return _error_response(
             f"Unknown scope_root issue id: {gp.scope_root}",
-            "GRAPH_INVALID_PARAM",
+            ErrorCode.VALIDATION,
             404,
             {"param": "scope_root", "value": gp.scope_root},
         )
@@ -146,21 +170,24 @@ def _parse_graph_v2_params(
         if not gp.scope_root:
             return _error_response(
                 "scope_radius requires scope_root.",
-                "GRAPH_INVALID_PARAM",
+                ErrorCode.VALIDATION,
                 422,
                 {"param": "scope_radius", "value": scope_radius_raw},
             )
 
-    # Type filter
+    # Type filter — validate against the workflow template registry, not the
+    # set of types in the current issue list.  A registered type with zero
+    # current issues is still a valid filter (yields an empty node list);
+    # rejecting it conflated "registered" with "currently observed".
+    # (filigree-68c24cee62)
     type_filter_raw = params.get("types")
     gp.type_filter = set(_parse_csv_param(type_filter_raw)) if type_filter_raw else set()
     if gp.type_filter:
-        known_types = {i.type for i in issues}
-        unknown_types = sorted(gp.type_filter - known_types)
+        unknown_types = sorted(gp.type_filter - registered_types)
         if unknown_types:
             return _error_response(
                 f"Unknown types: {', '.join(unknown_types)}",
-                "GRAPH_INVALID_PARAM",
+                ErrorCode.VALIDATION,
                 400,
                 {"param": "types", "value": type_filter_raw},
             )
@@ -173,7 +200,7 @@ def _parse_graph_v2_params(
         if unknown_cats:
             return _error_response(
                 f"Unknown status_categories: {', '.join(unknown_cats)}",
-                "GRAPH_INVALID_PARAM",
+                ErrorCode.VALIDATION,
                 400,
                 {"param": "status_categories", "value": status_filter_raw},
             )
@@ -206,6 +233,20 @@ def _issue_updated_at_utc(issue: Issue) -> datetime | None:
     return parsed.astimezone(UTC)
 
 
+def _graph_status_category(issue: Issue) -> str:
+    """Status category for graph filtering and serialization.
+
+    archive_closed() preserves closed_at but writes status='archived',
+    which is not a workflow done state — so the raw status_category
+    resolves to 'open' (filigree-42045dd065). For graph queries that
+    surface terminal-state filters (include_done, status_categories,
+    blocker counts), an archived issue must read as 'done'.
+    """
+    if issue.status == "archived":
+        return "done"
+    return issue.status_category
+
+
 def _filter_graph_nodes(
     issues: list[Issue],
     issue_map: dict[str, Issue],
@@ -220,7 +261,7 @@ def _filter_graph_nodes(
         total = 0
         for blocker_id in issue.blocked_by:
             blocker = issue_map.get(blocker_id)
-            if blocker and blocker.status_category != "done":
+            if blocker and _graph_status_category(blocker) != "done":
                 total += 1
         return total
 
@@ -229,19 +270,20 @@ def _filter_graph_nodes(
         total = 0
         for blocked_id in issue.blocks:
             blocked_issue = issue_map.get(blocked_id)
-            if blocked_issue and blocked_issue.status_category != "done":
+            if blocked_issue and _graph_status_category(blocked_issue) != "done":
                 total += 1
         return total
 
     filtered: list[dict[str, Any]] = []
     for issue in issues:
+        category = _graph_status_category(issue)
         if scoped_ids is not None and issue.id not in scoped_ids:
             continue
-        if not gp.include_done and issue.status_category == "done":
+        if not gp.include_done and category == "done":
             continue
         if gp.type_filter and issue.type not in gp.type_filter:
             continue
-        if gp.status_filter and issue.status_category not in gp.status_filter:
+        if gp.status_filter and category not in gp.status_filter:
             continue
         if gp.assignee_filter is not None and issue.assignee != gp.assignee_filter:
             continue
@@ -264,7 +306,7 @@ def _filter_graph_nodes(
                 "id": issue.id,
                 "title": issue.title,
                 "status": issue.status,
-                "status_category": issue.status_category,
+                "status_category": category,
                 "priority": issue.priority,
                 "type": issue.type,
                 "assignee": issue.assignee,
@@ -279,16 +321,23 @@ def _filter_graph_nodes(
 def _filter_graph_edges(
     deps: list[dict[str, Any]],
     visible_ids: set[str],
-    critical_path_ids: set[str],
+    critical_path_edges: set[tuple[str, str]],
 ) -> list[dict[str, Any]]:
-    """Build edge dicts for visible nodes."""
+    """Build edge dicts for visible nodes.
+
+    ``critical_path_edges`` is the set of adjacent ``(source, target)``
+    pairs along the ordered critical path chain — only those edges may
+    be flagged ``is_critical_path``. Marking on node-id membership alone
+    incorrectly flagged shortcut edges between non-adjacent path nodes
+    (filigree-c9b08d1363).
+    """
     return [
         {
             "id": f"{dep['to']}->{dep['from']}",
             "source": dep["to"],
             "target": dep["from"],
             "kind": dep["type"],
-            "is_critical_path": dep["to"] in critical_path_ids and dep["from"] in critical_path_ids,
+            "is_critical_path": (dep["to"], dep["from"]) in critical_path_edges,
         }
         for dep in deps
         if dep["to"] in visible_ids and dep["from"] in visible_ids
@@ -300,8 +349,9 @@ def _filter_graph_edges(
 # ---------------------------------------------------------------------------
 
 
-def create_router() -> APIRouter:
-    """Build the APIRouter for analytics, graph, and metrics endpoints.
+def create_classic_router() -> APIRouter:
+    """Build the classic-generation APIRouter for analytics, graph, and
+    metrics endpoints.
 
     NOTE: All handlers are intentionally async despite doing synchronous
     SQLite I/O. This serializes DB access on the event loop thread,
@@ -333,7 +383,7 @@ def create_router() -> APIRouter:
         if isinstance(mode, JSONResponse):
             return mode
 
-        issues = db.list_issues(limit=10000)
+        issues = _fetch_all_issues(db)
         deps = db.get_all_dependencies()
 
         # Legacy behavior remains the default compatibility path.
@@ -356,13 +406,20 @@ def create_router() -> APIRouter:
         started = perf_counter()
         issue_map = {i.id: i for i in issues}
 
-        gp = _parse_graph_v2_params(request.query_params, issues, issue_map)
+        registered_types = {t.type for t in db.templates.list_types()}
+        gp = _parse_graph_v2_params(request.query_params, issues, issue_map, registered_types)
         if isinstance(gp, JSONResponse):
             return gp
 
         critical_path_ids: set[str] = set()
+        critical_path_edges: set[tuple[str, str]] = set()
         if gp.critical_path_only:
-            critical_path_ids = {node["id"] for node in db.get_critical_path()}
+            ordered_path = [node["id"] for node in db.get_critical_path()]
+            critical_path_ids = set(ordered_path)
+            # Adjacent (source=blocker, target=blocked) pairs only — shortcut
+            # edges between non-adjacent path nodes are not part of the chain
+            # and must not be flagged is_critical_path (filigree-c9b08d1363).
+            critical_path_edges = {(ordered_path[i], ordered_path[i + 1]) for i in range(len(ordered_path) - 1)}
 
         # Scope neighborhood (undirected BFS around scope_root)
         scoped_ids: set[str] | None = None
@@ -392,7 +449,7 @@ def create_router() -> APIRouter:
             truncated = True
 
         visible_ids = {node["id"] for node in filtered_nodes}
-        filtered_edges = _filter_graph_edges([dict(d) for d in deps], visible_ids, critical_path_ids)
+        filtered_edges = _filter_graph_edges([dict(d) for d in deps], visible_ids, critical_path_edges)
 
         total_edges_before_limit = len(filtered_edges)
         if len(filtered_edges) > gp.edge_limit:
@@ -455,7 +512,7 @@ def create_router() -> APIRouter:
             stats = db.observation_stats(sweep=False)
         except sqlite3.Error:
             logger.warning("observation_stats unavailable", exc_info=True)
-            return _error_response("observation stats unavailable", "DB_UNAVAILABLE", 503)
+            return _error_response("observation stats unavailable", ErrorCode.IO, 503, exc_info=False)
         return JSONResponse(stats)
 
     @router.get("/critical-path")
@@ -469,14 +526,126 @@ def create_router() -> APIRouter:
         """Recent events across all issues."""
         limit = min(max(limit, 1), 1000)
         if since:
-            from datetime import datetime
+            from datetime import UTC, datetime
 
             try:
-                datetime.fromisoformat(since.replace("Z", "+00:00"))
+                parsed = datetime.fromisoformat(since.replace("Z", "+00:00"))
             except (ValueError, AttributeError):
-                return _error_response(f"Invalid ISO timestamp: {since!r}", "VALIDATION_ERROR", 400)
-            since = since.replace("Z", "+00:00") if since.endswith("Z") else since
+                return _error_response(f"Invalid ISO timestamp: {since!r}", ErrorCode.VALIDATION, 400)
+            # Stored timestamps are ISO with explicit UTC offset and SQLite compares as text.
+            # Normalize to UTC isoformat so offset-bearing and naive inputs compare correctly.
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=UTC)
+            since = parsed.astimezone(UTC).isoformat()
         events = db.get_events_since(since, limit=limit) if since else db.get_recent_events(limit=limit)
         return JSONResponse(events)
+
+    return router
+
+
+def create_loom_router() -> APIRouter:
+    """Build the loom-generation APIRouter for analytics, graph, and
+    metrics endpoints.
+
+    Phase C4 mounts the cross-issue ``GET /changes`` and project-wide
+    ``GET /observations`` list endpoints; both are loom-only (no
+    classic dashboard counterpart) and live behind ``/api/loom/`` plus
+    living-surface aliases at ``/api/changes`` and ``/api/observations``
+    per the C4 aliasing rule (no classic counterpart → alias).
+    """
+    from fastapi import APIRouter, Depends
+    from fastapi.responses import JSONResponse
+
+    from filigree.dashboard import _get_db
+    from filigree.dashboard_routes.common import _MAX_PAGINATION_LIMIT, _parse_pagination
+    from filigree.generations.loom.adapters import (
+        change_record_to_loom,
+        list_response,
+        observation_to_loom,
+    )
+
+    router = APIRouter()
+
+    @router.get("/changes")
+    async def api_loom_changes(request: Request, db: FiligreeDB = Depends(_get_db)) -> JSONResponse:
+        """Cross-issue events since a timestamp — ``ListResponse[ChangeRecordLoom]``.
+
+        Loom-only (no classic dashboard counterpart). Mirrors MCP's
+        ``get_changes`` semantics: pass ``?since=<ISO timestamp>`` and
+        optional ``?limit=`` (default 100). Overfetches by 1 to detect
+        ``has_more``. ``offset`` is not exposed — the cursor is the
+        ``since`` timestamp.
+        """
+        params = request.query_params
+        since = params.get("since", "")
+        if not since:
+            return _error_response("since query parameter is required", ErrorCode.VALIDATION, 400)
+        try:
+            parsed = datetime.fromisoformat(since.replace("Z", "+00:00"))
+        except ValueError:
+            return _error_response(
+                f"Invalid ISO timestamp: {since!r}. Expected format: 2026-01-15T10:30:00",
+                ErrorCode.VALIDATION,
+                400,
+            )
+        # Stored timestamps are ISO with explicit ``+00:00`` offset; SQLite
+        # compares them as text. Canonicalize ``since`` to UTC isoformat so
+        # offset-bearing and naive inputs compare correctly. Mirrors the
+        # classic ``/api/activity`` route. (filigree-d808d8b70f)
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=UTC)
+        since_normalized = parsed.astimezone(UTC).isoformat()
+        # ``offset`` is not part of this endpoint's surface — the cursor is
+        # ``since``.  Reject any offset query param rather than silently
+        # discarding it. (filigree-f0f47f5b9d)
+        if "offset" in params:
+            return _error_response(
+                "offset is not supported on /api/loom/changes; the cursor is the 'since' timestamp.",
+                ErrorCode.VALIDATION,
+                400,
+                {"param": "offset"},
+            )
+        limit_or_err = _safe_bounded_int(
+            params.get("limit", "100"),
+            name="limit",
+            min_value=1,
+            max_value=_MAX_PAGINATION_LIMIT,
+        )
+        if not isinstance(limit_or_err, int):
+            return limit_or_err
+        limit = limit_or_err
+        events = db.get_events_since(since_normalized, limit=limit + 1)
+        has_more = len(events) > limit
+        if has_more:
+            events = events[:limit]
+        items = [change_record_to_loom(e) for e in events]
+        return JSONResponse(list_response(items, limit=limit, offset=0, has_more=has_more))
+
+    @router.get("/observations")
+    async def api_loom_list_observations(request: Request, db: FiligreeDB = Depends(_get_db)) -> JSONResponse:
+        """List pending observations — ``ListResponse[ObservationLoom]``.
+
+        Loom-only (no classic dashboard counterpart). Drops MCP's
+        ``stats`` sibling per the strict ``ListResponse[T]`` envelope —
+        consumers needing aggregate counts hit ``/api/observations/stats``.
+        ``?file_path=`` and ``?file_id=`` filters mirror the MCP tool;
+        ``?limit=&offset=`` paginate.
+        """
+        params = request.query_params
+        pagination = _parse_pagination(params)
+        if isinstance(pagination, JSONResponse):
+            return pagination
+        limit, offset = pagination
+        observations = db.list_observations(
+            limit=limit + 1,
+            offset=offset,
+            file_path=params.get("file_path", ""),
+            file_id=params.get("file_id", ""),
+        )
+        has_more = len(observations) > limit
+        if has_more:
+            observations = observations[:limit]
+        items = [observation_to_loom(o) for o in observations]
+        return JSONResponse(list_response(items, limit=limit, offset=offset, has_more=has_more))
 
     return router

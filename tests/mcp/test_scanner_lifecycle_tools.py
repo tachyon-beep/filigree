@@ -15,6 +15,7 @@ import pytest
 from filigree.core import FiligreeDB
 from filigree.mcp_server import call_tool  # type: ignore[attr-defined]
 from filigree.mcp_tools.scanners import _validate_localhost_url
+from filigree.types.api import ErrorCode
 from tests.mcp._helpers import _parse
 
 
@@ -87,7 +88,7 @@ class TestPreviewScanTool:
                 {"scanner": "nonexistent", "file_path": "foo.py"},
             )
         )
-        assert data["code"] == "scanner_not_found"
+        assert data["code"] == ErrorCode.NOT_FOUND
 
     async def test_preview_scan_path_traversal(self, mcp_db: FiligreeDB) -> None:
         _write_scanner_toml(mcp_db)
@@ -97,7 +98,7 @@ class TestPreviewScanTool:
                 {"scanner": "test-scanner", "file_path": "../../etc/passwd"},
             )
         )
-        assert data["code"] == "invalid_path"
+        assert data["code"] == ErrorCode.VALIDATION
 
 
 class TestGetScanStatusTool:
@@ -117,15 +118,15 @@ class TestGetScanStatusTool:
 
     async def test_get_scan_status_not_found(self, mcp_db: FiligreeDB) -> None:
         data = _parse(await call_tool("get_scan_status", {"scan_run_id": "nonexistent"}))
-        assert data["code"] == "not_found"
+        assert data["code"] == ErrorCode.NOT_FOUND
 
     async def test_get_scan_status_empty_id_rejected(self, mcp_db: FiligreeDB) -> None:
         data = _parse(await call_tool("get_scan_status", {"scan_run_id": ""}))
-        assert data["code"] == "validation_error"
+        assert data["code"] == ErrorCode.VALIDATION
 
     async def test_get_scan_status_log_lines_validated(self, mcp_db: FiligreeDB) -> None:
         data = _parse(await call_tool("get_scan_status", {"scan_run_id": "x", "log_lines": 0}))
-        assert data["code"] == "validation_error"
+        assert data["code"] == ErrorCode.VALIDATION
 
     async def test_get_scan_status_auto_fails_dead_process(self, mcp_db: FiligreeDB) -> None:
         """When process is dead, get_scan_status should auto-transition to 'failed'."""
@@ -151,7 +152,7 @@ class TestTriggerScanBatchTool:
         _write_scanner_toml(mcp_db)
         try:
             with patch(
-                "filigree.mcp_tools.scanners.subprocess.Popen",
+                "filigree.scanner_runtime.subprocess.Popen",
                 side_effect=[_FakeProc(100), _FakeProc(101)],
             ):
                 data = _parse(
@@ -163,17 +164,26 @@ class TestTriggerScanBatchTool:
             assert data["status"] == "triggered"
             assert data["file_count"] == 2
             assert data["processes_spawned"] == 2
-            assert "scan_run_id" in data
+            # Batch returns per-file scan_run_ids rather than one shared id —
+            # each child's completion is tracked independently (filigree-ec33df4b86).
+            assert "batch_id" in data
+            assert isinstance(data["scan_run_ids"], list)
+            assert len(data["scan_run_ids"]) == 2
+            assert len(set(data["scan_run_ids"])) == 2  # unique per file
+            for child_id in data["scan_run_ids"]:
+                run = mcp_db.get_scan_run(child_id)
+                assert len(run["file_paths"]) == 1
+                assert run["status"] == "running"
         finally:
             _cleanup_files(mcp_db, files)
 
     async def test_batch_scan_partial_spawn_failure(self, mcp_db: FiligreeDB) -> None:
-        """When some files fail to spawn, scan_run should only include successful ones."""
+        """When some files fail to spawn, the successful child runs survive and the failed one is recorded."""
         files = _make_target_files(mcp_db, ["batch_ok.py", "batch_fail.py"])
         _write_scanner_toml(mcp_db)
         try:
             with patch(
-                "filigree.mcp_tools.scanners.subprocess.Popen",
+                "filigree.scanner_runtime.subprocess.Popen",
                 side_effect=[_FakeProc(100), OSError("mock fail")],
             ):
                 data = _parse(
@@ -186,13 +196,14 @@ class TestTriggerScanBatchTool:
             assert data["processes_spawned"] == 1
             assert data["file_count"] == 1
             assert len(data["spawn_errors"]) == 1
-            # Verify spawn error includes actual error detail (not just "spawn_failed")
             assert "mock fail" in data["spawn_errors"][0]["reason"].lower() or "spawn" in data["spawn_errors"][0]["reason"].lower()
 
-            # Verify scan_run record only includes the successful file
-            run = mcp_db.get_scan_run(data["scan_run_id"])
+            # The surviving child run exists and references the ok file.
+            assert len(data["scan_run_ids"]) == 1
+            run = mcp_db.get_scan_run(data["scan_run_ids"][0])
             assert len(run["file_paths"]) == 1
             assert "batch_ok.py" in run["file_paths"][0]
+            assert run["status"] == "running"
         finally:
             _cleanup_files(mcp_db, files)
 
@@ -201,7 +212,7 @@ class TestTriggerScanBatchTool:
         _write_scanner_toml(mcp_db)
         try:
             with patch(
-                "filigree.mcp_tools.scanners.subprocess.Popen",
+                "filigree.scanner_runtime.subprocess.Popen",
                 side_effect=OSError("mock fail"),
             ):
                 data = _parse(
@@ -210,7 +221,7 @@ class TestTriggerScanBatchTool:
                         {"scanner": "test-scanner", "file_paths": ["batch_all_fail.py"]},
                     )
                 )
-            assert data["code"] == "spawn_failed"
+            assert data["code"] == ErrorCode.IO
         finally:
             _cleanup_files(mcp_db, files)
 
@@ -222,7 +233,7 @@ class TestTriggerScanBatchTool:
                 {"scanner": "test-scanner", "file_paths": []},
             )
         )
-        assert data["code"] == "validation_error"
+        assert data["code"] == ErrorCode.VALIDATION
 
     async def test_batch_scan_scanner_not_found(self, mcp_db: FiligreeDB) -> None:
         data = _parse(
@@ -231,7 +242,7 @@ class TestTriggerScanBatchTool:
                 {"scanner": "nonexistent", "file_paths": ["foo.py"]},
             )
         )
-        assert data["code"] == "scanner_not_found"
+        assert data["code"] == ErrorCode.NOT_FOUND
 
     async def test_batch_scan_non_localhost_rejected(self, mcp_db: FiligreeDB) -> None:
         files = _make_target_files(mcp_db, ["batch_url.py"])
@@ -247,7 +258,7 @@ class TestTriggerScanBatchTool:
                     },
                 )
             )
-            assert data["code"] == "invalid_api_url"
+            assert data["code"] == ErrorCode.INVALID_API_URL
         finally:
             _cleanup_files(mcp_db, files)
 
@@ -256,7 +267,7 @@ class TestTriggerScanBatchTool:
         _write_scanner_toml(mcp_db)
         try:
             with patch(
-                "filigree.mcp_tools.scanners.subprocess.Popen",
+                "filigree.scanner_runtime.subprocess.Popen",
                 return_value=_FakeProc(100),
             ):
                 data = _parse(
@@ -282,7 +293,7 @@ class TestTriggerScanBatchTool:
         _write_scanner_toml(mcp_db)
         try:
             with patch(
-                "filigree.mcp_tools.scanners.subprocess.Popen",
+                "filigree.scanner_runtime.subprocess.Popen",
                 side_effect=[_FakeProc(100), _FakeProc(101)],
             ):
                 data = _parse(
@@ -291,14 +302,61 @@ class TestTriggerScanBatchTool:
                         {"scanner": "test-scanner", "file_paths": ["batch_log_a.py", "batch_log_b.py"]},
                     )
                 )
-            scan_run_id = data["scan_run_id"]
+            batch_id = data["batch_id"]
             assert mcp_mod._filigree_dir is not None
             scan_log_dir = mcp_mod._filigree_dir / "scans"
             # Should have per-file log files, not a single shared one
-            log_files = sorted(scan_log_dir.glob(f"{scan_run_id}*.log"))
+            log_files = sorted(scan_log_dir.glob(f"{batch_id}*.log"))
             assert len(log_files) == 2
             assert any("-0.log" in str(f) for f in log_files)
             assert any("-1.log" in str(f) for f in log_files)
+        finally:
+            _cleanup_files(mcp_db, files)
+
+    async def test_batch_scan_children_have_independent_run_ids(self, mcp_db: FiligreeDB) -> None:
+        """Regression for filigree-ec33df4b86: each child gets its own scan_run_id
+        so the fastest child's completion POST can't finalize the batch early."""
+        files = _make_target_files(mcp_db, ["indep_a.py", "indep_b.py", "indep_c.py"])
+        _write_scanner_toml(mcp_db)
+        try:
+            with patch(
+                "filigree.scanner_runtime.subprocess.Popen",
+                side_effect=[_FakeProc(100), _FakeProc(101), _FakeProc(102)],
+            ):
+                data = _parse(
+                    await call_tool(
+                        "trigger_scan_batch",
+                        {"scanner": "test-scanner", "file_paths": ["indep_a.py", "indep_b.py", "indep_c.py"]},
+                    )
+                )
+            assert data["file_count"] == 3
+            ids = data["scan_run_ids"]
+            assert len(ids) == 3 == len(set(ids))
+            # Each child's scan_run holds exactly one file_path — no shared row.
+            for child_id in ids:
+                run = mcp_db.get_scan_run(child_id)
+                assert len(run["file_paths"]) == 1
+                assert run["pid"] is not None
+        finally:
+            _cleanup_files(mcp_db, files)
+
+    async def test_batch_scan_dedupes_repeated_file_paths(self, mcp_db: FiligreeDB) -> None:
+        """Repeated file_paths in one request are deduped before reservation."""
+        files = _make_target_files(mcp_db, ["dup_a.py"])
+        _write_scanner_toml(mcp_db)
+        try:
+            with patch(
+                "filigree.scanner_runtime.subprocess.Popen",
+                side_effect=[_FakeProc(100)],
+            ):
+                data = _parse(
+                    await call_tool(
+                        "trigger_scan_batch",
+                        {"scanner": "test-scanner", "file_paths": ["dup_a.py", "dup_a.py"]},
+                    )
+                )
+            assert data["file_count"] == 1
+            assert any(s["reason"] == "duplicate" for s in data.get("skipped", []))
         finally:
             _cleanup_files(mcp_db, files)
 
@@ -374,18 +432,31 @@ class TestValidateLocalhostUrl:
     def test_non_localhost_urls_rejected(self, url: str) -> None:
         result = _validate_localhost_url(url)
         assert result is not None
-        # Should be an error response (list of TextContent)
-        assert isinstance(result, list)
+        # Should be an ErrorResponse dict
+        assert isinstance(result, dict)
+        assert "error" in result
+        assert "code" in result
 
-    def test_empty_string_url(self) -> None:
-        # Empty URL produces empty hostname — accepted by fallback
-        result = _validate_localhost_url("")
-        assert result is None
-
-    def test_malformed_url_no_scheme(self) -> None:
-        # urlparse("no-scheme") puts everything in path, hostname is None → ""
-        result = _validate_localhost_url("no-scheme")
-        assert result is None
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "",
+            "   ",
+            "no-scheme",
+            "localhost:8377",
+            "ftp://localhost/api",
+            "file:///etc/passwd",
+            "//localhost/api",
+        ],
+    )
+    def test_unusable_urls_rejected(self, url: str) -> None:
+        """Empty, scheme-less, or non-HTTP URLs must be rejected — the scanner
+        helper can't build a usable POST target from them."""
+        result = _validate_localhost_url(url)
+        assert result is not None
+        assert isinstance(result, dict)
+        assert "error" in result
+        assert "code" in result
 
 
 class TestSpawnScanLogFileFailure:
@@ -403,7 +474,7 @@ class TestSpawnScanLogFileFailure:
                 return real_open(path, *a, **kw)
 
             with (
-                patch("filigree.mcp_tools.scanners.subprocess.Popen", return_value=_FakeProc(100)),
+                patch("filigree.scanner_runtime.subprocess.Popen", return_value=_FakeProc(100)),
                 patch("builtins.open", side_effect=mock_open_fail),
             ):
                 data = _parse(
@@ -419,16 +490,17 @@ class TestSpawnScanLogFileFailure:
 
 
 class TestBatchScanDbTrackingFailure:
-    """trigger_scan_batch kills all processes when DB tracking fails."""
+    """trigger_scan_batch handles DB failures without leaking orphan processes."""
 
-    async def test_db_failure_kills_spawned_processes(self, mcp_db: FiligreeDB) -> None:
+    async def test_reservation_failure_produces_no_eligible_files(self, mcp_db: FiligreeDB) -> None:
+        """When reserve_scan_run itself fails, no process is ever spawned — so there's
+        nothing to clean up, but we should surface the failure reason."""
         files = _make_target_files(mcp_db, ["db_fail_a.py", "db_fail_b.py"])
         _write_scanner_toml(mcp_db)
-        mock_procs = [MagicMock(pid=100, poll=MagicMock(return_value=None)), MagicMock(pid=101, poll=MagicMock(return_value=None))]
         try:
             with (
-                patch("filigree.mcp_tools.scanners.subprocess.Popen", side_effect=mock_procs),
-                patch.object(mcp_db, "create_scan_run", side_effect=sqlite3.OperationalError("DB broken")),
+                patch("filigree.scanner_runtime.subprocess.Popen") as popen_mock,
+                patch.object(mcp_db, "reserve_scan_run", side_effect=sqlite3.OperationalError("DB broken")),
             ):
                 data = _parse(
                     await call_tool(
@@ -436,9 +508,86 @@ class TestBatchScanDbTrackingFailure:
                         {"scanner": "test-scanner", "file_paths": ["db_fail_a.py", "db_fail_b.py"]},
                     )
                 )
-            assert data["code"] == "db_error"
-            # Both processes should have been killed
-            for proc in mock_procs:
-                proc.kill.assert_called_once()
+            # No files eligible (all reservations failed); no processes spawned.
+            assert data["code"] == ErrorCode.VALIDATION
+            popen_mock.assert_not_called()
+            # Extras are in details under the 2.0 envelope shape.
+            skipped = data["details"]["skipped"]
+            assert all("reservation_failed" in s["reason"] for s in skipped)
+        finally:
+            _cleanup_files(mcp_db, files)
+
+    async def test_backfill_failure_kills_process(self, mcp_db: FiligreeDB) -> None:
+        """If the post-spawn pid/log backfill fails, the spawned child is killed."""
+        files = _make_target_files(mcp_db, ["backfill_fail.py"])
+        _write_scanner_toml(mcp_db)
+        proc = MagicMock(pid=100, poll=MagicMock(return_value=None))
+        try:
+            with (
+                patch("filigree.scanner_runtime.subprocess.Popen", return_value=proc),
+                patch.object(mcp_db, "set_scan_run_spawn_info", side_effect=sqlite3.OperationalError("DB broken")),
+            ):
+                data = _parse(
+                    await call_tool(
+                        "trigger_scan_batch",
+                        {"scanner": "test-scanner", "file_paths": ["backfill_fail.py"]},
+                    )
+                )
+            assert data["code"] == ErrorCode.IO
+            proc.kill.assert_called_once()
+        finally:
+            _cleanup_files(mcp_db, files)
+
+
+class TestTriggerScanCooldownReservation:
+    """Regression tests for filigree-ed3be5a092: cooldown is reserved pre-spawn."""
+
+    async def test_second_trigger_blocked_by_pending_reservation(self, mcp_db: FiligreeDB) -> None:
+        """Trigger #1 leaves a pending reservation row; trigger #2 should see it and
+        return rate_limited rather than silently spawning a duplicate scanner."""
+        files = _make_target_files(mcp_db, ["reserve_target.py"])
+        _write_scanner_toml(mcp_db)
+        try:
+            with patch("filigree.scanner_runtime.subprocess.Popen", return_value=_FakeProc(100)):
+                first = _parse(
+                    await call_tool(
+                        "trigger_scan",
+                        {"scanner": "test-scanner", "file_path": "reserve_target.py"},
+                    )
+                )
+                assert first["status"] == "triggered"
+                # Second call immediately after — the reservation row should block it
+                # regardless of whether the first process has finished.
+                second = _parse(
+                    await call_tool(
+                        "trigger_scan",
+                        {"scanner": "test-scanner", "file_path": "reserve_target.py"},
+                    )
+                )
+            assert second["code"] == ErrorCode.CONFLICT
+            assert second["details"]["blocking_run_id"] == first["scan_run_id"]
+        finally:
+            _cleanup_files(mcp_db, files)
+
+    async def test_spawn_failure_marks_reservation_failed(self, mcp_db: FiligreeDB) -> None:
+        """If the scanner fails to spawn, the reservation is transitioned to
+        'failed' so cooldown doesn't keep blocking retries."""
+        files = _make_target_files(mcp_db, ["spawn_fail_target.py"])
+        _write_scanner_toml(mcp_db)
+        try:
+            with patch(
+                "filigree.scanner_runtime.subprocess.Popen",
+                side_effect=OSError("can't fork"),
+            ):
+                data = _parse(
+                    await call_tool(
+                        "trigger_scan",
+                        {"scanner": "test-scanner", "file_path": "spawn_fail_target.py"},
+                    )
+                )
+            assert data["code"] == ErrorCode.IO
+            # The cooldown query should no longer find a blocking run — failed
+            # rows are excluded from the cooldown window.
+            assert mcp_db.check_scan_cooldown("test-scanner", "spawn_fail_target.py") is None
         finally:
             _cleanup_files(mcp_db, files)

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from filigree.core import FiligreeDB
 from filigree.mcp_server import call_tool  # type: ignore[attr-defined]
+from filigree.types.api import ErrorCode
 from tests.mcp._helpers import _parse
 
 
@@ -36,40 +37,40 @@ class TestGetFindingTool:
 
     async def test_get_finding_not_found(self, mcp_db: FiligreeDB) -> None:
         data = _parse(await call_tool("get_finding", {"finding_id": "nonexistent"}))
-        assert data["code"] == "not_found"
+        assert data["code"] == ErrorCode.NOT_FOUND
 
     async def test_get_finding_empty_id_rejected(self, mcp_db: FiligreeDB) -> None:
         data = _parse(await call_tool("get_finding", {"finding_id": ""}))
-        assert data["code"] == "validation_error"
+        assert data["code"] == ErrorCode.VALIDATION
 
     async def test_get_finding_missing_id_rejected(self, mcp_db: FiligreeDB) -> None:
         data = _parse(await call_tool("get_finding", {}))
-        assert data["code"] == "validation_error"
+        assert data["code"] == ErrorCode.VALIDATION
 
 
 class TestListFindingsTool:
     async def test_list_all(self, mcp_db: FiligreeDB) -> None:
         _seed_findings(mcp_db)
         data = _parse(await call_tool("list_findings", {}))
-        assert len(data["findings"]) == 3
+        assert len(data["items"]) == 3
 
     async def test_filter_by_severity(self, mcp_db: FiligreeDB) -> None:
         _seed_findings(mcp_db)
         data = _parse(await call_tool("list_findings", {"severity": "critical"}))
-        assert len(data["findings"]) == 1
-        assert data["findings"][0]["rule_id"] == "injection"
+        assert len(data["items"]) == 1
+        assert data["items"][0]["rule_id"] == "injection"
 
     async def test_filter_by_status(self, mcp_db: FiligreeDB) -> None:
         _seed_findings(mcp_db)
         data = _parse(await call_tool("list_findings", {"status": "open"}))
-        assert len(data["findings"]) == 3
+        assert len(data["items"]) == 3
 
     async def test_pagination(self, mcp_db: FiligreeDB) -> None:
         _seed_findings(mcp_db)
         page1 = _parse(await call_tool("list_findings", {"limit": 2, "offset": 0}))
-        assert len(page1["findings"]) == 2
+        assert len(page1["items"]) == 2
         page2 = _parse(await call_tool("list_findings", {"limit": 2, "offset": 2}))
-        assert len(page2["findings"]) == 1
+        assert len(page2["items"]) == 1
 
 
 class TestUpdateFindingTool:
@@ -86,19 +87,19 @@ class TestUpdateFindingTool:
 
     async def test_update_not_found(self, mcp_db: FiligreeDB) -> None:
         data = _parse(await call_tool("update_finding", {"finding_id": "nonexistent", "status": "acknowledged"}))
-        assert data["code"] == "not_found"
+        assert data["code"] == ErrorCode.NOT_FOUND
 
     async def test_update_no_fields_rejected(self, mcp_db: FiligreeDB) -> None:
         """At least one of status or issue_id must be provided."""
         ids = _seed_findings(mcp_db)
         data = _parse(await call_tool("update_finding", {"finding_id": ids["obo"]}))
-        assert data["code"] == "validation_error"
+        assert data["code"] == ErrorCode.VALIDATION
         assert "at least one" in data["error"].lower()
 
     async def test_update_invalid_status_rejected(self, mcp_db: FiligreeDB) -> None:
         ids = _seed_findings(mcp_db)
         data = _parse(await call_tool("update_finding", {"finding_id": ids["obo"], "status": "banana"}))
-        assert data["code"] == "validation_error"
+        assert data["code"] == ErrorCode.VALIDATION
 
 
 class TestBatchUpdateFindingsTool:
@@ -110,8 +111,8 @@ class TestBatchUpdateFindingsTool:
                 {"finding_ids": [ids["obo"], ids["type"]], "status": "acknowledged"},
             )
         )
-        assert len(data["updated"]) == 2
-        assert data["errors"] == []
+        assert len(data["succeeded"]) == 2
+        assert data["failed"] == []
 
     async def test_batch_update_partial_failure(self, mcp_db: FiligreeDB) -> None:
         ids = _seed_findings(mcp_db)
@@ -121,18 +122,19 @@ class TestBatchUpdateFindingsTool:
                 {"finding_ids": [ids["obo"], "nonexistent"], "status": "acknowledged"},
             )
         )
-        assert len(data["updated"]) == 1
-        assert len(data["errors"]) == 1
-        assert data["errors"][0]["finding_id"] == "nonexistent"
+        assert len(data["succeeded"]) == 1
+        assert len(data["failed"]) == 1
+        assert data["failed"][0]["id"] == "nonexistent"
+        assert data["failed"][0]["code"] == ErrorCode.NOT_FOUND
 
     async def test_batch_update_empty_ids_rejected(self, mcp_db: FiligreeDB) -> None:
         data = _parse(await call_tool("batch_update_findings", {"finding_ids": [], "status": "acknowledged"}))
-        assert data["code"] == "validation_error"
+        assert data["code"] == ErrorCode.VALIDATION
 
     async def test_batch_update_missing_status_rejected(self, mcp_db: FiligreeDB) -> None:
         ids = _seed_findings(mcp_db)
         data = _parse(await call_tool("batch_update_findings", {"finding_ids": [ids["obo"]], "status": ""}))
-        assert data["code"] == "validation_error"
+        assert data["code"] == ErrorCode.VALIDATION
 
 
 class TestPromoteFindingTool:
@@ -149,11 +151,11 @@ class TestPromoteFindingTool:
 
     async def test_promote_not_found(self, mcp_db: FiligreeDB) -> None:
         data = _parse(await call_tool("promote_finding", {"finding_id": "nonexistent"}))
-        assert data["code"] == "not_found"
+        assert data["code"] == ErrorCode.NOT_FOUND
 
     async def test_promote_empty_id_rejected(self, mcp_db: FiligreeDB) -> None:
         data = _parse(await call_tool("promote_finding", {"finding_id": ""}))
-        assert data["code"] == "validation_error"
+        assert data["code"] == ErrorCode.VALIDATION
 
 
 class TestDismissFindingTool:
@@ -164,8 +166,8 @@ class TestDismissFindingTool:
 
     async def test_dismiss_not_found(self, mcp_db: FiligreeDB) -> None:
         data = _parse(await call_tool("dismiss_finding", {"finding_id": "nonexistent"}))
-        assert data["code"] == "not_found"
+        assert data["code"] == ErrorCode.NOT_FOUND
 
     async def test_dismiss_empty_id_rejected(self, mcp_db: FiligreeDB) -> None:
         data = _parse(await call_tool("dismiss_finding", {"finding_id": ""}))
-        assert data["code"] == "validation_error"
+        assert data["code"] == ErrorCode.VALIDATION

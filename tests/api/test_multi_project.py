@@ -10,6 +10,7 @@ from httpx import ASGITransport, AsyncClient
 import filigree.dashboard as dash_module
 from filigree.core import FiligreeDB
 from filigree.dashboard import ProjectStore, create_app
+from filigree.types.api import ErrorCode
 from tests.api.conftest import _create_project
 
 
@@ -76,7 +77,14 @@ class TestProjectStore:
         assert "bravo" in diff["removed"]
         assert len(project_store.list_projects()) == 1
 
-    def test_reload_closes_removed_project_db_handles(self, project_store: ProjectStore, tmp_path: Path) -> None:
+    def test_reload_evicts_removed_project_db_handles_close_deferred_to_close_all(
+        self, project_store: ProjectStore, tmp_path: Path
+    ) -> None:
+        """filigree-e43edbc067: reload evicts removed handles from ``_dbs`` but
+        does NOT close them synchronously — closing under a concurrent request
+        would race with that request's SQLite call. The single drain point is
+        ``close_all`` (process shutdown).
+        """
         import json
 
         bravo_db = project_store.get_db("bravo")
@@ -93,10 +101,22 @@ class TestProjectStore:
 
         assert "bravo" in diff["removed"]
         assert "bravo" not in project_store._dbs
-        assert bravo_db._conn is None
+        # Handle is parked for deferred close, not closed yet.
+        assert bravo_db in project_store._evicted_dbs
+        assert bravo_db._conn is not None
 
-    def test_reload_logs_db_close_error_at_warning(self, project_store: ProjectStore, tmp_path: Path) -> None:
-        """Bug filigree-191611: reload must log DB close errors at warning, not debug."""
+        # close_all is the drain point.
+        project_store.close_all()
+        assert bravo_db._conn is None
+        assert project_store._evicted_dbs == []
+
+    def test_close_all_logs_db_close_error_at_warning(self, project_store: ProjectStore, tmp_path: Path) -> None:
+        """Bug filigree-191611: close failures must log at WARNING (not DEBUG).
+
+        After filigree-e43edbc067 the actual close happens in ``close_all``,
+        not ``reload``. Drain reload's eviction first (via close_all) and
+        verify the warning surfaces from close_all.
+        """
         import json
         from unittest.mock import patch
 
@@ -108,7 +128,7 @@ class TestProjectStore:
         original_close = bravo_db.close
         bravo_db.close = lambda: (_ for _ in ()).throw(RuntimeError("close failed"))  # type: ignore[method-assign]
 
-        # Remove bravo from config so reload tries to close it
+        # Remove bravo from config so reload evicts it
         config_dir = tmp_path / ".config" / "filigree"
         existing = json.loads((config_dir / "server.json").read_text())
         to_remove = [k for k, v in existing["projects"].items() if v["prefix"] == "bravo"]
@@ -116,14 +136,20 @@ class TestProjectStore:
             del existing["projects"][k]
         (config_dir / "server.json").write_text(json.dumps(existing))
 
+        project_store.reload()
         with patch("filigree.dashboard.logger") as mock_logger:
-            project_store.reload()
+            project_store.close_all()
 
         mock_logger.warning.assert_called_once()
-        assert "bravo" in str(mock_logger.warning.call_args)
+        assert "evicted" in str(mock_logger.warning.call_args).lower()
         bravo_db.close = original_close  # type: ignore[method-assign]
 
     def test_reload_evicts_db_handle_when_project_path_changes(self, project_store: ProjectStore, tmp_path: Path) -> None:
+        """Path-changed projects evict the old handle from ``_dbs`` and the
+        next ``get_db`` opens the new path. Old handle stays alive on
+        ``_evicted_dbs`` until ``close_all`` (filigree-e43edbc067), so
+        an in-flight request that already holds it does not race a close.
+        """
         import json
 
         bravo_db = project_store.get_db("bravo")
@@ -145,11 +171,16 @@ class TestProjectStore:
         assert diff["added"] == []
         assert diff["removed"] == []
         assert "bravo" not in project_store._dbs
-        assert bravo_db._conn is None
+        # Old handle parked, NOT closed — concurrent readers can finish using it.
+        assert bravo_db in project_store._evicted_dbs
+        assert bravo_db._conn is not None
 
         reopened = project_store.get_db("bravo")
         assert reopened.db_path != old_db_path
         assert reopened.db_path.parent == replacement_dir
+
+        project_store.close_all()
+        assert bravo_db._conn is None
 
     def test_reload_corrupt_file_retains_state(self, project_store: ProjectStore, tmp_path: Path) -> None:
         config_dir = tmp_path / ".config" / "filigree"
@@ -217,6 +248,161 @@ class TestProjectStore:
         project_store.close_all()  # second call is a no-op
         assert project_store._dbs == {}
 
+    def test_get_db_concurrent_first_open_serialized(self, project_store: ProjectStore) -> None:
+        """filigree-732f6b31e4: concurrent first get_db() must open exactly once.
+
+        Without the internal lock, two threads each pass the cache-miss check
+        and each call ``FiligreeDB.from_filigree_dir`` (which migrates and
+        seeds-inserts), only the loser's handle gets cached, and the winner's
+        handle is leaked unclosed.
+        """
+        import threading
+        from unittest.mock import patch
+
+        original = FiligreeDB.from_filigree_dir
+        opened: list[FiligreeDB] = []
+        opened_lock = threading.Lock()
+        gate = threading.Event()
+
+        def slow_open(*args: object, **kwargs: object) -> FiligreeDB:
+            # Block until both threads are inside the open path so they race.
+            gate.wait(timeout=2.0)
+            db = original(*args, **kwargs)  # type: ignore[arg-type]
+            with opened_lock:
+                opened.append(db)
+            return db
+
+        results: list[FiligreeDB] = []
+        results_lock = threading.Lock()
+
+        def worker() -> None:
+            db = project_store.get_db("alpha")
+            with results_lock:
+                results.append(db)
+
+        with patch.object(FiligreeDB, "from_filigree_dir", side_effect=slow_open):
+            t1 = threading.Thread(target=worker)
+            t2 = threading.Thread(target=worker)
+            t1.start()
+            t2.start()
+            # Let both threads converge on the get_db call.
+            gate.set()
+            t1.join(timeout=5.0)
+            t2.join(timeout=5.0)
+
+        assert len(opened) == 1, f"from_filigree_dir called {len(opened)}x, expected 1 (race / leak)"
+        assert len(results) == 2
+        assert results[0] is results[1], "both threads must observe the same cached handle"
+        assert project_store._dbs["alpha"] is opened[0]
+
+    def test_get_db_honors_custom_db_path_from_conf(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """filigree-da8d5aba0f: ProjectStore must open the conf-declared db
+        path, not silently fall back to ``.filigree/filigree.db``.
+
+        Mirrors ``tests/test_doctor.py::TestDoctorHonorsConfDbPath``.
+        """
+        import json
+
+        from filigree.core import CONF_FILENAME, FILIGREE_DIR_NAME, write_conf
+
+        config_dir = tmp_path / ".config" / "filigree"
+        config_dir.mkdir(parents=True)
+        monkeypatch.setattr("filigree.server.SERVER_CONFIG_DIR", config_dir)
+        monkeypatch.setattr("filigree.server.SERVER_CONFIG_FILE", config_dir / "server.json")
+
+        # Build a project whose DB lives at storage/track.db (not .filigree/filigree.db).
+        project_root = tmp_path / "custom-db-proj"
+        filigree_dir = project_root / FILIGREE_DIR_NAME
+        filigree_dir.mkdir(parents=True)
+        from filigree.core import write_config
+
+        write_config(filigree_dir, {"prefix": "tst", "version": 1})
+        storage_dir = project_root / "storage"
+        storage_dir.mkdir()
+        custom_db = storage_dir / "track.db"
+        db = FiligreeDB(custom_db, prefix="tst", check_same_thread=False)
+        db.initialize()
+        db.create_issue("issue in custom-path db")
+        db.close()
+        write_conf(
+            project_root / CONF_FILENAME,
+            {"version": 1, "project_name": "tst", "prefix": "tst", "db": "storage/track.db"},
+        )
+
+        (config_dir / "server.json").write_text(json.dumps({"port": 8377, "projects": {str(filigree_dir): {"prefix": "tst"}}}))
+
+        store = ProjectStore()
+        store.load()
+        try:
+            opened = store.get_db("tst")
+            assert opened.db_path == custom_db, f"dashboard opened {opened.db_path}, expected conf-declared {custom_db}"
+            # Sanity: issue created via the custom-path DB is visible.
+            assert any(i.title == "issue in custom-path db" for i in opened.list_issues())
+        finally:
+            store.close_all()
+
+    def test_reload_atomic_under_concurrent_get_db(self, project_store: ProjectStore, tmp_path: Path) -> None:
+        """filigree-e43edbc067: a reader concurrent with reload() must observe
+        a consistent ``(_projects[key], _dbs[key])`` pair — never a torn view
+        where ``_projects[key]`` points at the new path while ``_dbs[key]`` is
+        the old handle (or vice versa). The handle returned must also be open.
+        """
+        import json
+        import threading
+
+        # Prime alpha and bravo so the handles exist.
+        project_store.get_db("alpha")
+        old_bravo = project_store.get_db("bravo")
+
+        replacement_dir = _create_project(tmp_path, "proj-bravo-new", "bravo", 5)
+        config_dir = tmp_path / ".config" / "filigree"
+        existing = json.loads((config_dir / "server.json").read_text())
+        old_bravo_paths = [k for k, v in existing["projects"].items() if v["prefix"] == "bravo"]
+        del existing["projects"][old_bravo_paths[0]]
+        existing["projects"][str(replacement_dir)] = {"prefix": "bravo"}
+        (config_dir / "server.json").write_text(json.dumps(existing))
+
+        observations: list[tuple[Path, Path]] = []  # (projects[bravo].path, db.db_path.parent)
+        barrier = threading.Barrier(2)
+
+        def reader() -> None:
+            barrier.wait()
+            for _ in range(50):
+                try:
+                    db = project_store.get_db("bravo")
+                except KeyError:
+                    continue
+                # Snapshot the projects entry observed-by-the-store at this moment.
+                projects_snapshot = {p["key"]: Path(p["path"]) for p in project_store.list_projects()}
+                if "bravo" in projects_snapshot:
+                    observations.append((projects_snapshot["bravo"], db.db_path.parent))
+                # The handle we just got must be open.
+                assert db._conn is not None, "get_db returned a closed handle"
+
+        def reloader() -> None:
+            barrier.wait()
+            for _ in range(20):
+                project_store.reload()
+
+        t1 = threading.Thread(target=reader)
+        t2 = threading.Thread(target=reloader)
+        t1.start()
+        t2.start()
+        t1.join(timeout=10.0)
+        t2.join(timeout=10.0)
+        assert not t1.is_alive(), "reader thread did not finish"
+        assert not t2.is_alive(), "reloader thread did not finish"
+
+        # Every observation must be consistent: projects[bravo] path matches the
+        # parent of the DB path the store handed back. No torn views.
+        for projects_path, db_parent in observations:
+            assert projects_path == db_parent, f"torn view: projects[bravo]={projects_path} but db_path.parent={db_parent}"
+
+        # Old handle must still be alive (parked on _evicted_dbs); close_all drains.
+        assert old_bravo._conn is not None
+        project_store.close_all()
+        assert old_bravo._conn is None
+
     def test_prefix_collision_raises(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         import json
 
@@ -260,12 +446,12 @@ class TestMultiProjectRouting:
         assert len(data) == 3  # 2 issues + auto-seeded Future release
 
     async def test_unknown_project_404(self, multi_client: AsyncClient) -> None:
-        """GET /api/p/nonexistent/issues returns structured 404, not raw stack trace."""
+        """GET /api/p/nonexistent/issues returns 2.0 envelope 404, not raw stack trace."""
         resp = await multi_client.get("/api/p/nonexistent/issues")
         assert resp.status_code == 404
         data = resp.json()
-        assert "detail" in data
-        assert "nonexistent" in data["detail"]
+        assert data.get("code") == "NOT_FOUND", f"wrong envelope: {data!r}"
+        assert "nonexistent" in data.get("error", ""), f"missing project key in error: {data!r}"
 
     async def test_empty_project_key_returns_404(self, multi_client: AsyncClient) -> None:
         """GET /api/p//issues with empty key does not match any route."""
@@ -277,7 +463,7 @@ class TestMultiProjectRouting:
         resp = await multi_client.get("/mcp/?project=nonexistent")
         assert resp.status_code == 404
         data = resp.json()
-        assert data["code"] == "project_not_found"
+        assert data["code"] == ErrorCode.NOT_FOUND
 
     async def test_stats_per_project(self, multi_client: AsyncClient) -> None:
         """Stats endpoint returns different prefixes per project."""
@@ -309,13 +495,13 @@ class TestMultiProjectRouting:
             app = create_app(server_mode=True)
             transport = ASGITransport(app=app)
             async with AsyncClient(transport=transport, base_url="http://test") as client:
-                # Verify multiple endpoints return 503 with correct detail message
+                # Verify multiple endpoints return 503 with 2.0 flat envelope
                 for endpoint in ("/api/issues", "/api/stats", "/api/graph"):
                     resp = await client.get(endpoint)
                     assert resp.status_code == 503, f"{endpoint} returned {resp.status_code}, expected 503"
                     body = resp.json()
-                    assert "detail" in body, f"{endpoint} missing 'detail' key"
-                    assert "No projects registered" in body["detail"]
+                    assert body.get("code") == "NOT_INITIALIZED", f"{endpoint} missing/wrong code: {body!r}"
+                    assert "No projects registered" in body.get("error", ""), f"{endpoint} missing 'error' text: {body!r}"
         finally:
             dash_module._project_store = None
 
@@ -338,6 +524,10 @@ class TestMultiProjectManagement:
         assert "status" in data
         assert "added" in data
         assert "removed" in data
+        # filigree-173e76a28a: frontend ui.js reads data.ok and data.projects.
+        assert data["ok"] is True
+        assert data["projects"] == 2
+        assert data["status"] == "ok"
 
     async def test_reload_endpoint_surfaces_errors(self, multi_client: AsyncClient, tmp_path: Path) -> None:
         config_dir = tmp_path / ".config" / "filigree"
@@ -345,9 +535,9 @@ class TestMultiProjectManagement:
 
         resp = await multi_client.post("/api/reload")
         assert resp.status_code == 409
-        err = resp.json()["error"]
-        assert err["code"] == "RELOAD_FAILED"
-        assert "reload" in err["message"].lower()
+        body = resp.json()
+        assert body["code"] == "IO"
+        assert "reload" in body["error"].lower()
 
     async def test_health_in_server_mode(self, multi_client: AsyncClient) -> None:
         resp = await multi_client.get("/api/health")

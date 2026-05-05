@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import json as json_mod
 import sys
+from typing import Any
 
 import click
 
 from filigree.cli_common import get_db, refresh_summary
+from filigree.issue_payloads import issue_to_public
+from filigree.types.api import ErrorCode
 
 
 @click.command("add-comment")
@@ -18,11 +21,22 @@ from filigree.cli_common import get_db, refresh_summary
 def add_comment(ctx: click.Context, issue_id: str, text: str, as_json: bool) -> None:
     """Add a comment to an issue."""
     with get_db() as db:
+        # Prefix check first — db.get_issue() ignores prefix on reads, so a
+        # foreign-project ID would otherwise be reported as NOT_FOUND, masking
+        # the WrongProjectError the write would raise. See filigree-f8861115a9.
+        try:
+            db._check_id_prefix(issue_id)
+        except ValueError as e:
+            if as_json:
+                click.echo(json_mod.dumps({"error": str(e), "code": ErrorCode.VALIDATION}))
+            else:
+                click.echo(f"Error: {e}", err=True)
+            sys.exit(1)
         try:
             db.get_issue(issue_id)
         except KeyError:
             if as_json:
-                click.echo(json_mod.dumps({"error": f"Not found: {issue_id}"}))
+                click.echo(json_mod.dumps({"error": f"Not found: {issue_id}", "code": ErrorCode.NOT_FOUND}))
             else:
                 click.echo(f"Not found: {issue_id}", err=True)
             sys.exit(1)
@@ -30,7 +44,7 @@ def add_comment(ctx: click.Context, issue_id: str, text: str, as_json: bool) -> 
             comment_id = db.add_comment(issue_id, text, author=ctx.obj["actor"])
         except ValueError as e:
             if as_json:
-                click.echo(json_mod.dumps({"error": str(e)}))
+                click.echo(json_mod.dumps({"error": str(e), "code": ErrorCode.VALIDATION}))
             else:
                 click.echo(f"Error: {e}", err=True)
             sys.exit(1)
@@ -38,6 +52,7 @@ def add_comment(ctx: click.Context, issue_id: str, text: str, as_json: bool) -> 
             click.echo(json_mod.dumps({"comment_id": comment_id, "issue_id": issue_id}))
         else:
             click.echo(f"Added comment {comment_id} to {issue_id}")
+        refresh_summary(db)
 
 
 @click.command("get-comments")
@@ -50,13 +65,15 @@ def get_comments(issue_id: str, as_json: bool) -> None:
             db.get_issue(issue_id)
         except KeyError:
             if as_json:
-                click.echo(json_mod.dumps({"error": f"Not found: {issue_id}"}))
+                click.echo(json_mod.dumps({"error": f"Not found: {issue_id}", "code": ErrorCode.NOT_FOUND}))
             else:
                 click.echo(f"Not found: {issue_id}", err=True)
             sys.exit(1)
         result = db.get_comments(issue_id)
         if as_json:
-            click.echo(json_mod.dumps(result, indent=2, default=str))
+            # Phase E1: list --json wraps items in ListResponse[T] ({items, has_more}).
+            # Mirrors mcp_tools/meta.py::_handle_get_comments which uses _list_response().
+            click.echo(json_mod.dumps({"items": list(result), "has_more": False}, indent=2, default=str))
             return
         if not result:
             click.echo("No comments.")
@@ -66,36 +83,45 @@ def get_comments(issue_id: str, as_json: bool) -> None:
 
 
 @click.command("add-label")
-@click.argument("issue_id")
 @click.argument("label_name")
+@click.argument("issue_id")
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON")
-def add_label(issue_id: str, label_name: str, as_json: bool) -> None:
-    """Add a label to an issue."""
+def add_label(label_name: str, issue_id: str, as_json: bool) -> None:
+    """Add a label to an issue. Usage: add-label <label> <issue_id>"""
     with get_db() as db:
+        # Prefix check before existence precheck — see filigree-f8861115a9.
+        try:
+            db._check_id_prefix(issue_id)
+        except ValueError as e:
+            if as_json:
+                click.echo(json_mod.dumps({"error": str(e), "code": ErrorCode.VALIDATION}))
+            else:
+                click.echo(f"Error: {e}", err=True)
+            sys.exit(1)
         try:
             db.get_issue(issue_id)
         except KeyError:
             if as_json:
-                click.echo(json_mod.dumps({"error": f"Not found: {issue_id}"}))
+                click.echo(json_mod.dumps({"error": f"Not found: {issue_id}", "code": ErrorCode.NOT_FOUND}))
             else:
                 click.echo(f"Not found: {issue_id}", err=True)
             sys.exit(1)
         try:
-            added = db.add_label(issue_id, label_name)
+            added, canonical = db.add_label(issue_id, label_name)
         except ValueError as e:
             if as_json:
-                click.echo(json_mod.dumps({"error": str(e)}))
+                click.echo(json_mod.dumps({"error": str(e), "code": ErrorCode.VALIDATION}))
             else:
                 click.echo(f"Error: {e}", err=True)
             sys.exit(1)
         status = "added" if added else "already_exists"
         if as_json:
-            click.echo(json_mod.dumps({"issue_id": issue_id, "label": label_name, "status": status}))
+            click.echo(json_mod.dumps({"issue_id": issue_id, "label": canonical, "status": status}))
         else:
             if added:
-                click.echo(f"Added label '{label_name}' to {issue_id}")
+                click.echo(f"Added label '{canonical}' to {issue_id}")
             else:
-                click.echo(f"Label '{label_name}' already on {issue_id}")
+                click.echo(f"Label '{canonical}' already on {issue_id}")
         refresh_summary(db)
 
 
@@ -106,23 +132,39 @@ def add_label(issue_id: str, label_name: str, as_json: bool) -> None:
 def remove_label(issue_id: str, label_name: str, as_json: bool) -> None:
     """Remove a label from an issue."""
     with get_db() as db:
+        # Prefix check before existence precheck — see filigree-f8861115a9.
+        try:
+            db._check_id_prefix(issue_id)
+        except ValueError as e:
+            if as_json:
+                click.echo(json_mod.dumps({"error": str(e), "code": ErrorCode.VALIDATION}))
+            else:
+                click.echo(f"Error: {e}", err=True)
+            sys.exit(1)
         try:
             db.get_issue(issue_id)
         except KeyError:
             if as_json:
-                click.echo(json_mod.dumps({"error": f"Not found: {issue_id}"}))
+                click.echo(json_mod.dumps({"error": f"Not found: {issue_id}", "code": ErrorCode.NOT_FOUND}))
             else:
                 click.echo(f"Not found: {issue_id}", err=True)
             sys.exit(1)
-        removed = db.remove_label(issue_id, label_name)
+        try:
+            removed, canonical = db.remove_label(issue_id, label_name)
+        except ValueError as e:
+            if as_json:
+                click.echo(json_mod.dumps({"error": str(e), "code": ErrorCode.VALIDATION}))
+            else:
+                click.echo(f"Error: {e}", err=True)
+            sys.exit(1)
         status = "removed" if removed else "not_found"
         if as_json:
-            click.echo(json_mod.dumps({"issue_id": issue_id, "label": label_name, "status": status}))
+            click.echo(json_mod.dumps({"issue_id": issue_id, "label": canonical, "status": status}))
         else:
             if removed:
-                click.echo(f"Removed label '{label_name}' from {issue_id}")
+                click.echo(f"Removed label '{canonical}' from {issue_id}")
             else:
-                click.echo(f"Label '{label_name}' not found on {issue_id}")
+                click.echo(f"Label '{canonical}' not found on {issue_id}")
         refresh_summary(db)
 
 
@@ -156,10 +198,18 @@ def stats(as_json: bool) -> None:
 def search(query: str, limit: int, offset: int, as_json: bool) -> None:
     """Search issues by title/description."""
     with get_db() as db:
-        issues = db.search_issues(query, limit=limit, offset=offset)
+        issues = db.search_issues(query, limit=limit + 1 if limit > 0 else limit, offset=offset)
+        has_more = limit > 0 and len(issues) > limit
+        issues = issues[:limit] if has_more else issues
 
         if as_json:
-            click.echo(json_mod.dumps([i.to_dict() for i in issues], indent=2, default=str))
+            search_payload: dict[str, Any] = {
+                "items": [{"issue_id": i.id, "title": i.title, "status": i.status, "priority": i.priority, "type": i.type} for i in issues],
+                "has_more": has_more,
+            }
+            if has_more:
+                search_payload["next_offset"] = offset + len(issues)
+            click.echo(json_mod.dumps(search_payload, indent=2, default=str))
             return
 
         for issue in issues:
@@ -167,24 +217,23 @@ def search(query: str, limit: int, offset: int, as_json: bool) -> None:
         click.echo(f"\n{len(issues)} results")
 
 
-@click.command("events")
-@click.argument("issue_id")
-@click.option("--limit", default=50, type=click.IntRange(min=0), help="Max events (default 50)")
-@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
-def events_cmd(issue_id: str, limit: int, as_json: bool) -> None:
-    """Get event history for a specific issue, newest first."""
+def _events_impl(issue_id: str, limit: int, as_json: bool) -> None:
     with get_db() as db:
         try:
-            event_list = db.get_issue_events(issue_id, limit=limit)
+            # Overfetch by 1 to detect has_more without an offset param.
+            raw_events = db.get_issue_events(issue_id, limit=limit + 1 if limit > 0 else limit)
         except KeyError:
             if as_json:
-                click.echo(json_mod.dumps({"error": f"Not found: {issue_id}"}))
+                click.echo(json_mod.dumps({"error": f"Not found: {issue_id}", "code": ErrorCode.NOT_FOUND}))
             else:
                 click.echo(f"Not found: {issue_id}", err=True)
             sys.exit(1)
 
+        has_more = limit > 0 and len(raw_events) > limit
+        event_list = raw_events[:limit] if has_more else raw_events
         if as_json:
-            click.echo(json_mod.dumps(event_list, indent=2, default=str))
+            events_payload: dict[str, Any] = {"items": event_list, "has_more": has_more}
+            click.echo(json_mod.dumps(events_payload, indent=2, default=str))
             return
 
         if not event_list:
@@ -202,12 +251,37 @@ def events_cmd(issue_id: str, limit: int, as_json: bool) -> None:
         click.echo(f"\n{len(event_list)} events")
 
 
+@click.command("events")
+@click.argument("issue_id")
+@click.option("--limit", default=50, type=click.IntRange(min=0), help="Max events (default 50)")
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+def events_cmd(issue_id: str, limit: int, as_json: bool) -> None:
+    """Get event history for a specific issue, newest first."""
+    _events_impl(issue_id, limit, as_json)
+
+
+@click.command("get-issue-events")
+@click.argument("issue_id")
+@click.option("--limit", default=50, type=click.IntRange(min=0), help="Max events (default 50)")
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+def get_issue_events_cmd(issue_id: str, limit: int, as_json: bool) -> None:
+    """Get event history for a specific issue, newest first. Alias for `events`."""
+    _events_impl(issue_id, limit, as_json)
+
+
 @click.command("batch-update")
 @click.argument("issue_ids", nargs=-1, required=True)
 @click.option("--status", default=None, help="New status")
 @click.option("--priority", "-p", default=None, type=click.IntRange(0, 4), help="New priority")
 @click.option("--assignee", default=None, help="New assignee")
 @click.option("--field", "-f", multiple=True, help="Custom field as key=value (repeatable)")
+@click.option(
+    "--detail",
+    "response_detail",
+    type=click.Choice(["slim", "full"]),
+    default="slim",
+    help="JSON shape for succeeded[]: 'slim' (default, 5-key SlimIssue) or 'full' (PublicIssue records).",
+)
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON")
 @click.pass_context
 def batch_update(
@@ -217,6 +291,7 @@ def batch_update(
     priority: int | None,
     assignee: str | None,
     field: tuple[str, ...],
+    response_detail: str,
     as_json: bool,
 ) -> None:
     """Update multiple issues with the same changes."""
@@ -226,7 +301,7 @@ def batch_update(
         for f in field:
             if "=" not in f:
                 if as_json:
-                    click.echo(json_mod.dumps({"error": f"Invalid field format: {f} (expected key=value)"}))
+                    click.echo(json_mod.dumps({"error": f"Invalid field format: {f} (expected key=value)", "code": ErrorCode.VALIDATION}))
                 else:
                     click.echo(f"Invalid field format: {f}", err=True)
                 sys.exit(1)
@@ -243,11 +318,17 @@ def batch_update(
             actor=ctx.obj["actor"],
         )
         if as_json:
+            if response_detail == "full":
+                succeeded_payload: list[dict[str, Any]] = [dict(issue_to_public(i)) for i in results]
+            else:
+                succeeded_payload = [
+                    {"issue_id": i.id, "title": i.title, "status": i.status, "priority": i.priority, "type": i.type} for i in results
+                ]
             click.echo(
                 json_mod.dumps(
                     {
-                        "updated": [i.to_dict() for i in results],
-                        "errors": errors,
+                        "succeeded": succeeded_payload,
+                        "failed": errors,
                     },
                     indent=2,
                     default=str,
@@ -270,11 +351,25 @@ def batch_update(
 @click.command("batch-close")
 @click.argument("issue_ids", nargs=-1, required=True)
 @click.option("--reason", default="", help="Close reason")
+@click.option(
+    "--detail",
+    "response_detail",
+    type=click.Choice(["slim", "full"]),
+    default="slim",
+    help="JSON shape for succeeded[]: 'slim' (default, 5-key SlimIssue) or 'full' (PublicIssue records). newly_unblocked stays slim.",
+)
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON")
 @click.pass_context
-def batch_close(ctx: click.Context, issue_ids: tuple[str, ...], reason: str, as_json: bool) -> None:
+def batch_close(
+    ctx: click.Context,
+    issue_ids: tuple[str, ...],
+    reason: str,
+    response_detail: str,
+    as_json: bool,
+) -> None:
     """Close multiple issues with per-item error reporting."""
     with get_db() as db:
+        ready_before_batch = {i.id for i in db.get_ready()} if as_json else set()
         closed, errors = db.batch_close(
             list(issue_ids),
             reason=reason,
@@ -282,16 +377,28 @@ def batch_close(ctx: click.Context, issue_ids: tuple[str, ...], reason: str, as_
         )
 
         if as_json:
-            click.echo(
-                json_mod.dumps(
-                    {
-                        "closed": [{"id": i.id, "title": i.title, "priority": i.priority, "type": i.type} for i in closed],
-                        "errors": errors,
-                    },
-                    indent=2,
-                    default=str,
-                )
-            )
+            ready_after_batch = db.get_ready() if as_json else []
+            newly_unblocked_batch = [
+                {"issue_id": i.id, "title": i.title, "status": i.status, "priority": i.priority, "type": i.type}
+                for i in ready_after_batch
+                if i.id not in ready_before_batch
+            ]
+            if response_detail == "full":
+                succeeded_payload: list[dict[str, Any]] = [dict(issue_to_public(i)) for i in closed]
+            else:
+                succeeded_payload = [
+                    {"issue_id": i.id, "title": i.title, "status": i.status, "priority": i.priority, "type": i.type} for i in closed
+                ]
+            # BatchResponse contract: newly_unblocked is NotRequired and must be
+            # OMITTED when empty (not emitted as []). Mirrors
+            # mcp_tools/issues.py::_handle_batch_close.
+            payload: dict[str, Any] = {
+                "succeeded": succeeded_payload,
+                "failed": errors,
+            }
+            if newly_unblocked_batch:
+                payload["newly_unblocked"] = newly_unblocked_batch
+            click.echo(json_mod.dumps(payload, indent=2, default=str))
         else:
             for issue in closed:
                 click.echo(f"  Closed {issue.id}: {issue.title}")
@@ -309,18 +416,29 @@ def batch_close(ctx: click.Context, issue_ids: tuple[str, ...], reason: str, as_
 @click.command("batch-add-label")
 @click.argument("label_name")
 @click.argument("issue_ids", nargs=-1, required=True)
+@click.option(
+    "--detail",
+    "response_detail",
+    type=click.Choice(["slim", "full"]),
+    default="slim",
+    help="JSON shape for succeeded[]: 'slim' (default, issue ID strings) or 'full' (PublicIssue records).",
+)
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON")
-def batch_add_label(label_name: str, issue_ids: tuple[str, ...], as_json: bool) -> None:
+def batch_add_label(label_name: str, issue_ids: tuple[str, ...], response_detail: str, as_json: bool) -> None:
     """Add the same label to multiple issues."""
     with get_db() as db:
         labeled, errors = db.batch_add_label(list(issue_ids), label=label_name)
 
         if as_json:
+            if response_detail == "full":
+                succeeded_payload: list[Any] = [dict(issue_to_public(db.get_issue(row["id"]))) for row in labeled]
+            else:
+                succeeded_payload = [row["id"] for row in labeled]
             click.echo(
                 json_mod.dumps(
                     {
-                        "labeled": labeled,
-                        "errors": errors,
+                        "succeeded": succeeded_payload,
+                        "failed": errors,
                     },
                     indent=2,
                     default=str,
@@ -343,9 +461,22 @@ def batch_add_label(label_name: str, issue_ids: tuple[str, ...], as_json: bool) 
 @click.command("batch-add-comment")
 @click.argument("text")
 @click.argument("issue_ids", nargs=-1, required=True)
+@click.option(
+    "--detail",
+    "response_detail",
+    type=click.Choice(["slim", "full"]),
+    default="slim",
+    help="JSON shape for succeeded[]: 'slim' (default, issue ID strings) or 'full' (PublicIssue records of the commented-on issues).",
+)
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON")
 @click.pass_context
-def batch_add_comment(ctx: click.Context, text: str, issue_ids: tuple[str, ...], as_json: bool) -> None:
+def batch_add_comment(
+    ctx: click.Context,
+    text: str,
+    issue_ids: tuple[str, ...],
+    response_detail: str,
+    as_json: bool,
+) -> None:
     """Add the same comment to multiple issues."""
     with get_db() as db:
         commented, errors = db.batch_add_comment(
@@ -355,11 +486,15 @@ def batch_add_comment(ctx: click.Context, text: str, issue_ids: tuple[str, ...],
         )
 
         if as_json:
+            if response_detail == "full":
+                succeeded_payload: list[Any] = [dict(issue_to_public(db.get_issue(str(row["id"])))) for row in commented]
+            else:
+                succeeded_payload = [str(row["id"]) for row in commented]
             click.echo(
                 json_mod.dumps(
                     {
-                        "commented": commented,
-                        "errors": errors,
+                        "succeeded": succeeded_payload,
+                        "failed": errors,
                     },
                     indent=2,
                     default=str,
@@ -376,16 +511,12 @@ def batch_add_comment(ctx: click.Context, text: str, issue_ids: tuple[str, ...],
             sys.exit(1)
 
 
-@click.command("labels")
-@click.option("--namespace", "-n", default=None, help="Filter to a namespace")
-@click.option("--top", default=10, type=int, help="Max labels per namespace (0 for unlimited)")
-@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
-def list_labels_cmd(namespace: str | None, top: int, as_json: bool) -> None:
-    """List all labels grouped by namespace with counts."""
+def _list_labels_impl(namespace: str | None, top: int, as_json: bool) -> None:
     with get_db() as db:
         result = db.list_labels(namespace=namespace, top=top)
         if as_json:
-            click.echo(json_mod.dumps(result, indent=2))
+            items = [{"namespace": ns, **ns_data} for ns, ns_data in result["namespaces"].items()]
+            click.echo(json_mod.dumps({"items": items, "has_more": False}, indent=2))
             return
         for ns_name, ns_data in sorted(result["namespaces"].items()):
             writable = "rw" if ns_data["writable"] else "ro"
@@ -394,10 +525,25 @@ def list_labels_cmd(namespace: str | None, top: int, as_json: bool) -> None:
                 click.echo(f"  {item['label']}  ({item['count']})")
 
 
-@click.command("taxonomy")
+@click.command("labels")
+@click.option("--namespace", "-n", default=None, help="Filter to a namespace")
+@click.option("--top", default=10, type=click.IntRange(min=0), help="Max labels per namespace (0 for unlimited)")
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON")
-def taxonomy_cmd(as_json: bool) -> None:
-    """Show the label taxonomy vocabulary."""
+def list_labels_cmd(namespace: str | None, top: int, as_json: bool) -> None:
+    """List all labels grouped by namespace with counts."""
+    _list_labels_impl(namespace, top, as_json)
+
+
+@click.command("list-labels")
+@click.option("--namespace", "-n", default=None, help="Filter to a namespace")
+@click.option("--top", default=10, type=click.IntRange(min=0), help="Max labels per namespace (0 for unlimited)")
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+def list_labels_alias_cmd(namespace: str | None, top: int, as_json: bool) -> None:
+    """List all labels grouped by namespace with counts. Alias for `labels`."""
+    _list_labels_impl(namespace, top, as_json)
+
+
+def _taxonomy_impl(as_json: bool) -> None:
     with get_db() as db:
         result = db.get_label_taxonomy()
         if as_json:
@@ -413,6 +559,20 @@ def taxonomy_cmd(as_json: bool) -> None:
                     click.echo(f"  {ns}: {info['description']}  [{', '.join(str(v) for v in vals)}]")
 
 
+@click.command("taxonomy")
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+def taxonomy_cmd(as_json: bool) -> None:
+    """Show the label taxonomy vocabulary."""
+    _taxonomy_impl(as_json)
+
+
+@click.command("get-label-taxonomy")
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+def get_label_taxonomy_cmd(as_json: bool) -> None:
+    """Show the label taxonomy vocabulary. Alias for `taxonomy`."""
+    _taxonomy_impl(as_json)
+
+
 def register(cli: click.Group) -> None:
     """Register metadata commands with the CLI group."""
     cli.add_command(add_comment)
@@ -420,10 +580,13 @@ def register(cli: click.Group) -> None:
     cli.add_command(add_label)
     cli.add_command(remove_label)
     cli.add_command(list_labels_cmd)
+    cli.add_command(list_labels_alias_cmd)
     cli.add_command(taxonomy_cmd)
+    cli.add_command(get_label_taxonomy_cmd)
     cli.add_command(stats)
     cli.add_command(search)
     cli.add_command(events_cmd)
+    cli.add_command(get_issue_events_cmd)
     cli.add_command(batch_update)
     cli.add_command(batch_close)
     cli.add_command(batch_add_label)

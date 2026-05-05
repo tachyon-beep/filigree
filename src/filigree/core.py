@@ -15,6 +15,7 @@ import os
 import shutil
 import sqlite3
 import sys
+import tempfile
 import uuid as _uuid
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -82,21 +83,242 @@ __all__ = [
 FILIGREE_DIR_NAME = ".filigree"
 DB_FILENAME = "filigree.db"
 CONFIG_FILENAME = "config.json"
+CONF_FILENAME = ".filigree.conf"
 SUMMARY_FILENAME = "context.md"
+
+# Schema version for .filigree.conf — bump if the file format changes incompatibly.
+CONF_VERSION = 1
+
+
+def read_schema_version(conn: sqlite3.Connection) -> int:
+    """Return the on-disk schema version for *conn*.
+
+    Single source of truth for "what schema version is this DB?". Called by
+    :meth:`FiligreeDB.get_schema_version` and by ``filigree doctor``'s raw
+    ``sqlite3.connect`` path so a future migration that changes how the
+    version is stored only has to update this one function — the alternative
+    (each surface inlining ``PRAGMA user_version``) silently drifts.
+    """
+    result: int = conn.execute("PRAGMA user_version").fetchone()[0]
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Exceptions
+# ---------------------------------------------------------------------------
+
+
+class ProjectNotInitialisedError(FileNotFoundError):
+    """Raised when no ``.filigree.conf`` is found anywhere up to the filesystem root.
+
+    Inherits from FileNotFoundError so existing call sites that catch
+    FileNotFoundError still work during the v2.0 transition.
+    """
+
+
+class ForeignDatabaseError(ProjectNotInitialisedError):
+    """Walk-up discovery crossed a ``.git/`` boundary before finding an anchor.
+
+    The current working directory sits inside a git repository that has no
+    ``.filigree.conf`` (or legacy ``.filigree/``) of its own, but an ancestor
+    *above* the git root does. Silently opening that ancestor's database
+    would dump tickets into a foreign project, so discovery refuses.
+
+    Subclasses :class:`ProjectNotInitialisedError` so generic "not set up"
+    handlers still work; catch :class:`ForeignDatabaseError` specifically
+    when you want to surface the richer message (e.g. in the MCP server or
+    ``filigree doctor``).
+    """
+
+    def __init__(self, *, cwd: Path, found_anchor: Path, git_boundary: Path) -> None:
+        self.cwd = cwd
+        self.found_anchor = found_anchor
+        self.git_boundary = git_boundary
+        msg = (
+            "Refusing to latch onto another project's filigree database.\n"
+            "\n"
+            f"  Current directory: {cwd}\n"
+            f"  Nearest anchor:    {found_anchor}\n"
+            f"  Git boundary at:   {git_boundary}\n"
+            "\n"
+            "The nearest filigree anchor sits above a .git/ boundary, so it "
+            "belongs to a different project. To track work here, install "
+            "filigree in this project:\n"
+            "\n"
+            f"  cd {git_boundary} && filigree init\n"
+            "\n"
+            "If MCP is configured, ask the user to restart the MCP server "
+            "after `filigree init` so it picks up the new project's "
+            "database. To operate on the outer project intentionally, `cd` "
+            "above the git boundary."
+        )
+        super().__init__(msg)
+
+
+class WrongProjectError(ValueError):
+    """Raised when an issue ID's prefix doesn't match the open DB's prefix.
+
+    Indicates the caller is operating on a ticket that belongs to a different
+    project. Common cause: an agent climbed into a parent's database and is
+    trying to act on an ID copy-pasted from somewhere else.
+    """
+
+
+def find_filigree_conf(start: Path | None = None) -> Path:
+    """Walk up from *start* (default cwd) looking for ``.filigree.conf``.
+
+    Strict and read-only: returns the path to an existing conf file or raises.
+    Does **not** auto-migrate legacy installs — that would require a write,
+    which makes inspection-only commands fail on read-only mounts. For
+    discovery that tolerates legacy installs without writing, use
+    :func:`find_filigree_anchor`.
+
+    Nested ``.filigree.conf`` files override their parents — first hit wins.
+
+    Raises:
+        ProjectNotInitialisedError: if no ``.filigree.conf`` is found in
+            *start* or any ancestor up to ``/``. The error message points at
+            ``filigree init`` and ``filigree doctor``.
+        ForeignDatabaseError: if the walk-up passes a ``.git/`` boundary
+            before finding ``.filigree.conf`` — that conf belongs to a
+            different project and silently opening it would write to the
+            wrong database.
+    """
+    current = (start or Path.cwd()).resolve()
+    git_boundary: Path | None = None
+    for parent in [current, *current.parents]:
+        conf = parent / CONF_FILENAME
+        if conf.is_file():
+            if git_boundary is not None:
+                raise ForeignDatabaseError(cwd=current, found_anchor=conf, git_boundary=git_boundary)
+            return conf
+        if git_boundary is None and (parent / ".git").exists():
+            git_boundary = parent
+    msg = (
+        f"No {CONF_FILENAME} found in {current} or any parent directory. "
+        f"Run `filigree init` here to create one, or `filigree doctor` to diagnose."
+    )
+    raise ProjectNotInitialisedError(msg)
+
+
+def find_filigree_anchor(start: Path | None = None) -> tuple[Path, Path | None]:
+    """Walk up from *start* for either a v2.0 conf or a legacy ``.filigree/`` dir.
+
+    Returns a ``(project_root, conf_path)`` pair. ``conf_path`` is the path
+    to the resolved ``.filigree.conf`` file when one exists, or ``None`` for a
+    legacy install (``.filigree/`` present, no conf yet). The walk is
+    closer-first: a child anchor wins over an ancestor regardless of type.
+
+    Pure read — never writes. Use this when discovery must work on read-only
+    mounts (inspection commands, MCP startup, ``filigree doctor``). To force
+    a backfill, run ``filigree init`` (or another explicit write path) on
+    a writable copy of the project.
+
+    Raises:
+        ProjectNotInitialisedError: if neither anchor is found anywhere up
+            to ``/``.
+        ForeignDatabaseError: if the walk-up passes a ``.git/`` boundary
+            before finding any anchor — the ancestor anchor belongs to a
+            different project and silently opening it would write to the
+            wrong database.
+    """
+    current = (start or Path.cwd()).resolve()
+    git_boundary: Path | None = None
+    for parent in [current, *current.parents]:
+        conf = parent / CONF_FILENAME
+        if conf.is_file():
+            if git_boundary is not None:
+                raise ForeignDatabaseError(cwd=current, found_anchor=conf, git_boundary=git_boundary)
+            return parent, conf
+        legacy_dir = parent / FILIGREE_DIR_NAME
+        if legacy_dir.is_dir():
+            if git_boundary is not None:
+                raise ForeignDatabaseError(cwd=current, found_anchor=legacy_dir, git_boundary=git_boundary)
+            return parent, None
+        if git_boundary is None and (parent / ".git").exists():
+            git_boundary = parent
+    msg = (
+        f"No {CONF_FILENAME} or {FILIGREE_DIR_NAME}/ found in {current} or any parent directory. "
+        f"Run `filigree init` here to create one, or `filigree doctor` to diagnose."
+    )
+    raise ProjectNotInitialisedError(msg)
 
 
 def find_filigree_root(start: Path | None = None) -> Path:
-    """Walk up from start (default cwd) looking for .filigree/ directory.
+    """Return the project's ``.filigree/`` directory (back-compat helper).
 
-    Returns the .filigree/ directory path (not the project root).
+    Locates the project via :func:`find_filigree_conf` (the v2.0 anchor) and
+    returns the ``.filigree/`` directory next to that conf. The contract is
+    "the literal ``.filigree/`` directory" — every caller in this codebase
+    concatenates ``SUMMARY_FILENAME``, ``ephemeral.pid``, or ``DB_FILENAME``
+    onto the result, or does ``.parent`` to derive the project root, so the
+    return value must point at ``conf.parent / .filigree``, regardless of any
+    custom ``db`` location declared in the conf.
+
+    The conf's ``db`` field can still relocate the database itself; callers
+    that need the actual DB path should use :meth:`FiligreeDB.from_conf`.
+
+    Resolves through :func:`find_filigree_anchor` so legacy installs (which
+    have no conf yet) are still discoverable without writing.
+
+    New code should prefer :func:`find_filigree_anchor` plus
+    :meth:`FiligreeDB.from_conf` / :meth:`FiligreeDB.from_filigree_dir` over
+    this helper.
     """
-    current = (start or Path.cwd()).resolve()
-    for parent in [current, *current.parents]:
-        candidate = parent / FILIGREE_DIR_NAME
-        if candidate.is_dir():
-            return candidate
-    msg = f"No {FILIGREE_DIR_NAME}/ directory found in {current} or any parent"
-    raise FileNotFoundError(msg)
+    project_root, _conf_path = find_filigree_anchor(start)
+    return project_root / FILIGREE_DIR_NAME
+
+
+def read_conf(conf_path: Path) -> dict[str, Any]:
+    """Read and validate a ``.filigree.conf`` file.
+
+    Returns the parsed JSON dict. Raises ``ValueError`` if the file is not a
+    JSON object, is missing required keys (``prefix``, ``db``), or contains
+    malformed values for ``prefix``, ``db``, or ``enabled_packs``.
+
+    Type validation here ensures downstream callers (notably
+    :meth:`FiligreeDB.from_conf`, which evaluates ``Path / data["db"]``) get
+    a well-formed dict instead of raw ``TypeError`` from the wrong scalar
+    type.
+    """
+    raw: Any = json.loads(conf_path.read_text())
+    if not isinstance(raw, dict):
+        msg = f"{conf_path}: must be a JSON object, got {type(raw).__name__}"
+        raise ValueError(msg)
+    missing = [k for k in ("prefix", "db") if k not in raw]
+    if missing:
+        msg = f"{conf_path}: missing required keys: {', '.join(missing)}"
+        raise ValueError(msg)
+    for key in ("prefix", "db"):
+        value = raw[key]
+        if not isinstance(value, str) or not value:
+            msg = f"{conf_path}: {key!r} must be a non-empty string, got {type(value).__name__}: {value!r}"
+            raise ValueError(msg)
+    if "enabled_packs" in raw:
+        packs = raw["enabled_packs"]
+        if not isinstance(packs, list) or not all(isinstance(p, str) for p in packs):
+            msg = f"{conf_path}: 'enabled_packs' must be a list of strings, got {type(packs).__name__}: {packs!r}"
+            raise ValueError(msg)
+    # Trust boundary: a checked-in .filigree.conf must not be able to redirect
+    # the database to an arbitrary filesystem path. Reject absolute paths and
+    # any path whose resolved location escapes the conf's directory.
+    db_value: str = raw["db"]
+    if Path(db_value).is_absolute():
+        msg = f"{conf_path}: 'db' must be a project-relative path, got absolute: {db_value!r}"
+        raise ValueError(msg)
+    project_root = conf_path.parent.resolve()
+    db_resolved = (conf_path.parent / db_value).resolve()
+    try:
+        db_resolved.relative_to(project_root)
+    except ValueError as exc:
+        msg = f"{conf_path}: 'db' must resolve under the project root {project_root}, got {db_resolved}"
+        raise ValueError(msg) from exc
+    return raw
+
+
+def write_conf(conf_path: Path, data: dict[str, Any]) -> None:
+    """Write a ``.filigree.conf`` file atomically."""
+    write_atomic(conf_path, json.dumps(data, indent=2) + "\n")
 
 
 def read_config(filigree_dir: Path) -> ProjectConfig:
@@ -128,6 +350,28 @@ def write_config(filigree_dir: Path, config: dict[str, Any] | ProjectConfig) -> 
     write_atomic(config_path, json.dumps(config, indent=2) + "\n")
 
 
+def _raw_config_prefix(config_path: Path) -> str | None:
+    """Return the ``prefix`` key from config.json as it was literally written.
+
+    Unlike :func:`read_config`, this does not backfill defaults. Returns
+    ``None`` when the file is missing, unreadable, not a JSON object, or
+    lacks a non-empty string ``prefix`` — letting callers distinguish
+    "user declared this prefix" from "read_config made one up".
+    """
+    if not config_path.exists():
+        return None
+    try:
+        raw: Any = json.loads(config_path.read_text())
+    except (json.JSONDecodeError, OSError):
+        return None
+    if not isinstance(raw, dict):
+        return None
+    value = raw.get("prefix")
+    if isinstance(value, str) and value:
+        return value
+    return None
+
+
 VALID_MODES: frozenset[str] = frozenset({"ethereal", "server"})
 
 
@@ -137,8 +381,8 @@ def get_mode(filigree_dir: Path) -> str:
     Raises ValueError if the config contains an explicit but invalid mode string.
     """
     config = read_config(filigree_dir)
-    mode: str = config.get("mode", "ethereal")
-    if mode not in VALID_MODES:
+    mode: Any = config.get("mode", "ethereal")
+    if not isinstance(mode, str) or mode not in VALID_MODES:
         raise ValueError(f"Unknown mode {mode!r} in config. Valid modes: {sorted(VALID_MODES)}")
     return mode
 
@@ -176,10 +420,22 @@ def find_filigree_command() -> list[str]:
 
 
 def write_atomic(path: Path, content: str) -> None:
-    """Write content to path atomically via temp file + os.replace()."""
-    tmp = path.with_suffix(path.suffix + ".tmp")
+    """Write content to path atomically via temp file + os.replace().
+
+    Uses a unique per-writer temp file in ``path.parent`` so that concurrent
+    writers to the same target cannot collide on a shared staging path.
+    """
+    fd, tmp_name = tempfile.mkstemp(dir=path.parent, prefix=path.name + ".", suffix=".tmp")
+    tmp = Path(tmp_name)
     try:
-        tmp.write_text(content, encoding="utf-8")
+        try:
+            f = os.fdopen(fd, "w", encoding="utf-8")
+        except BaseException:
+            with contextlib.suppress(OSError):
+                os.close(fd)
+            raise
+        with f:
+            f.write(content)
         os.replace(tmp, path)
     except BaseException:
         with contextlib.suppress(OSError):
@@ -233,9 +489,15 @@ class FiligreeDB(FilesMixin, ScansMixin, IssuesMixin, EventsMixin, WorkflowMixin
         enabled_packs: list[str] | None = None,
         template_registry: TemplateRegistry | None = None,
         check_same_thread: bool = True,
+        project_root: str | Path | None = None,
     ) -> None:
         self.db_path = Path(db_path)
         self.prefix = prefix
+        # ``project_root`` anchors filesystem paths stored relative to the
+        # project (e.g. scanner log files). None means "derive from db_path",
+        # which only works for the legacy .filigree/filigree.db layout;
+        # v2.0 conf installs may place the DB anywhere and must set this.
+        self.project_root: Path | None = Path(project_root) if project_root is not None else None
         if enabled_packs is not None and isinstance(enabled_packs, str):
             msg = f"enabled_packs must be a list of strings, not a bare string: {enabled_packs!r}"
             raise TypeError(msg)
@@ -247,22 +509,77 @@ class FiligreeDB(FilesMixin, ScansMixin, IssuesMixin, EventsMixin, WorkflowMixin
 
     @classmethod
     def from_filigree_dir(cls, filigree_dir: Path, *, check_same_thread: bool = True) -> FiligreeDB:
-        """Create a FiligreeDB from an existing ``.filigree/`` directory."""
+        """Create a FiligreeDB from an existing ``.filigree/`` directory.
+
+        When ``config.json`` is missing or omits the ``prefix`` key, fall back
+        to the project directory's own name rather than the hardcoded
+        ``"filigree"`` default. This mirrors what ``filigree init`` writes
+        (prefix defaults to ``cwd.name``) and prevents a legacy install from
+        silently opening with the wrong identity — every write to its own
+        pre-existing issues would otherwise raise ``WrongProjectError``.
+        """
         config = read_config(filigree_dir)
+        # ``read_config`` backfills a "filigree" prefix into its return value
+        # for missing/partial configs, so inspect the raw JSON to detect
+        # whether the user ever declared one explicitly.
+        configured_prefix = _raw_config_prefix(filigree_dir / CONFIG_FILENAME)
+        prefix = configured_prefix if configured_prefix is not None else (filigree_dir.parent.name or "filigree")
         db = cls(
             filigree_dir / DB_FILENAME,
-            prefix=config.get("prefix", "filigree"),
+            prefix=prefix,
             enabled_packs=config.get("enabled_packs"),
             check_same_thread=check_same_thread,
+            project_root=filigree_dir.resolve().parent,
         )
-        db.initialize()
+        try:
+            db.initialize()
+        except BaseException:
+            # ``initialize()`` opens the connection lazily on its first line
+            # (``get_schema_version()`` → ``self.conn``). If it raises before
+            # returning, the caller never receives ``db`` and so cannot close
+            # the connection — close it here to avoid leaking the handle and
+            # its WAL/SHM sidecar files.
+            db.close()
+            raise
+        return db
+
+    @classmethod
+    def from_conf(cls, conf_path: Path, *, check_same_thread: bool = True) -> FiligreeDB:
+        """Create a FiligreeDB from a ``.filigree.conf`` anchor file (v2.0).
+
+        Resolves the DB path relative to the conf file's directory.
+        """
+        data = read_conf(conf_path)
+        db_path = (conf_path.parent / data["db"]).resolve()
+        prefix: str = data["prefix"]
+        enabled_packs = data.get("enabled_packs")
+        db = cls(
+            db_path,
+            prefix=prefix,
+            enabled_packs=enabled_packs,
+            check_same_thread=check_same_thread,
+            project_root=conf_path.resolve().parent,
+        )
+        try:
+            db.initialize()
+        except BaseException:
+            db.close()
+            raise
         return db
 
     @classmethod
     def from_project(cls, project_path: Path | None = None) -> FiligreeDB:
-        """Create a FiligreeDB by discovering .filigree/ from project_path (or cwd)."""
-        filigree_dir = find_filigree_root(project_path)
-        return cls.from_filigree_dir(filigree_dir)
+        """Create a FiligreeDB by discovering the project anchor from *project_path* (or cwd).
+
+        Walks up via :func:`find_filigree_anchor` so legacy installs (a bare
+        ``.filigree/`` directory with no conf yet) still open without requiring
+        write access during discovery. Returns the v2.0 conf-based DB if a
+        conf is present, otherwise falls back to ``from_filigree_dir``.
+        """
+        project_root, conf_path = find_filigree_anchor(project_path)
+        if conf_path is not None:
+            return cls.from_conf(conf_path)
+        return cls.from_filigree_dir(project_root / FILIGREE_DIR_NAME)
 
     def __enter__(self) -> FiligreeDB:
         return self
@@ -297,6 +614,33 @@ class FiligreeDB(FilesMixin, ScansMixin, IssuesMixin, EventsMixin, WorkflowMixin
             self._conn.execute("PRAGMA busy_timeout=5000")
         return self._conn
 
+    def _check_id_prefix(self, issue_id: str) -> None:
+        """Reject IDs whose prefix doesn't match this DB's prefix.
+
+        Catches cross-project ID confusion — e.g. ``update_issue("alpha-xyz")``
+        against a DB with ``prefix="beefdata"``. IDs without a recognisable
+        ``<prefix>-<infix>`` structure are passed through; the not-found path
+        handles them as before.
+
+        Prefixes may contain hyphens (``filigree init`` defaults the prefix to
+        ``cwd.name``, which is unconstrained), so the match is anchored on
+        ``startswith(prefix + "-")`` rather than splitting the ID.
+        """
+        if "-" not in issue_id:
+            return
+        if issue_id.startswith(self.prefix + "-"):
+            return
+        # Strip the trailing ``-<10-hex>`` infix to derive a readable label
+        # for the error message; rsplit handles hyphenated foreign prefixes too.
+        candidate_prefix = issue_id.rsplit("-", 1)[0]
+        msg = (
+            f"Issue ID {issue_id!r} belongs to project {candidate_prefix!r}, "
+            f"but this database is for project {self.prefix!r}. "
+            f"You may be in the wrong project directory, or you copied an ID "
+            f"from another project's docs."
+        )
+        raise WrongProjectError(msg)
+
     def initialize(self) -> None:
         """Create tables (if new) or migrate (if existing), then seed templates.
 
@@ -311,11 +655,12 @@ class FiligreeDB(FilesMixin, ScansMixin, IssuesMixin, EventsMixin, WorkflowMixin
             self.conn.executescript(SCHEMA_SQL)
             self.conn.execute(f"PRAGMA user_version = {CURRENT_SCHEMA_VERSION}")
         elif current_version > CURRENT_SCHEMA_VERSION:
-            msg = (
-                f"Database schema v{current_version} is newer than this version of "
-                f"filigree (expects v{CURRENT_SCHEMA_VERSION}). Downgrade is not supported."
+            from filigree.types.api import SchemaVersionMismatchError
+
+            raise SchemaVersionMismatchError(
+                installed=CURRENT_SCHEMA_VERSION,
+                database=current_version,
             )
-            raise ValueError(msg)
         elif current_version < CURRENT_SCHEMA_VERSION:
             # Existing database — apply pending migrations
             from filigree.migrations import apply_pending_migrations
@@ -340,8 +685,12 @@ class FiligreeDB(FilesMixin, ScansMixin, IssuesMixin, EventsMixin, WorkflowMixin
             logger.warning("Release pack enabled but 'release' type not registered — skipping Future release seed")
             return
 
+        # Guard json_extract with json_valid: a single corrupt fields row would
+        # otherwise raise ``OperationalError: malformed JSON`` and abort init.
+        # Migrations already tolerate corrupt fields elsewhere; the
+        # Future-singleton check must do the same.
         existing = self.conn.execute(
-            "SELECT id FROM issues WHERE type = 'release' AND json_extract(fields, '$.version') = 'Future'"
+            "SELECT id FROM issues WHERE type = 'release' AND json_valid(fields) AND json_extract(fields, '$.version') = 'Future'"
         ).fetchone()
         if existing is not None:
             return
@@ -359,8 +708,7 @@ class FiligreeDB(FilesMixin, ScansMixin, IssuesMixin, EventsMixin, WorkflowMixin
 
     def get_schema_version(self) -> int:
         """Return the current schema version from PRAGMA user_version."""
-        result: int = self.conn.execute("PRAGMA user_version").fetchone()[0]
-        return result
+        return read_schema_version(self.conn)
 
     def reconnect(self, *, check_same_thread: bool = True) -> None:
         """Close the current connection so the next access reopens it with a new ``check_same_thread`` setting.

@@ -16,6 +16,7 @@ import importlib.metadata
 import importlib.resources
 import os
 import shutil
+import stat
 import tempfile
 from pathlib import Path
 
@@ -37,6 +38,12 @@ from filigree.install_support import (
 from filigree.install_support.doctor import (
     CheckResult,
     run_doctor,
+)
+from filigree.install_support.gitignore import (
+    FILIGREE_IGNORE_RULES as _FILIGREE_IGNORE_RULES,  # noqa: F401  (back-compat re-export)
+)
+from filigree.install_support.gitignore import (
+    has_active_filigree_ignore as _has_active_filigree_ignore,
 )
 from filigree.install_support.hooks import (
     ENSURE_DASHBOARD_COMMAND,
@@ -134,11 +141,30 @@ FILIGREE_INSTRUCTIONS = _build_instructions_block()
 
 
 def _atomic_write_text(path: Path, content: str) -> None:
-    """Write *content* to *path* atomically via write-to-temp + rename."""
+    """Write *content* to *path* atomically via write-to-temp + rename.
+
+    Preserves the destination's permissions when it already exists.
+    `tempfile.mkstemp()` creates files with mode 0o600; without an explicit
+    chmod, the rename would leak that mode onto the destination, making
+    user-visible files (CLAUDE.md, .gitignore, etc.) owner-only.
+    """
+    existing_mode: int | None
+    try:
+        existing_mode = stat.S_IMODE(path.stat().st_mode)
+    except FileNotFoundError:
+        existing_mode = None
+
     fd, tmp = tempfile.mkstemp(dir=path.parent, suffix=".tmp", prefix=path.name)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             f.write(content)
+        if existing_mode is not None:
+            os.chmod(tmp, existing_mode)
+        else:
+            # New file: respect process umask instead of mkstemp's 0o600.
+            umask = os.umask(0)
+            os.umask(umask)
+            os.chmod(tmp, 0o666 & ~umask)
         os.replace(tmp, path)
     except BaseException:
         Path(tmp).unlink(missing_ok=True)
@@ -167,16 +193,14 @@ def inject_instructions(file_path: Path) -> tuple[bool, str]:
                 end = end_pos + len(_END_MARKER)
                 content = content[:start] + FILIGREE_INSTRUCTIONS + content[end:]
             else:
-                # Malformed — end marker missing. Only replace the opening
-                # marker line to avoid truncating user content that may
-                # follow the (now-corrupted) filigree block.  The old body
-                # becomes orphan text below the new end marker, but on the
-                # next run the end marker will be found and cleaned up.
-                marker_line_end = content.find("\n", start)
-                if marker_line_end == -1:
-                    content = FILIGREE_INSTRUCTIONS
-                else:
-                    content = content[:start] + FILIGREE_INSTRUCTIONS + content[marker_line_end:]
+                # Malformed — end marker missing. The block is unclosed, so
+                # anything from the start marker onward belongs to the broken
+                # block and cannot be safely preserved.  Replace from the
+                # start marker through EOF.  (The previous behaviour of
+                # preserving the tail left orphan content behind that the
+                # next run could no longer distinguish from genuine user
+                # text, so the corruption persisted indefinitely.)
+                content = content[:start] + FILIGREE_INSTRUCTIONS
             _atomic_write_text(file_path, content)
             return True, f"Updated instructions in {file_path}"
         else:
@@ -203,7 +227,7 @@ def ensure_gitignore(project_root: Path) -> tuple[bool, str]:
 
     if gitignore.exists():
         content = gitignore.read_text()
-        if filigree_pattern in content:
+        if _has_active_filigree_ignore(content):
             return True, ".filigree/ already in .gitignore"
         if not content.endswith("\n"):
             content += "\n"
@@ -229,7 +253,10 @@ def _install_skill_to(project_root: Path, target_subpath: Path) -> tuple[bool, s
     """Copy the filigree skill pack into *target_subpath* under *project_root*.
 
     Idempotent — overwrites existing skill files to keep them up-to-date
-    with the installed filigree version.
+    with the installed filigree version. Safe under concurrent invocation:
+    each call stages into a unique per-invocation directory, and the final
+    swap tolerates a concurrent peer winning the rename race (their staged
+    content is identical to ours).
     """
     source_dir = _get_skills_source_dir()
     skill_source = source_dir / SKILL_NAME
@@ -239,15 +266,41 @@ def _install_skill_to(project_root: Path, target_subpath: Path) -> tuple[bool, s
     target_dir = project_root / target_subpath / SKILL_NAME
     target_dir.parent.mkdir(parents=True, exist_ok=True)
 
-    # Copy to temp dir first, then swap — avoids losing the skill
-    # directory if the process crashes between rmtree and copytree.
-    tmp_dir = target_dir.with_name(f"{SKILL_NAME}.installing")
-    if tmp_dir.exists():
-        shutil.rmtree(tmp_dir)
-    shutil.copytree(skill_source, tmp_dir)
-    if target_dir.exists():
-        shutil.rmtree(target_dir)
-    tmp_dir.rename(target_dir)
+    # Stage into a unique per-call directory. mkdtemp's name is collision-free
+    # even when multiple installers race (e.g. concurrent Claude Code sessions
+    # firing SessionStart hooks). Remove the empty placeholder so copytree
+    # can create the directory itself.
+    staging = Path(tempfile.mkdtemp(dir=target_dir.parent, prefix=f"{SKILL_NAME}.installing."))
+    staging.rmdir()
+    staging_consumed = False
+    backup: Path | None = None
+    try:
+        shutil.copytree(skill_source, staging)
+
+        # Move any existing target aside under a unique name so a concurrent
+        # swapper can't collide with our backup. If the target vanishes before
+        # we rename it, another swapper already moved it — that's fine.
+        if target_dir.exists():
+            backup_holder = Path(tempfile.mkdtemp(dir=target_dir.parent, prefix=f"{SKILL_NAME}.old."))
+            backup_holder.rmdir()
+            try:
+                os.rename(target_dir, backup_holder)
+                backup = backup_holder
+            except FileNotFoundError:
+                pass
+
+        try:
+            os.rename(staging, target_dir)
+            staging_consumed = True
+        except OSError:
+            # A peer raced ahead and installed their staging into target_dir.
+            # Their content matches ours (same source), so accept their result.
+            pass
+    finally:
+        if not staging_consumed and staging.exists():
+            shutil.rmtree(staging, ignore_errors=True)
+        if backup is not None and backup.exists():
+            shutil.rmtree(backup, ignore_errors=True)
 
     return True, f"Installed skill pack to {target_dir}"
 

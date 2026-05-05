@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Any, Literal, NotRequired, TypedDict
+from enum import StrEnum
+from typing import Any, Generic, Literal, NotRequired, TypedDict, TypeVar, assert_never
 
 from filigree.types.core import ISOTimestamp, IssueDict, StatusCategory
 from filigree.types.events import EventType
@@ -43,7 +44,7 @@ InboundTransitionInfo = TypedDict("InboundTransitionInfo", {"from": str, "enforc
 
 
 class OutboundTransitionInfo(TypedDict):
-    """Outbound transition info returned by explain_state."""
+    """Outbound transition info returned by explain_status."""
 
     to: str
     enforcement: str
@@ -51,13 +52,50 @@ class OutboundTransitionInfo(TypedDict):
 
 
 class SlimIssue(TypedDict):
-    """Reduced 5-key issue shape for search results and unblocked lists."""
+    """Reduced 5-key issue shape for search results and unblocked lists.
 
-    id: str
+    Per Phase D3 of the 2.0 federation work package, the entity's own
+    primary key is named ``issue_id`` (matching the loom vocabulary used
+    by ``SlimIssueLoom`` since Phase C). Cross-entity references inside
+    response payloads (``parent_id``, ``blocks``, ``blocked_by``,
+    ``children``) keep their existing names — only the entity's own
+    primary key is renamed.
+    """
+
+    issue_id: str
     title: str
     status: str
     priority: int
     type: str
+
+
+class PublicIssue(TypedDict):
+    """Full issue shape for MCP and CLI JSON responses.
+
+    Internal/classic code may still use IssueDict with ``id``; agent-facing
+    2.0 surfaces expose the entity primary key as ``issue_id``.
+    """
+
+    issue_id: str
+    title: str
+    status: str
+    status_category: StatusCategory
+    priority: int
+    type: str
+    parent_id: str | None
+    assignee: str
+    created_at: ISOTimestamp
+    updated_at: ISOTimestamp
+    closed_at: ISOTimestamp | None
+    description: str
+    notes: str
+    fields: dict[str, Any]
+    labels: list[str]
+    blocks: list[str]
+    blocked_by: list[str]
+    is_ready: bool
+    children: list[str]
+    data_warnings: list[str]
 
 
 class BlockedIssue(SlimIssue):
@@ -67,24 +105,28 @@ class BlockedIssue(SlimIssue):
 
 
 class ErrorResponse(TypedDict):
-    """Flat error envelope returned by MCP tool handlers.
+    """Unified error envelope for MCP tools, CLI, and dashboard routes.
 
-    NOTE: Dashboard routes use a different nested format via _error_response()
-    in dashboard_routes/common.py: ``{"error": {"message", "code", "details"}}``.
+    Flat shape — `details` is optional. Dashboard previously used nested
+    `{"error": {"message", "code"}}`; 2.0 consolidates to this one shape.
     """
 
     error: str
-    code: str
+    code: ErrorCode
+    details: NotRequired[dict[str, Any]]
 
 
 class TransitionError(TypedDict):
     """Extended error for invalid status transitions.
 
     Includes valid_transitions hint to guide the caller toward correct states.
+    ``code`` matches the 2.0 uppercase ErrorCode.INVALID_TRANSITION so this
+    envelope is indistinguishable from the regular ErrorResponse for case-
+    sensitive consumers.
     """
 
     error: str
-    code: Literal["invalid_transition"]
+    code: Literal[ErrorCode.INVALID_TRANSITION]
     valid_transitions: NotRequired[list[TransitionHint]]
     hint: NotRequired[str]
 
@@ -106,25 +148,25 @@ class TransitionError(TypedDict):
 # ---------------------------------------------------------------------------
 
 
-class IssueWithTransitions(IssueDict):
+class IssueWithTransitions(PublicIssue):
     """Issue detail with optional valid_transitions (MCP get_issue)."""
 
     valid_transitions: NotRequired[list[TransitionDetail]]
 
 
-class IssueWithChangedFields(IssueDict):
+class IssueWithChangedFields(PublicIssue):
     """Issue update response with list of changed field names."""
 
     changed_fields: list[str]
 
 
-class IssueWithUnblocked(IssueDict):
+class IssueWithUnblocked(PublicIssue):
     """Issue close response with optional newly-unblocked issues."""
 
     newly_unblocked: NotRequired[list[SlimIssue]]
 
 
-class ClaimNextResponse(IssueDict):
+class ClaimNextResponse(PublicIssue):
     """Claimed issue with human-readable selection reason."""
 
     selection_reason: str
@@ -180,68 +222,6 @@ class EnrichedIssueDetail(IssueDict):
 # ---------------------------------------------------------------------------
 
 
-class IssueListResponse(TypedDict):
-    """Paginated issue list (MCP list_issues).
-
-    Does not use ``PaginatedResult`` because the list key is ``issues``
-    (not ``results``) for wire-format compatibility, and ``total`` is
-    omitted because counting all matching issues is expensive for large
-    projects. File pagination uses ``PaginatedResult`` with ``total``
-    because file counts are bounded.
-    """
-
-    issues: list[IssueDict]
-    limit: int
-    offset: int
-    has_more: bool
-
-
-class SearchResponse(TypedDict):
-    """Paginated search results with slim issues (MCP search_issues).
-
-    Same pagination divergence as ``IssueListResponse`` — see its docstring.
-    """
-
-    issues: list[SlimIssue]
-    limit: int
-    offset: int
-    has_more: bool
-
-
-class BatchFailureDetail(TypedDict):
-    """Error detail for a single failed item in a batch operation.
-
-    All batch failures share this {id, error, code} shape.  Batch update/close
-    may also include valid_transitions when the failure is an invalid transition.
-    """
-
-    id: str
-    error: str
-    code: str
-    valid_transitions: NotRequired[list[TransitionHint]]
-
-
-class BatchUpdateResponse(TypedDict):
-    """Batch update result with succeeded IDs and failures."""
-
-    succeeded: list[str]
-    failed: list[BatchFailureDetail]
-    count: int
-
-
-class BatchCloseResponse(TypedDict):
-    """Batch close result with optional newly-unblocked list.
-
-    ``succeeded``, ``failed``, and ``count`` are always present.
-    ``newly_unblocked`` is only included when issues were actually unblocked.
-    """
-
-    succeeded: list[str]
-    failed: list[BatchFailureDetail]
-    count: int
-    newly_unblocked: NotRequired[list[SlimIssue]]
-
-
 class PlanResponse(PlanTree):
     """Plan tree with computed progress percentage (MCP get_plan)."""
 
@@ -266,19 +246,6 @@ class CriticalPathResponse(TypedDict):
 
     path: list[CriticalPathNode]
     length: int
-
-
-class BatchActionResponse(TypedDict):
-    """Shared response shape for batch_add_label / batch_add_comment.
-
-    ``results`` varies by operation (label adds: {id, status}, comment adds:
-    {id, comment_id}), so it remains list[dict[str, Any]].
-    """
-
-    succeeded: list[str]
-    results: list[dict[str, Any]]
-    failed: list[BatchFailureDetail]
-    count: int
 
 
 # ---------------------------------------------------------------------------
@@ -337,10 +304,10 @@ class ClaimNextEmptyResponse(TypedDict):
 # ---------------------------------------------------------------------------
 
 
-class WorkflowStatesResponse(TypedDict):
-    """Response for get_workflow_states MCP tool."""
+class WorkflowStatusesResponse(TypedDict):
+    """Response for get_workflow_statuses MCP tool (D5: state→status rename)."""
 
-    states: dict[str, list[str]]
+    statuses: dict[str, list[str]]
 
 
 class PackListItem(TypedDict):
@@ -376,12 +343,300 @@ class WorkflowGuideResponse(TypedDict):
     note: NotRequired[str]
 
 
-class StateExplanation(TypedDict):
-    """Response for explain_state MCP tool."""
+class StatusExplanation(TypedDict):
+    """Response for explain_status MCP tool (D5: state→status rename).
 
-    state: str
+    The ``status`` key replaces the legacy ``state`` key on this response
+    payload — only the surface-level vocabulary changed; the underlying
+    workflow data is unchanged.
+    """
+
+    status: str
     category: str
     type: str
     inbound_transitions: list[InboundTransitionInfo]
     outbound_transitions: list[OutboundTransitionInfo]
     required_fields: list[str]
+
+
+# ---------------------------------------------------------------------------
+# 2.0 response envelopes
+# ---------------------------------------------------------------------------
+
+_T = TypeVar("_T")
+
+
+class ErrorCode(StrEnum):
+    """Closed set of error codes for MCP + dashboard + CLI.
+
+    Callers branch on these values; retry / UX policies depend on them.
+    The full legacy-code → ErrorCode mapping lives in
+    ``LEGACY_CODE_TO_ERRORCODE`` below — that dict is the single source of
+    truth so inline comments here don't drift when new codes are collapsed.
+    """
+
+    VALIDATION = "VALIDATION"
+    NOT_FOUND = "NOT_FOUND"
+    CONFLICT = "CONFLICT"
+    INVALID_TRANSITION = "INVALID_TRANSITION"
+    PERMISSION = "PERMISSION"
+    NOT_INITIALIZED = "NOT_INITIALIZED"
+    IO = "IO"
+    INVALID_API_URL = "INVALID_API_URL"
+    STOP_FAILED = "STOP_FAILED"
+    SCHEMA_MISMATCH = "SCHEMA_MISMATCH"
+    INTERNAL = "INTERNAL"
+
+
+class BatchFailure(TypedDict):
+    """One failed item inside a BatchResponse.failed list.
+
+    ``id`` holds whichever id shape the specific batch tool operates on
+    (issue-id, finding-id, observation-id); the consumer disambiguates
+    by context. The field was originally named ``item_id`` when this
+    type was introduced in Stage 1, but had no live wire consumers at
+    that time; it was renamed to ``id`` during Stage 2B task 2b.0 to
+    match the wire shape of the retired ``BatchFailureDetail`` and
+    avoid a gratuitous wire-contract break.
+
+    ``valid_transitions`` is populated by
+    ``db._batch_with_transition_errors`` when the per-item failure is
+    an invalid transition; callers can use it to guide the retry.
+    """
+
+    id: str
+    error: str
+    code: ErrorCode
+    valid_transitions: NotRequired[list[TransitionHint]]
+
+
+class BatchResponse(TypedDict, Generic[_T]):
+    """Unified response for batch mutation operations.
+
+    Rules:
+    - ``succeeded`` is a list of T, where T is the per-op result type
+      (e.g. SlimIssue for issue batch ops, FindingRecord for finding
+      batch ops).
+    - ``failed`` is always present (empty list if no failures).
+    - ``newly_unblocked`` is OMITTED entirely when the op cannot unblock
+      (not present as ``[]``). Present only for close/transition ops.
+    """
+
+    succeeded: list[_T]
+    failed: list[BatchFailure]
+    newly_unblocked: NotRequired[list[SlimIssue]]
+
+
+class ListResponse(TypedDict, Generic[_T]):
+    """Unified response for list/query operations.
+
+    - ``items`` is always present (empty list for no results).
+    - ``has_more`` is always present (never omitted); callers can
+      reliably distinguish "no more" from "field absent."
+    - ``next_offset`` is present only when ``has_more=True``.
+    """
+
+    items: list[_T]
+    has_more: bool
+    next_offset: NotRequired[int]
+
+
+# ---------------------------------------------------------------------------
+# Response detail (slim/full) opt-in for batch ops
+# ---------------------------------------------------------------------------
+
+ResponseDetail = Literal["slim", "full"]
+
+
+def parse_response_detail(raw: str | None) -> ResponseDetail | ErrorResponse:
+    """Parse a ``response_detail`` value to the closed ``ResponseDetail`` literal.
+
+    Returns ``"slim"`` (default when ``raw`` is None or ``"slim"``) or
+    ``"full"``. Returns an ``ErrorResponse`` with ``code=VALIDATION`` for
+    any other value. Shared by MCP handlers, CLI commands, and the
+    dashboard query-param parser so the slim/full vocabulary is enforced
+    in one place.
+    """
+    if raw is None or raw == "slim":
+        return "slim"
+    if raw == "full":
+        return "full"
+    return ErrorResponse(
+        error=f"Invalid value for response_detail: {raw!r}. Must be 'slim' or 'full'.",
+        code=ErrorCode.VALIDATION,
+    )
+
+
+# ---------------------------------------------------------------------------
+# 2.0 typed exceptions
+# ---------------------------------------------------------------------------
+
+
+class SchemaVersionMismatchError(ValueError):
+    """Raised by ``FiligreeDB.initialize`` when the on-disk schema version is
+    newer than the installed filigree's ``CURRENT_SCHEMA_VERSION`` — the binary
+    cannot safely downgrade the database.
+
+    Structured carrier for installed/database version numbers — callers can
+    read ``.installed`` and ``.database`` directly rather than parsing the
+    message string. Inherits from ``ValueError`` so pre-Stage-1 ``except
+    ValueError`` catches (including upstream tests) continue to work.
+    Stage 5 wires the MCP + dashboard startup boundaries to catch this
+    type specifically and surface it as ``ErrorCode.SCHEMA_MISMATCH``.
+    """
+
+    def __init__(self, *, installed: int, database: int) -> None:
+        self.installed = installed
+        self.database = database
+        super().__init__(
+            f"Database schema v{database} is newer than this version of filigree (expects v{installed}). Downgrade is not supported."
+        )
+
+
+class AmbiguousTransitionError(Exception):
+    """Raised by WorkflowPack.canonical_working_status when multiple
+    wip-category targets exist from the current status.
+
+    Carries the ambiguous type_name plus the full list of candidate
+    target states so callers can render a disambiguation prompt. Stage 3
+    will wire this into the ``start_work`` path; the type is defined now
+    so the mapping is stable when the raise sites land.
+    """
+
+    def __init__(self, type_name: str, candidates: list[str]) -> None:
+        self.type_name = type_name
+        self.candidates = candidates
+        super().__init__(
+            f"start_work ambiguous for type {type_name!r}: "
+            f"multiple wip-category targets available ({candidates}). "
+            f"Specify target_status explicitly."
+        )
+
+
+class InvalidTransitionError(Exception):
+    """Raised by WorkflowPack.canonical_working_status when no wip-category
+    target is reachable from the current status.
+
+    Carries type_name + current_status so callers can show *why* no
+    work-state transition is available. Stage 3 wires the raise site;
+    defined here for stable mapping.
+    """
+
+    def __init__(self, type_name: str, current_status: str) -> None:
+        self.type_name = type_name
+        self.current_status = current_status
+        super().__init__(f"No wip-category transition from {current_status!r} for type {type_name!r}.")
+
+
+def errorcode_to_http_status(code: ErrorCode) -> int:
+    """Map an ErrorCode to the HTTP status the dashboard should return.
+
+    Exhaustive match: adding an ErrorCode member without extending this
+    function fails mypy via ``assert_never``. Dashboard routes are free
+    to choose a more specific status (e.g. 409 for a particular conflict)
+    but should never invent a status that disagrees with this default.
+    """
+    match code:
+        case ErrorCode.VALIDATION | ErrorCode.INVALID_API_URL:
+            return 400
+        case ErrorCode.PERMISSION:
+            return 403
+        case ErrorCode.NOT_FOUND:
+            return 404
+        case ErrorCode.CONFLICT | ErrorCode.INVALID_TRANSITION:
+            return 409
+        case ErrorCode.NOT_INITIALIZED | ErrorCode.SCHEMA_MISMATCH:
+            # Service exists but is not in a state where it can answer —
+            # 503 lets clients retry once the project is initialized or
+            # the schema is migrated.
+            return 503
+        case ErrorCode.IO | ErrorCode.STOP_FAILED | ErrorCode.INTERNAL:
+            return 500
+        case _:
+            assert_never(code)
+
+
+def classify_value_error(message: str) -> ErrorCode:
+    """Classify a ``ValueError`` message as INVALID_TRANSITION or VALIDATION.
+
+    Substring heuristic on the exception message: presence of ``status``,
+    ``transition``, or ``state`` means the core rejected a status-machine
+    transition (409 on the wire); anything else is generic input validation
+    (400). Used identically by the MCP, dashboard, and CLI surfaces so the
+    same input produces the same code everywhere.
+
+    This heuristic is a bridge until Stage 3 introduces typed raise sites
+    (``InvalidTransitionError``, ``AmbiguousTransitionError``) in the data
+    layer; once those land, ValueError handlers will catch the typed
+    subclass explicitly and this function retires.
+
+    Boundary rule (documented in 2B rebaseline §Task 2b.4):
+
+    - **State-machine sites MUST use this helper.** Currently:
+      ``db._batch_with_transition_errors`` (db_issues.py:894),
+      ``_handle_update_issue`` / ``_handle_close_issue`` /
+      ``_handle_reopen_issue`` (mcp_tools/issues.py), CLI ``update`` /
+      ``close`` / ``reopen`` ``--json`` paths (cli_commands/issues.py),
+      dashboard PATCH / close / reopen routes
+      (dashboard_routes/issues.py). These wrap a ``db.*`` method that
+      raises ``ValueError`` for multiple classes of issue: transition
+      failure, already-closed, dependency conflict, or validation. The
+      helper routes correctly across these.
+
+    - **Input-validation sites MUST hardcode VALIDATION.** Currently:
+      ``_safe_path`` / URL parsing (dashboard_routes/common.py), schema
+      validation in ``mcp_tools/meta.py``, ``mcp_tools/files.py``,
+      ``mcp_tools/scanners.py``, ``mcp_tools/observations.py``. These
+      catch ``ValueError`` for one class only (bad input from the
+      caller); using the helper would mis-classify future error-message
+      additions containing the keyword "status" or "state" (e.g. a
+      scanner complaining about a bad "status filter" arg would land
+      as INVALID_TRANSITION, which is wrong).
+
+    The enforcement test at ``tests/util/test_classify_value_error_boundary.py``
+    greps the input-validation modules listed above for
+    ``classify_value_error`` imports and fails if any appear — so
+    breaking this rule in a future change trips CI.
+    """
+    lowered = message.lower()
+    if "status" in lowered or "transition" in lowered or "state" in lowered:
+        return ErrorCode.INVALID_TRANSITION
+    return ErrorCode.VALIDATION
+
+
+# Mapping used only during Stage 2a rollout for developer reference.
+# After Stage 2a lands, this dict stays as documentation.
+LEGACY_CODE_TO_ERRORCODE: dict[str, ErrorCode] = {
+    "invalid": ErrorCode.VALIDATION,
+    "validation_error": ErrorCode.VALIDATION,
+    "invalid_path": ErrorCode.VALIDATION,
+    "invalid_command": ErrorCode.VALIDATION,
+    "not_found": ErrorCode.NOT_FOUND,
+    "scanner_not_found": ErrorCode.NOT_FOUND,
+    "unknown_tool": ErrorCode.NOT_FOUND,
+    "command_not_found": ErrorCode.NOT_FOUND,
+    "conflict": ErrorCode.CONFLICT,
+    "invalid_transition": ErrorCode.INVALID_TRANSITION,
+    "permission_error": ErrorCode.PERMISSION,
+    "not_initialized": ErrorCode.NOT_INITIALIZED,
+    "io_error": ErrorCode.IO,
+    "db_error": ErrorCode.IO,
+    "database_error": ErrorCode.IO,
+    "import_error": ErrorCode.IO,
+    "batch_all_failed": ErrorCode.VALIDATION,  # rare; used in scanner batch path
+    "invalid_api_url": ErrorCode.INVALID_API_URL,
+    "stop_failed": ErrorCode.STOP_FAILED,
+    # --- Added during Stage 2a sweep — legacy codes discovered beyond the
+    # --- original 19-code mapping. Mapping decisions documented in
+    # --- docs/plans/2026-04-18-2.0-unified-surface-plan.md (Stage 2a fix-up).
+    "ingestion_error": ErrorCode.IO,
+    "file_not_found": ErrorCode.NOT_FOUND,
+    "promotion_error": ErrorCode.VALIDATION,
+    "spawn_failed": ErrorCode.IO,
+    # rate_limited is a cooldown conflict, not an IO failure — clients
+    # should retry when the blocking run completes (check details.blocking_run_id).
+    "rate_limited": ErrorCode.CONFLICT,
+    "no_eligible_files": ErrorCode.VALIDATION,
+    "project_not_found": ErrorCode.NOT_FOUND,
+    "project_unavailable": ErrorCode.NOT_INITIALIZED,
+}

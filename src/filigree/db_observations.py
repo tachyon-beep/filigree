@@ -58,12 +58,18 @@ class ObservationsMixin(DBMixinProtocol):
     time via MRO.
     """
 
-    def _sweep_expired_observations(self) -> int:
+    def _sweep_expired_observations(self) -> tuple[int, bool]:
         """Delete expired observations in a savepoint (piggyback cleanup).
 
         All expired observations are logged to dismissed_observations and deleted.
         Also prunes the dismissed_observations audit trail to DISMISSED_AUDIT_TRAIL_CAP entries.
         Uses a savepoint so it doesn't commit or interfere with in-flight transactions.
+
+        Returns:
+            (deleted_row_count, succeeded). ``succeeded=False`` indicates that the
+            sweep was rolled back after a transient error, so expired rows may
+            still be present — callers must apply ``WHERE expires_at > ?`` to
+            avoid returning them as live results.
         """
         now = _now_iso()
         self.conn.execute("SAVEPOINT sweep_obs")
@@ -86,7 +92,7 @@ class ObservationsMixin(DBMixinProtocol):
             self.conn.execute("RELEASE SAVEPOINT sweep_obs")
             if cursor.rowcount > 0:
                 logger.debug("Swept %d expired observations", cursor.rowcount)
-            return cursor.rowcount
+            return cursor.rowcount, True
         except (sqlite3.OperationalError, sqlite3.IntegrityError):
             # Suppress transient errors (locked, busy) and integrity violations — sweep is best-effort.
             # Let ProgrammingError, InterfaceError propagate — those indicate code bugs.
@@ -98,7 +104,7 @@ class ObservationsMixin(DBMixinProtocol):
                     self.conn.execute("RELEASE SAVEPOINT sweep_obs")
                 except sqlite3.Error:
                     logger.warning("Failed to release savepoint after sweep rollback", exc_info=True)
-            return 0  # Sweep is best-effort — don't block reads
+            return 0, False  # Sweep is best-effort — don't block reads, but signal failure
 
     def create_observation(
         self,
@@ -133,12 +139,19 @@ class ObservationsMixin(DBMixinProtocol):
             raise ValueError(f"line must be >= 0, got {line}")
 
         file_id: str | None = None
+        # Track whether THIS call created a new file_record so we can compensate
+        # by deleting it if the later observation INSERT fails — otherwise the
+        # file_record is orphaned (register_file commits independently).
+        created_file_id: str | None = None
         if file_path:
             file_path = _normalize_scan_path(file_path)
             if auto_commit:
                 # Standalone call — register_file commits, which is fine.
+                existing_fr = self.conn.execute("SELECT id FROM file_records WHERE path = ?", (file_path,)).fetchone()
                 fr = self.register_file(file_path)
                 file_id = fr.id
+                if existing_fr is None:
+                    created_file_id = file_id
             else:
                 # Inside an outer transaction — register_file would commit
                 # prematurely.  Look up the file_id without side effects;
@@ -186,9 +199,47 @@ class ObservationsMixin(DBMixinProtocol):
             )
             if auto_commit:
                 self.conn.commit()
+        except sqlite3.IntegrityError as e:
+            # Concurrent racer won the dedup slot between our SELECT and INSERT.
+            # The pre-insert SELECT cannot serialize writers under DEFERRED isolation,
+            # and we cannot wrap the whole function in BEGIN IMMEDIATE because callers
+            # invoke us with auto_commit=False inside their own transactions. So
+            # absorb the dedup IntegrityError, roll back our partial work, re-SELECT
+            # the live duplicate, and return it — preserving the documented contract
+            # that concurrent calls with the same dedup key all return the same row.
+            if "idx_observations_dedup" not in str(e):
+                # Some other integrity failure (e.g. file_records race) — surface it.
+                if auto_commit:
+                    self.conn.rollback()
+                raise
+            if auto_commit:
+                self.conn.rollback()
+            winner = self.conn.execute(
+                "SELECT * FROM observations WHERE summary = ? AND file_path = ? AND coalesce(line, -1) = ?",
+                (summary_stripped, file_path, line_cmp),
+            ).fetchone()
+            if winner is not None:
+                return cast(ObservationDict, dict(winner))
+            # Race resolved by deletion (sweep / dismiss between IntegrityError and re-SELECT).
+            # No live duplicate to return — re-raise so caller retries.
+            raise
         except sqlite3.Error:
             if auto_commit:
                 self.conn.rollback()
+                # Compensate: delete the file_record we just created.  register_file
+                # committed independently, so rolling back this transaction does not
+                # remove it — and we'd leave an orphan row otherwise.
+                if created_file_id is not None:
+                    try:
+                        self.conn.execute("DELETE FROM file_records WHERE id = ?", (created_file_id,))
+                        self.conn.commit()
+                    except sqlite3.Error:
+                        self.conn.rollback()
+                        logger.warning(
+                            "Failed to compensate orphaned file_record %s after observation insert failure",
+                            created_file_id,
+                            exc_info=True,
+                        )
             raise
         return {
             "id": obs_id,
@@ -214,29 +265,55 @@ class ObservationsMixin(DBMixinProtocol):
     ) -> list[ObservationDict]:
         """List pending observations with optional filtering.
 
-        Sweeps expired observations first (best-effort, in savepoint).
+        Sweeps expired observations first (best-effort, in savepoint).  If the
+        sweep itself fails (transient DB error, rolled back), the read falls
+        back to ``WHERE expires_at > ?`` so expired rows are still excluded
+        from results — otherwise a suppressed sweep error would surface
+        expired rows as live.
         ``file_path`` filtering uses substring matching (LIKE), not exact match.
         ``file_id`` filtering uses exact FK match (more precise than path LIKE).
         """
-        self._sweep_expired_observations()
+        _, swept_ok = self._sweep_expired_observations()
+        alive_frag, alive_where, alive_params = _alive_clause(swept_ok, _now_iso())
         if file_id:
             # Direct FK query — more precise than path LIKE.
             rows = self.conn.execute(
-                "SELECT * FROM observations WHERE file_id = ? ORDER BY priority ASC, created_at ASC LIMIT ? OFFSET ?",
-                (file_id, limit, offset),
+                f"SELECT * FROM observations WHERE file_id = ?{alive_frag} ORDER BY priority ASC, created_at ASC LIMIT ? OFFSET ?",
+                (file_id, *alive_params, limit, offset),
             ).fetchall()
         elif file_path:
             file_path = _normalize_scan_path(file_path) or file_path
             rows = self.conn.execute(
-                "SELECT * FROM observations WHERE file_path LIKE ? ESCAPE '\\' ORDER BY priority ASC, created_at ASC LIMIT ? OFFSET ?",
-                (_escape_like(file_path), limit, offset),
+                f"SELECT * FROM observations WHERE file_path LIKE ? ESCAPE '\\'{alive_frag} "
+                "ORDER BY priority ASC, created_at ASC LIMIT ? OFFSET ?",
+                (_escape_like(file_path), *alive_params, limit, offset),
             ).fetchall()
         else:
             rows = self.conn.execute(
-                "SELECT * FROM observations ORDER BY priority ASC, created_at ASC LIMIT ? OFFSET ?",
-                (limit, offset),
+                f"SELECT * FROM observations{alive_where} ORDER BY priority ASC, created_at ASC LIMIT ? OFFSET ?",
+                (*alive_params, limit, offset),
             ).fetchall()
         return [cast(ObservationDict, dict(row)) for row in rows]
+
+    def get_observations_by_ids(self, obs_ids: list[str]) -> list[ObservationDict]:
+        """Return observation records for a list of IDs, in input order.
+
+        Used by ``batch_dismiss_observations`` callers that want full
+        records returned before dismissal (response_detail='full').
+        Missing IDs are silently skipped — pair with the not_found list
+        from ``batch_dismiss_observations`` to identify them. Does not
+        sweep expired observations.
+        """
+        if not obs_ids:
+            return []
+        unique_ids = list(dict.fromkeys(obs_ids))
+        placeholders = ",".join("?" for _ in unique_ids)
+        rows = self.conn.execute(
+            f"SELECT * FROM observations WHERE id IN ({placeholders})",
+            unique_ids,
+        ).fetchall()
+        by_id = {row["id"]: cast(ObservationDict, dict(row)) for row in rows}
+        return [by_id[oid] for oid in unique_ids if oid in by_id]
 
     def observation_count(self) -> int:
         """Return total observation count WITHOUT sweeping expired rows.
@@ -256,15 +333,19 @@ class ObservationsMixin(DBMixinProtocol):
             sweep: If True (default), sweep expired observations first.
                    Pass False when calling from read-only context paths
                    (summary generation, MCP prompt) to avoid write side effects.
-                   When False, expired rows are excluded via WHERE filter
-                   to keep counts consistent with what list_observations returns.
+                   When False — or when the sweep itself fails — expired rows
+                   are excluded via WHERE filter to keep counts consistent with
+                   what list_observations returns.
         """
+        swept_ok = True
         if sweep:
-            self._sweep_expired_observations()
+            _, swept_ok = self._sweep_expired_observations()
 
         now = datetime.now(UTC)
         now_iso = now.isoformat()
-        alive_frag, alive_where, alive_params = _alive_clause(sweep, now_iso)
+        # Apply expires-filter whenever the sweep did not succeed OR when caller
+        # opted out of sweeping — in both cases expired rows may still exist.
+        alive_frag, alive_where, alive_params = _alive_clause(sweep and swept_ok, now_iso)
         count = self.conn.execute(f"SELECT COUNT(*) FROM observations{alive_where}", alive_params).fetchone()[0]
         if count == 0:
             return {"count": 0, "stale_count": 0, "oldest_hours": 0, "expiring_soon_count": 0}
@@ -306,19 +387,30 @@ class ObservationsMixin(DBMixinProtocol):
         actor: str = "",
         reason: str = "",
     ) -> None:
-        row = self.conn.execute("SELECT id, summary FROM observations WHERE id = ?", (obs_id,)).fetchone()
-        if row is None:
-            raise ValueError(f"Observation not found: {obs_id}")
-        now = _now_iso()
+        # Serialize the SELECT/INSERT/DELETE so two concurrent dismissals don't
+        # both write audit rows for the same row. Without BEGIN IMMEDIATE the
+        # losing racer's stale pre-read still produces an audit insert and a
+        # no-op delete that silently reports success — masking the fact that
+        # the row was already gone. Contract change: concurrent second dismiss
+        # now correctly raises ``ValueError("Observation not found")``.
+        if self.conn.in_transaction:
+            self.conn.rollback()
+        self.conn.execute("BEGIN IMMEDIATE")
         try:
+            row = self.conn.execute("SELECT id, summary FROM observations WHERE id = ?", (obs_id,)).fetchone()
+            if row is None:
+                self.conn.rollback()
+                raise ValueError(f"Observation not found: {obs_id}")
+            now = _now_iso()
             self.conn.execute(
                 "INSERT INTO dismissed_observations (obs_id, summary, actor, reason, dismissed_at) VALUES (?, ?, ?, ?, ?)",
                 (obs_id, row["summary"], actor, reason, now),
             )
             self.conn.execute("DELETE FROM observations WHERE id = ?", (obs_id,))
             self.conn.commit()
-        except sqlite3.Error:
-            self.conn.rollback()
+        except Exception:
+            if self.conn.in_transaction:
+                self.conn.rollback()
             raise
 
     def batch_dismiss_observations(
@@ -334,8 +426,15 @@ class ObservationsMixin(DBMixinProtocol):
         unique_ids = list(dict.fromkeys(obs_ids))
         now = _now_iso()
         placeholders = ",".join("?" for _ in unique_ids)
+        # Same TOCTOU as single dismiss — under concurrent batch calls the
+        # found_ids/not_found computation must match the rows we actually
+        # delete, otherwise the audit table inflates and ``not_found`` lies.
+        # Hold a writer lock across the SELECT and the INSERT/DELETE.
+        if self.conn.in_transaction:
+            self.conn.rollback()
+        self.conn.execute("BEGIN IMMEDIATE")
         try:
-            # Find which IDs actually exist before deleting
+            # Find which IDs actually exist (under writer lock)
             found_rows = self.conn.execute(
                 f"SELECT id FROM observations WHERE id IN ({placeholders})",
                 unique_ids,
@@ -353,8 +452,9 @@ class ObservationsMixin(DBMixinProtocol):
                 unique_ids,
             )
             self.conn.commit()
-        except sqlite3.Error:
-            self.conn.rollback()
+        except Exception:
+            if self.conn.in_transaction:
+                self.conn.rollback()
             raise
         return {"dismissed": cursor.rowcount, "not_found": not_found}
 
@@ -368,46 +468,92 @@ class ObservationsMixin(DBMixinProtocol):
         extra_description: str = "",
         actor: str = "",
     ) -> PromoteObservationResult:
-        # 1. Read observation (don't delete yet)
-        row = self.conn.execute("SELECT * FROM observations WHERE id = ?", (obs_id,)).fetchone()
-        if row is None:
-            raise ValueError(f"Observation not found: {obs_id}")
-        obs = dict(row)
+        # Idempotency check: if a prior promote already created an issue for this
+        # obs_id (recorded in issue.fields.source_observation_id), return that
+        # issue instead of creating a duplicate.  Handles the retry case where
+        # the observation delete failed after the issue was committed.
+        #
+        # The check + create_issue is wrapped in BEGIN IMMEDIATE so two
+        # concurrent promoters cannot both pass the check and both insert an
+        # issue (mirrors the cooldown-check pattern in db_scans.py).
+        # ``json_valid(fields)`` skips rows whose fields JSON is corrupt —
+        # without it, one malformed row anywhere in the issues table makes
+        # ``json_extract`` raise OperationalError and breaks every promote.
+        warnings: list[str] = []
+        if self.conn.in_transaction:
+            self.conn.rollback()
+        self.conn.execute("BEGIN IMMEDIATE")
+        try:
+            existing_issue_row = self.conn.execute(
+                "SELECT id FROM issues WHERE json_valid(fields) AND json_extract(fields, '$.source_observation_id') = ?",
+                (obs_id,),
+            ).fetchone()
+            if existing_issue_row is not None:
+                # Best-effort cleanup of lingering observation from prior failed promote.
+                # Lives inside the BEGIN IMMEDIATE so a single commit covers both reads
+                # and the cleanup write atomically.
+                self.conn.execute("DELETE FROM observations WHERE id = ?", (obs_id,))
+                self.conn.commit()
+                existing_issue = self.get_issue(existing_issue_row["id"])
+                msg = f"Observation {obs_id} was already promoted to issue {existing_issue.id} (returning existing)"
+                logger.info(msg)
+                warnings.append(msg)
+                idem_result = cast(PromoteObservationResult, {"issue": existing_issue, "warnings": warnings})
+                return idem_result
 
-        # Reject expired observations — consistent with TTL enforcement elsewhere.
-        if obs["expires_at"] <= _now_iso():
-            raise ValueError(f"Observation {obs_id} has expired and cannot be promoted")
+            # 1. Read observation (don't delete yet)
+            row = self.conn.execute("SELECT * FROM observations WHERE id = ?", (obs_id,)).fetchone()
+            if row is None:
+                self.conn.rollback()
+                raise ValueError(f"Observation not found: {obs_id}")
+            obs = dict(row)
 
-        # 2. Build issue fields
-        issue_title = title or obs["summary"]
-        desc_parts = []
-        if extra_description:
-            desc_parts.append(extra_description)
-        if obs["detail"]:
-            desc_parts.append(obs["detail"])
-        if obs["file_path"]:
-            loc = f"`{obs['file_path']}`"
-            if obs["line"] is not None:
-                loc += f":{obs['line']}"
-            desc_parts.append(f"Observed in: {loc}")
-        if obs.get("source_issue_id"):
-            desc_parts.append(f"Observed while working on: {obs['source_issue_id']}")
-        description = "\n\n".join(desc_parts)
+            # Reject expired observations — consistent with TTL enforcement elsewhere.
+            if obs["expires_at"] <= _now_iso():
+                self.conn.rollback()
+                raise ValueError(f"Observation {obs_id} has expired and cannot be promoted")
 
-        # 3. Create issue first — if this fails, observation is untouched
-        issue = self.create_issue(
-            issue_title,
-            type=issue_type,
-            priority=priority if priority is not None else obs["priority"],
-            description=description,
-            actor=actor or obs["actor"],
-        )
+            # 2. Build issue fields
+            issue_title = title or obs["summary"]
+            desc_parts = []
+            if extra_description:
+                desc_parts.append(extra_description)
+            if obs["detail"]:
+                desc_parts.append(obs["detail"])
+            if obs["file_path"]:
+                loc = f"`{obs['file_path']}`"
+                if obs["line"] is not None:
+                    loc += f":{obs['line']}"
+                desc_parts.append(f"Observed in: {loc}")
+            if obs.get("source_issue_id"):
+                desc_parts.append(f"Observed while working on: {obs['source_issue_id']}")
+            description = "\n\n".join(desc_parts)
+
+            # 3. Create issue first — if this fails, observation is untouched.
+            #    The source_observation_id field is the durable idempotency key:
+            #    retries after a cleanup failure see the existing issue and return
+            #    it instead of creating a duplicate.  ``create_issue`` commits
+            #    internally, which closes the BEGIN IMMEDIATE transaction; that's
+            #    fine — the writer lock has been held continuously from BEGIN
+            #    through the INSERT, so any peer waiting on BEGIN IMMEDIATE will
+            #    see this issue's row when their idempotency check runs.
+            issue = self.create_issue(
+                issue_title,
+                type=issue_type,
+                priority=priority if priority is not None else obs["priority"],
+                description=description,
+                actor=actor or obs["actor"],
+                fields={"source_observation_id": obs_id},
+            )
+        except Exception:
+            if self.conn.in_transaction:
+                self.conn.rollback()
+            raise
 
         # 4. Issue created successfully — now clean up the observation.
         #    Delete the observation FIRST (prevents double-promotion on retry),
         #    then write the audit trail (nice-to-have).  If only the audit trail
         #    fails, the observation is already gone so retries get "not found".
-        warnings: list[str] = []
         now = _now_iso()
         try:
             cursor = self.conn.execute("DELETE FROM observations WHERE id = ?", (obs_id,))
@@ -455,7 +601,7 @@ class ObservationsMixin(DBMixinProtocol):
             logger.warning(msg, exc_info=True)
             warnings.append(msg)
 
-        result: PromoteObservationResult = {"issue": issue}
+        result = cast(PromoteObservationResult, {"issue": issue})
         if warnings:
             result["warnings"] = warnings
         return result

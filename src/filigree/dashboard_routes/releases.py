@@ -16,50 +16,71 @@ from starlette.requests import Request
 
 from filigree.core import FiligreeDB
 from filigree.dashboard_routes.common import _error_response, _get_bool_param
+from filigree.db_planning import NotAReleaseError
+from filigree.types.api import ErrorCode
 
 logger = logging.getLogger(__name__)
 
 _SEMVER_STRICT_RE = re.compile(r"^v(\d+)\.(\d+)\.(\d+)$")
 _SEMVER_LOOSE_RE = re.compile(r"v?(\d+)\.(\d+)(?:\.(\d+))?")
-_NON_SEMVER_KEY = (999_999, 0, 0)
-_FUTURE_KEY = (999_999, 999_999, 0)
+
+# Tagged sort keys: a leading "kind" discriminator guarantees that no valid
+# semver tuple can collide with a sentinel, regardless of version magnitude.
+# 0 = semver, 1 = non-semver, 2 = Future — so the ordering contract
+# (semver < non-semver < Future) holds without relying on numeric headroom.
+_SemverSortKey = tuple[int, int, int, int]
+_NON_SEMVER_KEY: _SemverSortKey = (1, 0, 0, 0)
+_FUTURE_KEY: _SemverSortKey = (2, 0, 0, 0)
 
 
-def _semver_sort_key(release: ReleaseSummaryItem) -> tuple[int, int, int]:
-    """Extract a (major, minor, patch) sort key from a release.
+def _semver_sort_key(release: ReleaseSummaryItem) -> _SemverSortKey:
+    """Extract a tagged sort key ``(kind, major, minor, patch)`` from a release.
 
-    Priority order for "Future" detection:
-      1. ``version == "Future"`` (exact match on version field)
-      2. Title matches "future" (case-insensitive, backward compat)
+    Priority (each step independent — failure to parse falls through to the next):
+      1. ``version`` strip-equals ``"Future"`` → FUTURE.
+      2. Strict semver on ``version``.
+      3. Loose semver on ``version``.
+      4. ``title`` (case-insensitive, whitespace-stripped) equals ``"future"`` → FUTURE.
+      5. Loose semver on ``title``.
+      6. Otherwise non-semver.
 
-    For semver parsing, checks version field first (strict 3-part),
-    then falls back to title (loose matching).
-    Non-semver releases sort after all semver releases but before "future".
+    Non-empty-but-unparseable ``version`` does NOT block title fallbacks: it
+    must yield to title-based Future detection (step 4) and title-based loose
+    semver (step 5). Whitespace-only ``version`` is treated as absent.
+
+    Non-string ``version``/``title`` values (possible via ``import_jsonl``,
+    which stores ``fields`` verbatim) are treated as absent rather than being
+    passed through to ``re.match``.
     """
-    version = release.get("version") or ""
-    title = release.get("title", "")
+    version_raw = release.get("version")
+    version = version_raw.strip() if isinstance(version_raw, str) else ""
+    title_raw = release.get("title", "")
+    title = title_raw if isinstance(title_raw, str) else ""
 
-    # Check version field for exact "Future" first
+    # 1. Exact "Future" on version field
     if version == "Future":
         return _FUTURE_KEY
 
-    # Backward compat: title-based Future detection
-    if not version and title.strip().lower() == "future":
-        return _FUTURE_KEY
-
-    # Try strict semver on version field
+    # 2-3. Try parsing version: strict 3-part, then loose
     if version:
         m = _SEMVER_STRICT_RE.match(version)
         if m:
-            return (int(m.group(1)), int(m.group(2)), int(m.group(3)))
+            return (0, int(m.group(1)), int(m.group(2)), int(m.group(3)))
+        m = _SEMVER_LOOSE_RE.search(version)
+        if m:
+            return (0, int(m.group(1)), int(m.group(2)), int(m.group(3) or 0))
 
-    # Fallback: loose semver on version or title
-    text = version or title
-    m = _SEMVER_LOOSE_RE.search(text)
-    if m:
-        return (int(m.group(1)), int(m.group(2)), int(m.group(3) or 0))
+    # 4. Title-based Future detection (backward compat)
+    if title.strip().lower() == "future":
+        return _FUTURE_KEY
 
-    # Fallback: after semver releases, before future
+    # 5. Loose semver on title
+    if title:
+        m = _SEMVER_LOOSE_RE.search(title)
+        if m:
+            return (0, int(m.group(1)), int(m.group(2)), int(m.group(3) or 0))
+
+    # 6. Non-semver fallback (between semver and Future)
     return _NON_SEMVER_KEY
 
 
@@ -68,12 +89,15 @@ def _semver_sort_key(release: ReleaseSummaryItem) -> tuple[int, int, int]:
 # ---------------------------------------------------------------------------
 
 
-def create_router() -> APIRouter:
-    """Build the APIRouter for release endpoints.
+def create_classic_router() -> APIRouter:
+    """Build the classic-generation APIRouter for release endpoints.
 
     NOTE: All handlers are intentionally async despite doing synchronous
     SQLite I/O. This serializes DB access on the event loop thread,
     avoiding concurrent multi-thread access to the shared DB connection.
+
+    Classic routes live at their existing unprefixed paths. See ADR-002
+    for the generation naming and lifecycle rules.
     """
     from fastapi import APIRouter, Depends
     from fastapi.responses import JSONResponse
@@ -91,16 +115,17 @@ def create_router() -> APIRouter:
 
         try:
             releases = db.get_releases_summary(include_released=include_released)
+            # Sort is a UI concern — applied here, not in the DB layer.
+            # Kept inside the try block so a corrupt release row (e.g.
+            # non-string version from import_jsonl) surfaces as a structured
+            # error instead of an uncaught exception.
+            releases.sort(key=_semver_sort_key)
         except sqlite3.Error:
             logger.exception("Database error loading releases summary")
-            return _error_response("Database error loading releases", "RELEASES_LOAD_ERROR", 500)
+            return _error_response("Database error loading releases", ErrorCode.IO, 500, exc_info=False)
         except Exception:
             logger.exception("BUG: Unexpected error loading releases summary")
-            return _error_response("Internal error loading releases", "RELEASES_LOAD_ERROR", 500)
-
-        # Sort is a UI concern — applied here, not in the DB layer
-        # Primary: semantic version ascending; "future" always last
-        releases.sort(key=_semver_sort_key)
+            return _error_response("Internal error loading releases", ErrorCode.INTERNAL, 500, exc_info=False)
 
         return JSONResponse({"releases": releases})
 
@@ -110,15 +135,34 @@ def create_router() -> APIRouter:
         try:
             tree = db.get_release_tree(release_id)
         except KeyError:
-            return _error_response(f"Release not found: {release_id}", "RELEASE_NOT_FOUND", 404)
-        except ValueError as e:
-            return _error_response(str(e), "NOT_A_RELEASE", 404)
+            return _error_response(f"Release not found: {release_id}", ErrorCode.NOT_FOUND, 404)
+        except NotAReleaseError as e:
+            # Asking for a /release/<id>/tree on an id that exists but is not
+            # a release is still a "not a release of that id" — matching the
+            # 404 status with NOT_FOUND keeps the envelope internally
+            # consistent (status and code agree).
+            return _error_response(str(e), ErrorCode.NOT_FOUND, 404)
         except sqlite3.Error:
             logger.exception("Database error loading release tree for %s", release_id)
-            return _error_response("Database error loading release tree", "TREE_LOAD_ERROR", 500)
+            return _error_response("Database error loading release tree", ErrorCode.IO, 500, exc_info=False)
         except Exception:
+            # Includes bare ValueError from corrupt imported data (e.g. Issue.__post_init__)
+            # — that is data corruption, not a release-type mismatch.
             logger.exception("BUG: Unexpected error loading release tree for %s", release_id)
-            return _error_response("Internal error loading release tree", "TREE_LOAD_ERROR", 500)
+            return _error_response("Internal error loading release tree", ErrorCode.INTERNAL, 500, exc_info=False)
         return JSONResponse(tree)
 
     return router
+
+
+def create_loom_router() -> APIRouter:
+    """Build the loom-generation APIRouter for release endpoints.
+
+    Empty in Phase B of the 2.0 federation work package; Phase C fills
+    loom release endpoints as they are implemented. See ADR-002 for the
+    generation framing and docs/federation/contracts.md for the stability
+    guarantee.
+    """
+    from fastapi import APIRouter
+
+    return APIRouter()

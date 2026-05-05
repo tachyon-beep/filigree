@@ -37,7 +37,12 @@ class _JsonFormatter(logging.Formatter):
         if hasattr(record, "error"):
             entry["error"] = record.error
         if record.exc_info and record.exc_info[1]:
-            entry["exception"] = str(record.exc_info[1])
+            exc = record.exc_info[1]
+            entry["exception"] = str(exc)
+            entry["exception_type"] = type(exc).__name__
+            entry["traceback"] = self.formatException(record.exc_info)
+        if record.stack_info:
+            entry["stack"] = self.formatStack(record.stack_info)
         return json.dumps(entry, default=str)
 
 
@@ -51,22 +56,31 @@ def setup_logging(filigree_dir: Path) -> logging.Logger:
     target_filename = os.path.abspath(str(log_path))
 
     with _setup_lock:
-        # Check existing RotatingFileHandlers on the global logger.
+        # Scan every RotatingFileHandler on the logger. Keep at most one that
+        # matches the target path; close and remove the rest (stale paths,
+        # plus any duplicate matches from a prior leak).
+        surviving: RotatingFileHandler | None = None
         for h in logger.handlers[:]:
             if not isinstance(h, RotatingFileHandler):
                 continue
-            if h.baseFilename == target_filename:
-                return logger
-            # Different path — remove stale handler to avoid leaks / duplicates.
+            if h.baseFilename == target_filename and surviving is None:
+                surviving = h
+                continue
             logger.removeHandler(h)
             h.close()
 
-        handler = RotatingFileHandler(
-            str(log_path),
-            maxBytes=_MAX_BYTES,
-            backupCount=_BACKUP_COUNT,
-        )
-        handler.setFormatter(_JsonFormatter())
-        logger.addHandler(handler)
+        if surviving is None:
+            surviving = RotatingFileHandler(
+                str(log_path),
+                maxBytes=_MAX_BYTES,
+                backupCount=_BACKUP_COUNT,
+            )
+            logger.addHandler(surviving)
+
+        # Apply configuration unconditionally so a reused handler that was
+        # attached without a formatter or correct level still satisfies the
+        # function's contract (JSONL output, INFO level).
+        if not isinstance(surviving.formatter, _JsonFormatter):
+            surviving.setFormatter(_JsonFormatter())
         logger.setLevel(logging.INFO)
     return logger

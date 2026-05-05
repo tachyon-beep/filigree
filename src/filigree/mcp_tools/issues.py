@@ -3,16 +3,17 @@
 from __future__ import annotations
 
 import logging
-import sqlite3
 from collections.abc import Callable
 from typing import Any
 
 from mcp.types import TextContent, Tool
 
+from filigree.issue_payloads import issue_to_public
 from filigree.mcp_tools.common import (
     _MAX_LIST_RESULTS,
     _apply_has_more,
     _build_transition_error,
+    _list_response,
     _parse_args,
     _resolve_pagination,
     _slim_issue,
@@ -21,19 +22,21 @@ from filigree.mcp_tools.common import (
     _validate_int_range,
 )
 from filigree.types.api import (
-    BatchCloseResponse,
-    BatchUpdateResponse,
+    AmbiguousTransitionError,
+    BatchResponse,
     ClaimNextEmptyResponse,
     ClaimNextResponse,
+    ErrorCode,
     ErrorResponse,
-    IssueListResponse,
+    InvalidTransitionError,
     IssueWithChangedFields,
     IssueWithTransitions,
-    IssueWithUnblocked,
-    SearchResponse,
+    PublicIssue,
+    SlimIssue,
     TransitionDetail,
+    classify_value_error,
+    parse_response_detail,
 )
-from filigree.types.core import IssueDict
 from filigree.types.inputs import (
     BatchCloseArgs,
     BatchUpdateArgs,
@@ -46,6 +49,8 @@ from filigree.types.inputs import (
     ReleaseClaimArgs,
     ReopenIssueArgs,
     SearchIssuesArgs,
+    StartNextWorkArgs,
+    StartWorkArgs,
     UpdateIssueArgs,
 )
 
@@ -63,7 +68,7 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "id": {"type": "string", "description": "Issue ID"},
+                    "issue_id": {"type": "string", "description": "Issue ID"},
                     "include_transitions": {
                         "type": "boolean",
                         "default": False,
@@ -71,11 +76,16 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
                     },
                     "include_files": {
                         "type": "boolean",
-                        "default": True,
-                        "description": "Include file associations in response (default true)",
+                        "default": False,
+                        "description": (
+                            "Include file associations in response (default false; pass true to "
+                            "include the files list). Federation consumers typically want a clean "
+                            "issue projection — this aligns with /api/loom/issues/{issue_id} which "
+                            "has defaulted include_files to false since Phase C3."
+                        ),
                     },
                 },
-                "required": ["id"],
+                "required": ["issue_id"],
             },
         ),
         Tool(
@@ -98,7 +108,7 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
                         "description": "Filter by type (use list_types for available types)",
                     },
                     "priority": {"type": "integer", "minimum": 0, "maximum": 4, "description": "Filter by priority"},
-                    "parent_id": {"type": "string", "description": "Filter by parent issue ID"},
+                    "parent_issue_id": {"type": "string", "description": "Filter by parent issue ID"},
                     "assignee": {"type": "string", "description": "Filter by assignee"},
                     "label": {
                         "oneOf": [
@@ -148,7 +158,7 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
                         "maximum": 4,
                         "description": "Priority 0-4 (0=critical)",
                     },
-                    "parent_id": {"type": "string", "description": "Parent issue ID (for hierarchy)"},
+                    "parent_issue_id": {"type": "string", "description": "Parent issue ID (for hierarchy)"},
                     "description": {"type": "string", "description": "Issue description"},
                     "notes": {"type": "string", "description": "Additional notes"},
                     "fields": {"type": "object", "description": "Custom fields (from template schema)"},
@@ -169,7 +179,7 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "id": {"type": "string", "description": "Issue ID"},
+                    "issue_id": {"type": "string", "description": "Issue ID"},
                     "status": {
                         "type": "string",
                         "description": "New status (use get_valid_transitions for allowed values)",
@@ -179,11 +189,14 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
                     "assignee": {"type": "string", "description": "New assignee"},
                     "description": {"type": "string", "description": "New description"},
                     "notes": {"type": "string", "description": "New notes"},
-                    "parent_id": {"type": "string", "description": "New parent issue ID (empty string to clear)"},
+                    "parent_issue_id": {
+                        "type": "string",
+                        "description": "New parent issue ID (empty string to clear)",
+                    },
                     "fields": {"type": "object", "description": "Fields to merge into existing fields"},
                     "actor": {"type": "string", "description": "Agent/user identity for audit trail"},
                 },
-                "required": ["id"],
+                "required": ["issue_id"],
             },
         ),
         Tool(
@@ -192,12 +205,12 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "id": {"type": "string", "description": "Issue ID"},
+                    "issue_id": {"type": "string", "description": "Issue ID"},
                     "reason": {"type": "string", "description": "Close reason"},
                     "actor": {"type": "string", "description": "Agent/user identity for audit trail"},
                     "fields": {"type": "object", "description": "Custom fields to set (e.g. root_cause for incidents)"},
                 },
-                "required": ["id"],
+                "required": ["issue_id"],
             },
         ),
         Tool(
@@ -206,10 +219,10 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "id": {"type": "string", "description": "Issue ID"},
+                    "issue_id": {"type": "string", "description": "Issue ID"},
                     "actor": {"type": "string", "description": "Agent/user identity for audit trail"},
                 },
-                "required": ["id"],
+                "required": ["issue_id"],
             },
         ),
         Tool(
@@ -244,14 +257,14 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "id": {"type": "string", "description": "Issue ID to claim"},
-                    "assignee": {"type": "string", "description": "Who is claiming (agent name)"},
+                    "issue_id": {"type": "string", "description": "Issue ID to claim"},
+                    "assignee": {"type": "string", "minLength": 1, "description": "Who is claiming (agent name)"},
                     "actor": {
                         "type": "string",
                         "description": "Agent/user identity for audit trail (defaults to assignee)",
                     },
                 },
-                "required": ["id", "assignee"],
+                "required": ["issue_id", "assignee"],
             },
         ),
         Tool(
@@ -260,10 +273,10 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "id": {"type": "string", "description": "Issue ID to release"},
+                    "issue_id": {"type": "string", "description": "Issue ID to release"},
                     "actor": {"type": "string", "description": "Agent/user identity for audit trail"},
                 },
-                "required": ["id"],
+                "required": ["issue_id"],
             },
         ),
         Tool(
@@ -272,7 +285,7 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "assignee": {"type": "string", "description": "Who is claiming (agent name)"},
+                    "assignee": {"type": "string", "minLength": 1, "description": "Who is claiming (agent name)"},
                     "type": {"type": "string", "description": "Filter by issue type"},
                     "priority_min": {
                         "type": "integer",
@@ -290,29 +303,109 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
             },
         ),
         Tool(
-            name="batch_close",
-            description="Close multiple issues in one call. Returns list of closed issues.",
+            name="start_work",
+            description=(
+                "Atomically claim an issue and transition it to a working status. "
+                "target_status defaults to the type's canonical wip-category status; "
+                "AmbiguousTransitionError surfaces if the type has multiple wip statuses "
+                "(specify target_status explicitly). On transition failure the claim is rolled back."
+            ),
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "ids": {
+                    "issue_id": {"type": "string", "description": "Issue ID to claim and transition"},
+                    "assignee": {"type": "string", "minLength": 1, "description": "Who is starting work (agent name)"},
+                    "target_status": {
+                        "type": "string",
+                        "description": (
+                            "Optional target status. Defaults to the type's unique wip-category status; "
+                            "required when the type defines multiple wip statuses."
+                        ),
+                    },
+                    "actor": {
+                        "type": "string",
+                        "description": "Agent/user identity for audit trail (defaults to assignee)",
+                    },
+                },
+                "required": ["issue_id", "assignee"],
+            },
+        ),
+        Tool(
+            name="start_next_work",
+            description=(
+                "Claim the highest-priority ready issue and atomically transition it to a working status. "
+                "Tie-break ordering: priority asc, created_at asc, issue_id asc (same as claim_next). "
+                "Returns the transitioned issue, or {status: 'empty'} when no ready issue matches."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "assignee": {"type": "string", "minLength": 1, "description": "Who is starting work (agent name)"},
+                    "type": {"type": "string", "description": "Filter by issue type"},
+                    "priority_min": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 4,
+                        "description": "Minimum priority (0=critical)",
+                    },
+                    "priority_max": {"type": "integer", "minimum": 0, "maximum": 4, "description": "Maximum priority"},
+                    "target_status": {
+                        "type": "string",
+                        "description": (
+                            "Optional target status. Defaults to the type's unique wip-category status; "
+                            "required when the type defines multiple wip statuses."
+                        ),
+                    },
+                    "actor": {
+                        "type": "string",
+                        "description": "Agent/user identity for audit trail (defaults to assignee)",
+                    },
+                },
+                "required": ["assignee"],
+            },
+        ),
+        Tool(
+            name="batch_close",
+            description=(
+                "Close multiple issues in one call. Returns BatchResponse[SlimIssue] "
+                "(default) or BatchResponse[PublicIssue] when response_detail='full'. "
+                "failed[] is always present (empty if none); newly_unblocked is "
+                "included only when the close unblocks dependent issues; "
+                "valid_transitions appears on per-item failures with code=INVALID_TRANSITION."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "issue_ids": {
                         "type": "array",
                         "items": {"type": "string"},
                         "description": "Issue IDs to close",
                     },
                     "reason": {"type": "string", "default": "", "description": "Close reason"},
+                    "response_detail": {
+                        "type": "string",
+                        "enum": ["slim", "full"],
+                        "default": "slim",
+                        "description": "'slim' (default) returns SlimIssue items in succeeded[]; 'full' returns full PublicIssue records.",
+                    },
                     "actor": {"type": "string", "description": "Agent/user identity for audit trail"},
                 },
-                "required": ["ids"],
+                "required": ["issue_ids"],
             },
         ),
         Tool(
             name="batch_update",
-            description="Update multiple issues with the same changes in one call.",
+            description=(
+                "Update multiple issues with the same changes in one call. Returns "
+                "BatchResponse[SlimIssue] (default) or BatchResponse[PublicIssue] "
+                "when response_detail='full'. failed[] is always present (empty if "
+                "none); valid_transitions appears on per-item failures with "
+                "code=INVALID_TRANSITION."
+            ),
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "ids": {
+                    "issue_ids": {
                         "type": "array",
                         "items": {"type": "string"},
                         "description": "Issue IDs to update",
@@ -324,9 +417,15 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
                     "priority": {"type": "integer", "minimum": 0, "maximum": 4, "description": "New priority"},
                     "assignee": {"type": "string", "description": "New assignee"},
                     "fields": {"type": "object", "description": "Fields to merge"},
+                    "response_detail": {
+                        "type": "string",
+                        "enum": ["slim", "full"],
+                        "default": "slim",
+                        "description": "'slim' (default) returns SlimIssue items in succeeded[]; 'full' returns full PublicIssue records.",
+                    },
                     "actor": {"type": "string", "description": "Agent/user identity for audit trail"},
                 },
-                "required": ["ids"],
+                "required": ["issue_ids"],
             },
         ),
     ]
@@ -344,6 +443,8 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
         "claim_next": _handle_claim_next,
         "batch_close": _handle_batch_close,
         "batch_update": _handle_batch_update,
+        "start_work": _handle_start_work,
+        "start_next_work": _handle_start_next_work,
     }
 
     return tools, handlers
@@ -359,22 +460,21 @@ async def _handle_get_issue(arguments: dict[str, Any]) -> list[TextContent]:
 
     args = _parse_args(arguments, GetIssueArgs)
     tracker = _get_db()
+    include_files = bool(args.get("include_files", False))
     try:
-        issue = tracker.get_issue(args["id"])
-        issue_dict = issue.to_dict()
+        issue = tracker.get_issue(args["issue_id"])
+        issue_payload = issue_to_public(issue)
 
-        # Include file associations (default true)
+        # Fail-fast to match dashboard and get_issue_files MCP tool; see
+        # filigree-c6c7842661 for why swallowing sqlite3.Error is wrong.
         file_assocs: list[Any] = []
-        if args.get("include_files", True):
-            try:
-                file_assocs = tracker.get_issue_files(args["id"])
-            except (sqlite3.Error, KeyError) as exc:
-                logger.warning("Failed to load file associations for %s: %s", args["id"], exc)
+        if include_files:
+            file_assocs = tracker.get_issue_files(args["issue_id"])
 
         if args.get("include_transitions"):
-            transitions = tracker.get_valid_transitions(args["id"])
+            transitions = tracker.get_valid_transitions(args["issue_id"])
             result = IssueWithTransitions(
-                **issue_dict,
+                **issue_payload,
                 valid_transitions=[
                     TransitionDetail(
                         to=t.to,
@@ -388,15 +488,15 @@ async def _handle_get_issue(arguments: dict[str, Any]) -> list[TextContent]:
                 ],
             )
             out: dict[str, Any] = dict(result)
-            if args.get("include_files", True):
+            if include_files:
                 out["files"] = file_assocs
             return _text(out)
-        out = dict(issue_dict)
-        if args.get("include_files", True):
+        out = dict(issue_payload)
+        if include_files:
             out["files"] = file_assocs
         return _text(out)
     except KeyError:
-        return _text(ErrorResponse(error=f"Issue not found: {args['id']}", code="not_found"))
+        return _text(ErrorResponse(error=f"Issue not found: {args['issue_id']}", code=ErrorCode.NOT_FOUND))
 
 
 async def _handle_list_issues(arguments: dict[str, Any]) -> list[TextContent]:
@@ -415,14 +515,16 @@ async def _handle_list_issues(arguments: dict[str, Any]) -> list[TextContent]:
         # expansion internally (open/wip/done + aliases like in_progress/closed).
         status_filter = status_category
 
-    effective_limit, offset = _resolve_pagination(arguments)
+    effective_limit, offset, pag_err = _resolve_pagination(arguments)
+    if pag_err is not None:
+        return pag_err
 
     try:
         issues = tracker.list_issues(
             status=status_filter,
             type=args.get("type"),
             priority=priority,
-            parent_id=args.get("parent_id"),
+            parent_id=args.get("parent_issue_id"),
             assignee=args.get("assignee"),
             label=args.get("label"),
             label_prefix=args.get("label_prefix"),
@@ -431,16 +533,11 @@ async def _handle_list_issues(arguments: dict[str, Any]) -> list[TextContent]:
             offset=offset,
         )
     except ValueError as e:
-        return _text(ErrorResponse(error=str(e), code="validation_error"))
+        return _text(ErrorResponse(error=str(e), code=ErrorCode.VALIDATION))
     issues, has_more = _apply_has_more(issues, effective_limit)
-    return _text(
-        IssueListResponse(
-            issues=[i.to_dict() for i in issues],
-            limit=effective_limit,
-            offset=offset,
-            has_more=has_more,
-        )
-    )
+    items = [issue_to_public(i) for i in issues]
+    next_offset = offset + len(items) if has_more else None
+    return _text(_list_response(items, has_more=has_more, next_offset=next_offset))
 
 
 async def _handle_create_issue(arguments: dict[str, Any]) -> list[TextContent]:
@@ -460,7 +557,7 @@ async def _handle_create_issue(arguments: dict[str, Any]) -> list[TextContent]:
             args["title"],
             type=args.get("type", "task"),
             priority=priority,
-            parent_id=args.get("parent_id"),
+            parent_id=args.get("parent_issue_id"),
             description=args.get("description", ""),
             notes=args.get("notes", ""),
             fields=args.get("fields"),
@@ -469,9 +566,9 @@ async def _handle_create_issue(arguments: dict[str, Any]) -> list[TextContent]:
             actor=actor,
         )
     except ValueError as e:
-        return _text(ErrorResponse(error=str(e), code="validation_error"))
+        return _text(ErrorResponse(error=str(e), code=ErrorCode.VALIDATION))
     _refresh_summary()
-    return _text(issue.to_dict())
+    return _text(issue_to_public(issue))
 
 
 async def _handle_update_issue(arguments: dict[str, Any]) -> list[TextContent]:
@@ -487,33 +584,33 @@ async def _handle_update_issue(arguments: dict[str, Any]) -> list[TextContent]:
         return priority_err
     tracker = _get_db()
     try:
-        before = tracker.get_issue(args["id"])
+        before = tracker.get_issue(args["issue_id"])
     except KeyError:
-        return _text(ErrorResponse(error=f"Issue not found: {args['id']}", code="not_found"))
+        return _text(ErrorResponse(error=f"Issue not found: {args['issue_id']}", code=ErrorCode.NOT_FOUND))
     try:
         issue = tracker.update_issue(
-            args["id"],
+            args["issue_id"],
             status=args.get("status"),
             priority=priority,
             title=args.get("title"),
             assignee=args.get("assignee"),
             description=args.get("description"),
             notes=args.get("notes"),
-            parent_id=args.get("parent_id"),
+            parent_id=args.get("parent_issue_id"),
             fields=args.get("fields"),
             actor=actor,
         )
         _refresh_summary()
         changed = [attr for attr in _UPDATE_TRACKED_FIELDS if getattr(issue, attr) != getattr(before, attr)]
-        result = IssueWithChangedFields(**issue.to_dict(), changed_fields=changed)
+        result = IssueWithChangedFields(**issue_to_public(issue), changed_fields=changed)
         return _text(result)
     except KeyError:
-        return _text(ErrorResponse(error=f"Issue not found: {args['id']}", code="not_found"))
+        return _text(ErrorResponse(error=f"Issue not found: {args['issue_id']}", code=ErrorCode.NOT_FOUND))
     except ValueError as e:
         msg = str(e)
-        if "status" in msg.lower() or "transition" in msg.lower() or "state" in msg.lower():
-            return _text(_build_transition_error(tracker, args["id"], msg))
-        return _text(ErrorResponse(error=msg, code="validation_error"))
+        if classify_value_error(msg) == ErrorCode.INVALID_TRANSITION:
+            return _text(_build_transition_error(tracker, args["issue_id"], msg))
+        return _text(ErrorResponse(error=msg, code=ErrorCode.VALIDATION))
 
 
 async def _handle_close_issue(arguments: dict[str, Any]) -> list[TextContent]:
@@ -527,7 +624,7 @@ async def _handle_close_issue(arguments: dict[str, Any]) -> list[TextContent]:
     try:
         ready_before = {i.id for i in tracker.get_ready()}
         issue = tracker.close_issue(
-            args["id"],
+            args["issue_id"],
             reason=args.get("reason", ""),
             actor=actor,
             fields=args.get("fields"),
@@ -535,17 +632,14 @@ async def _handle_close_issue(arguments: dict[str, Any]) -> list[TextContent]:
         _refresh_summary()
         ready_after = tracker.get_ready()
         newly_unblocked = [i for i in ready_after if i.id not in ready_before]
+        result: dict[str, Any] = dict(issue_to_public(issue))
         if newly_unblocked:
-            result: IssueWithUnblocked | IssueDict = IssueWithUnblocked(
-                **issue.to_dict(), newly_unblocked=[_slim_issue(i) for i in newly_unblocked]
-            )
-        else:
-            result = issue.to_dict()
+            result["newly_unblocked"] = [_slim_issue(i) for i in newly_unblocked]
         return _text(result)
     except KeyError:
-        return _text(ErrorResponse(error=f"Issue not found: {args['id']}", code="not_found"))
+        return _text(ErrorResponse(error=f"Issue not found: {args['issue_id']}", code=ErrorCode.NOT_FOUND))
     except ValueError as e:
-        return _text(_build_transition_error(tracker, args["id"], str(e)))
+        return _text(_build_transition_error(tracker, args["issue_id"], str(e)))
 
 
 async def _handle_reopen_issue(arguments: dict[str, Any]) -> list[TextContent]:
@@ -558,15 +652,15 @@ async def _handle_reopen_issue(arguments: dict[str, Any]) -> list[TextContent]:
     tracker = _get_db()
     try:
         issue = tracker.reopen_issue(
-            args["id"],
+            args["issue_id"],
             actor=actor,
         )
         _refresh_summary()
-        return _text(issue.to_dict())
+        return _text(issue_to_public(issue))
     except KeyError:
-        return _text(ErrorResponse(error=f"Issue not found: {args['id']}", code="not_found"))
+        return _text(ErrorResponse(error=f"Issue not found: {args['issue_id']}", code=ErrorCode.NOT_FOUND))
     except ValueError as e:
-        return _text(ErrorResponse(error=str(e), code="invalid_transition"))
+        return _text(ErrorResponse(error=str(e), code=ErrorCode.INVALID_TRANSITION))
 
 
 async def _handle_search_issues(arguments: dict[str, Any]) -> list[TextContent]:
@@ -574,7 +668,9 @@ async def _handle_search_issues(arguments: dict[str, Any]) -> list[TextContent]:
 
     args = _parse_args(arguments, SearchIssuesArgs)
     tracker = _get_db()
-    effective_limit, offset = _resolve_pagination(arguments)
+    effective_limit, offset, pag_err = _resolve_pagination(arguments)
+    if pag_err is not None:
+        return pag_err
 
     issues = tracker.search_issues(
         args["query"],
@@ -582,36 +678,34 @@ async def _handle_search_issues(arguments: dict[str, Any]) -> list[TextContent]:
         offset=offset,
     )
     issues, has_more = _apply_has_more(issues, effective_limit)
-    return _text(
-        SearchResponse(
-            issues=[_slim_issue(i) for i in issues],
-            limit=effective_limit,
-            offset=offset,
-            has_more=has_more,
-        )
-    )
+    items = [_slim_issue(i) for i in issues]
+    next_offset = offset + len(items) if has_more else None
+    return _text(_list_response(items, has_more=has_more, next_offset=next_offset))
 
 
 async def _handle_claim_issue(arguments: dict[str, Any]) -> list[TextContent]:
     from filigree.mcp_server import _get_db, _refresh_summary
 
     args = _parse_args(arguments, ClaimIssueArgs)
-    actor, actor_err = _validate_actor(args.get("actor", args["assignee"]))
+    assignee = args.get("assignee")
+    if not isinstance(assignee, str) or not assignee.strip():
+        return _text(ErrorResponse(error="assignee must be a non-empty string", code=ErrorCode.VALIDATION))
+    actor, actor_err = _validate_actor(args.get("actor", assignee))
     if actor_err:
         return actor_err
     tracker = _get_db()
     try:
         issue = tracker.claim_issue(
-            args["id"],
-            assignee=args["assignee"],
+            args["issue_id"],
+            assignee=assignee,
             actor=actor,
         )
         _refresh_summary()
-        return _text(issue.to_dict())
+        return _text(issue_to_public(issue))
     except KeyError:
-        return _text(ErrorResponse(error=f"Issue not found: {args['id']}", code="not_found"))
+        return _text(ErrorResponse(error=f"Issue not found: {args['issue_id']}", code=ErrorCode.NOT_FOUND))
     except ValueError as e:
-        return _text(ErrorResponse(error=str(e), code="conflict"))
+        return _text(ErrorResponse(error=str(e), code=ErrorCode.CONFLICT))
 
 
 async def _handle_release_claim(arguments: dict[str, Any]) -> list[TextContent]:
@@ -623,20 +717,23 @@ async def _handle_release_claim(arguments: dict[str, Any]) -> list[TextContent]:
         return actor_err
     tracker = _get_db()
     try:
-        issue = tracker.release_claim(args["id"], actor=actor)
+        issue = tracker.release_claim(args["issue_id"], actor=actor)
         _refresh_summary()
-        return _text(issue.to_dict())
+        return _text(issue_to_public(issue))
     except KeyError:
-        return _text(ErrorResponse(error=f"Issue not found: {args['id']}", code="not_found"))
+        return _text(ErrorResponse(error=f"Issue not found: {args['issue_id']}", code=ErrorCode.NOT_FOUND))
     except ValueError as e:
-        return _text(ErrorResponse(error=str(e), code="conflict"))
+        return _text(ErrorResponse(error=str(e), code=ErrorCode.CONFLICT))
 
 
 async def _handle_claim_next(arguments: dict[str, Any]) -> list[TextContent]:
     from filigree.mcp_server import _get_db, _refresh_summary
 
     args = _parse_args(arguments, ClaimNextArgs)
-    actor, actor_err = _validate_actor(args.get("actor", args["assignee"]))
+    assignee = args.get("assignee")
+    if not isinstance(assignee, str) or not assignee.strip():
+        return _text(ErrorResponse(error="assignee must be a non-empty string", code=ErrorCode.VALIDATION))
+    actor, actor_err = _validate_actor(args.get("actor", assignee))
     if actor_err:
         return actor_err
     priority_min = args.get("priority_min")
@@ -648,23 +745,22 @@ async def _handle_claim_next(arguments: dict[str, Any]) -> list[TextContent]:
     if pmax_err:
         return pmax_err
     tracker = _get_db()
-    claimed = tracker.claim_next(
-        args["assignee"],
-        type_filter=args.get("type"),
-        priority_min=priority_min,
-        priority_max=priority_max,
-        actor=actor,
-    )
+    try:
+        claimed = tracker.claim_next(
+            assignee,
+            type_filter=args.get("type"),
+            priority_min=priority_min,
+            priority_max=priority_max,
+            actor=actor,
+        )
+    except ValueError as e:
+        return _text(ErrorResponse(error=str(e), code=ErrorCode.VALIDATION))
     if claimed is None:
         return _text(ClaimNextEmptyResponse(status="empty", reason="No ready issues matching filters"))
     _refresh_summary()
-    parts = [f"P{claimed.priority}"]
-    if claimed.type != "task":
-        parts.append(f"type={claimed.type}")
-    parts.append("ready issue (no blockers)")
     result = ClaimNextResponse(
-        **claimed.to_dict(),
-        selection_reason=f"Highest-priority {', '.join(parts)}",
+        **issue_to_public(claimed),
+        selection_reason=claimed.format_claim_next_reason(),
     )
     return _text(result)
 
@@ -676,27 +772,37 @@ async def _handle_batch_close(arguments: dict[str, Any]) -> list[TextContent]:
     actor, actor_err = _validate_actor(args.get("actor", "mcp"))
     if actor_err:
         return actor_err
+    detail = parse_response_detail(args.get("response_detail"))
+    if isinstance(detail, dict):
+        return _text(detail)
     tracker = _get_db()
-    ids = args["ids"]
-    if not all(isinstance(i, str) for i in ids):
-        return _text(ErrorResponse(error="All issue IDs must be strings", code="validation_error"))
+    issue_ids = args["issue_ids"]
+    if not all(isinstance(i, str) for i in issue_ids):
+        return _text(ErrorResponse(error="All issue IDs must be strings", code=ErrorCode.VALIDATION))
     ready_before = {i.id for i in tracker.get_ready()}
     closed, failed = tracker.batch_close(
-        ids,
+        issue_ids,
         reason=args.get("reason", ""),
         actor=actor,
     )
     _refresh_summary()
     ready_after = tracker.get_ready()
     newly_unblocked = [i for i in ready_after if i.id not in ready_before]
-    batch_result = BatchCloseResponse(
-        succeeded=[i.id for i in closed],
+    if detail == "full":
+        full_result: BatchResponse[PublicIssue] = BatchResponse(
+            succeeded=[issue_to_public(i) for i in closed],
+            failed=failed,
+        )
+        if newly_unblocked:
+            full_result["newly_unblocked"] = [_slim_issue(i) for i in newly_unblocked]
+        return _text(full_result)
+    slim_result: BatchResponse[SlimIssue] = BatchResponse(
+        succeeded=[_slim_issue(i) for i in closed],
         failed=failed,
-        count=len(closed),
     )
     if newly_unblocked:
-        batch_result["newly_unblocked"] = [_slim_issue(i) for i in newly_unblocked]
-    return _text(batch_result)
+        slim_result["newly_unblocked"] = [_slim_issue(i) for i in newly_unblocked]
+    return _text(slim_result)
 
 
 async def _handle_batch_update(arguments: dict[str, Any]) -> list[TextContent]:
@@ -710,15 +816,18 @@ async def _handle_batch_update(arguments: dict[str, Any]) -> list[TextContent]:
     priority_err = _validate_int_range(priority, "priority", min_val=0, max_val=4)
     if priority_err:
         return priority_err
+    detail = parse_response_detail(args.get("response_detail"))
+    if isinstance(detail, dict):
+        return _text(detail)
     tracker = _get_db()
-    u_ids = args["ids"]
-    if not all(isinstance(i, str) for i in u_ids):
-        return _text(ErrorResponse(error="All issue IDs must be strings", code="validation_error"))
+    issue_ids = args["issue_ids"]
+    if not all(isinstance(i, str) for i in issue_ids):
+        return _text(ErrorResponse(error="All issue IDs must be strings", code=ErrorCode.VALIDATION))
     u_fields = args.get("fields")
     if u_fields is not None and not isinstance(u_fields, dict):
-        return _text(ErrorResponse(error="fields must be a JSON object", code="validation_error"))
+        return _text(ErrorResponse(error="fields must be a JSON object", code=ErrorCode.VALIDATION))
     updated, update_failed = tracker.batch_update(
-        u_ids,
+        issue_ids,
         status=args.get("status"),
         priority=priority,
         assignee=args.get("assignee"),
@@ -726,10 +835,84 @@ async def _handle_batch_update(arguments: dict[str, Any]) -> list[TextContent]:
         actor=actor,
     )
     _refresh_summary()
-    return _text(
-        BatchUpdateResponse(
-            succeeded=[i.id for i in updated],
+    if detail == "full":
+        full_result: BatchResponse[PublicIssue] = BatchResponse(
+            succeeded=[issue_to_public(i) for i in updated],
             failed=update_failed,
-            count=len(updated),
         )
+        return _text(full_result)
+    result: BatchResponse[SlimIssue] = BatchResponse(
+        succeeded=[_slim_issue(i) for i in updated],
+        failed=update_failed,
     )
+    return _text(result)
+
+
+async def _handle_start_work(arguments: dict[str, Any]) -> list[TextContent]:
+    from filigree.mcp_server import _get_db, _refresh_summary
+
+    args = _parse_args(arguments, StartWorkArgs)
+    assignee = args.get("assignee")
+    if not isinstance(assignee, str) or not assignee.strip():
+        return _text(ErrorResponse(error="assignee must be a non-empty string", code=ErrorCode.VALIDATION))
+    actor, actor_err = _validate_actor(args.get("actor", assignee))
+    if actor_err:
+        return actor_err
+    tracker = _get_db()
+    try:
+        issue = tracker.start_work(
+            args["issue_id"],
+            assignee=assignee,
+            target_status=args.get("target_status"),
+            actor=actor,
+        )
+    except KeyError:
+        return _text(ErrorResponse(error=f"Issue not found: {args['issue_id']}", code=ErrorCode.NOT_FOUND))
+    except (AmbiguousTransitionError, InvalidTransitionError) as e:
+        return _text(ErrorResponse(error=str(e), code=ErrorCode.INVALID_TRANSITION))
+    except ValueError as e:
+        msg = str(e)
+        code = classify_value_error(msg)
+        if code == ErrorCode.INVALID_TRANSITION:
+            return _text(_build_transition_error(tracker, args["issue_id"], msg))
+        return _text(ErrorResponse(error=msg, code=ErrorCode.CONFLICT))
+    _refresh_summary()
+    return _text(issue_to_public(issue))
+
+
+async def _handle_start_next_work(arguments: dict[str, Any]) -> list[TextContent]:
+    from filigree.mcp_server import _get_db, _refresh_summary
+
+    args = _parse_args(arguments, StartNextWorkArgs)
+    assignee = args.get("assignee")
+    if not isinstance(assignee, str) or not assignee.strip():
+        return _text(ErrorResponse(error="assignee must be a non-empty string", code=ErrorCode.VALIDATION))
+    actor, actor_err = _validate_actor(args.get("actor", assignee))
+    if actor_err:
+        return actor_err
+    priority_min = args.get("priority_min")
+    pmin_err = _validate_int_range(priority_min, "priority_min", min_val=0, max_val=4)
+    if pmin_err:
+        return pmin_err
+    priority_max = args.get("priority_max")
+    pmax_err = _validate_int_range(priority_max, "priority_max", min_val=0, max_val=4)
+    if pmax_err:
+        return pmax_err
+    tracker = _get_db()
+    try:
+        claimed = tracker.start_next_work(
+            assignee=assignee,
+            type_filter=args.get("type"),
+            priority_min=priority_min,
+            priority_max=priority_max,
+            target_status=args.get("target_status"),
+            actor=actor,
+        )
+    except (AmbiguousTransitionError, InvalidTransitionError) as e:
+        return _text(ErrorResponse(error=str(e), code=ErrorCode.INVALID_TRANSITION))
+    except ValueError as e:
+        return _text(ErrorResponse(error=str(e), code=ErrorCode.VALIDATION))
+    if claimed is None:
+        return _text(ClaimNextEmptyResponse(status="empty", reason="No ready issues matching filters"))
+    _refresh_summary()
+    return _text(issue_to_public(claimed))

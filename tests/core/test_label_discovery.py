@@ -43,6 +43,29 @@ class TestListLabels:
         result = db.list_labels(top=0)
         assert len(result["namespaces"]["cluster"]["labels"]) == 15
 
+    def test_top_n_also_limits_virtual_namespaces(self, db: FiligreeDB) -> None:
+        """filigree-b6abe0a2fb: --top is documented as 'max labels per
+        namespace'. The age: virtual namespace has 5 buckets unconditionally;
+        top=2 must truncate it like any other namespace.
+
+        The has: virtual namespace is bounded by the predicates the workflow
+        defines, but its count under top=2 must not exceed 2 either."""
+        db.create_issue("Anchor", labels=["cluster:x"])
+        result = db.list_labels(top=2)
+        assert len(result["namespaces"]["age"]["labels"]) <= 2, (
+            f"age: namespace must respect top=2; got {result['namespaces']['age']['labels']}"
+        )
+        assert len(result["namespaces"]["has"]["labels"]) <= 2, (
+            f"has: namespace must respect top=2; got {result['namespaces']['has']['labels']}"
+        )
+
+    def test_top_zero_keeps_full_virtual_namespaces(self, db: FiligreeDB) -> None:
+        """Reciprocal of the truncation fix: top=0 must NOT collapse age:/has:
+        — the unlimited semantic must continue to return all virtual entries."""
+        db.create_issue("Anchor", labels=["cluster:x"])
+        result = db.list_labels(top=0)
+        assert len(result["namespaces"]["age"]["labels"]) == 5
+
     def test_namespace_filter(self, db: FiligreeDB) -> None:
         db.create_issue("A", labels=["cluster:x", "effort:m"])
         result = db.list_labels(namespace="cluster")

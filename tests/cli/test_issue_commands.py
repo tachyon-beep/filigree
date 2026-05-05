@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 
+import pytest
 from click.testing import CliRunner
 
 from filigree.cli import cli
@@ -86,6 +87,53 @@ class TestCreate:
         assert result.exit_code == 1
 
 
+class TestCliPublicIssueVocabulary:
+    def test_create_json_uses_issue_id(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        runner, _ = cli_in_project
+        result = runner.invoke(cli, ["create", "Public create", "--json"])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["issue_id"]
+        assert "id" not in data
+
+    def test_show_json_uses_issue_id(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        runner, _ = cli_in_project
+        created = runner.invoke(cli, ["create", "Public show"])
+        issue_id = _extract_id(created.output)
+
+        result = runner.invoke(cli, ["show", issue_id, "--json"])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["issue_id"] == issue_id
+        assert "id" not in data
+
+    def test_list_json_uses_issue_id(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        runner, _ = cli_in_project
+        created = runner.invoke(cli, ["create", "Public list"])
+        issue_id = _extract_id(created.output)
+
+        result = runner.invoke(cli, ["list", "--type", "task", "--json"])
+        assert result.exit_code == 0
+        items = json.loads(result.output)["items"]
+        item = next(i for i in items if i["title"] == "Public list")
+        assert item["issue_id"] == issue_id
+        assert "id" not in item
+
+    def test_start_next_work_json_uses_issue_id(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        runner, _ = cli_in_project
+        created = runner.invoke(cli, ["create", "Public start next", "--type", "task", "--priority", "0"])
+        issue_id = _extract_id(created.output)
+
+        result = runner.invoke(
+            cli,
+            ["start-next-work", "--assignee", "agent-1", "--type", "task", "--json"],
+        )
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["issue_id"] == issue_id
+        assert "id" not in data
+
+
 class TestShowAndList:
     def test_show_issue(self, cli_in_project: tuple[CliRunner, Path]) -> None:
         runner, _ = cli_in_project
@@ -97,7 +145,7 @@ class TestShowAndList:
 
     def test_show_not_found(self, cli_in_project: tuple[CliRunner, Path]) -> None:
         runner, _ = cli_in_project
-        result = runner.invoke(cli, ["show", "nonexistent-abc"])
+        result = runner.invoke(cli, ["show", "test-nonexistent"])
         assert result.exit_code == 1
 
     def test_list_all(self, cli_in_project: tuple[CliRunner, Path]) -> None:
@@ -119,6 +167,27 @@ class TestShowAndList:
         # 1 open task + auto-seeded "Future" release (planning = open category) = 2
         assert "2 issues" in result.output
 
+    def test_show_with_files_json_has_files_key(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        """--with-files --json includes a 'files' key (even if empty list)."""
+        runner, _ = cli_in_project
+        r = runner.invoke(cli, ["create", "Files test issue"])
+        issue_id = _extract_id(r.output)
+        result = runner.invoke(cli, ["show", issue_id, "--with-files", "--json"])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert "files" in data
+        assert isinstance(data["files"], list)
+
+    def test_show_without_files_json_has_no_files_key(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        """Default show --json does NOT include a 'files' key."""
+        runner, _ = cli_in_project
+        r = runner.invoke(cli, ["create", "No files key issue"])
+        issue_id = _extract_id(r.output)
+        result = runner.invoke(cli, ["show", issue_id, "--json"])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert "files" not in data
+
 
 class TestUpdateAndClose:
     def test_update_status(self, cli_in_project: tuple[CliRunner, Path]) -> None:
@@ -131,8 +200,34 @@ class TestUpdateAndClose:
 
     def test_update_not_found(self, cli_in_project: tuple[CliRunner, Path]) -> None:
         runner, _ = cli_in_project
-        result = runner.invoke(cli, ["update", "nonexistent-abc", "--title", "nope"])
+        result = runner.invoke(cli, ["update", "test-nonexistent", "--title", "nope"])
         assert result.exit_code == 1
+
+    def test_update_design_sets_field(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        runner, _ = cli_in_project
+        r = runner.invoke(cli, ["create", "Design shorthand"])
+        issue_id = _extract_id(r.output)
+        result = runner.invoke(cli, ["update", issue_id, "--design", "draft v1"])
+        assert result.exit_code == 0
+
+        show = runner.invoke(cli, ["show", issue_id, "--json"])
+        data = json.loads(show.output)
+        assert data["fields"]["design"] == "draft v1"
+
+    def test_update_design_empty_string_clears_field(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        """filigree-613e9f5f66: `--design=` must clear the field via shorthand, not silently no-op."""
+        runner, _ = cli_in_project
+        r = runner.invoke(cli, ["create", "Design clear"])
+        issue_id = _extract_id(r.output)
+        runner.invoke(cli, ["update", issue_id, "--design", "initial"])
+
+        # Clear via empty-string shorthand.
+        result = runner.invoke(cli, ["update", issue_id, "--design", ""])
+        assert result.exit_code == 0
+
+        show = runner.invoke(cli, ["show", issue_id, "--json"])
+        data = json.loads(show.output)
+        assert data["fields"].get("design") == ""
 
     def test_close_issue(self, cli_in_project: tuple[CliRunner, Path]) -> None:
         runner, _ = cli_in_project
@@ -151,7 +246,7 @@ class TestUpdateAndClose:
 
     def test_close_not_found(self, cli_in_project: tuple[CliRunner, Path]) -> None:
         runner, _ = cli_in_project
-        result = runner.invoke(cli, ["close", "nonexistent-abc"])
+        result = runner.invoke(cli, ["close", "test-nonexistent"])
         assert result.exit_code == 1
         assert "Not found" in result.output
 
@@ -160,13 +255,13 @@ class TestUpdateAndClose:
         runner, _ = cli_in_project
         r = runner.invoke(cli, ["create", "Good one"])
         good_id = _extract_id(r.output)
-        result = runner.invoke(cli, ["close", good_id, "nonexistent-abc", "--json"])
+        result = runner.invoke(cli, ["close", good_id, "test-nonexistent", "--json"])
         assert result.exit_code == 1
         data = json.loads(result.output)
-        assert len(data["closed"]) == 1
-        assert data["closed"][0]["id"] == good_id
-        assert len(data["errors"]) == 1
-        assert data["errors"][0]["id"] == "nonexistent-abc"
+        assert len(data["succeeded"]) == 1
+        assert data["succeeded"][0]["issue_id"] == good_id
+        assert len(data["failed"]) == 1
+        assert data["failed"][0]["id"] == "test-nonexistent"
 
     def test_close_json_all_success(self, cli_in_project: tuple[CliRunner, Path]) -> None:
         runner, _ = cli_in_project
@@ -176,8 +271,23 @@ class TestUpdateAndClose:
         result = runner.invoke(cli, ["close", id1, id2, "--json"])
         assert result.exit_code == 0
         data = json.loads(result.output)
-        assert len(data["closed"]) == 2
-        assert "errors" not in data
+        assert len(data["succeeded"]) == 2
+        assert data["failed"] == []
+
+    def test_close_json_unblocked_only_newly_unblocked(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        """`unblocked` must contain only issues that became ready from this close, not pre-existing ready issues."""
+        runner, _ = cli_in_project
+        already_ready = _extract_id(runner.invoke(cli, ["create", "Already ready"]).output)
+        dep = _extract_id(runner.invoke(cli, ["create", "Dep"]).output)
+        blocked = _extract_id(runner.invoke(cli, ["create", "Blocked"]).output)
+        assert runner.invoke(cli, ["add-dep", blocked, dep]).exit_code == 0
+
+        result = runner.invoke(cli, ["close", dep, "--json"])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        unblocked_ids = {i["issue_id"] for i in data["newly_unblocked"]}
+        assert blocked in unblocked_ids, "issue whose only dep closed must appear in newly_unblocked"
+        assert already_ready not in unblocked_ids, f"pre-existing ready issue must NOT appear in newly_unblocked; got {unblocked_ids}"
 
 
 class TestReopen:
@@ -192,7 +302,7 @@ class TestReopen:
 
     def test_reopen_not_found(self, cli_in_project: tuple[CliRunner, Path]) -> None:
         runner, _ = cli_in_project
-        result = runner.invoke(cli, ["reopen", "nonexistent-abc"])
+        result = runner.invoke(cli, ["reopen", "test-nonexistent"])
         assert result.exit_code == 1
         assert "Not found" in result.output
 
@@ -202,12 +312,12 @@ class TestReopen:
         r = runner.invoke(cli, ["create", "Reopen me"])
         good_id = _extract_id(r.output)
         runner.invoke(cli, ["close", good_id])
-        result = runner.invoke(cli, ["reopen", good_id, "nonexistent-abc", "--json"])
+        result = runner.invoke(cli, ["reopen", good_id, "test-nonexistent", "--json"])
         assert result.exit_code == 1
         data = json.loads(result.output)
-        assert len(data["reopened"]) == 1
-        assert data["reopened"][0]["id"] == good_id
-        assert len(data["errors"]) == 1
+        assert len(data["succeeded"]) == 1
+        assert data["succeeded"][0]["issue_id"] == good_id
+        assert len(data["failed"]) == 1
 
     def test_reopen_json_all_success(self, cli_in_project: tuple[CliRunner, Path]) -> None:
         runner, _ = cli_in_project
@@ -219,8 +329,8 @@ class TestReopen:
         result = runner.invoke(cli, ["reopen", id1, id2, "--json"])
         assert result.exit_code == 0
         data = json.loads(result.output)
-        assert len(data["reopened"]) == 2
-        assert "errors" not in data
+        assert len(data["succeeded"]) == 2
+        assert data["failed"] == []
 
 
 class TestCommentsCli:
@@ -245,8 +355,28 @@ class TestCommentsCli:
 
     def test_comment_not_found(self, cli_in_project: tuple[CliRunner, Path]) -> None:
         runner, _ = cli_in_project
-        result = runner.invoke(cli, ["add-comment", "nonexistent-abc", "text"])
+        result = runner.invoke(cli, ["add-comment", "test-nonexistent", "text"])
         assert result.exit_code == 1
+
+    def test_add_comment_refreshes_context_md(
+        self,
+        cli_in_project: tuple[CliRunner, Path],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """filigree-8188eb6fe7: add-comment must refresh context.md like other CLI mutations."""
+        runner, _ = cli_in_project
+        r = runner.invoke(cli, ["create", "Refresh me"])
+        issue_id = _extract_id(r.output)
+
+        calls: list[tuple[object, object]] = []
+
+        def spy(db: object, path: object) -> None:
+            calls.append((db, path))
+
+        monkeypatch.setattr("filigree.cli_common.write_summary", spy)
+        result = runner.invoke(cli, ["add-comment", issue_id, "needs refresh"])
+        assert result.exit_code == 0
+        assert calls, "add-comment must call refresh_summary (write_summary was never invoked)"
 
     def test_comments_empty(self, cli_in_project: tuple[CliRunner, Path]) -> None:
         runner, _ = cli_in_project
@@ -262,7 +392,7 @@ class TestLabelCli:
         runner, _ = cli_in_project
         r = runner.invoke(cli, ["create", "Label me"])
         issue_id = _extract_id(r.output)
-        result = runner.invoke(cli, ["add-label", issue_id, "urgent"])
+        result = runner.invoke(cli, ["add-label", "urgent", issue_id])
         assert result.exit_code == 0
         assert "Added label" in result.output
 
@@ -278,14 +408,34 @@ class TestLabelCli:
         runner, _ = cli_in_project
         r = runner.invoke(cli, ["create", "Label me"])
         issue_id = _extract_id(r.output)
-        result = runner.invoke(cli, ["add-label", issue_id, "bug"])
+        result = runner.invoke(cli, ["add-label", "bug", issue_id])
         assert result.exit_code == 1
         assert "reserved as an issue type" in result.output
 
     def test_label_add_not_found(self, cli_in_project: tuple[CliRunner, Path]) -> None:
         runner, _ = cli_in_project
-        result = runner.invoke(cli, ["add-label", "nonexistent-abc", "bug"])
+        result = runner.invoke(cli, ["add-label", "bug", "test-nonexistent"])
         assert result.exit_code == 1
+
+    def test_label_add_echoes_canonical_form(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        """Bug filigree-6870a1dcc0: add-label must echo the canonical (stripped) label, not raw argv."""
+        runner, _ = cli_in_project
+        r = runner.invoke(cli, ["create", "Label echo"])
+        issue_id = _extract_id(r.output)
+        result = runner.invoke(cli, ["add-label", "  urgent  ", issue_id])
+        assert result.exit_code == 0
+        assert "'urgent'" in result.output, f"expected canonical 'urgent' in output, got: {result.output!r}"
+        assert "  urgent  " not in result.output
+
+    def test_label_remove_echoes_canonical_form(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        """Bug filigree-6870a1dcc0: remove-label must echo the canonical (stripped) label, not raw argv."""
+        runner, _ = cli_in_project
+        r = runner.invoke(cli, ["create", "Label echo", "-l", "urgent"])
+        issue_id = _extract_id(r.output)
+        result = runner.invoke(cli, ["remove-label", issue_id, "  urgent  "])
+        assert result.exit_code == 0
+        assert "'urgent'" in result.output
+        assert "  urgent  " not in result.output
 
 
 class TestClaimCli:
@@ -317,8 +467,22 @@ class TestClaimCli:
 
     def test_claim_not_found(self, cli_in_project: tuple[CliRunner, Path]) -> None:
         runner, _ = cli_in_project
-        result = runner.invoke(cli, ["claim", "nonexistent-abc", "--assignee", "a"])
+        result = runner.invoke(cli, ["claim", "test-nonexistent", "--assignee", "a"])
         assert result.exit_code == 1
+
+    def test_claim_whitespace_assignee_json_is_validation(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        """Cross-surface parity: MCP pre-validates assignee to VALIDATION.
+
+        CLI must match. Previously, a blank assignee fell through to db.claim_issue,
+        raised "Assignee cannot be empty", and was miscoded as CONFLICT.
+        """
+        runner, _ = cli_in_project
+        r = runner.invoke(cli, ["create", "Claimable"])
+        issue_id = _extract_id(r.output)
+        result = runner.invoke(cli, ["claim", issue_id, "--assignee", "   ", "--json"])
+        assert result.exit_code == 1
+        data = json.loads(result.output)
+        assert data["code"] == "VALIDATION"
 
 
 class TestClaimNextCli:
@@ -355,12 +519,60 @@ class TestClaimNextCli:
         data = json.loads(result.output)
         assert data["status"] == "empty"
 
+    def test_claim_next_json_empty_includes_reason(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        """filigree-0e8dadbfcc: empty --json must mirror MCP ClaimNextEmptyResponse.
+
+        types/api.py:266 declares ``reason`` alongside ``status``; the MCP
+        handler emits ``"No ready issues matching filters"``. CLI parity.
+        """
+        runner, _ = cli_in_project
+        runner.invoke(cli, ["claim-next", "--assignee", "drain"])
+        result = runner.invoke(cli, ["claim-next", "--assignee", "a", "--json"])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data == {"status": "empty", "reason": "No ready issues matching filters"}
+
+    def test_claim_next_json_success_includes_selection_reason(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        """filigree-0e8dadbfcc: successful --json must mirror MCP ClaimNextResponse.
+
+        types/api.py:140 declares ``selection_reason``; the MCP handler builds
+        it via ``Issue.format_claim_next_reason``. CLI parity is required by
+        Phase E §9 (envelope shape contract).
+        """
+        runner, _ = cli_in_project
+        runner.invoke(cli, ["create", "P1 task", "-p", "1"])
+        result = runner.invoke(cli, ["claim-next", "--assignee", "bot", "--type", "task", "--json"])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["selection_reason"] == "Highest-priority P1, ready issue (no blockers)"
+
+    def test_claim_next_json_success_selection_reason_includes_type_when_nondefault(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        """The seeded ``Future`` release issue exercises the ``type=`` branch."""
+        runner, _ = cli_in_project
+        result = runner.invoke(cli, ["claim-next", "--assignee", "bot", "--type", "release", "--json"])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["type"] == "release"
+        assert "type=release" in data["selection_reason"]
+
     def test_claim_next_whitespace_assignee_shows_clean_error(self, cli_in_project: tuple[CliRunner, Path]) -> None:
         runner, _ = cli_in_project
         runner.invoke(cli, ["create", "A task"])
         result = runner.invoke(cli, ["claim-next", "--assignee", "   "])
         assert result.exit_code == 1
         assert "Traceback" not in (result.output or "")
+
+    def test_claim_next_whitespace_assignee_json_is_validation(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        """Cross-surface parity: MCP returns VALIDATION for blank assignee.
+
+        CLI must match — blank assignee is bad user input, not a race condition.
+        """
+        runner, _ = cli_in_project
+        runner.invoke(cli, ["create", "A task"])
+        result = runner.invoke(cli, ["claim-next", "--assignee", "   ", "--json"])
+        assert result.exit_code == 1
+        data = json.loads(result.output)
+        assert data["code"] == "VALIDATION"
 
 
 class TestReleaseCli:
@@ -375,7 +587,7 @@ class TestReleaseCli:
 
     def test_release_not_found(self, cli_in_project: tuple[CliRunner, Path]) -> None:
         runner, _ = cli_in_project
-        result = runner.invoke(cli, ["release", "nonexistent-abc"])
+        result = runner.invoke(cli, ["release", "test-nonexistent"])
         assert result.exit_code == 1
 
     def test_release_not_claimed(self, cli_in_project: tuple[CliRunner, Path]) -> None:
@@ -393,12 +605,13 @@ class TestReleaseCli:
         result = runner.invoke(cli, ["release", issue_id, "--json"])
         assert result.exit_code == 0
         data = json.loads(result.output)
-        assert data["id"] == issue_id
+        assert data["issue_id"] == issue_id
+        assert "id" not in data
         assert data["assignee"] == ""
 
     def test_release_json_not_found(self, cli_in_project: tuple[CliRunner, Path]) -> None:
         runner, _ = cli_in_project
-        result = runner.invoke(cli, ["release", "nonexistent-abc", "--json"])
+        result = runner.invoke(cli, ["release", "test-nonexistent", "--json"])
         assert result.exit_code == 1
         data = json.loads(result.output)
         assert "error" in data
@@ -435,3 +648,27 @@ class TestListLabelQuery:
         result = runner.invoke(cli, ["list", "-l", "age:fresh"])
         assert result.exit_code == 0
         assert "Fresh issue" in result.output
+
+    def test_list_invalid_virtual_label_emits_json_envelope(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        """`list --json` must emit a 2.0 envelope on invalid label, not a Click string.
+
+        Regression for filigree-d87fd24b12.
+        """
+        runner, _ = cli_in_project
+        result = runner.invoke(cli, ["list", "-l", "age:bogus", "--json"])
+        assert result.exit_code == 1, result.output
+        data = json.loads(result.output)
+        assert data["code"] == "VALIDATION", data
+        assert "age" in data["error"].lower() or "bogus" in data["error"].lower()
+
+    def test_list_malformed_label_prefix_emits_json_envelope(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        """`list --json` must emit a 2.0 envelope on malformed --label-prefix.
+
+        Regression for filigree-d87fd24b12.
+        """
+        runner, _ = cli_in_project
+        result = runner.invoke(cli, ["list", "--label-prefix", "missing-colon", "--json"])
+        assert result.exit_code == 1, result.output
+        data = json.loads(result.output)
+        assert data["code"] == "VALIDATION", data
+        assert "label_prefix" in data["error"].lower() or "colon" in data["error"].lower()

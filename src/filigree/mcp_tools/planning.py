@@ -7,8 +7,15 @@ from typing import Any, cast
 
 from mcp.types import TextContent, Tool
 
-from filigree.mcp_tools.common import _parse_args, _slim_issue, _text, _validate_actor, _validate_int_range
-from filigree.types.api import BlockedIssue, CriticalPathResponse, DependencyActionResponse, ErrorResponse, PlanResponse
+from filigree.mcp_tools.common import (
+    _list_response,
+    _parse_args,
+    _slim_issue,
+    _text,
+    _validate_actor,
+    _validate_int_range,
+)
+from filigree.types.api import BlockedIssue, CriticalPathResponse, DependencyActionResponse, ErrorCode, ErrorResponse, PlanResponse
 from filigree.types.inputs import (
     AddDependencyArgs,
     CreatePlanArgs,
@@ -24,15 +31,15 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
     tools = [
         Tool(
             name="add_dependency",
-            description="Add dependency: from_id depends on to_id (to_id blocks from_id)",
+            description="Add dependency: from_issue_id depends on to_issue_id (to_issue_id blocks from_issue_id)",
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "from_id": {"type": "string", "description": "Issue that is blocked"},
-                    "to_id": {"type": "string", "description": "Issue that blocks"},
+                    "from_issue_id": {"type": "string", "description": "Issue that is blocked"},
+                    "to_issue_id": {"type": "string", "description": "Issue that blocks"},
                     "actor": {"type": "string", "description": "Agent/user identity for audit trail"},
                 },
-                "required": ["from_id", "to_id"],
+                "required": ["from_issue_id", "to_issue_id"],
             },
         ),
         Tool(
@@ -41,11 +48,11 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "from_id": {"type": "string", "description": "Issue that was blocked"},
-                    "to_id": {"type": "string", "description": "Issue that was blocking"},
+                    "from_issue_id": {"type": "string", "description": "Issue that was blocked"},
+                    "to_issue_id": {"type": "string", "description": "Issue that was blocking"},
                     "actor": {"type": "string", "description": "Agent/user identity for audit trail"},
                 },
-                "required": ["from_id", "to_id"],
+                "required": ["from_issue_id", "to_issue_id"],
             },
         ),
         Tool(
@@ -106,7 +113,7 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
                                             "description": {"type": "string", "default": ""},
                                             "deps": {
                                                 "type": "array",
-                                                "items": {},
+                                                "items": {"type": ["integer", "string"]},
                                                 "description": "Step indices (int for same-phase, 'p.s' for cross-phase)",
                                             },
                                         },
@@ -157,15 +164,15 @@ async def _handle_add_dependency(arguments: dict[str, Any]) -> list[TextContent]
     tracker = _get_db()
     try:
         added = tracker.add_dependency(
-            args["from_id"],
-            args["to_id"],
+            args["from_issue_id"],
+            args["to_issue_id"],
             actor=actor,
         )
     except (ValueError, KeyError) as e:
-        return _text(ErrorResponse(error=str(e), code="invalid"))
+        return _text(ErrorResponse(error=str(e), code=ErrorCode.VALIDATION))
     _refresh_summary()
     status = "added" if added else "already_exists"
-    return _text(DependencyActionResponse(status=status, from_id=args["from_id"], to_id=args["to_id"]))
+    return _text(DependencyActionResponse(status=status, from_id=args["from_issue_id"], to_id=args["to_issue_id"]))
 
 
 async def _handle_remove_dependency(arguments: dict[str, Any]) -> list[TextContent]:
@@ -176,14 +183,17 @@ async def _handle_remove_dependency(arguments: dict[str, Any]) -> list[TextConte
     if actor_err:
         return actor_err
     tracker = _get_db()
-    removed = tracker.remove_dependency(
-        args["from_id"],
-        args["to_id"],
-        actor=actor,
-    )
+    try:
+        removed = tracker.remove_dependency(
+            args["from_issue_id"],
+            args["to_issue_id"],
+            actor=actor,
+        )
+    except (ValueError, KeyError) as e:
+        return _text(ErrorResponse(error=str(e), code=ErrorCode.VALIDATION))
     _refresh_summary()
     status = "removed" if removed else "not_found"
-    return _text(DependencyActionResponse(status=status, from_id=args["from_id"], to_id=args["to_id"]))
+    return _text(DependencyActionResponse(status=status, from_id=args["from_issue_id"], to_id=args["to_issue_id"]))
 
 
 async def _handle_get_ready(arguments: dict[str, Any]) -> list[TextContent]:
@@ -191,7 +201,8 @@ async def _handle_get_ready(arguments: dict[str, Any]) -> list[TextContent]:
 
     tracker = _get_db()
     issues = tracker.get_ready()
-    return _text([_slim_issue(i) for i in issues])
+    items = [_slim_issue(i) for i in issues]
+    return _text(_list_response(items, has_more=False))
 
 
 async def _handle_get_blocked(arguments: dict[str, Any]) -> list[TextContent]:
@@ -199,7 +210,8 @@ async def _handle_get_blocked(arguments: dict[str, Any]) -> list[TextContent]:
 
     tracker = _get_db()
     issues = tracker.get_blocked()
-    return _text([BlockedIssue(**_slim_issue(i), blocked_by=i.blocked_by) for i in issues])
+    items = [BlockedIssue(**_slim_issue(i), blocked_by=i.blocked_by) for i in issues]
+    return _text(_list_response(items, has_more=False))
 
 
 async def _handle_get_plan(arguments: dict[str, Any]) -> list[TextContent]:
@@ -220,7 +232,47 @@ async def _handle_get_plan(arguments: dict[str, Any]) -> list[TextContent]:
         )
         return _text(result)
     except KeyError:
-        return _text(ErrorResponse(error=f"Milestone not found: {args['milestone_id']}", code="not_found"))
+        return _text(ErrorResponse(error=f"Milestone not found: {args['milestone_id']}", code=ErrorCode.NOT_FOUND))
+
+
+def _validate_plan_deps(deps: Any, name: str) -> list[TextContent] | None:
+    """Reject deps values that db_planning would silently misinterpret.
+
+    ``db_planning.create_plan`` uses ``str(dep_ref)`` and treats any string
+    containing ``"."`` as ``"phase_idx.step_idx"``. A JSON float like ``0.1``
+    would become ``"0.1"`` and resolve to phase 0 step 1 instead of being
+    rejected; a bool would become ``"True"``/``"False"`` and fail with a raw
+    ``ValueError`` from ``int()`` (per filigree-e87d310708).
+    """
+    if not isinstance(deps, list):
+        return _text(ErrorResponse(error=f"{name} must be an array", code=ErrorCode.VALIDATION))
+    for i, dep in enumerate(deps):
+        label = f"{name}[{i}]"
+        # Reject bool before int: ``True`` is ``int`` subclass but ``str(True)``
+        # hits ``int('True')`` → raw ValueError.
+        if isinstance(dep, bool):
+            return _text(ErrorResponse(error=f"{label} must be integer or string, not bool", code=ErrorCode.VALIDATION))
+        if isinstance(dep, int):
+            if dep < 0:
+                return _text(ErrorResponse(error=f"{label} must be >= 0", code=ErrorCode.VALIDATION))
+            continue
+        if isinstance(dep, str):
+            parts = dep.split(".")
+            if len(parts) > 2 or any(not p.lstrip("-").isdigit() for p in parts):
+                return _text(
+                    ErrorResponse(
+                        error=f"{label} must be 'N' or 'P.S' with integer components, got {dep!r}",
+                        code=ErrorCode.VALIDATION,
+                    )
+                )
+            continue
+        return _text(
+            ErrorResponse(
+                error=f"{label} must be integer or 'P.S' string, got {type(dep).__name__}",
+                code=ErrorCode.VALIDATION,
+            )
+        )
+    return None
 
 
 async def _handle_create_plan(arguments: dict[str, Any]) -> list[TextContent]:
@@ -244,6 +296,9 @@ async def _handle_create_plan(arguments: dict[str, Any]) -> list[TextContent]:
             err = _validate_int_range(step.get("priority"), f"phases[{pi}].steps[{si}].priority", min_val=0, max_val=4)
             if err:
                 return err
+            dep_err = _validate_plan_deps(step.get("deps", []), f"phases[{pi}].steps[{si}].deps")
+            if dep_err:
+                return dep_err
 
     tracker = _get_db()
     try:
@@ -255,7 +310,7 @@ async def _handle_create_plan(arguments: dict[str, Any]) -> list[TextContent]:
         _refresh_summary()
         return _text(plan)
     except (KeyError, IndexError, ValueError) as e:
-        return _text(ErrorResponse(error=str(e), code="invalid"))
+        return _text(ErrorResponse(error=str(e), code=ErrorCode.VALIDATION))
 
 
 async def _handle_get_critical_path(arguments: dict[str, Any]) -> list[TextContent]:

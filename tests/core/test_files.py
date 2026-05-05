@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import sqlite3
+
 import pytest
 
 from filigree.core import FiligreeDB, ScanFinding, _normalize_scan_path
@@ -110,6 +112,22 @@ class TestRegisterFile:
         """Path that normalizes to empty (e.g. '.') should be rejected."""
         with pytest.raises(ValueError, match="empty after normalization"):
             db.register_file(".")
+
+    def test_register_explicit_empty_metadata_clears_existing(self, db: FiligreeDB) -> None:
+        """filigree-822d514ec7: register_file(metadata={}) must clear stored metadata.
+
+        `metadata=None` means leave unchanged; `metadata={}` means set to empty.
+        """
+        f1 = db.register_file("src/main.py", metadata={"owner": "team-a"})
+        assert f1.metadata == {"owner": "team-a"}
+        f2 = db.register_file("src/main.py", metadata={})
+        assert f2.metadata == {}
+
+    def test_register_metadata_none_preserves_existing(self, db: FiligreeDB) -> None:
+        """metadata=None on re-register must preserve existing metadata."""
+        db.register_file("src/main.py", metadata={"owner": "team-a"})
+        f = db.register_file("src/main.py")
+        assert f.metadata == {"owner": "team-a"}
 
 
 class TestListFiles:
@@ -410,6 +428,15 @@ class TestProcessScanResults:
                 findings=[{"path": "a.py", "rule_id": "E1", "severity": "low", "message": "  "}],
             )
 
+    def test_ingest_finding_path_dot_rejected_after_normalization(self, db: FiligreeDB) -> None:
+        """Bug filigree-0911b35955: path='.' normalizes to '' and must be rejected, not inserted."""
+        with pytest.raises(ValueError, match="empty after normalization"):
+            db.process_scan_results(
+                scan_source="ruff",
+                findings=[{"path": ".", "rule_id": "R1", "severity": "low", "message": "m"}],
+            )
+        assert db.conn.execute("SELECT COUNT(*) FROM file_records").fetchone()[0] == 0
+
     def test_ingest_finding_is_string(self, db: FiligreeDB) -> None:
         with pytest.raises(ValueError, match="dict"):
             db.process_scan_results(scan_source="ruff", findings=["not-a-dict"])  # type: ignore[list-item]
@@ -483,6 +510,56 @@ class TestProcessScanResults:
                 ],
             )
 
+    def test_bool_line_start_rejected(self, db: FiligreeDB) -> None:
+        """Bug filigree-f08a57b68f: bool passes isinstance(int) so was silently stored as 1/0."""
+        with pytest.raises(ValueError, match="line_start must be"):
+            db.process_scan_results(
+                scan_source="ruff",
+                findings=[
+                    {"path": "a.py", "rule_id": "E1", "severity": "low", "message": "m", "line_start": True},
+                ],
+            )
+
+    def test_bool_line_end_rejected(self, db: FiligreeDB) -> None:
+        """Bug filigree-f08a57b68f: bool passes isinstance(int) so was silently stored as 1/0."""
+        with pytest.raises(ValueError, match="line_end must be"):
+            db.process_scan_results(
+                scan_source="ruff",
+                findings=[
+                    {"path": "a.py", "rule_id": "E1", "severity": "low", "message": "m", "line_end": False},
+                ],
+            )
+
+    def test_negative_line_start_rejected(self, db: FiligreeDB) -> None:
+        """filigree-8383bb4462: negative line_start collides with -1 dedup sentinel."""
+        with pytest.raises(ValueError, match="line_start must be >= 0"):
+            db.process_scan_results(
+                scan_source="ruff",
+                findings=[
+                    {"path": "a.py", "rule_id": "E1", "severity": "low", "message": "m", "line_start": -1},
+                ],
+            )
+
+    def test_negative_line_end_rejected(self, db: FiligreeDB) -> None:
+        """filigree-8383bb4462: negative line_end likewise rejected for symmetry."""
+        with pytest.raises(ValueError, match="line_end must be >= 0"):
+            db.process_scan_results(
+                scan_source="ruff",
+                findings=[
+                    {"path": "a.py", "rule_id": "E1", "severity": "low", "message": "m", "line_end": -5},
+                ],
+            )
+
+    def test_non_dict_metadata_rejected(self, db: FiligreeDB) -> None:
+        """filigree-ff98665ca3: list metadata must be rejected at ingest."""
+        with pytest.raises(ValueError, match="metadata must be a JSON object"):
+            db.process_scan_results(
+                scan_source="ruff",
+                findings=[
+                    {"path": "a.py", "rule_id": "E1", "severity": "low", "message": "m", "metadata": [1, 2]},
+                ],
+            )
+
     def test_non_string_suggestion_rejected(self, db: FiligreeDB) -> None:
         """Bug filigree-0dbe1a: non-string suggestion must raise ValueError."""
         with pytest.raises(ValueError, match="suggestion must be a string"):
@@ -492,6 +569,45 @@ class TestProcessScanResults:
                     {"path": "a.py", "rule_id": "E1", "severity": "low", "message": "m", "suggestion": 42},
                 ],
             )
+
+    def test_null_suggestion_rejected(self, db: FiligreeDB) -> None:
+        """filigree-e74fecddd4: explicit None suggestion must raise ValueError, not crash _upsert_finding with TypeError."""
+        with pytest.raises(ValueError, match="suggestion must be a string"):
+            db.process_scan_results(
+                scan_source="ruff",
+                findings=[
+                    {"path": "a.py", "rule_id": "E1", "severity": "low", "message": "m", "suggestion": None},
+                ],
+            )
+
+    def test_non_string_language_rejected(self, db: FiligreeDB) -> None:
+        """filigree-2134b23fb9: non-string language must raise ValueError, not leak sqlite errors."""
+        with pytest.raises(ValueError, match="language must be a string"):
+            db.process_scan_results(
+                scan_source="ruff",
+                findings=[
+                    {"path": "a.py", "rule_id": "E1", "severity": "low", "message": "m", "language": ["py"]},
+                ],
+            )
+        with pytest.raises(ValueError, match="language must be a string"):
+            db.process_scan_results(
+                scan_source="ruff",
+                findings=[
+                    {"path": "b.py", "rule_id": "E1", "severity": "low", "message": "m", "language": 42},
+                ],
+            )
+
+    def test_null_language_normalized_to_empty(self, db: FiligreeDB) -> None:
+        """filigree-2134b23fb9: explicit None language is treated like missing (becomes "")."""
+        db.process_scan_results(
+            scan_source="ruff",
+            findings=[
+                {"path": "c.py", "rule_id": "E1", "severity": "low", "message": "m", "language": None},
+            ],
+        )
+        f = db.get_file_by_path("c.py")
+        assert f is not None
+        assert f.language == ""
 
     def test_scan_metadata_persisted_on_create(self, db: FiligreeDB) -> None:
         db.process_scan_results(
@@ -631,6 +747,45 @@ class TestScanRunId:
         )
         row = db.conn.execute("SELECT scan_run_id FROM scan_findings").fetchone()
         assert row["scan_run_id"] == "run-001"
+
+    def test_findings_count_reflects_observations_not_attribution(self, db: FiligreeDB) -> None:
+        """filigree-f84f141e86: scan_runs.findings_count must reflect findings observed
+        by THIS run, not findings whose first-attribution scan_run_id matches.
+
+        With first-attribution-wins on scan_findings.scan_run_id, a re-scan that only
+        re-sees existing findings would otherwise report findings_count=0 even though
+        it observed them.
+        """
+        db.create_scan_run(
+            scan_run_id="run-A",
+            scanner_name="codex",
+            scan_source="codex",
+            file_paths=["a.py"],
+            file_ids=[],
+        )
+        db.update_scan_run_status("run-A", "running")
+        db.process_scan_results(
+            scan_source="codex",
+            scan_run_id="run-A",
+            findings=[{"path": "a.py", "rule_id": "R1", "severity": "low", "message": "m"}],
+        )
+        db.create_scan_run(
+            scan_run_id="run-B",
+            scanner_name="codex",
+            scan_source="codex",
+            file_paths=["a.py"],
+            file_ids=[],
+        )
+        db.update_scan_run_status("run-B", "running")
+        db.process_scan_results(
+            scan_source="codex",
+            scan_run_id="run-B",
+            findings=[{"path": "a.py", "rule_id": "R1", "severity": "low", "message": "m2"}],
+        )
+        run_a = db.conn.execute("SELECT findings_count FROM scan_runs WHERE id='run-A'").fetchone()
+        run_b = db.conn.execute("SELECT findings_count FROM scan_runs WHERE id='run-B'").fetchone()
+        assert run_a["findings_count"] == 1
+        assert run_b["findings_count"] == 1, f"run-B observed 1 finding but reports findings_count={run_b['findings_count']}"
 
 
 class TestSuggestionField:
@@ -1457,10 +1612,10 @@ class TestTerminalFindingStatusesConstant:
 
 
 class TestCorruptFindingMetadata:
-    """L2 bugfix: corrupt metadata should include programmatic indicator."""
+    """L2 bugfix: corrupt metadata should signal corruption out-of-band."""
 
-    def test_corrupt_metadata_includes_error_key(self, db: FiligreeDB) -> None:
-        """When finding metadata is corrupt JSON, result should include _metadata_error."""
+    def test_corrupt_metadata_sets_corrupt_flag(self, db: FiligreeDB) -> None:
+        """When finding metadata is corrupt JSON, the result carries the out-of-band flag."""
         db.process_scan_results(
             scan_source="ruff",
             findings=[{"path": "a.py", "rule_id": "E501", "severity": "low", "message": "m"}],
@@ -1476,7 +1631,8 @@ class TestCorruptFindingMetadata:
         db.conn.commit()
 
         findings = db.get_findings(f.id)
-        assert findings[0].metadata.get("_metadata_error") is True
+        assert findings[0].metadata == {}
+        assert getattr(findings[0].metadata, "_filigree_corrupt", False) is True
 
     def test_corrupt_file_record_metadata_does_not_crash(self, db: FiligreeDB) -> None:
         """When file_records.metadata is corrupt JSON, _build_file_record should not crash."""
@@ -1490,7 +1646,8 @@ class TestCorruptFindingMetadata:
 
         result = db.get_file_by_path("corrupt_meta.py")
         assert result is not None
-        assert result.metadata.get("_metadata_error") is True
+        assert result.metadata == {}
+        assert getattr(result.metadata, "_filigree_corrupt", False) is True
 
     def test_corrupt_timeline_data_json_does_not_crash(self, db: FiligreeDB) -> None:
         """When timeline data_json is corrupt, get_file_timeline should not crash."""
@@ -2219,6 +2376,20 @@ class TestPaginationMetadata:
         with pytest.raises(ValueError, match="Invalid severity"):
             db.list_files_paginated(has_severity="ultra_critical")
 
+    def test_list_files_paginated_invalid_direction_raises(self, db: FiligreeDB) -> None:
+        """filigree-e53ce98110: invalid direction must raise ValueError, not silently fall back to default order."""
+        db.register_file("a.py")
+        with pytest.raises(ValueError, match="Invalid direction"):
+            db.list_files_paginated(direction="SIDEWAYS")
+
+    def test_list_files_paginated_valid_directions_accepted(self, db: FiligreeDB) -> None:
+        """ASC/DESC/asc/desc must all be accepted for direction."""
+        db.register_file("a.py")
+        for d in ("ASC", "DESC", "asc", "desc"):
+            db.list_files_paginated(direction=d)
+        # None still means "use default"
+        db.list_files_paginated(direction=None)
+
 
 # ---------------------------------------------------------------------------
 # _normalize_scan_path edge cases (filigree-7bff85)
@@ -2312,6 +2483,34 @@ class TestGetScanRunsCore:
         runs = db.get_scan_runs(limit=2)
         assert len(runs) == 2
 
+    def test_clean_run_with_zero_findings_appears_in_history(self, db: FiligreeDB) -> None:
+        """filigree-ff340d965f: a completed clean scan run must show in history.
+
+        Pre-fix, get_scan_runs() derived history from scan_findings only, so a
+        run that completed with zero findings was invisible despite the
+        scan_runs row existing.
+        """
+        db.create_scan_run(
+            scan_run_id="clean-run",
+            scanner_name="codex",
+            scan_source="codex",
+            file_paths=["a.py"],
+            file_ids=["f-1"],
+        )
+        db.update_scan_run_status("clean-run", "running")
+        db.process_scan_results(
+            scan_source="codex",
+            findings=[],
+            scan_run_id="clean-run",
+            complete_scan_run=True,
+        )
+        runs = db.get_scan_runs()
+        assert len(runs) == 1
+        assert runs[0]["scan_run_id"] == "clean-run"
+        assert runs[0]["total_findings"] == 0
+        assert runs[0]["files_scanned"] == 0
+        assert runs[0]["completed_at"]  # non-empty
+
 
 class TestCreateObservationsPartialFailure:
     """Test that create_observations=True handles mid-batch failures correctly."""
@@ -2348,33 +2547,102 @@ class TestCreateObservationsPartialFailure:
 
 
 class TestSafeJsonLoads:
-    """filigree-ef3925404b: _safe_json_loads edge cases."""
+    """filigree-ef3925404b, filigree-769a192252, filigree-7ea6b80f3b: _safe_json_loads edge cases.
+
+    ``_safe_json_loads`` returns a ``_ParsedJson`` (dict subclass) carrying an
+    out-of-band ``_filigree_corrupt`` flag instead of an in-band sentinel key.
+    These assertions cover both the parsed payload and the flag.
+    """
 
     def test_none_input_returns_empty_dict(self) -> None:
-        assert _safe_json_loads(None, "test") == {}
+        result = _safe_json_loads(None, "test")
+        assert result == {}
+        assert getattr(result, "_filigree_corrupt", False) is False
 
     def test_empty_string_returns_empty_dict(self) -> None:
-        assert _safe_json_loads("", "test") == {}
+        result = _safe_json_loads("", "test")
+        assert result == {}
+        assert getattr(result, "_filigree_corrupt", False) is False
 
-    def test_non_dict_json_array_repairs_to_empty(self) -> None:
+    def test_non_dict_json_array_surfaces_corrupt_flag(self) -> None:
         result = _safe_json_loads("[1,2,3]", "test")
         assert result == {}
+        assert getattr(result, "_filigree_corrupt", False) is True
 
-    def test_non_dict_json_scalar_repairs_to_empty(self) -> None:
+    def test_non_dict_json_scalar_surfaces_corrupt_flag(self) -> None:
         result = _safe_json_loads("42", "test")
         assert result == {}
-
-    def test_non_dict_json_repairs_regardless_of_error_key(self) -> None:
-        result = _safe_json_loads("[1,2,3]", "test", error_key="_fields_error")
-        assert result == {}
+        assert getattr(result, "_filigree_corrupt", False) is True
 
     def test_valid_dict_returns_parsed(self) -> None:
         result = _safe_json_loads('{"key": "value", "num": 42}', "test")
         assert result == {"key": "value", "num": 42}
+        assert getattr(result, "_filigree_corrupt", False) is False
 
-    def test_invalid_json_returns_error_marker(self) -> None:
+    def test_invalid_json_returns_corrupt_flag(self) -> None:
         result = _safe_json_loads("{not valid json}", "test")
-        assert result == {"_metadata_error": True}
+        assert result == {}
+        assert getattr(result, "_filigree_corrupt", False) is True
+
+    def test_undecodable_bytes_become_corrupt_flag(self) -> None:
+        """Bug 2 (filigree-7ea6b80f3b): UnicodeDecodeError must not leak.
+
+        SQLite-flexible-typed JSON columns can return ``bytes`` for BLOB
+        rows. Invalid-UTF-8 input previously raised ``UnicodeDecodeError``
+        past the ``(JSONDecodeError, TypeError)`` arm; the contract says
+        all corruption should surface as the flag.
+        """
+        result = _safe_json_loads(b"\xff", "test")
+        assert result == {}
+        assert getattr(result, "_filigree_corrupt", False) is True
+
+    def test_user_field_named_like_legacy_sentinel_round_trips(self, db: FiligreeDB) -> None:
+        """Bug 1 (filigree-7ea6b80f3b): a custom field named ``_fields_error`` must NOT be stripped."""
+        issue = db.create_issue("repro", type="bug", fields={"_fields_error": True, "keep": "value"})
+        out = db.get_issue(issue.id).to_dict()
+        assert out["fields"] == {"_fields_error": True, "keep": "value"}
+        assert out["data_warnings"] == []
+
+    def test_user_metadata_named_like_legacy_sentinel_round_trips(self, db: FiligreeDB) -> None:
+        """Bug 1 (filigree-7ea6b80f3b): file metadata key ``_metadata_error`` must NOT be stripped."""
+        fr = db.register_file("user_meta.py", metadata={"_metadata_error": True, "owner": "bot"})
+        out = db.get_file(fr.id)
+        assert out is not None
+        d = out.to_dict()
+        assert d["metadata"] == {"_metadata_error": True, "owner": "bot"}
+        assert d["data_warnings"] == []
+
+    def test_non_dict_file_metadata_surfaces_data_warning(self, db: FiligreeDB) -> None:
+        """End-to-end: array JSON in file_records.metadata must yield a data_warning."""
+        fr = db.register_file("array_meta.py")
+        db.conn.execute(
+            "UPDATE file_records SET metadata = '[1,2,3]' WHERE id = ?",
+            (fr.id,),
+        )
+        db.conn.commit()
+
+        result = db.get_file_by_path("array_meta.py")
+        assert result is not None
+        d = result.to_dict()
+        assert "_metadata_error" not in d["metadata"]
+        assert len(d["data_warnings"]) == 1
+        assert "corrupt" in d["data_warnings"][0].lower()
+
+    def test_blob_metadata_surfaces_data_warning(self, db: FiligreeDB) -> None:
+        """End-to-end (Bug 2): BLOB-typed garbage in metadata must become a data_warning, not raise."""
+        fr = db.register_file("blob_meta.py")
+        db.conn.execute(
+            "UPDATE file_records SET metadata = ? WHERE id = ?",
+            (sqlite3.Binary(b"\xff\xfe\xfd"), fr.id),
+        )
+        db.conn.commit()
+
+        result = db.get_file_by_path("blob_meta.py")
+        assert result is not None
+        d = result.to_dict()
+        assert d["metadata"] == {}
+        assert len(d["data_warnings"]) == 1
+        assert "corrupt" in d["data_warnings"][0].lower()
 
 
 # ---------------------------------------------------------------------------

@@ -11,6 +11,7 @@ import pytest
 from filigree.core import DB_FILENAME, FILIGREE_DIR_NAME, SUMMARY_FILENAME, VALID_SEVERITIES, FiligreeDB, write_config
 from filigree.db_scans import SCAN_COOLDOWN_SECONDS
 from filigree.mcp_server import call_tool  # type: ignore[attr-defined]
+from filigree.types.api import ErrorCode
 from tests.mcp._helpers import _parse
 
 # ---------------------------------------------------------------------------
@@ -494,7 +495,7 @@ class TestReportFindingTool:
                 },
             )
         )
-        assert data["code"] == "validation_error"
+        assert data["code"] == ErrorCode.VALIDATION
         assert "catastrophic" in data["error"]
 
     async def test_missing_file_path_returns_validation_error(self, mcp_db_for_report_finding: FiligreeDB) -> None:
@@ -509,7 +510,7 @@ class TestReportFindingTool:
                 },
             )
         )
-        assert data["code"] == "validation_error"
+        assert data["code"] == ErrorCode.VALIDATION
         assert "file_path" in data["error"]
 
     async def test_missing_rule_id_returns_validation_error(self, mcp_db_for_report_finding: FiligreeDB) -> None:
@@ -524,7 +525,7 @@ class TestReportFindingTool:
                 },
             )
         )
-        assert data["code"] == "validation_error"
+        assert data["code"] == ErrorCode.VALIDATION
         assert "rule_id" in data["error"]
 
     async def test_missing_message_returns_validation_error(self, mcp_db_for_report_finding: FiligreeDB) -> None:
@@ -539,7 +540,7 @@ class TestReportFindingTool:
                 },
             )
         )
-        assert data["code"] == "validation_error"
+        assert data["code"] == ErrorCode.VALIDATION
         assert "message" in data["error"]
 
     @pytest.mark.parametrize("severity", sorted(VALID_SEVERITIES))
@@ -593,7 +594,7 @@ class TestReportFindingTool:
                     },
                 )
             )
-        assert data["code"] == "ingestion_error"
+        assert data["code"] == ErrorCode.IO
         assert "disk full" in data["error"]
 
     async def test_file_created_false_for_existing_file(self, mcp_db_for_report_finding: FiligreeDB) -> None:

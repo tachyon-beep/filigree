@@ -29,7 +29,7 @@ from filigree.types.core import AssocType, FindingStatus, ISOTimestamp, Severity
 
 
 class GetIssueArgs(TypedDict):
-    id: str
+    issue_id: str
     include_transitions: NotRequired[bool]
     include_files: NotRequired[bool]
 
@@ -41,7 +41,7 @@ class ListIssuesArgs(TypedDict):
     status_category: NotRequired[StatusCategory]
     type: NotRequired[str]
     priority: NotRequired[int]
-    parent_id: NotRequired[str]
+    parent_issue_id: NotRequired[str]
     assignee: NotRequired[str]
     label: NotRequired[str | list[str]]
     label_prefix: NotRequired[str]
@@ -55,7 +55,7 @@ class CreateIssueArgs(TypedDict):
     title: str
     type: NotRequired[str]
     priority: NotRequired[int]
-    parent_id: NotRequired[str]
+    parent_issue_id: NotRequired[str]
     description: NotRequired[str]
     notes: NotRequired[str]
     fields: NotRequired[dict[str, Any]]
@@ -65,27 +65,27 @@ class CreateIssueArgs(TypedDict):
 
 
 class UpdateIssueArgs(TypedDict):
-    id: str
+    issue_id: str
     status: NotRequired[str]
     priority: NotRequired[int]
     title: NotRequired[str]
     assignee: NotRequired[str]
     description: NotRequired[str]
     notes: NotRequired[str]
-    parent_id: NotRequired[str]
+    parent_issue_id: NotRequired[str]
     fields: NotRequired[dict[str, Any]]
     actor: NotRequired[str]
 
 
 class CloseIssueArgs(TypedDict):
-    id: str
+    issue_id: str
     reason: NotRequired[str]
     actor: NotRequired[str]
     fields: NotRequired[dict[str, Any]]
 
 
 class ReopenIssueArgs(TypedDict):
-    id: str
+    issue_id: str
     actor: NotRequired[str]
 
 
@@ -97,13 +97,13 @@ class SearchIssuesArgs(TypedDict):
 
 
 class ClaimIssueArgs(TypedDict):
-    id: str
+    issue_id: str
     assignee: str
     actor: NotRequired[str]
 
 
 class ReleaseClaimArgs(TypedDict):
-    id: str
+    issue_id: str
     actor: NotRequired[str]
 
 
@@ -115,18 +115,36 @@ class ClaimNextArgs(TypedDict):
     actor: NotRequired[str]
 
 
+class StartWorkArgs(TypedDict):
+    issue_id: str
+    assignee: str
+    target_status: NotRequired[str]
+    actor: NotRequired[str]
+
+
+class StartNextWorkArgs(TypedDict):
+    assignee: str
+    type: NotRequired[str]
+    priority_min: NotRequired[int]
+    priority_max: NotRequired[int]
+    target_status: NotRequired[str]
+    actor: NotRequired[str]
+
+
 class BatchCloseArgs(TypedDict):
-    ids: list[str]
+    issue_ids: list[str]
     reason: NotRequired[str]
+    response_detail: NotRequired[str]
     actor: NotRequired[str]
 
 
 class BatchUpdateArgs(TypedDict):
-    ids: list[str]
+    issue_ids: list[str]
     status: NotRequired[str]
     priority: NotRequired[int]
     assignee: NotRequired[str]
     fields: NotRequired[dict[str, Any]]
+    response_detail: NotRequired[str]
     actor: NotRequired[str]
 
 
@@ -161,14 +179,16 @@ class ListLabelsArgs(TypedDict):
 
 
 class BatchAddLabelArgs(TypedDict):
-    ids: list[str]
+    issue_ids: list[str]
     label: str
+    response_detail: NotRequired[str]
     actor: NotRequired[str]
 
 
 class BatchAddCommentArgs(TypedDict):
-    ids: list[str]
+    issue_ids: list[str]
     text: str
+    response_detail: NotRequired[str]
     actor: NotRequired[str]
 
 
@@ -200,7 +220,7 @@ class CompactEventsArgs(TypedDict):
 
 
 class UndoLastArgs(TypedDict):
-    id: str
+    issue_id: str
     actor: NotRequired[str]
 
 
@@ -215,14 +235,14 @@ class GetIssueEventsArgs(TypedDict):
 
 
 class AddDependencyArgs(TypedDict):
-    from_id: str
-    to_id: str
+    from_issue_id: str
+    to_issue_id: str
     actor: NotRequired[str]
 
 
 class RemoveDependencyArgs(TypedDict):
-    from_id: str
-    to_id: str
+    from_issue_id: str
+    to_issue_id: str
     actor: NotRequired[str]
 
 
@@ -281,9 +301,9 @@ class GetWorkflowGuideArgs(TypedDict):
     pack: str
 
 
-class ExplainStateArgs(TypedDict):
+class ExplainStatusArgs(TypedDict):
     type: str
-    state: str
+    status: str
 
 
 # ---------------------------------------------------------------------------
@@ -361,6 +381,7 @@ class UpdateFindingArgs(TypedDict):
 class BatchUpdateFindingsArgs(TypedDict):
     finding_ids: list[str]
     status: FindingStatus
+    response_detail: NotRequired[str]
 
 
 class PromoteFindingArgs(TypedDict):
@@ -429,19 +450,20 @@ class ListObservationsArgs(TypedDict):
 
 
 class DismissObservationArgs(TypedDict):
-    id: str
+    observation_id: str
     reason: NotRequired[str]
     actor: NotRequired[str]
 
 
 class BatchDismissObservationsArgs(TypedDict):
-    ids: list[str]
+    observation_ids: list[str]
     reason: NotRequired[str]
+    response_detail: NotRequired[str]
     actor: NotRequired[str]
 
 
 class PromoteObservationArgs(TypedDict):
-    id: str
+    observation_id: str
     type: NotRequired[str]
     priority: NotRequired[int]
     title: NotRequired[str]
@@ -466,6 +488,8 @@ TOOL_ARGS_MAP: dict[str, type] = {
     "claim_next": ClaimNextArgs,
     "batch_close": BatchCloseArgs,
     "batch_update": BatchUpdateArgs,
+    "start_work": StartWorkArgs,
+    "start_next_work": StartNextWorkArgs,
     # meta.py
     "add_comment": AddCommentArgs,
     "get_comments": GetCommentsArgs,
@@ -493,7 +517,7 @@ TOOL_ARGS_MAP: dict[str, type] = {
     "get_valid_transitions": GetValidTransitionsArgs,
     "validate_issue": ValidateIssueArgs,
     "get_workflow_guide": GetWorkflowGuideArgs,
-    "explain_state": ExplainStateArgs,
+    "explain_status": ExplainStatusArgs,
     # files.py
     "list_files": ListFilesArgs,
     "get_file": GetFileArgs,

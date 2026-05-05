@@ -37,6 +37,63 @@ logger = logging.getLogger(__name__)
 _MAX_TREE_DEPTH = 10
 
 
+def _validate_priority(value: Any, label: str) -> None:
+    """Validate a plan-input priority up front.
+
+    Mirrors the DB-layer CHECK constraint (``priority BETWEEN 0 AND 4``) so
+    bad values surface as ValueError before the transaction begins — preventing
+    a partial insert from tripping ``sqlite3.IntegrityError`` mid-plan and
+    bubbling raw DB errors to CLI callers.
+
+    Rejects booleans explicitly since ``bool`` is a subclass of ``int`` and
+    would otherwise pass the range check silently.
+    """
+    if isinstance(value, bool) or not isinstance(value, int) or not (0 <= value <= 4):
+        msg = f"{label} 'priority' must be an integer 0-4, got {value!r}"
+        raise ValueError(msg)
+
+
+def _normalize_dep_ref(dep_ref: Any) -> str:
+    """Validate a step ``dep_ref`` and return its canonical string form.
+
+    Accepts:
+    - ``int`` (excluding ``bool``): same-phase step index, must be non-negative.
+    - ``str`` matching ``"N"`` or ``"P.S"`` where each part is a non-negative
+      decimal integer literal.
+
+    Rejects floats, booleans, malformed strings, negatives, and anything else
+    with ``ValueError``. ``str()`` coercion at the parsing site silently
+    accepted floats like ``0.1`` as ``phase 0 step 1``; this guard runs first
+    so the DB API surface matches the validation already done by CLI/MCP.
+    """
+    if isinstance(dep_ref, bool):
+        msg = f"dep_ref must be int or str, got bool: {dep_ref!r}"
+        raise ValueError(msg)
+    if isinstance(dep_ref, int):
+        if dep_ref < 0:
+            msg = f"Negative dep index not allowed: {dep_ref}"
+            raise ValueError(msg)
+        return str(dep_ref)
+    if isinstance(dep_ref, str):
+        parts = dep_ref.split(".")
+        if len(parts) > 2 or any(not p.isdigit() for p in parts):
+            msg = f"dep_ref must be 'N' or 'P.S' with non-negative integer parts, got {dep_ref!r}"
+            raise ValueError(msg)
+        return dep_ref
+    msg = f"dep_ref must be int or str, got {type(dep_ref).__name__}: {dep_ref!r}"
+    raise ValueError(msg)
+
+
+class NotAReleaseError(ValueError):
+    """Raised by ``get_release_tree`` when the issue exists but is not a release.
+
+    Subclasses ``ValueError`` so existing ``except ValueError`` call sites keep
+    working; new callers can disambiguate this case from unrelated ValueErrors
+    (e.g. data-validation failures in ``Issue.__post_init__``) by catching this
+    subclass specifically.
+    """
+
+
 def _truncated_issue_sentinel(issue_id: str) -> IssueDict:
     """Minimal IssueDict placeholder for tree nodes truncated at the depth limit."""
     return IssueDict(
@@ -73,6 +130,10 @@ class PlanningMixin(DBMixinProtocol):
     # -- Dependencies --------------------------------------------------------
 
     def add_dependency(self, issue_id: str, depends_on_id: str, *, dep_type: str = "blocks", actor: str = "") -> bool:
+        # Reject cross-project IDs up front so the prefix mismatch is reported
+        # for *either* argument, not whichever happens to be looked up first.
+        self._check_id_prefix(issue_id)
+        self._check_id_prefix(depends_on_id)
         # Validate both issues exist
         self.get_issue(issue_id)  # raises KeyError if not found
         self.get_issue(depends_on_id)  # raises KeyError if not found
@@ -93,6 +154,10 @@ class PlanningMixin(DBMixinProtocol):
                 (issue_id, depends_on_id, dep_type, now),
             )
             if cursor.rowcount == 0:
+                # INSERT OR IGNORE still opens an implicit write transaction even
+                # when no row changes; without an explicit rollback the lock
+                # lingers and blocks other connections.
+                self.conn.rollback()
                 return False  # Already exists — no-op, no event
             self._record_event(issue_id, "dependency_added", actor=actor, new_value=f"{dep_type}:{depends_on_id}")
             self.conn.commit()
@@ -128,6 +193,8 @@ class PlanningMixin(DBMixinProtocol):
         return False
 
     def remove_dependency(self, issue_id: str, depends_on_id: str, *, actor: str = "") -> bool:
+        self._check_id_prefix(issue_id)
+        self._check_id_prefix(depends_on_id)
         try:
             # Read dep_type before deleting so undo can restore it
             row = self.conn.execute(
@@ -154,51 +221,66 @@ class PlanningMixin(DBMixinProtocol):
 
     # -- Ready / Blocked -----------------------------------------------------
 
-    def _resolve_open_done_states(self) -> tuple[list[str], list[str], str, str]:
-        """Return (open_states, done_states, open_placeholders, done_placeholders).
+    def _resolve_open_blocker_predicates(self) -> tuple[tuple[str, list[str]], tuple[str, list[str]]] | None:
+        """Return ``(open_predicate, blocker_done_predicate)`` SQL fragments.
 
-        ``done_states`` falls back to ``["closed"]`` when no templates define done states.
+        Returns ``None`` when no open-category states are registered — callers
+        treat that as "nothing can be ready".
+
+        - ``open_predicate`` matches an issue row aliased ``i`` whose
+          ``(type, status)`` is open-category.
+        - ``blocker_done_predicate`` matches a blocker row aliased ``blocker``
+          whose ``(type, status)`` is done-category, plus the synthetic
+          ``'archived'`` terminal state (filigree-42045dd065).
+
+        Type-aware (filigree-b55aa3191f): replaces the prior status-name list
+        approach so colliding state names across types are classified per type.
         """
-        open_states = self._get_states_for_category("open")
-        done_states = self._get_states_for_category("done") or ["closed"]
-        open_ph = ",".join("?" * len(open_states))
-        done_ph = ",".join("?" * len(done_states))
-        return open_states, done_states, open_ph, done_ph
+        open_pred = self._category_predicate_sql("open", type_col="i.type", status_col="i.status")
+        if not open_pred[1]:
+            return None
+        blocker_done_pred = self._category_predicate_sql(
+            "done",
+            type_col="blocker.type",
+            status_col="blocker.status",
+            include_archived=True,
+        )
+        return open_pred, blocker_done_pred
 
     def get_ready(self) -> list[Issue]:
         """Issues in open-category states with no open blockers."""
-        open_states, done_states, open_ph, done_ph = self._resolve_open_done_states()
-
-        if not open_states:
+        preds = self._resolve_open_blocker_predicates()
+        if preds is None:
             return []
+        (open_sql, open_params), (blocker_done_sql, blocker_done_params) = preds
 
         rows = self.conn.execute(
             f"SELECT i.id FROM issues i "
-            f"WHERE i.status IN ({open_ph}) "
+            f"WHERE {open_sql} "
             f"AND NOT EXISTS ("
             f"  SELECT 1 FROM dependencies d "
             f"  JOIN issues blocker ON d.depends_on_id = blocker.id "
-            f"  WHERE d.issue_id = i.id AND blocker.status NOT IN ({done_ph})"
+            f"  WHERE d.issue_id = i.id AND NOT ({blocker_done_sql})"
             f") ORDER BY i.priority, i.created_at",
-            [*open_states, *done_states],
+            [*open_params, *blocker_done_params],
         ).fetchall()
 
         return self._build_issues_batch([r["id"] for r in rows])
 
     def get_blocked(self) -> list[Issue]:
         """Issues in open-category states that have at least one non-done blocker."""
-        open_states, done_states, open_ph, done_ph = self._resolve_open_done_states()
-
-        if not open_states:
+        preds = self._resolve_open_blocker_predicates()
+        if preds is None:
             return []
+        (open_sql, open_params), (blocker_done_sql, blocker_done_params) = preds
 
         rows = self.conn.execute(
             f"SELECT DISTINCT i.id FROM issues i "
             f"JOIN dependencies d ON d.issue_id = i.id "
             f"JOIN issues blocker ON d.depends_on_id = blocker.id "
-            f"WHERE i.status IN ({open_ph}) AND blocker.status NOT IN ({done_ph}) "
+            f"WHERE {open_sql} AND NOT ({blocker_done_sql}) "
             f"ORDER BY i.priority, i.created_at",
-            [*open_states, *done_states],
+            [*open_params, *blocker_done_params],
         ).fetchall()
 
         return self._build_issues_batch([r["id"] for r in rows])
@@ -212,12 +294,19 @@ class PlanningMixin(DBMixinProtocol):
         Returns the chain as a list of {id, title, priority, type} dicts, ordered
         from the root blocker to the final blocked issue.
         """
-        done_states = self._get_states_for_category("done")
-
-        done_ph = ",".join("?" * len(done_states)) if done_states else "'__none__'"
+        # Treat archived as done here: an archived issue has reached terminal
+        # state and must not appear as an open node on the critical path.
+        # (filigree-42045dd065). Match by (type, status) so colliding state
+        # names across types are classified per type (filigree-b55aa3191f).
+        not_done_sql, not_done_params = self._category_predicate_sql(
+            "done",
+            type_col="type",
+            status_col="status",
+            include_archived=True,
+        )
         open_rows = self.conn.execute(
-            f"SELECT id, title, priority, type FROM issues WHERE status NOT IN ({done_ph})",
-            done_states if done_states else [],
+            f"SELECT id, title, priority, type FROM issues WHERE NOT ({not_done_sql})",
+            not_done_params,
         ).fetchall()
         open_ids = {r["id"] for r in open_rows}
         info = {r["id"]: CriticalPathNode(id=r["id"], title=r["title"], priority=r["priority"], type=r["type"]) for r in open_rows}
@@ -270,11 +359,24 @@ class PlanningMixin(DBMixinProtocol):
 
     # -- Plan tree -----------------------------------------------------------
 
+    def _list_all_children(self, parent_id: str) -> list[Issue]:
+        """Return every direct child of ``parent_id`` — no pagination.
+
+        Tree construction (``get_plan``, ``_build_tree``) needs the complete
+        child set; using the paginated ``list_issues`` (default ``limit=100``)
+        silently truncates large plans/releases.
+        """
+        rows = self.conn.execute(
+            "SELECT id FROM issues WHERE parent_id = ? ORDER BY priority, created_at",
+            (parent_id,),
+        ).fetchall()
+        return self._build_issues_batch([r["id"] for r in rows])
+
     def get_plan(self, milestone_id: str) -> PlanTree:
         """Get milestone->phase->step tree with progress stats."""
         milestone = self.get_issue(milestone_id)
 
-        phases = self.list_issues(parent_id=milestone_id)
+        phases = self._list_all_children(milestone_id)
         phases.sort(key=lambda p: p.fields.get("sequence", 999))
 
         phase_list: list[PlanPhase] = []
@@ -282,7 +384,7 @@ class PlanningMixin(DBMixinProtocol):
         completed_steps = 0
 
         for phase in phases:
-            steps = self.list_issues(parent_id=phase.id)
+            steps = self._list_all_children(phase.id)
             steps.sort(key=lambda s: s.fields.get("sequence", 999))
 
             completed = sum(1 for s in steps if s.status_category == "done")
@@ -330,14 +432,20 @@ class PlanningMixin(DBMixinProtocol):
         if not milestone.get("title", "").strip():
             msg = "Milestone 'title' is required and cannot be empty"
             raise ValueError(msg)
+        _validate_priority(milestone.get("priority", 2), "Milestone")
         for phase_idx, phase_data in enumerate(phases):
             if not phase_data.get("title", "").strip():
                 msg = f"Phase {phase_idx + 1} 'title' is required and cannot be empty"
                 raise ValueError(msg)
+            _validate_priority(phase_data.get("priority", 2), f"Phase {phase_idx + 1}")
             for step_idx, step_data in enumerate(phase_data.get("steps", [])):
                 if not step_data.get("title", "").strip():
                     msg = f"Phase {phase_idx + 1}, Step {step_idx + 1} 'title' is required and cannot be empty"
                     raise ValueError(msg)
+                _validate_priority(
+                    step_data.get("priority", 2),
+                    f"Phase {phase_idx + 1}, Step {step_idx + 1}",
+                )
 
         now = _now_iso()
         milestone_initial = self.templates.get_initial_state("milestone")
@@ -424,7 +532,7 @@ class PlanningMixin(DBMixinProtocol):
                 steps = phase_data.get("steps") or []
                 for step_idx, step_data in enumerate(steps):
                     for dep_ref in step_data.get("deps", []):
-                        dep_ref_str = str(dep_ref)
+                        dep_ref_str = _normalize_dep_ref(dep_ref)
                         if "." in dep_ref_str:
                             # Cross-phase: "phase_idx.step_idx"
                             p_idx_str, s_idx_str = dep_ref_str.split(".", 1)
@@ -456,11 +564,20 @@ class PlanningMixin(DBMixinProtocol):
                             msg = f"Dependency {issue_id} -> {dep_issue_id} would create a cycle"
                             raise ValueError(msg)
 
-                        self.conn.execute(
+                        cursor = self.conn.execute(
                             "INSERT OR IGNORE INTO dependencies (issue_id, depends_on_id, type, created_at) VALUES (?, ?, 'blocks', ?)",
                             (issue_id, dep_issue_id, now),
                         )
-                        self._record_event(issue_id, "dependency_added", actor=actor, new_value=f"blocks:{dep_issue_id}")
+                        # Emit event only when a new row was inserted: duplicate deps
+                        # (``deps: [0, 0]``) collapse to one dep row and must not produce
+                        # multiple events, which otherwise wedge undo_last().
+                        if cursor.rowcount > 0:
+                            self._record_event(
+                                issue_id,
+                                "dependency_added",
+                                actor=actor,
+                                new_value=f"blocks:{dep_issue_id}",
+                            )
 
             self.conn.commit()
         except Exception:
@@ -511,7 +628,7 @@ class PlanningMixin(DBMixinProtocol):
     def get_release_tree(self, release_id: str) -> ReleaseTree:
         release = self.get_issue(release_id)  # raises KeyError if not found
         if release.type != "release":
-            raise ValueError(f"Issue {release_id} is not a release")
+            raise NotAReleaseError(f"Issue {release_id} is not a release")
         children = self._build_tree(release.id)
         tree_warnings = self._collect_tree_warnings(children)
         return {
@@ -525,7 +642,7 @@ class PlanningMixin(DBMixinProtocol):
             logger.warning("_build_tree: depth limit reached at parent_id=%s", parent_id)
             return [TreeNode(issue=_truncated_issue_sentinel(parent_id), progress=None, children=[], truncated=True)]
 
-        children = self.list_issues(parent_id=parent_id)
+        children = self._list_all_children(parent_id)
         nodes: list[TreeNode] = []
         for child in children:
             subtree = self._build_tree(child.id, _depth=_depth + 1)
@@ -544,6 +661,11 @@ class PlanningMixin(DBMixinProtocol):
     def _progress_from_subtree(self, nodes: list[TreeNode]) -> ProgressDict:
         total = completed = in_progress = open_count = 0
         for node in nodes:
+            # Depth-limit sentinels stand for "unknown more items below" — skip
+            # them from the count (surfaced separately via _collect_tree_warnings)
+            # so a truncated subtree does not masquerade as a single open leaf.
+            if node.get("truncated"):
+                continue
             if not node["children"]:  # leaf node
                 cat = node["issue"].get("status_category", "open")
                 total += 1

@@ -21,7 +21,16 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # Shared internal API — used by DB mixins across modules.
-__all__ = ["AGE_BUCKETS", "DBMixinProtocol", "StatusCategory", "_escape_like", "_escape_like_chars", "_now_iso", "_safe_json_loads"]
+__all__ = [
+    "AGE_BUCKETS",
+    "DBMixinProtocol",
+    "StatusCategory",
+    "_escape_like",
+    "_escape_like_chars",
+    "_normalize_iso_to_utc",
+    "_now_iso",
+    "_safe_json_loads",
+]
 
 # Virtual label dispatch — explicit allowlist, no prefix matching
 AGE_BUCKETS: dict[str, tuple[int, int]] = {
@@ -37,23 +46,72 @@ def _now_iso() -> ISOTimestamp:
     return ISOTimestamp(datetime.now(UTC).isoformat())
 
 
-def _safe_json_loads(raw: str | None, context: str, *, error_key: str = "_metadata_error") -> dict[str, Any]:
-    """Parse JSON from a database column, returning an error marker on corrupt data.
+def _normalize_iso_to_utc(raw: object) -> str | None:
+    """Canonicalize an ISO-8601 timestamp to ``+00:00`` UTC text.
 
-    Used by DB mixins to safely handle corrupt JSON in issue fields, file metadata,
-    and scan finding metadata.  On failure, returns ``{error_key: True}`` — callers
-    can check for the sentinel key (``_metadata_error`` or ``_fields_error``) to
-    detect corrupt records.
+    Returns ``None`` for ``None`` or empty input. Naive timestamps are
+    treated as UTC (matching the convention of ``_now_iso``). A trailing
+    ``Z`` is accepted. Unparseable input raises ``ValueError``.
+
+    SQLite TEXT compares lexicographically: rows whose stored text uses a
+    non-zero offset (e.g. ``+02:00``) miscompare against the canonical
+    ``+00:00`` written by ``_now_iso``. The internal write paths always
+    emit canonical text; the import boundary must too. (filigree-20911dfe6d)
     """
+    if raw is None:
+        return None
+    if not isinstance(raw, str):
+        msg = f"timestamp must be a string, got {type(raw).__name__}"
+        raise ValueError(msg)
+    if raw == "":
+        return None
+    candidate = raw.replace("Z", "+00:00") if raw.endswith("Z") else raw
+    parsed = datetime.fromisoformat(candidate)
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC).isoformat()
+
+
+class _ParsedJson(dict[str, Any]):
+    """``dict`` subclass carrying an out-of-band JSON-parse-failure flag.
+
+    Returned by :func:`_safe_json_loads`. The ``_filigree_corrupt`` attribute
+    signals corruption without occupying a user-visible dict key, so a custom
+    field or metadata entry that happens to be named ``_fields_error`` or
+    ``_metadata_error`` is not falsely stripped by Issue / FileRecord /
+    ScanFinding ``to_dict()``. Consumers duck-type the attribute via
+    ``getattr(value, "_filigree_corrupt", False)`` (filigree-7ea6b80f3b).
+    """
+
+    _filigree_corrupt: bool = False
+
+
+def _safe_json_loads(raw: str | bytes | None, context: str) -> _ParsedJson:
+    """Parse JSON from a database column, returning an out-of-band corrupt flag.
+
+    Used by DB mixins to handle corrupt JSON in issue fields, file metadata,
+    and scan finding metadata. On failure — invalid JSON, undecodable bytes,
+    or a non-dict top-level value — returns an empty ``_ParsedJson`` with
+    ``_filigree_corrupt=True``. SQLite's flexible typing can hand back
+    ``bytes`` for BLOB-typed JSON columns, so undecodable bytes
+    (``UnicodeDecodeError``) are treated as corrupt rather than allowed to
+    propagate (filigree-7ea6b80f3b).
+    """
+    if not raw:
+        return _ParsedJson()
     try:
-        result = json.loads(raw) if raw else {}
-    except (json.JSONDecodeError, TypeError):
-        logger.warning("Corrupt JSON (%s): %r", context, str(raw)[:200] if raw else raw)
-        return {error_key: True}
+        result = json.loads(raw)
+    except (json.JSONDecodeError, TypeError, UnicodeDecodeError):
+        logger.warning("Corrupt JSON (%s): %r", context, str(raw)[:200])
+        out = _ParsedJson()
+        out._filigree_corrupt = True
+        return out
     if not isinstance(result, dict):
-        logger.warning("JSON (%s) parsed but is not a dict (got %s), repairing to {{}}: %r", context, type(result).__name__, str(raw)[:200])
-        return {}
-    return result
+        logger.warning("JSON (%s) parsed but is not a dict (got %s): %r", context, type(result).__name__, str(raw)[:200])
+        out = _ParsedJson()
+        out._filigree_corrupt = True
+        return out
+    return _ParsedJson(result)
 
 
 def _escape_like_chars(value: str) -> str:
@@ -81,6 +139,9 @@ class DBMixinProtocol(Protocol):
     # -- Shared attributes ---------------------------------------------------
 
     db_path: Path
+    # Project root set by from_filigree_dir / from_conf.  ``None`` for legacy
+    # direct-path construction — consumers that need it must fall back.
+    project_root: Path | None
     prefix: str
     _conn: sqlite3.Connection | None
     _template_registry: TemplateRegistry | None
@@ -92,6 +153,7 @@ class DBMixinProtocol(Protocol):
     # -- Core (FiligreeDB) ---------------------------------------------------
 
     def get_issue(self, issue_id: str) -> Issue: ...
+    def _check_id_prefix(self, issue_id: str) -> None: ...
 
     # -- WorkflowMixin -------------------------------------------------------
 
@@ -102,11 +164,21 @@ class DBMixinProtocol(Protocol):
     def _validate_parent_id(self, parent_id: str | None) -> None: ...
     def _validate_label_name(self, label: str) -> str: ...
     def _get_states_for_category(self, category: str) -> list[str]: ...
+    def _get_type_states_for_category(self, category: str) -> list[tuple[str, str]]: ...
+    def _category_predicate_sql(
+        self,
+        category: str,
+        *,
+        type_col: str,
+        status_col: str,
+        include_archived: bool = False,
+    ) -> tuple[str, list[str]]: ...
+    def _blocker_done_states(self) -> list[str]: ...
     def _resolve_status_category(self, issue_type: str, status: str) -> StatusCategory: ...
     def get_valid_transitions(self, issue_id: str) -> list[TransitionOption]: ...
 
     @staticmethod
-    def _infer_status_category(status: str) -> StatusCategory: ...
+    def _infer_status_category(issue_type: str, status: str) -> StatusCategory: ...
 
     # -- EventsMixin ---------------------------------------------------------
 
@@ -125,6 +197,7 @@ class DBMixinProtocol(Protocol):
 
     def _generate_unique_id(self, table: str, infix: str = "") -> str: ...
     def _build_issues_batch(self, issue_ids: list[str]) -> list[Issue]: ...
+    def _would_create_parent_cycle(self, child_id: str, proposed_parent_id: str) -> bool: ...
 
     def create_issue(
         self,
@@ -159,13 +232,15 @@ class DBMixinProtocol(Protocol):
 
     # -- MetaMixin -----------------------------------------------------------
 
-    def add_label(self, issue_id: str, label: str) -> bool: ...
+    def add_label(self, issue_id: str, label: str) -> tuple[bool, str]: ...
     def add_comment(self, issue_id: str, text: str, *, author: str = "") -> int: ...
 
     # -- PlanningMixin -------------------------------------------------------
 
     def get_ready(self) -> list[Issue]: ...
-    def _resolve_open_done_states(self) -> tuple[list[str], list[str], str, str]: ...
+    def _resolve_open_blocker_predicates(
+        self,
+    ) -> tuple[tuple[str, list[str]], tuple[str, list[str]]] | None: ...
 
     # -- FilesMixin ----------------------------------------------------------
 
@@ -206,3 +281,23 @@ class DBMixinProtocol(Protocol):
         findings_count: int | None = None,
         error_message: str | None = None,
     ) -> ScanRunDict: ...
+
+    def reserve_scan_run(
+        self,
+        *,
+        scan_run_id: str,
+        scanner_name: str,
+        scan_source: str,
+        file_path: str,
+        file_id: str,
+        api_url: str = "",
+        log_path: str = "",
+    ) -> tuple[ScanRunDict | None, ScanRunDict | None]: ...
+
+    def set_scan_run_spawn_info(
+        self,
+        scan_run_id: str,
+        *,
+        pid: int,
+        log_path: str,
+    ) -> None: ...

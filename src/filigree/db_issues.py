@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING, Any
 from filigree.db_base import AGE_BUCKETS, DBMixinProtocol, _escape_like, _escape_like_chars, _now_iso, _safe_json_loads
 from filigree.models import Issue
 from filigree.templates import validate_field_pattern
-from filigree.types.api import BatchFailureDetail
+from filigree.types.api import BatchFailure, ErrorCode, classify_value_error
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -31,15 +31,40 @@ def _escape_like_prefix(value: str) -> str:
     return _escape_like_chars(value)
 
 
+def _validate_priority_value(priority: Any) -> None:
+    """Reject non-int (including bool) and out-of-range priorities before any write.
+
+    The Issue model's ``__post_init__`` validates type and range during hydration
+    (models.py: ``isinstance(self.priority, int)`` and 0..4). Without this
+    pre-write guard, float priorities pass the previous range-only check and are
+    INSERTed before hydration raises — leaving a row with
+    ``typeof(priority) = 'real'`` durably committed. ``bool`` slips past
+    ``isinstance(_, int)`` because Python's ``bool`` is an ``int`` subclass and
+    ``0 <= True <= 4`` is ``0 <= 1 <= 4``, so it must be rejected explicitly first.
+    """
+    if isinstance(priority, bool) or not isinstance(priority, int) or not (0 <= priority <= 4):
+        msg = f"Priority must be an integer between 0 and 4, got {priority!r}"
+        raise ValueError(msg)
+
+
 def _resolve_virtual_label(
     label: str,
     *,
     negate: bool = False,
-    done_states: list[str] | None = None,
+    blocker_done_predicate: tuple[str, list[Any]] | None = None,
 ) -> tuple[str, list[Any]] | None:
     """Resolve a virtual label to a SQL condition + params.
 
     Returns (sql_fragment, params) or None if not a virtual label.
+
+    ``blocker_done_predicate`` is a ``(sql, params)`` fragment that
+    matches a "done" blocker row aliased ``blocker`` (for ``has:blockers``).
+    Build it at the call site via ``_category_predicate_sql("done",
+    type_col="blocker.type", status_col="blocker.status",
+    include_archived=True)``. When ``None``, falls back to a safe
+    name-only predicate using ``blocker.status IN ('closed', 'archived')``;
+    the typed form is preferred so state-name collisions across types
+    (filigree-b55aa3191f) do not erroneously treat a wip blocker as done.
     """
     if label.startswith("age:"):
         value = label.split(":", 1)[1]
@@ -61,14 +86,17 @@ def _resolve_virtual_label(
     if label.startswith("has:"):
         value = label.split(":", 1)[1]
         exists_op = "NOT EXISTS" if negate else "EXISTS"
-        effective_done = done_states or ["closed"]
-        done_ph = ",".join("?" * len(effective_done))
+        if blocker_done_predicate is None:
+            blocker_done_sql = "blocker.status IN ('closed', 'archived')"
+            blocker_done_params: list[Any] = []
+        else:
+            blocker_done_sql, blocker_done_params = blocker_done_predicate
         subqueries: dict[str, tuple[str, list[Any]]] = {
             "blockers": (
                 f"{exists_op} (SELECT 1 FROM dependencies d "
                 "JOIN issues blocker ON d.depends_on_id = blocker.id "
-                f"WHERE d.issue_id = i.id AND blocker.status NOT IN ({done_ph}))",
-                list(effective_done),
+                f"WHERE d.issue_id = i.id AND NOT ({blocker_done_sql}))",
+                list(blocker_done_params),
             ),
             "children": (
                 f"{exists_op} (SELECT 1 FROM issues child WHERE child.parent_id = i.id)",
@@ -97,8 +125,13 @@ def _resolve_virtual_label(
 
 
 def _safe_fields_json(raw: str | None, issue_id: str) -> dict[str, Any]:
-    """Parse issue fields JSON, returning error sentinel on corrupt data."""
-    return _safe_json_loads(raw, f"issue {issue_id} fields", error_key="_fields_error")
+    """Parse issue fields JSON.
+
+    Returns a ``_ParsedJson`` (dict subclass). On corrupt JSON it returns
+    an empty dict with ``_filigree_corrupt=True``; ``Issue.to_dict()`` reads
+    that flag to derive ``data_warnings``.
+    """
+    return _safe_json_loads(raw, f"issue {issue_id} fields")
 
 
 def _validate_string_list(value: object, name: str) -> None:
@@ -106,6 +139,20 @@ def _validate_string_list(value: object, name: str) -> None:
     if not isinstance(value, list) or not all(isinstance(i, str) for i in value):
         msg = f"{name} must be a list of strings"
         raise TypeError(msg)
+
+
+def _normalize_assignee(value: object) -> str:
+    """Strip whitespace from an assignee value; whitespace-only becomes ``""`` (unassigned).
+
+    Enforces the storage invariant that ``assignee`` is either the empty string
+    (unassigned) or a trimmed real identity — never whitespace-only. This keeps
+    ``claim_issue``'s "already assigned" check (which treats any non-empty
+    stored value as owned) from misfiring on a blank that looks empty.
+    """
+    if not isinstance(value, str):
+        msg = "assignee must be a string"
+        raise TypeError(msg)
+    return value.strip()
 
 
 def _sanitize_fts_query(query: str) -> str:
@@ -126,6 +173,27 @@ class IssuesMixin(DBMixinProtocol):
     Inherits ``DBMixinProtocol`` for type-safe access to shared attributes.
     Actual implementations provided by ``FiligreeDB`` at composition time via MRO.
     """
+
+    # -- Parent hierarchy invariants -----------------------------------------
+
+    def _would_create_parent_cycle(self, child_id: str, proposed_parent_id: str) -> bool:
+        """Return True if setting ``child_id``'s parent to ``proposed_parent_id``
+        would create a circular parent chain. Walks the proposed parent's
+        ancestor chain looking for the child. Shared by ``update_issue`` and
+        ``EventsMixin.undo_last`` so both write paths enforce the same
+        hierarchy invariant (filigree-0a8c3d38d7).
+        """
+        if not proposed_parent_id or proposed_parent_id == child_id:
+            return proposed_parent_id == child_id
+        ancestor: str | None = proposed_parent_id
+        while ancestor is not None:
+            row = self.conn.execute("SELECT parent_id FROM issues WHERE id = ?", (ancestor,)).fetchone()
+            if row is None:
+                return False
+            ancestor = row["parent_id"]
+            if ancestor == child_id:
+                return True
+        return False
 
     # -- Field validation ----------------------------------------------------
 
@@ -217,9 +285,7 @@ class IssuesMixin(DBMixinProtocol):
         if not title or not title.strip():
             msg = "Title cannot be empty"
             raise ValueError(msg)
-        if not (0 <= priority <= 4):
-            msg = f"Priority must be between 0 and 4, got {priority}"
-            raise ValueError(msg)
+        _validate_priority_value(priority)
         if fields is not None and not isinstance(fields, dict):
             msg = "fields must be a dict"
             raise TypeError(msg)
@@ -228,6 +294,13 @@ class IssuesMixin(DBMixinProtocol):
                 if not k or not k.strip():
                     msg = "Field key cannot be empty"
                     raise ValueError(msg)
+        # Validate container shape before iterating — a bare str would otherwise
+        # be iterated character-by-character (see filigree-0b4fcb6d30).
+        if labels is not None:
+            _validate_string_list(labels, "labels")
+        if deps is not None:
+            _validate_string_list(deps, "deps")
+        assignee = _normalize_assignee(assignee)
         if labels:
             labels = [self._validate_label_name(label) for label in labels]
         # Reject unknown types — don't silently fall back
@@ -308,6 +381,9 @@ class IssuesMixin(DBMixinProtocol):
         return self.get_issue(issue_id)
 
     def get_issue(self, issue_id: str) -> Issue:
+        # Reads do not enforce prefix-matching — cross-project lookups simply
+        # return KeyError if not found. Writes do enforce; see update_issue,
+        # close_issue, reopen_issue, claim_issue.
         return self._build_issue(issue_id)
 
     def _build_issue(self, issue_id: str) -> Issue:
@@ -343,15 +419,24 @@ class IssuesMixin(DBMixinProtocol):
         ).fetchall():
             blocks_by_id[r["depends_on_id"]].append(r["issue_id"])
 
-        # 4. Batch fetch "blocked_by" — only open (non-done) blockers
-        done_states = self._get_states_for_category("done") or ["closed"]
-        done_ph = ",".join("?" * len(done_states))
+        # 4. Batch fetch "blocked_by" — only open (non-done, non-archived) blockers.
+        # Archived blockers must not appear here (filigree-42045dd065): archive_closed
+        # writes status='archived' which is not a workflow done state.
+        # filigree-b55aa3191f: match by (blocker.type, blocker.status) so a state
+        # name shared across types in different categories (e.g.
+        # incident.resolved=wip, debt_item.resolved=done) is classified per type.
+        blocker_done_sql, blocker_done_params = self._category_predicate_sql(
+            "done",
+            type_col="blocker.type",
+            status_col="blocker.status",
+            include_archived=True,
+        )
         blocked_by_id: dict[str, list[str]] = {iid: [] for iid in issue_ids}
         for r in self.conn.execute(
             f"SELECT d.issue_id, d.depends_on_id FROM dependencies d "
             f"JOIN issues blocker ON d.depends_on_id = blocker.id "
-            f"WHERE d.issue_id IN ({placeholders}) AND blocker.status NOT IN ({done_ph})",
-            [*issue_ids, *done_states],
+            f"WHERE d.issue_id IN ({placeholders}) AND NOT ({blocker_done_sql})",
+            [*issue_ids, *blocker_done_params],
         ).fetchall():
             blocked_by_id[r["issue_id"]].append(r["depends_on_id"])
 
@@ -360,19 +445,16 @@ class IssuesMixin(DBMixinProtocol):
         for r in self.conn.execute(f"SELECT id, parent_id FROM issues WHERE parent_id IN ({placeholders})", issue_ids).fetchall():
             children_by_id[r["parent_id"]].append(r["id"])
 
-        # 6. Batch compute open blocker counts (reuses done_states/done_ph from step 4)
+        # 6. Batch compute open blocker counts — same blocker semantics as step 4.
         open_blockers_by_id: dict[str, int] = dict.fromkeys(issue_ids, 0)
         for r in self.conn.execute(
             f"SELECT d.issue_id, COUNT(*) as cnt FROM dependencies d "
-            f"JOIN issues i ON d.depends_on_id = i.id "
-            f"WHERE d.issue_id IN ({placeholders}) AND i.status NOT IN ({done_ph}) "
+            f"JOIN issues blocker ON d.depends_on_id = blocker.id "
+            f"WHERE d.issue_id IN ({placeholders}) AND NOT ({blocker_done_sql}) "
             f"GROUP BY d.issue_id",
-            [*issue_ids, *done_states],
+            [*issue_ids, *blocker_done_params],
         ).fetchall():
             open_blockers_by_id[r["issue_id"]] = r["cnt"]
-
-        # 7. Compute open states for is_ready check
-        open_states_set = set(self._get_states_for_category("open")) or {"open"}
 
         # Build Issue objects preserving input order
         result: list[Issue] = []
@@ -398,7 +480,13 @@ class IssuesMixin(DBMixinProtocol):
                     labels=labels_by_id.get(iid, []),
                     blocks=blocks_by_id.get(iid, []),
                     blocked_by=blocked_by_id.get(iid, []),
-                    is_ready=(row["status"] in open_states_set and open_blockers_by_id.get(iid, 0) == 0),
+                    is_ready=(
+                        # filigree-b55aa3191f: resolve category per (type, status)
+                        # rather than via a deduplicated open-state name set, so a
+                        # state name shared across types in different categories
+                        # is classified correctly.
+                        self._resolve_status_category(row["type"], row["status"]) == "open" and open_blockers_by_id.get(iid, 0) == 0
+                    ),
                     children=children_by_id.get(iid, []),
                     status_category=self._resolve_status_category(row["type"], row["status"]),
                 )
@@ -420,6 +508,7 @@ class IssuesMixin(DBMixinProtocol):
         actor: str = "",
         _skip_transition_check: bool = False,
     ) -> Issue:
+        self._check_id_prefix(issue_id)
         current = self.get_issue(issue_id)
         now = _now_iso()
 
@@ -427,25 +516,23 @@ class IssuesMixin(DBMixinProtocol):
         if fields is not None and not isinstance(fields, dict):
             msg = "fields must be a dict"
             raise TypeError(msg)
-        if priority is not None and priority != current.priority and not (0 <= priority <= 4):
-            msg = f"Priority must be between 0 and 4, got {priority}"
+        if title is not None and not title.strip():
+            # filigree-365dff403e: mirror create_issue's invariant on update.
+            msg = "Title cannot be empty"
             raise ValueError(msg)
+        if priority is not None:
+            _validate_priority_value(priority)
+        if assignee is not None:
+            assignee = _normalize_assignee(assignee)
 
         if parent_id is not None and parent_id != "":
             if parent_id == issue_id:
                 msg = f"Issue {issue_id} cannot be its own parent"
                 raise ValueError(msg)
             self._validate_parent_id(parent_id)
-            # Check for circular parent chain
-            ancestor = parent_id
-            while ancestor is not None:
-                row = self.conn.execute("SELECT parent_id FROM issues WHERE id = ?", (ancestor,)).fetchone()
-                if row is None:
-                    break
-                ancestor = row["parent_id"]
-                if ancestor == issue_id:
-                    msg = f"Setting parent_id to '{parent_id}' would create a circular parent chain"
-                    raise ValueError(msg)
+            if self._would_create_parent_cycle(issue_id, parent_id):
+                msg = f"Setting parent_id to '{parent_id}' would create a circular parent chain"
+                raise ValueError(msg)
 
         # Cache transition validation result for reuse in write phase (warnings)
         _transition_result = None
@@ -522,7 +609,7 @@ class IssuesMixin(DBMixinProtocol):
 
                 # Set closed_at when entering a done-category state
                 status_cat = self.templates.get_category(current.type, status)
-                is_done = (status_cat or self._infer_status_category(status)) == "done"
+                is_done = (status_cat or self._infer_status_category(current.type, status)) == "done"
 
                 if is_done:
                     updates.append("closed_at = ?")
@@ -530,7 +617,7 @@ class IssuesMixin(DBMixinProtocol):
                 else:
                     # Clear closed_at when leaving a done-category state
                     old_cat = self.templates.get_category(current.type, current.status)
-                    if (old_cat or self._infer_status_category(current.status)) == "done":
+                    if (old_cat or self._infer_status_category(current.type, current.status)) == "done":
                         updates.append("closed_at = NULL")
 
             if priority is not None and priority != current.priority:
@@ -634,6 +721,7 @@ class IssuesMixin(DBMixinProtocol):
         if fields is not None and not isinstance(fields, dict):
             msg = "fields must be a dict"
             raise TypeError(msg)
+        self._check_id_prefix(issue_id)
 
         current = self.get_issue(issue_id)
 
@@ -688,6 +776,7 @@ class IssuesMixin(DBMixinProtocol):
 
         Clears closed_at. Only works on issues in done-category states.
         """
+        self._check_id_prefix(issue_id)
         current = self.get_issue(issue_id)
         if self._resolve_status_category(current.type, current.status) != "done":
             msg = f"Cannot reopen {issue_id}: status '{current.status}' is not in a done-category state"
@@ -717,9 +806,15 @@ class IssuesMixin(DBMixinProtocol):
         Uses a single atomic UPDATE with WHERE guard to prevent race conditions
         where two agents try to claim the same issue concurrently.
         """
-        if not assignee or not assignee.strip():
+        # filigree-694f7e9bf8: enforce the same trimmed-identity invariant as
+        # create_issue/update_issue. Without normalization, claiming with
+        # "  bob  " stores the padded form and a later canonical "bob" claim
+        # falsely reports "already assigned to '  bob  '".
+        assignee = _normalize_assignee(assignee)
+        if not assignee:
             msg = "Assignee cannot be empty"
             raise ValueError(msg)
+        self._check_id_prefix(issue_id)
         # Look up the issue type and current assignee so we know which states are "open"
         # and can record old_value for undo
         row = self.conn.execute("SELECT type, assignee FROM issues WHERE id = ?", (issue_id,)).fetchone()
@@ -769,21 +864,39 @@ class IssuesMixin(DBMixinProtocol):
     def release_claim(self, issue_id: str, *, actor: str = "") -> Issue:
         """Release a claimed issue by clearing its assignee.
 
-        Does NOT change status. Only succeeds if issue has an assignee.
+        Does NOT change status. Uses compare-and-swap on the observed
+        assignee so a concurrent reassignment between read and UPDATE
+        cannot be silently erased.
         """
-        current = self.get_issue(issue_id)
-
-        if not current.assignee:
+        self._check_id_prefix(issue_id)
+        row = self.conn.execute("SELECT assignee FROM issues WHERE id = ?", (issue_id,)).fetchone()
+        if row is None:
+            msg = f"Issue not found: {issue_id}"
+            raise KeyError(msg)
+        observed = row["assignee"] or ""
+        if not observed:
             msg = f"Cannot release {issue_id}: no assignee set"
             raise ValueError(msg)
 
         try:
-            self.conn.execute(
-                "UPDATE issues SET assignee = '', updated_at = ? WHERE id = ?",
-                [_now_iso(), issue_id],
+            cursor = self.conn.execute(
+                "UPDATE issues SET assignee = '', updated_at = ? WHERE id = ? AND assignee = ?",
+                [_now_iso(), issue_id, observed],
             )
 
-            self._record_event(issue_id, "released", actor=actor, old_value=current.assignee)
+            if cursor.rowcount == 0:
+                current = self.conn.execute("SELECT assignee FROM issues WHERE id = ?", (issue_id,)).fetchone()
+                if current is None:
+                    msg = f"Issue not found: {issue_id}"
+                    raise KeyError(msg)
+                new_assignee = current["assignee"] or ""
+                if not new_assignee:
+                    msg = f"Cannot release {issue_id}: already released"
+                    raise ValueError(msg)
+                msg = f"Cannot release {issue_id}: reassigned to '{new_assignee}' (expected '{observed}')"
+                raise ValueError(msg)
+
+            self._record_event(issue_id, "released", actor=actor, old_value=observed)
             self.conn.commit()
         except Exception:
             self.conn.rollback()
@@ -805,6 +918,34 @@ class IssuesMixin(DBMixinProtocol):
         on each until one succeeds (handles race conditions with retry).
         Returns None if no matching ready issues exist.
         """
+        result = self._claim_next_with_prior(
+            assignee,
+            type_filter=type_filter,
+            priority_min=priority_min,
+            priority_max=priority_max,
+            actor=actor,
+        )
+        return result[0] if result is not None else None
+
+    def _claim_next_with_prior(
+        self,
+        assignee: str,
+        *,
+        type_filter: str | None = None,
+        priority_min: int | None = None,
+        priority_max: int | None = None,
+        actor: str = "",
+    ) -> tuple[Issue, str] | None:
+        """Internal: claim_next that also returns the candidate's prior assignee.
+
+        Returns ``(claimed_issue, prior_assignee)`` so composed callers
+        (start_next_work) can distinguish a freshly-acquired claim from a
+        same-assignee re-claim and decide whether a compensating release is
+        appropriate. ``prior_assignee`` is read transactionally just before
+        ``claim_issue`` so a concurrent reassignment landing between the read
+        and the UPDATE will surface as the same race ``claim_issue`` already
+        handles (skip and continue).
+        """
         if not assignee or not assignee.strip():
             msg = "Assignee cannot be empty"
             raise ValueError(msg)
@@ -819,36 +960,182 @@ class IssuesMixin(DBMixinProtocol):
             if priority_max is not None and issue.priority > priority_max:
                 continue
             try:
-                return self.claim_issue(issue.id, assignee=assignee, actor=actor or assignee)
+                row = self.conn.execute("SELECT assignee FROM issues WHERE id = ?", (issue.id,)).fetchone()
+                prior_assignee = (row["assignee"] if row is not None else "") or ""
+                claimed = self.claim_issue(issue.id, assignee=assignee, actor=actor or assignee)
             except (ValueError, KeyError) as exc:
                 skipped += 1
                 logger.debug("claim_next: skipping %s: %s", issue.id, exc)
                 continue  # Race condition, status mismatch, or deleted issue
+            return claimed, prior_assignee
         if skipped:
             logger.warning("claim_next: all %d candidate(s) failed to claim for '%s'", skipped, assignee)
         return None
+
+    def start_work(
+        self,
+        issue_id: str,
+        *,
+        assignee: str,
+        target_status: str | None = None,
+        actor: str = "",
+    ) -> Issue:
+        """Atomically claim an issue and transition it to a working status.
+
+        Phase D6 composed operation. Performs ``claim_issue`` followed by
+        ``update_issue(status=target_status)`` with a compensating-action
+        rollback: if the transition fails, the claim is released so the
+        issue's ``assignee`` returns to its prior value.
+
+        ``target_status`` defaults to the type's
+        ``canonical_working_status()``. If the type defines multiple wip
+        statuses an ``AmbiguousTransitionError`` surfaces (caller must
+        specify ``target_status`` explicitly); if zero,
+        ``InvalidTransitionError``.
+
+        Note: rollback uses ``release_claim``, which itself may fail (e.g.
+        a concurrent reassignment). The audit trail preserves both the
+        ``claimed`` and ``released`` events even on rollback — auditability
+        is preserved at the cost of leaving a brief observable window
+        where the issue is claimed but not transitioned.
+
+        Rollback only releases the claim when *this* invocation acquired
+        it (filigree-31404d228f). ``claim_issue`` is idempotent for the
+        same identity — if the issue was already owned by ``assignee``
+        before the call, a transition failure must leave the claim in
+        place rather than wiping out an unrelated, pre-existing claim.
+        """
+        actor = actor or assignee
+
+        # Capture the prior assignee so rollback knows whether THIS call
+        # acquired the claim. Read directly to avoid building a full Issue;
+        # if the row is missing, claim_issue will raise the canonical KeyError.
+        row = self.conn.execute("SELECT assignee FROM issues WHERE id = ?", (issue_id,)).fetchone()
+        prior_assignee = (row["assignee"] if row is not None else "") or ""
+
+        issue = self.claim_issue(issue_id, assignee=assignee, actor=actor)
+        newly_acquired_claim = prior_assignee == ""
+
+        def _rollback_claim() -> None:
+            if newly_acquired_claim:
+                self._safe_release_claim(issue_id, actor=actor)
+
+        if target_status is None:
+            tpl = self.templates.get_type(issue.type)
+            if tpl is None:
+                # Roll back the claim before surfacing the error.
+                from filigree.types.api import InvalidTransitionError
+
+                _rollback_claim()
+                raise InvalidTransitionError(issue.type, issue.status)
+            try:
+                target_status = tpl.canonical_working_status()
+            except Exception:
+                _rollback_claim()
+                raise
+
+        try:
+            return self.update_issue(issue_id, status=target_status, actor=actor)
+        except Exception:
+            _rollback_claim()
+            raise
+
+    def start_next_work(
+        self,
+        *,
+        assignee: str,
+        type_filter: str | None = None,
+        priority_min: int | None = None,
+        priority_max: int | None = None,
+        target_status: str | None = None,
+        actor: str = "",
+    ) -> Issue | None:
+        """Claim the highest-priority ready issue (filtered) and atomically
+        transition it to a working status.
+
+        Phase D6 composed operation: ``claim_next`` + atomic transition with
+        compensating rollback (see ``start_work`` for the rollback contract).
+        Returns ``None`` if no ready issue matches the filters.
+
+        Rollback only releases the claim when *this* invocation acquired it.
+        ``claim_next`` reuses an existing same-assignee claim (claim_issue is
+        idempotent for the same identity), so an unconditional release on
+        transition failure would wipe out a pre-existing, unrelated claim.
+        Mirrors ``start_work``'s ownership-tracking contract.
+
+        Tie-break ordering inherits from ``claim_next``: priority asc,
+        created_at asc, issue_id asc.
+        """
+        actor = actor or assignee
+        claimed_with_prior = self._claim_next_with_prior(
+            assignee,
+            type_filter=type_filter,
+            priority_min=priority_min,
+            priority_max=priority_max,
+            actor=actor,
+        )
+        if claimed_with_prior is None:
+            return None
+        claimed, prior_assignee = claimed_with_prior
+        newly_acquired_claim = prior_assignee == ""
+
+        def _rollback_claim() -> None:
+            if newly_acquired_claim:
+                self._safe_release_claim(claimed.id, actor=actor)
+
+        if target_status is None:
+            tpl = self.templates.get_type(claimed.type)
+            if tpl is None:
+                from filigree.types.api import InvalidTransitionError
+
+                _rollback_claim()
+                raise InvalidTransitionError(claimed.type, claimed.status)
+            try:
+                target_status = tpl.canonical_working_status()
+            except Exception:
+                _rollback_claim()
+                raise
+
+        try:
+            return self.update_issue(claimed.id, status=target_status, actor=actor)
+        except Exception:
+            _rollback_claim()
+            raise
+
+    def _safe_release_claim(self, issue_id: str, *, actor: str) -> None:
+        """Best-effort claim rollback for start_work / start_next_work.
+
+        Used in compensating-action paths — never raises; logs at WARN if
+        the rollback itself fails so operators can spot leaked claims.
+        """
+        try:
+            self.release_claim(issue_id, actor=actor)
+        except (KeyError, ValueError) as exc:
+            logger.warning("start_work compensating release_claim failed for %s: %s", issue_id, exc)
 
     def _batch_with_transition_errors(
         self,
         issue_ids: list[str],
         action: Callable[[str], Issue],
-    ) -> tuple[list[Issue], list[BatchFailureDetail]]:
+    ) -> tuple[list[Issue], list[BatchFailure]]:
         """Run *action(issue_id)* per item with transition-enriched error handling."""
         _validate_string_list(issue_ids, "issue_ids")
         results: list[Issue] = []
-        errors: list[BatchFailureDetail] = []
+        errors: list[BatchFailure] = []
         for issue_id in issue_ids:
             try:
                 results.append(action(issue_id))
             except KeyError:
-                errors.append(BatchFailureDetail(id=issue_id, error=f"Not found: {issue_id}", code="not_found"))
+                errors.append(BatchFailure(id=issue_id, error=f"Not found: {issue_id}", code=ErrorCode.NOT_FOUND))
             except ValueError as e:
-                err = BatchFailureDetail(id=issue_id, error=str(e), code="invalid_transition")
-                try:
-                    transitions = self.get_valid_transitions(issue_id)
-                    err["valid_transitions"] = [{"to": t.to, "category": t.category} for t in transitions]
-                except KeyError:
-                    logger.debug("batch: could not enrich error with transitions for %s", issue_id)
+                code = classify_value_error(str(e))
+                err = BatchFailure(id=issue_id, error=str(e), code=code)
+                if code == ErrorCode.INVALID_TRANSITION:
+                    try:
+                        transitions = self.get_valid_transitions(issue_id)
+                        err["valid_transitions"] = [{"to": t.to, "category": t.category} for t in transitions]
+                    except KeyError:
+                        logger.debug("batch: could not enrich error with transitions for %s", issue_id)
                 errors.append(err)
         return results, errors
 
@@ -858,7 +1145,7 @@ class IssuesMixin(DBMixinProtocol):
         *,
         reason: str = "",
         actor: str = "",
-    ) -> tuple[list[Issue], list[BatchFailureDetail]]:
+    ) -> tuple[list[Issue], list[BatchFailure]]:
         """Close multiple issues with per-item error handling. Returns (closed, errors)."""
         return self._batch_with_transition_errors(
             issue_ids,
@@ -874,7 +1161,7 @@ class IssuesMixin(DBMixinProtocol):
         assignee: str | None = None,
         fields: dict[str, Any] | None = None,
         actor: str = "",
-    ) -> tuple[list[Issue], list[BatchFailureDetail]]:
+    ) -> tuple[list[Issue], list[BatchFailure]]:
         """Update multiple issues with the same changes. Returns (updated, errors)."""
         return self._batch_with_transition_errors(
             issue_ids,
@@ -893,7 +1180,7 @@ class IssuesMixin(DBMixinProtocol):
         issue_ids: list[str],
         *,
         label: str,
-    ) -> tuple[list[dict[str, str]], list[BatchFailureDetail]]:
+    ) -> tuple[list[dict[str, str]], list[BatchFailure]]:
         """Add the same label to multiple issues. Returns (labeled, errors)."""
         _validate_string_list(issue_ids, "issue_ids")
         if not isinstance(label, str):
@@ -901,16 +1188,16 @@ class IssuesMixin(DBMixinProtocol):
             raise TypeError(msg)
 
         results: list[dict[str, str]] = []
-        errors: list[BatchFailureDetail] = []
+        errors: list[BatchFailure] = []
         for issue_id in issue_ids:
             try:
                 self.get_issue(issue_id)
-                added = self.add_label(issue_id, label)
+                added, _canonical = self.add_label(issue_id, label)
                 results.append({"id": issue_id, "status": "added" if added else "already_exists"})
             except KeyError:
-                errors.append(BatchFailureDetail(id=issue_id, error=f"Not found: {issue_id}", code="not_found"))
+                errors.append(BatchFailure(id=issue_id, error=f"Not found: {issue_id}", code=ErrorCode.NOT_FOUND))
             except ValueError as e:
-                errors.append(BatchFailureDetail(id=issue_id, error=str(e), code="validation_error"))
+                errors.append(BatchFailure(id=issue_id, error=str(e), code=ErrorCode.VALIDATION))
         return results, errors
 
     def batch_add_comment(
@@ -919,7 +1206,7 @@ class IssuesMixin(DBMixinProtocol):
         *,
         text: str,
         author: str = "",
-    ) -> tuple[list[dict[str, str | int]], list[BatchFailureDetail]]:
+    ) -> tuple[list[dict[str, str | int]], list[BatchFailure]]:
         """Add the same comment to multiple issues. Returns (commented, errors)."""
         _validate_string_list(issue_ids, "issue_ids")
         if not isinstance(text, str):
@@ -930,16 +1217,16 @@ class IssuesMixin(DBMixinProtocol):
             raise TypeError(msg)
 
         results: list[dict[str, str | int]] = []
-        errors: list[BatchFailureDetail] = []
+        errors: list[BatchFailure] = []
         for issue_id in issue_ids:
             try:
                 self.get_issue(issue_id)
                 comment_id = self.add_comment(issue_id, text, author=author)
                 results.append({"id": issue_id, "comment_id": comment_id})
             except KeyError:
-                errors.append(BatchFailureDetail(id=issue_id, error=f"Not found: {issue_id}", code="not_found"))
+                errors.append(BatchFailure(id=issue_id, error=f"Not found: {issue_id}", code=ErrorCode.NOT_FOUND))
             except ValueError as e:
-                errors.append(BatchFailureDetail(id=issue_id, error=str(e), code="validation_error"))
+                errors.append(BatchFailure(id=issue_id, error=str(e), code=ErrorCode.VALIDATION))
         return results, errors
 
     def list_issues(
@@ -971,21 +1258,35 @@ class IssuesMixin(DBMixinProtocol):
         conditions: list[str] = []
         params: list[Any] = []
 
-        # Get done states once for virtual has:blockers
-        done_states = self._get_states_for_category("done")
+        # Build the type-aware blocker-done predicate once for virtual
+        # has:blockers. Blocker semantics (filigree-42045dd065): archived
+        # blockers do not block dependents. (filigree-b55aa3191f): match by
+        # ``(blocker.type, blocker.status)`` rather than status name alone, so
+        # an ``incident.resolved`` (wip) is correctly seen as still-blocking.
+        blocker_done_predicate = self._category_predicate_sql(
+            "done",
+            type_col="blocker.type",
+            status_col="blocker.status",
+            include_archived=True,
+        )
 
         if status is not None:
             # Check if status is a category name (with aliases)
             category_aliases = {"in_progress": "wip", "closed": "done"}
             category_key = category_aliases.get(status, status)
-            category_states: list[str] = []
+            cat_pred: tuple[str, list[str]] | None = None
             if category_key in ("open", "wip", "done"):
-                category_states = self._get_states_for_category(category_key)
+                # filigree-b55aa3191f: compare (type, status) pairs so a state
+                # name shared across types in different categories (e.g.
+                # incident.resolved=wip vs debt_item.resolved=done) routes only
+                # to the right type.
+                pred_sql, pred_params = self._category_predicate_sql(category_key, type_col="i.type", status_col="i.status")
+                if pred_params:
+                    cat_pred = (pred_sql, pred_params)
 
-            if category_states:
-                placeholders = ",".join("?" * len(category_states))
-                conditions.append(f"i.status IN ({placeholders})")
-                params.extend(category_states)
+            if cat_pred is not None:
+                conditions.append(cat_pred[0])
+                params.extend(cat_pred[1])
             else:
                 # Literal state match (either not a category, or W7 empty guard)
                 conditions.append("i.status = ?")
@@ -1006,7 +1307,7 @@ class IssuesMixin(DBMixinProtocol):
         # Label filters (array, AND logic)
         if label:
             for lbl in label:
-                virtual = _resolve_virtual_label(lbl, negate=False, done_states=done_states)
+                virtual = _resolve_virtual_label(lbl, negate=False, blocker_done_predicate=blocker_done_predicate)
                 if virtual is not None:
                     sql_frag, vparams = virtual
                     conditions.append(f"({sql_frag})")
@@ -1033,7 +1334,7 @@ class IssuesMixin(DBMixinProtocol):
                 conditions.append("i.id NOT IN (SELECT issue_id FROM labels WHERE label LIKE ? ESCAPE '\\')")
                 params.append(escaped + "%")
             else:
-                virtual = _resolve_virtual_label(not_label, negate=True, done_states=done_states)
+                virtual = _resolve_virtual_label(not_label, negate=True, blocker_done_predicate=blocker_done_predicate)
                 if virtual is not None:
                     sql_frag, vparams = virtual
                     conditions.append(f"({sql_frag})")

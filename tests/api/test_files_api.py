@@ -157,33 +157,33 @@ class TestErrorMessagesIncludeValidOptions:
 
     async def test_unknown_type_lists_valid_types(self, client: AsyncClient) -> None:
         resp = await client.get("/api/type/bogus_type")
-        assert resp.status_code == 404
-        err = resp.json()["error"]
-        assert err["code"] == "INVALID_TYPE"
-        assert '"bogus_type"' in err["message"]
+        assert resp.status_code == 400
+        body = resp.json()
+        assert body["code"] == "VALIDATION"
+        assert '"bogus_type"' in body["error"]
         # Must include at least some known types
         for expected in ("task", "bug", "feature"):
-            assert expected in err["message"], f"Missing valid type '{expected}' in error"
+            assert expected in body["error"], f"Missing valid type '{expected}' in error"
 
     async def test_create_issue_unknown_type_lists_valid_types(self, client: AsyncClient) -> None:
         resp = await client.post("/api/issues", json={"title": "Bad", "type": "widgets"})
         assert resp.status_code == 400
-        err = resp.json()["error"]
-        assert "widgets" in err["message"]
-        assert "task" in err["message"]
+        body = resp.json()
+        assert "widgets" in body["error"]
+        assert "task" in body["error"]
 
     async def test_priority_error_includes_valid_range(self, client: AsyncClient, dashboard_db: PopulatedDB) -> None:
         ids = dashboard_db.ids
         resp = await client.patch(f"/api/issue/{ids['a']}", json={"priority": "high"})
         assert resp.status_code == 400
-        err = resp.json()["error"]
-        assert err["code"] == "INVALID_PRIORITY"
-        assert "0" in err["message"]
-        assert "4" in err["message"]
+        body = resp.json()
+        assert body["code"] == "VALIDATION"
+        assert "0" in body["error"]
+        assert "4" in body["error"]
 
     async def test_issue_not_found_includes_id(self, client: AsyncClient) -> None:
         resp = await client.get("/api/issue/nonexistent-id-xyz")
         assert resp.status_code == 404
-        err = resp.json()["error"]
-        assert err["code"] == "ISSUE_NOT_FOUND"
-        assert "nonexistent-id-xyz" in err["message"]
+        body = resp.json()
+        assert body["code"] == "NOT_FOUND"
+        assert "nonexistent-id-xyz" in body["error"]

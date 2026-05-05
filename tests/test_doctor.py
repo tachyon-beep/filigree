@@ -202,6 +202,24 @@ class TestDoctorFiligreeDir:
         first = results[0]
         assert first.passed is True
 
+    def test_foreign_database_is_reported_with_specific_message(self, tmp_path: Path) -> None:
+        """Doctor must surface the full ForeignDatabaseError message — not
+        collapse it into the generic "No .filigree/ found" line — so agents
+        and users see *why* we refused and what to do next.
+        """
+        _make_project(tmp_path)  # outer project has .filigree/ and .filigree.conf
+        inner = tmp_path / "inner-repo"
+        inner.mkdir()
+        (inner / ".git").mkdir()  # inner is a separate git repo, no anchor of its own
+
+        results = run_doctor(inner)
+        assert len(results) == 1
+        r = results[0]
+        assert r.passed is False
+        assert "Refusing to latch" in r.message
+        assert "filigree init" in r.fix_hint
+        assert str(inner.resolve()) in r.fix_hint
+
 
 # ---------------------------------------------------------------------------
 # run_doctor — config.json check
@@ -271,7 +289,10 @@ class TestDoctorDatabase:
         results = run_doctor(tmp_path)
         db_result = next(r for r in results if r.name == "filigree.db")
         assert db_result.passed is False
-        assert "error" in db_result.message.lower()
+        # Either the schema-version probe fails first (post-PR-#33 ordering)
+        # or a later table query fails — both produce a corrupted-DB hint.
+        assert "error" in db_result.message.lower() or "schema version" in db_result.message.lower()
+        assert "corrupted" in (db_result.fix_hint or "").lower()
 
     def test_schema_version_current(self, tmp_path: Path) -> None:
         _make_project(tmp_path)
@@ -303,6 +324,81 @@ class TestDoctorDatabase:
         schema_result = next(r for r in results if r.name == "Schema version")
         assert schema_result.passed is False
         assert "newer" in schema_result.fix_hint.lower() or "Upgrade" in schema_result.fix_hint
+
+
+class TestDoctorHonorsConfDbPath:
+    """Bug filigree-3572d3b273: run_doctor must resolve the DB path from
+    ``.filigree.conf`` when one exists, not hardcode ``.filigree/filigree.db``.
+
+    Custom relocations like ``db = "storage/track.db"`` are explicitly
+    supported by ``FiligreeDB.from_conf`` and ``filigree init``; doctor
+    cannot silently inspect the wrong file (or report a false "missing DB").
+    """
+
+    def test_honors_custom_db_path_from_conf(self, tmp_path: Path) -> None:
+        from filigree.core import CONF_FILENAME, write_conf
+
+        # Build a project whose DB lives at storage/track.db, not .filigree/filigree.db
+        filigree_dir = tmp_path / FILIGREE_DIR_NAME
+        filigree_dir.mkdir()
+        storage_dir = tmp_path / "storage"
+        storage_dir.mkdir()
+        custom_db = storage_dir / "track.db"
+
+        write_config(filigree_dir, {"prefix": "tst", "version": 1})
+        (filigree_dir / SUMMARY_FILENAME).write_text("# summary\n")
+
+        db = FiligreeDB(custom_db, prefix="tst")
+        db.initialize()
+        db.close()
+
+        write_conf(
+            tmp_path / CONF_FILENAME,
+            {"version": 1, "project_name": "tst", "prefix": "tst", "db": "storage/track.db"},
+        )
+
+        results = run_doctor(tmp_path)
+        db_result = next(r for r in results if r.name == "filigree.db")
+        assert db_result.passed is True, f"doctor did not find DB at {custom_db}: {db_result.message}"
+
+    def test_reports_missing_custom_db(self, tmp_path: Path) -> None:
+        """If conf declares a DB path that doesn't exist, doctor reports missing."""
+        from filigree.core import CONF_FILENAME, write_conf
+
+        filigree_dir = tmp_path / FILIGREE_DIR_NAME
+        filigree_dir.mkdir()
+        write_config(filigree_dir, {"prefix": "tst", "version": 1})
+        (filigree_dir / SUMMARY_FILENAME).write_text("# summary\n")
+        # Conf points at a DB that was never created
+        write_conf(
+            tmp_path / CONF_FILENAME,
+            {"version": 1, "project_name": "tst", "prefix": "tst", "db": "storage/track.db"},
+        )
+
+        results = run_doctor(tmp_path)
+        db_result = next(r for r in results if r.name == "filigree.db")
+        assert db_result.passed is False
+        assert "Missing" in db_result.message
+
+    def test_falls_back_to_legacy_layout_without_conf(self, tmp_path: Path) -> None:
+        """Legacy installs without .filigree.conf must keep working."""
+        _make_project(tmp_path)  # no conf written
+        results = run_doctor(tmp_path)
+        db_result = next(r for r in results if r.name == "filigree.db")
+        assert db_result.passed is True
+
+    def test_unreadable_conf_surfaces_but_falls_back(self, tmp_path: Path) -> None:
+        """A corrupt conf must surface as a check failure, but not block the DB check."""
+        from filigree.core import CONF_FILENAME
+
+        _make_project(tmp_path)
+        (tmp_path / CONF_FILENAME).write_text("not json at all {")
+        results = run_doctor(tmp_path)
+        anchor_result = next(r for r in results if r.name == ".filigree.conf anchor")
+        assert anchor_result.passed is False
+        # DB check should still report the legacy DB as fine
+        db_result = next(r for r in results if r.name == "filigree.db")
+        assert db_result.passed is True
 
 
 # ---------------------------------------------------------------------------
@@ -509,6 +605,34 @@ class TestDoctorClaudeCodeHooks:
         hook_result = next(r for r in results if r.name == "Claude Code hooks")
         assert hook_result.passed is False
         assert "Binary not found" in hook_result.message
+
+    def test_module_form_hook_with_existing_interpreter_passes(self, tmp_path: Path) -> None:
+        """Module-form hooks (``<abs-path> -m filigree session-context``)
+        get structural validation only — if the interpreter file exists
+        the check passes.
+
+        This used to also subprocess-run the interpreter with
+        ``-c "import filigree"`` to detect a venv-purged install
+        (filigree-36539914b3), but the path comes from
+        project-controlled ``.claude/settings.json`` and could be
+        weaponised for arbitrary code execution under
+        ``filigree doctor`` — so the probe was removed
+        (filigree-e6828dcdb1). The security regression test lives in
+        ``tests/install/test_install.py::test_doctor_does_not_execute_hook_binary``.
+        """
+        _make_project(tmp_path)
+        claude_dir = tmp_path / ".claude"
+        claude_dir.mkdir()
+        fake_python = tmp_path / "bin" / "python3"
+        fake_python.parent.mkdir()
+        fake_python.touch()
+        settings = self._settings_with_hook(f"{fake_python} -m filigree session-context")
+        (claude_dir / "settings.json").write_text(json.dumps(settings))
+
+        results = run_doctor(tmp_path)
+        hook_result = next(r for r in results if r.name == "Claude Code hooks")
+        assert hook_result.passed is True
+        assert "session-context hook registered" in hook_result.message
 
 
 # ---------------------------------------------------------------------------
@@ -1069,7 +1193,7 @@ class TestDoctorEtherealChecks:
         assert results == []
 
     def test_pid_file_alive(self, tmp_path: Path) -> None:
-        """Alive PID → passing check with process info."""
+        """Alive PID owned by this project → passing check with process info."""
         filigree_dir = tmp_path / ".filigree"
         filigree_dir.mkdir()
         pid_file = filigree_dir / "ephemeral.pid"
@@ -1077,7 +1201,7 @@ class TestDoctorEtherealChecks:
 
         with (
             patch("filigree.ephemeral.read_pid_file", return_value={"pid": 42}),
-            patch("filigree.ephemeral.is_pid_alive", return_value=True),
+            patch("filigree.ephemeral.verify_pid_ownership", return_value=True),
         ):
             results = _doctor_ethereal_checks(filigree_dir)
 
@@ -1096,7 +1220,7 @@ class TestDoctorEtherealChecks:
 
         with (
             patch("filigree.ephemeral.read_pid_file", return_value={"pid": 99}),
-            patch("filigree.ephemeral.is_pid_alive", return_value=False),
+            patch("filigree.ephemeral.verify_pid_ownership", return_value=False),
         ):
             results = _doctor_ethereal_checks(filigree_dir)
 
@@ -1117,7 +1241,7 @@ class TestDoctorEtherealChecks:
 
         with (
             patch("filigree.ephemeral.read_pid_file", return_value=None),
-            patch("filigree.ephemeral.is_pid_alive", return_value=False),
+            patch("filigree.ephemeral.verify_pid_ownership", return_value=False),
         ):
             results = _doctor_ethereal_checks(filigree_dir)
 
@@ -1125,6 +1249,36 @@ class TestDoctorEtherealChecks:
         r = results[0]
         assert r.passed is False
         assert "unknown" in r.message
+
+    def test_pid_file_recycled_reports_stale(self, tmp_path: Path) -> None:
+        """filigree-aa80d21b97: recycled PID (alive but not ours) must report as stale.
+
+        Pre-fix the check used raw ``is_pid_alive``, so any unrelated process
+        that happened to reuse the recorded PID passed the Ephemeral PID check
+        as a healthy dashboard.
+        """
+        filigree_dir = tmp_path / ".filigree"
+        filigree_dir.mkdir()
+        pid_file = filigree_dir / "ephemeral.pid"
+        pid_file.write_text("1234\n")
+
+        # read_pid_file returns a valid record, but verify_pid_ownership
+        # rejects it — the live process with PID 1234 isn't our dashboard.
+        # (is_pid_alive would return True here; doctor must NOT trust that
+        # signal alone.)
+        with (
+            patch("filigree.ephemeral.read_pid_file", return_value={"pid": 1234}),
+            patch("filigree.ephemeral.is_pid_alive", return_value=True),
+            patch("filigree.ephemeral.verify_pid_ownership", return_value=False),
+        ):
+            results = _doctor_ethereal_checks(filigree_dir)
+
+        assert len(results) == 1
+        r = results[0]
+        assert r.name == "Ephemeral PID"
+        assert r.passed is False, "Recycled PID must not be reported as healthy"
+        assert "Stale" in r.message
+        assert "1234" in r.message
 
     def test_port_file_listening(self, tmp_path: Path) -> None:
         """Port file exists and port is listening → passing check."""
@@ -1174,7 +1328,7 @@ class TestDoctorEtherealChecks:
 
         with (
             patch("filigree.ephemeral.read_pid_file", return_value={"pid": 55}),
-            patch("filigree.ephemeral.is_pid_alive", return_value=True),
+            patch("filigree.ephemeral.verify_pid_ownership", return_value=True),
             patch("filigree.ephemeral.read_port_file", return_value=8377),
             patch("filigree.hooks._is_port_listening", return_value=True),
         ):

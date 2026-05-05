@@ -126,14 +126,15 @@ class TestBuildContext:
 
 class TestGenerateSessionContext:
     def test_returns_none_without_filigree_dir(self, tmp_path: Path) -> None:
-        with patch("filigree.hooks.find_filigree_root", side_effect=FileNotFoundError):
+        with patch("filigree.hooks.find_filigree_anchor", side_effect=FileNotFoundError):
             assert generate_session_context() is None
 
     def test_returns_context_string(self, tmp_path: Path, db: FiligreeDB) -> None:
         """Smoke test that generate_session_context returns a string when a project exists."""
-        # We mock find_filigree_root to return the db's directory
+        # We mock find_filigree_anchor to return the project root + no conf
+        # (legacy install), which routes DB init through ``from_filigree_dir``.
         db_dir = Path(db.db_path).parent
-        with patch("filigree.hooks.find_filigree_root", return_value=db_dir):
+        with patch("filigree.hooks.find_filigree_anchor", return_value=(db_dir.parent, None)):
             result = generate_session_context()
         assert result is not None
         assert "Filigree Project Snapshot" in result
@@ -256,6 +257,46 @@ class TestEnsureDashboardSubprocessVerification:
         assert "started" not in result.lower()
 
 
+class TestEnsureDashboardStartupRace:
+    """Bug filigree-ea2a1959e1: concurrent hook calls must not spawn a second dashboard
+    while the first child is alive but not yet listening."""
+
+    def test_does_not_respawn_while_startup_window_open(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        import time
+
+        from filigree.ephemeral import write_pid_file, write_port_file
+
+        pid_file = tmp_path / "ephemeral.pid"
+        port_file = tmp_path / "ephemeral.port"
+        write_pid_file(pid_file, 99999, cmd="filigree dashboard", port=8501)
+        write_port_file(port_file, 8501)
+
+        mock_proc = MagicMock()
+        mock_proc.poll.return_value = None
+        mock_proc.pid = 77777
+
+        with (
+            patch("filigree.hooks.find_filigree_root", return_value=tmp_path),
+            patch("filigree.hooks.get_mode", return_value="ethereal"),
+            patch("filigree.hooks._is_port_listening", return_value=False),
+            patch(
+                "filigree.ephemeral.verify_pid_ownership",
+                return_value=True,  # PID 99999 looks alive and like ours
+            ),
+            patch("filigree.hooks.subprocess.Popen", return_value=mock_proc) as mock_popen,
+            patch("filigree.hooks.find_filigree_command", return_value=["/usr/bin/filigree"]),
+            patch("filigree.hooks.time.sleep"),
+            patch.dict(os.environ, {"TMPDIR": str(tmp_path)}),
+        ):
+            result = ensure_dashboard_running()
+
+        assert mock_popen.call_count == 0, "must not spawn a second dashboard during startup window"
+        assert "starting" in result.lower() or "initializing" in result.lower(), result
+        # PID file must be preserved, not unlinked
+        assert pid_file.exists(), "must preserve PID file during startup window"
+        _ = time  # silence unused import warning on some linters
+
+
 class TestEnsureDashboardGetModeError:
     """Bug filigree-c765b98e9c: ensure_dashboard_running must catch ValueError from get_mode()."""
 
@@ -300,6 +341,100 @@ class TestEnsureDashboardGetModeError:
         mock_logger.warning.assert_called_once()
         # exc_info=True ensures the actual ValueError is logged for diagnosis
         assert mock_logger.warning.call_args.kwargs.get("exc_info") is True
+
+
+class TestEnsureDashboardMetadataWriteFailure:
+    """filigree-89e7a1c833: metadata-write OSError after Popen must not leak
+    an untracked detached dashboard.
+
+    Pre-fix, ``write_pid_file`` / ``write_port_file`` were called bare. Any
+    OSError (ENOSPC, EROFS, EACCES, etc.) propagated up through the function,
+    the ``finally`` released the lock, but the just-spawned child — launched
+    with ``start_new_session=True`` — kept running with no PID or port record.
+    """
+
+    def test_pid_write_failure_terminates_child(self, tmp_path: Path) -> None:
+        """If write_pid_file raises OSError, the spawned process must be terminated."""
+        mock_proc = MagicMock()
+        mock_proc.poll.return_value = None
+        mock_proc.pid = 33333
+        # proc.wait returns 0 the first time (terminated cleanly) so we
+        # don't need to exercise the SIGKILL escalation path here.
+        mock_proc.wait.return_value = 0
+
+        with (
+            patch("filigree.hooks.find_filigree_root", return_value=tmp_path),
+            patch("filigree.hooks.get_mode", return_value="ethereal"),
+            patch("filigree.hooks._is_port_listening", return_value=False),
+            patch("filigree.hooks.subprocess.Popen", return_value=mock_proc),
+            patch("filigree.hooks.find_filigree_command", return_value=["/usr/bin/filigree"]),
+            patch("filigree.hooks.time.sleep"),
+            patch(
+                "filigree.ephemeral.write_pid_file",
+                side_effect=OSError("ENOSPC: no space left on device"),
+            ),
+            patch.dict(os.environ, {"TMPDIR": str(tmp_path)}),
+        ):
+            result = ensure_dashboard_running()
+
+        mock_proc.terminate.assert_called_once()
+        assert "failed" in result.lower() or "metadata" in result.lower(), result
+        assert "started" not in result.lower() or "failed" in result.lower()
+
+    def test_port_write_failure_terminates_child_and_cleans_pid(self, tmp_path: Path) -> None:
+        """If write_port_file raises, we must still kill the child and remove partial PID file."""
+        pid_file = tmp_path / "ephemeral.pid"
+        port_file = tmp_path / "ephemeral.port"
+
+        mock_proc = MagicMock()
+        mock_proc.poll.return_value = None
+        mock_proc.pid = 44444
+        mock_proc.wait.return_value = 0
+
+        with (
+            patch("filigree.hooks.find_filigree_root", return_value=tmp_path),
+            patch("filigree.hooks.get_mode", return_value="ethereal"),
+            patch("filigree.hooks._is_port_listening", return_value=False),
+            patch("filigree.hooks.subprocess.Popen", return_value=mock_proc),
+            patch("filigree.hooks.find_filigree_command", return_value=["/usr/bin/filigree"]),
+            patch("filigree.hooks.time.sleep"),
+            patch(
+                "filigree.ephemeral.write_port_file",
+                side_effect=OSError("EROFS: read-only file system"),
+            ),
+            patch.dict(os.environ, {"TMPDIR": str(tmp_path)}),
+        ):
+            result = ensure_dashboard_running()
+
+        mock_proc.terminate.assert_called_once()
+        assert not pid_file.exists(), "orphaned PID file must be removed"
+        assert not port_file.exists(), "orphaned port file must be removed"
+        assert "failed" in result.lower() or "metadata" in result.lower(), result
+
+    def test_child_unresponsive_to_sigterm_gets_killed(self, tmp_path: Path) -> None:
+        """SIGKILL fallback when the spawned child ignores SIGTERM."""
+        import subprocess as _subprocess
+
+        mock_proc = MagicMock()
+        mock_proc.poll.return_value = None
+        mock_proc.pid = 55555
+        # First wait (after terminate) times out → escalate to kill.
+        mock_proc.wait.side_effect = [_subprocess.TimeoutExpired(cmd="x", timeout=2.0), 0]
+
+        with (
+            patch("filigree.hooks.find_filigree_root", return_value=tmp_path),
+            patch("filigree.hooks.get_mode", return_value="ethereal"),
+            patch("filigree.hooks._is_port_listening", return_value=False),
+            patch("filigree.hooks.subprocess.Popen", return_value=mock_proc),
+            patch("filigree.hooks.find_filigree_command", return_value=["/usr/bin/filigree"]),
+            patch("filigree.hooks.time.sleep"),
+            patch("filigree.ephemeral.write_pid_file", side_effect=OSError("ENOSPC")),
+            patch.dict(os.environ, {"TMPDIR": str(tmp_path)}),
+        ):
+            ensure_dashboard_running()
+
+        mock_proc.terminate.assert_called_once()
+        mock_proc.kill.assert_called_once()
 
 
 class TestExtractMarkerHash:
@@ -411,7 +546,7 @@ class TestGenerateSessionContextFreshness:
         # Create a stale CLAUDE.md in the project root
         claude_md = project_root / "CLAUDE.md"
         claude_md.write_text("<!-- filigree:instructions:v0.0.0:00000000 -->\nold\n<!-- /filigree:instructions -->\n")
-        with patch("filigree.hooks.find_filigree_root", return_value=db_dir):
+        with patch("filigree.hooks.find_filigree_anchor", return_value=(db_dir.parent, None)):
             result = generate_session_context()
         assert result is not None
         assert "Updated filigree instructions in CLAUDE.md" in result
@@ -419,7 +554,7 @@ class TestGenerateSessionContextFreshness:
     def test_context_without_stale_instructions(self, tmp_path: Path, db: FiligreeDB) -> None:
         """generate_session_context should not include update messages when everything is fresh."""
         db_dir = Path(db.db_path).parent
-        with patch("filigree.hooks.find_filigree_root", return_value=db_dir):
+        with patch("filigree.hooks.find_filigree_anchor", return_value=(db_dir.parent, None)):
             result = generate_session_context()
         assert result is not None
         assert "Updated" not in result
@@ -438,6 +573,9 @@ class TestSessionContextDashboardUrl:
         db.initialize()
 
         monkeypatch.setattr("filigree.hooks._is_port_listening", lambda *a: True)
+        # Identity check now goes through ``verify_pid_ownership`` so a PID
+        # recycled to another process can't be misreported (filigree-aa38935c28).
+        monkeypatch.setattr("filigree.ephemeral.verify_pid_ownership", lambda *_a, **_k: True)
         context = _build_context(db, filigree_dir)
         db.close()
 
@@ -770,7 +908,7 @@ class TestFreshnessCheckLogLevel:
         db.close()
 
         with (
-            patch("filigree.hooks.find_filigree_root", return_value=db_dir),
+            patch("filigree.hooks.find_filigree_anchor", return_value=(db_dir.parent, None)),
             patch("filigree.hooks._check_instructions_freshness", side_effect=OSError("disk full")),
             patch("filigree.hooks.logger") as mock_logger,
         ):
@@ -789,7 +927,7 @@ class TestFreshnessCheckLogLevel:
         db.close()
 
         with (
-            patch("filigree.hooks.find_filigree_root", return_value=db_dir),
+            patch("filigree.hooks.find_filigree_anchor", return_value=(db_dir.parent, None)),
             patch("filigree.hooks._check_instructions_freshness", side_effect=RuntimeError("boom")),
             pytest.raises(RuntimeError, match="boom"),
         ):

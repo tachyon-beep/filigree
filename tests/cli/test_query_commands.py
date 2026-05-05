@@ -135,7 +135,22 @@ class TestJsonOutput:
         assert result.exit_code == 0
         data = json.loads(result.output)
         # 2 created + auto-seeded "Future" release = 3
-        assert len(data) == 3
+        assert len(data["items"]) == 3
+
+    def test_list_json_has_more_no_false_positive(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        """Overfetch-by-1: when DB has exactly limit rows, has_more must be False."""
+        runner, _ = cli_in_project
+        # The project has 1 auto-seeded "Future" release.  Add 2 more → 3 total.
+        runner.invoke(cli, ["create", "Boundary A"])
+        runner.invoke(cli, ["create", "Boundary B"])
+        # Query with limit=3: DB has exactly 3 rows.  Old code returns has_more=True;
+        # correct overfetch-by-1 returns has_more=False.
+        result = runner.invoke(cli, ["list", "--limit", "3", "--json"])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert len(data["items"]) == 3
+        assert data["has_more"] is False
+        assert "next_offset" not in data
 
     def test_ready_json(self, cli_in_project: tuple[CliRunner, Path]) -> None:
         runner, _ = cli_in_project
@@ -144,7 +159,10 @@ class TestJsonOutput:
         assert result.exit_code == 0
         data = json.loads(result.output)
         # 1 created + auto-seeded "Future" release = 2 ready
-        assert len(data) == 2
+        assert len(data["items"]) == 2
+        # Items must be SlimIssue shape (5 keys): no full IssueDict.
+        item = data["items"][0]
+        assert set(item.keys()) == {"issue_id", "title", "status", "priority", "type"}
 
     def test_stats_json(self, cli_in_project: tuple[CliRunner, Path]) -> None:
         runner, _ = cli_in_project
@@ -160,7 +178,10 @@ class TestJsonOutput:
         result = runner.invoke(cli, ["search", "searchable", "--json"])
         assert result.exit_code == 0
         data = json.loads(result.output)
-        assert len(data) == 1
+        assert len(data["items"]) == 1
+        # Items must be SlimIssue shape (5 keys): no full IssueDict.
+        item = data["items"][0]
+        assert set(item.keys()) == {"issue_id", "title", "status", "priority", "type"}
 
 
 class TestBlockedJson:
@@ -174,7 +195,11 @@ class TestBlockedJson:
         result = runner.invoke(cli, ["blocked", "--json"])
         assert result.exit_code == 0
         data = json.loads(result.output)
-        assert len(data) == 1
+        assert len(data["items"]) == 1
+        # Items must be BlockedIssue shape: SlimIssue + blocked_by (no full IssueDict).
+        item = data["items"][0]
+        assert "blocked_by" in item
+        assert "description" not in item  # absence check catches IssueDict drift
 
 
 class TestCycleTimeDisplay:

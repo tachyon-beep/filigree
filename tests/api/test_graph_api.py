@@ -264,8 +264,8 @@ class TestSafeBoundedInt:
 
         assert isinstance(result.body, bytes)
         body = json.loads(result.body.decode())
-        # Must use _safe_int's VALIDATION_ERROR, not the replaced GRAPH_INVALID_PARAM
-        assert body["error"]["code"] == "VALIDATION_ERROR"
+        # Must use _safe_int's VALIDATION, not the replaced GRAPH_INVALID_PARAM
+        assert body["code"] == "VALIDATION"
 
 
 class TestGraphAdvancedAPI:
@@ -372,6 +372,61 @@ class TestGraphAdvancedAPI:
         assert len(data["edges"]) == 50
         assert data["telemetry"]["total_edges_before_limit"] > 50
 
+    async def test_graph_v2_paginates_beyond_single_list_page(
+        self,
+        client: AsyncClient,
+        dashboard_db: PopulatedDB,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Regression: /api/graph must paginate through all issues, not cap silently.
+
+        Previously the handler called list_issues(limit=10000); projects with
+        more issues silently lost graph nodes and could false-404 on a valid
+        scope_root past the cap.
+        """
+        from filigree.dashboard_routes import analytics as analytics_routes
+
+        monkeypatch.setattr(analytics_routes, "_GRAPH_LIST_PAGE_SIZE", 3)
+
+        created_ids: list[str] = []
+        for i in range(7):
+            new_issue = dashboard_db.db.create_issue(f"Beyond cap {i}", type="task", priority=2)
+            created_ids.append(new_issue.id)
+
+        resp = await client.get("/api/graph?mode=v2&node_limit=2000")
+        assert resp.status_code == 200
+        data = resp.json()
+        node_ids = {n["id"] for n in data["nodes"]}
+        for issue_id in created_ids:
+            assert issue_id in node_ids, f"Issue {issue_id} missing — pagination failed"
+
+    async def test_graph_v2_scope_root_accepted_when_beyond_preload_page(
+        self,
+        client: AsyncClient,
+        dashboard_db: PopulatedDB,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """scope_root must validate against the full DB, not a preload-truncated subset."""
+        from filigree.dashboard_routes import analytics as analytics_routes
+
+        monkeypatch.setattr(analytics_routes, "_GRAPH_LIST_PAGE_SIZE", 3)
+
+        far_ids: list[str] = []
+        for i in range(6):
+            far_issue = dashboard_db.db.create_issue(f"Far issue {i}", type="task", priority=2)
+            far_ids.append(far_issue.id)
+
+        # scope_root is the last-created issue, which under the old non-paginated
+        # 10000-limit code was inside the preload, but the bug class the test
+        # guards against is: any issue not in the preload must still validate.
+        # The pagination fix ensures issue_map is complete even when the underlying
+        # list_issues default page size is tiny.
+        resp = await client.get(f"/api/graph?mode=v2&scope_root={far_ids[-1]}&scope_radius=0")
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        node_ids = {n["id"] for n in data["nodes"]}
+        assert far_ids[-1] in node_ids
+
     async def test_graph_window_days_filters_stale_nodes(self, client: AsyncClient, dashboard_db: PopulatedDB) -> None:
         stale = dashboard_db.db.create_issue("Old graph issue", type="task", priority=2)
         fresh = dashboard_db.db.create_issue("Fresh graph issue", type="task", priority=2)
@@ -435,20 +490,20 @@ class TestGraphAPI:
     async def test_graph_invalid_mode(self, client: AsyncClient) -> None:
         resp = await client.get("/api/graph?mode=nope")
         assert resp.status_code == 400
-        err = resp.json()["error"]
-        assert err["code"] == "GRAPH_INVALID_PARAM"
+        body = resp.json()
+        assert body["code"] == "VALIDATION"
 
     async def test_graph_invalid_ready_blocked_combo(self, client: AsyncClient) -> None:
         resp = await client.get("/api/graph?mode=v2&ready_only=true&blocked_only=true")
         assert resp.status_code == 422
-        err = resp.json()["error"]
-        assert err["code"] == "GRAPH_INVALID_PARAM"
+        body = resp.json()
+        assert body["code"] == "VALIDATION"
 
     async def test_graph_scope_root_not_found(self, client: AsyncClient) -> None:
         resp = await client.get("/api/graph?mode=v2&scope_root=missing")
         assert resp.status_code == 404
-        err = resp.json()["error"]
-        assert err["code"] == "GRAPH_INVALID_PARAM"
+        body = resp.json()
+        assert body["code"] == "VALIDATION"
 
     async def test_graph_include_done_false_excludes_done_nodes(self, client: AsyncClient) -> None:
         resp = await client.get("/api/graph?mode=v2&include_done=false")
@@ -474,44 +529,44 @@ class TestGraphAPI:
     async def test_graph_invalid_boolean_param(self, client: AsyncClient) -> None:
         resp = await client.get("/api/graph?mode=v2&include_done=maybe")
         assert resp.status_code == 400
-        err = resp.json()["error"]
-        assert err["code"] == "VALIDATION_ERROR"
-        assert err["details"]["param"] == "include_done"
+        body = resp.json()
+        assert body["code"] == "VALIDATION"
+        assert body["details"]["param"] == "include_done"
 
     async def test_graph_invalid_status_category(self, client: AsyncClient) -> None:
         resp = await client.get("/api/graph?mode=v2&status_categories=open,wat")
         assert resp.status_code == 400
-        err = resp.json()["error"]
-        assert err["code"] == "GRAPH_INVALID_PARAM"
-        assert err["details"]["param"] == "status_categories"
+        body = resp.json()
+        assert body["code"] == "VALIDATION"
+        assert body["details"]["param"] == "status_categories"
 
     async def test_graph_invalid_type_filter(self, client: AsyncClient) -> None:
         resp = await client.get("/api/graph?mode=v2&types=task,notatype")
         assert resp.status_code == 400
-        err = resp.json()["error"]
-        assert err["code"] == "GRAPH_INVALID_PARAM"
-        assert err["details"]["param"] == "types"
+        body = resp.json()
+        assert body["code"] == "VALIDATION"
+        assert body["details"]["param"] == "types"
 
     async def test_graph_scope_radius_requires_scope_root(self, client: AsyncClient) -> None:
         resp = await client.get("/api/graph?mode=v2&scope_radius=2")
         assert resp.status_code == 422
-        err = resp.json()["error"]
-        assert err["code"] == "GRAPH_INVALID_PARAM"
-        assert err["details"]["param"] == "scope_radius"
+        body = resp.json()
+        assert body["code"] == "VALIDATION"
+        assert body["details"]["param"] == "scope_radius"
 
     async def test_graph_limit_validation(self, client: AsyncClient) -> None:
         resp = await client.get("/api/graph?mode=v2&node_limit=10")
         assert resp.status_code == 400
-        err = resp.json()["error"]
-        assert err["code"] == "VALIDATION_ERROR"
-        assert err["details"]["param"] == "node_limit"
+        body = resp.json()
+        assert body["code"] == "VALIDATION"
+        assert body["details"]["param"] == "node_limit"
 
     async def test_graph_window_days_validation(self, client: AsyncClient) -> None:
         resp = await client.get("/api/graph?mode=v2&window_days=-1")
         assert resp.status_code == 400
-        err = resp.json()["error"]
-        assert err["code"] == "VALIDATION_ERROR"
-        assert err["details"]["param"] == "window_days"
+        body = resp.json()
+        assert body["code"] == "VALIDATION"
+        assert body["details"]["param"] == "window_days"
 
     async def test_graph_window_days_zero_is_noop(self, client: AsyncClient, dashboard_db: PopulatedDB) -> None:
         """window_days=0 should not filter any nodes — it's a no-op."""
@@ -553,3 +608,144 @@ class TestGraphAPI:
         assert data["limits"]["truncated"] is True
         assert len(data["nodes"]) == 50
         assert "query_ms" in data["telemetry"]
+
+    async def test_graph_critical_path_only_marks_only_adjacent_edges(
+        self,
+        client: AsyncClient,
+        dashboard_db: PopulatedDB,
+    ) -> None:
+        """is_critical_path must mark only adjacent edges in the ordered chain.
+
+        Regression: the route collapsed db.get_critical_path() into a node-id
+        set, so any edge whose endpoints both lay on the path was flagged
+        critical — including shortcut edges that skip a path node.
+        Build chain x1->x2->x3->x4 with shortcut x1->x4 and assert the
+        shortcut is NOT marked critical even though both endpoints are on
+        the path. (filigree-c9b08d1363)
+        """
+        db = dashboard_db.db
+        x1 = db.create_issue("CP root", type="task", priority=2)
+        x2 = db.create_issue("CP mid1", type="task", priority=2)
+        x3 = db.create_issue("CP mid2", type="task", priority=2)
+        x4 = db.create_issue("CP tail", type="task", priority=2)
+        # Chain: x1 blocks x2 blocks x3 blocks x4 (so x4 dep x3, x3 dep x2, x2 dep x1)
+        db.add_dependency(x2.id, x1.id)
+        db.add_dependency(x3.id, x2.id)
+        db.add_dependency(x4.id, x3.id)
+        # Shortcut: x4 also depends directly on x1 (skipping x2, x3)
+        db.add_dependency(x4.id, x1.id)
+
+        resp = await client.get("/api/graph?mode=v2&critical_path_only=true")
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        node_ids = {n["id"] for n in data["nodes"]}
+        # Longest path is 4 nodes; shortcut alone would only give 2 — DP wins.
+        assert {x1.id, x2.id, x3.id, x4.id} <= node_ids
+
+        edges_by_pair = {(e["source"], e["target"]): e for e in data["edges"]}
+        # Adjacent edges in the chain are critical
+        assert edges_by_pair[(x1.id, x2.id)]["is_critical_path"] is True
+        assert edges_by_pair[(x2.id, x3.id)]["is_critical_path"] is True
+        assert edges_by_pair[(x3.id, x4.id)]["is_critical_path"] is True
+        # The shortcut x1->x4 must NOT be marked critical
+        assert edges_by_pair[(x1.id, x4.id)]["is_critical_path"] is False
+
+    async def test_graph_v2_archived_issues_excluded_when_include_done_false(
+        self,
+        client: AsyncClient,
+        dashboard_db: PopulatedDB,
+    ) -> None:
+        """include_done=false must also exclude archived issues.
+
+        Regression: archive_closed() preserves closed_at but strips the
+        'done' status_category, so archived issues' status_category
+        resolves to 'open'. The graph route filtered only on
+        status_category=='done', leaking archived issues. (filigree-b6cacfce72)
+        """
+        db = dashboard_db.db
+        target = db.create_issue("To be archived", type="task", priority=2)
+        db.update_issue(target.id, status="in_progress")
+        db.close_issue(target.id)
+        db.archive_closed(days_old=0)
+        archived = db.get_issue(target.id)
+        assert archived.status == "archived"
+        assert archived.status_category == "open", "fixture invariant: archived stays in 'open' category"
+
+        resp = await client.get("/api/graph?mode=v2&include_done=false")
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        node_ids = {n["id"] for n in data["nodes"]}
+        assert target.id not in node_ids, "archived issue must be excluded by include_done=false"
+
+    async def test_graph_v2_archived_issues_excluded_by_status_categories_open(
+        self,
+        client: AsyncClient,
+        dashboard_db: PopulatedDB,
+    ) -> None:
+        """status_categories=open must not match archived issues.
+
+        Even though archived's raw status_category resolves to 'open',
+        the route should normalize archived to 'done' for filtering and
+        the node payload. (filigree-b6cacfce72)
+        """
+        db = dashboard_db.db
+        target = db.create_issue("Archived but open-cat", type="task", priority=2)
+        db.update_issue(target.id, status="in_progress")
+        db.close_issue(target.id)
+        db.archive_closed(days_old=0)
+
+        resp = await client.get("/api/graph?mode=v2&status_categories=open")
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        node_ids = {n["id"] for n in data["nodes"]}
+        assert target.id not in node_ids
+        # Any node serialized must surface a normalized category — archived → 'done'
+        for n in data["nodes"]:
+            assert n["status_category"] != "done", "open filter must not yield 'done' nodes"
+
+    async def test_graph_v2_archived_dependents_do_not_increment_blocks_open_count(
+        self,
+        client: AsyncClient,
+        dashboard_db: PopulatedDB,
+    ) -> None:
+        """Archived dependents must count as done for blocks_open_count.
+
+        Regression: _open_blocks_count compared against
+        status_category != 'done', and the .blocks list (unlike
+        .blocked_by) is unfiltered upstream — so an archived dependent
+        was still counted as an open blocked-issue. (filigree-b6cacfce72)
+        """
+        db = dashboard_db.db
+        blocker = db.create_issue("Blocker with archived dependent", type="task", priority=2)
+        dependent = db.create_issue("Will be archived dependent", type="task", priority=2)
+        db.add_dependency(dependent.id, blocker.id)
+        db.update_issue(dependent.id, status="in_progress")
+        db.close_issue(dependent.id)
+        db.archive_closed(days_old=0)
+        # Sanity: archived dependent retained in .blocks (unfiltered upstream)
+        assert dependent.id in db.get_issue(blocker.id).blocks
+
+        resp = await client.get("/api/graph?mode=v2")
+        assert resp.status_code == 200
+        data = resp.json()
+        target_node = next(n for n in data["nodes"] if n["id"] == blocker.id)
+        assert target_node["blocks_open_count"] == 0, "archived dependent must not count toward blocks_open_count"
+
+    async def test_graph_v2_types_filter_accepts_registered_but_absent_type(self, client: AsyncClient, dashboard_db: PopulatedDB) -> None:
+        """Filter validation must use registered template types, not the set
+        of types currently held by issues.  ``release`` is a registered type
+        in the default packs but the populated_db fixture seeds none — the
+        request should still validate (returning an empty node list), not
+        400 with "Unknown types: release".  (filigree-68c24cee62)
+        """
+        registered = {t.type for t in dashboard_db.db.templates.list_types()}
+        observed = {i.type for i in dashboard_db.db.list_issues()}
+        unused = sorted(registered - observed)
+        assert unused, "test fixture changed: no registered-but-unused type to exercise"
+        target = unused[0]
+
+        resp = await client.get(f"/api/graph?mode=v2&types={target}")
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        # No issue currently has this type, so the node list is empty.
+        assert data["nodes"] == []

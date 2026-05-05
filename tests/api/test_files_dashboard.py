@@ -116,7 +116,7 @@ class TestFileEndpoints:
     async def test_get_file_not_found(self, client: AsyncClient) -> None:
         resp = await client.get("/api/files/test-f-nope")
         assert resp.status_code == 404
-        assert resp.json()["error"]["code"] == "FILE_NOT_FOUND"
+        assert resp.json()["code"] == "NOT_FOUND"
 
     async def test_get_file_findings(self, client: AsyncClient, api_db: FiligreeDB) -> None:
         api_db.process_scan_results(
@@ -174,7 +174,7 @@ class TestFileEndpoints:
             },
         )
         assert resp.status_code == 400
-        assert resp.json()["error"]["code"] == "VALIDATION_ERROR"
+        assert resp.json()["code"] == "VALIDATION"
 
     async def test_post_file_association(self, client: AsyncClient, api_db: FiligreeDB) -> None:
         f = api_db.register_file("src/main.py")
@@ -202,9 +202,9 @@ class TestFileEndpoints:
             json={"issue_id": "nonexistent-id", "assoc_type": "bug_in"},
         )
         assert resp.status_code == 400
-        err = resp.json()["error"]
-        assert err["code"] == "VALIDATION_ERROR"
-        assert "Issue not found" in err["message"]
+        body = resp.json()
+        assert body["code"] == "VALIDATION"
+        assert "Issue not found" in body["error"]
 
     async def test_post_invalid_json_body_returns_400(self, client: AsyncClient, api_db: FiligreeDB) -> None:
         """Bug filigree-4d8aa1: invalid JSON must return 400, not swallow unexpected exceptions."""
@@ -215,7 +215,7 @@ class TestFileEndpoints:
             headers={"Content-Type": "application/json"},
         )
         assert resp.status_code == 400
-        assert "Invalid JSON body" in resp.json()["error"]["message"]
+        assert "Invalid JSON body" in resp.json()["error"]
 
     async def test_schema_endpoint_statuses_updated(self, client: AsyncClient) -> None:
         resp = await client.get("/api/files/_schema")
@@ -291,7 +291,7 @@ class TestFileFindingUpdateEndpoint:
 
         resp = await client.patch(f"/api/files/{file_record.id}/findings/{finding.id}", json={})
         assert resp.status_code == 400
-        assert resp.json()["error"]["code"] == "VALIDATION_ERROR"
+        assert resp.json()["code"] == "VALIDATION"
 
 
 class TestHotspotsEndpoint:
@@ -510,11 +510,11 @@ class TestSortBySeverityEndpoint:
         f = api_db.register_file("a.py")
         resp = await client.get(f"/api/files/{f.id}/findings?sort=bogus")
         assert resp.status_code == 400
-        err = resp.json()["error"]
-        assert err["code"] == "VALIDATION_ERROR"
-        assert "Invalid sort field" in err["message"]
-        assert "severity" in err["message"]
-        assert "updated_at" in err["message"]
+        body = resp.json()
+        assert body["code"] == "VALIDATION"
+        assert "Invalid sort field" in body["error"]
+        assert "severity" in body["error"]
+        assert "updated_at" in body["error"]
 
 
 class TestMinFindingsEndpoint:
@@ -558,7 +558,7 @@ class TestHasSeverityEndpoint:
         api_db.register_file("a.py")
         resp = await client.get("/api/files?has_severity=bogus")
         assert resp.status_code == 400
-        assert resp.json()["error"]["code"] == "VALIDATION_ERROR"
+        assert resp.json()["code"] == "VALIDATION"
 
 
 class TestTimelineEndpoint:
@@ -582,7 +582,7 @@ class TestTimelineEndpoint:
     async def test_timeline_not_found(self, client: AsyncClient) -> None:
         resp = await client.get("/api/files/test-f-nope/timeline")
         assert resp.status_code == 404
-        assert resp.json()["error"]["code"] == "FILE_NOT_FOUND"
+        assert resp.json()["code"] == "NOT_FOUND"
 
     async def test_timeline_pagination(self, client: AsyncClient, api_db: FiligreeDB) -> None:
         api_db.process_scan_results(
@@ -666,7 +666,7 @@ class TestInputValidation400s:
             headers={"content-type": "application/json"},
         )
         assert resp.status_code == 400
-        assert resp.json()["error"]["code"] == "VALIDATION_ERROR"
+        assert resp.json()["code"] == "VALIDATION"
 
     async def test_scan_body_is_string(self, client: AsyncClient) -> None:
         resp = await client.post(
@@ -675,7 +675,7 @@ class TestInputValidation400s:
             headers={"content-type": "application/json"},
         )
         assert resp.status_code == 400
-        assert resp.json()["error"]["code"] == "VALIDATION_ERROR"
+        assert resp.json()["code"] == "VALIDATION"
 
     async def test_association_body_is_list(self, client: AsyncClient, api_db: FiligreeDB) -> None:
         f = api_db.register_file("x.py")
@@ -685,7 +685,7 @@ class TestInputValidation400s:
             headers={"content-type": "application/json"},
         )
         assert resp.status_code == 400
-        assert resp.json()["error"]["code"] == "VALIDATION_ERROR"
+        assert resp.json()["code"] == "VALIDATION"
 
     # -- P2b: malformed finding entries --------------------------------------
 
@@ -695,8 +695,8 @@ class TestInputValidation400s:
             json={"scan_source": "ruff", "findings": [{"severity": "low"}]},
         )
         assert resp.status_code == 400
-        assert resp.json()["error"]["code"] == "VALIDATION_ERROR"
-        assert "path" in resp.json()["error"]["message"].lower()
+        assert resp.json()["code"] == "VALIDATION"
+        assert "path" in resp.json()["error"].lower()
 
     async def test_scan_finding_missing_rule_id(self, client: AsyncClient) -> None:
         resp = await client.post(
@@ -704,8 +704,8 @@ class TestInputValidation400s:
             json={"scan_source": "ruff", "findings": [{"path": "a.py", "severity": "low", "message": "m"}]},
         )
         assert resp.status_code == 400
-        assert resp.json()["error"]["code"] == "VALIDATION_ERROR"
-        assert "rule_id" in resp.json()["error"]["message"].lower()
+        assert resp.json()["code"] == "VALIDATION"
+        assert "rule_id" in resp.json()["error"].lower()
 
     async def test_scan_finding_missing_message(self, client: AsyncClient) -> None:
         resp = await client.post(
@@ -713,8 +713,8 @@ class TestInputValidation400s:
             json={"scan_source": "ruff", "findings": [{"path": "a.py", "rule_id": "E1", "severity": "low"}]},
         )
         assert resp.status_code == 400
-        assert resp.json()["error"]["code"] == "VALIDATION_ERROR"
-        assert "message" in resp.json()["error"]["message"].lower()
+        assert resp.json()["code"] == "VALIDATION"
+        assert "message" in resp.json()["error"].lower()
 
     async def test_scan_finding_is_string(self, client: AsyncClient) -> None:
         resp = await client.post(
@@ -722,7 +722,7 @@ class TestInputValidation400s:
             json={"scan_source": "ruff", "findings": ["not-a-dict"]},
         )
         assert resp.status_code == 400
-        assert resp.json()["error"]["code"] == "VALIDATION_ERROR"
+        assert resp.json()["code"] == "VALIDATION"
 
     async def test_scan_finding_is_number(self, client: AsyncClient) -> None:
         resp = await client.post(
@@ -730,7 +730,7 @@ class TestInputValidation400s:
             json={"scan_source": "ruff", "findings": [42]},
         )
         assert resp.status_code == 400
-        assert resp.json()["error"]["code"] == "VALIDATION_ERROR"
+        assert resp.json()["code"] == "VALIDATION"
 
     async def test_scan_create_observations_must_be_boolean(self, client: AsyncClient) -> None:
         resp = await client.post(
@@ -738,7 +738,7 @@ class TestInputValidation400s:
             json={"scan_source": "ruff", "create_observations": "yes", "findings": []},
         )
         assert resp.status_code == 400
-        assert resp.json()["error"]["code"] == "VALIDATION_ERROR"
+        assert resp.json()["code"] == "VALIDATION"
 
     async def test_scan_mark_unseen_must_be_boolean(self, client: AsyncClient) -> None:
         resp = await client.post(
@@ -746,31 +746,31 @@ class TestInputValidation400s:
             json={"scan_source": "ruff", "mark_unseen": "false", "findings": []},
         )
         assert resp.status_code == 400
-        assert resp.json()["error"]["code"] == "VALIDATION_ERROR"
-        assert "mark_unseen must be a boolean" in resp.json()["error"]["message"]
+        assert resp.json()["code"] == "VALIDATION"
+        assert "mark_unseen must be a boolean" in resp.json()["error"]
 
     # -- P2c: pagination query params ----------------------------------------
 
     async def test_files_limit_not_int(self, client: AsyncClient) -> None:
         resp = await client.get("/api/files?limit=abc")
         assert resp.status_code == 400
-        assert resp.json()["error"]["code"] == "VALIDATION_ERROR"
+        assert resp.json()["code"] == "VALIDATION"
 
     async def test_files_offset_not_int(self, client: AsyncClient) -> None:
         resp = await client.get("/api/files?offset=xyz")
         assert resp.status_code == 400
-        assert resp.json()["error"]["code"] == "VALIDATION_ERROR"
+        assert resp.json()["code"] == "VALIDATION"
 
     async def test_findings_limit_not_int(self, client: AsyncClient, api_db: FiligreeDB) -> None:
         f = api_db.register_file("x.py")
         resp = await client.get(f"/api/files/{f.id}/findings?limit=nope")
         assert resp.status_code == 400
-        assert resp.json()["error"]["code"] == "VALIDATION_ERROR"
+        assert resp.json()["code"] == "VALIDATION"
 
     async def test_hotspots_limit_not_int(self, client: AsyncClient) -> None:
         resp = await client.get("/api/files/hotspots?limit=bad")
         assert resp.status_code == 400
-        assert resp.json()["error"]["code"] == "VALIDATION_ERROR"
+        assert resp.json()["code"] == "VALIDATION"
 
     # -- scan_source type validation -------------------------------------------
 
@@ -780,19 +780,19 @@ class TestInputValidation400s:
             json={"scan_source": 123, "findings": []},
         )
         assert resp.status_code == 400
-        assert "scan_source" in resp.json()["error"]["message"]
+        assert "scan_source" in resp.json()["error"]
 
     # -- negative pagination values --------------------------------------------
 
     async def test_files_negative_limit_rejected(self, client: AsyncClient) -> None:
         resp = await client.get("/api/files?limit=-1")
         assert resp.status_code == 400
-        assert resp.json()["error"]["code"] == "VALIDATION_ERROR"
+        assert resp.json()["code"] == "VALIDATION"
 
     async def test_files_negative_offset_rejected(self, client: AsyncClient) -> None:
         resp = await client.get("/api/files?offset=-5")
         assert resp.status_code == 400
-        assert resp.json()["error"]["code"] == "VALIDATION_ERROR"
+        assert resp.json()["code"] == "VALIDATION"
 
 
 class TestFileStatsEndpoint:
@@ -859,4 +859,4 @@ class TestObservationStatsEndpoint:
             resp = await client.get("/api/observations/stats")
         assert resp.status_code == 503
         data = resp.json()
-        assert data["error"]["code"] == "DB_UNAVAILABLE"
+        assert data["code"] == "IO"

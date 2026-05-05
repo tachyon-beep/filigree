@@ -25,6 +25,41 @@ if TYPE_CHECKING:
     from filigree.templates import FieldSchema, TemplateRegistry, TransitionOption, ValidationResult
 
 
+def _build_builtin_category_maps() -> tuple[
+    dict[tuple[str, str], StatusCategory],
+    frozenset[str],
+    frozenset[str],
+]:
+    """Derive ``(type, state) -> category`` and unambiguous state-name sets from bundled packs.
+
+    Used as a correctness floor when the active template registry has no entry for
+    a type — e.g. a pack was disabled after issues in that pack were created, or
+    a bulk import predates pack registration. Name-only disambiguation only
+    promotes states whose category is identical across every bundled type that
+    declares them, so values like ``resolved`` (wip in ``incident``, done
+    elsewhere) stay ambiguous and fall through to ``"open"``.
+    """
+    from filigree.templates_data import BUILT_IN_PACKS
+
+    by_type_state: dict[tuple[str, str], StatusCategory] = {}
+    by_state: dict[str, set[StatusCategory]] = {}
+
+    for pack_data in BUILT_IN_PACKS.values():
+        for type_name, type_data in pack_data.get("types", {}).items():
+            for s in type_data.get("states", []):
+                name: str = s["name"]
+                cat: StatusCategory = s["category"]
+                by_type_state[(type_name, name)] = cat
+                by_state.setdefault(name, set()).add(cat)
+
+    done_names = frozenset(s for s, cats in by_state.items() if cats == {"done"})
+    wip_names = frozenset(s for s, cats in by_state.items() if cats == {"wip"})
+    return by_type_state, done_names, wip_names
+
+
+_BUILTIN_CATEGORY_BY_TYPE_STATE, _BUILTIN_UNAMBIGUOUS_DONE_NAMES, _BUILTIN_UNAMBIGUOUS_WIP_NAMES = _build_builtin_category_maps()
+
+
 class WorkflowMixin(DBMixinProtocol):
     """Template and workflow operations for FiligreeDB.
 
@@ -170,6 +205,13 @@ class WorkflowMixin(DBMixinProtocol):
         """Collect all state names that map to a category across enabled types.
 
         Returns deduplicated list. Empty if no types are registered.
+
+        Note: this dedups by state name, so when two types share a state
+        name with the same category (e.g. 'open') it appears once. It is
+        unsafe for SQL category filtering when state names collide across
+        categories (e.g. ``incident.resolved`` is wip, ``debt_item.resolved``
+        is done) — use ``_get_type_states_for_category`` /
+        ``_category_predicate_sql`` for that. (filigree-b55aa3191f)
         """
         seen: set[str] = set()
         states: list[str] = []
@@ -180,23 +222,126 @@ class WorkflowMixin(DBMixinProtocol):
                     states.append(s.name)
         return states
 
+    def _get_type_states_for_category(self, category: str) -> list[tuple[str, str]]:
+        """Collect ``(type, state_name)`` pairs whose category matches.
+
+        Type-aware companion to ``_get_states_for_category``. Used for SQL
+        predicates that must respect the type when state names collide
+        across categories (filigree-b55aa3191f).
+
+        Mirrors the correctness floor in ``_infer_status_category``: types
+        that are not in the active registry (e.g. their pack was disabled
+        after issues were created) still contribute their bundled
+        ``(type, state)`` pairs, so SQL category predicates agree with the
+        Python-level ``_resolve_status_category`` for those rows
+        (filigree-c9af813900). Without this, a hydrated blocker shows
+        ``status_category="done"`` while readiness/hydration SQL still
+        treats it as active.
+        """
+        active_types: set[str] = set()
+        pairs: list[tuple[str, str]] = []
+        for tpl in self.templates.list_types():
+            active_types.add(tpl.type)
+            for s in tpl.states:
+                if s.category == category:
+                    pairs.append((tpl.type, s.name))
+        for (type_name, state_name), cat in _BUILTIN_CATEGORY_BY_TYPE_STATE.items():
+            if type_name in active_types:
+                continue
+            if cat == category:
+                pairs.append((type_name, state_name))
+        return pairs
+
+    def _category_predicate_sql(
+        self,
+        category: str,
+        *,
+        type_col: str,
+        status_col: str,
+        include_archived: bool = False,
+    ) -> tuple[str, list[str]]:
+        """Build a SQL fragment matching rows whose ``(type, status)`` maps to *category*.
+
+        Returns ``(sql, params)``. ``include_archived`` ORs in the synthetic
+        ``status='archived'`` terminal status — used only by blocker
+        semantics, where ``archive_closed()`` rows must count as no-longer-
+        blocking even though ``'archived'`` is not a workflow state.
+
+        When no ``(type, state)`` pair matches the requested category (and
+        ``include_archived`` is false), returns ``("0", [])`` — a SQL-valid
+        always-false predicate — so callers do not need to special-case
+        empty registries.
+        """
+        pairs = self._get_type_states_for_category(category)
+        parts: list[str] = []
+        params: list[str] = []
+        if include_archived:
+            parts.append(f"{status_col} = 'archived'")
+        if pairs:
+            ors = " OR ".join(f"({type_col} = ? AND {status_col} = ?)" for _ in pairs)
+            parts.append(f"({ors})")
+            for t, s in pairs:
+                params.extend([t, s])
+        if not parts:
+            return ("0", [])
+        if len(parts) == 1:
+            return (parts[0], params)
+        return ("(" + " OR ".join(parts) + ")", params)
+
+    def _blocker_done_states(self) -> list[str]:
+        """States that count as 'no longer blocking dependents'.
+
+        This is the workflow's done states plus the synthetic ``'archived'``
+        produced by ``archive_closed()``. Use this for readiness queries,
+        ``blocked_by`` hydration, and virtual ``has:blockers`` resolution
+        — anything that asks "is this blocker still active?". Use the
+        plain ``_get_states_for_category("done")`` for archival selection
+        (which must not include ``'archived'`` or it would re-archive
+        already-archived rows) and for label semantics.
+        """
+        base = self._get_states_for_category("done") or ["closed"]
+        if "archived" in base:
+            return base
+        return [*base, "archived"]
+
     @staticmethod
-    def _infer_status_category(status: str) -> StatusCategory:
-        """Infer status category from status name when no template is available."""
-        done_names = {"closed", "done", "resolved", "wont_fix", "cancelled", "archived"}
-        wip_names = {"in_progress", "fixing", "verifying", "reviewing", "testing", "active"}
-        if status in done_names:
+    def _infer_status_category(issue_type: str, status: str) -> StatusCategory:
+        """Infer status category when the active registry lacks a matching template.
+
+        Order:
+          1. Exact ``(type, state)`` match in the bundled built-in packs. Preserves
+             correctness when a pack was disabled after issues were created with it.
+          2. State-name match that is unambiguously ``done`` or ``wip`` across every
+             bundled type that declares it.
+          3. ``"open"`` — permissive fallback for truly custom types.
+        """
+        cat = _BUILTIN_CATEGORY_BY_TYPE_STATE.get((issue_type, status))
+        if cat is not None:
+            return cat
+        if status in _BUILTIN_UNAMBIGUOUS_DONE_NAMES:
             return "done"
-        if status in wip_names:
+        if status in _BUILTIN_UNAMBIGUOUS_WIP_NAMES:
             return "wip"
         return "open"
 
     def _resolve_status_category(self, issue_type: str, status: str) -> StatusCategory:
-        """Resolve status category via template or fallback heuristic for unknown types."""
+        """Resolve status category via template or fallback heuristic for unknown types.
+
+        The name-only fallback in ``_infer_status_category`` is intended for
+        types that are not in the active registry (disabled pack, custom type
+        with no template). When the type *is* active but the state is
+        undeclared, the row carries invalid template state — running the
+        unambiguous-name path would silently classify e.g. a ``task`` with
+        status ``released`` as done. Stay conservative and return ``"open"``
+        for active-type / undeclared-state pairs; ``validate_issue()``
+        surfaces the schema error (filigree-c9af813900).
+        """
         cat = self.templates.get_category(issue_type, status)
         if cat is not None:
             return cat
-        return self._infer_status_category(status)
+        if self.templates.get_type(issue_type) is not None:
+            return "open"
+        return self._infer_status_category(issue_type, status)
 
     # Namespace reservation — auto-tag and virtual namespaces are system-managed
     RESERVED_NAMESPACES_AUTO: frozenset[str] = frozenset(
@@ -257,18 +402,33 @@ class WorkflowMixin(DBMixinProtocol):
     def validate_issue(self, issue_id: str) -> ValidationResult:
         """Validate an issue against its template.
 
-        Checks whether all fields required at the current state are populated.
-        Also checks fields needed for next reachable transitions (upcoming requirements).
-        Checks field values against pattern constraints (non-blocking warnings).
-        Returns a ValidationResult with warnings for missing recommended fields.
-        Unknown types validate as valid (no template to check against).
+        Emits errors when the issue type has no active template or when the
+        current status is not a declared state for that type — both are reachable
+        via bulk import, migration, or a pack being disabled after issues were
+        created. Also checks whether fields required at the current state are
+        populated, surfaces upcoming transition requirements as warnings, and
+        validates field values against pattern constraints.
         """
         from filigree.templates import ValidationResult, validate_field_pattern
 
         issue = self.get_issue(issue_id)
         tpl = self.templates.get_type(issue.type)
         if tpl is None:
-            return ValidationResult(warnings=(), errors=())
+            return ValidationResult(
+                warnings=(),
+                errors=(
+                    f"Type '{issue.type}' has no active workflow template. "
+                    f"The issue may belong to a disabled pack or an unregistered custom type.",
+                ),
+            )
+
+        errors: list[str] = []
+        declared_states = {s.name for s in tpl.states}
+        if issue.status not in declared_states:
+            errors.append(
+                f"Status '{issue.status}' is not a declared state for type '{issue.type}'. "
+                f"Valid states: {', '.join(sorted(declared_states))}."
+            )
 
         warnings: list[str] = []
 
@@ -293,4 +453,4 @@ class WorkflowMixin(DBMixinProtocol):
                 fields_str = ", ".join(t.missing_fields)
                 warnings.append(f"Transition to '{t.to}' requires: {fields_str}")
 
-        return ValidationResult(warnings=tuple(warnings), errors=())
+        return ValidationResult(warnings=tuple(warnings), errors=tuple(errors))

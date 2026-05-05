@@ -173,6 +173,76 @@ class TestCreatePlan:
         dep_events = [e for e in events if e["event_type"] == "dependency_added"]
         assert len(dep_events) == 1
 
+    def test_plan_dedups_duplicate_step_deps(self, db: FiligreeDB) -> None:
+        """Bug fix: filigree-fcac6acf6c — a step with duplicate dep indices
+
+        creates one dep row (INSERT OR IGNORE) but must not emit duplicate
+        dependency_added events. Duplicate events block undo_last() from
+        reaching earlier reversible events on the same step.
+        """
+        plan = db.create_plan(
+            {"title": "Dup Deps MS"},
+            [
+                {
+                    "title": "Phase",
+                    "steps": [
+                        {"title": "S1"},
+                        {"title": "S2", "deps": [0, 0, 0]},
+                    ],
+                },
+            ],
+        )
+        step_2_id = plan["phases"][0]["steps"][1]["id"]
+        events = db.get_issue_events(step_2_id)
+        dep_events = [e for e in events if e["event_type"] == "dependency_added"]
+        assert len(dep_events) == 1, f"Expected 1 dependency_added event for duplicate deps, got {len(dep_events)}"
+
+    def test_plan_rejects_out_of_range_priority(self, db: FiligreeDB) -> None:
+        """Bug fix: filigree-a5e7090f76 — invalid priority must raise ValueError
+
+        before the transaction begins, not surface as sqlite3.IntegrityError
+        from the DB-layer CHECK constraint.
+        """
+        with pytest.raises(ValueError, match="priority"):
+            db.create_plan(
+                {"title": "Bad Priority MS", "priority": 99},
+                [{"title": "Phase", "steps": [{"title": "S1"}]}],
+            )
+
+    def test_plan_rejects_out_of_range_phase_priority(self, db: FiligreeDB) -> None:
+        """Phase priority must also be validated up front."""
+        with pytest.raises(ValueError, match="priority"):
+            db.create_plan(
+                {"title": "MS"},
+                [{"title": "Phase", "priority": 99, "steps": [{"title": "S1"}]}],
+            )
+
+    def test_plan_rejects_out_of_range_step_priority(self, db: FiligreeDB) -> None:
+        """Step priority must also be validated up front."""
+        with pytest.raises(ValueError, match="priority"):
+            db.create_plan(
+                {"title": "MS"},
+                [{"title": "Phase", "steps": [{"title": "S1", "priority": -1}]}],
+            )
+
+    def test_plan_rejects_non_int_priority(self, db: FiligreeDB) -> None:
+        """Non-integer priority must raise ValueError, not sqlite3.IntegrityError."""
+        with pytest.raises(ValueError, match="priority"):
+            db.create_plan(
+                {"title": "MS", "priority": "high"},  # type: ignore[typeddict-item]
+                [{"title": "Phase", "steps": [{"title": "S1"}]}],
+            )
+
+    def test_plan_bad_priority_does_not_orphan_rows(self, db: FiligreeDB) -> None:
+        """Priority validation must run before any INSERT — no orphan milestones."""
+        issues_before = len(db.list_issues())
+        with pytest.raises(ValueError, match="priority"):
+            db.create_plan(
+                {"title": "MS"},
+                [{"title": "Phase", "steps": [{"title": "S1", "priority": 99}]}],
+            )
+        assert len(db.list_issues()) == issues_before
+
 
 class TestCreatePlanRollback:
     """Bug fix: filigree-4135c6 — create_plan no rollback."""
@@ -219,3 +289,91 @@ class TestCreatePlanRollback:
         assert plan["milestone"]["title"] == "Good Milestone"
         assert len(plan["phases"]) == 1
         assert plan["phases"][0]["total"] == 2
+
+
+class TestPlanTreeChildLimit:
+    """Bug filigree-07d55ee5e5: tree builders inherited list_issues' default
+    page size of 100 and silently dropped children beyond it."""
+
+    def test_get_plan_includes_all_steps_beyond_default_page(self, db: FiligreeDB) -> None:
+        steps = [{"title": f"s{i}"} for i in range(101)]
+        result = db.create_plan({"title": "Big M"}, [{"title": "P0", "steps": steps}])
+        plan = db.get_plan(result["milestone"]["id"])
+        assert plan["total_steps"] == 101
+        assert plan["phases"][0]["total"] == 101
+        assert len(plan["phases"][0]["steps"]) == 101
+
+    def test_get_plan_includes_all_phases_beyond_default_page(self, db: FiligreeDB) -> None:
+        phases = [{"title": f"P{i}", "steps": [{"title": "s"}]} for i in range(101)]
+        result = db.create_plan({"title": "MS"}, phases)
+        plan = db.get_plan(result["milestone"]["id"])
+        assert len(plan["phases"]) == 101
+        assert plan["total_steps"] == 101
+
+    def test_release_tree_includes_all_children_beyond_default_page(self, db: FiligreeDB) -> None:
+        release = db.create_issue("Big release", type="release")
+        for i in range(101):
+            db.create_issue(f"task {i}", parent_id=release.id)
+        tree = db.get_release_tree(release.id)
+        assert len(tree["children"]) == 101
+
+
+class TestCreatePlanDepRefValidation:
+    """Bug filigree-6802ed02e0: ``str(dep_ref)`` silently coerced floats and
+    other non-int/non-str types into well-formed-looking dependency indices.
+    """
+
+    @pytest.mark.parametrize(
+        "bad_dep",
+        [
+            0.1,  # float that splits into "0.1"
+            1.0,  # whole-number float
+            True,  # bool — int subclass that should still be rejected
+            "0.1.2",  # too many dots
+            "0.",  # empty step component
+            ".0",  # empty phase component
+            "+0",  # signed
+            "-1",  # negative string
+            "0.-1",  # negative component
+            " 1 ",  # whitespace
+            None,  # NoneType
+            [0],  # nested list
+        ],
+    )
+    def test_invalid_dep_ref_raises(self, db: FiligreeDB, bad_dep: object) -> None:
+        with pytest.raises(ValueError, match="dep"):
+            db.create_plan(
+                {"title": "MS"},
+                [
+                    {"title": "P0", "steps": [{"title": "s0"}, {"title": "s1"}]},
+                    {"title": "P1", "steps": [{"title": "s0", "deps": [bad_dep]}]},
+                ],
+            )
+
+    def test_invalid_dep_ref_does_not_orphan_rows(self, db: FiligreeDB) -> None:
+        """Dep validation must run inside the transaction so partial inserts roll back."""
+        issues_before = len(db.list_issues())
+        with pytest.raises(ValueError, match="dep"):
+            db.create_plan(
+                {"title": "MS"},
+                [{"title": "P", "steps": [{"title": "s", "deps": [0.5]}]}],
+            )
+        assert len(db.list_issues()) == issues_before
+
+    def test_valid_string_dep_refs_still_accepted(self, db: FiligreeDB) -> None:
+        """Stringified valid refs ('0', '0.1') keep working."""
+        plan = db.create_plan(
+            {"title": "MS"},
+            [
+                {"title": "P0", "steps": [{"title": "s0"}, {"title": "s1"}]},
+                {"title": "P1", "steps": [{"title": "s0", "deps": ["0.1"]}]},
+            ],
+        )
+        # Verify the dep was wired to phase 0 step 1, not silently misrouted.
+        p1_step0_id = plan["phases"][1]["steps"][0]["id"]
+        p0_step1_id = plan["phases"][0]["steps"][1]["id"]
+        rows = db.conn.execute(
+            "SELECT depends_on_id FROM dependencies WHERE issue_id = ?",
+            (p1_step0_id,),
+        ).fetchall()
+        assert [r["depends_on_id"] for r in rows] == [p0_step1_id]

@@ -90,6 +90,14 @@ class TestScanIngestStatusCode:
         # 202 is wrong here — the operation completed synchronously
         assert resp.status_code == 200, f"No findings: expected 200, got {resp.status_code}"
 
+    async def test_scan_missing_findings_field_returns_400(self, bug_db: FiligreeDB, client: AsyncClient) -> None:
+        """Missing findings field must be rejected as malformed, not treated as clean scan (9a9caabc08)."""
+        payload = {"scan_source": "test-scanner"}  # no findings key at all
+        resp = await client.post("/api/v1/scan-results", json=payload)
+        assert resp.status_code == 400, f"Missing findings should return 400, got {resp.status_code}"
+        body = resp.json()
+        assert body.get("code") == "VALIDATION"
+
 
 # ---------------------------------------------------------------------------
 # Bug 3: findings endpoint accepts invalid severity/status without validation
@@ -138,3 +146,411 @@ class TestAddDependencyValidation:
             json={},
         )
         assert resp.status_code == 400, f"Missing depends_on should be 400, got {resp.status_code}"
+
+
+# ---------------------------------------------------------------------------
+# filigree-0ad97ea6e0: search routes leak SQLite OverflowError on huge offsets
+# ---------------------------------------------------------------------------
+
+
+class TestSearchOversizedOffset:
+    """Both /api/search and /api/loom/search must reject offsets above
+    SQLite's signed-int64 OFFSET bind limit with 400 VALIDATION, not 500."""
+
+    async def test_classic_search_huge_offset_returns_400(self, client: AsyncClient) -> None:
+        # 2**63 — one past SQLite's signed-int64 max
+        resp = await client.get("/api/search", params={"q": "x", "offset": "9223372036854775808"})
+        assert resp.status_code == 400, f"Expected 400, got {resp.status_code}: {resp.text}"
+        body = resp.json()
+        assert body["code"] == "VALIDATION", body
+
+    async def test_loom_search_huge_offset_returns_400(self, client: AsyncClient) -> None:
+        resp = await client.get("/api/loom/search", params={"q": "x", "offset": "9223372036854775808"})
+        assert resp.status_code == 400, f"Expected 400, got {resp.status_code}: {resp.text}"
+        body = resp.json()
+        assert body["code"] == "VALIDATION", body
+
+    async def test_classic_search_extreme_offset_still_clamps_negative(self, client: AsyncClient) -> None:
+        """Lower-bound clamping is preserved (pinned by test_search_negative_offset_clamped)."""
+        resp = await client.get("/api/search", params={"q": "x", "offset": -10})
+        assert resp.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# filigree-223d6a28ce: remove_dependency leaks WrongProjectError as 500
+# ---------------------------------------------------------------------------
+
+
+class TestRemoveDependencyForeignPrefix:
+    """Both classic and loom remove-dependency routes must convert a
+    foreign-prefix WrongProjectError into 400 VALIDATION, not 500."""
+
+    async def test_classic_remove_dependency_foreign_prefix_returns_400(self, bug_db: FiligreeDB, client: AsyncClient) -> None:
+        # Use a fully-formed foreign-prefix ID. The DB's prefix is set by
+        # the bug_db fixture (make_db default) — anything not starting with
+        # that prefix will trip _check_id_prefix.
+        foreign_a = "foreignproj-aaaaaaaa00"
+        foreign_b = "foreignproj-bbbbbbbb00"
+        resp = await client.request(
+            "DELETE",
+            f"/api/issue/{foreign_a}/dependencies/{foreign_b}",
+        )
+        assert resp.status_code == 400, f"Expected 400, got {resp.status_code}: {resp.text}"
+        body = resp.json()
+        assert body["code"] == "VALIDATION", body
+        assert "project" in body["error"].lower()
+
+    async def test_loom_remove_dependency_foreign_prefix_returns_400(self, bug_db: FiligreeDB, client: AsyncClient) -> None:
+        foreign_a = "foreignproj-aaaaaaaa00"
+        foreign_b = "foreignproj-bbbbbbbb00"
+        resp = await client.request(
+            "DELETE",
+            f"/api/loom/issues/{foreign_a}/dependencies/{foreign_b}",
+        )
+        assert resp.status_code == 400, f"Expected 400, got {resp.status_code}: {resp.text}"
+        body = resp.json()
+        assert body["code"] == "VALIDATION", body
+
+
+# ---------------------------------------------------------------------------
+# filigree-48e937cd3e: close routes accept non-string reason
+# ---------------------------------------------------------------------------
+
+
+class TestCloseReasonTypeValidation:
+    """All close paths must reject non-string reason with 400 VALIDATION."""
+
+    async def test_classic_close_reason_list_returns_400(self, bug_db: FiligreeDB, client: AsyncClient) -> None:
+        issue = bug_db.create_issue("Close reason list")
+        resp = await client.post(
+            f"/api/issue/{issue.id}/close",
+            json={"reason": ["not", "a", "string"]},
+        )
+        assert resp.status_code == 400, resp.text
+        body = resp.json()
+        assert body["code"] == "VALIDATION"
+        assert "reason" in body["error"].lower()
+
+    async def test_classic_close_reason_int_returns_400(self, bug_db: FiligreeDB, client: AsyncClient) -> None:
+        issue = bug_db.create_issue("Close reason int")
+        resp = await client.post(
+            f"/api/issue/{issue.id}/close",
+            json={"reason": 42},
+        )
+        assert resp.status_code == 400, resp.text
+
+    async def test_loom_close_reason_dict_returns_400(self, bug_db: FiligreeDB, client: AsyncClient) -> None:
+        issue = bug_db.create_issue("Close reason dict")
+        resp = await client.post(
+            f"/api/loom/issues/{issue.id}/close",
+            json={"reason": {"nested": "object"}},
+        )
+        assert resp.status_code == 400, resp.text
+        body = resp.json()
+        assert body["code"] == "VALIDATION"
+
+    async def test_classic_batch_close_reason_list_returns_400(self, bug_db: FiligreeDB, client: AsyncClient) -> None:
+        issue = bug_db.create_issue("Batch close reason list")
+        resp = await client.post(
+            "/api/batch/close",
+            json={"issue_ids": [issue.id], "reason": [1, 2, 3]},
+        )
+        assert resp.status_code == 400, resp.text
+        body = resp.json()
+        assert body["code"] == "VALIDATION"
+
+    async def test_classic_close_string_reason_still_works(self, bug_db: FiligreeDB, client: AsyncClient) -> None:
+        """Sanity: a plain string reason still closes the issue."""
+        issue = bug_db.create_issue("Happy reason")
+        resp = await client.post(
+            f"/api/issue/{issue.id}/close",
+            json={"reason": "duplicate of #X"},
+        )
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["fields"]["close_reason"] == "duplicate of #X"
+
+
+# ---------------------------------------------------------------------------
+# Bug: /api/loom/changes since cursor not UTC-canonicalized (filigree-d808d8b70f)
+# ---------------------------------------------------------------------------
+
+
+class TestLoomChangesSinceUTCNormalization:
+    """``/api/loom/changes`` must canonicalize ``since`` to UTC before
+    SQLite text-compares it against stored ``created_at`` (which is stored as
+    ``+00:00`` ISO). Otherwise an offset-bearing ``since`` representing the
+    same instant returns different events than a UTC ``since``.
+    """
+
+    async def test_offset_bearing_since_matches_utc_equivalent(self, bug_db: FiligreeDB, client: AsyncClient) -> None:
+        # Seed an event with a controlled created_at so we can probe the
+        # boundary precisely.  Stored timestamps are ``+00:00`` ISO strings.
+        issue = bug_db.create_issue("seed for changes")
+        stored_at = "2026-01-15T15:30:00+00:00"
+        bug_db.conn.execute(
+            "UPDATE events SET created_at = ? WHERE issue_id = ?",
+            (stored_at, issue.id),
+        )
+        bug_db.conn.commit()
+
+        # ``since`` instant: 2026-01-15T15:31:00 UTC — strictly **after** the
+        # stored event, so the event must NOT be returned regardless of how
+        # the offset is expressed.
+        utc_since = "2026-01-15T15:31:00+00:00"
+        # Same instant, expressed with a -05:00 offset.
+        offset_since = "2026-01-15T10:31:00-05:00"
+
+        utc_resp = await client.get("/api/loom/changes", params={"since": utc_since})
+        offset_resp = await client.get("/api/loom/changes", params={"since": offset_since})
+
+        assert utc_resp.status_code == 200, utc_resp.text
+        assert offset_resp.status_code == 200, offset_resp.text
+
+        utc_items = utc_resp.json()["items"]
+        offset_items = offset_resp.json()["items"]
+
+        # Sanity: UTC form correctly excludes the stored event.
+        assert utc_items == [], f"UTC since should exclude older event, got {utc_items}"
+
+        # Bug fix: offset form must also exclude it (text-compare with
+        # ``-05:00`` would otherwise incorrectly flag the stored ``+00:00``
+        # event as newer than the cursor).
+        assert offset_items == utc_items, f"Offset since must agree with UTC equivalent; utc={utc_items!r}, offset={offset_items!r}"
+
+
+# ---------------------------------------------------------------------------
+# Bug: /api/loom/changes accepts ?offset= but discards it (filigree-f0f47f5b9d)
+# ---------------------------------------------------------------------------
+
+
+class TestLoomChangesOffsetRejected:
+    """The contract (``tests/fixtures/contracts/loom/changes.json``) declares
+    the cursor is ``since``; ``offset`` is not exposed. The handler must
+    therefore reject ``?offset=`` instead of silently discarding it.
+    """
+
+    async def test_offset_query_param_returns_400(self, client: AsyncClient) -> None:
+        resp = await client.get(
+            "/api/loom/changes",
+            params={"since": "2000-01-01T00:00:00+00:00", "offset": "10"},
+        )
+        assert resp.status_code == 400, resp.text
+        body = resp.json()
+        assert body["code"] == "VALIDATION"
+        assert "offset" in body["error"].lower()
+
+    async def test_offset_zero_also_rejected(self, client: AsyncClient) -> None:
+        # offset is not part of this endpoint's surface — even an explicit
+        # ``offset=0`` should be rejected, not silently accepted.
+        resp = await client.get(
+            "/api/loom/changes",
+            params={"since": "2000-01-01T00:00:00+00:00", "offset": "0"},
+        )
+        assert resp.status_code == 400, resp.text
+        body = resp.json()
+        assert body["code"] == "VALIDATION"
+
+
+# ---------------------------------------------------------------------------
+# filigree-8a117524ca: search routes leak FastAPI 422 envelope on malformed
+# limit/offset (must produce flat {error, code} envelope at 400).
+# ---------------------------------------------------------------------------
+
+
+class TestSearchMalformedPaginationFlatEnvelope:
+    """Both /api/search and /api/loom/search use FastAPI int coercion for
+    limit/offset, which produces FastAPI's 422 ``{detail: [...]}`` envelope on
+    malformed values — bypassing the flat ``{error, code}`` envelope contract
+    pinned by tests/test_error_envelope_contract.py. Handlers must parse the
+    query string themselves and return 400 VALIDATION.
+    """
+
+    async def test_classic_search_malformed_limit_returns_flat_400(self, client: AsyncClient) -> None:
+        resp = await client.get("/api/search", params={"q": "x", "limit": "foo"})
+        assert resp.status_code == 400, resp.text
+        body = resp.json()
+        assert body.get("code") == "VALIDATION", body
+        assert "error" in body, body
+        assert "detail" not in body, body  # FastAPI default envelope absent
+
+    async def test_classic_search_malformed_offset_returns_flat_400(self, client: AsyncClient) -> None:
+        resp = await client.get("/api/search", params={"q": "x", "offset": "bar"})
+        assert resp.status_code == 400, resp.text
+        body = resp.json()
+        assert body.get("code") == "VALIDATION", body
+        assert "detail" not in body, body
+
+    async def test_loom_search_malformed_limit_returns_flat_400(self, client: AsyncClient) -> None:
+        resp = await client.get("/api/loom/search", params={"q": "x", "limit": "foo"})
+        assert resp.status_code == 400, resp.text
+        body = resp.json()
+        assert body.get("code") == "VALIDATION", body
+        assert "detail" not in body, body
+
+    async def test_loom_search_malformed_offset_returns_flat_400(self, client: AsyncClient) -> None:
+        resp = await client.get("/api/loom/search", params={"q": "x", "offset": "bar"})
+        assert resp.status_code == 400, resp.text
+        body = resp.json()
+        assert body.get("code") == "VALIDATION", body
+        assert "detail" not in body, body
+
+
+# ---------------------------------------------------------------------------
+# filigree-d39c7bdc1e: PATCH issue handlers don't type-validate ``status``.
+# Explicit JSON null collapses to "missing"; non-string is misclassified as
+# INVALID_TRANSITION instead of VALIDATION.
+# ---------------------------------------------------------------------------
+
+
+class TestPatchStatusTypeValidation:
+    async def test_classic_patch_status_null_returns_400(self, bug_db: FiligreeDB, client: AsyncClient) -> None:
+        issue = bug_db.create_issue("Status null")
+        resp = await client.patch(f"/api/issue/{issue.id}", json={"status": None})
+        assert resp.status_code == 400, resp.text
+        body = resp.json()
+        assert body["code"] == "VALIDATION", body
+        assert "status" in body["error"].lower()
+
+    async def test_classic_patch_status_int_returns_400(self, bug_db: FiligreeDB, client: AsyncClient) -> None:
+        issue = bug_db.create_issue("Status int")
+        resp = await client.patch(f"/api/issue/{issue.id}", json={"status": 42})
+        assert resp.status_code == 400, resp.text
+        body = resp.json()
+        assert body["code"] == "VALIDATION", body
+        assert "status" in body["error"].lower()
+
+    async def test_classic_patch_status_missing_is_no_change(self, bug_db: FiligreeDB, client: AsyncClient) -> None:
+        """Sanity: omitting status keeps existing semantics (title-only update succeeds)."""
+        issue = bug_db.create_issue("Status missing", priority=2)
+        resp = await client.patch(f"/api/issue/{issue.id}", json={"title": "renamed"})
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["title"] == "renamed"
+
+    async def test_loom_patch_status_null_returns_400(self, bug_db: FiligreeDB, client: AsyncClient) -> None:
+        issue = bug_db.create_issue("Loom status null")
+        resp = await client.patch(f"/api/loom/issues/{issue.id}", json={"status": None})
+        assert resp.status_code == 400, resp.text
+        body = resp.json()
+        assert body["code"] == "VALIDATION", body
+
+    async def test_loom_patch_status_int_returns_400(self, bug_db: FiligreeDB, client: AsyncClient) -> None:
+        issue = bug_db.create_issue("Loom status int")
+        resp = await client.patch(f"/api/loom/issues/{issue.id}", json={"status": 42})
+        assert resp.status_code == 400, resp.text
+        body = resp.json()
+        assert body["code"] == "VALIDATION", body
+
+    async def test_classic_batch_update_status_int_returns_400(self, bug_db: FiligreeDB, client: AsyncClient) -> None:
+        issue = bug_db.create_issue("Batch status int")
+        resp = await client.post(
+            "/api/batch/update",
+            json={"issue_ids": [issue.id], "status": 42},
+        )
+        assert resp.status_code == 400, resp.text
+        body = resp.json()
+        assert body["code"] == "VALIDATION", body
+
+    async def test_loom_batch_update_status_null_returns_400(self, bug_db: FiligreeDB, client: AsyncClient) -> None:
+        issue = bug_db.create_issue("Loom batch status null")
+        resp = await client.post(
+            "/api/loom/batch/update",
+            json={"issue_ids": [issue.id], "status": None},
+        )
+        assert resp.status_code == 400, resp.text
+        body = resp.json()
+        assert body["code"] == "VALIDATION", body
+
+
+# ---------------------------------------------------------------------------
+# filigree-25b44e65e2: write routes map WrongProjectError to CONFLICT/NOT_FOUND
+# instead of VALIDATION on claim/release/add-dependency/add-comment.
+# ---------------------------------------------------------------------------
+
+
+class TestWriteRoutesWrongProjectError:
+    """All write routes must surface WrongProjectError as 400 VALIDATION
+    (precedent: remove_dependency at dashboard_routes/issues.py:680-681).
+    For comment routes, the read-style precheck (db.get_issue) ignores
+    prefix and would otherwise mask the error as 404 NOT_FOUND.
+    """
+
+    _FOREIGN_A = "foreignproj-aaaaaaaa00"
+    _FOREIGN_B = "foreignproj-bbbbbbbb00"
+
+    async def test_classic_claim_foreign_prefix_returns_400(self, client: AsyncClient) -> None:
+        resp = await client.post(
+            f"/api/issue/{self._FOREIGN_A}/claim",
+            json={"assignee": "alice"},
+        )
+        assert resp.status_code == 400, resp.text
+        body = resp.json()
+        assert body["code"] == "VALIDATION", body
+        assert "project" in body["error"].lower()
+
+    async def test_loom_claim_foreign_prefix_returns_400(self, client: AsyncClient) -> None:
+        resp = await client.post(
+            f"/api/loom/issues/{self._FOREIGN_A}/claim",
+            json={"assignee": "alice"},
+        )
+        assert resp.status_code == 400, resp.text
+        body = resp.json()
+        assert body["code"] == "VALIDATION", body
+
+    async def test_classic_release_foreign_prefix_returns_400(self, client: AsyncClient) -> None:
+        resp = await client.post(f"/api/issue/{self._FOREIGN_A}/release", json={})
+        assert resp.status_code == 400, resp.text
+        body = resp.json()
+        assert body["code"] == "VALIDATION", body
+
+    async def test_loom_release_foreign_prefix_returns_400(self, client: AsyncClient) -> None:
+        resp = await client.post(f"/api/loom/issues/{self._FOREIGN_A}/release", json={})
+        assert resp.status_code == 400, resp.text
+        body = resp.json()
+        assert body["code"] == "VALIDATION", body
+
+    async def test_classic_add_dependency_foreign_prefix_returns_400(self, client: AsyncClient) -> None:
+        resp = await client.post(
+            f"/api/issue/{self._FOREIGN_A}/dependencies",
+            json={"depends_on": self._FOREIGN_B},
+        )
+        assert resp.status_code == 400, resp.text
+        body = resp.json()
+        assert body["code"] == "VALIDATION", body
+
+    async def test_loom_add_dependency_foreign_prefix_returns_400(self, client: AsyncClient) -> None:
+        resp = await client.post(
+            f"/api/loom/issues/{self._FOREIGN_A}/dependencies",
+            json={"depends_on": self._FOREIGN_B},
+        )
+        assert resp.status_code == 400, resp.text
+        body = resp.json()
+        assert body["code"] == "VALIDATION", body
+
+    async def test_classic_add_comment_foreign_prefix_returns_400(self, client: AsyncClient) -> None:
+        resp = await client.post(
+            f"/api/issue/{self._FOREIGN_A}/comments",
+            json={"text": "hi"},
+        )
+        assert resp.status_code == 400, resp.text
+        body = resp.json()
+        assert body["code"] == "VALIDATION", body
+
+    async def test_loom_add_comment_foreign_prefix_returns_400(self, client: AsyncClient) -> None:
+        resp = await client.post(
+            f"/api/loom/issues/{self._FOREIGN_A}/comments",
+            json={"text": "hi"},
+        )
+        assert resp.status_code == 400, resp.text
+        body = resp.json()
+        assert body["code"] == "VALIDATION", body
+
+    async def test_same_prefix_missing_claim_still_404(self, client: AsyncClient) -> None:
+        """Sanity: a same-project missing ID should still return NOT_FOUND."""
+        resp = await client.post(
+            "/api/issue/test-0000000000/claim",
+            json={"assignee": "alice"},
+        )
+        assert resp.status_code == 404, resp.text
+        body = resp.json()
+        assert body["code"] == "NOT_FOUND", body

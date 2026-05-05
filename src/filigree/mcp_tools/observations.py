@@ -12,13 +12,16 @@ from mcp.types import TextContent, Tool
 from filigree.mcp_tools.common import (
     _MAX_LIST_RESULTS,
     _apply_has_more,
+    _list_response,
     _parse_args,
     _resolve_pagination,
     _text,
     _validate_actor,
     _validate_int_range,
+    _validate_str,
 )
-from filigree.types.api import ErrorResponse
+from filigree.types.api import BatchFailure, BatchResponse, ErrorCode, ErrorResponse, parse_response_detail
+from filigree.types.core import ObservationDict
 from filigree.types.inputs import (
     BatchDismissObservationsArgs,
     DismissObservationArgs,
@@ -85,28 +88,40 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "id": {"type": "string", "description": "Observation ID"},
+                    "observation_id": {"type": "string", "description": "Observation ID"},
                     "reason": {"type": "string", "description": "Reason for dismissal"},
                     "actor": {"type": "string", "description": "Agent/user identity for audit trail"},
                 },
-                "required": ["id"],
+                "required": ["observation_id"],
             },
         ),
         Tool(
             name="batch_dismiss_observations",
-            description="Dismiss multiple observations in one call.",
+            description=(
+                "Dismiss multiple observations in one call. Returns "
+                "BatchResponse[str] (succeeded observation IDs) by default, or "
+                "BatchResponse[ObservationDict] when response_detail='full' "
+                "(succeeded[] then carries the pre-dismissal observation records). "
+                "failed[] is always present (empty if none)."
+            ),
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "ids": {
+                    "observation_ids": {
                         "type": "array",
                         "items": {"type": "string"},
                         "description": "Observation IDs to dismiss",
                     },
                     "reason": {"type": "string", "default": "", "description": "Reason for dismissal"},
+                    "response_detail": {
+                        "type": "string",
+                        "enum": ["slim", "full"],
+                        "default": "slim",
+                        "description": "'slim' (default) returns observation ID strings in succeeded[]; 'full' returns the pre-dismissal ObservationDict records.",
+                    },
                     "actor": {"type": "string", "description": "Agent/user identity for audit trail"},
                 },
-                "required": ["ids"],
+                "required": ["observation_ids"],
             },
         ),
         Tool(
@@ -115,7 +130,7 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "id": {"type": "string", "description": "Observation ID"},
+                    "observation_id": {"type": "string", "description": "Observation ID"},
                     "type": {
                         "type": "string",
                         "default": "task",
@@ -131,7 +146,7 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
                     "description": {"type": "string", "description": "Extra description to prepend"},
                     "actor": {"type": "string", "description": "Agent/user identity for audit trail"},
                 },
-                "required": ["id"],
+                "required": ["observation_id"],
             },
         ),
     ]
@@ -148,12 +163,26 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
 
 
 async def _handle_observe(arguments: dict[str, Any]) -> list[TextContent]:
-    from filigree.mcp_server import _get_db
+    from filigree.mcp_server import _get_db, _refresh_summary
 
     args = _parse_args(arguments, ObserveArgs)
     actor, actor_err = _validate_actor(args.get("actor", "mcp"))
     if actor_err:
         return actor_err
+
+    # Validate raw argument types up front — otherwise a bool priority would
+    # silently coerce to int (True==1), a dict detail would hit SQLite binding
+    # errors, and a non-string file_path would crash in _normalize_scan_path.
+    for err in (
+        _validate_str(args.get("summary"), "summary"),
+        _validate_str(args.get("detail"), "detail"),
+        _validate_str(args.get("file_path"), "file_path"),
+        _validate_str(args.get("source_issue_id"), "source_issue_id"),
+        _validate_int_range(args.get("line"), "line", min_val=0),
+        _validate_int_range(args.get("priority"), "priority", min_val=0, max_val=4),
+    ):
+        if err is not None:
+            return err
 
     tracker = _get_db()
     try:
@@ -167,9 +196,10 @@ async def _handle_observe(arguments: dict[str, Any]) -> list[TextContent]:
             actor=actor,
         )
     except ValueError as e:
-        return _text(ErrorResponse(error=str(e), code="validation_error"))
+        return _text(ErrorResponse(error=str(e), code=ErrorCode.VALIDATION))
     except sqlite3.Error as e:
-        return _text(ErrorResponse(error=f"Database error: {e}", code="database_error"))
+        return _text(ErrorResponse(error=f"Database error: {e}", code=ErrorCode.IO))
+    _refresh_summary()
     return _text(obs)
 
 
@@ -177,7 +207,9 @@ async def _handle_list_observations(arguments: dict[str, Any]) -> list[TextConte
     from filigree.mcp_server import _get_db
 
     args = _parse_args(arguments, ListObservationsArgs)
-    effective_limit, offset = _resolve_pagination(arguments)
+    effective_limit, offset, pag_err = _resolve_pagination(arguments)
+    if pag_err is not None:
+        return pag_err
     tracker = _get_db()
     try:
         observations = tracker.list_observations(
@@ -187,26 +219,17 @@ async def _handle_list_observations(arguments: dict[str, Any]) -> list[TextConte
             file_id=args.get("file_id", ""),
         )
     except sqlite3.Error as e:
-        return _text(ErrorResponse(error=f"Database error: {e}", code="database_error"))
+        return _text(ErrorResponse(error=f"Database error: {e}", code=ErrorCode.IO))
     observations, has_more = _apply_has_more(observations, effective_limit)
-    stats: dict[str, object]
-    try:
-        stats = dict(tracker.observation_stats(sweep=False))
-    except sqlite3.Error as e:
-        logger.warning("observation_stats failed, returning degraded response", exc_info=True)
-        stats = {
-            "count": None,
-            "page_count": len(observations),
-            "stale_count": None,
-            "oldest_hours": None,
-            "expiring_soon_count": None,
-            "stats_error": f"observation stats temporarily unavailable ({type(e).__name__})",
-        }
-    return _text({"observations": observations, "stats": stats, "has_more": has_more})
+    next_offset = offset + len(observations) if has_more else None
+    # Drops the legacy ``stats`` sibling per the loom precedent (Phase C4 dropped
+    # it on the HTTP side); consumers needing observation stats use
+    # ``tracker.observation_stats()`` via a dedicated tool.
+    return _text(_list_response(list(observations), has_more=has_more, next_offset=next_offset))
 
 
 async def _handle_dismiss_observation(arguments: dict[str, Any]) -> list[TextContent]:
-    from filigree.mcp_server import _get_db
+    from filigree.mcp_server import _get_db, _refresh_summary
 
     args = _parse_args(arguments, DismissObservationArgs)
     actor, actor_err = _validate_actor(args.get("actor", "mcp"))
@@ -216,37 +239,65 @@ async def _handle_dismiss_observation(arguments: dict[str, Any]) -> list[TextCon
     tracker = _get_db()
     try:
         tracker.dismiss_observation(
-            args["id"],
+            args["observation_id"],
             actor=actor,
             reason=args.get("reason", ""),
         )
     except ValueError as e:
-        return _text(ErrorResponse(error=str(e), code="not_found"))
+        return _text(ErrorResponse(error=str(e), code=ErrorCode.NOT_FOUND))
     except sqlite3.Error as e:
-        return _text(ErrorResponse(error=f"Database error: {e}", code="database_error"))
-    return _text({"status": "dismissed", "id": args["id"]})
+        return _text(ErrorResponse(error=f"Database error: {e}", code=ErrorCode.IO))
+    _refresh_summary()
+    return _text({"status": "dismissed", "observation_id": args["observation_id"]})
 
 
 async def _handle_batch_dismiss_observations(arguments: dict[str, Any]) -> list[TextContent]:
-    from filigree.mcp_server import _get_db
+    from filigree.mcp_server import _get_db, _refresh_summary
 
     args = _parse_args(arguments, BatchDismissObservationsArgs)
     actor, actor_err = _validate_actor(args.get("actor", "mcp"))
     if actor_err:
         return actor_err
 
+    # Validate observation_ids is a list of strings up front — a bare string
+    # would otherwise be iterated char-by-char and produce bogus per-character
+    # not_found results (see filigree-45580755aa).
+    raw_ids = args.get("observation_ids", [])
+    if not isinstance(raw_ids, list):
+        return _text(ErrorResponse(error="'observation_ids' must be an array of strings", code=ErrorCode.VALIDATION))
+    if not all(isinstance(x, str) for x in raw_ids):
+        return _text(ErrorResponse(error="'observation_ids' must contain only string values", code=ErrorCode.VALIDATION))
+    detail = parse_response_detail(args.get("response_detail"))
+    if isinstance(detail, dict):
+        return _text(detail)
+
     tracker = _get_db()
+    # Snapshot pre-dismissal records for full mode — the rows are deleted by
+    # batch_dismiss_observations so the fetch must happen first.
+    full_records: list[ObservationDict] = []
+    if detail == "full":
+        full_records = tracker.get_observations_by_ids(raw_ids)
     try:
         result = tracker.batch_dismiss_observations(
-            args.get("ids", []),
+            raw_ids,
             actor=actor,
             reason=args.get("reason", ""),
         )
     except sqlite3.Error as e:
-        return _text(ErrorResponse(error=f"Database error: {e}", code="database_error"))
-    resp: dict[str, object] = {"dismissed": result["dismissed"], "ok": True}
-    if result["not_found"]:
-        resp["not_found"] = result["not_found"]
+        return _text(ErrorResponse(error=f"Database error: {e}", code=ErrorCode.IO))
+    _refresh_summary()
+    not_found_set = set(result["not_found"])
+    # Preserve input order, deduped, for the succeeded list — db returns a
+    # row-count plus the not-found ids, so the dismissed-id list is computed
+    # here as: unique inputs minus not-found.
+    succeeded_ids = [oid for oid in dict.fromkeys(raw_ids) if oid not in not_found_set]
+    failed: list[BatchFailure] = [
+        BatchFailure(id=oid, error=f"Observation not found: {oid}", code=ErrorCode.NOT_FOUND) for oid in result["not_found"]
+    ]
+    if detail == "full":
+        full_resp: BatchResponse[ObservationDict] = BatchResponse(succeeded=full_records, failed=failed)
+        return _text(full_resp)
+    resp: BatchResponse[str] = BatchResponse(succeeded=succeeded_ids, failed=failed)
     return _text(resp)
 
 
@@ -267,7 +318,7 @@ async def _handle_promote_observation(arguments: dict[str, Any]) -> list[TextCon
     tracker = _get_db()
     try:
         result = tracker.promote_observation(
-            args["id"],
+            args["observation_id"],
             issue_type=args.get("type", "task"),
             priority=priority,
             title=args.get("title"),
@@ -276,11 +327,11 @@ async def _handle_promote_observation(arguments: dict[str, Any]) -> list[TextCon
         )
     except ValueError as e:
         msg = str(e)
-        code = "not_found" if "not found" in msg.lower() else "validation_error"
-        return _text(ErrorResponse(error=msg, code=code))
+        err_code = ErrorCode.NOT_FOUND if "not found" in msg.lower() else ErrorCode.VALIDATION
+        return _text(ErrorResponse(error=msg, code=err_code))
     except sqlite3.Error as e:
         logger.error("promote_observation database error", exc_info=True)
-        return _text(ErrorResponse(error=f"Database error: {e}", code="database_error"))
+        return _text(ErrorResponse(error=f"Database error: {e}", code=ErrorCode.IO))
     _refresh_summary()
     resp: dict[str, object] = {"issue": result["issue"].to_dict()}
     if result.get("warnings"):

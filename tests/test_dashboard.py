@@ -199,6 +199,141 @@ class TestIdleTrackingMiddleware:
 # ---------------------------------------------------------------------------
 
 
+class TestMainGlobalReset:
+    """Bug filigree-bff063de18: repeated in-process main() calls must not serve the
+    wrong database because _project_store / _db globals leak between runs."""
+
+    def test_ethereal_main_clears_prior_project_store(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        filigree_dir = _create_filigree_dir(tmp_path, "proj-a", "a")
+        monkeypatch.setattr(dash_module, "find_filigree_anchor", lambda: (filigree_dir.parent, None))
+
+        # Simulate lingering server-mode global from a prior in-process run.
+        leftover = ProjectStore()
+        dash_module._project_store = leftover
+        dash_module._db = None
+
+        captured: dict[str, object] = {}
+
+        def fake_uvicorn_run(*args: object, **kwargs: object) -> None:
+            captured["project_store_during_run"] = dash_module._project_store
+            captured["db_during_run"] = dash_module._db
+
+        monkeypatch.setattr("uvicorn.run", fake_uvicorn_run)
+        monkeypatch.setattr("filigree.dashboard.webbrowser.open", lambda *a, **kw: None)
+
+        try:
+            dash_module.main(port=9999, no_browser=True, server_mode=False)
+        finally:
+            # Ensure we don't pollute other tests.
+            dash_module._project_store = None
+            dash_module._db = None
+
+        assert captured["project_store_during_run"] is None, (
+            "ethereal main must clear leftover _project_store before running so _get_db routes to the intended single-project _db"
+        )
+        assert captured["db_during_run"] is not None, "ethereal main must assign _db before running"
+
+    def test_server_main_clears_prior_single_db(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        filigree_dir = _create_filigree_dir(tmp_path, "proj-b", "b")
+        # Simulate leftover ethereal _db from a prior in-process run.
+        leftover_db = FiligreeDB(filigree_dir / DB_FILENAME, prefix="b", check_same_thread=False)
+        dash_module._db = leftover_db
+        dash_module._project_store = None
+
+        # Point ProjectStore at an empty server config so load() is cheap.
+        config_dir = tmp_path / ".server-config"
+        config_dir.mkdir()
+        (config_dir / "server.json").write_text(json.dumps({"port": 8377, "projects": {}}))
+        monkeypatch.setattr("filigree.server.SERVER_CONFIG_DIR", config_dir)
+        monkeypatch.setattr("filigree.server.SERVER_CONFIG_FILE", config_dir / "server.json")
+
+        captured: dict[str, object] = {}
+
+        def fake_uvicorn_run(*args: object, **kwargs: object) -> None:
+            captured["db_during_run"] = dash_module._db
+            captured["project_store_during_run"] = dash_module._project_store
+
+        monkeypatch.setattr("uvicorn.run", fake_uvicorn_run)
+        monkeypatch.setattr("filigree.dashboard.webbrowser.open", lambda *a, **kw: None)
+
+        try:
+            dash_module.main(port=9999, no_browser=True, server_mode=True)
+        finally:
+            leftover_db.close()
+            dash_module._project_store = None
+            dash_module._db = None
+
+        assert captured["db_during_run"] is None, "server main must clear leftover _db before running so _get_db routes via _project_store"
+        assert captured["project_store_during_run"] is not None
+
+    def test_main_resets_both_globals_in_finally(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        filigree_dir = _create_filigree_dir(tmp_path, "proj-c", "c")
+        monkeypatch.setattr(dash_module, "find_filigree_anchor", lambda: (filigree_dir.parent, None))
+
+        dash_module._project_store = ProjectStore()
+        dash_module._db = None
+
+        monkeypatch.setattr("uvicorn.run", lambda *a, **kw: None)
+        monkeypatch.setattr("filigree.dashboard.webbrowser.open", lambda *a, **kw: None)
+
+        dash_module.main(port=9999, no_browser=True, server_mode=False)
+
+        assert dash_module._project_store is None, "finally must reset _project_store"
+        assert dash_module._db is None, "finally must reset _db"
+
+    def test_main_clears_stale_config_on_restart(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """filigree-154a23794c: a previous run's _config["name"] must not leak.
+
+        Scenario: ethereal run #1 against a project whose config has
+        ``name="Old Project"``; ethereal run #2 against a project whose
+        config omits ``name`` (read_config only defaults prefix and version).
+        /api/projects must serve the new project's prefix, not "Old Project".
+        """
+        # Run #1: project with explicit name.
+        proj_a = _create_filigree_dir(tmp_path, "proj-old", "old")
+        # Overwrite config to include a name.
+        write_config(proj_a, {"prefix": "old", "version": 1, "name": "Old Project"})
+
+        captured: dict[str, dict[str, object]] = {}
+
+        def fake_uvicorn_run_a(*args: object, **kwargs: object) -> None:
+            captured["after_run_a"] = dict(dash_module._config)
+
+        monkeypatch.setattr(dash_module, "find_filigree_anchor", lambda: (proj_a.parent, None))
+        monkeypatch.setattr("uvicorn.run", fake_uvicorn_run_a)
+        monkeypatch.setattr("filigree.dashboard.webbrowser.open", lambda *a, **kw: None)
+
+        dash_module.main(port=9999, no_browser=True, server_mode=False)
+        assert captured["after_run_a"].get("name") == "Old Project"
+
+        # Run #2: minimal config (no name key).
+        proj_b = _create_filigree_dir(tmp_path, "proj-new", "new")
+        # write_config in _create_filigree_dir already wrote {prefix, version}; no name.
+
+        def fake_uvicorn_run_b(*args: object, **kwargs: object) -> None:
+            captured["after_run_b"] = dict(dash_module._config)
+
+        monkeypatch.setattr(dash_module, "find_filigree_anchor", lambda: (proj_b.parent, None))
+        monkeypatch.setattr("uvicorn.run", fake_uvicorn_run_b)
+
+        dash_module.main(port=9999, no_browser=True, server_mode=False)
+
+        # _config["name"] from run #1 must be gone.
+        assert "name" not in captured["after_run_b"], f"stale 'name' from prior run leaked into _config: {captured['after_run_b']!r}"
+
+    def test_main_clears_config_in_finally(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """filigree-154a23794c: finally block must clear _config too."""
+        proj = _create_filigree_dir(tmp_path, "proj-fin", "fin")
+        write_config(proj, {"prefix": "fin", "version": 1, "name": "Finalize"})
+        monkeypatch.setattr(dash_module, "find_filigree_anchor", lambda: (proj.parent, None))
+        monkeypatch.setattr("uvicorn.run", lambda *a, **kw: None)
+        monkeypatch.setattr("filigree.dashboard.webbrowser.open", lambda *a, **kw: None)
+
+        dash_module.main(port=9999, no_browser=True, server_mode=False)
+
+        assert dash_module._config == {}, f"finally must clear _config; got {dash_module._config!r}"
+
+
 class TestGetDbErrorPaths:
     async def test_returns_500_when_db_is_none_in_ethereal_mode(self) -> None:
         """_get_db() must raise HTTP 500 when module-level _db is None."""
@@ -211,7 +346,9 @@ class TestGetDbErrorPaths:
             async with AsyncClient(transport=transport, base_url="http://test") as client:
                 resp = await client.get("/api/stats")
             assert resp.status_code == 500
-            assert "Database not initialized" in resp.json().get("detail", "")
+            body = resp.json()
+            assert body.get("code") == "INTERNAL", f"wrong code: {body!r}"
+            assert "Database not initialized" in body.get("error", "")
         finally:
             dash_module._db = saved
 
@@ -392,3 +529,91 @@ class TestSafeBoundedIntReexport:
         from filigree.dashboard_routes.common import _safe_bounded_int as original
 
         assert via_dashboard is original
+
+
+# ---------------------------------------------------------------------------
+# /api/loom/scanners — relocated-DB resolution (filigree-641037692a)
+# ---------------------------------------------------------------------------
+
+
+class TestLoomScannersRelocatedDB:
+    """``GET /api/loom/scanners`` must resolve scanner TOMLs from
+    ``project_root / ".filigree" / "scanners"``, not ``db.db_path.parent /
+    "scanners"`` — otherwise ``.filigree.conf`` projects with a relocated
+    ``db = ...`` path return an empty scanner list while the CLI/MCP
+    surfaces correctly enumerate them.
+    """
+
+    async def test_relocated_db_finds_scanner_in_filigree_dir(self, tmp_path: Path) -> None:
+        from filigree.core import CONF_FILENAME, FILIGREE_DIR_NAME, write_conf
+
+        project_root = tmp_path / "relocated-proj"
+        filigree_dir = project_root / FILIGREE_DIR_NAME
+        filigree_dir.mkdir(parents=True)
+        write_config(filigree_dir, {"prefix": "rel", "version": 1})
+
+        # Scanner TOML lives in the conventional .filigree/scanners/ location.
+        scanners_dir = filigree_dir / "scanners"
+        scanners_dir.mkdir()
+        (scanners_dir / "demo.toml").write_text(
+            '[scanner]\nname = "demo"\ndisplay_name = "Demo"\nadapter = "command"\ncommand = "echo hi"\n'
+        )
+
+        # DB lives outside .filigree/, mimicking a v2.0 conf-relocated layout.
+        custom_db_dir = project_root / "data"
+        custom_db_dir.mkdir()
+        custom_db = custom_db_dir / "track.db"
+        seed = FiligreeDB(custom_db, prefix="rel", check_same_thread=False)
+        seed.initialize()
+        seed.close()
+        write_conf(
+            project_root / CONF_FILENAME,
+            {"version": 1, "project_name": "rel", "prefix": "rel", "db": "data/track.db"},
+        )
+
+        db = FiligreeDB.from_conf(project_root / CONF_FILENAME, check_same_thread=False)
+        # Sanity: DB path is outside .filigree/, so the legacy resolution would miss.
+        assert db.db_path.parent != filigree_dir
+        assert db.project_root == project_root.resolve()
+
+        dash_module._db = db
+        try:
+            app = create_app()
+            transport = ASGITransport(app=app)
+            async with AsyncClient(transport=transport, base_url="http://test") as client:
+                resp = await client.get("/api/loom/scanners")
+            assert resp.status_code == 200, resp.text
+            body = resp.json()
+            names = [item["name"] for item in body["items"]]
+            assert "demo" in names, f"scanners not found via /api/loom/scanners: {body!r}"
+        finally:
+            dash_module._db = None
+            db.close()
+
+    async def test_legacy_filigree_dir_install_still_finds_scanner(self, tmp_path: Path) -> None:
+        """Sanity: the fix must not regress the legacy
+        ``.filigree/filigree.db`` layout — both DB construction paths set
+        ``project_root`` (``from_filigree_dir`` resolves it from the dir's
+        parent), so the route still resolves to ``.filigree/scanners``.
+        """
+        filigree_dir = tmp_path / ".filigree"
+        filigree_dir.mkdir()
+        write_config(filigree_dir, {"prefix": "leg", "version": 1})
+        (filigree_dir / "scanners").mkdir()
+        (filigree_dir / "scanners" / "legacy.toml").write_text(
+            '[scanner]\nname = "legacy"\ndisplay_name = "Legacy"\nadapter = "command"\ncommand = "echo hi"\n'
+        )
+        db = FiligreeDB.from_filigree_dir(filigree_dir, check_same_thread=False)
+
+        dash_module._db = db
+        try:
+            app = create_app()
+            transport = ASGITransport(app=app)
+            async with AsyncClient(transport=transport, base_url="http://test") as client:
+                resp = await client.get("/api/loom/scanners")
+            assert resp.status_code == 200
+            names = [item["name"] for item in resp.json()["items"]]
+            assert "legacy" in names
+        finally:
+            dash_module._db = None
+            db.close()

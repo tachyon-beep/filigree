@@ -14,6 +14,7 @@ if _scripts_dir not in sys.path:
     sys.path.insert(0, _scripts_dir)
 
 from scan_utils import (  # type: ignore[import-not-found]  # noqa: E402, I001
+    PROMPT_TEMPLATE,
     _infer_rule_id,
     estimate_tokens,
     find_files,
@@ -22,6 +23,35 @@ from scan_utils import (  # type: ignore[import-not-found]  # noqa: E402, I001
     post_to_api,
     severity_map,
 )
+
+
+# ── PROMPT_TEMPLATE ────────────────────────────────────────────────────
+
+
+class TestPromptTemplate:
+    """PROMPT_TEMPLATE keeps per-file values late for prompt-cache reuse."""
+
+    def test_file_specific_values_follow_static_instructions(self) -> None:
+        first_file_slot = PROMPT_TEMPLATE.index("{file_path}")
+        static_output_contract = PROMPT_TEMPLATE.index("## Suggested Fix")
+
+        assert first_file_slot > static_output_contract
+
+    def test_rendered_prompts_share_static_prefix_across_target_files(self) -> None:
+        context = "--- CLAUDE.md ---\nShared project guidance"
+        prompt_a = PROMPT_TEMPLATE.format(file_path="/repo/src/filigree/a.py", context=context)
+        prompt_b = PROMPT_TEMPLATE.format(file_path="/repo/src/filigree/b.py", context=context)
+
+        common_prefix_len = 0
+        for char_a, char_b in zip(prompt_a, prompt_b, strict=False):
+            if char_a != char_b:
+                break
+            common_prefix_len += 1
+
+        shared_prefix = prompt_a[:common_prefix_len]
+        assert "Bug categories to check" in shared_prefix
+        assert "## Suggested Fix" in shared_prefix
+        assert "Shared project guidance" in shared_prefix
 
 
 # ── severity_map ───────────────────────────────────────────────────────

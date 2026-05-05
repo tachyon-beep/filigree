@@ -1,0 +1,37 @@
+{
+  "_meta": {
+    "contract": "filigree-loom",
+    "stability": "Frozen for the loom-generation lifetime per ADR-002. Shape additions that preserve wire compatibility (new optional response fields) are allowed; breaking changes require a new generation.",
+    "authority": [
+      "docs/architecture/decisions/ADR-002-api-generations-and-federation-posture.md",
+      "docs/plans/2026-04-24-2.0-federation-work-package.md"
+    ],
+    "pinning_discipline": "shape reference; see docs/federation/contracts.md",
+    "updated": "2026-04-26",
+    "endpoint": "DELETE /api/loom/issues/{issue_id}/dependencies/{dep_issue_id}",
+    "status": "live as of Phase C3.",
+    "relation_to_classic": "Path parameter renamed dep_id → dep_issue_id (loom vocabulary at the URL level). Response shape unchanged from classic ({removed: bool}). Idempotent: removing a non-existent dependency between two valid-prefix ids returns 200 {removed: false}, not 404 — wire-compatible behaviour shared with classic."
+  },
+  "shape_decl": {
+    "request_type": "DELETE (no body); optional ?actor= query string",
+    "response_type": "{removed: bool}",
+    "rationale": "Boolean status response. Path uses dep_issue_id since the path parameter denotes another issue's primary key. Idempotent semantics inherited from db.remove_dependency()."
+  },
+  "examples": [
+    {
+      "name": "success_idempotent_no_dep",
+      "note": "Removing a non-existent dependency between two valid-prefix ids returns 200 with removed=false. This is the only fixture-replayable case (the populated success path requires seeded issues + a real dependency); see the seeded full-lifecycle test for that.",
+      "request": {
+        "method": "DELETE",
+        "path": "/api/loom/issues/genp-deadbeef00/dependencies/genp-deadbeef01",
+        "headers": {},
+        "body": null
+      },
+      "response": {
+        "status": 200,
+        "headers": {"Content-Type": "application/json"},
+        "body": {"removed": false}
+      }
+    }
+  ]
+}

@@ -42,15 +42,32 @@ def cycle_time(db: FiligreeDB, issue_id: str) -> float | None:
     issue = db.get_issue(issue_id)
     issue_type = issue.type
 
-    events = db.conn.execute(
-        "SELECT event_type, new_value, created_at FROM events "
-        "WHERE issue_id = ? AND event_type = 'status_changed' ORDER BY created_at ASC, id ASC",
+    rows = db.conn.execute(
+        "SELECT id, event_type, new_value, created_at FROM events WHERE issue_id = ? AND event_type = 'status_changed'",
         (issue_id,),
     ).fetchall()
     return _cycle_time_from_events(
-        events,
+        _sort_events_chronologically(rows),
         lambda state: db._resolve_status_category(issue_type, state),
     )
+
+
+def _sort_events_chronologically(rows: list[sqlite3.Row]) -> list[sqlite3.Row]:
+    """Sort event rows by parsed UTC timestamp then by id.
+
+    SQLite ORDER BY on raw ISO text produces wrong results when rows carry
+    mixed timezone offsets (e.g. +00:00 vs +10:00 sort lexically but not
+    chronologically). Unparseable timestamps are dropped — callers already
+    handle missing events by returning None metrics.
+    """
+    ordered: list[tuple[datetime, int, sqlite3.Row]] = []
+    for r in rows:
+        dt = _parse_iso(r["created_at"])
+        if dt is None:
+            continue
+        ordered.append((dt, r["id"], r))
+    ordered.sort(key=lambda t: (t[0], t[1]))
+    return [t[2] for t in ordered]
 
 
 def _cycle_time_from_events(
@@ -87,18 +104,18 @@ def _fetch_status_events_by_issue(db: FiligreeDB, issue_ids: list[str]) -> dict[
         placeholders = ",".join("?" for _ in chunk)
         rows = db.conn.execute(
             (
-                "SELECT issue_id, new_value, created_at "
+                "SELECT id, issue_id, new_value, created_at "
                 "FROM events "
                 "WHERE event_type = 'status_changed' "
-                f"AND issue_id IN ({placeholders}) "
-                "ORDER BY issue_id ASC, created_at ASC, id ASC"
+                f"AND issue_id IN ({placeholders})"
             ),
             tuple(chunk),
         ).fetchall()
         for row in rows:
             by_issue.setdefault(row["issue_id"], []).append(row)
 
-    return by_issue
+    # Sort each issue's events chronologically (by parsed UTC), not by raw text.
+    return {issue_id: _sort_events_chronologically(evts) for issue_id, evts in by_issue.items()}
 
 
 def lead_time(
@@ -116,7 +133,13 @@ def lead_time(
         if issue_id is None:
             return None
         issue = db.get_issue(issue_id)
-    if issue.status_category != "done" or issue.closed_at is None:
+    if issue.closed_at is None:
+        return None
+    # Treat archive_closed()'s synthetic status='archived' as completed.
+    # It preserves closed_at but strips the done-category, so a strict
+    # status_category=='done' check would silently drop archived issues
+    # from averages even though throughput includes them.
+    if issue.status_category != "done" and issue.status != "archived":
         return None
     created = _parse_iso(issue.created_at)
     closed = _parse_iso(issue.closed_at)
@@ -142,29 +165,42 @@ def get_flow_metrics(db: FiligreeDB, *, days: int = 30) -> FlowMetrics:
     """
     from datetime import timedelta
 
+    if days < 1:
+        msg = f"days must be >= 1, got {days}"
+        raise ValueError(msg)
+
     cutoff_dt = datetime.now(UTC) - timedelta(days=days)
 
     # Paginate through all done issues to avoid silent truncation.
     # Query both "closed" (template-defined done states) and "archived"
     # (synthetic status set by archive_closed()) to avoid undercounting.
+    # Key by id to dedupe: templates may define an "archived" done state,
+    # which overlaps the literal "archived" status bucket; a concurrent
+    # archive_closed() can also shift an issue between buckets mid-scan.
     page_size = 1000
-    recent_closed = []
+    recent_by_id: dict[str, Issue] = {}
     for status_filter in ("closed", "archived"):
         offset = 0
         while True:
             page = db.list_issues(status=status_filter, limit=page_size, offset=offset)
             for i in page:
-                if i.closed_at:
+                if i.closed_at and i.id not in recent_by_id:
                     closed_dt = _parse_iso(i.closed_at)
                     if closed_dt is not None and closed_dt >= cutoff_dt:
-                        recent_closed.append(i)
+                        recent_by_id[i.id] = i
             if len(page) < page_size:
                 break
             offset += page_size
+    recent_closed = list(recent_by_id.values())
 
     cycle_times: list[float] = []
     lead_times: list[float] = []
-    by_type: dict[str, list[float]] = {}
+    # Track per-type closed counts independently from cycle-time samples:
+    # an issue closed without a WIP transition (allowed by the task workflow)
+    # is real throughput but yields no cycle-time sample. Conflating them
+    # under-reports the per-type "closed" count the CLI/dashboard display.
+    type_counts: dict[str, int] = {}
+    type_cycle_times: dict[str, list[float]] = {}
     status_events = _fetch_status_events_by_issue(db, [issue.id for issue in recent_closed])
 
     def _make_resolver(issue_type: str) -> Callable[[str], str]:
@@ -176,17 +212,19 @@ def get_flow_metrics(db: FiligreeDB, *, days: int = 30) -> FlowMetrics:
             _make_resolver(issue.type),
         )
         lt = lead_time(db, issue=issue)
+        type_counts[issue.type] = type_counts.get(issue.type, 0) + 1
         if ct is not None:
             cycle_times.append(ct)
-            by_type.setdefault(issue.type, []).append(ct)
+            type_cycle_times.setdefault(issue.type, []).append(ct)
         if lt is not None:
             lead_times.append(lt)
 
     type_metrics: dict[str, TypeMetrics] = {}
-    for issue_type, times in by_type.items():
+    for issue_type, count in type_counts.items():
+        times = type_cycle_times.get(issue_type, [])
         type_metrics[issue_type] = {
             "avg_cycle_time_hours": round(sum(times) / len(times), 1) if times else None,
-            "count": len(times),
+            "count": count,
         }
 
     return {

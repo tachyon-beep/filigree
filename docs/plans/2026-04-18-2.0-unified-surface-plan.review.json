@@ -1,0 +1,271 @@
+{
+  "verdict": "CHANGES_REQUESTED",
+  "summary": "Plan has 6 blocking issues across all four reviewers. The central structural gap is that FiligreeDB.start_work() — the atomic operation Stage 3 builds around — does not exist and the plan does not implement it; its error hierarchy (ClaimConflictError, IssueNotFoundError) also does not exist. Additional blockers: non-existent test fixtures referenced throughout Stages 2b-5, BatchFailure vs BatchFailureDetail type collision, wrong CLI context pattern (ctx.obj[\\\"actor\\\"] vs ctx.actor), and a git add ../CLAUDE.md step that cannot work from the filigree repo. Plus 14 warnings including a schema-mismatch hotfix that should land pre-Stage-1 to relieve current dogfooding pain. Spec-traceability gaps are real: several spec NFRs (concurrent start_next_work, 2x2 idempotency, MCP warm-degraded per tool, CLI/MCP parity) are only partially covered by the plan's tests.",
+  "plan_file": "/home/john/filigree/docs/plans/2026-04-18-2.0-unified-surface-plan.md",
+  "spec_file": "/home/john/filigree/docs/plans/2026-04-18-2.0-unified-surface-design.md",
+  "reviewed_at": "2026-04-18T00:00:00Z",
+  "reviewers": ["reality", "architecture", "quality", "systems"],
+  "blocking_issues": [
+    {
+      "id": "B1",
+      "title": "start_work() DB method and its exception hierarchy do not exist",
+      "sources": ["reality", "architecture", "systems", "quality"],
+      "confidence": "very_high",
+      "evidence": "Grep across src/ finds zero occurrences of ClaimConflictError or IssueNotFoundError. No def start_work in src/. Plan Task 3.2 builds the entire atomic-claim+transition operation around a method and exceptions that must be designed, not just wired. The plan's test uses raw threads while production MCP dispatch is async under _tool_locks — validating a different concurrency model than production.",
+      "severity": 4,
+      "likelihood": 3,
+      "reversibility": 2,
+      "priority_score": 24,
+      "resolution": "Before Stage 3, add a sub-task that (a) defines ClaimConflictError and IssueNotFoundError in filigree.errors (or wherever domain errors live) with .current_assignee and .issue_id attributes, (b) specifies FiligreeDB.start_work() with explicit transaction semantics that match claim_issue()'s manual try/except/rollback rather than with self.conn:, and (c) refactors the concurrency test to exercise the actual async MCP dispatch path (or proves the thread test is equivalent)."
+    },
+    {
+      "id": "B2",
+      "title": "Test fixtures used throughout the plan do not exist",
+      "sources": ["reality", "systems"],
+      "confidence": "very_high",
+      "evidence": "tests/conftest.py only provides mcp_db. Plan references mcp_client_for_empty_project, mcp_client_with_open_bug, initialized_project_with_bug and others as 'already provided'. Stage 2b-5 tests will fail at collection with 'fixture not found'. tests/workflows/ directory does not exist (verified: only __init__.py, conftest.py, test_e2e.py present).",
+      "severity": 4,
+      "likelihood": 3,
+      "reversibility": 1,
+      "priority_score": 12,
+      "resolution": "Add a Stage 2a.0 task that creates the fixture set in tests/conftest.py (or a scoped conftest) and lists each fixture name, signature, and teardown. Also add a task to create tests/workflows/ and docs/migration/ directories with placeholders before the stages that write into them."
+    },
+    {
+      "id": "B3",
+      "title": "BatchFailure vs existing BatchFailureDetail collision",
+      "sources": ["reality", "architecture"],
+      "confidence": "very_high",
+      "evidence": "filigree.types.api.BatchFailureDetail already exists (field: id) and is used in ~15 call sites in db_issues.py. Plan introduces BatchFailure (field: item_id) in the same module. DB layer emits BatchFailureDetail; the new MCP envelope expects BatchFailure. Plan has no translation step, so both types will coexist indefinitely and id/item_id asymmetry leaks to consumers.",
+      "severity": 3,
+      "likelihood": 3,
+      "reversibility": 2,
+      "priority_score": 18,
+      "resolution": "Decide one of: (a) rename BatchFailureDetail.id -> item_id and delete the new type (preferred, aligns with broader id -> issue_id rename), (b) keep both but add an explicit translation layer and task, or (c) keep BatchFailureDetail as the sole type and drop BatchFailure. Add the chosen resolution as a Stage 2a task before any Stage 2b response-shape work."
+    },
+    {
+      "id": "B4",
+      "title": "CLI context pattern ctx.actor / ctx.db does not exist",
+      "sources": ["reality", "architecture"],
+      "confidence": "very_high",
+      "evidence": "Actual pattern confirmed in 18 occurrences across 5 files (cli.py, cli_commands/issues.py, planning.py, meta.py, admin.py): ctx.obj[\\\"actor\\\"] plus a get_db() context manager. Plan Tasks 3.3 and 4.1 use attribute access (ctx.db, ctx.actor). Generated code will fail with AttributeError on first invocation.",
+      "severity": 3,
+      "likelihood": 3,
+      "reversibility": 1,
+      "priority_score": 9,
+      "resolution": "Global search-and-replace in the plan: ctx.actor -> ctx.obj[\\\"actor\\\"], ctx.db -> with get_db(...) as db:. Also fix Task 4.1 to register new commands in cli.py (where existing registrations live), not in cli_commands/__init__.py."
+    },
+    {
+      "id": "B5",
+      "title": "Task 6.8 'git add ../CLAUDE.md' cannot work from filigree repo",
+      "sources": ["systems"],
+      "confidence": "high",
+      "evidence": "/home/john/CLAUDE.md lives outside the filigree git worktree. A commit in the filigree repo that stages a path outside the worktree will fail. Plan currently prescribes this as a single step.",
+      "severity": 2,
+      "likelihood": 3,
+      "reversibility": 1,
+      "priority_score": 6,
+      "resolution": "Split Task 6.8 into two operations: (a) update /home/john/filigree/CLAUDE.md inside the worktree as part of the Stage 6 commit, (b) separately update /home/john/CLAUDE.md via a shell step outside git (or document it as a manual user step). Note that only /home/john/CLAUDE.md is the 'global' copy; the worktree copy is a duplicate — consider collapsing them."
+    },
+    {
+      "id": "B6",
+      "title": "Multiple symbol/signature hallucinations in test code",
+      "sources": ["reality"],
+      "confidence": "very_high",
+      "evidence": "Plan Task 2a.10: 'from filigree.dashboard import app' — no module-level app exists; tests must use create_app(). Plan Task 5.3: 'dashboard.main(filigree_dir=...)' — actual signature has no filigree_dir parameter; call will raise TypeError. Plan WorkflowPack.canonical_working_status implementation references StateDefinition.transitions but states is a tuple, not a dict, and StateDefinition lacks that field.",
+      "severity": 3,
+      "likelihood": 3,
+      "reversibility": 1,
+      "priority_score": 9,
+      "resolution": "Rewrite Task 2a.10 test against create_app() (or assert an app factory contract). Rewrite Task 5.3 to match main()'s real signature. Rewrite canonical_working_status against the real StateDefinition / states tuple shape before landing Task 2a."
+    }
+  ],
+  "warnings": [
+    {
+      "id": "W1",
+      "title": "Schema-mismatch fix arrives too late (Stage 5)",
+      "sources": ["systems"],
+      "evidence": "Session start already shows a v9 binary vs v8 DB failure (the exact pain Stage 5 addresses). Current pain persists for 5 stages of plan execution.",
+      "priority_score": 8,
+      "recommendation": "Add a pre-Stage-1 hotfix: 3-line change to promote SchemaVersionMismatchError and replace the raise in core.py. Land separately before starting plan execution."
+    },
+    {
+      "id": "W2",
+      "title": "IssueDict.id vs SlimIssue.issue_id asymmetry permanent",
+      "sources": ["systems"],
+      "evidence": "Plan renames SlimIssue.id -> issue_id but preserves IssueDict['id']. get_ready returns issue_id; get_issue returns id. This embeds the exact inconsistency the rename was meant to eliminate.",
+      "priority_score": 6,
+      "recommendation": "Either rename IssueDict['id'] -> IssueDict['issue_id'] as part of Stage 6, or document the contract explicitly in the spec with a stated reason for the asymmetry. Don't just comment it away."
+    },
+    {
+      "id": "W3",
+      "title": "summary.py and context.md missing from Stage 6 file list",
+      "sources": ["systems"],
+      "evidence": "Stage 6 file list covers the rename sweep but omits summary.py / context.md output. Agents consuming context.md will see inconsistent field names vs tool responses post-merge.",
+      "priority_score": 6,
+      "recommendation": "Add summary.py and any context.md generator to Stage 6 audit step. Re-run context.md generation and commit as part of Stage 6."
+    },
+    {
+      "id": "W4",
+      "title": "Concurrent start_next_work test missing",
+      "sources": ["quality"],
+      "evidence": "Spec explicitly requires concurrent start_next_work NFR. Plan has no task writing this test. Concurrent start_work test exists but does not re-read status to verify the loser didn't advance status — the central invariant.",
+      "priority_score": 6,
+      "recommendation": "Add Task 3.4 concurrent test with N threads calling start_next_work against a queue of 1, and strengthen Task 3.2 concurrency test to re-read the losing caller's issue and assert status unchanged."
+    },
+    {
+      "id": "W5",
+      "title": "Task 2b.10 dashboard envelope has no test code",
+      "sources": ["quality", "architecture"],
+      "evidence": "Every other Stage 2b task spells out exact test code; 2b.10 says 'mirror the pattern'. Dashboard REST call sites are not enumerated, so scope of the rollout is unclear.",
+      "priority_score": 6,
+      "recommendation": "Enumerate affected REST endpoints in 2b.10. Write at least 2-3 concrete test cases (list endpoint, get endpoint, error case) rather than deferring to 'mirror'."
+    },
+    {
+      "id": "W6",
+      "title": "Enum casing change is a wire-protocol break, audit limited to src/",
+      "sources": ["systems"],
+      "evidence": "ErrorCode StrEnum lowercase -> UPPERCASE (not_found -> NOT_FOUND). Source sweep doesn't audit tests/ or scripts/ for string equality comparisons like == \\\"not_found\\\".",
+      "priority_score": 6,
+      "recommendation": "Extend the Stage 2a audit step to include tests/ and scripts/ and any external repos (Clarion, etc.) where filigree findings-consumers exist."
+    },
+    {
+      "id": "W7",
+      "title": "DependencyActionResponse uses from_id/to_id — asymmetric with renamed inputs",
+      "sources": ["architecture"],
+      "evidence": "Task 6.2 renames inputs to depends_on_id style but leaves response fields from_id/to_id — exactly the kind of asymmetry the spec tries to eliminate.",
+      "priority_score": 4,
+      "recommendation": "Rename DependencyActionResponse fields as part of Task 6.2, or document why response fields intentionally differ from inputs."
+    },
+    {
+      "id": "W8",
+      "title": "get_comments / get_issue_events missing from ListResponse parametrized test",
+      "sources": ["quality"],
+      "evidence": "Spec requires ListResponse envelope apply to all list-shaped tools; plan's parametrized test enumerates list_issues/get_ready/search_issues but omits get_comments and get_issue_events.",
+      "priority_score": 4,
+      "recommendation": "Extend Task 2b parametrized test to include get_comments and get_issue_events."
+    },
+    {
+      "id": "W9",
+      "title": "No server-side logging on new error paths",
+      "sources": ["quality"],
+      "evidence": "Plan specifies consumer-visible errors only. start_work transaction failures have no instrumentation, so a loop between client retries and NOT_INITIALIZED responses can hide.",
+      "priority_score": 4,
+      "recommendation": "Add a 'log at WARN with structured context' line to each new error-producing path in Stage 3 tasks."
+    },
+    {
+      "id": "W10",
+      "title": "MCP warm-but-degraded tested on only one tool",
+      "sources": ["quality"],
+      "evidence": "Spec requires every MCP tool to return NOT_INITIALIZED cleanly when DB unopened. Plan tests get_ready only.",
+      "priority_score": 4,
+      "recommendation": "Add a parametrized degraded-mode test iterating every @mcp.tool registration and asserting NOT_INITIALIZED envelope."
+    },
+    {
+      "id": "W11",
+      "title": "pyproject.toml version and Python claim drift",
+      "sources": ["reality"],
+      "evidence": "Task 7.3 bumps version to 2.0.0; pyproject already at 2.0.0 (no-op). Plan claims 'Python 3.12+' but pyproject says py311.",
+      "priority_score": 3,
+      "recommendation": "Delete Task 7.3 or repurpose for a changelog cut. Correct the Python version claim to 3.11+ throughout the plan, or separately propose the 3.12 bump with its own rationale."
+    },
+    {
+      "id": "W12",
+      "title": "POST /api/v1/scan-results response shape change not dogfood-gated",
+      "sources": ["reality", "quality", "systems"],
+      "evidence": "Response shape changes in the envelope rollout but plan has no dogfood checkpoint for Clarion / external scanner ingesters; no compat window.",
+      "priority_score": 4,
+      "recommendation": "Either keep the scan-results response shape stable through 2.0 (internal dual-write) or add an explicit Clarion compat checkpoint at end of Stage 2b."
+    },
+    {
+      "id": "W13",
+      "title": "Stage 6 has no revert-readiness note",
+      "sources": ["architecture"],
+      "evidence": "Stage 2b has an explicit revert note. Stage 6 is the biggest rename sweep and carries no equivalent.",
+      "priority_score": 3,
+      "recommendation": "Add a Stage 6 revert-readiness subsection: one clean revert commit per sub-rename, atomic test runs between."
+    },
+    {
+      "id": "W14",
+      "title": "LEGACY_CODE_TO_ERRORCODE dead-code risk",
+      "sources": ["architecture"],
+      "evidence": "Mapping table introduced for compat but no task ever retires it; likely lives forever in production.",
+      "priority_score": 3,
+      "recommendation": "Add a deletion task in Stage 7 (post-2.0 release) to remove LEGACY_CODE_TO_ERRORCODE after a defined grace period."
+    }
+  ],
+  "recommendations": [
+    {
+      "type": "HOTFIX_BEFORE_EXECUTION",
+      "source": "systems",
+      "suggestion": "Land the SchemaVersionMismatchError hotfix on a separate PR before starting plan execution. Session start already shows this pain."
+    },
+    {
+      "type": "EXCEPTION_HIERARCHY_FIRST",
+      "source": "architecture",
+      "suggestion": "Introduce ClaimConflictError / IssueNotFoundError in a pre-Stage-3 task and retrofit claim_issue() to raise them. Then Task 3.2 can be honest about what it catches."
+    },
+    {
+      "type": "FIXTURE_BOOTSTRAP",
+      "source": "reality",
+      "suggestion": "Create the referenced fixture set (mcp_client_for_empty_project, initialized_project_with_bug, etc.) as Stage 2a.0 before any downstream stage needs them."
+    },
+    {
+      "type": "TRACER_BULLET",
+      "source": "architecture",
+      "suggestion": "Implement start_work end-to-end (DB -> MCP -> CLI) as a thin tracer through one task in Stage 3 before expanding to start_next_work and the rest. This validates the atomicity model on the smallest possible surface."
+    },
+    {
+      "type": "SCOPE_SPLIT",
+      "source": "architecture",
+      "suggestion": "Stage 2b envelope rollout is a big-bang rename across ~28 files. Consider splitting: (1) new types defined + parallel, (2) per-handler cutover one subsystem at a time, (3) retire legacy response types."
+    },
+    {
+      "type": "SPEC_TRACEABILITY_MATRIX",
+      "source": "quality",
+      "suggestion": "Add an explicit NFR-to-test mapping at the end of the plan: for each spec NFR (concurrent start_work, concurrent start_next_work, 2x2 idempotency, CLI/MCP parity, warm-degraded per tool), name the test file and function that covers it."
+    },
+    {
+      "type": "CONTEXT_REGENERATION",
+      "source": "systems",
+      "suggestion": "Add 'regenerate summary.py / context.md outputs and commit' as the last step of Stage 6 so agent-facing context matches tool responses."
+    }
+  ],
+  "conflicts_resolved": [
+    {
+      "issue": "Quality reviewer says 'no blocking issues' while Reality/Architecture/Systems raise blockers",
+      "resolution": "No real conflict. Quality was scoped to test/observability/security blockers; the structural gaps (start_work, fixtures, batch types, CLI context) are blockers for the plan's correctness even though they are not quality blockers. Blocker list uses the union across reviewers with Reality/Architecture/Systems claims preserved."
+    },
+    {
+      "issue": "Blast radius severity — Architecture calls it 'Very High'; other reviewers don't quantify",
+      "resolution": "Accept Architecture's assessment. Single-user tool scope reduces production impact but does not reduce integration-correctness risk, which is what matters here."
+    }
+  ],
+  "reviewer_summaries": {
+    "reality": {
+      "status": "ISSUES_FOUND",
+      "blocking": 6,
+      "warnings": 10
+    },
+    "architecture": {
+      "status": "ISSUES_FOUND",
+      "blocking": 3,
+      "warnings": 4
+    },
+    "quality": {
+      "status": "WARNINGS_ONLY",
+      "blocking": 0,
+      "warnings": 7
+    },
+    "systems": {
+      "status": "ISSUES_FOUND",
+      "blocking": 3,
+      "warnings": 4
+    }
+  },
+  "context_notes": {
+    "user_scope": "Single-user tool; no external production blast radius. Severity calibrated to correctness and dogfooding pain, not outage risk.",
+    "branch_state": "Plan is on 2.0-project-management-extension branch since 2026-04-18. Execution has not started.",
+    "current_pain": "Session start shows v9 binary vs v8 DB failure. This is exactly what Stage 5 addresses — justifies promoting schema-mismatch fix to a pre-plan hotfix (W1).",
+    "spec_traceability_verdict": "Plan is not fully spec-traceable. Concrete NFR gaps: concurrent start_next_work, 2x2 idempotency full matrix, MCP warm-degraded per tool, CLI/MCP parity for files/scanners. Spec mandates these; plan only partially covers them."
+  }
+}

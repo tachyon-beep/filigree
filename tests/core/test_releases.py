@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import logging
+import sqlite3
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
-from filigree.core import FiligreeDB, Issue, _seed_builtin_packs
+from filigree.core import DB_FILENAME, FILIGREE_DIR_NAME, FiligreeDB, Issue, _seed_builtin_packs, write_config
 from filigree.types.planning import TreeNode
 
 
@@ -421,6 +422,36 @@ class TestProgressFromSubtree:
         result = release_db._progress_from_subtree([])
         assert result == {"total": 0, "completed": 0, "in_progress": 0, "open": 0, "pct": 0}
 
+    def test_truncated_sentinel_not_counted_as_leaf(self, release_db: FiligreeDB) -> None:
+        """Truncation sentinels must not inflate progress totals as fake open leaves.
+
+        Regression: filigree-719ec7afe3. A deeply nested chain that hits
+        ``_MAX_TREE_DEPTH`` produces a single truncated sentinel node at the
+        depth boundary. The sentinel has empty children and is not a real
+        leaf; progress math must skip it (warnings surface via
+        ``_collect_tree_warnings`` instead).
+        """
+        db = release_db
+        release = db.create_issue("R", type="release")
+        parent_id = release.id
+        last_id = None
+        for i in range(12):
+            child = db.create_issue(f"T{i}", type="task", parent_id=parent_id)
+            parent_id = child.id
+            last_id = child.id
+        # Give the deepest node a child that will be entirely hidden by truncation
+        db.create_issue("HiddenByTruncation", type="task", parent_id=last_id)
+
+        summary = db.get_releases_summary()
+        entry = next(e for e in summary if e["id"] == release.id)
+        # Every visible task on the spine has one child, so none are real leaves.
+        # The only "leaf" in the tree is the truncation sentinel, which must be
+        # skipped. Before fix: total == 1 (sentinel counted as open). After: 0.
+        assert entry["progress"]["total"] == 0
+        assert entry["progress"]["open"] == 0
+        # Truncation should still surface as a data warning, not as silent zero.
+        assert any("truncat" in w.lower() for w in entry.get("data_warnings", []))
+
 
 # ---------------------------------------------------------------------------
 # TestBuildTree
@@ -585,6 +616,64 @@ class TestSeedFutureReleaseEdgeCases:
             release_db._seed_future_release()
 
         assert any("Release pack enabled but 'release' type not registered" in r.message for r in caplog.records)
+
+    def test_corrupt_release_fields_does_not_abort_init(self, tmp_path: Path) -> None:
+        """Bug filigree-20ea5411e1: a release row with malformed JSON in ``fields``
+        used to make ``json_extract`` raise ``OperationalError: malformed JSON``,
+        aborting the entire DB ``initialize()``. The Future-singleton check must
+        be tolerant of pre-existing corruption (it's an idempotent maintenance
+        step, not a place to enforce schema integrity).
+        """
+        # Set up a v2.0 project so FiligreeDB.from_filigree_dir works.
+        filigree_dir = tmp_path / FILIGREE_DIR_NAME
+        filigree_dir.mkdir()
+        write_config(filigree_dir, {"prefix": "rel", "version": 1, "enabled_packs": ["core", "planning", "release"]})
+        db_path = filigree_dir / DB_FILENAME
+
+        # First open: normal init seeds the Future release.
+        db = FiligreeDB.from_filigree_dir(filigree_dir)
+        db.close()
+
+        # Inject a corrupt-fields release row directly via SQLite, simulating
+        # data damage or a buggy migration.
+        conn = sqlite3.connect(str(db_path))
+        try:
+            conn.execute(
+                "INSERT INTO issues (id, title, status, priority, type, assignee, "
+                "created_at, updated_at, description, notes, fields) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    "rel-corrupt",
+                    "Bad",
+                    "planning",
+                    4,
+                    "release",
+                    "",
+                    "2026-01-01T00:00:00+00:00",
+                    "2026-01-01T00:00:00+00:00",
+                    "",
+                    "",
+                    "this-is-not-json",
+                ),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        # Re-opening must not raise: _seed_future_release should skip the bad row.
+        reopened = FiligreeDB.from_filigree_dir(filigree_dir)
+        try:
+            # Future singleton should still resolve to the original good row.
+            futures = [
+                row
+                for row in reopened.conn.execute("SELECT id, fields FROM issues WHERE type = 'release'").fetchall()
+                if row[0] != "rel-corrupt"
+            ]
+            assert any(r[1] and '"Future"' in r[1] for r in futures), (
+                "Future release singleton must still exist after corrupt-row tolerance"
+            )
+        finally:
+            reopened.close()
 
     def test_seed_builtin_packs_returns_type_count(self, tmp_path: Path) -> None:
         """_seed_builtin_packs returns count of type templates seeded."""

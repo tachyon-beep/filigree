@@ -166,6 +166,25 @@ class TypeTemplate:
     suggested_children: tuple[str, ...] = ()
     suggested_labels: tuple[str, ...] = ()
 
+    def canonical_working_status(self) -> str:
+        """Return the unique wip-category status name for this type.
+
+        Used by ``start_work`` / ``start_next_work`` (Phase D6) to default
+        ``target_status`` when the type defines exactly one wip-category
+        status. Raises ``AmbiguousTransitionError`` if multiple wip statuses
+        exist (caller must specify ``target_status`` explicitly); raises
+        ``InvalidTransitionError`` if the type has no wip statuses (start-work
+        cannot pick a target at all).
+        """
+        from filigree.types.api import AmbiguousTransitionError, InvalidTransitionError
+
+        wip = [s.name for s in self.states if s.category == "wip"]
+        if len(wip) == 1:
+            return wip[0]
+        if not wip:
+            raise InvalidTransitionError(self.type, self.initial_state)
+        raise AmbiguousTransitionError(self.type, wip)
+
 
 @dataclass(frozen=True)
 class WorkflowPack:

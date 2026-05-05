@@ -46,6 +46,46 @@ def incident_db(tmp_path: Path) -> Generator[FiligreeDB, None, None]:
 
 
 # ---------------------------------------------------------------------------
+# Test helpers for TOCTOU race simulation
+# ---------------------------------------------------------------------------
+
+
+class _InterceptingConnProxy:
+    """Wraps a sqlite3.Connection and fires a callback before each execute().
+
+    Used to simulate a concurrent writer landing between a reader's
+    time-of-check and time-of-use — the callback may issue its own
+    statements through the real connection before the caller's query runs.
+    """
+
+    def __init__(self, real: Any, on_sql: Any) -> None:
+        self._real = real
+        self._on_sql = on_sql
+        self.fired = False
+
+    def execute(self, sql: str, params: Any = ()) -> Any:
+        if not self.fired:
+            effect = self._on_sql(sql)
+            if effect is not None:
+                self.fired = True
+        return self._real.execute(sql, params)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._real, name)
+
+
+def _reassign_to(conn: Any, issue_id: str, assignee: str) -> object:
+    """Simulate a concurrent reassignment via a direct UPDATE, bypassing release_claim.
+
+    Commits immediately so the "other actor's" write is durable when the
+    intercepted statement subsequently rolls back on failure.
+    """
+    conn.execute("UPDATE issues SET assignee = ? WHERE id = ?", [assignee, issue_id])
+    conn.commit()
+    return True
+
+
+# ---------------------------------------------------------------------------
 # Task 1.9: Per-Type Status Validation
 # ---------------------------------------------------------------------------
 
@@ -442,7 +482,7 @@ class TestReleaseClaim:
 
     def test_release_not_found(self, db: FiligreeDB) -> None:
         with pytest.raises(KeyError, match="not found"):
-            db.release_claim("nonexistent-xyz")
+            db.release_claim("test-nonexistent")
 
     def test_release_then_reclaim(self, db: FiligreeDB) -> None:
         issue = db.create_issue("Reclaim test")
@@ -451,6 +491,49 @@ class TestReleaseClaim:
         reclaimed = db.claim_issue(issue.id, assignee="agent-2")
         assert reclaimed.status == "open"  # status unchanged
         assert reclaimed.assignee == "agent-2"
+
+    def test_release_rejects_concurrent_reassign(self, db: FiligreeDB) -> None:
+        """TOCTOU: a reassignment landing between read and UPDATE must not be erased."""
+        issue = db.create_issue("Race test", type="task")
+        db.claim_issue(issue.id, assignee="agent-1")
+
+        # Intercept the release UPDATE and, right before it executes, simulate
+        # another actor reassigning the issue to agent-2. With the old
+        # unconditional UPDATE the clear silently wins; with compare-and-swap
+        # it must rowcount=0 and raise.
+        proxy = _InterceptingConnProxy(
+            db._conn,
+            lambda sql: _reassign_to(db._conn, issue.id, "agent-2") if "set assignee = ''" in sql.lower() else None,
+        )
+        db._conn = proxy  # type: ignore[assignment]
+        try:
+            with pytest.raises(ValueError, match="reassigned"):
+                db.release_claim(issue.id, actor="agent-1")
+        finally:
+            db._conn = proxy._real
+
+        assert proxy.fired, "race hook never fired — test is not exercising the gap"
+        after = db.get_issue(issue.id)
+        assert after.assignee == "agent-2", "newer claim must not be erased"
+
+    def test_release_detects_concurrent_release(self, db: FiligreeDB) -> None:
+        """If another actor already cleared the claim, CAS must raise instead of no-op'ing."""
+        issue = db.create_issue("Double-release test", type="task")
+        db.claim_issue(issue.id, assignee="agent-1")
+
+        proxy = _InterceptingConnProxy(
+            db._conn,
+            lambda sql: _reassign_to(db._conn, issue.id, "") if "set assignee = ''" in sql.lower() else None,
+        )
+        db._conn = proxy  # type: ignore[assignment]
+        try:
+            with pytest.raises(ValueError, match="already released"):
+                db.release_claim(issue.id, actor="agent-1")
+        finally:
+            db._conn = proxy._real
+
+        assert proxy.fired
+        assert db.get_issue(issue.id).assignee == ""
 
 
 # ---------------------------------------------------------------------------
@@ -879,3 +962,150 @@ class TestValidateIssue:
         """validate_issue on nonexistent issue raises KeyError."""
         with pytest.raises(KeyError):
             db.validate_issue("test-nonexistent")
+
+    def test_unknown_type_emits_error(self, tmp_path: Path) -> None:
+        """Bug filigree-910f1cb024: issue whose type is not in the active registry
+        must fail validation, not silently pass."""
+        d = make_db(tmp_path, packs=["core", "planning", "release"])
+        try:
+            issue = d.create_issue("Rel", type="release")
+        finally:
+            d.close()
+
+        # Disable release pack on next load — the type is now unknown.
+        d2 = make_db(tmp_path, packs=["core", "planning"])
+        try:
+            result = d2.validate_issue(issue.id)
+            assert result.valid is False
+            assert any("release" in e for e in result.errors)
+        finally:
+            d2.close()
+
+    def test_undeclared_status_emits_error(self, db: FiligreeDB) -> None:
+        """Bug filigree-910f1cb024: issue whose current status is not a declared
+        state for its type must fail validation."""
+        issue = db.create_issue("Task", type="task")
+        # Force an impossible state via raw SQL (simulates bulk import / migration
+        # from an older template).
+        db.conn.execute("UPDATE issues SET status = ? WHERE id = ?", ("not_a_real_state", issue.id))
+        db.conn.commit()
+        result = db.validate_issue(issue.id)
+        assert result.valid is False
+        assert any("not_a_real_state" in e for e in result.errors)
+
+
+class TestInferStatusCategoryFallback:
+    """Bug filigree-5c1605d349: name-only fallback must cover every built-in done state.
+
+    Exercised whenever ``_resolve_status_category`` can't find a ``(type, state)`` in
+    the active registry — e.g. pack disabled after issues in it were created.
+    """
+
+    def test_builtin_release_released_is_done(self) -> None:
+        """``release`` pack's ``released`` state must classify as done even when disabled."""
+        from filigree.core import FiligreeDB
+
+        assert FiligreeDB._infer_status_category("release", "released") == "done"
+
+    def test_builtin_risk_mitigated_is_done(self) -> None:
+        """``risk`` pack's ``mitigated`` state must classify as done even when disabled."""
+        from filigree.core import FiligreeDB
+
+        assert FiligreeDB._infer_status_category("risk", "mitigated") == "done"
+
+    def test_builtin_requirement_verified_is_done(self) -> None:
+        """``requirement`` pack's ``verified`` state must classify as done."""
+        from filigree.core import FiligreeDB
+
+        assert FiligreeDB._infer_status_category("requirement", "verified") == "done"
+
+    def test_builtin_milestone_completed_is_done(self) -> None:
+        """``milestone`` pack's ``completed`` state must classify as done."""
+        from filigree.core import FiligreeDB
+
+        assert FiligreeDB._infer_status_category("milestone", "completed") == "done"
+
+    def test_incident_resolved_is_wip_not_done(self) -> None:
+        """``resolved`` is wip for incidents — type-aware lookup must return wip,
+        even though the legacy hardcoded set treated ``resolved`` as done."""
+        from filigree.core import FiligreeDB
+
+        assert FiligreeDB._infer_status_category("incident", "resolved") == "wip"
+
+    def test_bug_fixing_is_wip(self) -> None:
+        """``bug`` pack's ``fixing`` state must classify as wip."""
+        from filigree.core import FiligreeDB
+
+        assert FiligreeDB._infer_status_category("bug", "fixing") == "wip"
+
+    def test_custom_type_falls_through_to_open(self) -> None:
+        """Truly unknown (type, state) pairs default to ``open`` — permissive."""
+        from filigree.core import FiligreeDB
+
+        assert FiligreeDB._infer_status_category("my_custom_type", "some_weird_state") == "open"
+
+    def test_disabled_pack_issue_stays_done(self, tmp_path: Path) -> None:
+        """End-to-end: release issue in ``released`` state retains done category
+        after the release pack is disabled — so close_issue/reopen_issue/stats
+        keep working."""
+        d = make_db(tmp_path, packs=["core", "planning", "release"])
+        try:
+            issue = d.create_issue("Rel", type="release")
+            # Force status directly — the full transition chain is out of scope
+            # for this regression (it requires populating required fields). What
+            # matters here is that the issue row has type=release, status=released.
+            d.conn.execute("UPDATE issues SET status = ? WHERE id = ?", ("released", issue.id))
+            d.conn.commit()
+            assert d.get_issue(issue.id).to_dict()["status_category"] == "done"
+        finally:
+            d.close()
+
+        # Disable release pack and verify fallback still yields done
+        d2 = make_db(tmp_path, packs=["core", "planning"])
+        try:
+            fetched = d2.get_issue(issue.id)
+            assert fetched.to_dict()["status_category"] == "done"
+        finally:
+            d2.close()
+
+    def test_disabled_pack_blocker_not_blocking_in_sql(self, tmp_path: Path) -> None:
+        """Bug filigree-c9af813900: SQL category predicate must agree with
+        ``_resolve_status_category`` for disabled-pack rows. Otherwise a
+        release/released blocker is hydrated as ``status_category='done'``
+        but still appears as blocking in readiness SQL.
+        """
+        d = make_db(tmp_path, packs=["core", "planning", "release"])
+        try:
+            release = d.create_issue("Rel", type="release")
+            d.conn.execute("UPDATE issues SET status = ? WHERE id = ?", ("released", release.id))
+            d.conn.commit()
+            task = d.create_issue("Dependent", type="task")
+            d.add_dependency(task.id, release.id)
+        finally:
+            d.close()
+
+        d2 = make_db(tmp_path, packs=["core", "planning"])
+        try:
+            sql, params = d2._category_predicate_sql("done", type_col="type", status_col="status", include_archived=True)
+            row = d2.conn.execute(
+                f"SELECT id FROM issues WHERE id = ? AND ({sql})",  # noqa: S608 — sql/params come from _category_predicate_sql
+                [release.id, *params],
+            ).fetchone()
+            assert row is not None, "disabled-pack done state must match SQL category predicate"
+            assert d2.get_issue(task.id).blocked_by == []
+        finally:
+            d2.close()
+
+    def test_active_type_undeclared_status_is_open(self, tmp_path: Path) -> None:
+        """Bug filigree-c9af813900: when the type is active but the state is
+        undeclared, the unambiguous-name fallback must NOT fire — otherwise a
+        ``task`` with corrupt status ``released`` is silently classified as done.
+        """
+        d = make_db(tmp_path, packs=["core", "planning", "release"])
+        try:
+            assert d._resolve_status_category("task", "released") == "open"
+            assert d._resolve_status_category("task", "verified") == "open"
+            assert d._resolve_status_category("release", "released") == "done"
+            assert d._resolve_status_category("totally_unknown_type", "released") == "done"
+        finally:
+            d.close()

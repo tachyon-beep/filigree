@@ -67,6 +67,90 @@ class ScansMixin(DBMixinProtocol):
         self.conn.commit()
         return self.get_scan_run(scan_run_id)
 
+    def reserve_scan_run(
+        self,
+        *,
+        scan_run_id: str,
+        scanner_name: str,
+        scan_source: str,
+        file_path: str,
+        file_id: str,
+        api_url: str = "",
+        log_path: str = "",
+    ) -> tuple[ScanRunDict | None, ScanRunDict | None]:
+        """Atomically check cooldown and insert a pending scan_run row.
+
+        Returns ``(created_run, None)`` on success, or ``(None, blocking_run)``
+        if a cooldown-active run already exists for ``(scanner_name, file_path)``.
+
+        Uses ``BEGIN IMMEDIATE`` so the cooldown read + insert is serialized
+        across concurrent callers — without that, two concurrent
+        ``trigger_scan`` invocations can both pass the cooldown check and
+        both spawn a scanner for the same file.
+        """
+        # If another call left an open implicit transaction, roll it back
+        # first so BEGIN IMMEDIATE can take the writer lock cleanly. Use
+        # rollback (not commit): committing here would persist whatever
+        # pending writes that earlier caller left behind, which is not our
+        # work to keep.
+        if self.conn.in_transaction:
+            self.conn.rollback()
+        self.conn.execute("BEGIN IMMEDIATE")
+        try:
+            blocking = self.check_scan_cooldown(scanner_name, file_path)
+            if blocking is not None:
+                self.conn.rollback()
+                return None, blocking
+            existing = self.conn.execute("SELECT id FROM scan_runs WHERE id = ?", (scan_run_id,)).fetchone()
+            if existing:
+                self.conn.rollback()
+                msg = f"Scan run {scan_run_id!r} already exists"
+                raise ValueError(msg)
+            now = _now_iso()
+            self.conn.execute(
+                "INSERT INTO scan_runs "
+                "(id, scanner_name, scan_source, status, file_paths, file_ids, "
+                "pid, api_url, log_path, started_at, updated_at) "
+                "VALUES (?, ?, ?, 'pending', ?, ?, NULL, ?, ?, ?, ?)",
+                (
+                    scan_run_id,
+                    scanner_name,
+                    scan_source,
+                    json.dumps([file_path]),
+                    json.dumps([file_id]),
+                    api_url,
+                    log_path,
+                    now,
+                    now,
+                ),
+            )
+            self.conn.commit()
+        except Exception:
+            if self.conn.in_transaction:
+                self.conn.rollback()
+            raise
+        return self.get_scan_run(scan_run_id), None
+
+    def set_scan_run_spawn_info(
+        self,
+        scan_run_id: str,
+        *,
+        pid: int,
+        log_path: str,
+    ) -> None:
+        """Backfill ``pid`` and ``log_path`` onto a reserved (pending) run.
+
+        Used by the trigger handlers after they spawn the scanner process —
+        the row exists from :meth:`reserve_scan_run`, this fills in the
+        process-specific fields.
+        """
+        now = _now_iso()
+        self.conn.execute(
+            "UPDATE scan_runs SET pid = ?, log_path = ?, updated_at = ? WHERE id = ?",
+            (pid, log_path, now, scan_run_id),
+        )
+        self.conn.commit()
+
     def get_scan_run(self, scan_run_id: str) -> ScanRunDict:
         row = self.conn.execute("SELECT * FROM scan_runs WHERE id = ?", (scan_run_id,)).fetchone()
         if row is None:
@@ -111,29 +195,60 @@ class ScansMixin(DBMixinProtocol):
         if error_message is not None:
             updates.append("error_message = ?")
             params.append(error_message)
-        params.append(scan_run_id)
-        self.conn.execute(
-            f"UPDATE scan_runs SET {', '.join(updates)} WHERE id = ?",
+        # Compare-and-swap on the previously-observed status. Without this
+        # guard, two writers that both see `running` (e.g. dead-PID auto-fail
+        # in get_scan_status and result-ingestion completion in db_files) can
+        # both pass python validation and the second commit would silently
+        # overwrite the first writer's terminal state.
+        params.extend([scan_run_id, current_status])
+        cursor = self.conn.execute(
+            f"UPDATE scan_runs SET {', '.join(updates)} WHERE id = ? AND status = ?",
             params,
         )
+        if cursor.rowcount == 0:
+            self.conn.rollback()
+            actual = self.get_scan_run(scan_run_id)
+            logger.warning(
+                "Stale scan_run transition for %s: expected %r, found %r",
+                scan_run_id,
+                current_status,
+                actual["status"],
+            )
+            raise ValueError(
+                f"Stale transition for {scan_run_id!r}: expected status {current_status!r}, "
+                f"found {actual['status']!r} (concurrent writer changed the row)"
+            )
         self.conn.commit()
         return self.get_scan_run(scan_run_id)
 
     def check_scan_cooldown(self, scanner_name: str, file_path: str) -> ScanRunDict | None:
-        """Check if a recent non-failed scan blocks triggering.
+        """Check if a prior scan blocks triggering.
 
         Returns the blocking scan run dict, or ``None`` if trigger is allowed.
-        A scan blocks if it was updated within the last ``SCAN_COOLDOWN_SECONDS``
-        and has status 'pending', 'running', or 'completed'.
+        Two distinct invariants apply here:
+
+        - ``pending`` and ``running`` rows are a singleton lock on the active
+          run for ``(scanner_name, file_path)``. They block regardless of age:
+          ``updated_at`` is only refreshed on status transitions, so a
+          long-running scan would otherwise fall outside the cutoff and a
+          duplicate trigger could spawn a parallel process.
+        - ``completed`` rows act as a debounce window — they block for
+          ``SCAN_COOLDOWN_SECONDS`` after completion, then trigger is allowed.
         """
         row = self.conn.execute(
             "SELECT sr.* FROM scan_runs sr "
             "WHERE sr.scanner_name = ? "
+            "AND json_valid(sr.file_paths) "
             "AND EXISTS ("
             "  SELECT 1 FROM json_each(sr.file_paths) je WHERE je.value = ?"
             ") "
-            "AND sr.status IN ('pending', 'running', 'completed') "
-            "AND sr.updated_at >= strftime('%Y-%m-%dT%H:%M:%S+00:00', 'now', ?) "
+            "AND ("
+            "  sr.status IN ('pending', 'running') "
+            "  OR ("
+            "    sr.status = 'completed' "
+            "    AND sr.updated_at >= strftime('%Y-%m-%dT%H:%M:%S+00:00', 'now', ?) "
+            "  )"
+            ") "
             "ORDER BY sr.updated_at DESC LIMIT 1",
             (scanner_name, file_path, f"-{SCAN_COOLDOWN_SECONDS} seconds"),
         ).fetchone()
@@ -182,9 +297,15 @@ class ScansMixin(DBMixinProtocol):
                         )
         log_tail: list[str] = []
         if run["log_path"]:
-            # Log paths are stored relative to the project root; resolve against
-            # db_path's grandparent (.filigree/filigree.db -> project root).
-            log_path = self.db_path.parent.parent / run["log_path"]
+            # Log paths are stored relative to the project root. Prefer the
+            # explicit ``project_root`` set by from_filigree_dir/from_conf.
+            # Fall back to ``db_path.parent.parent`` only for legacy callers
+            # that constructed ``FiligreeDB(path)`` directly without declaring
+            # a root (the legacy ``.filigree/filigree.db`` layout). Custom
+            # ``.filigree.conf`` DB locations would otherwise resolve logs
+            # against the wrong directory.
+            project_root = self.project_root if self.project_root is not None else self.db_path.parent.parent
+            log_path = project_root / run["log_path"]
             if log_path.is_file():
                 try:
                     lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()

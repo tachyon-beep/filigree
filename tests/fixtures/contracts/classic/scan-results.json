@@ -1,0 +1,109 @@
+{
+  "_meta": {
+    "contract": "filigree-classic",
+    "endpoint": "POST /api/v1/scan-results",
+    "stability": "Frozen for the classic-generation lifetime per ADR-002. Retirement requires a new ADR + 12-month deprecation.",
+    "authority": [
+      "docs/architecture/decisions/ADR-002-api-generations-and-federation-posture.md",
+      "docs/plans/2026-04-24-adr017-audit.md",
+      "/home/john/clarion/docs/clarion/adr/ADR-017-severity-and-dedup.md"
+    ],
+    "verification": "tests/util/test_cross_surface_parity.py::TestScanResultsEnvelope",
+    "pinning_discipline": "shape reference; see docs/federation/contracts.md",
+    "updated": "2026-04-24"
+  },
+  "examples": [
+    {
+      "name": "success_empty_findings_clean_scan",
+      "note": "Canonical clean-scan: no findings submitted, all counts zero, empty new_finding_ids. Pins the key set of ScanIngestResult (src/filigree/types/files.py).",
+      "request": {
+        "method": "POST",
+        "path": "/api/v1/scan-results",
+        "headers": {"Content-Type": "application/json"},
+        "body": {
+          "scan_source": "example-scanner",
+          "findings": []
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {"Content-Type": "application/json"},
+        "body": {
+          "files_created": 0,
+          "files_updated": 0,
+          "findings_created": 0,
+          "findings_updated": 0,
+          "new_finding_ids": [],
+          "observations_created": 0,
+          "observations_failed": 0,
+          "warnings": []
+        }
+      }
+    },
+    {
+      "name": "success_one_finding_with_clarion_metadata",
+      "note": "Representative federation-emitter case: one finding with severity, line_start, and metadata.clarion.* extension slot. Demonstrates new_finding_ids returns one server-generated id (sf_... pattern); exact id is a shape placeholder.",
+      "request": {
+        "method": "POST",
+        "path": "/api/v1/scan-results",
+        "headers": {"Content-Type": "application/json"},
+        "body": {
+          "scan_source": "clarion",
+          "scan_run_id": "clarion-20260424-a1b2c3",
+          "mark_unseen": true,
+          "findings": [
+            {
+              "path": "src/example/module.py",
+              "rule_id": "CLA-PY-UNSAFE-EVAL",
+              "severity": "high",
+              "message": "Use of eval() on untrusted input",
+              "line_start": 42,
+              "line_end": 42,
+              "suggestion": "Replace eval() with ast.literal_eval() or a parser for the expected grammar.",
+              "metadata": {
+                "clarion": {
+                  "internal_severity": "ERROR",
+                  "entity_id": "clarion:py:example.module.parse_config"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {"Content-Type": "application/json"},
+        "body": {
+          "files_created": 1,
+          "files_updated": 0,
+          "findings_created": 1,
+          "findings_updated": 0,
+          "new_finding_ids": ["sf_example_generated_id"],
+          "observations_created": 0,
+          "observations_failed": 0,
+          "warnings": []
+        }
+      }
+    },
+    {
+      "name": "error_missing_findings",
+      "note": "Validation error envelope. Flat {error, code} shape; ErrorCode enum value VALIDATION. Pinned by TestScanResultsEnvelope::test_missing_findings_validation.",
+      "request": {
+        "method": "POST",
+        "path": "/api/v1/scan-results",
+        "headers": {"Content-Type": "application/json"},
+        "body": {
+          "scan_source": "example-scanner"
+        }
+      },
+      "response": {
+        "status": 400,
+        "headers": {"Content-Type": "application/json"},
+        "body": {
+          "error": "findings is required (use [] for a clean scan)",
+          "code": "VALIDATION"
+        }
+      }
+    }
+  ]
+}

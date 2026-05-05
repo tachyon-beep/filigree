@@ -238,6 +238,34 @@ class TestPidLifecycle:
         assert result is None
         assert any("missing 'pid' key" in r.message for r in caplog.records)
 
+    def test_read_pid_rejects_float_pid(self, tmp_path: Path) -> None:
+        """filigree-626c12d368: float pid must be rejected (no silent truncation)."""
+        pid_file = tmp_path / "ephemeral.pid"
+        pid_file.write_text('{"pid": 12.9, "cmd": "filigree"}')
+        assert read_pid_file(pid_file) is None
+
+    def test_read_pid_rejects_non_finite_pid(self, tmp_path: Path) -> None:
+        """filigree-626c12d368: non-finite pid (1e999 → inf) must not raise OverflowError."""
+        pid_file = tmp_path / "ephemeral.pid"
+        pid_file.write_text('{"pid": 1e999, "cmd": "filigree"}')
+        # Must return None — and must not propagate OverflowError.
+        assert read_pid_file(pid_file) is None
+
+    def test_read_pid_rejects_bool_pid(self, tmp_path: Path) -> None:
+        """filigree-626c12d368: bool is an int subclass; it must be rejected, not coerced to 1."""
+        pid_file = tmp_path / "ephemeral.pid"
+        pid_file.write_text('{"pid": true, "cmd": "filigree"}')
+        assert read_pid_file(pid_file) is None
+
+    def test_read_pid_rejects_float_port(self, tmp_path: Path) -> None:
+        """filigree-626c12d368: float port must be ignored (info returned without 'port')."""
+        pid_file = tmp_path / "ephemeral.pid"
+        pid_file.write_text('{"pid": 1234, "cmd": "filigree", "port": 8401.9}')
+        info = read_pid_file(pid_file)
+        assert info is not None
+        assert info["pid"] == 1234
+        assert "port" not in info, "float port must not be silently truncated"
+
     def test_is_pid_alive_for_self(self) -> None:
         assert is_pid_alive(os.getpid()) is True
 
@@ -339,6 +367,54 @@ class TestPidLifecycle:
         # Should return False because cmd="unknown" is not trustworthy
         assert verify_pid_ownership(pid_file, expected_cmd="filigree") is False
 
+    def test_verify_pid_ownership_rejects_cross_project_port_mismatch(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """filigree-563d5454e9: PID record stores the project's port; verify must reject
+        a live filigree dashboard running on a different port (different project, possibly
+        after PID recycling)."""
+        pid_file = tmp_path / "ephemeral.pid"
+        # This project's dashboard is recorded at port 8401.
+        write_pid_file(pid_file, os.getpid(), cmd="filigree dashboard", port=8401)
+        # The live process with that PID is actually another filigree project's
+        # dashboard on port 8923 (PID recycling across projects on same host).
+        monkeypatch.setattr(
+            "filigree.ephemeral._read_os_command_line",
+            lambda _pid: ["/usr/bin/filigree", "dashboard", "--no-browser", "--port", "8923"],
+        )
+        assert verify_pid_ownership(pid_file, expected_cmd="filigree", required_args=("dashboard",)) is False, (
+            "must reject when recorded port does not appear in the live process argv"
+        )
+
+    def test_verify_pid_ownership_accepts_matching_port(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """filigree-563d5454e9: verify accepts when recorded port matches argv."""
+        pid_file = tmp_path / "ephemeral.pid"
+        write_pid_file(pid_file, os.getpid(), cmd="filigree dashboard", port=8401)
+        monkeypatch.setattr(
+            "filigree.ephemeral._read_os_command_line",
+            lambda _pid: ["/usr/bin/filigree", "dashboard", "--no-browser", "--port", "8401"],
+        )
+        assert verify_pid_ownership(pid_file, expected_cmd="filigree", required_args=("dashboard",)) is True
+
+    def test_verify_pid_ownership_fallback_accepts_record_with_port(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """filigree-403dd029c3: when OS argv is unavailable, the PID-file fallback must
+        accept a record where ``cmd`` lacks --port and ``port`` is recorded as
+        a separate metadata field (the actual shape callers write)."""
+        pid_file = tmp_path / "ephemeral.pid"
+        write_pid_file(pid_file, os.getpid(), cmd="filigree dashboard", port=8401)
+        monkeypatch.setattr("filigree.ephemeral._read_os_command_line", lambda _pid: None)
+        # The fallback must trust the recorded port as metadata; cmd does not
+        # (and never will) include --port.
+        assert verify_pid_ownership(pid_file, expected_cmd="filigree", required_args=("dashboard",)) is True
+
+    def test_verify_pid_ownership_without_port_is_unchanged(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """filigree-563d5454e9: PID records without a port field behave as before."""
+        pid_file = tmp_path / "ephemeral.pid"
+        write_pid_file(pid_file, os.getpid(), cmd="filigree dashboard")
+        monkeypatch.setattr(
+            "filigree.ephemeral._read_os_command_line",
+            lambda _pid: ["/usr/bin/filigree", "dashboard", "--no-browser", "--port", "8923"],
+        )
+        assert verify_pid_ownership(pid_file, expected_cmd="filigree", required_args=("dashboard",)) is True
+
     def test_verify_pid_ownership_uses_cmdline_before_alive_check(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """TOCTOU fix: cmdline should be checked first, not is_pid_alive.
 
@@ -382,6 +458,102 @@ class TestPidLifecycle:
         )
         cleanup_stale_pid(pid_file)
         assert pid_file.exists()
+
+    def test_cleanup_stale_pid_does_not_unlink_fresh_pid_written_during_check(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """filigree-73e909e6cc: if a concurrent session writes a fresh PID between
+        cleanup's initial read and the unlink, the fresh file must survive."""
+        from filigree import ephemeral as _eph
+
+        pid_file = tmp_path / "ephemeral.pid"
+        # Initially, a stale PID file that looks dead.
+        write_pid_file(pid_file, 99999999, cmd="filigree dashboard", port=8401)
+
+        fresh_payload = '{"pid": ' + str(os.getpid()) + ', "cmd": "filigree dashboard", "port": 8401}'
+
+        # When cleanup calls verify_pid_ownership, simulate another session
+        # taking the lock, writing a fresh PID file, then releasing. The
+        # concurrent writer's payload must remain on disk afterwards.
+        orig_verify = _eph.verify_pid_ownership
+
+        def _verify_with_concurrent_write(*args: object, **kwargs: object) -> bool:
+            result = orig_verify(*args, **kwargs)
+            # Concurrent writer
+            pid_file.write_text(fresh_payload)
+            return result
+
+        monkeypatch.setattr("filigree.ephemeral.verify_pid_ownership", _verify_with_concurrent_write)
+
+        cleanup_stale_pid(pid_file)
+
+        assert pid_file.exists(), "fresh PID file was unlinked by racing cleanup"
+        assert pid_file.read_text() == fresh_payload, "fresh PID file content was clobbered"
+
+    def test_cleanup_stale_pid_does_not_clobber_newest_writer(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """filigree-5aa3dc590a: the quarantine-restore branch must not clobber a newer
+        primary PID file written by another writer between our quarantine and
+        restore. POSIX ``os.rename`` overwrites; we use ``os.link`` so the
+        restore atomically fails when pid_file already exists."""
+        from filigree import ephemeral as _eph
+
+        pid_file = tmp_path / "ephemeral.pid"
+        write_pid_file(pid_file, 99999999, cmd="filigree dashboard", port=8401)
+
+        fresh_a = '{"pid": ' + str(os.getpid()) + ', "cmd": "filigree dashboard", "port": 8401, "startup_ts": 1.0}'
+        fresh_b = '{"pid": ' + str(os.getpid()) + ', "cmd": "filigree dashboard", "port": 8401, "startup_ts": 2.0}'
+
+        # Make verify trust our PID as a filigree dashboard.
+        monkeypatch.setattr(
+            "filigree.ephemeral._read_os_command_line",
+            lambda pid: ["/usr/bin/filigree", "dashboard", "--port", "8401"] if pid == os.getpid() else None,
+        )
+
+        orig_verify = _eph.verify_pid_ownership
+        calls = {"n": 0}
+
+        def patched_verify(path: Path, **kwargs: object) -> bool:
+            result = orig_verify(path, **kwargs)
+            calls["n"] += 1
+            if calls["n"] == 1:
+                # Writer A races between our first verify and the rename.
+                pid_file.write_text(fresh_a)
+            elif calls["n"] == 2:
+                # Writer B fills the slot after our quarantine, before restore.
+                pid_file.write_text(fresh_b)
+            return result
+
+        monkeypatch.setattr("filigree.ephemeral.verify_pid_ownership", patched_verify)
+
+        cleanup_stale_pid(pid_file)
+
+        # Writer B is the most recent legitimate write; it must survive.
+        assert pid_file.read_text() == fresh_b, "quarantine restore clobbered the newest writer"
+
+    def test_cleanup_stale_pid_uses_unique_quarantine_name(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """filigree-5aa3dc590a: the quarantine filename must be unique per cleaner so
+        concurrent cleaners cannot collide on the same path."""
+        pid_file = tmp_path / "ephemeral.pid"
+        write_pid_file(pid_file, 99999999, cmd="filigree dashboard")
+
+        # Make rename observable so we can inspect the quarantine path.
+        captured: dict[str, Path] = {}
+        orig_rename = Path.rename
+
+        def spy_rename(self: Path, target: str | Path) -> Path:
+            if self == pid_file:
+                captured["quarantine"] = Path(target)
+            return orig_rename(self, target)
+
+        monkeypatch.setattr(Path, "rename", spy_rename)
+        cleanup_stale_pid(pid_file)
+
+        q = captured.get("quarantine")
+        assert q is not None
+        # Quarantine name should not be the legacy fixed ".removing" suffix.
+        assert q.name != "ephemeral.pid.removing", f"quarantine name is shared (collision-prone): {q.name}"
+        # It should still mark the file as being removed.
+        assert ".removing" in q.name
 
     def test_cleanup_stale_pid_removes_recycled_pid(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """TOCTOU fix: cleanup should remove PID file when PID is alive but not our process."""

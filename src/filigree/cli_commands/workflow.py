@@ -1,14 +1,24 @@
-"""CLI commands for workflow: templates, types, transitions, packs, validate, guide, explain-state."""
+"""CLI commands for workflow: templates, types, transitions, packs, validate, guide, explain-status."""
 
 from __future__ import annotations
 
 import json as json_mod
 import sys
-from typing import Any
+from typing import Any, NoReturn
 
 import click
 
-from filigree.cli_common import get_db
+from filigree.cli_common import get_db, refresh_summary
+from filigree.types.api import ErrorCode
+
+
+def _emit_error(message: str, code: str, *, as_json: bool) -> NoReturn:
+    """Emit a 2.0 flat error envelope on --json, plain stderr otherwise. Exits 1."""
+    if as_json:
+        click.echo(json_mod.dumps({"error": message, "code": code}))
+    else:
+        click.echo(message, err=True)
+    sys.exit(1)
 
 
 @click.group(invoke_without_command=True)
@@ -28,7 +38,8 @@ def templates(ctx: click.Context, issue_type: str | None) -> None:
             click.echo(f"  {tpl['description']}")
             click.echo("\n  Fields:")
             for f in tpl["fields_schema"]:
-                req = " (required)" if f.get("required") else ""
+                required_at = f.get("required_at") or []
+                req = f" (required at: {', '.join(required_at)})" if required_at else ""
                 click.echo(f"    {f['name']}: {f['type']}{req} — {f['description']}")
         else:
             for item in db.list_templates():
@@ -36,34 +47,78 @@ def templates(ctx: click.Context, issue_type: str | None) -> None:
 
 
 @templates.command("reload")
-def templates_reload() -> None:
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+def templates_reload(as_json: bool) -> None:
     """Reload workflow templates from disk."""
     with get_db() as db:
-        db.reload_templates()
-        click.echo("Templates reloaded")
+        try:
+            db.reload_templates()
+            # Force the new registry to materialise before regenerating
+            # context.md; refresh_summary reads template-derived sections.
+            db.templates.list_types()
+        except ValueError as exc:
+            _emit_error(str(exc), ErrorCode.VALIDATION, as_json=as_json)
+        refresh_summary(db)
+        if as_json:
+            click.echo(json_mod.dumps({"status": "ok"}))
+        else:
+            click.echo("Templates reloaded")
 
 
-@click.command("workflow-states")
+@click.command("get-template")
+@click.argument("type_name")
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON")
-def workflow_states(as_json: bool) -> None:
-    """Show workflow states by category from enabled templates."""
+def get_template_cmd(type_name: str, as_json: bool) -> None:
+    """Get the template (states, transitions, fields) for an issue type.
+
+    Verb-noun alias for ``templates --type=<type>`` mirroring the MCP
+    ``get_template`` tool.
+    """
+    with get_db() as db:
+        tpl = db.get_template(type_name)
+        if tpl is None:
+            _emit_error(f"Unknown template: {type_name}", ErrorCode.NOT_FOUND, as_json=as_json)
+        if as_json:
+            click.echo(json_mod.dumps(dict(tpl), indent=2))
+            return
+        click.echo(f"{tpl['display_name']} ({tpl['type']})")
+        click.echo(f"  {tpl['description']}")
+        click.echo("\n  Fields:")
+        for f in tpl["fields_schema"]:
+            required_at = f.get("required_at") or []
+            req = f" (required at: {', '.join(required_at)})" if required_at else ""
+            click.echo(f"    {f['name']}: {f['type']}{req} — {f['description']}")
+
+
+def _workflow_statuses_impl(as_json: bool) -> None:
     with get_db() as db:
         data = {}
         for category in ("open", "wip", "done"):
             data[category] = list(db._get_states_for_category(category))
         if as_json:
-            click.echo(json_mod.dumps(data, indent=2))
+            click.echo(json_mod.dumps({"statuses": data}, indent=2))
             return
-        for category, states in data.items():
-            click.echo(f"{category}: {', '.join(states) if states else '(none)'}")
+        for category, statuses in data.items():
+            click.echo(f"{category}: {', '.join(statuses) if statuses else '(none)'}")
 
 
-@click.command("types")
+@click.command("workflow-statuses")
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON")
-def types_cmd(as_json: bool) -> None:
-    """List all registered issue types with pack info."""
+def workflow_statuses(as_json: bool) -> None:
+    """Show workflow statuses by category from enabled templates."""
+    _workflow_statuses_impl(as_json)
+
+
+@click.command("get-workflow-statuses")
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+def get_workflow_statuses(as_json: bool) -> None:
+    """Show workflow statuses by category from enabled templates. Alias for `workflow-statuses`."""
+    _workflow_statuses_impl(as_json)
+
+
+def _types_impl(as_json: bool) -> None:
     with get_db() as db:
-        types_list = []
+        types_list: list[dict[str, Any]] = []
         for tpl in db.templates.list_types():
             types_list.append(
                 {
@@ -71,30 +126,40 @@ def types_cmd(as_json: bool) -> None:
                     "display_name": tpl.display_name,
                     "description": tpl.description,
                     "pack": tpl.pack,
-                    "states": [s.name for s in tpl.states],
+                    "initial_state": tpl.initial_state,
+                    "states": [{"name": s.name, "category": s.category} for s in tpl.states],
                 }
             )
         types_list.sort(key=lambda t: str(t["type"]))
 
         if as_json:
-            click.echo(json_mod.dumps(types_list, indent=2))
+            click.echo(json_mod.dumps({"items": types_list, "has_more": False}, indent=2))
             return
 
         for t in types_list:
-            states = " → ".join(t["states"])
+            states = " → ".join(s["name"] for s in t["states"])
             click.echo(f"  {t['type']:<15} [{t['pack']}] {states}")
 
 
-@click.command("type-info")
-@click.argument("type_name")
+@click.command("types")
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON")
-def type_info(type_name: str, as_json: bool) -> None:
-    """Show full workflow definition for an issue type."""
+def types_cmd(as_json: bool) -> None:
+    """List all registered issue types with pack info."""
+    _types_impl(as_json)
+
+
+@click.command("list-types")
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+def list_types_cmd(as_json: bool) -> None:
+    """List all registered issue types with pack info. Alias for `types`."""
+    _types_impl(as_json)
+
+
+def _type_info_impl(type_name: str, as_json: bool) -> None:
     with get_db() as db:
         tpl = db.templates.get_type(type_name)
         if tpl is None:
-            click.echo(f"Unknown type: {type_name}", err=True)
-            sys.exit(1)
+            _emit_error(f"Unknown type: {type_name}", ErrorCode.NOT_FOUND, as_json=as_json)
 
         if as_json:
             data = {
@@ -113,16 +178,7 @@ def type_info(type_name: str, as_json: bool) -> None:
                     }
                     for t in tpl.transitions
                 ],
-                "fields_schema": [
-                    {
-                        "name": f.name,
-                        "type": f.type,
-                        "description": f.description,
-                        **({"pattern": f.pattern} if f.pattern else {}),
-                        **({"unique": f.unique} if f.unique else {}),
-                    }
-                    for f in tpl.fields_schema
-                ],
+                "fields_schema": [db._field_schema_to_info(f) for f in tpl.fields_schema],
             }
             click.echo(json_mod.dumps(data, indent=2))
             return
@@ -151,17 +207,28 @@ def type_info(type_name: str, as_json: bool) -> None:
                 click.echo(f"    {f.name}: {f.type} — {f.description}{suffix}")
 
 
-@click.command("transitions")
-@click.argument("issue_id")
+@click.command("type-info")
+@click.argument("type_name")
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON")
-def transitions_cmd(issue_id: str, as_json: bool) -> None:
-    """Show valid next states for an issue."""
+def type_info(type_name: str, as_json: bool) -> None:
+    """Show full workflow definition for an issue type."""
+    _type_info_impl(type_name, as_json)
+
+
+@click.command("get-type-info")
+@click.argument("type_name")
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+def get_type_info(type_name: str, as_json: bool) -> None:
+    """Show full workflow definition for an issue type. Alias for `type-info`."""
+    _type_info_impl(type_name, as_json)
+
+
+def _transitions_impl(issue_id: str, as_json: bool) -> None:
     with get_db() as db:
         try:
             transitions = db.get_valid_transitions(issue_id)
         except KeyError:
-            click.echo(f"Not found: {issue_id}", err=True)
-            sys.exit(1)
+            _emit_error(f"Not found: {issue_id}", ErrorCode.NOT_FOUND, as_json=as_json)
 
         if as_json:
             click.echo(
@@ -194,26 +261,43 @@ def transitions_cmd(issue_id: str, as_json: bool) -> None:
             click.echo(f"  → {t.to:<20} [{t.category}] {t.enforcement}{missing}{ready_mark}")
 
 
-@click.command("packs")
+@click.command("transitions")
+@click.argument("issue_id")
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON")
-def packs_cmd(as_json: bool) -> None:
-    """List enabled workflow packs."""
+def transitions_cmd(issue_id: str, as_json: bool) -> None:
+    """Show valid next states for an issue."""
+    _transitions_impl(issue_id, as_json)
+
+
+@click.command("get-valid-transitions")
+@click.argument("issue_id")
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+def get_valid_transitions(issue_id: str, as_json: bool) -> None:
+    """Show valid next states for an issue. Alias for `transitions`."""
+    _transitions_impl(issue_id, as_json)
+
+
+def _packs_impl(as_json: bool) -> None:
     with get_db() as db:
         packs = db.templates.list_packs()
 
         if as_json:
             click.echo(
                 json_mod.dumps(
-                    [
-                        {
-                            "pack": p.pack,
-                            "version": p.version,
-                            "display_name": p.display_name,
-                            "description": p.description,
-                            "types": sorted(p.types.keys()),
-                        }
-                        for p in sorted(packs, key=lambda p: p.pack)
-                    ],
+                    {
+                        "items": [
+                            {
+                                "pack": p.pack,
+                                "version": p.version,
+                                "display_name": p.display_name,
+                                "description": p.description,
+                                "types": sorted(p.types.keys()),
+                                "requires_packs": list(p.requires_packs),
+                            }
+                            for p in sorted(packs, key=lambda p: p.pack)
+                        ],
+                        "has_more": False,
+                    },
                     indent=2,
                 )
             )
@@ -224,17 +308,26 @@ def packs_cmd(as_json: bool) -> None:
             click.echo(f"  {p.pack:<15} v{p.version}  {type_names}")
 
 
-@click.command("validate")
-@click.argument("issue_id")
+@click.command("packs")
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON")
-def validate_cmd(issue_id: str, as_json: bool) -> None:
-    """Validate an issue against its type template."""
+def packs_cmd(as_json: bool) -> None:
+    """List enabled workflow packs."""
+    _packs_impl(as_json)
+
+
+@click.command("list-packs")
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+def list_packs_cmd(as_json: bool) -> None:
+    """List enabled workflow packs. Alias for `packs`."""
+    _packs_impl(as_json)
+
+
+def _validate_impl(issue_id: str, as_json: bool) -> None:
     with get_db() as db:
         try:
             result = db.validate_issue(issue_id)
         except KeyError:
-            click.echo(f"Not found: {issue_id}", err=True)
-            sys.exit(1)
+            _emit_error(f"Not found: {issue_id}", ErrorCode.NOT_FOUND, as_json=as_json)
 
         if as_json:
             click.echo(
@@ -261,22 +354,31 @@ def validate_cmd(issue_id: str, as_json: bool) -> None:
                 click.echo(f"  X {e}")
 
 
-@click.command("guide")
-@click.argument("pack_name")
+@click.command("validate")
+@click.argument("issue_id")
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON")
-def guide_cmd(pack_name: str, as_json: bool) -> None:
-    """Display workflow guide for a pack."""
+def validate_cmd(issue_id: str, as_json: bool) -> None:
+    """Validate an issue against its type template."""
+    _validate_impl(issue_id, as_json)
+
+
+@click.command("validate-issue")
+@click.argument("issue_id")
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+def validate_issue_cmd(issue_id: str, as_json: bool) -> None:
+    """Validate an issue against its type template. Alias for `validate`."""
+    _validate_impl(issue_id, as_json)
+
+
+def _guide_impl(pack_name: str, as_json: bool) -> None:
     with get_db() as db:
         pack = db.templates.get_pack(pack_name)
         if pack is None:
-            if as_json:
-                click.echo(json_mod.dumps({"error": f"Unknown pack: {pack_name}"}))
-            else:
-                click.echo(f"Unknown pack: {pack_name}", err=True)
-            sys.exit(1)
+            _emit_error(f"Unknown pack: {pack_name}", ErrorCode.NOT_FOUND, as_json=as_json)
 
         if as_json:
-            click.echo(json_mod.dumps({"pack": pack_name, "guide": pack.guide}, indent=2, default=str))
+            guide_obj = None if pack.guide is None else dict(pack.guide)
+            click.echo(json_mod.dumps({"pack": pack.pack, "guide": guide_obj}, indent=2))
             return
 
         if pack.guide is None:
@@ -301,41 +403,59 @@ def guide_cmd(pack_name: str, as_json: bool) -> None:
                 click.echo(f"  - {mistake}")
 
 
-@click.command("explain-state")
-@click.argument("type_name")
-@click.argument("state_name")
+@click.command("guide")
+@click.argument("pack_name")
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON")
-def explain_state(type_name: str, state_name: str, as_json: bool) -> None:
-    """Explain a state's transitions and required fields."""
+def guide_cmd(pack_name: str, as_json: bool) -> None:
+    """Display workflow guide for a pack."""
+    _guide_impl(pack_name, as_json)
+
+
+@click.command("get-workflow-guide")
+@click.argument("pack_name")
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+def get_workflow_guide(pack_name: str, as_json: bool) -> None:
+    """Display workflow guide for a pack. Alias for `guide`."""
+    _guide_impl(pack_name, as_json)
+
+
+@click.command("explain-status")
+@click.argument("type_name")
+@click.argument("status_name")
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+def explain_status(type_name: str, status_name: str, as_json: bool) -> None:
+    """Explain a status's transitions and required fields."""
     with get_db() as db:
         tpl = db.templates.get_type(type_name)
         if tpl is None:
-            click.echo(f"Unknown type: {type_name}", err=True)
-            sys.exit(1)
+            _emit_error(f"Unknown type: {type_name}", ErrorCode.NOT_FOUND, as_json=as_json)
 
-        state_def = None
+        status_def = None
         for s in tpl.states:
-            if s.name == state_name:
-                state_def = s
+            if s.name == status_name:
+                status_def = s
                 break
-        if state_def is None:
-            click.echo(f"Unknown state '{state_name}' for type '{type_name}'", err=True)
-            sys.exit(1)
+        if status_def is None:
+            _emit_error(
+                f"Unknown status '{status_name}' for type '{type_name}'",
+                ErrorCode.NOT_FOUND,
+                as_json=as_json,
+            )
 
-        inbound = [{"from": t.from_state, "enforcement": t.enforcement} for t in tpl.transitions if t.to_state == state_name]
+        inbound = [{"from": t.from_state, "enforcement": t.enforcement} for t in tpl.transitions if t.to_state == status_name]
         outbound: list[dict[str, Any]] = [
             {"to": t.to_state, "enforcement": t.enforcement, "requires_fields": list(t.requires_fields)}
             for t in tpl.transitions
-            if t.from_state == state_name
+            if t.from_state == status_name
         ]
-        required_fields = [f.name for f in tpl.fields_schema if state_name in f.required_at]
+        required_fields = [f.name for f in tpl.fields_schema if status_name in f.required_at]
 
         if as_json:
             click.echo(
                 json_mod.dumps(
                     {
-                        "state": state_name,
-                        "category": state_def.category,
+                        "status": status_name,
+                        "category": status_def.category,
                         "type": type_name,
                         "inbound_transitions": inbound,
                         "outbound_transitions": outbound,
@@ -346,13 +466,13 @@ def explain_state(type_name: str, state_name: str, as_json: bool) -> None:
             )
             return
 
-        click.echo(f"State: {state_name} [{state_def.category}] (type: {type_name})")
+        click.echo(f"Status: {status_name} [{status_def.category}] (type: {type_name})")
         if inbound:
             click.echo("\nInbound transitions:")
             for t in inbound:
                 click.echo(f"  <- {t['from']} [{t['enforcement']}]")
         else:
-            click.echo("\nNo inbound transitions (initial state)")
+            click.echo("\nNo inbound transitions (initial status)")
         if outbound:
             click.echo("\nOutbound transitions:")
             for ot in outbound:
@@ -360,19 +480,27 @@ def explain_state(type_name: str, state_name: str, as_json: bool) -> None:
                 fields_note = f" (requires: {', '.join(req_fields)})" if req_fields else ""
                 click.echo(f"  -> {ot['to']} [{ot['enforcement']}]{fields_note}")
         else:
-            click.echo("\nNo outbound transitions (terminal state)")
+            click.echo("\nNo outbound transitions (terminal status)")
         if required_fields:
-            click.echo(f"\nRequired fields at this state: {', '.join(required_fields)}")
+            click.echo(f"\nRequired fields at this status: {', '.join(required_fields)}")
 
 
 def register(cli: click.Group) -> None:
     """Register workflow commands with the CLI group."""
     cli.add_command(templates)
-    cli.add_command(workflow_states)
+    cli.add_command(get_template_cmd)
+    cli.add_command(workflow_statuses)
+    cli.add_command(get_workflow_statuses)
     cli.add_command(types_cmd)
+    cli.add_command(list_types_cmd)
     cli.add_command(type_info)
+    cli.add_command(get_type_info)
     cli.add_command(transitions_cmd)
+    cli.add_command(get_valid_transitions)
     cli.add_command(packs_cmd)
+    cli.add_command(list_packs_cmd)
     cli.add_command(validate_cmd)
+    cli.add_command(validate_issue_cmd)
     cli.add_command(guide_cmd)
-    cli.add_command(explain_state)
+    cli.add_command(get_workflow_guide)
+    cli.add_command(explain_status)

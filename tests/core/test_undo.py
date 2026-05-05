@@ -182,15 +182,17 @@ class TestUndoEdgeCases:
         assert result["undone"] is True
         assert result["event_type"] == "status_changed"
 
-    def test_double_undo_returns_already_undone(self, db: FiligreeDB) -> None:
-        """Cannot undo the same reversible event twice."""
+    def test_double_undo_returns_no_reversible_events(self, db: FiligreeDB) -> None:
+        """Cannot undo the same reversible event twice. Per filigree-a849860f2e
+        the candidate-selection query filters out already-undone events, so
+        when there is no earlier reversible event to fall back to the result
+        is "no reversible events" rather than "already undone"."""
         issue = db.create_issue("Test")
         db.update_issue(issue.id, status="in_progress", actor="t")
         db.undo_last(issue.id, actor="t")
-        # The reversible event (status_changed) already has a newer 'undone' covering it
         result = db.undo_last(issue.id, actor="t")
         assert result["undone"] is False
-        assert "already undone" in result["reason"]
+        assert "No reversible events" in result["reason"]
 
     def test_undo_reaches_past_non_reversible_events(self, db: FiligreeDB) -> None:
         """Undo should skip non-reversible events and find earlier reversible ones."""
@@ -469,10 +471,13 @@ class TestUndoFields:
         ).fetchall()
         assert len(undone_events) == 1
         assert undone_events[0]["new_value"] == str(first["event_id"])
-        # Second undo must be blocked
+        # Second undo must be blocked. Post filigree-a849860f2e, the
+        # candidate-selection NOT EXISTS clause filters out the already-undone
+        # event, so the reason becomes "No reversible events to undo" rather
+        # than "already undone".
         second = db.undo_last(issue.id, actor="t")
         assert second["undone"] is False
-        assert "already undone" in second["reason"]
+        assert "No reversible events" in second["reason"]
 
     def test_undo_field_change_with_corrupt_json(self, db: FiligreeDB) -> None:
         """Undoing a field change with corrupt stored JSON returns failure, not exception."""
@@ -487,3 +492,216 @@ class TestUndoFields:
         result = db.undo_last(issue.id, actor="t")
         assert result["undone"] is False
         assert "corrupt" in result["reason"].lower()
+
+
+class TestUndoFallsBackPastAlreadyUndone:
+    """filigree-a849860f2e: undo_last must reach older reversible events
+    when the newest reversible event is already covered by an 'undone'
+    marker. The CLI semantics promise to undo "the most recent reversible
+    action", not "the most recent action that has not yet been undone"."""
+
+    def test_double_undo_reaches_earlier_reversible_event(self, db: FiligreeDB) -> None:
+        """title-change → priority-change → undo (priority restored) →
+        undo again should restore the title."""
+        issue = db.create_issue("Original title", priority=2)
+        db.update_issue(issue.id, title="Changed title", actor="t")
+        db.update_issue(issue.id, priority=0, actor="t")
+
+        first = db.undo_last(issue.id, actor="t")
+        assert first["undone"] is True
+        assert first["event_type"] == "priority_changed"
+        assert db.get_issue(issue.id).priority == 2
+        # Title still in its post-change state
+        assert db.get_issue(issue.id).title == "Changed title"
+
+        second = db.undo_last(issue.id, actor="t")
+        assert second["undone"] is True, f"second undo failed: {second}"
+        assert second["event_type"] == "title_changed"
+        assert db.get_issue(issue.id).title == "Original title"
+
+
+class TestUndoParentChanged:
+    """filigree-fc6bb28c23: parent_changed must be undoable."""
+
+    def test_undo_parent_set(self, db: FiligreeDB) -> None:
+        """Setting a parent then undoing must clear it back to None."""
+        parent = db.create_issue("Parent")
+        child = db.create_issue("Child")
+        db.update_issue(child.id, parent_id=parent.id, actor="t")
+        assert db.get_issue(child.id).parent_id == parent.id
+
+        result = db.undo_last(child.id, actor="t")
+        assert result["undone"] is True, f"undo failed: {result}"
+        assert result["event_type"] == "parent_changed"
+        assert db.get_issue(child.id).parent_id is None
+
+    def test_undo_parent_change(self, db: FiligreeDB) -> None:
+        """Reparenting to a different parent and undoing must restore the original."""
+        parent_a = db.create_issue("Parent A")
+        parent_b = db.create_issue("Parent B")
+        child = db.create_issue("Child")
+        db.update_issue(child.id, parent_id=parent_a.id, actor="t")
+        db.update_issue(child.id, parent_id=parent_b.id, actor="t")
+        assert db.get_issue(child.id).parent_id == parent_b.id
+
+        result = db.undo_last(child.id, actor="t")
+        assert result["undone"] is True
+        assert db.get_issue(child.id).parent_id == parent_a.id
+
+    def test_undo_parent_clear(self, db: FiligreeDB) -> None:
+        """Clearing a parent and undoing must restore the prior parent."""
+        parent = db.create_issue("Parent")
+        child = db.create_issue("Child")
+        db.update_issue(child.id, parent_id=parent.id, actor="t")
+        # Clear by passing empty string (per db_issues update path)
+        db.update_issue(child.id, parent_id="", actor="t")
+        assert db.get_issue(child.id).parent_id is None
+
+        result = db.undo_last(child.id, actor="t")
+        assert result["undone"] is True
+        assert db.get_issue(child.id).parent_id == parent.id
+
+
+class TestUndoParentChangedCycleGuard:
+    """filigree-0a8c3d38d7: undo of parent_changed must reject restorations
+    that would create a circular parent chain, mirroring update_issue's
+    invariant. Without the guard, an interleaved reparent sequence followed
+    by undo could produce A->C->A."""
+
+    def test_undo_refuses_to_create_parent_cycle(self, db: FiligreeDB) -> None:
+        a = db.create_issue("A")
+        b = db.create_issue("B")
+        c = db.create_issue("C")
+        # C parented under A, then re-parented to B (records old=A, new=B).
+        db.update_issue(c.id, parent_id=a.id, actor="t")
+        db.update_issue(c.id, parent_id=b.id, actor="t")
+        # A is reparented under C (valid: C->B is the chain root).
+        db.update_issue(a.id, parent_id=c.id, actor="t")
+
+        # Undoing C's last parent_changed would set C.parent=A, but A->C
+        # already exists, so this would create a cycle. Must be refused.
+        result = db.undo_last(c.id, actor="t")
+        assert result["undone"] is False
+        assert "cycle" in result["reason"].lower() or "circular" in result["reason"].lower()
+        # Ensure no cycle was actually written.
+        assert db.get_issue(c.id).parent_id == b.id
+        assert db.get_issue(a.id).parent_id == c.id
+
+
+class TestUndoFieldsChangedSchemaGuard:
+    """filigree-cb4cd68f80: fields_changed undo must reject NULL or non-dict
+    JSON in old_value rather than silently writing an empty dict or a list.
+    The model invariant is that issues.fields is always a JSON object."""
+
+    def test_undo_refuses_null_old_value(self, db: FiligreeDB) -> None:
+        issue = db.create_issue("X", fields={"foo": "bar"})
+        # Inject a corrupted fields_changed event with old_value=NULL as the
+        # most recent reversible event for this issue.
+        db.conn.execute(
+            "INSERT INTO events (issue_id, event_type, actor, old_value, new_value, comment, created_at) "
+            "VALUES (?, 'fields_changed', 'inject', NULL, ?, '', ?)",
+            (issue.id, '{"foo":"baz"}', "2999-01-01T00:00:00+00:00"),
+        )
+        db.conn.commit()
+        result = db.undo_last(issue.id, actor="t")
+        assert result["undone"] is False
+        # Fields must remain untouched.
+        assert db.get_issue(issue.id).fields == {"foo": "bar"}
+
+    def test_undo_refuses_non_dict_old_value(self, db: FiligreeDB) -> None:
+        issue = db.create_issue("X", fields={"foo": "bar"})
+        db.conn.execute(
+            "INSERT INTO events (issue_id, event_type, actor, old_value, new_value, comment, created_at) "
+            "VALUES (?, 'fields_changed', 'inject', '[]', ?, '', ?)",
+            (issue.id, '{"foo":"baz"}', "2999-01-01T00:00:00+00:00"),
+        )
+        db.conn.commit()
+        result = db.undo_last(issue.id, actor="t")
+        assert result["undone"] is False
+        row = db.conn.execute("SELECT fields FROM issues WHERE id = ?", (issue.id,)).fetchone()
+        # Stored fields column must still be a JSON object, not '[]'.
+        assert row["fields"] != "[]"
+
+
+class TestUndoConcurrentRace:
+    """filigree-f38d4e2874: concurrent undo_last() calls on the same issue
+    via separate connections must not both write 'undone' markers for the
+    same target event. BEGIN IMMEDIATE serializes the read-check-write."""
+
+    def test_concurrent_undo_writes_at_most_one_marker(self, tmp_path) -> None:
+        import threading
+
+        db_path = tmp_path / "filigree.db"
+        seed = FiligreeDB(db_path, prefix="test", check_same_thread=False)
+        seed.initialize()
+        issue = seed.create_issue("X")
+        seed.update_issue(issue.id, title="Y", actor="t")
+        seed.close()
+
+        db1 = FiligreeDB(db_path, prefix="test", check_same_thread=False)
+        db1.initialize()
+        db2 = FiligreeDB(db_path, prefix="test", check_same_thread=False)
+        db2.initialize()
+
+        results: list[dict | None] = [None, None]
+        barrier = threading.Barrier(2)
+
+        def worker(idx: int, dbref: FiligreeDB) -> None:
+            barrier.wait()
+            results[idx] = dbref.undo_last(issue.id, actor=f"a{idx}")
+
+        t1 = threading.Thread(target=worker, args=(0, db1))
+        t2 = threading.Thread(target=worker, args=(1, db2))
+        t1.start()
+        t2.start()
+        t1.join()
+        t2.join()
+
+        successes = [r for r in results if r and r.get("undone")]
+        assert len(successes) == 1, f"expected exactly one undo to succeed, got {results}"
+
+        target_id = successes[0]["event_id"]
+        markers = db1.conn.execute(
+            "SELECT * FROM events WHERE event_type = 'undone' AND new_value = ?",
+            (str(target_id),),
+        ).fetchall()
+        assert len(markers) == 1, f"expected one undone marker, got {len(markers)}"
+        db1.close()
+        db2.close()
+
+
+class TestUndoDependencyTypeWithColon:
+    """filigree-2cd923c1d8: dep_type containing ':' must round-trip
+    correctly through dependency_added / dependency_removed undo. The
+    parse used split(':', 1) which fails when dep_type itself has a colon."""
+
+    def test_undo_dependency_added_with_colon_in_type(self, db: FiligreeDB) -> None:
+        a = db.create_issue("A")
+        b = db.create_issue("B")
+        # add_dependency takes dep_type as a kwarg; choose one that contains ':'
+        db.add_dependency(a.id, b.id, dep_type="namespaced:type", actor="t")
+        assert any(d["from"] == a.id and d["to"] == b.id for d in db.get_all_dependencies())
+
+        result = db.undo_last(a.id, actor="t")
+        assert result["undone"] is True
+        assert result["event_type"] == "dependency_added"
+        # The dependency must be gone now (undo removes it)
+        deps = db.get_all_dependencies()
+        assert not any(d["from"] == a.id and d["to"] == b.id for d in deps), f"dependency_added undo did not remove the edge; deps={deps}"
+
+    def test_undo_dependency_removed_with_colon_in_type(self, db: FiligreeDB) -> None:
+        a = db.create_issue("A")
+        b = db.create_issue("B")
+        db.add_dependency(a.id, b.id, dep_type="namespaced:type", actor="t")
+        db.remove_dependency(a.id, b.id, actor="t")
+        # Sanity: edge gone
+        assert not any(d["from"] == a.id and d["to"] == b.id for d in db.get_all_dependencies())
+
+        result = db.undo_last(a.id, actor="t")
+        assert result["undone"] is True, f"undo failed: {result}"
+        assert result["event_type"] == "dependency_removed"
+        deps = db.get_all_dependencies()
+        edge = next((d for d in deps if d["from"] == a.id and d["to"] == b.id), None)
+        assert edge is not None, "dependency_removed undo did not restore the edge"
+        # The original dep_type must round-trip
+        assert edge["type"] == "namespaced:type", f"dep_type was lost on undo; got {edge['type']!r}"

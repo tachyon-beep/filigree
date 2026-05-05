@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import importlib.util
 from pathlib import Path
 from types import ModuleType
@@ -10,6 +11,16 @@ import pytest
 def _load_scan_utils() -> ModuleType:
     script_path = Path(__file__).resolve().parents[2] / "scripts" / "scan_utils.py"
     spec = importlib.util.spec_from_file_location("scan_utils_script", script_path)
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _load_codex_bug_hunt() -> ModuleType:
+    script_path = Path(__file__).resolve().parents[2] / "scripts" / "codex_bug_hunt.py"
+    spec = importlib.util.spec_from_file_location("codex_bug_hunt_script", script_path)
     assert spec is not None
     assert spec.loader is not None
     module = importlib.util.module_from_spec(spec)
@@ -49,3 +60,55 @@ class TestResolveTargetFile:
 
         with pytest.raises(ValueError, match="does not exist"):
             mod._resolve_target_file(repo_root=repo_root, root_dir=root_dir, file_arg="src/missing.py")
+
+
+class TestRunCodex:
+    @pytest.mark.asyncio
+    async def test_prompt_is_sent_over_stdin(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        mod = _load_codex_bug_hunt()
+        captured: dict[str, object] = {}
+
+        class FakeProcess:
+            returncode: int | None = 0
+            received_input: bytes | None = None
+
+            async def communicate(self, input: bytes | None = None) -> tuple[bytes, bytes]:
+                self.received_input = input
+                return b"", b""
+
+            async def wait(self) -> int:
+                return 0
+
+            def kill(self) -> None:
+                self.returncode = -9
+
+            def terminate(self) -> None:
+                self.returncode = -15
+
+        fake_process = FakeProcess()
+
+        async def fake_create_subprocess_exec(*cmd: str, **kwargs: object) -> FakeProcess:
+            captured["cmd"] = cmd
+            captured["kwargs"] = kwargs
+            return fake_process
+
+        monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+
+        prompt = "static analysis prompt\n" * 100
+        await mod.run_codex(
+            prompt=prompt,
+            output_path=tmp_path / "report.md",
+            model=None,
+            repo_root=tmp_path,
+            timeout=5,
+        )
+
+        cmd = captured["cmd"]
+        assert isinstance(cmd, tuple)
+        assert cmd[-1] == "-"
+        assert prompt not in cmd
+
+        kwargs = captured["kwargs"]
+        assert isinstance(kwargs, dict)
+        assert kwargs["stdin"] is asyncio.subprocess.PIPE
+        assert fake_process.received_input == prompt.encode("utf-8")

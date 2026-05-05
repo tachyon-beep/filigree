@@ -41,7 +41,12 @@ def server() -> None:
 
 
 @server.command("start")
-@click.option("--port", default=None, type=int, help="Override port")
+@click.option(
+    "--port",
+    default=None,
+    type=click.IntRange(1, 65535),
+    help="Override port (valid TCP range: 1-65535)",
+)
 def server_start(port: int | None) -> None:
     """Start the filigree daemon."""
     from filigree.server import start_daemon
@@ -93,11 +98,15 @@ def server_register(path: str) -> None:
         click.echo(str(e), err=True)
         sys.exit(1)
     click.echo(f"Registered {filigree_dir}")
+    # Reload is best-effort: the registry change is already committed, so
+    # failure here doesn't undo the register. Warn loudly and suggest a
+    # manual reload, but exit 0 so scripts don't mistake a partial success
+    # for a failed registration.
     ok, reason = _reload_server_daemon_if_running()
     if not ok:
         click.echo(f"Warning: {reason}", err=True)
-        sys.exit(1)
-    if reason == "daemon_reloaded":
+        click.echo("Restart the daemon manually: `filigree server stop && filigree server start`", err=True)
+    elif reason == "daemon_reloaded":
         click.echo("Reloaded running daemon")
 
 
@@ -115,11 +124,14 @@ def server_unregister(path: str) -> None:
         click.echo(str(e), err=True)
         sys.exit(1)
     click.echo(f"Unregistered {filigree_dir}")
+    # Same best-effort semantics as register: the unregister already
+    # committed. Reload failure gets a warning + manual-restart hint, not
+    # a non-zero exit.
     ok, reason = _reload_server_daemon_if_running()
     if not ok:
         click.echo(f"Warning: {reason}", err=True)
-        sys.exit(1)
-    if reason == "daemon_reloaded":
+        click.echo("Restart the daemon manually: `filigree server stop && filigree server start`", err=True)
+    elif reason == "daemon_reloaded":
         click.echo("Reloaded running daemon")
 
 

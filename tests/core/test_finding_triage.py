@@ -146,6 +146,27 @@ class TestUpdateFinding:
         with pytest.raises(ValueError, match="dismiss_reason requires status"):
             db.update_finding(ids["obo"], dismiss_reason="reason only")
 
+    def test_dismiss_with_legacy_non_dict_metadata_recovers(self, db: FiligreeDB) -> None:
+        """filigree-ff98665ca3: legacy rows with JSON-array metadata must not crash dismiss.
+
+        Pre-fix, `old_meta["dismiss_reason"] = ...` ran outside the parse
+        try/except and raised TypeError on list/scalar metadata. The fix uses
+        `_safe_json_loads` which coerces non-dict top-levels to {}.
+        """
+        ids = _seed_findings(db)
+        # Simulate a legacy row whose metadata is a JSON array (valid JSON but
+        # not an object) — bypass validation by writing the column directly.
+        db.conn.execute(
+            "UPDATE scan_findings SET metadata = ? WHERE id = ?",
+            ("[1, 2, 3]", ids["obo"]),
+        )
+        db.conn.commit()
+        updated = db.update_finding(ids["obo"], status="false_positive", dismiss_reason="recovered")
+        assert updated["status"] == "false_positive"
+        meta = updated.get("metadata") or {}
+        assert isinstance(meta, dict)
+        assert meta["dismiss_reason"] == "recovered"
+
 
 class TestPromoteFindingToObservation:
     def test_creates_observation(self, db: FiligreeDB) -> None:

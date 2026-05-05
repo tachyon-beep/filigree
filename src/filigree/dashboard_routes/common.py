@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import TYPE_CHECKING, Any
+import sys
+from typing import TYPE_CHECKING, Any, Literal
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -12,10 +13,12 @@ if TYPE_CHECKING:
     from fastapi.responses import JSONResponse
     from starlette.requests import Request
 
-from filigree.core import FiligreeDB, read_config
+from filigree.core import FILIGREE_DIR_NAME, FiligreeDB, read_config
+from filigree.types.api import ErrorCode, ErrorResponse, parse_response_detail
 from filigree.validation import sanitize_actor as _sanitize_actor
 
 logger = logging.getLogger(__name__)
+_MISSING = object()
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -26,29 +29,49 @@ _GRAPH_STATUS_CATEGORIES = frozenset({"open", "wip", "done"})
 _BOOL_TRUE_VALUES = frozenset({"1", "true", "yes", "on"})
 _BOOL_FALSE_VALUES = frozenset({"0", "false", "no", "off"})
 
+# Pagination caps. Routes that overfetch by `limit + 1` must stay safely
+# under SQLite's signed-int64 bind limit (2**63 - 1); _MAX_PAGINATION_LIMIT
+# is also a product cap that prevents runaway response sizes. Offset stops
+# one short of int64 max so any future +1 arithmetic still binds.
+_MAX_PAGINATION_LIMIT = 10_000
+_MAX_PAGINATION_OFFSET = 9_223_372_036_854_775_806  # 2**63 - 2
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
 
 def _error_response(
-    message: str,
-    code: str,
+    error: str,
+    code: ErrorCode,
     status_code: int,
     details: dict[str, Any] | None = None,
+    *,
+    exc_info: bool | None = None,
 ) -> JSONResponse:
-    """Return a structured error response and log the error.
+    """Return a flat 2.0 ErrorResponse and log the error.
 
-    NOTE: Dashboard errors use a nested format ``{"error": {"message", "code", "details"}}``.
-    MCP tools use a flat ``ErrorResponse(error=str, code=str)`` — see types/api.py.
+    Shape: ``{"error": str, "code": ErrorCode, "details"?: dict}``.
+    Construction goes through the ErrorResponse TypedDict so mypy gates
+    the wire shape at every call site; the cast to dict is only to
+    satisfy JSONResponse's content-type annotation.
     """
     from fastapi.responses import JSONResponse
 
-    logger.warning("API error [%s] %s: %s", status_code, code, message)
-    return JSONResponse(
-        {"error": {"message": message, "code": code, "details": details or {}}},
-        status_code=status_code,
-    )
+    # 5xx means a server-side problem we should be able to investigate —
+    # log at error level. 4xx is client-caused (bad input, missing id,
+    # conflict) — warning is enough. By default we only attach traceback
+    # info for 5xx responses when an exception is actually active; callers
+    # that already logged the traceback can force exc_info=False.
+    log = logger.error if status_code >= 500 else logger.warning
+    if exc_info is None:
+        exc_info = status_code >= 500 and sys.exc_info()[0] is not None
+    log("API error [%s] %s: %s", status_code, code, error, exc_info=exc_info)
+
+    body: ErrorResponse = {"error": error, "code": code, "details": details} if details is not None else {"error": error, "code": code}
+    # JSONResponse accepts any JSON-serializable mapping; StrEnum values
+    # round-trip correctly because ErrorCode inherits from str.
+    return JSONResponse(dict(body), status_code=status_code)
 
 
 async def _parse_json_body(request: Request) -> dict[str, Any] | JSONResponse:
@@ -58,9 +81,9 @@ async def _parse_json_body(request: Request) -> dict[str, Any] | JSONResponse:
     try:
         body = await request.json()
     except (json.JSONDecodeError, ValueError, UnicodeDecodeError):
-        return _error_response("Invalid JSON body", "VALIDATION_ERROR", 400)
+        return _error_response("Invalid JSON body", ErrorCode.VALIDATION, 400)
     if not isinstance(body, dict):
-        return _error_response("Request body must be a JSON object", "VALIDATION_ERROR", 400)
+        return _error_response("Request body must be a JSON object", ErrorCode.VALIDATION, 400)
     return body
 
 
@@ -71,33 +94,77 @@ def _parse_pagination(
     """Extract ``limit`` and ``offset`` from query params with validation.
 
     Returns ``(limit, offset)`` on success or a 400 ``JSONResponse`` on error.
+
+    Both values are bounded so they (and ``limit + 1`` overfetch) bind safely
+    into SQLite's signed-int64 LIMIT/OFFSET. See ``_MAX_PAGINATION_LIMIT`` /
+    ``_MAX_PAGINATION_OFFSET``.
     """
-    limit = _safe_int(params.get("limit", str(default_limit)), "limit", min_value=1)
+    limit = _safe_int(
+        params.get("limit", str(default_limit)),
+        "limit",
+        min_value=1,
+        max_value=_MAX_PAGINATION_LIMIT,
+    )
     if not isinstance(limit, int):
         return limit
-    offset = _safe_int(params.get("offset", "0"), "offset", min_value=0)
+    offset = _safe_int(
+        params.get("offset", "0"),
+        "offset",
+        min_value=0,
+        max_value=_MAX_PAGINATION_OFFSET,
+    )
     if not isinstance(offset, int):
         return offset
     return limit, offset
 
 
-def _safe_int(value: str, name: str, *, min_value: int | None = None) -> int | JSONResponse:
+def _parse_response_detail(
+    params: Mapping[str, str],
+) -> Literal["slim", "full"] | JSONResponse:
+    """Parse the ``response_detail`` query parameter.
+
+    Thin HTTP wrapper around ``filigree.types.api.parse_response_detail`` —
+    converts an ``ErrorResponse`` from the shared parser into a 400
+    ``JSONResponse`` for FastAPI route consumption. The shared parser is
+    the single source of truth for the slim/full vocabulary; MCP and CLI
+    surfaces use it directly.
+    """
+    parsed = parse_response_detail(params.get("response_detail"))
+    if isinstance(parsed, dict):
+        return _error_response(parsed["error"], ErrorCode.VALIDATION, 400)
+    return parsed
+
+
+def _safe_int(
+    value: str,
+    name: str,
+    *,
+    min_value: int | None = None,
+    max_value: int | None = None,
+) -> int | JSONResponse:
     """Parse a query-param string to int, returning a 400 error response on failure.
 
     When *min_value* is set, values below that floor are rejected with 400.
+    When *max_value* is set, values above that ceiling are rejected with 400.
     """
     try:
         result = int(value)
     except (ValueError, TypeError):
         return _error_response(
             f'Invalid value for {name}: "{value}". Must be an integer.',
-            "VALIDATION_ERROR",
+            ErrorCode.VALIDATION,
             400,
         )
     if min_value is not None and result < min_value:
         return _error_response(
             f"Invalid value for {name}: {result}. Must be >= {min_value}.",
-            "VALIDATION_ERROR",
+            ErrorCode.VALIDATION,
+            400,
+        )
+    if max_value is not None and result > max_value:
+        return _error_response(
+            f"Invalid value for {name}: {result}. Must be <= {max_value}.",
+            ErrorCode.VALIDATION,
             400,
         )
     return result
@@ -111,7 +178,7 @@ def _parse_bool_value(raw: str, name: str) -> bool | JSONResponse:
         return False
     return _error_response(
         f'Invalid value for {name}: "{raw}". Must be one of true/false, 1/0, yes/no, on/off.',
-        "VALIDATION_ERROR",
+        ErrorCode.VALIDATION,
         400,
         {"param": name, "value": raw},
     )
@@ -131,27 +198,90 @@ def _read_graph_runtime_config(db: FiligreeDB) -> dict[str, Any]:
     Note: read_config() already handles JSONDecodeError/OSError internally
     and returns defaults, so no outer try/except is needed here.
     """
-    return dict(read_config(db.db_path.parent))
+    # ``read_config`` expects the ``.filigree/`` metadata directory.
+    # For ``.filigree.conf`` projects the DB may be relocated (e.g.
+    # ``storage/track.db``), so ``db_path.parent`` is not the metadata
+    # dir — derive it from ``project_root`` when present, and only fall
+    # back to ``db_path.parent`` for the legacy ``.filigree/filigree.db``
+    # layout where they coincide.
+    config_dir = db.project_root / FILIGREE_DIR_NAME if db.project_root is not None else db.db_path.parent
+    return dict(read_config(config_dir))
+
+
+def _coerce_config_bool(value: Any, name: str) -> bool:
+    """Coerce a config-file value to bool using strict parsing.
+
+    Native bool passes through. Strings are parsed via the same allowlist as
+    env vars (``_parse_bool_value``) so ``"false"``/``"0"`` read as False
+    instead of truthy-non-empty-string. Anything else logs and returns False.
+    """
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    if isinstance(value, str):
+        parsed = _parse_bool_value(value, name)
+        if isinstance(parsed, bool):
+            return parsed
+        logger.warning("Unparseable config value %s=%r; defaulting to False", name, value)
+        return False
+    logger.warning(
+        "Unexpected config value %s=%r (type %s); defaulting to False",
+        name,
+        value,
+        type(value).__name__,
+    )
+    return False
+
+
+def _coerce_config_graph_mode(value: Any) -> str:
+    """Normalize a config graph_api_mode value to a canonical mode or ``''``."""
+    if not isinstance(value, str):
+        return ""
+    mode = value.strip().lower()
+    return mode if mode in _GRAPH_MODE_VALUES else ""
 
 
 def _resolve_graph_runtime(db: FiligreeDB) -> dict[str, Any]:
-    """Resolve graph feature controls from env + project config."""
+    """Resolve graph feature controls from env + project config.
+
+    Precedence: explicit env var (when validly parseable) wins; otherwise the
+    project config value is used. Malformed env vars log and fall back to
+    config — they do not silently force the feature off.
+    """
     config = _read_graph_runtime_config(db)
+    config_enabled = _coerce_config_bool(config.get("graph_v2_enabled"), "graph_v2_enabled")
 
     enabled_raw = os.getenv("FILIGREE_GRAPH_V2_ENABLED")
-    enabled: bool
     if enabled_raw is not None:
         enabled_value = _parse_bool_value(enabled_raw, "FILIGREE_GRAPH_V2_ENABLED")
-        if not isinstance(enabled_value, bool):
-            logger.warning("Unparseable FILIGREE_GRAPH_V2_ENABLED=%r, falling back to False", enabled_raw)
-        enabled = bool(enabled_value) if isinstance(enabled_value, bool) else False
+        if isinstance(enabled_value, bool):
+            enabled = enabled_value
+        else:
+            logger.warning(
+                "Unparseable FILIGREE_GRAPH_V2_ENABLED=%r, falling back to config value %s",
+                enabled_raw,
+                config_enabled,
+            )
+            enabled = config_enabled
     else:
-        enabled = bool(config.get("graph_v2_enabled", False))
+        enabled = config_enabled
 
-    configured_mode_raw = os.getenv("FILIGREE_GRAPH_API_MODE") or str(config.get("graph_api_mode", "")).strip()
-    configured_mode = configured_mode_raw.lower() if configured_mode_raw else ""
-    if configured_mode not in _GRAPH_MODE_VALUES:
-        configured_mode = ""
+    config_mode = _coerce_config_graph_mode(config.get("graph_api_mode"))
+    env_mode_raw = os.getenv("FILIGREE_GRAPH_API_MODE")
+    if env_mode_raw is not None and env_mode_raw.strip():
+        env_mode = env_mode_raw.strip().lower()
+        if env_mode in _GRAPH_MODE_VALUES:
+            configured_mode = env_mode
+        else:
+            logger.warning(
+                "Invalid FILIGREE_GRAPH_API_MODE=%r, falling back to config value %r",
+                env_mode_raw,
+                config_mode or None,
+            )
+            configured_mode = config_mode
+    else:
+        configured_mode = config_mode
 
     compatibility_mode = configured_mode or ("v2" if enabled else "legacy")
     return {
@@ -172,7 +302,7 @@ def _safe_bounded_int(raw: str, *, name: str, min_value: int, max_value: int) ->
     if value < min_value or value > max_value:
         return _error_response(
             f'Invalid value for {name}: "{raw}". Must be between {min_value} and {max_value}.',
-            "VALIDATION_ERROR",
+            ErrorCode.VALIDATION,
             400,
             {"param": name, "value": raw},
         )
@@ -180,18 +310,20 @@ def _safe_bounded_int(raw: str, *, name: str, min_value: int, max_value: int) ->
 
 
 def _coerce_graph_mode(raw: str | None, db: FiligreeDB) -> str | JSONResponse:
+    # Explicit `?mode=` wins over compatibility/feature-flag defaults, so skip
+    # the runtime-config disk read on the override path. See filigree-1eaf84f2c3.
+    if raw is not None:
+        mode = raw.strip().lower()
+        if mode not in _GRAPH_MODE_VALUES:
+            return _error_response(
+                f'Invalid value for mode: "{raw}". Must be one of: legacy, v2.',
+                ErrorCode.VALIDATION,
+                400,
+                {"param": "mode", "value": raw},
+            )
+        return mode
     runtime = _resolve_graph_runtime(db)
-    if raw is None:
-        return str(runtime["compatibility_mode"])
-    mode = raw.strip().lower()
-    if mode not in _GRAPH_MODE_VALUES:
-        return _error_response(
-            f'Invalid value for mode: "{raw}". Must be one of: legacy, v2.',
-            "GRAPH_INVALID_PARAM",
-            400,
-            {"param": "mode", "value": raw},
-        )
-    return mode
+    return str(runtime["compatibility_mode"])
 
 
 def _validate_priority(value: Any, *, required: bool = False) -> int | None | JSONResponse:
@@ -201,13 +333,37 @@ def _validate_priority(value: Any, *, required: bool = False) -> int | None | JS
     """
     if value is None:
         if required:
-            return _error_response("priority is required", "VALIDATION_ERROR", 400)
+            return _error_response("priority is required", ErrorCode.VALIDATION, 400)
         return None
     if not isinstance(value, int) or isinstance(value, bool):
-        return _error_response("priority must be an integer between 0 and 4", "INVALID_PRIORITY", 400)
+        return _error_response("priority must be an integer between 0 and 4", ErrorCode.VALIDATION, 400)
     if not (0 <= value <= 4):
-        return _error_response(f"priority must be between 0 and 4, got {value}", "INVALID_PRIORITY", 400)
+        return _error_response(f"priority must be between 0 and 4, got {value}", ErrorCode.VALIDATION, 400)
     return value
+
+
+def _validate_priority_field(
+    body: Mapping[str, Any],
+    *,
+    key: str = "priority",
+    default: object = _MISSING,
+    required: bool = False,
+) -> int | None | JSONResponse:
+    """Validate a priority field while distinguishing missing from explicit null.
+
+    Route handlers often need to preserve semantics like "omitted means leave
+    unchanged" or "omitted means use default 2". Using ``dict.get()`` erases
+    the difference between a missing key and an explicit JSON ``null``; this
+    helper preserves that distinction so ``null`` can be rejected cleanly.
+    """
+    raw = body.get(key, _MISSING)
+    if raw is _MISSING:
+        if default is not _MISSING:
+            return default if isinstance(default, int) else None
+        return _validate_priority(None, required=required)
+    if raw is None:
+        return _error_response("priority must be an integer between 0 and 4", ErrorCode.VALIDATION, 400)
+    return _validate_priority(raw, required=required)
 
 
 def _validate_actor(value: Any) -> tuple[str, JSONResponse | None]:
@@ -217,5 +373,5 @@ def _validate_actor(value: Any) -> tuple[str, JSONResponse | None]:
     """
     cleaned, err = _sanitize_actor(value)
     if err:
-        return ("", _error_response(err, "VALIDATION_ERROR", 400))
+        return ("", _error_response(err, ErrorCode.VALIDATION, 400))
     return (cleaned, None)

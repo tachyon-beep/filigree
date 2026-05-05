@@ -5,9 +5,82 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from unittest.mock import patch
 
+import pytest
+
 from filigree.analytics import _parse_iso as analytics_parse_iso
 from filigree.analytics import cycle_time, get_flow_metrics, lead_time
 from filigree.core import FiligreeDB, Issue
+
+
+class TestCycleTimeTimezoneOrdering:
+    """Regression: cycle_time must order events by chronological time, not by
+    raw SQL text. Events imported from external systems can carry heterogeneous
+    ISO offsets; lexical ordering picks the wrong WIP→done pair.
+    """
+
+    def test_cycle_time_orders_by_utc_not_raw_text(self, db: FiligreeDB) -> None:
+        """WIP event with +10:00 offset is chronologically earlier than
+        done event with +00:00 offset, even though the raw text sorts later.
+
+        Lexical sort would place 'T00:30:00+00:00' before 'T09:00:00+10:00',
+        producing either a negative cycle time or None. Proper chronological
+        sort keeps them in order and yields ~30 minutes.
+        """
+        issue = db.create_issue("TZ order test")
+        db.conn.execute(
+            "DELETE FROM events WHERE issue_id = ? AND event_type = 'status_changed'",
+            (issue.id,),
+        )
+        # WIP event: 2026-01-01T10:00:00+10:00 == 2026-01-01T00:00:00 UTC
+        db.conn.execute(
+            "INSERT INTO events (issue_id, event_type, old_value, new_value, created_at) "
+            "VALUES (?, 'status_changed', 'open', 'in_progress', '2026-01-01T10:00:00+10:00')",
+            (issue.id,),
+        )
+        # Done event: 2026-01-01T00:30:00+00:00 == 2026-01-01T00:30:00 UTC (30 min later)
+        # Lexically '2026-01-01T00:30:00+00:00' < '2026-01-01T10:00:00+10:00',
+        # so raw-text SQL sort places done before WIP — breaking cycle_time.
+        db.conn.execute(
+            "INSERT INTO events (issue_id, event_type, old_value, new_value, created_at) "
+            "VALUES (?, 'status_changed', 'in_progress', 'closed', '2026-01-01T00:30:00+00:00')",
+            (issue.id,),
+        )
+        db.conn.commit()
+
+        ct = cycle_time(db, issue.id)
+        assert ct is not None, "should find WIP→done pair with chronological ordering"
+        # 30 minutes = 0.5 hours
+        assert abs(ct - 0.5) < 0.01, f"cycle time should be 0.5h UTC, got {ct}"
+
+    def test_flow_metrics_orders_events_chronologically(self, db: FiligreeDB) -> None:
+        """get_flow_metrics must sort per-issue events by UTC, not raw text."""
+        issue = db.create_issue("Flow TZ test")
+        db.close_issue(issue.id)
+        db.conn.execute(
+            "DELETE FROM events WHERE issue_id = ? AND event_type = 'status_changed'",
+            (issue.id,),
+        )
+        # WIP in +10:00, done in +00:00 — chronological gap is 30 minutes.
+        db.conn.execute(
+            "INSERT INTO events (issue_id, event_type, old_value, new_value, created_at) "
+            "VALUES (?, 'status_changed', 'open', 'in_progress', '2026-01-01T10:00:00+10:00')",
+            (issue.id,),
+        )
+        db.conn.execute(
+            "INSERT INTO events (issue_id, event_type, old_value, new_value, created_at) "
+            "VALUES (?, 'status_changed', 'in_progress', 'closed', '2026-01-01T00:30:00+00:00')",
+            (issue.id,),
+        )
+        # Make sure the issue is counted (closed_at recent)
+        db.conn.execute(
+            "UPDATE issues SET closed_at = ? WHERE id = ?",
+            (datetime.now(UTC).isoformat(), issue.id),
+        )
+        db.conn.commit()
+
+        metrics = get_flow_metrics(db, days=30)
+        assert metrics["avg_cycle_time_hours"] is not None
+        assert abs(metrics["avg_cycle_time_hours"] - 0.5) < 0.01
 
 
 class TestCycleTime:
@@ -172,6 +245,24 @@ class TestLeadTime:
         assert lt is not None
         assert len(calls) == 0, f"get_issue called {len(calls)} times with Issue object"
 
+    def test_lead_time_archived_issue(self, db: FiligreeDB) -> None:
+        """Archived issues retain closed_at and should count as completed.
+
+        ``archive_closed()`` writes literal status='archived', which is not a
+        template-defined done category — but the issue is still completed work
+        with a real closed_at. lead_time must not silently drop these.
+        """
+        issue = db.create_issue("Will archive")
+        db.update_issue(issue.id, status="in_progress")
+        db.close_issue(issue.id)
+        db.archive_closed(days_old=0)
+        refreshed = db.get_issue(issue.id)
+        assert refreshed.status == "archived"
+
+        lt = lead_time(db, issue=refreshed)
+        assert lt is not None, "Archived issue with closed_at must contribute to lead time"
+        assert lt >= 0
+
 
 class TestFlowMetrics:
     def test_flow_metrics_structure(self, db: FiligreeDB) -> None:
@@ -257,6 +348,13 @@ class TestFlowMetrics:
         assert data_7["period_days"] == 7
         assert data_7["throughput"] >= 1  # recently closed, still in 7d window
 
+    def test_flow_metrics_rejects_non_positive_days(self, db: FiligreeDB) -> None:
+        """get_flow_metrics must reject days < 1 — a negative cutoff silently
+        excludes all real issues and returns period_days=N to callers."""
+        for bad in (-1, 0, -365):
+            with pytest.raises(ValueError, match="days"):
+                get_flow_metrics(db, days=bad)
+
     def test_flow_metrics_uses_high_limit(self, db: FiligreeDB) -> None:
         """get_flow_metrics must not use default limit=100 for list_issues."""
         original = db.list_issues
@@ -328,6 +426,92 @@ class TestFlowMetrics:
         assert refreshed.status == "archived"
         data = get_flow_metrics(db, days=30)
         assert data["throughput"] >= 1, "Archived issues should be counted"
+
+    def test_flow_metrics_dedupes_issues_appearing_in_multiple_buckets(self, db: FiligreeDB) -> None:
+        """Issue returned by both status='closed' and status='archived' scans must count once.
+
+        The closed-category expansion includes any template-defined done state — if
+        a workflow pack declares an 'archived' done state, it overlaps with the
+        synthetic status that archive_closed() writes, so both status queries return
+        the same issue. Without id-keyed dedup, throughput and cycle-time averages
+        are inflated.
+        """
+        issue = db.create_issue("Overlap target")
+        db.update_issue(issue.id, status="in_progress")
+        db.close_issue(issue.id)
+        closed_issue = db.get_issue(issue.id)
+
+        original = db.list_issues
+
+        def overlapping_list(**kwargs):  # type: ignore[no-untyped-def]
+            status = kwargs.get("status")
+            offset = kwargs.get("offset", 0)
+            if status in ("closed", "archived") and offset == 0:
+                return [closed_issue]
+            if status in ("closed", "archived"):
+                return []
+            return original(**kwargs)
+
+        with patch.object(db, "list_issues", side_effect=overlapping_list):
+            data = get_flow_metrics(db, days=30)
+
+        assert data["throughput"] == 1, f"Same issue in both buckets should be counted once, got {data['throughput']}"
+        assert data["by_type"].get("task", {}).get("count", 0) <= 1
+
+    def test_flow_metrics_archived_issues_contribute_to_lead_time(self, db: FiligreeDB) -> None:
+        """Archived issues are counted in throughput; they must also feed avg_lead_time.
+
+        Regression: lead_time() rejected status='archived' because the synthetic
+        status resolves to category 'open', so archived issues' lead times were
+        silently dropped from the average even though throughput included them.
+        """
+        issue = db.create_issue("Archived metric")
+        db.update_issue(issue.id, status="in_progress")
+        db.close_issue(issue.id)
+        db.archive_closed(days_old=0)
+        assert db.get_issue(issue.id).status == "archived"
+
+        data = get_flow_metrics(db, days=30)
+        assert data["throughput"] >= 1
+        assert data["avg_lead_time_hours"] is not None, "Archived issue must contribute to avg_lead_time"
+
+    def test_flow_metrics_by_type_count_is_closed_count_not_cycle_samples(self, db: FiligreeDB) -> None:
+        """by_type[t]['count'] is the closed-issue count for type t, not the cycle-time sample count.
+
+        Regression: count was len(cycle_time_samples), so issues closed without a
+        WIP transition (allowed by the task workflow's open->closed direct path)
+        were silently absent from by_type even though they're real throughput.
+        The CLI labels this field "closed" — keep the displayed count honest.
+        """
+        # Direct open->closed: no WIP event, so cycle_time will be None
+        no_wip = db.create_issue("Direct close", type="task")
+        db.close_issue(no_wip.id)
+        # Normal WIP->closed: contributes a cycle-time sample
+        with_wip = db.create_issue("WIP close", type="task")
+        db.update_issue(with_wip.id, status="in_progress")
+        db.close_issue(with_wip.id)
+
+        data = get_flow_metrics(db, days=30)
+        task_metrics = data["by_type"].get("task")
+        assert task_metrics is not None, f"task type missing from by_type: {data['by_type']}"
+        assert task_metrics["count"] == 2, f"expected 2 closed tasks, got {task_metrics['count']}"
+        # avg_cycle_time_hours derives from the one WIP->closed issue only
+        assert task_metrics["avg_cycle_time_hours"] is not None
+
+    def test_flow_metrics_by_type_count_present_with_no_cycle_samples(self, db: FiligreeDB) -> None:
+        """A type with closed issues but zero cycle-time samples still appears in by_type.
+
+        Edge case of the count-vs-samples bug: previously, a type whose only
+        closed issues lacked WIP transitions was missing from by_type entirely.
+        """
+        issue = db.create_issue("No-WIP only", type="task")
+        db.close_issue(issue.id)
+
+        data = get_flow_metrics(db, days=30)
+        task_metrics = data["by_type"].get("task")
+        assert task_metrics is not None
+        assert task_metrics["count"] == 1
+        assert task_metrics["avg_cycle_time_hours"] is None
 
 
 # ---------------------------------------------------------------------------

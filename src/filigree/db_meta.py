@@ -12,8 +12,9 @@ import sqlite3
 from pathlib import Path
 from typing import Any, ClassVar
 
-from filigree.db_base import DBMixinProtocol, _now_iso
+from filigree.db_base import DBMixinProtocol, _normalize_iso_to_utc, _now_iso
 from filigree.db_files import VALID_FINDING_STATUSES, VALID_SEVERITIES
+from filigree.db_observations import _expires_iso
 from filigree.types.planning import CommentRecord, StatsResult
 
 logger = logging.getLogger(__name__)
@@ -34,6 +35,7 @@ class MetaMixin(DBMixinProtocol):
         if not text or not text.strip():
             msg = "Comment text cannot be empty"
             raise ValueError(msg)
+        self._check_id_prefix(issue_id)
         now = _now_iso()
         try:
             cursor = self.conn.execute(
@@ -59,8 +61,28 @@ class MetaMixin(DBMixinProtocol):
 
     # -- Labels --------------------------------------------------------------
 
-    def add_label(self, issue_id: str, label: str) -> bool:
+    def add_label(self, issue_id: str, label: str) -> tuple[bool, str]:
+        """Add label to issue. Returns (added, canonical_label).
+
+        ``canonical_label`` is the stored form after normalization (strip, etc.);
+        callers rendering output should use it rather than the raw argument.
+        """
+        self._check_id_prefix(issue_id)
         normalized = self._validate_label_name(label)
+        # Idempotency for review:* — the mutual-exclusivity DELETE below would
+        # otherwise turn a no-op re-add into delete-then-reinsert and falsely
+        # report (True, ...). Detect and short-circuit when the existing review
+        # set is exactly {normalized}.
+        if normalized.startswith("review:"):
+            existing_review = {
+                row["label"]
+                for row in self.conn.execute(
+                    "SELECT label FROM labels WHERE issue_id = ? AND label LIKE 'review:%'",
+                    (issue_id,),
+                ).fetchall()
+            }
+            if existing_review == {normalized}:
+                return False, normalized
         try:
             # Mutual exclusivity for review: namespace
             if normalized.startswith("review:"):
@@ -76,9 +98,11 @@ class MetaMixin(DBMixinProtocol):
         except Exception:
             self.conn.rollback()
             raise
-        return cursor.rowcount > 0
+        return cursor.rowcount > 0, normalized
 
-    def remove_label(self, issue_id: str, label: str) -> bool:
+    def remove_label(self, issue_id: str, label: str) -> tuple[bool, str]:
+        """Remove label from issue. Returns (removed, canonical_label)."""
+        self._check_id_prefix(issue_id)
         normalized = self._validate_label_name(label)
         try:
             cursor = self.conn.execute(
@@ -89,7 +113,7 @@ class MetaMixin(DBMixinProtocol):
         except Exception:
             self.conn.rollback()
             raise
-        return cursor.rowcount > 0
+        return cursor.rowcount > 0, normalized
 
     def list_labels(
         self,
@@ -130,10 +154,6 @@ class MetaMixin(DBMixinProtocol):
 
             namespaces[ns]["labels"].append({"label": lbl, "count": cnt})
 
-        if top > 0:
-            for ns_data in namespaces.values():
-                ns_data["labels"] = ns_data["labels"][:top]
-
         # Add virtual namespaces with computed counts
         if namespace is None or namespace == "age":
             age_labels = self._compute_virtual_age_counts()
@@ -142,6 +162,12 @@ class MetaMixin(DBMixinProtocol):
         if namespace is None or namespace == "has":
             has_labels = self._compute_virtual_has_counts()
             namespaces.setdefault("has", {"type": "virtual", "writable": False, "labels": has_labels})
+
+        # Truncate after virtual namespaces are added so the per-namespace
+        # cap applies uniformly. top=0 stays unlimited.
+        if top > 0:
+            for ns_data in namespaces.values():
+                ns_data["labels"] = ns_data["labels"][:top]
 
         total = sum(len(ns["labels"]) for ns in namespaces.values())
         return {"namespaces": namespaces, "total_in_result": total}
@@ -161,16 +187,21 @@ class MetaMixin(DBMixinProtocol):
         return results
 
     def _compute_virtual_has_counts(self) -> list[dict[str, Any]]:
-        _, done_states_raw, _, _ = self._resolve_open_done_states()
-        done_states = done_states_raw or ["closed"]
-        done_ph = ",".join("?" * len(done_states))
+        # filigree-b55aa3191f: type-aware blocker-done predicate so a blocker
+        # whose state name collides across categories (e.g. incident.resolved
+        # vs debt_item.resolved) is classified per type. With
+        # include_archived=True the predicate is always SQL-valid even when no
+        # done-category states are registered (matches archived-only).
+        blocker_done_sql, blocker_done_params = self._category_predicate_sql(
+            "done", type_col="b.type", status_col="b.status", include_archived=True
+        )
         counts = []
         cnt = self.conn.execute(
             f"SELECT COUNT(DISTINCT i.id) as cnt FROM issues i "
             f"JOIN dependencies d ON d.issue_id = i.id "
             f"JOIN issues b ON d.depends_on_id = b.id "
-            f"WHERE b.status NOT IN ({done_ph})",
-            done_states,
+            f"WHERE NOT ({blocker_done_sql})",
+            blocker_done_params,
         ).fetchone()["cnt"]
         counts.append({"label": "has:blockers", "count": cnt})
         cnt = self.conn.execute("SELECT COUNT(DISTINCT parent_id) as cnt FROM issues WHERE parent_id IS NOT NULL").fetchone()["cnt"]
@@ -265,27 +296,28 @@ class MetaMixin(DBMixinProtocol):
         for row in self.conn.execute("SELECT type, COUNT(*) as cnt FROM issues GROUP BY type").fetchall():
             by_type[row["type"]] = row["cnt"]
 
-        open_states, done_states, open_ph, done_ph = self._resolve_open_done_states()
-        if not open_states:
+        preds = self._resolve_open_blocker_predicates()
+        if preds is None:
             ready_count = 0
             blocked_count = 0
         else:
+            (open_sql, open_params), (blocker_done_sql, blocker_done_params) = preds
             ready_count = self.conn.execute(
                 f"SELECT COUNT(*) as cnt FROM issues i "
-                f"WHERE i.status IN ({open_ph}) "
+                f"WHERE {open_sql} "
                 f"AND NOT EXISTS ("
                 f"  SELECT 1 FROM dependencies d "
                 f"  JOIN issues blocker ON d.depends_on_id = blocker.id "
-                f"  WHERE d.issue_id = i.id AND blocker.status NOT IN ({done_ph})"
+                f"  WHERE d.issue_id = i.id AND NOT ({blocker_done_sql})"
                 f")",
-                [*open_states, *done_states],
+                [*open_params, *blocker_done_params],
             ).fetchone()["cnt"]
             blocked_count = self.conn.execute(
                 f"SELECT COUNT(DISTINCT i.id) as cnt FROM issues i "
                 f"JOIN dependencies d ON d.issue_id = i.id "
                 f"JOIN issues blocker ON d.depends_on_id = blocker.id "
-                f"WHERE i.status IN ({open_ph}) AND blocker.status NOT IN ({done_ph})",
-                [*open_states, *done_states],
+                f"WHERE {open_sql} AND NOT ({blocker_done_sql})",
+                [*open_params, *blocker_done_params],
             ).fetchone()["cnt"]
 
         dep_count = self.conn.execute("SELECT COUNT(*) as cnt FROM dependencies").fetchone()["cnt"]
@@ -478,8 +510,8 @@ class MetaMixin(DBMixinProtocol):
                 path,
                 record.get("language", ""),
                 record.get("file_type", ""),
-                record.get("first_seen", _now_iso()),
-                record.get("updated_at", _now_iso()),
+                _normalize_iso_to_utc(record.get("first_seen")) or _now_iso(),
+                _normalize_iso_to_utc(record.get("updated_at")) or _now_iso(),
                 self._json_text(record.get("metadata", {})),
             ),
         )
@@ -521,6 +553,7 @@ class MetaMixin(DBMixinProtocol):
     _EXPORT_TABLES: ClassVar[list[tuple[str, str]]] = [
         ("issue", "SELECT * FROM issues ORDER BY created_at"),
         ("file_record", "SELECT * FROM file_records ORDER BY path"),
+        ("scan_run", "SELECT * FROM scan_runs ORDER BY started_at, id"),
         ("scan_finding", "SELECT * FROM scan_findings ORDER BY first_seen, file_id, scan_source, rule_id"),
         ("dependency", "SELECT * FROM dependencies ORDER BY issue_id"),
         ("label", "SELECT * FROM labels ORDER BY issue_id"),
@@ -548,21 +581,105 @@ class MetaMixin(DBMixinProtocol):
                     count += 1
         return count
 
-    def import_jsonl(self, input_path: str | Path, *, merge: bool = False) -> dict[str, Any]:
+    def _assert_import_ids_match_prefix(
+        self,
+        *,
+        issues: list[dict[str, Any]],
+        dependencies: list[dict[str, Any]],
+        labels: list[dict[str, Any]],
+        comments: list[dict[str, Any]],
+        events: list[dict[str, Any]],
+        file_associations: list[dict[str, Any]],
+        scan_findings: list[dict[str, Any]],
+        observations: list[dict[str, Any]],
+    ) -> None:
+        """Raise WrongProjectError if any imported record references an
+        issue ID whose prefix doesn't match this DB.
+
+        Rationale: ``import_jsonl`` inserts rows by ``INSERT OR (IGNORE|ABORT)``
+        directly into SQLite, bypassing the per-method ``_check_id_prefix``
+        guard. Without this preflight, a cross-prefix JSONL would silently
+        install rows that every subsequent mutation path rejects.
+        """
+        from filigree.core import WrongProjectError
+
+        foreign: set[str] = set()
+
+        def check(issue_id: Any) -> None:
+            if not isinstance(issue_id, str) or not issue_id:
+                return
+            if "-" not in issue_id:
+                return
+            if issue_id.startswith(self.prefix + "-"):
+                return
+            foreign.add(issue_id)
+
+        for rec in issues:
+            check(rec.get("id"))
+            check(rec.get("parent_id"))
+        for rec in dependencies:
+            check(rec.get("issue_id"))
+            check(rec.get("depends_on_id"))
+        for rec in labels:
+            check(rec.get("issue_id"))
+        for rec in comments:
+            check(rec.get("issue_id"))
+        for rec in events:
+            check(rec.get("issue_id"))
+        for rec in file_associations:
+            check(rec.get("issue_id"))
+        for rec in scan_findings:
+            check(rec.get("issue_id"))
+        for rec in observations:
+            check(rec.get("source_issue_id"))
+
+        if not foreign:
+            return
+        sample = sorted(foreign)[:5]
+        extra = f" (+{len(foreign) - len(sample)} more)" if len(foreign) > len(sample) else ""
+        msg = (
+            f"import_jsonl: {len(foreign)} record(s) reference issue ID(s) "
+            f"from a foreign project — this DB's prefix is {self.prefix!r}. "
+            f"Examples: {sample}{extra}. Re-export the source data or pass "
+            f"allow_foreign_ids=True to keep the original IDs (which will "
+            f"then be readable but not mutable through the prefix-guarded "
+            f"write methods)."
+        )
+        raise WrongProjectError(msg)
+
+    def import_jsonl(
+        self,
+        input_path: str | Path,
+        *,
+        merge: bool = False,
+        allow_foreign_ids: bool = False,
+    ) -> dict[str, Any]:
         """Import full project data from a JSONL file.
 
         Args:
             input_path: Path to JSONL file
             merge: If True, skip existing records (OR IGNORE). If False, raise on conflict.
+            allow_foreign_ids: If True, permit imported issue IDs whose prefix
+                does not match this DB's prefix. The default (False) rejects
+                cross-prefix imports fast, because later write paths enforce
+                the prefix guard and the imported rows would otherwise be
+                readable-but-unwritable. Migration tools that deliberately
+                preserve source IDs may opt in.
 
         Returns dict with ``count`` (records inserted) and ``skipped_types``
         (mapping of unknown _type values to their occurrence counts, empty if none).
+
+        Raises:
+            WrongProjectError: if *allow_foreign_ids* is False and any
+                imported record carries an issue ID that does not belong to
+                this project. No rows are inserted before the check.
         """
         count = 0
         skipped_types: dict[str, int] = {}
         conflict = "OR IGNORE" if merge else "OR ABORT"
         issues: list[dict[str, Any]] = []
         file_records: list[dict[str, Any]] = []
+        scan_runs: list[dict[str, Any]] = []
         scan_findings: list[dict[str, Any]] = []
         dependencies: list[dict[str, Any]] = []
         labels: list[dict[str, Any]] = []
@@ -576,6 +693,7 @@ class MetaMixin(DBMixinProtocol):
         buckets: dict[str, list[dict[str, Any]]] = {
             "issue": issues,
             "file_record": file_records,
+            "scan_run": scan_runs,
             "scan_finding": scan_findings,
             "dependency": dependencies,
             "label": labels,
@@ -607,6 +725,18 @@ class MetaMixin(DBMixinProtocol):
                     key = record_type or "<missing>"
                     skipped_types[key] = skipped_types.get(key, 0) + 1
 
+        if not allow_foreign_ids:
+            self._assert_import_ids_match_prefix(
+                issues=issues,
+                dependencies=dependencies,
+                labels=labels,
+                comments=comments,
+                events=events,
+                file_associations=file_associations,
+                scan_findings=scan_findings,
+                observations=observations,
+            )
+
         inserted_issue_ids: set[str] = set()
         parent_map: dict[str, str] = {}
         file_id_map: dict[str, str] = {}
@@ -619,6 +749,10 @@ class MetaMixin(DBMixinProtocol):
             for _import_index, record in enumerate(issues):
                 parent_id = record.get("parent_id")
                 fields = self._issue_fields_json(record.get("fields", "{}"))
+                # Normalize timestamps at the import boundary so SQLite TEXT
+                # comparisons (used by archive_closed for closed_at, etc.) work
+                # chronologically regardless of the source's offset. Internal
+                # write paths already emit canonical UTC. (filigree-20911dfe6d)
                 cursor = self.conn.execute(
                     f"INSERT {conflict} INTO issues "
                     "(id, title, status, priority, type, parent_id, assignee, "
@@ -632,9 +766,9 @@ class MetaMixin(DBMixinProtocol):
                         record.get("type", "task"),
                         None,
                         record.get("assignee", ""),
-                        record.get("created_at", _now_iso()),
-                        record.get("updated_at", _now_iso()),
-                        record.get("closed_at"),
+                        _normalize_iso_to_utc(record.get("created_at")) or _now_iso(),
+                        _normalize_iso_to_utc(record.get("updated_at")) or _now_iso(),
+                        _normalize_iso_to_utc(record.get("closed_at")),
                         record.get("description", ""),
                         record.get("notes", ""),
                         fields,
@@ -659,6 +793,39 @@ class MetaMixin(DBMixinProtocol):
             _import_stage = "file_record"
             for _import_index, record in enumerate(file_records):
                 count += self._resolve_imported_file_id(record, merge=merge, conflict=conflict, file_id_map=file_id_map)
+
+            _import_stage = "scan_run"
+            for _import_index, record in enumerate(scan_runs):
+                rec_id = record.get("id", "?")
+                status = record.get("status", "pending")
+                if status not in {"pending", "running", "completed", "failed", "timeout"}:
+                    msg = f"Invalid scan_run status {status!r} for {rec_id!r}"
+                    raise ValueError(msg)
+                cursor = self.conn.execute(
+                    f"INSERT {conflict} INTO scan_runs "
+                    "(id, scanner_name, scan_source, status, file_paths, file_ids, "
+                    "pid, api_url, log_path, started_at, updated_at, completed_at, "
+                    "exit_code, findings_count, error_message) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        record["id"],
+                        record["scanner_name"],
+                        record.get("scan_source", ""),
+                        status,
+                        record.get("file_paths", "[]"),
+                        record.get("file_ids", "[]"),
+                        record.get("pid"),
+                        record.get("api_url", ""),
+                        record.get("log_path", ""),
+                        _normalize_iso_to_utc(record.get("started_at")) or _now_iso(),
+                        _normalize_iso_to_utc(record.get("updated_at")) or _now_iso(),
+                        _normalize_iso_to_utc(record.get("completed_at")),
+                        record.get("exit_code"),
+                        record.get("findings_count", 0),
+                        record.get("error_message", ""),
+                    ),
+                )
+                count += cursor.rowcount
 
             _import_stage = "scan_finding"
             for _import_index, record in enumerate(scan_findings):
@@ -692,9 +859,9 @@ class MetaMixin(DBMixinProtocol):
                         record.get("line_start"),
                         record.get("line_end"),
                         record.get("seen_count", 1),
-                        record.get("first_seen", _now_iso()),
-                        record.get("updated_at", _now_iso()),
-                        record.get("last_seen_at"),
+                        _normalize_iso_to_utc(record.get("first_seen")) or _now_iso(),
+                        _normalize_iso_to_utc(record.get("updated_at")) or _now_iso(),
+                        _normalize_iso_to_utc(record.get("last_seen_at")),
                         self._json_text(record.get("metadata", {})),
                     ),
                 )
@@ -708,23 +875,39 @@ class MetaMixin(DBMixinProtocol):
                         record["issue_id"],
                         record["depends_on_id"],
                         record.get("type", "blocks"),
-                        record.get("created_at", _now_iso()),
+                        _normalize_iso_to_utc(record.get("created_at")) or _now_iso(),
                     ),
                 )
                 count += cursor.rowcount
 
             _import_stage = "label"
             for _import_index, record in enumerate(labels):
+                raw_label = record["label"]
+                try:
+                    validated = self._validate_label_name(raw_label)
+                except ValueError as exc:
+                    # Mirrors normal-write enforcement: reserved auto/virtual
+                    # namespaces (age:, has:) and reserved type names cannot be
+                    # imported as physical rows — they would shadow computed
+                    # virtual namespaces in list_labels(). Skip and account.
+                    logger.warning(
+                        "import_jsonl: skipping invalid label %r for %s: %s",
+                        raw_label,
+                        record.get("issue_id", "<missing>"),
+                        exc,
+                    )
+                    skipped_types["<invalid_label>"] = skipped_types.get("<invalid_label>", 0) + 1
+                    continue
                 cursor = self.conn.execute(
                     f"INSERT {conflict} INTO labels (issue_id, label) VALUES (?, ?)",
-                    (record["issue_id"], record["label"]),
+                    (record["issue_id"], validated),
                 )
                 count += cursor.rowcount
 
             _import_stage = "comment"
             for _import_index, record in enumerate(comments):
                 if merge:
-                    created = record.get("created_at", _now_iso())
+                    created = _normalize_iso_to_utc(record.get("created_at")) or _now_iso()
                     cursor = self.conn.execute(
                         "INSERT INTO comments (issue_id, author, text, created_at) "
                         "SELECT ?, ?, ?, ? "
@@ -749,13 +932,17 @@ class MetaMixin(DBMixinProtocol):
                             record.get("issue_id", ""),
                             record.get("author", ""),
                             record.get("text", ""),
-                            record.get("created_at", _now_iso()),
+                            _normalize_iso_to_utc(record.get("created_at")) or _now_iso(),
                         ),
                     )
                 count += cursor.rowcount
 
             _import_stage = "event"
             for _import_index, record in enumerate(events):
+                # events.created_at is the column read by get_events_since,
+                # which compares lexicographically. Normalize on import so
+                # rows from sources with non-UTC offsets sort correctly.
+                # (filigree-20911dfe6d)
                 cursor = self.conn.execute(
                     f"INSERT {conflict} INTO events "
                     "(issue_id, event_type, actor, old_value, new_value, comment, created_at) "
@@ -767,7 +954,7 @@ class MetaMixin(DBMixinProtocol):
                         record.get("old_value"),
                         record.get("new_value"),
                         record.get("comment", ""),
-                        record.get("created_at", _now_iso()),
+                        _normalize_iso_to_utc(record.get("created_at")) or _now_iso(),
                     ),
                 )
                 count += cursor.rowcount
@@ -781,7 +968,7 @@ class MetaMixin(DBMixinProtocol):
                         file_id,
                         record["issue_id"],
                         record.get("assoc_type", "bug_in"),
-                        record.get("created_at", _now_iso()),
+                        _normalize_iso_to_utc(record.get("created_at")) or _now_iso(),
                     ),
                 )
                 count += cursor.rowcount
@@ -790,7 +977,7 @@ class MetaMixin(DBMixinProtocol):
             for _import_index, record in enumerate(file_events):
                 file_id = self._remap_file_id(record["file_id"], file_id_map)
                 if merge:
-                    created = record.get("created_at", _now_iso())
+                    created = _normalize_iso_to_utc(record.get("created_at")) or _now_iso()
                     cursor = self.conn.execute(
                         "INSERT INTO file_events (file_id, event_type, field, old_value, new_value, created_at) "
                         "SELECT ?, ?, ?, ?, ?, ? "
@@ -822,7 +1009,7 @@ class MetaMixin(DBMixinProtocol):
                             record.get("field", ""),
                             record.get("old_value", ""),
                             record.get("new_value", ""),
-                            record.get("created_at", _now_iso()),
+                            _normalize_iso_to_utc(record.get("created_at")) or _now_iso(),
                         ),
                     )
                 count += cursor.rowcount
@@ -832,6 +1019,9 @@ class MetaMixin(DBMixinProtocol):
                 obs_file_id: str | None = record.get("file_id")
                 if obs_file_id and obs_file_id in file_id_map:
                     obs_file_id = file_id_map[obs_file_id]
+                # Default expires_at to _expires_iso() (now + TTL) when missing.
+                # _now_iso() would make every imported observation already expired
+                # and swept on the next read.
                 cursor = self.conn.execute(
                     f"INSERT {conflict} INTO observations "
                     "(id, summary, detail, file_id, file_path, line, source_issue_id, "
@@ -847,8 +1037,8 @@ class MetaMixin(DBMixinProtocol):
                         record.get("source_issue_id", ""),
                         record.get("priority", 3),
                         record.get("actor", ""),
-                        record.get("created_at", _now_iso()),
-                        record.get("expires_at", _now_iso()),
+                        _normalize_iso_to_utc(record.get("created_at")) or _now_iso(),
+                        _normalize_iso_to_utc(record.get("expires_at")) or _expires_iso(),
                     ),
                 )
                 count += cursor.rowcount
@@ -859,7 +1049,7 @@ class MetaMixin(DBMixinProtocol):
                 summary = record["summary"]
                 actor_val = record.get("actor", "")
                 reason = record.get("reason", "")
-                dismissed_at = record.get("dismissed_at", _now_iso())
+                dismissed_at = _normalize_iso_to_utc(record.get("dismissed_at")) or _now_iso()
                 # dismissed_observations has no unique content constraint (only
                 # an auto-increment PK), so OR IGNORE won't deduplicate on
                 # content.  In merge mode, skip rows that already exist.

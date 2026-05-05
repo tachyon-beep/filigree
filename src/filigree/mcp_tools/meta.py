@@ -9,15 +9,19 @@ from typing import Any
 
 from mcp.types import TextContent, Tool
 
-from filigree.mcp_tools.common import _parse_args, _text, _validate_actor
+from filigree.issue_payloads import issue_to_public
+from filigree.mcp_tools.common import _list_response, _parse_args, _text, _validate_actor, _validate_int_range
 from filigree.types.api import (
     AddCommentResult,
     ArchiveClosedResponse,
-    BatchActionResponse,
+    BatchResponse,
     CompactEventsResponse,
+    ErrorCode,
     ErrorResponse,
     JsonlTransferResponse,
     LabelActionResponse,
+    PublicIssue,
+    parse_response_detail,
 )
 from filigree.types.inputs import (
     AddCommentArgs,
@@ -93,36 +97,59 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
         ),
         Tool(
             name="batch_add_label",
-            description="Add the same label to multiple issues in one call.",
+            description=(
+                "Add the same label to multiple issues in one call. Returns "
+                "BatchResponse[str] (succeeded issue IDs) by default, or "
+                "BatchResponse[PublicIssue] when response_detail='full'. "
+                "failed[] is always present (empty if none)."
+            ),
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "ids": {
+                    "issue_ids": {
                         "type": "array",
                         "items": {"type": "string"},
                         "description": "Issue IDs to update",
                     },
                     "label": {"type": "string", "description": "Label to add"},
+                    "response_detail": {
+                        "type": "string",
+                        "enum": ["slim", "full"],
+                        "default": "slim",
+                        "description": "'slim' (default) returns issue ID strings in succeeded[]; 'full' returns full PublicIssue records.",
+                    },
                     "actor": {"type": "string", "description": "Agent/user identity for audit trail"},
                 },
-                "required": ["ids", "label"],
+                "required": ["issue_ids", "label"],
             },
         ),
         Tool(
             name="batch_add_comment",
-            description="Add the same comment to multiple issues in one call.",
+            description=(
+                "Add the same comment to multiple issues in one call. Returns "
+                "BatchResponse[str] (succeeded issue IDs) by default, or "
+                "BatchResponse[PublicIssue] when response_detail='full' "
+                "(succeeded[] then carries the full commented-on issues). "
+                "failed[] is always present (empty if none)."
+            ),
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "ids": {
+                    "issue_ids": {
                         "type": "array",
                         "items": {"type": "string"},
                         "description": "Issue IDs to update",
                     },
                     "text": {"type": "string", "description": "Comment text"},
+                    "response_detail": {
+                        "type": "string",
+                        "enum": ["slim", "full"],
+                        "default": "slim",
+                        "description": "'slim' (default) returns issue ID strings in succeeded[]; 'full' returns full PublicIssue records of the commented-on issues.",
+                    },
                     "actor": {"type": "string", "description": "Agent/user identity for audit trail"},
                 },
-                "required": ["ids", "text"],
+                "required": ["issue_ids", "text"],
             },
         ),
         Tool(
@@ -198,7 +225,8 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
                     "days_old": {
                         "type": "integer",
                         "default": 30,
-                        "description": "Archive issues closed more than N days ago",
+                        "minimum": 0,
+                        "description": "Archive issues closed more than N days ago (must be >= 0)",
                     },
                     "actor": {"type": "string", "description": "Agent/user identity for audit trail"},
                 },
@@ -213,7 +241,8 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
                     "keep_recent": {
                         "type": "integer",
                         "default": 50,
-                        "description": "Keep N most recent events per archived issue",
+                        "minimum": 0,
+                        "description": "Keep N most recent events per archived issue (must be >= 0)",
                     },
                 },
             },
@@ -224,10 +253,10 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "id": {"type": "string", "description": "Issue ID"},
+                    "issue_id": {"type": "string", "description": "Issue ID"},
                     "actor": {"type": "string", "description": "Agent/user identity for audit trail"},
                 },
-                "required": ["id"],
+                "required": ["issue_id"],
             },
         ),
         Tool(
@@ -317,7 +346,7 @@ async def _handle_add_comment(arguments: dict[str, Any]) -> list[TextContent]:
     try:
         tracker.get_issue(args["issue_id"])
     except KeyError:
-        return _text(ErrorResponse(error=f"Issue not found: {args['issue_id']}", code="not_found"))
+        return _text(ErrorResponse(error=f"Issue not found: {args['issue_id']}", code=ErrorCode.NOT_FOUND))
     try:
         comment_id = tracker.add_comment(
             args["issue_id"],
@@ -325,7 +354,7 @@ async def _handle_add_comment(arguments: dict[str, Any]) -> list[TextContent]:
             author=actor,
         )
     except ValueError as e:
-        return _text(ErrorResponse(error=str(e), code="validation_error"))
+        return _text(ErrorResponse(error=str(e), code=ErrorCode.VALIDATION))
     _refresh_summary()
     return _text(AddCommentResult(status="ok", comment_id=comment_id))
 
@@ -338,9 +367,9 @@ async def _handle_get_comments(arguments: dict[str, Any]) -> list[TextContent]:
     try:
         tracker.get_issue(args["issue_id"])
     except KeyError:
-        return _text(ErrorResponse(error=f"Issue not found: {args['issue_id']}", code="not_found"))
+        return _text(ErrorResponse(error=f"Issue not found: {args['issue_id']}", code=ErrorCode.NOT_FOUND))
     comments = tracker.get_comments(args["issue_id"])
-    return _text(comments)
+    return _text(_list_response(list(comments), has_more=False))
 
 
 async def _handle_add_label(arguments: dict[str, Any]) -> list[TextContent]:
@@ -351,14 +380,14 @@ async def _handle_add_label(arguments: dict[str, Any]) -> list[TextContent]:
     try:
         tracker.get_issue(args["issue_id"])
     except KeyError:
-        return _text(ErrorResponse(error=f"Issue not found: {args['issue_id']}", code="not_found"))
+        return _text(ErrorResponse(error=f"Issue not found: {args['issue_id']}", code=ErrorCode.NOT_FOUND))
     try:
-        added = tracker.add_label(args["issue_id"], args["label"])
+        added, canonical = tracker.add_label(args["issue_id"], args["label"])
     except ValueError as e:
-        return _text(ErrorResponse(error=str(e), code="validation_error"))
+        return _text(ErrorResponse(error=str(e), code=ErrorCode.VALIDATION))
     _refresh_summary()
     status = "added" if added else "already_exists"
-    return _text(LabelActionResponse(status=status, issue_id=args["issue_id"], label=args["label"]))
+    return _text(LabelActionResponse(status=status, issue_id=args["issue_id"], label=canonical))
 
 
 async def _handle_remove_label(arguments: dict[str, Any]) -> list[TextContent]:
@@ -369,14 +398,14 @@ async def _handle_remove_label(arguments: dict[str, Any]) -> list[TextContent]:
     try:
         tracker.get_issue(args["issue_id"])
     except KeyError:
-        return _text(ErrorResponse(error=f"Issue not found: {args['issue_id']}", code="not_found"))
+        return _text(ErrorResponse(error=f"Issue not found: {args['issue_id']}", code=ErrorCode.NOT_FOUND))
     try:
-        removed = tracker.remove_label(args["issue_id"], args["label"])
+        removed, canonical = tracker.remove_label(args["issue_id"], args["label"])
     except ValueError as e:
-        return _text(ErrorResponse(error=str(e), code="validation_error"))
+        return _text(ErrorResponse(error=str(e), code=ErrorCode.VALIDATION))
     _refresh_summary()
     status = "removed" if removed else "not_found"
-    return _text(LabelActionResponse(status=status, issue_id=args["issue_id"], label=args["label"]))
+    return _text(LabelActionResponse(status=status, issue_id=args["issue_id"], label=canonical))
 
 
 async def _handle_batch_add_label(arguments: dict[str, Any]) -> list[TextContent]:
@@ -386,22 +415,28 @@ async def _handle_batch_add_label(arguments: dict[str, Any]) -> list[TextContent
     _actor, actor_err = _validate_actor(args.get("actor", "mcp"))  # validated for rejection only
     if actor_err:
         return actor_err
+    detail = parse_response_detail(args.get("response_detail"))
+    if isinstance(detail, dict):
+        return _text(detail)
     tracker = _get_db()
-    label_ids = args["ids"]
-    if not all(isinstance(i, str) for i in label_ids):
-        return _text(ErrorResponse(error="All issue IDs must be strings", code="validation_error"))
+    issue_ids = args["issue_ids"]
+    if not all(isinstance(i, str) for i in issue_ids):
+        return _text(ErrorResponse(error="All issue IDs must be strings", code=ErrorCode.VALIDATION))
     if not isinstance(args["label"], str):
-        return _text(ErrorResponse(error="label must be a string", code="validation_error"))
-    label_succeeded, label_failed = tracker.batch_add_label(label_ids, label=args["label"])
+        return _text(ErrorResponse(error="label must be a string", code=ErrorCode.VALIDATION))
+    label_succeeded, label_failed = tracker.batch_add_label(issue_ids, label=args["label"])
     _refresh_summary()
-    return _text(
-        BatchActionResponse(
-            succeeded=[row["id"] for row in label_succeeded],
-            results=label_succeeded,
+    if detail == "full":
+        full_result: BatchResponse[PublicIssue] = BatchResponse(
+            succeeded=[issue_to_public(tracker.get_issue(row["id"])) for row in label_succeeded],
             failed=label_failed,
-            count=len(label_succeeded),
         )
+        return _text(full_result)
+    result: BatchResponse[str] = BatchResponse(
+        succeeded=[row["id"] for row in label_succeeded],
+        failed=label_failed,
     )
+    return _text(result)
 
 
 async def _handle_batch_add_comment(arguments: dict[str, Any]) -> list[TextContent]:
@@ -411,26 +446,32 @@ async def _handle_batch_add_comment(arguments: dict[str, Any]) -> list[TextConte
     actor, actor_err = _validate_actor(args.get("actor", "mcp"))
     if actor_err:
         return actor_err
+    detail = parse_response_detail(args.get("response_detail"))
+    if isinstance(detail, dict):
+        return _text(detail)
     tracker = _get_db()
-    comment_ids = args["ids"]
-    if not all(isinstance(i, str) for i in comment_ids):
-        return _text(ErrorResponse(error="All issue IDs must be strings", code="validation_error"))
+    issue_ids = args["issue_ids"]
+    if not all(isinstance(i, str) for i in issue_ids):
+        return _text(ErrorResponse(error="All issue IDs must be strings", code=ErrorCode.VALIDATION))
     if not isinstance(args["text"], str):
-        return _text(ErrorResponse(error="text must be a string", code="validation_error"))
+        return _text(ErrorResponse(error="text must be a string", code=ErrorCode.VALIDATION))
     comment_succeeded, comment_failed = tracker.batch_add_comment(
-        comment_ids,
+        issue_ids,
         text=args["text"],
         author=actor,
     )
     _refresh_summary()
-    return _text(
-        BatchActionResponse(
-            succeeded=[str(row["id"]) for row in comment_succeeded],
-            results=comment_succeeded,
+    if detail == "full":
+        full_result: BatchResponse[PublicIssue] = BatchResponse(
+            succeeded=[issue_to_public(tracker.get_issue(str(row["id"]))) for row in comment_succeeded],
             failed=comment_failed,
-            count=len(comment_succeeded),
         )
+        return _text(full_result)
+    result: BatchResponse[str] = BatchResponse(
+        succeeded=[str(row["id"]) for row in comment_succeeded],
+        failed=comment_failed,
     )
+    return _text(result)
 
 
 async def _handle_get_changes(arguments: dict[str, Any]) -> list[TextContent]:
@@ -445,14 +486,16 @@ async def _handle_get_changes(arguments: dict[str, Any]) -> list[TextContent]:
         datetime.fromisoformat(since_normalized)
     except (ValueError, AttributeError):
         return _text(
-            ErrorResponse(error=f"Invalid ISO timestamp: {since!r}. Expected format: 2026-01-15T10:30:00", code="validation_error")
+            ErrorResponse(error=f"Invalid ISO timestamp: {since!r}. Expected format: 2026-01-15T10:30:00", code=ErrorCode.VALIDATION)
         )
     tracker = _get_db()
-    events = tracker.get_events_since(
-        since_normalized,
-        limit=args.get("limit", 100),
-    )
-    return _text(events)
+    limit = args.get("limit", 100)
+    # Overfetch by 1 to detect has_more, matching list_issues / search_issues.
+    events = tracker.get_events_since(since_normalized, limit=limit + 1)
+    has_more = len(events) > limit
+    if has_more:
+        events = events[:limit]
+    return _text(_list_response(list(events), has_more=has_more))
 
 
 async def _handle_get_summary(arguments: dict[str, Any]) -> list[TextContent]:
@@ -490,9 +533,9 @@ async def _handle_export_jsonl(arguments: dict[str, Any]) -> list[TextContent]:
         count = tracker.export_jsonl(safe)
         return _text(JsonlTransferResponse(status="ok", records=count, path=str(safe)))
     except ValueError as e:
-        return _text(ErrorResponse(error=str(e), code="invalid_path"))
+        return _text(ErrorResponse(error=str(e), code=ErrorCode.VALIDATION))
     except (OSError, sqlite3.Error) as e:
-        return _text(ErrorResponse(error=str(e), code="io_error"))
+        return _text(ErrorResponse(error=str(e), code=ErrorCode.IO))
 
 
 async def _handle_import_jsonl(arguments: dict[str, Any]) -> list[TextContent]:
@@ -503,7 +546,7 @@ async def _handle_import_jsonl(arguments: dict[str, Any]) -> list[TextContent]:
     try:
         safe = _safe_path(args["input_path"])
     except ValueError as e:
-        return _text(ErrorResponse(error=str(e), code="invalid_path"))
+        return _text(ErrorResponse(error=str(e), code=ErrorCode.VALIDATION))
     try:
         result = tracker.import_jsonl(safe, merge=args.get("merge", False))
         _refresh_summary()
@@ -513,7 +556,7 @@ async def _handle_import_jsonl(arguments: dict[str, Any]) -> list[TextContent]:
         return _text(resp)
     except (ValueError, OSError, sqlite3.Error) as e:
         logging.getLogger(__name__).warning("import_jsonl failed: %s", e, exc_info=True)
-        return _text(ErrorResponse(error=str(e), code="import_error"))
+        return _text(ErrorResponse(error=str(e), code=ErrorCode.IO))
 
 
 async def _handle_archive_closed(arguments: dict[str, Any]) -> list[TextContent]:
@@ -523,9 +566,13 @@ async def _handle_archive_closed(arguments: dict[str, Any]) -> list[TextContent]
     actor, actor_err = _validate_actor(args.get("actor", "mcp"))
     if actor_err:
         return actor_err
+    days_old = args.get("days_old", 30)
+    days_err = _validate_int_range(days_old, "days_old", min_val=0)
+    if days_err:
+        return days_err
     tracker = _get_db()
     archived = tracker.archive_closed(
-        days_old=args.get("days_old", 30),
+        days_old=days_old,
         actor=actor,
     )
     _refresh_summary()
@@ -536,8 +583,12 @@ async def _handle_compact_events(arguments: dict[str, Any]) -> list[TextContent]
     from filigree.mcp_server import _get_db
 
     args = _parse_args(arguments, CompactEventsArgs)
+    keep_recent = args.get("keep_recent", 50)
+    keep_err = _validate_int_range(keep_recent, "keep_recent", min_val=0)
+    if keep_err:
+        return keep_err
     tracker = _get_db()
-    deleted = tracker.compact_events(keep_recent=args.get("keep_recent", 50))
+    deleted = tracker.compact_events(keep_recent=keep_recent)
     return _text(CompactEventsResponse(status="ok", events_deleted=deleted))
 
 
@@ -550,12 +601,12 @@ async def _handle_undo_last(arguments: dict[str, Any]) -> list[TextContent]:
         return actor_err
     tracker = _get_db()
     try:
-        result = tracker.undo_last(args["id"], actor=actor)
+        result = tracker.undo_last(args["issue_id"], actor=actor)
         if result["undone"]:
             _refresh_summary()
         return _text(result)
     except KeyError:
-        return _text(ErrorResponse(error=f"Issue not found: {args['id']}", code="not_found"))
+        return _text(ErrorResponse(error=f"Issue not found: {args['issue_id']}", code=ErrorCode.NOT_FOUND))
 
 
 async def _handle_get_issue_events(arguments: dict[str, Any]) -> list[TextContent]:
@@ -563,14 +614,15 @@ async def _handle_get_issue_events(arguments: dict[str, Any]) -> list[TextConten
 
     args = _parse_args(arguments, GetIssueEventsArgs)
     tracker = _get_db()
+    limit = args.get("limit", 50)
     try:
-        events = tracker.get_issue_events(
-            args["issue_id"],
-            limit=args.get("limit", 50),
-        )
-        return _text(events)
+        events = tracker.get_issue_events(args["issue_id"], limit=limit + 1)
     except KeyError:
-        return _text(ErrorResponse(error=f"Issue not found: {args['issue_id']}", code="not_found"))
+        return _text(ErrorResponse(error=f"Issue not found: {args['issue_id']}", code=ErrorCode.NOT_FOUND))
+    has_more = len(events) > limit
+    if has_more:
+        events = events[:limit]
+    return _text(_list_response(list(events), has_more=has_more))
 
 
 async def _handle_list_labels(arguments: dict[str, Any]) -> list[TextContent]:
@@ -584,8 +636,14 @@ async def _handle_list_labels(arguments: dict[str, Any]) -> list[TextContent]:
             top=args.get("top", 10),
         )
     except (sqlite3.Error, ValueError) as exc:
-        return _text(ErrorResponse(error=f"Failed to list labels: {exc}", code="db_error"))
-    return _text(result)
+        return _text(ErrorResponse(error=f"Failed to list labels: {exc}", code=ErrorCode.IO))
+    # ``tracker.list_labels`` returns ``{namespaces: {ns: {type, writable,
+    # labels}}, total_in_result}``. Flatten the namespaces map to a list of
+    # entries so list_labels matches the ListResponse[T] envelope used by
+    # every other MCP list tool. The bounded total is recoverable by the
+    # caller as ``sum(len(item['labels']) for item in items)``.
+    items: list[dict[str, Any]] = [{"namespace": ns, **ns_data} for ns, ns_data in result["namespaces"].items()]
+    return _text(_list_response(items, has_more=False))
 
 
 async def _handle_get_label_taxonomy(arguments: dict[str, Any]) -> list[TextContent]:
@@ -595,7 +653,7 @@ async def _handle_get_label_taxonomy(arguments: dict[str, Any]) -> list[TextCont
     try:
         result = tracker.get_label_taxonomy()
     except (sqlite3.Error, ValueError) as exc:
-        return _text(ErrorResponse(error=f"Failed to get label taxonomy: {exc}", code="db_error"))
+        return _text(ErrorResponse(error=f"Failed to get label taxonomy: {exc}", code=ErrorCode.IO))
     return _text(result)
 
 
@@ -611,12 +669,16 @@ async def _handle_restart_dashboard(arguments: dict[str, Any]) -> list[TextConte
     try:
         filigree_dir = find_filigree_root()
     except FileNotFoundError:
-        return _text(ErrorResponse(error="No .filigree/ directory found", code="not_initialized"))
+        return _text(ErrorResponse(error="No .filigree/ directory found", code=ErrorCode.NOT_INITIALIZED))
 
     pid_file = filigree_dir / "ephemeral.pid"
     info = read_pid_file(pid_file)
 
-    # Stop existing dashboard if running
+    # Stop existing dashboard if running. Only mark ``stopped`` once the PID is
+    # actually gone (filigree-2298877675) — previously this was set
+    # unconditionally after SIGTERM+grace, so a wedged dashboard produced
+    # ``status: "restarted"`` even though ``ensure_dashboard_running`` simply
+    # reused the same still-alive process.
     stopped = False
     if info is not None and verify_pid_ownership(pid_file, expected_cmd="filigree", required_args=("dashboard",)):
         pid = info["pid"]
@@ -627,6 +689,33 @@ async def _handle_restart_dashboard(arguments: dict[str, Any]) -> list[TextConte
                 time.sleep(0.1)
                 if not is_pid_alive(pid):
                     break
+            if is_pid_alive(pid):
+                # Escalate: SIGKILL the unresponsive dashboard.
+                try:
+                    os.kill(pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                except PermissionError:
+                    return _text(
+                        ErrorResponse(
+                            error=f"Cannot stop dashboard (PID {pid}): permission denied",
+                            code=ErrorCode.PERMISSION,
+                        )
+                    )
+                for _ in range(10):  # up to 1 more second
+                    time.sleep(0.1)
+                    if not is_pid_alive(pid):
+                        break
+            if is_pid_alive(pid):
+                return _text(
+                    ErrorResponse(
+                        error=(
+                            f"Old dashboard (PID {pid}) did not exit after SIGTERM+SIGKILL; "
+                            "aborting restart to avoid reporting a spurious success"
+                        ),
+                        code=ErrorCode.STOP_FAILED,
+                    )
+                )
             stopped = True
         except ProcessLookupError:
             stopped = True  # Already dead
@@ -634,7 +723,7 @@ async def _handle_restart_dashboard(arguments: dict[str, Any]) -> list[TextConte
             return _text(
                 ErrorResponse(
                     error=f"Cannot stop dashboard (PID {pid}): permission denied",
-                    code="permission_error",
+                    code=ErrorCode.PERMISSION,
                 )
             )
 
@@ -644,14 +733,22 @@ async def _handle_restart_dashboard(arguments: dict[str, Any]) -> list[TextConte
     try:
         url = ensure_dashboard_running()
     except Exception as exc:
-        logger.error("restart_dashboard: %s", exc)
-        return _text({"status": "failed", "error": f"Dashboard restart failed: {exc}"})
+        logger.exception("restart_dashboard: ensure_dashboard_running raised")
+        return _text(
+            ErrorResponse(
+                error=f"Dashboard restart failed: {exc}",
+                code=ErrorCode.INTERNAL,
+            )
+        )
 
     result: dict[str, Any] = {"status": "restarted" if stopped else "started"}
     if url:
         result["url"] = url
-    else:
-        logger.warning("restart_dashboard: ensure_dashboard_running returned no URL")
-        result["status"] = "failed"
-        result["error"] = "Dashboard did not start"
-    return _text(result)
+        return _text(result)
+    logger.warning("restart_dashboard: ensure_dashboard_running returned no URL")
+    return _text(
+        ErrorResponse(
+            error="Dashboard did not start",
+            code=ErrorCode.IO,
+        )
+    )

@@ -70,12 +70,19 @@ class TestFromFiligreeDir:
     """Verify FiligreeDB.from_filigree_dir construction."""
 
     def test_missing_config_uses_defaults(self, tmp_path: Path) -> None:
-        """from_filigree_dir with no config.json should succeed with defaults."""
-        filigree_dir = tmp_path / ".filigree"
+        """from_filigree_dir with no config.json should succeed with defaults.
+
+        The prefix defaults to the project directory's name (mirroring
+        ``filigree init``'s default), not the hardcoded string ``"filigree"``
+        — see bug filigree-fda0e2a340.
+        """
+        project_root = tmp_path / "myproj"
+        project_root.mkdir()
+        filigree_dir = project_root / ".filigree"
         filigree_dir.mkdir()
 
         db = FiligreeDB.from_filigree_dir(filigree_dir)
-        assert db.prefix == "filigree"
+        assert db.prefix == "myproj"
         assert db.enabled_packs == ["core", "planning", "release"]
         db.close()
 
@@ -263,6 +270,19 @@ class TestGetMode:
         with pytest.raises(ValueError, match="bogus"):
             get_mode(filigree_dir)
 
+    @pytest.mark.parametrize("bad_mode", [[], {}, 1, True, None])
+    def test_non_string_mode_raises_value_error(self, tmp_path: Path, bad_mode: Any) -> None:
+        """Bug filigree-cff0de463f: a JSON-valid non-string ``mode`` (e.g. a list)
+        used to raise ``TypeError`` from a frozenset membership test, bypassing
+        callers that recover from ``ValueError``. It must raise ``ValueError``.
+        """
+        filigree_dir = tmp_path / ".filigree"
+        filigree_dir.mkdir()
+        config = {"prefix": "test", "version": 1, "mode": bad_mode}
+        (filigree_dir / "config.json").write_text(json.dumps(config))
+        with pytest.raises(ValueError, match="mode"):
+            get_mode(filigree_dir)
+
 
 class TestFindFiligreeCommand:
     def test_returns_list(self) -> None:
@@ -298,7 +318,6 @@ class TestWriteAtomic:
         """Bug filigree-07485f: on os.replace failure, temp file must be removed and original preserved."""
         target = tmp_path / "test.txt"
         target.write_text("precious data")
-        tmp_file = target.with_suffix(".txt.tmp")
 
         def failing_replace(src: object, dst: object) -> None:
             raise OSError("disk full")
@@ -309,7 +328,43 @@ class TestWriteAtomic:
             write_atomic(target, "new content that should not land")
 
         assert target.read_text() == "precious data", "Original file must be untouched"
-        assert not tmp_file.exists(), "Temp file must be cleaned up on failure"
+        leftover = list(tmp_path.glob("test.txt.*.tmp"))
+        assert leftover == [], f"Temp file must be cleaned up on failure (found {leftover})"
+
+    def test_concurrent_writers_do_not_collide(self, tmp_path: Path) -> None:
+        """Bug filigree-9bb033331a: each writer must use a unique temp file.
+
+        Two concurrent writers used to share ``target.tmp`` — one writer's
+        replace could install the other's content, or fail/clobber the other's
+        stage. A unique per-writer staging path eliminates the collision.
+        """
+        import threading
+
+        target = tmp_path / "shared.txt"
+        target.write_text("initial")
+        errors: list[BaseException] = []
+        barrier = threading.Barrier(8)
+
+        def writer(idx: int) -> None:
+            try:
+                barrier.wait()
+                for _ in range(20):
+                    write_atomic(target, f"writer-{idx}")
+            except BaseException as exc:
+                errors.append(exc)
+
+        threads = [threading.Thread(target=writer, args=(i,)) for i in range(8)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert errors == [], f"writers raised: {errors}"
+        # Final content must be one of the writers' values, not garbage.
+        assert target.read_text().startswith("writer-")
+        # No temp files should be left behind under any naming pattern.
+        leftover = list(tmp_path.glob("shared.txt.*.tmp")) + list(tmp_path.glob("shared.txt.tmp"))
+        assert leftover == [], f"Temp files leaked: {leftover}"
 
 
 # ===========================================================================

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 from httpx import AsyncClient
 
 from filigree.core import FiligreeDB
@@ -148,7 +150,7 @@ class TestGetReleaseTreeEndpoint:
     async def test_nonexistent_id_returns_404(self, release_client: AsyncClient, release_dashboard_db: FiligreeDB) -> None:
         resp = await release_client.get("/api/release/nonexistent-abc123/tree")
         assert resp.status_code == 404
-        assert resp.json()["error"]["code"] == "RELEASE_NOT_FOUND"
+        assert resp.json()["code"] == "NOT_FOUND"
 
     async def test_non_release_type_returns_404(self, release_client: AsyncClient, release_dashboard_db: FiligreeDB) -> None:
         db = release_dashboard_db
@@ -156,7 +158,10 @@ class TestGetReleaseTreeEndpoint:
 
         resp = await release_client.get(f"/api/release/{epic.id}/tree")
         assert resp.status_code == 404
-        assert resp.json()["error"]["code"] == "NOT_A_RELEASE"
+        # Code matches status — asking for the release tree of an
+        # id-that-exists-but-is-not-a-release is a "release not found at this
+        # id" from the caller's perspective.
+        assert resp.json()["code"] == "NOT_FOUND"
 
     async def test_tree_structure_shape(self, release_client: AsyncClient, release_dashboard_db: FiligreeDB) -> None:
         db = release_dashboard_db
@@ -215,3 +220,93 @@ class TestGetReleaseTreeEndpoint:
         assert len(data["children"]) == 3
         for child in data["children"]:
             assert child["progress"] is None
+
+
+class TestReleasesRobustnessAgainstCorruptData:
+    """Regressions for the release-API hardening cluster.
+
+    The ingest path (``import_jsonl``) can persist non-string version values
+    and invalid priorities (no post-deserialisation validation). The release
+    endpoints must degrade gracefully rather than crash or misreport.
+    """
+
+    async def test_non_string_version_does_not_crash_list(self, release_client: AsyncClient, release_dashboard_db: FiligreeDB) -> None:
+        """Regression: filigree-b592adfe89. /api/releases must not raise
+        TypeError when a release row has a non-string ``version`` field.
+        """
+        db = release_dashboard_db
+        r = db.create_issue("R1", type="release", fields={"version": "v1.0.0"})
+        # Simulate imported corruption: non-string version stored verbatim
+        db.conn.execute(
+            "UPDATE issues SET fields = ? WHERE id = ?",
+            (json.dumps({"version": 123}), r.id),
+        )
+        db.conn.commit()
+
+        resp = await release_client.get("/api/releases")
+        # Before fix: uncaught TypeError propagates → 500 from FastAPI default handler,
+        # but without our structured error code. After fix: 200 (corrupt release sorts
+        # as non-semver) OR 500 with structured RELEASES_LOAD_ERROR.
+        assert resp.status_code == 200
+        releases = resp.json()["releases"]
+        # The corrupt release should appear, just without ordering preference
+        assert any(entry["id"] == r.id for entry in releases)
+
+    async def test_unrelated_valueerror_returns_500_not_false_not_a_release(
+        self, release_client: AsyncClient, release_dashboard_db: FiligreeDB
+    ) -> None:
+        """Regression: filigree-27ed472d6c. ``get_release_tree`` can raise
+        ValueError from two distinct causes: the intended "issue exists but
+        is not a release" path, AND any future data-invariant failure
+        (e.g. ``Issue.__post_init__`` rejecting corrupt imported rows).
+        The route must only map the former to 404 NOT_A_RELEASE; unrelated
+        ValueErrors reach the ``except Exception`` branch and surface as
+        500 INTERNAL (bug/data-corruption) rather than IO (transient), so
+        clients don't retry what can only be fixed by inspection.
+        """
+        from unittest.mock import patch
+
+        db = release_dashboard_db
+        r = db.create_issue("R1", type="release")
+        with patch.object(
+            db,
+            "get_release_tree",
+            side_effect=ValueError("unrelated data corruption"),
+        ):
+            resp = await release_client.get(f"/api/release/{r.id}/tree")
+        assert resp.status_code == 500
+        body = resp.json()
+        assert body["code"] == "INTERNAL"
+
+    async def test_high_semver_sorts_before_non_semver(self, release_client: AsyncClient, release_dashboard_db: FiligreeDB) -> None:
+        """Regression: filigree-2fc4203a63. Version ``v999999.0.1`` is a
+        valid semver and must sort before any non-semver release; the
+        previous 3-tuple sentinel ``(999_999, 0, 0)`` collided with
+        high-numbered semver tuples.
+        """
+        db = release_dashboard_db
+        # A valid semver with an extreme major number
+        r_hi = db.create_issue("High Semver", type="release", fields={"version": "v999999.0.1"})
+        # A release whose title has no semver-like substring → non-semver bucket
+        r_plain = db.create_issue("Plain Title Release", type="release")
+
+        resp = await release_client.get("/api/releases")
+        releases = resp.json()["releases"]
+        ids = [entry["id"] for entry in releases]
+        assert ids.index(r_hi.id) < ids.index(r_plain.id), (
+            f"High semver must sort before non-semver; got titles {[entry['title'] for entry in releases]}"
+        )
+
+    async def test_exact_collision_value_still_sorts_as_semver(self, release_client: AsyncClient, release_dashboard_db: FiligreeDB) -> None:
+        """Regression: filigree-2fc4203a63 edge case. ``v999999.0.0``
+        matched the previous ``_NON_SEMVER_KEY`` exactly — after fix it
+        must still be treated as semver and ordered before non-semver.
+        """
+        db = release_dashboard_db
+        r_collide = db.create_issue("Collision Semver", type="release", fields={"version": "v999999.0.0"})
+        r_plain = db.create_issue("Plain Title Release", type="release")
+
+        resp = await release_client.get("/api/releases")
+        releases = resp.json()["releases"]
+        ids = [entry["id"] for entry in releases]
+        assert ids.index(r_collide.id) < ids.index(r_plain.id)

@@ -12,10 +12,12 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import asyncio
 import logging
 import sqlite3
 import sys
 import time
+import weakref
 from collections.abc import Callable
 from contextvars import ContextVar, Token
 from pathlib import Path
@@ -35,16 +37,19 @@ from mcp.types import (
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from filigree.core import (
+    CONF_FILENAME,
     FILIGREE_DIR_NAME,
     SUMMARY_FILENAME,
     FiligreeDB,
-    find_filigree_root,
+    find_filigree_anchor,
 )
+from filigree.install_support.version_marker import format_schema_mismatch_guidance
 from filigree.mcp_tools.common import (  # noqa: F401  — re-exported for backward compat
     _MAX_LIST_RESULTS,
     _text,
 )
 from filigree.summary import generate_summary, write_summary
+from filigree.types.api import ErrorCode, ErrorResponse, SchemaVersionMismatchError
 
 # ---------------------------------------------------------------------------
 # Module globals (state accessors depend on these)
@@ -56,6 +61,33 @@ _filigree_dir: Path | None = None
 _logger: logging.Logger | None = None
 _request_db: ContextVar[FiligreeDB | None] = ContextVar("filigree_request_db", default=None)
 _request_filigree_dir: ContextVar[Path | None] = ContextVar("filigree_request_dir", default=None)
+
+# Set when startup detects an on-disk schema newer than the installed
+# filigree (forward mismatch). When non-None the server stays up — list_tools
+# still works for introspection — but every call_tool short-circuits to a
+# structured ErrorResponse(code=SCHEMA_MISMATCH). Cleared on successful init.
+_schema_mismatch: SchemaVersionMismatchError | None = None
+
+# Set when startup hits a non-mismatch DB-open failure (locked file, missing
+# file, permission denied, on-disk corruption). The server cannot run without
+# a DB; ``_run`` checks this and exits cleanly with a structured log line and
+# a stderr message — no Python traceback. F3-followup, GH PR #33 review.
+_db_open_error: Exception | None = None
+
+# Per-DB async lock serialising ``call_tool`` execution. The MCP SDK dispatches
+# tool invocations concurrently via ``tg.start_soon``; without serialisation two
+# coroutines share the single cached ``sqlite3.Connection`` on ``FiligreeDB``
+# and the ``finally`` rollback of one can wipe another's uncommitted writes.
+# See filigree-33a938b515.
+_tool_locks: weakref.WeakKeyDictionary[FiligreeDB, asyncio.Lock] = weakref.WeakKeyDictionary()
+
+
+def _lock_for(db_obj: FiligreeDB) -> asyncio.Lock:
+    lock = _tool_locks.get(db_obj)
+    if lock is None:
+        lock = asyncio.Lock()
+        _tool_locks[db_obj] = lock
+    return lock
 
 
 # ---------------------------------------------------------------------------
@@ -73,6 +105,23 @@ def _get_db() -> FiligreeDB:
 
 def _get_filigree_dir() -> Path | None:
     return _request_filigree_dir.get() or _filigree_dir
+
+
+def _resolve_request_filigree_dir(active_db: FiligreeDB) -> Path:
+    """Return the project metadata directory (``project_root/.filigree``)
+    for the active per-request DB, used to anchor ``_safe_path()``.
+
+    For v2.0 conf-built DBs the ``db`` may be relocated outside ``.filigree/``,
+    so ``db_path.parent`` is the project root, not the metadata dir; using it
+    as the anchor would let ``_safe_path()`` resolve up one level into the
+    project's parent. ``FiligreeDB.project_root`` is the source of truth — both
+    ``from_filigree_dir`` and ``from_conf`` set it. Fall back to
+    ``db_path.parent`` only for legacy direct ``FiligreeDB(...)`` constructions
+    that did not set ``project_root`` (chiefly older tests).
+    """
+    if active_db.project_root is not None:
+        return active_db.project_root / FILIGREE_DIR_NAME
+    return active_db.db_path.parent
 
 
 def _refresh_summary() -> None:
@@ -94,28 +143,16 @@ def _safe_path(raw: str) -> Path:
     """Resolve a user-supplied path safely within the project root.
 
     Raises ValueError for paths that escape the project directory.
+    Delegates to :func:`filigree.paths.safe_path` so the same logic is
+    shared with the CLI surface.
     """
-    if Path(raw).is_absolute():
-        msg = f"Absolute paths not allowed: {raw}"
-        raise ValueError(msg)
+    from filigree.paths import safe_path
 
     filigree_dir = _get_filigree_dir()
     if filigree_dir is None:
         msg = "Project directory not initialized"
         raise ValueError(msg)
-
-    # Resolve relative to project root (parent of .filigree/)
-    base = filigree_dir.resolve().parent
-    resolved = (base / raw).resolve()
-
-    # Ensure resolved path is under the project root
-    try:
-        resolved.relative_to(base)
-    except ValueError:
-        msg = f"Path escapes project directory: {raw}"
-        raise ValueError(msg) from None
-
-    return resolved
+    return safe_path(raw, filigree_dir.parent)
 
 
 # ---------------------------------------------------------------------------
@@ -186,17 +223,18 @@ Filigree data lives in `.filigree/` and is accessed via these MCP tools.
 ## Quick start
 1. Read `filigree://context` resource for current project state (vitals, ready work, blockers)
 2. Use `get_ready` to find unblocked tasks sorted by priority
-3. Use `claim_issue` or `claim_next` to atomically claim a task (prevents double-work)
-4. Use `get_valid_transitions` to see allowed state changes before updating
+3. Use `start_work` or `start_next_work` to atomically claim and transition a task into work
+4. Use `get_valid_transitions` to see allowed status changes before manual updates
 5. Work on the task, use `add_comment` to log progress
 6. Use `close_issue` when done — response includes newly-unblocked items
 
 ## Key tools
 - **get_issue / list_issues / search_issues** — read project state
 - **create_issue / update_issue / close_issue** — mutate issues
-- **claim_issue / claim_next** — atomic claim with optimistic locking
-- **get_valid_transitions / validate_issue** — workflow-aware state management
-- **list_types / get_type_info / explain_state** — discover type workflows
+- **start_work / start_next_work** — usual path: atomic claim plus transition to work
+- `claim_issue` / `claim_next` — claim-only, niche path with optimistic locking
+- **get_valid_transitions / validate_issue** — workflow-aware status management
+- **list_types / get_type_info / explain_status** — discover type workflows
 - **list_packs / get_workflow_guide** — workflow pack documentation
 - **add_dependency / remove_dependency** — manage blockers
 - **get_plan / create_plan** — milestone/phase/step hierarchies
@@ -211,7 +249,7 @@ Filigree data lives in `.filigree/` and is accessed via these MCP tools.
 ## Conventions
 - Issue IDs: `{prefix}-{10hex}` (e.g., `myproj-a3f9b2e1c0`)
 - Priorities: P0 (critical) through P4 (low)
-- Each type has its own state machine — use `list_types` to discover
+- Each type has its own status workflow — use `list_types` to discover
 - Use `get_valid_transitions <id>` before status changes
 """
 
@@ -327,31 +365,65 @@ async def list_tools() -> list[Tool]:
 async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
     t0 = time.monotonic()
 
-    try:
-        handler = _all_handlers.get(name)
-        if handler is None:
-            from filigree.mcp_tools.common import _text as _common_text
+    # Warm-but-degraded mode: if startup detected a v+1 DB, every call_tool
+    # short-circuits to a structured SCHEMA_MISMATCH envelope. list_tools
+    # still works (introspection needs no DB), so agents get a clean signal
+    # instead of seeing a connection drop. See F3 of the 2.0 release plan.
+    if _schema_mismatch is not None:
+        from filigree.mcp_tools.common import _text as _common_text
 
-            return _common_text({"error": f"Unknown tool: {name}", "code": "unknown_tool"})
-        result: list[TextContent] = await handler(arguments)
-    except Exception:
-        if _logger:
-            _logger.error("tool_error", extra={"tool": name, "args_data": arguments}, exc_info=True)
-        raise
+        return _common_text(
+            ErrorResponse(
+                error=format_schema_mismatch_guidance(
+                    _schema_mismatch.installed,
+                    _schema_mismatch.database,
+                ),
+                code=ErrorCode.SCHEMA_MISMATCH,
+            )
+        )
+
+    # Fast-path: unknown tool returns an error response before any DB contact
+    # and without holding the serialisation lock.
+    handler = _all_handlers.get(name)
+    if handler is None:
+        from filigree.mcp_tools.common import _text as _common_text
+
+        return _common_text({"error": f"Unknown tool: {name}", "code": ErrorCode.NOT_FOUND})
+
+    # Serialise tool execution per-DB. The MCP SDK dispatches tool calls
+    # concurrently; the shared ``sqlite3.Connection`` on ``FiligreeDB`` has
+    # no transaction isolation between coroutines, and the finally-rollback
+    # below would otherwise erase a sibling coroutine's uncommitted writes.
+    # See filigree-33a938b515.
+    active_db = _request_db.get() or db
+    lock = _lock_for(active_db) if active_db is not None else None
+
+    async def _run() -> list[TextContent]:
+        try:
+            out: list[TextContent] = await handler(arguments)
+            return out
+        except Exception:
+            if _logger:
+                _logger.error("tool_error", extra={"tool": name, "args_data": arguments}, exc_info=True)
+            raise
+        finally:
+            # Safety net: roll back any uncommitted transaction left by a
+            # failed mutation. Re-resolve _get_db() in case the handler
+            # switched the ContextVar-scoped DB.
+            resolved = _request_db.get() or db
+            if resolved is not None and resolved.conn.in_transaction:
+                resolved.conn.rollback()
+
+    if lock is None:
+        result = await _run()
     else:
-        duration_ms = round((time.monotonic() - t0) * 1000, 1)
-        if _logger:
-            _logger.info("tool_call", extra={"tool": name, "args_data": arguments, "duration_ms": duration_ms})
-        return result
-    finally:
-        # Safety net: roll back any uncommitted transaction left by a failed
-        # mutation.  Successful mutations commit explicitly; only partial
-        # failures leave dirty state that would be flushed by the next commit.
-        # Re-resolve _get_db() to ensure we roll back the correct connection
-        # in server mode where _request_db ContextVar scopes per-request.
-        active_db = _request_db.get() or db
-        if active_db is not None and active_db.conn.in_transaction:
-            active_db.conn.rollback()
+        async with lock:
+            result = await _run()
+
+    duration_ms = round((time.monotonic() - t0) * 1000, 1)
+    if _logger:
+        _logger.info("tool_call", extra={"tool": name, "args_data": arguments, "duration_ms": duration_ms})
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -398,7 +470,7 @@ def create_mcp_app(
                 resp = JSONResponse(
                     {
                         "error": "Unknown project",
-                        "code": "project_not_found",
+                        "code": ErrorCode.NOT_FOUND,
                         "project": project_key,
                     },
                     status_code=404,
@@ -410,14 +482,14 @@ def create_mcp_app(
                 resp = JSONResponse(
                     {
                         "error": "Unable to resolve project database",
-                        "code": "project_unavailable",
+                        "code": ErrorCode.NOT_INITIALIZED,
                     },
                     status_code=503,
                 )
                 await resp(scope, receive, send)
                 return
             db_token = _request_db.set(resolved)
-            dir_token = _request_filigree_dir.set(resolved.db_path.parent)
+            dir_token = _request_filigree_dir.set(_resolve_request_filigree_dir(resolved))
         try:
             await session_manager.handle_request(scope, receive, send)
         except RuntimeError as exc:
@@ -429,7 +501,10 @@ def create_mcp_app(
             from starlette.responses import JSONResponse
 
             resp = JSONResponse(
-                {"error": "MCP session manager not initialized"},
+                {
+                    "error": "MCP session manager not initialized",
+                    "code": ErrorCode.NOT_INITIALIZED,
+                },
                 status_code=503,
             )
             await resp(scope, receive, send)
@@ -449,28 +524,84 @@ def create_mcp_app(
 # ---------------------------------------------------------------------------
 
 
+def _attempt_startup(filigree_dir: Path, conf_path: Path | None = None) -> None:
+    """Open the project DB, falling back to warm-but-degraded mode on v+1.
+
+    When ``conf_path`` is provided, opens the DB declared by ``.filigree.conf``
+    via :meth:`FiligreeDB.from_conf` so v2.0 relocated layouts (e.g.
+    ``db: "track.db"``) are honoured. Otherwise opens the legacy
+    ``.filigree/filigree.db`` via :meth:`FiligreeDB.from_filigree_dir`.
+    ``filigree_dir`` always remains the metadata directory
+    (``project_root/.filigree``) and anchors logs / summary / ephemeral PID
+    regardless of where the DB itself lives.
+
+    On a forward schema mismatch the server stays up: ``db`` remains ``None``,
+    ``_schema_mismatch`` is set, and every ``call_tool`` short-circuits to a
+    structured ``SCHEMA_MISMATCH`` envelope. ``list_tools`` continues to work
+    (it touches no DB state). This lets MCP clients render a clean error
+    instead of seeing a connection drop. See F3 of the 2.0 release plan.
+
+    For non-mismatch open failures (locked file, permission denied, missing
+    file, on-disk corruption) the helper records ``_db_open_error`` instead
+    of letting the exception propagate — the F3 promise of "clean signal
+    instead of connection drop" was one bug-class wide before this fix.
+    ``_run`` consults the sentinel after calling us and exits cleanly.
+    """
+    global db, _filigree_dir, _schema_mismatch, _db_open_error
+
+    _filigree_dir = filigree_dir
+    try:
+        db = FiligreeDB.from_conf(conf_path) if conf_path is not None else FiligreeDB.from_filigree_dir(filigree_dir)
+        _schema_mismatch = None
+        _db_open_error = None
+    except SchemaVersionMismatchError as exc:
+        db = None
+        _schema_mismatch = exc
+        _db_open_error = None
+    except (OSError, sqlite3.Error) as exc:
+        db = None
+        _schema_mismatch = None
+        _db_open_error = exc
+
+
 async def _run(project_path: Path | None) -> None:
-    global db, _filigree_dir, _logger
+    global _logger
 
     if project_path:
+        # Honour ``.filigree.conf`` even when ``--project`` is supplied: the
+        # CLI surface (cli_common.get_db) does and stdio MCP must agree, or
+        # a v2.0 conf-relocated project gets two divergent databases.
+        conf_path: Path | None = (project_path / CONF_FILENAME) if (project_path / CONF_FILENAME).is_file() else None
         filigree_dir = project_path / FILIGREE_DIR_NAME
         if not filigree_dir.is_dir():
             print(f"Error: {filigree_dir} not found. Run 'filigree init' first.", file=sys.stderr)
             sys.exit(1)
     else:
         try:
-            filigree_dir = find_filigree_root()
-        except FileNotFoundError:
-            print(f"Error: No {FILIGREE_DIR_NAME}/ found. Run 'filigree init' first.", file=sys.stderr)
+            project_root, conf_path = find_filigree_anchor()
+        except FileNotFoundError as exc:
+            # ProjectNotInitialisedError carries a message that points at
+            # `filigree init` and `filigree doctor`.
+            print(f"Error: {exc}", file=sys.stderr)
             sys.exit(1)
+        filigree_dir = project_root / FILIGREE_DIR_NAME
 
-    _filigree_dir = filigree_dir
-    db = FiligreeDB.from_filigree_dir(filigree_dir)
+    _attempt_startup(filigree_dir, conf_path=conf_path)
 
     from filigree.logging import setup_logging
 
     _logger = setup_logging(filigree_dir)
     _logger.info("mcp_server_start", extra={"tool": "server", "args_data": {"project": str(filigree_dir.parent)}})
+    _log_startup_status(_logger)
+
+    if _db_open_error is not None:
+        # Locked DB / permission denied / missing file / corruption — the
+        # server cannot proceed. Exit cleanly with a structured log line so
+        # operators see a single failure event instead of a Python
+        # traceback dumped to stderr by asyncio.
+        print(f"Error opening project database: {_db_open_error}", file=sys.stderr)
+        print("Run `filigree doctor` for diagnosis.", file=sys.stderr)
+        sys.exit(1)
 
     try:
         async with stdio_server() as (read_stream, write_stream):
@@ -478,6 +609,36 @@ async def _run(project_path: Path | None) -> None:
     finally:
         if db is not None:
             db.close()
+
+
+def _log_startup_status(logger: logging.Logger) -> None:
+    """Emit a WARNING when the server is starting in degraded (v+1) mode.
+
+    Operators tailing the MCP server log should immediately see that the
+    process is up but degraded — without having to wait for a client to
+    invoke a tool and read the ``SCHEMA_MISMATCH`` envelope. Split out as
+    a tiny helper so a unit test can drive this branch synchronously
+    without entering the async ``stdio_server`` event loop in :func:`_run`.
+    """
+    if _schema_mismatch is not None:
+        logger.warning(
+            "mcp_server_degraded",
+            extra={
+                "tool": "server",
+                "args_data": {
+                    "installed": _schema_mismatch.installed,
+                    "database": _schema_mismatch.database,
+                },
+            },
+        )
+    elif _db_open_error is not None:
+        logger.warning(
+            "mcp_server_db_open_failed",
+            extra={
+                "tool": "server",
+                "args_data": {"error": str(_db_open_error)},
+            },
+        )
 
 
 def main() -> None:

@@ -13,16 +13,29 @@ import click
 
 from filigree.cli_common import get_db, refresh_summary
 from filigree.core import (
+    CONF_FILENAME,
+    CONF_VERSION,
     DB_FILENAME,
     FILIGREE_DIR_NAME,
     SUMMARY_FILENAME,
     FiligreeDB,
+    ProjectNotInitialisedError,
     find_filigree_root,
     get_mode,
+    read_conf,
     read_config,
+    read_schema_version,
+    write_conf,
     write_config,
 )
+from filigree.db_schema import CURRENT_SCHEMA_VERSION
+from filigree.install_support.version_marker import (
+    format_schema_mismatch_guidance,
+    read_install_version,
+    write_install_version,
+)
 from filigree.summary import write_summary
+from filigree.types.api import SchemaVersionMismatchError
 
 
 @click.command()
@@ -41,22 +54,83 @@ def init(prefix: str | None, name: str | None, mode: str | None) -> None:
 
     if filigree_dir.exists():
         click.echo(f"{FILIGREE_DIR_NAME}/ already exists in {cwd}")
+        previous_marker = read_install_version(filigree_dir)
         # Still ensure DB is initialized and migrated
         config = read_config(filigree_dir)
-        db = FiligreeDB(
-            filigree_dir / DB_FILENAME,
-            prefix=config.get("prefix", "filigree"),
-            enabled_packs=config.get("enabled_packs"),
-        )
+        # filigree-fa6309d551: route DB open through the v2.0 anchor-aware
+        # constructors so a custom .filigree.conf `db` path is honoured.
+        # Without this, init silently migrates the legacy
+        # .filigree/filigree.db while the project's actual DB (declared in
+        # the conf) stays un-migrated.
+        conf_path = cwd / CONF_FILENAME
+        if conf_path.is_file():
+            try:
+                existing_conf = read_conf(conf_path)
+                db_path = (conf_path.parent / existing_conf["db"]).resolve()
+            except (json_mod.JSONDecodeError, ValueError, OSError) as exc:
+                click.echo(f"Cannot read {conf_path}: {exc}", err=True)
+                sys.exit(1)
+        else:
+            db_path = filigree_dir / DB_FILENAME
+        # Read pre-init schema version directly so we can detect upgrades —
+        # the from_* constructors call initialize() internally, which would
+        # mask the old version.
+        old_version: int | None = None
+        if db_path.exists():
+            raw_conn = sqlite3.connect(str(db_path))
+            try:
+                old_version = read_schema_version(raw_conn)
+            finally:
+                raw_conn.close()
         try:
-            old_version = db.get_schema_version()
-            db.initialize()
+            db = FiligreeDB.from_conf(conf_path) if conf_path.is_file() else FiligreeDB.from_filigree_dir(filigree_dir)
+        except SchemaVersionMismatchError as exc:
+            # The DB was written by a newer filigree; this older binary
+            # cannot safely touch it. Emit the same guidance text and
+            # exit code (3) used by `filigree doctor` / `filigree
+            # dashboard`, and do NOT update INSTALL_VERSION (which would
+            # falsely advertise this older version against a v+1 DB).
+            click.echo(
+                format_schema_mismatch_guidance(exc.installed, exc.database),
+                err=True,
+            )
+            sys.exit(3)
+        try:
             new_version = db.get_schema_version()
         finally:
             db.close()
-        if new_version > old_version:
+        if old_version is not None and new_version > old_version:
             click.echo(f"  Schema upgraded v{old_version} → v{new_version}")
         (filigree_dir / "scanners").mkdir(exist_ok=True)
+        # filigree-f22fc98687: backfill the v2.0 anchor on legacy installs
+        # where the existing-project branch was reached without a conf. Do
+        # not overwrite an existing custom anchor.
+        if not conf_path.exists():
+            project_name = config.get("name") or cwd.name
+            project_prefix = config.get("prefix") or cwd.name
+            backfill_conf: dict[str, object] = {
+                "version": CONF_VERSION,
+                "project_name": project_name,
+                "prefix": project_prefix,
+                "db": f"{FILIGREE_DIR_NAME}/{DB_FILENAME}",
+            }
+            conf_mode = config.get("mode")
+            if conf_mode and conf_mode != "ethereal":
+                backfill_conf["mode"] = conf_mode
+            write_conf(conf_path, backfill_conf)
+            click.echo(f"  Backfilled v2.0 anchor: {conf_path}")
+        # Cross-tool skew warning: if a previous marker recorded an older
+        # schema, other tools / sessions pinned to that version will now
+        # report SCHEMA_MISMATCH against this DB.
+        if previous_marker is not None and previous_marker < CURRENT_SCHEMA_VERSION:
+            click.echo(
+                f"Note: this project's previous .filigree/ used schema v{previous_marker}; "
+                f"the new DB is at v{CURRENT_SCHEMA_VERSION}. Other tools or sessions "
+                f"pinned to filigree v{previous_marker} will report SCHEMA_MISMATCH against "
+                f"this DB.",
+                err=True,
+            )
+        write_install_version(filigree_dir, CURRENT_SCHEMA_VERSION)
         # Update name/mode if explicitly provided
         updated = False
         if name is not None:
@@ -80,15 +154,33 @@ def init(prefix: str | None, name: str | None, mode: str | None) -> None:
     config = {"prefix": prefix, "name": name, "version": 1, "mode": mode}
     write_config(filigree_dir, config)
 
+    # v2.0: also write the .filigree.conf anchor — this is the file agents
+    # walk up looking for, the authoritative declaration that "this folder and
+    # its subtree belong to this filigree project".
+    conf_data: dict[str, object] = {
+        "version": CONF_VERSION,
+        "project_name": name,
+        "prefix": prefix,
+        "db": f"{FILIGREE_DIR_NAME}/{DB_FILENAME}",
+    }
+    if mode and mode != "ethereal":
+        conf_data["mode"] = mode
+    write_conf(cwd / CONF_FILENAME, conf_data)
+
     db = FiligreeDB(filigree_dir / DB_FILENAME, prefix=prefix)
     db.initialize()
     write_summary(db, filigree_dir / SUMMARY_FILENAME)
     db.close()
 
+    # Record the schema version this project was last initialized at — used
+    # by future `init` runs to warn about cross-tool schema skew.
+    write_install_version(filigree_dir, CURRENT_SCHEMA_VERSION)
+
     click.echo(f"Initialized {FILIGREE_DIR_NAME}/ in {cwd}")
     click.echo(f"  Prefix: {prefix}")
     click.echo(f"  Mode: {mode}")
     click.echo(f"  Database: {filigree_dir / DB_FILENAME}")
+    click.echo(f"  Anchor: {cwd / CONF_FILENAME}")
     click.echo(f"  Scanners: {filigree_dir / 'scanners'}/ (add .toml files to register scanners)")
     click.echo("\nNext: filigree install")
 
@@ -136,8 +228,11 @@ def install(
 
     try:
         filigree_dir = find_filigree_root()
-    except FileNotFoundError:
-        click.echo(f"No {FILIGREE_DIR_NAME}/ found. Run 'filigree init' first.", err=True)
+    except ProjectNotInitialisedError as exc:
+        # filigree-dad647cf35: catch the rich subclass before the generic
+        # FileNotFoundError so ForeignDatabaseError's git-boundary remediation
+        # message reaches the user instead of "No .filigree/ found".
+        click.echo(str(exc), err=True)
         sys.exit(1)
 
     # Update mode in config if explicitly provided
@@ -187,28 +282,36 @@ def install(
         ok, msg = ensure_gitignore(project_root)
         results.append((".gitignore", ok, msg))
 
-    if install_all or claude_code or hooks_only:
+    if install_all or hooks_only:
         ok, msg = install_claude_code_hooks(project_root)
         results.append(("Claude Code hooks", ok, msg))
 
-    if install_all or claude_code or skills_only:
+    if install_all or skills_only:
         ok, msg = install_skills(project_root)
         results.append(("Claude Code skills", ok, msg))
 
-    if install_all or codex or codex_skills_only:
+    if install_all or codex_skills_only:
         ok, msg = install_codex_skills(project_root)
         results.append(("Codex skills", ok, msg))
 
     # Server mode: register project in server.json
     if mode == "server":
         try:
-            from filigree.server import daemon_status, register_project
+            from filigree.cli_commands.server import _reload_server_daemon_if_running
+            from filigree.server import register_project
 
             register_project(filigree_dir)
             results.append(("Server registration", True, "Registered in server.json"))
-            status = daemon_status()
-            if not status.running:
+            # filigree-80753e4b54: ask any running daemon to reload its
+            # registry; otherwise it serves a stale view until restart.
+            # Helper short-circuits cleanly when the daemon isn't running.
+            ok, reason = _reload_server_daemon_if_running()
+            if not ok:
+                results.append(("Server reload", False, reason))
+            elif reason == "daemon_not_running":
                 click.echo('\nNote: start the daemon with "filigree server start"')
+            else:
+                results.append(("Server reload", True, "Reloaded running daemon"))
         except Exception as e:
             results.append(("Server registration", False, str(e)))
 
@@ -218,6 +321,15 @@ def install(
 
     ok_count = sum(1 for _, ok, _ in results if ok)
     click.echo(f"\n{ok_count}/{len(results)} installed successfully")
+
+    # filigree-ca4e5d28dd: exit 1 if any selected installer step failed so
+    # callers (CI, shell pipelines) don't treat partial success as success.
+    # Also suppress the "Next:" hint, which would mislead the user into
+    # thinking the install completed.
+    if any(not ok for _, ok, _ in results):
+        click.echo("Some install steps failed. See messages above.", err=True)
+        sys.exit(1)
+
     click.echo('Next: filigree create "My first issue"')
 
 
@@ -245,12 +357,22 @@ def doctor(fix: bool, verbose: bool) -> None:
         if not r.passed and r.fix_hint:
             click.echo(f"       -> {r.fix_hint}")
 
+    # Schema-mismatch (v+1) is a distinct exit code (3) from generic check
+    # failures (1). Don't attempt --fix on this — there's nothing to fix
+    # forward when the DB is newer than the installed filigree.
+    if any(r.code == "schema_mismatch_forward" for r in results):
+        sys.exit(3)
+
+    fixed = 0
     if fix and failed > 0:
         click.echo("\nApplying fixes...")
         try:
             filigree_dir = find_filigree_root()
-        except FileNotFoundError:
-            click.echo("  !!  Cannot fix: no .filigree/ directory found", err=True)
+        except ProjectNotInitialisedError as exc:
+            # filigree-dad647cf35: surface the rich ForeignDatabaseError
+            # message instead of the generic "Cannot fix" line, matching
+            # scanners.py and the run_doctor() check above.
+            click.echo(str(exc), err=True)
             sys.exit(1)
 
         from filigree.install import (
@@ -292,7 +414,6 @@ def doctor(fix: bool, verbose: bool) -> None:
             "AGENTS.md": ("agents_md",),
         }
 
-        fixed = 0
         for r in results:
             if r.passed or r.name not in fixable:
                 continue
@@ -306,15 +427,24 @@ def doctor(fix: bool, verbose: bool) -> None:
                     click.echo(f"  OK  Fixed: {r.name}")
                     ok = True
                 elif fix_key == "schema":
-                    config = read_config(filigree_dir)
-                    db = FiligreeDB(
-                        filigree_dir / DB_FILENAME,
-                        prefix=config.get("prefix", "filigree"),
-                        enabled_packs=config.get("enabled_packs"),
-                    )
+                    # filigree-fa6309d551: route DB open through the v2.0
+                    # anchor-aware constructors. Without this, --fix would
+                    # initialize/migrate a phantom .filigree/filigree.db
+                    # while the project's actual DB (declared in the conf)
+                    # stays un-migrated.
+                    conf_path = project_root / CONF_FILENAME
+                    if conf_path.is_file():
+                        conf_data = read_conf(conf_path)
+                        db_path = (conf_path.parent / conf_data["db"]).resolve()
+                    else:
+                        db_path = filigree_dir / DB_FILENAME
+                    raw_conn = sqlite3.connect(str(db_path))
                     try:
-                        old_ver = db.get_schema_version()
-                        db.initialize()
+                        old_ver = read_schema_version(raw_conn)
+                    finally:
+                        raw_conn.close()
+                    db = FiligreeDB.from_conf(conf_path) if conf_path.is_file() else FiligreeDB.from_filigree_dir(filigree_dir)
+                    try:
                         new_ver = db.get_schema_version()
                     finally:
                         db.close()
@@ -358,6 +488,15 @@ def doctor(fix: bool, verbose: bool) -> None:
 
     if failed == 0:
         click.echo("\nAll checks passed.")
+        return
+
+    # filigree-467d1e7487: surface non-schema failures as a non-zero exit
+    # so CI scripts and `set -e` shells can detect breakage. Schema-mismatch
+    # already exited(3) above; here we own exit(1) for the generic case.
+    # Without --fix, every failure is unresolved. With --fix, only failures
+    # the fixer could not address remain.
+    if not fix or (failed - fixed) > 0:
+        sys.exit(1)
 
 
 @click.command()
@@ -383,21 +522,44 @@ def migrate(from_beads: bool, beads_db: str | None) -> None:
 
 
 @click.command()
-@click.option("--port", default=8377, type=int, help="Server port (default 8377)")
+@click.option(
+    "--port",
+    default=None,
+    # filigree-31da65493c: validate at the CLI boundary (mirrors `server
+    # start` at server.py:43-49). Without this, `--server-mode --port 0`
+    # would persist a bogus port into daemon state before bind failed.
+    type=click.IntRange(1, 65535),
+    help="Server port (valid TCP range: 1-65535; defaults to configured daemon port in --server-mode, else 8377)",
+)
 @click.option("--no-browser", is_flag=True, help="Don't auto-open browser")
 @click.option("--server-mode", is_flag=True, help="Multi-project server mode (reads server.json)")
-def dashboard(port: int, no_browser: bool, server_mode: bool) -> None:
+def dashboard(port: int | None, no_browser: bool, server_mode: bool) -> None:
     """Launch the web dashboard."""
+    from filigree.dashboard import DEFAULT_PORT
     from filigree.dashboard import main as dashboard_main
 
     pid_claimed = False
     current_pid = os.getpid()
     if server_mode:
-        from filigree.server import claim_current_process_as_daemon
+        from filigree.server import claim_current_process_as_daemon, read_server_config
 
+        effective_port = port if port is not None else read_server_config().port
+        # Pass only the user-specified port to claim — ``None`` means "don't
+        # overwrite the configured daemon port" (filigree-f863b9d1f8).
         pid_claimed = claim_current_process_as_daemon(port=port)
+        if not pid_claimed:
+            # A different live daemon is already tracked — refuse rather than
+            # racing a second server (filigree-ceb2da2411).
+            click.echo(
+                "Another filigree daemon is already running. Stop it with `filigree server stop` first.",
+                err=True,
+            )
+            sys.exit(1)
+    else:
+        effective_port = port if port is not None else DEFAULT_PORT
+
     try:
-        dashboard_main(port=port, no_browser=no_browser, server_mode=server_mode)
+        dashboard_main(port=effective_port, no_browser=no_browser, server_mode=server_mode)
     finally:
         if server_mode and pid_claimed:
             from filigree.server import release_daemon_pid_if_owned
@@ -420,7 +582,13 @@ def session_context() -> None:
 
 
 @click.command("ensure-dashboard")
-@click.option("--port", default=None, type=int, help="Dashboard port override (server mode)")
+@click.option(
+    "--port",
+    default=None,
+    # filigree-31da65493c: same boundary validation as `dashboard --port`.
+    type=click.IntRange(1, 65535),
+    help="Dashboard port override (valid TCP range: 1-65535; server mode)",
+)
 def ensure_dashboard_cmd(port: int | None) -> None:
     """Ensure the filigree dashboard is running."""
     try:
@@ -436,7 +604,12 @@ def ensure_dashboard_cmd(port: int | None) -> None:
 
 @click.command()
 @click.option("--json", "as_json", is_flag=True, help="JSON output")
-@click.option("--days", default=30, help="Lookback window in days")
+@click.option(
+    "--days",
+    default=30,
+    type=click.IntRange(1, 3650),
+    help="Lookback window in days (1-3650)",
+)
 def metrics(as_json: bool, days: int) -> None:
     """Show flow metrics: cycle time, lead time, throughput."""
     from filigree.analytics import get_flow_metrics
@@ -466,18 +639,34 @@ def metrics(as_json: bool, days: int) -> None:
 def export_data(output: str) -> None:
     """Export full project data to a JSONL file."""
     with get_db() as db:
-        count = db.export_jsonl(output)
+        # filigree-48613c1c55: surface FS errors (missing parent dir,
+        # permission denied, disk full) and DB errors as a clean
+        # "Export failed: …" line, matching `import`'s contract.
+        try:
+            count = db.export_jsonl(output)
+        except (OSError, sqlite3.Error) as e:
+            click.echo(f"Export failed: {e}", err=True)
+            sys.exit(1)
         click.echo(f"Exported {count} records to {output}")
 
 
 @click.command("import")
 @click.argument("input_file", type=click.Path(exists=True))
 @click.option("--merge", is_flag=True, help="Skip existing records instead of failing on conflict")
-def import_data(input_file: str, merge: bool) -> None:
+@click.option(
+    "--allow-foreign-ids",
+    is_flag=True,
+    help=(
+        "Keep source issue IDs even when their prefix doesn't match this "
+        "project (migration escape hatch; imported rows become readable "
+        "but not mutable)."
+    ),
+)
+def import_data(input_file: str, merge: bool, allow_foreign_ids: bool) -> None:
     """Import full project data from a JSONL file."""
     with get_db() as db:
         try:
-            result = db.import_jsonl(input_file, merge=merge)
+            result = db.import_jsonl(input_file, merge=merge, allow_foreign_ids=allow_foreign_ids)
         except (json_mod.JSONDecodeError, KeyError, ValueError, sqlite3.IntegrityError, OSError) as e:
             click.echo(f"Import failed: {e}", err=True)
             sys.exit(1)
