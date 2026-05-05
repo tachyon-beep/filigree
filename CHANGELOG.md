@@ -22,6 +22,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Loom ``ScanIngestResponseLoom`` is now a concrete TypedDict.** It
+  previously subclassed ``BatchResponse[str]`` from ``filigree.types.api``,
+  but at runtime TypedDict + ``Generic`` does not preserve the ``str``
+  substitution (``succeeded`` resolved to ``list[~_T]``), and parent
+  ``NotRequired`` markers are stripped on a ``total=True`` subclass — which
+  promoted ``newly_unblocked`` to a *required* key on the response
+  type, even though scan ingestion cannot unblock issues. The shape is
+  now declared inline (``succeeded: list[str]``, ``failed``, ``stats``,
+  ``warnings``); a ``get_type_hints`` contract test pins it.
+  (filigree-58f82a0c38)
+- **Loom ``BatchCloseResponseLoom.succeeded`` widened to
+  ``list[SlimIssueLoom | IssueLoom]``.** The C5 contract
+  (``docs/federation/contracts.md`` §C5) and the handler in
+  ``dashboard_routes/issues.py`` upgrade ``succeeded[]`` to full
+  ``IssueLoom`` items when ``response_detail=full``, but the type was
+  pinned slim-only. ``newly_unblocked`` stays ``SlimIssueLoom`` per the
+  locked C5 rule. A ``get_type_hints`` contract test pins both.
+  (filigree-2189802389)
 - **``filigree install`` and ``filigree doctor --fix`` now surface
   ``ForeignDatabaseError`` instead of swallowing it as a generic missing-project
   error.** Both admin commands caught the bare ``FileNotFoundError`` raised by
