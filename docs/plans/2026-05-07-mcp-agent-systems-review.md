@@ -73,9 +73,11 @@ Agents treat tool metadata and bundled docs as executable truth. Generate MCP re
 
 **Issue:** `filigree-360ac7fc4c`
 
-Follow-up design: [2026-05-07-mcp-shared-file-annotations-design.md](2026-05-07-mcp-shared-file-annotations-design.md).
+Follow-up design, revised after conceptual review: [2026-05-07-mcp-shared-file-annotations-design.md](2026-05-07-mcp-shared-file-annotations-design.md).
 
-Annotations are shared file notes, distinct from observations. They preserve durable context such as "future agents working this epic need to know why this file section matters." They should capture file anchors, commit/diff/checksum provenance, the agent's current context, typed links to epics/issues/findings/observations/sessions, and a boolean `critical` flag for attention routing.
+Annotations are shared file notes, distinct from observations. They preserve durable context such as "future agents working this epic need to know why this file section matters." The revised V1 design keeps them file-anchored and project-shared, captures commit/diff/checksum provenance with explicit partial/redacted states, links them to existing issues/files/findings/observations, and uses a boolean `critical` flag for attention routing without adding hard close blockers.
+
+The conceptual review pushed the design to define the boundary against observations, findings, comments, and issues; separate lifecycle status from computed anchor drift; constrain the first link model; and add a concrete closeout warning/carry-forward contract for critical `must_consider` annotations.
 
 ## Product Principle
 
@@ -91,4 +93,4 @@ Strong candidates:
 
 ## Scratch Cleanup
 
-Created and closed scratch issue `filigree-4576602301`. Dismissed scratch observations `filigree-obs-84f0dbbd45` and `filigree-obs-e958a165a9`. Dismissed scratch finding `filigree-sf-e13aa808fd`. The five actionable findings above remain open under parent epic `filigree-ed2ccaf10d`.
+Created and closed scratch issue `filigree-4576602301`. Dismissed scratch observations `filigree-obs-84f0dbbd45` and `filigree-obs-e958a165a9`. Dismissed scratch finding `filigree-sf-e13aa808fd`. The six actionable findings above remain open under parent epic `filigree-ed2ccaf10d`.
