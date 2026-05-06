@@ -1228,6 +1228,31 @@ class IssuesMixin(DBMixinProtocol):
                 errors.append(BatchFailure(id=issue_id, error=str(e), code=ErrorCode.VALIDATION))
         return results, errors
 
+    def batch_remove_label(
+        self,
+        issue_ids: list[str],
+        *,
+        label: str,
+    ) -> tuple[list[dict[str, str]], list[BatchFailure]]:
+        """Remove the same label from multiple issues. Returns (removed, errors)."""
+        _validate_string_list(issue_ids, "issue_ids")
+        if not isinstance(label, str):
+            msg = "label must be a string"
+            raise TypeError(msg)
+
+        results: list[dict[str, str]] = []
+        errors: list[BatchFailure] = []
+        for issue_id in issue_ids:
+            try:
+                self.get_issue(issue_id)
+                removed, _canonical = self.remove_label(issue_id, label)
+                results.append({"id": issue_id, "status": "removed" if removed else "not_found"})
+            except KeyError:
+                errors.append(BatchFailure(id=issue_id, error=f"Not found: {issue_id}", code=ErrorCode.NOT_FOUND))
+            except ValueError as e:
+                errors.append(BatchFailure(id=issue_id, error=str(e), code=ErrorCode.VALIDATION))
+        return results, errors
+
     def batch_add_comment(
         self,
         issue_ids: list[str],

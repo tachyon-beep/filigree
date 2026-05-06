@@ -187,6 +187,13 @@ class BatchAddLabelArgs(TypedDict):
     actor: NotRequired[str]
 
 
+class BatchRemoveLabelArgs(TypedDict):
+    issue_ids: list[str]
+    label: str
+    response_detail: NotRequired[str]
+    actor: NotRequired[str]
+
+
 class BatchAddCommentArgs(TypedDict):
     issue_ids: list[str]
     text: str
@@ -508,6 +515,7 @@ TOOL_ARGS_MAP: dict[str, type] = {
     "remove_label": RemoveLabelArgs,
     "list_labels": ListLabelsArgs,
     "batch_add_label": BatchAddLabelArgs,
+    "batch_remove_label": BatchRemoveLabelArgs,
     "batch_add_comment": BatchAddCommentArgs,
     "get_changes": GetChangesArgs,
     "get_metrics": GetMetricsArgs,

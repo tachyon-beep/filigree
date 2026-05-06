@@ -697,6 +697,37 @@ class TestBatchAddLabel:
         assert data["failed"][0]["code"] == "VALIDATION"
 
 
+class TestBatchRemoveLabel:
+    async def test_batch_remove_label(self, mcp_db: FiligreeDB) -> None:
+        a = mcp_db.create_issue("Label A", labels=["security"])
+        b = mcp_db.create_issue("Label B", labels=["security"])
+        result = await call_tool("batch_remove_label", {"issue_ids": [a.id, b.id], "label": "security"})
+        data = _parse(result)
+        assert len(data["succeeded"]) == 2
+        assert a.id in data["succeeded"]
+        assert b.id in data["succeeded"]
+        assert data["failed"] == []
+        assert "security" not in mcp_db.get_issue(a.id).labels
+        assert "security" not in mcp_db.get_issue(b.id).labels
+
+    async def test_batch_remove_label_partial_failure(self, mcp_db: FiligreeDB) -> None:
+        a = mcp_db.create_issue("Label A", labels=["security"])
+        result = await call_tool("batch_remove_label", {"issue_ids": [a.id, "mcp-nonexistent"], "label": "security"})
+        data = _parse(result)
+        assert len(data["succeeded"]) == 1
+        assert a.id in data["succeeded"]
+        assert len(data["failed"]) == 1
+        assert data["failed"][0]["code"] == "NOT_FOUND"
+
+    async def test_batch_remove_label_validation_error(self, mcp_db: FiligreeDB) -> None:
+        a = mcp_db.create_issue("Label A")
+        result = await call_tool("batch_remove_label", {"issue_ids": [a.id], "label": "bug"})
+        data = _parse(result)
+        assert data["succeeded"] == []
+        assert len(data["failed"]) == 1
+        assert data["failed"][0]["code"] == "VALIDATION"
+
+
 class TestBatchAddComment:
     async def test_batch_add_comment(self, mcp_db: FiligreeDB) -> None:
         a = mcp_db.create_issue("Comment A")

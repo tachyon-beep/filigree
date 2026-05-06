@@ -122,6 +122,24 @@ class TestMetaBatchDetail:
         assert set(item.keys()) >= _FULL_ONLY_KEYS
         assert "x" in item["labels"]
 
+    async def test_batch_remove_label_slim_default(self, mcp_db: FiligreeDB) -> None:
+        a = mcp_db.create_issue("A", labels=["x"])
+        result = await call_tool("batch_remove_label", {"issue_ids": [a.id], "label": "x"})
+        data = _parse(result)
+        assert data["succeeded"] == [a.id]
+
+    async def test_batch_remove_label_full(self, mcp_db: FiligreeDB) -> None:
+        a = mcp_db.create_issue("A", description="d", labels=["x"])
+        result = await call_tool(
+            "batch_remove_label",
+            {"issue_ids": [a.id], "label": "x", "response_detail": "full"},
+        )
+        data = _parse(result)
+        item = data["succeeded"][0]
+        assert isinstance(item, dict)
+        assert set(item.keys()) >= _FULL_ONLY_KEYS
+        assert "x" not in item["labels"]
+
     async def test_batch_add_comment_slim_default(self, mcp_db: FiligreeDB) -> None:
         a = mcp_db.create_issue("A")
         result = await call_tool("batch_add_comment", {"issue_ids": [a.id], "text": "hi"})

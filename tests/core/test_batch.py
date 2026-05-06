@@ -65,6 +65,29 @@ class TestBatchOperations:
         assert len(errors) == 1
         assert errors[0]["code"] == "VALIDATION"
 
+    def test_batch_remove_label(self, db: FiligreeDB) -> None:
+        a = db.create_issue("A", labels=["security"])
+        b = db.create_issue("B", labels=["security"])
+        removed, errors = db.batch_remove_label([a.id, b.id], label="security")
+        assert len(removed) == 2
+        assert len(errors) == 0
+        assert all(row["status"] == "removed" for row in removed)
+        assert "security" not in db.get_issue(a.id).labels
+        assert "security" not in db.get_issue(b.id).labels
+
+    def test_batch_remove_label_not_found(self, db: FiligreeDB) -> None:
+        removed, errors = db.batch_remove_label(["nonexistent-xyz"], label="security")
+        assert removed == []
+        assert len(errors) == 1
+        assert errors[0]["code"] == "NOT_FOUND"
+
+    def test_batch_remove_label_validation_error(self, db: FiligreeDB) -> None:
+        issue = db.create_issue("A")
+        removed, errors = db.batch_remove_label([issue.id], label="bug")
+        assert removed == []
+        assert len(errors) == 1
+        assert errors[0]["code"] == "VALIDATION"
+
     def test_batch_add_comment(self, db: FiligreeDB) -> None:
         a = db.create_issue("A")
         b = db.create_issue("B")
@@ -110,6 +133,10 @@ class TestBatchInputValidation:
         with pytest.raises(TypeError, match="issue_ids must be a list of strings"):
             db.batch_add_label("not-a-list", label="security")  # type: ignore[arg-type]
 
+    def test_batch_remove_label_string_raises(self, db: FiligreeDB) -> None:
+        with pytest.raises(TypeError, match="issue_ids must be a list of strings"):
+            db.batch_remove_label("not-a-list", label="security")  # type: ignore[arg-type]
+
     def test_batch_add_comment_string_raises(self, db: FiligreeDB) -> None:
         with pytest.raises(TypeError, match="issue_ids must be a list of strings"):
             db.batch_add_comment("not-a-list", text="note")  # type: ignore[arg-type]
@@ -130,6 +157,12 @@ class TestBatchInputValidation:
         issue = db.create_issue("Labelable")
         labeled, errors = db.batch_add_label([issue.id], label="security")
         assert len(labeled) == 1
+        assert len(errors) == 0
+
+    def test_batch_remove_label_valid_list_passes(self, db: FiligreeDB) -> None:
+        issue = db.create_issue("Labelable", labels=["security"])
+        removed, errors = db.batch_remove_label([issue.id], label="security")
+        assert len(removed) == 1
         assert len(errors) == 0
 
     def test_batch_add_comment_valid_list_passes(self, db: FiligreeDB) -> None:

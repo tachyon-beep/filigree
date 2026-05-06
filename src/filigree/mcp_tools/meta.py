@@ -30,6 +30,7 @@ from filigree.types.inputs import (
     ArchiveClosedArgs,
     BatchAddCommentArgs,
     BatchAddLabelArgs,
+    BatchRemoveLabelArgs,
     CompactEventsArgs,
     ExportJsonlArgs,
     GetChangesArgs,
@@ -113,6 +114,34 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
                         "description": "Issue IDs to update",
                     },
                     "label": {"type": "string", "description": "Label to add"},
+                    "response_detail": {
+                        "type": "string",
+                        "enum": ["slim", "full"],
+                        "default": "slim",
+                        "description": "'slim' (default) returns issue ID strings in succeeded[]; 'full' returns full PublicIssue records.",
+                    },
+                    "actor": {"type": "string", "description": "Agent/user identity for audit trail"},
+                },
+                "required": ["issue_ids", "label"],
+            },
+        ),
+        Tool(
+            name="batch_remove_label",
+            description=(
+                "Remove the same label from multiple issues in one call. Returns "
+                "BatchResponse[str] (succeeded issue IDs) by default, or "
+                "BatchResponse[PublicIssue] when response_detail='full'. "
+                "failed[] is always present (empty if none)."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "issue_ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Issue IDs to update",
+                    },
+                    "label": {"type": "string", "description": "Label to remove"},
                     "response_detail": {
                         "type": "string",
                         "enum": ["slim", "full"],
@@ -312,6 +341,7 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
         "add_label": _handle_add_label,
         "remove_label": _handle_remove_label,
         "batch_add_label": _handle_batch_add_label,
+        "batch_remove_label": _handle_batch_remove_label,
         "batch_add_comment": _handle_batch_add_comment,
         "get_changes": _handle_get_changes,
         "get_summary": _handle_get_summary,
@@ -426,6 +456,37 @@ async def _handle_batch_add_label(arguments: dict[str, Any]) -> list[TextContent
     if not isinstance(args["label"], str):
         return _text(ErrorResponse(error="label must be a string", code=ErrorCode.VALIDATION))
     label_succeeded, label_failed = tracker.batch_add_label(issue_ids, label=args["label"])
+    _refresh_summary()
+    if detail == "full":
+        full_result: BatchResponse[PublicIssue] = BatchResponse(
+            succeeded=[issue_to_public(tracker.get_issue(row["id"])) for row in label_succeeded],
+            failed=label_failed,
+        )
+        return _text(full_result)
+    result: BatchResponse[str] = BatchResponse(
+        succeeded=[row["id"] for row in label_succeeded],
+        failed=label_failed,
+    )
+    return _text(result)
+
+
+async def _handle_batch_remove_label(arguments: dict[str, Any]) -> list[TextContent]:
+    from filigree.mcp_server import _get_db, _refresh_summary
+
+    args = _parse_args(arguments, BatchRemoveLabelArgs)
+    _actor, actor_err = _validate_actor(args.get("actor", "mcp"))  # validated for rejection only
+    if actor_err:
+        return actor_err
+    detail = parse_response_detail(args.get("response_detail"))
+    if isinstance(detail, dict):
+        return _text(detail)
+    tracker = _get_db()
+    issue_ids = args["issue_ids"]
+    if not all(isinstance(i, str) for i in issue_ids):
+        return _text(ErrorResponse(error="All issue IDs must be strings", code=ErrorCode.VALIDATION))
+    if not isinstance(args["label"], str):
+        return _text(ErrorResponse(error="label must be a string", code=ErrorCode.VALIDATION))
+    label_succeeded, label_failed = tracker.batch_remove_label(issue_ids, label=args["label"])
     _refresh_summary()
     if detail == "full":
         full_result: BatchResponse[PublicIssue] = BatchResponse(
