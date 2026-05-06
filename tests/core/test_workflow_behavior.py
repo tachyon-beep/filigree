@@ -642,6 +642,17 @@ class TestGetReadyCategory:
         ids = {i.id for i in ready}
         assert bug.id in ids
 
+    def test_ready_excludes_assigned_open_issue(self, db: FiligreeDB) -> None:
+        """Assigned open-category issues are not claimable ready work."""
+        bug = db.create_issue("Assigned bug", type="bug")
+        db.claim_issue(bug.id, assignee="agent-1")
+
+        ready = db.get_ready()
+        ids = {i.id for i in ready}
+
+        assert bug.id not in ids
+        assert db.get_issue(bug.id).is_ready is False
+
     def test_ready_excludes_wip(self, db: FiligreeDB) -> None:
         """Bug in 'fixing' (wip-category) is not ready."""
         bug = db.create_issue("Bug", type="bug")

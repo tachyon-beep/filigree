@@ -486,6 +486,7 @@ class IssuesMixin(DBMixinProtocol):
                         # state name shared across types in different categories
                         # is classified correctly.
                         self._resolve_status_category(row["type"], row["status"]) == "open" and open_blockers_by_id.get(iid, 0) == 0
+                        and not (row["assignee"] or "")
                     ),
                     children=children_by_id.get(iid, []),
                     status_category=self._resolve_status_category(row["type"], row["status"]),

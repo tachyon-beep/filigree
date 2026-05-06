@@ -248,7 +248,7 @@ class PlanningMixin(DBMixinProtocol):
         return open_pred, blocker_done_pred
 
     def get_ready(self) -> list[Issue]:
-        """Issues in open-category states with no open blockers."""
+        """Unassigned issues in open-category states with no open blockers."""
         preds = self._resolve_open_blocker_predicates()
         if preds is None:
             return []
@@ -257,6 +257,7 @@ class PlanningMixin(DBMixinProtocol):
         rows = self.conn.execute(
             f"SELECT i.id FROM issues i "
             f"WHERE {open_sql} "
+            f"AND (i.assignee = '' OR i.assignee IS NULL) "
             f"AND NOT EXISTS ("
             f"  SELECT 1 FROM dependencies d "
             f"  JOIN issues blocker ON d.depends_on_id = blocker.id "

@@ -306,6 +306,16 @@ class TestReadyAndBlocked:
         titles = {d["title"] for d in data["items"]}
         assert "Ready one" in titles
 
+    async def test_get_ready_excludes_assigned_issue(self, mcp_db: FiligreeDB) -> None:
+        issue = mcp_db.create_issue("Claimed ready one")
+        mcp_db.claim_issue(issue.id, assignee="agent-1")
+
+        result = await call_tool("get_ready", {})
+
+        data = _parse(result)
+        ids = {d["issue_id"] for d in data["items"]}
+        assert issue.id not in ids
+
     async def test_get_ready_shape(self, mcp_db: FiligreeDB) -> None:
         """get_ready must return SlimIssue shape (5 keys including status)."""
         mcp_db.create_issue("Ready")

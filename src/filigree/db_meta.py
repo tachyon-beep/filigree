@@ -305,6 +305,7 @@ class MetaMixin(DBMixinProtocol):
             ready_count = self.conn.execute(
                 f"SELECT COUNT(*) as cnt FROM issues i "
                 f"WHERE {open_sql} "
+                f"AND (i.assignee = '' OR i.assignee IS NULL) "
                 f"AND NOT EXISTS ("
                 f"  SELECT 1 FROM dependencies d "
                 f"  JOIN issues blocker ON d.depends_on_id = blocker.id "

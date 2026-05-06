@@ -255,6 +255,16 @@ class TestStats:
         assert bug.id in ready_ids
         assert stats["ready_count"] == len(ready_ids)
 
+    def test_ready_count_excludes_assigned_open_issues(self, db: FiligreeDB) -> None:
+        bug = db.create_issue("Claimed template-open bug", type="bug")
+        db.claim_issue(bug.id, assignee="agent-1")
+
+        ready_ids = {i.id for i in db.get_ready()}
+        stats = db.get_stats()
+
+        assert bug.id not in ready_ids
+        assert stats["ready_count"] == len(ready_ids)
+
     def test_done_category_blocker_does_not_count_as_blocked(self, db: FiligreeDB) -> None:
         blocker = db.create_issue("Blocker", type="bug")
         blocked = db.create_issue("Blocked", type="bug")

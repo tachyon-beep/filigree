@@ -20,6 +20,20 @@ class TestReadyAndBlocked:
         # 1 created task + auto-seeded "Future" release = 2 ready
         assert "2 ready" in result.output
 
+    def test_ready_excludes_claimed_issue(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        runner, _ = cli_in_project
+        created = runner.invoke(cli, ["create", "Claimed ready task"])
+        issue_id = _extract_id(created.output)
+        claim = runner.invoke(cli, ["claim", issue_id, "--assignee", "agent-1"])
+        assert claim.exit_code == 0
+
+        result = runner.invoke(cli, ["ready", "--json"])
+
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        ids = {item["issue_id"] for item in data["items"]}
+        assert issue_id not in ids
+
     def test_blocked(self, cli_in_project: tuple[CliRunner, Path]) -> None:
         runner, _ = cli_in_project
         r1 = runner.invoke(cli, ["create", "Blocked"])
