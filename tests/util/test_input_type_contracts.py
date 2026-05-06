@@ -141,7 +141,8 @@ def test_all_mcp_modules_covered() -> None:
     from pathlib import Path
 
     mcp_dir = Path(__file__).resolve().parents[2] / "src" / "filigree" / "mcp_tools"
-    actual_modules = {f.stem for f in mcp_dir.glob("*.py") if f.stem not in ("__init__", "common")}
+    helper_modules = {"__init__", "common", "payloads"}
+    actual_modules = {f.stem for f in mcp_dir.glob("*.py") if f.stem not in helper_modules}
     scanned_modules = {m.rsplit(".", 1)[-1] for m in _MCP_MODULES}
     assert actual_modules == scanned_modules, f"Module mismatch:\n  On disk: {actual_modules}\n  Scanned: {scanned_modules}"
 

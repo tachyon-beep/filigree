@@ -46,6 +46,8 @@ class ListIssuesArgs(TypedDict):
     label: NotRequired[str | list[str]]
     label_prefix: NotRequired[str]
     not_label: NotRequired[str]
+    sort_by: NotRequired[Literal["created_at", "updated_at", "priority"]]
+    direction: NotRequired[Literal["asc", "desc"]]
     limit: NotRequired[int]
     offset: NotRequired[int]
     no_limit: NotRequired[bool]

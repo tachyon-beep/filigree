@@ -135,6 +135,29 @@ class TestListAndSearch:
         # the "open" category, so it matches the status="open" filter)
         assert len(data["items"]) == 2
 
+    async def test_list_issues_sort_by_updated_at_desc(self, mcp_db: FiligreeDB) -> None:
+        older = mcp_db.create_issue("Older task", type="task", priority=2)
+        newer = mcp_db.create_issue("Newer task", type="task", priority=2)
+        mcp_db.conn.execute(
+            "UPDATE issues SET updated_at = ? WHERE id = ?",
+            ("2026-01-01T00:00:00+00:00", older.id),
+        )
+        mcp_db.conn.execute(
+            "UPDATE issues SET updated_at = ? WHERE id = ?",
+            ("2026-02-01T00:00:00+00:00", newer.id),
+        )
+        mcp_db.conn.commit()
+
+        result = await call_tool("list_issues", {"type": "task", "sort_by": "updated_at", "direction": "desc", "limit": 2})
+        data = _parse(result)
+
+        assert [item["issue_id"] for item in data["items"]] == [newer.id, older.id]
+
+    async def test_list_issues_rejects_invalid_sort_by(self, mcp_db: FiligreeDB) -> None:
+        result = await call_tool("list_issues", {"sort_by": "title"})
+        data = _parse(result)
+        assert data["code"] == ErrorCode.VALIDATION
+
     async def test_search(self, mcp_db: FiligreeDB) -> None:
         mcp_db.create_issue("Authentication bug")
         mcp_db.create_issue("Something else")

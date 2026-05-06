@@ -58,6 +58,7 @@ from filigree.types.inputs import (
 logger = logging.getLogger(__name__)
 
 _UPDATE_TRACKED_FIELDS = ("status", "priority", "title", "assignee", "description", "notes", "parent_id", "fields")
+_LIST_ISSUES_SORT_FIELDS = {"created_at", "updated_at", "priority"}
 
 
 def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
@@ -125,6 +126,18 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
                     "not_label": {
                         "type": "string",
                         "description": "Exclude issues with this label. Supports exact match, prefix (trailing colon), and virtual labels.",
+                    },
+                    "sort_by": {
+                        "type": "string",
+                        "enum": ["created_at", "updated_at", "priority"],
+                        "default": "priority",
+                        "description": "Sort issues by created_at, updated_at, or priority.",
+                    },
+                    "direction": {
+                        "type": "string",
+                        "enum": ["asc", "desc"],
+                        "default": "asc",
+                        "description": "Sort direction.",
                     },
                     "limit": {
                         "type": "integer",
@@ -521,6 +534,13 @@ async def _handle_list_issues(arguments: dict[str, Any]) -> list[TextContent]:
     if pag_err is not None:
         return pag_err
 
+    sort_by = args.get("sort_by", "priority")
+    direction = args.get("direction", "asc")
+    if not isinstance(sort_by, str) or sort_by not in _LIST_ISSUES_SORT_FIELDS:
+        return _text(ErrorResponse(error=f"sort_by must be one of {sorted(_LIST_ISSUES_SORT_FIELDS)}", code=ErrorCode.VALIDATION))
+    if not isinstance(direction, str) or direction.lower() not in {"asc", "desc"}:
+        return _text(ErrorResponse(error="direction must be 'asc' or 'desc'", code=ErrorCode.VALIDATION))
+
     try:
         issues = tracker.list_issues(
             status=status_filter,
@@ -531,6 +551,8 @@ async def _handle_list_issues(arguments: dict[str, Any]) -> list[TextContent]:
             label=args.get("label"),
             label_prefix=args.get("label_prefix"),
             not_label=args.get("not_label"),
+            sort_by=sort_by,
+            direction=direction,
             limit=effective_limit + 1,
             offset=offset,
         )

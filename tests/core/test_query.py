@@ -116,6 +116,43 @@ class TestListIssuesFilters:
         assert all(i.type == "bug" and i.priority == 0 for i in results)
 
 
+class TestListIssuesSorting:
+    """list_issues supports explicit sort fields and directions."""
+
+    def test_sort_by_updated_at_desc(self, db: FiligreeDB) -> None:
+        older = db.create_issue("Older task", type="task", priority=2)
+        newer = db.create_issue("Newer task", type="task", priority=2)
+        db.conn.execute(
+            "UPDATE issues SET updated_at = ? WHERE id = ?",
+            ("2026-01-01T00:00:00+00:00", older.id),
+        )
+        db.conn.execute(
+            "UPDATE issues SET updated_at = ? WHERE id = ?",
+            ("2026-02-01T00:00:00+00:00", newer.id),
+        )
+        db.conn.commit()
+
+        results = db.list_issues(type="task", sort_by="updated_at", direction="desc", limit=2)
+
+        assert [issue.id for issue in results] == [newer.id, older.id]
+
+    def test_sort_by_priority_desc(self, db: FiligreeDB) -> None:
+        high_numeric_priority = db.create_issue("Priority four", type="task", priority=4)
+        low_numeric_priority = db.create_issue("Priority zero", type="task", priority=0)
+
+        results = db.list_issues(type="task", sort_by="priority", direction="desc", limit=2)
+
+        assert [issue.id for issue in results] == [high_numeric_priority.id, low_numeric_priority.id]
+
+    def test_rejects_invalid_sort_by(self, db: FiligreeDB) -> None:
+        with pytest.raises(ValueError, match="sort_by must be one of"):
+            db.list_issues(sort_by="title")
+
+    def test_rejects_invalid_direction(self, db: FiligreeDB) -> None:
+        with pytest.raises(ValueError, match="direction must be 'asc' or 'desc'"):
+            db.list_issues(direction="sideways")
+
+
 class TestListIssuesBoundaries:
     """M9: list_issues negative limit/offset guards."""
 

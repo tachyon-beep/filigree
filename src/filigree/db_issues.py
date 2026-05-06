@@ -25,6 +25,12 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+_LIST_ISSUE_SORT_COLUMNS = {
+    "created_at": "i.created_at",
+    "updated_at": "i.updated_at",
+    "priority": "i.priority",
+}
+
 
 def _escape_like_prefix(value: str) -> str:
     """Escape LIKE wildcard characters for prefix matching (no wrapping %)."""
@@ -45,6 +51,23 @@ def _validate_priority_value(priority: Any) -> None:
     if isinstance(priority, bool) or not isinstance(priority, int) or not (0 <= priority <= 4):
         msg = f"Priority must be an integer between 0 and 4, got {priority!r}"
         raise ValueError(msg)
+
+
+def _list_issue_order_by(sort_by: str, direction: str) -> str:
+    if not isinstance(sort_by, str) or sort_by not in _LIST_ISSUE_SORT_COLUMNS:
+        valid = ", ".join(sorted(_LIST_ISSUE_SORT_COLUMNS))
+        raise ValueError(f"sort_by must be one of: {valid}")
+    if not isinstance(direction, str) or direction.lower() not in {"asc", "desc"}:
+        raise ValueError("direction must be 'asc' or 'desc'")
+
+    order_direction = direction.upper()
+    order_by = [f"{_LIST_ISSUE_SORT_COLUMNS[sort_by]} {order_direction}"]
+    if sort_by != "priority":
+        order_by.append("i.priority ASC")
+    if sort_by != "created_at":
+        order_by.append("i.created_at ASC")
+    order_by.append("i.id ASC")
+    return ", ".join(order_by)
 
 
 def _resolve_virtual_label(
@@ -1245,6 +1268,8 @@ class IssuesMixin(DBMixinProtocol):
         label: str | list[str] | None = None,
         label_prefix: str | None = None,
         not_label: str | None = None,
+        sort_by: str = "priority",
+        direction: str = "asc",
         limit: int = 100,
         offset: int = 0,
     ) -> list[Issue]:
@@ -1255,6 +1280,7 @@ class IssuesMixin(DBMixinProtocol):
         if label_prefix is not None and not label_prefix.endswith(":"):
             msg = f"label_prefix must include a trailing colon (got {label_prefix!r})"
             raise ValueError(msg)
+        order_by = _list_issue_order_by(sort_by, direction)
 
         # Normalize label to list
         if isinstance(label, str):
@@ -1351,7 +1377,7 @@ class IssuesMixin(DBMixinProtocol):
         where = f" WHERE {' AND '.join(conditions)}" if conditions else ""
         params.extend([limit, offset])
         rows = self.conn.execute(
-            f"SELECT i.id FROM issues i{where} ORDER BY i.priority, i.created_at LIMIT ? OFFSET ?",
+            f"SELECT i.id FROM issues i{where} ORDER BY {order_by} LIMIT ? OFFSET ?",
             params,
         ).fetchall()
 
