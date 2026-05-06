@@ -647,6 +647,7 @@ async def _handle_close_issue(arguments: dict[str, Any]) -> list[TextContent]:
     tracker = _get_db()
     try:
         ready_before = {i.id for i in tracker.get_ready()}
+        annotation_warnings = tracker.get_annotation_closeout_warnings(args["issue_id"])
         issue = tracker.close_issue(
             args["issue_id"],
             reason=args.get("reason", ""),
@@ -657,6 +658,8 @@ async def _handle_close_issue(arguments: dict[str, Any]) -> list[TextContent]:
         ready_after = tracker.get_ready()
         newly_unblocked = [i for i in ready_after if i.id not in ready_before]
         result: dict[str, Any] = dict(issue_to_public(issue))
+        if annotation_warnings:
+            result["annotation_warnings"] = annotation_warnings
         if newly_unblocked:
             result["newly_unblocked"] = [_slim_issue(i) for i in newly_unblocked]
         return _text(result)

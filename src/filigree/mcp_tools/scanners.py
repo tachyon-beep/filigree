@@ -316,11 +316,7 @@ async def _handle_report_finding(arguments: dict[str, Any]) -> list[TextContent]
     )["findings"]
     line_start = args.get("line_start")
     finding_record = next(
-        (
-            item
-            for item in matching_findings
-            if item["rule_id"] == rule_id and item.get("line_start") == line_start
-        ),
+        (item for item in matching_findings if item["rule_id"] == rule_id and item.get("line_start") == line_start),
         None,
     )
     if finding_record is None:

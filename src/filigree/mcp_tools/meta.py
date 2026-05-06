@@ -778,9 +778,7 @@ async def _handle_list_labels(arguments: dict[str, Any]) -> list[TextContent]:
     # entries so list_labels matches the ListResponse[T] envelope used by
     # every other MCP list tool. The bounded total is recoverable by the
     # caller as ``sum(len(item['labels']) for item in items)``.
-    items: list[dict[str, Any]] = [
-        label_namespace_item_to_public(ns, ns_data) for ns, ns_data in result["namespaces"].items()
-    ]
+    items: list[dict[str, Any]] = [label_namespace_item_to_public(ns, ns_data) for ns, ns_data in result["namespaces"].items()]
     return _text(_list_response(items, has_more=False))
 
 

@@ -240,6 +240,7 @@ def get_mcp_status_payload() -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 from filigree.mcp_tools import (  # noqa: E402, I001  — must come after globals
+    annotations as _annotations_mod,
     files as _files_mod,
     issues as _issues_mod,
     meta as _meta_mod,
@@ -252,7 +253,7 @@ from filigree.mcp_tools import (  # noqa: E402, I001  — must come after global
 _all_tools: list[Tool] = []
 _all_handlers: dict[str, Callable[..., Any]] = {}
 
-for _mod in (_issues_mod, _planning_mod, _files_mod, _workflow_mod, _meta_mod, _observations_mod):
+for _mod in (_issues_mod, _planning_mod, _files_mod, _annotations_mod, _workflow_mod, _meta_mod, _observations_mod):
     _tools, _handlers = _mod.register()
     _all_tools.extend(_tools)
     _all_handlers.update(_handlers)

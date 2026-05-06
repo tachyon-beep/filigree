@@ -27,6 +27,7 @@ _SRC_DIR = Path(__file__).resolve().parents[2] / "src" / "filigree"
 
 # Mixin files that may contain TYPE_CHECKING stubs
 _MIXIN_FILES = [
+    "db_annotations.py",
     "db_issues.py",
     "db_planning.py",
     "db_files.py",

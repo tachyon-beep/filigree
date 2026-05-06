@@ -1,7 +1,7 @@
 """Composition point for the Filigree issue tracker database.
 
 Assembles DB mixins (db_files, db_issues, db_events, db_workflow, db_meta,
-db_planning, db_observations) into the ``FiligreeDB`` class. Also provides
+db_planning, db_observations, db_annotations) into the ``FiligreeDB`` class. Also provides
 convention-based ``.filigree/`` directory discovery, configuration I/O,
 template seeding, and shared file helpers.
 """
@@ -20,6 +20,13 @@ import uuid as _uuid
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from filigree.db_annotations import (
+    VALID_ANNOTATION_INTENTS,
+    VALID_ANNOTATION_RELATIONSHIPS,
+    VALID_ANNOTATION_STATUSES,
+    VALID_ANNOTATION_TARGET_TYPES,
+    AnnotationsMixin,
+)
 from filigree.db_base import _now_iso
 from filigree.db_events import EventsMixin
 from filigree.db_files import (
@@ -56,6 +63,10 @@ logger = logging.getLogger(__name__)
 
 # Re-exported names from db_files, models, and types.core for backward compatibility.
 __all__ = [
+    "VALID_ANNOTATION_INTENTS",
+    "VALID_ANNOTATION_RELATIONSHIPS",
+    "VALID_ANNOTATION_STATUSES",
+    "VALID_ANNOTATION_TARGET_TYPES",
     "VALID_ASSOC_TYPES",
     "VALID_FINDING_STATUSES",
     "VALID_SEVERITIES",
@@ -478,7 +489,17 @@ def _seed_builtin_packs(conn: sqlite3.Connection, now: str) -> int:
 # ---------------------------------------------------------------------------
 
 
-class FiligreeDB(FilesMixin, ScansMixin, IssuesMixin, EventsMixin, WorkflowMixin, MetaMixin, PlanningMixin, ObservationsMixin):
+class FiligreeDB(
+    FilesMixin,
+    ScansMixin,
+    IssuesMixin,
+    EventsMixin,
+    WorkflowMixin,
+    MetaMixin,
+    PlanningMixin,
+    ObservationsMixin,
+    AnnotationsMixin,
+):
     """Direct SQLite operations. No daemon, no sync. Importable by CLI and MCP."""
 
     def __init__(
@@ -497,7 +518,12 @@ class FiligreeDB(FilesMixin, ScansMixin, IssuesMixin, EventsMixin, WorkflowMixin
         # project (e.g. scanner log files). None means "derive from db_path",
         # which only works for the legacy .filigree/filigree.db layout;
         # v2.0 conf installs may place the DB anywhere and must set this.
-        self.project_root: Path | None = Path(project_root) if project_root is not None else None
+        if project_root is not None:
+            self.project_root: Path | None = Path(project_root)
+        elif self.db_path.parent.name == FILIGREE_DIR_NAME:
+            self.project_root = self.db_path.parent.parent
+        else:
+            self.project_root = None
         if enabled_packs is not None and isinstance(enabled_packs, str):
             msg = f"enabled_packs must be a list of strings, not a bare string: {enabled_packs!r}"
             raise TypeError(msg)

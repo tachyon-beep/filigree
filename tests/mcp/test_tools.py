@@ -2295,9 +2295,7 @@ class TestFileTools:
         await call_tool("update_issue", {"issue_id": issue.id, "status": "in_progress"})
 
         default_timeline = _parse(await call_tool("get_file_timeline", {"file_id": file_data["file_id"]}))
-        with_issue_events = _parse(
-            await call_tool("get_file_timeline", {"file_id": file_data["file_id"], "include_issue_events": True})
-        )
+        with_issue_events = _parse(await call_tool("get_file_timeline", {"file_id": file_data["file_id"], "include_issue_events": True}))
         issue_only = _parse(await call_tool("get_file_timeline", {"file_id": file_data["file_id"], "event_type": "issue_event"}))
 
         assert all(e["type"] != "issue_event" for e in default_timeline["items"])

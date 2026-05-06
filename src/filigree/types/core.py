@@ -16,6 +16,12 @@ FindingStatus = Literal["open", "acknowledged", "fixed", "false_positive", "unse
 AssocType = Literal["bug_in", "task_for", "scan_finding", "mentioned_in"]
 StatusCategory = Literal["open", "wip", "done"]
 ScanRunStatus = Literal["pending", "running", "completed", "failed", "timeout"]
+AnnotationIntent = Literal["explanation", "warning", "breadcrumb", "hypothesis", "decision", "handoff", "gotcha"]
+AnnotationStatus = Literal["active", "resolved", "superseded", "promoted"]
+AnnotationTargetType = Literal["issue", "file", "finding", "observation"]
+AnnotationRelationship = Literal["relevant_to", "must_consider", "evidence_for", "explains", "created_from", "promoted_to"]
+AnnotationAnchorState = Literal["current", "line_drifted", "content_changed_anchor_found", "stale", "file_missing"]
+AnnotationProvenanceTrustLevel = Literal["complete", "partial", "minimal"]
 
 
 class _ProjectConfigRequired(TypedDict):

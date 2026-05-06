@@ -1,6 +1,6 @@
 # MCP Server Reference
 
-Filigree exposes an MCP (Model Context Protocol) server so AI agents interact natively without parsing CLI output. The server provides 71 tools, 1 resource, and 1 prompt.
+Filigree exposes an MCP (Model Context Protocol) server so AI agents interact natively without parsing CLI output. The server provides 98 tools, 1 resource, and 1 prompt.
 
 ## Contents
 
@@ -20,6 +20,7 @@ Filigree exposes an MCP (Model Context Protocol) server so AI agents interact na
   - [Analytics](#analytics)
   - [Data Management](#data-management)
   - [Files and Traceability](#files-and-traceability)
+  - [Annotations](#annotations)
   - [Scanning](#scanning)
 
 ## Setup
@@ -143,6 +144,11 @@ Workflow guide with optional live project context. Agents use this to understand
 | `reason` | string | no | Close reason |
 | `fields` | object | no | Extra fields to set while closing (for enforced workflows) |
 | `actor` | string | no | Agent identity for audit trail |
+
+When an issue has active `critical=true` annotations linked with
+`relationship="must_consider"`, `close_issue` still closes the issue but returns
+an `annotation_warnings` array. Each warning contains the `annotation_id`,
+file anchor, computed `anchor_state`, and suggested follow-up tools.
 
 #### `reopen_issue`
 
@@ -561,6 +567,49 @@ Response includes: `file`, `associations`, `recent_findings`, `summary`.
 |-----------|------|----------|-------------|
 | `file_id` | string | yes | File ID |
 | `force` | boolean | no | Cascade associations and open findings (default false) |
+
+### Annotations
+
+Annotations are durable, project-shared file notes with provenance. They are
+not issues, comments, findings, or observations. Every annotation is anchored to
+a file, can link to issues/files/findings/observations, and returns computed
+anchor drift separately from lifecycle `status`.
+
+List tools return `{items, has_more, next_offset?}`. `response_detail` defaults
+to `summary`; pass `full` to include provenance, links, and audit events.
+
+| Tool | Description |
+|------|-------------|
+| `annotate_file` | Create a file annotation and capture checksum/git/diff provenance |
+| `list_annotations` | Filter annotations by file, link target, actor, intent, status, or anchor state |
+| `get_annotation` | Get one annotation with full provenance, links, and audit events |
+| `update_annotation` | Update note/context/intent/critical/status |
+| `resolve_annotation` | Resolve an annotation with audit trail |
+| `supersede_annotation` | Supersede one annotation with another |
+| `promote_annotation` | Create an issue or observation and add a `promoted_to` link |
+| `carry_forward_annotation` | Add a `must_consider` link to a new issue and acknowledge the old warning |
+| `link_annotation` / `unlink_annotation` | Manage typed target links |
+| `get_file_annotations` | List annotations for a file |
+| `get_issue_annotations` | List annotations linked to an issue or epic |
+| `list_attention_annotations` | List active critical `must_consider` annotations |
+
+#### `annotate_file`
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `file_path` | string | yes | Project-relative file path |
+| `note` | string | yes | Durable note text |
+| `line_start` / `line_end` | integer | no | 1-based line range |
+| `context_summary` | string | no | What the agent was doing |
+| `intent` | enum | no | `explanation`, `warning`, `breadcrumb`, `hypothesis`, `decision`, `handoff`, `gotcha` |
+| `critical` | boolean | no | Elevate surfacing and closeout warnings |
+| `links` | array | no | `{target_type, target_id, relationship}` entries |
+| `actor` | string | no | Agent identity |
+| `session_ref` | string | no | Optional opaque run/session reference |
+
+V1 link targets are `issue`, `file`, `finding`, and `observation`.
+Relationships are `relevant_to`, `must_consider`, `evidence_for`, `explains`,
+`created_from`, and `promoted_to`.
 
 ### Scanning
 

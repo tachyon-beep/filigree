@@ -151,6 +151,131 @@ class BatchUpdateArgs(TypedDict):
 
 
 # ---------------------------------------------------------------------------
+# annotations.py handlers
+# ---------------------------------------------------------------------------
+
+
+class AnnotationLinkInput(TypedDict):
+    target_type: str
+    target_id: str
+    relationship: str
+
+
+class AnnotateFileArgs(TypedDict):
+    file_path: str
+    note: str
+    line_start: NotRequired[int]
+    line_end: NotRequired[int]
+    context_summary: NotRequired[str]
+    intent: NotRequired[str]
+    critical: NotRequired[bool]
+    links: NotRequired[list[AnnotationLinkInput]]
+    actor: NotRequired[str]
+    session_ref: NotRequired[str]
+
+
+class ListAnnotationsArgs(TypedDict):
+    file_path: NotRequired[str]
+    file_id: NotRequired[str]
+    issue_id: NotRequired[str]
+    target_type: NotRequired[str]
+    target_id: NotRequired[str]
+    actor: NotRequired[str]
+    intent: NotRequired[str]
+    critical: NotRequired[bool]
+    status: NotRequired[str]
+    anchor_state: NotRequired[str]
+    relationship: NotRequired[str]
+    response_detail: NotRequired[str]
+    limit: NotRequired[int]
+    offset: NotRequired[int]
+
+
+class GetAnnotationArgs(TypedDict):
+    annotation_id: str
+
+
+class UpdateAnnotationArgs(TypedDict):
+    annotation_id: str
+    note: NotRequired[str]
+    context_summary: NotRequired[str]
+    intent: NotRequired[str]
+    critical: NotRequired[bool]
+    status: NotRequired[str]
+    actor: NotRequired[str]
+
+
+class ResolveAnnotationArgs(TypedDict):
+    annotation_id: str
+    reason: NotRequired[str]
+    actor: NotRequired[str]
+
+
+class SupersedeAnnotationArgs(TypedDict):
+    annotation_id: str
+    replacement_annotation_id: str
+    reason: NotRequired[str]
+    actor: NotRequired[str]
+
+
+class PromoteAnnotationArgs(TypedDict):
+    annotation_id: str
+    target_type: NotRequired[str]
+    title: NotRequired[str]
+    reason: NotRequired[str]
+    keep_active: NotRequired[bool]
+    actor: NotRequired[str]
+
+
+class CarryForwardAnnotationArgs(TypedDict):
+    annotation_id: str
+    from_target_id: str
+    to_target_id: str
+    reason: str
+    actor: NotRequired[str]
+
+
+class LinkAnnotationArgs(TypedDict):
+    annotation_id: str
+    target_type: str
+    target_id: str
+    relationship: str
+    actor: NotRequired[str]
+
+
+class UnlinkAnnotationArgs(TypedDict):
+    annotation_id: str
+    target_type: str
+    target_id: str
+    relationship: NotRequired[str]
+    actor: NotRequired[str]
+
+
+class GetFileAnnotationsArgs(TypedDict):
+    file_path: str
+    response_detail: NotRequired[str]
+    limit: NotRequired[int]
+    offset: NotRequired[int]
+
+
+class GetIssueAnnotationsArgs(TypedDict):
+    issue_id: str
+    response_detail: NotRequired[str]
+    limit: NotRequired[int]
+    offset: NotRequired[int]
+
+
+class ListAttentionAnnotationsArgs(TypedDict):
+    target_id: NotRequired[str]
+    file_path: NotRequired[str]
+    critical: NotRequired[bool]
+    status: NotRequired[str]
+    response_detail: NotRequired[str]
+    limit: NotRequired[int]
+    offset: NotRequired[int]
+
+
+# ---------------------------------------------------------------------------
 # meta.py handlers
 # ---------------------------------------------------------------------------
 
@@ -562,6 +687,20 @@ TOOL_ARGS_MAP: dict[str, type] = {
     "batch_update": BatchUpdateArgs,
     "start_work": StartWorkArgs,
     "start_next_work": StartNextWorkArgs,
+    # annotations.py
+    "annotate_file": AnnotateFileArgs,
+    "list_annotations": ListAnnotationsArgs,
+    "get_annotation": GetAnnotationArgs,
+    "update_annotation": UpdateAnnotationArgs,
+    "resolve_annotation": ResolveAnnotationArgs,
+    "supersede_annotation": SupersedeAnnotationArgs,
+    "promote_annotation": PromoteAnnotationArgs,
+    "carry_forward_annotation": CarryForwardAnnotationArgs,
+    "link_annotation": LinkAnnotationArgs,
+    "unlink_annotation": UnlinkAnnotationArgs,
+    "get_file_annotations": GetFileAnnotationsArgs,
+    "get_issue_annotations": GetIssueAnnotationsArgs,
+    "list_attention_annotations": ListAttentionAnnotationsArgs,
     # meta.py
     "add_comment": AddCommentArgs,
     "get_comments": GetCommentsArgs,

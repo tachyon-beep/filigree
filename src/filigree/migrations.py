@@ -417,6 +417,112 @@ def migrate_v8_to_v9(conn: sqlite3.Connection) -> None:
     add_index(conn, "idx_issues_assignee_priority", "issues", ["assignee", "priority", "created_at"])
 
 
+def _create_annotation_tables(conn: sqlite3.Connection) -> None:
+    conn.execute("""\
+        CREATE TABLE IF NOT EXISTS annotations (
+            id              TEXT PRIMARY KEY,
+            file_id         TEXT REFERENCES file_records(id) ON DELETE SET NULL,
+            file_path       TEXT NOT NULL,
+            line_start      INTEGER,
+            line_end        INTEGER,
+            anchor_snippet  TEXT DEFAULT '',
+            note            TEXT NOT NULL,
+            context_summary TEXT DEFAULT '',
+            intent          TEXT NOT NULL DEFAULT 'breadcrumb',
+            critical        BOOLEAN NOT NULL DEFAULT 0,
+            status          TEXT NOT NULL DEFAULT 'active',
+            actor           TEXT DEFAULT '',
+            session_ref     TEXT DEFAULT '',
+            created_at      TEXT NOT NULL,
+            updated_at      TEXT NOT NULL,
+            resolved_at     TEXT,
+            CHECK (intent IN ('explanation', 'warning', 'breadcrumb', 'hypothesis', 'decision', 'handoff', 'gotcha')),
+            CHECK (status IN ('active', 'resolved', 'superseded', 'promoted')),
+            CHECK (line_start IS NULL OR line_start >= 1),
+            CHECK (line_end IS NULL OR (line_start IS NOT NULL AND line_end >= line_start))
+        )""")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_annotations_file ON annotations(file_id, status, critical, created_at)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_annotations_path ON annotations(file_path, status, critical, created_at)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_annotations_status ON annotations(status, critical, created_at)")
+
+    conn.execute("""\
+        CREATE TABLE IF NOT EXISTS annotation_provenance (
+            annotation_id          TEXT PRIMARY KEY REFERENCES annotations(id) ON DELETE CASCADE,
+            commit_ref            TEXT DEFAULT '',
+            branch                TEXT DEFAULT '',
+            repo_root             TEXT DEFAULT '',
+            worktree_root         TEXT DEFAULT '',
+            git_state             TEXT DEFAULT '',
+            worktree_dirty        BOOLEAN NOT NULL DEFAULT 0,
+            file_checksum         TEXT DEFAULT '',
+            file_size             INTEGER DEFAULT 0,
+            file_mtime            TEXT DEFAULT '',
+            dirty_diff_hash       TEXT DEFAULT '',
+            dirty_diff_summary    TEXT DEFAULT '',
+            file_diff             TEXT DEFAULT '',
+            worktree_diff_summary TEXT DEFAULT '',
+            anchor_context_before TEXT DEFAULT '',
+            anchor_context_after  TEXT DEFAULT '',
+            provenance_trust_level TEXT NOT NULL DEFAULT 'minimal',
+            provenance_flags      TEXT NOT NULL DEFAULT '[]',
+            provenance_warnings   TEXT NOT NULL DEFAULT '[]',
+            CHECK (provenance_trust_level IN ('complete', 'partial', 'minimal'))
+        )""")
+
+    conn.execute("""\
+        CREATE TABLE IF NOT EXISTS annotation_links (
+            id             TEXT PRIMARY KEY,
+            annotation_id  TEXT NOT NULL REFERENCES annotations(id) ON DELETE CASCADE,
+            target_type    TEXT NOT NULL,
+            target_id      TEXT NOT NULL,
+            relationship   TEXT NOT NULL,
+            actor          TEXT DEFAULT '',
+            created_at     TEXT NOT NULL,
+            UNIQUE(annotation_id, target_type, target_id, relationship),
+            CHECK (target_type IN ('issue', 'file', 'finding', 'observation')),
+            CHECK (relationship IN ('relevant_to', 'must_consider', 'evidence_for', 'explains', 'created_from', 'promoted_to'))
+        )""")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_annotation_links_annotation ON annotation_links(annotation_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_annotation_links_target ON annotation_links(target_type, target_id, relationship)")
+
+    conn.execute("""\
+        CREATE TABLE IF NOT EXISTS annotation_events (
+            id            TEXT PRIMARY KEY,
+            annotation_id TEXT NOT NULL REFERENCES annotations(id) ON DELETE CASCADE,
+            event_type    TEXT NOT NULL,
+            actor         TEXT DEFAULT '',
+            reason        TEXT DEFAULT '',
+            old_value     TEXT,
+            new_value     TEXT,
+            target_type   TEXT DEFAULT '',
+            target_id     TEXT DEFAULT '',
+            created_at    TEXT NOT NULL
+        )""")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_annotation_events_annotation ON annotation_events(annotation_id, created_at)")
+
+    conn.execute("""\
+        CREATE TABLE IF NOT EXISTS annotation_closeout_acknowledgements (
+            id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+            annotation_id         TEXT NOT NULL REFERENCES annotations(id) ON DELETE CASCADE,
+            target_type           TEXT NOT NULL DEFAULT 'issue',
+            target_id             TEXT NOT NULL,
+            carried_to_target_id  TEXT DEFAULT '',
+            actor                 TEXT DEFAULT '',
+            reason                TEXT DEFAULT '',
+            acknowledged_at       TEXT NOT NULL,
+            UNIQUE(annotation_id, target_type, target_id),
+            CHECK (target_type IN ('issue'))
+        )""")
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_annotation_closeout_ack_target ON annotation_closeout_acknowledgements(target_type, target_id)"
+    )
+
+
+def migrate_v9_to_v10(conn: sqlite3.Connection) -> None:
+    """v9 -> v10: Add shared file annotation tables."""
+    _create_annotation_tables(conn)
+
+
 MIGRATIONS: dict[int, MigrationFn] = {
     1: migrate_v1_to_v2,
     2: migrate_v2_to_v3,
@@ -426,6 +532,7 @@ MIGRATIONS: dict[int, MigrationFn] = {
     6: migrate_v6_to_v7,
     7: migrate_v7_to_v8,
     8: migrate_v8_to_v9,
+    9: migrate_v9_to_v10,
 }
 
 

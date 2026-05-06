@@ -445,10 +445,7 @@ def delete_file_record_cmd(file_id: str, force: bool, as_json: bool) -> None:
         if as_json:
             click.echo(json_mod.dumps(result, indent=2, default=str))
         else:
-            click.echo(
-                f"Deleted {file_id} "
-                f"({result['deleted_findings']} finding(s), {result['deleted_associations']} association(s))"
-            )
+            click.echo(f"Deleted {file_id} ({result['deleted_findings']} finding(s), {result['deleted_associations']} association(s))")
 
 
 # ---------------------------------------------------------------------------

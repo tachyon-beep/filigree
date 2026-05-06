@@ -17,6 +17,7 @@ Most data commands support `--json` for machine-readable output (`--json` is sup
 - [Analytics and Events](#analytics-and-events)
 - [Observations](#observations)
 - [Files and Findings](#files-and-findings)
+- [Annotations](#annotations)
 - [Scanners](#scanners)
 - [Data Management](#data-management)
 
@@ -215,7 +216,10 @@ Close one or more issues. Accepts multiple IDs.
 | `ids` | string... | One or more issue IDs (positional, variadic) |
 | `--reason` | string | Close reason |
 
-When using `--json`, the output includes a `closed` array and an `unblocked` array showing issues that became ready after the close.
+When using `--json`, the output includes `succeeded`, `failed`, and
+`newly_unblocked`. Closed issues with active critical `must_consider`
+annotations include an `annotation_warnings` array. Plain-text close prints the
+same warning after the close; V1 warnings are advisory and do not block closure.
 
 ### `reopen`
 
@@ -842,6 +846,51 @@ Update multiple findings in one call.
 |-----------|------|-------------|
 | `finding-ids` | string... | Finding IDs (positional, multiple) |
 | `--status` | string | New status (required) |
+
+## Annotations
+
+Annotations are durable, project-shared file notes with checksum/git/diff
+provenance and computed anchor drift. They are file anchored and can link to
+issues, files, findings, and observations.
+
+```bash
+filigree annotate-file src/auth.py "Keep this invariant in mind" --line 42 --intent warning --critical
+filigree annotate-file src/auth.py "Context for phase 2" --link issue:filigree-abc123:must_consider
+filigree list-annotations --file src/auth.py --json
+filigree get-annotation <annotation-id> --json
+filigree resolve-annotation <annotation-id> --reason "Handled"
+filigree carry-forward-annotation <annotation-id> --from <old-issue> --to <new-issue> --reason "Still applies"
+```
+
+JSON list output uses `{items, has_more, next_offset?}`. `--detail summary` is
+the default for list commands; `--detail full` includes provenance, links, and
+audit events.
+
+### `annotate-file`
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `file-path` | string | Project-relative file path (positional) |
+| `note` | string | Annotation note (positional) |
+| `--line` / `--line-end` | integer | 1-based anchor range |
+| `--context-summary` | string | What the agent was doing |
+| `--intent` | enum | `explanation`, `warning`, `breadcrumb`, `hypothesis`, `decision`, `handoff`, `gotcha` |
+| `--critical` | flag | Elevate surfacing and closeout warnings |
+| `--link` | string | `target_type:target_id:relationship` |
+| `--session-ref` | string | Optional opaque session/run reference |
+
+### `list-annotations`
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `--file` / `--file-id` | string | Filter by file |
+| `--issue-id` | string | Filter by linked issue |
+| `--target-type` / `--target-id` | string | Filter by any V1 link target |
+| `--relationship` | string | Filter by link relationship |
+| `--intent` / `--status` / `--critical` | mixed | Filter by annotation fields |
+| `--anchor-state` | enum | Filter by computed drift state |
+| `--detail` | `summary`/`full` | Response detail |
+| `--limit` / `--offset` | integer | Pagination |
 
 ## Scanners
 

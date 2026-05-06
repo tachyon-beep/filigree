@@ -6,6 +6,7 @@ import pytest
 from mcp.types import Tool
 
 from filigree.core import FiligreeDB
+from filigree.db_annotations import AnnotationsMixin
 from filigree.db_events import EventsMixin
 from filigree.db_files import FilesMixin
 from filigree.db_issues import IssuesMixin
@@ -19,18 +20,18 @@ from filigree.db_workflow import WorkflowMixin
 
 
 def test_mcp_tools_package_exists() -> None:
-    """All 6 domain modules import and expose register()."""
-    from filigree.mcp_tools import files, issues, meta, observations, planning, workflow
+    """All domain modules import and expose register()."""
+    from filigree.mcp_tools import annotations, files, issues, meta, observations, planning, workflow
 
-    for mod in (issues, planning, files, workflow, meta, observations):
+    for mod in (issues, planning, files, workflow, meta, observations, annotations):
         assert callable(getattr(mod, "register", None)), f"{mod.__name__} missing register()"
 
 
 def test_mcp_tools_register_shape() -> None:
     """register() returns (list[Tool], dict[str, Callable])."""
-    from filigree.mcp_tools import files, issues, meta, observations, planning, workflow
+    from filigree.mcp_tools import annotations, files, issues, meta, observations, planning, workflow
 
-    for mod in (issues, planning, files, workflow, meta, observations):
+    for mod in (issues, planning, files, workflow, meta, observations, annotations):
         tools, handlers = mod.register()
         assert isinstance(tools, list), f"{mod.__name__}.register() tools is not a list"
         assert all(isinstance(t, Tool) for t in tools), f"{mod.__name__} has non-Tool items"
@@ -47,21 +48,21 @@ def test_mcp_tools_register_shape() -> None:
 
 
 def test_mcp_tools_total_count() -> None:
-    """All 83 tools are registered across domain modules.
+    """All 98 tools are registered across domain modules.
 
     Count includes the observation batch-promotion surface so the split-module
     registry test notices dropped tool registrations.
     """
-    from filigree.mcp_tools import files, issues, meta, observations, planning, scanners, workflow
+    from filigree.mcp_tools import annotations, files, issues, meta, observations, planning, scanners, workflow
 
     total = 0
-    for mod in (issues, planning, files, workflow, meta, observations):
+    for mod in (issues, planning, files, workflow, meta, observations, annotations):
         tools, _ = mod.register()
         total += len(tools)
-    # Scanner module needs include_legacy=True to include all 5 tools
+    # Scanner module needs include_legacy=True to include all legacy aliases.
     tools, _ = scanners.register(include_legacy=True)
     total += len(tools)
-    assert total == 83, f"Expected 83 tools total, got {total}"
+    assert total == 98, f"Expected 98 tools total, got {total}"
 
 
 def test_mcp_backward_compat_imports() -> None:
@@ -103,6 +104,11 @@ def test_archive_compact_available(db: FiligreeDB) -> None:
 
 
 # -- WorkflowMixin ----------------------------------------------------------
+
+
+def test_annotations_mixin_is_base_class() -> None:
+    """FiligreeDB should inherit from AnnotationsMixin."""
+    assert issubclass(FiligreeDB, AnnotationsMixin)
 
 
 def test_workflow_mixin_is_base_class() -> None:

@@ -508,7 +508,8 @@ class IssuesMixin(DBMixinProtocol):
                         # rather than via a deduplicated open-state name set, so a
                         # state name shared across types in different categories
                         # is classified correctly.
-                        self._resolve_status_category(row["type"], row["status"]) == "open" and open_blockers_by_id.get(iid, 0) == 0
+                        self._resolve_status_category(row["type"], row["status"]) == "open"
+                        and open_blockers_by_id.get(iid, 0) == 0
                         and not (row["assignee"] or "")
                     ),
                     children=children_by_id.get(iid, []),
@@ -879,7 +880,9 @@ class IssuesMixin(DBMixinProtocol):
                 if current["assignee"] and current["assignee"] != assignee:
                     msg = f"Cannot claim {issue_id}: already assigned to '{current['assignee']}'"
                     raise ValueError(msg)
-                msg = f"Cannot claim {issue_id}: status is '{current['status']}', expected open- or wip-category state"
+                msg = (
+                    f"Cannot claim {issue_id}: status is '{current['status']}', expected open-category state or wip-category handoff state"
+                )
                 raise ValueError(msg)
 
             self._record_event(issue_id, "claimed", actor=actor, old_value=old_assignee, new_value=assignee)

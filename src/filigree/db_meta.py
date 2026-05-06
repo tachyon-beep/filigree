@@ -467,6 +467,12 @@ class MetaMixin(DBMixinProtocol):
             ("SELECT 1 FROM events WHERE issue_id = ? LIMIT 1", (issue_id,)),
             ("SELECT 1 FROM file_associations WHERE issue_id = ? LIMIT 1", (issue_id,)),
             ("SELECT 1 FROM scan_findings WHERE issue_id = ? LIMIT 1", (issue_id,)),
+            ("SELECT 1 FROM annotation_links WHERE target_type = 'issue' AND target_id = ? LIMIT 1", (issue_id,)),
+            (
+                "SELECT 1 FROM annotation_closeout_acknowledgements "
+                "WHERE target_type = 'issue' AND (target_id = ? OR carried_to_target_id = ?) LIMIT 1",
+                (issue_id, issue_id),
+            ),
         ]
         return not any(self.conn.execute(query, params).fetchone() is not None for query, params in blockers)
 
@@ -572,6 +578,14 @@ class MetaMixin(DBMixinProtocol):
         ("file_event", "SELECT * FROM file_events ORDER BY created_at, file_id"),
         ("observation", "SELECT * FROM observations ORDER BY created_at"),
         ("dismissed_observation", "SELECT * FROM dismissed_observations ORDER BY dismissed_at"),
+        ("annotation", "SELECT * FROM annotations ORDER BY created_at, id"),
+        ("annotation_provenance", "SELECT * FROM annotation_provenance ORDER BY annotation_id"),
+        ("annotation_link", "SELECT * FROM annotation_links ORDER BY created_at, id"),
+        ("annotation_event", "SELECT * FROM annotation_events ORDER BY created_at, id"),
+        (
+            "annotation_closeout_acknowledgement",
+            "SELECT * FROM annotation_closeout_acknowledgements ORDER BY acknowledged_at, id",
+        ),
     ]
 
     def export_jsonl(self, output_path: str | Path) -> int:
@@ -601,6 +615,9 @@ class MetaMixin(DBMixinProtocol):
         file_associations: list[dict[str, Any]],
         scan_findings: list[dict[str, Any]],
         observations: list[dict[str, Any]],
+        annotation_links: list[dict[str, Any]],
+        annotation_events: list[dict[str, Any]],
+        annotation_closeout_acknowledgements: list[dict[str, Any]],
     ) -> None:
         """Raise WrongProjectError if any imported record references an
         issue ID whose prefix doesn't match this DB.
@@ -641,6 +658,16 @@ class MetaMixin(DBMixinProtocol):
             check(rec.get("issue_id"))
         for rec in observations:
             check(rec.get("source_issue_id"))
+        for rec in annotation_links:
+            if rec.get("target_type") == "issue":
+                check(rec.get("target_id"))
+        for rec in annotation_events:
+            if rec.get("target_type") == "issue":
+                check(rec.get("target_id"))
+        for rec in annotation_closeout_acknowledgements:
+            if rec.get("target_type") == "issue":
+                check(rec.get("target_id"))
+                check(rec.get("carried_to_target_id"))
 
         if not foreign:
             return
@@ -698,6 +725,11 @@ class MetaMixin(DBMixinProtocol):
         file_events: list[dict[str, Any]] = []
         observations: list[dict[str, Any]] = []
         dismissed_observations: list[dict[str, Any]] = []
+        annotations: list[dict[str, Any]] = []
+        annotation_provenance: list[dict[str, Any]] = []
+        annotation_links: list[dict[str, Any]] = []
+        annotation_events: list[dict[str, Any]] = []
+        annotation_closeout_acknowledgements: list[dict[str, Any]] = []
 
         buckets: dict[str, list[dict[str, Any]]] = {
             "issue": issues,
@@ -712,6 +744,11 @@ class MetaMixin(DBMixinProtocol):
             "file_event": file_events,
             "observation": observations,
             "dismissed_observation": dismissed_observations,
+            "annotation": annotations,
+            "annotation_provenance": annotation_provenance,
+            "annotation_link": annotation_links,
+            "annotation_event": annotation_events,
+            "annotation_closeout_acknowledgement": annotation_closeout_acknowledgements,
         }
 
         with Path(input_path).open() as f:
@@ -744,6 +781,9 @@ class MetaMixin(DBMixinProtocol):
                 file_associations=file_associations,
                 scan_findings=scan_findings,
                 observations=observations,
+                annotation_links=annotation_links,
+                annotation_events=annotation_events,
+                annotation_closeout_acknowledgements=annotation_closeout_acknowledgements,
             )
 
         inserted_issue_ids: set[str] = set()
@@ -1072,6 +1112,130 @@ class MetaMixin(DBMixinProtocol):
                 cursor = self.conn.execute(
                     f"INSERT {conflict} INTO dismissed_observations (obs_id, summary, actor, reason, dismissed_at) VALUES (?, ?, ?, ?, ?)",
                     (obs_id, summary, actor_val, reason, dismissed_at),
+                )
+                count += cursor.rowcount
+
+            _import_stage = "annotation"
+            for _import_index, record in enumerate(annotations):
+                ann_file_id: str | None = record.get("file_id")
+                if ann_file_id:
+                    ann_file_id = self._remap_file_id(ann_file_id, file_id_map)
+                cursor = self.conn.execute(
+                    f"INSERT {conflict} INTO annotations "
+                    "(id, file_id, file_path, line_start, line_end, anchor_snippet, note, context_summary, "
+                    "intent, critical, status, actor, session_ref, created_at, updated_at, resolved_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        record["id"],
+                        ann_file_id,
+                        record["file_path"],
+                        record.get("line_start"),
+                        record.get("line_end"),
+                        record.get("anchor_snippet", ""),
+                        record["note"],
+                        record.get("context_summary", ""),
+                        record.get("intent", "breadcrumb"),
+                        int(bool(record.get("critical", 0))),
+                        record.get("status", "active"),
+                        record.get("actor", ""),
+                        record.get("session_ref", ""),
+                        _normalize_iso_to_utc(record.get("created_at")) or _now_iso(),
+                        _normalize_iso_to_utc(record.get("updated_at")) or _now_iso(),
+                        _normalize_iso_to_utc(record.get("resolved_at")),
+                    ),
+                )
+                count += cursor.rowcount
+
+            _import_stage = "annotation_provenance"
+            for _import_index, record in enumerate(annotation_provenance):
+                cursor = self.conn.execute(
+                    f"INSERT {conflict} INTO annotation_provenance "
+                    "(annotation_id, commit_ref, branch, repo_root, worktree_root, git_state, worktree_dirty, "
+                    "file_checksum, file_size, file_mtime, dirty_diff_hash, dirty_diff_summary, file_diff, "
+                    "worktree_diff_summary, anchor_context_before, anchor_context_after, provenance_trust_level, "
+                    "provenance_flags, provenance_warnings) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        record["annotation_id"],
+                        record.get("commit_ref", ""),
+                        record.get("branch", ""),
+                        record.get("repo_root", ""),
+                        record.get("worktree_root", ""),
+                        record.get("git_state", ""),
+                        int(bool(record.get("worktree_dirty", 0))),
+                        record.get("file_checksum", ""),
+                        record.get("file_size", 0),
+                        record.get("file_mtime", ""),
+                        record.get("dirty_diff_hash", ""),
+                        record.get("dirty_diff_summary", ""),
+                        record.get("file_diff", ""),
+                        record.get("worktree_diff_summary", ""),
+                        record.get("anchor_context_before", ""),
+                        record.get("anchor_context_after", ""),
+                        record.get("provenance_trust_level", "minimal"),
+                        json.dumps(record.get("provenance_flags", [])),
+                        json.dumps(record.get("provenance_warnings", [])),
+                    ),
+                )
+                count += cursor.rowcount
+
+            _import_stage = "annotation_link"
+            for _import_index, record in enumerate(annotation_links):
+                target_id = record["target_id"]
+                if record.get("target_type") == "file":
+                    target_id = self._remap_file_id(target_id, file_id_map)
+                cursor = self.conn.execute(
+                    f"INSERT {conflict} INTO annotation_links "
+                    "(id, annotation_id, target_type, target_id, relationship, actor, created_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        record["id"],
+                        record["annotation_id"],
+                        record["target_type"],
+                        target_id,
+                        record["relationship"],
+                        record.get("actor", ""),
+                        _normalize_iso_to_utc(record.get("created_at")) or _now_iso(),
+                    ),
+                )
+                count += cursor.rowcount
+
+            _import_stage = "annotation_event"
+            for _import_index, record in enumerate(annotation_events):
+                cursor = self.conn.execute(
+                    f"INSERT {conflict} INTO annotation_events "
+                    "(id, annotation_id, event_type, actor, reason, old_value, new_value, target_type, target_id, created_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        record["id"],
+                        record["annotation_id"],
+                        record["event_type"],
+                        record.get("actor", ""),
+                        record.get("reason", ""),
+                        record.get("old_value"),
+                        record.get("new_value"),
+                        record.get("target_type", ""),
+                        record.get("target_id", ""),
+                        _normalize_iso_to_utc(record.get("created_at")) or _now_iso(),
+                    ),
+                )
+                count += cursor.rowcount
+
+            _import_stage = "annotation_closeout_acknowledgement"
+            for _import_index, record in enumerate(annotation_closeout_acknowledgements):
+                cursor = self.conn.execute(
+                    f"INSERT {conflict} INTO annotation_closeout_acknowledgements "
+                    "(annotation_id, target_type, target_id, carried_to_target_id, actor, reason, acknowledged_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        record["annotation_id"],
+                        record.get("target_type", "issue"),
+                        record["target_id"],
+                        record.get("carried_to_target_id", ""),
+                        record.get("actor", ""),
+                        record.get("reason", ""),
+                        _normalize_iso_to_utc(record.get("acknowledged_at")) or _now_iso(),
+                    ),
                 )
                 count += cursor.rowcount
         except KeyError as exc:

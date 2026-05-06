@@ -112,7 +112,11 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
                             "title": {"type": "string"},
                             "priority": {"type": "integer", "default": 2, "minimum": 0, "maximum": 4},
                             "description": {"type": "string", "default": ""},
-                            "labels": {"type": "array", "items": {"type": "string"}, "description": "Labels to apply to the milestone and all descendants"},
+                            "labels": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "Labels to apply to the milestone and all descendants",
+                            },
                         },
                         "required": ["title"],
                     },
@@ -124,7 +128,11 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
                                 "title": {"type": "string"},
                                 "priority": {"type": "integer", "default": 2, "minimum": 0, "maximum": 4},
                                 "description": {"type": "string", "default": ""},
-                                "labels": {"type": "array", "items": {"type": "string"}, "description": "Additional labels to apply to this phase and its steps"},
+                                "labels": {
+                                    "type": "array",
+                                    "items": {"type": "string"},
+                                    "description": "Additional labels to apply to this phase and its steps",
+                                },
                                 "steps": {
                                     "type": "array",
                                     "items": {
@@ -133,7 +141,11 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
                                             "title": {"type": "string"},
                                             "priority": {"type": "integer", "default": 2, "minimum": 0, "maximum": 4},
                                             "description": {"type": "string", "default": ""},
-                                            "labels": {"type": "array", "items": {"type": "string"}, "description": "Additional labels to apply to this step"},
+                                            "labels": {
+                                                "type": "array",
+                                                "items": {"type": "string"},
+                                                "description": "Additional labels to apply to this step",
+                                            },
                                             "deps": {
                                                 "type": "array",
                                                 "items": {"type": ["integer", "string"]},
@@ -182,7 +194,11 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
                     "priority": {"type": "integer", "default": 2, "minimum": 0, "maximum": 4},
                     "description": {"type": "string", "default": ""},
                     "notes": {"type": "string", "default": ""},
-                    "labels": {"type": "array", "items": {"type": "string"}, "description": "Additional labels; phase labels are inherited"},
+                    "labels": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Additional labels; phase labels are inherited",
+                    },
                     "deps": {"type": "array", "items": {"type": "string"}, "description": "Issue IDs this new step depends on"},
                     "actor": {"type": "string", "description": "Agent/user identity for audit trail"},
                 },
@@ -424,7 +440,9 @@ def _validate_plan_payload_shape(arguments: dict[str, Any]) -> list[TextContent]
         return _text(ErrorResponse(error="'milestone' must be an object with at least a 'title' key", code=ErrorCode.VALIDATION))
     if not isinstance(milestone.get("title"), str):
         return _text(
-            ErrorResponse(error=f"Milestone 'title' must be a string, got {type(milestone.get('title')).__name__}", code=ErrorCode.VALIDATION)
+            ErrorResponse(
+                error=f"Milestone 'title' must be a string, got {type(milestone.get('title')).__name__}", code=ErrorCode.VALIDATION
+            )
         )
 
     phases = arguments["phases"]
@@ -435,15 +453,21 @@ def _validate_plan_payload_shape(arguments: dict[str, Any]) -> list[TextContent]
             return _text(ErrorResponse(error=f"Phase {pi + 1} must be an object, got {type(phase).__name__}", code=ErrorCode.VALIDATION))
         if not isinstance(phase.get("title"), str):
             return _text(
-                ErrorResponse(error=f"Phase {pi + 1} 'title' must be a string, got {type(phase.get('title')).__name__}", code=ErrorCode.VALIDATION)
+                ErrorResponse(
+                    error=f"Phase {pi + 1} 'title' must be a string, got {type(phase.get('title')).__name__}", code=ErrorCode.VALIDATION
+                )
             )
         steps = phase.get("steps", [])
         if not isinstance(steps, list):
-            return _text(ErrorResponse(error=f"Phase {pi + 1} 'steps' must be a list, got {type(steps).__name__}", code=ErrorCode.VALIDATION))
+            return _text(
+                ErrorResponse(error=f"Phase {pi + 1} 'steps' must be a list, got {type(steps).__name__}", code=ErrorCode.VALIDATION)
+            )
         for si, step in enumerate(steps):
             if not isinstance(step, dict):
                 return _text(
-                    ErrorResponse(error=f"Phase {pi + 1}, Step {si + 1} must be an object, got {type(step).__name__}", code=ErrorCode.VALIDATION)
+                    ErrorResponse(
+                        error=f"Phase {pi + 1}, Step {si + 1} must be an object, got {type(step).__name__}", code=ErrorCode.VALIDATION
+                    )
                 )
             if not isinstance(step.get("title"), str):
                 return _text(

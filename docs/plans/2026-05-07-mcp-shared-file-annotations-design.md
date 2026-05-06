@@ -1,7 +1,7 @@
 # MCP Shared File Annotations Design
 
 **Date:** 2026-05-07 local time
-**Status:** Draft design, revised after conceptual review
+**Status:** Implemented in schema v10
 **Tracker:** `filigree-360ac7fc4c` under `filigree-ed2ccaf10d`
 **Audience:** Filigree maintainers and agents using the MCP surface
 

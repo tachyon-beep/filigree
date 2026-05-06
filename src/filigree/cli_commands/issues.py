@@ -526,19 +526,26 @@ def close(ctx: click.Context, issue_ids: tuple[str, ...], reason: str, as_json: 
         ready_before = {i.id for i in db.get_ready()} if as_json else set()
         for issue_id in issue_ids:
             try:
+                annotation_warnings = db.get_annotation_closeout_warnings(issue_id)
                 issue = db.close_issue(issue_id, reason=reason, actor=ctx.obj["actor"])
                 if as_json:
-                    succeeded.append(
-                        {
-                            "issue_id": issue.id,
-                            "title": issue.title,
-                            "status": issue.status,
-                            "priority": issue.priority,
-                            "type": issue.type,
-                        }
-                    )
+                    item: dict[str, Any] = {
+                        "issue_id": issue.id,
+                        "title": issue.title,
+                        "status": issue.status,
+                        "priority": issue.priority,
+                        "type": issue.type,
+                    }
+                    if annotation_warnings:
+                        item["annotation_warnings"] = annotation_warnings
+                    succeeded.append(item)
                 else:
                     click.echo(f"Closed {issue.id}: {issue.title}")
+                    for warning in annotation_warnings:
+                        click.echo(
+                            f"Annotation warning: {warning['annotation_id']} must be considered for {warning['file_path']}",
+                            err=True,
+                        )
             except KeyError:
                 errors.append({"id": issue_id, "error": f"Not found: {issue_id}", "code": ErrorCode.NOT_FOUND})
                 if not as_json:

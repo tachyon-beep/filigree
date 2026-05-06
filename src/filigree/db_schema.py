@@ -243,6 +243,105 @@ CREATE TABLE IF NOT EXISTS dismissed_observations (
 );
 
 CREATE INDEX IF NOT EXISTS idx_dismissed_obs_id ON dismissed_observations(obs_id);
+
+-- ---- Shared file annotations (v10) --------------------------------------
+
+CREATE TABLE IF NOT EXISTS annotations (
+    id              TEXT PRIMARY KEY,
+    file_id         TEXT REFERENCES file_records(id) ON DELETE SET NULL,
+    file_path       TEXT NOT NULL,
+    line_start      INTEGER,
+    line_end        INTEGER,
+    anchor_snippet  TEXT DEFAULT '',
+    note            TEXT NOT NULL,
+    context_summary TEXT DEFAULT '',
+    intent          TEXT NOT NULL DEFAULT 'breadcrumb',
+    critical        BOOLEAN NOT NULL DEFAULT 0,
+    status          TEXT NOT NULL DEFAULT 'active',
+    actor           TEXT DEFAULT '',
+    session_ref     TEXT DEFAULT '',
+    created_at      TEXT NOT NULL,
+    updated_at      TEXT NOT NULL,
+    resolved_at     TEXT,
+    CHECK (intent IN ('explanation', 'warning', 'breadcrumb', 'hypothesis', 'decision', 'handoff', 'gotcha')),
+    CHECK (status IN ('active', 'resolved', 'superseded', 'promoted')),
+    CHECK (line_start IS NULL OR line_start >= 1),
+    CHECK (line_end IS NULL OR (line_start IS NOT NULL AND line_end >= line_start))
+);
+
+CREATE INDEX IF NOT EXISTS idx_annotations_file ON annotations(file_id, status, critical, created_at);
+CREATE INDEX IF NOT EXISTS idx_annotations_path ON annotations(file_path, status, critical, created_at);
+CREATE INDEX IF NOT EXISTS idx_annotations_status ON annotations(status, critical, created_at);
+
+CREATE TABLE IF NOT EXISTS annotation_provenance (
+    annotation_id          TEXT PRIMARY KEY REFERENCES annotations(id) ON DELETE CASCADE,
+    commit_ref            TEXT DEFAULT '',
+    branch                TEXT DEFAULT '',
+    repo_root             TEXT DEFAULT '',
+    worktree_root         TEXT DEFAULT '',
+    git_state             TEXT DEFAULT '',
+    worktree_dirty        BOOLEAN NOT NULL DEFAULT 0,
+    file_checksum         TEXT DEFAULT '',
+    file_size             INTEGER DEFAULT 0,
+    file_mtime            TEXT DEFAULT '',
+    dirty_diff_hash       TEXT DEFAULT '',
+    dirty_diff_summary    TEXT DEFAULT '',
+    file_diff             TEXT DEFAULT '',
+    worktree_diff_summary TEXT DEFAULT '',
+    anchor_context_before TEXT DEFAULT '',
+    anchor_context_after  TEXT DEFAULT '',
+    provenance_trust_level TEXT NOT NULL DEFAULT 'minimal',
+    provenance_flags      TEXT NOT NULL DEFAULT '[]',
+    provenance_warnings   TEXT NOT NULL DEFAULT '[]',
+    CHECK (provenance_trust_level IN ('complete', 'partial', 'minimal'))
+);
+
+CREATE TABLE IF NOT EXISTS annotation_links (
+    id             TEXT PRIMARY KEY,
+    annotation_id  TEXT NOT NULL REFERENCES annotations(id) ON DELETE CASCADE,
+    target_type    TEXT NOT NULL,
+    target_id      TEXT NOT NULL,
+    relationship   TEXT NOT NULL,
+    actor          TEXT DEFAULT '',
+    created_at     TEXT NOT NULL,
+    UNIQUE(annotation_id, target_type, target_id, relationship),
+    CHECK (target_type IN ('issue', 'file', 'finding', 'observation')),
+    CHECK (relationship IN ('relevant_to', 'must_consider', 'evidence_for', 'explains', 'created_from', 'promoted_to'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_annotation_links_annotation ON annotation_links(annotation_id);
+CREATE INDEX IF NOT EXISTS idx_annotation_links_target ON annotation_links(target_type, target_id, relationship);
+
+CREATE TABLE IF NOT EXISTS annotation_events (
+    id            TEXT PRIMARY KEY,
+    annotation_id TEXT NOT NULL REFERENCES annotations(id) ON DELETE CASCADE,
+    event_type    TEXT NOT NULL,
+    actor         TEXT DEFAULT '',
+    reason        TEXT DEFAULT '',
+    old_value     TEXT,
+    new_value     TEXT,
+    target_type   TEXT DEFAULT '',
+    target_id     TEXT DEFAULT '',
+    created_at    TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_annotation_events_annotation ON annotation_events(annotation_id, created_at);
+
+CREATE TABLE IF NOT EXISTS annotation_closeout_acknowledgements (
+    id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+    annotation_id         TEXT NOT NULL REFERENCES annotations(id) ON DELETE CASCADE,
+    target_type           TEXT NOT NULL DEFAULT 'issue',
+    target_id             TEXT NOT NULL,
+    carried_to_target_id  TEXT DEFAULT '',
+    actor                 TEXT DEFAULT '',
+    reason                TEXT DEFAULT '',
+    acknowledged_at       TEXT NOT NULL,
+    UNIQUE(annotation_id, target_type, target_id),
+    CHECK (target_type IN ('issue'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_annotation_closeout_ack_target
+  ON annotation_closeout_acknowledgements(target_type, target_id);
 """
 
 # V1 schema (without file tables) — kept for migration tests.
@@ -351,4 +450,4 @@ CREATE TRIGGER IF NOT EXISTS issues_fts_delete AFTER DELETE ON issues BEGIN
 END;
 """
 
-CURRENT_SCHEMA_VERSION = 9
+CURRENT_SCHEMA_VERSION = 10
