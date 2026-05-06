@@ -296,7 +296,7 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
         ),
         Tool(
             name="claim_next",
-            description="Claim the highest-priority ready issue by setting assignee. Does NOT change status — use update_issue to advance through workflow after claiming.",
+            description="Claim the highest-priority open-category ready issue by setting assignee. Does NOT change status — use update_issue to advance through workflow after claiming.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -348,7 +348,7 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
         Tool(
             name="start_next_work",
             description=(
-                "Claim the highest-priority ready issue and atomically transition it to a working status. "
+                "Claim the highest-priority open-category ready issue and atomically transition it to a working status. "
                 "Tie-break ordering: priority asc, created_at asc, issue_id asc (same as claim_next). "
                 "Returns the transitioned issue, or {status: 'empty'} when no ready issue matches."
             ),

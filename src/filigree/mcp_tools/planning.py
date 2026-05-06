@@ -73,7 +73,7 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
         ),
         Tool(
             name="get_ready",
-            description="Get all issues that are ready to work on (open, no blockers), sorted by priority",
+            description="Get all issues in the open category (no blockers), sorted by priority",
             inputSchema={"type": "object", "properties": {}},
         ),
         Tool(

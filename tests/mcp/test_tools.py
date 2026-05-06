@@ -212,6 +212,19 @@ class TestPublicIssueVocabulary:
         assert data["title"] == "MCP undo public"
 
 
+class TestToolDescriptions:
+    async def test_ready_tool_descriptions_name_open_category(self) -> None:
+        tools = {tool.name: tool for tool in await list_tools()}
+
+        get_ready_description = tools["get_ready"].description or ""
+        assert "open category" in get_ready_description
+        assert "(open, no blockers)" not in get_ready_description
+
+        for tool_name in ("claim_next", "start_next_work"):
+            description = tools[tool_name].description or ""
+            assert "open-category ready issue" in description
+
+
 class TestListPagination:
     """Pagination cap and has_more for list_issues / search_issues."""
 
