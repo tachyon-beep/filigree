@@ -129,6 +129,7 @@ class TransitionError(TypedDict):
     code: Literal[ErrorCode.INVALID_TRANSITION]
     valid_transitions: NotRequired[list[TransitionHint]]
     hint: NotRequired[str]
+    reopen_available: NotRequired[bool]
 
 
 # ---------------------------------------------------------------------------

@@ -1157,6 +1157,18 @@ class TestMCPMutationEnhancements:
         assert "valid_transitions" in data
         assert "hint" in data
 
+    async def test_update_closed_issue_hint_points_to_reopen(self, mcp_db: FiligreeDB) -> None:
+        issue = mcp_db.create_issue("Closed update hint", type="task")
+        mcp_db.close_issue(issue.id, reason="done")
+
+        result = await call_tool("update_issue", {"issue_id": issue.id, "status": "in_progress"})
+
+        data = _parse(result)
+        assert data["code"] == ErrorCode.INVALID_TRANSITION
+        assert data["valid_transitions"] == []
+        assert data["reopen_available"] is True
+        assert "reopen_issue" in data["hint"]
+
     async def test_transition_error_survives_enrichment_backend_failure(self, mcp_db: FiligreeDB) -> None:
         """filigree-55c5347992: enrichment lookup failure must not mask invalid_transition."""
         import sqlite3

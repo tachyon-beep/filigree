@@ -170,7 +170,11 @@ def _build_transition_error(
             data["valid_transitions"] = [{"to": t.to, "category": t.category, "ready": t.ready} for t in transitions]
         else:
             data["valid_transitions"] = [{"to": t.to, "category": t.category} for t in transitions]
-        data["hint"] = "Use get_valid_transitions to see allowed state changes"
+        if not transitions and tracker.get_issue(issue_id).status_category == "done":
+            data["reopen_available"] = True
+            data["hint"] = "Use reopen_issue to return this closed issue to its initial state"
+        else:
+            data["hint"] = "Use get_valid_transitions to see allowed state changes"
     except Exception:
         # Enrichment is best-effort — must never mask the original error.
         logger.debug("Could not resolve transitions for %s", issue_id, exc_info=True)
