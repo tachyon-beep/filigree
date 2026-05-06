@@ -694,6 +694,129 @@ class TestCreatePlan:
         assert "scratch" in mcp_db.get_issue(phase_id).labels
         assert "scratch" in mcp_db.get_issue(step_id).labels
 
+    async def test_add_plan_step_creates_step_with_plan_context(self, mcp_db: FiligreeDB) -> None:
+        created = await call_tool(
+            "create_plan",
+            {
+                "milestone": {"title": "Editable plan", "labels": ["release:v1"]},
+                "phases": [
+                    {
+                        "title": "Phase",
+                        "labels": ["phase:build"],
+                        "steps": [{"title": "Existing step"}],
+                    }
+                ],
+            },
+        )
+        plan = _parse(created)
+        phase_id = plan["phases"][0]["phase"]["issue_id"]
+        existing_step_id = plan["phases"][0]["steps"][0]["issue_id"]
+
+        result = await call_tool(
+            "add_plan_step",
+            {
+                "phase_id": phase_id,
+                "title": "Inserted step",
+                "description": "Added after initial planning",
+                "priority": 1,
+                "labels": ["step:inserted"],
+                "deps": [existing_step_id],
+                "actor": "planner",
+            },
+        )
+
+        data = _parse(result)
+        assert data["type"] == "step"
+        assert data["parent_id"] == phase_id
+        assert data["priority"] == 1
+        assert data["description"] == "Added after initial planning"
+        assert set(data["labels"]) == {"release:v1", "phase:build", "step:inserted"}
+        assert data["blocked_by"] == [existing_step_id]
+
+        updated = _parse(await call_tool("get_plan", {"milestone_id": plan["milestone"]["issue_id"]}))
+        assert updated["total_steps"] == 2
+        assert {step["title"] for step in updated["phases"][0]["steps"]} == {"Existing step", "Inserted step"}
+
+    async def test_retarget_plan_dependency_swaps_blocker(self, mcp_db: FiligreeDB) -> None:
+        created = await call_tool(
+            "create_plan",
+            {
+                "milestone": {"title": "Retarget plan"},
+                "phases": [
+                    {
+                        "title": "Phase",
+                        "steps": [
+                            {"title": "Old blocker"},
+                            {"title": "Blocked step", "deps": [0]},
+                            {"title": "New blocker"},
+                        ],
+                    }
+                ],
+            },
+        )
+        steps = _parse(created)["phases"][0]["steps"]
+        old_blocker_id = steps[0]["issue_id"]
+        blocked_step_id = steps[1]["issue_id"]
+        new_blocker_id = steps[2]["issue_id"]
+
+        result = await call_tool(
+            "retarget_plan_dependency",
+            {
+                "step_id": blocked_step_id,
+                "old_depends_on_id": old_blocker_id,
+                "new_depends_on_id": new_blocker_id,
+                "actor": "planner",
+            },
+        )
+
+        data = _parse(result)
+        assert data["dependency_result"] == "retargeted"
+        assert data["dependency"] == {
+            "from_issue_id": blocked_step_id,
+            "old_to_issue_id": old_blocker_id,
+            "to_issue_id": new_blocker_id,
+        }
+        assert data["blocked_by"] == [new_blocker_id]
+        assert mcp_db.get_issue(blocked_step_id).blocked_by == [new_blocker_id]
+
+    async def test_move_plan_step_moves_between_phases(self, mcp_db: FiligreeDB) -> None:
+        created = await call_tool(
+            "create_plan",
+            {
+                "milestone": {"title": "Move plan"},
+                "phases": [
+                    {"title": "Phase A", "steps": [{"title": "Move me"}]},
+                    {"title": "Phase B", "steps": []},
+                ],
+            },
+        )
+        plan = _parse(created)
+        milestone_id = plan["milestone"]["issue_id"]
+        step_id = plan["phases"][0]["steps"][0]["issue_id"]
+        target_phase_id = plan["phases"][1]["phase"]["issue_id"]
+
+        result = await call_tool(
+            "move_plan_step",
+            {"step_id": step_id, "phase_id": target_phase_id, "actor": "planner"},
+        )
+
+        data = _parse(result)
+        assert data["move_result"] == "moved"
+        assert data["parent_id"] == target_phase_id
+
+        updated = _parse(await call_tool("get_plan", {"milestone_id": milestone_id}))
+        assert updated["phases"][0]["steps"] == []
+        assert [step["issue_id"] for step in updated["phases"][1]["steps"]] == [step_id]
+
+    async def test_label_plan_tree_requires_milestone_root(self, mcp_db: FiligreeDB) -> None:
+        phase = mcp_db.create_issue("Loose phase", type="phase")
+
+        result = await call_tool("label_plan_tree", {"milestone_id": phase.id, "label": "release:v1"})
+
+        data = _parse(result)
+        assert data["code"] == ErrorCode.VALIDATION
+        assert "milestone" in data["error"]
+
 
 class TestBatchClose:
     async def test_batch_close(self, mcp_db: FiligreeDB) -> None:

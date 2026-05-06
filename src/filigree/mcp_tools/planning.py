@@ -32,13 +32,17 @@ from filigree.types.api import (
 )
 from filigree.types.inputs import (
     AddDependencyArgs,
+    AddPlanStepArgs,
     CreatePlanArgs,
     CreatePlanFromFileArgs,
     GetPlanArgs,
+    LabelPlanTreeArgs,
     LabelSubtreeArgs,
     MilestoneInput,
+    MovePlanStepArgs,
     PhaseInput,
     RemoveDependencyArgs,
+    RetargetPlanDependencyArgs,
 )
 
 
@@ -164,6 +168,76 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
             },
         ),
         Tool(
+            name="add_plan_step",
+            description=(
+                "Add a step to an existing phase in one call. Inherits labels from the phase "
+                "and accepts dependency issue IDs so agents do not have to compose create_issue "
+                "plus add_dependency manually."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "phase_id": {"type": "string", "description": "Phase issue ID to receive the new step"},
+                    "title": {"type": "string", "description": "Step title"},
+                    "priority": {"type": "integer", "default": 2, "minimum": 0, "maximum": 4},
+                    "description": {"type": "string", "default": ""},
+                    "notes": {"type": "string", "default": ""},
+                    "labels": {"type": "array", "items": {"type": "string"}, "description": "Additional labels; phase labels are inherited"},
+                    "deps": {"type": "array", "items": {"type": "string"}, "description": "Issue IDs this new step depends on"},
+                    "actor": {"type": "string", "description": "Agent/user identity for audit trail"},
+                },
+                "required": ["phase_id", "title"],
+            },
+        ),
+        Tool(
+            name="retarget_plan_dependency",
+            description=(
+                "Replace one dependency edge on a plan step. This wraps remove_dependency + "
+                "add_dependency so agents do not have to hand-edit the plan graph."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "step_id": {"type": "string", "description": "Plan step whose dependency should change"},
+                    "old_depends_on_id": {"type": "string", "description": "Current blocker to remove"},
+                    "new_depends_on_id": {"type": "string", "description": "Replacement blocker to add"},
+                    "actor": {"type": "string", "description": "Agent/user identity for audit trail"},
+                },
+                "required": ["step_id", "old_depends_on_id", "new_depends_on_id"],
+            },
+        ),
+        Tool(
+            name="move_plan_step",
+            description="Move an existing plan step under another phase without raw parent_id surgery.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "step_id": {"type": "string", "description": "Step issue ID to move"},
+                    "phase_id": {"type": "string", "description": "Destination phase issue ID"},
+                    "actor": {"type": "string", "description": "Agent/user identity for audit trail"},
+                },
+                "required": ["step_id", "phase_id"],
+            },
+        ),
+        Tool(
+            name="label_plan_tree",
+            description="Apply one label to a milestone and every phase/step beneath it.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "milestone_id": {"type": "string", "description": "Milestone issue ID whose plan tree should be labeled"},
+                    "label": {"type": "string", "description": "Label to apply"},
+                    "response_detail": {
+                        "type": "string",
+                        "enum": ["slim", "full"],
+                        "default": "slim",
+                        "description": "'slim' returns issue ID strings; 'full' returns full PublicIssue records.",
+                    },
+                },
+                "required": ["milestone_id", "label"],
+            },
+        ),
+        Tool(
             name="label_subtree",
             description="Apply one label to a parent issue and every descendant in its subtree.",
             inputSchema={
@@ -196,6 +270,10 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
         "get_plan": _handle_get_plan,
         "create_plan": _handle_create_plan,
         "create_plan_from_file": _handle_create_plan_from_file,
+        "add_plan_step": _handle_add_plan_step,
+        "retarget_plan_dependency": _handle_retarget_plan_dependency,
+        "move_plan_step": _handle_move_plan_step,
+        "label_plan_tree": _handle_label_plan_tree,
         "label_subtree": _handle_label_subtree,
         "get_critical_path": _handle_get_critical_path,
     }
@@ -447,6 +525,124 @@ async def _handle_create_plan_from_file(arguments: dict[str, Any]) -> list[TextC
     if "actor" in args:
         payload["actor"] = args["actor"]
     return await _create_plan_from_payload(payload)
+
+
+async def _handle_add_plan_step(arguments: dict[str, Any]) -> list[TextContent]:
+    from filigree.mcp_server import _get_db, _refresh_summary
+
+    args = _parse_args(arguments, AddPlanStepArgs)
+    actor, actor_err = _validate_actor(args.get("actor", "mcp"))
+    if actor_err:
+        return actor_err
+    priority_err = _validate_int_range(args.get("priority"), "priority", min_val=0, max_val=4)
+    if priority_err:
+        return priority_err
+
+    tracker = _get_db()
+    try:
+        step = tracker.add_plan_step(
+            args["phase_id"],
+            args["title"],
+            priority=args.get("priority", 2),
+            description=args.get("description", ""),
+            notes=args.get("notes", ""),
+            labels=args.get("labels"),
+            deps=args.get("deps"),
+            actor=actor,
+        )
+    except KeyError as e:
+        return _text(ErrorResponse(error=str(e), code=ErrorCode.NOT_FOUND))
+    except (TypeError, ValueError) as e:
+        return _text(ErrorResponse(error=str(e), code=ErrorCode.VALIDATION))
+    _refresh_summary()
+    return _text(issue_to_public(step))
+
+
+async def _handle_retarget_plan_dependency(arguments: dict[str, Any]) -> list[TextContent]:
+    from filigree.mcp_server import _get_db, _refresh_summary
+
+    args = _parse_args(arguments, RetargetPlanDependencyArgs)
+    actor, actor_err = _validate_actor(args.get("actor", "mcp"))
+    if actor_err:
+        return actor_err
+    tracker = _get_db()
+    try:
+        issue = tracker.retarget_plan_dependency(
+            args["step_id"],
+            args["old_depends_on_id"],
+            args["new_depends_on_id"],
+            actor=actor,
+        )
+    except KeyError as e:
+        return _text(ErrorResponse(error=str(e), code=ErrorCode.NOT_FOUND))
+    except ValueError as e:
+        return _text(ErrorResponse(error=str(e), code=ErrorCode.VALIDATION))
+    _refresh_summary()
+    response: dict[str, Any] = dict(issue_to_public(issue))
+    response["dependency_result"] = "retargeted"
+    response["dependency"] = {
+        "from_issue_id": args["step_id"],
+        "old_to_issue_id": args["old_depends_on_id"],
+        "to_issue_id": args["new_depends_on_id"],
+    }
+    return _text(response)
+
+
+async def _handle_move_plan_step(arguments: dict[str, Any]) -> list[TextContent]:
+    from filigree.mcp_server import _get_db, _refresh_summary
+
+    args = _parse_args(arguments, MovePlanStepArgs)
+    actor, actor_err = _validate_actor(args.get("actor", "mcp"))
+    if actor_err:
+        return actor_err
+    tracker = _get_db()
+    try:
+        issue = tracker.move_plan_step(args["step_id"], args["phase_id"], actor=actor)
+    except KeyError as e:
+        return _text(ErrorResponse(error=str(e), code=ErrorCode.NOT_FOUND))
+    except ValueError as e:
+        return _text(ErrorResponse(error=str(e), code=ErrorCode.VALIDATION))
+    _refresh_summary()
+    response: dict[str, Any] = dict(issue_to_public(issue))
+    response["move_result"] = "moved"
+    response["changed_fields"] = ["parent_id"]
+    return _text(response)
+
+
+async def _handle_label_plan_tree(arguments: dict[str, Any]) -> list[TextContent]:
+    from filigree.mcp_server import _get_db, _refresh_summary
+
+    args = _parse_args(arguments, LabelPlanTreeArgs)
+    detail = parse_response_detail(args.get("response_detail"))
+    if isinstance(detail, dict):
+        return _text(detail)
+    tracker = _get_db()
+    try:
+        milestone = tracker.get_issue(args["milestone_id"])
+        if milestone.type != "milestone":
+            return _text(
+                ErrorResponse(
+                    error=f"milestone_id must reference a milestone issue, got {milestone.type!r}: {args['milestone_id']}",
+                    code=ErrorCode.VALIDATION,
+                )
+            )
+        succeeded, failed = tracker.label_subtree(args["milestone_id"], label=args["label"])
+    except KeyError:
+        return _text(ErrorResponse(error=f"Issue not found: {args['milestone_id']}", code=ErrorCode.NOT_FOUND))
+    except ValueError as e:
+        return _text(ErrorResponse(error=str(e), code=ErrorCode.VALIDATION))
+    _refresh_summary()
+    if detail == "full":
+        full_result: BatchResponse[PublicIssue] = BatchResponse(
+            succeeded=[issue_to_public(tracker.get_issue(row["id"])) for row in succeeded],
+            failed=failed,
+        )
+        return _text(full_result)
+    result: BatchResponse[str] = BatchResponse(
+        succeeded=[row["id"] for row in succeeded],
+        failed=failed,
+    )
+    return _text(result)
 
 
 async def _handle_label_subtree(arguments: dict[str, Any]) -> list[TextContent]:

@@ -425,6 +425,26 @@ class PlanningMixin(DBMixinProtocol):
             results.append({"id": issue_id, "label": label, "status": "added" if added else "already_exists"})
         return results
 
+    def _validate_issue_id_list(self, issue_ids: Any, source: str) -> list[str]:
+        if issue_ids is None:
+            return []
+        if not isinstance(issue_ids, list):
+            msg = f"{source} must be a list of issue IDs"
+            raise ValueError(msg)
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for idx, raw_issue_id in enumerate(issue_ids):
+            if not isinstance(raw_issue_id, str) or not raw_issue_id.strip():
+                msg = f"{source}[{idx}] must be a non-empty issue ID string"
+                raise ValueError(msg)
+            issue_id = raw_issue_id.strip()
+            self._check_id_prefix(issue_id)
+            self.get_issue(issue_id)
+            if issue_id not in seen:
+                normalized.append(issue_id)
+                seen.add(issue_id)
+        return normalized
+
     def _collect_subtree_issue_ids(self, parent_id: str) -> list[str]:
         self.get_issue(parent_id)
         issue_ids: list[str] = []
@@ -490,6 +510,172 @@ class PlanningMixin(DBMixinProtocol):
             total_steps=total_steps,
             completed_steps=completed_steps,
         )
+
+    def _next_child_sequence(self, parent_id: str, child_type: str) -> int:
+        rows = self.conn.execute(
+            "SELECT fields FROM issues WHERE parent_id = ? AND type = ?",
+            (parent_id, child_type),
+        ).fetchall()
+        max_sequence = 0
+        for row in rows:
+            raw_fields = row["fields"] or "{}"
+            try:
+                fields = json.loads(raw_fields)
+            except json.JSONDecodeError:
+                continue
+            sequence = fields.get("sequence") if isinstance(fields, dict) else None
+            if isinstance(sequence, int) and sequence > max_sequence:
+                max_sequence = sequence
+        return max_sequence + 1
+
+    def add_plan_step(
+        self,
+        phase_id: str,
+        title: str,
+        *,
+        priority: int = 2,
+        description: str = "",
+        notes: str = "",
+        labels: list[str] | None = None,
+        deps: list[str] | None = None,
+        actor: str = "",
+    ) -> Issue:
+        """Create a step under an existing phase with plan-context defaults."""
+        self._check_id_prefix(phase_id)
+        phase = self.get_issue(phase_id)
+        if phase.type != "phase":
+            msg = f"phase_id must reference a phase issue, got {phase.type!r}: {phase_id}"
+            raise ValueError(msg)
+        if not title or not title.strip():
+            msg = "Step 'title' is required and cannot be empty"
+            raise ValueError(msg)
+        _validate_priority(priority, "Step")
+        extra_labels = self._normalize_label_inputs(labels, "labels")
+        dep_ids = self._validate_issue_id_list(deps, "deps")
+
+        step_id = self._generate_unique_id("issues")
+        now = _now_iso()
+        step_initial = self.templates.get_initial_state("step")
+        step_fields = {"sequence": self._next_child_sequence(phase_id, "step")}
+        step_labels = _merge_labels(phase.labels, extra_labels)
+
+        try:
+            self.conn.execute(
+                "INSERT INTO issues (id, title, status, priority, type, parent_id, assignee, "
+                "created_at, updated_at, description, notes, fields) "
+                "VALUES (?, ?, ?, ?, 'step', ?, '', ?, ?, ?, ?, ?)",
+                (
+                    step_id,
+                    title,
+                    step_initial,
+                    priority,
+                    phase_id,
+                    now,
+                    now,
+                    description,
+                    notes,
+                    json.dumps(step_fields),
+                ),
+            )
+            self._record_event(step_id, "created", actor=actor, new_value=title)
+            self._insert_labels_no_commit(step_id, step_labels)
+
+            for dep_id in dep_ids:
+                if step_id == dep_id:
+                    msg = f"Cannot add self-dependency: {step_id}"
+                    raise ValueError(msg)
+                if self._would_create_cycle(step_id, dep_id):
+                    msg = f"Dependency {step_id} -> {dep_id} would create a cycle"
+                    raise ValueError(msg)
+                cursor = self.conn.execute(
+                    "INSERT OR IGNORE INTO dependencies (issue_id, depends_on_id, type, created_at) VALUES (?, ?, 'blocks', ?)",
+                    (step_id, dep_id, now),
+                )
+                if cursor.rowcount > 0:
+                    self._record_event(step_id, "dependency_added", actor=actor, new_value=f"blocks:{dep_id}")
+
+            self.conn.commit()
+        except Exception:
+            self.conn.rollback()
+            raise
+
+        return self.get_issue(step_id)
+
+    def retarget_plan_dependency(
+        self,
+        step_id: str,
+        old_depends_on_id: str,
+        new_depends_on_id: str,
+        *,
+        actor: str = "",
+    ) -> Issue:
+        """Replace one dependency edge on a plan step in one operation."""
+        for issue_id in (step_id, old_depends_on_id, new_depends_on_id):
+            self._check_id_prefix(issue_id)
+
+        step = self.get_issue(step_id)
+        old_dep = self.get_issue(old_depends_on_id)
+        new_dep = self.get_issue(new_depends_on_id)
+        if step.type != "step":
+            msg = f"step_id must reference a step issue, got {step.type!r}: {step_id}"
+            raise ValueError(msg)
+        if old_dep.type != "step" or new_dep.type != "step":
+            msg = "old_depends_on_id and new_depends_on_id must both reference step issues"
+            raise ValueError(msg)
+        if step_id == new_depends_on_id:
+            msg = f"Cannot add self-dependency: {step_id}"
+            raise ValueError(msg)
+
+        row = self.conn.execute(
+            "SELECT type FROM dependencies WHERE issue_id = ? AND depends_on_id = ?",
+            (step_id, old_depends_on_id),
+        ).fetchone()
+        if row is None:
+            msg = f"Dependency not found: {step_id} -> {old_depends_on_id}"
+            raise ValueError(msg)
+        dep_type = row["type"] or "blocks"
+
+        if old_depends_on_id == new_depends_on_id:
+            return self.get_issue(step_id)
+        if self._would_create_cycle(step_id, new_depends_on_id):
+            msg = f"Dependency {step_id} -> {new_depends_on_id} would create a cycle"
+            raise ValueError(msg)
+
+        now = _now_iso()
+        try:
+            self.conn.execute(
+                "DELETE FROM dependencies WHERE issue_id = ? AND depends_on_id = ?",
+                (step_id, old_depends_on_id),
+            )
+            self._record_event(step_id, "dependency_removed", actor=actor, old_value=f"{dep_type}:{old_depends_on_id}")
+            cursor = self.conn.execute(
+                "INSERT OR IGNORE INTO dependencies (issue_id, depends_on_id, type, created_at) VALUES (?, ?, ?, ?)",
+                (step_id, new_depends_on_id, dep_type, now),
+            )
+            if cursor.rowcount > 0:
+                self._record_event(step_id, "dependency_added", actor=actor, new_value=f"{dep_type}:{new_depends_on_id}")
+            self.conn.execute("UPDATE issues SET updated_at = ? WHERE id = ?", (now, step_id))
+            self.conn.commit()
+        except Exception:
+            self.conn.rollback()
+            raise
+
+        return self.get_issue(step_id)
+
+    def move_plan_step(self, step_id: str, phase_id: str, *, actor: str = "") -> Issue:
+        """Move an existing step under a different phase."""
+        self._check_id_prefix(step_id)
+        self._check_id_prefix(phase_id)
+        step = self.get_issue(step_id)
+        phase = self.get_issue(phase_id)
+        if step.type != "step":
+            msg = f"step_id must reference a step issue, got {step.type!r}: {step_id}"
+            raise ValueError(msg)
+        if phase.type != "phase":
+            msg = f"phase_id must reference a phase issue, got {phase.type!r}: {phase_id}"
+            raise ValueError(msg)
+        sequence = self._next_child_sequence(phase_id, "step")
+        return self.update_issue(step_id, parent_id=phase_id, fields={"sequence": sequence}, actor=actor)
 
     def create_plan(
         self,

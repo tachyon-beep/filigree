@@ -297,6 +297,36 @@ class CreatePlanFromFileArgs(TypedDict):
     actor: NotRequired[str]
 
 
+class AddPlanStepArgs(TypedDict):
+    phase_id: str
+    title: str
+    priority: NotRequired[int]
+    description: NotRequired[str]
+    notes: NotRequired[str]
+    labels: NotRequired[list[str]]
+    deps: NotRequired[list[str]]
+    actor: NotRequired[str]
+
+
+class RetargetPlanDependencyArgs(TypedDict):
+    step_id: str
+    old_depends_on_id: str
+    new_depends_on_id: str
+    actor: NotRequired[str]
+
+
+class MovePlanStepArgs(TypedDict):
+    step_id: str
+    phase_id: str
+    actor: NotRequired[str]
+
+
+class LabelPlanTreeArgs(TypedDict):
+    milestone_id: str
+    label: str
+    response_detail: NotRequired[str]
+
+
 class LabelSubtreeArgs(TypedDict):
     parent_id: str
     label: str
@@ -540,6 +570,10 @@ TOOL_ARGS_MAP: dict[str, type] = {
     "get_plan": GetPlanArgs,
     "create_plan": CreatePlanArgs,
     "create_plan_from_file": CreatePlanFromFileArgs,
+    "add_plan_step": AddPlanStepArgs,
+    "retarget_plan_dependency": RetargetPlanDependencyArgs,
+    "move_plan_step": MovePlanStepArgs,
+    "label_plan_tree": LabelPlanTreeArgs,
     "label_subtree": LabelSubtreeArgs,
     # workflow.py
     "get_template": GetTemplateArgs,

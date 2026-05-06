@@ -215,6 +215,22 @@ class DBMixinProtocol(Protocol):
         actor: str = "",
     ) -> Issue: ...
 
+    def update_issue(
+        self,
+        issue_id: str,
+        *,
+        title: str | None = None,
+        status: str | None = None,
+        priority: int | None = None,
+        assignee: str | None = None,
+        description: str | None = None,
+        notes: str | None = None,
+        parent_id: str | None = None,
+        fields: dict[str, Any] | None = None,
+        actor: str = "",
+        _skip_transition_check: bool = False,
+    ) -> Issue: ...
+
     def list_issues(
         self,
         *,
