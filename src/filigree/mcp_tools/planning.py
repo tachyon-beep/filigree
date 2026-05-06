@@ -15,7 +15,16 @@ from filigree.mcp_tools.common import (
     _validate_actor,
     _validate_int_range,
 )
-from filigree.types.api import BlockedIssue, CriticalPathResponse, DependencyActionResponse, ErrorCode, ErrorResponse, PlanResponse
+from filigree.mcp_tools.payloads import critical_path_node_to_mcp, plan_tree_to_mcp
+from filigree.types.api import (
+    BlockedIssue,
+    CriticalPathMcpNode,
+    CriticalPathResponse,
+    DependencyActionResponse,
+    ErrorCode,
+    ErrorResponse,
+    PlanResponse,
+)
 from filigree.types.inputs import (
     AddDependencyArgs,
     CreatePlanArgs,
@@ -172,7 +181,7 @@ async def _handle_add_dependency(arguments: dict[str, Any]) -> list[TextContent]
         return _text(ErrorResponse(error=str(e), code=ErrorCode.VALIDATION))
     _refresh_summary()
     status = "added" if added else "already_exists"
-    return _text(DependencyActionResponse(status=status, from_id=args["from_issue_id"], to_id=args["to_issue_id"]))
+    return _text(DependencyActionResponse(status=status, from_issue_id=args["from_issue_id"], to_issue_id=args["to_issue_id"]))
 
 
 async def _handle_remove_dependency(arguments: dict[str, Any]) -> list[TextContent]:
@@ -193,7 +202,7 @@ async def _handle_remove_dependency(arguments: dict[str, Any]) -> list[TextConte
         return _text(ErrorResponse(error=str(e), code=ErrorCode.VALIDATION))
     _refresh_summary()
     status = "removed" if removed else "not_found"
-    return _text(DependencyActionResponse(status=status, from_id=args["from_issue_id"], to_id=args["to_issue_id"]))
+    return _text(DependencyActionResponse(status=status, from_issue_id=args["from_issue_id"], to_issue_id=args["to_issue_id"]))
 
 
 async def _handle_get_ready(arguments: dict[str, Any]) -> list[TextContent]:
@@ -230,7 +239,7 @@ async def _handle_get_plan(arguments: dict[str, Any]) -> list[TextContent]:
             completed_steps=completed,
             progress_pct=round(completed / total * 100, 1) if total > 0 else 0.0,
         )
-        return _text(result)
+        return _text(plan_tree_to_mcp(result))
     except KeyError:
         return _text(ErrorResponse(error=f"Milestone not found: {args['milestone_id']}", code=ErrorCode.NOT_FOUND))
 
@@ -308,7 +317,7 @@ async def _handle_create_plan(arguments: dict[str, Any]) -> list[TextContent]:
             actor=actor,
         )
         _refresh_summary()
-        return _text(plan)
+        return _text(plan_tree_to_mcp(plan))
     except (KeyError, IndexError, ValueError) as e:
         return _text(ErrorResponse(error=str(e), code=ErrorCode.VALIDATION))
 
@@ -317,5 +326,5 @@ async def _handle_get_critical_path(arguments: dict[str, Any]) -> list[TextConte
     from filigree.mcp_server import _get_db
 
     tracker = _get_db()
-    path = tracker.get_critical_path()
+    path = [cast(CriticalPathMcpNode, critical_path_node_to_mcp(node)) for node in tracker.get_critical_path()]
     return _text(CriticalPathResponse(path=path, length=len(path)))

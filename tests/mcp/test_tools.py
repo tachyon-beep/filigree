@@ -88,6 +88,18 @@ class TestCreateAndGet:
         data = _parse(result)
         assert "files" not in data
 
+    async def test_get_issue_include_files_uses_assoc_id(self, mcp_db: FiligreeDB) -> None:
+        issue = mcp_db.create_issue("Issue with file")
+        file_record = mcp_db.register_file("src/linked.py", language="python")
+        mcp_db.add_file_association(file_record.id, issue.id, "mentioned_in")
+
+        result = await call_tool("get_issue", {"issue_id": issue.id, "include_files": True})
+
+        data = _parse(result)
+        assert data["files"][0]["assoc_id"]
+        assert "id" not in data["files"][0]
+        assert data["files"][0]["file_id"] == file_record.id
+
 
 class TestRefreshSummaryBestEffort:
     async def test_mutation_succeeds_when_summary_refresh_fails(self, mcp_db: FiligreeDB) -> None:
@@ -161,6 +173,18 @@ class TestPublicIssueVocabulary:
         data = _parse(result)
         assert data["issue_id"] == issue.id
         assert "id" not in data
+
+    async def test_undo_last_nested_issue_uses_issue_id(self, mcp_db: FiligreeDB) -> None:
+        issue = mcp_db.create_issue("MCP undo public")
+        await call_tool("update_issue", {"issue_id": issue.id, "title": "Changed title"})
+
+        result = await call_tool("undo_last", {"issue_id": issue.id})
+
+        data = _parse(result)
+        assert data["undone"] is True
+        assert data["issue"]["issue_id"] == issue.id
+        assert "id" not in data["issue"]
+        assert data["issue"]["title"] == "MCP undo public"
 
 
 class TestListPagination:
@@ -276,7 +300,10 @@ class TestDependencies:
         result = await call_tool("add_dependency", {"from_issue_id": a.id, "to_issue_id": b.id})
         data = _parse(result)
         assert data["status"] == "added"
-        assert data["from_id"] == a.id
+        assert data["from_issue_id"] == a.id
+        assert data["to_issue_id"] == b.id
+        assert "from_id" not in data
+        assert "to_id" not in data
 
     async def test_add_dependency_cycle(self, mcp_db: FiligreeDB) -> None:
         a = mcp_db.create_issue("A")
@@ -293,6 +320,8 @@ class TestDependencies:
         result = await call_tool("remove_dependency", {"from_issue_id": a.id, "to_issue_id": b.id})
         data = _parse(result)
         assert data["status"] == "removed"
+        assert data["from_issue_id"] == a.id
+        assert data["to_issue_id"] == b.id
 
 
 class TestReadyAndBlocked:
@@ -355,6 +384,12 @@ class TestPlan:
         data = _parse(result)
         assert data["total_steps"] == 1
         assert data["completed_steps"] == 1
+        assert data["milestone"]["issue_id"] == ms.id
+        assert "id" not in data["milestone"]
+        assert data["phases"][0]["phase"]["issue_id"] == p.id
+        assert "id" not in data["phases"][0]["phase"]
+        assert data["phases"][0]["steps"][0]["issue_id"] == s.id
+        assert "id" not in data["phases"][0]["steps"][0]
 
     async def test_get_plan_not_found(self, mcp_db: FiligreeDB) -> None:
         result = await call_tool("get_plan", {"milestone_id": "mcp-nonexistent"})
@@ -377,6 +412,8 @@ class TestComments:
         result = await call_tool("get_comments", {"issue_id": issue.id})
         data = _parse(result)
         assert len(data["items"]) == 2
+        assert data["items"][0]["comment_id"]
+        assert "id" not in data["items"][0]
         assert data["items"][0]["text"] == "First"
 
 
@@ -474,10 +511,16 @@ class TestCreatePlan:
         )
         data = _parse(result)
         assert data["milestone"]["title"] == "v1.0 Release"
+        assert data["milestone"]["issue_id"]
+        assert "id" not in data["milestone"]
         assert data["total_steps"] == 3
         assert len(data["phases"]) == 2
         assert data["phases"][0]["total"] == 2
         assert data["phases"][1]["total"] == 1
+        assert data["phases"][0]["phase"]["issue_id"]
+        assert "id" not in data["phases"][0]["phase"]
+        assert data["phases"][0]["steps"][0]["issue_id"]
+        assert "id" not in data["phases"][0]["steps"][0]
 
     async def test_create_plan_empty_phases(self, mcp_db: FiligreeDB) -> None:
         result = await call_tool(
@@ -713,7 +756,20 @@ class TestGetChanges:
         result = await call_tool("get_changes", {"since": "2000-01-01T00:00:00+00:00"})
         data = _parse(result)
         assert len(data["items"]) >= 2  # created + status_changed
+        assert data["items"][0]["event_id"]
+        assert "id" not in data["items"][0]
         assert any(e["event_type"] == "status_changed" for e in data["items"])
+
+    async def test_get_issue_events_uses_event_id(self, mcp_db: FiligreeDB) -> None:
+        issue = mcp_db.create_issue("Issue events")
+        mcp_db.update_issue(issue.id, status="in_progress")
+
+        result = await call_tool("get_issue_events", {"issue_id": issue.id})
+
+        data = _parse(result)
+        assert len(data["items"]) >= 1
+        assert data["items"][0]["event_id"]
+        assert "id" not in data["items"][0]
 
     async def test_get_changes_empty(self, mcp_db: FiligreeDB) -> None:
         result = await call_tool("get_changes", {"since": "2099-01-01T00:00:00+00:00"})
@@ -856,6 +912,8 @@ class TestCriticalPathMCP:
         data = _parse(result)
         assert data["length"] == 2
         assert len(data["path"]) == 2
+        assert data["path"][0]["issue_id"]
+        assert "id" not in data["path"][0]
 
     async def test_get_critical_path_empty(self, mcp_db: FiligreeDB) -> None:
         result = await call_tool("get_critical_path", {})
@@ -1605,16 +1663,39 @@ class TestFileTools:
         created = _parse(await call_tool("register_file", {"path": "src/example.py", "language": "python"}))
         assert "error" not in created
         assert created["path"] == "src/example.py"
-        assert created["id"]
+        assert created["file_id"]
+        assert "id" not in created
 
-        detail = _parse(await call_tool("get_file", {"file_id": created["id"]}))
-        assert detail["file"]["id"] == created["id"]
+        detail = _parse(await call_tool("get_file", {"file_id": created["file_id"]}))
+        assert detail["file"]["file_id"] == created["file_id"]
+        assert "id" not in detail["file"]
         assert detail["file"]["path"] == "src/example.py"
+
+    async def test_get_file_recent_findings_use_finding_id(self, mcp_db: FiligreeDB) -> None:
+        created = _parse(await call_tool("register_file", {"path": "src/with_finding.py", "language": "python"}))
+        scan = mcp_db.process_scan_results(
+            scan_source="contract-test",
+            findings=[
+                {
+                    "path": "src/with_finding.py",
+                    "rule_id": "R001",
+                    "severity": "medium",
+                    "message": "shape check",
+                }
+            ],
+        )
+
+        detail = _parse(await call_tool("get_file", {"file_id": created["file_id"]}))
+
+        assert detail["recent_findings"][0]["finding_id"] == scan["new_finding_ids"][0]
+        assert "id" not in detail["recent_findings"][0]
 
     async def test_register_file_is_idempotent_by_path(self, mcp_db: FiligreeDB) -> None:
         first = _parse(await call_tool("register_file", {"path": "src/idempotent.py"}))
         second = _parse(await call_tool("register_file", {"path": "./src/idempotent.py"}))
-        assert first["id"] == second["id"]
+        assert first["file_id"] == second["file_id"]
+        assert "id" not in first
+        assert "id" not in second
         assert second["path"] == "src/idempotent.py"
 
     async def test_register_file_path_traversal_rejected(self, mcp_db: FiligreeDB) -> None:
@@ -1632,6 +1713,8 @@ class TestFileTools:
         result = _parse(await call_tool("list_files", {"path_prefix": "src/", "limit": 10}))
         assert len(result["items"]) == 1
         assert result["items"][0]["path"] == "src/a.py"
+        assert result["items"][0]["file_id"]
+        assert "id" not in result["items"][0]
         assert result["has_more"] is False
 
     async def test_list_files_invalid_sort_rejected(self, mcp_db: FiligreeDB) -> None:
@@ -1661,7 +1744,7 @@ class TestFileTools:
             await call_tool(
                 "add_file_association",
                 {
-                    "file_id": file_data["id"],
+                    "file_id": file_data["file_id"],
                     "issue_id": issue.id,
                     "assoc_type": "task_for",
                 },
@@ -1673,8 +1756,14 @@ class TestFileTools:
         assert "items" in files
         assert files["has_more"] is False
         assert len(files["items"]) == 1
-        assert files["items"][0]["file_id"] == file_data["id"]
+        assert files["items"][0]["file_id"] == file_data["file_id"]
+        assert files["items"][0]["assoc_id"]
+        assert "id" not in files["items"][0]
         assert files["items"][0]["assoc_type"] == "task_for"
+
+        detail = _parse(await call_tool("get_file", {"file_id": file_data["file_id"]}))
+        assert detail["associations"][0]["assoc_id"]
+        assert "id" not in detail["associations"][0]
 
     async def test_add_file_association_invalid_assoc_type(self, mcp_db: FiligreeDB) -> None:
         issue = mcp_db.create_issue("Issue for invalid assoc")
@@ -1683,7 +1772,7 @@ class TestFileTools:
             await call_tool(
                 "add_file_association",
                 {
-                    "file_id": file_data["id"],
+                    "file_id": file_data["file_id"],
                     "issue_id": issue.id,
                     "assoc_type": "invalid_assoc",
                 },
@@ -1716,7 +1805,7 @@ class TestFileTools:
             await call_tool(
                 "add_file_association",
                 {
-                    "file_id": file_data["id"],
+                    "file_id": file_data["file_id"],
                     "issue_id": issue.id,
                     "assoc_type": "mentioned_in",
                 },
@@ -1726,7 +1815,7 @@ class TestFileTools:
         timeline = _parse(
             await call_tool(
                 "get_file_timeline",
-                {"file_id": file_data["id"], "event_type": "association"},
+                {"file_id": file_data["file_id"], "event_type": "association"},
             )
         )
         assert "items" in timeline
@@ -1739,7 +1828,7 @@ class TestFileTools:
         result = _parse(
             await call_tool(
                 "get_file_timeline",
-                {"file_id": file_data["id"], "event_type": "bogus"},
+                {"file_id": file_data["file_id"], "event_type": "bogus"},
             )
         )
         assert result["code"] == ErrorCode.VALIDATION
@@ -2379,7 +2468,7 @@ class TestAddFileAssociationIssueNotFound:
             await call_tool(
                 "add_file_association",
                 {
-                    "file_id": file_data["id"],
+                    "file_id": file_data["file_id"],
                     "issue_id": "mcp-nonexistent",
                     "assoc_type": "task_for",
                 },
@@ -2395,7 +2484,7 @@ class TestAddFileAssociationIssueNotFound:
             await call_tool(
                 "add_file_association",
                 {
-                    "file_id": file_data["id"],
+                    "file_id": file_data["file_id"],
                     "issue_id": issue.id,
                     "assoc_type": "invalid_type",
                 },

@@ -15,7 +15,8 @@ class TestObserveTool:
     async def test_observe_creates_observation(self, mcp_db: FiligreeDB) -> None:
         result = await call_tool("observe", {"summary": "Something looks wrong"})
         data = _parse(result)
-        assert data["id"].startswith("mcp-")
+        assert data["observation_id"].startswith("mcp-")
+        assert "id" not in data
         assert data["summary"] == "Something looks wrong"
         assert data["priority"] == 3
 
@@ -75,6 +76,8 @@ class TestListObservationsTool:
         result = await call_tool("list_observations", {})
         data = _parse(result)
         assert len(data["items"]) == 2
+        assert all("observation_id" in item for item in data["items"])
+        assert all("id" not in item for item in data["items"])
 
     async def test_list_with_file_path_filter(self, mcp_db: FiligreeDB) -> None:
         mcp_db.create_observation("api bug", file_path="src/api/routes.py")

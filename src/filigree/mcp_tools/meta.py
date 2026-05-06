@@ -11,6 +11,7 @@ from mcp.types import TextContent, Tool
 
 from filigree.issue_payloads import issue_to_public
 from filigree.mcp_tools.common import _list_response, _parse_args, _text, _validate_actor, _validate_int_range
+from filigree.mcp_tools.payloads import comment_to_mcp, event_to_mcp, undo_result_to_mcp
 from filigree.types.api import (
     AddCommentResult,
     ArchiveClosedResponse,
@@ -368,8 +369,8 @@ async def _handle_get_comments(arguments: dict[str, Any]) -> list[TextContent]:
         tracker.get_issue(args["issue_id"])
     except KeyError:
         return _text(ErrorResponse(error=f"Issue not found: {args['issue_id']}", code=ErrorCode.NOT_FOUND))
-    comments = tracker.get_comments(args["issue_id"])
-    return _text(_list_response(list(comments), has_more=False))
+    comments = [comment_to_mcp(comment) for comment in tracker.get_comments(args["issue_id"])]
+    return _text(_list_response(comments, has_more=False))
 
 
 async def _handle_add_label(arguments: dict[str, Any]) -> list[TextContent]:
@@ -495,7 +496,7 @@ async def _handle_get_changes(arguments: dict[str, Any]) -> list[TextContent]:
     has_more = len(events) > limit
     if has_more:
         events = events[:limit]
-    return _text(_list_response(list(events), has_more=has_more))
+    return _text(_list_response([event_to_mcp(event) for event in events], has_more=has_more))
 
 
 async def _handle_get_summary(arguments: dict[str, Any]) -> list[TextContent]:
@@ -604,7 +605,7 @@ async def _handle_undo_last(arguments: dict[str, Any]) -> list[TextContent]:
         result = tracker.undo_last(args["issue_id"], actor=actor)
         if result["undone"]:
             _refresh_summary()
-        return _text(result)
+        return _text(undo_result_to_mcp(result))
     except KeyError:
         return _text(ErrorResponse(error=f"Issue not found: {args['issue_id']}", code=ErrorCode.NOT_FOUND))
 
@@ -622,7 +623,7 @@ async def _handle_get_issue_events(arguments: dict[str, Any]) -> list[TextConten
     has_more = len(events) > limit
     if has_more:
         events = events[:limit]
-    return _text(_list_response(list(events), has_more=has_more))
+    return _text(_list_response([event_to_mcp(event) for event in events], has_more=has_more))
 
 
 async def _handle_list_labels(arguments: dict[str, Any]) -> list[TextContent]:

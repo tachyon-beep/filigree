@@ -21,6 +21,7 @@ from filigree.mcp_tools.common import (
     _validate_actor,
     _validate_int_range,
 )
+from filigree.mcp_tools.payloads import file_assoc_to_mcp
 from filigree.types.api import (
     AmbiguousTransitionError,
     BatchResponse,
@@ -470,7 +471,7 @@ async def _handle_get_issue(arguments: dict[str, Any]) -> list[TextContent]:
         # filigree-c6c7842661 for why swallowing sqlite3.Error is wrong.
         file_assocs: list[Any] = []
         if include_files:
-            file_assocs = tracker.get_issue_files(args["issue_id"])
+            file_assocs = [file_assoc_to_mcp(item) for item in tracker.get_issue_files(args["issue_id"])]
 
         if args.get("include_transitions"):
             transitions = tracker.get_valid_transitions(args["issue_id"])

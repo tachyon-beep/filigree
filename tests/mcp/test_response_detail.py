@@ -164,7 +164,8 @@ class TestFindingsBatchDetail:
         data = _parse(result)
         item = data["succeeded"][0]
         assert isinstance(item, dict)
-        assert set(item.keys()) > {"id"}
+        assert "finding_id" in item
+        assert "id" not in item
         assert item["status"] == "fixed"
 
 
@@ -191,4 +192,5 @@ class TestObservationsBatchDetail:
         assert len(data["succeeded"]) == 2
         for item in data["succeeded"]:
             assert isinstance(item, dict)
-            assert {"id", "summary"} <= set(item.keys())
+            assert {"observation_id", "summary"} <= set(item.keys())
+            assert "id" not in item

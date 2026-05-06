@@ -7,7 +7,7 @@ from typing import Any, Generic, Literal, NotRequired, TypedDict, TypeVar, asser
 
 from filigree.types.core import ISOTimestamp, IssueDict, StatusCategory
 from filigree.types.events import EventType
-from filigree.types.planning import CommentRecord, CriticalPathNode, PlanTree, StatsResult
+from filigree.types.planning import CommentRecord, PlanTree, StatsResult
 
 # ---------------------------------------------------------------------------
 # Shared types
@@ -237,14 +237,23 @@ class DependencyActionResponse(TypedDict):
     """Response for add_dependency / remove_dependency MCP tools."""
 
     status: str
-    from_id: str
-    to_id: str
+    from_issue_id: str
+    to_issue_id: str
+
+
+class CriticalPathMcpNode(TypedDict):
+    """Issue node in get_critical_path MCP response."""
+
+    issue_id: str
+    title: str
+    priority: int
+    type: str
 
 
 class CriticalPathResponse(TypedDict):
     """Response for get_critical_path MCP tool."""
 
-    path: list[CriticalPathNode]
+    path: list[CriticalPathMcpNode]
     length: int
 
 

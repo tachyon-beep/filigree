@@ -21,8 +21,8 @@ from filigree.mcp_tools.common import (
     _validate_int_range,
     _validate_str,
 )
+from filigree.mcp_tools.payloads import observation_to_mcp
 from filigree.types.api import BatchFailure, BatchResponse, ErrorCode, ErrorResponse, parse_response_detail
-from filigree.types.core import ObservationDict
 from filigree.types.inputs import (
     BatchDismissObservationsArgs,
     DismissObservationArgs,
@@ -201,7 +201,7 @@ async def _handle_observe(arguments: dict[str, Any]) -> list[TextContent]:
     except sqlite3.Error as e:
         return _text(ErrorResponse(error=f"Database error: {e}", code=ErrorCode.IO))
     _refresh_summary()
-    return _text(obs)
+    return _text(observation_to_mcp(obs))
 
 
 async def _handle_list_observations(arguments: dict[str, Any]) -> list[TextContent]:
@@ -226,7 +226,7 @@ async def _handle_list_observations(arguments: dict[str, Any]) -> list[TextConte
     # Drops the legacy ``stats`` sibling per the loom precedent (Phase C4 dropped
     # it on the HTTP side); consumers needing observation stats use
     # ``tracker.observation_stats()`` via a dedicated tool.
-    return _text(_list_response(list(observations), has_more=has_more, next_offset=next_offset))
+    return _text(_list_response([observation_to_mcp(obs) for obs in observations], has_more=has_more, next_offset=next_offset))
 
 
 async def _handle_dismiss_observation(arguments: dict[str, Any]) -> list[TextContent]:
@@ -275,9 +275,9 @@ async def _handle_batch_dismiss_observations(arguments: dict[str, Any]) -> list[
     tracker = _get_db()
     # Snapshot pre-dismissal records for full mode — the rows are deleted by
     # batch_dismiss_observations so the fetch must happen first.
-    full_records: list[ObservationDict] = []
+    full_records: list[dict[str, Any]] = []
     if detail == "full":
-        full_records = tracker.get_observations_by_ids(raw_ids)
+        full_records = [observation_to_mcp(obs) for obs in tracker.get_observations_by_ids(raw_ids)]
     try:
         result = tracker.batch_dismiss_observations(
             raw_ids,
@@ -296,7 +296,7 @@ async def _handle_batch_dismiss_observations(arguments: dict[str, Any]) -> list[
         BatchFailure(id=oid, error=f"Observation not found: {oid}", code=ErrorCode.NOT_FOUND) for oid in result["not_found"]
     ]
     if detail == "full":
-        full_resp: BatchResponse[ObservationDict] = BatchResponse(succeeded=full_records, failed=failed)
+        full_resp: BatchResponse[dict[str, Any]] = BatchResponse(succeeded=full_records, failed=failed)
         return _text(full_resp)
     resp: BatchResponse[str] = BatchResponse(succeeded=succeeded_ids, failed=failed)
     return _text(resp)

@@ -18,8 +18,8 @@ from filigree.mcp_tools.common import (
     _validate_int_range,
     _validate_str,
 )
+from filigree.mcp_tools.payloads import file_assoc_to_mcp, file_detail_to_mcp, file_record_to_mcp, finding_to_mcp, observation_to_mcp
 from filigree.types.api import BatchFailure, BatchResponse, ErrorCode, ErrorResponse, parse_response_detail
-from filigree.types.core import ScanFindingDict
 from filigree.types.inputs import (
     AddFileAssociationArgs,
     BatchUpdateFindingsArgs,
@@ -305,7 +305,7 @@ async def _handle_list_files(arguments: dict[str, Any]) -> list[TextContent]:
         sort=sort,
         direction=direction,
     )
-    items = list(files_result["results"])
+    items = [file_record_to_mcp(item) for item in files_result["results"]]
     has_more = bool(files_result["has_more"])
     next_offset = offset + len(items) if has_more else None
     return _text(_list_response(items, has_more=has_more, next_offset=next_offset))
@@ -323,7 +323,7 @@ async def _handle_get_file(arguments: dict[str, Any]) -> list[TextContent]:
         data = tracker.get_file_detail(file_id)
     except KeyError:
         return _text(ErrorResponse(error=f"File not found: {file_id}", code=ErrorCode.NOT_FOUND))
-    return _text(data)
+    return _text(file_detail_to_mcp(data))
 
 
 async def _handle_get_file_timeline(arguments: dict[str, Any]) -> list[TextContent]:
@@ -373,7 +373,7 @@ async def _handle_get_issue_files(arguments: dict[str, Any]) -> list[TextContent
         tracker.get_issue(issue_id)
     except KeyError:
         return _text(ErrorResponse(error=f"Issue not found: {issue_id}", code=ErrorCode.NOT_FOUND))
-    items = tracker.get_issue_files(issue_id)
+    items = [file_assoc_to_mcp(item) for item in tracker.get_issue_files(issue_id)]
     return _text(_list_response(items, has_more=False))
 
 
@@ -448,7 +448,7 @@ async def _handle_register_file(arguments: dict[str, Any]) -> list[TextContent]:
         )
     except ValueError as e:
         return _text(ErrorResponse(error=str(e), code=ErrorCode.VALIDATION))
-    return _text(file_record.to_dict())
+    return _text(file_record_to_mcp(file_record.to_dict()))
 
 
 # ---------------------------------------------------------------------------
@@ -468,7 +468,7 @@ async def _handle_get_finding(arguments: dict[str, Any]) -> list[TextContent]:
         finding = tracker.get_finding(finding_id)
     except KeyError:
         return _text(ErrorResponse(error=f"Finding not found: {finding_id}", code=ErrorCode.NOT_FOUND))
-    return _text(finding)
+    return _text(finding_to_mcp(finding))
 
 
 async def _handle_list_findings(arguments: dict[str, Any]) -> list[TextContent]:
@@ -502,7 +502,7 @@ async def _handle_list_findings(arguments: dict[str, Any]) -> list[TextContent]:
         result = tracker.list_findings_global(limit=limit, offset=offset, **filters)
     except ValueError as e:
         return _text(ErrorResponse(error=str(e), code=ErrorCode.VALIDATION))
-    findings = list(result["findings"])
+    findings = [finding_to_mcp(item) for item in result["findings"]]
     total = int(result["total"])
     has_more = (offset + len(findings)) < total
     next_offset = offset + len(findings) if has_more else None
@@ -528,7 +528,7 @@ async def _handle_update_finding(arguments: dict[str, Any]) -> list[TextContent]
         return _text(ErrorResponse(error=f"Finding not found: {finding_id}", code=ErrorCode.NOT_FOUND))
     except ValueError as e:
         return _text(ErrorResponse(error=str(e), code=ErrorCode.VALIDATION))
-    return _text(updated)
+    return _text(finding_to_mcp(updated))
 
 
 async def _handle_batch_update_findings(arguments: dict[str, Any]) -> list[TextContent]:
@@ -554,14 +554,14 @@ async def _handle_batch_update_findings(arguments: dict[str, Any]) -> list[TextC
 
     tracker = _get_db()
     updated_ids: list[str] = []
-    updated_records: list[ScanFindingDict] = []
+    updated_records: list[dict[str, Any]] = []
     errors: list[BatchFailure] = []
     for fid in finding_ids:
         try:
             record = tracker.update_finding(fid, status=status)
             updated_ids.append(fid)
             if detail == "full":
-                updated_records.append(record)
+                updated_records.append(finding_to_mcp(record))
         except KeyError as e:
             _logger.warning("batch_update_findings: failed for %s: %s", fid, e)
             errors.append(BatchFailure(id=fid, error=str(e), code=ErrorCode.NOT_FOUND))
@@ -576,7 +576,7 @@ async def _handle_batch_update_findings(arguments: dict[str, Any]) -> list[TextC
             )
         )
     if detail == "full":
-        full_result: BatchResponse[ScanFindingDict] = BatchResponse(succeeded=updated_records, failed=errors)
+        full_result: BatchResponse[dict[str, Any]] = BatchResponse(succeeded=updated_records, failed=errors)
         return _text(full_result)
     result: BatchResponse[str] = BatchResponse(succeeded=updated_ids, failed=errors)
     return _text(result)
@@ -608,7 +608,7 @@ async def _handle_promote_finding(arguments: dict[str, Any]) -> list[TextContent
     except sqlite3.Error as exc:
         _logger.exception("Database error promoting finding %s", finding_id)
         return _text(ErrorResponse(error=f"Database error promoting finding: {exc}", code=ErrorCode.IO))
-    return _text(obs)
+    return _text(observation_to_mcp(obs))
 
 
 async def _handle_dismiss_finding(arguments: dict[str, Any]) -> list[TextContent]:
@@ -631,4 +631,4 @@ async def _handle_dismiss_finding(arguments: dict[str, Any]) -> list[TextContent
     except sqlite3.Error as e:
         _logger.exception("Database error dismissing finding %s", finding_id)
         return _text(ErrorResponse(error=f"Database error dismissing finding: {e}", code=ErrorCode.IO))
-    return _text(updated)
+    return _text(finding_to_mcp(updated))

@@ -988,7 +988,7 @@ class TestPlanResponseShape:
 
 class TestDependencyActionResponseShape:
     def test_keys_match(self) -> None:
-        result = DependencyActionResponse(status="added", from_id="a", to_id="b")
+        result = DependencyActionResponse(status="added", from_issue_id="a", to_issue_id="b")
         hints = get_type_hints(DependencyActionResponse)
         assert set(result.keys()) == set(hints.keys())
 

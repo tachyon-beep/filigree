@@ -32,6 +32,8 @@ class TestGetFindingTool:
     async def test_get_finding(self, mcp_db: FiligreeDB) -> None:
         ids = _seed_findings(mcp_db)
         data = _parse(await call_tool("get_finding", {"finding_id": ids["obo"]}))
+        assert data["finding_id"] == ids["obo"]
+        assert "id" not in data
         assert data["rule_id"] == "logic-error"
         assert data["severity"] == "high"
 
@@ -53,6 +55,8 @@ class TestListFindingsTool:
         _seed_findings(mcp_db)
         data = _parse(await call_tool("list_findings", {}))
         assert len(data["items"]) == 3
+        assert all("finding_id" in item for item in data["items"])
+        assert all("id" not in item for item in data["items"])
 
     async def test_filter_by_severity(self, mcp_db: FiligreeDB) -> None:
         _seed_findings(mcp_db)
@@ -77,12 +81,15 @@ class TestUpdateFindingTool:
     async def test_update_status(self, mcp_db: FiligreeDB) -> None:
         ids = _seed_findings(mcp_db)
         data = _parse(await call_tool("update_finding", {"finding_id": ids["obo"], "status": "acknowledged"}))
+        assert data["finding_id"] == ids["obo"]
+        assert "id" not in data
         assert data["status"] == "acknowledged"
 
     async def test_update_issue_id(self, mcp_db: FiligreeDB) -> None:
         ids = _seed_findings(mcp_db)
         issue = mcp_db.create_issue("Bug ticket")
         data = _parse(await call_tool("update_finding", {"finding_id": ids["sqli"], "issue_id": issue.id}))
+        assert data["finding_id"] == ids["sqli"]
         assert data["issue_id"] == issue.id
 
     async def test_update_not_found(self, mcp_db: FiligreeDB) -> None:
@@ -141,7 +148,8 @@ class TestPromoteFindingTool:
     async def test_promote_creates_observation(self, mcp_db: FiligreeDB) -> None:
         ids = _seed_findings(mcp_db)
         data = _parse(await call_tool("promote_finding", {"finding_id": ids["sqli"]}))
-        assert "id" in data
+        assert "observation_id" in data
+        assert "id" not in data
         assert "summary" in data
 
     async def test_promote_with_priority_override(self, mcp_db: FiligreeDB) -> None:
@@ -162,6 +170,8 @@ class TestDismissFindingTool:
     async def test_dismiss_marks_false_positive(self, mcp_db: FiligreeDB) -> None:
         ids = _seed_findings(mcp_db)
         data = _parse(await call_tool("dismiss_finding", {"finding_id": ids["type"]}))
+        assert data["finding_id"] == ids["type"]
+        assert "id" not in data
         assert data["status"] == "false_positive"
 
     async def test_dismiss_not_found(self, mcp_db: FiligreeDB) -> None:
