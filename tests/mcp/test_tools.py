@@ -1833,7 +1833,38 @@ class TestFileTools:
         assert "items" in timeline
         assert timeline["has_more"] is False
         assert len(timeline["items"]) >= 1
-        assert any(e["type"] == "association_created" for e in timeline["items"])
+        association_event = next(e for e in timeline["items"] if e["type"] == "association_created")
+        assert association_event["timeline_event_id"]
+        assert association_event["assoc_id"]
+        assert "id" not in association_event
+        assert "source_id" not in association_event
+
+    async def test_get_file_timeline_for_finding_event_uses_finding_id(self, mcp_db: FiligreeDB) -> None:
+        file_data = _parse(await call_tool("register_file", {"path": "src/timeline_finding.py"}))
+        scan = mcp_db.process_scan_results(
+            scan_source="timeline-test",
+            findings=[
+                {
+                    "path": "src/timeline_finding.py",
+                    "rule_id": "R001",
+                    "severity": "medium",
+                    "message": "timeline shape",
+                }
+            ],
+        )
+
+        timeline = _parse(
+            await call_tool(
+                "get_file_timeline",
+                {"file_id": file_data["file_id"], "event_type": "finding"},
+            )
+        )
+
+        finding_event = next(e for e in timeline["items"] if e["type"] == "finding_created")
+        assert finding_event["timeline_event_id"]
+        assert finding_event["finding_id"] == scan["new_finding_ids"][0]
+        assert "id" not in finding_event
+        assert "source_id" not in finding_event
 
     async def test_get_file_timeline_invalid_event_type(self, mcp_db: FiligreeDB) -> None:
         file_data = _parse(await call_tool("register_file", {"path": "src/timeline_invalid.py"}))

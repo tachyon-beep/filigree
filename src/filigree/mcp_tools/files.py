@@ -18,7 +18,14 @@ from filigree.mcp_tools.common import (
     _validate_int_range,
     _validate_str,
 )
-from filigree.mcp_tools.payloads import file_assoc_to_mcp, file_detail_to_mcp, file_record_to_mcp, finding_to_mcp, observation_to_mcp
+from filigree.mcp_tools.payloads import (
+    file_assoc_to_mcp,
+    file_detail_to_mcp,
+    file_record_to_mcp,
+    finding_to_mcp,
+    observation_to_mcp,
+    timeline_entry_to_mcp,
+)
 from filigree.types.api import BatchFailure, BatchResponse, ErrorCode, ErrorResponse, parse_response_detail
 from filigree.types.inputs import (
     AddFileAssociationArgs,
@@ -355,7 +362,7 @@ async def _handle_get_file_timeline(arguments: dict[str, Any]) -> list[TextConte
         timeline_result = tracker.get_file_timeline(file_id, limit=limit, offset=offset, event_type=event_type)
     except KeyError:
         return _text(ErrorResponse(error=f"File not found: {file_id}", code=ErrorCode.NOT_FOUND))
-    items = timeline_result["results"]
+    items = [timeline_entry_to_mcp(item) for item in timeline_result["results"]]
     has_more = timeline_result["has_more"]
     next_offset = (offset + len(items)) if has_more else None
     return _text(_list_response(items, has_more=has_more, next_offset=next_offset))

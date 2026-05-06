@@ -47,6 +47,24 @@ def event_to_mcp(record: Mapping[str, Any]) -> dict[str, Any]:
     return _rename_primary_id(record, "event_id")
 
 
+def timeline_entry_to_mcp(record: Mapping[str, Any]) -> dict[str, Any]:
+    payload = _rename_primary_id(record, "timeline_event_id")
+    source_id = payload.pop("source_id", None)
+    if source_id is None:
+        return payload
+
+    event_type = payload.get("type")
+    if event_type in {"finding_created", "finding_updated"}:
+        payload["finding_id"] = source_id
+    elif event_type == "association_created":
+        payload["assoc_id"] = source_id
+    elif event_type == "file_metadata_update":
+        payload["file_event_id"] = source_id
+    else:
+        payload["source_ref"] = source_id
+    return payload
+
+
 def critical_path_node_to_mcp(record: Mapping[str, Any]) -> dict[str, Any]:
     return _rename_primary_id(record, "issue_id")
 
