@@ -201,6 +201,42 @@ class TestCliFindingsAndObservationsBatchDetail:
             assert isinstance(item, dict)
             assert {"id", "summary"} <= set(item.keys())
 
+    def test_batch_promote_observations_slim_default(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        runner, project = cli_in_project
+        original = os.getcwd()
+        os.chdir(str(project))
+        try:
+            with get_db() as db:
+                obs_ids = seed_observations(db, count=2)
+        finally:
+            os.chdir(original)
+        result = runner.invoke(cli, ["batch-promote-observations", *obs_ids, "--json"])
+        assert result.exit_code == 0, result.output
+        data = json.loads(result.output)
+        assert len(data["succeeded"]) == 2
+        for item in data["succeeded"]:
+            assert set(item.keys()) == _SLIM_KEYS
+
+    def test_batch_promote_observations_full(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        runner, project = cli_in_project
+        original = os.getcwd()
+        os.chdir(str(project))
+        try:
+            with get_db() as db:
+                obs_ids = seed_observations(db, count=2)
+        finally:
+            os.chdir(original)
+        result = runner.invoke(
+            cli,
+            ["batch-promote-observations", *obs_ids, "--detail", "full", "--json"],
+        )
+        assert result.exit_code == 0, result.output
+        data = json.loads(result.output)
+        assert len(data["succeeded"]) == 2
+        for item in data["succeeded"]:
+            assert isinstance(item, dict)
+            assert set(item.keys()) >= _FULL_ONLY_KEYS
+
 
 # ---------------------------------------------------------------------------
 # Bad value

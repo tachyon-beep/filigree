@@ -21,6 +21,7 @@ from typing import cast
 
 from filigree.db_base import DBMixinProtocol, _escape_like, _now_iso
 from filigree.db_files import _normalize_scan_path
+from filigree.types.api import BatchFailure, ErrorCode
 from filigree.types.core import BatchDismissResult, ISOTimestamp, ObservationDict, ObservationStatsDict, PromoteObservationResult
 
 logger = logging.getLogger(__name__)
@@ -457,6 +458,37 @@ class ObservationsMixin(DBMixinProtocol):
                 self.conn.rollback()
             raise
         return {"dismissed": cursor.rowcount, "not_found": not_found}
+
+    def batch_promote_observations(
+        self,
+        obs_ids: list[str],
+        *,
+        issue_type: str = "task",
+        priority: int | None = None,
+        actor: str = "",
+    ) -> tuple[list[PromoteObservationResult], list[BatchFailure]]:
+        """Promote multiple observations with per-item error reporting."""
+        if not isinstance(obs_ids, list) or not all(isinstance(obs_id, str) for obs_id in obs_ids):
+            msg = "obs_ids must be a list of strings"
+            raise TypeError(msg)
+
+        promoted: list[PromoteObservationResult] = []
+        errors: list[BatchFailure] = []
+        for obs_id in dict.fromkeys(obs_ids):
+            try:
+                promoted.append(
+                    self.promote_observation(
+                        obs_id,
+                        issue_type=issue_type,
+                        priority=priority,
+                        actor=actor,
+                    )
+                )
+            except ValueError as e:
+                msg = str(e)
+                err_code = ErrorCode.NOT_FOUND if "not found" in msg.lower() else ErrorCode.VALIDATION
+                errors.append(BatchFailure(id=obs_id, error=msg, code=err_code))
+        return promoted, errors
 
     def promote_observation(
         self,

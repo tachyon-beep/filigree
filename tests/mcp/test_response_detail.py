@@ -212,3 +212,23 @@ class TestObservationsBatchDetail:
             assert isinstance(item, dict)
             assert {"observation_id", "summary"} <= set(item.keys())
             assert "id" not in item
+
+    async def test_batch_promote_slim_default(self, mcp_db: FiligreeDB) -> None:
+        ids = seed_observations(mcp_db, count=2)
+        result = await call_tool("batch_promote_observations", {"observation_ids": ids})
+        data = _parse(result)
+        assert len(data["succeeded"]) == 2
+        for item in data["succeeded"]:
+            assert set(item.keys()) == _SLIM_KEYS
+
+    async def test_batch_promote_full(self, mcp_db: FiligreeDB) -> None:
+        ids = seed_observations(mcp_db, count=2)
+        result = await call_tool(
+            "batch_promote_observations",
+            {"observation_ids": ids, "response_detail": "full"},
+        )
+        data = _parse(result)
+        assert len(data["succeeded"]) == 2
+        for item in data["succeeded"]:
+            assert isinstance(item, dict)
+            assert set(item.keys()) >= _FULL_ONLY_KEYS

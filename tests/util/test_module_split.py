@@ -47,10 +47,10 @@ def test_mcp_tools_register_shape() -> None:
 
 
 def test_mcp_tools_total_count() -> None:
-    """All 73 tools are registered across domain modules.
+    """All 83 tools are registered across domain modules.
 
-    Count bumped from 71 to 73 in Phase D6: ``start_work`` and
-    ``start_next_work`` joined the issues domain.
+    Count includes the observation batch-promotion surface so the split-module
+    registry test notices dropped tool registrations.
     """
     from filigree.mcp_tools import files, issues, meta, observations, planning, scanners, workflow
 
@@ -61,7 +61,7 @@ def test_mcp_tools_total_count() -> None:
     # Scanner module needs include_legacy=True to include all 5 tools
     tools, _ = scanners.register(include_legacy=True)
     total += len(tools)
-    assert total == 73, f"Expected 73 tools total, got {total}"
+    assert total == 83, f"Expected 83 tools total, got {total}"
 
 
 def test_mcp_backward_compat_imports() -> None:

@@ -191,6 +191,58 @@ class TestBatchDismissTool:
         assert data.get("code") == ErrorCode.VALIDATION
 
 
+class TestBatchPromoteTool:
+    async def test_batch_promote_promotes_multiple_observations(self, mcp_db: FiligreeDB) -> None:
+        o1 = mcp_db.create_observation("One", priority=2)
+        o2 = mcp_db.create_observation("Two", priority=3)
+        mcp_db.create_observation("Three")
+
+        result = await call_tool(
+            "batch_promote_observations",
+            {
+                "observation_ids": [o1["id"], o2["id"]],
+                "type": "bug",
+                "priority": 1,
+                "actor": "tester",
+            },
+        )
+
+        data = _parse(result)
+        assert len(data["succeeded"]) == 2
+        assert data["failed"] == []
+        assert [item["title"] for item in data["succeeded"]] == ["One", "Two"]
+        assert {item["type"] for item in data["succeeded"]} == {"bug"}
+        assert {item["priority"] for item in data["succeeded"]} == {1}
+        issue_ids = [item["issue_id"] for item in data["succeeded"]]
+        assert mcp_db.list_observations()[0]["summary"] == "Three"
+        assert all("from-observation" in mcp_db.get_issue(issue_id).labels for issue_id in issue_ids)
+
+    async def test_batch_promote_reports_missing_ids_per_item(self, mcp_db: FiligreeDB) -> None:
+        obs = mcp_db.create_observation("Promote me")
+
+        result = await call_tool(
+            "batch_promote_observations",
+            {"observation_ids": [obs["id"], "obs-missing"]},
+        )
+
+        data = _parse(result)
+        assert len(data["succeeded"]) == 1
+        assert data["succeeded"][0]["title"] == "Promote me"
+        assert len(data["failed"]) == 1
+        assert data["failed"][0]["id"] == "obs-missing"
+        assert data["failed"][0]["code"] == ErrorCode.NOT_FOUND
+
+    async def test_batch_promote_rejects_bare_string_ids(self, mcp_db: FiligreeDB) -> None:
+        result = await call_tool("batch_promote_observations", {"observation_ids": "obs-123"})
+        data = _parse(result)
+        assert data.get("code") == ErrorCode.VALIDATION
+
+    async def test_batch_promote_rejects_non_string_members(self, mcp_db: FiligreeDB) -> None:
+        result = await call_tool("batch_promote_observations", {"observation_ids": [1, 2, 3]})
+        data = _parse(result)
+        assert data.get("code") == ErrorCode.VALIDATION
+
+
 class TestSummaryRefreshOnObservationMutations:
     """filigree-134296bf02: observe / dismiss_observation / batch_dismiss_observations
     must refresh context.md so the session snapshot stays in sync.
@@ -213,6 +265,12 @@ class TestSummaryRefreshOnObservationMutations:
         with patch("filigree.mcp_server.write_summary") as mock_write:
             await call_tool("batch_dismiss_observations", {"observation_ids": [o1["id"], o2["id"]]})
         assert mock_write.called, "batch_dismiss_observations must call _refresh_summary"
+
+    async def test_batch_promote_refreshes_summary(self, mcp_db: FiligreeDB) -> None:
+        obs = mcp_db.create_observation("will promote")
+        with patch("filigree.mcp_server.write_summary") as mock_write:
+            await call_tool("batch_promote_observations", {"observation_ids": [obs["id"]]})
+        assert mock_write.called, "batch_promote_observations must call _refresh_summary"
 
 
 class TestPromoteObservationTool:

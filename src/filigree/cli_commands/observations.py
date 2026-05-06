@@ -1,4 +1,4 @@
-"""CLI commands for observations (agent scratchpad): observe, list, dismiss, promote, batch-dismiss."""
+"""CLI commands for observations (agent scratchpad): observe, list, dismiss, promote, batch operations."""
 
 from __future__ import annotations
 
@@ -10,7 +10,19 @@ from typing import Any
 import click
 
 from filigree.cli_common import get_db, refresh_summary
+from filigree.issue_payloads import issue_to_public
+from filigree.models import Issue
 from filigree.types.api import BatchFailure, ErrorCode
+
+
+def _slim_issue(issue: Issue) -> dict[str, Any]:
+    return {
+        "issue_id": issue.id,
+        "title": issue.title,
+        "status": issue.status,
+        "priority": issue.priority,
+        "type": issue.type,
+    }
 
 
 def _emit_validation_error(msg: str, *, as_json: bool) -> None:
@@ -340,6 +352,76 @@ def batch_dismiss_observations_cmd(
             sys.exit(1)
 
 
+@click.command("batch-promote-observations")
+@click.argument("observation_ids", nargs=-1, required=True)
+@click.option("--type", "issue_type", default="task", help="Issue type (bug, task, feature, requirement)")
+@click.option(
+    "--priority",
+    "-p",
+    default=None,
+    type=int,
+    help="Override priority for all created issues (default: each observation priority)",
+)
+@click.option(
+    "--detail",
+    "response_detail",
+    type=click.Choice(["slim", "full"]),
+    default="slim",
+    help="JSON shape for succeeded[]: 'slim' (default, 5-key SlimIssue) or 'full' (PublicIssue records).",
+)
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+@click.pass_context
+def batch_promote_observations_cmd(
+    ctx: click.Context,
+    observation_ids: tuple[str, ...],
+    issue_type: str,
+    priority: int | None,
+    response_detail: str,
+    as_json: bool,
+) -> None:
+    """Promote multiple observations to issues in one call."""
+    _validate_priority(priority, as_json=as_json)
+    with get_db() as db:
+        try:
+            promoted, failed = db.batch_promote_observations(
+                list(observation_ids),
+                issue_type=issue_type,
+                priority=priority,
+                actor=ctx.obj["actor"],
+            )
+        except sqlite3.Error as e:
+            if as_json:
+                click.echo(json_mod.dumps({"error": f"Database error: {e}", "code": ErrorCode.IO}))
+            else:
+                click.echo(f"Error: {e}", err=True)
+            sys.exit(1)
+
+        issues = [db.get_issue(result["issue"].id) for result in promoted]
+        failed_ids = {f_item["id"] for f_item in failed}
+        succeeded_obs_ids = [oid for oid in dict.fromkeys(observation_ids) if oid not in failed_ids]
+        if as_json:
+            if response_detail == "full":
+                succeeded_payload: list[Any] = [dict(issue_to_public(issue)) for issue in issues]
+            else:
+                succeeded_payload = [_slim_issue(issue) for issue in issues]
+            click.echo(
+                json_mod.dumps(
+                    {"succeeded": succeeded_payload, "failed": failed},
+                    indent=2,
+                    default=str,
+                )
+            )
+        else:
+            for obs_id, issue in zip(succeeded_obs_ids, issues, strict=False):
+                click.echo(f"  Promoted {obs_id} -> {issue.id}: {issue.title}")
+            for f_item in failed:
+                click.echo(f"  Error {f_item['id']}: {f_item['error']}", err=True)
+            click.echo(f"Promoted {len(issues)}/{len(observation_ids)} observations")
+        refresh_summary(db)
+        if failed:
+            sys.exit(1)
+
+
 def register(cli: click.Group) -> None:
     """Register observation commands with the CLI group."""
     cli.add_command(observe_cmd)
@@ -347,3 +429,4 @@ def register(cli: click.Group) -> None:
     cli.add_command(dismiss_observation_cmd)
     cli.add_command(promote_observation_cmd)
     cli.add_command(batch_dismiss_observations_cmd)
+    cli.add_command(batch_promote_observations_cmd)

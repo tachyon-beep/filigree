@@ -16,6 +16,7 @@ from filigree.mcp_tools.common import (
     _list_response,
     _parse_args,
     _resolve_pagination,
+    _slim_issue,
     _text,
     _validate_actor,
     _validate_int_range,
@@ -25,6 +26,7 @@ from filigree.mcp_tools.payloads import observation_to_mcp
 from filigree.types.api import BatchFailure, BatchResponse, ErrorCode, ErrorResponse, parse_response_detail
 from filigree.types.inputs import (
     BatchDismissObservationsArgs,
+    BatchPromoteObservationsArgs,
     DismissObservationArgs,
     ListObservationsArgs,
     ObserveArgs,
@@ -150,6 +152,43 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
                 "required": ["observation_id"],
             },
         ),
+        Tool(
+            name="batch_promote_observations",
+            description=(
+                "Promote multiple observations in one call. Returns "
+                "BatchResponse[SlimIssue] by default, or BatchResponse[PublicIssue] "
+                "when response_detail='full'. failed[] is always present (empty if none)."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "observation_ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Observation IDs to promote",
+                    },
+                    "type": {
+                        "type": "string",
+                        "default": "task",
+                        "description": "Issue type: 'bug' for defects, 'task' for improvements/cleanup, 'feature' for new capability, 'requirement' for formal requirements",
+                    },
+                    "priority": {
+                        "type": "integer",
+                        "description": "Override priority for all created issues (default: each observation priority)",
+                        "minimum": 0,
+                        "maximum": 4,
+                    },
+                    "response_detail": {
+                        "type": "string",
+                        "enum": ["slim", "full"],
+                        "default": "slim",
+                        "description": "'slim' (default) returns SlimIssue items in succeeded[]; 'full' returns full PublicIssue records.",
+                    },
+                    "actor": {"type": "string", "description": "Agent/user identity for audit trail"},
+                },
+                "required": ["observation_ids"],
+            },
+        ),
     ]
 
     handlers: dict[str, Callable[..., Any]] = {
@@ -158,6 +197,7 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
         "dismiss_observation": _handle_dismiss_observation,
         "batch_dismiss_observations": _handle_batch_dismiss_observations,
         "promote_observation": _handle_promote_observation,
+        "batch_promote_observations": _handle_batch_promote_observations,
     }
 
     return tools, handlers
@@ -300,6 +340,62 @@ async def _handle_batch_dismiss_observations(arguments: dict[str, Any]) -> list[
         return _text(full_resp)
     resp: BatchResponse[str] = BatchResponse(succeeded=succeeded_ids, failed=failed)
     return _text(resp)
+
+
+async def _handle_batch_promote_observations(arguments: dict[str, Any]) -> list[TextContent]:
+    from filigree.mcp_server import _get_db, _refresh_summary
+
+    args = _parse_args(arguments, BatchPromoteObservationsArgs)
+    actor, actor_err = _validate_actor(args.get("actor", "mcp"))
+    if actor_err:
+        return actor_err
+
+    raw_ids = args.get("observation_ids", [])
+    if not isinstance(raw_ids, list):
+        return _text(ErrorResponse(error="'observation_ids' must be an array of strings", code=ErrorCode.VALIDATION))
+    if not all(isinstance(x, str) for x in raw_ids):
+        return _text(ErrorResponse(error="'observation_ids' must contain only string values", code=ErrorCode.VALIDATION))
+
+    detail = parse_response_detail(args.get("response_detail"))
+    if isinstance(detail, dict):
+        return _text(detail)
+
+    issue_type = args.get("type", "task")
+    type_err = _validate_str(issue_type, "type")
+    if type_err is not None:
+        return type_err
+
+    priority = args.get("priority")
+    if priority is not None:
+        priority_err = _validate_int_range(priority, "priority", min_val=0, max_val=4)
+        if priority_err:
+            return priority_err
+
+    tracker = _get_db()
+    try:
+        promoted, failed = tracker.batch_promote_observations(
+            raw_ids,
+            issue_type=issue_type,
+            priority=priority,
+            actor=actor,
+        )
+    except sqlite3.Error as e:
+        logger.error("batch_promote_observations database error", exc_info=True)
+        return _text(ErrorResponse(error=f"Database error: {e}", code=ErrorCode.IO))
+    _refresh_summary()
+
+    issues = [tracker.get_issue(result["issue"].id) for result in promoted]
+    if detail == "full":
+        full_resp: BatchResponse[dict[str, Any]] = BatchResponse(
+            succeeded=[dict(issue_to_public(issue)) for issue in issues],
+            failed=failed,
+        )
+        return _text(full_resp)
+    slim_resp = BatchResponse(
+        succeeded=[_slim_issue(issue) for issue in issues],
+        failed=failed,
+    )
+    return _text(slim_resp)
 
 
 async def _handle_promote_observation(arguments: dict[str, Any]) -> list[TextContent]:

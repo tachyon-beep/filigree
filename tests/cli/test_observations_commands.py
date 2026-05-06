@@ -1,5 +1,5 @@
 """CLI tests for observation commands: observe, list-observations, dismiss-observation,
-promote-observation, batch-dismiss-observations.
+promote-observation, batch-dismiss-observations, batch-promote-observations.
 
 MCP shape verification:
 - observe: {"id", "summary", "detail", "file_id", "file_path", "line",
@@ -8,6 +8,7 @@ MCP shape verification:
 - dismiss-observation: {"status": "dismissed", "observation_id": <str>}
 - promote-observation: {"issue": <IssueDict>} + optional "warnings"
 - batch-dismiss-observations: BatchResponse[str] — {"succeeded": [...], "failed": [...]}
+- batch-promote-observations: BatchResponse[SlimIssue] — {"succeeded": [...], "failed": [...]}
 """
 
 from __future__ import annotations
@@ -48,8 +49,10 @@ _LIST_ENVELOPE_KEYS_HAS_MORE = frozenset({"items", "has_more", "next_offset"})
 _DISMISS_KEYS = frozenset({"status", "observation_id"})
 
 _BATCH_DISMISS_KEYS = frozenset({"succeeded", "failed"})
+_BATCH_PROMOTE_KEYS = frozenset({"succeeded", "failed"})
 
 _PROMOTE_KEYS_MIN = frozenset({"issue"})  # warnings is optional
+_SLIM_ISSUE_KEYS = frozenset({"issue_id", "title", "status", "priority", "type"})
 
 
 # ---------------------------------------------------------------------------
@@ -481,6 +484,75 @@ class TestBatchDismissObservationsCommand:
             assert result.exit_code == 0
             data = json.loads(result.output)
             assert obs_id in data["succeeded"]
+        finally:
+            os.chdir(original)
+
+
+# ---------------------------------------------------------------------------
+# TestBatchPromoteObservationsCommand
+# ---------------------------------------------------------------------------
+
+
+class TestBatchPromoteObservationsCommand:
+    def test_batch_promote_all_valid_json(self, initialized_project_with_many_obs: SeededProject) -> None:
+        import os
+
+        runner = CliRunner()
+        original = os.getcwd()
+        os.chdir(str(initialized_project_with_many_obs.path))
+        try:
+            ids = initialized_project_with_many_obs.obs_ids[:2]
+            result = runner.invoke(
+                cli,
+                ["batch-promote-observations", *ids, "--type", "bug", "--priority", "1", "--json"],
+            )
+            assert result.exit_code == 0, result.output
+            data = json.loads(result.output)
+            assert set(data.keys()) == _BATCH_PROMOTE_KEYS
+            assert len(data["succeeded"]) == len(ids)
+            assert data["failed"] == []
+            for item in data["succeeded"]:
+                assert set(item.keys()) == _SLIM_ISSUE_KEYS
+                assert item["type"] == "bug"
+                assert item["priority"] == 1
+        finally:
+            os.chdir(original)
+
+    def test_batch_promote_mixed_valid_invalid(self, initialized_project_with_observation: SeededProject) -> None:
+        import os
+
+        runner = CliRunner()
+        original = os.getcwd()
+        os.chdir(str(initialized_project_with_observation.path))
+        try:
+            obs_id = initialized_project_with_observation.obs_id
+            result = runner.invoke(
+                cli,
+                ["batch-promote-observations", obs_id, "obs-nonexistent", "--json"],
+            )
+            assert result.exit_code == 1
+            data = json.loads(result.output)
+            assert set(data.keys()) == _BATCH_PROMOTE_KEYS
+            assert len(data["succeeded"]) == 1
+            assert data["succeeded"][0]["title"] == "note"
+            assert len(data["failed"]) == 1
+            assert data["failed"][0]["id"] == "obs-nonexistent"
+            assert data["failed"][0]["code"] == "NOT_FOUND"
+        finally:
+            os.chdir(original)
+
+    def test_batch_promote_plain_text(self, initialized_project_with_observation: SeededProject) -> None:
+        import os
+
+        runner = CliRunner()
+        original = os.getcwd()
+        os.chdir(str(initialized_project_with_observation.path))
+        try:
+            obs_id = initialized_project_with_observation.obs_id
+            result = runner.invoke(cli, ["batch-promote-observations", obs_id])
+            assert result.exit_code == 0
+            assert "Promoted" in result.output
+            assert obs_id in result.output
         finally:
             os.chdir(original)
 

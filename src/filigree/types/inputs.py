@@ -519,6 +519,14 @@ class BatchDismissObservationsArgs(TypedDict):
     actor: NotRequired[str]
 
 
+class BatchPromoteObservationsArgs(TypedDict):
+    observation_ids: list[str]
+    type: NotRequired[str]
+    priority: NotRequired[int]
+    response_detail: NotRequired[str]
+    actor: NotRequired[str]
+
+
 class PromoteObservationArgs(TypedDict):
     observation_id: str
     type: NotRequired[str]
@@ -606,5 +614,6 @@ TOOL_ARGS_MAP: dict[str, type] = {
     "list_observations": ListObservationsArgs,
     "dismiss_observation": DismissObservationArgs,
     "batch_dismiss_observations": BatchDismissObservationsArgs,
+    "batch_promote_observations": BatchPromoteObservationsArgs,
     "promote_observation": PromoteObservationArgs,
 }
