@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import builtins
+import json
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
 from datetime import UTC, datetime, timedelta
@@ -613,6 +614,45 @@ class TestCreatePlan:
         assert set(data["phases"][0]["phase"]["labels"]) == {"release:v1", "scratch", "phase:build"}
         assert set(data["phases"][0]["steps"][0]["labels"]) == {"release:v1", "scratch", "phase:build", "step:one"}
         assert set(data["phases"][0]["steps"][1]["labels"]) == {"release:v1", "scratch", "phase:build"}
+
+    async def test_create_plan_from_file_tool_is_available(self, mcp_db: FiligreeDB) -> None:
+        tools = await list_tools()
+        assert "create_plan_from_file" in {tool.name for tool in tools}
+
+    async def test_create_plan_from_file_reads_project_relative_json(self, mcp_db: FiligreeDB) -> None:
+        plan_path = mcp_db.db_path.parent.parent / "plan.json"
+        plan_path.write_text(
+            json.dumps(
+                {
+                    "milestone": {"title": "File-backed plan", "labels": ["release:file"]},
+                    "phases": [
+                        {
+                            "title": "Phase from file",
+                            "steps": [
+                                {"title": "Write fixture"},
+                                {"title": "Import fixture", "deps": [0]},
+                            ],
+                        }
+                    ],
+                }
+            )
+        )
+
+        result = await call_tool("create_plan_from_file", {"file_path": "plan.json", "actor": "planner"})
+
+        data = _parse(result)
+        assert data["milestone"]["title"] == "File-backed plan"
+        assert data["milestone"]["issue_id"]
+        assert data["total_steps"] == 2
+        assert data["phases"][0]["phase"]["title"] == "Phase from file"
+        assert data["phases"][0]["steps"][1]["title"] == "Import fixture"
+        assert set(data["phases"][0]["steps"][1]["labels"]) == {"release:file"}
+
+    async def test_create_plan_from_file_rejects_path_traversal(self, mcp_db: FiligreeDB) -> None:
+        result = await call_tool("create_plan_from_file", {"file_path": "../outside.json"})
+        data = _parse(result)
+        assert data["code"] == ErrorCode.VALIDATION
+        assert "escapes project directory" in data["error"]
 
     async def test_label_subtree_labels_root_and_descendants(self, mcp_db: FiligreeDB) -> None:
         created = await call_tool(

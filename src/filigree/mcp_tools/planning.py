@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 from typing import Any, cast
 
@@ -32,6 +33,7 @@ from filigree.types.api import (
 from filigree.types.inputs import (
     AddDependencyArgs,
     CreatePlanArgs,
+    CreatePlanFromFileArgs,
     GetPlanArgs,
     LabelSubtreeArgs,
     MilestoneInput,
@@ -147,6 +149,21 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
             },
         ),
         Tool(
+            name="create_plan_from_file",
+            description=(
+                "Create a full milestone->phase->step hierarchy from a project-relative JSON file. "
+                "Uses the same JSON structure as create_plan."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "file_path": {"type": "string", "description": "Project-relative path to a plan JSON file"},
+                    "actor": {"type": "string", "description": "Agent/user identity for audit trail"},
+                },
+                "required": ["file_path"],
+            },
+        ),
+        Tool(
             name="label_subtree",
             description="Apply one label to a parent issue and every descendant in its subtree.",
             inputSchema={
@@ -178,6 +195,7 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
         "get_blocked": _handle_get_blocked,
         "get_plan": _handle_get_plan,
         "create_plan": _handle_create_plan,
+        "create_plan_from_file": _handle_create_plan_from_file,
         "label_subtree": _handle_label_subtree,
         "get_critical_path": _handle_get_critical_path,
     }
@@ -311,9 +329,52 @@ def _validate_plan_deps(deps: Any, name: str) -> list[TextContent] | None:
     return None
 
 
-async def _handle_create_plan(arguments: dict[str, Any]) -> list[TextContent]:
+def _validate_plan_payload_shape(arguments: dict[str, Any]) -> list[TextContent] | None:
+    if "milestone" not in arguments or "phases" not in arguments:
+        return _text(ErrorResponse(error="JSON must contain 'milestone' and 'phases' keys", code=ErrorCode.VALIDATION))
+
+    milestone = arguments["milestone"]
+    if not isinstance(milestone, dict):
+        return _text(ErrorResponse(error="'milestone' must be an object with at least a 'title' key", code=ErrorCode.VALIDATION))
+    if not isinstance(milestone.get("title"), str):
+        return _text(
+            ErrorResponse(error=f"Milestone 'title' must be a string, got {type(milestone.get('title')).__name__}", code=ErrorCode.VALIDATION)
+        )
+
+    phases = arguments["phases"]
+    if not isinstance(phases, list):
+        return _text(ErrorResponse(error="'phases' must be a list of phase objects", code=ErrorCode.VALIDATION))
+    for pi, phase in enumerate(phases):
+        if not isinstance(phase, dict):
+            return _text(ErrorResponse(error=f"Phase {pi + 1} must be an object, got {type(phase).__name__}", code=ErrorCode.VALIDATION))
+        if not isinstance(phase.get("title"), str):
+            return _text(
+                ErrorResponse(error=f"Phase {pi + 1} 'title' must be a string, got {type(phase.get('title')).__name__}", code=ErrorCode.VALIDATION)
+            )
+        steps = phase.get("steps", [])
+        if not isinstance(steps, list):
+            return _text(ErrorResponse(error=f"Phase {pi + 1} 'steps' must be a list, got {type(steps).__name__}", code=ErrorCode.VALIDATION))
+        for si, step in enumerate(steps):
+            if not isinstance(step, dict):
+                return _text(
+                    ErrorResponse(error=f"Phase {pi + 1}, Step {si + 1} must be an object, got {type(step).__name__}", code=ErrorCode.VALIDATION)
+                )
+            if not isinstance(step.get("title"), str):
+                return _text(
+                    ErrorResponse(
+                        error=f"Phase {pi + 1}, Step {si + 1} 'title' must be a string, got {type(step.get('title')).__name__}",
+                        code=ErrorCode.VALIDATION,
+                    )
+                )
+    return None
+
+
+async def _create_plan_from_payload(arguments: dict[str, Any]) -> list[TextContent]:
     from filigree.mcp_server import _get_db, _refresh_summary
 
+    shape_err = _validate_plan_payload_shape(arguments)
+    if shape_err:
+        return shape_err
     args = _parse_args(arguments, CreatePlanArgs)
     actor, actor_err = _validate_actor(args.get("actor", "mcp"))
     if actor_err:
@@ -347,6 +408,37 @@ async def _handle_create_plan(arguments: dict[str, Any]) -> list[TextContent]:
         return _text(plan_tree_to_mcp(plan))
     except (KeyError, IndexError, ValueError) as e:
         return _text(ErrorResponse(error=str(e), code=ErrorCode.VALIDATION))
+
+
+async def _handle_create_plan(arguments: dict[str, Any]) -> list[TextContent]:
+    return await _create_plan_from_payload(arguments)
+
+
+async def _handle_create_plan_from_file(arguments: dict[str, Any]) -> list[TextContent]:
+    from filigree.mcp_server import _safe_path
+
+    args = _parse_args(arguments, CreatePlanFromFileArgs)
+    try:
+        plan_path = _safe_path(args["file_path"])
+        raw = plan_path.read_text()
+    except ValueError as e:
+        return _text(ErrorResponse(error=str(e), code=ErrorCode.VALIDATION))
+    except (OSError, UnicodeDecodeError) as e:
+        return _text(ErrorResponse(error=f"reading file: {e}", code=ErrorCode.IO))
+
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as e:
+        return _text(ErrorResponse(error=f"Invalid JSON: {e}", code=ErrorCode.VALIDATION))
+
+    if not isinstance(data, dict):
+        return _text(ErrorResponse(error="JSON must be an object, not a list or scalar", code=ErrorCode.VALIDATION))
+
+    payload = dict(data)
+    payload.pop("actor", None)
+    if "actor" in args:
+        payload["actor"] = args["actor"]
+    return await _create_plan_from_payload(payload)
 
 
 async def _handle_label_subtree(arguments: dict[str, Any]) -> list[TextContent]:

@@ -288,6 +288,11 @@ class CreatePlanArgs(TypedDict):
     actor: NotRequired[str]
 
 
+class CreatePlanFromFileArgs(TypedDict):
+    file_path: str
+    actor: NotRequired[str]
+
+
 class LabelSubtreeArgs(TypedDict):
     parent_id: str
     label: str
@@ -530,6 +535,7 @@ TOOL_ARGS_MAP: dict[str, type] = {
     "remove_dependency": RemoveDependencyArgs,
     "get_plan": GetPlanArgs,
     "create_plan": CreatePlanArgs,
+    "create_plan_from_file": CreatePlanFromFileArgs,
     "label_subtree": LabelSubtreeArgs,
     # workflow.py
     "get_template": GetTemplateArgs,
