@@ -409,6 +409,18 @@ class TestClaimIssue:
         with pytest.raises(ValueError, match="already assigned to"):
             db.claim_issue(issue.id, assignee="agent-2")
 
+    def test_claim_released_wip_issue_for_handoff(self, db: FiligreeDB) -> None:
+        issue = db.create_issue("Handoff task", type="task")
+        db.start_work(issue.id, assignee="agent-alpha", actor="agent-alpha")
+        released = db.release_claim(issue.id, actor="agent-alpha")
+        assert released.status == "in_progress"
+        assert released.assignee == ""
+
+        claimed = db.claim_issue(issue.id, assignee="agent-bravo", actor="agent-bravo")
+
+        assert claimed.status == "in_progress"
+        assert claimed.assignee == "agent-bravo"
+
 
 class TestReopenIssue:
     def test_reopen_bug_returns_to_triage(self, db: FiligreeDB) -> None:

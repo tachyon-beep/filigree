@@ -251,7 +251,8 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
         Tool(
             name="claim_issue",
             description=(
-                "Atomically claim an open issue by setting assignee (optimistic locking). "
+                "Atomically claim an open-category issue, or an unassigned wip-category issue released for handoff, "
+                "by setting assignee (optimistic locking). "
                 "Does NOT change status — use update_issue to advance through workflow after claiming."
             ),
             inputSchema={

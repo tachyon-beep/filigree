@@ -578,7 +578,7 @@ def reopen(ctx: click.Context, issue_ids: tuple[str, ...], as_json: bool) -> Non
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON")
 @click.pass_context
 def claim(ctx: click.Context, issue_id: str, assignee: str, as_json: bool) -> None:
-    """Atomically claim an open issue (optimistic locking)."""
+    """Atomically claim an open issue or released in-progress handoff."""
     # Mirror the MCP handler's assignee pre-validation (mcp_tools/issues.py
     # lines 603-604) so a blank value surfaces as VALIDATION, not CONFLICT.
     if not assignee.strip():

@@ -798,10 +798,12 @@ class IssuesMixin(DBMixinProtocol):
         return result
 
     def claim_issue(self, issue_id: str, *, assignee: str, actor: str = "") -> Issue:
-        """Atomically claim an open-category issue with optimistic locking.
+        """Atomically claim an open/wip-category issue with optimistic locking.
 
         Sets assignee only — does NOT change status. Agent uses update_issue
-        to advance through the workflow after claiming.
+        to advance through the workflow after claiming. Wip-category issues can
+        be claimed when they have been released and are currently unassigned,
+        which preserves an atomic multi-agent handoff path after release_claim().
 
         Uses a single atomic UPDATE with WHERE guard to prevent race conditions
         where two agents try to claim the same issue concurrently.
@@ -815,8 +817,8 @@ class IssuesMixin(DBMixinProtocol):
             msg = "Assignee cannot be empty"
             raise ValueError(msg)
         self._check_id_prefix(issue_id)
-        # Look up the issue type and current assignee so we know which states are "open"
-        # and can record old_value for undo
+        # Look up the issue type and current assignee so we know which states are
+        # claimable and can record old_value for undo.
         row = self.conn.execute("SELECT type, assignee FROM issues WHERE id = ?", (issue_id,)).fetchone()
         if row is None:
             msg = f"Issue not found: {issue_id}"
@@ -824,22 +826,24 @@ class IssuesMixin(DBMixinProtocol):
         issue_type = row["type"]
         old_assignee = row["assignee"] or ""
 
-        # Get all open-category states for this type
-        open_states: list[str] = []
+        # Open states are claimable for new work. Wip states are claimable only
+        # through the assignee CAS below, so released in-flight work can be
+        # handed off atomically without changing status.
+        claimable_states: list[str] = []
         tpl = self.templates.get_type(issue_type)
         if tpl is not None:
-            open_states = [s.name for s in tpl.states if s.category == "open"]
-        if not open_states:
-            open_states = ["open"]
+            claimable_states = [s.name for s in tpl.states if s.category in {"open", "wip"}]
+        if not claimable_states:
+            claimable_states = ["open"]
 
         # Atomic UPDATE: only succeeds if issue is unassigned OR already owned by this agent
-        status_ph = ",".join("?" * len(open_states))
+        status_ph = ",".join("?" * len(claimable_states))
         try:
             cursor = self.conn.execute(
                 f"UPDATE issues SET assignee = ?, updated_at = ? "
                 f"WHERE id = ? AND status IN ({status_ph}) "
                 f"AND (assignee = '' OR assignee IS NULL OR assignee = ?)",
-                [assignee, _now_iso(), issue_id, *open_states, assignee],
+                [assignee, _now_iso(), issue_id, *claimable_states, assignee],
             )
 
             if cursor.rowcount == 0:
@@ -851,7 +855,7 @@ class IssuesMixin(DBMixinProtocol):
                 if current["assignee"] and current["assignee"] != assignee:
                     msg = f"Cannot claim {issue_id}: already assigned to '{current['assignee']}'"
                     raise ValueError(msg)
-                msg = f"Cannot claim {issue_id}: status is '{current['status']}', expected open-category state"
+                msg = f"Cannot claim {issue_id}: status is '{current['status']}', expected open- or wip-category state"
                 raise ValueError(msg)
 
             self._record_event(issue_id, "claimed", actor=actor, old_value=old_assignee, new_value=assignee)

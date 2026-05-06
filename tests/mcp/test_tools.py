@@ -666,6 +666,19 @@ class TestClaimIssue:
         data = _parse(result)
         assert data["code"] == ErrorCode.CONFLICT
 
+    async def test_claim_released_wip_issue_for_handoff(self, mcp_db: FiligreeDB) -> None:
+        issue = mcp_db.create_issue("MCP handoff", type="task")
+        await call_tool("start_work", {"issue_id": issue.id, "assignee": "agent-alpha"})
+        released = _parse(await call_tool("release_claim", {"issue_id": issue.id, "actor": "agent-alpha"}))
+        assert released["status"] == "in_progress"
+        assert released["assignee"] == ""
+
+        result = await call_tool("claim_issue", {"issue_id": issue.id, "assignee": "agent-bravo"})
+
+        data = _parse(result)
+        assert data["status"] == "in_progress"
+        assert data["assignee"] == "agent-bravo"
+
     async def test_claim_not_found(self, mcp_db: FiligreeDB) -> None:
         result = await call_tool("claim_issue", {"issue_id": "mcp-nonexistent", "assignee": "agent-1"})
         data = _parse(result)
