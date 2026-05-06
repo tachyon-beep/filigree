@@ -206,9 +206,10 @@ class TestPublicIssueVocabulary:
 
         data = _parse(result)
         assert data["undone"] is True
-        assert data["issue"]["issue_id"] == issue.id
-        assert "id" not in data["issue"]
-        assert data["issue"]["title"] == "MCP undo public"
+        assert data["issue_id"] == issue.id
+        assert "issue" not in data
+        assert "id" not in data
+        assert data["title"] == "MCP undo public"
 
 
 class TestListPagination:
@@ -323,9 +324,10 @@ class TestDependencies:
         b = mcp_db.create_issue("Blocker")
         result = await call_tool("add_dependency", {"from_issue_id": a.id, "to_issue_id": b.id})
         data = _parse(result)
-        assert data["status"] == "added"
-        assert data["from_issue_id"] == a.id
-        assert data["to_issue_id"] == b.id
+        assert data["issue_id"] == a.id
+        assert data["dependency_result"] == "added"
+        assert data["dependency"] == {"from_issue_id": a.id, "to_issue_id": b.id}
+        assert b.id in data["blocked_by"]
         assert "from_id" not in data
         assert "to_id" not in data
 
@@ -343,9 +345,10 @@ class TestDependencies:
         mcp_db.add_dependency(a.id, b.id)
         result = await call_tool("remove_dependency", {"from_issue_id": a.id, "to_issue_id": b.id})
         data = _parse(result)
-        assert data["status"] == "removed"
-        assert data["from_issue_id"] == a.id
-        assert data["to_issue_id"] == b.id
+        assert data["issue_id"] == a.id
+        assert data["dependency_result"] == "removed"
+        assert data["dependency"] == {"from_issue_id": a.id, "to_issue_id": b.id}
+        assert b.id not in data["blocked_by"]
 
 
 class TestReadyAndBlocked:
@@ -426,7 +429,8 @@ class TestComments:
         issue = mcp_db.create_issue("Commentable")
         result = await call_tool("add_comment", {"issue_id": issue.id, "text": "A comment"})
         data = _parse(result)
-        assert data["status"] == "ok"
+        assert data["issue_id"] == issue.id
+        assert data["status"] == "open"
         assert "comment_id" in data
 
     async def test_get_comments(self, mcp_db: FiligreeDB) -> None:
@@ -487,11 +491,11 @@ class TestLabels:
         issue = mcp_db.create_issue("Labelable")
         result = await call_tool("add_label", {"issue_id": issue.id, "label": "urgent"})
         data = _parse(result)
-        assert data["status"] == "added"
+        assert data["issue_id"] == issue.id
+        assert data["status"] == "open"
+        assert data["label_result"] == "added"
         assert data["label"] == "urgent"
-        # Verify it was actually added
-        updated = mcp_db.get_issue(issue.id)
-        assert "urgent" in updated.labels
+        assert "urgent" in data["labels"]
 
     async def test_add_label_rejects_reserved_type_name(self, mcp_db: FiligreeDB) -> None:
         issue = mcp_db.create_issue("Labelable")
@@ -504,17 +508,18 @@ class TestLabels:
         issue = mcp_db.create_issue("Labelable", labels=["defect", "urgent"])
         result = await call_tool("remove_label", {"issue_id": issue.id, "label": "defect"})
         data = _parse(result)
-        assert data["status"] == "removed"
-        updated = mcp_db.get_issue(issue.id)
-        assert "defect" not in updated.labels
-        assert "urgent" in updated.labels
+        assert data["issue_id"] == issue.id
+        assert data["status"] == "open"
+        assert data["label_result"] == "removed"
+        assert "defect" not in data["labels"]
+        assert "urgent" in data["labels"]
 
     async def test_add_label_returns_canonical_label(self, mcp_db: FiligreeDB) -> None:
         """Bug filigree-6870a1dcc0: MCP must return canonical (stripped) label, not raw arg."""
         issue = mcp_db.create_issue("Labelable")
         result = await call_tool("add_label", {"issue_id": issue.id, "label": "  urgent  "})
         data = _parse(result)
-        assert data["status"] == "added"
+        assert data["label_result"] == "added"
         assert data["label"] == "urgent", f"expected canonical 'urgent', got {data['label']!r}"
 
     async def test_remove_label_returns_canonical_label(self, mcp_db: FiligreeDB) -> None:
@@ -522,7 +527,7 @@ class TestLabels:
         issue = mcp_db.create_issue("Labelable", labels=["urgent"])
         result = await call_tool("remove_label", {"issue_id": issue.id, "label": "  urgent  "})
         data = _parse(result)
-        assert data["status"] == "removed"
+        assert data["label_result"] == "removed"
         assert data["label"] == "urgent"
 
 

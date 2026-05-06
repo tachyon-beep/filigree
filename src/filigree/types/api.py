@@ -234,12 +234,45 @@ class PlanResponse(PlanTree):
 # ---------------------------------------------------------------------------
 
 
-class DependencyActionResponse(TypedDict):
-    """Response for add_dependency / remove_dependency MCP tools."""
+class DependencyMutationDetail(TypedDict):
+    """Dependency edge metadata included on issue mutation responses."""
 
-    status: str
     from_issue_id: str
     to_issue_id: str
+
+
+class IssueMutationResponse(PublicIssue):
+    """Flat post-mutation issue payload with optional action metadata.
+
+    Single-target MCP mutations that act on an issue return the current
+    PublicIssue fields at top level, then add narrowly named metadata for the
+    operation. The issue's own ``status`` remains the issue workflow status,
+    avoiding action-specific overloads like ``status='ok'``.
+    """
+
+    changed_fields: NotRequired[list[str]]
+    comment_id: NotRequired[int]
+    label: NotRequired[str]
+    label_result: NotRequired[str]
+    dependency: NotRequired[DependencyMutationDetail]
+    dependency_result: NotRequired[str]
+    undone: NotRequired[bool]
+    event_type: NotRequired[str]
+    event_id: NotRequired[int]
+    newly_unblocked: NotRequired[list[SlimIssue]]
+    warnings: NotRequired[list[str]]
+
+
+class DependencyActionResponse(IssueMutationResponse):
+    """Response for add_dependency / remove_dependency MCP tools."""
+
+
+class AddCommentResult(IssueMutationResponse):
+    """Response for add_comment MCP tool."""
+
+
+class LabelActionResponse(IssueMutationResponse):
+    """Response for add_label / remove_label MCP tools."""
 
 
 class CriticalPathMcpNode(TypedDict):
@@ -256,26 +289,6 @@ class CriticalPathResponse(TypedDict):
 
     path: list[CriticalPathMcpNode]
     length: int
-
-
-# ---------------------------------------------------------------------------
-# MCP meta handler responses
-# ---------------------------------------------------------------------------
-
-
-class AddCommentResult(TypedDict):
-    """Response for add_comment MCP tool."""
-
-    status: str
-    comment_id: int
-
-
-class LabelActionResponse(TypedDict):
-    """Response for add_label / remove_label MCP tools."""
-
-    status: str
-    issue_id: str
-    label: str
 
 
 class JsonlTransferResponse(TypedDict):

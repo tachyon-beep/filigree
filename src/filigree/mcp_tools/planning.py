@@ -47,7 +47,7 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
     tools = [
         Tool(
             name="add_dependency",
-            description="Add dependency: from_issue_id depends on to_issue_id (to_issue_id blocks from_issue_id)",
+            description="Add dependency: from_issue_id depends on to_issue_id (to_issue_id blocks from_issue_id). Returns the flat updated PublicIssue for from_issue_id plus dependency metadata.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -60,7 +60,7 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
         ),
         Tool(
             name="remove_dependency",
-            description="Remove a dependency between two issues",
+            description="Remove a dependency between two issues. Returns the flat updated PublicIssue for from_issue_id plus dependency metadata.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -226,7 +226,11 @@ async def _handle_add_dependency(arguments: dict[str, Any]) -> list[TextContent]
         return _text(ErrorResponse(error=str(e), code=ErrorCode.VALIDATION))
     _refresh_summary()
     status = "added" if added else "already_exists"
-    return _text(DependencyActionResponse(status=status, from_issue_id=args["from_issue_id"], to_issue_id=args["to_issue_id"]))
+    issue = tracker.get_issue(args["from_issue_id"])
+    response: dict[str, Any] = dict(issue_to_public(issue))
+    response["dependency_result"] = status
+    response["dependency"] = {"from_issue_id": args["from_issue_id"], "to_issue_id": args["to_issue_id"]}
+    return _text(cast(DependencyActionResponse, response))
 
 
 async def _handle_remove_dependency(arguments: dict[str, Any]) -> list[TextContent]:
@@ -247,7 +251,11 @@ async def _handle_remove_dependency(arguments: dict[str, Any]) -> list[TextConte
         return _text(ErrorResponse(error=str(e), code=ErrorCode.VALIDATION))
     _refresh_summary()
     status = "removed" if removed else "not_found"
-    return _text(DependencyActionResponse(status=status, from_issue_id=args["from_issue_id"], to_issue_id=args["to_issue_id"]))
+    issue = tracker.get_issue(args["from_issue_id"])
+    response: dict[str, Any] = dict(issue_to_public(issue))
+    response["dependency_result"] = status
+    response["dependency"] = {"from_issue_id": args["from_issue_id"], "to_issue_id": args["to_issue_id"]}
+    return _text(cast(DependencyActionResponse, response))
 
 
 async def _handle_get_ready(arguments: dict[str, Any]) -> list[TextContent]:

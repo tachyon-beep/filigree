@@ -444,7 +444,7 @@ class TestReportFindingTool:
     """Tests for the report_finding MCP tool handler."""
 
     async def test_happy_path_all_fields(self, mcp_db_for_report_finding: FiligreeDB) -> None:
-        """All optional fields are accepted and the response includes finding_id."""
+        """All optional fields are accepted and the response is the created finding."""
         data = _parse(
             await call_tool(
                 "report_finding",
@@ -459,14 +459,18 @@ class TestReportFindingTool:
                 },
             )
         )
-        assert data["status"] == "created"
+        assert data["finding_result"] == "created"
+        assert data["status"] == "open"
         assert data["findings_created"] == 1
         assert data["findings_updated"] == 0
         assert data["file_created"] is True
         assert "finding_id" in data
+        assert "id" not in data
+        assert data["rule_id"] == "sql-injection"
+        assert data["line_start"] == 42
 
     async def test_happy_path_minimal_required_fields(self, mcp_db_for_report_finding: FiligreeDB) -> None:
-        """Only required fields — severity defaults to info, no finding_id key if empty."""
+        """Only required fields — severity defaults to info and returns the finding."""
         data = _parse(
             await call_tool(
                 "report_finding",
@@ -477,10 +481,12 @@ class TestReportFindingTool:
                 },
             )
         )
-        assert data["status"] == "created"
+        assert data["finding_result"] == "created"
+        assert data["status"] == "open"
         assert data["findings_created"] == 1
         assert data["file_created"] is True
         assert "finding_id" in data
+        assert data["severity"] == "info"
 
     async def test_invalid_severity_returns_validation_error(self, mcp_db_for_report_finding: FiligreeDB) -> None:
         """An unrecognised severity value is rejected before any DB writes."""
@@ -557,7 +563,8 @@ class TestReportFindingTool:
                 },
             )
         )
-        assert data["status"] == "created"
+        assert data["finding_result"] == "created"
+        assert data["status"] == "open"
         assert data["findings_created"] == 1
 
     async def test_duplicate_finding_returns_updated_status(self, mcp_db_for_report_finding: FiligreeDB) -> None:
@@ -568,10 +575,12 @@ class TestReportFindingTool:
             "message": "First report",
         }
         first = _parse(await call_tool("report_finding", args))
-        assert first["status"] == "created"
+        assert first["finding_result"] == "created"
 
         second = _parse(await call_tool("report_finding", {**args, "message": "Second report"}))
-        assert second["status"] == "updated"
+        assert second["finding_result"] == "updated"
+        assert second["status"] == "open"
+        assert second["finding_id"] == first["finding_id"]
         assert second["findings_created"] == 0
         assert second["findings_updated"] == 1
 

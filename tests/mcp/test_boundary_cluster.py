@@ -45,7 +45,8 @@ class TestRemoveDependencyWrongProject:
             {"from_issue_id": a.id, "to_issue_id": b.id},
         )
         data = _parse(result)
-        assert data.get("status") == "not_found"
+        assert data.get("status") == "open"
+        assert data.get("dependency_result") == "not_found"
 
 
 # ---------------------------------------------------------------------------

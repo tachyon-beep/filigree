@@ -106,5 +106,8 @@ def undo_result_to_mcp(record: Mapping[str, Any]) -> dict[str, Any]:
     payload = dict(record)
     issue = payload.get("issue")
     if isinstance(issue, Mapping):
-        payload["issue"] = issue_dict_to_mcp(issue)
+        payload.pop("issue", None)
+        public_issue = issue_dict_to_mcp(issue)
+        public_issue.update(payload)
+        return public_issue
     return payload

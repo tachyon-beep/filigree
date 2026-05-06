@@ -42,7 +42,9 @@ class TestMCPCommentErrors:
             {"issue_id": issue.id, "text": "Hello"},
         )
         data = _parse(result)
-        assert data["status"] == "ok"
+        assert data["issue_id"] == issue.id
+        assert data["status"] == "open"
+        assert "comment_id" in data
 
 
 class TestMCPLabelErrors:
@@ -74,7 +76,10 @@ class TestMCPLabelErrors:
             {"issue_id": issue.id, "label": "urgent"},
         )
         data = _parse(result)
-        assert data["status"] == "added"
+        assert data["issue_id"] == issue.id
+        assert data["status"] == "open"
+        assert data["label_result"] == "added"
+        assert "urgent" in data["labels"]
 
 
 def test_meta_errors_use_error_code_enum(mcp_client_for_empty_project) -> None:

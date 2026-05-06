@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import sqlite3
 from collections.abc import Callable
-from typing import Any, get_args
+from typing import Any, cast, get_args
 
 from mcp.types import TextContent, Tool
 
@@ -52,7 +52,7 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
     tools = [
         Tool(
             name="add_comment",
-            description="Add a comment to an issue",
+            description="Add a comment to an issue. Returns the flat updated PublicIssue plus comment_id.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -76,7 +76,7 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
         ),
         Tool(
             name="add_label",
-            description="Add a label to an issue",
+            description="Add a label to an issue. Returns the flat updated PublicIssue plus label and label_result.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -88,7 +88,7 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
         ),
         Tool(
             name="remove_label",
-            description="Remove a label from an issue",
+            description="Remove a label from an issue. Returns the flat updated PublicIssue plus label and label_result.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -293,7 +293,7 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
         ),
         Tool(
             name="undo_last",
-            description="Undo the most recent reversible action on an issue. Covers status, title, priority, assignee, description, notes, claims, and dependency changes.",
+            description="Undo the most recent reversible action on an issue. Covers status, title, priority, assignee, description, notes, claims, and dependency changes. Success returns the flat updated PublicIssue plus undo metadata.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -402,7 +402,10 @@ async def _handle_add_comment(arguments: dict[str, Any]) -> list[TextContent]:
     except ValueError as e:
         return _text(ErrorResponse(error=str(e), code=ErrorCode.VALIDATION))
     _refresh_summary()
-    return _text(AddCommentResult(status="ok", comment_id=comment_id))
+    issue = tracker.get_issue(args["issue_id"])
+    response: dict[str, Any] = dict(issue_to_public(issue))
+    response["comment_id"] = comment_id
+    return _text(cast(AddCommentResult, response))
 
 
 async def _handle_get_comments(arguments: dict[str, Any]) -> list[TextContent]:
@@ -433,7 +436,11 @@ async def _handle_add_label(arguments: dict[str, Any]) -> list[TextContent]:
         return _text(ErrorResponse(error=str(e), code=ErrorCode.VALIDATION))
     _refresh_summary()
     status = "added" if added else "already_exists"
-    return _text(LabelActionResponse(status=status, issue_id=args["issue_id"], label=canonical))
+    issue = tracker.get_issue(args["issue_id"])
+    response: dict[str, Any] = dict(issue_to_public(issue))
+    response["label"] = canonical
+    response["label_result"] = status
+    return _text(cast(LabelActionResponse, response))
 
 
 async def _handle_remove_label(arguments: dict[str, Any]) -> list[TextContent]:
@@ -451,7 +458,11 @@ async def _handle_remove_label(arguments: dict[str, Any]) -> list[TextContent]:
         return _text(ErrorResponse(error=str(e), code=ErrorCode.VALIDATION))
     _refresh_summary()
     status = "removed" if removed else "not_found"
-    return _text(LabelActionResponse(status=status, issue_id=args["issue_id"], label=canonical))
+    issue = tracker.get_issue(args["issue_id"])
+    response: dict[str, Any] = dict(issue_to_public(issue))
+    response["label"] = canonical
+    response["label_result"] = status
+    return _text(cast(LabelActionResponse, response))
 
 
 async def _handle_batch_add_label(arguments: dict[str, Any]) -> list[TextContent]:

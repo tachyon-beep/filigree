@@ -12,7 +12,6 @@ import pytest
 from filigree.core import FileRecord, FiligreeDB
 from filigree.issue_payloads import issue_to_public
 from filigree.types.api import (
-    AddCommentResult,
     ArchiveClosedResponse,
     BlockedIssue,
     ClaimNextEmptyResponse,
@@ -25,11 +24,11 @@ from filigree.types.api import (
     ErrorCode,
     ErrorResponse,
     IssueDetailEvent,
+    IssueMutationResponse,
     IssueWithChangedFields,
     IssueWithTransitions,
     IssueWithUnblocked,
     JsonlTransferResponse,
-    LabelActionResponse,
     OutboundTransitionInfo,
     PackListItem,
     PlanResponse,
@@ -988,9 +987,9 @@ class TestPlanResponseShape:
 
 class TestDependencyActionResponseShape:
     def test_keys_match(self) -> None:
-        result = DependencyActionResponse(status="added", from_issue_id="a", to_issue_id="b")
-        hints = get_type_hints(DependencyActionResponse)
-        assert set(result.keys()) == set(hints.keys())
+        dependency_keys = set(get_type_hints(DependencyActionResponse).keys())
+        assert set(get_type_hints(PublicIssue).keys()) <= dependency_keys
+        assert {"dependency", "dependency_result"} <= dependency_keys
 
 
 class TestCriticalPathResponseShape:
@@ -1054,8 +1053,8 @@ class TestAddCommentResultShape:
         issues = _parse(await call_tool("list_issues", {}))
         issue_id = issues["items"][0]["issue_id"]
         result = _parse(await call_tool("add_comment", {"issue_id": issue_id, "text": "hello"}))
-        hints = get_type_hints(AddCommentResult)
-        assert set(result.keys()) == set(hints.keys())
+        public_issue_keys = set(get_type_hints(PublicIssue).keys())
+        assert set(result.keys()) == public_issue_keys | {"comment_id"}
 
     async def test_value_types(self, mcp_db: FiligreeDB) -> None:
         from filigree.mcp_server import call_tool
@@ -1065,8 +1064,14 @@ class TestAddCommentResultShape:
         issues = _parse(await call_tool("list_issues", {}))
         issue_id = issues["items"][0]["issue_id"]
         result = _parse(await call_tool("add_comment", {"issue_id": issue_id, "text": "hello"}))
-        assert isinstance(result["status"], str)
+        assert isinstance(result["issue_id"], str)
         assert isinstance(result["comment_id"], int)
+
+
+class TestIssueMutationResponseShape:
+    def test_type_includes_public_issue_keys(self) -> None:
+        mutation_keys = set(get_type_hints(IssueMutationResponse).keys())
+        assert set(get_type_hints(PublicIssue).keys()) <= mutation_keys
 
 
 class TestLabelActionResponseShape:
@@ -1078,8 +1083,8 @@ class TestLabelActionResponseShape:
         issues = _parse(await call_tool("list_issues", {}))
         issue_id = issues["items"][0]["issue_id"]
         result = _parse(await call_tool("add_label", {"issue_id": issue_id, "label": "test-label"}))
-        hints = get_type_hints(LabelActionResponse)
-        assert set(result.keys()) == set(hints.keys())
+        public_issue_keys = set(get_type_hints(PublicIssue).keys())
+        assert set(result.keys()) == public_issue_keys | {"label", "label_result"}
 
     async def test_value_types(self, mcp_db: FiligreeDB) -> None:
         from filigree.mcp_server import call_tool
@@ -1089,9 +1094,9 @@ class TestLabelActionResponseShape:
         issues = _parse(await call_tool("list_issues", {}))
         issue_id = issues["items"][0]["issue_id"]
         result = _parse(await call_tool("add_label", {"issue_id": issue_id, "label": "test-label"}))
-        assert isinstance(result["status"], str)
         assert isinstance(result["issue_id"], str)
         assert isinstance(result["label"], str)
+        assert isinstance(result["label_result"], str)
 
 
 class TestJsonlTransferResponseShape:

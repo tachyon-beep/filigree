@@ -16,6 +16,7 @@ from mcp.types import TextContent, Tool
 
 from filigree.core import VALID_SEVERITIES
 from filigree.mcp_tools.common import _list_response, _parse_args, _text, _validate_int_range
+from filigree.mcp_tools.payloads import finding_to_mcp
 from filigree.scanner_runtime import ScannerSpawnError, _spawn_scan
 from filigree.scanners import list_scanners as _list_scanners
 from filigree.scanners import load_scanner, validate_scanner_command
@@ -50,7 +51,7 @@ def register(
             description=(
                 "Report a single code finding (bug, smell, security issue) discovered by the agent. "
                 "Auto-registers the file if not already tracked. No scanner config needed — "
-                "one call, one finding, zero ceremony."
+                "one call, one finding, zero ceremony. Returns the flat ScanFinding record plus ingest metadata."
             ),
             inputSchema={
                 "type": "object",
@@ -307,14 +308,31 @@ async def _handle_report_finding(arguments: dict[str, Any]) -> list[TextContent]
         _logger.error("report_finding failed: %s", exc)
         return _text(ErrorResponse(error=f"Failed to report finding: {exc}", code=ErrorCode.IO))
 
+    file_record = tracker.register_file(file_path)
+    matching_findings = tracker.list_findings_global(
+        file_id=file_record.id,
+        scan_source="agent",
+        limit=10000,
+    )["findings"]
+    line_start = args.get("line_start")
+    finding_record = next(
+        (
+            item
+            for item in matching_findings
+            if item["rule_id"] == rule_id and item.get("line_start") == line_start
+        ),
+        None,
+    )
+    if finding_record is None:
+        return _text(ErrorResponse(error="Reported finding was not found after ingestion", code=ErrorCode.IO))
+
     response: dict[str, Any] = {
-        "status": "created" if result["findings_created"] else "updated",
+        **finding_to_mcp(finding_record),
+        "finding_result": "created" if result["findings_created"] else "updated",
         "findings_created": result["findings_created"],
         "findings_updated": result["findings_updated"],
         "file_created": result["files_created"] > 0,
     }
-    if result["new_finding_ids"]:
-        response["finding_id"] = result["new_finding_ids"][0]
     if result.get("warnings"):
         response["warnings"] = result["warnings"]
     return _text(response)
