@@ -48,6 +48,17 @@ class TestRegisterFile:
         assert f.language == "python"
         assert f.id.startswith("test-f-")
 
+    def test_register_file_infers_known_language_when_missing(self, db: FiligreeDB) -> None:
+        py = db.register_file("src/main.py")
+        md = db.register_file("docs/readme.md")
+        unknown = db.register_file("scripts/run.unknownext")
+        explicit = db.register_file("src/custom.py", language="python3")
+
+        assert py.language == "python"
+        assert md.language == "markdown"
+        assert unknown.language == ""
+        assert explicit.language == "python3"
+
     def test_register_duplicate_path_returns_existing(self, db: FiligreeDB) -> None:
         f1 = db.register_file("src/main.py")
         f2 = db.register_file("src/main.py")
@@ -352,6 +363,49 @@ class TestProcessScanResults:
         f = db.get_file_by_path("src/main.py")
         assert f is not None
         assert f.language == "python"
+
+    def test_ingest_infers_file_language_when_missing(self, db: FiligreeDB) -> None:
+        db.process_scan_results(
+            scan_source="ruff",
+            findings=[
+                {"path": "src/main.py", "rule_id": "E501", "severity": "low", "message": "Line too long"},
+                {"path": "docs/readme.md", "rule_id": "MD001", "severity": "low", "message": "Heading"},
+                {"path": "bin/tool.unknownext", "rule_id": "X1", "severity": "low", "message": "Unknown"},
+                {
+                    "path": "src/custom.py",
+                    "language": "python3",
+                    "rule_id": "C1",
+                    "severity": "low",
+                    "message": "Custom",
+                },
+            ],
+        )
+
+        py = db.get_file_by_path("src/main.py")
+        md = db.get_file_by_path("docs/readme.md")
+        unknown = db.get_file_by_path("bin/tool.unknownext")
+        explicit = db.get_file_by_path("src/custom.py")
+
+        assert py is not None
+        assert md is not None
+        assert unknown is not None
+        assert explicit is not None
+        assert py.language == "python"
+        assert md.language == "markdown"
+        assert unknown.language == ""
+        assert explicit.language == "python3"
+
+    def test_ingest_missing_language_does_not_overwrite_existing_language(self, db: FiligreeDB) -> None:
+        db.register_file("src/custom.py", language="python3")
+
+        db.process_scan_results(
+            scan_source="ruff",
+            findings=[{"path": "src/custom.py", "rule_id": "E501", "severity": "low", "message": "Line too long"}],
+        )
+
+        file_record = db.get_file_by_path("src/custom.py")
+        assert file_record is not None
+        assert file_record.language == "python3"
 
     def test_ingest_unknown_severity_maps_to_info(self, db: FiligreeDB) -> None:
         """Unknown severity strings are mapped to 'info' with a warning."""

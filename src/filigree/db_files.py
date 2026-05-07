@@ -51,11 +51,54 @@ if not all(s.isalpha() or s.replace("_", "").isalpha() for s in TERMINAL_FINDING
     raise ValueError(f"TERMINAL_FINDING_STATUSES values must be simple identifiers, got: {TERMINAL_FINDING_STATUSES}")
 VALID_ASSOC_TYPES: frozenset[str] = frozenset(get_args(AssocType))
 
+_LANGUAGE_BY_EXTENSION: dict[str, str] = {
+    ".c": "c",
+    ".cc": "cpp",
+    ".cpp": "cpp",
+    ".cs": "csharp",
+    ".css": "css",
+    ".cxx": "cpp",
+    ".go": "go",
+    ".h": "c",
+    ".hpp": "cpp",
+    ".html": "html",
+    ".java": "java",
+    ".js": "javascript",
+    ".json": "json",
+    ".jsx": "javascript",
+    ".kt": "kotlin",
+    ".lua": "lua",
+    ".md": "markdown",
+    ".mdown": "markdown",
+    ".markdown": "markdown",
+    ".php": "php",
+    ".py": "python",
+    ".rb": "ruby",
+    ".rs": "rust",
+    ".scala": "scala",
+    ".scss": "scss",
+    ".sh": "shell",
+    ".sql": "sql",
+    ".swift": "swift",
+    ".toml": "toml",
+    ".ts": "typescript",
+    ".tsx": "typescript",
+    ".xml": "xml",
+    ".yaml": "yaml",
+    ".yml": "yaml",
+}
+
 
 def _normalize_scan_path(path: str) -> str:
     """Normalize scanner-provided paths for stable file identity."""
     normalized = os.path.normpath(path.replace("\\", "/"))
     return "" if normalized == "." else normalized
+
+
+def _infer_language_from_path(path: str) -> str:
+    """Infer a conservative language name from a path extension."""
+    _root, ext = os.path.splitext(path.casefold())
+    return _LANGUAGE_BY_EXTENSION.get(ext, "")
 
 
 def scan_finding_observation_summary(scan_source: str, path: str, line_start: int | None, message: str) -> str:
@@ -153,16 +196,19 @@ class FilesMixin(DBMixinProtocol):
             raise ValueError("File path cannot be empty after normalization")
         now = _now_iso()
         existing = self.conn.execute("SELECT * FROM file_records WHERE path = ?", (path,)).fetchone()
+        inferred_language = _infer_language_from_path(path)
 
         if existing is not None:
             updates: list[str] = []
             params: list[Any] = []
             # Detect field changes and emit events
             changes: list[tuple[str, str, str]] = []  # (field, old, new)
-            if language and language != (existing["language"] or ""):
+            current_language = existing["language"] or ""
+            next_language = language or (inferred_language if not current_language else "")
+            if next_language and next_language != current_language:
                 updates.append("language = ?")
-                params.append(language)
-                changes.append(("language", existing["language"] or "", language))
+                params.append(next_language)
+                changes.append(("language", current_language, next_language))
             if file_type and file_type != (existing["file_type"] or ""):
                 updates.append("file_type = ?")
                 params.append(file_type)
@@ -210,10 +256,11 @@ class FilesMixin(DBMixinProtocol):
             return self.get_file(existing["id"])
 
         file_id = self._generate_unique_id("file_records", "f")
+        stored_language = language or inferred_language
         try:
             self.conn.execute(
                 "INSERT INTO file_records (id, path, language, file_type, first_seen, updated_at, metadata) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (file_id, path, language, file_type, now, now, json.dumps(metadata or {})),
+                (file_id, path, stored_language, file_type, now, now, json.dumps(metadata or {})),
             )
             self.conn.commit()
         except Exception:
@@ -522,16 +569,27 @@ class FilesMixin(DBMixinProtocol):
                 f["severity"] = "info"
         return warnings
 
-    def _upsert_file_record(self, *, path: str, language: str, now: str, stats: ScanIngestResult) -> str:
+    def _upsert_file_record(
+        self,
+        *,
+        path: str,
+        language: str,
+        infer_language: bool,
+        now: str,
+        stats: ScanIngestResult,
+    ) -> str:
         """Create or update a file record, returning its id."""
-        existing_file = self.conn.execute("SELECT id FROM file_records WHERE path = ?", (path,)).fetchone()
+        inferred_language = _infer_language_from_path(path) if infer_language else ""
+        existing_file = self.conn.execute("SELECT id, language FROM file_records WHERE path = ?", (path,)).fetchone()
         if existing_file is not None:
             file_id: str = existing_file["id"]
             update_parts = ["updated_at = ?"]
             update_params: list[Any] = [now]
-            if language:
+            current_language = existing_file["language"] or ""
+            next_language = language or (inferred_language if not current_language else "")
+            if next_language:
                 update_parts.append("language = ?")
-                update_params.append(language)
+                update_params.append(next_language)
             update_params.append(file_id)
             self.conn.execute(
                 f"UPDATE file_records SET {', '.join(update_parts)} WHERE id = ?",
@@ -540,9 +598,10 @@ class FilesMixin(DBMixinProtocol):
             stats["files_updated"] += 1
         else:
             file_id = self._generate_unique_id("file_records", "f")
+            stored_language = language or inferred_language
             self.conn.execute(
                 "INSERT INTO file_records (id, path, language, first_seen, updated_at) VALUES (?, ?, ?, ?, ?)",
-                (file_id, path, language, now, now),
+                (file_id, path, stored_language, now, now),
             )
             stats["files_created"] += 1
         return file_id
@@ -769,6 +828,7 @@ class FilesMixin(DBMixinProtocol):
                 file_id = self._upsert_file_record(
                     path=f["path"],
                     language=f.get("language", ""),
+                    infer_language="language" not in f,
                     now=now,
                     stats=stats,
                 )

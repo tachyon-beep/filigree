@@ -147,6 +147,31 @@ class TestFileEndpoints:
         data = resp.json()
         assert data["findings_created"] == 1
 
+    async def test_post_scan_results_infers_file_language(self, client: AsyncClient) -> None:
+        resp = await client.post(
+            "/api/v1/scan-results",
+            json={
+                "scan_source": "ruff",
+                "findings": [
+                    {"path": "src/inferred.py", "rule_id": "E501", "severity": "low", "message": "Too long"},
+                    {"path": "docs/inferred.md", "rule_id": "MD001", "severity": "low", "message": "Heading"},
+                    {"path": "tools/inferred.unknownext", "rule_id": "X1", "severity": "low", "message": "Unknown"},
+                ],
+            },
+        )
+        assert resp.status_code == 200
+
+        py = await client.get("/api/files?language=python")
+        md = await client.get("/api/files?language=markdown")
+        unknown = await client.get("/api/files?language=")
+
+        assert py.status_code == 200
+        assert md.status_code == 200
+        assert unknown.status_code == 200
+        assert [item["path"] for item in py.json()["results"]] == ["src/inferred.py"]
+        assert [item["path"] for item in md.json()["results"]] == ["docs/inferred.md"]
+        assert [item["path"] for item in unknown.json()["results"]] == ["tools/inferred.unknownext"]
+
     async def test_post_scan_results_unknown_severity_maps_to_info(self, client: AsyncClient) -> None:
         """Unknown severity strings are accepted and mapped to 'info' with warnings."""
         resp = await client.post(

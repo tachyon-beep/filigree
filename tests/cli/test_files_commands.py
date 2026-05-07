@@ -538,6 +538,19 @@ class TestRegisterFileCommand:
         assert data["path"] == "src/newfile.py"
         assert data["language"] == "python"
 
+    def test_register_file_infers_language_json(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        runner, _ = cli_in_project
+        py = runner.invoke(cli, ["register-file", "src/inferred.py", "--json"])
+        md = runner.invoke(cli, ["register-file", "docs/inferred.md", "--json"])
+        unknown = runner.invoke(cli, ["register-file", "tools/inferred.unknownext", "--json"])
+
+        assert py.exit_code == 0, py.output
+        assert md.exit_code == 0, md.output
+        assert unknown.exit_code == 0, unknown.output
+        assert json.loads(py.output)["language"] == "python"
+        assert json.loads(md.output)["language"] == "markdown"
+        assert json.loads(unknown.output)["language"] == ""
+
     def test_register_file_idempotent(self, cli_in_project: tuple[CliRunner, Path]) -> None:
         """Registering same path twice returns the same file record."""
         runner, _ = cli_in_project

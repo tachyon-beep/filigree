@@ -2141,6 +2141,15 @@ class TestFileTools:
         assert "id" not in detail["file"]
         assert detail["file"]["path"] == "src/example.py"
 
+    async def test_register_file_infers_language_without_hint(self, mcp_db: FiligreeDB) -> None:
+        py = _parse(await call_tool("register_file", {"path": "src/inferred.py"}))
+        md = _parse(await call_tool("register_file", {"path": "docs/inferred.md"}))
+        unknown = _parse(await call_tool("register_file", {"path": "tools/inferred.unknownext"}))
+
+        assert py["language"] == "python"
+        assert md["language"] == "markdown"
+        assert unknown["language"] == ""
+
     async def test_delete_file_record_removes_unreferenced_file(self, mcp_db: FiligreeDB) -> None:
         created = _parse(await call_tool("register_file", {"path": "src/delete_me.py"}))
 
