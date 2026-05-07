@@ -2,10 +2,30 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 from filigree.models import Issue
-from filigree.types.api import PublicIssue
+from filigree.types.api import PublicIssue, ReadyIssue, SlimIssue
+
+
+def issue_to_slim(issue: Issue) -> SlimIssue:
+    """Return the lightweight issue projection used by list-style surfaces."""
+    return SlimIssue(
+        issue_id=issue.id,
+        title=issue.title,
+        status=issue.status,
+        priority=issue.priority,
+        type=issue.type,
+    )
+
+
+def issue_to_ready(issue: Issue, *, include_context: bool = False, parent_title: str | None = None) -> ReadyIssue:
+    """Return a ready-queue projection, optionally enriched with parent context."""
+    payload = cast(ReadyIssue, dict(issue_to_slim(issue)))
+    if include_context:
+        payload["parent_issue_id"] = issue.parent_id
+        payload["parent_title"] = parent_title if issue.parent_id else None
+    return payload
 
 
 def issue_to_public(issue: Issue) -> PublicIssue:

@@ -180,9 +180,12 @@ def stats(as_json: bool) -> None:
             click.echo(json_mod.dumps(s, indent=2, default=str))
             return
 
-        click.echo("Status:")
+        click.echo("Status names:")
         for status, count in sorted(s["by_status"].items()):
             click.echo(f"  {status}: {count}")
+        click.echo("\nStatus categories:")
+        for category, count in sorted(s["by_category"].items()):
+            click.echo(f"  {category}: {count}")
         click.echo("\nTypes:")
         for t, count in sorted(s["by_type"].items()):
             click.echo(f"  {t}: {count}")

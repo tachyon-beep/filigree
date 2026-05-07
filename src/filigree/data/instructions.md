@@ -52,6 +52,8 @@ Filigree 2.0 unifies response envelopes across MCP and CLI:
 
 - **Batch ops** return `{succeeded: [...], failed: [{id, error, code}, ...], newly_unblocked?: [...]}`. `failed` is always present (empty list if none); `newly_unblocked` is omitted when the op cannot unblock. Pass `response_detail="full"` (MCP) or `--detail=full` (CLI) to get full records back instead of slim summaries.
 - **List ops** return `{items: [...], has_more: bool, next_offset?: int}`. `has_more` is always present; `next_offset` appears only when there is a next page.
+- **Ready items** are slim by default; pass `include_context=true` (MCP) or `ready --json --include-context` (CLI) to add `parent_issue_id` and `parent_title`.
+- **Stats** include explicit `status_name_counts` (literal workflow statuses) and `status_category_counts` (template categories), while `by_status` and `by_category` remain for compatibility.
 - **Errors** return `{error: str, code: ErrorCode, details?: dict}` where `code` is one of: `VALIDATION`, `NOT_FOUND`, `CONFLICT`, `INVALID_TRANSITION`, `PERMISSION`, `NOT_INITIALIZED`, `IO`, `INVALID_API_URL`, `STOP_FAILED`, `SCHEMA_MISMATCH`, `INTERNAL`.
 
 ### Schema-mismatch (warm-but-degraded MCP)
@@ -63,6 +65,7 @@ When the installed `filigree` is older than the project's database, the MCP serv
 ```bash
 # Finding work
 filigree ready                              # Show issues ready to work (no blockers)
+filigree ready --json --include-context     # JSON ready queue with parent issue context
 filigree list --status=open                 # All open issues
 filigree list --status=in_progress          # Active work
 filigree list --label=bug --priority=1      # Filter bugs by numeric priority

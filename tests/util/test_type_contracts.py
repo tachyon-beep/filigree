@@ -678,6 +678,10 @@ class TestStatsResultShape:
         db.create_issue("Test", type="task")
         result = db.get_stats()
         assert isinstance(result["by_status"], dict)
+        assert isinstance(result["status_name_counts"], dict)
+        assert result["status_name_counts"] == result["by_status"]
+        assert isinstance(result["status_category_counts"], dict)
+        assert result["status_category_counts"] == result["by_category"]
         assert isinstance(result["by_type"], dict)
         assert isinstance(result["ready_count"], int)
         assert isinstance(result["blocked_count"], int)
@@ -813,6 +817,16 @@ class TestSlimIssueShape:
         result = _slim_issue(issue)
         assert isinstance(result["issue_id"], str)
         assert isinstance(result["priority"], int)
+
+
+class TestReadyIssueShape:
+    def test_default_ready_issue_extends_slim_issue(self) -> None:
+        from filigree.types.api import ReadyIssue
+
+        slim_keys = set(get_type_hints(SlimIssue).keys())
+        ready_keys = set(get_type_hints(ReadyIssue).keys())
+        assert slim_keys < ready_keys
+        assert {"parent_issue_id", "parent_title"} <= ready_keys - slim_keys
 
 
 class TestPublicIssueShape:

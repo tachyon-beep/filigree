@@ -221,7 +221,10 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
         ),
         Tool(
             name="get_stats",
-            description="Get project statistics: counts by status, type, ready/blocked",
+            description=(
+                "Get project statistics: status_name_counts are literal workflow statuses, "
+                "status_category_counts are template categories (open/wip/done), plus type and ready/blocked counts."
+            ),
             inputSchema={"type": "object", "properties": {}},
         ),
         Tool(

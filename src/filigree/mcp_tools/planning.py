@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 from collections.abc import Callable
 from typing import Any, cast
@@ -12,6 +13,7 @@ from filigree.issue_payloads import issue_to_public
 from filigree.mcp_tools.common import (
     _list_response,
     _parse_args,
+    _ready_issue,
     _slim_issue,
     _text,
     _validate_actor,
@@ -36,6 +38,7 @@ from filigree.types.inputs import (
     CreatePlanArgs,
     CreatePlanFromFileArgs,
     GetPlanArgs,
+    GetReadyArgs,
     LabelPlanTreeArgs,
     LabelSubtreeArgs,
     MilestoneInput,
@@ -77,8 +80,20 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
         ),
         Tool(
             name="get_ready",
-            description="Get all issues in the open category (no blockers), sorted by priority",
-            inputSchema={"type": "object", "properties": {}},
+            description=(
+                "Get all unassigned issues in the open category with no open blockers, sorted by priority. "
+                "Pass include_context=true to add parent_issue_id and parent_title while preserving the slim default."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "include_context": {
+                        "type": "boolean",
+                        "default": False,
+                        "description": "Include parent_issue_id and parent_title on each ready item.",
+                    },
+                },
+            },
         ),
         Tool(
             name="get_blocked",
@@ -302,6 +317,15 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
 # ---------------------------------------------------------------------------
 
 
+def _parent_titles_by_id(tracker: Any, issues: list[Any]) -> dict[str, str]:
+    parent_ids = sorted({i.parent_id for i in issues if i.parent_id})
+    titles: dict[str, str] = {}
+    for parent_id in parent_ids:
+        with contextlib.suppress(KeyError):
+            titles[parent_id] = tracker.get_issue(parent_id).title
+    return titles
+
+
 async def _handle_add_dependency(arguments: dict[str, Any]) -> list[TextContent]:
     from filigree.mcp_server import _get_db, _refresh_summary
 
@@ -355,9 +379,18 @@ async def _handle_remove_dependency(arguments: dict[str, Any]) -> list[TextConte
 async def _handle_get_ready(arguments: dict[str, Any]) -> list[TextContent]:
     from filigree.mcp_server import _get_db
 
+    args = _parse_args(arguments, GetReadyArgs)
+    include_context = args.get("include_context", False)
+    if not isinstance(include_context, bool):
+        return _text(ErrorResponse(error="include_context must be a boolean", code=ErrorCode.VALIDATION))
+
     tracker = _get_db()
     issues = tracker.get_ready()
-    items = [_slim_issue(i) for i in issues]
+    parent_titles = _parent_titles_by_id(tracker, issues) if include_context else {}
+    items = [
+        _ready_issue(i, include_context=include_context, parent_title=parent_titles.get(i.parent_id or ""))
+        for i in issues
+    ]
     return _text(_list_response(items, has_more=False))
 
 

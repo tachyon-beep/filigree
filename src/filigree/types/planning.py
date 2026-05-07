@@ -147,6 +147,8 @@ class StatsResult(TypedDict):
 
     by_status: dict[str, int]
     by_category: dict[str, int]
+    status_name_counts: dict[str, int]
+    status_category_counts: dict[str, int]
     by_type: dict[str, int]
     ready_count: int
     blocked_count: int

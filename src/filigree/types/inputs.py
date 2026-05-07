@@ -387,6 +387,10 @@ class RemoveDependencyArgs(TypedDict):
     actor: NotRequired[str]
 
 
+class GetReadyArgs(TypedDict):
+    include_context: NotRequired[bool]
+
+
 class GetPlanArgs(TypedDict):
     milestone_id: str
 
@@ -723,6 +727,7 @@ TOOL_ARGS_MAP: dict[str, type] = {
     # planning.py
     "add_dependency": AddDependencyArgs,
     "remove_dependency": RemoveDependencyArgs,
+    "get_ready": GetReadyArgs,
     "get_plan": GetPlanArgs,
     "create_plan": CreatePlanArgs,
     "create_plan_from_file": CreatePlanFromFileArgs,

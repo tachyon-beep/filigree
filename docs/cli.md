@@ -259,6 +259,13 @@ filigree critical-path                      # Longest dependency chain
 ### `ready`
 
 Show issues that are ready to work on — open, no blockers, sorted by priority.
+JSON output stays slim by default. Pass `--include-context` with `--json` to
+add `parent_issue_id` and `parent_title` to each item.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `--json` | flag | Output `{items, has_more}` |
+| `--include-context` | flag | Add parent issue ID/title to JSON items |
 
 ### `list`
 
@@ -603,7 +610,7 @@ Show all workflow statuses grouped by category (open, wip, done) from enabled te
 ## Analytics and Events
 
 ```bash
-filigree stats                              # Counts by status, type, ready/blocked
+filigree stats                              # Counts by status name/category, type, ready/blocked
 filigree metrics --days=30                  # Cycle time, lead time, throughput
 filigree changes --since 2026-01-01T00:00   # Events since timestamp
 filigree events <id>                        # Event history for one issue
@@ -611,7 +618,10 @@ filigree events <id>                        # Event history for one issue
 
 ### `stats`
 
-Project statistics: counts by status, type, ready/blocked.
+Project statistics: counts by literal status name, template status category,
+type, ready, and blocked. JSON includes explicit `status_name_counts` and
+`status_category_counts` maps; `by_status` and `by_category` remain for
+compatibility.
 
 ### `metrics`
 

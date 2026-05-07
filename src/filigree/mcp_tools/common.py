@@ -12,11 +12,12 @@ from typing import TYPE_CHECKING, Any, TypeVar, cast
 
 from mcp.types import TextContent
 
+from filigree.issue_payloads import issue_to_ready, issue_to_slim
 from filigree.models import Issue
 
 if TYPE_CHECKING:
     from filigree.core import FiligreeDB
-from filigree.types.api import ErrorCode, ErrorResponse, ListResponse, SlimIssue, TransitionError
+from filigree.types.api import ErrorCode, ErrorResponse, ListResponse, ReadyIssue, SlimIssue, TransitionError
 from filigree.validation import sanitize_actor
 
 logger = logging.getLogger(__name__)
@@ -47,13 +48,12 @@ def _text(content: object) -> list[TextContent]:
 
 def _slim_issue(issue: Issue) -> SlimIssue:
     """Return a lightweight dict for search result listings."""
-    return SlimIssue(
-        issue_id=issue.id,
-        title=issue.title,
-        status=issue.status,
-        priority=issue.priority,
-        type=issue.type,
-    )
+    return issue_to_slim(issue)
+
+
+def _ready_issue(issue: Issue, *, include_context: bool = False, parent_title: str | None = None) -> ReadyIssue:
+    """Return a ready-queue item, keeping the default shape slim."""
+    return issue_to_ready(issue, include_context=include_context, parent_title=parent_title)
 
 
 def _resolve_pagination(arguments: dict[str, Any]) -> tuple[int, int, list[TextContent] | None]:

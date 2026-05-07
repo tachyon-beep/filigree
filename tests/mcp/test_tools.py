@@ -218,7 +218,12 @@ class TestToolDescriptions:
 
         get_ready_description = tools["get_ready"].description or ""
         assert "open category" in get_ready_description
+        assert "include_context" in get_ready_description
         assert "(open, no blockers)" not in get_ready_description
+
+        get_stats_description = tools["get_stats"].description or ""
+        assert "status_name_counts" in get_stats_description
+        assert "status_category_counts" in get_stats_description
 
         for tool_name in ("claim_next", "start_next_work"):
             description = tools[tool_name].description or ""
@@ -404,6 +409,17 @@ class TestReadyAndBlocked:
         expected_keys = {"issue_id", "title", "status", "priority", "type"}
         assert set(data["items"][0].keys()) == expected_keys
 
+    async def test_get_ready_include_context_adds_parent_context(self, mcp_db: FiligreeDB) -> None:
+        parent = mcp_db.create_issue("Parent epic", type="epic")
+        child = mcp_db.create_issue("Child task", parent_id=parent.id)
+
+        result = await call_tool("get_ready", {"include_context": True})
+
+        data = _parse(result)
+        item = next(i for i in data["items"] if i["issue_id"] == child.id)
+        assert item["parent_issue_id"] == parent.id
+        assert item["parent_title"] == "Parent epic"
+
     async def test_get_blocked(self, mcp_db: FiligreeDB) -> None:
         a = mcp_db.create_issue("Blocked")
         b = mcp_db.create_issue("Blocker")
@@ -521,6 +537,18 @@ class TestTemplateAndSummary:
         data = _parse(result)
         assert "by_status" in data
         assert data["by_status"]["open"] == 1
+
+    async def test_get_stats_exposes_unambiguous_status_count_names(self, mcp_db: FiligreeDB) -> None:
+        issue = mcp_db.create_issue("A")
+        mcp_db.update_issue(issue.id, status="in_progress")
+
+        result = await call_tool("get_stats", {})
+
+        data = _parse(result)
+        assert data["status_name_counts"] == data["by_status"]
+        assert data["status_category_counts"] == data["by_category"]
+        assert data["status_name_counts"]["in_progress"] == 1
+        assert data["status_category_counts"]["wip"] == 1
 
 
 class TestLabels:

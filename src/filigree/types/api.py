@@ -69,6 +69,18 @@ class SlimIssue(TypedDict):
     type: str
 
 
+class ReadyIssue(SlimIssue):
+    """Ready-queue issue projection.
+
+    By default ready surfaces return the inherited slim keys only. When callers
+    request context, parent fields are added so agents can display the owning
+    epic/plan without an immediate follow-up ``get_issue`` call.
+    """
+
+    parent_issue_id: NotRequired[str | None]
+    parent_title: NotRequired[str | None]
+
+
 class PublicIssue(TypedDict):
     """Full issue shape for MCP and CLI JSON responses.
 

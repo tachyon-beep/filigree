@@ -69,7 +69,8 @@ class TestStatsAndSearch:
         runner.invoke(cli, ["create", "A"])
         result = runner.invoke(cli, ["stats"])
         assert result.exit_code == 0
-        assert "Status:" in result.output
+        assert "Status names:" in result.output
+        assert "Status categories:" in result.output
 
     def test_search(self, cli_in_project: tuple[CliRunner, Path]) -> None:
         runner, _ = cli_in_project
@@ -233,6 +234,21 @@ class TestJsonOutput:
         item = data["items"][0]
         assert set(item.keys()) == {"issue_id", "title", "status", "priority", "type"}
 
+    def test_ready_json_include_context_adds_parent_context(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        runner, _ = cli_in_project
+        parent = runner.invoke(cli, ["create", "Parent epic", "--type", "epic"])
+        parent_id = _extract_id(parent.output)
+        child = runner.invoke(cli, ["create", "Child task", "--parent", parent_id])
+        child_id = _extract_id(child.output)
+
+        result = runner.invoke(cli, ["ready", "--json", "--include-context"])
+
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        item = next(i for i in data["items"] if i["issue_id"] == child_id)
+        assert item["parent_issue_id"] == parent_id
+        assert item["parent_title"] == "Parent epic"
+
     def test_stats_json(self, cli_in_project: tuple[CliRunner, Path]) -> None:
         runner, _ = cli_in_project
         runner.invoke(cli, ["create", "Stats JSON"])
@@ -240,6 +256,8 @@ class TestJsonOutput:
         assert result.exit_code == 0
         data = json.loads(result.output)
         assert "by_status" in data
+        assert data["status_name_counts"] == data["by_status"]
+        assert data["status_category_counts"] == data["by_category"]
 
     def test_search_json(self, cli_in_project: tuple[CliRunner, Path]) -> None:
         runner, _ = cli_in_project

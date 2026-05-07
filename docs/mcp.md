@@ -173,11 +173,19 @@ file anchor, computed `anchor_state`, and suggested follow-up tools.
 
 | Tool | Description |
 |------|-------------|
-| `get_ready` | Unblocked issues sorted by priority |
+| `get_ready` | Unassigned open-category issues with no blockers, sorted by priority |
 | `get_blocked` | Blocked issues with their blocker lists |
 | `get_critical_path` | Longest dependency chain |
 
-These tools take no required parameters.
+`get_ready` returns slim five-key issue items by default. Pass
+`include_context=true` to add `parent_issue_id` and `parent_title` to each item.
+`get_blocked` and `get_critical_path` take no required parameters.
+
+#### `get_ready`
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `include_context` | boolean | no | Include parent issue ID/title on each ready item |
 
 ### Dependencies
 
@@ -230,7 +238,7 @@ These tools take no required parameters.
 |------|-------------|
 | `search_issues` | Search by title and description (FTS5) |
 | `get_summary` | Pre-computed project summary (same as `context.md`) |
-| `get_stats` | Project statistics: counts by status, type, ready/blocked |
+| `get_stats` | Project statistics with explicit status-name and status-category count maps |
 
 #### `search_issues`
 
@@ -239,6 +247,13 @@ These tools take no required parameters.
 | `query` | string | yes | Search query |
 | `limit` | integer | no | Max results (default 100) |
 | `offset` | integer | no | Skip first N results |
+
+#### `get_stats`
+
+Returns both legacy count maps and explicit aliases:
+`status_name_counts` contains literal workflow status names such as `open` or
+`in_progress`; `status_category_counts` contains template categories
+`open`/`wip`/`done`. `by_status` and `by_category` remain for compatibility.
 
 ### Planning
 

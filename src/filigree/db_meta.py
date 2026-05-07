@@ -349,6 +349,8 @@ class MetaMixin(DBMixinProtocol):
         return {
             "by_status": by_status,
             "by_category": by_category,
+            "status_name_counts": dict(by_status),
+            "status_category_counts": dict(by_category),
             "by_type": by_type,
             "ready_count": ready_count,
             "blocked_count": blocked_count,

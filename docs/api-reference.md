@@ -704,12 +704,18 @@ Returns project statistics:
 {
     "by_status": {"open": 5, "in_progress": 2, ...},
     "by_category": {"open": 5, "wip": 2, "done": 10},
+    "status_name_counts": {"open": 5, "in_progress": 2, ...},
+    "status_category_counts": {"open": 5, "wip": 2, "done": 10},
     "by_type": {"task": 8, "bug": 4, ...},
     "ready_count": int,
     "blocked_count": int,
     "total_dependencies": int,
 }
 ```
+
+`status_name_counts` is the explicit alias for literal workflow status names.
+`status_category_counts` is the explicit alias for template-aware categories.
+`by_status` and `by_category` are retained for compatibility.
 
 #### `get_recent_events`
 

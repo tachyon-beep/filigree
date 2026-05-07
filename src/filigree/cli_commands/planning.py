@@ -2,15 +2,17 @@
 
 from __future__ import annotations
 
+import contextlib
 import json as json_mod
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import NoReturn
+from typing import Any, NoReturn
 
 import click
 
 from filigree.cli_common import get_db, refresh_summary
+from filigree.issue_payloads import issue_to_ready
 from filigree.types.api import ErrorCode
 
 
@@ -79,16 +81,31 @@ def _validate_plan_dep_refs(deps: object, label: str) -> str | None:
     return None
 
 
-def _ready_impl(as_json: bool) -> None:
+def _parent_titles_by_id(db: Any, issues: list[Any]) -> dict[str, str]:
+    parent_ids = sorted({i.parent_id for i in issues if i.parent_id})
+    titles: dict[str, str] = {}
+    for parent_id in parent_ids:
+        with contextlib.suppress(KeyError):
+            titles[parent_id] = db.get_issue(parent_id).title
+    return titles
+
+
+def _ready_impl(as_json: bool, include_context: bool) -> None:
     with get_db() as db:
         issues = db.get_ready()
 
         if as_json:
+            parent_titles = _parent_titles_by_id(db, issues) if include_context else {}
             click.echo(
                 json_mod.dumps(
                     {
                         "items": [
-                            {"issue_id": i.id, "title": i.title, "status": i.status, "priority": i.priority, "type": i.type} for i in issues
+                            issue_to_ready(
+                                i,
+                                include_context=include_context,
+                                parent_title=parent_titles.get(i.parent_id or ""),
+                            )
+                            for i in issues
                         ],
                         "has_more": False,
                     },
@@ -112,16 +129,18 @@ def _ready_impl(as_json: bool) -> None:
 
 @click.command()
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON")
-def ready(as_json: bool) -> None:
+@click.option("--include-context", is_flag=True, help="Include parent_issue_id and parent_title in JSON output")
+def ready(as_json: bool, include_context: bool) -> None:
     """Show issues ready to work on (no blockers)."""
-    _ready_impl(as_json)
+    _ready_impl(as_json, include_context)
 
 
 @click.command("get-ready")
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON")
-def get_ready(as_json: bool) -> None:
+@click.option("--include-context", is_flag=True, help="Include parent_issue_id and parent_title in JSON output")
+def get_ready(as_json: bool, include_context: bool) -> None:
     """Show issues ready to work on (no blockers). Alias for `ready`."""
-    _ready_impl(as_json)
+    _ready_impl(as_json, include_context)
 
 
 def _blocked_impl(as_json: bool) -> None:
