@@ -96,6 +96,9 @@ class PublicIssue(TypedDict):
     type: str
     parent_id: str | None
     assignee: str
+    claimed_at: ISOTimestamp | None
+    last_heartbeat_at: ISOTimestamp | None
+    claim_expires_at: ISOTimestamp | None
     created_at: ISOTimestamp
     updated_at: ISOTimestamp
     closed_at: ISOTimestamp | None

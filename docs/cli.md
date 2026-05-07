@@ -44,6 +44,8 @@ Every short-form CLI command has a permanent verb-noun alias that matches the co
 | `show` | `get-issue` |
 | `list` | `list-issues` |
 | `release` | `release-claim` |
+| `stale-claims` | `get-stale-claims` |
+| `reclaim` | `reclaim-issue` |
 | `events` | `get-issue-events` |
 | `undo` | `undo-last` |
 
@@ -381,7 +383,10 @@ Prevents double-work when multiple agents are active. Claiming uses optimistic l
 filigree claim <id> --assignee agent-1          # Claim specific issue
 filigree claim-next --assignee agent-1          # Claim highest-priority ready issue
 filigree claim-next --assignee agent-1 --type=bug --priority-max=1
-filigree release <id>                           # Release back to open
+filigree --actor agent-1 heartbeat-work <id>    # Refresh claim liveness for current holder
+filigree stale-claims                           # List abandoned or expired claims
+filigree reclaim <id> --assignee agent-2 --expected-assignee agent-1 --reason "missed heartbeat"
+filigree release <id> --reason "handoff"        # Release without changing status
 filigree start-work <id> --assignee agent-1     # Claim + transition to wip in one call
 filigree start-next-work --assignee agent-1     # Claim + transition highest-priority ready
 ```
@@ -418,6 +423,40 @@ expected assignee is provided.
 | `id` | string | Issue ID (positional) |
 | `--if-held` | flag | Idempotent release-if-held mode |
 | `--expected-assignee` | string | Expected current assignee for `--if-held` coordinator flows |
+| `--reason` | string | Audit reason recorded on the release event |
+
+### `heartbeat-work`
+
+Refresh claim liveness for a claimed issue. By default the global `--actor` is
+treated as the expected holder; coordinators can pass `--expected-assignee`.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `id` | string | Issue ID (positional) |
+| `--expected-assignee` | string | Expected current assignee |
+| `--lease-hours` | integer | Lease duration from this heartbeat (default 48) |
+
+### `stale-claims`
+
+List assigned, non-done issues whose explicit claim lease has expired, plus
+legacy assigned issues older than the threshold.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `--stale-after-hours` | integer | Legacy assignment age threshold (default 48) |
+
+### `reclaim`
+
+Safely transfer a claim only if the current assignee still matches the expected
+holder. The reason is required and is recorded on the reclaim event.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `id` | string | Issue ID (positional) |
+| `--assignee` | string | New assignee (required) |
+| `--expected-assignee` | string | Current assignee expected by the caller (required) |
+| `--reason` | string | Why the claim is being reclaimed (required) |
+| `--lease-hours` | integer | Lease duration for the new assignee (default 48) |
 
 ### `start-work`
 

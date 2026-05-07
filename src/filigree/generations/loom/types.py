@@ -95,7 +95,7 @@ class IssueLoom(TypedDict):
     endpoint in Phase C3 (GET, PATCH, close, reopen, claim, release,
     claim-next, create). Endpoints with optional enrichment use the
     ``WithFiles`` / ``WithUnblocked`` subtypes below; otherwise
-    consumers see exactly this 20-field projection.
+    consumers see exactly this 23-field projection.
 
     Pinned by ``tests/fixtures/contracts/loom/issues-*.json``.
     """
@@ -108,6 +108,9 @@ class IssueLoom(TypedDict):
     type: str
     parent_id: str | None
     assignee: str
+    claimed_at: ISOTimestamp | None
+    last_heartbeat_at: ISOTimestamp | None
+    claim_expires_at: ISOTimestamp | None
     created_at: ISOTimestamp
     updated_at: ISOTimestamp
     closed_at: ISOTimestamp | None

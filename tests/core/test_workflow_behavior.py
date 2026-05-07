@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Generator
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -417,6 +418,16 @@ class TestClaimIssue:
         assert claimed.status == "open"  # status unchanged
         assert claimed.assignee == "agent-1"
 
+    def test_claim_records_lease_metadata(self, db: FiligreeDB) -> None:
+        issue = db.create_issue("Task", type="task")
+
+        claimed = db.claim_issue(issue.id, assignee="agent-1")
+
+        assert claimed.claimed_at is not None
+        assert claimed.last_heartbeat_at == claimed.claimed_at
+        assert claimed.claim_expires_at is not None
+        assert datetime.fromisoformat(claimed.claim_expires_at) > datetime.fromisoformat(claimed.claimed_at)
+
     def test_claim_already_assigned_fails(self, db: FiligreeDB) -> None:
         """Cannot claim an issue that's already assigned to someone else."""
         issue = db.create_issue("Task", type="task")
@@ -507,6 +518,9 @@ class TestReleaseClaim:
         released = db.release_claim(claimed.id)
         assert released.status == "open"  # status unchanged
         assert released.assignee == ""
+        assert released.claimed_at is None
+        assert released.last_heartbeat_at is None
+        assert released.claim_expires_at is None
 
     def test_release_no_assignee_fails(self, db: FiligreeDB) -> None:
         """Cannot release an issue that has no assignee."""
@@ -564,11 +578,12 @@ class TestReleaseClaim:
     def test_release_records_event(self, db: FiligreeDB) -> None:
         issue = db.create_issue("Event check")
         db.claim_issue(issue.id, assignee="agent-1")
-        db.release_claim(issue.id, actor="agent-1")
+        db.release_claim(issue.id, actor="agent-1", reason="pausing for handoff")
         events = db.get_recent_events(limit=10)
         released_events = [e for e in events if e["event_type"] == "released"]
         assert len(released_events) == 1
         assert released_events[0]["actor"] == "agent-1"
+        assert released_events[0]["comment"] == "pausing for handoff"
 
     def test_release_closed_issue_no_assignee(self, db: FiligreeDB) -> None:
         issue = db.create_issue("Closed one")
@@ -630,6 +645,101 @@ class TestReleaseClaim:
 
         assert proxy.fired
         assert db.get_issue(issue.id).assignee == ""
+
+
+class TestClaimLeaseLiveness:
+    def test_heartbeat_refreshes_current_holder_liveness(self, db: FiligreeDB) -> None:
+        issue = db.create_issue("Heartbeat")
+        db.claim_issue(issue.id, assignee="agent-1")
+        old = (datetime.now(UTC) - timedelta(hours=3)).isoformat()
+        db.conn.execute(
+            "UPDATE issues SET last_heartbeat_at = ?, claim_expires_at = ? WHERE id = ?",
+            (old, old, issue.id),
+        )
+        db.conn.commit()
+
+        refreshed = db.heartbeat_work(issue.id, actor="agent-1")
+
+        assert refreshed.assignee == "agent-1"
+        assert refreshed.last_heartbeat_at is not None
+        assert datetime.fromisoformat(refreshed.last_heartbeat_at) > datetime.fromisoformat(old)
+        assert refreshed.claim_expires_at is not None
+        assert datetime.fromisoformat(refreshed.claim_expires_at) > datetime.fromisoformat(refreshed.last_heartbeat_at)
+
+    def test_heartbeat_rejects_other_holder(self, db: FiligreeDB) -> None:
+        issue = db.create_issue("Heartbeat")
+        db.claim_issue(issue.id, assignee="agent-1")
+
+        with pytest.raises(ValueError, match=r"assigned to 'agent-1'.*expected 'agent-2'"):
+            db.heartbeat_work(issue.id, actor="agent-2")
+
+    def test_stale_claims_include_expired_leases_and_legacy_assigned_work(self, db: FiligreeDB) -> None:
+        expired = db.create_issue("Expired lease", priority=1)
+        legacy = db.create_issue("Legacy stale", priority=0)
+        fresh = db.create_issue("Fresh lease", priority=0)
+        closed = db.create_issue("Closed assigned", priority=0)
+        db.claim_issue(expired.id, assignee="agent-1")
+        db.claim_issue(fresh.id, assignee="agent-2")
+        db.claim_issue(closed.id, assignee="agent-3")
+        old = (datetime.now(UTC) - timedelta(days=5)).isoformat()
+        future = (datetime.now(UTC) + timedelta(hours=2)).isoformat()
+        db.conn.execute(
+            "UPDATE issues SET claim_expires_at = ?, last_heartbeat_at = ? WHERE id = ?",
+            (old, old, expired.id),
+        )
+        db.conn.execute(
+            "UPDATE issues SET assignee = 'legacy-agent', updated_at = ?, claimed_at = NULL, "
+            "last_heartbeat_at = NULL, claim_expires_at = NULL WHERE id = ?",
+            (old, legacy.id),
+        )
+        db.conn.execute(
+            "UPDATE issues SET claim_expires_at = ?, last_heartbeat_at = ? WHERE id = ?",
+            (future, future, fresh.id),
+        )
+        db.conn.commit()
+        db.close_issue(closed.id)
+
+        stale = db.get_stale_claims(stale_after_hours=48)
+
+        assert [issue.id for issue in stale] == [legacy.id, expired.id]
+
+    def test_reclaim_issue_transfers_only_expected_holder_and_records_reason(self, db: FiligreeDB) -> None:
+        issue = db.create_issue("Reclaim me")
+        db.claim_issue(issue.id, assignee="agent-old")
+
+        reclaimed = db.reclaim_issue(
+            issue.id,
+            assignee="agent-new",
+            expected_assignee="agent-old",
+            reason="agent-old missed heartbeat",
+            actor="coordinator",
+        )
+
+        assert reclaimed.assignee == "agent-new"
+        assert reclaimed.claimed_at is not None
+        assert reclaimed.last_heartbeat_at == reclaimed.claimed_at
+        events = db.conn.execute(
+            "SELECT event_type, actor, old_value, new_value, comment FROM events WHERE issue_id = ? ORDER BY id",
+            (issue.id,),
+        ).fetchall()
+        reclaimed_event = next(event for event in events if event["event_type"] == "reclaimed")
+        assert reclaimed_event["actor"] == "coordinator"
+        assert reclaimed_event["old_value"] == "agent-old"
+        assert reclaimed_event["new_value"] == "agent-new"
+        assert reclaimed_event["comment"] == "agent-old missed heartbeat"
+
+    def test_reclaim_issue_rejects_unexpected_holder(self, db: FiligreeDB) -> None:
+        issue = db.create_issue("Reclaim me")
+        db.claim_issue(issue.id, assignee="agent-current")
+
+        with pytest.raises(ValueError, match=r"assigned to 'agent-current'.*expected 'agent-old'"):
+            db.reclaim_issue(
+                issue.id,
+                assignee="agent-new",
+                expected_assignee="agent-old",
+                reason="stale",
+                actor="coordinator",
+            )
 
 
 # ---------------------------------------------------------------------------

@@ -1,6 +1,6 @@
 # MCP Server Reference
 
-Filigree exposes an MCP (Model Context Protocol) server so AI agents interact natively without parsing CLI output. The server provides 98 tools, 1 resource, and 1 prompt.
+Filigree exposes an MCP (Model Context Protocol) server so AI agents interact natively without parsing CLI output. The server provides 101 tools, 1 resource, and 1 prompt.
 
 ## Contents
 
@@ -287,6 +287,9 @@ Step deps within a phase use integer indices. Cross-phase deps use `"phase_idx.s
 | `claim_issue` | Claim only, with optimistic locking |
 | `claim_next` | Claim highest-priority ready issue only |
 | `release_claim` | Release a claim, optionally idempotently with `if_held` |
+| `heartbeat_work` | Refresh claim liveness for active work |
+| `get_stale_claims` | List assigned work with expired leases or old legacy assignments |
+| `reclaim_issue` | Transfer a stale claim when the expected holder still owns it |
 
 #### `start_work`
 
@@ -334,6 +337,37 @@ Step deps within a phase use integer indices. Cross-phase deps use `"phase_idx.s
 | `actor` | string | no | Agent identity for audit trail |
 | `if_held` | boolean | no | Idempotent release-if-held mode; unassigned issues are returned unchanged |
 | `expected_assignee` | string | no | Only release when the current assignee matches this value; defaults to `actor` in `if_held` mode |
+| `reason` | string | no | Audit reason recorded on the release event |
+
+#### `heartbeat_work`
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `issue_id` | string | yes | Issue ID |
+| `actor` | string | no | Agent identity for audit trail and default holder check |
+| `expected_assignee` | string | no | Only heartbeat when the current assignee matches this value |
+| `lease_hours` | integer | no | Lease duration from this heartbeat (default 48) |
+
+#### `get_stale_claims`
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `stale_after_hours` | integer | no | Age threshold for legacy assignments without explicit lease metadata (default 48) |
+
+Returns a `ListResponse[IssueDict]` containing assigned, non-done issues whose
+`claim_expires_at` is in the past, plus legacy assigned rows older than the
+threshold.
+
+#### `reclaim_issue`
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `issue_id` | string | yes | Issue ID |
+| `assignee` | string | yes | New assignee |
+| `expected_assignee` | string | yes | Current assignee expected by the caller |
+| `reason` | string | yes | Why the claim is being reclaimed |
+| `actor` | string | no | Agent identity for audit trail |
+| `lease_hours` | integer | no | Lease duration for the new assignee (default 48) |
 
 ### Batch Operations
 

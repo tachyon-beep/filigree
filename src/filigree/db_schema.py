@@ -15,6 +15,9 @@ CREATE TABLE IF NOT EXISTS issues (
     type        TEXT NOT NULL DEFAULT 'task',
     parent_id   TEXT REFERENCES issues(id) ON DELETE SET NULL,
     assignee    TEXT DEFAULT '',
+    claimed_at  TEXT,
+    last_heartbeat_at TEXT,
+    claim_expires_at  TEXT,
     created_at  TEXT NOT NULL,
     updated_at  TEXT NOT NULL,
     closed_at   TEXT,
@@ -31,6 +34,7 @@ CREATE INDEX IF NOT EXISTS idx_issues_parent ON issues(parent_id);
 CREATE INDEX IF NOT EXISTS idx_issues_priority ON issues(priority);
 CREATE INDEX IF NOT EXISTS idx_issues_status_priority ON issues(status, priority, created_at);
 CREATE INDEX IF NOT EXISTS idx_issues_assignee_priority ON issues(assignee, priority, created_at);
+CREATE INDEX IF NOT EXISTS idx_issues_claim_expires_at ON issues(claim_expires_at);
 
 CREATE TABLE IF NOT EXISTS dependencies (
     issue_id       TEXT NOT NULL REFERENCES issues(id),
@@ -450,4 +454,4 @@ CREATE TRIGGER IF NOT EXISTS issues_fts_delete AFTER DELETE ON issues BEGIN
 END;
 """
 
-CURRENT_SCHEMA_VERSION = 10
+CURRENT_SCHEMA_VERSION = 11

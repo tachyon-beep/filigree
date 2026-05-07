@@ -20,6 +20,8 @@ EventType = Literal[
     "parent_changed",
     "claimed",
     "released",
+    "heartbeat",
+    "reclaimed",
     "reopened",
     "dependency_added",
     "dependency_removed",

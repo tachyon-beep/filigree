@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -512,6 +513,9 @@ class TestClaimCli:
         assert result.exit_code == 0
         data = json.loads(result.output)
         assert data["assignee"] == "agent-1"
+        assert data["claimed_at"] is not None
+        assert data["last_heartbeat_at"] == data["claimed_at"]
+        assert data["claim_expires_at"] is not None
 
     def test_claim_not_found(self, cli_in_project: tuple[CliRunner, Path]) -> None:
         runner, _ = cli_in_project
@@ -531,6 +535,92 @@ class TestClaimCli:
         assert result.exit_code == 1
         data = json.loads(result.output)
         assert data["code"] == "VALIDATION"
+
+    def test_heartbeat_work_json_refreshes_claim(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        runner, _ = cli_in_project
+        r = runner.invoke(cli, ["create", "Heartbeat CLI"])
+        issue_id = _extract_id(r.output)
+        runner.invoke(cli, ["claim", issue_id, "--assignee", "agent-1"])
+        old = (datetime.now(UTC) - timedelta(hours=3)).isoformat()
+        from filigree.cli_common import get_db
+
+        with get_db() as db:
+            db.conn.execute(
+                "UPDATE issues SET last_heartbeat_at = ?, claim_expires_at = ? WHERE id = ?",
+                (old, old, issue_id),
+            )
+            db.conn.commit()
+
+        result = runner.invoke(cli, ["--actor", "agent-1", "heartbeat-work", issue_id, "--json"])
+
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["issue_id"] == issue_id
+        assert datetime.fromisoformat(data["last_heartbeat_at"]) > datetime.fromisoformat(old)
+
+    def test_stale_claims_json_lists_legacy_assigned_work(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        runner, _ = cli_in_project
+        r = runner.invoke(cli, ["create", "Stale CLI", "-p", "1"])
+        issue_id = _extract_id(r.output)
+        old = (datetime.now(UTC) - timedelta(days=5)).isoformat()
+        from filigree.cli_common import get_db
+
+        with get_db() as db:
+            db.conn.execute(
+                "UPDATE issues SET assignee = 'old-agent', updated_at = ? WHERE id = ?",
+                (old, issue_id),
+            )
+            db.conn.commit()
+
+        result = runner.invoke(cli, ["stale-claims", "--json"])
+
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert [item["issue_id"] for item in data["items"]] == [issue_id]
+
+    def test_reclaim_issue_json_transfers_expected_holder(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        runner, _ = cli_in_project
+        r = runner.invoke(cli, ["create", "Reclaim CLI"])
+        issue_id = _extract_id(r.output)
+        runner.invoke(cli, ["claim", issue_id, "--assignee", "agent-old"])
+
+        result = runner.invoke(
+            cli,
+            [
+                "--actor",
+                "coordinator",
+                "reclaim",
+                issue_id,
+                "--assignee",
+                "agent-new",
+                "--expected-assignee",
+                "agent-old",
+                "--reason",
+                "missed heartbeat",
+                "--json",
+            ],
+        )
+
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["assignee"] == "agent-new"
+        assert data["claimed_at"] is not None
+
+    def test_release_reason_is_recorded(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        runner, _ = cli_in_project
+        r = runner.invoke(cli, ["create", "Release reason"])
+        issue_id = _extract_id(r.output)
+        runner.invoke(cli, ["claim", issue_id, "--assignee", "agent-1"])
+
+        result = runner.invoke(cli, ["--actor", "agent-1", "release", issue_id, "--reason", "handoff", "--json"])
+
+        assert result.exit_code == 0
+        from filigree.cli_common import get_db
+
+        with get_db() as db:
+            events = db.get_issue_events(issue_id, limit=10)
+        released = [event for event in events if event["event_type"] == "released"]
+        assert released[-1]["comment"] == "handoff"
 
 
 class TestClaimNextCli:

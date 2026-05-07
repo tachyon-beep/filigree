@@ -321,6 +321,7 @@ def release_claim(
     actor: str = "",
     if_held: bool = False,
     expected_assignee: str | None = None,
+    reason: str = "",
 ) -> Issue
 ```
 
@@ -331,6 +332,57 @@ only released when held by `expected_assignee` or, if omitted, `actor`.
 
 **Raises:** `ValueError` if strict mode sees no assignee, or if `if_held=True`
 would clear a claim held by someone other than the expected holder.
+
+#### `heartbeat_work`
+
+```python
+def heartbeat_work(
+    self,
+    issue_id: str,
+    *,
+    actor: str = "",
+    expected_assignee: str | None = None,
+    lease_hours: int = 48,
+) -> Issue
+```
+
+Refreshes liveness metadata for a claimed, non-done issue. The current assignee
+must match `expected_assignee` when provided, otherwise `actor` is treated as the
+expected holder when non-empty. Updates `last_heartbeat_at` and
+`claim_expires_at`.
+
+#### `get_stale_claims`
+
+```python
+def get_stale_claims(
+    self,
+    *,
+    stale_after_hours: int = 48,
+) -> list[Issue]
+```
+
+Returns assigned, non-done issues with expired `claim_expires_at` values. Legacy
+assigned rows without explicit lease metadata fall back to `last_heartbeat_at`,
+`claimed_at`, or `updated_at` and are stale when older than the threshold.
+
+#### `reclaim_issue`
+
+```python
+def reclaim_issue(
+    self,
+    issue_id: str,
+    *,
+    assignee: str,
+    expected_assignee: str,
+    reason: str,
+    actor: str = "",
+    lease_hours: int = 48,
+) -> Issue
+```
+
+Transfers a claim to `assignee` only when the current holder still matches
+`expected_assignee`. Records `reason` on the reclaim event and starts a fresh
+lease for the new holder.
 
 #### `start_work`
 

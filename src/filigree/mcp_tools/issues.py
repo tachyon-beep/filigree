@@ -46,7 +46,10 @@ from filigree.types.inputs import (
     CloseIssueArgs,
     CreateIssueArgs,
     GetIssueArgs,
+    GetStaleClaimsArgs,
+    HeartbeatWorkArgs,
     ListIssuesArgs,
+    ReclaimIssueArgs,
     ReleaseClaimArgs,
     ReopenIssueArgs,
     SearchIssuesArgs,
@@ -311,8 +314,77 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
                         "type": "string",
                         "description": "Only release when the current assignee matches this value; defaults to actor in if_held mode.",
                     },
+                    "reason": {"type": "string", "description": "Audit reason for releasing the claim."},
                 },
                 "required": ["issue_id"],
+            },
+        ),
+        Tool(
+            name="heartbeat_work",
+            description=(
+                "Refresh claim liveness metadata for a claimed issue. "
+                "By default actor is treated as the expected current holder; pass expected_assignee for coordinator flows."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "issue_id": {"type": "string", "description": "Issue ID to heartbeat"},
+                    "actor": {"type": "string", "description": "Agent/user identity for audit trail and holder check"},
+                    "expected_assignee": {
+                        "type": "string",
+                        "description": "Only heartbeat when the current assignee matches this value.",
+                    },
+                    "lease_hours": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "default": 48,
+                        "description": "Lease duration from this heartbeat, in hours.",
+                    },
+                },
+                "required": ["issue_id"],
+            },
+        ),
+        Tool(
+            name="get_stale_claims",
+            description="List assigned, non-done issues whose claim lease has expired or whose legacy assignment is older than the stale threshold.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "stale_after_hours": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "default": 48,
+                        "description": "Age threshold for legacy assignments without explicit claim expiry.",
+                    }
+                },
+            },
+        ),
+        Tool(
+            name="reclaim_issue",
+            description=(
+                "Safely transfer a claimed issue to a new assignee when the current assignee matches expected_assignee. "
+                "Records the reason on the reclaim event."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "issue_id": {"type": "string", "description": "Issue ID to reclaim"},
+                    "assignee": {"type": "string", "minLength": 1, "description": "New assignee"},
+                    "expected_assignee": {
+                        "type": "string",
+                        "minLength": 1,
+                        "description": "Current assignee expected by the caller",
+                    },
+                    "reason": {"type": "string", "minLength": 1, "description": "Why the claim is being reclaimed"},
+                    "actor": {"type": "string", "description": "Agent/user identity for audit trail"},
+                    "lease_hours": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "default": 48,
+                        "description": "Lease duration for the new assignee, in hours.",
+                    },
+                },
+                "required": ["issue_id", "assignee", "expected_assignee", "reason"],
             },
         ),
         Tool(
@@ -476,6 +548,9 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
         "search_issues": _handle_search_issues,
         "claim_issue": _handle_claim_issue,
         "release_claim": _handle_release_claim,
+        "heartbeat_work": _handle_heartbeat_work,
+        "get_stale_claims": _handle_get_stale_claims,
+        "reclaim_issue": _handle_reclaim_issue,
         "claim_next": _handle_claim_next,
         "batch_close": _handle_batch_close,
         "batch_update": _handle_batch_update,
@@ -772,9 +847,102 @@ async def _handle_release_claim(arguments: dict[str, Any]) -> list[TextContent]:
     expected_assignee = args.get("expected_assignee")
     if expected_assignee is not None and not isinstance(expected_assignee, str):
         return _text(ErrorResponse(error="expected_assignee must be a string", code=ErrorCode.VALIDATION))
+    reason = args.get("reason", "")
+    if not isinstance(reason, str):
+        return _text(ErrorResponse(error="reason must be a string", code=ErrorCode.VALIDATION))
     tracker = _get_db()
     try:
-        issue = tracker.release_claim(args["issue_id"], actor=actor, if_held=if_held, expected_assignee=expected_assignee)
+        issue = tracker.release_claim(
+            args["issue_id"],
+            actor=actor,
+            if_held=if_held,
+            expected_assignee=expected_assignee,
+            reason=reason,
+        )
+        _refresh_summary()
+        return _text(issue_to_public(issue))
+    except KeyError:
+        return _text(ErrorResponse(error=f"Issue not found: {args['issue_id']}", code=ErrorCode.NOT_FOUND))
+    except ValueError as e:
+        return _text(ErrorResponse(error=str(e), code=ErrorCode.CONFLICT))
+
+
+async def _handle_heartbeat_work(arguments: dict[str, Any]) -> list[TextContent]:
+    from filigree.mcp_server import _get_db, _refresh_summary
+
+    args = _parse_args(arguments, HeartbeatWorkArgs)
+    actor, actor_err = _validate_actor(args.get("actor", "mcp"))
+    if actor_err:
+        return actor_err
+    expected_assignee = args.get("expected_assignee")
+    if expected_assignee is not None and not isinstance(expected_assignee, str):
+        return _text(ErrorResponse(error="expected_assignee must be a string", code=ErrorCode.VALIDATION))
+    lease_hours = args.get("lease_hours", 48)
+    lease_err = _validate_int_range(lease_hours, "lease_hours", min_val=1)
+    if lease_err:
+        return lease_err
+    tracker = _get_db()
+    try:
+        issue = tracker.heartbeat_work(
+            args["issue_id"],
+            actor=actor,
+            expected_assignee=expected_assignee,
+            lease_hours=lease_hours,
+        )
+        _refresh_summary()
+        return _text(issue_to_public(issue))
+    except KeyError:
+        return _text(ErrorResponse(error=f"Issue not found: {args['issue_id']}", code=ErrorCode.NOT_FOUND))
+    except ValueError as e:
+        return _text(ErrorResponse(error=str(e), code=ErrorCode.CONFLICT))
+
+
+async def _handle_get_stale_claims(arguments: dict[str, Any]) -> list[TextContent]:
+    from filigree.mcp_server import _get_db
+
+    args = _parse_args(arguments, GetStaleClaimsArgs)
+    stale_after_hours = args.get("stale_after_hours", 48)
+    stale_err = _validate_int_range(stale_after_hours, "stale_after_hours", min_val=1)
+    if stale_err:
+        return stale_err
+    tracker = _get_db()
+    try:
+        issues = tracker.get_stale_claims(stale_after_hours=stale_after_hours)
+    except ValueError as e:
+        return _text(ErrorResponse(error=str(e), code=ErrorCode.VALIDATION))
+    return _text(_list_response([issue_to_public(issue) for issue in issues], has_more=False))
+
+
+async def _handle_reclaim_issue(arguments: dict[str, Any]) -> list[TextContent]:
+    from filigree.mcp_server import _get_db, _refresh_summary
+
+    args = _parse_args(arguments, ReclaimIssueArgs)
+    assignee = args.get("assignee")
+    if not isinstance(assignee, str) or not assignee.strip():
+        return _text(ErrorResponse(error="assignee must be a non-empty string", code=ErrorCode.VALIDATION))
+    expected_assignee = args.get("expected_assignee")
+    if not isinstance(expected_assignee, str) or not expected_assignee.strip():
+        return _text(ErrorResponse(error="expected_assignee must be a non-empty string", code=ErrorCode.VALIDATION))
+    reason = args.get("reason")
+    if not isinstance(reason, str) or not reason.strip():
+        return _text(ErrorResponse(error="reason must be a non-empty string", code=ErrorCode.VALIDATION))
+    actor, actor_err = _validate_actor(args.get("actor", "mcp"))
+    if actor_err:
+        return actor_err
+    lease_hours = args.get("lease_hours", 48)
+    lease_err = _validate_int_range(lease_hours, "lease_hours", min_val=1)
+    if lease_err:
+        return lease_err
+    tracker = _get_db()
+    try:
+        issue = tracker.reclaim_issue(
+            args["issue_id"],
+            assignee=assignee,
+            expected_assignee=expected_assignee,
+            reason=reason,
+            actor=actor,
+            lease_hours=lease_hours,
+        )
         _refresh_summary()
         return _text(issue_to_public(issue))
     except KeyError:

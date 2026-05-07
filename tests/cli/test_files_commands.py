@@ -22,9 +22,11 @@ Finding shapes:
 - get-finding: ScanFindingDict (same)
 - update-finding: ScanFindingDict (same)
 - promote-finding: PublicIssue — {issue_id, title, status, status_category, priority,
-                                  type, parent_id, assignee, created_at, updated_at,
-                                  closed_at, description, notes, fields, labels,
-                                  blocks, blocked_by, is_ready, children, data_warnings}
+                                  type, parent_id, assignee, claimed_at,
+                                  last_heartbeat_at, claim_expires_at, created_at,
+                                  updated_at, closed_at, description, notes, fields,
+                                  labels, blocks, blocked_by, is_ready, children,
+                                  data_warnings}
 - dismiss-finding: ScanFindingDict (same as get-finding)
 - batch-update-findings: BatchResponse[str] — {succeeded, failed} or error envelope
 """
@@ -109,6 +111,9 @@ _PUBLIC_ISSUE_KEYS = frozenset(
         "type",
         "parent_id",
         "assignee",
+        "claimed_at",
+        "last_heartbeat_at",
+        "claim_expires_at",
         "created_at",
         "updated_at",
         "closed_at",

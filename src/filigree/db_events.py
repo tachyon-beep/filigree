@@ -9,10 +9,16 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from filigree.db_base import DBMixinProtocol, _now_iso
 from filigree.types.events import EventRecord, EventRecordWithTitle, EventType, UndoResult
+
+_UNDO_CLAIM_LEASE_HOURS = 48
+
+
+def _undo_claim_expiry(now: str) -> str:
+    return (datetime.fromisoformat(str(now)) + timedelta(hours=_UNDO_CLAIM_LEASE_HOURS)).isoformat()
 
 # ---------------------------------------------------------------------------
 # Undo constants (moved from core.py — only used by undo_last)
@@ -236,18 +242,36 @@ class EventsMixin(DBMixinProtocol):
                     )
 
                 case "assignee_changed":
-                    self.conn.execute(
-                        "UPDATE issues SET assignee = ?, updated_at = ? WHERE id = ?",
-                        (row["old_value"] or "", now, issue_id),
-                    )
+                    old_assignee = row["old_value"] or ""
+                    if old_assignee:
+                        self.conn.execute(
+                            "UPDATE issues SET assignee = ?, claimed_at = ?, last_heartbeat_at = ?, "
+                            "claim_expires_at = ?, updated_at = ? WHERE id = ?",
+                            (old_assignee, now, now, _undo_claim_expiry(now), now, issue_id),
+                        )
+                    else:
+                        self.conn.execute(
+                            "UPDATE issues SET assignee = '', claimed_at = NULL, last_heartbeat_at = NULL, "
+                            "claim_expires_at = NULL, updated_at = ? WHERE id = ?",
+                            (now, issue_id),
+                        )
 
                 case "claimed":
                     # Restore: revert to the assignee before the claim (usually '' but
                     # preserves prior assignee if the claim re-assigned from another agent)
-                    self.conn.execute(
-                        "UPDATE issues SET assignee = ?, updated_at = ? WHERE id = ?",
-                        (row["old_value"] if row["old_value"] is not None else "", now, issue_id),
-                    )
+                    old_assignee = row["old_value"] if row["old_value"] is not None else ""
+                    if old_assignee:
+                        self.conn.execute(
+                            "UPDATE issues SET assignee = ?, claimed_at = ?, last_heartbeat_at = ?, "
+                            "claim_expires_at = ?, updated_at = ? WHERE id = ?",
+                            (old_assignee, now, now, _undo_claim_expiry(now), now, issue_id),
+                        )
+                    else:
+                        self.conn.execute(
+                            "UPDATE issues SET assignee = '', claimed_at = NULL, last_heartbeat_at = NULL, "
+                            "claim_expires_at = NULL, updated_at = ? WHERE id = ?",
+                            (now, issue_id),
+                        )
 
                 case "dependency_added":
                     # Event: issue_id=from_id, new_value="type:depends_on_id"

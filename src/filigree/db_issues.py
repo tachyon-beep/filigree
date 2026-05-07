@@ -13,6 +13,7 @@ import logging
 import re as _re
 import sqlite3
 import uuid
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, cast
 
 from filigree.db_base import AGE_BUCKETS, DBMixinProtocol, _escape_like, _escape_like_chars, _now_iso, _safe_json_loads
@@ -26,6 +27,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _REOPEN_CLEAR_FIELDS = frozenset({"close_reason"})
+DEFAULT_CLAIM_LEASE_HOURS = 48
 
 _LIST_ISSUE_SORT_COLUMNS = {
     "created_at": "i.created_at",
@@ -69,6 +71,32 @@ def _transition_data_warnings(result: TransitionResult) -> list[str]:
 def _fields_for_reopen(fields: dict[str, Any]) -> dict[str, Any]:
     """Drop stale terminal-only fields when returning an issue to live work."""
     return {key: value for key, value in fields.items() if key not in _REOPEN_CLEAR_FIELDS}
+
+
+def _claim_expiry(now: str, lease_hours: int = DEFAULT_CLAIM_LEASE_HOURS) -> str:
+    """Return the expiry timestamp for a claim heartbeat."""
+    return (datetime.fromisoformat(str(now)) + timedelta(hours=lease_hours)).isoformat()
+
+
+def _parse_issue_timestamp(raw: object) -> datetime | None:
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    text = raw.strip()
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
+
+
+def _validate_lease_hours(value: int) -> None:
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        msg = "lease_hours must be a positive integer"
+        raise ValueError(msg)
 
 
 def _list_issue_order_by(sort_by: str, direction: str) -> str:
@@ -371,6 +399,9 @@ class IssuesMixin(DBMixinProtocol):
 
         issue_id = self._generate_unique_id("issues")
         now = _now_iso()
+        claimed_at = now if assignee else None
+        last_heartbeat_at = now if assignee else None
+        claim_expires_at = _claim_expiry(now) if assignee else None
         fields = fields or {}
 
         # Determine initial state from template
@@ -379,8 +410,8 @@ class IssuesMixin(DBMixinProtocol):
         try:
             self.conn.execute(
                 "INSERT INTO issues (id, title, status, priority, type, parent_id, assignee, "
-                "created_at, updated_at, description, notes, fields) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "claimed_at, last_heartbeat_at, claim_expires_at, created_at, updated_at, description, notes, fields) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     issue_id,
                     title,
@@ -389,6 +420,9 @@ class IssuesMixin(DBMixinProtocol):
                     type,
                     parent_id,
                     assignee,
+                    claimed_at,
+                    last_heartbeat_at,
+                    claim_expires_at,
                     now,
                     now,
                     description,
@@ -512,6 +546,9 @@ class IssuesMixin(DBMixinProtocol):
                     type=row["type"],
                     parent_id=row["parent_id"],
                     assignee=row["assignee"],
+                    claimed_at=row["claimed_at"],
+                    last_heartbeat_at=row["last_heartbeat_at"],
+                    claim_expires_at=row["claim_expires_at"],
                     created_at=row["created_at"],
                     updated_at=row["updated_at"],
                     closed_at=row["closed_at"],
@@ -670,6 +707,11 @@ class IssuesMixin(DBMixinProtocol):
                 self._record_event(issue_id, "assignee_changed", actor=actor, old_value=current.assignee, new_value=assignee)
                 updates.append("assignee = ?")
                 params.append(assignee)
+                if assignee:
+                    updates.extend(["claimed_at = ?", "last_heartbeat_at = ?", "claim_expires_at = ?"])
+                    params.extend([now, now, _claim_expiry(now)])
+                else:
+                    updates.extend(["claimed_at = NULL", "last_heartbeat_at = NULL", "claim_expires_at = NULL"])
 
             if description is not None and description != current.description:
                 self._record_event(
@@ -916,12 +958,15 @@ class IssuesMixin(DBMixinProtocol):
 
         # Atomic UPDATE: only succeeds if issue is unassigned OR already owned by this agent
         status_ph = ",".join("?" * len(claimable_states))
+        now = _now_iso()
+        claim_expires_at = _claim_expiry(now)
         try:
             cursor = self.conn.execute(
-                f"UPDATE issues SET assignee = ?, updated_at = ? "
+                f"UPDATE issues SET assignee = ?, claimed_at = COALESCE(claimed_at, ?), "
+                f"last_heartbeat_at = ?, claim_expires_at = ?, updated_at = ? "
                 f"WHERE id = ? AND status IN ({status_ph}) "
                 f"AND (assignee = '' OR assignee IS NULL OR assignee = ?)",
-                [assignee, _now_iso(), issue_id, *claimable_states, assignee],
+                [assignee, now, now, claim_expires_at, now, issue_id, *claimable_states, assignee],
             )
 
             if cursor.rowcount == 0:
@@ -953,6 +998,7 @@ class IssuesMixin(DBMixinProtocol):
         actor: str = "",
         if_held: bool = False,
         expected_assignee: str | None = None,
+        reason: str = "",
     ) -> Issue:
         """Release a claimed issue by clearing its assignee.
 
@@ -992,7 +1038,8 @@ class IssuesMixin(DBMixinProtocol):
 
         try:
             cursor = self.conn.execute(
-                "UPDATE issues SET assignee = '', updated_at = ? WHERE id = ? AND assignee = ?",
+                "UPDATE issues SET assignee = '', claimed_at = NULL, last_heartbeat_at = NULL, "
+                "claim_expires_at = NULL, updated_at = ? WHERE id = ? AND assignee = ?",
                 [_now_iso(), issue_id, observed],
             )
 
@@ -1014,7 +1061,169 @@ class IssuesMixin(DBMixinProtocol):
                 msg = f"Cannot release {issue_id}: reassigned to '{new_assignee}' (expected '{observed}')"
                 raise ValueError(msg)
 
-            self._record_event(issue_id, "released", actor=actor, old_value=observed)
+            self._record_event(issue_id, "released", actor=actor, old_value=observed, comment=reason.strip())
+            self.conn.commit()
+        except Exception:
+            self.conn.rollback()
+            raise
+        return self.get_issue(issue_id)
+
+    def heartbeat_work(
+        self,
+        issue_id: str,
+        *,
+        actor: str = "",
+        expected_assignee: str | None = None,
+        lease_hours: int = DEFAULT_CLAIM_LEASE_HOURS,
+    ) -> Issue:
+        """Refresh liveness metadata for a claimed, non-done issue."""
+        _validate_lease_hours(lease_hours)
+        self._check_id_prefix(issue_id)
+        row = self.conn.execute("SELECT type, status, assignee FROM issues WHERE id = ?", (issue_id,)).fetchone()
+        if row is None:
+            msg = f"Issue not found: {issue_id}"
+            raise KeyError(msg)
+        observed = row["assignee"] or ""
+        if not observed:
+            msg = f"Cannot heartbeat {issue_id}: no assignee set"
+            raise ValueError(msg)
+        expected_holder = ""
+        if expected_assignee is not None or actor:
+            expected_holder = _normalize_assignee(actor if expected_assignee is None else expected_assignee)
+            if not expected_holder:
+                msg = "expected_assignee or actor is required"
+                raise ValueError(msg)
+        if expected_holder and observed != expected_holder:
+            msg = f"Cannot heartbeat {issue_id}: assigned to '{observed}' (expected '{expected_holder}')"
+            raise ValueError(msg)
+        if self._resolve_status_category(row["type"], row["status"]) == "done":
+            msg = f"Cannot heartbeat {issue_id}: status is '{row['status']}'"
+            raise ValueError(msg)
+
+        now = _now_iso()
+        claim_expires_at = _claim_expiry(now, lease_hours)
+        try:
+            cursor = self.conn.execute(
+                "UPDATE issues SET last_heartbeat_at = ?, claim_expires_at = ?, updated_at = ? "
+                "WHERE id = ? AND assignee = ?",
+                (now, claim_expires_at, now, issue_id, observed),
+            )
+            if cursor.rowcount == 0:
+                current = self.conn.execute("SELECT assignee FROM issues WHERE id = ?", (issue_id,)).fetchone()
+                if current is None:
+                    msg = f"Issue not found: {issue_id}"
+                    raise KeyError(msg)
+                new_assignee = current["assignee"] or ""
+                msg = f"Cannot heartbeat {issue_id}: reassigned to '{new_assignee}' (expected '{observed}')"
+                raise ValueError(msg)
+            self._record_event(
+                issue_id,
+                "heartbeat",
+                actor=actor,
+                old_value=observed,
+                new_value=claim_expires_at,
+            )
+            self.conn.commit()
+        except Exception:
+            self.conn.rollback()
+            raise
+        return self.get_issue(issue_id)
+
+    def get_stale_claims(self, *, stale_after_hours: int = DEFAULT_CLAIM_LEASE_HOURS) -> list[Issue]:
+        """Return assigned, non-done issues whose ownership appears abandoned."""
+        _validate_lease_hours(stale_after_hours)
+        now = datetime.now(UTC)
+        cutoff = now - timedelta(hours=stale_after_hours)
+
+        pred_sql, pred_params = self._category_predicate_sql("done", type_col="i.type", status_col="i.status")
+        rows = self.conn.execute(
+            "SELECT i.id, i.claim_expires_at, i.last_heartbeat_at, i.claimed_at, i.updated_at "
+            "FROM issues i "
+            "WHERE COALESCE(i.assignee, '') != '' "
+            f"AND NOT ({pred_sql}) "
+            "ORDER BY i.priority ASC, i.created_at ASC, i.id ASC",
+            pred_params,
+        ).fetchall()
+
+        stale_ids: list[str] = []
+        for row in rows:
+            expires_at = _parse_issue_timestamp(row["claim_expires_at"])
+            if expires_at is not None:
+                if expires_at <= now:
+                    stale_ids.append(row["id"])
+                continue
+
+            basis = (
+                _parse_issue_timestamp(row["last_heartbeat_at"])
+                or _parse_issue_timestamp(row["claimed_at"])
+                or _parse_issue_timestamp(row["updated_at"])
+            )
+            if basis is None or basis <= cutoff:
+                stale_ids.append(row["id"])
+
+        return self._build_issues_batch(stale_ids)
+
+    def reclaim_issue(
+        self,
+        issue_id: str,
+        *,
+        assignee: str,
+        expected_assignee: str,
+        reason: str,
+        actor: str = "",
+        lease_hours: int = DEFAULT_CLAIM_LEASE_HOURS,
+    ) -> Issue:
+        """Atomically transfer a claim when the observed holder matches."""
+        _validate_lease_hours(lease_hours)
+        assignee = _normalize_assignee(assignee)
+        expected_assignee = _normalize_assignee(expected_assignee)
+        if not assignee:
+            msg = "Assignee cannot be empty"
+            raise ValueError(msg)
+        if not expected_assignee:
+            msg = "expected_assignee cannot be empty"
+            raise ValueError(msg)
+        reason = reason.strip()
+        if not reason:
+            msg = "reason cannot be empty"
+            raise ValueError(msg)
+        self._check_id_prefix(issue_id)
+        row = self.conn.execute("SELECT type, status, assignee FROM issues WHERE id = ?", (issue_id,)).fetchone()
+        if row is None:
+            msg = f"Issue not found: {issue_id}"
+            raise KeyError(msg)
+        observed = row["assignee"] or ""
+        if observed != expected_assignee:
+            msg = f"Cannot reclaim {issue_id}: assigned to '{observed}' (expected '{expected_assignee}')"
+            raise ValueError(msg)
+        if self._resolve_status_category(row["type"], row["status"]) == "done":
+            msg = f"Cannot reclaim {issue_id}: status is '{row['status']}'"
+            raise ValueError(msg)
+
+        now = _now_iso()
+        claim_expires_at = _claim_expiry(now, lease_hours)
+        try:
+            cursor = self.conn.execute(
+                "UPDATE issues SET assignee = ?, claimed_at = ?, last_heartbeat_at = ?, "
+                "claim_expires_at = ?, updated_at = ? WHERE id = ? AND assignee = ?",
+                (assignee, now, now, claim_expires_at, now, issue_id, expected_assignee),
+            )
+            if cursor.rowcount == 0:
+                current = self.conn.execute("SELECT assignee FROM issues WHERE id = ?", (issue_id,)).fetchone()
+                if current is None:
+                    msg = f"Issue not found: {issue_id}"
+                    raise KeyError(msg)
+                new_assignee = current["assignee"] or ""
+                msg = f"Cannot reclaim {issue_id}: reassigned to '{new_assignee}' (expected '{expected_assignee}')"
+                raise ValueError(msg)
+            self._record_event(
+                issue_id,
+                "reclaimed",
+                actor=actor,
+                old_value=expected_assignee,
+                new_value=assignee,
+                comment=reason,
+            )
             self.conn.commit()
         except Exception:
             self.conn.rollback()

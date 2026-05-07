@@ -523,6 +523,19 @@ def migrate_v9_to_v10(conn: sqlite3.Connection) -> None:
     _create_annotation_tables(conn)
 
 
+def migrate_v10_to_v11(conn: sqlite3.Connection) -> None:
+    """v10 -> v11: Add issue claim lease metadata.
+
+    Changes:
+      - issues: add claimed_at, last_heartbeat_at, and claim_expires_at
+      - issues: add index on claim_expires_at for stale-claim scans
+    """
+    add_column(conn, "issues", "claimed_at", "TEXT", "NULL")
+    add_column(conn, "issues", "last_heartbeat_at", "TEXT", "NULL")
+    add_column(conn, "issues", "claim_expires_at", "TEXT", "NULL")
+    add_index(conn, "idx_issues_claim_expires_at", "issues", ["claim_expires_at"])
+
+
 MIGRATIONS: dict[int, MigrationFn] = {
     1: migrate_v1_to_v2,
     2: migrate_v2_to_v3,
@@ -533,6 +546,7 @@ MIGRATIONS: dict[int, MigrationFn] = {
     7: migrate_v7_to_v8,
     8: migrate_v8_to_v9,
     9: migrate_v9_to_v10,
+    10: migrate_v10_to_v11,
 }
 
 

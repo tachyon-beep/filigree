@@ -23,12 +23,12 @@ def _project_db(tmp_path: Path) -> FiligreeDB:
 
 
 class TestAnnotationSchema:
-    def test_schema_version_10_creates_annotation_tables(self, tmp_path: Path) -> None:
+    def test_current_schema_creates_annotation_tables(self, tmp_path: Path) -> None:
         conn = sqlite3.connect(tmp_path / "schema.db")
         conn.executescript(SCHEMA_SQL)
         conn.execute(f"PRAGMA user_version = {CURRENT_SCHEMA_VERSION}")
 
-        assert CURRENT_SCHEMA_VERSION == 10
+        assert CURRENT_SCHEMA_VERSION >= 10
         tables = {
             row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").fetchall()
         }

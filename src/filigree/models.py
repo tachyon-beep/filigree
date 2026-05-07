@@ -43,6 +43,9 @@ class Issue:
     type: str = "task"
     parent_id: str | None = None
     assignee: str = ""
+    claimed_at: ISOTimestamp | None = None
+    last_heartbeat_at: ISOTimestamp | None = None
+    claim_expires_at: ISOTimestamp | None = None
     created_at: ISOTimestamp = _EMPTY_TS
     updated_at: ISOTimestamp = _EMPTY_TS
     closed_at: ISOTimestamp | None = None
@@ -83,6 +86,9 @@ class Issue:
             type=self.type,
             parent_id=self.parent_id,
             assignee=self.assignee,
+            claimed_at=self.claimed_at,
+            last_heartbeat_at=self.last_heartbeat_at,
+            claim_expires_at=self.claim_expires_at,
             created_at=self.created_at,
             updated_at=self.updated_at,
             closed_at=self.closed_at,

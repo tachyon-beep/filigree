@@ -13,7 +13,7 @@
     "relation_to_classic": "Same request shape; response shape changes from IssueDict to IssueLoom."
   },
   "shape_decl": {
-    "request_type": "{actor?: str, if_held?: bool, expected_assignee?: str}",
+    "request_type": "{actor?: str, if_held?: bool, expected_assignee?: str, reason?: str}",
     "response_type": "IssueLoom",
     "rationale": "Releases a claim. 409 CONFLICT when not claimable; 404 NOT_FOUND when the issue id does not exist. Optional if_held mode is idempotent for unassigned issues and only clears the expected holder."
   },

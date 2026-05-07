@@ -1108,6 +1108,9 @@ class TestClaimIssue:
         data = _parse(result)
         assert data["status"] == "open"  # status unchanged — claim only sets assignee
         assert data["assignee"] == "agent-1"
+        assert data["claimed_at"] is not None
+        assert data["last_heartbeat_at"] == data["claimed_at"]
+        assert data["claim_expires_at"] is not None
 
     async def test_claim_conflict(self, mcp_db: FiligreeDB) -> None:
         issue = mcp_db.create_issue("Claimable")
@@ -1144,6 +1147,88 @@ class TestClaimIssue:
         result = await call_tool("claim_issue", {"issue_id": "mcp-nonexistent", "assignee": "agent-1"})
         data = _parse(result)
         assert data["code"] == ErrorCode.NOT_FOUND
+
+
+class TestClaimLeaseTools:
+    async def test_release_claim_records_reason(self, mcp_db: FiligreeDB) -> None:
+        issue = mcp_db.create_issue("Release reason MCP")
+        mcp_db.claim_issue(issue.id, assignee="agent-1")
+
+        result = await call_tool("release_claim", {"issue_id": issue.id, "actor": "agent-1", "reason": "handoff"})
+
+        data = _parse(result)
+        assert data["assignee"] == ""
+        events = mcp_db.get_issue_events(issue.id, limit=10)
+        released = [event for event in events if event["event_type"] == "released"]
+        assert released[-1]["comment"] == "handoff"
+
+    async def test_heartbeat_work_refreshes_claim(self, mcp_db: FiligreeDB) -> None:
+        issue = mcp_db.create_issue("Heartbeat MCP")
+        mcp_db.claim_issue(issue.id, assignee="agent-1")
+        old = (datetime.now(UTC) - timedelta(hours=3)).isoformat()
+        mcp_db.conn.execute(
+            "UPDATE issues SET last_heartbeat_at = ?, claim_expires_at = ? WHERE id = ?",
+            (old, old, issue.id),
+        )
+        mcp_db.conn.commit()
+
+        result = await call_tool("heartbeat_work", {"issue_id": issue.id, "actor": "agent-1"})
+
+        data = _parse(result)
+        assert data["issue_id"] == issue.id
+        assert datetime.fromisoformat(data["last_heartbeat_at"]) > datetime.fromisoformat(old)
+        assert datetime.fromisoformat(data["claim_expires_at"]) > datetime.fromisoformat(data["last_heartbeat_at"])
+
+    async def test_get_stale_claims_includes_legacy_assigned_work(self, mcp_db: FiligreeDB) -> None:
+        issue = mcp_db.create_issue("Stale MCP", priority=1)
+        old = (datetime.now(UTC) - timedelta(days=5)).isoformat()
+        mcp_db.conn.execute(
+            "UPDATE issues SET assignee = 'old-agent', updated_at = ? WHERE id = ?",
+            (old, issue.id),
+        )
+        mcp_db.conn.commit()
+
+        result = await call_tool("get_stale_claims", {})
+
+        data = _parse(result)
+        assert [item["issue_id"] for item in data["items"]] == [issue.id]
+
+    async def test_reclaim_issue_transfers_expected_holder(self, mcp_db: FiligreeDB) -> None:
+        issue = mcp_db.create_issue("Reclaim MCP")
+        mcp_db.claim_issue(issue.id, assignee="agent-old")
+
+        result = await call_tool(
+            "reclaim_issue",
+            {
+                "issue_id": issue.id,
+                "assignee": "agent-new",
+                "expected_assignee": "agent-old",
+                "reason": "missed heartbeat",
+                "actor": "coordinator",
+            },
+        )
+
+        data = _parse(result)
+        assert data["assignee"] == "agent-new"
+        assert data["claimed_at"] is not None
+
+    async def test_reclaim_issue_rejects_unexpected_holder(self, mcp_db: FiligreeDB) -> None:
+        issue = mcp_db.create_issue("Reclaim MCP conflict")
+        mcp_db.claim_issue(issue.id, assignee="agent-current")
+
+        result = await call_tool(
+            "reclaim_issue",
+            {
+                "issue_id": issue.id,
+                "assignee": "agent-new",
+                "expected_assignee": "agent-old",
+                "reason": "missed heartbeat",
+                "actor": "coordinator",
+            },
+        )
+
+        data = _parse(result)
+        assert data["code"] == ErrorCode.CONFLICT
 
 
 class TestGetChanges:

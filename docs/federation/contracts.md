@@ -164,6 +164,12 @@ vocabulary that landed in Phase C:
   claim is released if the transition fails) so the assignee/status
   pair returns to its prior state on error.
 
+- **Claim liveness.** Claiming surfaces now return `claimed_at`,
+  `last_heartbeat_at`, and `claim_expires_at` on issue records. MCP adds
+  `heartbeat_work`, `get_stale_claims`, and `reclaim_issue` so agents can
+  refresh long-running work, discover expired or legacy stale assignments, and
+  transfer ownership with an expected-holder check.
+
 **Forward-only.** MCP does not accept dual vocabularies. Federation
 consumers using HTTP have used the loom vocabulary (`issue_id`,
 unified envelopes) since Phase C; MCP clients re-pin against the new

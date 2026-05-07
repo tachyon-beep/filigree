@@ -80,6 +80,40 @@ class TestSchemaV1Constant:
             assert table not in SCHEMA_V1_SQL
 
 
+class TestClaimLeaseSchema:
+    def test_fresh_schema_contains_claim_lease_columns(self, tmp_path: Path) -> None:
+        conn = _make_db(tmp_path)
+        conn.executescript(SCHEMA_SQL)
+
+        columns = _get_table_columns(conn, "issues")
+
+        assert columns["claimed_at"] == "TEXT"
+        assert columns["last_heartbeat_at"] == "TEXT"
+        assert columns["claim_expires_at"] == "TEXT"
+        indexes = _get_index_names(conn)
+        assert "idx_issues_claim_expires_at" in indexes
+        conn.close()
+
+    def test_migration_adds_claim_lease_columns(self, tmp_path: Path) -> None:
+        conn = _make_db(tmp_path)
+        conn.executescript(SCHEMA_SQL)
+        conn.execute(f"PRAGMA user_version = {CURRENT_SCHEMA_VERSION - 1}")
+        conn.execute("DROP INDEX IF EXISTS idx_issues_claim_expires_at")
+        conn.execute("ALTER TABLE issues DROP COLUMN claimed_at")
+        conn.execute("ALTER TABLE issues DROP COLUMN last_heartbeat_at")
+        conn.execute("ALTER TABLE issues DROP COLUMN claim_expires_at")
+        conn.commit()
+
+        apply_pending_migrations(conn, CURRENT_SCHEMA_VERSION)
+
+        columns = _get_table_columns(conn, "issues")
+        assert "claimed_at" in columns
+        assert "last_heartbeat_at" in columns
+        assert "claim_expires_at" in columns
+        assert "idx_issues_claim_expires_at" in _get_index_names(conn)
+        conn.close()
+
+
 # ---------------------------------------------------------------------------
 # Migration runner tests
 # ---------------------------------------------------------------------------

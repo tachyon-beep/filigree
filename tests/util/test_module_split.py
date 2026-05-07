@@ -48,7 +48,7 @@ def test_mcp_tools_register_shape() -> None:
 
 
 def test_mcp_tools_total_count() -> None:
-    """All 98 tools are registered across domain modules.
+    """All 101 tools are registered across domain modules.
 
     Count includes the observation batch-promotion surface so the split-module
     registry test notices dropped tool registrations.
@@ -62,7 +62,7 @@ def test_mcp_tools_total_count() -> None:
     # Scanner module needs include_legacy=True to include all legacy aliases.
     tools, _ = scanners.register(include_legacy=True)
     total += len(tools)
-    assert total == 98, f"Expected 98 tools total, got {total}"
+    assert total == 101, f"Expected 101 tools total, got {total}"
 
 
 def test_mcp_backward_compat_imports() -> None:

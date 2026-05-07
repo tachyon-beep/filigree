@@ -727,10 +727,11 @@ def _release_impl(
     *,
     if_held: bool = False,
     expected_assignee: str | None = None,
+    reason: str = "",
 ) -> None:
     with get_db() as db:
         try:
-            issue = db.release_claim(issue_id, actor=actor, if_held=if_held, expected_assignee=expected_assignee)
+            issue = db.release_claim(issue_id, actor=actor, if_held=if_held, expected_assignee=expected_assignee, reason=reason)
             if as_json:
                 click.echo(json_mod.dumps(issue_to_public(issue), indent=2, default=str))
             else:
@@ -758,11 +759,19 @@ def _release_impl(
     help="Idempotently release only if held by --expected-assignee or the global --actor; no-op if unassigned.",
 )
 @click.option("--expected-assignee", default=None, help="Expected current assignee for --if-held coordinator flows.")
+@click.option("--reason", default="", help="Audit reason for releasing the claim.")
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON")
 @click.pass_context
-def release(ctx: click.Context, issue_id: str, if_held: bool, expected_assignee: str | None, as_json: bool) -> None:
+def release(
+    ctx: click.Context,
+    issue_id: str,
+    if_held: bool,
+    expected_assignee: str | None,
+    reason: str,
+    as_json: bool,
+) -> None:
     """Release a claimed issue by clearing its assignee."""
-    _release_impl(ctx.obj["actor"], issue_id, as_json, if_held=if_held, expected_assignee=expected_assignee)
+    _release_impl(ctx.obj["actor"], issue_id, as_json, if_held=if_held, expected_assignee=expected_assignee, reason=reason)
 
 
 @click.command("release-claim")
@@ -773,11 +782,157 @@ def release(ctx: click.Context, issue_id: str, if_held: bool, expected_assignee:
     help="Idempotently release only if held by --expected-assignee or the global --actor; no-op if unassigned.",
 )
 @click.option("--expected-assignee", default=None, help="Expected current assignee for --if-held coordinator flows.")
+@click.option("--reason", default="", help="Audit reason for releasing the claim.")
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON")
 @click.pass_context
-def release_claim_cmd(ctx: click.Context, issue_id: str, if_held: bool, expected_assignee: str | None, as_json: bool) -> None:
+def release_claim_cmd(
+    ctx: click.Context,
+    issue_id: str,
+    if_held: bool,
+    expected_assignee: str | None,
+    reason: str,
+    as_json: bool,
+) -> None:
     """Release a claimed issue by clearing its assignee. Alias for `release`."""
-    _release_impl(ctx.obj["actor"], issue_id, as_json, if_held=if_held, expected_assignee=expected_assignee)
+    _release_impl(ctx.obj["actor"], issue_id, as_json, if_held=if_held, expected_assignee=expected_assignee, reason=reason)
+
+
+@click.command("heartbeat-work")
+@click.argument("issue_id")
+@click.option("--expected-assignee", default=None, help="Expected current assignee; defaults to global --actor.")
+@click.option("--lease-hours", default=48, type=int, help="Lease duration from this heartbeat.")
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+@click.pass_context
+def heartbeat_work_cmd(
+    ctx: click.Context,
+    issue_id: str,
+    expected_assignee: str | None,
+    lease_hours: int,
+    as_json: bool,
+) -> None:
+    """Refresh claim liveness metadata for the current holder."""
+    _range_check_int(lease_hours, "lease_hours", min_val=1, max_val=8760, as_json=as_json)
+    with get_db() as db:
+        try:
+            issue = db.heartbeat_work(
+                issue_id,
+                actor=ctx.obj["actor"],
+                expected_assignee=expected_assignee,
+                lease_hours=lease_hours,
+            )
+        except KeyError:
+            if as_json:
+                click.echo(json_mod.dumps({"error": f"Not found: {issue_id}", "code": ErrorCode.NOT_FOUND}))
+            else:
+                click.echo(f"Not found: {issue_id}", err=True)
+            sys.exit(1)
+        except ValueError as e:
+            if as_json:
+                click.echo(json_mod.dumps({"error": str(e), "code": ErrorCode.CONFLICT}))
+            else:
+                click.echo(f"Error: {e}", err=True)
+            sys.exit(1)
+        if as_json:
+            click.echo(json_mod.dumps(issue_to_public(issue), indent=2, default=str))
+        else:
+            click.echo(f"Heartbeat recorded for {issue.id}: assignee={issue.assignee}")
+        refresh_summary(db)
+
+
+@click.command("stale-claims")
+@click.option("--stale-after-hours", default=48, type=int, help="Legacy assignment age threshold.")
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+def stale_claims_cmd(stale_after_hours: int, as_json: bool) -> None:
+    """List assigned issues whose claim liveness is stale."""
+    _range_check_int(stale_after_hours, "stale_after_hours", min_val=1, max_val=8760, as_json=as_json)
+    with get_db() as db:
+        try:
+            issues = db.get_stale_claims(stale_after_hours=stale_after_hours)
+        except ValueError as e:
+            if as_json:
+                click.echo(json_mod.dumps({"error": str(e), "code": ErrorCode.VALIDATION}))
+            else:
+                click.echo(f"Error: {e}", err=True)
+            sys.exit(1)
+        if as_json:
+            click.echo(
+                json_mod.dumps(
+                    {"items": [issue_to_public(issue) for issue in issues], "has_more": False},
+                    indent=2,
+                    default=str,
+                )
+            )
+        elif not issues:
+            click.echo("No stale claims")
+        else:
+            for issue in issues:
+                click.echo(f'P{issue.priority} {issue.id} [{issue.type}] "{issue.title}" -> {issue.assignee}')
+
+
+@click.command("reclaim")
+@click.argument("issue_id")
+@click.option("--assignee", required=True, help="New assignee")
+@click.option("--expected-assignee", required=True, help="Current assignee expected by the caller")
+@click.option("--reason", required=True, help="Why the claim is being reclaimed")
+@click.option("--lease-hours", default=48, type=int, help="Lease duration for the new assignee.")
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+@click.pass_context
+def reclaim_cmd(
+    ctx: click.Context,
+    issue_id: str,
+    assignee: str,
+    expected_assignee: str,
+    reason: str,
+    lease_hours: int,
+    as_json: bool,
+) -> None:
+    """Safely transfer a claim when the observed holder matches."""
+    if not assignee.strip():
+        if as_json:
+            click.echo(json_mod.dumps({"error": "assignee must be a non-empty string", "code": ErrorCode.VALIDATION}))
+        else:
+            click.echo("Error: assignee must be a non-empty string", err=True)
+        sys.exit(1)
+    if not expected_assignee.strip():
+        if as_json:
+            click.echo(json_mod.dumps({"error": "expected_assignee must be a non-empty string", "code": ErrorCode.VALIDATION}))
+        else:
+            click.echo("Error: expected_assignee must be a non-empty string", err=True)
+        sys.exit(1)
+    if not reason.strip():
+        if as_json:
+            click.echo(json_mod.dumps({"error": "reason must be a non-empty string", "code": ErrorCode.VALIDATION}))
+        else:
+            click.echo("Error: reason must be a non-empty string", err=True)
+        sys.exit(1)
+    _range_check_int(lease_hours, "lease_hours", min_val=1, max_val=8760, as_json=as_json)
+    with get_db() as db:
+        try:
+            issue = db.reclaim_issue(
+                issue_id,
+                assignee=assignee,
+                expected_assignee=expected_assignee,
+                reason=reason,
+                actor=ctx.obj["actor"],
+                lease_hours=lease_hours,
+            )
+        except KeyError:
+            if as_json:
+                click.echo(json_mod.dumps({"error": f"Not found: {issue_id}", "code": ErrorCode.NOT_FOUND}))
+            else:
+                click.echo(f"Not found: {issue_id}", err=True)
+            sys.exit(1)
+        except ValueError as e:
+            if as_json:
+                click.echo(json_mod.dumps({"error": str(e), "code": ErrorCode.CONFLICT}))
+            else:
+                click.echo(f"Error: {e}", err=True)
+            sys.exit(1)
+        if as_json:
+            click.echo(json_mod.dumps(issue_to_public(issue), indent=2, default=str))
+        else:
+            click.echo(f"Reclaimed {issue.id}: {expected_assignee} -> {issue.assignee}")
+        refresh_summary(db)
 
 
 def _undo_impl(actor: str, issue_id: str, as_json: bool) -> None:
@@ -983,6 +1138,11 @@ def register(cli: click.Group) -> None:
     cli.add_command(claim_next)
     cli.add_command(release)
     cli.add_command(release_claim_cmd)
+    cli.add_command(heartbeat_work_cmd)
+    cli.add_command(stale_claims_cmd)
+    cli.add_command(stale_claims_cmd, "get-stale-claims")
+    cli.add_command(reclaim_cmd)
+    cli.add_command(reclaim_cmd, "reclaim-issue")
     cli.add_command(undo)
     cli.add_command(undo_last_cmd)
     cli.add_command(start_work)

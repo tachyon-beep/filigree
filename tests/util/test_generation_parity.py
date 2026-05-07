@@ -385,7 +385,7 @@ class TestLoomGenerationParityBatchUpdate:
 
     async def test_response_detail_full_succeeded_shape(self, dashboard_surface: AsyncClient) -> None:
         """``?response_detail=full`` upgrades ``succeeded[0]`` from a slim
-        5-key projection to a full ``IssueLoom`` (20 keys). Pins the C5
+        5-key projection to a full ``IssueLoom`` (23 keys). Pins the C5
         shape contract for federation consumers that opt in.
         """
         create = await dashboard_surface.post("/api/issues", json={"title": "C5 batch update full seed"})
@@ -604,6 +604,9 @@ _ISSUE_LOOM_KEYS: frozenset[str] = frozenset(
         "type",
         "parent_id",
         "assignee",
+        "claimed_at",
+        "last_heartbeat_at",
+        "claim_expires_at",
         "created_at",
         "updated_at",
         "closed_at",
@@ -621,7 +624,7 @@ _ISSUE_LOOM_KEYS: frozenset[str] = frozenset(
 
 
 def _assert_issue_loom_shape(body: Any, *, path: str = "$") -> None:
-    """Assert ``body`` is an ``IssueLoom`` (20 keys, types match the TypedDict).
+    """Assert ``body`` is an ``IssueLoom`` (23 keys, types match the TypedDict).
 
     Allows extra keys to support the ``WithFiles`` / ``WithUnblocked`` subtypes
     (the test bodies that hit those paths assert the extra keys themselves).
@@ -639,6 +642,13 @@ def _assert_issue_loom_shape(body: Any, *, path: str = "$") -> None:
     assert isinstance(body["type"], str), f"{path}: type must be str"
     assert body["parent_id"] is None or isinstance(body["parent_id"], str), f"{path}: parent_id must be str|None"
     assert isinstance(body["assignee"], str), f"{path}: assignee must be str"
+    assert body["claimed_at"] is None or isinstance(body["claimed_at"], str), f"{path}: claimed_at must be str|None"
+    assert body["last_heartbeat_at"] is None or isinstance(body["last_heartbeat_at"], str), (
+        f"{path}: last_heartbeat_at must be str|None"
+    )
+    assert body["claim_expires_at"] is None or isinstance(body["claim_expires_at"], str), (
+        f"{path}: claim_expires_at must be str|None"
+    )
     assert isinstance(body["fields"], dict), f"{path}: fields must be dict"
     for list_key in ("labels", "blocks", "blocked_by", "children", "data_warnings"):
         assert isinstance(body[list_key], list), f"{path}: {list_key} must be list"

@@ -106,6 +106,19 @@ def _build_context(db: FiligreeDB, filigree_dir: Path | None = None) -> str:
             lines.append(f'P{issue.priority} {issue.id} [{issue.type}] "{title}"')
         lines.append("")
 
+    try:
+        stale_claims = db.get_stale_claims()
+        if stale_claims:
+            lines.append(f"STALE CLAIMS ({len(stale_claims)} assigned issue(s) older than 48h or past lease expiry):")
+            for issue in stale_claims[:READY_CAP]:
+                title = _sanitize_context_title(issue.title)
+                lines.append(f'P{issue.priority} {issue.id} [{issue.type}] "{title}" -> {issue.assignee}')
+            if len(stale_claims) > READY_CAP:
+                lines.append("  ... (truncated, run 'filigree stale-claims' for full list)")
+            lines.append("")
+    except (sqlite3.OperationalError, AttributeError):
+        logger.debug("stale claim stats unavailable in session context", exc_info=True)
+
     # Ready to work
     ready = db.get_ready()
     if ready:

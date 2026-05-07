@@ -109,6 +109,27 @@ class ReleaseClaimArgs(TypedDict):
     actor: NotRequired[str]
     if_held: NotRequired[bool]
     expected_assignee: NotRequired[str]
+    reason: NotRequired[str]
+
+
+class HeartbeatWorkArgs(TypedDict):
+    issue_id: str
+    actor: NotRequired[str]
+    expected_assignee: NotRequired[str]
+    lease_hours: NotRequired[int]
+
+
+class GetStaleClaimsArgs(TypedDict):
+    stale_after_hours: NotRequired[int]
+
+
+class ReclaimIssueArgs(TypedDict):
+    issue_id: str
+    assignee: str
+    expected_assignee: str
+    reason: str
+    actor: NotRequired[str]
+    lease_hours: NotRequired[int]
 
 
 class ClaimNextArgs(TypedDict):
@@ -688,6 +709,9 @@ TOOL_ARGS_MAP: dict[str, type] = {
     "search_issues": SearchIssuesArgs,
     "claim_issue": ClaimIssueArgs,
     "release_claim": ReleaseClaimArgs,
+    "heartbeat_work": HeartbeatWorkArgs,
+    "get_stale_claims": GetStaleClaimsArgs,
+    "reclaim_issue": ReclaimIssueArgs,
     "claim_next": ClaimNextArgs,
     "batch_close": BatchCloseArgs,
     "batch_update": BatchUpdateArgs,

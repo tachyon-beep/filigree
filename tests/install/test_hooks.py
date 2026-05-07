@@ -57,6 +57,23 @@ class TestBuildContext:
         assert "IN PROGRESS" in result
         assert "Working on this" in result
 
+    def test_stale_claims_shown_separately(self, db: FiligreeDB) -> None:
+        issue = db.create_issue("Abandoned claim", priority=1)
+        db.conn.execute(
+            "UPDATE issues SET assignee = 'old-agent', updated_at = '2020-01-01T00:00:00+00:00' WHERE id = ?",
+            (issue.id,),
+        )
+        db.conn.commit()
+
+        result = _build_context(db)
+
+        assert "STALE CLAIMS" in result
+        assert "Abandoned claim" in result
+        assert "old-agent" in result
+        assert "READY TO WORK" in result
+        ready_section = result.split("READY TO WORK", 1)[1]
+        assert "Abandoned claim" not in ready_section
+
     def test_critical_path_shown(self, db: FiligreeDB) -> None:
         a = db.create_issue("Blocker task", priority=1)
         b = db.create_issue("Downstream task", priority=2)

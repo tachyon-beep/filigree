@@ -178,7 +178,10 @@ def _parse_release_claim_body(body: dict[str, Any]) -> dict[str, Any] | JSONResp
     expected_assignee = body.get("expected_assignee")
     if expected_assignee is not None and not isinstance(expected_assignee, str):
         return _error_response("expected_assignee must be a string", ErrorCode.VALIDATION, 400)
-    return {"if_held": if_held, "expected_assignee": expected_assignee}
+    reason = _validate_body_string_field(body, "reason", default="")
+    if not isinstance(reason, str):
+        return reason
+    return {"if_held": if_held, "expected_assignee": expected_assignee, "reason": reason}
 
 
 # ---------------------------------------------------------------------------
