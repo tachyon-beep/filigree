@@ -226,7 +226,9 @@ same warning after the close; V1 warnings are advisory and do not block closure.
 
 ### `reopen`
 
-Reopen one or more closed issues, returning them to their type's initial state. Accepts multiple IDs.
+Reopen one or more closed issues, returning each to the last non-done status
+before closure. Reopen clears `closed_at` and stale close-only fields such as
+`close_reason`. Accepts multiple IDs.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|

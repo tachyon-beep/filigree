@@ -445,11 +445,33 @@ class TestReopenIssue:
         assert reopened.status == "triage"
         assert reopened.closed_at is None
 
+    def test_reopen_bug_returns_to_last_non_done_status_and_clears_close_reason(self, db: FiligreeDB) -> None:
+        issue = db.create_issue("Bug", type="bug", fields={"severity": "major"})
+        db.update_issue(issue.id, status="confirmed")
+        db.update_issue(issue.id, status="fixing", fields={"root_cause": "bad assumption"})
+        db.update_issue(issue.id, status="verifying", fields={"fix_verification": "regression added"})
+        db.close_issue(issue.id, reason="closed too early")
+
+        reopened = db.reopen_issue(issue.id, actor="tester")
+
+        assert reopened.status == "verifying"
+        assert reopened.closed_at is None
+        assert reopened.fields["root_cause"] == "bad assumption"
+        assert reopened.fields["fix_verification"] == "regression added"
+        assert "close_reason" not in reopened.fields
+        events = db.conn.execute(
+            "SELECT * FROM events WHERE issue_id = ? AND event_type = 'reopened'",
+            (issue.id,),
+        ).fetchall()
+        assert events[-1]["old_value"] == "closed"
+        assert events[-1]["new_value"] == "verifying"
+
     def test_reopen_task_returns_to_open(self, db: FiligreeDB) -> None:
         issue = db.create_issue("Task", type="task")
-        db.close_issue(issue.id)
+        db.close_issue(issue.id, reason="done")
         reopened = db.reopen_issue(issue.id)
         assert reopened.status == "open"
+        assert "close_reason" not in reopened.fields
 
     def test_reopen_already_open_raises(self, db: FiligreeDB) -> None:
         issue = db.create_issue("Task", type="task")

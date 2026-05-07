@@ -3161,6 +3161,25 @@ class TestMCPReopenIssue:
         assert data["status"] == "open"
         assert data["closed_at"] is None
 
+    async def test_reopen_bug_returns_to_last_non_done_status_and_clears_close_reason(self, mcp_db: FiligreeDB) -> None:
+        issue = mcp_db.create_issue("MCP bug reopen", type="bug", fields={"severity": "major"})
+        mcp_db.update_issue(issue.id, status="confirmed")
+        mcp_db.update_issue(issue.id, status="fixing", fields={"root_cause": "bad assumption"})
+        mcp_db.update_issue(issue.id, status="verifying", fields={"fix_verification": "regression added"})
+        mcp_db.close_issue(issue.id, reason="closed too early")
+
+        result = await call_tool("reopen_issue", {"issue_id": issue.id, "actor": "agent-gamma"})
+
+        data = _parse(result)
+        assert data["status"] == "verifying"
+        assert data["closed_at"] is None
+        assert data["fields"]["root_cause"] == "bad assumption"
+        assert data["fields"]["fix_verification"] == "regression added"
+        assert "close_reason" not in data["fields"]
+        reopen_event = next(e for e in mcp_db.get_recent_events(limit=10) if e["event_type"] == "reopened")
+        assert reopen_event["old_value"] == "closed"
+        assert reopen_event["new_value"] == "verifying"
+
     async def test_reopen_with_actor(self, mcp_db: FiligreeDB) -> None:
         issue = mcp_db.create_issue("Actor reopen")
         mcp_db.close_issue(issue.id, reason="done")

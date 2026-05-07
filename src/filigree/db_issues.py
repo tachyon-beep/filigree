@@ -13,7 +13,7 @@ import logging
 import re as _re
 import sqlite3
 import uuid
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from filigree.db_base import AGE_BUCKETS, DBMixinProtocol, _escape_like, _escape_like_chars, _now_iso, _safe_json_loads
 from filigree.models import Issue
@@ -24,6 +24,8 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
 logger = logging.getLogger(__name__)
+
+_REOPEN_CLEAR_FIELDS = frozenset({"close_reason"})
 
 _LIST_ISSUE_SORT_COLUMNS = {
     "created_at": "i.created_at",
@@ -62,6 +64,11 @@ def _transition_data_warnings(result: TransitionResult) -> list[str]:
     if not warnings and result.enforcement == "soft" and result.missing_fields:
         warnings.append(f"Missing recommended fields: {', '.join(result.missing_fields)}")
     return warnings
+
+
+def _fields_for_reopen(fields: dict[str, Any]) -> dict[str, Any]:
+    """Drop stale terminal-only fields when returning an issue to live work."""
+    return {key: value for key, value in fields.items() if key not in _REOPEN_CLEAR_FIELDS}
 
 
 def _list_issue_order_by(sort_by: str, direction: str) -> str:
@@ -803,9 +810,10 @@ class IssuesMixin(DBMixinProtocol):
         )
 
     def reopen_issue(self, issue_id: str, *, actor: str = "") -> Issue:
-        """Reopen a closed issue, returning it to its type's initial state.
+        """Reopen a closed issue to the last non-done status before closure.
 
-        Clears closed_at. Only works on issues in done-category states.
+        Clears closed_at and stale close-only fields. Only works on issues in
+        done-category states.
         """
         self._check_id_prefix(issue_id)
         current = self.get_issue(issue_id)
@@ -813,20 +821,59 @@ class IssuesMixin(DBMixinProtocol):
             msg = f"Cannot reopen {issue_id}: status '{current.status}' is not in a done-category state"
             raise ValueError(msg)
 
-        initial_state = self.templates.get_initial_state(current.type)
-        result = self.update_issue(issue_id, status=initial_state, actor=actor, _skip_transition_check=True)
+        reopen_status = self._reopen_target_status(current)
+        result = self.update_issue(issue_id, status=reopen_status, actor=actor, _skip_transition_check=True)
+        reopen_fields = _fields_for_reopen(current.fields)
+        if reopen_fields != current.fields:
+            self._record_event(
+                issue_id,
+                "fields_changed",
+                actor=actor,
+                old_value=json.dumps(current.fields),
+                new_value=json.dumps(reopen_fields),
+            )
+            self.conn.execute(
+                "UPDATE issues SET fields = ?, updated_at = ? WHERE id = ?",
+                (json.dumps(reopen_fields), _now_iso(), issue_id),
+            )
+            self.conn.commit()
+            result = self.get_issue(issue_id)
         # Record "reopened" event after update_issue has committed the status
         # change and its own status_changed event.  The state change is already
         # durable, so a failure here must not propagate — callers would wrongly
         # assume the reopen failed and retry into a confusing error.
         try:
-            self._record_event(issue_id, "reopened", actor=actor, old_value=current.status, new_value=initial_state)
+            self._record_event(issue_id, "reopened", actor=actor, old_value=current.status, new_value=reopen_status)
             self.conn.commit()
         except Exception:
             logger.warning("Failed to record reopened event for %s (status change succeeded)", issue_id, exc_info=True)
             with contextlib.suppress(sqlite3.Error):
                 self.conn.rollback()
         return result
+
+    def _reopen_target_status(self, issue: Issue) -> str:
+        """Find the most recent non-done status that led into a done state."""
+        rows = self.conn.execute(
+            "SELECT old_value, new_value FROM events "
+            "WHERE issue_id = ? AND event_type = 'status_changed' "
+            "ORDER BY created_at DESC, id DESC",
+            (issue.id,),
+        ).fetchall()
+        for row in rows:
+            old_status = row["old_value"]
+            new_status = row["new_value"]
+            if not old_status or not new_status:
+                continue
+            try:
+                self._validate_status(old_status, issue.type)
+            except ValueError:
+                continue
+            if (
+                self._resolve_status_category(issue.type, new_status) == "done"
+                and self._resolve_status_category(issue.type, old_status) != "done"
+            ):
+                return cast(str, old_status)
+        return self.templates.get_initial_state(issue.type)
 
     def claim_issue(self, issue_id: str, *, assignee: str, actor: str = "") -> Issue:
         """Atomically claim an open/wip-category issue with optimistic locking.

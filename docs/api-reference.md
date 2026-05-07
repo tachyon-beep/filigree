@@ -231,7 +231,8 @@ Closes an issue by moving it to a done-category state. Direct close bypasses tra
 def reopen_issue(self, issue_id: str, *, actor: str = "") -> Issue
 ```
 
-Reopens a closed issue, returning it to its type's initial state. Clears `closed_at`.
+Reopens a closed issue, returning it to the last non-done status before closure.
+Clears `closed_at` and stale close-only fields such as `close_reason`.
 
 **Raises:** `ValueError` if the issue is not in a done-category state.
 

@@ -313,6 +313,29 @@ class TestReopen:
         assert result.exit_code == 0
         assert "Reopened" in result.output
 
+    def test_reopen_bug_returns_to_last_non_done_status_and_clears_close_reason(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        runner, _ = cli_in_project
+        created = runner.invoke(cli, ["create", "Bug reopen", "--type", "bug", "--field", "severity=major", "--json"])
+        assert created.exit_code == 0
+        issue_id = json.loads(created.output)["issue_id"]
+        assert runner.invoke(cli, ["update", issue_id, "--status", "confirmed"]).exit_code == 0
+        assert runner.invoke(cli, ["update", issue_id, "--status", "fixing", "--field", "root_cause=bad assumption"]).exit_code == 0
+        assert (
+            runner.invoke(cli, ["update", issue_id, "--status", "verifying", "--field", "fix_verification=regression added"]).exit_code == 0
+        )
+        assert runner.invoke(cli, ["close", issue_id, "--reason", "closed too early"]).exit_code == 0
+
+        result = runner.invoke(cli, ["reopen", issue_id, "--json"])
+
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["succeeded"][0]["status"] == "verifying"
+        shown = runner.invoke(cli, ["show", issue_id, "--json"])
+        fields = json.loads(shown.output)["fields"]
+        assert fields["root_cause"] == "bad assumption"
+        assert fields["fix_verification"] == "regression added"
+        assert "close_reason" not in fields
+
     def test_reopen_not_found(self, cli_in_project: tuple[CliRunner, Path]) -> None:
         runner, _ = cli_in_project
         result = runner.invoke(cli, ["reopen", "test-nonexistent"])

@@ -233,7 +233,10 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
         ),
         Tool(
             name="reopen_issue",
-            description="Reopen a closed issue, returning it to its type's initial state. Clears closed_at.",
+            description=(
+                "Reopen a closed issue to the last non-done status before closure. "
+                "Clears closed_at and stale close-only fields such as close_reason."
+            ),
             inputSchema={
                 "type": "object",
                 "properties": {

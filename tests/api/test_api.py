@@ -522,6 +522,23 @@ class TestCloseReopenAPI:
         data = resp.json()
         assert data["status_category"] == "open"
 
+    async def test_loom_reopen_bug_returns_to_last_non_done_status(self, client: AsyncClient, dashboard_db: PopulatedDB) -> None:
+        issue = dashboard_db.db.create_issue("Loom bug reopen", type="bug", fields={"severity": "major"})
+        dashboard_db.db.update_issue(issue.id, status="confirmed")
+        dashboard_db.db.update_issue(issue.id, status="fixing", fields={"root_cause": "bad assumption"})
+        dashboard_db.db.update_issue(issue.id, status="verifying", fields={"fix_verification": "regression added"})
+        dashboard_db.db.close_issue(issue.id, reason="closed too early")
+
+        resp = await client.post(f"/api/loom/issues/{issue.id}/reopen", json={"actor": "api-test"})
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "verifying"
+        assert data["closed_at"] is None
+        assert data["fields"]["root_cause"] == "bad assumption"
+        assert data["fields"]["fix_verification"] == "regression added"
+        assert "close_reason" not in data["fields"]
+
     async def test_reopen_not_closed(self, client: AsyncClient, dashboard_db: PopulatedDB) -> None:
         ids = dashboard_db.ids
         # B is open — can't reopen

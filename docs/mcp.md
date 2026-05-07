@@ -84,7 +84,7 @@ Workflow guide with optional live project context. Agents use this to understand
 | `create_issue` | Create with type, priority, deps, labels, fields |
 | `update_issue` | Update status, priority, title, assignee, fields |
 | `close_issue` | Close with optional reason |
-| `reopen_issue` | Reopen a closed issue to its initial status |
+| `reopen_issue` | Reopen a closed issue to the last non-done status before closure |
 | `undo_last` | Undo most recent reversible action |
 
 #### `get_issue`

@@ -172,7 +172,7 @@ def _build_transition_error(
             data["valid_transitions"] = [{"to": t.to, "category": t.category} for t in transitions]
         if not transitions and tracker.get_issue(issue_id).status_category == "done":
             data["reopen_available"] = True
-            data["hint"] = "Use reopen_issue to return this closed issue to its initial state"
+            data["hint"] = "Use reopen_issue to return this closed issue to the last non-done status before closure"
         else:
             data["hint"] = "Use get_valid_transitions to see allowed state changes"
     except Exception:
