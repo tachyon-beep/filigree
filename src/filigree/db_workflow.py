@@ -158,6 +158,7 @@ class WorkflowMixin(DBMixinProtocol):
             type=tpl.type,
             display_name=tpl.display_name,
             description=tpl.description,
+            pack=tpl.pack,
             states=[StateInfo(name=s.name, category=s.category) for s in tpl.states],
             initial_state=tpl.initial_state,
             transitions=[

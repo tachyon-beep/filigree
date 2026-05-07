@@ -531,7 +531,8 @@ Show plan tree with progress for a milestone.
 
 ```bash
 filigree types                              # List all types with status flows
-filigree type-info <type>                   # Full workflow definition
+filigree get-template <type>                # Canonical full workflow definition
+filigree type-info <type>                   # Compatibility alias for get-template
 filigree transitions <id>                   # Valid next statuses for an issue
 filigree validate <id>                      # Validate against template
 filigree packs                              # List enabled packs
@@ -551,7 +552,8 @@ List all registered issue types with their pack and status flow.
 
 ### `type-info`
 
-Show the full workflow definition for an issue type: statuses, transitions, fields, and enforcement rules.
+Compatibility alias for `get-template`. Shows the same full workflow definition for an issue type:
+pack, statuses, transitions, fields, and enforcement rules.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|

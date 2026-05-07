@@ -52,6 +52,7 @@ class TestWorkflowCli:
         assert result.exit_code == 0
         data = json.loads(result.output)
         assert data["type"] == "task"
+        assert data["pack"] == "core"
         assert "states" in data
         assert "transitions" in data
         assert "initial_state" in data
@@ -313,9 +314,19 @@ class TestWorkflowCli:
         assert result.exit_code == 0
         payload = json.loads(result.output)
         assert payload["type"] == "bug"
+        assert payload["pack"] == "core"
         assert "fields_schema" in payload
         assert "states" in payload
         assert "initial_state" in payload
+
+    def test_type_info_json_matches_get_template_json(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        runner, _ = cli_in_project
+
+        template = runner.invoke(cli, ["get-template", "task", "--json"])
+        type_info = runner.invoke(cli, ["type-info", "task", "--json"])
+
+        assert template.exit_code == type_info.exit_code == 0
+        assert json.loads(type_info.output) == json.loads(template.output)
 
     def test_get_template_alias_unknown_type_envelope(self, cli_in_project: tuple[CliRunner, Path]) -> None:
         """Bug filigree-6213766f9b: get-template --json on unknown type emits the 2.0 envelope."""

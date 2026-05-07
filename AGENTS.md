@@ -95,7 +95,8 @@ filigree taxonomy                           # Show reserved namespaces and vocab
 
 # Workflow templates
 filigree types                              # List registered types with status flows
-filigree type-info <type>                   # Full workflow definition for a type
+filigree get-template <type>                # Canonical full workflow definition for a type
+filigree type-info <type>                   # Compatibility alias for get-template
 filigree transitions <id>                   # Valid next statuses for an issue
 filigree workflow-statuses                  # All statuses by category from enabled templates
 filigree explain-status <type> <status>     # Explain a status's transitions and required fields

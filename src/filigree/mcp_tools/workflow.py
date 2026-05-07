@@ -31,8 +31,6 @@ from filigree.types.inputs import (
 )
 from filigree.types.workflow import (
     StateInfo,
-    TransitionInfo,
-    TypeInfoResponse,
     TypeListItem,
 )
 
@@ -42,7 +40,10 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
     tools = [
         Tool(
             name="get_template",
-            description="Get the field schema for an issue type (shows what fields to populate)",
+            description=(
+                "canonical full workflow definition for an issue type: pack, states, transitions, "
+                "initial state, and fields schema. Prefer this for workflow discovery."
+            ),
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -76,7 +77,9 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
         ),
         Tool(
             name="get_type_info",
-            description="Get full workflow definition for an issue type: states, transitions, fields, enforcement rules.",
+            description=(
+                "compatibility alias for get_template; returns the same canonical full workflow definition."
+            ),
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -324,27 +327,10 @@ async def _handle_get_type_info(arguments: dict[str, Any]) -> list[TextContent]:
 
     args = _parse_args(arguments, GetTypeInfoArgs)
     tracker = _get_db()
-    type_tpl = tracker.templates.get_type(args["type"])
-    if type_tpl is None:
+    tpl = tracker.get_template(args["type"])
+    if tpl is None:
         return _text(ErrorResponse(error=f"Unknown type: {args['type']}", code=ErrorCode.NOT_FOUND))
-    fields = [tracker._field_schema_to_info(fd) for fd in type_tpl.fields_schema]
-    return _text(
-        TypeInfoResponse(
-            type=type_tpl.type,
-            display_name=type_tpl.display_name,
-            description=type_tpl.description,
-            pack=type_tpl.pack,
-            states=[StateInfo(name=s.name, category=s.category) for s in type_tpl.states],
-            initial_state=type_tpl.initial_state,
-            transitions=[
-                TransitionInfo(
-                    {"from": td.from_state, "to": td.to_state, "enforcement": td.enforcement, "requires_fields": list(td.requires_fields)}
-                )
-                for td in type_tpl.transitions
-            ],
-            fields_schema=fields,
-        )
-    )
+    return _text(tpl)
 
 
 async def _handle_list_packs(arguments: dict[str, Any]) -> list[TextContent]:

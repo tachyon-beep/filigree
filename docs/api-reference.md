@@ -768,7 +768,10 @@ Undoes the most recent reversible event for an issue. Reversible events: `status
 def get_template(self, issue_type: str) -> dict[str, Any] | None
 ```
 
-Returns the workflow template for a type as a dict with `type`, `display_name`, `description`, `states`, `initial_state`, `transitions`, and `fields_schema`. Returns `None` if the type is not registered.
+Returns the canonical workflow definition for a type as a dict with `type`,
+`display_name`, `description`, `pack`, `states`, `initial_state`,
+`transitions`, and `fields_schema`. Returns `None` if the type is not
+registered.
 
 #### `list_templates`
 

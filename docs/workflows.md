@@ -589,7 +589,8 @@ Use these CLI commands to explore available workflows:
 
 ```bash
 filigree types                       # List all types with state flows
-filigree type-info task              # Full definition: states, transitions, fields
+filigree get-template task           # Canonical full definition: pack, states, transitions, fields
+filigree type-info task              # Compatibility alias for get-template
 filigree guide core                  # Workflow guide for the core pack
 filigree transitions <id>            # Valid next states for a specific issue
 filigree explain-status bug triage   # What "triage" means for bugs
@@ -600,7 +601,8 @@ Or via MCP tools:
 
 ```
 list_types             → All types with pack info
-get_type_info          → Full workflow definition
+get_template           → Canonical full workflow definition
+get_type_info          → Compatibility alias for get_template
 get_workflow_guide     → Pack documentation
 get_valid_transitions  → Valid next statuses for an issue
 explain_status         → Status details and transitions

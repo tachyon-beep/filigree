@@ -771,6 +771,7 @@ class TestTemplateInfoShape:
         result = db.get_template("task")
         assert result is not None
         assert isinstance(result["type"], str)
+        assert isinstance(result["pack"], str)
         assert isinstance(result["states"], list)
         assert isinstance(result["transitions"], list)
         assert isinstance(result["fields_schema"], list)

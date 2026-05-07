@@ -157,54 +157,37 @@ def list_types_cmd(as_json: bool) -> None:
 
 def _type_info_impl(type_name: str, as_json: bool) -> None:
     with get_db() as db:
-        tpl = db.templates.get_type(type_name)
+        tpl = db.get_template(type_name)
         if tpl is None:
             _emit_error(f"Unknown type: {type_name}", ErrorCode.NOT_FOUND, as_json=as_json)
 
         if as_json:
-            data = {
-                "type": tpl.type,
-                "display_name": tpl.display_name,
-                "description": tpl.description,
-                "pack": tpl.pack,
-                "states": [{"name": s.name, "category": s.category} for s in tpl.states],
-                "initial_state": tpl.initial_state,
-                "transitions": [
-                    {
-                        "from": t.from_state,
-                        "to": t.to_state,
-                        "enforcement": t.enforcement,
-                        "requires_fields": list(t.requires_fields),
-                    }
-                    for t in tpl.transitions
-                ],
-                "fields_schema": [db._field_schema_to_info(f) for f in tpl.fields_schema],
-            }
-            click.echo(json_mod.dumps(data, indent=2))
+            click.echo(json_mod.dumps(dict(tpl), indent=2))
             return
 
-        click.echo(f"{tpl.display_name} ({tpl.type}) — {tpl.pack} pack")
-        click.echo(f"  {tpl.description}")
+        click.echo(f"{tpl['display_name']} ({tpl['type']}) — {tpl['pack']} pack")
+        click.echo(f"  {tpl['description']}")
         click.echo("\n  States:")
-        for s in tpl.states:
-            initial = " (initial)" if s.name == tpl.initial_state else ""
-            click.echo(f"    {s.name:<20} [{s.category}]{initial}")
+        for s in tpl["states"]:
+            initial = " (initial)" if s["name"] == tpl["initial_state"] else ""
+            click.echo(f"    {s['name']:<20} [{s['category']}]{initial}")
         click.echo("\n  Transitions:")
-        for t in tpl.transitions:
-            fields_note = f" (requires: {', '.join(t.requires_fields)})" if t.requires_fields else ""
-            click.echo(f"    {t.from_state} → {t.to_state}  [{t.enforcement}]{fields_note}")
-        if tpl.fields_schema:
+        for t in tpl["transitions"]:
+            requires_fields = t["requires_fields"]
+            fields_note = f" (requires: {', '.join(requires_fields)})" if requires_fields else ""
+            click.echo(f"    {t['from']} → {t['to']}  [{t['enforcement']}]{fields_note}")
+        if tpl["fields_schema"]:
             click.echo("\n  Fields:")
-            for f in tpl.fields_schema:
+            for f in tpl["fields_schema"]:
                 notes: list[str] = []
-                if f.required_at:
-                    notes.append(f"required at: {', '.join(f.required_at)}")
-                if f.pattern:
-                    notes.append(f"pattern: {f.pattern}")
-                if f.unique:
+                if f.get("required_at"):
+                    notes.append(f"required at: {', '.join(f['required_at'])}")
+                if f.get("pattern"):
+                    notes.append(f"pattern: {f['pattern']}")
+                if f.get("unique"):
                     notes.append("unique")
                 suffix = f" ({'; '.join(notes)})" if notes else ""
-                click.echo(f"    {f.name}: {f.type} — {f.description}{suffix}")
+                click.echo(f"    {f['name']}: {f['type']} — {f['description']}{suffix}")
 
 
 @click.command("type-info")

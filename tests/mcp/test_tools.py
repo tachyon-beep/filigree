@@ -474,7 +474,20 @@ class TestTemplateAndSummary:
         result = await call_tool("get_template", {"type": "bug"})
         data = _parse(result)
         assert data["type"] == "bug"
+        assert data["pack"] == "core"
         assert "fields_schema" in data
+
+    async def test_get_template_is_canonical_for_type_info(self, mcp_db: FiligreeDB) -> None:
+        template = _parse(await call_tool("get_template", {"type": "task"}))
+        type_info = _parse(await call_tool("get_type_info", {"type": "task"}))
+
+        assert type_info == template
+
+    async def test_template_tool_descriptions_explain_alias_contract(self, mcp_db: FiligreeDB) -> None:
+        tools = {tool.name: tool for tool in await list_tools()}
+
+        assert "canonical full workflow definition" in tools["get_template"].description
+        assert "compatibility alias" in tools["get_type_info"].description
 
     async def test_get_template_unknown(self, mcp_db: FiligreeDB) -> None:
         result = await call_tool("get_template", {"type": "nonexistent"})

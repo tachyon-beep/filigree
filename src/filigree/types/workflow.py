@@ -46,6 +46,7 @@ class TemplateInfo(TypedDict):
     type: str
     display_name: str
     description: str
+    pack: str
     states: list[StateInfo]
     initial_state: str
     transitions: list[TransitionInfo]
@@ -77,9 +78,4 @@ class TypeListItem(TypedDict):
 
 
 class TypeInfoResponse(TemplateInfo):
-    """Full type info response from get_type_info MCP handler.
-
-    Extends ``TemplateInfo`` with the pack identifier.
-    """
-
-    pack: str
+    """Backward-compatible alias shape for ``get_type_info``."""

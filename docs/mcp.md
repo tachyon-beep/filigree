@@ -384,8 +384,8 @@ All batch tools return the unified `BatchResponse` envelope (`{succeeded, failed
 | Tool | Description |
 |------|-------------|
 | `list_types` | All registered types with pack info |
-| `get_type_info` | Full workflow definition for a type |
-| `get_template` | Field schema for an issue type |
+| `get_template` | Canonical full workflow definition for a type |
+| `get_type_info` | Compatibility alias for `get_template` |
 | `get_valid_transitions` | Valid next states with readiness indicators |
 | `validate_issue` | Validate against template (warnings for missing fields) |
 | `list_packs` | Enabled workflow packs |
@@ -398,11 +398,16 @@ All batch tools return the unified `BatchResponse` envelope (`{succeeded, failed
 
 #### `get_type_info`
 
+Compatibility alias for `get_template`; returns the same canonical workflow definition.
+
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `type` | string | yes | Issue type name |
 
 #### `get_template`
+
+Canonical workflow-discovery tool for issue types. Returns pack, states,
+transitions, initial state, and fields schema.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
