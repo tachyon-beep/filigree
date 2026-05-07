@@ -299,6 +299,28 @@ class TestLabelsAndComments:
         with pytest.raises(ValueError, match="reserved as an issue type"):
             db.add_label(issue.id, "BuG")
 
+    @pytest.mark.parametrize("label", ["P0", "p4", "priority:1", "Priority:high"])
+    def test_add_label_rejects_priority_like_label(self, db: FiligreeDB, label: str) -> None:
+        issue = db.create_issue("Label test")
+        with pytest.raises(ValueError, match="priority field"):
+            db.add_label(issue.id, label)
+
+    @pytest.mark.parametrize("label", ["P1", "priority:2"])
+    def test_create_rejects_priority_like_label(self, db: FiligreeDB, label: str) -> None:
+        with pytest.raises(ValueError, match="priority field"):
+            db.create_issue("Bad labels", labels=[label])
+
+    def test_remove_label_allows_legacy_priority_like_label(self, db: FiligreeDB) -> None:
+        issue = db.create_issue("Label test")
+        db.conn.execute("INSERT INTO labels (issue_id, label) VALUES (?, ?)", (issue.id, "P1"))
+        db.conn.commit()
+
+        removed, canonical = db.remove_label(issue.id, "P1")
+
+        assert removed is True
+        assert canonical == "P1"
+        assert db.get_issue(issue.id).labels == []
+
     def test_add_comment(self, db: FiligreeDB) -> None:
         issue = db.create_issue("Commentable")
         db.add_comment(issue.id, "This is a note", author="tester")

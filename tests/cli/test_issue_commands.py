@@ -448,6 +448,18 @@ class TestLabelCli:
         assert result.exit_code == 1
         assert "reserved as an issue type" in result.output
 
+    def test_label_add_rejects_priority_like_label_json(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        runner, _ = cli_in_project
+        r = runner.invoke(cli, ["create", "Label me"])
+        issue_id = _extract_id(r.output)
+
+        result = runner.invoke(cli, ["add-label", "P1", issue_id, "--json"])
+
+        assert result.exit_code == 1
+        data = json.loads(result.output)
+        assert data["code"] == "VALIDATION"
+        assert "priority field" in data["error"]
+
     def test_label_add_not_found(self, cli_in_project: tuple[CliRunner, Path]) -> None:
         runner, _ = cli_in_project
         result = runner.invoke(cli, ["add-label", "bug", "test-nonexistent"])

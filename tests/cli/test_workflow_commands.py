@@ -908,6 +908,20 @@ class TestBatchCli:
         assert len(data["failed"]) == 1
         assert data["failed"][0]["id"] == "nonexistent-abc"
 
+    def test_batch_add_label_rejects_priority_like_label_json(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        runner, _ = cli_in_project
+        r1 = runner.invoke(cli, ["create", "A"])
+        id1 = _extract_id(r1.output)
+
+        result = runner.invoke(cli, ["batch-add-label", "priority:1", id1, "--json"])
+
+        assert result.exit_code == 1
+        data = json.loads(result.output)
+        assert data["succeeded"] == []
+        assert len(data["failed"]) == 1
+        assert data["failed"][0]["code"] == "VALIDATION"
+        assert "priority field" in data["failed"][0]["error"]
+
     def test_batch_remove_label_json(self, cli_in_project: tuple[CliRunner, Path]) -> None:
         runner, _ = cli_in_project
         r1 = runner.invoke(cli, ["create", "A"])
@@ -1227,4 +1241,5 @@ class TestTaxonomyCommand:
         assert result.exit_code == 0
         data = json.loads(result.output)
         assert "manual_suggested" in data
-        assert data["bare_labels"]["discouraged"]["pattern"] == "P[0-4]"
+        assert data["bare_labels"]["reserved"]["patterns"] == ["P[0-4]", "priority:*"]
+        assert data["bare_labels"]["reserved"]["writable"] is False

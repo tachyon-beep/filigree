@@ -308,6 +308,28 @@ class TestCreateIssueAPI:
         assert data["description"] == "A bug report"
         assert data["assignee"] == "alice"
 
+    async def test_create_rejects_priority_like_labels(self, client: AsyncClient) -> None:
+        resp = await client.post(
+            "/api/issues",
+            json={"title": "Bad labels", "labels": ["P1"]},
+        )
+
+        assert resp.status_code == 400
+        body = resp.json()
+        assert body["code"] == "VALIDATION"
+        assert "priority field" in body["error"]
+
+    async def test_loom_create_rejects_priority_like_labels(self, client: AsyncClient) -> None:
+        resp = await client.post(
+            "/api/loom/issues",
+            json={"title": "Bad labels", "labels": ["priority:1"]},
+        )
+
+        assert resp.status_code == 400
+        body = resp.json()
+        assert body["code"] == "VALIDATION"
+        assert "priority field" in body["error"]
+
     async def test_create_preserves_custom_fields(self, release_client: AsyncClient, release_dashboard_db: Any) -> None:
         resp = await release_client.post(
             "/api/issues",

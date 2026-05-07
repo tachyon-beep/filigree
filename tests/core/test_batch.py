@@ -65,6 +65,17 @@ class TestBatchOperations:
         assert len(errors) == 1
         assert errors[0]["code"] == "VALIDATION"
 
+    @pytest.mark.parametrize("label", ["P1", "priority:1"])
+    def test_batch_add_label_rejects_priority_like_labels(self, db: FiligreeDB, label: str) -> None:
+        issue = db.create_issue("A")
+        labeled, errors = db.batch_add_label([issue.id], label=label)
+
+        assert labeled == []
+        assert len(errors) == 1
+        assert errors[0]["code"] == "VALIDATION"
+        assert "priority field" in errors[0]["error"]
+        assert db.get_issue(issue.id).labels == []
+
     def test_batch_remove_label(self, db: FiligreeDB) -> None:
         a = db.create_issue("A", labels=["security"])
         b = db.create_issue("B", labels=["security"])

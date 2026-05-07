@@ -124,8 +124,9 @@ class TestGetLabelTaxonomy:
         assert "review" in result["manual_suggested"]
         assert "needed" in result["manual_suggested"]["review"]["values"]
 
-    def test_priority_text_labels_are_discouraged(self, db: FiligreeDB) -> None:
+    def test_priority_text_labels_are_rejected(self, db: FiligreeDB) -> None:
         result = db.get_label_taxonomy()
-        discouraged = result["bare_labels"]["discouraged"]
-        assert discouraged["pattern"] == "P[0-4]"
-        assert "priority field" in discouraged["reason"]
+        reserved = result["bare_labels"]["reserved"]
+        assert reserved["patterns"] == ["P[0-4]", "priority:*"]
+        assert reserved["writable"] is False
+        assert "priority field" in reserved["reason"]

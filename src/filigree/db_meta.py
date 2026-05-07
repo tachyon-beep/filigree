@@ -103,7 +103,7 @@ class MetaMixin(DBMixinProtocol):
     def remove_label(self, issue_id: str, label: str) -> tuple[bool, str]:
         """Remove label from issue. Returns (removed, canonical_label)."""
         self._check_id_prefix(issue_id)
-        normalized = self._validate_label_name(label)
+        normalized = self._validate_label_name(label, allow_priority_like=True)
         try:
             cursor = self.conn.execute(
                 "DELETE FROM labels WHERE issue_id = ? AND label = ?",
@@ -286,9 +286,18 @@ class MetaMixin(DBMixinProtocol):
                 "description": "Common labels without namespace prefix",
                 "writable": True,
                 "suggested": ["tech-debt", "regression", "security", "perf", "cherry-pick", "hotfix", "flaky-test", "wontfix"],
+                "reserved": {
+                    "patterns": ["P[0-4]", "priority:*"],
+                    "writable": False,
+                    "reason": (
+                        "Use the numeric priority field as the canonical priority signal; "
+                        "priority-like labels are rejected to prevent drift."
+                    ),
+                },
                 "discouraged": {
                     "pattern": "P[0-4]",
-                    "reason": "Use the numeric priority field as the canonical priority signal; manual P0-P4 labels can drift.",
+                    "writable": False,
+                    "reason": "Deprecated alias for bare priority labels; these labels are now rejected. Use the priority field instead.",
                 },
             },
         }

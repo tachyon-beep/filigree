@@ -528,6 +528,13 @@ class TestLabels:
         assert data["code"] == ErrorCode.VALIDATION
         assert "reserved as an issue type" in data["error"]
 
+    async def test_add_label_rejects_priority_like_label(self, mcp_db: FiligreeDB) -> None:
+        issue = mcp_db.create_issue("Labelable")
+        result = await call_tool("add_label", {"issue_id": issue.id, "label": "priority:1"})
+        data = _parse(result)
+        assert data["code"] == ErrorCode.VALIDATION
+        assert "priority field" in data["error"]
+
     async def test_remove_label(self, mcp_db: FiligreeDB) -> None:
         issue = mcp_db.create_issue("Labelable", labels=["defect", "urgent"])
         result = await call_tool("remove_label", {"issue_id": issue.id, "label": "defect"})
@@ -903,6 +910,15 @@ class TestBatchAddLabel:
         assert data["succeeded"] == []
         assert len(data["failed"]) == 1
         assert data["failed"][0]["code"] == "VALIDATION"
+
+    async def test_batch_add_label_rejects_priority_like_label(self, mcp_db: FiligreeDB) -> None:
+        a = mcp_db.create_issue("Label A")
+        result = await call_tool("batch_add_label", {"issue_ids": [a.id], "label": "P1"})
+        data = _parse(result)
+        assert data["succeeded"] == []
+        assert len(data["failed"]) == 1
+        assert data["failed"][0]["code"] == "VALIDATION"
+        assert "priority field" in data["failed"][0]["error"]
 
 
 class TestBatchRemoveLabel:
@@ -3431,7 +3447,8 @@ class TestGetLabelTaxonomy:
         assert "manual_suggested" in data
         assert "bare_labels" in data
 
-    async def test_taxonomy_discourages_priority_text_labels(self, mcp_db: FiligreeDB) -> None:
+    async def test_taxonomy_rejects_priority_text_labels(self, mcp_db: FiligreeDB) -> None:
         result = await call_tool("get_label_taxonomy", {})
         data = _parse(result)
-        assert data["bare_labels"]["discouraged"]["pattern"] == "P[0-4]"
+        assert data["bare_labels"]["reserved"]["patterns"] == ["P[0-4]", "priority:*"]
+        assert data["bare_labels"]["reserved"]["writable"] is False

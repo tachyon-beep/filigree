@@ -400,7 +400,7 @@ class EventsMixin(DBMixinProtocol):
             msg = f"days_old must be >= 0, got {days_old}"
             raise ValueError(msg)
 
-        normalized_label = self._validate_label_name(label) if label is not None else None
+        normalized_label = self._validate_label_name(label, allow_priority_like=True) if label is not None else None
 
         cutoff_dt = datetime.now(UTC) - timedelta(days=days_old)
         cutoff = cutoff_dt.isoformat()

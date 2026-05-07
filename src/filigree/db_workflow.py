@@ -25,6 +25,13 @@ if TYPE_CHECKING:
     from filigree.templates import FieldSchema, TemplateRegistry, TransitionOption, ValidationResult
 
 
+def _is_priority_like_label(label: str) -> bool:
+    casefolded = label.casefold()
+    if len(casefolded) == 2 and casefolded[0] == "p" and casefolded[1] in "01234":
+        return True
+    return ":" in label and label.split(":", 1)[0].casefold() == "priority"
+
+
 def _build_builtin_category_maps() -> tuple[
     dict[tuple[str, str], StatusCategory],
     frozenset[str],
@@ -361,7 +368,7 @@ class WorkflowMixin(DBMixinProtocol):
         """Issue type names are reserved and cannot be used as free-form labels."""
         return {tpl.type.casefold() for tpl in self.templates.list_types()}
 
-    def _validate_label_name(self, label: str) -> str:
+    def _validate_label_name(self, label: str, *, allow_priority_like: bool = False) -> str:
         """Normalize and validate a label before writing it."""
         if not isinstance(label, str):
             msg = "Label must be a string"
@@ -376,6 +383,12 @@ class WorkflowMixin(DBMixinProtocol):
             raise ValueError(msg)
         if normalized.casefold() in self._reserved_label_names():
             msg = f"Label '{normalized}' is reserved as an issue type name; set the issue type explicitly instead."
+            raise ValueError(msg)
+        if not allow_priority_like and _is_priority_like_label(normalized):
+            msg = (
+                f"Label '{normalized}' conflicts with the priority field; set the numeric priority field "
+                "or filter with --priority instead of using P0-P4 or priority:* labels."
+            )
             raise ValueError(msg)
         # Check namespace reservation
         if ":" in normalized:
