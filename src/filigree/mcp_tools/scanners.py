@@ -15,6 +15,7 @@ from typing import Any
 from mcp.types import TextContent, Tool
 
 from filigree.core import VALID_SEVERITIES
+from filigree.db_files import scan_finding_observation_summary
 from filigree.mcp_tools.common import _list_response, _parse_args, _text, _validate_int_range
 from filigree.mcp_tools.payloads import finding_to_mcp
 from filigree.scanner_runtime import ScannerSpawnError, _spawn_scan
@@ -35,6 +36,24 @@ _ALLOWED_URL_SCHEMES = frozenset(("http", "https"))
 _logger = logging.getLogger(__name__)
 
 
+def _report_finding_observation_ids(
+    tracker: Any,
+    *,
+    file_id: str,
+    path: str,
+    line_start: int | None,
+    message: str,
+) -> list[str]:
+    """Find observation IDs created by the agent report_finding shortcut."""
+    summary = scan_finding_observation_summary("agent", path, line_start, message)
+    observations = tracker.list_observations(file_id=file_id, limit=10000)
+    return [
+        observation["id"]
+        for observation in observations
+        if observation["summary"] == summary and observation.get("line") == line_start and observation.get("actor") == "scanner:agent"
+    ]
+
+
 def register(
     *,
     include_legacy: bool = False,
@@ -51,7 +70,8 @@ def register(
             description=(
                 "Report a single code finding (bug, smell, security issue) discovered by the agent. "
                 "Auto-registers the file if not already tracked. No scanner config needed — "
-                "one call, one finding, zero ceremony. Returns the flat ScanFinding record plus ingest metadata."
+                "one call, one finding, zero ceremony. Returns the flat ScanFinding record plus ingest metadata, "
+                "including any observation_id created for triage."
             ),
             inputSchema={
                 "type": "object",
@@ -308,7 +328,8 @@ async def _handle_report_finding(arguments: dict[str, Any]) -> list[TextContent]
         _logger.error("report_finding failed: %s", exc)
         return _text(ErrorResponse(error=f"Failed to report finding: {exc}", code=ErrorCode.IO))
 
-    file_record = tracker.register_file(file_path)
+    normalized_path = finding["path"]
+    file_record = tracker.register_file(normalized_path)
     matching_findings = tracker.list_findings_global(
         file_id=file_record.id,
         scan_source="agent",
@@ -322,13 +343,25 @@ async def _handle_report_finding(arguments: dict[str, Any]) -> list[TextContent]
     if finding_record is None:
         return _text(ErrorResponse(error="Reported finding was not found after ingestion", code=ErrorCode.IO))
 
+    observation_ids = _report_finding_observation_ids(
+        tracker,
+        file_id=file_record.id,
+        path=normalized_path,
+        line_start=line_start,
+        message=message,
+    )
     response: dict[str, Any] = {
         **finding_to_mcp(finding_record),
         "finding_result": "created" if result["findings_created"] else "updated",
         "findings_created": result["findings_created"],
         "findings_updated": result["findings_updated"],
         "file_created": result["files_created"] > 0,
+        "observations_created": result["observations_created"],
+        "observations_failed": result["observations_failed"],
+        "observation_ids": observation_ids,
     }
+    if observation_ids:
+        response["observation_id"] = observation_ids[0]
     if result.get("warnings"):
         response["warnings"] = result["warnings"]
     return _text(response)

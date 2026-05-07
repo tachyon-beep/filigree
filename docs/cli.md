@@ -955,7 +955,7 @@ Preview the shell command a scanner would run (without executing it).
 
 ### `report-finding`
 
-Ingest a finding in loom-shape JSON format. Reads from stdin by default; `--file` overrides. Returns `ScanIngestResponseLoom` with counts and any warnings.
+Ingest a finding in loom-shape JSON format. Reads from stdin by default; `--file` overrides. This agent-shortcut path also creates an observation for triage, so JSON output includes `observations_created`, `observations_failed`, `observation_ids`, and `observation_id` when one was created.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|

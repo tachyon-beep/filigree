@@ -58,6 +58,13 @@ def _normalize_scan_path(path: str) -> str:
     return "" if normalized == "." else normalized
 
 
+def scan_finding_observation_summary(scan_source: str, path: str, line_start: int | None, message: str) -> str:
+    """Return the observation summary used for scanner-created findings."""
+    first_line = message.strip().splitlines()[0] if message.strip() else "Scanner finding"
+    line_label = line_start if line_start is not None else "?"
+    return f"[{scan_source}] {path}:{line_label} -- {first_line}"
+
+
 class FilesMixin(DBMixinProtocol):
     """File records, scan findings, associations, and timeline.
 
@@ -615,8 +622,12 @@ class FilesMixin(DBMixinProtocol):
             stats["new_finding_ids"].append(finding_id)
             seen_finding_ids.setdefault(file_id, []).append(finding_id)
             if create_observations:
-                first_line = f.get("message", "").strip().splitlines()[0] if f.get("message", "").strip() else "Scanner finding"
-                obs_summary = f"[{scan_source}] {path}:{f.get('line_start', '?')} -- {first_line}"
+                obs_summary = scan_finding_observation_summary(
+                    scan_source,
+                    path,
+                    f.get("line_start"),
+                    f.get("message", ""),
+                )
                 obs_detail = f.get("message", "")
                 if f.get("suggestion"):
                     obs_detail += f"\n\nSuggested fix:\n{f['suggestion']}"

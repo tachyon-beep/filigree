@@ -22,7 +22,7 @@ import click
 
 from filigree.cli_common import get_db
 from filigree.core import FILIGREE_DIR_NAME, VALID_SEVERITIES, ProjectNotInitialisedError, find_filigree_anchor
-from filigree.mcp_tools.scanners import _load_scanner_or_error, _validate_localhost_url
+from filigree.mcp_tools.scanners import _load_scanner_or_error, _report_finding_observation_ids, _validate_localhost_url
 from filigree.paths import safe_path
 from filigree.scanner_runtime import ScannerSpawnError, _spawn_scan
 from filigree.scanners import list_scanners as _list_scanners
@@ -722,6 +722,7 @@ def report_finding_cmd(file_path: str | None, as_json: bool) -> None:
     if finding.get("category"):
         finding_record["metadata"] = {"category": finding["category"]}
 
+    observation_ids: list[str] = []
     with get_db() as tracker:
         try:
             result = tracker.process_scan_results(
@@ -741,15 +742,28 @@ def report_finding_cmd(file_path: str | None, as_json: bool) -> None:
             _logger.error("report_finding storage failure: %s", exc)
             _emit_error(f"Failed to report finding: {exc}", ErrorCode.IO, as_json=as_json)
             return
+        file_record = tracker.register_file(finding_record["path"])
+        observation_ids = _report_finding_observation_ids(
+            tracker,
+            file_id=file_record.id,
+            path=finding_record["path"],
+            line_start=line_start,
+            message=message,
+        )
 
     response: dict[str, Any] = {
         "status": "created" if result["findings_created"] else "updated",
         "findings_created": result["findings_created"],
         "findings_updated": result["findings_updated"],
         "file_created": result["files_created"] > 0,
+        "observations_created": result["observations_created"],
+        "observations_failed": result["observations_failed"],
+        "observation_ids": observation_ids,
     }
     if result["new_finding_ids"]:
         response["finding_id"] = result["new_finding_ids"][0]
+    if observation_ids:
+        response["observation_id"] = observation_ids[0]
     if result.get("warnings"):
         response["warnings"] = result["warnings"]
 

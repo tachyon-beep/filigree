@@ -8,7 +8,8 @@ MCP shape verification (verified against mcp_tools/scanners.py handlers):
 - trigger-scan-batch success: {status, scanner, file_count, processes_spawned, batch_id, scan_run_ids, per_file}
 - get-scan-status: ScanRunStatusDict — {id, status, scanner_name, ..., process_alive, log_tail}
 - preview-scan: {scanner, file_path, command, command_string, valid, validation_error}
-- report-finding: {status, findings_created, findings_updated, file_created, [finding_id], [warnings]}
+- report-finding: {status, findings_created, findings_updated, file_created,
+  observations_created, observations_failed, observation_ids, [finding_id], [observation_id], [warnings]}
 
 Subprocess mocking: patch "filigree.scanner_runtime.subprocess.Popen" (same path as MCP tests).
 trigger-scan and trigger-scan-batch are mocked at the subprocess level.
@@ -309,6 +310,9 @@ class TestReportFindingCommand:
             assert data["findings_created"] == 1
             assert data["file_created"] is True
             assert "finding_id" in data
+            assert data["observations_created"] == 1
+            assert isinstance(data["observation_id"], str)
+            assert data["observation_ids"] == [data["observation_id"]]
         finally:
             os.chdir(original)
 

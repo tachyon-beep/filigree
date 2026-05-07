@@ -77,6 +77,28 @@ class TestListFindingsTool:
         assert len(page2["items"]) == 1
 
 
+class TestReportFindingTool:
+    async def test_report_finding_returns_created_observation_id(self, mcp_db: FiligreeDB) -> None:
+        data = _parse(
+            await call_tool(
+                "report_finding",
+                {
+                    "file_path": "src/report_target.py",
+                    "rule_id": "agent-noted-risk",
+                    "message": "Agent spotted a follow-up risk",
+                    "severity": "medium",
+                    "line_start": 7,
+                },
+            )
+        )
+
+        observations = mcp_db.list_observations(file_path="src/report_target.py")
+        assert len(observations) == 1
+        assert data["observations_created"] == 1
+        assert data["observation_id"] == observations[0]["id"]
+        assert data["observation_ids"] == [observations[0]["id"]]
+
+
 class TestUpdateFindingTool:
     async def test_update_status(self, mcp_db: FiligreeDB) -> None:
         ids = _seed_findings(mcp_db)
