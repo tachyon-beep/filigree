@@ -306,8 +306,16 @@ class TestMCPArchiveClosedDaysOld:
         assert data["code"] == ErrorCode.VALIDATION
         assert "days_old" in data["error"]
 
-    async def test_archive_closed_days_old_zero_ok(self, mcp_db: FiligreeDB) -> None:
-        """0 is valid — archives everything closed right now."""
+    async def test_archive_closed_days_old_zero_requires_label(self, mcp_db: FiligreeDB) -> None:
+        """days_old<7 requires a label filter to prevent project-wide sweeps
+        of recently-closed issues (filigree-cb980eee0d, P3.17)."""
         result = await call_tool("archive_closed", {"days_old": 0})
+        data = _parse(result)
+        assert data["code"] == ErrorCode.VALIDATION
+        assert "label filter" in data["error"]
+
+    async def test_archive_closed_days_old_zero_with_label_ok(self, mcp_db: FiligreeDB) -> None:
+        """0 with a label filter is valid — scoped to the label."""
+        result = await call_tool("archive_closed", {"days_old": 0, "label": "test-scope"})
         data = _parse(result)
         assert "error" not in data

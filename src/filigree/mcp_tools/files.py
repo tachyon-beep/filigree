@@ -27,6 +27,7 @@ from filigree.mcp_tools.payloads import (
     timeline_entry_to_mcp,
 )
 from filigree.types.api import BatchFailure, BatchResponse, ErrorCode, ErrorResponse, parse_response_detail
+from filigree.types.core import FindingStatus
 from filigree.types.inputs import (
     AddFileAssociationArgs,
     BatchUpdateFindingsArgs,
@@ -258,12 +259,26 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
         ),
         Tool(
             name="dismiss_finding",
-            description="Dismiss a finding by marking it as false_positive.",
+            description=(
+                "Dismiss a finding by transitioning it to a non-open status. Default status is "
+                "'false_positive'; pass status= to land in an alternate dismissal status "
+                "('fixed', 'unseen_in_latest', 'acknowledged'). (filigree-cb980eee0d, P3.13.)"
+            ),
             inputSchema={
                 "type": "object",
                 "properties": {
                     "finding_id": {"type": "string", "description": "Finding ID"},
                     "reason": {"type": "string", "description": "Optional reason for dismissal"},
+                    "status": {
+                        "type": "string",
+                        "enum": ["false_positive", "fixed", "unseen_in_latest", "acknowledged"],
+                        "default": "false_positive",
+                        "description": (
+                            "Dismissal status. Defaults to 'false_positive' to match the legacy "
+                            "shape; pass an alternate status to record 'won't fix here' (acknowledged) "
+                            "or 'no longer present' (unseen_in_latest)."
+                        ),
+                    },
                 },
                 "required": ["finding_id"],
             },
@@ -689,10 +704,29 @@ async def _handle_dismiss_finding(arguments: dict[str, Any]) -> list[TextContent
         return _text(ErrorResponse(error="finding_id is required", code=ErrorCode.VALIDATION))
 
     reason = args.get("reason")
+    # P3.13: allow callers to pick an alternate dismissal status. The default
+    # preserves the legacy shape (false_positive). Validate against the
+    # subset that makes sense for "dismiss" — promotion to 'open' would
+    # contradict the verb.
+    status_arg = args.get("status", "false_positive")
+    valid_dismiss_statuses: dict[str, FindingStatus] = {
+        "false_positive": "false_positive",
+        "fixed": "fixed",
+        "unseen_in_latest": "unseen_in_latest",
+        "acknowledged": "acknowledged",
+    }
+    if status_arg not in valid_dismiss_statuses:
+        return _text(
+            ErrorResponse(
+                error=f"Invalid dismiss status: {status_arg!r}. Valid: {', '.join(sorted(valid_dismiss_statuses))}",
+                code=ErrorCode.VALIDATION,
+            )
+        )
+    status: FindingStatus = valid_dismiss_statuses[status_arg]
 
     tracker = _get_db()
     try:
-        updated = tracker.update_finding(finding_id, status="false_positive", dismiss_reason=reason or None)
+        updated = tracker.update_finding(finding_id, status=status, dismiss_reason=reason or None)
     except KeyError:
         return _text(ErrorResponse(error=f"Finding not found: {finding_id}", code=ErrorCode.NOT_FOUND))
     except ValueError as e:

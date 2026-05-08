@@ -1149,7 +1149,8 @@ class TestArchiveClosedResponseShape:
         from filigree.mcp_server import call_tool
         from tests.mcp._helpers import _parse
 
-        result = _parse(await call_tool("archive_closed", {"days_old": 0}))
+        # days_old<7 now requires a label filter (filigree-cb980eee0d, P3.17).
+        result = _parse(await call_tool("archive_closed", {"days_old": 0, "label": "test-scope"}))
         hints = get_type_hints(ArchiveClosedResponse)
         assert set(result.keys()) == set(hints.keys())
 
@@ -1157,7 +1158,8 @@ class TestArchiveClosedResponseShape:
         from filigree.mcp_server import call_tool
         from tests.mcp._helpers import _parse
 
-        result = _parse(await call_tool("archive_closed", {"days_old": 0}))
+        # days_old<7 now requires a label filter (filigree-cb980eee0d, P3.17).
+        result = _parse(await call_tool("archive_closed", {"days_old": 0, "label": "test-scope"}))
         assert isinstance(result["status"], str)
         assert isinstance(result["archived_count"], int)
         assert isinstance(result["archived_ids"], list)

@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **``get_summary`` accepts ``format='json'``** to return a structured
+  envelope ``{markdown: <str>, stats: <get_stats output>}`` so callers
+  doing programmatic orientation don't need a follow-up ``get_stats``
+  call. Default behaviour (``format='markdown'``) is unchanged.
+  (filigree-cb980eee0d, P3.12)
+
+- **``dismiss_finding`` accepts ``status``** to record an alternate
+  dismissal status (``fixed``, ``unseen_in_latest``, ``acknowledged``)
+  rather than always writing ``false_positive``. The default remains
+  ``false_positive`` for backwards compatibility. The natural verb
+  no longer forces the wrong status name when the dismissal is "won't
+  fix here" or "no longer present". (filigree-cb980eee0d, P3.13)
+
+- **``archive_closed`` requires a non-empty ``label`` filter when
+  ``days_old<7``** to prevent accidentally sweeping up issues closed
+  minutes ago across the whole project. The error message points at
+  the fix (``label='cluster:<name>'``). The CLI command is unchanged
+  — the guard lives at the MCP layer where agents could trigger
+  over-broad sweeps. (filigree-cb980eee0d, P3.17)
+
 - **``get_blocked`` now includes wip-category issues that are stuck on
   another non-done issue.** Previously ``get_blocked`` filtered to
   open-category only, so an in-progress task waiting on an open

@@ -371,6 +371,10 @@ class GetChangesArgs(TypedDict):
     include_heartbeats: NotRequired[bool]
 
 
+class GetSummaryArgs(TypedDict):
+    format: NotRequired[str]
+
+
 class GetMetricsArgs(TypedDict):
     days: NotRequired[int]
 
@@ -622,6 +626,7 @@ class PromoteFindingArgs(TypedDict):
 class DismissFindingArgs(TypedDict):
     finding_id: str
     reason: NotRequired[str]
+    status: NotRequired[str]
 
 
 # ---------------------------------------------------------------------------
@@ -754,6 +759,7 @@ TOOL_ARGS_MAP: dict[str, type] = {
     "batch_remove_label": BatchRemoveLabelArgs,
     "batch_add_comment": BatchAddCommentArgs,
     "get_changes": GetChangesArgs,
+    "get_summary": GetSummaryArgs,
     "get_metrics": GetMetricsArgs,
     "export_jsonl": ExportJsonlArgs,
     "import_jsonl": ImportJsonlArgs,

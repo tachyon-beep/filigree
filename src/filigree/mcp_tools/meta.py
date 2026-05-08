@@ -281,8 +281,23 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
         ),
         Tool(
             name="get_summary",
-            description="Get the pre-computed project summary (same as context.md)",
-            inputSchema={"type": "object", "properties": {}},
+            description=(
+                "Get the pre-computed project summary (same as context.md). Default returns markdown "
+                "for human display; pass format='json' to receive a structured envelope "
+                "{markdown: str, stats: <get_stats output>} so callers doing programmatic orientation "
+                "don't need a follow-up get_stats call. (filigree-cb980eee0d, P3.12.)"
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "format": {
+                        "type": "string",
+                        "enum": ["markdown", "json"],
+                        "default": "markdown",
+                        "description": "Output format: markdown (default) or json envelope.",
+                    },
+                },
+            },
         ),
         Tool(
             name="session_context",
@@ -336,7 +351,11 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
         ),
         Tool(
             name="archive_closed",
-            description="Archive old closed issues (>N days). Reduces active issue count for better performance.",
+            description=(
+                "Archive old closed issues (>N days). Reduces active issue count for better performance. "
+                "Requires a non-empty label filter when days_old<7 to prevent accidentally sweeping up "
+                "issues closed minutes ago across the whole project. (filigree-cb980eee0d, P3.17.)"
+            ),
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -344,12 +363,15 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
                         "type": "integer",
                         "default": 30,
                         "minimum": 0,
-                        "description": "Archive issues closed more than N days ago (must be >= 0)",
+                        "description": (
+                            "Archive issues closed more than N days ago (must be >= 0). "
+                            "Values <7 require a label filter to scope the archival."
+                        ),
                     },
                     "actor": {"type": "string", "description": "Agent/user identity for audit trail"},
                     "label": {
                         "type": "string",
-                        "description": "Only archive closed issues currently carrying this label",
+                        "description": "Only archive closed issues currently carrying this label (required when days_old<7)",
                     },
                 },
             },
@@ -744,8 +766,15 @@ async def _handle_get_summary(arguments: dict[str, Any]) -> list[TextContent]:
     from filigree.mcp_server import _get_db
     from filigree.summary import generate_summary
 
+    fmt = arguments.get("format", "markdown")
+    if fmt not in {"markdown", "json"}:
+        return _text(ErrorResponse(error=f"Invalid format: {fmt!r}. Use 'markdown' or 'json'.", code=ErrorCode.VALIDATION))
     tracker = _get_db()
     summary = generate_summary(tracker)
+    if fmt == "json":
+        # Bundle markdown + structured stats so a single call powers
+        # programmatic orientation. (filigree-cb980eee0d, P3.12.)
+        return _text({"markdown": summary, "stats": tracker.get_stats()})
     return _text(summary)
 
 
@@ -824,6 +853,23 @@ async def _handle_archive_closed(arguments: dict[str, Any]) -> list[TextContent]
     label_err = _validate_str(label, "label")
     if label_err:
         return label_err
+    # Footgun guard: days_old < 7 without a label filter could sweep up
+    # issues closed minutes ago across the whole project. Require an
+    # explicit label scope when running with a tight age window.
+    # (filigree-cb980eee0d, P3.17.)
+    if isinstance(days_old, int) and days_old < 7 and not (label and isinstance(label, str) and label.strip()):
+        return _text(
+            ErrorResponse(
+                error=(
+                    f"days_old={days_old} requires a non-empty label filter. "
+                    "Tight age windows without a label scope risk archiving "
+                    "issues closed seconds ago across the whole project. Pass "
+                    "label='cluster:<name>' or 'mcp-review-scratch' to scope, "
+                    "or use days_old>=7."
+                ),
+                code=ErrorCode.VALIDATION,
+            )
+        )
     tracker = _get_db()
     try:
         archived = tracker.archive_closed(
