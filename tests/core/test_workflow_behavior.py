@@ -17,6 +17,7 @@ import pytest
 
 from filigree.core import FiligreeDB
 from filigree.templates import TransitionOption, ValidationResult
+from filigree.types.api import ErrorCode
 from tests._db_factory import make_db
 
 # ---------------------------------------------------------------------------
@@ -281,6 +282,40 @@ class TestUpdateIssueTransitionEnforcement:
         # Reachable done state from triage works.
         closed = db.close_issue(issue.id, status="wont_fix", reason="duplicate")
         assert closed.status == "wont_fix"
+
+    def test_close_force_bypasses_validator(self, db: FiligreeDB) -> None:
+        """close_issue(force=True) skips the template transition validator.
+
+        Documented escape hatch for cleanup flows that need to rage-close
+        regardless of the template — same shape as
+        ``delete_file_record(force=True)``. Senior-user MCP review run e P1.3.
+        """
+        issue = db.create_issue("Bug", type="bug")
+        # Without force, triage → closed is rejected.
+        with pytest.raises(ValueError, match="not allowed"):
+            db.close_issue(issue.id)
+        # With force, the same call lands in the default done state.
+        closed = db.close_issue(issue.id, force=True, reason="cleanup")
+        assert closed.status == "closed"
+
+    def test_batch_close_force_propagates_per_item(self, db: FiligreeDB) -> None:
+        """batch_close(force=True) passes the flag to every per-item close.
+
+        The pre-fix behaviour smashed templates anyway because batch_close
+        delegated to update_issue with no transition check; the post-fix
+        path validates by default and only bypasses when force is set.
+        Senior-user MCP review run e P1.3.
+        """
+        bug = db.create_issue("Bug A", type="bug")
+        milestone = db.create_issue("Milestone X", type="milestone")
+        # No force → both items fail with INVALID_TRANSITION.
+        _, errors = db.batch_close([bug.id, milestone.id], reason="cleanup")
+        assert len(errors) == 2
+        assert all(e["code"] == ErrorCode.INVALID_TRANSITION for e in errors)
+        # With force → both items reach a done state.
+        closed, errors = db.batch_close([bug.id, milestone.id], reason="cleanup", force=True)
+        assert len(closed) == 2
+        assert errors == []
 
     def test_reopen_bypasses_transition_check(self, db: FiligreeDB) -> None:
         """Reopen works from done state back to initial."""

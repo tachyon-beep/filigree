@@ -343,7 +343,18 @@ class WorkflowMixin(DBMixinProtocol):
         status ``released`` as done. Stay conservative and return ``"open"``
         for active-type / undeclared-state pairs; ``validate_issue()``
         surfaces the schema error (filigree-c9af813900).
+
+        ``"archived"`` is the synthetic terminal status written by
+        ``archive_closed`` and is not present in any workflow template.
+        Classify it as ``"done"`` so ``is_ready``, ``status_category``, and
+        every list/record consumer see archived rows as terminal — without
+        this special-case the template lookup misses, the active-type
+        branch returns ``"open"``, and archived issues surface as ready
+        open work in ``list_issues`` / ``get_issue`` record output.
+        Senior-user MCP review run e P2.10.
         """
+        if status == "archived":
+            return "done"
         cat = self.templates.get_category(issue_type, status)
         if cat is not None:
             return cat

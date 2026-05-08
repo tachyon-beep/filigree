@@ -541,6 +541,21 @@ class TestPromoteObservation:
         labels = db.conn.execute("SELECT label FROM labels WHERE issue_id = ?", (result["issue"].id,)).fetchall()
         assert any(row["label"] == "from-observation" for row in labels)
 
+    def test_promote_carries_caller_supplied_labels(self, db: FiligreeDB) -> None:
+        """Senior-user MCP review run e P2.12: caller labels travel with the promote.
+
+        Agents tag their session work with ``cluster:foo``. Without the
+        labels parameter, that context was lost at promote and the
+        promoted issue carried only ``from-observation``. Caller labels
+        now carry through, with ``from-observation`` always added.
+        """
+        obs = db.create_observation("noted code smell")
+        result = db.promote_observation(obs["id"], labels=["cluster:mcp-review-e", "review:needed"])
+        labels = {row["label"] for row in db.conn.execute("SELECT label FROM labels WHERE issue_id = ?", (result["issue"].id,)).fetchall()}
+        assert "from-observation" in labels
+        assert "cluster:mcp-review-e" in labels
+        assert "review:needed" in labels
+
     def test_promote_with_file_creates_association(self, db: FiligreeDB) -> None:
         obs = db.create_observation("bug", file_path="src/core.py")
         result = db.promote_observation(obs["id"])

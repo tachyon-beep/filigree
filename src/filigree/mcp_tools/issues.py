@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
-from typing import Any
+from typing import TYPE_CHECKING, Any, cast
+
+if TYPE_CHECKING:
+    from filigree.types.core import StatusCategory
 
 from mcp.types import TextContent, Tool
 
@@ -240,7 +243,8 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
                 "omitted, defaults to the first done-category state for the type (e.g. 'closed'); pass "
                 "status explicitly to land in an alternate done state (e.g. 'wont_fix', 'not_a_bug', "
                 "'cancelled'). Returns INVALID_TRANSITION with valid_transitions when the path isn't "
-                "defined — walk the workflow with update_issue or pass a reachable status."
+                "defined — walk the workflow with update_issue, pass a reachable status, or pass "
+                "force=true to rage-close from any state (skips the template transition validator)."
             ),
             inputSchema={
                 "type": "object",
@@ -261,6 +265,15 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
                         "description": (
                             "Optional claim-aware precondition. When set, the call returns "
                             "CONFLICT if the issue's observed assignee differs."
+                        ),
+                    },
+                    "force": {
+                        "type": "boolean",
+                        "default": False,
+                        "description": (
+                            "Bypass the template transition validator and close from any state. "
+                            "Use only for cleanup flows that intentionally skip the workflow; "
+                            "soft transitions are still recorded as transition_warning events."
                         ),
                     },
                 },
@@ -285,12 +298,12 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
         Tool(
             name="search_issues",
             description=(
-                "Search issues by title and description using SQLite FTS5 with prefix matching. "
-                "FTS tokenisation splits on punctuation including hyphens — a query like "
-                "'mcp-review-d' is tokenised to ['mcp', 'review', 'd'] and the single-letter 'd' is "
-                "elided, so the literal substring is not matched. To find self-tagged work prefixed "
-                "with '[mcp-review-d]', use 'mcp review' (multi-token AND) instead, or filter "
-                "list_issues by label/cluster prefix. (filigree-cb980eee0d, P2.6.)"
+                "Search issues by title and description. Pure word-token queries use FTS5 "
+                "with prefix matching for ranked relevance. Queries containing punctuation "
+                "(hyphens, brackets, etc.) — e.g. 'mcp-review-e' or '[cluster-foo]' — fall "
+                "back to a LIKE substring search on the raw query so agents can find their "
+                "own self-tagged work without splitting it manually. Pass status_category "
+                "to scope results to live work (open/wip) and exclude archived/closed rows."
             ),
             inputSchema={
                 "type": "object",
@@ -298,8 +311,17 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
                     "query": {
                         "type": "string",
                         "description": (
-                            "Search query. Tokens split on punctuation; tokens shorter than 2 chars "
-                            "are dropped by FTS. Use list_issues with --label-prefix for namespace search."
+                            "Search query. Pure word tokens use FTS5; queries with hyphens, "
+                            "brackets, or other punctuation use LIKE substring fallback so "
+                            "self-tagged work prefixed like '[cluster-foo]' is found verbatim."
+                        ),
+                    },
+                    "status_category": {
+                        "type": "string",
+                        "enum": ["open", "wip", "done"],
+                        "description": (
+                            "Optional category filter. Default returns all categories; "
+                            "pass 'open' or 'wip' to exclude archived/closed results."
                         ),
                     },
                     "limit": {
@@ -565,6 +587,14 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
                             "code=CONFLICT."
                         ),
                     },
+                    "force": {
+                        "type": "boolean",
+                        "default": False,
+                        "description": (
+                            "Bypass the template transition validator on every item. "
+                            "Use only for cleanup flows that intentionally skip the workflow."
+                        ),
+                    },
                 },
                 "required": ["issue_ids"],
             },
@@ -825,6 +855,9 @@ async def _handle_close_issue(arguments: dict[str, Any]) -> list[TextContent]:
     expected_assignee = args.get("expected_assignee")
     if expected_assignee is not None and not isinstance(expected_assignee, str):
         return _text(ErrorResponse(error="expected_assignee must be a string", code=ErrorCode.VALIDATION))
+    force = args.get("force", False)
+    if not isinstance(force, bool):
+        return _text(ErrorResponse(error="force must be a boolean", code=ErrorCode.VALIDATION))
     tracker = _get_db()
     try:
         ready_before = {i.id for i in tracker.get_ready()}
@@ -836,6 +869,7 @@ async def _handle_close_issue(arguments: dict[str, Any]) -> list[TextContent]:
             actor=actor,
             fields=args.get("fields"),
             expected_assignee=expected_assignee,
+            force=force,
         )
         _refresh_summary()
         ready_after = tracker.get_ready()
@@ -885,11 +919,24 @@ async def _handle_search_issues(arguments: dict[str, Any]) -> list[TextContent]:
     if pag_err is not None:
         return pag_err
 
-    issues = tracker.search_issues(
-        args["query"],
-        limit=effective_limit + 1,
-        offset=offset,
-    )
+    status_category_raw = args.get("status_category")
+    if status_category_raw is not None and status_category_raw not in ("open", "wip", "done"):
+        return _text(
+            ErrorResponse(
+                error=f"Invalid status_category: {status_category_raw!r}. Valid: open, wip, done.",
+                code=ErrorCode.VALIDATION,
+            )
+        )
+    status_category = cast("StatusCategory | None", status_category_raw)
+    try:
+        issues = tracker.search_issues(
+            args["query"],
+            limit=effective_limit + 1,
+            offset=offset,
+            status_category=status_category,
+        )
+    except ValueError as e:
+        return _text(ErrorResponse(error=str(e), code=ErrorCode.VALIDATION))
     issues, has_more = _apply_has_more(issues, effective_limit)
     items = [_slim_issue(i) for i in issues]
     next_offset = offset + len(items) if has_more else None
@@ -1112,6 +1159,9 @@ async def _handle_batch_close(arguments: dict[str, Any]) -> list[TextContent]:
     expected_assignee = args.get("expected_assignee")
     if expected_assignee is not None and not isinstance(expected_assignee, str):
         return _text(ErrorResponse(error="expected_assignee must be a string", code=ErrorCode.VALIDATION))
+    force = args.get("force", False)
+    if not isinstance(force, bool):
+        return _text(ErrorResponse(error="force must be a boolean", code=ErrorCode.VALIDATION))
     detail = parse_response_detail(args.get("response_detail"))
     if isinstance(detail, dict):
         return _text(detail)
@@ -1125,6 +1175,7 @@ async def _handle_batch_close(arguments: dict[str, Any]) -> list[TextContent]:
         reason=args.get("reason", ""),
         actor=actor,
         expected_assignee=expected_assignee,
+        force=force,
     )
     _refresh_summary()
     ready_after = tracker.get_ready()

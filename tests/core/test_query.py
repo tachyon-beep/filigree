@@ -498,6 +498,59 @@ class TestFTS5SpecialCharacters:
         # The key point is: no crash.
         assert isinstance(results, list)
 
+    def test_search_hyphenated_cluster_prefix_finds_self_tagged_work(self, db: FiligreeDB) -> None:
+        """Senior-user MCP review run e P2.6: hyphenated queries hit LIKE path.
+
+        Agents prefix their session work with ``[cluster-foo]`` for
+        later self-discovery. The legacy FTS-only path tokenised hyphens
+        and dropped single-letter tokens, so ``mcp-review-e`` returned 0
+        results. The fix routes hyphen / bracket queries to a LIKE
+        substring search on the raw query.
+        """
+        target = db.create_issue("[mcp-review-e] Scratch task A — start_work probe", type="task")
+        db.create_issue("Unrelated work")
+        db.create_issue("Other [different-cluster] work", type="task")
+
+        # Hyphenated token finds the cluster-prefixed issue.
+        results = db.search_issues("mcp-review-e")
+        assert any(i.id == target.id for i in results), "hyphenated query must find cluster-prefixed work"
+
+        # Bracketed token finds it too — tests the bracket regex hint.
+        results = db.search_issues("[mcp-review-e]")
+        assert any(i.id == target.id for i in results), "bracketed query must find cluster-prefixed work"
+
+        # Plain word tokens still use FTS and continue to work.
+        results = db.search_issues("Scratch")
+        assert any(i.id == target.id for i in results), "plain word query stays on FTS path"
+
+    def test_search_status_category_filter_excludes_done(self, db: FiligreeDB) -> None:
+        """Senior-user MCP review run e P2.7: status_category filter scopes search.
+
+        Without the filter, search returns archived/closed alongside live
+        work — so an agent searching for in-flight work has to post-filter
+        by hand. The status_category parameter restricts results at the
+        DB layer.
+        """
+        live = db.create_issue("[mcp-review-e] live work", type="task")
+        closed = db.create_issue("[mcp-review-e] closed work", type="task")
+        db.close_issue(closed.id)
+        archived = db.create_issue("[mcp-review-e] archived work", type="task")
+        db.close_issue(archived.id)
+        db.archive_closed(days_old=0)
+
+        # No filter: all three appear.
+        all_results = {i.id for i in db.search_issues("[mcp-review-e]")}
+        assert {live.id, closed.id, archived.id}.issubset(all_results)
+
+        # Open category: only live work.
+        open_results = {i.id for i in db.search_issues("[mcp-review-e]", status_category="open")}
+        assert open_results == {live.id}
+
+        # Done category: closed + archived (the P2.10 archived-as-done fix
+        # means archived rows resolve to 'done' too).
+        done_results = {i.id for i in db.search_issues("[mcp-review-e]", status_category="done")}
+        assert done_results == {closed.id, archived.id}
+
 
 class TestCountSearchResults:
     """filigree-af817d0cf3: count_search_results unit tests."""

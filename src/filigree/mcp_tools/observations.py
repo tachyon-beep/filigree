@@ -129,7 +129,11 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
         ),
         Tool(
             name="promote_observation",
-            description="Promote an observation to a real issue. Deletes the observation, creates an issue with the from-observation label. Use type='bug' for defects, type='task' for improvements/cleanup.",
+            description=(
+                "Promote an observation to a real issue. Deletes the observation, creates an "
+                "issue with the from-observation label and any labels passed via labels=[]. "
+                "Use type='bug' for defects, type='task' for improvements/cleanup."
+            ),
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -147,6 +151,15 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
                     },
                     "title": {"type": "string", "description": "Override title (default: observation summary)"},
                     "description": {"type": "string", "description": "Extra description to prepend"},
+                    "labels": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": (
+                            "Additional labels to attach to the promoted issue. Use this to "
+                            "carry session-cluster context (e.g. ['cluster:mcp-review-e']) "
+                            "onto promoted observations."
+                        ),
+                    },
                     "actor": {"type": "string", "description": "Agent/user identity for audit trail"},
                 },
                 "required": ["observation_id"],
@@ -412,6 +425,10 @@ async def _handle_promote_observation(arguments: dict[str, Any]) -> list[TextCon
         if priority_err:
             return priority_err
 
+    labels = args.get("labels")
+    if labels is not None and (not isinstance(labels, list) or not all(isinstance(lbl, str) for lbl in labels)):
+        return _text(ErrorResponse(error="labels must be a list of strings", code=ErrorCode.VALIDATION))
+
     tracker = _get_db()
     try:
         result = tracker.promote_observation(
@@ -421,6 +438,7 @@ async def _handle_promote_observation(arguments: dict[str, Any]) -> list[TextCon
             title=args.get("title"),
             extra_description=args.get("description", ""),
             actor=actor,
+            labels=labels,
         )
     except ValueError as e:
         msg = str(e)

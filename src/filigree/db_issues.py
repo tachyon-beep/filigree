@@ -20,6 +20,7 @@ from filigree.db_base import AGE_BUCKETS, DBMixinProtocol, _escape_like, _escape
 from filigree.models import Issue
 from filigree.templates import TransitionResult, validate_field_pattern
 from filigree.types.api import BatchFailure, ErrorCode, classify_value_error
+from filigree.types.core import StatusCategory
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -262,6 +263,28 @@ def _sanitize_fts_query(query: str) -> str:
     tokens = [t.replace('"', "") for t in sanitized.strip().split()]
     tokens = [t for t in tokens if t]
     return " AND ".join(f'"{t}"*' for t in tokens) if tokens else ""
+
+
+# Punctuation that signals "agent self-tag" / "literal substring" intent.
+# Other punctuation (e.g. @, #, $) is benign — strip-and-FTS is fine; only
+# hyphens and bracket-like delimiters wreck cluster prefixes that agents
+# rely on for self-discovery (``[mcp-review-e]``, ``cluster-foo``, etc.).
+_FTS_LITERAL_HINT_RE = _re.compile(r"[-\[\](){}]")
+
+
+def _query_uses_literal_substring(query: str) -> bool:
+    """Return True when ``query`` should bypass FTS in favour of a LIKE substring.
+
+    The FTS5 tokeniser splits on hyphens and brackets, so a query like
+    ``[mcp-review-e]`` is decomposed into single-letter tokens that FTS
+    drops. When the raw query contains any of those literal-intent
+    delimiters, this returns True so the caller can run a LIKE
+    substring search on the raw query instead. Other punctuation (``@``,
+    ``#``, ``$`` etc.) is left to the legacy strip-and-FTS path so the
+    pre-existing ``"notification @#$%"`` behaviour is preserved.
+    Senior-user MCP review run e P2.6.
+    """
+    return bool(query.strip()) and bool(_FTS_LITERAL_HINT_RE.search(query))
 
 
 class IssuesMixin(DBMixinProtocol):
@@ -834,7 +857,18 @@ class IssuesMixin(DBMixinProtocol):
         status: str | None = None,
         fields: dict[str, Any] | None = None,
         expected_assignee: str | None = None,
+        force: bool = False,
     ) -> Issue:
+        """Close an issue.
+
+        Routes through ``update_issue`` so the same template transition
+        validator enforces ``triage → closed`` (and similar shortcuts)
+        consistently across both close paths. Pass ``force=True`` to
+        rage-close from any state, skipping the template's transition
+        table — this is the documented escape hatch for cleanup
+        flows that intentionally bypass the workflow.
+        Senior-user MCP review run e P1.3.
+        """
         if fields is not None and not isinstance(fields, dict):
             msg = "fields must be a dict"
             raise TypeError(msg)
@@ -863,8 +897,8 @@ class IssuesMixin(DBMixinProtocol):
         # validation (including hard-enforcement field gates) is delegated
         # to update_issue so close_issue and update_issue enforce the same
         # contract for the same target state — closing a bug from 'triage'
-        # without a defined transition now raises INVALID_TRANSITION just
-        # like update_issue(status=closed) does.
+        # without a defined transition raises INVALID_TRANSITION just
+        # like update_issue(status=closed) does, unless force=True.
         update_fields: dict[str, Any] = {}
         if fields:
             update_fields.update(fields)
@@ -877,6 +911,7 @@ class IssuesMixin(DBMixinProtocol):
             fields=update_fields or None,
             actor=actor,
             expected_assignee=expected_assignee,
+            _skip_transition_check=force,
         )
 
     def reopen_issue(self, issue_id: str, *, actor: str = "") -> Issue:
@@ -1521,16 +1556,28 @@ class IssuesMixin(DBMixinProtocol):
         reason: str = "",
         actor: str = "",
         expected_assignee: str | None = None,
+        force: bool = False,
     ) -> tuple[list[Issue], list[BatchFailure]]:
         """Close multiple issues with per-item error handling. Returns (closed, errors).
 
         ``expected_assignee`` is applied to every issue in the batch as a
         single shared precondition; pass ``None`` (default) to skip the
         check (filigree-cb980eee0d, P1.1).
+
+        ``force=True`` skips the template transition validator on every
+        item — same escape hatch as ``close_issue(force=True)``. Use only
+        for cleanup flows that intentionally bypass the workflow.
+        Senior-user MCP review run e P1.3.
         """
         return self._batch_with_transition_errors(
             issue_ids,
-            lambda iid: self.close_issue(iid, reason=reason, actor=actor, expected_assignee=expected_assignee),
+            lambda iid: self.close_issue(
+                iid,
+                reason=reason,
+                actor=actor,
+                expected_assignee=expected_assignee,
+                force=force,
+            ),
         )
 
     def batch_update(
@@ -1812,36 +1859,78 @@ class IssuesMixin(DBMixinProtocol):
             ).fetchone()
         return int(row["cnt"]) if row else 0
 
-    def search_issues(self, query: str, *, limit: int = 100, offset: int = 0) -> list[Issue]:
-        """Search issues by title/description using FTS5, falling back to LIKE."""
-        fts_query = _sanitize_fts_query(query)
+    def search_issues(
+        self,
+        query: str,
+        *,
+        limit: int = 100,
+        offset: int = 0,
+        status_category: StatusCategory | None = None,
+    ) -> list[Issue]:
+        """Search issues by title/description using FTS5, falling back to LIKE.
+
+        When ``query`` contains punctuation that FTS5 would tokenise away
+        (hyphens, brackets, etc.), this falls back to a LIKE substring
+        match on the raw query so agents can find self-tagged work
+        prefixed with ``[cluster-foo]`` or ``mcp-review-e``. Pure
+        word-token queries continue to use FTS5 for ranked relevance.
+        Senior-user MCP review run e P2.6.
+
+        ``status_category`` (``"open"`` / ``"wip"`` / ``"done"``) optionally
+        restricts the result set so agents searching for live work don't
+        get archived results back. Senior-user MCP review run e P2.7.
+        """
+        # Resolve the requested category to a row-level predicate. The
+        # category resolver is per-(type, status) so we filter post-fetch
+        # to keep the SQL portable across the FTS / LIKE branches below.
+        category_filter: StatusCategory | None = None
+        if status_category is not None:
+            if status_category not in ("open", "wip", "done"):
+                msg = f"Invalid status_category: {status_category!r}. Valid: open, wip, done."
+                raise ValueError(msg)
+            category_filter = status_category
+
+        # Effective fetch limit: when category filtering is requested we
+        # over-fetch to a safe ceiling and trim post-filter so the limit
+        # still matches caller expectations after rows are dropped.
+        fetch_limit = max(limit * 4, 200) if category_filter is not None else limit
+
+        use_like_substring = _query_uses_literal_substring(query)
+        fts_query = "" if use_like_substring else _sanitize_fts_query(query)
+
+        rows: list[Any]
         if not fts_query:
             pattern = _escape_like(query)
             rows = self.conn.execute(
-                "SELECT id FROM issues WHERE title LIKE ? ESCAPE '\\' OR description LIKE ? ESCAPE '\\' "
+                "SELECT id, type, status FROM issues "
+                "WHERE title LIKE ? ESCAPE '\\' OR description LIKE ? ESCAPE '\\' "
                 "ORDER BY priority, created_at LIMIT ? OFFSET ?",
-                (pattern, pattern, limit, offset),
+                (pattern, pattern, fetch_limit, offset),
             ).fetchall()
-            return self._build_issues_batch([r["id"] for r in rows])
-        try:
-            rows = self.conn.execute(
-                "SELECT i.id FROM issues i "
-                "JOIN issues_fts ON issues_fts.rowid = i.rowid "
-                "WHERE issues_fts MATCH ? "
-                "ORDER BY issues_fts.rank LIMIT ? OFFSET ?",
-                (fts_query, limit, offset),
-            ).fetchall()
-        except sqlite3.OperationalError as exc:
-            if "no such table" not in str(exc) and "no such module" not in str(exc):
-                raise
-            logging.getLogger(__name__).warning(
-                "FTS5 search unavailable (%s); falling back to LIKE. Performance may be degraded. Run 'filigree doctor' to check.",
-                exc,
-            )
-            pattern = _escape_like(query)
-            rows = self.conn.execute(
-                "SELECT id FROM issues WHERE title LIKE ? ESCAPE '\\' OR description LIKE ? ESCAPE '\\' "
-                "ORDER BY priority, created_at LIMIT ? OFFSET ?",
-                (pattern, pattern, limit, offset),
-            ).fetchall()
+        else:
+            try:
+                rows = self.conn.execute(
+                    "SELECT i.id, i.type, i.status FROM issues i "
+                    "JOIN issues_fts ON issues_fts.rowid = i.rowid "
+                    "WHERE issues_fts MATCH ? "
+                    "ORDER BY issues_fts.rank LIMIT ? OFFSET ?",
+                    (fts_query, fetch_limit, offset),
+                ).fetchall()
+            except sqlite3.OperationalError as exc:
+                if "no such table" not in str(exc) and "no such module" not in str(exc):
+                    raise
+                logging.getLogger(__name__).warning(
+                    "FTS5 search unavailable (%s); falling back to LIKE. Performance may be degraded. Run 'filigree doctor' to check.",
+                    exc,
+                )
+                pattern = _escape_like(query)
+                rows = self.conn.execute(
+                    "SELECT id, type, status FROM issues "
+                    "WHERE title LIKE ? ESCAPE '\\' OR description LIKE ? ESCAPE '\\' "
+                    "ORDER BY priority, created_at LIMIT ? OFFSET ?",
+                    (pattern, pattern, fetch_limit, offset),
+                ).fetchall()
+
+        if category_filter is not None:
+            rows = [r for r in rows if self._resolve_status_category(r["type"], r["status"]) == category_filter][:limit]
         return self._build_issues_batch([r["id"] for r in rows])

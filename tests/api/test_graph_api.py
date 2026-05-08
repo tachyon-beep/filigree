@@ -657,10 +657,13 @@ class TestGraphAPI:
     ) -> None:
         """include_done=false must also exclude archived issues.
 
-        Regression: archive_closed() preserves closed_at but strips the
-        'done' status_category, so archived issues' status_category
-        resolves to 'open'. The graph route filtered only on
-        status_category=='done', leaking archived issues. (filigree-b6cacfce72)
+        Regression: archive_closed() preserves closed_at but historically
+        the 'archived' status was not in any workflow's done category,
+        so archived issues' status_category resolved to 'open'. The graph
+        route filtered only on status_category=='done', leaking archived
+        issues. (filigree-b6cacfce72) Senior-user MCP review run e P2.10
+        fixed the root cause: 'archived' is now resolved to 'done' at the
+        category layer.
         """
         db = dashboard_db.db
         target = db.create_issue("To be archived", type="task", priority=2)
@@ -669,7 +672,7 @@ class TestGraphAPI:
         db.archive_closed(days_old=0)
         archived = db.get_issue(target.id)
         assert archived.status == "archived"
-        assert archived.status_category == "open", "fixture invariant: archived stays in 'open' category"
+        assert archived.status_category == "done", "archived now resolves to 'done' category (P2.10)"
 
         resp = await client.get("/api/graph?mode=v2&include_done=false")
         assert resp.status_code == 200, resp.text
@@ -684,9 +687,10 @@ class TestGraphAPI:
     ) -> None:
         """status_categories=open must not match archived issues.
 
-        Even though archived's raw status_category resolves to 'open',
-        the route should normalize archived to 'done' for filtering and
-        the node payload. (filigree-b6cacfce72)
+        Senior-user MCP review run e P2.10: archived is now resolved to
+        'done' at the category layer, so the open filter naturally
+        excludes archived rows and the node payload reports 'done'.
+        (filigree-b6cacfce72)
         """
         db = dashboard_db.db
         target = db.create_issue("Archived but open-cat", type="task", priority=2)

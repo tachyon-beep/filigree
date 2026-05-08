@@ -1348,12 +1348,17 @@ class FilesMixin(DBMixinProtocol):
         *,
         priority: int | None = None,
         actor: str = "",
+        labels: list[str] | None = None,
     ) -> dict[str, Any]:
         """Promote a finding directly to a tracked issue.
 
         The older ``promote_finding_to_observation`` helper remains available
         for explicit scratchpad triage. This method backs public
         ``promote_finding`` surfaces where agents expect a real work item.
+
+        ``labels`` lets the caller carry session-cluster context onto the
+        promoted issue. The ``from-finding`` label is always added in
+        addition. Senior-user MCP review run e P2.12.
         """
         finding = self.get_finding(finding_id)
         if priority is None:
@@ -1407,6 +1412,11 @@ class FilesMixin(DBMixinProtocol):
         if finding.get("suggestion"):
             description_parts.append(f"Suggestion: {finding['suggestion']}")
 
+        # Carry caller-supplied session-cluster labels alongside the
+        # canonical ``from-finding`` marker. dict.fromkeys preserves order
+        # while de-duplicating if the caller redundantly passed
+        # "from-finding".
+        carry_labels = list(dict.fromkeys(["from-finding", *(labels or [])]))
         issue = self.create_issue(
             title,
             type="bug",
@@ -1417,7 +1427,7 @@ class FilesMixin(DBMixinProtocol):
                 "scan_source": finding["scan_source"],
                 "rule_id": finding["rule_id"],
             },
-            labels=["from-finding"],
+            labels=carry_labels,
             actor=actor,
         )
         try:

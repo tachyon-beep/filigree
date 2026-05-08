@@ -206,11 +206,23 @@ def stats(as_json: bool) -> None:
 @click.argument("query")
 @click.option("--limit", default=100, type=click.IntRange(min=0), help="Max results (default 100)")
 @click.option("--offset", default=0, type=click.IntRange(min=0), help="Skip first N results")
+@click.option(
+    "--status-category",
+    "status_category",
+    type=click.Choice(["open", "wip", "done"]),
+    default=None,
+    help="Filter results by template status category. Default returns all categories.",
+)
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON")
-def search(query: str, limit: int, offset: int, as_json: bool) -> None:
+def search(query: str, limit: int, offset: int, status_category: str | None, as_json: bool) -> None:
     """Search issues by title/description."""
     with get_db() as db:
-        issues = db.search_issues(query, limit=limit + 1 if limit > 0 else limit, offset=offset)
+        issues = db.search_issues(
+            query,
+            limit=limit + 1 if limit > 0 else limit,
+            offset=offset,
+            status_category=status_category,  # type: ignore[arg-type]
+        )
         has_more = limit > 0 and len(issues) > limit
         issues = issues[:limit] if has_more else issues
 
@@ -370,6 +382,12 @@ def batch_update(
     default="slim",
     help="JSON shape for succeeded[]: 'slim' (default, 5-key SlimIssue) or 'full' (PublicIssue records). newly_unblocked stays slim.",
 )
+@click.option(
+    "--force",
+    is_flag=True,
+    default=False,
+    help=("Bypass the template transition validator on every item. Use only for cleanup flows that intentionally skip the workflow."),
+)
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON")
 @click.pass_context
 def batch_close(
@@ -377,6 +395,7 @@ def batch_close(
     issue_ids: tuple[str, ...],
     reason: str,
     response_detail: str,
+    force: bool,
     as_json: bool,
 ) -> None:
     """Close multiple issues with per-item error reporting."""
@@ -386,6 +405,7 @@ def batch_close(
             list(issue_ids),
             reason=reason,
             actor=ctx.obj["actor"],
+            force=force,
         )
 
         if as_json:

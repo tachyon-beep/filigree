@@ -1398,6 +1398,34 @@ class TestResource:
         assert "upgrade" in status["guidance"].lower()
         assert blocked["code"] == ErrorCode.SCHEMA_MISMATCH
 
+    async def test_runtime_schema_drift_gates_writes(self, mcp_db: FiligreeDB, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Senior-user MCP review run e P2.5: detect post-init forward drift.
+
+        Init-time gate only trips when ``_schema_mismatch`` is set. A
+        long-running MCP can have its DB forward-migrated by a sibling
+        process — init succeeded with version N, but ``user_version``
+        now reports N+1. The runtime gate re-checks every call and
+        fail-closes when the DB is strictly newer than the installed
+        binary; ``get_mcp_status`` stays available for diagnosis.
+        """
+        import filigree.mcp_server as mcp_mod
+
+        # Ensure init-time global is clean — we're testing the runtime path.
+        monkeypatch.setattr(mcp_mod, "_schema_mismatch", None)
+        monkeypatch.setattr(mcp_mod, "db", mcp_db)
+        # Spoof a forward-drifted DB version (current+1).
+        installed = mcp_mod.CURRENT_SCHEMA_VERSION
+        monkeypatch.setattr(mcp_db, "get_schema_version", lambda: installed + 1)
+
+        # Diagnostic stays available — it must not be gated even under drift.
+        status = _parse(await call_tool("get_mcp_status", {}))
+        assert status["status"] == "schema_mismatch"
+        assert status["database_schema_version"] == installed + 1
+
+        # Writes are gated.
+        blocked = _parse(await call_tool("create_issue", {"title": "should be blocked"}))
+        assert blocked["code"] == ErrorCode.SCHEMA_MISMATCH
+
     async def test_list_resources(self, mcp_db: FiligreeDB) -> None:
         resources = await list_resources()
         assert len(resources) == 1

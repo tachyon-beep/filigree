@@ -525,9 +525,18 @@ def update_issue_cmd(
         "cancelled) when the default isn't reachable from the current status."
     ),
 )
+@click.option(
+    "--force",
+    is_flag=True,
+    default=False,
+    help=(
+        "Bypass the template transition validator and close from any state. Use only "
+        "for cleanup flows that intentionally skip the workflow."
+    ),
+)
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON")
 @click.pass_context
-def close(ctx: click.Context, issue_ids: tuple[str, ...], reason: str, status: str | None, as_json: bool) -> None:
+def close(ctx: click.Context, issue_ids: tuple[str, ...], reason: str, status: str | None, force: bool, as_json: bool) -> None:
     """Close one or more issues."""
     with get_db() as db:
         succeeded: list[dict[str, Any]] = []
@@ -536,7 +545,7 @@ def close(ctx: click.Context, issue_ids: tuple[str, ...], reason: str, status: s
         for issue_id in issue_ids:
             try:
                 annotation_warnings = db.get_annotation_closeout_warnings(issue_id)
-                issue = db.close_issue(issue_id, reason=reason, status=status, actor=ctx.obj["actor"])
+                issue = db.close_issue(issue_id, reason=reason, status=status, actor=ctx.obj["actor"], force=force)
                 if as_json:
                     item: dict[str, Any] = {
                         "issue_id": issue.id,

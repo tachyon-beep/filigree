@@ -510,7 +510,15 @@ class ObservationsMixin(DBMixinProtocol):
         title: str | None = None,
         extra_description: str = "",
         actor: str = "",
+        labels: list[str] | None = None,
     ) -> PromoteObservationResult:
+        """Promote an observation to a tracked issue.
+
+        ``labels`` lets the caller carry session-cluster context (e.g.
+        ``["cluster:mcp-review-e"]``) onto the promoted issue. The
+        ``from-observation`` label is always added in addition.
+        Senior-user MCP review run e P2.12.
+        """
         # Idempotency check: if a prior promote already created an issue for this
         # obs_id (recorded in issue.fields.source_observation_id), return that
         # issue instead of creating a duplicate.  Handles the retry case where
@@ -626,12 +634,14 @@ class ObservationsMixin(DBMixinProtocol):
             warnings.append(msg)
 
         # 5. Enrichments (non-critical — failure should not undo the promotion)
-        try:
-            self.add_label(issue.id, "from-observation")
-        except (sqlite3.Error, ValueError):
-            msg = f"Failed to add from-observation label to {issue.id}"
-            logger.warning(msg, exc_info=True)
-            warnings.append(msg)
+        carry_labels = ["from-observation", *list(dict.fromkeys(labels or []))]
+        for lbl in carry_labels:
+            try:
+                self.add_label(issue.id, lbl)
+            except (sqlite3.Error, ValueError):
+                msg = f"Failed to add label {lbl!r} to promoted issue {issue.id}"
+                logger.warning(msg, exc_info=True)
+                warnings.append(msg)
 
         file_id = obs.get("file_id")
         try:

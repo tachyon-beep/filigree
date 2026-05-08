@@ -87,6 +87,7 @@ class CloseIssueArgs(TypedDict):
     actor: NotRequired[str]
     fields: NotRequired[dict[str, Any]]
     expected_assignee: NotRequired[str]
+    force: NotRequired[bool]
 
 
 class ReopenIssueArgs(TypedDict):
@@ -96,6 +97,7 @@ class ReopenIssueArgs(TypedDict):
 
 class SearchIssuesArgs(TypedDict):
     query: str
+    status_category: NotRequired[str]
     limit: NotRequired[int]
     offset: NotRequired[int]
     no_limit: NotRequired[bool]
@@ -166,6 +168,7 @@ class BatchCloseArgs(TypedDict):
     response_detail: NotRequired[str]
     actor: NotRequired[str]
     expected_assignee: NotRequired[str]
+    force: NotRequired[bool]
 
 
 class BatchUpdateArgs(TypedDict):
@@ -620,6 +623,7 @@ class BatchUpdateFindingsArgs(TypedDict):
 class PromoteFindingArgs(TypedDict):
     finding_id: str
     priority: NotRequired[int]
+    labels: NotRequired[list[str]]
     actor: NotRequired[str]
 
 
@@ -710,6 +714,7 @@ class PromoteObservationArgs(TypedDict):
     priority: NotRequired[int]
     title: NotRequired[str]
     description: NotRequired[str]
+    labels: NotRequired[list[str]]
     actor: NotRequired[str]
 
 

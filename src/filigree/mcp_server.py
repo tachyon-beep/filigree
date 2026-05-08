@@ -463,6 +463,30 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             )
         )
 
+    # Runtime drift gate: a long-running MCP session can have its DB
+    # forward-migrated under it (sibling MCP at a newer version, manual
+    # migration, etc.). Initialization succeeded with version N, but
+    # ``PRAGMA user_version`` now reports N+1 — every write goes through
+    # because the init-time gate already fell through. Re-check on every
+    # call; cheap (a single pragma read) and fail-closed only when the
+    # DB is strictly newer than the installed binary. ``get_mcp_status``
+    # is exempted so the diagnostic stays available. Senior-user MCP
+    # review run e P2.5.
+    if name != "get_mcp_status" and db is not None:
+        try:
+            db_version = db.get_schema_version()
+        except sqlite3.Error:
+            db_version = None
+        if db_version is not None and db_version > CURRENT_SCHEMA_VERSION:
+            from filigree.mcp_tools.common import _text as _common_text
+
+            return _common_text(
+                ErrorResponse(
+                    error=format_schema_mismatch_guidance(CURRENT_SCHEMA_VERSION, db_version),
+                    code=ErrorCode.SCHEMA_MISMATCH,
+                )
+            )
+
     # Fast-path: unknown tool returns an error response before any DB contact
     # and without holding the serialisation lock.
     handler = _all_handlers.get(name)
