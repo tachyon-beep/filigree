@@ -352,6 +352,32 @@ class TestLoomChangesOffsetRejected:
         assert body["code"] == "VALIDATION"
 
 
+class TestLoomChangesCompoundCursor:
+    async def test_after_event_id_resumes_inside_same_timestamp_group(self, bug_db: FiligreeDB, client: AsyncClient) -> None:
+        issue = bug_db.create_issue("API same timestamp cursor")
+        tied_timestamp = "2026-01-01T00:00:00+00:00"
+        cursor = bug_db.conn.execute(
+            "INSERT INTO events (issue_id, event_type, actor, created_at) VALUES (?, ?, ?, ?)",
+            (issue.id, "title_changed", "import", tied_timestamp),
+        ).lastrowid
+        expected = bug_db.conn.execute(
+            "INSERT INTO events (issue_id, event_type, actor, created_at) VALUES (?, ?, ?, ?)",
+            (issue.id, "status_changed", "import", tied_timestamp),
+        ).lastrowid
+        bug_db.conn.commit()
+
+        resp = await client.get(
+            "/api/loom/changes",
+            params={"since": tied_timestamp, "after_event_id": str(cursor), "limit": "1"},
+        )
+
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert [item["event_id"] for item in body["items"]] == [expected]
+        assert body["next_since"] == tied_timestamp
+        assert body["next_event_id"] == expected
+
+
 # ---------------------------------------------------------------------------
 # filigree-8a117524ca: search routes leak FastAPI 422 envelope on malformed
 # limit/offset (must produce flat {error, code} envelope at 400).

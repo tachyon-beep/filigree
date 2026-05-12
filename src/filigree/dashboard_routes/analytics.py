@@ -605,6 +605,17 @@ def create_loom_router() -> APIRouter:
                 400,
                 {"param": "offset"},
             )
+        after_event_id: int | None = None
+        if "after_event_id" in params:
+            after_event_id_or_err = _safe_bounded_int(
+                params.get("after_event_id", "0"),
+                name="after_event_id",
+                min_value=0,
+                max_value=9223372036854775807,
+            )
+            if not isinstance(after_event_id_or_err, int):
+                return after_event_id_or_err
+            after_event_id = after_event_id_or_err
         limit_or_err = _safe_bounded_int(
             params.get("limit", "100"),
             name="limit",
@@ -614,12 +625,15 @@ def create_loom_router() -> APIRouter:
         if not isinstance(limit_or_err, int):
             return limit_or_err
         limit = limit_or_err
-        events = db.get_events_since(since_normalized, limit=limit + 1)
+        events = db.get_events_since(since_normalized, after_event_id=after_event_id, limit=limit + 1)
         has_more = len(events) > limit
         if has_more:
             events = events[:limit]
         items = [change_record_to_loom(e) for e in events]
-        return JSONResponse(list_response(items, limit=limit, offset=0, has_more=has_more))
+        body = list_response(items, limit=limit, offset=0, has_more=has_more)
+        body["next_since"] = items[-1]["created_at"] if items else since_normalized
+        body["next_event_id"] = items[-1]["event_id"] if items else after_event_id
+        return JSONResponse(body)
 
     @router.get("/observations")
     async def api_loom_list_observations(request: Request, db: FiligreeDB = Depends(_get_db)) -> JSONResponse:

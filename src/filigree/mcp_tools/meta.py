@@ -262,6 +262,11 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
                     "actor": {"type": "string", "description": "Only include events written by this actor"},
                     "issue_id": {"type": "string", "description": "Only include events for this issue"},
                     "label": {"type": "string", "description": "Only include events for issues currently carrying this label"},
+                    "after_event_id": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "description": "Resume after this event id when since matches multiple events",
+                    },
                     "type": {
                         "type": "string",
                         "enum": list(get_args(EventType)),
@@ -719,6 +724,10 @@ async def _handle_get_changes(arguments: dict[str, Any]) -> list[TextContent]:
     limit_err = _validate_int_range(limit, "limit", min_val=1)
     if limit_err:
         return limit_err
+    after_event_id = args.get("after_event_id")
+    event_id_err = _validate_int_range(after_event_id, "after_event_id", min_val=0) if after_event_id is not None else None
+    if event_id_err:
+        return event_id_err
     for field in ("actor", "issue_id", "label", "type"):
         str_err = _validate_str(args.get(field), field)
         if str_err:
@@ -746,6 +755,7 @@ async def _handle_get_changes(arguments: dict[str, Any]) -> list[TextContent]:
     # Overfetch by 1 to detect has_more, matching list_issues / search_issues.
     events = tracker.get_events_since(
         since_normalized,
+        after_event_id=after_event_id,
         limit=limit + 1,
         actor=args.get("actor"),
         issue_id=args.get("issue_id"),
@@ -759,6 +769,7 @@ async def _handle_get_changes(arguments: dict[str, Any]) -> list[TextContent]:
     items = [event_to_mcp(event) for event in events]
     response: dict[str, Any] = dict(_list_response(items, has_more=has_more))
     response["next_since"] = items[-1]["created_at"] if items else since_normalized
+    response["next_event_id"] = items[-1]["event_id"] if items else after_event_id
     return _text(response)
 
 

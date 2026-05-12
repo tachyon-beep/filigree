@@ -1820,6 +1820,23 @@ class TestImportNormalizesNonUtcTimestamps:
             f"Non-UTC imported event should normalize to chronologically-earlier UTC and be excluded by post-cursor query; got {imported}"
         )
 
+    def test_get_events_since_can_resume_inside_same_timestamp_group(self, db: FiligreeDB) -> None:
+        issue = db.create_issue("Same timestamp cursor")
+        tied_timestamp = "2026-01-01T00:00:00+00:00"
+        cursor = db.conn.execute(
+            "INSERT INTO events (issue_id, event_type, actor, created_at) VALUES (?, ?, ?, ?)",
+            (issue.id, "title_changed", "import", tied_timestamp),
+        ).lastrowid
+        expected = db.conn.execute(
+            "INSERT INTO events (issue_id, event_type, actor, created_at) VALUES (?, ?, ?, ?)",
+            (issue.id, "status_changed", "import", tied_timestamp),
+        ).lastrowid
+        db.conn.commit()
+
+        page = db.get_events_since(tied_timestamp, after_event_id=cursor, limit=1)
+
+        assert [event["id"] for event in page] == [expected]
+
     def test_imported_observation_expires_at_normalized_so_expired_is_swept(self, db: FiligreeDB, tmp_path: Path) -> None:
         """filigree-cfada09a36: Import an observation whose expires_at is
         chronologically expired but whose ``+02:00`` text representation

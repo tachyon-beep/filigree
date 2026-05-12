@@ -377,6 +377,7 @@ class BatchAddCommentArgs(TypedDict):
 class GetChangesArgs(TypedDict):
     since: ISOTimestamp
     limit: NotRequired[int]
+    after_event_id: NotRequired[int]
     actor: NotRequired[str]
     issue_id: NotRequired[str]
     label: NotRequired[str]

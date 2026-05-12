@@ -440,11 +440,11 @@ def create_plan(ctx: click.Context, file_path: str | None, as_json: bool) -> Non
         refresh_summary(db)
 
 
-def _changes_impl(since: str, limit: int, as_json: bool) -> None:
+def _changes_impl(since: str, limit: int, after_event_id: int | None, as_json: bool) -> None:
     since = _normalize_iso_timestamp(since, as_json)
     with get_db() as db:
         # Overfetch by 1 to detect has_more without an offset param.
-        raw = db.get_events_since(since, limit=limit + 1 if limit > 0 else limit)
+        raw = db.get_events_since(since, after_event_id=after_event_id, limit=limit + 1 if limit > 0 else limit)
         has_more = limit > 0 and len(raw) > limit
         events = raw[:limit] if has_more else raw
 
@@ -453,6 +453,7 @@ def _changes_impl(since: str, limit: int, as_json: bool) -> None:
                 "items": events,
                 "has_more": has_more,
                 "next_since": events[-1]["created_at"] if events else since,
+                "next_event_id": events[-1]["id"] if events else after_event_id,
             }
             click.echo(json_mod.dumps(payload, indent=2, default=str))
             return
@@ -476,10 +477,11 @@ def _changes_impl(since: str, limit: int, as_json: bool) -> None:
     type=click.IntRange(min=1),
     help="Max events (default 100, must be >= 1)",
 )
+@click.option("--after-event-id", default=None, type=click.IntRange(min=0), help="Resume after this event id when --since ties")
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON")
-def changes(since: str, limit: int, as_json: bool) -> None:
+def changes(since: str, limit: int, after_event_id: int | None, as_json: bool) -> None:
     """Get events since a timestamp (for session resumption)."""
-    _changes_impl(since, limit, as_json)
+    _changes_impl(since, limit, after_event_id, as_json)
 
 
 @click.command("get-changes")
@@ -490,10 +492,11 @@ def changes(since: str, limit: int, as_json: bool) -> None:
     type=click.IntRange(min=1),
     help="Max events (default 100, must be >= 1)",
 )
+@click.option("--after-event-id", default=None, type=click.IntRange(min=0), help="Resume after this event id when --since ties")
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON")
-def get_changes(since: str, limit: int, as_json: bool) -> None:
+def get_changes(since: str, limit: int, after_event_id: int | None, as_json: bool) -> None:
     """Get events since a timestamp (for session resumption). Alias for `changes`."""
-    _changes_impl(since, limit, as_json)
+    _changes_impl(since, limit, after_event_id, as_json)
 
 
 def register(cli: click.Group) -> None:

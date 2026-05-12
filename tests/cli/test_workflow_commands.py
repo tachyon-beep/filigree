@@ -8,6 +8,7 @@ from pathlib import Path
 from click.testing import CliRunner
 
 from filigree.cli import cli
+from filigree.cli_common import get_db
 from tests.cli.conftest import _extract_id
 
 
@@ -1028,6 +1029,41 @@ class TestEventsCli:
         data = json.loads(result.output)
         assert data["has_more"] is True
         assert data["next_since"] == data["items"][-1]["created_at"]
+
+    def test_changes_json_can_resume_inside_same_timestamp_group(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        runner, _ = cli_in_project
+        tied_timestamp = "2026-01-01T00:00:00+00:00"
+        with get_db() as db:
+            issue = db.create_issue("CLI same timestamp cursor")
+            cursor = db.conn.execute(
+                "INSERT INTO events (issue_id, event_type, actor, created_at) VALUES (?, ?, ?, ?)",
+                (issue.id, "title_changed", "import", tied_timestamp),
+            ).lastrowid
+            expected = db.conn.execute(
+                "INSERT INTO events (issue_id, event_type, actor, created_at) VALUES (?, ?, ?, ?)",
+                (issue.id, "status_changed", "import", tied_timestamp),
+            ).lastrowid
+            db.conn.commit()
+
+        result = runner.invoke(
+            cli,
+            [
+                "changes",
+                "--since",
+                tied_timestamp,
+                "--after-event-id",
+                str(cursor),
+                "--limit",
+                "1",
+                "--json",
+            ],
+        )
+
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert [item["id"] for item in data["items"]] == [expected]
+        assert data["next_since"] == tied_timestamp
+        assert data["next_event_id"] == expected
 
     def test_changes_json_empty_next_since_echoes_normalized_since(self, cli_in_project: tuple[CliRunner, Path]) -> None:
         runner, _ = cli_in_project

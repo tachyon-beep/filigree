@@ -1316,6 +1316,29 @@ class TestGetChanges:
         assert data["has_more"] is True
         assert data["next_since"] == data["items"][0]["created_at"]
 
+    async def test_get_changes_can_resume_inside_same_timestamp_group(self, mcp_db: FiligreeDB) -> None:
+        issue = mcp_db.create_issue("MCP same timestamp cursor")
+        tied_timestamp = "2026-01-01T00:00:00+00:00"
+        cursor = mcp_db.conn.execute(
+            "INSERT INTO events (issue_id, event_type, actor, created_at) VALUES (?, ?, ?, ?)",
+            (issue.id, "title_changed", "import", tied_timestamp),
+        ).lastrowid
+        expected = mcp_db.conn.execute(
+            "INSERT INTO events (issue_id, event_type, actor, created_at) VALUES (?, ?, ?, ?)",
+            (issue.id, "status_changed", "import", tied_timestamp),
+        ).lastrowid
+        mcp_db.conn.commit()
+
+        result = await call_tool(
+            "get_changes",
+            {"since": tied_timestamp, "after_event_id": cursor, "limit": 1, "include_heartbeats": True},
+        )
+
+        data = _parse(result)
+        assert [item["event_id"] for item in data["items"]] == [expected]
+        assert data["next_since"] == tied_timestamp
+        assert data["next_event_id"] == expected
+
 
 class TestActorIdentity:
     async def test_update_with_actor(self, mcp_db: FiligreeDB) -> None:

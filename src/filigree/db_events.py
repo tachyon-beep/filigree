@@ -112,6 +112,7 @@ class EventsMixin(DBMixinProtocol):
         self,
         since: str,
         *,
+        after_event_id: int | None = None,
         limit: int = 100,
         actor: str | None = None,
         issue_id: str | None = None,
@@ -127,8 +128,12 @@ class EventsMixin(DBMixinProtocol):
         path defaults to excluding ``heartbeat`` so liveness pings don't
         dominate session-resumption feeds (filigree-cb980eee0d, P2.11).
         """
-        clauses = ["e.created_at > ?"]
-        params: list[object] = [since]
+        if after_event_id is None:
+            clauses = ["e.created_at > ?"]
+            params: list[object] = [since]
+        else:
+            clauses = ["(e.created_at > ? OR (e.created_at = ? AND e.id > ?))"]
+            params = [since, since, after_event_id]
         if actor is not None:
             clauses.append("e.actor = ?")
             params.append(actor)
