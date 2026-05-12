@@ -1386,6 +1386,106 @@ class TestImportJsonl:
         assert leaked == 0
         fresh.close()
 
+    def test_import_future_reconcile_ignores_corrupt_release_fields(self, db: FiligreeDB, tmp_path: Path) -> None:
+        db.conn.execute(
+            "INSERT INTO issues (id, title, status, priority, type, assignee, "
+            "created_at, updated_at, description, notes, fields) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                "test-corruptrel",
+                "Corrupt release",
+                "planning",
+                4,
+                "release",
+                "",
+                "2026-01-01T00:00:00+00:00",
+                "2026-01-01T00:00:00+00:00",
+                "",
+                "",
+                "not-json",
+            ),
+        )
+        db.conn.commit()
+
+        jsonl = tmp_path / "future-with-corrupt-existing.jsonl"
+        jsonl.write_text(
+            json.dumps(
+                {
+                    "_type": "issue",
+                    "id": "test-importfuture",
+                    "title": "Future",
+                    "type": "release",
+                    "status": "planning",
+                    "priority": 4,
+                    "fields": '{"version": "Future"}',
+                }
+            )
+            + "\n"
+        )
+
+        db.import_jsonl(jsonl, merge=True)
+
+        assert db.conn.execute("SELECT id FROM issues WHERE id = ?", ("test-importfuture",)).fetchone() is not None
+
+    def test_import_rejects_foreign_closeout_ack_when_target_type_missing(self, db: FiligreeDB, tmp_path: Path) -> None:
+        from filigree.core import WrongProjectError
+
+        jsonl = tmp_path / "foreign-closeout-ack.jsonl"
+        lines = [
+            {
+                "_type": "annotation",
+                "id": "ann-foreign-ack",
+                "file_path": "src.py",
+                "note": "imported annotation",
+                "created_at": "2026-01-01T00:00:00+00:00",
+                "updated_at": "2026-01-01T00:00:00+00:00",
+            },
+            {
+                "_type": "annotation_closeout_acknowledgement",
+                "annotation_id": "ann-foreign-ack",
+                "target_id": "src-foreignissue",
+                "carried_to_target_id": "src-carriedissue",
+                "actor": "import",
+                "acknowledged_at": "2026-01-01T00:00:00+00:00",
+            },
+        ]
+        jsonl.write_text("\n".join(json.dumps(line) for line in lines) + "\n")
+
+        with pytest.raises(WrongProjectError, match=r"src-foreignissue"):
+            db.import_jsonl(jsonl, merge=True)
+
+        leaked = db.conn.execute(
+            "SELECT COUNT(*) FROM annotation_closeout_acknowledgements WHERE target_id = ?",
+            ("src-foreignissue",),
+        ).fetchone()[0]
+        assert leaked == 0
+
+    def test_import_preserves_annotation_provenance_json_list_text(self, db: FiligreeDB, tmp_path: Path) -> None:
+        jsonl = tmp_path / "annotation-provenance.jsonl"
+        lines = [
+            {
+                "_type": "annotation",
+                "id": "ann-provenance",
+                "file_path": "src.py",
+                "note": "imported annotation",
+                "created_at": "2026-01-01T00:00:00+00:00",
+                "updated_at": "2026-01-01T00:00:00+00:00",
+            },
+            {
+                "_type": "annotation_provenance",
+                "annotation_id": "ann-provenance",
+                "provenance_flags": '["generated_file"]',
+                "provenance_warnings": '["anchor shifted"]',
+            },
+        ]
+        jsonl.write_text("\n".join(json.dumps(line) for line in lines) + "\n")
+
+        db.import_jsonl(jsonl, merge=True)
+
+        annotation = db.get_annotation("ann-provenance")
+        assert annotation["provenance"]["provenance_flags"] == ["generated_file"]
+        assert annotation["provenance"]["provenance_warnings"] == ["anchor shifted"]
+
     def test_import_merge_reconciles_file_ids_by_path(self, tmp_path: Path) -> None:
         source = FiligreeDB(tmp_path / "source.db", prefix="src")
         source.initialize()

@@ -554,7 +554,7 @@ class MetaMixin(DBMixinProtocol):
         existing_ids = [
             row["id"]
             for row in self.conn.execute(
-                "SELECT id FROM issues WHERE type = 'release' AND json_extract(fields, '$.version') = 'Future'"
+                "SELECT id FROM issues WHERE type = 'release' AND json_valid(fields) AND json_extract(fields, '$.version') = 'Future'"
             ).fetchall()
         ]
         conflicting_ids = [issue_id for issue_id in existing_ids if issue_id != imported_id]
@@ -572,6 +572,18 @@ class MetaMixin(DBMixinProtocol):
         if isinstance(value, str):
             return value
         return json.dumps(value or {})
+
+    @staticmethod
+    def _json_list_text(value: Any) -> str:
+        if isinstance(value, str):
+            try:
+                parsed = json.loads(value)
+            except (TypeError, json.JSONDecodeError):
+                return "[]"
+            return value if isinstance(parsed, list) else "[]"
+        if isinstance(value, list):
+            return json.dumps(value)
+        return "[]"
 
     def _resolve_imported_file_id(
         self,
@@ -731,7 +743,7 @@ class MetaMixin(DBMixinProtocol):
             if rec.get("target_type") == "issue":
                 check(rec.get("target_id"))
         for rec in annotation_closeout_acknowledgements:
-            if rec.get("target_type") == "issue":
+            if rec.get("target_type", "issue") == "issue":
                 check(rec.get("target_id"))
                 check(rec.get("carried_to_target_id"))
 
@@ -1239,8 +1251,8 @@ class MetaMixin(DBMixinProtocol):
                         record.get("anchor_context_before", ""),
                         record.get("anchor_context_after", ""),
                         record.get("provenance_trust_level", "minimal"),
-                        json.dumps(record.get("provenance_flags", [])),
-                        json.dumps(record.get("provenance_warnings", [])),
+                        self._json_list_text(record.get("provenance_flags", [])),
+                        self._json_list_text(record.get("provenance_warnings", [])),
                     ),
                 )
                 count += cursor.rowcount
