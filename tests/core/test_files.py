@@ -913,6 +913,28 @@ class TestScanRunId:
         assert run_a["findings_count"] == 1
         assert run_b["findings_count"] == 1, f"run-B observed 1 finding but reports findings_count={run_b['findings_count']}"
 
+    def test_existing_scan_run_rejects_mismatched_scan_source(self, db: FiligreeDB) -> None:
+        db.create_scan_run(
+            scan_run_id="run-source",
+            scanner_name="codex",
+            scan_source="codex",
+            file_paths=["a.py"],
+            file_ids=[],
+        )
+        db.update_scan_run_status("run-source", "running")
+
+        with pytest.raises(ValueError, match="scan_source"):
+            db.process_scan_results(
+                scan_source="ruff",
+                scan_run_id="run-source",
+                findings=[{"path": "a.py", "rule_id": "R1", "severity": "low", "message": "m"}],
+            )
+
+        findings = db.conn.execute("SELECT COUNT(*) AS c FROM scan_findings").fetchone()
+        run = db.get_scan_run("run-source")
+        assert findings["c"] == 0
+        assert run["status"] == "running"
+
 
 class TestSuggestionField:
     """Tests for suggestion storage and size cap."""
@@ -1296,6 +1318,41 @@ class TestCleanStaleFindings:
 
         result = db.clean_stale_findings(days=30)
         assert result["findings_fixed"] == 0
+
+    def test_cleans_linked_observations_for_stale_findings(self, db: FiligreeDB) -> None:
+        result = db.process_scan_results(
+            scan_source="ruff",
+            create_observations=True,
+            findings=[{"path": "a.py", "rule_id": "E501", "severity": "low", "message": "m"}],
+        )
+        finding_id = result["new_finding_ids"][0]
+        observation = db.conn.execute(
+            "SELECT id FROM observations WHERE source_finding_id = ?",
+            (finding_id,),
+        ).fetchone()
+        assert observation is not None
+
+        db.conn.execute(
+            "UPDATE scan_findings SET status = 'unseen_in_latest', last_seen_at = '2020-01-01T00:00:00+00:00' WHERE id = ?",
+            (finding_id,),
+        )
+        db.conn.commit()
+
+        cleanup = db.clean_stale_findings(days=30, actor="janitor")
+
+        live = db.conn.execute(
+            "SELECT COUNT(*) AS c FROM observations WHERE source_finding_id = ?",
+            (finding_id,),
+        ).fetchone()
+        dismissed = db.conn.execute(
+            "SELECT actor, reason FROM dismissed_observations WHERE obs_id = ?",
+            (observation["id"],),
+        ).fetchone()
+        assert cleanup["findings_fixed"] == 1
+        assert live["c"] == 0
+        assert dismissed is not None
+        assert dismissed["actor"] == "janitor"
+        assert "stale" in dismissed["reason"]
 
 
 class TestGetFindings:

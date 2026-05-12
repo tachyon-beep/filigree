@@ -816,6 +816,14 @@ class FilesMixin(DBMixinProtocol):
             raise ValueError(
                 "mark_unseen=True requires at least one finding; an empty batch cannot identify which (file, scan_source) pairs to sweep"
             )
+        if scan_run_id:
+            scan_run = self.conn.execute("SELECT scan_source FROM scan_runs WHERE id = ?", (scan_run_id,)).fetchone()
+            if scan_run is not None and scan_run["scan_source"] != scan_source:
+                msg = (
+                    f"scan_source mismatch for scan_run_id {scan_run_id!r}: "
+                    f"existing run uses {scan_run['scan_source']!r}, got {scan_source!r}"
+                )
+                raise ValueError(msg)
 
         warnings = self._validate_scan_findings(findings, scan_source)
 
@@ -1138,10 +1146,21 @@ class FilesMixin(DBMixinProtocol):
         now = _now_iso()
         where = " AND ".join(clauses)
         try:
+            fixed_rows = self.conn.execute(
+                f"SELECT id FROM scan_findings WHERE {where}",
+                params,
+            ).fetchall()
             cursor = self.conn.execute(
                 f"UPDATE scan_findings SET status = 'fixed', updated_at = ? WHERE {where}",
                 [now, *params],
             )
+            for row in fixed_rows:
+                self._cascade_dismiss_observations_for_finding(
+                    row["id"],
+                    actor=actor or "system",
+                    reason="stale finding cleanup marked finding fixed",
+                    now=now,
+                )
             self.conn.commit()
         except Exception:
             self.conn.rollback()
