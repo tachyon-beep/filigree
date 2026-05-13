@@ -201,19 +201,20 @@ def _transitions_impl(issue_id: str, as_json: bool) -> None:
             _emit_error(f"Not found: {issue_id}", ErrorCode.NOT_FOUND, as_json=as_json)
 
         if as_json:
+            items = [
+                {
+                    "to": t.to,
+                    "category": t.category,
+                    "enforcement": t.enforcement,
+                    "requires_fields": list(t.requires_fields),
+                    "missing_fields": list(t.missing_fields),
+                    "ready": t.ready,
+                }
+                for t in transitions
+            ]
             click.echo(
                 json_mod.dumps(
-                    [
-                        {
-                            "to": t.to,
-                            "category": t.category,
-                            "enforcement": t.enforcement,
-                            "requires_fields": list(t.requires_fields),
-                            "missing_fields": list(t.missing_fields),
-                            "ready": t.ready,
-                        }
-                        for t in transitions
-                    ],
+                    {"items": items, "has_more": False},
                     indent=2,
                 )
             )

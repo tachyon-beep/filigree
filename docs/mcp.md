@@ -292,12 +292,25 @@ Returns both legacy count maps and explicit aliases:
 |------|-------------|
 | `get_plan` | Milestone plan tree with progress |
 | `create_plan` | Create milestone/phase/step hierarchy in one call |
+| `add_plan_step` | Add a step to an existing phase |
+| `retarget_plan_dependency` | Swap one step dependency for another |
+| `move_plan_step` | Move an existing step to another phase |
+| `label_plan_tree` | Apply a label to a milestone subtree |
 
 #### `get_plan`
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `milestone_id` | string | yes | Milestone issue ID |
+| `response_detail` | enum | no | `slim` (default) for compact issue records, `full` for full issue payloads |
+
+Returns the plan tree with progress fields. Slim responses keep milestone,
+phase, and step records compact; full responses include full issue payloads
+with descriptions, fields, labels, blockers, and timestamps.
+
+Plan-editing operations preserve dependency edges. `move_plan_step` returns a
+`warnings[]` entry when active dependencies are carried forward across the move;
+use `retarget_plan_dependency` when a moved step's blockers should change.
 
 #### `create_plan`
 
@@ -530,6 +543,9 @@ transitions, initial state, and fields schema.
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `issue_id` | string | yes | Issue ID |
+
+Returns `ListResponse[TransitionDetail]` (`{items, has_more}`), with
+`has_more=false` because transition sets are finite and unpaginated.
 
 #### `validate_issue`
 

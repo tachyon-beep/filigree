@@ -452,6 +452,7 @@ class GetBlockedArgs(TypedDict):
 
 class GetPlanArgs(TypedDict):
     milestone_id: str
+    response_detail: NotRequired[str]
 
 
 class StepInput(TypedDict):

@@ -202,7 +202,7 @@ product match those decisions.
   `create`, `list`/`list-issues`, and `update`/`update-issue` accept
   `--parent-issue-id` alongside stable `--parent`.
 
-- [ ] **Normalize common response envelopes without losing useful slim paths.**
+- [x] **Normalize common response envelopes without losing useful slim paths.**
   Source: A14, B7, C3, D12/D14/D15, E14/E19/E21/E22, F4, G11, H5/H8/H9/H13/H14/H17.
   Decision: [ADR-009](../architecture/decisions/ADR-009-response-shape-philosophy.md)
   chooses predictable envelopes, slim defaults, and `response_detail` for full
@@ -216,6 +216,13 @@ product match those decisions.
   Ship criterion: wrap list-shaped tools consistently, keep batch envelopes
   canonical, add `response_detail=slim|full` where needed, migrate empty result
   shapes into the same envelope families, and document compatibility aliases.
+  Resolution: remaining list-shaped transition reads now use `ListResponse`
+  (`get_valid_transitions` on MCP and CLI JSON), plan reads default to slim
+  issue records with `response_detail`/`--detail full` for full payloads, and
+  compatibility aliases such as `by_status`, `by_category`, and full-payload
+  `parent_id` are documented as compatibility fields rather than new canonical
+  names. `start_next_work` keeps its singleton empty-result action response by
+  design because it is not a list query.
 
 - [x] **Clarify workflow-template semantics and soft enforcement.**
   Source: C1/C2/C6/C8/C9, F5, H6, H10.
@@ -253,7 +260,7 @@ product match those decisions.
   remains an all-history lookup by design; live-work search uses
   `status_category="open"` and excludes archived history at the DB layer.
 
-- [ ] **Improve plan-editing and plan-read ergonomics.**
+- [x] **Improve plan-editing and plan-read ergonomics.**
   Source: A6/A7, B8, D16/D18, E20/E21, G6/G7/G9, H9.
   Problem: earlier passes wanted file-backed plan creation, plan-native edits,
   subtree labeling, and whole-tree cleanup; later passes found cross-phase deps
@@ -262,6 +269,12 @@ product match those decisions.
   Ship criterion: plan operations expose safe high-level edits, warnings for
   surprising dependency carry-forward, predictable dependency ID syntax, and
   slim/full response modes.
+  Resolution: `get_plan` now defaults to slim issue records and accepts
+  `response_detail="full"` on MCP / `--detail full` on CLI JSON. Plan move
+  responses warn when active dependencies are carried forward, and
+  `retarget_plan_dependency` remains the explicit tool for changing blockers.
+  Dependency reference syntax is documented as integer same-phase indices or
+  `"phase_idx.step_idx"` cross-phase references, with ambiguous JSON rejected.
 
 - [x] **Clarify close, dismiss, and reason semantics across issue and finding lifecycles.**
   Source: F2/F6, H10/H16, E16/E17.

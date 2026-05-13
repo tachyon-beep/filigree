@@ -120,10 +120,11 @@ class TestWorkflowCli:
         result = runner.invoke(cli, ["transitions", issue_id, "--json"])
         assert result.exit_code == 0
         data = json.loads(result.output)
-        assert isinstance(data, list)
-        if data:
-            assert "to" in data[0]
-            assert "ready" in data[0]
+        assert set(data) == {"items", "has_more"}
+        assert data["has_more"] is False
+        if data["items"]:
+            assert "to" in data["items"][0]
+            assert "ready" in data["items"][0]
 
     def test_transitions_not_found(self, cli_in_project: tuple[CliRunner, Path]) -> None:
         runner, _ = cli_in_project
@@ -563,6 +564,13 @@ class TestPlanCli:
         assert result.exit_code == 0
         data = json.loads(result.output)
         assert "milestone" in data
+        assert "issue_id" in data["milestone"]
+        assert "fields" not in data["milestone"]
+
+        full_result = runner.invoke(cli, ["get-plan", ms_id, "--json", "--detail", "full"])
+        assert full_result.exit_code == 0
+        full_data = json.loads(full_result.output)
+        assert "fields" in full_data["milestone"]
 
     def test_plan_step_marker_uses_status_category(self, cli_in_project: tuple[CliRunner, Path]) -> None:
         """Bug fix: filigree-6b0f8cfb49 — step icons must be derived from
@@ -612,9 +620,9 @@ class TestPlanCli:
         phase_line = next(line for line in r.output.splitlines() if "Phase A" in line)
         # "Created plan: ...(ms_id)" then "  Phase: Phase A (1 steps)"
         # Find phase id via JSON call
-        result_json = runner.invoke(cli, ["plan", ms_id, "--json"])
+        result_json = runner.invoke(cli, ["plan", ms_id, "--json", "--detail", "full"])
         data = json.loads(result_json.output)
-        phase_id = data["phases"][0]["phase"]["id"]
+        phase_id = data["phases"][0]["phase"]["issue_id"]
         upd = runner.invoke(cli, ["update", phase_id, "--status", "active"])
         assert upd.exit_code == 0, f"update to active failed: {upd.output}"
 

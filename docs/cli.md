@@ -624,6 +624,16 @@ Show plan tree with progress for a milestone.
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `milestone-id` | string | Milestone issue ID (positional) |
+| `--json` | flag | Output plan tree JSON |
+| `--detail` | enum | JSON detail: `slim` (default) or `full` |
+
+JSON output uses public `issue_id` keys. Slim detail keeps milestone, phase, and
+step records compact; full detail includes descriptions, fields, labels,
+blockers, and timestamps.
+
+Plan-native editing tools are exposed on MCP. Moving a step preserves its
+dependency edges and returns a warning when active dependencies carry forward;
+retarget dependencies explicitly when the move changes the intended blockers.
 
 ## Workflow Templates
 
@@ -666,6 +676,7 @@ Show valid next statuses for an issue, with readiness indicators and missing fie
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `id` | string | Issue ID (positional) |
+| `--json` | flag | Output `ListResponse[TransitionDetail]` (`{items, has_more}`) |
 
 ### `validate`
 

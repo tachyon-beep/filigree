@@ -19,7 +19,7 @@ from filigree.mcp_tools.common import (
     _validate_actor,
     _validate_int_range,
 )
-from filigree.mcp_tools.payloads import critical_path_node_to_mcp, plan_tree_to_mcp
+from filigree.mcp_tools.payloads import critical_path_node_to_mcp, plan_tree_to_mcp, slim_plan_tree_to_mcp
 from filigree.types.api import (
     BatchResponse,
     CriticalPathMcpNode,
@@ -113,11 +113,17 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
         ),
         Tool(
             name="get_plan",
-            description="Get milestone plan tree showing phases, steps, and progress",
+            description="Get milestone plan tree showing phases, steps, and progress. Defaults to slim issue records; pass response_detail='full' for full issue payloads.",
             inputSchema={
                 "type": "object",
                 "properties": {
                     "milestone_id": {"type": "string", "description": "Milestone issue ID"},
+                    "response_detail": {
+                        "type": "string",
+                        "enum": ["slim", "full"],
+                        "default": "slim",
+                        "description": "'slim' returns compact issue records; 'full' includes full issue payloads.",
+                    },
                 },
                 "required": ["milestone_id"],
             },
@@ -439,6 +445,9 @@ async def _handle_get_plan(arguments: dict[str, Any]) -> list[TextContent]:
     from filigree.mcp_server import _get_db
 
     args = _parse_args(arguments, GetPlanArgs)
+    detail = parse_response_detail(args.get("response_detail"))
+    if isinstance(detail, dict):
+        return _text(detail)
     tracker = _get_db()
     try:
         plan_tree = tracker.get_plan(args["milestone_id"])
@@ -451,7 +460,8 @@ async def _handle_get_plan(arguments: dict[str, Any]) -> list[TextContent]:
             completed_steps=completed,
             progress_pct=round(completed / total * 100, 1) if total > 0 else 0.0,
         )
-        return _text(plan_tree_to_mcp(result))
+        payload = plan_tree_to_mcp(result) if detail == "full" else slim_plan_tree_to_mcp(result)
+        return _text(payload)
     except KeyError:
         return _text(ErrorResponse(error=f"Milestone not found: {args['milestone_id']}", code=ErrorCode.NOT_FOUND))
 
@@ -686,6 +696,7 @@ async def _handle_move_plan_step(arguments: dict[str, Any]) -> list[TextContent]
         return actor_err
     tracker = _get_db()
     try:
+        before = tracker.get_issue(args["step_id"])
         issue = tracker.move_plan_step(args["step_id"], args["phase_id"], actor=actor)
     except KeyError as e:
         return _text(ErrorResponse(error=str(e), code=ErrorCode.NOT_FOUND))
@@ -695,6 +706,11 @@ async def _handle_move_plan_step(arguments: dict[str, Any]) -> list[TextContent]
     response: dict[str, Any] = dict(issue_to_public(issue))
     response["move_result"] = "moved"
     response["changed_fields"] = ["parent_id"]
+    dependency_edges = len(before.blocked_by) + len(before.blocks)
+    if dependency_edges:
+        response["warnings"] = [
+            f"{dependency_edges} active dependencies carried forward; use retarget_plan_dependency if the move changes blockers."
+        ]
     return _text(response)
 
 

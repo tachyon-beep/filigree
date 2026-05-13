@@ -13,8 +13,11 @@ import click
 
 from filigree.cli_common import get_db, refresh_summary
 from filigree.issue_payloads import issue_to_ready
+from filigree.mcp_tools.payloads import plan_tree_to_mcp, slim_plan_tree_to_mcp
 from filigree.types.api import ErrorCode
 from filigree.types.events import EventType
+
+_PLAN_DETAIL_CHOICES = ("slim", "full")
 
 
 def _emit_error(message: str, code: ErrorCode, as_json: bool) -> NoReturn:
@@ -213,7 +216,7 @@ def get_blocked(as_json: bool, include_blockers: bool) -> None:
     _blocked_impl(as_json, include_blockers)
 
 
-def _plan_impl(milestone_id: str, as_json: bool) -> None:
+def _plan_impl(milestone_id: str, as_json: bool, detail: str = "slim") -> None:
     with get_db() as db:
         try:
             p = db.get_plan(milestone_id)
@@ -221,7 +224,8 @@ def _plan_impl(milestone_id: str, as_json: bool) -> None:
             _emit_error(f"Not found: {milestone_id}", ErrorCode.NOT_FOUND, as_json)
 
         if as_json:
-            click.echo(json_mod.dumps(p, indent=2, default=str))
+            payload = plan_tree_to_mcp(p) if detail == "full" else slim_plan_tree_to_mcp(p)
+            click.echo(json_mod.dumps(payload, indent=2, default=str))
             return
 
         ms = p["milestone"]
@@ -256,17 +260,19 @@ def _plan_impl(milestone_id: str, as_json: bool) -> None:
 @click.command()
 @click.argument("milestone_id")
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON")
-def plan(milestone_id: str, as_json: bool) -> None:
+@click.option("--detail", type=click.Choice(_PLAN_DETAIL_CHOICES), default="slim", show_default=True, help="JSON detail level")
+def plan(milestone_id: str, as_json: bool, detail: str) -> None:
     """Show milestone plan tree with progress."""
-    _plan_impl(milestone_id, as_json)
+    _plan_impl(milestone_id, as_json, detail)
 
 
 @click.command("get-plan")
 @click.argument("milestone_id")
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON")
-def get_plan(milestone_id: str, as_json: bool) -> None:
+@click.option("--detail", type=click.Choice(_PLAN_DETAIL_CHOICES), default="slim", show_default=True, help="JSON detail level")
+def get_plan(milestone_id: str, as_json: bool, detail: str) -> None:
     """Show milestone plan tree with progress. Alias for `plan`."""
-    _plan_impl(milestone_id, as_json)
+    _plan_impl(milestone_id, as_json, detail)
 
 
 @click.command("add-dep")

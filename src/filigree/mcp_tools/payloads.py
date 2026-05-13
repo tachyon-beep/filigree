@@ -23,6 +23,20 @@ def issue_dict_to_mcp(record: Mapping[str, Any]) -> dict[str, Any]:
     return _rename_primary_id(record, "issue_id")
 
 
+def issue_dict_to_slim_mcp(record: Mapping[str, Any]) -> dict[str, Any]:
+    payload = issue_dict_to_mcp(record)
+    return {
+        "issue_id": payload["issue_id"],
+        "title": payload["title"],
+        "status": payload["status"],
+        "status_category": payload["status_category"],
+        "priority": payload["priority"],
+        "type": payload["type"],
+        "parent_issue_id": payload.get("parent_id"),
+        "is_ready": payload["is_ready"],
+    }
+
+
 def file_record_to_mcp(record: Mapping[str, Any]) -> dict[str, Any]:
     return _rename_primary_id(record, "file_id")
 
@@ -109,6 +123,29 @@ def plan_tree_to_mcp(record: Mapping[str, Any]) -> dict[str, Any]:
         if isinstance(phase, Mapping):
             phase_payload["phase"] = issue_dict_to_mcp(phase)
         phase_payload["steps"] = [issue_dict_to_mcp(step) if isinstance(step, Mapping) else step for step in phase_payload.get("steps", [])]
+        phases.append(phase_payload)
+    payload["phases"] = phases
+    return payload
+
+
+def slim_plan_tree_to_mcp(record: Mapping[str, Any]) -> dict[str, Any]:
+    payload = dict(record)
+    milestone = payload.get("milestone")
+    if isinstance(milestone, Mapping):
+        payload["milestone"] = issue_dict_to_slim_mcp(milestone)
+
+    phases: list[Any] = []
+    for phase_item in payload.get("phases", []):
+        if not isinstance(phase_item, Mapping):
+            phases.append(phase_item)
+            continue
+        phase_payload = dict(phase_item)
+        phase = phase_payload.get("phase")
+        if isinstance(phase, Mapping):
+            phase_payload["phase"] = issue_dict_to_slim_mcp(phase)
+        phase_payload["steps"] = [
+            issue_dict_to_slim_mcp(step) if isinstance(step, Mapping) else step for step in phase_payload.get("steps", [])
+        ]
         phases.append(phase_payload)
     payload["phases"] = phases
     return payload

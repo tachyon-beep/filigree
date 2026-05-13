@@ -350,19 +350,18 @@ async def _handle_get_valid_transitions(arguments: dict[str, Any]) -> list[TextC
     tracker = _get_db()
     try:
         transitions = tracker.get_valid_transitions(args["issue_id"])
-        return _text(
-            [
-                TransitionDetail(
-                    to=t.to,
-                    category=t.category,
-                    enforcement=t.enforcement or "",
-                    requires_fields=list(t.requires_fields),
-                    missing_fields=list(t.missing_fields),
-                    ready=t.ready,
-                )
-                for t in transitions
-            ]
-        )
+        items = [
+            TransitionDetail(
+                to=t.to,
+                category=t.category,
+                enforcement=t.enforcement or "",
+                requires_fields=list(t.requires_fields),
+                missing_fields=list(t.missing_fields),
+                ready=t.ready,
+            )
+            for t in transitions
+        ]
+        return _text(_list_response(items, has_more=False))
     except KeyError:
         return _text(ErrorResponse(error=f"Issue not found: {args['issue_id']}", code=ErrorCode.NOT_FOUND))
 

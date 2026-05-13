@@ -518,11 +518,27 @@ class TestPlan:
         assert data["total_steps"] == 1
         assert data["completed_steps"] == 1
         assert data["milestone"]["issue_id"] == ms.id
+        assert "fields" not in data["milestone"]
         assert "id" not in data["milestone"]
         assert data["phases"][0]["phase"]["issue_id"] == p.id
+        assert "fields" not in data["phases"][0]["phase"]
         assert "id" not in data["phases"][0]["phase"]
         assert data["phases"][0]["steps"][0]["issue_id"] == s.id
+        assert "fields" not in data["phases"][0]["steps"][0]
         assert "id" not in data["phases"][0]["steps"][0]
+
+    async def test_get_plan_full_response_detail(self, mcp_db: FiligreeDB) -> None:
+        ms = mcp_db.create_issue("Full Milestone", type="milestone", fields={"scope_summary": "full"})
+        p = mcp_db.create_issue("Full Phase", type="phase", parent_id=ms.id, fields={"sequence": 1})
+        s = mcp_db.create_issue("Full Step", type="step", parent_id=p.id, fields={"sequence": 1})
+
+        result = await call_tool("get_plan", {"milestone_id": ms.id, "response_detail": "full"})
+        data = _parse(result)
+
+        assert data["milestone"]["fields"]["scope_summary"] == "full"
+        assert data["phases"][0]["phase"]["fields"]["sequence"] == 1
+        assert data["phases"][0]["steps"][0]["fields"]["sequence"] == 1
+        assert data["phases"][0]["steps"][0]["issue_id"] == s.id
 
     async def test_get_plan_not_found(self, mcp_db: FiligreeDB) -> None:
         result = await call_tool("get_plan", {"milestone_id": "mcp-nonexistent"})
@@ -943,6 +959,28 @@ class TestCreatePlan:
         updated = _parse(await call_tool("get_plan", {"milestone_id": milestone_id}))
         assert updated["phases"][0]["steps"] == []
         assert [step["issue_id"] for step in updated["phases"][1]["steps"]] == [step_id]
+
+    async def test_move_plan_step_warns_when_dependencies_carry_forward(self, mcp_db: FiligreeDB) -> None:
+        created = await call_tool(
+            "create_plan",
+            {
+                "milestone": {"title": "Move warning plan"},
+                "phases": [
+                    {"title": "Phase A", "steps": [{"title": "Blocker"}, {"title": "Move me", "deps": [0]}]},
+                    {"title": "Phase B", "steps": []},
+                ],
+            },
+        )
+        plan = _parse(created)
+        step_id = plan["phases"][0]["steps"][1]["issue_id"]
+        target_phase_id = plan["phases"][1]["phase"]["issue_id"]
+
+        result = await call_tool("move_plan_step", {"step_id": step_id, "phase_id": target_phase_id, "actor": "planner"})
+
+        data = _parse(result)
+        assert data["move_result"] == "moved"
+        assert data["warnings"]
+        assert "dependencies carried forward" in data["warnings"][0]
 
     async def test_label_plan_tree_requires_milestone_root(self, mcp_db: FiligreeDB) -> None:
         phase = mcp_db.create_issue("Loose phase", type="phase")
@@ -1786,9 +1824,10 @@ class TestWorkflowTemplateTools:
         issue = mcp_db.create_issue("Transition test", type="task")
         result = await call_tool("get_valid_transitions", {"issue_id": issue.id})
         data = _parse(result)
-        assert isinstance(data, list)
-        assert len(data) >= 1
-        for t in data:
+        assert set(data) == {"items", "has_more"}
+        assert data["has_more"] is False
+        assert len(data["items"]) >= 1
+        for t in data["items"]:
             assert "to" in t
             assert "category" in t
             assert "ready" in t
@@ -1810,7 +1849,7 @@ class TestWorkflowTemplateTools:
         with patch.object(mcp_db, "get_valid_transitions", return_value=patched):
             result = await call_tool("get_valid_transitions", {"issue_id": issue.id})
         data = _parse(result)
-        for t in data:
+        for t in data["items"]:
             assert isinstance(t["enforcement"], str), f"enforcement should be str, got {type(t['enforcement'])}: {t['enforcement']}"
 
     async def test_get_valid_transitions_not_found(self, mcp_db: FiligreeDB) -> None:

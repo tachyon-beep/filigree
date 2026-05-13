@@ -1323,10 +1323,11 @@ class TestTransitionDetailShape:
 
         issue = mcp_db.create_issue("Transition test", type="task")
         result = _parse(await call_tool("get_valid_transitions", {"issue_id": issue.id}))
-        assert isinstance(result, list)
-        assert len(result) >= 1
+        assert set(result.keys()) == {"items", "has_more"}
+        assert result["has_more"] is False
+        assert len(result["items"]) >= 1
         hints = get_type_hints(TransitionDetail)
-        assert set(result[0].keys()) == set(hints.keys())
+        assert set(result["items"][0].keys()) == set(hints.keys())
 
     async def test_value_types(self, mcp_db: FiligreeDB) -> None:
         from filigree.mcp_server import call_tool
@@ -1334,7 +1335,7 @@ class TestTransitionDetailShape:
 
         issue = mcp_db.create_issue("Transition test", type="task")
         result = _parse(await call_tool("get_valid_transitions", {"issue_id": issue.id}))
-        t = result[0]
+        t = result["items"][0]
         assert isinstance(t["to"], str)
         assert isinstance(t["category"], str)
         assert isinstance(t["enforcement"], str)
