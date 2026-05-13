@@ -264,7 +264,12 @@ def dismiss_observation_cmd(
 
 @click.command("promote-observation")
 @click.argument("observation_id")
-@click.option("--type", "issue_type", default="task", help="Issue type (bug, task, feature, requirement)")
+@click.option(
+    "--type",
+    "issue_type",
+    default="task",
+    help="Issue type (bug, task, feature; requirement requires the requirements pack)",
+)
 @click.option(
     "--priority",
     "-p",
@@ -395,7 +400,12 @@ def batch_dismiss_observations_cmd(
 
 @click.command("batch-promote-observations")
 @click.argument("observation_ids", nargs=-1, required=True)
-@click.option("--type", "issue_type", default="task", help="Issue type (bug, task, feature, requirement)")
+@click.option(
+    "--type",
+    "issue_type",
+    default="task",
+    help="Issue type (bug, task, feature; requirement requires the requirements pack)",
+)
 @click.option(
     "--priority",
     "-p",

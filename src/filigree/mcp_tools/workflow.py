@@ -90,7 +90,10 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
                 "properties": {
                     "type": {
                         "type": "string",
-                        "description": "Issue type (bug, task, feature, epic, milestone, phase, step, requirement)",
+                        "description": (
+                            "Issue type. Core/planning examples: bug, task, feature, epic, milestone, phase, step. "
+                            "requirement is available when the requirements pack is enabled."
+                        ),
                     },
                 },
                 "required": ["type"],

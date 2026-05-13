@@ -261,7 +261,7 @@ Observations expire after 14 days. Triage them before they rot:
      - `type='bug'` — something is broken or produces wrong results
      - `type='task'` (default) — cleanup, improvement, or "this works but is shitty"
      - `type='feature'` — a missing capability that should exist
-     - `type='requirement'` — a formal requirement to be reviewed, approved, and verified
+     - `type='requirement'` — a formal requirement to be reviewed, approved, and verified, when the requirements pack is enabled
    - **Leave it** — still uncertain. Let it age. If it survives a few sessions
      without being promoted, it's probably a dismiss.
 

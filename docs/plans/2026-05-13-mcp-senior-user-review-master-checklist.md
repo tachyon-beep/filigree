@@ -263,12 +263,17 @@ product match those decisions.
   `blocked_by` ID list and add `blockers[]` slim records with blocker issue ID,
   title, status, priority, and type.
 
-- [ ] **Resolve the requirement-type documentation mismatch.**
+- [x] **Resolve the requirement-type documentation mismatch.**
   Source: H11.
+  Tracker: `filigree-c4a2c61ccc` is closed.
   Problem: docs/docstrings mention `type='requirement'`, but `list_types` did
   not expose that type in H's run.
   Ship criterion: enable the requirements pack by default, or update docs and
   tool descriptions to say it is optional.
+  Resolution: the requirements pack remains optional. MCP create/promote/template
+  type descriptions and CLI create/promote help now say `requirement` is
+  available when the requirements pack is enabled; live MCP registry coverage
+  pins that wording.
 
 - [ ] **Thread actor identity through file/finding write events.**
   Source: H3 and current tracker cleanup.

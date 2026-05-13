@@ -183,7 +183,11 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
                     "type": {
                         "type": "string",
                         "default": "task",
-                        "description": "Issue type: 'bug' for defects, 'task' for improvements/cleanup, 'feature' for new capability, 'requirement' for formal requirements",
+                        "description": (
+                            "Issue type: 'bug' for defects, 'task' for improvements/cleanup, "
+                            "'feature' for new capability, 'requirement' for formal requirements "
+                            "when the requirements pack is enabled"
+                        ),
                     },
                     "priority": {
                         "type": "integer",
@@ -312,7 +316,11 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
                     "type": {
                         "type": "string",
                         "default": "task",
-                        "description": "Issue type: 'bug' for defects, 'task' for improvements/cleanup, 'feature' for new capability, 'requirement' for formal requirements",
+                        "description": (
+                            "Issue type: 'bug' for defects, 'task' for improvements/cleanup, "
+                            "'feature' for new capability, 'requirement' for formal requirements "
+                            "when the requirements pack is enabled"
+                        ),
                     },
                     "priority": {
                         "type": "integer",

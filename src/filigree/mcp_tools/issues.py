@@ -171,7 +171,14 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
                 "type": "object",
                 "properties": {
                     "title": {"type": "string", "description": "Issue title"},
-                    "type": {"type": "string", "default": "task", "description": "Issue type"},
+                    "type": {
+                        "type": "string",
+                        "default": "task",
+                        "description": (
+                            "Issue type. Core examples: 'bug', 'task', 'feature'. "
+                            "'requirement' is available when the requirements pack is enabled."
+                        ),
+                    },
                     "priority": {
                         "type": "integer",
                         "default": 2,

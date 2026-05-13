@@ -95,7 +95,10 @@ def _min_check_int(value: int, name: str, *, min_val: int, as_json: bool) -> Non
     "--type",
     "issue_type",
     default="task",
-    help="Issue type (task, bug, feature, epic, milestone, phase, step, requirement)",
+    help=(
+        "Issue type. Core/planning examples: task, bug, feature, epic, "
+        "milestone, phase, step; requirement requires the requirements pack."
+    ),
 )
 @click.option("--priority", "-p", default=2, type=int, help="Priority 0-4 (0=critical)")
 @click.option("--parent", default=None, help="Parent issue ID")

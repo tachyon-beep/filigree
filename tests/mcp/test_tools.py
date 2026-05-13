@@ -229,6 +229,20 @@ class TestToolDescriptions:
             description = tools[tool_name].description or ""
             assert "open-category ready issue" in description
 
+    async def test_requirement_type_descriptions_name_optional_pack(self) -> None:
+        tools = {tool.name: tool for tool in await list_tools()}
+
+        for tool_name in ("create_issue", "promote_observation", "batch_promote_observations"):
+            schema = tools[tool_name].inputSchema
+            assert isinstance(schema, dict)
+            properties = schema.get("properties", {})
+            assert isinstance(properties, dict)
+            type_property = properties["type"]
+            assert isinstance(type_property, dict)
+            description = str(type_property.get("description", "")).lower()
+            assert "requirement" in description
+            assert "requirements pack" in description
+
 
 class TestListPagination:
     """Pagination cap and has_more for list_issues / search_issues."""
