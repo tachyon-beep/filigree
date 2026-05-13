@@ -1194,6 +1194,8 @@ class TestEventsCli:
         assert result.exit_code == 0
         data = json.loads(result.output)
         assert "items" in data
+        assert data["items"][0]["event_id"]
+        assert "id" not in data["items"][0]
 
     def test_events_not_found(self, cli_in_project: tuple[CliRunner, Path]) -> None:
         runner, _ = cli_in_project

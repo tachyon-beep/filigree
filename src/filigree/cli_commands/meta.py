@@ -11,6 +11,7 @@ import click
 from filigree.cli_common import get_db, refresh_summary
 from filigree.issue_payloads import issue_to_public
 from filigree.label_payloads import label_namespace_from_public, label_namespace_item_to_public, label_namespace_to_public
+from filigree.mcp_tools.payloads import comment_to_mcp, event_to_mcp
 from filigree.types.api import ErrorCode
 
 
@@ -74,7 +75,7 @@ def get_comments(issue_id: str, as_json: bool) -> None:
         if as_json:
             # Phase E1: list --json wraps items in ListResponse[T] ({items, has_more}).
             # Mirrors mcp_tools/meta.py::_handle_get_comments which uses _list_response().
-            click.echo(json_mod.dumps({"items": list(result), "has_more": False}, indent=2, default=str))
+            click.echo(json_mod.dumps({"items": [comment_to_mcp(c) for c in result], "has_more": False}, indent=2, default=str))
             return
         if not result:
             click.echo("No comments.")
@@ -256,7 +257,7 @@ def _events_impl(issue_id: str, limit: int, as_json: bool) -> None:
         has_more = limit > 0 and len(raw_events) > limit
         event_list = raw_events[:limit] if has_more else raw_events
         if as_json:
-            events_payload: dict[str, Any] = {"items": event_list, "has_more": has_more}
+            events_payload: dict[str, Any] = {"items": [event_to_mcp(ev) for ev in event_list], "has_more": has_more}
             click.echo(json_mod.dumps(events_payload, indent=2, default=str))
             return
 

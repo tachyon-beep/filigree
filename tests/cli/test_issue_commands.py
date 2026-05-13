@@ -390,6 +390,19 @@ class TestCommentsCli:
         assert "First comment" in result.output
         assert "Second comment" in result.output
 
+    def test_list_comments_json_uses_comment_id(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        runner, _ = cli_in_project
+        r = runner.invoke(cli, ["create", "Commentable"])
+        issue_id = _extract_id(r.output)
+        runner.invoke(cli, ["add-comment", issue_id, "First comment"])
+
+        result = runner.invoke(cli, ["get-comments", issue_id, "--json"])
+
+        assert result.exit_code == 0, result.output
+        data = json.loads(result.output)
+        assert data["items"][0]["comment_id"]
+        assert "id" not in data["items"][0]
+
     def test_comment_not_found(self, cli_in_project: tuple[CliRunner, Path]) -> None:
         runner, _ = cli_in_project
         result = runner.invoke(cli, ["add-comment", "test-nonexistent", "text"])
