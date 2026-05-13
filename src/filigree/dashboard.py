@@ -48,6 +48,7 @@ from filigree.core import (
     CONF_FILENAME,
     FILIGREE_DIR_NAME,
     FiligreeDB,
+    ProjectNotInitialisedError,
     find_filigree_anchor,
     read_config,
 )
@@ -61,6 +62,8 @@ STATIC_DIR = Path(__file__).parent / "static"
 DEFAULT_PORT = 8377
 
 logger = logging.getLogger(__name__)
+
+_EXPECTED_PROJECT_CONFIG_ERRORS = (ProjectNotInitialisedError, ValueError, TypeError, KeyError)
 
 # ---------------------------------------------------------------------------
 # Module-level state — set by main() or test fixtures
@@ -210,6 +213,11 @@ class ProjectStore:
                 if db is not None:
                     db.close()
                 raise
+            except _EXPECTED_PROJECT_CONFIG_ERRORS:
+                logger.warning("Invalid project configuration for key=%r path=%s", key, filigree_path)
+                if db is not None:
+                    db.close()
+                raise
             except Exception:
                 logger.error("Failed to open project DB for key=%r path=%s", key, filigree_path, exc_info=True)
                 if db is not None:
@@ -302,6 +310,8 @@ def _get_db() -> FiligreeDB:
     """
     from fastapi import HTTPException
 
+    from filigree.types.api import ErrorCode
+
     if _project_store is not None:
         key = _current_project_key.get() or _project_store.default_key
         if not key:
@@ -310,6 +320,16 @@ def _get_db() -> FiligreeDB:
             return _project_store.get_db(key)
         except KeyError:
             raise HTTPException(status_code=404, detail=f"Unknown project: {key!r}") from None
+        except SchemaVersionMismatchError:
+            raise
+        except (ProjectNotInitialisedError, ValueError, TypeError) as exc:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": f"Invalid project configuration for {key!r}: {exc}",
+                    "code": ErrorCode.VALIDATION,
+                },
+            ) from None
     if _db is None:
         raise HTTPException(status_code=500, detail="Database not initialized")
     return _db
@@ -636,6 +656,14 @@ def _idle_watchdog(timeout: float, check_interval: float) -> None:
             return
 
 
+def _exit_dashboard_config_error(exc: BaseException) -> None:
+    """Exit dashboard startup cleanly for expected project configuration errors."""
+    logger.warning("dashboard_project_config_error", extra={"tool": "dashboard", "args_data": {"error": str(exc)}})
+    print(f"Error loading dashboard project: {exc}", file=sys.stderr)
+    print("Run `filigree doctor` for diagnosis.", file=sys.stderr)
+    sys.exit(1)
+
+
 def main(port: int = DEFAULT_PORT, *, no_browser: bool = False, server_mode: bool = False) -> None:
     """Start the dashboard server.
 
@@ -662,16 +690,20 @@ def main(port: int = DEFAULT_PORT, *, no_browser: bool = False, server_mode: boo
     _config.clear()
 
     if server_mode:
-        _project_store = ProjectStore()
-        _project_store.load()
-        n = len(_project_store.list_projects())
+        try:
+            store = ProjectStore()
+            store.load()
+            _project_store = store
+        except _EXPECTED_PROJECT_CONFIG_ERRORS as exc:
+            _exit_dashboard_config_error(exc)
+        n = len(store.list_projects())
         logger.info("Server mode: loaded %d project(s)", n)
     else:
-        project_root, _conf_path = find_filigree_anchor()
-        filigree_dir = project_root / FILIGREE_DIR_NAME
-        config = read_config(filigree_dir)
-        _config.update(config)
         try:
+            project_root, _conf_path = find_filigree_anchor()
+            filigree_dir = project_root / FILIGREE_DIR_NAME
+            config = read_config(filigree_dir)
+            _config.update(config)
             _db = _open_db_for_filigree_dir(filigree_dir, check_same_thread=False)
         except SchemaVersionMismatchError as exc:
             # Forward schema mismatch — exit cleanly (code 3, matching
@@ -689,6 +721,8 @@ def main(port: int = DEFAULT_PORT, *, no_browser: bool = False, server_mode: boo
             )
             print(format_schema_mismatch_guidance(exc.installed, exc.database), file=sys.stderr)
             sys.exit(3)
+        except _EXPECTED_PROJECT_CONFIG_ERRORS as exc:
+            _exit_dashboard_config_error(exc)
         except (OSError, sqlite3.Error) as exc:
             # Locked DB / permission denied / on-disk corruption etc. The
             # F2 fix only covered v+1; this sibling branch keeps the same

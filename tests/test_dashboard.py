@@ -19,7 +19,7 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 import filigree.dashboard as dash_module
-from filigree.core import DB_FILENAME, FiligreeDB, write_config
+from filigree.core import CONF_FILENAME, DB_FILENAME, FILIGREE_DIR_NAME, FiligreeDB, write_conf, write_config
 from filigree.dashboard import (
     IDLE_TIMEOUT_SECONDS,
     ProjectStore,
@@ -333,6 +333,43 @@ class TestMainGlobalReset:
 
         assert dash_module._config == {}, f"finally must clear _config; got {dash_module._config!r}"
 
+    def test_ethereal_main_without_project_exits_cleanly(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Startup discovery failures should be clean CLI errors, not raw exceptions."""
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr("uvicorn.run", lambda *a, **kw: pytest.fail("uvicorn should not start"))
+
+        with pytest.raises(SystemExit) as excinfo:
+            dash_module.main(port=9999, no_browser=True, server_mode=False)
+
+        assert excinfo.value.code == 1
+        stderr = capsys.readouterr().err
+        assert "Error loading dashboard project" in stderr
+        assert "filigree init" in stderr
+        assert "Traceback" not in stderr
+
+    def test_ethereal_main_with_malformed_conf_exits_cleanly(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Malformed .filigree.conf should exit with guidance instead of a traceback."""
+        filigree_dir = tmp_path / FILIGREE_DIR_NAME
+        filigree_dir.mkdir()
+        write_config(filigree_dir, {"prefix": "bad", "version": 1})
+        write_conf(tmp_path / CONF_FILENAME, {"version": 1, "project_name": "bad", "prefix": "bad", "db": "../escape.db"})
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr("uvicorn.run", lambda *a, **kw: pytest.fail("uvicorn should not start"))
+
+        with pytest.raises(SystemExit) as excinfo:
+            dash_module.main(port=9999, no_browser=True, server_mode=False)
+
+        assert excinfo.value.code == 1
+        stderr = capsys.readouterr().err
+        assert "Error loading dashboard project" in stderr
+        assert ".filigree.conf" in stderr
+        assert "Run `filigree doctor`" in stderr
+        assert "Traceback" not in stderr
+
 
 class TestGetDbErrorPaths:
     async def test_returns_500_when_db_is_none_in_ethereal_mode(self) -> None:
@@ -351,6 +388,39 @@ class TestGetDbErrorPaths:
             assert "Database not initialized" in body.get("error", "")
         finally:
             dash_module._db = saved
+
+    async def test_server_mode_project_config_error_returns_validation_envelope(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Malformed per-project config should be a 400 ErrorResponse, not a 500 traceback."""
+        config_dir = tmp_path / ".config" / "filigree"
+        config_dir.mkdir(parents=True)
+        monkeypatch.setattr("filigree.server.SERVER_CONFIG_DIR", config_dir)
+        monkeypatch.setattr("filigree.server.SERVER_CONFIG_FILE", config_dir / "server.json")
+
+        project_root = tmp_path / "bad-project"
+        filigree_dir = project_root / FILIGREE_DIR_NAME
+        filigree_dir.mkdir(parents=True)
+        write_config(filigree_dir, {"prefix": "bad", "version": 1})
+        write_conf(project_root / CONF_FILENAME, {"version": 1, "project_name": "bad", "prefix": "bad", "db": "../escape.db"})
+        _write_server_json(config_dir, {str(filigree_dir): {"prefix": "bad"}})
+
+        store = ProjectStore()
+        store.load()
+        dash_module._project_store = store
+        try:
+            app = create_app(server_mode=True)
+            transport = ASGITransport(app=app, raise_app_exceptions=False)
+            async with AsyncClient(transport=transport, base_url="http://test") as client:
+                resp = await client.get("/api/p/bad/issues")
+
+            assert resp.status_code == 400
+            body = resp.json()
+            assert body["code"] == "VALIDATION"
+            assert ".filigree.conf" in body["error"]
+        finally:
+            store.close_all()
+            dash_module._project_store = None
 
 
 # ---------------------------------------------------------------------------
