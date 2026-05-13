@@ -353,6 +353,22 @@ class TestLoomChangesOffsetRejected:
 
 
 class TestLoomChangesCompoundCursor:
+    async def test_has_more_uses_since_cursor_not_next_offset(self, bug_db: FiligreeDB, client: AsyncClient) -> None:
+        bug_db.create_issue("API cursor page A")
+        bug_db.create_issue("API cursor page B")
+
+        resp = await client.get(
+            "/api/loom/changes",
+            params={"since": "2000-01-01T00:00:00+00:00", "limit": "1"},
+        )
+
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["has_more"] is True
+        assert "next_since" in body
+        assert "next_event_id" in body
+        assert "next_offset" not in body
+
     async def test_after_event_id_resumes_inside_same_timestamp_group(self, bug_db: FiligreeDB, client: AsyncClient) -> None:
         issue = bug_db.create_issue("API same timestamp cursor")
         tied_timestamp = "2026-01-01T00:00:00+00:00"
@@ -376,6 +392,31 @@ class TestLoomChangesCompoundCursor:
         assert [item["event_id"] for item in body["items"]] == [expected]
         assert body["next_since"] == tied_timestamp
         assert body["next_event_id"] == expected
+
+
+class TestLoomChangesHeartbeatFiltering:
+    async def test_heartbeat_events_are_excluded_by_default(self, bug_db: FiligreeDB, client: AsyncClient) -> None:
+        issue = bug_db.create_issue("API heartbeat filtering")
+        bug_db.conn.execute(
+            "INSERT INTO events (issue_id, event_type, actor, created_at) VALUES (?, ?, ?, ?)",
+            (issue.id, "heartbeat", "agent", "2026-01-01T00:00:00+00:00"),
+        )
+        expected = bug_db.conn.execute(
+            "INSERT INTO events (issue_id, event_type, actor, created_at) VALUES (?, ?, ?, ?)",
+            (issue.id, "status_changed", "agent", "2026-01-01T00:00:01+00:00"),
+        ).lastrowid
+        bug_db.conn.commit()
+
+        resp = await client.get(
+            "/api/loom/changes",
+            params={"since": "2000-01-01T00:00:00+00:00"},
+        )
+
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        event_types = [item["event_type"] for item in body["items"]]
+        assert "heartbeat" not in event_types
+        assert expected in [item["event_id"] for item in body["items"]]
 
 
 # ---------------------------------------------------------------------------

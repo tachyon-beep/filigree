@@ -6,7 +6,7 @@ import logging
 from collections import deque
 from datetime import UTC, datetime, timedelta
 from time import perf_counter
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, get_args
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -28,6 +28,7 @@ from filigree.dashboard_routes.common import (
 )
 from filigree.models import Issue
 from filigree.types.api import ErrorCode, StatsWithPrefix
+from filigree.types.events import EventType
 
 logger = logging.getLogger(__name__)
 
@@ -572,9 +573,10 @@ def create_loom_router() -> APIRouter:
 
         Loom-only (no classic dashboard counterpart). Mirrors MCP's
         ``get_changes`` semantics: pass ``?since=<ISO timestamp>`` and
-        optional ``?limit=`` (default 100). Overfetches by 1 to detect
-        ``has_more``. ``offset`` is not exposed — the cursor is the
-        ``since`` timestamp.
+        optional ``?limit=`` (default 100). Heartbeat events are excluded
+        by default; pass ``?include_heartbeats=true`` or ``?type=heartbeat``
+        to include them. Overfetches by 1 to detect ``has_more``. ``offset``
+        is not exposed — the cursor is the ``since`` timestamp.
         """
         params = request.query_params
         since = params.get("since", "")
@@ -616,6 +618,20 @@ def create_loom_router() -> APIRouter:
             if not isinstance(after_event_id_or_err, int):
                 return after_event_id_or_err
             after_event_id = after_event_id_or_err
+        event_type = params.get("type")
+        if event_type is not None and event_type not in get_args(EventType):
+            return _error_response(
+                f"Invalid event type: {event_type}",
+                ErrorCode.VALIDATION,
+                400,
+                {"param": "type", "value": event_type},
+            )
+        include_heartbeats = _get_bool_param(params, "include_heartbeats", False)
+        if not isinstance(include_heartbeats, bool):
+            return include_heartbeats
+        exclude_types: list[str] = []
+        if not include_heartbeats and event_type != "heartbeat":
+            exclude_types.append("heartbeat")
         limit_or_err = _safe_bounded_int(
             params.get("limit", "100"),
             name="limit",
@@ -625,12 +641,18 @@ def create_loom_router() -> APIRouter:
         if not isinstance(limit_or_err, int):
             return limit_or_err
         limit = limit_or_err
-        events = db.get_events_since(since_normalized, after_event_id=after_event_id, limit=limit + 1)
+        events = db.get_events_since(
+            since_normalized,
+            after_event_id=after_event_id,
+            limit=limit + 1,
+            event_type=event_type,
+            exclude_types=exclude_types or None,
+        )
         has_more = len(events) > limit
         if has_more:
             events = events[:limit]
         items = [change_record_to_loom(e) for e in events]
-        body = list_response(items, limit=limit, offset=0, has_more=has_more)
+        body: dict[str, Any] = {"items": items, "has_more": has_more}
         body["next_since"] = items[-1]["created_at"] if items else since_normalized
         body["next_event_id"] = items[-1]["event_id"] if items else after_event_id
         return JSONResponse(body)
