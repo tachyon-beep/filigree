@@ -1151,6 +1151,9 @@ Validates a `TypeTemplate` for internal consistency (state references, field ref
 ## Template Data Types
 
 All template data types are frozen (immutable) dataclasses defined in `filigree.templates`.
+The runtime semantics contract for initial states, type-aware status
+categories, hard/soft enforcement, warnings, close/reopen target selection, and
+claim handoff is documented in [Workflow Templates](workflows.md#runtime-semantics-contract).
 
 ```python
 from filigree.templates import (

@@ -5,6 +5,7 @@ Every issue in filigree has a **type**, and every type has a **state machine** d
 ## Contents
 
 - [How It Works](#how-it-works)
+- [Runtime Semantics Contract](#runtime-semantics-contract)
 - [Packs](#packs)
 - [Core Pack](#core-pack) — task, bug, feature, epic
 - [Planning Pack](#planning-pack) — milestone, phase, step, work_package, deliverable
@@ -27,6 +28,56 @@ Every issue in filigree has a **type**, and every type has a **state machine** d
 3. **Transitions** define which state changes are valid
 4. Transitions can be **hard** (blocked if invalid) or **soft** (allowed with a warning)
 5. Some transitions **require fields** to be populated before they're allowed
+
+## Runtime Semantics Contract
+
+Templates are the runtime contract for issue state, not just documentation.
+Known issue types must be registered by an enabled pack or project-local
+template; creating an issue with an unknown type is rejected. New issues start
+in the type's `initial_state`.
+
+Each concrete state has a universal category: `open`, `wip`, or `done`.
+Consumers should use `status_category` for broad workflow logic and keep
+`status` for the literal type-specific state. Category-aware commands such as
+ready queues, stale-claim discovery, blocker checks, and archive cleanup use
+the type-aware category mapping so shared state names can mean different
+categories for different types.
+
+Status updates validate against the current type's transition graph. A
+transition that is not declared is rejected and callers should inspect
+`get_valid_transitions` / `filigree transitions <id>` for the allowed next
+states. Transition field requirements are evaluated against the issue fields
+after applying the requested update, so callers may set the target status and
+its required fields in one write.
+
+Hard and soft enforcement share the same field vocabulary:
+
+- **Hard** transitions fail when required fields or fields required at the
+  target state are missing.
+- **Soft** transitions succeed, return the warning in `data_warnings[]`, and
+  record the same advisory once as a `transition_warning` event.
+
+Closing is a transition into a done-category state. If no close target is
+provided, Filigree starts with the type's first done-category state; when that
+default is not reachable but exactly one done-category transition is reachable,
+it auto-selects that reachable target and returns a warning. Ambiguous close
+targets remain caller choices. Close reasons are stored in
+`fields.close_reason`; a reason-only close also records the reason on the
+status-change event so history readers can display it without reconstructing a
+separate field event.
+
+Reopening only works from done-category states. It returns the issue to the
+most recent non-done state that transitioned into done, falling back to the
+type's `initial_state` when no usable event exists. Reopen clears close-only
+fields such as `close_reason`.
+
+Claiming and handoff also respect categories. Open-category issues are
+claimable for new work; released wip-category issues are claimable for handoff.
+`start_work` / `start_next_work` default to the unique reachable wip-category
+target and require an explicit target when several wip states are possible.
+`release_claim` reverts wip-category work to the template-defined open
+predecessor by default so unassigned work returns to ready discovery; callers
+may opt out with `revert_status=false`.
 
 ## Packs
 

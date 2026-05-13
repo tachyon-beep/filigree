@@ -217,7 +217,7 @@ product match those decisions.
   canonical, add `response_detail=slim|full` where needed, migrate empty result
   shapes into the same envelope families, and document compatibility aliases.
 
-- [ ] **Clarify workflow-template semantics and soft enforcement.**
+- [x] **Clarify workflow-template semantics and soft enforcement.**
   Source: C1/C2/C6/C8/C9, F5, H6, H10.
   Problem: reviews found confusing `start_work` target selection, missing
   `data_warnings`, duplicate warning events, reopen target questions, template
@@ -226,6 +226,12 @@ product match those decisions.
   Ship criterion: template defaults, warning channels, reopen behavior, and
   transition readiness fields have a single documented meaning and regression
   coverage.
+  Resolution: `docs/workflows.md` now has a single runtime semantics contract
+  covering known-type creation, `initial_state`, type-aware status categories,
+  transition validation, hard versus soft enforcement, `data_warnings[]` and
+  `transition_warning` events, close target selection, close reasons, reopen
+  targets, and claim/release handoff semantics. MCP, CLI, and API references
+  link back to that contract.
 
 - [x] **Resolve archive and done-status model consistently.**
   Source: E10, G3, G4, H1, H18.

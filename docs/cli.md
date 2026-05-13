@@ -642,7 +642,9 @@ filigree templates --type=bug               # Show specific template fields
 filigree templates reload                   # Reload templates from disk
 ```
 
-See [Workflow Templates](workflows.md) for details on types, packs, and status workflows.
+See [Workflow Templates](workflows.md) for details on types, packs, status
+workflows, and the runtime semantics contract for initial states, hard/soft
+enforcement, warnings, close targets, reopen targets, and claim handoff.
 
 ### `types`
 

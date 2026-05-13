@@ -503,6 +503,11 @@ All batch tools return the unified `BatchResponse` envelope (`{succeeded, failed
 tool registry. The docs headline tool count is pinned by tests against the same
 registry so new tools cannot silently drift from the published reference.
 
+See [Workflow Templates](workflows.md#runtime-semantics-contract) for the
+runtime contract behind these tools: initial states, status categories,
+hard/soft transition enforcement, `data_warnings[]`, close/reopen target
+selection, and claim handoff behavior.
+
 #### `get_type_info`
 
 Compatibility alias for `get_template`; returns the same canonical workflow definition.
