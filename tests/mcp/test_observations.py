@@ -118,6 +118,14 @@ class TestListObservationsTool:
         assert len(data["items"]) == 1
         assert data["items"][0]["summary"] == "api bug"
 
+    async def test_list_with_source_issue_filter(self, mcp_db: FiligreeDB) -> None:
+        mcp_db.create_observation("from issue", source_issue_id="mcp-issue-1")
+        mcp_db.create_observation("unrelated", source_issue_id="mcp-issue-2")
+        result = await call_tool("list_observations", {"source_issue_id": "mcp-issue-1"})
+        data = _parse(result)
+        assert len(data["items"]) == 1
+        assert data["items"][0]["summary"] == "from issue"
+
 
 class TestDismissObservationTool:
     async def test_dismiss(self, mcp_db: FiligreeDB) -> None:
@@ -241,6 +249,66 @@ class TestBatchPromoteTool:
         result = await call_tool("batch_promote_observations", {"observation_ids": [1, 2, 3]})
         data = _parse(result)
         assert data.get("code") == ErrorCode.VALIDATION
+
+
+class TestObservationTriageTools:
+    async def test_link_observation_to_issue(self, mcp_db: FiligreeDB) -> None:
+        issue = mcp_db.create_issue("Existing issue")
+        obs = mcp_db.create_observation("Same evidence")
+
+        result = await call_tool(
+            "link_observation",
+            {
+                "observation_id": obs["id"],
+                "issue_id": issue.id,
+                "disposition": "duplicate",
+                "reason": "same failure",
+                "actor": "triager",
+            },
+        )
+
+        data = _parse(result)
+        assert data["observation_id"] == obs["id"]
+        assert data["issue_id"] == issue.id
+        assert data["disposition"] == "duplicate"
+        assert mcp_db.list_observations() == []
+
+    async def test_batch_link_observations(self, mcp_db: FiligreeDB) -> None:
+        issue = mcp_db.create_issue("Existing issue")
+        obs = mcp_db.create_observation("Attach me")
+
+        result = await call_tool(
+            "batch_link_observations",
+            {
+                "observation_ids": [obs["id"], "obs-missing"],
+                "issue_id": issue.id,
+                "disposition": "evidence",
+            },
+        )
+
+        data = _parse(result)
+        assert [item["observation_id"] for item in data["succeeded"]] == [obs["id"]]
+        assert data["failed"][0]["id"] == "obs-missing"
+        assert data["failed"][0]["code"] == ErrorCode.NOT_FOUND
+
+    async def test_promote_observations_to_issue(self, mcp_db: FiligreeDB) -> None:
+        obs1 = mcp_db.create_observation("First signal")
+        obs2 = mcp_db.create_observation("Second signal", priority=1)
+
+        result = await call_tool(
+            "promote_observations_to_issue",
+            {
+                "observation_ids": [obs1["id"], obs2["id"]],
+                "type": "bug",
+                "title": "Merged issue",
+            },
+        )
+
+        data = _parse(result)
+        assert data["issue_id"].startswith("mcp-")
+        assert data["title"] == "Merged issue"
+        assert data["priority"] == 1
+        assert data["fields"]["source_observation_ids"] == [obs1["id"], obs2["id"]]
 
 
 class TestSummaryRefreshOnObservationMutations:

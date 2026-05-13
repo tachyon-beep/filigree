@@ -656,6 +656,7 @@ class MetaMixin(DBMixinProtocol):
         ("file_event", "SELECT * FROM file_events ORDER BY created_at, file_id"),
         ("observation", "SELECT * FROM observations ORDER BY created_at"),
         ("dismissed_observation", "SELECT * FROM dismissed_observations ORDER BY dismissed_at"),
+        ("observation_link", "SELECT * FROM observation_links ORDER BY linked_at, id"),
         ("annotation", "SELECT * FROM annotations ORDER BY created_at, id"),
         ("annotation_provenance", "SELECT * FROM annotation_provenance ORDER BY annotation_id"),
         ("annotation_link", "SELECT * FROM annotation_links ORDER BY created_at, id"),
@@ -693,6 +694,7 @@ class MetaMixin(DBMixinProtocol):
         file_associations: list[dict[str, Any]],
         scan_findings: list[dict[str, Any]],
         observations: list[dict[str, Any]],
+        observation_links: list[dict[str, Any]],
         annotation_links: list[dict[str, Any]],
         annotation_events: list[dict[str, Any]],
         annotation_closeout_acknowledgements: list[dict[str, Any]],
@@ -735,6 +737,9 @@ class MetaMixin(DBMixinProtocol):
         for rec in scan_findings:
             check(rec.get("issue_id"))
         for rec in observations:
+            check(rec.get("source_issue_id"))
+        for rec in observation_links:
+            check(rec.get("issue_id"))
             check(rec.get("source_issue_id"))
         for rec in annotation_links:
             if rec.get("target_type") == "issue":
@@ -803,6 +808,7 @@ class MetaMixin(DBMixinProtocol):
         file_events: list[dict[str, Any]] = []
         observations: list[dict[str, Any]] = []
         dismissed_observations: list[dict[str, Any]] = []
+        observation_links: list[dict[str, Any]] = []
         annotations: list[dict[str, Any]] = []
         annotation_provenance: list[dict[str, Any]] = []
         annotation_links: list[dict[str, Any]] = []
@@ -822,6 +828,7 @@ class MetaMixin(DBMixinProtocol):
             "file_event": file_events,
             "observation": observations,
             "dismissed_observation": dismissed_observations,
+            "observation_link": observation_links,
             "annotation": annotations,
             "annotation_provenance": annotation_provenance,
             "annotation_link": annotation_links,
@@ -859,6 +866,7 @@ class MetaMixin(DBMixinProtocol):
                 file_associations=file_associations,
                 scan_findings=scan_findings,
                 observations=observations,
+                observation_links=observation_links,
                 annotation_links=annotation_links,
                 annotation_events=annotation_events,
                 annotation_closeout_acknowledgements=annotation_closeout_acknowledgements,
@@ -1152,8 +1160,8 @@ class MetaMixin(DBMixinProtocol):
                 cursor = self.conn.execute(
                     f"INSERT {conflict} INTO observations "
                     "(id, summary, detail, file_id, file_path, line, source_issue_id, "
-                    "priority, actor, created_at, expires_at) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "source_finding_id, priority, actor, created_at, expires_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         record["id"],
                         record["summary"],
@@ -1162,6 +1170,7 @@ class MetaMixin(DBMixinProtocol):
                         record.get("file_path", ""),
                         record.get("line"),
                         record.get("source_issue_id", ""),
+                        record.get("source_finding_id", ""),
                         record.get("priority", 3),
                         record.get("actor", ""),
                         _normalize_iso_to_utc(record.get("created_at")) or _now_iso(),
@@ -1190,6 +1199,46 @@ class MetaMixin(DBMixinProtocol):
                 cursor = self.conn.execute(
                     f"INSERT {conflict} INTO dismissed_observations (obs_id, summary, actor, reason, dismissed_at) VALUES (?, ?, ?, ?, ?)",
                     (obs_id, summary, actor_val, reason, dismissed_at),
+                )
+                count += cursor.rowcount
+
+            _import_stage = "observation_link"
+            for _import_index, record in enumerate(observation_links):
+                link_file_id: str | None = record.get("file_id")
+                if link_file_id:
+                    link_file_id = self._remap_file_id(link_file_id, file_id_map)
+                if merge:
+                    linked_at = _normalize_iso_to_utc(record.get("linked_at")) or _now_iso()
+                    exists = self.conn.execute(
+                        "SELECT 1 FROM observation_links WHERE obs_id = ? AND issue_id = ? AND disposition = ?",
+                        (record["obs_id"], record["issue_id"], record.get("disposition", "evidence")),
+                    ).fetchone()
+                    if exists:
+                        continue
+                else:
+                    linked_at = _normalize_iso_to_utc(record.get("linked_at")) or _now_iso()
+                cursor = self.conn.execute(
+                    f"INSERT {conflict} INTO observation_links "
+                    "(obs_id, issue_id, disposition, summary, detail, file_id, file_path, line, "
+                    "source_issue_id, source_finding_id, priority, observation_actor, actor, reason, linked_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        record["obs_id"],
+                        record["issue_id"],
+                        record.get("disposition", "evidence"),
+                        record.get("summary", ""),
+                        record.get("detail", ""),
+                        link_file_id,
+                        record.get("file_path", ""),
+                        record.get("line"),
+                        record.get("source_issue_id", ""),
+                        record.get("source_finding_id", ""),
+                        record.get("priority", 3),
+                        record.get("observation_actor", ""),
+                        record.get("actor", ""),
+                        record.get("reason", ""),
+                        linked_at,
+                    ),
                 )
                 count += cursor.rowcount
 

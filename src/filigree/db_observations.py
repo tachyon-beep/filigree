@@ -22,7 +22,14 @@ from typing import Any, cast
 from filigree.db_base import DBMixinProtocol, _begin_immediate, _escape_like, _now_iso
 from filigree.db_files import _normalize_scan_path
 from filigree.types.api import BatchFailure, ErrorCode
-from filigree.types.core import BatchDismissResult, ISOTimestamp, ObservationDict, ObservationStatsDict, PromoteObservationResult
+from filigree.types.core import (
+    BatchDismissResult,
+    ISOTimestamp,
+    ObservationDict,
+    ObservationLinkDict,
+    ObservationStatsDict,
+    PromoteObservationResult,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +38,7 @@ STALE_THRESHOLD_HOURS = 48
 
 _LIST_OBSERVATIONS_SORT_COLUMNS = frozenset({"priority", "created_at", "expires_at"})
 _LIST_OBSERVATIONS_DIRECTIONS = frozenset({"asc", "desc"})
+VALID_OBSERVATION_LINK_DISPOSITIONS = frozenset({"evidence", "duplicate", "superseded", "related"})
 
 
 def _alive_clause(sweep: bool, now_iso: str) -> tuple[str, str, tuple[str, ...]]:
@@ -51,6 +59,55 @@ DISMISSED_AUDIT_TRAIL_CAP = 10_000
 def _expires_iso(ttl_days: int = DEFAULT_TTL_DAYS) -> str:
     """Compute expiry timestamp using same isoformat() as _now_iso for consistent text comparison."""
     return (datetime.now(UTC) + timedelta(days=ttl_days)).isoformat()
+
+
+def _public_observation_link(row: dict[str, Any]) -> ObservationLinkDict:
+    return cast(
+        ObservationLinkDict,
+        {
+            "id": row["id"],
+            "obs_id": row["obs_id"],
+            "observation_id": row["obs_id"],
+            "issue_id": row["issue_id"],
+            "disposition": row["disposition"],
+            "summary": row["summary"],
+            "detail": row["detail"],
+            "file_id": row["file_id"],
+            "file_path": row["file_path"],
+            "line": row["line"],
+            "source_issue_id": row["source_issue_id"],
+            "source_finding_id": row["source_finding_id"],
+            "priority": row["priority"],
+            "observation_actor": row["observation_actor"],
+            "actor": row["actor"],
+            "reason": row["reason"],
+            "linked_at": row["linked_at"],
+        },
+    )
+
+
+def _observation_location(obs: dict[str, Any]) -> str:
+    if not obs.get("file_path"):
+        return ""
+    loc = str(obs["file_path"])
+    if obs.get("line") is not None:
+        loc += f":{obs['line']}"
+    return loc
+
+
+def _observation_evidence_block(obs: dict[str, Any]) -> str:
+    lines = [f"- {obs['summary']}"]
+    if obs.get("detail"):
+        lines.append(f"  Detail: {obs['detail']}")
+    location = _observation_location(obs)
+    if location:
+        lines.append(f"  Location: `{location}`")
+    if obs.get("source_issue_id"):
+        lines.append(f"  Observed while working on: {obs['source_issue_id']}")
+    if obs.get("source_finding_id"):
+        lines.append(f"  Source finding: {obs['source_finding_id']}")
+    lines.append(f"  Observation ID: {obs['id']}")
+    return "\n".join(lines)
 
 
 class ObservationsMixin(DBMixinProtocol):
@@ -315,6 +372,7 @@ class ObservationsMixin(DBMixinProtocol):
         file_path: str = "",
         file_id: str = "",
         actor: str = "",
+        source_issue_id: str = "",
         priority_min: int | None = None,
         priority_max: int | None = None,
         older_than_hours: int | None = None,
@@ -333,6 +391,7 @@ class ObservationsMixin(DBMixinProtocol):
           - ``file_path``: substring match (LIKE)
           - ``file_id``: exact FK match (more precise than path LIKE)
           - ``actor``: exact actor string match (e.g. ``"mcp-review-h"``)
+          - ``source_issue_id``: exact issue this observation was noticed during
           - ``priority_min`` / ``priority_max``: inclusive bounds (0..4)
           - ``older_than_hours``: only observations created more than N hours ago
 
@@ -374,6 +433,9 @@ class ObservationsMixin(DBMixinProtocol):
         if actor:
             clauses.append("actor = ?")
             params.append(actor)
+        if source_issue_id:
+            clauses.append("source_issue_id = ?")
+            params.append(source_issue_id)
         if priority_min is not None:
             clauses.append("priority >= ?")
             params.append(priority_min)
@@ -555,6 +617,198 @@ class ObservationsMixin(DBMixinProtocol):
                 self.conn.rollback()
             raise
         return {"dismissed": cursor.rowcount, "not_found": not_found}
+
+    def link_observation_to_issue(
+        self,
+        obs_id: str,
+        issue_id: str,
+        *,
+        disposition: str = "evidence",
+        reason: str = "",
+        actor: str = "",
+    ) -> ObservationLinkDict:
+        """Link a live observation to an existing issue and remove it from the queue.
+
+        The observation row is deleted, but its full evidence snapshot is kept
+        in ``observation_links`` and the dismissal audit trail records the
+        structured disposition.
+        """
+        if disposition not in VALID_OBSERVATION_LINK_DISPOSITIONS:
+            msg = f"disposition must be one of {sorted(VALID_OBSERVATION_LINK_DISPOSITIONS)}, got {disposition!r}"
+            raise ValueError(msg)
+        # Validate the target issue before mutating the observation queue.
+        self.get_issue(issue_id)
+
+        _begin_immediate(self.conn, "link_observation_to_issue")
+        try:
+            row = self.conn.execute("SELECT * FROM observations WHERE id = ?", (obs_id,)).fetchone()
+            if row is None:
+                self.conn.rollback()
+                raise ValueError(f"Observation not found: {obs_id}")
+            obs = dict(row)
+            if obs["expires_at"] <= _now_iso():
+                self.conn.rollback()
+                raise ValueError(f"Observation {obs_id} has expired and cannot be linked")
+
+            now = _now_iso()
+            cursor = self.conn.execute(
+                "INSERT INTO observation_links "
+                "(obs_id, issue_id, disposition, summary, detail, file_id, file_path, line, "
+                "source_issue_id, source_finding_id, priority, observation_actor, actor, reason, linked_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    obs_id,
+                    issue_id,
+                    disposition,
+                    obs["summary"],
+                    obs["detail"],
+                    obs["file_id"],
+                    obs["file_path"],
+                    obs["line"],
+                    obs["source_issue_id"],
+                    obs["source_finding_id"],
+                    obs["priority"],
+                    obs["actor"],
+                    actor,
+                    reason,
+                    now,
+                ),
+            )
+            audit_reason = f"linked:{disposition}:{issue_id}"
+            if reason:
+                audit_reason += f": {reason}"
+            self.conn.execute(
+                "INSERT INTO dismissed_observations (obs_id, summary, actor, reason, dismissed_at) VALUES (?, ?, ?, ?, ?)",
+                (obs_id, obs["summary"], actor or obs["actor"], audit_reason, now),
+            )
+            comment = f"Linked observation {obs_id} as {disposition}: {obs['summary']}"
+            if reason:
+                comment += f"\nReason: {reason}"
+            location = _observation_location(obs)
+            if location:
+                comment += f"\nLocation: `{location}`"
+            if obs.get("detail"):
+                comment += f"\n\n{obs['detail']}"
+            self.conn.execute(
+                "INSERT INTO comments (issue_id, author, text, created_at) VALUES (?, ?, ?, ?)",
+                (issue_id, actor, comment, now),
+            )
+            self.conn.execute("DELETE FROM observations WHERE id = ?", (obs_id,))
+            self.conn.commit()
+        except Exception:
+            if self.conn.in_transaction:
+                self.conn.rollback()
+            raise
+
+        link_id = cursor.lastrowid
+        if link_id is None:  # pragma: no cover - INSERT always sets lastrowid
+            msg = "INSERT did not produce a lastrowid"
+            raise RuntimeError(msg)
+        stored = self.conn.execute("SELECT * FROM observation_links WHERE id = ?", (link_id,)).fetchone()
+        return _public_observation_link(dict(stored))
+
+    def batch_link_observations_to_issue(
+        self,
+        obs_ids: list[str],
+        issue_id: str,
+        *,
+        disposition: str = "evidence",
+        reason: str = "",
+        actor: str = "",
+    ) -> tuple[list[ObservationLinkDict], list[BatchFailure]]:
+        """Link multiple observations to an existing issue with per-item errors."""
+        if not isinstance(obs_ids, list) or not all(isinstance(obs_id, str) for obs_id in obs_ids):
+            msg = "obs_ids must be a list of strings"
+            raise TypeError(msg)
+        self.get_issue(issue_id)
+
+        linked: list[ObservationLinkDict] = []
+        errors: list[BatchFailure] = []
+        for obs_id in dict.fromkeys(obs_ids):
+            try:
+                linked.append(
+                    self.link_observation_to_issue(
+                        obs_id,
+                        issue_id,
+                        disposition=disposition,
+                        reason=reason,
+                        actor=actor,
+                    )
+                )
+            except ValueError as e:
+                msg = str(e)
+                err_code = ErrorCode.NOT_FOUND if "not found" in msg.lower() else ErrorCode.VALIDATION
+                errors.append(BatchFailure(id=obs_id, error=msg, code=err_code))
+        return linked, errors
+
+    def promote_observations_to_issue(
+        self,
+        obs_ids: list[str],
+        *,
+        issue_type: str = "task",
+        priority: int | None = None,
+        title: str | None = None,
+        extra_description: str = "",
+        actor: str = "",
+        labels: list[str] | None = None,
+    ) -> PromoteObservationResult:
+        """Promote several observations into one issue, preserving all IDs."""
+        if not isinstance(obs_ids, list) or not obs_ids or not all(isinstance(obs_id, str) for obs_id in obs_ids):
+            msg = "obs_ids must be a non-empty list of strings"
+            raise TypeError(msg)
+        unique_ids = list(dict.fromkeys(obs_ids))
+
+        now = _now_iso()
+        placeholders = ",".join("?" for _ in unique_ids)
+        rows = self.conn.execute(f"SELECT * FROM observations WHERE id IN ({placeholders})", unique_ids).fetchall()
+        by_id = {row["id"]: dict(row) for row in rows}
+        missing = [obs_id for obs_id in unique_ids if obs_id not in by_id]
+        if missing:
+            raise ValueError(f"Observation not found: {missing[0]}")
+        observations = [by_id[obs_id] for obs_id in unique_ids]
+        expired = [obs["id"] for obs in observations if obs["expires_at"] <= now]
+        if expired:
+            raise ValueError(f"Observation {expired[0]} has expired and cannot be promoted")
+
+        issue_title = title or observations[0]["summary"]
+        issue_priority = priority if priority is not None else min(int(obs["priority"]) for obs in observations)
+        desc_parts: list[str] = []
+        if extra_description:
+            desc_parts.append(extra_description)
+        desc_parts.append("Promoted observations:\n" + "\n".join(_observation_evidence_block(obs) for obs in observations))
+        description = "\n\n".join(desc_parts)
+
+        carry_labels = ["from-observation", *list(dict.fromkeys(labels or []))]
+        issue = self.create_issue(
+            issue_title,
+            type=issue_type,
+            priority=issue_priority,
+            description=description,
+            actor=actor or observations[0]["actor"],
+            fields={"source_observation_ids": unique_ids},
+            labels=carry_labels,
+        )
+
+        warnings: list[str] = []
+        for obs in observations:
+            try:
+                self.link_observation_to_issue(
+                    obs["id"],
+                    issue.id,
+                    disposition="evidence",
+                    reason="promoted into merged issue",
+                    actor=actor or obs["actor"],
+                )
+            except (sqlite3.Error, ValueError) as exc:
+                msg = f"Failed to clean up linked observation {obs['id']} after creating issue {issue.id}: {exc}"
+                logger.warning(msg, exc_info=True)
+                warnings.append(msg)
+
+        refreshed = self.get_issue(issue.id)
+        result = cast(PromoteObservationResult, {"issue": refreshed})
+        if warnings:
+            result["warnings"] = warnings
+        return result
 
     def batch_promote_observations(
         self,

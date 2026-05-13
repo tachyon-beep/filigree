@@ -250,6 +250,29 @@ CREATE TABLE IF NOT EXISTS dismissed_observations (
 
 CREATE INDEX IF NOT EXISTS idx_dismissed_obs_id ON dismissed_observations(obs_id);
 
+CREATE TABLE IF NOT EXISTS observation_links (
+    id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+    obs_id             TEXT NOT NULL,
+    issue_id           TEXT NOT NULL REFERENCES issues(id),
+    disposition        TEXT NOT NULL DEFAULT 'evidence',
+    summary            TEXT NOT NULL,
+    detail             TEXT DEFAULT '',
+    file_id            TEXT REFERENCES file_records(id) ON DELETE SET NULL,
+    file_path          TEXT DEFAULT '',
+    line               INTEGER,
+    source_issue_id    TEXT DEFAULT '',
+    source_finding_id  TEXT DEFAULT '',
+    priority           INTEGER DEFAULT 3 CHECK (priority BETWEEN 0 AND 4),
+    observation_actor  TEXT DEFAULT '',
+    actor              TEXT DEFAULT '',
+    reason             TEXT DEFAULT '',
+    linked_at          TEXT NOT NULL,
+    CHECK (disposition IN ('evidence', 'duplicate', 'superseded', 'related'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_observation_links_obs ON observation_links(obs_id);
+CREATE INDEX IF NOT EXISTS idx_observation_links_issue ON observation_links(issue_id, linked_at);
+
 -- ---- Shared file annotations (v10) --------------------------------------
 
 CREATE TABLE IF NOT EXISTS annotations (
@@ -456,4 +479,4 @@ CREATE TRIGGER IF NOT EXISTS issues_fts_delete AFTER DELETE ON issues BEGIN
 END;
 """
 
-CURRENT_SCHEMA_VERSION = 12
+CURRENT_SCHEMA_VERSION = 13

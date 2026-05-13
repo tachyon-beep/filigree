@@ -11,7 +11,7 @@ import click
 
 from filigree.cli_common import get_db, refresh_summary
 from filigree.issue_payloads import issue_to_public
-from filigree.mcp_tools.payloads import observation_to_mcp
+from filigree.mcp_tools.payloads import observation_link_to_mcp, observation_to_mcp
 from filigree.models import Issue
 from filigree.types.api import BatchFailure, ErrorCode
 
@@ -135,6 +135,7 @@ def observe_cmd(
 @click.option("--file-path", default="", help="Filter by substring in file path")
 @click.option("--file-id", default="", help="Filter by exact file ID")
 @click.option("--actor", default="", help="Filter by exact actor (e.g. your agent name)")
+@click.option("--source-issue-id", default="", help="Filter by source issue ID")
 @click.option("--priority-min", type=int, default=None, help="Only observations with priority >= this value")
 @click.option("--priority-max", type=int, default=None, help="Only observations with priority <= this value")
 @click.option("--older-than-hours", type=int, default=None, help="Only observations created more than N hours ago")
@@ -158,6 +159,7 @@ def list_observations_cmd(
     file_path: str,
     file_id: str,
     actor: str,
+    source_issue_id: str,
     priority_min: int | None,
     priority_max: int | None,
     older_than_hours: int | None,
@@ -177,6 +179,7 @@ def list_observations_cmd(
                 file_path=file_path,
                 file_id=file_id,
                 actor=actor,
+                source_issue_id=source_issue_id,
                 priority_min=priority_min,
                 priority_max=priority_max,
                 older_than_hours=older_than_hours,
@@ -460,6 +463,195 @@ def batch_promote_observations_cmd(
             sys.exit(1)
 
 
+@click.command("link-observation")
+@click.argument("observation_id")
+@click.argument("issue_id")
+@click.option(
+    "--disposition",
+    type=click.Choice(["evidence", "duplicate", "superseded", "related"]),
+    default="evidence",
+    help="Triage disposition for this link.",
+)
+@click.option("--reason", default="", help="Reason or operator note for the link")
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+@click.pass_context
+def link_observation_cmd(
+    ctx: click.Context,
+    observation_id: str,
+    issue_id: str,
+    disposition: str,
+    reason: str,
+    as_json: bool,
+) -> None:
+    """Link an observation to an existing issue and clear it from the queue."""
+    with get_db() as db:
+        try:
+            link = db.link_observation_to_issue(
+                observation_id,
+                issue_id,
+                disposition=disposition,
+                reason=reason,
+                actor=ctx.obj["actor"],
+            )
+        except KeyError as e:
+            if as_json:
+                click.echo(json_mod.dumps({"error": str(e), "code": ErrorCode.NOT_FOUND}))
+            else:
+                click.echo(f"Error: {e}", err=True)
+            sys.exit(1)
+        except ValueError as e:
+            msg = str(e)
+            err_code = ErrorCode.NOT_FOUND if "not found" in msg.lower() else ErrorCode.VALIDATION
+            if as_json:
+                click.echo(json_mod.dumps({"error": msg, "code": err_code}))
+            else:
+                click.echo(f"Error: {msg}", err=True)
+            sys.exit(1)
+        except sqlite3.Error as e:
+            if as_json:
+                click.echo(json_mod.dumps({"error": f"Database error: {e}", "code": ErrorCode.IO}))
+            else:
+                click.echo(f"Error: {e}", err=True)
+            sys.exit(1)
+
+        if as_json:
+            click.echo(json_mod.dumps(observation_link_to_mcp(link), indent=2, default=str))
+        else:
+            click.echo(f"Linked {observation_id} -> {issue_id} as {disposition}")
+        refresh_summary(db)
+
+
+@click.command("batch-link-observations")
+@click.argument("issue_id")
+@click.argument("observation_ids", nargs=-1, required=True)
+@click.option(
+    "--disposition",
+    type=click.Choice(["evidence", "duplicate", "superseded", "related"]),
+    default="evidence",
+    help="Triage disposition for every link.",
+)
+@click.option("--reason", default="", help="Reason or operator note for every link")
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+@click.pass_context
+def batch_link_observations_cmd(
+    ctx: click.Context,
+    issue_id: str,
+    observation_ids: tuple[str, ...],
+    disposition: str,
+    reason: str,
+    as_json: bool,
+) -> None:
+    """Link multiple observations to an existing issue."""
+    with get_db() as db:
+        try:
+            linked, failed = db.batch_link_observations_to_issue(
+                list(observation_ids),
+                issue_id,
+                disposition=disposition,
+                reason=reason,
+                actor=ctx.obj["actor"],
+            )
+        except KeyError as e:
+            if as_json:
+                click.echo(json_mod.dumps({"error": str(e), "code": ErrorCode.NOT_FOUND}))
+            else:
+                click.echo(f"Error: {e}", err=True)
+            sys.exit(1)
+        except (TypeError, ValueError) as e:
+            if as_json:
+                click.echo(json_mod.dumps({"error": str(e), "code": ErrorCode.VALIDATION}))
+            else:
+                click.echo(f"Error: {e}", err=True)
+            sys.exit(1)
+        except sqlite3.Error as e:
+            if as_json:
+                click.echo(json_mod.dumps({"error": f"Database error: {e}", "code": ErrorCode.IO}))
+            else:
+                click.echo(f"Error: {e}", err=True)
+            sys.exit(1)
+
+        succeeded_payload = [observation_link_to_mcp(item) for item in linked]
+        payload = {
+            "succeeded": succeeded_payload,
+            "failed": failed,
+        }
+        if as_json:
+            click.echo(json_mod.dumps(payload, indent=2, default=str))
+        else:
+            for item in succeeded_payload:
+                click.echo(f"  Linked {item['observation_id']} -> {item['issue_id']} as {item['disposition']}")
+            for f_item in failed:
+                click.echo(f"  Error {f_item['id']}: {f_item['error']}", err=True)
+            click.echo(f"Linked {len(linked)}/{len(observation_ids)} observations")
+        refresh_summary(db)
+        if failed:
+            sys.exit(1)
+
+
+@click.command("promote-observations-to-issue")
+@click.argument("observation_ids", nargs=-1, required=True)
+@click.option("--type", "issue_type", default="task", help="Issue type for the created issue")
+@click.option(
+    "--priority",
+    "-p",
+    default=None,
+    type=int,
+    help="Override priority (default: highest priority among observations)",
+)
+@click.option("--title", default=None, help="Override title (default: first observation summary)")
+@click.option("--description", default="", help="Extra description to prepend")
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+@click.pass_context
+def promote_observations_to_issue_cmd(
+    ctx: click.Context,
+    observation_ids: tuple[str, ...],
+    issue_type: str,
+    priority: int | None,
+    title: str | None,
+    description: str,
+    as_json: bool,
+) -> None:
+    """Promote multiple observations into one issue."""
+    _validate_priority(priority, as_json=as_json)
+    with get_db() as db:
+        try:
+            result = db.promote_observations_to_issue(
+                list(observation_ids),
+                issue_type=issue_type,
+                priority=priority,
+                title=title,
+                extra_description=description,
+                actor=ctx.obj["actor"],
+            )
+        except (TypeError, ValueError) as e:
+            msg = str(e)
+            err_code = ErrorCode.NOT_FOUND if "not found" in msg.lower() else ErrorCode.VALIDATION
+            if as_json:
+                click.echo(json_mod.dumps({"error": msg, "code": err_code}))
+            else:
+                click.echo(f"Error: {msg}", err=True)
+            sys.exit(1)
+        except sqlite3.Error as e:
+            if as_json:
+                click.echo(json_mod.dumps({"error": f"Database error: {e}", "code": ErrorCode.IO}))
+            else:
+                click.echo(f"Error: {e}", err=True)
+            sys.exit(1)
+
+        issue = db.get_issue(result["issue"].id)
+        resp: dict[str, Any] = dict(issue_to_public(issue))
+        if result.get("warnings"):
+            resp["warnings"] = result["warnings"]
+        if as_json:
+            click.echo(json_mod.dumps(resp, indent=2, default=str))
+        else:
+            click.echo(f"Promoted {len(observation_ids)} observations -> {issue.id}: {issue.title}")
+            if result.get("warnings"):
+                for w in result["warnings"]:
+                    click.echo(f"  Warning: {w}", err=True)
+        refresh_summary(db)
+
+
 def register(cli: click.Group) -> None:
     """Register observation commands with the CLI group."""
     cli.add_command(observe_cmd)
@@ -468,3 +660,6 @@ def register(cli: click.Group) -> None:
     cli.add_command(promote_observation_cmd)
     cli.add_command(batch_dismiss_observations_cmd)
     cli.add_command(batch_promote_observations_cmd)
+    cli.add_command(link_observation_cmd)
+    cli.add_command(batch_link_observations_cmd)
+    cli.add_command(promote_observations_to_issue_cmd)

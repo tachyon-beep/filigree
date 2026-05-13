@@ -703,8 +703,11 @@ filigree observe "Possible auth race" --file-path src/auth.py --line 42
 filigree list-observations
 filigree list-observations --file-path src/auth.py
 filigree dismiss-observation <obs-id> --reason "Already fixed"
+filigree link-observation <obs-id> <issue-id> --disposition duplicate --reason "Same root cause"
 filigree promote-observation <obs-id> --type bug --priority 1
 filigree batch-dismiss-observations <id1> <id2> --reason "Stale"
+filigree batch-link-observations <issue-id> <id1> <id2> --disposition evidence
+filigree promote-observations-to-issue <id1> <id2> --type bug --title "Merged issue"
 ```
 
 #### `observe`
@@ -730,6 +733,10 @@ List observations with optional filters. Output: `ListResponse[T]` (`{items, has
 | `--offset` | integer | Skip first N results |
 | `--file-path` | string | Filter by file path |
 | `--file-id` | string | Filter by file record ID |
+| `--actor` | string | Filter by exact actor |
+| `--source-issue-id` | string | Filter by source issue |
+| `--priority-min` / `--priority-max` | 0-4 | Filter by priority range |
+| `--older-than-hours` | integer | Filter to older observations |
 
 #### `dismiss-observation`
 
@@ -739,6 +746,18 @@ Dismiss an observation (will not generate an issue).
 |-----------|------|-------------|
 | `observation-id` | string | Observation ID (positional) |
 | `--reason` | string | Dismissal reason |
+
+#### `link-observation`
+
+Link an observation to an existing issue, preserve its evidence snapshot in
+`observation_links`, and remove it from the pending queue.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `observation-id` | string | Observation ID (positional) |
+| `issue-id` | string | Existing issue ID (positional) |
+| `--disposition` | enum | `evidence`, `duplicate`, `superseded`, or `related` |
+| `--reason` | string | Link reason |
 
 #### `promote-observation`
 
@@ -760,6 +779,31 @@ Dismiss multiple observations in one call.
 |-----------|------|-------------|
 | `observation-ids` | string... | Observation IDs (positional, multiple) |
 | `--reason` | string | Dismissal reason |
+
+#### `batch-link-observations`
+
+Link multiple observations to one existing issue with a shared disposition.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `issue-id` | string | Existing issue ID (positional) |
+| `observation-ids` | string... | Observation IDs (positional, multiple) |
+| `--disposition` | enum | `evidence`, `duplicate`, `superseded`, or `related` |
+| `--reason` | string | Link reason |
+
+#### `promote-observations-to-issue`
+
+Promote multiple observations into one issue. The created issue stores all
+source IDs in `fields.source_observation_ids` and each observation is linked
+as durable evidence.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `observation-ids` | string... | Observation IDs (positional, multiple) |
+| `--type` | string | Issue type for the new issue |
+| `--priority` | 0-4 | Priority override |
+| `--title` | string | Override title |
+| `--description` | string | Extra description to prepend |
 
 ## Files and Findings
 

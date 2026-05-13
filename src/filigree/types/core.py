@@ -146,6 +146,28 @@ class ObservationDict(TypedDict):
     expires_at: ISOTimestamp
 
 
+class ObservationLinkDict(TypedDict):
+    """Durable snapshot for an observation linked into issue triage."""
+
+    id: int
+    obs_id: str
+    observation_id: NotRequired[str]
+    issue_id: str
+    disposition: str
+    summary: str
+    detail: str
+    file_id: str | None
+    file_path: str
+    line: int | None
+    source_issue_id: str
+    source_finding_id: str
+    priority: int
+    observation_actor: str
+    actor: str
+    reason: str
+    linked_at: ISOTimestamp
+
+
 class BatchDismissResult(TypedDict):
     """Shape contract for batch_dismiss_observations() return value."""
 

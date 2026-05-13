@@ -39,6 +39,13 @@ def observation_to_mcp(record: Mapping[str, Any]) -> dict[str, Any]:
     return _rename_primary_id(record, "observation_id")
 
 
+def observation_link_to_mcp(record: Mapping[str, Any]) -> dict[str, Any]:
+    payload = _rename_primary_id(record, "link_id")
+    if "obs_id" in payload:
+        payload["observation_id"] = payload.pop("obs_id")
+    return payload
+
+
 def comment_to_mcp(record: Mapping[str, Any]) -> dict[str, Any]:
     return _rename_primary_id(record, "comment_id")
 

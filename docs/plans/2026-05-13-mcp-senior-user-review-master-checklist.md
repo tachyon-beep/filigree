@@ -56,15 +56,21 @@ product match those decisions.
   remains available, compatible drift is not called `SCHEMA_MISMATCH`, and
   session-start diagnostics identify the binary/schema pair producing warnings.
 
-- [ ] **Provide first-class observation triage and session cleanup filters.**
+- [x] **Provide first-class observation triage and session cleanup filters.**
   Source: B19, D10, H2, H4.
-  Tracker: `filigree-b0af8a661b` is open P1.
+  Tracker: `filigree-b0af8a661b` is closed.
   Problem: `list_observations` lacks actor, age, priority, source, and sort
   filters; agents cannot link or merge observations into existing issues; stale
   observations accumulate across review sessions.
   Ship criterion: observation triage supports actor/session filtering,
   linking/duplicate dispositions, batch dismissal or promotion by filter, and
   preservation of observation evidence.
+  Resolution: schema v13 adds durable `observation_links` evidence snapshots;
+  `list_observations` filters by actor, file, source issue, priority, age, sort,
+  and direction; MCP/CLI expose `link_observation`, `batch_link_observations`,
+  and `promote_observations_to_issue`. First-class session/run IDs remain
+  deferred by ADR-011, so session cleanup is represented through actor/source
+  issue filters and explicit batch triage.
 
 - [ ] **Make `report_finding` side effects explicit, traceable, and slim.**
   Source: D2, E1, F3, G5, H3, H12.

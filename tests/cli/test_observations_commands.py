@@ -230,6 +230,18 @@ class TestListObservationsCommand:
         finally:
             os.chdir(original)
 
+    def test_list_filters_by_source_issue_id(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        runner, _ = cli_in_project
+        runner.invoke(cli, ["observe", "from issue", "--source-issue-id", "test-issue-1"])
+        runner.invoke(cli, ["observe", "unrelated", "--source-issue-id", "test-issue-2"])
+
+        result = runner.invoke(cli, ["list-observations", "--source-issue-id", "test-issue-1", "--json"])
+
+        assert result.exit_code == 0, result.output
+        data = json.loads(result.output)
+        assert len(data["items"]) == 1
+        assert data["items"][0]["summary"] == "from issue"
+
 
 # ---------------------------------------------------------------------------
 # TestDismissObservationCommand
@@ -561,6 +573,91 @@ class TestBatchPromoteObservationsCommand:
             assert result.exit_code == 0
             assert "Promoted" in result.output
             assert obs_id in result.output
+        finally:
+            os.chdir(original)
+
+
+class TestObservationTriageCommands:
+    def test_link_observation_json(self, initialized_project_with_observation: SeededProject) -> None:
+        import os
+
+        from filigree.cli_common import get_db
+
+        runner = CliRunner()
+        original = os.getcwd()
+        os.chdir(str(initialized_project_with_observation.path))
+        try:
+            with get_db() as db:
+                issue = db.create_issue("Existing issue")
+            result = runner.invoke(
+                cli,
+                [
+                    "link-observation",
+                    initialized_project_with_observation.obs_id,
+                    issue.id,
+                    "--disposition",
+                    "duplicate",
+                    "--reason",
+                    "same issue",
+                    "--json",
+                ],
+            )
+            assert result.exit_code == 0, result.output
+            data = json.loads(result.output)
+            assert data["observation_id"] == initialized_project_with_observation.obs_id
+            assert data["issue_id"] == issue.id
+            assert data["disposition"] == "duplicate"
+        finally:
+            os.chdir(original)
+
+    def test_batch_link_observations_json(self, initialized_project_with_many_obs: SeededProject) -> None:
+        import os
+
+        from filigree.cli_common import get_db
+
+        runner = CliRunner()
+        original = os.getcwd()
+        os.chdir(str(initialized_project_with_many_obs.path))
+        try:
+            with get_db() as db:
+                issue = db.create_issue("Existing issue")
+            obs_id = initialized_project_with_many_obs.obs_ids[0]
+            result = runner.invoke(
+                cli,
+                ["batch-link-observations", issue.id, obs_id, "obs-missing", "--json"],
+            )
+            assert result.exit_code == 1
+            data = json.loads(result.output)
+            assert [item["observation_id"] for item in data["succeeded"]] == [obs_id]
+            assert data["failed"][0]["id"] == "obs-missing"
+        finally:
+            os.chdir(original)
+
+    def test_promote_observations_to_issue_json(self, initialized_project_with_many_obs: SeededProject) -> None:
+        import os
+
+        runner = CliRunner()
+        original = os.getcwd()
+        os.chdir(str(initialized_project_with_many_obs.path))
+        try:
+            ids = initialized_project_with_many_obs.obs_ids[:2]
+            result = runner.invoke(
+                cli,
+                [
+                    "promote-observations-to-issue",
+                    *ids,
+                    "--type",
+                    "bug",
+                    "--title",
+                    "Merged issue",
+                    "--json",
+                ],
+            )
+            assert result.exit_code == 0, result.output
+            data = json.loads(result.output)
+            assert data["title"] == "Merged issue"
+            assert data["type"] == "bug"
+            assert data["fields"]["source_observation_ids"] == ids
         finally:
             os.chdir(original)
 

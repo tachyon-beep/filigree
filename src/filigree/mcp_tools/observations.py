@@ -22,15 +22,18 @@ from filigree.mcp_tools.common import (
     _validate_int_range,
     _validate_str,
 )
-from filigree.mcp_tools.payloads import observation_to_mcp
+from filigree.mcp_tools.payloads import observation_link_to_mcp, observation_to_mcp
 from filigree.types.api import BatchFailure, BatchResponse, ErrorCode, ErrorResponse, parse_response_detail
 from filigree.types.inputs import (
     BatchDismissObservationsArgs,
+    BatchLinkObservationsArgs,
     BatchPromoteObservationsArgs,
     DismissObservationArgs,
+    LinkObservationArgs,
     ListObservationsArgs,
     ObserveArgs,
     PromoteObservationArgs,
+    PromoteObservationsToIssueArgs,
 )
 
 logger = logging.getLogger(__name__)
@@ -88,6 +91,10 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
                     "file_path": {"type": "string", "description": "Filter by substring in file path"},
                     "file_id": {"type": "string", "description": "Filter by exact file ID"},
                     "actor": {"type": "string", "description": "Filter by exact actor (e.g. your agent name)"},
+                    "source_issue_id": {
+                        "type": "string",
+                        "description": "Filter by the issue this observation was noticed while working on",
+                    },
                     "priority_min": {
                         "type": "integer",
                         "minimum": 0,
@@ -201,6 +208,93 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
             },
         ),
         Tool(
+            name="link_observation",
+            description=(
+                "Link one observation to an existing issue as durable triage evidence, "
+                "then remove it from the pending observation queue."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "observation_id": {"type": "string", "description": "Observation ID"},
+                    "issue_id": {"type": "string", "description": "Existing issue ID to link the observation to"},
+                    "disposition": {
+                        "type": "string",
+                        "enum": ["evidence", "duplicate", "superseded", "related"],
+                        "default": "evidence",
+                        "description": "Triage disposition for the link",
+                    },
+                    "reason": {"type": "string", "default": "", "description": "Reason or operator note for the link"},
+                    "actor": {"type": "string", "description": "Agent/user identity for audit trail"},
+                },
+                "required": ["observation_id", "issue_id"],
+            },
+        ),
+        Tool(
+            name="batch_link_observations",
+            description=(
+                "Link multiple observations to one existing issue with the same "
+                "disposition. Returns BatchResponse[ObservationLink]."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "observation_ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Observation IDs to link",
+                    },
+                    "issue_id": {"type": "string", "description": "Existing issue ID to link the observations to"},
+                    "disposition": {
+                        "type": "string",
+                        "enum": ["evidence", "duplicate", "superseded", "related"],
+                        "default": "evidence",
+                        "description": "Triage disposition for every link",
+                    },
+                    "reason": {"type": "string", "default": "", "description": "Reason or operator note for every link"},
+                    "actor": {"type": "string", "description": "Agent/user identity for audit trail"},
+                },
+                "required": ["observation_ids", "issue_id"],
+            },
+        ),
+        Tool(
+            name="promote_observations_to_issue",
+            description=(
+                "Promote multiple observations into one issue. The created issue preserves "
+                "all source observation IDs in fields.source_observation_ids."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "observation_ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Observation IDs to merge into one issue",
+                    },
+                    "type": {
+                        "type": "string",
+                        "default": "task",
+                        "description": "Issue type for the created issue",
+                    },
+                    "priority": {
+                        "type": "integer",
+                        "description": "Override priority (default: highest priority among observations)",
+                        "minimum": 0,
+                        "maximum": 4,
+                    },
+                    "title": {"type": "string", "description": "Override title (default: first observation summary)"},
+                    "description": {"type": "string", "description": "Extra description to prepend"},
+                    "labels": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Additional labels to attach to the promoted issue",
+                    },
+                    "actor": {"type": "string", "description": "Agent/user identity for audit trail"},
+                },
+                "required": ["observation_ids"],
+            },
+        ),
+        Tool(
             name="batch_promote_observations",
             description=(
                 "Promote multiple observations in one call. Returns "
@@ -245,6 +339,9 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
         "dismiss_observation": _handle_dismiss_observation,
         "batch_dismiss_observations": _handle_batch_dismiss_observations,
         "promote_observation": _handle_promote_observation,
+        "link_observation": _handle_link_observation,
+        "batch_link_observations": _handle_batch_link_observations,
+        "promote_observations_to_issue": _handle_promote_observations_to_issue,
         "batch_promote_observations": _handle_batch_promote_observations,
     }
 
@@ -307,6 +404,7 @@ async def _handle_list_observations(arguments: dict[str, Any]) -> list[TextConte
             file_path=args.get("file_path", ""),
             file_id=args.get("file_id", ""),
             actor=args.get("actor", ""),
+            source_issue_id=args.get("source_issue_id", ""),
             priority_min=args.get("priority_min"),
             priority_max=args.get("priority_max"),
             older_than_hours=args.get("older_than_hours"),
@@ -452,6 +550,122 @@ async def _handle_batch_promote_observations(arguments: dict[str, Any]) -> list[
         failed=failed,
     )
     return _text(slim_resp)
+
+
+async def _handle_link_observation(arguments: dict[str, Any]) -> list[TextContent]:
+    from filigree.mcp_server import _get_db, _refresh_summary
+
+    args = _parse_args(arguments, LinkObservationArgs)
+    actor, actor_err = _validate_actor(args.get("actor", "mcp"))
+    if actor_err:
+        return actor_err
+
+    tracker = _get_db()
+    try:
+        link = tracker.link_observation_to_issue(
+            args["observation_id"],
+            args["issue_id"],
+            disposition=args.get("disposition", "evidence"),
+            reason=args.get("reason", ""),
+            actor=actor,
+        )
+    except KeyError as e:
+        return _text(ErrorResponse(error=str(e), code=ErrorCode.NOT_FOUND))
+    except ValueError as e:
+        msg = str(e)
+        err_code = ErrorCode.NOT_FOUND if "not found" in msg.lower() else ErrorCode.VALIDATION
+        return _text(ErrorResponse(error=msg, code=err_code))
+    except sqlite3.Error as e:
+        return _text(ErrorResponse(error=f"Database error: {e}", code=ErrorCode.IO))
+    _refresh_summary()
+    return _text(observation_link_to_mcp(link))
+
+
+async def _handle_batch_link_observations(arguments: dict[str, Any]) -> list[TextContent]:
+    from filigree.mcp_server import _get_db, _refresh_summary
+
+    args = _parse_args(arguments, BatchLinkObservationsArgs)
+    actor, actor_err = _validate_actor(args.get("actor", "mcp"))
+    if actor_err:
+        return actor_err
+
+    raw_ids = args.get("observation_ids", [])
+    if not isinstance(raw_ids, list):
+        return _text(ErrorResponse(error="'observation_ids' must be an array of strings", code=ErrorCode.VALIDATION))
+    if not all(isinstance(x, str) for x in raw_ids):
+        return _text(ErrorResponse(error="'observation_ids' must contain only string values", code=ErrorCode.VALIDATION))
+
+    tracker = _get_db()
+    try:
+        linked, failed = tracker.batch_link_observations_to_issue(
+            raw_ids,
+            args["issue_id"],
+            disposition=args.get("disposition", "evidence"),
+            reason=args.get("reason", ""),
+            actor=actor,
+        )
+    except KeyError as e:
+        return _text(ErrorResponse(error=str(e), code=ErrorCode.NOT_FOUND))
+    except ValueError as e:
+        return _text(ErrorResponse(error=str(e), code=ErrorCode.VALIDATION))
+    except sqlite3.Error as e:
+        return _text(ErrorResponse(error=f"Database error: {e}", code=ErrorCode.IO))
+    _refresh_summary()
+    resp: BatchResponse[dict[str, Any]] = BatchResponse(
+        succeeded=[observation_link_to_mcp(item) for item in linked],
+        failed=failed,
+    )
+    return _text(resp)
+
+
+async def _handle_promote_observations_to_issue(arguments: dict[str, Any]) -> list[TextContent]:
+    from filigree.mcp_server import _get_db, _refresh_summary
+
+    args = _parse_args(arguments, PromoteObservationsToIssueArgs)
+    actor, actor_err = _validate_actor(args.get("actor", "mcp"))
+    if actor_err:
+        return actor_err
+
+    raw_ids = args.get("observation_ids", [])
+    if not isinstance(raw_ids, list):
+        return _text(ErrorResponse(error="'observation_ids' must be an array of strings", code=ErrorCode.VALIDATION))
+    if not all(isinstance(x, str) for x in raw_ids):
+        return _text(ErrorResponse(error="'observation_ids' must contain only string values", code=ErrorCode.VALIDATION))
+
+    priority = args.get("priority")
+    if priority is not None:
+        priority_err = _validate_int_range(priority, "priority", min_val=0, max_val=4)
+        if priority_err:
+            return priority_err
+    labels = args.get("labels")
+    if labels is not None and (not isinstance(labels, list) or not all(isinstance(lbl, str) for lbl in labels)):
+        return _text(ErrorResponse(error="labels must be a list of strings", code=ErrorCode.VALIDATION))
+
+    tracker = _get_db()
+    try:
+        result = tracker.promote_observations_to_issue(
+            raw_ids,
+            issue_type=args.get("type", "task"),
+            priority=priority,
+            title=args.get("title"),
+            extra_description=args.get("description", ""),
+            actor=actor,
+            labels=labels,
+        )
+    except TypeError as e:
+        return _text(ErrorResponse(error=str(e), code=ErrorCode.VALIDATION))
+    except ValueError as e:
+        msg = str(e)
+        err_code = ErrorCode.NOT_FOUND if "not found" in msg.lower() else ErrorCode.VALIDATION
+        return _text(ErrorResponse(error=msg, code=err_code))
+    except sqlite3.Error as e:
+        return _text(ErrorResponse(error=f"Database error: {e}", code=ErrorCode.IO))
+    _refresh_summary()
+    issue = tracker.get_issue(result["issue"].id)
+    resp: dict[str, object] = dict(issue_to_public(issue))
+    if result.get("warnings"):
+        resp["warnings"] = result["warnings"]
+    return _text(resp)
 
 
 async def _handle_promote_observation(arguments: dict[str, Any]) -> list[TextContent]:

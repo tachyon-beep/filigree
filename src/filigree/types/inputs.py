@@ -700,6 +700,7 @@ class ListObservationsArgs(TypedDict):
     file_path: NotRequired[str]
     file_id: NotRequired[str]
     actor: NotRequired[str]
+    source_issue_id: NotRequired[str]
     priority_min: NotRequired[int]
     priority_max: NotRequired[int]
     older_than_hours: NotRequired[int]
@@ -725,6 +726,32 @@ class BatchPromoteObservationsArgs(TypedDict):
     type: NotRequired[str]
     priority: NotRequired[int]
     response_detail: NotRequired[str]
+    actor: NotRequired[str]
+
+
+class LinkObservationArgs(TypedDict):
+    observation_id: str
+    issue_id: str
+    disposition: NotRequired[str]
+    reason: NotRequired[str]
+    actor: NotRequired[str]
+
+
+class BatchLinkObservationsArgs(TypedDict):
+    observation_ids: list[str]
+    issue_id: str
+    disposition: NotRequired[str]
+    reason: NotRequired[str]
+    actor: NotRequired[str]
+
+
+class PromoteObservationsToIssueArgs(TypedDict):
+    observation_ids: list[str]
+    type: NotRequired[str]
+    priority: NotRequired[int]
+    title: NotRequired[str]
+    description: NotRequired[str]
+    labels: NotRequired[list[str]]
     actor: NotRequired[str]
 
 
@@ -838,5 +865,8 @@ TOOL_ARGS_MAP: dict[str, type] = {
     "dismiss_observation": DismissObservationArgs,
     "batch_dismiss_observations": BatchDismissObservationsArgs,
     "batch_promote_observations": BatchPromoteObservationsArgs,
+    "link_observation": LinkObservationArgs,
+    "batch_link_observations": BatchLinkObservationsArgs,
+    "promote_observations_to_issue": PromoteObservationsToIssueArgs,
     "promote_observation": PromoteObservationArgs,
 }

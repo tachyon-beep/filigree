@@ -16,7 +16,7 @@ from filigree.types.events import EventType
 if TYPE_CHECKING:
     from filigree.templates import TemplateRegistry, TransitionOption
     from filigree.types.api import BatchFailure
-    from filigree.types.core import ObservationDict, ScanFindingDict
+    from filigree.types.core import ObservationDict, ObservationLinkDict, ScanFindingDict
     from filigree.types.files import ScanRunDict
 
 logger = logging.getLogger(__name__)
@@ -305,6 +305,16 @@ class DBMixinProtocol(Protocol):
         actor: str = "",
         auto_commit: bool = True,
     ) -> ObservationDict: ...
+
+    def link_observation_to_issue(
+        self,
+        obs_id: str,
+        issue_id: str,
+        *,
+        disposition: str = "evidence",
+        reason: str = "",
+        actor: str = "",
+    ) -> ObservationLinkDict: ...
 
     # -- ScansMixin ----------------------------------------------------------
 

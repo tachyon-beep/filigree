@@ -556,6 +556,38 @@ def migrate_v11_to_v12(conn: sqlite3.Connection) -> None:
     add_index(conn, "idx_observations_source_finding", "observations", ["source_finding_id"])
 
 
+def migrate_v12_to_v13(conn: sqlite3.Connection) -> None:
+    """v12 -> v13: Preserve structured observation triage links.
+
+    Observations can now be linked to existing issues as evidence,
+    duplicate, superseded, or related dispositions.  The live observation is
+    cleared from the queue while a snapshot of its evidence remains durable in
+    ``observation_links``.
+    """
+    conn.execute("""\
+        CREATE TABLE IF NOT EXISTS observation_links (
+            id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+            obs_id             TEXT NOT NULL,
+            issue_id           TEXT NOT NULL REFERENCES issues(id),
+            disposition        TEXT NOT NULL DEFAULT 'evidence',
+            summary            TEXT NOT NULL,
+            detail             TEXT DEFAULT '',
+            file_id            TEXT REFERENCES file_records(id) ON DELETE SET NULL,
+            file_path          TEXT DEFAULT '',
+            line               INTEGER,
+            source_issue_id    TEXT DEFAULT '',
+            source_finding_id  TEXT DEFAULT '',
+            priority           INTEGER DEFAULT 3 CHECK (priority BETWEEN 0 AND 4),
+            observation_actor  TEXT DEFAULT '',
+            actor              TEXT DEFAULT '',
+            reason             TEXT DEFAULT '',
+            linked_at          TEXT NOT NULL,
+            CHECK (disposition IN ('evidence', 'duplicate', 'superseded', 'related'))
+        )""")
+    add_index(conn, "idx_observation_links_obs", "observation_links", ["obs_id"])
+    add_index(conn, "idx_observation_links_issue", "observation_links", ["issue_id", "linked_at"])
+
+
 MIGRATIONS: dict[int, MigrationFn] = {
     1: migrate_v1_to_v2,
     2: migrate_v2_to_v3,
@@ -568,6 +600,7 @@ MIGRATIONS: dict[int, MigrationFn] = {
     9: migrate_v9_to_v10,
     10: migrate_v10_to_v11,
     11: migrate_v11_to_v12,
+    12: migrate_v12_to_v13,
 }
 
 

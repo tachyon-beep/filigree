@@ -335,6 +335,13 @@ class TestListObservations:
         summaries = sorted(r["summary"] for r in result)
         assert summaries == ["alpha note", "alpha note 2"]
 
+    def test_list_filter_by_source_issue_id(self, db: FiligreeDB) -> None:
+        db.create_observation("from issue", source_issue_id="test-issue-1")
+        db.create_observation("unrelated", source_issue_id="test-issue-2")
+        result = db.list_observations(source_issue_id="test-issue-1")
+        assert len(result) == 1
+        assert result[0]["summary"] == "from issue"
+
     def test_list_filter_by_priority_range(self, db: FiligreeDB) -> None:
         db.create_observation("p0", priority=0)
         db.create_observation("p2", priority=2)
@@ -869,6 +876,78 @@ class TestPromoteObservation:
         obs = db.create_observation("all good")
         result = db.promote_observation(obs["id"])
         assert "warnings" not in result
+
+    def test_link_observation_to_issue_preserves_evidence_and_clears_queue(self, db: FiligreeDB) -> None:
+        issue = db.create_issue("Existing tracked work")
+        obs = db.create_observation(
+            "Same root cause",
+            detail="The duplicate evidence lives here",
+            file_path="src/api.py",
+            line=12,
+            priority=1,
+            actor="reviewer-a",
+        )
+
+        link = db.link_observation_to_issue(
+            obs["id"],
+            issue.id,
+            disposition="duplicate",
+            reason="covered by existing issue",
+            actor="triager",
+        )
+
+        assert link["observation_id"] == obs["id"]
+        assert link["issue_id"] == issue.id
+        assert link["disposition"] == "duplicate"
+        assert db.list_observations() == []
+        stored = db.conn.execute("SELECT * FROM observation_links WHERE obs_id = ?", (obs["id"],)).fetchone()
+        assert stored is not None
+        assert stored["summary"] == "Same root cause"
+        assert stored["detail"] == "The duplicate evidence lives here"
+        assert stored["file_path"] == "src/api.py"
+        assert stored["line"] == 12
+        audit = db.conn.execute("SELECT * FROM dismissed_observations WHERE obs_id = ?", (obs["id"],)).fetchone()
+        assert audit is not None
+        assert audit["reason"] == f"linked:duplicate:{issue.id}: covered by existing issue"
+
+    def test_batch_link_observations_reports_per_item_failures(self, db: FiligreeDB) -> None:
+        issue = db.create_issue("Existing tracked work")
+        obs = db.create_observation("Attach me")
+
+        linked, failed = db.batch_link_observations_to_issue(
+            [obs["id"], "obs-missing"],
+            issue.id,
+            disposition="evidence",
+            actor="triager",
+        )
+
+        assert [item["observation_id"] for item in linked] == [obs["id"]]
+        assert len(failed) == 1
+        assert failed[0]["id"] == "obs-missing"
+        assert failed[0]["code"] == "NOT_FOUND"
+
+    def test_promote_many_observations_to_one_issue_preserves_all_source_ids(self, db: FiligreeDB) -> None:
+        obs1 = db.create_observation("First signal", detail="one", priority=3)
+        obs2 = db.create_observation("Second signal", detail="two", file_path="src/core.py", line=8, priority=1)
+
+        result = db.promote_observations_to_issue(
+            [obs1["id"], obs2["id"]],
+            issue_type="bug",
+            title="Merged observation issue",
+            actor="triager",
+        )
+
+        issue = result["issue"]
+        assert issue.title == "Merged observation issue"
+        assert issue.type == "bug"
+        assert issue.priority == 1
+        assert issue.fields["source_observation_ids"] == [obs1["id"], obs2["id"]]
+        assert "First signal" in issue.description
+        assert "Second signal" in issue.description
+        assert "src/core.py:8" in issue.description
+        assert db.list_observations() == []
+        linked = db.conn.execute("SELECT obs_id FROM observation_links WHERE issue_id = ? ORDER BY id", (issue.id,)).fetchall()
+        assert [row["obs_id"] for row in linked] == [obs1["id"], obs2["id"]]
 
     def test_promote_expired_observation_raises(self, db: FiligreeDB) -> None:
         """Promoting an expired observation should fail, not create a stale issue."""

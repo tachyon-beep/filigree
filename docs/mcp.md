@@ -1,6 +1,6 @@
 # MCP Server Reference
 
-Filigree exposes an MCP (Model Context Protocol) server so AI agents interact natively without parsing CLI output. The server provides 101 tools, 1 resource, and 1 prompt.
+Filigree exposes an MCP (Model Context Protocol) server so AI agents interact natively without parsing CLI output. The server provides 105 tools, 1 resource, and 1 prompt.
 
 ## Contents
 
@@ -378,6 +378,8 @@ threshold.
 | `batch_add_label` | Add the same label to multiple issues |
 | `batch_add_comment` | Add the same comment to multiple issues |
 | `batch_dismiss_observations` | Dismiss multiple observations at once |
+| `batch_link_observations` | Link multiple observations to one issue with a shared disposition |
+| `batch_promote_observations` | Promote multiple observations to separate issues |
 | `batch_update_findings` | Update status on multiple scan findings |
 
 All batch tools return the unified `BatchResponse` envelope (`{succeeded, failed, newly_unblocked?}`) and accept an optional `response_detail: "slim" | "full"` (default `"slim"`). In `"slim"` mode `succeeded` is a list of compact records (`SlimIssue` for issue ops, IDs for label/comment/observation/finding ops); in `"full"` mode each batch tool upgrades `succeeded` to the full record type:
@@ -387,6 +389,8 @@ All batch tools return the unified `BatchResponse` envelope (`{succeeded, failed
 | `batch_update`, `batch_close` | `SlimIssue` | `IssueDict` |
 | `batch_add_label`, `batch_add_comment` | `issue_id: str` | `IssueDict` |
 | `batch_dismiss_observations` | `observation_id: str` | `ObservationDict` (snapshot pre-dismissal) |
+| `batch_link_observations` | `ObservationLink` | `ObservationLink` |
+| `batch_promote_observations` | `SlimIssue` | `PublicIssue` |
 | `batch_update_findings` | `finding_id: str` | `ScanFindingDict` |
 
 #### `batch_update`
@@ -642,9 +646,12 @@ file-anchored notes with provenance and drift detection.
 | `observe` | Record a quick scratchpad note, optionally anchored to a file |
 | `list_observations` | List active observations with file filters and pagination |
 | `dismiss_observation` | Dismiss one observation with audit trail |
+| `link_observation` | Link one observation to an existing issue as `evidence`, `duplicate`, `superseded`, or `related` |
 | `promote_observation` | Promote one observation to a tracked issue |
 | `batch_dismiss_observations` | Dismiss multiple observations in one call |
+| `batch_link_observations` | Link multiple observations to one existing issue |
 | `batch_promote_observations` | Promote multiple observations in one call |
+| `promote_observations_to_issue` | Promote multiple observations into one issue with all source IDs preserved |
 
 #### Annotations
 

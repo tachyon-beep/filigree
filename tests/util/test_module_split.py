@@ -48,10 +48,10 @@ def test_mcp_tools_register_shape() -> None:
 
 
 def test_mcp_tools_total_count() -> None:
-    """All 101 tools are registered across domain modules.
+    """All 105 tools are registered across domain modules.
 
-    Count includes the observation batch-promotion surface so the split-module
-    registry test notices dropped tool registrations.
+    Count includes the structured observation triage surfaces so the
+    split-module registry test notices dropped tool registrations.
     """
     from filigree.mcp_tools import annotations, files, issues, meta, observations, planning, scanners, workflow
 
@@ -62,8 +62,8 @@ def test_mcp_tools_total_count() -> None:
     # Scanner module needs include_legacy=True to include all legacy aliases.
     tools, _ = scanners.register(include_legacy=True)
     total += len(tools)
-    # +1 in review-h: release_my_claims (F4 bulk end-of-session cleanup).
-    assert total == 102, f"Expected 102 tools total, got {total}"
+    # +3 for structured observation triage: link, batch-link, promote-many-to-one.
+    assert total == 105, f"Expected 105 tools total, got {total}"
 
 
 def test_mcp_backward_compat_imports() -> None:
