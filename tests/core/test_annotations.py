@@ -125,6 +125,46 @@ class TestAnnotationCrud:
         finally:
             db.close()
 
+    def test_anchor_drift_counts_final_line_without_trailing_newline(self, tmp_path: Path) -> None:
+        """A two-line snippet without a final newline still spans two lines after drift."""
+        db = _project_db(tmp_path)
+        try:
+            source = tmp_path / "multi.py"
+            source.write_text("aa\nbb")
+            annotation = db.annotate_file("multi.py", "Watch two final lines", line_start=1, line_end=2)
+
+            source.write_text("intro\naa\nbb")
+            drifted = db.get_annotation(annotation["annotation_id"])
+
+            assert drifted["anchor_state"] == "line_drifted"
+            assert drifted["current_line_start"] == 2
+            assert drifted["current_line_end"] == 3
+        finally:
+            db.close()
+
+    def test_annotate_file_rejects_line_end_beyond_eof(self, tmp_path: Path) -> None:
+        db = _project_db(tmp_path)
+        try:
+            (tmp_path / "short.py").write_text("one\n")
+
+            with pytest.raises(ValueError, match=r"line_end exceeds file length"):
+                db.annotate_file("short.py", "impossible range", line_start=1, line_end=99)
+        finally:
+            db.close()
+
+    def test_failed_annotation_range_does_not_register_file(self, tmp_path: Path) -> None:
+        db = _project_db(tmp_path)
+        try:
+            (tmp_path / "short.py").write_text("one\n")
+
+            with pytest.raises(ValueError, match=r"line_start exceeds file length"):
+                db.annotate_file("short.py", "bad range", line_start=3)
+
+            paths = [row["path"] for row in db.conn.execute("SELECT path FROM file_records").fetchall()]
+            assert "short.py" not in paths
+        finally:
+            db.close()
+
     def test_carry_forward_acknowledges_old_critical_warning(self, tmp_path: Path) -> None:
         db = _project_db(tmp_path)
         try:

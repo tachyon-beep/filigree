@@ -76,6 +76,12 @@ def _line_for_offset(text: str, offset: int) -> int:
     return text.count("\n", 0, offset) + 1
 
 
+def _logical_line_count(snippet: str) -> int:
+    if not snippet:
+        return 0
+    return len(snippet.splitlines()) or 1
+
+
 class AnnotationsMixin(DBMixinProtocol):
     """Shared file annotation CRUD, provenance, links, and closeout warnings."""
 
@@ -155,6 +161,9 @@ class AnnotationsMixin(DBMixinProtocol):
             raise ValueError(msg)
         if line_end is None:
             msg = "line_end is required when line_start is provided"
+            raise ValueError(msg)
+        if line_end > len(lines):
+            msg = f"line_end exceeds file length ({len(lines)} line(s))"
             raise ValueError(msg)
         end = min(line_end, len(lines))
         snippet = "".join(lines[line_start - 1 : end])
@@ -385,13 +394,14 @@ class AnnotationsMixin(DBMixinProtocol):
             if original_start <= len(lines):
                 candidate = "".join(lines[original_start - 1 : min(original_end, len(lines))])
                 if candidate == snippet:
+                    line_count = _logical_line_count(snippet)
                     base.update(
                         {
                             "anchor_state": "content_changed_anchor_found",
                             "anchor_match_confidence": 0.85,
                             "anchor_match_count": 1,
                             "current_line_start": original_start,
-                            "current_line_end": original_start + max(snippet.count("\n"), 1) - 1,
+                            "current_line_end": original_start + line_count - 1,
                         }
                     )
                     return base
@@ -405,7 +415,7 @@ class AnnotationsMixin(DBMixinProtocol):
             cursor = found + max(len(snippet), 1)
         if len(offsets) == 1:
             line = _line_for_offset(text, offsets[0])
-            line_count = max(snippet.count("\n"), 1)
+            line_count = _logical_line_count(snippet)
             base.update(
                 {
                     "anchor_state": "line_drifted",
@@ -634,7 +644,6 @@ class AnnotationsMixin(DBMixinProtocol):
                 msg = f"relationship must be one of: {', '.join(sorted(VALID_ANNOTATION_RELATIONSHIPS))}"
                 raise ValueError(msg)
 
-        file_record = self.register_file(normalized)
         annotation_id = self._generate_unique_id("annotations", "ann")
         now = _now_iso()
         anchor_snippet, provenance = self._capture_annotation_provenance(
@@ -643,6 +652,7 @@ class AnnotationsMixin(DBMixinProtocol):
             line_start=line_start,
             line_end=line_end,
         )
+        file_record = self.register_file(normalized)
         try:
             self.conn.execute(
                 "INSERT INTO annotations "
