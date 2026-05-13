@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import json
+import os
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -65,6 +67,17 @@ class TestReadConfig:
         assert config["prefix"] == "proj"
         assert config["version"] == 1
 
+    def test_invalid_utf8_config_returns_defaults(self, tmp_path: Path) -> None:
+        """Invalid bytes are corrupt config and should use defaults."""
+        filigree_dir = tmp_path / ".filigree"
+        filigree_dir.mkdir()
+        (filigree_dir / "config.json").write_bytes(b"\xff\xfe")
+
+        config = read_config(filigree_dir)
+
+        assert config["prefix"] == "filigree"
+        assert config["version"] == 1
+
 
 class TestFromFiligreeDir:
     """Verify FiligreeDB.from_filigree_dir construction."""
@@ -95,6 +108,20 @@ class TestFromFiligreeDir:
         db = FiligreeDB.from_filigree_dir(filigree_dir, check_same_thread=False)
         assert db._check_same_thread is False
         db.close()
+
+    def test_invalid_utf8_config_uses_project_prefix_fallback(self, tmp_path: Path) -> None:
+        """from_filigree_dir treats undecodable config.json like a corrupt partial config."""
+        project_root = tmp_path / "broken-config"
+        project_root.mkdir()
+        filigree_dir = project_root / ".filigree"
+        filigree_dir.mkdir()
+        (filigree_dir / "config.json").write_bytes(b"\xff\xfe")
+
+        db = FiligreeDB.from_filigree_dir(filigree_dir)
+        try:
+            assert db.prefix == "broken-config"
+        finally:
+            db.close()
 
 
 class TestConfigEnabledPacks:
@@ -294,6 +321,44 @@ class TestFindFiligreeCommand:
     def test_at_least_one_element(self) -> None:
         result = find_filigree_command()
         assert len(result) >= 1
+
+    def test_skips_non_executable_uv_tool_candidate(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A 0644 file at ~/.local/bin/filigree is not a runnable command."""
+        home = tmp_path / "home"
+        uv_tool_dir = home / ".local" / "bin"
+        uv_tool_dir.mkdir(parents=True)
+        uv_candidate = uv_tool_dir / "filigree"
+        uv_candidate.write_text("#!/bin/sh\n")
+        uv_candidate.chmod(0o644)
+
+        path_dir = tmp_path / "path-bin"
+        path_dir.mkdir()
+        path_candidate = path_dir / "filigree"
+        path_candidate.write_text("#!/bin/sh\n")
+        path_candidate.chmod(0o755)
+
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setenv("PATH", str(path_dir))
+
+        assert find_filigree_command() == [str(path_candidate)]
+
+    def test_skips_non_executable_interpreter_sibling(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The venv sibling candidate must also be executable before use."""
+        home = tmp_path / "home"
+        home.mkdir()
+        python_dir = tmp_path / "venv-bin"
+        python_dir.mkdir()
+        python_exe = python_dir / "python"
+        python_exe.write_text("#!/bin/sh\n")
+        sibling = python_dir / "filigree"
+        sibling.write_text("#!/bin/sh\n")
+        sibling.chmod(0o644)
+
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setenv("PATH", os.devnull)
+        monkeypatch.setattr(sys, "executable", str(python_exe))
+
+        assert find_filigree_command() == [str(python_exe), "-m", "filigree"]
 
 
 class TestWriteAtomic:

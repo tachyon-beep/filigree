@@ -875,7 +875,9 @@ class TestFindFiligreeCommand:
         """When uv tool is installed, prefer it over shutil.which result."""
         uv_bin = tmp_path / ".local" / "bin"
         uv_bin.mkdir(parents=True)
-        (uv_bin / "filigree").touch()
+        candidate = uv_bin / "filigree"
+        candidate.touch()
+        candidate.chmod(0o755)
 
         with patch("filigree.core.shutil.which", return_value="/some/venv/bin/filigree"):
             result = find_filigree_command()
@@ -887,6 +889,7 @@ class TestFindFiligreeCommand:
         fake_python.touch()
         sibling = tmp_path / "filigree"
         sibling.touch()
+        sibling.chmod(0o755)
 
         with (
             patch("filigree.core.shutil.which", return_value=None),

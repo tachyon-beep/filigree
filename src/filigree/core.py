@@ -350,7 +350,7 @@ def read_config(filigree_dir: Path) -> ProjectConfig:
         if "version" not in result:
             result["version"] = defaults["version"]
         return result
-    except (json.JSONDecodeError, OSError) as exc:
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError) as exc:
         logger.warning("Failed to read %s, using defaults: %s", config_path, exc)
         return defaults
 
@@ -373,7 +373,7 @@ def _raw_config_prefix(config_path: Path) -> str | None:
         return None
     try:
         raw: Any = json.loads(config_path.read_text())
-    except (json.JSONDecodeError, OSError):
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError):
         return None
     if not isinstance(raw, dict):
         return None
@@ -414,7 +414,7 @@ def find_filigree_command() -> list[str]:
     """
     # Prefer uv tool install — stable path that survives venv changes
     uv_tool_bin = Path.home() / ".local" / "bin" / "filigree"
-    if uv_tool_bin.is_file():
+    if uv_tool_bin.is_file() and os.access(uv_tool_bin, os.X_OK):
         return [str(uv_tool_bin)]
 
     which = shutil.which("filigree")
@@ -424,7 +424,7 @@ def find_filigree_command() -> list[str]:
     # Check sibling of Python interpreter (common in venvs)
     python_dir = Path(sys.executable).parent
     candidate = python_dir / "filigree"
-    if candidate.is_file():
+    if candidate.is_file() and os.access(candidate, os.X_OK):
         return [str(candidate)]
 
     return [sys.executable, "-m", "filigree"]
@@ -579,6 +579,11 @@ class FiligreeDB(
         db_path = (conf_path.parent / data["db"]).resolve()
         prefix: str = data["prefix"]
         enabled_packs = data.get("enabled_packs")
+        enabled_packs_from_project_config = False
+        if enabled_packs is None:
+            config = read_config(conf_path.parent / FILIGREE_DIR_NAME)
+            enabled_packs = config.get("enabled_packs")
+            enabled_packs_from_project_config = enabled_packs is not None
         db = cls(
             db_path,
             prefix=prefix,
@@ -588,6 +593,8 @@ class FiligreeDB(
         )
         try:
             db.initialize()
+            if enabled_packs_from_project_config:
+                db._enabled_packs_override = None
         except BaseException:
             db.close()
             raise
@@ -649,16 +656,21 @@ class FiligreeDB(
         handles them as before.
 
         Prefixes may contain hyphens (``filigree init`` defaults the prefix to
-        ``cwd.name``, which is unconstrained), so the match is anchored on
-        ``startswith(prefix + "-")`` rather than splitting the ID.
+        ``cwd.name``, which is unconstrained), so recognisable generated IDs
+        are parsed from their terminal hex suffix instead of splitting on the
+        first hyphen.
         """
         if "-" not in issue_id:
             return
-        if issue_id.startswith(self.prefix + "-"):
-            return
-        # Strip the trailing ``-<10-hex>`` infix to derive a readable label
-        # for the error message; rsplit handles hyphenated foreign prefixes too.
         candidate_prefix = issue_id.rsplit("-", 1)[0]
+        suffix = issue_id.rsplit("-", 1)[1]
+        suffix_is_id = 6 <= len(suffix) <= 16 and all(c in "0123456789abcdef" for c in suffix.lower())
+        if suffix_is_id:
+            if candidate_prefix == self.prefix:
+                return
+        elif issue_id.startswith(self.prefix + "-"):
+            return
+
         msg = (
             f"Issue ID {issue_id!r} belongs to project {candidate_prefix!r}, "
             f"but this database is for project {self.prefix!r}. "

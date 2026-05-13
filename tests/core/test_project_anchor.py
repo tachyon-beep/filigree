@@ -455,6 +455,26 @@ class TestFromConf:
         finally:
             db.close()
 
+    def test_from_conf_uses_config_enabled_packs_when_conf_omits_them(self, tmp_path: Path) -> None:
+        """The conf anchors the DB, while config.json remains the project pack source."""
+        filigree_dir = tmp_path / FILIGREE_DIR_NAME
+        filigree_dir.mkdir()
+        (filigree_dir / "config.json").write_text(
+            json.dumps({"prefix": "p", "version": 1, "enabled_packs": ["core"]})
+        )
+        conf = tmp_path / CONF_FILENAME
+        write_conf(
+            conf,
+            {"version": 1, "project_name": "p", "prefix": "p", "db": f"{FILIGREE_DIR_NAME}/{DB_FILENAME}"},
+        )
+
+        db = FiligreeDB.from_conf(conf)
+        try:
+            assert db.enabled_packs == ["core"]
+            assert db.list_issues(type="release") == []
+        finally:
+            db.close()
+
 
 class TestFactoriesCloseConnOnInitFailure:
     """Regression: ``from_filigree_dir`` / ``from_conf`` must close the
@@ -705,6 +725,26 @@ class TestWrongProjectErrorOnWrites:
             db.add_label(issue.id, "needs-review")
             db.add_comment(issue.id, "still working")
             db.close_issue(issue.id)
+        finally:
+            db.close()
+
+    def test_foreign_prefix_that_extends_local_prefix_raises(self, tmp_path: Path) -> None:
+        """A DB with prefix 'a' must reject issue IDs whose real prefix is 'a-b'."""
+        db = FiligreeDB(tmp_path / "filigree.db", prefix="a")
+        db.initialize()
+        issue_id = "a-b-1234567890"
+        now = "2026-01-01T00:00:00+00:00"
+        db.conn.execute(
+            "INSERT INTO issues (id, title, status, priority, type, assignee, "
+            "created_at, updated_at, description, notes, fields) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (issue_id, "foreign", "open", 2, "task", "", now, now, "", "", "{}"),
+        )
+        db.conn.commit()
+        try:
+            with pytest.raises(WrongProjectError, match=r"a-b|a"):
+                db.update_issue(issue_id, title="mutated")
+            assert db.get_issue(issue_id).title == "foreign"
         finally:
             db.close()
 
