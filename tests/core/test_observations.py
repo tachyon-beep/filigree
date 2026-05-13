@@ -130,6 +130,39 @@ class TestCreateObservation:
         row = db.conn.execute("SELECT id FROM observations WHERE id = ?", (original_id,)).fetchone()
         assert row is not None, "Rollback should have preserved the expired observation"
 
+    def test_create_auto_commit_false_rolls_back_expired_cleanup_on_insert_failure(self, db: FiligreeDB) -> None:
+        """An outer transaction commit must not preserve failed replacement cleanup."""
+        obs1 = db.create_observation("outer survives", file_path="src/outer.py", line=1)
+        original_id = obs1["id"]
+        db.conn.execute(
+            "UPDATE observations SET expires_at = '2020-01-01T00:00:00+00:00' WHERE id = ?",
+            (original_id,),
+        )
+        db.conn.commit()
+
+        real_conn = db._conn
+
+        def _fail_on_insert(real: Any, sql: str, params: Any = ()) -> Any:
+            if "INSERT INTO observations" in sql and "dismissed_observations" not in sql:
+                raise sqlite3.OperationalError("disk I/O error on insert")
+            return real.execute(sql, params)
+
+        db._conn = _InterceptingConn(real_conn, _fail_on_insert)  # type: ignore[assignment]
+        try:
+            with pytest.raises(sqlite3.OperationalError, match="disk I/O error"):
+                db.create_observation("outer survives", file_path="src/outer.py", line=1, auto_commit=False)
+        finally:
+            db._conn = real_conn
+
+        # Simulate callers like process_scan_results catching observation errors
+        # and committing the rest of their outer transaction.
+        db.conn.commit()
+
+        row = db.conn.execute("SELECT id FROM observations WHERE id = ?", (original_id,)).fetchone()
+        assert row is not None, "Savepoint rollback should preserve the expired observation"
+        audit = db.conn.execute("SELECT id FROM dismissed_observations WHERE obs_id = ?", (original_id,)).fetchone()
+        assert audit is None
+
     def test_create_different_summary_same_location_allowed(self, db: FiligreeDB) -> None:
         db.create_observation("null deref", file_path="src/foo.py", line=10)
         db.create_observation("type error", file_path="src/foo.py", line=10)

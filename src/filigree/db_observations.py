@@ -175,8 +175,39 @@ class ObservationsMixin(DBMixinProtocol):
             "SELECT * FROM observations WHERE summary = ? AND file_path = ? AND coalesce(line, -1) = ?",
             (summary_stripped, file_path, line_cmp),
         ).fetchone()
-        if existing:
-            if existing["expires_at"] <= now:
+        if existing and existing["expires_at"] > now:
+            # Live duplicate — return existing row
+            return cast(ObservationDict, dict(existing))
+
+        savepoint_name = "create_observation_mutation"
+        savepoint_active = False
+
+        def _rollback_savepoint() -> None:
+            nonlocal savepoint_active
+            if not savepoint_active:
+                return
+            try:
+                self.conn.execute(f"ROLLBACK TO SAVEPOINT {savepoint_name}")
+            finally:
+                self.conn.execute(f"RELEASE SAVEPOINT {savepoint_name}")
+                savepoint_active = False
+
+        def _release_savepoint() -> None:
+            nonlocal savepoint_active
+            if savepoint_active:
+                self.conn.execute(f"RELEASE SAVEPOINT {savepoint_name}")
+                savepoint_active = False
+
+        if not auto_commit:
+            if not self.conn.in_transaction:
+                self.conn.execute("BEGIN")
+            self.conn.execute(f"SAVEPOINT {savepoint_name}")
+            savepoint_active = True
+
+        obs_id = self._generate_unique_id("observations", "obs")
+        expires = _expires_iso()
+        try:
+            if existing:
                 # Expired duplicate — delete and fall through to insert.
                 # Both operations share a single transaction to avoid a TOCTOU
                 # window where a concurrent caller could insert the same dedup key
@@ -189,13 +220,7 @@ class ObservationsMixin(DBMixinProtocol):
                 self.conn.execute("DELETE FROM observations WHERE id = ?", (existing["id"],))
                 # No commit here — fall through to INSERT below so both
                 # the deletion and insertion are committed atomically.
-            else:
-                # Live duplicate — return existing row
-                return cast(ObservationDict, dict(existing))
 
-        obs_id = self._generate_unique_id("observations", "obs")
-        expires = _expires_iso()
-        try:
             self.conn.execute(
                 "INSERT INTO observations (id, summary, detail, file_id, file_path, line, "
                 "source_issue_id, source_finding_id, priority, actor, created_at, expires_at) "
@@ -217,6 +242,8 @@ class ObservationsMixin(DBMixinProtocol):
             )
             if auto_commit:
                 self.conn.commit()
+            else:
+                _release_savepoint()
         except sqlite3.IntegrityError as e:
             # Concurrent racer won the dedup slot between our SELECT and INSERT.
             # The pre-insert SELECT cannot serialize writers under DEFERRED isolation,
@@ -229,9 +256,13 @@ class ObservationsMixin(DBMixinProtocol):
                 # Some other integrity failure (e.g. file_records race) — surface it.
                 if auto_commit:
                     self.conn.rollback()
+                else:
+                    _rollback_savepoint()
                 raise
             if auto_commit:
                 self.conn.rollback()
+            else:
+                _rollback_savepoint()
             winner = self.conn.execute(
                 "SELECT * FROM observations WHERE summary = ? AND file_path = ? AND coalesce(line, -1) = ?",
                 (summary_stripped, file_path, line_cmp),
@@ -258,6 +289,8 @@ class ObservationsMixin(DBMixinProtocol):
                             created_file_id,
                             exc_info=True,
                         )
+            else:
+                _rollback_savepoint()
             raise
         return {
             "id": obs_id,
