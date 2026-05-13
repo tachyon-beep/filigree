@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
 from click.testing import CliRunner, Result
 
 from filigree.cli import cli
@@ -167,6 +168,16 @@ class TestIssuePriorityFilterEnvelopeEmission:
         result = runner.invoke(cli, ["list-issues", "--priority", "5", "--json"])
         self._assert_validation_envelope(result)
 
+    def test_list_limit_negative_json_envelope(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        runner, _ = cli_in_project
+        result = runner.invoke(cli, ["list", "--limit", "-1", "--json"])
+        self._assert_validation_envelope(result)
+
+    def test_list_issues_offset_negative_json_envelope(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        runner, _ = cli_in_project
+        result = runner.invoke(cli, ["list-issues", "--offset", "-1", "--json"])
+        self._assert_validation_envelope(result)
+
     def test_update_priority_high_json_envelope(self, cli_in_project: tuple[CliRunner, Path]) -> None:
         runner, _ = cli_in_project
         create_result = runner.invoke(cli, ["create", "Target"])
@@ -201,6 +212,43 @@ class TestIssuePriorityFilterEnvelopeEmission:
         runner, _ = cli_in_project
         result = runner.invoke(cli, ["start-next-work", "--assignee", "bot", "--priority-max", "5", "--json"])
         self._assert_validation_envelope(result)
+
+
+class TestOwnershipForeignIDEnvelopeEmission:
+    """Foreign project IDs are caller-context validation errors, not claim conflicts."""
+
+    @pytest.mark.parametrize(
+        "args",
+        [
+            ["claim", "other-1234567890", "--assignee", "bot", "--json"],
+            ["release", "other-1234567890", "--json"],
+            ["heartbeat-work", "other-1234567890", "--json"],
+            [
+                "reclaim",
+                "other-1234567890",
+                "--assignee",
+                "bot",
+                "--expected-assignee",
+                "old-bot",
+                "--reason",
+                "stale claim",
+                "--json",
+            ],
+            ["start-work", "other-1234567890", "--assignee", "bot", "--json"],
+        ],
+    )
+    def test_foreign_issue_id_json_is_validation(
+        self,
+        cli_in_project: tuple[CliRunner, Path],
+        args: list[str],
+    ) -> None:
+        runner, _ = cli_in_project
+        result = runner.invoke(cli, args)
+
+        assert result.exit_code == 1, result.output
+        payload = json.loads(result.output)
+        assert payload["code"] == ErrorCode.VALIDATION, payload
+        assert "belongs to project" in payload["error"]
 
 
 class TestObservationCLIEnvelopeEmission:

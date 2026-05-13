@@ -10,6 +10,7 @@ from typing import Any
 import click
 
 from filigree.cli_common import get_db, refresh_summary
+from filigree.core import WrongProjectError
 from filigree.issue_payloads import issue_to_public, public_issue_with
 from filigree.types.api import AmbiguousTransitionError, ErrorCode, InvalidTransitionError, classify_value_error
 from filigree.validation import sanitize_actor
@@ -71,6 +72,21 @@ def _range_check_priority(priority: int, *, as_json: bool) -> None:
     and the boundary-validation tests pin.
     """
     _range_check_int(priority, "Priority", min_val=0, max_val=4, as_json=as_json)
+
+
+def _min_check_int(value: int, name: str, *, min_val: int, as_json: bool) -> None:
+    """Validate an integer lower bound inside the command body.
+
+    Like ``_range_check_int``, this is intentionally not a Click callback so
+    JSON callers receive the unified envelope instead of Click's usage error.
+    """
+    if value < min_val:
+        msg = f"{name} must be >= {min_val}, got {value}"
+        if as_json:
+            click.echo(json_mod.dumps({"error": msg, "code": ErrorCode.VALIDATION}))
+        else:
+            click.echo(f"Error: {msg}", err=True)
+        sys.exit(1)
 
 
 @click.command()
@@ -247,6 +263,8 @@ def _list_issues_impl(
     as_json: bool,
 ) -> None:
     _range_check_int(priority, "priority", min_val=0, max_val=4, as_json=as_json)
+    _min_check_int(limit, "limit", min_val=0, as_json=as_json)
+    _min_check_int(offset, "offset", min_val=0, as_json=as_json)
     with get_db() as db:
         label_filter = list(label) if label else None
         try:
@@ -301,8 +319,8 @@ def _list_issues_impl(
 @click.option("--not-label", default=None, help="Exclude issues with this label")
 @click.option("--sort-by", default="priority", help="Sort by priority, created_at, or updated_at")
 @click.option("--direction", default="asc", help="Sort direction: asc or desc")
-@click.option("--limit", default=100, type=click.IntRange(min=0), help="Max results (default 100)")
-@click.option("--offset", default=0, type=click.IntRange(min=0), help="Skip first N results")
+@click.option("--limit", default=100, type=int, help="Max results (default 100)")
+@click.option("--offset", default=0, type=int, help="Skip first N results")
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON")
 def list_cmd(
     status: str | None,
@@ -348,8 +366,8 @@ def list_cmd(
 @click.option("--not-label", default=None, help="Exclude issues with this label")
 @click.option("--sort-by", default="priority", help="Sort by priority, created_at, or updated_at")
 @click.option("--direction", default="asc", help="Sort direction: asc or desc")
-@click.option("--limit", default=100, type=click.IntRange(min=0), help="Max results (default 100)")
-@click.option("--offset", default=0, type=click.IntRange(min=0), help="Skip first N results")
+@click.option("--limit", default=100, type=int, help="Max results (default 100)")
+@click.option("--offset", default=0, type=int, help="Skip first N results")
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON")
 def list_issues_cmd(
     status: str | None,
@@ -661,6 +679,12 @@ def claim(ctx: click.Context, issue_id: str, assignee: str, as_json: bool) -> No
             else:
                 click.echo(f"Not found: {issue_id}", err=True)
             sys.exit(1)
+        except WrongProjectError as e:
+            if as_json:
+                click.echo(json_mod.dumps({"error": str(e), "code": ErrorCode.VALIDATION}))
+            else:
+                click.echo(f"Error: {e}", err=True)
+            sys.exit(1)
         except ValueError as e:
             msg = str(e)
             if as_json:
@@ -759,6 +783,12 @@ def _release_impl(
                 click.echo(json_mod.dumps({"error": f"Not found: {issue_id}", "code": ErrorCode.NOT_FOUND}))
             else:
                 click.echo(f"Not found: {issue_id}", err=True)
+            sys.exit(1)
+        except WrongProjectError as e:
+            if as_json:
+                click.echo(json_mod.dumps({"error": str(e), "code": ErrorCode.VALIDATION}))
+            else:
+                click.echo(f"Error: {e}", err=True)
             sys.exit(1)
         except ValueError as e:
             if as_json:
@@ -916,6 +946,12 @@ def heartbeat_work_cmd(
             else:
                 click.echo(f"Not found: {issue_id}", err=True)
             sys.exit(1)
+        except WrongProjectError as e:
+            if as_json:
+                click.echo(json_mod.dumps({"error": str(e), "code": ErrorCode.VALIDATION}))
+            else:
+                click.echo(f"Error: {e}", err=True)
+            sys.exit(1)
         except ValueError as e:
             if as_json:
                 click.echo(json_mod.dumps({"error": str(e), "code": ErrorCode.CONFLICT}))
@@ -1011,6 +1047,12 @@ def reclaim_cmd(
                 click.echo(json_mod.dumps({"error": f"Not found: {issue_id}", "code": ErrorCode.NOT_FOUND}))
             else:
                 click.echo(f"Not found: {issue_id}", err=True)
+            sys.exit(1)
+        except WrongProjectError as e:
+            if as_json:
+                click.echo(json_mod.dumps({"error": str(e), "code": ErrorCode.VALIDATION}))
+            else:
+                click.echo(f"Error: {e}", err=True)
             sys.exit(1)
         except ValueError as e:
             if as_json:
@@ -1108,6 +1150,12 @@ def start_work(
         except (AmbiguousTransitionError, InvalidTransitionError) as e:
             if as_json:
                 click.echo(json_mod.dumps({"error": str(e), "code": ErrorCode.INVALID_TRANSITION}))
+            else:
+                click.echo(f"Error: {e}", err=True)
+            sys.exit(1)
+        except WrongProjectError as e:
+            if as_json:
+                click.echo(json_mod.dumps({"error": str(e), "code": ErrorCode.VALIDATION}))
             else:
                 click.echo(f"Error: {e}", err=True)
             sys.exit(1)
