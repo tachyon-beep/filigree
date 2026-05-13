@@ -263,7 +263,7 @@ product match those decisions.
   surprising dependency carry-forward, predictable dependency ID syntax, and
   slim/full response modes.
 
-- [ ] **Clarify close, dismiss, and reason semantics across issue and finding lifecycles.**
+- [x] **Clarify close, dismiss, and reason semantics across issue and finding lifecycles.**
   Source: F2/F6, H10/H16, E16/E17.
   Problem: `undo_last` close semantics were fixed later, but close/dismiss
   reasons still live in different fields, `dismiss_finding` defaults to
@@ -271,6 +271,14 @@ product match those decisions.
   Ship criterion: reason storage and dismissal status defaults are documented
   and consistent enough for history consumers; finding archival or expiry is
   defined.
+  Resolution: CLI `dismiss-finding` now accepts the same constrained dismissal
+  statuses as MCP (`false_positive` default, `fixed`, `unseen_in_latest`,
+  `acknowledged`) while preserving `--reason`. CLI/MCP/file-traceability docs
+  define finding statuses, terminal statuses (`fixed`, `false_positive`),
+  `dismiss_reason` metadata, `updated_by` attribution, and
+  `clean-stale-findings` expiry from stale `unseen_in_latest` to `fixed`. The
+  API reference now documents close reason storage and status-event reason
+  presentation.
 
 - [x] **Hydrate blockers and context where agents need one-call triage.**
   Source: H7 plus earlier ready-context findings.

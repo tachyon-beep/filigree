@@ -723,6 +723,11 @@ Response includes: `file`, `associations`, `recent_findings`, `summary`.
 Finding records include `created_by` and `updated_by`. Finding timeline events
 include the relevant actor; `update_finding`, `batch_update_findings`, and
 `dismiss_finding` accept `actor` for triage attribution.
+`dismiss_finding` defaults to `status="false_positive"` and accepts
+`false_positive`, `fixed`, `unseen_in_latest`, or `acknowledged`. A `reason`
+is stored on the finding metadata as `dismiss_reason`. File summaries and safe
+file deletion treat `fixed` and `false_positive` as terminal; stale
+`unseen_in_latest` findings become `fixed` through `clean_stale_findings`.
 
 ### Agent Context Notes
 

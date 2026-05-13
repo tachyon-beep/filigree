@@ -955,6 +955,20 @@ class TestDismissFindingCommand:
         finally:
             os.chdir(original)
 
+    def test_dismiss_finding_accepts_status_and_reason(self, initialized_project_with_finding: SeededProject) -> None:
+        runner = CliRunner()
+        original = os.getcwd()
+        os.chdir(str(initialized_project_with_finding.path))
+        try:
+            finding_id = initialized_project_with_finding.finding_id
+            result = runner.invoke(cli, ["dismiss-finding", finding_id, "--status", "fixed", "--reason", "verified fixed", "--json"])
+            assert result.exit_code == 0, result.output
+            data = json.loads(result.output)
+            assert data["status"] == "fixed"
+            assert data["metadata"]["dismiss_reason"] == "verified fixed"
+        finally:
+            os.chdir(original)
+
     def test_dismiss_finding_plain_text(self, initialized_project_with_finding: SeededProject) -> None:
         runner = CliRunner()
         original = os.getcwd()

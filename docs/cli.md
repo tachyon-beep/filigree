@@ -884,8 +884,19 @@ filigree get-finding <finding-id>
 filigree update-finding <finding-id> --status fixed
 filigree promote-finding <finding-id> --priority 1
 filigree dismiss-finding <finding-id> --reason "False positive"
+filigree dismiss-finding <finding-id> --status fixed --reason "Verified fixed"
 filigree batch-update-findings <id1> <id2> --status fixed
 ```
+
+Finding lifecycle statuses are `open`, `acknowledged`, `unseen_in_latest`,
+`fixed`, and `false_positive`. File summaries and deletion safety treat
+`fixed` and `false_positive` as terminal. `unseen_in_latest` means the scanner
+did not report the finding in its latest run; `clean-stale-findings` moves old
+`unseen_in_latest` findings to `fixed`. `dismiss-finding` defaults to
+`false_positive`; pass `--status` when the dismissal reason is better expressed
+as `fixed`, `unseen_in_latest`, or `acknowledged`. The reason is stored in
+finding metadata as `dismiss_reason`, and the global `--actor` is stored in
+`updated_by`.
 
 ### `list-files`
 
@@ -1017,6 +1028,7 @@ Dismiss a finding (marks as not worth tracking).
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `finding-id` | string | Finding ID (positional) |
+| `--status` | enum | `false_positive` (default), `fixed`, `unseen_in_latest`, or `acknowledged` |
 | `--reason` | string | Dismissal reason |
 
 Records the global `--actor` in the finding's `updated_by` field.

@@ -31,6 +31,8 @@ from filigree.types.api import BatchFailure, ErrorCode
 from filigree.types.core import AssocType, FindingStatus
 from filigree.validation import sanitize_actor
 
+_DISMISS_FINDING_STATUSES = ("acknowledged", "false_positive", "fixed", "unseen_in_latest")
+
 # ---------------------------------------------------------------------------
 # File commands
 # ---------------------------------------------------------------------------
@@ -699,16 +701,23 @@ def promote_finding_cmd(
 
 @click.command("dismiss-finding")
 @click.argument("finding_id")
+@click.option(
+    "--status",
+    type=click.Choice(_DISMISS_FINDING_STATUSES),
+    default="false_positive",
+    show_default=True,
+    help="Dismissal status to apply",
+)
 @click.option("--reason", default=None, help="Optional reason for dismissal")
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON")
 @click.pass_context
-def dismiss_finding_cmd(ctx: click.Context, finding_id: str, reason: str | None, as_json: bool) -> None:
-    """Dismiss a finding by marking it as false_positive."""
+def dismiss_finding_cmd(ctx: click.Context, finding_id: str, status: FindingStatus, reason: str | None, as_json: bool) -> None:
+    """Dismiss a finding by marking it with a triage status."""
     with get_db() as db:
         try:
             updated = db.update_finding(
                 finding_id,
-                status="false_positive",
+                status=status,
                 dismiss_reason=reason or None,
                 actor=ctx.obj["actor"],
             )

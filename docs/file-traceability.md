@@ -114,6 +114,23 @@ File detail and timeline:
 }
 ```
 
+### Finding Lifecycle and Reasons
+
+Finding statuses are:
+
+- `open`: newly reported and actionable.
+- `acknowledged`: reviewed but still active.
+- `unseen_in_latest`: absent from the latest scan, but not yet aged out.
+- `fixed`: terminal; no longer counted as active.
+- `false_positive`: terminal; no longer counted as active.
+
+`dismiss_finding` defaults to `false_positive`. Use its `status` argument when
+the same dismissal action should instead record `fixed`, `unseen_in_latest`, or
+`acknowledged`. Dismissal reasons are stored in finding metadata as
+`dismiss_reason`; actor attribution is stored in `updated_by`. File deletion
+without `force` treats only `fixed` and `false_positive` as terminal. Stale
+`unseen_in_latest` findings are moved to `fixed` by `clean_stale_findings`.
+
 ## Dashboard UI Workflow
 
 Use this when working manually in the web UI.

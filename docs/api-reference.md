@@ -237,7 +237,9 @@ def close_issue(
 ) -> Issue
 ```
 
-Closes an issue by moving it to a done-category state. Direct close bypasses transition graph traversal, but hard-enforcement field gates still apply. Sets `closed_at` automatically.
+Closes an issue by moving it to a done-category state. Close uses the same
+transition validation as `update_issue()` unless `force=True`, including
+hard-enforcement field gates. Sets `closed_at` automatically.
 
 | Parameter | Type | Default | Description |
 |---|---|---|---|
@@ -246,6 +248,10 @@ Closes an issue by moving it to a done-category state. Direct close bypasses tra
 | `actor` | `str` | `""` | Identity for the audit trail |
 | `status` | `str \| None` | `None` | Specific done-category state. `None` uses the first done state from the template |
 | `fields` | `dict[str, Any] \| None` | `None` | Additional fields to merge while closing |
+
+The close `reason` is stored in `fields.close_reason`; a reason-only close also
+records the text on the status-change event comment so history readers can
+display it without reconstructing field deltas.
 
 **Raises:** `ValueError` if the issue is already closed or the specified status is not a done-category state.
 
