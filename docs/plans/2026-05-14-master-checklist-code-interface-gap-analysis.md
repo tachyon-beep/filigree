@@ -63,12 +63,12 @@ write defaults, and registry-derived MCP self-discovery metadata.
 
 | Checklist item | Current status | Evidence | Remaining work |
 |---|---:|---|---|
-| Actor/session filters for `archive_closed` | Partial | MCP/CLI archive supports `label`; MCP also accepts `actor` for history (`src/filigree/mcp_tools/meta.py:357`; `uv run filigree archive --help`). | No actor/session filter; document session-unique labels or add filter. |
-| `get_summary` JSON or human-only | Done for MCP, not CLI | MCP `get_summary(format="json")` returns `{markdown, stats}` (`src/filigree/mcp_tools/meta.py:287`, `src/filigree/mcp_tools/meta.py:780`). There is no CLI `get-summary` command. | Mark MCP criterion complete; decide whether CLI needs equivalent. |
+| Actor/session filters for `archive_closed` | Done by session-label doctrine | MCP/CLI archive supports `label`; MCP also accepts `actor` for history (`src/filigree/mcp_tools/meta.py`; `uv run filigree archive --help`). The CLI/MCP end-of-session cleanup recipe now requires a session-unique label before archive and warns that archive scopes by label, not actor (`docs/cli.md`; `docs/mcp.md`). | None. |
+| `get_summary` JSON or human-only | Done | MCP `get_summary(format="json")` returns `{markdown, stats}` (`src/filigree/mcp_tools/meta.py`). The CLI has no `get-summary` command and remains human-output oriented through `session-context`/summary file workflows. | None. |
 | Preview stale observations in summary | Done | `generate_summary()` appends stale observation count and oldest age when observation stats are available (`src/filigree/summary.py:300`). Session context also reports stale observations (`src/filigree/hooks.py:156`). | Mark complete if count/oldest-age preview is sufficient; otherwise add sample IDs. |
-| Canonical `get_stats` fields and aliases | Done | `get_stats()` returns `status_name_counts`, `status_category_counts`, plus compatibility `by_status` and `by_category` (`src/filigree/db_meta.py:404`). CLI JSON confirms all four. | Documentation/deprecation wording may still need a pass. |
+| Canonical `get_stats` fields and aliases | Done | `get_stats()` returns `status_name_counts`, `status_category_counts`, plus compatibility `by_status` and `by_category` (`src/filigree/db_meta.py`). MCP and CLI docs describe the canonical fields and compatibility aliases (`docs/mcp.md`; `docs/cli.md`), and CLI JSON confirms all four. | None. |
 | `add_comment` echo text or structured comment | Partial | MCP `add_comment` returns full `PublicIssue` plus `comment_id` (`src/filigree/mcp_tools/meta.py:492`); no comment text or structured comment is included. CLI JSON add-comment should be checked separately if this becomes a ship item. | Either add structured comment echo or decide full issue plus ID is acceptable. |
-| `release_claim(if_held=true)` held-by-other behavior | Decided in implementation: conflict | `release_claim` raises if held by another actor in `if_held` mode (`src/filigree/db_issues.py:1190`). API tests assert the conflict behavior. | Update checklist as decided, or create ADR note if product wants no-op. |
+| `release_claim(if_held=true)` held-by-other behavior | Done | `release_claim` raises if held by another actor in `if_held` mode (`src/filigree/db_issues.py`). API/core/MCP tests assert the conflict behavior. | None. |
 | Near-expiry stale claims | Not done | `get_stale_claims` only accepts `stale_after_hours` in MCP and CLI (`src/filigree/mcp_tools/issues.py:484`; `uv run filigree get-stale-claims --help`). | Add `expires_within_hours` if proactive heartbeat discovery is wanted. |
 | File timelines include issue events | Done | `get_file_timeline` supports `include_issue_events` and `event_type='issue_event'` (`src/filigree/db_files.py:1677`; `uv run filigree get-file-timeline --help`). Tests cover CLI and core behavior (`tests/core/test_files.py:2352`; `tests/cli/test_files_commands.py:382`). | Mark complete. |
 | Closed scratch/file immutable history | Done by ADR | Master checklist already marks this complete under ADR-003/ADR-005. | None. |
@@ -110,7 +110,7 @@ Keep as active gaps:
 - Blocker hydration for `get_blocked`. **Resolved 2026-05-14:** MCP and CLI blocked-work queries now support opt-in `blockers[]` context.
 - Requirement pack/doc mismatch. **Resolved 2026-05-14:** live MCP/CLI type descriptions now mark `requirement` as requirements-pack scoped.
 - File/finding actor attribution beyond observation/issue promotion.
-- Annotation carry-forward source-link validation. **Resolved 2026-05-14:** carry-forward now requires an active `must_consider` link to `from_target_id`.
-- Archive session/actor filter or explicit session-label doctrine.
+- Annotation carry-forward source-link validation. **Resolved 2026-05-14:** carry-forward now requires a `must_consider` link to `from_target_id`.
+- Archive session/actor filter or explicit session-label doctrine. **Resolved 2026-05-14:** the cleanup recipe requires session-unique labels before archive and documents the label-scoped archive boundary.
 - `add_comment` structured comment echo if the response becomes slim.
 - Near-expiry claim discovery.

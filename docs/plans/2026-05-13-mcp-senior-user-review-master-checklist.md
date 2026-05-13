@@ -127,7 +127,7 @@ product match those decisions.
   label, dry-run previews for claim release, default refusal before forced file
   deletion, and label-scope confirmation before archive.
 
-- [ ] **Finish stale-claim and handoff discovery.**
+- [x] **Finish stale-claim and handoff discovery.**
   Source: A1/A4, B2/B12, D3, E4, G3, H4/H15.
   Tracker: claim leases were implemented in `filigree-76d27e95c2`, but G/H
   leave follow-up friction.
@@ -137,6 +137,10 @@ product match those decisions.
   Ship criterion: stale-claim tools default to non-done work, handoff/orphan
   work is discoverable, and session cleanup can safely release current actor
   claims without knowing every issue ID.
+  Resolution: `get_stale_claims` selects assigned non-done work, and
+  `release_my_claims` bulk-releases live claims by actor while skipping
+  done-category issues. The proactive near-expiry extension remains tracked as
+  separate P3 polish below.
 
 ### P2 - significant friction to resolve for a polished ship
 
@@ -297,22 +301,36 @@ product match those decisions.
 
 ### P3 - polish, but should be triaged before release cut
 
-- [ ] Add actor/session filters to `archive_closed` or document session-unique
+- [x] Add actor/session filters to `archive_closed` or document session-unique
   labels for cleanup. Source: F7, E18.
-- [ ] Add `get_summary` JSON or make markdown summary clearly human-only.
+  Resolution: the CLI/MCP end-of-session cleanup recipe now requires a
+  session-unique label before archive, and warns that archive scopes by label,
+  not actor.
+- [x] Add `get_summary` JSON or make markdown summary clearly human-only.
   Source: D12.
-- [ ] Preview stale observations in `get_summary`. Source: F8.
-- [ ] Document canonical `get_stats` fields and compatibility aliases according
+  Resolution: MCP `get_summary(format="json")` returns `{markdown, stats}`.
+  The CLI remains human-output only via `session-context`/summary file flows.
+- [x] Preview stale observations in `get_summary`. Source: F8.
+  Resolution: generated summaries and session context report stale observation
+  count and oldest age.
+- [x] Document canonical `get_stats` fields and compatibility aliases according
   to ADR-009; deprecate legacy aliases only with an explicit migration path.
   Source: H13.
+  Resolution: `docs/mcp.md` and `docs/cli.md` document
+  `status_name_counts`/`status_category_counts` as canonical and
+  `by_status`/`by_category` as compatibility aliases.
 - [ ] Echo comment text or a structured comment in `add_comment` responses if
   the response remains slim. Source: H14.
-- [ ] Decide whether `release_claim(if_held=true)` should conflict or no-op
+- [x] Decide whether `release_claim(if_held=true)` should conflict or no-op
   when another actor holds the claim. Source: H15.
+  Resolution: the implemented decision is conflict. Tests cover held-by-other
+  behavior so cleanup cannot silently release another actor's claim.
 - [ ] Add `get_stale_claims(expires_within_hours=...)` if proactive
   heartbeating is a supported workflow. Source: E23.
-- [ ] Add optional issue events to file timelines if file-centered history is a
+- [x] Add optional issue events to file timelines if file-centered history is a
   first-class workflow. Source: A16/B18.
+  Resolution: file timelines support `include_issue_events` and
+  `event_type=issue_event` in MCP/CLI/core tests.
 - [x] Closed scratch/file records do not need immutable-history treatment.
   ADR-003 establishes operational durability, and ADR-005 allows explicit
   cleanup/archive lanes. Remaining work belongs under the cleanup/archive
