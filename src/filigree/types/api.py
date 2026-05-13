@@ -276,6 +276,7 @@ class IssueMutationResponse(PublicIssue):
 
     changed_fields: NotRequired[list[str]]
     comment_id: NotRequired[int]
+    comment: NotRequired[dict[str, Any]]
     label: NotRequired[str]
     label_result: NotRequired[str]
     dependency: NotRequired[DependencyMutationDetail]

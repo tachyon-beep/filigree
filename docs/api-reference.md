@@ -733,13 +733,26 @@ Adds a comment to an issue.
 
 **Raises:** `ValueError` if text is empty.
 
+Use `get_comment(comment_id)` or `get_comments(issue_id)` to retrieve the
+structured row (`id`, `author`, `text`, `created_at`). MCP and CLI add-comment
+write responses echo that structured comment as `comment` with the primary key
+renamed to `comment_id`.
+
+#### `get_comment`
+
+```python
+def get_comment(self, comment_id: int) -> CommentRecord
+```
+
+Returns one comment row by ID.
+
 #### `get_comments`
 
 ```python
-def get_comments(self, issue_id: str) -> list[dict[str, Any]]
+def get_comments(self, issue_id: str) -> list[CommentRecord]
 ```
 
-Returns all comments on an issue, ordered chronologically. Each dict contains `id`, `author`, `text`, and `created_at`.
+Returns all comments on an issue, ordered chronologically. Each record contains `id`, `author`, `text`, and `created_at`.
 
 ---
 

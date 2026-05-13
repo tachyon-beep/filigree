@@ -522,6 +522,7 @@ async def _handle_add_comment(arguments: dict[str, Any]) -> list[TextContent]:
     issue = tracker.get_issue(args["issue_id"])
     response: dict[str, Any] = dict(issue_to_public(issue))
     response["comment_id"] = comment_id
+    response["comment"] = comment_to_mcp(tracker.get_comment(comment_id))
     return _text(cast(AddCommentResult, response))
 
 

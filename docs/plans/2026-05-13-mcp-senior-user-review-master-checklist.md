@@ -329,8 +329,11 @@ product match those decisions.
   Resolution: `docs/mcp.md` and `docs/cli.md` document
   `status_name_counts`/`status_category_counts` as canonical and
   `by_status`/`by_category` as compatibility aliases.
-- [ ] Echo comment text or a structured comment in `add_comment` responses if
+- [x] Echo comment text or a structured comment in `add_comment` responses if
   the response remains slim. Source: H14.
+  Resolution: MCP `add_comment` now preserves top-level `comment_id` and adds
+  `comment: {comment_id, author, text, created_at}`; CLI JSON `add-comment`
+  mirrors the structured echo while keeping existing top-level IDs.
 - [x] Decide whether `release_claim(if_held=true)` should conflict or no-op
   when another actor holds the claim. Source: H15.
   Resolution: the implemented decision is conflict. Tests cover held-by-other

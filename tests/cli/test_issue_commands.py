@@ -379,6 +379,21 @@ class TestCommentsCli:
         assert result.exit_code == 0
         assert "Added comment" in result.output
 
+    def test_add_comment_json_echoes_structured_comment(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        runner, _ = cli_in_project
+        r = runner.invoke(cli, ["create", "Commentable"])
+        issue_id = _extract_id(r.output)
+
+        result = runner.invoke(cli, ["--actor", "cli-commenter", "add-comment", issue_id, "My comment", "--json"])
+
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["issue_id"] == issue_id
+        assert data["comment"]["comment_id"] == data["comment_id"]
+        assert data["comment"]["author"] == "cli-commenter"
+        assert data["comment"]["text"] == "My comment"
+        assert isinstance(data["comment"]["created_at"], str)
+
     def test_list_comments(self, cli_in_project: tuple[CliRunner, Path]) -> None:
         runner, _ = cli_in_project
         r = runner.invoke(cli, ["create", "Commentable"])

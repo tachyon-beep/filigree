@@ -72,6 +72,16 @@ class MetaMixin(DBMixinProtocol):
         ).fetchall()
         return [CommentRecord(id=r["id"], author=r["author"], text=r["text"], created_at=r["created_at"]) for r in rows]
 
+    def get_comment(self, comment_id: int) -> CommentRecord:
+        row = self.conn.execute(
+            "SELECT id, author, text, created_at FROM comments WHERE id = ?",
+            (comment_id,),
+        ).fetchone()
+        if row is None:
+            msg = f"Comment not found: {comment_id}"
+            raise KeyError(msg)
+        return CommentRecord(id=row["id"], author=row["author"], text=row["text"], created_at=row["created_at"])
+
     # -- Labels --------------------------------------------------------------
 
     def add_label(

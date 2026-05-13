@@ -18,6 +18,7 @@ if TYPE_CHECKING:
     from filigree.types.api import BatchFailure
     from filigree.types.core import ObservationDict, ObservationLinkDict, ScanFindingDict
     from filigree.types.files import ScanRunDict
+    from filigree.types.planning import CommentRecord
 
 logger = logging.getLogger(__name__)
 
@@ -268,6 +269,7 @@ class DBMixinProtocol(Protocol):
         self, issue_ids: list[str], *, label: str, actor: str = "", expected_assignee: str | None = None
     ) -> tuple[list[dict[str, str]], list[BatchFailure]]: ...
     def add_comment(self, issue_id: str, text: str, *, author: str = "", expected_assignee: str | None = None) -> int: ...
+    def get_comment(self, comment_id: int) -> CommentRecord: ...
 
     # -- PlanningMixin -------------------------------------------------------
 

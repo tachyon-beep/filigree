@@ -53,7 +53,17 @@ def add_comment(ctx: click.Context, issue_id: str, text: str, expected_assignee:
                 click.echo(f"Error: {e}", err=True)
             sys.exit(1)
         if as_json:
-            click.echo(json_mod.dumps({"comment_id": comment_id, "issue_id": issue_id}))
+            comment = db.get_comment(comment_id)
+            click.echo(
+                json_mod.dumps(
+                    {
+                        "comment_id": comment_id,
+                        "issue_id": issue_id,
+                        "comment": comment_to_mcp(comment),
+                    },
+                    default=str,
+                )
+            )
         else:
             click.echo(f"Added comment {comment_id} to {issue_id}")
         refresh_summary(db)

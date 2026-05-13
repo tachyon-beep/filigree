@@ -1075,7 +1075,8 @@ class TestAddCommentResultShape:
         issue_id = issues["items"][0]["issue_id"]
         result = _parse(await call_tool("add_comment", {"issue_id": issue_id, "text": "hello"}))
         public_issue_keys = set(get_type_hints(PublicIssue).keys())
-        assert set(result.keys()) == public_issue_keys | {"comment_id"}
+        assert set(result.keys()) == public_issue_keys | {"comment_id", "comment"}
+        assert set(result["comment"].keys()) == {"comment_id", "author", "text", "created_at"}
 
     async def test_value_types(self, mcp_db: FiligreeDB) -> None:
         from filigree.mcp_server import call_tool
@@ -1084,9 +1085,13 @@ class TestAddCommentResultShape:
         await call_tool("create_issue", {"title": "Comment target"})
         issues = _parse(await call_tool("list_issues", {}))
         issue_id = issues["items"][0]["issue_id"]
-        result = _parse(await call_tool("add_comment", {"issue_id": issue_id, "text": "hello"}))
+        result = _parse(await call_tool("add_comment", {"issue_id": issue_id, "text": "hello", "actor": "commenter"}))
         assert isinstance(result["issue_id"], str)
         assert isinstance(result["comment_id"], int)
+        assert result["comment"]["comment_id"] == result["comment_id"]
+        assert result["comment"]["author"] == "commenter"
+        assert result["comment"]["text"] == "hello"
+        assert isinstance(result["comment"]["created_at"], str)
 
 
 class TestIssueMutationResponseShape:

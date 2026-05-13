@@ -235,6 +235,10 @@ add slim blocker records under `blockers[]` while preserving `blocked_by`.
 | `actor` | string | no | Used as comment author |
 | `expected_assignee` | string | no | Override expected holder for coordinator writes |
 
+Returns the updated `PublicIssue`, preserving top-level `comment_id` for
+compatibility and adding `comment: {comment_id, author, text, created_at}` so
+callers can confirm the exact inserted comment without a follow-up read.
+
 #### `get_comments`
 
 | Parameter | Type | Required | Description |

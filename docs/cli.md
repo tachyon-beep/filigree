@@ -366,6 +366,9 @@ filigree remove-label <id> backend
 | `text` | string | Comment text (positional) |
 | `--expected-assignee` | string | Expected current holder for coordinator writes |
 
+JSON output preserves top-level `comment_id` and `issue_id`, and also includes
+`comment: {comment_id, author, text, created_at}`.
+
 ### `get-comments`
 
 | Parameter | Type | Description |
