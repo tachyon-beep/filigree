@@ -24,9 +24,9 @@ tracker snapshot taken with `uv run filigree session-context` and
 ## Ship-blocking checklist
 
 These are the consolidated findings after the ADR-003 through ADR-011 decision
-pass. The product decisions are now locked; unchecked items represent remaining
-implementation, documentation, tracker, or verification work needed to make the
-product match those decisions.
+pass. The product decisions are locked, and the checklist is now closed for the
+2.0 MCP senior-user review scope. Each checked item records the implemented,
+documented, deferred, or explicitly accepted outcome.
 
 ### P1 - must implement or explicitly defer
 
@@ -468,40 +468,33 @@ regression.
   `source_finding_id` cleanup were reported fixed by G/H. Source: G "what works
   well", H "what works well".
 
-## Current live tracker coverage snapshot
+## Closure Tracker Snapshot
 
-Open issues already covering parts of this checklist:
+Implementation issues that closed checklist criteria:
 
-- `filigree-b0af8a661b` - structured observation triage, P1.
-- `filigree-b48cd07e68` - generated MCP self-discovery and docs, P2.
-- `filigree-aec52efb9b` - archival-status model implementation, P2
-  (policy locked by ADR-010).
-- `filigree-564438a17e` - actor identity through file/finding write events, P2.
+- `filigree-b0af8a661b` - structured observation triage, P1, closed.
+- `filigree-b48cd07e68` - generated MCP self-discovery and docs, P2, closed.
+- `filigree-aec52efb9b` - archival-status model implementation, P2, closed
+  against ADR-010.
+- `filigree-564438a17e` - actor identity through file/finding write events,
+  P2, closed.
 
 Deferred by ADR rather than 2.0-blocking:
 
 - `filigree-c2009921cf` - agent session/run checkpoints, deferred beyond 2.0
   by ADR-011.
 
-Recent release:v2.0 issues from observation cleanup that are adjacent but not
-core senior-user review consolidation:
+Adjacent release:v2.0 issues from observation cleanup are tracked separately
+from this senior-user review consolidation. They do not reopen this checklist
+unless they change one of the locked interface outcomes above.
 
-- `filigree-660e79b93d` - corrupt `issues.fields` JSON guard.
-- `filigree-c5dd08e240` - `register_file` duplicate path race.
-- `filigree-7feef2cf67` - dashboard `min_findings` SQLite bounds.
-- `filigree-c31fe51a34` - finding CLI mutations refresh context; currently
-  `fixing` and assigned to `codex`.
+## Release Verification Note
 
-## Suggested next triage pass
+The checklist is closed as an implementation and interface artifact. Before a
+release cut, run a live MCP+CLI parity smoke that exercises representative
+checklist outcomes in addition to the regression suite.
 
-1. Convert every unchecked P1/P2 item that is not already covered into a
-   Filigree issue under an MCP 2.0 ship-readiness epic.
-2. For each existing issue, add this checklist path and source tags to the
-   issue description or comments so implementation can trace back to the
-   review evidence.
-3. Before release, run a live MCP+CLI parity smoke that exercises the final
-   checklist, not just the unit suite.
-
-Decision update: the major conflict decisions are now recorded in ADR-003
-through ADR-011. Remaining unchecked checklist entries should be implemented,
-converted into tracker issues, or explicitly deferred against those ADRs.
+Decision update: the major conflict decisions are recorded in ADR-003 through
+ADR-011. The only remaining senior-user review item is the ADR-011-deferred
+session/run checkpoint model, which is intentionally outside the 2.0 closure
+scope.

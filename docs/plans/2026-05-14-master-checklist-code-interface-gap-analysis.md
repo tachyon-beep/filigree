@@ -11,10 +11,11 @@ analysis, not a new product decision pass.
 
 ## Executive Summary
 
-Several checklist items are implemented but still unchecked in the master list.
-The high-risk schema/default-behavior gaps called out in this analysis are now
-resolved; remaining work is lower-scope P1/P2/P3 polish and documentation
-normalization.
+The master checklist is now mechanically closed and the implementation evidence
+matches the locked ADR outcomes for the 2.0 MCP senior-user review scope. The
+high-risk schema/default-behavior gaps called out in this analysis are resolved.
+Remaining work is limited to release-smoke verification and any future
+ADR-011-deferred session/run checkpoint model.
 
 The strongest completed areas are schema-mismatch fail-closed behavior,
 stale-claim discovery and `release_my_claims`, archived-status hydration,
@@ -75,45 +76,41 @@ write defaults, and registry-derived MCP self-discovery metadata.
 
 ## Interface Drift Notes
 
-- MCP and CLI `get_changes`/`get-changes` now share actor, issue, label, type,
+- MCP and CLI `get_changes`/`get-changes` share actor, issue, label, type,
   cursor, and heartbeat controls.
-- MCP exposes `get_summary`; CLI does not expose `get-summary`. This is fine if
-  summary JSON is MCP-only by design, but the checklist should say so.
-- MCP schemas are all hand-written and permissive. Without unknown-parameter
-  rejection, interface docs and runtime behavior can silently diverge.
-- The live project does not enable the requirements pack by default, but public
-  tool descriptions still mention `requirement` as if it were generally valid.
+- MCP exposes `get_summary(format="json")`; CLI intentionally remains
+  human-output oriented through `session-context` and summary file workflows.
+- MCP unknown parameters are rejected at dispatch from the live tool registry,
+  so interface docs and runtime behavior no longer silently diverge on extra
+  arguments.
+- Requirement-type wording is scoped to the optional requirements pack across
+  MCP descriptions and CLI help.
 
-## Recommended Checklist Updates
+## Closure Outcome
 
-Mark as Done after maintainer review:
+The previously active gaps are resolved for 2.0:
 
-- P1 stale-claim and handoff discovery, except the P3 near-expiry extension.
-- P2 archive/done-status model.
-- P3 `get_summary` JSON for MCP.
-- P3 stale observation preview in summary.
-- P3 `get_stats` canonical fields and compatibility aliases.
-- P3 file timeline issue events.
-
-Keep as active gaps:
-
-- Strict unknown MCP parameter rejection. **Resolved 2026-05-14:** dispatcher-level registry-derived validation now rejects unknown keys before handler dispatch.
-- Schema-mismatch binary diagnostics. **Resolved 2026-05-14:** `get_mcp_status` includes runtime executable/source diagnostics in every status branch.
-- Observation duplicate/link/merge dispositions. **Resolved 2026-05-14:** `observation_links`, `link_observation`, `batch_link_observations`, and `promote_observations_to_issue` landed with CLI/MCP/docs/tests.
-- ADR-007 `report_finding` default side effect change. **Resolved 2026-05-14:** paired observation creation is explicit opt-in and default responses remain slim.
-- Mixed scratch cleanup documentation/orchestration. **Resolved 2026-05-14:** CLI and MCP docs now provide a single end-of-session cleanup recipe covering claims, observations, findings, file records, scratch issue archive, and compaction.
-- ADR-008 actor-as-default claim-aware writes. **Resolved 2026-05-14:** held issue writes default expected holder to actor/author and return `CONFLICT` on mismatch.
-- CLI parity for `get_changes` filters. **Resolved 2026-05-14:** CLI `changes`/`get-changes` now support actor, issue, label, type, cursor, and heartbeat controls.
-- Registry-generated MCP schema/docs. **Resolved 2026-05-14:** `accepted_by_tools` is derived from live tool schemas and docs count drift is pinned by test.
-- ID and relationship naming consistency. **Resolved 2026-05-14:** public docs now define canonical `parent_issue_id`/dependency naming and CLI accepts `--parent-issue-id` aliases.
-- Workflow-template semantics. **Resolved 2026-05-14:** `docs/workflows.md` now defines the runtime contract for initial states, categories, transition validation, warnings, close/reopen, and claim handoff.
-- Close/dismiss/reason semantics. **Resolved 2026-05-14:** CLI/MCP finding dismissal status/reason handling is aligned and documented with terminal/expiry semantics.
-- Remaining response-envelope normalization. **Resolved 2026-05-14:** transitions use `ListResponse`, plan reads use slim defaults plus full detail controls.
-- Plan read slim/full mode and move/dependency warnings. **Resolved 2026-05-14:** `get_plan` supports slim/full detail and `move_plan_step` warns when dependencies carry forward.
-- Blocker hydration for `get_blocked`. **Resolved 2026-05-14:** MCP and CLI blocked-work queries now support opt-in `blockers[]` context.
-- Requirement pack/doc mismatch. **Resolved 2026-05-14:** live MCP/CLI type descriptions now mark `requirement` as requirements-pack scoped.
-- File/finding actor attribution beyond observation/issue promotion. **Resolved 2026-05-14:** schema v14 adds file/finding actor fields and file timeline events expose actor attribution.
-- Annotation carry-forward source-link validation. **Resolved 2026-05-14:** carry-forward now requires a `must_consider` link to `from_target_id`.
-- Archive session/actor filter or explicit session-label doctrine. **Resolved 2026-05-14:** the cleanup recipe requires session-unique labels before archive and documents the label-scoped archive boundary.
-- `add_comment` structured comment echo if the response becomes slim. **Resolved 2026-05-14:** MCP and CLI JSON add-comment responses now include a structured `comment` echo.
+- Strict MCP unknown-parameter rejection.
+- Schema-mismatch binary diagnostics.
+- Structured observation triage links and promote-many behavior.
+- ADR-007 `report_finding` explicit observation opt-in.
+- End-of-session cleanup documentation.
+- ADR-008 claim-aware write defaults.
+- CLI/MCP `get_changes` parity.
+- Registry-derived MCP schema metadata and docs count tests.
+- Public ID and relationship naming consistency.
+- Workflow-template semantics documentation.
+- Close, dismiss, and reason semantics.
+- Response-envelope normalization.
+- Plan read slim/full mode and move/dependency warnings.
+- Blocker hydration for `get_blocked`.
+- Requirements-pack wording.
+- File/finding actor attribution.
+- Annotation carry-forward source-link validation.
+- Session-label archive doctrine.
+- Structured `add_comment` echo.
 - Near-expiry claim discovery.
+
+No master-checklist implementation gap remains. The ADR-011 session/run
+checkpoint model is deliberately deferred beyond 2.0 and should be handled as a
+future feature, not as a checklist closure blocker.
