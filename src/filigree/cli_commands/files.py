@@ -16,7 +16,7 @@ from typing import Any, cast
 
 import click
 
-from filigree.cli_common import get_db
+from filigree.cli_common import get_db, refresh_summary
 from filigree.core import VALID_ASSOC_TYPES, VALID_FINDING_STATUSES, VALID_SEVERITIES, find_filigree_anchor
 from filigree.issue_payloads import issue_to_public
 from filigree.mcp_tools.payloads import (
@@ -622,6 +622,7 @@ def update_finding_cmd(
             click.echo(json_mod.dumps(finding_to_mcp(updated), indent=2, default=str))
         else:
             click.echo(f"Updated finding {finding_id}: status={updated.get('status', '')}")
+        refresh_summary(db)
 
 
 @click.command("promote-finding")
@@ -684,6 +685,7 @@ def promote_finding_cmd(
         else:
             issue = promoted["issue"]
             click.echo(f"Promoted finding {finding_id} → issue {issue.id}: {issue.title}")
+        refresh_summary(db)
 
 
 @click.command("dismiss-finding")
@@ -718,6 +720,7 @@ def dismiss_finding_cmd(finding_id: str, reason: str | None, as_json: bool) -> N
             click.echo(json_mod.dumps(finding_to_mcp(updated), indent=2, default=str))
         else:
             click.echo(f"Dismissed finding {finding_id}")
+        refresh_summary(db)
 
 
 @click.command("batch-update-findings")
@@ -804,6 +807,9 @@ def batch_update_findings_cmd(
             for f_item in errors:
                 click.echo(f"  Error {f_item['id']}: {f_item['error']}", err=True)
             click.echo(f"Updated {len(updated_ids)}/{len(raw_ids)} findings")
+
+        if updated_ids:
+            refresh_summary(db)
 
         if errors:
             sys.exit(1)

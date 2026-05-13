@@ -792,6 +792,28 @@ class TestUpdateFindingCommand:
         finally:
             os.chdir(original)
 
+    def test_update_finding_refreshes_context_md(
+        self,
+        initialized_project_with_finding: SeededProject,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        runner = CliRunner()
+        original = os.getcwd()
+        os.chdir(str(initialized_project_with_finding.path))
+        try:
+            calls: list[tuple[object, object]] = []
+
+            def spy(db: object, path: object) -> None:
+                calls.append((db, path))
+
+            monkeypatch.setattr("filigree.cli_common.write_summary", spy)
+            finding_id = initialized_project_with_finding.finding_id
+            result = runner.invoke(cli, ["update-finding", finding_id, "--status", "fixed", "--json"])
+            assert result.exit_code == 0, result.output
+            assert calls, "update-finding must refresh context.md after a successful mutation"
+        finally:
+            os.chdir(original)
+
 
 # ---------------------------------------------------------------------------
 # TestPromoteFindingCommand
@@ -851,6 +873,28 @@ class TestPromoteFindingCommand:
         finally:
             os.chdir(original)
 
+    def test_promote_finding_refreshes_context_md(
+        self,
+        initialized_project_with_finding: SeededProject,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        runner = CliRunner()
+        original = os.getcwd()
+        os.chdir(str(initialized_project_with_finding.path))
+        try:
+            calls: list[tuple[object, object]] = []
+
+            def spy(db: object, path: object) -> None:
+                calls.append((db, path))
+
+            monkeypatch.setattr("filigree.cli_common.write_summary", spy)
+            finding_id = initialized_project_with_finding.finding_id
+            result = runner.invoke(cli, ["promote-finding", finding_id, "--json"])
+            assert result.exit_code == 0, result.output
+            assert calls, "promote-finding must refresh context.md after creating an issue"
+        finally:
+            os.chdir(original)
+
 
 # ---------------------------------------------------------------------------
 # TestDismissFindingCommand
@@ -903,6 +947,28 @@ class TestDismissFindingCommand:
             result = runner.invoke(cli, ["dismiss-finding", finding_id])
             assert result.exit_code == 0
             assert "Dismissed" in result.output
+        finally:
+            os.chdir(original)
+
+    def test_dismiss_finding_refreshes_context_md(
+        self,
+        initialized_project_with_finding: SeededProject,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        runner = CliRunner()
+        original = os.getcwd()
+        os.chdir(str(initialized_project_with_finding.path))
+        try:
+            calls: list[tuple[object, object]] = []
+
+            def spy(db: object, path: object) -> None:
+                calls.append((db, path))
+
+            monkeypatch.setattr("filigree.cli_common.write_summary", spy)
+            finding_id = initialized_project_with_finding.finding_id
+            result = runner.invoke(cli, ["dismiss-finding", finding_id, "--json"])
+            assert result.exit_code == 0, result.output
+            assert calls, "dismiss-finding must refresh context.md after a successful mutation"
         finally:
             os.chdir(original)
 
@@ -978,6 +1044,28 @@ class TestBatchUpdateFindingsCommand:
             result = runner.invoke(cli, ["batch-update-findings", finding_id, "--status", "fixed"])
             assert result.exit_code == 0
             assert "Updated" in result.output
+        finally:
+            os.chdir(original)
+
+    def test_batch_update_refreshes_context_md_after_success(
+        self,
+        initialized_project_with_many_findings: SeededProject,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        runner = CliRunner()
+        original = os.getcwd()
+        os.chdir(str(initialized_project_with_many_findings.path))
+        try:
+            calls: list[tuple[object, object]] = []
+
+            def spy(db: object, path: object) -> None:
+                calls.append((db, path))
+
+            monkeypatch.setattr("filigree.cli_common.write_summary", spy)
+            ids = initialized_project_with_many_findings.finding_ids
+            result = runner.invoke(cli, ["batch-update-findings", *ids, "--status", "fixed", "--json"])
+            assert result.exit_code == 0, result.output
+            assert calls, "batch-update-findings must refresh context.md after successful updates"
         finally:
             os.chdir(original)
 
