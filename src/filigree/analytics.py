@@ -43,7 +43,19 @@ def cycle_time(db: FiligreeDB, issue_id: str) -> float | None:
     issue_type = issue.type
 
     rows = db.conn.execute(
-        "SELECT id, event_type, new_value, created_at FROM events WHERE issue_id = ? AND event_type = 'status_changed'",
+        """
+        SELECT e.id, e.event_type, e.new_value, e.created_at
+        FROM events e
+        WHERE e.issue_id = ?
+          AND e.event_type = 'status_changed'
+          AND NOT EXISTS (
+            SELECT 1
+            FROM events u
+            WHERE u.issue_id = e.issue_id
+              AND u.event_type = 'undone'
+              AND u.new_value = CAST(e.id AS TEXT)
+          )
+        """,
         (issue_id,),
     ).fetchall()
     return _cycle_time_from_events(
@@ -104,10 +116,17 @@ def _fetch_status_events_by_issue(db: FiligreeDB, issue_ids: list[str]) -> dict[
         placeholders = ",".join("?" for _ in chunk)
         rows = db.conn.execute(
             (
-                "SELECT id, issue_id, new_value, created_at "
-                "FROM events "
-                "WHERE event_type = 'status_changed' "
-                f"AND issue_id IN ({placeholders})"
+                "SELECT e.id, e.issue_id, e.new_value, e.created_at "
+                "FROM events e "
+                "WHERE e.event_type = 'status_changed' "
+                f"AND e.issue_id IN ({placeholders}) "
+                "AND NOT EXISTS ("
+                "  SELECT 1 "
+                "  FROM events u "
+                "  WHERE u.issue_id = e.issue_id "
+                "    AND u.event_type = 'undone' "
+                "    AND u.new_value = CAST(e.id AS TEXT)"
+                ")"
             ),
             tuple(chunk),
         ).fetchall()

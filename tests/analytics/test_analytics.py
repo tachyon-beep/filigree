@@ -164,6 +164,40 @@ class TestCycleTime:
         # 2 days = 48 hours
         assert abs(ct - 48.0) < 0.1
 
+    def test_cycle_time_ignores_undone_done_event(self, db: FiligreeDB) -> None:
+        issue = db.create_issue("Undone close cycle time")
+        db.conn.execute(
+            "DELETE FROM events WHERE issue_id = ? AND event_type = 'status_changed'",
+            (issue.id,),
+        )
+        db.conn.execute(
+            "INSERT INTO events (issue_id, event_type, old_value, new_value, created_at) "
+            "VALUES (?, 'status_changed', 'open', 'in_progress', '2026-01-01T00:00:00+00:00')",
+            (issue.id,),
+        )
+        done_event = db.conn.execute(
+            "INSERT INTO events (issue_id, event_type, old_value, new_value, created_at) "
+            "VALUES (?, 'status_changed', 'in_progress', 'closed', '2026-01-02T00:00:00+00:00') "
+            "RETURNING id",
+            (issue.id,),
+        ).fetchone()
+        assert done_event is not None
+        db.conn.execute(
+            "INSERT INTO events (issue_id, event_type, old_value, new_value, created_at) "
+            "VALUES (?, 'undone', 'status_changed', ?, '2026-01-02T00:05:00+00:00')",
+            (issue.id, str(done_event["id"])),
+        )
+        db.conn.execute(
+            "INSERT INTO events (issue_id, event_type, old_value, new_value, created_at) "
+            "VALUES (?, 'status_changed', 'in_progress', 'closed', '2026-01-03T00:00:00+00:00')",
+            (issue.id,),
+        )
+        db.conn.commit()
+
+        ct = cycle_time(db, issue.id)
+
+        assert ct == 48.0
+
     def test_cycle_time_uses_type_specific_status_categories(self, db: FiligreeDB) -> None:
         """cycle_time must classify status by issue type, not global state-name sets."""
         issue = db.create_issue("Type-aware CT", type="bug")
@@ -514,6 +548,45 @@ class TestFlowMetrics:
         assert task_metrics is not None
         assert task_metrics["count"] == 1
         assert task_metrics["avg_cycle_time_hours"] is None
+
+    def test_flow_metrics_ignores_undone_done_event(self, db: FiligreeDB) -> None:
+        issue = db.create_issue("Undone close flow metrics")
+        db.close_issue(issue.id)
+        db.conn.execute(
+            "DELETE FROM events WHERE issue_id = ? AND event_type = 'status_changed'",
+            (issue.id,),
+        )
+        db.conn.execute(
+            "INSERT INTO events (issue_id, event_type, old_value, new_value, created_at) "
+            "VALUES (?, 'status_changed', 'open', 'in_progress', '2026-01-01T00:00:00+00:00')",
+            (issue.id,),
+        )
+        done_event = db.conn.execute(
+            "INSERT INTO events (issue_id, event_type, old_value, new_value, created_at) "
+            "VALUES (?, 'status_changed', 'in_progress', 'closed', '2026-01-02T00:00:00+00:00') "
+            "RETURNING id",
+            (issue.id,),
+        ).fetchone()
+        assert done_event is not None
+        db.conn.execute(
+            "INSERT INTO events (issue_id, event_type, old_value, new_value, created_at) "
+            "VALUES (?, 'undone', 'status_changed', ?, '2026-01-02T00:05:00+00:00')",
+            (issue.id, str(done_event["id"])),
+        )
+        db.conn.execute(
+            "INSERT INTO events (issue_id, event_type, old_value, new_value, created_at) "
+            "VALUES (?, 'status_changed', 'in_progress', 'closed', '2026-01-03T00:00:00+00:00')",
+            (issue.id,),
+        )
+        db.conn.execute(
+            "UPDATE issues SET closed_at = ? WHERE id = ?",
+            (datetime.now(UTC).isoformat(), issue.id),
+        )
+        db.conn.commit()
+
+        data = get_flow_metrics(db, days=30)
+
+        assert data["avg_cycle_time_hours"] == 48.0
 
 
 # ---------------------------------------------------------------------------
