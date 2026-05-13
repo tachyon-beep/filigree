@@ -627,9 +627,7 @@ class TestClaimCli:
         data = json.loads(result.output)
         assert [item["issue_id"] for item in data["items"]] == [issue_id]
 
-    def test_stale_claims_json_can_include_near_expiry_leases(
-        self, cli_in_project: tuple[CliRunner, Path]
-    ) -> None:
+    def test_stale_claims_json_can_include_near_expiry_leases(self, cli_in_project: tuple[CliRunner, Path]) -> None:
         runner, _ = cli_in_project
         soon_id = _extract_id(runner.invoke(cli, ["create", "Expires soon CLI", "-p", "0"]).output)
         later_id = _extract_id(runner.invoke(cli, ["create", "Expires later CLI", "-p", "0"]).output)

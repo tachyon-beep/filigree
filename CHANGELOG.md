@@ -9,6 +9,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Senior-user MCP review closure package.** The review corpus is now
+  reconciled into a closed master checklist with implementation evidence,
+  ADRs, and docs for the locked 2.0 outcomes. New ADRs record that Filigree's
+  persisted records are durable for utility but not an audit-proof product;
+  schema mismatches fail closed; workflow enforcement stays soft where
+  templates define it; unknown MCP parameters are rejected; `report_finding`
+  observation creation is explicit; claim-aware writes default to the actor;
+  response shapes prefer slim defaults plus explicit detail controls; archived
+  issues are done-category history; and first-class agent session/run
+  checkpoints are deferred beyond 2.0.
+
+- **Shared file annotations.** Files can now carry durable annotations with
+  anchors, severity/intent, link relationships, supersession, promotion,
+  attention queries, and carry-forward workflow for critical `must_consider`
+  annotations. Core, MCP, and CLI surfaces are covered by regression tests,
+  and carry-forward now validates that the annotation is actively linked to
+  the source issue before acknowledging it.
+
+- **Structured observation triage.** Observations can be linked to existing
+  issues as evidence, duplicates, superseded notes, or related context via
+  `link_observation` / `batch_link_observations`; multiple observations can
+  be promoted into one issue while preserving source IDs. Observation listing
+  also gained richer filters for actor, source issue, priority, age, and
+  sorting so agents can clean up session residue without losing evidence.
+
+- **Agent-oriented discovery and cleanup tools.** `get_schema` derives
+  `accepted_by_tools` from the live MCP registry; `get_blocked` and
+  `get-blocked` can hydrate slim `blockers[]` context; `get_changes` /
+  `get-changes` share actor, issue, label, type, cursor, and heartbeat
+  controls; `get_stale_claims` can include near-expiry leases; `add_comment`
+  returns a structured comment echo; and the CLI/MCP docs now include one
+  mixed scratch cleanup recipe spanning claims, observations, findings, file
+  records, scratch archive, and event compaction.
+
 - **``get_summary`` accepts ``format='json'``** to return a structured
   envelope ``{markdown: <str>, stats: <get_stats output>}`` so callers
   doing programmatic orientation don't need a follow-up ``get_stats``
@@ -115,12 +149,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`report_finding` no longer creates observations by default.** MCP callers
+  must pass `create_observation=true`, and CLI callers must pass
+  `--create-observation`, to create a paired triage observation. Default
+  responses stay slim and single-finding oriented; full/paired observation
+  details are available only when explicitly requested.
+
+- **Claim-aware writes default the expected holder to the actor.** When a
+  held issue is updated, closed, commented, labelled, or batch-mutated with
+  an `actor`/author but no explicit `expected_assignee`, the current holder
+  must match that actor. Coordinator flows can still pass
+  `expected_assignee` to edit another actor's held issue deliberately.
+
+- **Workflow, archive, and relationship semantics are documented as runtime
+  contracts.** Public docs now define issue ID vocabulary (`issue_id`,
+  `parent_issue_id`, `from_issue_id`, `to_issue_id`), template status
+  categories, soft warnings, close/reopen behavior, close/dismiss reasons,
+  label-scoped archive doctrine, and optional requirements-pack issue types.
+
 - **``search_issues`` description now documents FTS tokenisation
   behaviour.** Hyphens split tokens and tokens shorter than 2 chars are
   elided, so ``mcp-review-d`` returns nothing while ``mcp review``
   matches ``[mcp-review-d] Scratch task A``. (filigree-cb980eee0d, P2.6)
 
 ### Changed (BREAKING)
+
+- **MCP tools reject unknown parameters before handler dispatch.** Extra keys
+  now return a `VALIDATION` error naming the unsupported parameter(s) instead
+  of being silently ignored. This makes misspelled or hallucinated tool
+  arguments fail early and keeps runtime behavior aligned with the published
+  schemas.
 
 - **``close_issue`` now validates state transitions like ``update_issue``.**
   The senior-user MCP review (run d, ``docs/plans/2026-05-06-mcp-senior-user-review-d.md``
@@ -184,6 +242,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   table in ``docs/cli.md`` is updated. (filigree-ca938979f4)
 
 ### Fixed
+
+- **Schema-mismatch diagnostics now identify the executing runtime.** Warm
+  degraded MCP status includes schema versions, project path, Python
+  executable, resolved executable, entrypoint, module file, package root, venv
+  root, and install context. Normal MCP tool calls continue to fail closed with
+  `SCHEMA_MISMATCH` while `get_mcp_status` remains available.
+
+- **Response envelopes and slim/full detail controls are normalized across
+  late MCP/CLI gaps.** `get_valid_transitions` now returns a list envelope,
+  plan reads default slim and accept full detail, batch response detail
+  behavior is pinned, and plan-move warnings surface carried dependencies so
+  callers can retarget blockers intentionally.
+
+- **File/finding actor attribution is durable.** Schema v14 records
+  `created_by` / `updated_by` on file records and scan findings and stores
+  actor identity on file associations and metadata timeline events. Register,
+  update, dismiss, promote, report, and batch finding paths preserve actor
+  identity through public records and file timelines.
+
+- **Senior-user review hardening closed late interface and boundary bugs.**
+  The post-review sweep tightened issue/observation CLI JSON shapes, loom
+  change cursor semantics, loom issue route contracts, scan-result cleanup,
+  scan log tail handling, dashboard config failures, project config parsing,
+  JSONL metadata import, release summary listing, semver parsing, workflow enum
+  validation, annotation anchor ranges, observation replacement atomicity, and
+  finding CLI context refresh.
 
 - **Loom ``ScanIngestResponseLoom`` is now a concrete TypedDict.** It
   previously subclassed ``BatchResponse[str]`` from ``filigree.types.api``,

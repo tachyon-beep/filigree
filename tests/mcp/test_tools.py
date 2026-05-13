@@ -1562,10 +1562,7 @@ class TestResource:
                     expected[entity].append(tool.name)
 
         data = _parse(await call_tool("get_schema", {}))
-        actual = {
-            entity: schema["accepted_by_tools"]
-            for entity, schema in data["entity_id_prefixes"].items()
-        }
+        actual = {entity: schema["accepted_by_tools"] for entity, schema in data["entity_id_prefixes"].items()}
 
         assert actual == {entity: sorted(set(tools)) for entity, tools in expected.items()}
 

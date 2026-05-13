@@ -73,9 +73,7 @@ _TIMELINE_FINDING_ENTRY_KEYS = _TIMELINE_ENTRY_BASE_KEYS | frozenset({"finding_i
 _TIMELINE_ASSOC_ENTRY_KEYS = _TIMELINE_ENTRY_BASE_KEYS | frozenset({"assoc_id"})
 _TIMELINE_ISSUE_EVENT_KEYS = _TIMELINE_ENTRY_BASE_KEYS | frozenset({"event_id", "issue_id"})
 
-_ISSUE_FILE_ASSOC_KEYS = frozenset(
-    {"assoc_id", "file_id", "issue_id", "assoc_type", "actor", "created_at", "file_path", "file_language"}
-)
+_ISSUE_FILE_ASSOC_KEYS = frozenset({"assoc_id", "file_id", "issue_id", "assoc_type", "actor", "created_at", "file_path", "file_language"})
 
 _SCAN_FINDING_KEYS = frozenset(
     {

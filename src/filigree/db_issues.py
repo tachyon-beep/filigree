@@ -2091,9 +2091,7 @@ class IssuesMixin(DBMixinProtocol):
                 params.extend(category_params)
             params.extend([limit, offset])
             rows = self.conn.execute(
-                "SELECT i.id, i.type, i.status FROM issues i "
-                f"WHERE {where} "
-                "ORDER BY priority, created_at LIMIT ? OFFSET ?",
+                f"SELECT i.id, i.type, i.status FROM issues i WHERE {where} ORDER BY priority, created_at LIMIT ? OFFSET ?",
                 params,
             ).fetchall()
         else:
@@ -2126,9 +2124,7 @@ class IssuesMixin(DBMixinProtocol):
                     params.extend(category_params)
                 params.extend([limit, offset])
                 rows = self.conn.execute(
-                    "SELECT i.id, i.type, i.status FROM issues i "
-                    f"WHERE {where} "
-                    "ORDER BY priority, created_at LIMIT ? OFFSET ?",
+                    f"SELECT i.id, i.type, i.status FROM issues i WHERE {where} ORDER BY priority, created_at LIMIT ? OFFSET ?",
                     params,
                 ).fetchall()
 

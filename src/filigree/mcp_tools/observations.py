@@ -214,8 +214,7 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
         Tool(
             name="link_observation",
             description=(
-                "Link one observation to an existing issue as durable triage evidence, "
-                "then remove it from the pending observation queue."
+                "Link one observation to an existing issue as durable triage evidence, then remove it from the pending observation queue."
             ),
             inputSchema={
                 "type": "object",
@@ -237,8 +236,7 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
         Tool(
             name="batch_link_observations",
             description=(
-                "Link multiple observations to one existing issue with the same "
-                "disposition. Returns BatchResponse[ObservationLink]."
+                "Link multiple observations to one existing issue with the same disposition. Returns BatchResponse[ObservationLink]."
             ),
             inputSchema={
                 "type": "object",

@@ -459,9 +459,7 @@ class TestFromConf:
         """The conf anchors the DB, while config.json remains the project pack source."""
         filigree_dir = tmp_path / FILIGREE_DIR_NAME
         filigree_dir.mkdir()
-        (filigree_dir / "config.json").write_text(
-            json.dumps({"prefix": "p", "version": 1, "enabled_packs": ["core"]})
-        )
+        (filigree_dir / "config.json").write_text(json.dumps({"prefix": "p", "version": 1, "enabled_packs": ["core"]}))
         conf = tmp_path / CONF_FILENAME
         write_conf(
             conf,
