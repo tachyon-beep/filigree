@@ -395,6 +395,7 @@ filigree --actor agent-1 heartbeat-work <id>    # Refresh claim liveness for cur
 filigree stale-claims                           # List abandoned or expired claims
 filigree reclaim <id> --assignee agent-2 --expected-assignee agent-1 --reason "missed heartbeat"
 filigree release <id> --reason "handoff"        # Release without changing status
+filigree --actor agent-1 release-my-claims --label cluster:review-2026-05-14 --dry-run
 filigree start-work <id> --assignee agent-1     # Claim + transition to wip in one call
 filigree start-next-work --assignee agent-1     # Claim + transition highest-priority ready
 ```
@@ -432,6 +433,21 @@ expected assignee is provided.
 | `--if-held` | flag | Idempotent release-if-held mode |
 | `--expected-assignee` | string | Expected current assignee for `--if-held` coordinator flows |
 | `--reason` | string | Audit reason recorded on the release event |
+
+### `release-my-claims`
+
+Bulk-release every live claim held by the global `--actor`. Done-category
+issues are skipped because their assignee is audit history, not a live claim.
+Use `--dry-run` first, and scope with a session-unique label when cleaning up
+scratch or review work.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `--label` | string | Restrict to issues carrying this exact label |
+| `--label-prefix` | string | Restrict to issues with a label starting with this prefix |
+| `--dry-run` | flag | List issues that would be released without changing them |
+| `--no-revert-status` | flag | Do not revert wip-category issues back to an open predecessor |
+| `--reason` | string | Audit reason recorded on each release event |
 
 ### `heartbeat-work`
 
@@ -1096,6 +1112,31 @@ filigree dashboard --port=8377              # Launch web UI
 filigree dashboard --no-browser            # Launch without opening browser
 filigree dashboard --server-mode            # Launch in multi-project daemon mode
 ```
+
+### End-of-session cleanup
+
+Use one session-unique label, such as `cluster:<session-id>`, on scratch issues
+and temporary review work. Generic labels like `scratch` are useful for search,
+but they are too broad for final cleanup by themselves.
+
+1. Finish, hand off, or comment on active task-scope work first. Defects found
+   inside the current task should become tracked issues or be fixed before the
+   task closes, not hidden in expiring observations.
+2. Preview live claim cleanup:
+   `filigree --actor <agent> release-my-claims --label <session-label> --dry-run`.
+   If the preview is correct, repeat without `--dry-run` and include `--reason`.
+3. Triage observations with `list-observations --actor <agent>`, then choose
+   `promote-observations-to-issue`, `batch-link-observations`, or
+   `batch-dismiss-observations` so each pending note is tracked, attached as
+   evidence, or intentionally dropped.
+4. Triage scan scratch with `list-findings`, `promote-finding`,
+   `dismiss-finding`, `batch-update-findings`, or `clean-stale-findings`.
+5. Remove temporary file records with `delete-file-record`. Run it without
+   `--force` first; only force after associations and open findings are handled.
+6. Archive closed scratch with
+   `filigree archive --days=0 --label <session-label> --json`. Confirm the
+   label is session-unique before archiving, because archive scopes by label,
+   not by actor.
 
 ### `export`
 

@@ -105,8 +105,9 @@ product match those decisions.
   `--create-observation` in CLI, actor attribution is preserved for opted-in
   observations, and the default response remains slim.
 
-- [ ] **Define the end-of-session cleanup story for mixed-type scratch work.**
+- [x] **Define the end-of-session cleanup story for mixed-type scratch work.**
   Source: E3, F2/F6, H1, H4.
+  Tracker: `filigree-958da5d6b5` is closed.
   Decision: [ADR-005](../architecture/decisions/ADR-005-workflow-enforcement-and-cleanup-paths.md)
   splits normal workflow-respecting close paths from explicit cleanup/archive
   paths.
@@ -119,6 +120,12 @@ product match those decisions.
   document cleanup/archive primitives with clear scope, previews or metadata for
   broad changes, and actor/session/label filters so agents do not sweep each
   other's artifacts.
+  Resolution: `docs/mcp.md` and `docs/cli.md` now include one ordered
+  end-of-session cleanup recipe covering live claim release, observation
+  promotion/link/dismissal, finding triage, temporary file-record deletion,
+  scratch issue archive, and compaction. The recipe requires a session-unique
+  label, dry-run previews for claim release, default refusal before forced file
+  deletion, and label-scope confirmation before archive.
 
 - [ ] **Finish stale-claim and handoff discovery.**
   Source: A1/A4, B2/B12, D3, E4, G3, H4/H15.

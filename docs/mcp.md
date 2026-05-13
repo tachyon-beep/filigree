@@ -297,6 +297,7 @@ Step deps within a phase use integer indices. Cross-phase deps use `"phase_idx.s
 | `claim_issue` | Claim only, with optimistic locking |
 | `claim_next` | Claim highest-priority ready issue only |
 | `release_claim` | Release a claim, optionally idempotently with `if_held` |
+| `release_my_claims` | Bulk-release every live claim held by one actor |
 | `heartbeat_work` | Refresh claim liveness for active work |
 | `get_stale_claims` | List assigned work with expired leases or old legacy assignments |
 | `reclaim_issue` | Transfer a stale claim when the expected holder still owns it |
@@ -348,6 +349,18 @@ Step deps within a phase use integer indices. Cross-phase deps use `"phase_idx.s
 | `if_held` | boolean | no | Idempotent release-if-held mode; unassigned issues are returned unchanged |
 | `expected_assignee` | string | no | Only release when the current assignee matches this value; defaults to `actor` in `if_held` mode |
 | `reason` | string | no | Audit reason recorded on the release event |
+
+#### `release_my_claims`
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `actor` | string | yes | Agent identity whose live claims should be released |
+| `label` | string | no | Restrict to issues carrying this exact label |
+| `label_prefix` | string | no | Restrict to issues with a label starting with this prefix |
+| `dry_run` | boolean | no | Return the issues that would be released without changing them |
+| `revert_status` | boolean | no | Revert wip-category issues to an open predecessor (default true) |
+| `reason` | string | no | Audit reason recorded on each release event |
+| `response_detail` | enum | no | `slim` or `full` |
 
 #### `heartbeat_work`
 
@@ -549,6 +562,31 @@ No parameters. Returns connector health fields including `status`, `db_initializ
 | `import_jsonl` | Import from JSONL |
 | `archive_closed` | Archive old closed issues |
 | `compact_events` | Compact event history |
+
+#### End-of-session cleanup
+
+Use one session-unique label, such as `cluster:<session-id>`, on scratch issues
+and temporary review work so cleanup can be scoped without sweeping another
+agent's artifacts.
+
+1. Finish, hand off, or comment on the active issue before cleanup; task-scope
+   defects should become tracked work, not expiring observations.
+2. Preview and release live claims with `release_my_claims(actor=..., label=...,
+   dry_run=true)`, then repeat with `dry_run=false` and a `reason` once the
+   preview is right. Use `label_prefix` only when the prefix is unique enough
+   for the session.
+3. List pending notes with `list_observations(actor=...)`, then use
+   `promote_observations_to_issue`, `batch_link_observations`, or
+   `batch_dismiss_observations` so observations are either tracked, attached as
+   evidence, or intentionally dropped.
+4. Review scan scratch with `list_findings`; use `promote_finding`,
+   `dismiss_finding`, or `batch_update_findings` before deleting file records.
+5. Remove synthetic file records with `delete_file_record`. Prefer the default
+   refusal mode first; use `force=true` only after associated issues/findings
+   are handled.
+6. Archive closed scratch with `archive_closed(days_old=0, label=...)` after the
+   label scope is confirmed. `compact_events` is a separate storage-maintenance
+   step for already archived issues.
 
 #### `export_jsonl`
 
