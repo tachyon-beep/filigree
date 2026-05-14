@@ -1627,6 +1627,26 @@ class TestResource:
         blocked = _parse(await call_tool("create_issue", {"title": "should be blocked"}))
         assert blocked["code"] == ErrorCode.SCHEMA_MISMATCH
 
+    async def test_runtime_schema_drift_uses_request_scoped_db(self, mcp_db: FiligreeDB, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Server-mode HTTP has no module-global DB; the runtime drift gate
+        must inspect the same request-scoped DB that handlers will use.
+        """
+        import filigree.mcp_server as mcp_mod
+
+        installed = mcp_mod.CURRENT_SCHEMA_VERSION
+        monkeypatch.setattr(mcp_mod, "_schema_mismatch", None)
+        monkeypatch.setattr(mcp_mod, "db", None)
+        monkeypatch.setattr(mcp_db, "get_schema_version", lambda: installed + 1)
+
+        token = mcp_mod._request_db.set(mcp_db)
+        try:
+            blocked = _parse(await call_tool("list_issues", {}))
+        finally:
+            mcp_mod._request_db.reset(token)
+
+        assert blocked["code"] == ErrorCode.SCHEMA_MISMATCH
+        assert f"v{installed + 1}" in blocked["error"]
+
     async def test_list_resources(self, mcp_db: FiligreeDB) -> None:
         resources = await list_resources()
         assert len(resources) == 1
@@ -3259,7 +3279,6 @@ class TestScannerTools:
         finally:
             mcp_mod.db = original_db
             mcp_mod._filigree_dir = original_dir
-
             db_a.close()
             db_b.close()
 
@@ -3376,6 +3395,51 @@ class TestHttpMcpRequestContext:
             db_global.close()
             db_a.close()
             db_b.close()
+
+    async def test_create_mcp_app_resolver_schema_mismatch_returns_structured_envelope(self) -> None:
+        from filigree.types.api import SchemaVersionMismatchError
+
+        def _resolver() -> FiligreeDB:
+            raise SchemaVersionMismatchError(installed=8, database=9)
+
+        handler, _lifespan = create_mcp_app(db_resolver=_resolver)
+        messages: list[dict[str, Any]] = []
+
+        async def _receive() -> dict[str, Any]:
+            return {"type": "http.request", "body": b"", "more_body": False}
+
+        async def _send(message: dict[str, Any]) -> None:
+            messages.append(message)
+
+        await handler({"type": "http", "path": "/mcp"}, _receive, _send)  # type: ignore[arg-type]
+
+        start = next(m for m in messages if m["type"] == "http.response.start")
+        body = b"".join(m.get("body", b"") for m in messages if m["type"] == "http.response.body")
+        data = json.loads(body)
+        assert start["status"] == 409
+        assert data["code"] == ErrorCode.SCHEMA_MISMATCH
+        assert "upgrade" in data["error"].lower()
+
+    async def test_create_mcp_app_resolver_config_error_returns_structured_envelope(self) -> None:
+        def _resolver() -> FiligreeDB:
+            raise ValueError("bad project config")
+
+        handler, _lifespan = create_mcp_app(db_resolver=_resolver)
+        messages: list[dict[str, Any]] = []
+
+        async def _receive() -> dict[str, Any]:
+            return {"type": "http.request", "body": b"", "more_body": False}
+
+        async def _send(message: dict[str, Any]) -> None:
+            messages.append(message)
+
+        await handler({"type": "http", "path": "/mcp"}, _receive, _send)  # type: ignore[arg-type]
+
+        start = next(m for m in messages if m["type"] == "http.response.start")
+        body = b"".join(m.get("body", b"") for m in messages if m["type"] == "http.response.body")
+        data = json.loads(body)
+        assert start["status"] == 400
+        assert data == {"error": "bad project config", "code": ErrorCode.VALIDATION}
 
 
 # ---------------------------------------------------------------------------

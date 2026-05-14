@@ -110,10 +110,12 @@ class ProjectStore:
         self._dbs: dict[str, FiligreeDB] = {}
         # Handles evicted by reload() (removed/path-changed projects). They are
         # NOT closed at eviction time because a concurrent request handler may
-        # still be using one — closing under it would race with a SQLite call.
-        # close_all() (process shutdown) is the single drain point.
-        # (filigree-e43edbc067)
+        # still be using one. A short grace-period drain bounds long-lived
+        # server processes without closing under the request that just lost
+        # the cache race.
         self._evicted_dbs: list[FiligreeDB] = []
+        self._evicted_at: dict[FiligreeDB, float] = {}
+        self._evicted_close_grace_seconds = 60.0
         # Serialises ALL reads and writes of (_projects, _dbs, _evicted_dbs):
         # - get_db lazy-open and cache lookup (filigree-732f6b31e4: serialise
         #   first opens; filigree-e43edbc067: removed unlocked fast path so a
@@ -121,6 +123,32 @@ class ProjectStore:
         # - reload's atomic state swap (filigree-e43edbc067).
         # - close_all drain.
         self._lock = threading.Lock()
+
+    def _pop_drainable_evicted_locked(self, *, force: bool = False) -> list[FiligreeDB]:
+        now = time.monotonic()
+        drainable: list[FiligreeDB] = []
+        retained: list[FiligreeDB] = []
+        for db in self._evicted_dbs:
+            evicted_at = self._evicted_at.get(db, now)
+            if force or now - evicted_at >= self._evicted_close_grace_seconds:
+                drainable.append(db)
+                self._evicted_at.pop(db, None)
+            else:
+                retained.append(db)
+        self._evicted_dbs = retained
+        return drainable
+
+    def _close_evicted_handles(self, handles: list[FiligreeDB]) -> None:
+        for db in handles:
+            try:
+                db.close()
+            except Exception:
+                logger.warning("Error closing evicted project DB", exc_info=True)
+
+    def _drain_evicted_dbs(self) -> None:
+        with self._lock:
+            drainable = self._pop_drainable_evicted_locked()
+        self._close_evicted_handles(drainable)
 
     # -- public API --
 
@@ -185,6 +213,7 @@ class ProjectStore:
         ``_dbs[key]`` is still the handle for the old path.
         (filigree-e43edbc067)
         """
+        self._drain_evicted_dbs()
         with self._lock:
             if key not in self._projects:
                 raise KeyError(key)
@@ -227,6 +256,7 @@ class ProjectStore:
 
     def list_projects(self) -> list[dict[str, str]]:
         """Return ``[{key, name, path}]`` for the frontend."""
+        self._drain_evicted_dbs()
         with self._lock:
             return [{"key": k, **v} for k, v in self._projects.items()]
 
@@ -234,11 +264,9 @@ class ProjectStore:
         """Re-read server.json. On read failure, retains existing state.
 
         Atomic: builds the new project map locally, then under one lock
-        acquisition (a) swaps ``_projects`` and (b) evicts stale ``_dbs``
-        entries. Evicted handles are stashed on ``_evicted_dbs`` for
-        ``close_all`` to drain at shutdown — closing them synchronously here
-        would race with any in-flight request handler that already holds the
-        handle. (filigree-e43edbc067)
+        acquisition (a) drains older evicted handles, (b) swaps ``_projects``,
+        and (c) evicts stale ``_dbs`` entries. Newly evicted handles get a
+        short grace period before later runtime calls close them.
         """
         try:
             new_projects = self._compute_projects()
@@ -247,6 +275,7 @@ class ProjectStore:
             return {"added": [], "removed": [], "error": str(exc)}
 
         with self._lock:
+            drainable = self._pop_drainable_evicted_locked()
             old_projects = self._projects
             old_keys = set(old_projects)
             new_keys = set(new_projects)
@@ -257,6 +286,8 @@ class ProjectStore:
                 handle = self._dbs.pop(key, None)
                 if handle is not None:
                     self._evicted_dbs.append(handle)
+                    self._evicted_at[handle] = time.monotonic()
+        self._close_evicted_handles(drainable)
 
         return {
             "added": sorted(new_keys - old_keys),
@@ -268,14 +299,14 @@ class ProjectStore:
         """Close all open DB connections, including handles previously
         evicted by ``reload()``.
 
-        Single drain point for SQLite handles managed by the store. Called
-        on dashboard shutdown. (filigree-e43edbc067)
+        Shutdown drain for SQLite handles managed by the store. Runtime calls
+        also drain evicted handles after a grace period.
         """
         with self._lock:
             handles: list[tuple[str, FiligreeDB]] = list(self._dbs.items())
-            evicted = list(self._evicted_dbs)
+            evicted = self._pop_drainable_evicted_locked(force=True)
             self._dbs.clear()
-            self._evicted_dbs.clear()
+            self._evicted_at.clear()
         for key, db in handles:
             try:
                 db.close()
@@ -485,10 +516,10 @@ def create_app(*, server_mode: bool = False) -> ASGIApp:
                 # Log so it's discoverable rather than silently coerced to
                 # INTERNAL — clients branching on ``code`` deserve to know.
                 logger.warning(
-                    "HTTPException with unmapped status_code=%s; coercing code to INTERNAL",
+                    "HTTPException with unmapped status_code=%s; using generic client/server error code",
                     exc.status_code,
                 )
-                code = ErrorCode.INTERNAL
+                code = ErrorCode.VALIDATION if 400 <= exc.status_code < 500 else ErrorCode.INTERNAL
             body = {
                 "error": str(detail) if detail is not None else "Request failed",
                 "code": code,

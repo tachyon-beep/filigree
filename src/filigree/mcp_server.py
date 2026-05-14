@@ -542,9 +542,10 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
     # DB is strictly newer than the installed binary. ``get_mcp_status``
     # is exempted so the diagnostic stays available. Senior-user MCP
     # review run e P2.5.
-    if name != "get_mcp_status" and db is not None:
+    active_db_for_schema = _request_db.get() or db
+    if name != "get_mcp_status" and active_db_for_schema is not None:
         try:
-            db_version = db.get_schema_version()
+            db_version = active_db_for_schema.get_schema_version()
         except sqlite3.Error:
             db_version = None
         if db_version is not None and db_version > CURRENT_SCHEMA_VERSION:
@@ -657,6 +658,46 @@ def create_mcp_app(
                 )
                 await resp(scope, receive, send)
                 return
+            except SchemaVersionMismatchError as exc:
+                resp = JSONResponse(
+                    {
+                        "error": format_schema_mismatch_guidance(exc.installed, exc.database),
+                        "code": ErrorCode.SCHEMA_MISMATCH,
+                    },
+                    status_code=409,
+                )
+                await resp(scope, receive, send)
+                return
+            except ValueError as exc:
+                resp = JSONResponse(
+                    {
+                        "error": str(exc),
+                        "code": ErrorCode.VALIDATION,
+                    },
+                    status_code=400,
+                )
+                await resp(scope, receive, send)
+                return
+            except FileNotFoundError as exc:
+                resp = JSONResponse(
+                    {
+                        "error": str(exc),
+                        "code": ErrorCode.NOT_INITIALIZED,
+                    },
+                    status_code=503,
+                )
+                await resp(scope, receive, send)
+                return
+            except (OSError, sqlite3.Error) as exc:
+                resp = JSONResponse(
+                    {
+                        "error": str(exc),
+                        "code": ErrorCode.IO,
+                    },
+                    status_code=500,
+                )
+                await resp(scope, receive, send)
+                return
 
             if resolved is None:
                 resp = JSONResponse(
@@ -738,7 +779,7 @@ def _attempt_startup(filigree_dir: Path, conf_path: Path | None = None) -> None:
         db = None
         _schema_mismatch = exc
         _db_open_error = None
-    except (OSError, sqlite3.Error) as exc:
+    except (OSError, sqlite3.Error, ValueError) as exc:
         db = None
         _schema_mismatch = None
         _db_open_error = exc

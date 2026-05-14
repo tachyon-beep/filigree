@@ -11,6 +11,7 @@ if TYPE_CHECKING:
 
 from mcp.types import TextContent, Tool
 
+from filigree.core import WrongProjectError
 from filigree.issue_payloads import issue_to_public
 from filigree.mcp_tools.common import (
     _MAX_LIST_RESULTS,
@@ -66,6 +67,10 @@ logger = logging.getLogger(__name__)
 
 _UPDATE_TRACKED_FIELDS = ("status", "priority", "title", "assignee", "description", "notes", "parent_id", "fields")
 _LIST_ISSUES_SORT_FIELDS = {"created_at", "updated_at", "priority"}
+
+
+def _wrong_project_response(exc: WrongProjectError) -> list[TextContent]:
+    return _text(ErrorResponse(error=str(exc), code=ErrorCode.VALIDATION))
 
 
 def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
@@ -903,6 +908,8 @@ async def _handle_update_issue(arguments: dict[str, Any]) -> list[TextContent]:
         return _text(result)
     except KeyError:
         return _text(ErrorResponse(error=f"Issue not found: {args['issue_id']}", code=ErrorCode.NOT_FOUND))
+    except WrongProjectError as e:
+        return _wrong_project_response(e)
     except ValueError as e:
         msg = str(e)
         if classify_value_error(msg) == ErrorCode.INVALID_TRANSITION:
@@ -949,6 +956,8 @@ async def _handle_close_issue(arguments: dict[str, Any]) -> list[TextContent]:
         return _text(result)
     except KeyError:
         return _text(ErrorResponse(error=f"Issue not found: {args['issue_id']}", code=ErrorCode.NOT_FOUND))
+    except WrongProjectError as e:
+        return _wrong_project_response(e)
     except ValueError as e:
         msg = str(e)
         if "assigned to" in msg and "expected" in msg:
@@ -973,6 +982,8 @@ async def _handle_reopen_issue(arguments: dict[str, Any]) -> list[TextContent]:
         return _text(issue_to_public(issue))
     except KeyError:
         return _text(ErrorResponse(error=f"Issue not found: {args['issue_id']}", code=ErrorCode.NOT_FOUND))
+    except WrongProjectError as e:
+        return _wrong_project_response(e)
     except ValueError as e:
         return _text(ErrorResponse(error=str(e), code=ErrorCode.INVALID_TRANSITION))
 
@@ -1031,6 +1042,8 @@ async def _handle_claim_issue(arguments: dict[str, Any]) -> list[TextContent]:
         return _text(issue_to_public(issue))
     except KeyError:
         return _text(ErrorResponse(error=f"Issue not found: {args['issue_id']}", code=ErrorCode.NOT_FOUND))
+    except WrongProjectError as e:
+        return _wrong_project_response(e)
     except ValueError as e:
         msg = str(e)
         if classify_value_error(msg) == ErrorCode.INVALID_TRANSITION:
@@ -1071,6 +1084,8 @@ async def _handle_release_claim(arguments: dict[str, Any]) -> list[TextContent]:
         return _text(issue_to_public(issue))
     except KeyError:
         return _text(ErrorResponse(error=f"Issue not found: {args['issue_id']}", code=ErrorCode.NOT_FOUND))
+    except WrongProjectError as e:
+        return _wrong_project_response(e)
     except ValueError as e:
         return _text(ErrorResponse(error=str(e), code=ErrorCode.CONFLICT))
 
@@ -1183,6 +1198,8 @@ async def _handle_heartbeat_work(arguments: dict[str, Any]) -> list[TextContent]
         return _text(issue_to_public(issue))
     except KeyError:
         return _text(ErrorResponse(error=f"Issue not found: {args['issue_id']}", code=ErrorCode.NOT_FOUND))
+    except WrongProjectError as e:
+        return _wrong_project_response(e)
     except ValueError as e:
         return _text(ErrorResponse(error=str(e), code=ErrorCode.CONFLICT))
 
@@ -1244,6 +1261,8 @@ async def _handle_reclaim_issue(arguments: dict[str, Any]) -> list[TextContent]:
         return _text(issue_to_public(issue))
     except KeyError:
         return _text(ErrorResponse(error=f"Issue not found: {args['issue_id']}", code=ErrorCode.NOT_FOUND))
+    except WrongProjectError as e:
+        return _wrong_project_response(e)
     except ValueError as e:
         return _text(ErrorResponse(error=str(e), code=ErrorCode.CONFLICT))
 
@@ -1402,6 +1421,8 @@ async def _handle_start_work(arguments: dict[str, Any]) -> list[TextContent]:
         )
     except KeyError:
         return _text(ErrorResponse(error=f"Issue not found: {args['issue_id']}", code=ErrorCode.NOT_FOUND))
+    except WrongProjectError as e:
+        return _wrong_project_response(e)
     except (AmbiguousTransitionError, InvalidTransitionError) as e:
         return _text(ErrorResponse(error=str(e), code=ErrorCode.INVALID_TRANSITION))
     except ValueError as e:

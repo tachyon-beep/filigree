@@ -110,6 +110,27 @@ class TestProjectStore:
         assert bravo_db._conn is None
         assert project_store._evicted_dbs == []
 
+    def test_evicted_project_db_handles_drain_during_runtime(self, project_store: ProjectStore, tmp_path: Path) -> None:
+        """Evicted DB handles should not be retained until process shutdown."""
+        import json
+
+        project_store._evicted_close_grace_seconds = 0
+        bravo_db = project_store.get_db("bravo")
+
+        config_dir = tmp_path / ".config" / "filigree"
+        existing = json.loads((config_dir / "server.json").read_text())
+        for key in [k for k, v in existing["projects"].items() if v["prefix"] == "bravo"]:
+            del existing["projects"][key]
+        (config_dir / "server.json").write_text(json.dumps(existing))
+
+        project_store.reload()
+        assert bravo_db in project_store._evicted_dbs
+
+        project_store.list_projects()
+
+        assert bravo_db._conn is None
+        assert bravo_db not in project_store._evicted_dbs
+
     def test_close_all_logs_db_close_error_at_warning(self, project_store: ProjectStore, tmp_path: Path) -> None:
         """Bug filigree-191611: close failures must log at WARNING (not DEBUG).
 
@@ -504,6 +525,17 @@ class TestMultiProjectRouting:
                     assert "No projects registered" in body.get("error", ""), f"{endpoint} missing 'error' text: {body!r}"
         finally:
             dash_module._project_store = None
+
+    async def test_unmapped_framework_4xx_uses_client_error_code(self, multi_client: AsyncClient) -> None:
+        """Framework-raised 4xx responses such as 405 must not be labelled
+        INTERNAL in the 2.0 envelope.
+        """
+        resp = await multi_client.post("/api/health")
+
+        assert resp.status_code == 405
+        body = resp.json()
+        assert body["code"] == ErrorCode.VALIDATION
+        assert body["code"] != ErrorCode.INTERNAL
 
 
 class TestMultiProjectManagement:

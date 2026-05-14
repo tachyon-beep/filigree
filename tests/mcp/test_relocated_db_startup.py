@@ -102,6 +102,33 @@ class TestStdioStartupHonoursConf:
             if mcp_mod.db is not None:
                 mcp_mod.db.close()
 
+    def test_attempt_startup_records_invalid_conf_as_open_error(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Malformed/unsafe .filigree.conf should use the clean startup-open
+        failure path instead of escaping as a raw ValueError traceback.
+        """
+        import filigree.mcp_server as mcp_mod
+
+        project_root = tmp_path / "bad-conf"
+        filigree_dir = project_root / FILIGREE_DIR_NAME
+        filigree_dir.mkdir(parents=True)
+        write_config(filigree_dir, {"prefix": "bad", "version": 1})
+        write_conf(
+            project_root / CONF_FILENAME,
+            {"version": 1, "project_name": "bad", "prefix": "bad", "db": "../outside.db"},
+        )
+
+        monkeypatch.setattr(mcp_mod, "db", None)
+        monkeypatch.setattr(mcp_mod, "_filigree_dir", None)
+        monkeypatch.setattr(mcp_mod, "_schema_mismatch", None)
+        monkeypatch.setattr(mcp_mod, "_db_open_error", None)
+
+        mcp_mod._attempt_startup(filigree_dir, conf_path=project_root / CONF_FILENAME)
+
+        assert mcp_mod.db is None
+        assert mcp_mod._schema_mismatch is None
+        assert isinstance(mcp_mod._db_open_error, ValueError)
+        assert "must resolve under the project root" in str(mcp_mod._db_open_error)
+
 
 class TestRequestFiligreeDirSandbox:
     """Bug filigree-8311f59c0f: HTTP request dir must equal project_root/.filigree."""
