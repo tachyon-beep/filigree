@@ -15,17 +15,20 @@ Filigree is a lightweight, SQLite-backed issue tracker designed for AI coding ag
 
 Traditional issue trackers are human-first — agents scrape CLI output or parse API responses. Filigree flips this: agents get a pre-computed `context.md` at session start, claim work with optimistic locking, and resume sessions via event streams without re-reading history. For Claude Code, `filigree install` wires up session hooks and a workflow skill pack so agents get project context automatically.
 
-Filigree is local-first. No cloud, no accounts. Each project gets a `.filigree/` directory (like `.git/`) containing a SQLite database, configuration, and auto-generated context summary. Installations support two modes: `ethereal` (default, per-project) and `server` (persistent multi-project daemon).
+Filigree is local-first. No cloud, no accounts. Each project gets a `.filigree/` directory (like `.git/`) containing a SQLite database, configuration, and auto-generated context summary. Installations support two modes: `ethereal` (default, per-project) and `server` (persistent multi-project daemon). Filigree 2.0 also adds a named Loom HTTP generation at `/api/loom/*` for federation-aware integrations while keeping the classic HTTP surface supported for existing callers.
 
 ### Key Features
 
 - **MCP server** with 109 tools — agents interact natively without parsing text
 - **Full CLI** with `--json` output for background subagents and `--actor` for audit trails
+- **Loom HTTP generation** — stable `/api/loom/*` contracts with classic compatibility for existing integrations
 - **Claude Code integration** — session hooks inject project snapshots at startup; bundled skill pack teaches agents workflow patterns
 - **Workflow templates** — 24 issue types across 9 packs with enforced state machines
 - **Dependency graph** — blockers, ready-queue, critical path analysis
 - **Hierarchical planning** — milestone/phase/step hierarchies with automatic unblocking
 - **Atomic claiming** — optimistic locking prevents double-work in multi-agent scenarios
+- **Agent handoff tools** — claim leases, stale-claim discovery, observation triage, shared file annotations, and scanner/finding workflows
+- **Bundled scanners** — opt-in Codex and Claude scanner registrations with prompt packs for security, architecture, language, and quality reviews
 - **Pre-computed context** — `context.md` regenerated on every mutation for instant agent orientation
 - **Web dashboard** — real-time project overview with Kanban drag-and-drop, Graph v2 dependency exploration, Files/Health views, and optional multi-project server mode
 - **Minimal dependencies** — just Python + SQLite + click (no framework overhead)
@@ -121,6 +124,7 @@ The dashboard runs on localhost. If stakeholders need to read or file issues fro
 | [Getting Started](docs/getting-started.md) | 5-minute tutorial: install, init, first issue |
 | [CLI Reference](docs/cli.md) | All CLI commands with full parameter docs |
 | [MCP Server Reference](docs/mcp.md) | 109 MCP tools for agent-native interaction |
+| [Federation Contracts](docs/federation/contracts.md) | Classic and Loom HTTP generation contracts |
 | [Workflow Templates](docs/workflows.md) | State machines, packs, field schemas, enforcement |
 | [Agent Integration](docs/agent-integration.md) | Multi-agent patterns, claiming, session resumption |
 | [Python API Reference](docs/api-reference.md) | FiligreeDB, Issue, TemplateRegistry for programmatic use |
