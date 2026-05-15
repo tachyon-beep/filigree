@@ -19,9 +19,11 @@ filigree start-work <id> --assignee <name>
 filigree close <id>
 ```
 
-Use `start_work` / `start-next-work`. Do **not** chain `claim_issue` with
-`update --status=in_progress` — the two-step form races against other agents;
-the combined verb is atomic.
+Use the atomic claim+transition verbs — `start_work` / `start_next_work`
+(MCP) or `start-work` / `start-next-work` (CLI). Do **not** chain
+`claim_issue` (MCP) or `filigree claim` (CLI) with a subsequent status
+update — the two-step form races against other agents; the combined verb is
+atomic.
 
 ### Observations: when (and when not) to use them
 
