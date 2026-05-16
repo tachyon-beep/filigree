@@ -1051,6 +1051,34 @@ class TestBatchAPI:
         data = resp.json()
         assert len(data["closed"]) == 1
 
+    async def test_batch_close_force_bypasses_transition_check(self, client: AsyncClient, dashboard_db: PopulatedDB) -> None:
+        """HTTP batch-close accepts force=true to bypass the transition
+        validator — matches CLI ``--force`` and MCP ``force``. Without it,
+        a phase in 'pending' cannot reach the template default 'completed'
+        and surfaces INVALID_TRANSITION per item.
+        """
+        phase = dashboard_db.db.create_issue("Cleanup phase", type="phase")
+        # No force → default 'completed' unreachable from 'pending'.
+        resp = await client.post("/api/batch/close", json={"issue_ids": [phase.id]})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["closed"] == []
+        assert len(data["errors"]) == 1
+        assert data["errors"][0]["code"] == "INVALID_TRANSITION"
+        # force=true → lands in the type's default done state.
+        resp = await client.post("/api/batch/close", json={"issue_ids": [phase.id], "force": True})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data["closed"]) == 1
+        assert data["closed"][0]["status"] == "completed"
+        assert data["errors"] == []
+
+    async def test_batch_close_force_must_be_boolean(self, client: AsyncClient, dashboard_db: PopulatedDB) -> None:
+        ids = dashboard_db.ids
+        resp = await client.post("/api/batch/close", json={"issue_ids": [ids["b"]], "force": "yes"})
+        assert resp.status_code == 400
+        assert "force" in resp.json()["error"].lower()
+
 
 class TestNonObjectBodyReturns400:
     """Non-dict JSON bodies (e.g. []) must return 400, not crash with 500."""

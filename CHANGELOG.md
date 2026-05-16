@@ -25,6 +25,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   caller can synthesise the retry. Affects `close_issue` and
   `batch_close` on both the CLI and MCP surfaces.
 
+### Added
+
+- **HTTP batch-close accepts `force`.** `POST /api/batch/close` and
+  `POST /api/loom/batch/close` now accept an optional `force` boolean
+  in the request body, matching the CLI `--force` flag and MCP `force`
+  argument. This gives HTTP callers a recovery path when the close
+  auto-resolve removal would otherwise leave them with no way to close
+  planning items (phase/step/milestone) in their initial states.
+
 ## [2.0.1] - 2026-05-15
 
 ### Changed
