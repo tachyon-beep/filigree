@@ -511,6 +511,38 @@ class TestLoomGenerationParityBatchClose:
         _assert_slim_issue_loom(unblocked, path="newly_unblocked[0]")
         assert unblocked["issue_id"] == b_id
 
+    async def test_force_bypasses_transition_check(self, dashboard_surface: AsyncClient) -> None:
+        """``force=true`` on /api/loom/batch/close bypasses the template
+        transition validator — matches CLI ``--force`` and MCP ``force``.
+        Phase in 'pending' cannot reach 'completed' without it.
+        """
+        create = await dashboard_surface.post(
+            "/api/issues",
+            json={"title": "C2 batch close force seed", "type": "phase"},
+        )
+        assert create.status_code in (200, 201), create.text
+        issue_id = create.json()["id"]
+        # Without force → INVALID_TRANSITION per item.
+        resp = await dashboard_surface.post(
+            "/api/loom/batch/close",
+            json={"issue_ids": [issue_id], "reason": "no-force"},
+        )
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["succeeded"] == []
+        assert len(body["failed"]) == 1
+        assert body["failed"][0]["code"] == "INVALID_TRANSITION"
+        # With force → lands in the type's default done state.
+        resp = await dashboard_surface.post(
+            "/api/loom/batch/close",
+            json={"issue_ids": [issue_id], "reason": "force", "force": True},
+        )
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["failed"] == []
+        assert len(body["succeeded"]) == 1
+        assert body["succeeded"][0]["status"] == "completed"
+
     async def test_response_detail_full_succeeded_shape(self, dashboard_surface: AsyncClient) -> None:
         """``?response_detail=full`` on batch/close upgrades succeeded[0]
         to a full ``IssueLoom``. Single isolated close, no

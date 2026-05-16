@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.2] - 2026-05-16
+
+### Changed
+
+- **`close_issue` no longer auto-resolves the target status to a single
+  reachable done state.** Previously, when the template default done state
+  was unreachable from the current status but exactly one done-category
+  state was reachable, `close_issue` (and `batch_close`) silently picked
+  that target and emitted a `data_warning`. This hid intent: a `feature`
+  in `building` that had actually shipped became `deferred` (semantically
+  "abandoned") on close, because `deferred` was the only reachable
+  done-state. Callers must now either pass `status=` explicitly to choose
+  a dismissal target, walk the workflow forward to a state from which the
+  template default is reachable, or pass `force=True` to bypass the
+  transition validator. Failed closes echo `valid_transitions` so a
+  caller can synthesise the retry. Affects `close_issue` and
+  `batch_close` on both the CLI and MCP surfaces.
+
+### Added
+
+- **HTTP batch-close accepts `force`.** `POST /api/batch/close` and
+  `POST /api/loom/batch/close` now accept an optional `force` boolean
+  in the request body, matching the CLI `--force` flag and MCP `force`
+  argument. This gives HTTP callers a recovery path when the close
+  auto-resolve removal would otherwise leave them with no way to close
+  planning items (phase/step/milestone) in their initial states.
+
 ## [2.0.1] - 2026-05-15
 
 ### Changed

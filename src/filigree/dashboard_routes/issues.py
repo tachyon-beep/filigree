@@ -164,6 +164,12 @@ def _parse_batch_close_body(body: dict[str, Any]) -> dict[str, Any] | JSONRespon
     Shared by classic ``POST /api/batch/close`` and loom
     ``POST /api/loom/batch/close``. Returns kwargs for ``db.batch_close``
     on success, or a 400 ``JSONResponse`` on error.
+
+    Accepts optional ``force`` (bool) to bypass the template transition
+    validator on every item — matches the CLI ``--force`` and MCP
+    ``force`` argument on ``batch_close``. Use only for cleanup flows
+    that intentionally skip the workflow (e.g. a planning batch in its
+    initial state where the type's default done state is not reachable).
     """
     issue_ids = body.get("issue_ids")
     if not isinstance(issue_ids, list):
@@ -183,7 +189,16 @@ def _parse_batch_close_body(body: dict[str, Any]) -> dict[str, Any] | JSONRespon
     expected_assignee = body.get("expected_assignee")
     if expected_assignee is not None and not isinstance(expected_assignee, str):
         return _error_response("expected_assignee must be a string", ErrorCode.VALIDATION, 400)
-    return {"issue_ids": issue_ids, "reason": reason, "actor": actor, "expected_assignee": expected_assignee}
+    force = body.get("force", False)
+    if not isinstance(force, bool):
+        return _error_response("force must be a boolean", ErrorCode.VALIDATION, 400)
+    return {
+        "issue_ids": issue_ids,
+        "reason": reason,
+        "actor": actor,
+        "expected_assignee": expected_assignee,
+        "force": force,
+    }
 
 
 def _parse_release_claim_body(body: dict[str, Any]) -> dict[str, Any] | JSONResponse:
