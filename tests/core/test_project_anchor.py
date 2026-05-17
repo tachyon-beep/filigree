@@ -508,6 +508,49 @@ class TestGitWorktreeDiscovery:
         project_root, _ = find_filigree_anchor(wt)
         assert project_root == main
 
+    def test_nested_conf_inside_worktree_wins_over_main(self, tmp_path: Path) -> None:
+        """A nested ``.filigree.conf`` inside a worktree subtree must still win.
+
+        Codex review #39: the redirect must not skip past closer anchors in
+        the worktree's own subtree, otherwise sub-projects inside a worktree
+        get routed to the main repo's DB instead of their own.
+        """
+        main = self._make_main_repo(tmp_path)
+        wt = self._make_worktree(main, tmp_path / "wt", "wt")
+        # Nested sub-project inside the worktree, with its own conf.
+        nested = wt / "subproject"
+        nested.mkdir()
+        nested_conf = nested / CONF_FILENAME
+        write_conf(
+            nested_conf,
+            {"version": 1, "project_name": "nested", "prefix": "nested", "db": ".filigree/filigree.db"},
+        )
+
+        # From inside the nested sub-project: nested wins, not main.
+        project_root, conf_path = find_filigree_anchor(nested / "src")
+        assert project_root == nested
+        assert conf_path == nested_conf
+
+        # Strict resolver agrees.
+        assert find_filigree_conf(nested / "src") == nested_conf
+
+        # And from the worktree root itself (above nested): we redirect to
+        # main (no nested anchor in this direct ancestry).
+        project_root, _ = find_filigree_anchor(wt)
+        assert project_root == main
+
+    def test_nested_legacy_dir_inside_worktree_wins_over_main(self, tmp_path: Path) -> None:
+        """A nested legacy ``.filigree/`` inside a worktree subtree also wins."""
+        main = self._make_main_repo(tmp_path)
+        wt = self._make_worktree(main, tmp_path / "wt", "wt")
+        nested = wt / "legacy-sub"
+        nested.mkdir()
+        (nested / FILIGREE_DIR_NAME).mkdir()
+
+        project_root, conf_path = find_filigree_anchor(nested / "deep" / "code")
+        assert project_root == nested
+        assert conf_path is None
+
     def test_foreign_database_error_reports_original_cwd(self, tmp_path: Path) -> None:
         """When the redirect resolves a worktree and the *main* worktree itself
         lives inside a foreign project, ``ForeignDatabaseError.cwd`` must report

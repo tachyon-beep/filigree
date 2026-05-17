@@ -184,13 +184,22 @@ def _resolve_to_main_worktree(start: Path) -> Path:
     and refuse to find the project's anchor in the main worktree — raising
     :class:`ForeignDatabaseError` for what is, in fact, the same project.
 
+    The redirect is suppressed when a closer anchor (``.filigree.conf`` or
+    legacy ``.filigree/``) sits between *start* and the worktree's ``.git``
+    pointer — that nested anchor wins, preserving the "child anchor
+    overrides parent" contract for sub-projects nested inside a worktree.
+
     Returns the main worktree root when *start* (or an ancestor up to the
-    first ``.git`` entry) is inside a linked worktree. Returns *start*
-    unchanged in every other case: plain repos (``.git`` is a directory),
+    first ``.git`` entry) is inside a linked worktree AND no nested anchor
+    exists in that subtree. Returns *start* unchanged in every other case:
+    a closer anchor was found first, plain repos (``.git`` is a directory),
     submodules (``.git`` file points at ``<parent>/.git/modules/<name>/``),
     no ``.git`` found, or a malformed ``.git`` file.
     """
     for parent in [start, *start.parents]:
+        # A nested anchor in the worktree subtree wins — don't redirect past it.
+        if (parent / CONF_FILENAME).is_file() or (parent / FILIGREE_DIR_NAME).is_dir():
+            return start
         git_path = parent / ".git"
         if not git_path.exists():
             continue
