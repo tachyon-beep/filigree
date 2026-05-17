@@ -129,6 +129,19 @@ class TestRemoveEntityAssociationMCP:
         )
         assert result["removed"] is False
 
+    async def test_remove_foreign_prefix_validation(self, mcp_db: FiligreeDB) -> None:
+        """A foreign-prefix issue_id surfaces as VALIDATION via
+        WrongProjectError, matching add/list. Without this, a routing
+        error could quietly resolve to ``removed=False`` no-op.
+        """
+        result = _parse(
+            await call_tool(
+                "remove_entity_association",
+                {"issue_id": "other-1234567890", "entity_id": "py:func:foo"},
+            )
+        )
+        assert result["code"] == ErrorCode.VALIDATION
+
 
 class TestListEntityAssociationsMCP:
     async def test_list_empty(self, mcp_db: FiligreeDB) -> None:

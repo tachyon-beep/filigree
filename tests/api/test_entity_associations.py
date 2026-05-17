@@ -195,6 +195,18 @@ class TestRemoveEntityAssociationHTTP:
         resp = await client.delete(f"/api/issue/{issue_id}/entity-associations")
         assert resp.status_code == 400
 
+    async def test_remove_foreign_prefix_returns_400(self, client: AsyncClient) -> None:
+        """A foreign-prefix issue_id surfaces as VALIDATION via
+        WrongProjectError, matching the other write routes (POST/GET).
+        Without this, a cross-project routing error could masquerade as
+        an idempotent ``{"removed": false}`` no-op.
+        """
+        resp = await client.delete(
+            "/api/issue/other-1234567890/entity-associations",
+            params={"entity_id": "py:func:foo"},
+        )
+        assert resp.status_code == 400
+
 
 class TestFullLifecycleViaHTTP:
     async def test_attach_list_reattach_remove(self, client: AsyncClient, dashboard_db: PopulatedDB) -> None:

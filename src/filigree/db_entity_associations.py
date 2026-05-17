@@ -202,7 +202,7 @@ class EntityAssociationsMixin(DBMixinProtocol):
         tool (B.6) calls to answer "what issues are about this code I'm
         reading?" in one round trip.
 
-        Uses the ``idx_entity_associations_entity`` index. Isolation
+        Uses the ``ix_entity_assoc_entity`` index. Isolation
         between projects is by DB file — every row in this query
         already belongs to the project hosting this database.
 
