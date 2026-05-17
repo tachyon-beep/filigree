@@ -1,0 +1,394 @@
+{
+  "verdict": "CHANGES_REQUESTED",
+  "round": 2,
+  "summary": "Revision v2 successfully resolves all 8 blockers from round 1 (test strategy, observability, migration mechanism, force semantics, polymorphic FK, prose_blocks design, deprecation separation, Loom decoupling). The 10 new blockers surfaced this round are finer-grained — they live at the implementation-detail layer rather than the design-coherence layer. Highest-signal items are convergent across reviewers: pack rename safety (3 reviewers), Wardline trust model (3 reviewers), Loom URI registry coordination (2 reviewers). Recommend a focused B1-B7 fix pass; B8-B10 can be inlined during implementation.",
+  "plans_reviewed": [
+    "/home/john/filigree/docs/plans/2026-05-17-shuttle-design.md",
+    "/home/john/filigree/docs/plans/2026-05-17-filigree-planning-deprecation.md",
+    "/home/john/filigree/docs/plans/2026-05-17-loom-uri-spec.md"
+  ],
+  "reviewed_at": "2026-05-17T00:00:00Z",
+  "reviewers": ["reality", "architecture", "quality", "systems"],
+  "progress_vs_round_1": {
+    "round_1_blockers": 8,
+    "round_1_resolved": 8,
+    "round_2_blockers": 10,
+    "shift": "design-coherence → implementation-detail",
+    "interpretation": "The plan is now structurally sound. Remaining blockers are localizable fixes, not redesigns."
+  },
+  "blocking_issues": [
+    {
+      "id": "B1",
+      "title": "Pack rename has multiple silent-breakage surfaces",
+      "sources": ["systems", "architecture", "reality"],
+      "convergence": "high — caught by 3 reviewers from different angles",
+      "severity": 4,
+      "likelihood": 3,
+      "reversibility": 3,
+      "priority_score": 36,
+      "evidence": {
+        "systems": "core.py lines 337/465/531 hardcode 'planning' as default enabled_packs; templates_data.py lines 823/1531 list requires_packs: ['core', 'planning'] for release and roadmap packs; templates.py:898 confirms requires_packs is NEVER enforced at runtime — failure is silent orphan-relation, not load error as deprecation §3 claims",
+        "architecture": "cross-pack relationships in release/roadmap reference planning.milestone — schema implications for existing DBs with release pack loaded; do internal template references update automatically or need DB migration?",
+        "reality": "release pack has undocumented second cross-pack relation (release_item_from_task) — inventory in deprecation §2.2 is incomplete; milestone count in deprecation §2.3/§8.1 says '2 milestones' but actual is 6 (3 archived, 3 completed) + 12 phases + 27 steps"
+      },
+      "resolution": "Phase 3 of deprecation plan must enumerate: (a) the three hardcoded sites in core.py with config-rewrite migration, (b) a step that rewrites 'planning'→'coordination' in every .filigree.conf, (c) requires_packs string updates in templates_data.py for release and roadmap packs, (d) correct the milestone count in §2.3 and §8.1 to reflect dogfood reality (6 milestones, 12 phases, 27 steps), (e) add release_item_from_task to the cross-pack inventory in §2.2, (f) add a DB-migration step (or proof of no-op) for existing release/roadmap-loaded DBs whose stored templates reference planning.*, (g) fix the false claim in §3 that pack-load fails loudly — document the actual silent-breakage failure mode.",
+      "blocked_on": "internal to deprecation doc"
+    },
+    {
+      "id": "B2",
+      "title": "Batch 3 / deprecation circular dependency",
+      "sources": ["architecture"],
+      "severity": 4,
+      "likelihood": 3,
+      "reversibility": 2,
+      "priority_score": 24,
+      "evidence": "Shuttle §13 says Batch 3 prerequisite is filigree deprecation 'executing or executed'; Deprecation §6 says the plan runs *after* Shuttle Batch 3 (because migration targets must exist). Each waits on the other.",
+      "resolution": "Replace 'executing or executed' in Shuttle §13 with 'ratified' (or equivalent: design approved + Batch 3 acceptance criteria include migration-target readiness). Tighten Deprecation §6 sequencing language to remove circularity.",
+      "blocked_on": "Shuttle doc + Deprecation doc — coordinated edit"
+    },
+    {
+      "id": "B3",
+      "title": "loom-core extraction risk understated; Batch 0 naming contradiction",
+      "sources": ["architecture"],
+      "severity": 3,
+      "likelihood": 3,
+      "reversibility": 2,
+      "priority_score": 18,
+      "evidence": "Section 12 calls loom-core extraction 'prerequisite, not Batch 0'; Section 13 labels the same work 'Batch 0' — direct naming contradiction. 'Mechanical, ~2-3 weeks, low risk' understates: db_issues.py >1000 LOC wired into FiligreeDB MRO mixin chain; extraction requires defining a clean generic interface, not file moves.",
+      "resolution": "Pick one name (recommend: Batch 0). Revise estimate to acknowledge interface-design phase precedes mechanical extraction. Add explicit acceptance gate: 'filigree CI green throughout extraction' as exit criterion.",
+      "blocked_on": "internal to Shuttle doc"
+    },
+    {
+      "id": "B4",
+      "title": "Loom URI registry split-brain — undetectable and unresolved in multi-project case",
+      "sources": ["architecture", "systems"],
+      "convergence": "high — caught by 2 reviewers",
+      "severity": 3,
+      "likelihood": 3,
+      "reversibility": 2,
+      "priority_score": 18,
+      "evidence": {
+        "architecture": "URI spec §5.1 places registry at .loom/registry.json; Shuttle §3.1 places .shuttle/shuttle.db co-resident with project; one filigree process can serve multiple projects — which registry does Shuttle read at startup? Open Question 11.4 admits the multi-project case without resolving it.",
+        "systems": "Flat-file registry is propagated manually; stale peer's base_url produces 'unavailable' indefinitely, indistinguishable from 'peer down.' No divergence detection."
+      },
+      "resolution": "Two coordinated fixes: (1) resolve §11.4 — specify whether Shuttle picks per-project registry, a merged process-level view, or refuses multi-project deployment; (2) each component publishes registry hash via X-Loom-Registry-Version response header with caller-side counter-check and a registry_divergence_total metric. Both decisions belong in the URI spec; Shuttle references them.",
+      "blocked_on": "URI spec doc"
+    },
+    {
+      "id": "B5",
+      "title": "Canary 11.4 metric cannot measure what it claims",
+      "sources": ["quality"],
+      "severity": 3,
+      "likelihood": 3,
+      "reversibility": 1,
+      "priority_score": 9,
+      "evidence": "shuttle_tdd_event_omission_ratio is described as detecting agents who skip red_committed; but §4.5 enforces ordering at write path — green_committed without prior red_committed is REFUSED with OUT_OF_ORDER_EVENT. The metric cannot observe what write-path enforcement prevents.",
+      "resolution": "Reframe canary 11.4: replace with a background query over closed TDD steps checking for incomplete event sequences (e.g., steps closed without red_committed at all, or with red but no green). The intent is achievable — it requires a different measurement strategy.",
+      "blocked_on": "internal to Shuttle doc"
+    },
+    {
+      "id": "B6",
+      "title": "Contract-test CI gate has no implementation mechanism",
+      "sources": ["quality"],
+      "severity": 3,
+      "likelihood": 3,
+      "reversibility": 1,
+      "priority_score": 9,
+      "evidence": "'Gated on Loom fixtures published' is not a runnable CI condition. No fixture repository named, no owner specified, no CI integration described (submodule, download step, artifact).",
+      "resolution": "Specify in URI spec §10.4: fixture repository name/location, who owns publication, CI consumption mechanism (git submodule? versioned artifact download? pinned commit SHA?). Shuttle §8 then references the specified mechanism rather than declaring an abstract gate.",
+      "blocked_on": "URI spec + Shuttle doc — mixed"
+    },
+    {
+      "id": "B7",
+      "title": "Pre/post-check strings accumulate unvalidated until Wardline ships",
+      "sources": ["systems"],
+      "severity": 3,
+      "likelihood": 3,
+      "reversibility": 1,
+      "priority_score": 9,
+      "evidence": "Close validator checks field PRESENCE, not string format. With Wardline 6-12 months away, every stored pre_checks/post_checks string will need retroactive evaluation. No format migration path planned.",
+      "resolution": "Enforce a prefix convention from Batch 3 forward (e.g., 'wardline:', 'local:', 'external:'). Bounds the namespace before accumulation begins. Document the prefix table and reserve future expansion in the spec.",
+      "blocked_on": "internal to Shuttle doc"
+    },
+    {
+      "id": "B8",
+      "title": "Test layout convention mismatch in Shuttle §8",
+      "sources": ["quality"],
+      "severity": 2,
+      "likelihood": 3,
+      "reversibility": 1,
+      "priority_score": 6,
+      "evidence": "Shuttle §8 claims tests/{unit,integration,contract} layout 'mirrors filigree's convention.' Filigree actually organizes tests by surface: tests/{api,cli,core,migrations,install}/. tests/unit/ in filigree contains only 2 files. False premise inherited by implementor.",
+      "resolution": "Restructure §8 to mirror actual filigree layout (tests/{api,cli,core,migrations,contract,...}) or honestly state 'Shuttle adopts a different test layout because X.' Pick one.",
+      "blocked_on": "internal to Shuttle doc"
+    },
+    {
+      "id": "B9",
+      "title": "Milestone count factually wrong in deprecation §2.3 and §8.1",
+      "sources": ["reality"],
+      "severity": 2,
+      "likelihood": 3,
+      "reversibility": 1,
+      "priority_score": 6,
+      "evidence": "Deprecation doc claims '2 milestones' in dogfood DB; actual count is 6 milestones (3 archived, 3 completed) + 12 phases + 27 steps. Pre-deployment validation test (8.1) asserts 'All 2 live milestones survive.'",
+      "resolution": "Correct the count. Replace 'unknown — varies by project' for phase/step with actual dogfood numbers. Distinguish dogfood-specific assertions from cross-project parameterized ones.",
+      "blocked_on": "internal to deprecation doc — folded into B1 resolution"
+    },
+    {
+      "id": "B10",
+      "title": "OTel and Prometheus framed as filigree pattern but filigree uses neither",
+      "sources": ["reality"],
+      "severity": 2,
+      "likelihood": 2,
+      "reversibility": 1,
+      "priority_score": 4,
+      "evidence": "Filigree does NOT use OpenTelemetry, has NO Prometheus /metrics endpoint. Shuttle's observability stack is new, not extracted. Claim 'matches filigree's pattern' overclaims.",
+      "resolution": "Reframe §11 honestly: 'Shuttle introduces OTel + Prometheus; filigree has neither today and may adopt them later via loom-core.' This is fine — just don't claim symmetry that does not exist.",
+      "blocked_on": "internal to Shuttle doc"
+    }
+  ],
+  "warnings": [
+    {
+      "id": "W1",
+      "title": "Batch 1 mutable prose column is self-inflicted migration debt",
+      "source": "architecture",
+      "priority_score": 6,
+      "recommendation": "Ship prose_blocks from Batch 1 — eliminates the Batch 1→2 migration and the guaranteed authorship-history loss event."
+    },
+    {
+      "id": "W2",
+      "title": "work_package routing has three different answers",
+      "source": "architecture",
+      "priority_score": 4,
+      "recommendation": "§5.2 (route to Shuttle stage) vs §9.4 (re-evaluate as canary) vs §10.1 (--keep-work-packages opt-in) — specify the default and conditions for deviation."
+    },
+    {
+      "id": "W3",
+      "title": "HMAC v1 trusted-execution-environment assumption not stated",
+      "source": "architecture",
+      "priority_score": 4,
+      "recommendation": "Add explicit threat-model statement: 'v1 federation assumes all peers run in a mutually trusted execution environment; remote-process federation requires v2 token bundles.'"
+    },
+    {
+      "id": "W4",
+      "title": "decision_reads table underspecified",
+      "source": "architecture",
+      "priority_score": 4,
+      "recommendation": "Add schema catalog entry, idempotency handling, index design, compaction question. The unread_decisions cap depends on these."
+    },
+    {
+      "id": "W5",
+      "title": "Migration manifest format unspecified",
+      "source": "architecture",
+      "priority_score": 4,
+      "recommendation": "Specify manifest schema; rollback consumes it but the format is never defined."
+    },
+    {
+      "id": "W6",
+      "title": "Step.estimated_minutes omitted from migration field-mapping table",
+      "source": "reality",
+      "priority_score": 3,
+      "recommendation": "Add to deprecation §2.x — decide map vs drop."
+    },
+    {
+      "id": "W7",
+      "title": "Releases Loom router is currently an empty stub",
+      "source": "reality",
+      "priority_score": 3,
+      "recommendation": "Either implement the router or flag 'release/release_item resolvable kinds: pending router implementation' in URI spec §registry."
+    },
+    {
+      "id": "W8",
+      "title": "loom-uri fixture directory presented as existing",
+      "source": "reality",
+      "priority_score": 2,
+      "recommendation": "Mark docs/federation/loom-uri/fixtures/ as 'to be created' in URI spec §10.4."
+    },
+    {
+      "id": "W9",
+      "title": "record_event null-key is permissive for ordering-enforced events",
+      "source": "systems",
+      "priority_score": 6,
+      "recommendation": "Make idempotency_key REQUIRED at the API surface for red_committed, green_committed, post_checks, ready_for_review — prevents duplicate events on SQLite BUSY retry."
+    },
+    {
+      "id": "W10",
+      "title": "STALE_SUPERSESSION retry has no bounded backoff",
+      "source": "systems",
+      "priority_score": 6,
+      "recommendation": "Bounded retries with jitter; add shuttle_supersession_conflict_total metric to surface the reinforcing loop."
+    },
+    {
+      "id": "W11",
+      "title": "7-day reversibility window uses time as proxy for the wrong invariant",
+      "source": "systems",
+      "priority_score": 6,
+      "recommendation": "Replace with event-based predicate: manifest records migration_timestamp; rollback queries events since timestamp and refuses if any write events found on migrated objects."
+    },
+    {
+      "id": "W12",
+      "title": "Migration tool version drift against Shuttle MCP surface",
+      "source": "systems",
+      "priority_score": 4,
+      "recommendation": "Tool version-checks Shuttle MCP on startup; pin supported range."
+    },
+    {
+      "id": "W13",
+      "title": "ready_for_review orphans wait 7 days to become visible",
+      "source": "systems",
+      "priority_score": 4,
+      "recommendation": "Add clarion_last_seen heartbeat on dashboard from day one — operator sees Clarion-missing immediately, not after TTL."
+    },
+    {
+      "id": "W14",
+      "title": "Token leak has no v1 incident-response procedure",
+      "source": "systems",
+      "priority_score": 4,
+      "recommendation": "Document env var to rotate, peers to restart, rotation-gap duration."
+    },
+    {
+      "id": "W15",
+      "title": "prose_blocks has no compaction path",
+      "source": "quality",
+      "priority_score": 3,
+      "recommendation": "compact_events applies to the event log only; specify prose_blocks compaction or commit to unbounded growth."
+    },
+    {
+      "id": "W16",
+      "title": "Multi-project deployment topology unspecified",
+      "source": "quality",
+      "priority_score": 4,
+      "recommendation": "Coordinated with B4 — define how Shuttle runs in single-process-many-projects deployments."
+    },
+    {
+      "id": "W17",
+      "title": "force_used alert has no threshold",
+      "source": "quality",
+      "priority_score": 3,
+      "recommendation": "Specify the rate/count that triggers an alert."
+    },
+    {
+      "id": "W18",
+      "title": "HMAC has no anti-replay protection; not disclosed",
+      "source": "quality",
+      "priority_score": 4,
+      "recommendation": "Either add nonce/timestamp window or document explicitly that v1 accepts replay."
+    },
+    {
+      "id": "W19",
+      "title": "PII redaction via supersession insufficient for GDPR",
+      "source": "quality",
+      "priority_score": 3,
+      "recommendation": "Supersession leaves prior versions; document a hard-erase path or scope the system as PII-free."
+    },
+    {
+      "id": "W20",
+      "title": "Deprecation Phase 3 stakeholder communication is thin",
+      "source": "quality",
+      "priority_score": 2,
+      "recommendation": "Add explicit comms plan to deprecation §3."
+    },
+    {
+      "id": "W21",
+      "title": "Migration partial-failure has no operator procedure",
+      "source": "quality",
+      "priority_score": 4,
+      "recommendation": "Specify what an operator does when 80% of objects migrate and 20% fail."
+    },
+    {
+      "id": "W22",
+      "title": "Unregistered URI status has no cleanup guidance",
+      "source": "quality",
+      "priority_score": 2,
+      "recommendation": "Specify TTL or operator action."
+    },
+    {
+      "id": "W23",
+      "title": "Rollback-after-window has no forward-fix path",
+      "source": "quality",
+      "priority_score": 3,
+      "recommendation": "If window expires and rollback is needed, what's the procedure?"
+    },
+    {
+      "id": "W24",
+      "title": "loom-core extraction has no acceptance gate",
+      "source": "quality",
+      "priority_score": 3,
+      "recommendation": "Folded into B3 resolution."
+    },
+    {
+      "id": "W25",
+      "title": "Batch 3 go/no-go has no named coordinator",
+      "source": "quality",
+      "priority_score": 2,
+      "recommendation": "Name a decision owner."
+    },
+    {
+      "id": "W26",
+      "title": "__ prefix reservation is test spec not implementation spec",
+      "source": "quality",
+      "priority_score": 2,
+      "recommendation": "Specify enforcement point (DB constraint? API validator?)."
+    }
+  ],
+  "convergence_analysis": {
+    "high_signal_convergent_issues": [
+      {
+        "theme": "Pack rename safety",
+        "reviewers": ["reality", "architecture", "systems"],
+        "consolidated_as": "B1",
+        "note": "Three reviewers caught variations: Reality (inventory gaps), Architecture (cross-pack schema implications), Systems (hardcoded sites + silent failure mode). The deprecation plan §3's failure-mode claim is empirically wrong — Systems verified at templates.py:898."
+      },
+      {
+        "theme": "Wardline gap",
+        "reviewers": ["reality", "architecture", "systems"],
+        "consolidated_as": ["W3", "B7"],
+        "note": "Wardline named-only (Reality), HMAC trust assumption (Architecture), pre/post-string accumulation (Systems). Three angles on the same future-coupling risk."
+      },
+      {
+        "theme": "Loom URI registry / multi-project",
+        "reviewers": ["architecture", "systems"],
+        "consolidated_as": "B4",
+        "note": "Architecture caught the multi-project coordination directly; Systems caught registry split-brain detection. Both belong in URI spec."
+      }
+    ],
+    "specialist_unique_findings": {
+      "reality": [
+        "Milestone count factually wrong (B9)",
+        "Releases Loom router is empty stub (W7)",
+        "OTel/Prometheus overclaim (B10)"
+      ],
+      "architecture": [
+        "Batch 3 / deprecation circular dependency (B2)",
+        "loom-core risk understated + Batch 0 naming contradiction (B3)",
+        "Batch 1 prose_blocks day-one alternative (W1)"
+      ],
+      "quality": [
+        "Test layout convention mismatch (B8)",
+        "Canary 11.4 measurability flaw (B5)",
+        "Contract-test CI gate has no implementation mechanism (B6)"
+      ],
+      "systems": [
+        "requires_packs never enforced at runtime — silent breakage (B1 evidence)",
+        "Reinforcing supersession feedback loop (W10)",
+        "Time-as-proxy for rollback invariant (W11)"
+      ]
+    }
+  },
+  "blocked_on_classification": {
+    "internal_to_deprecation_doc": ["B1", "B9"],
+    "internal_to_shuttle_doc": ["B3", "B5", "B7", "B8", "B10"],
+    "internal_to_uri_spec_doc": ["B4-partial"],
+    "cross_doc_coordination": ["B2 (Shuttle+Deprecation)", "B4 (URI+Shuttle)", "B6 (URI+Shuttle)"],
+    "blocked_on_external_work": [
+      "Wardline-related warnings (W3, B7) cannot be fully resolved until Wardline exists; mitigations specifiable now"
+    ]
+  },
+  "single_most_actionable_next_step": "Resolve B1 (pack rename safety). Three reviewers converged on it; the empirical failure mode contradicts the deprecation plan's stated assumption; the fix is bounded and internal to one document. After B1, address B2 (circular dependency — one-line edit) and B4 (registry coordination — requires URI spec edit).",
+  "reviewer_summaries": {
+    "reality": {"status": "ISSUES_FOUND", "blocking": 1, "warnings": 5, "note": "Most factual checks passed — loom-core primitives exist, pack types verified, federation reality vs aspiration accurate"},
+    "architecture": {"status": "ISSUES_FOUND", "blocking": 3, "warnings": 6, "note": "Pattern alignment strong; batch tracer-bullet structure sound; issues localized to specific contradictions and underspecification"},
+    "quality": {"status": "ISSUES_FOUND", "blocking": 3, "warnings": 12, "note": "Test/observability foundation present (round 1 fix held); finer-grained gaps in measurability and CI mechanism"},
+    "systems": {"status": "ISSUES_FOUND", "blocking": 3, "warnings": 6, "note": "Empirical verification of failure modes is this reviewer's signature contribution; B1 silent-failure proof at templates.py:898 is the single highest-value finding of the round"}
+  }
+}
