@@ -36,6 +36,7 @@ _MIXIN_FILES = [
     "db_workflow.py",
     "db_observations.py",
     "db_scans.py",
+    "db_entity_associations.py",
 ]
 
 

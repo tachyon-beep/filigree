@@ -397,7 +397,7 @@ def _create_project_router() -> APIRouter:
     """
     from fastapi import APIRouter
 
-    from filigree.dashboard_routes import analytics, files, issues, releases
+    from filigree.dashboard_routes import analytics, entities, files, issues, releases
 
     router = APIRouter()
 
@@ -406,6 +406,7 @@ def _create_project_router() -> APIRouter:
     router.include_router(issues.create_classic_router())
     router.include_router(files.create_classic_router())
     router.include_router(releases.create_classic_router())
+    router.include_router(entities.create_classic_router())
 
     # Loom generation — new in 2.0 under /loom. Empty in Phase B.
     router.include_router(analytics.create_loom_router(), prefix="/loom")

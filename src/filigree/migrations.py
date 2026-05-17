@@ -598,6 +598,27 @@ def migrate_v13_to_v14(conn: sqlite3.Connection) -> None:
     add_column(conn, "file_events", "actor", "TEXT", "''")
 
 
+def migrate_v14_to_v15(conn: sqlite3.Connection) -> None:
+    """v14 -> v15: Add entity_associations table (ADR-029, Clarion B.7).
+
+    Binds Filigree issues to Clarion entities via opaque string IDs.
+    Filigree does not parse the ID grammar — the federation enrich-only
+    rule (loom.md §5) requires that Clarion's entity-ID format remain
+    Clarion's contract with itself.
+    """
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS entity_associations (
+            issue_id                TEXT NOT NULL REFERENCES issues(id) ON DELETE CASCADE,
+            clarion_entity_id       TEXT NOT NULL,
+            content_hash_at_attach  TEXT NOT NULL,
+            attached_at             TEXT NOT NULL,
+            attached_by             TEXT NOT NULL,
+            PRIMARY KEY (issue_id, clarion_entity_id)
+        )
+    """)
+    add_index(conn, "ix_entity_assoc_entity", "entity_associations", ["clarion_entity_id"])
+
+
 MIGRATIONS: dict[int, MigrationFn] = {
     1: migrate_v1_to_v2,
     2: migrate_v2_to_v3,
@@ -612,6 +633,7 @@ MIGRATIONS: dict[int, MigrationFn] = {
     11: migrate_v11_to_v12,
     12: migrate_v12_to_v13,
     13: migrate_v13_to_v14,
+    14: migrate_v14_to_v15,
 }
 
 
