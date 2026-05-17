@@ -377,6 +377,26 @@ CREATE TABLE IF NOT EXISTS annotation_closeout_acknowledgements (
 
 CREATE INDEX IF NOT EXISTS idx_annotation_closeout_ack_target
   ON annotation_closeout_acknowledgements(target_type, target_id);
+
+-- ---- Cross-product entity associations (ADR-029) --------------------------
+-- Binds Filigree issues to Clarion entities (functions, classes, modules).
+-- The clarion_entity_id is OPAQUE to Filigree — no grammar parsing, no
+-- CHECK constraint on its shape. Filigree does not know what a "Clarion
+-- entity" is; it stores the ID as a string and hands content_hash back at
+-- query time so Clarion can detect drift. This preserves the federation
+-- enrich-only rule (loom.md §5).
+
+CREATE TABLE IF NOT EXISTS entity_associations (
+    issue_id                TEXT NOT NULL REFERENCES issues(id) ON DELETE CASCADE,
+    clarion_entity_id       TEXT NOT NULL,
+    content_hash_at_attach  TEXT NOT NULL,
+    attached_at             TEXT NOT NULL,
+    attached_by             TEXT NOT NULL,
+    PRIMARY KEY (issue_id, clarion_entity_id)
+);
+
+CREATE INDEX IF NOT EXISTS ix_entity_assoc_entity
+  ON entity_associations(clarion_entity_id);
 """
 
 # V1 schema (without file tables) — kept for migration tests.
@@ -485,4 +505,4 @@ CREATE TRIGGER IF NOT EXISTS issues_fts_delete AFTER DELETE ON issues BEGIN
 END;
 """
 
-CURRENT_SCHEMA_VERSION = 14
+CURRENT_SCHEMA_VERSION = 15

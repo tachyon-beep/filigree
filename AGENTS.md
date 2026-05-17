@@ -64,6 +64,10 @@ either catalogue. The verbs you will reach for most:
 - **Claim work:** `start_work`, `start_next_work`
 - **Update:** `add_comment`, `add_label`, `update_issue`, `close_issue`
 - **Scratchpad:** `observe`, `list_observations`, `promote_observation`, `dismiss_observation`
+- **Cross-product entity bindings (ADR-029):** `add_entity_association`,
+  `remove_entity_association`, `list_entity_associations` — for binding
+  issues to opaque entity IDs from sibling tools (e.g. Clarion). Also
+  available as HTTP routes under `/api/issue/{issue_id}/entity-associations`.
 - **Health:** `get_stats`, `get_metrics`, `get_mcp_status`
 
 Pass `--actor <name>` (CLI) so events attribute to your agent identity.

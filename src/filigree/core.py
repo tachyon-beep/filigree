@@ -28,6 +28,7 @@ from filigree.db_annotations import (
     AnnotationsMixin,
 )
 from filigree.db_base import _now_iso
+from filigree.db_entity_associations import EntityAssociationsMixin
 from filigree.db_events import EventsMixin
 from filigree.db_files import (
     VALID_ASSOC_TYPES,
@@ -565,6 +566,7 @@ class FiligreeDB(
     PlanningMixin,
     ObservationsMixin,
     AnnotationsMixin,
+    EntityAssociationsMixin,
 ):
     """Direct SQLite operations. No daemon, no sync. Importable by CLI and MCP."""
 

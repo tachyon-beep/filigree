@@ -1,6 +1,6 @@
 # MCP Server Reference
 
-Filigree exposes an MCP (Model Context Protocol) server so AI agents interact natively without parsing CLI output. The server provides 109 tools, 1 resource, and 1 prompt.
+Filigree exposes an MCP (Model Context Protocol) server so AI agents interact natively without parsing CLI output. The server provides 112 tools, 1 resource, and 1 prompt.
 
 ## Contents
 
@@ -744,6 +744,41 @@ include the relevant actor; `update_finding`, `batch_update_findings`, and
 is stored on the finding metadata as `dismiss_reason`. File summaries and safe
 file deletion treat `fixed` and `false_positive` as terminal; stale
 `unseen_in_latest` findings become `fixed` through `clean_stale_findings`.
+
+### Cross-Product Entity Associations
+
+Bind a Filigree issue to an opaque entity identifier from a sibling
+product (notably Clarion — see ADR-029). Filigree never parses the
+entity-ID grammar; the binding stores opaque strings so the federation
+enrich-only rule (`clarion/docs/suite/loom.md` §5) is preserved.
+
+| Tool | Description |
+|------|-------------|
+| `add_entity_association` | Attach a Clarion entity to a Filigree issue (idempotent on the composite key — re-attach refreshes the hash, preserves original actor) |
+| `remove_entity_association` | Remove the binding identified by `(issue_id, entity_id)` |
+| `list_entity_associations` | Return the entity bindings attached to an issue (raw rows; drift comparison is the consumer's job per ADR-029 §"Decision 3") |
+
+#### `add_entity_association`
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `issue_id` | string | yes | Filigree issue ID |
+| `entity_id` | string | yes | Opaque Clarion entity ID; not parsed |
+| `content_hash` | string | yes | Snapshot of Clarion's current content hash for drift detection at query time |
+| `actor` | string | no | Actor identity recorded as `attached_by` on first attach |
+
+#### `remove_entity_association`
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `issue_id` | string | yes | Filigree issue ID |
+| `entity_id` | string | yes | Clarion entity ID |
+
+#### `list_entity_associations`
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `issue_id` | string | yes | Filigree issue ID |
 
 ### Agent Context Notes
 

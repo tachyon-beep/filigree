@@ -609,6 +609,27 @@ class RegisterFileArgs(TypedDict):
     actor: NotRequired[str]
 
 
+# ---------------------------------------------------------------------------
+# entity_associations.py handlers (ADR-029, Clarion B.7)
+# ---------------------------------------------------------------------------
+
+
+class AddEntityAssociationArgs(TypedDict):
+    issue_id: str
+    entity_id: str
+    content_hash: str
+    actor: NotRequired[str]
+
+
+class RemoveEntityAssociationArgs(TypedDict):
+    issue_id: str
+    entity_id: str
+
+
+class ListEntityAssociationsArgs(TypedDict):
+    issue_id: str
+
+
 class TriggerScanArgs(TypedDict):
     scanner: str
     file_path: str
@@ -879,6 +900,10 @@ TOOL_ARGS_MAP: dict[str, type] = {
     "get_issue_files": GetIssueFilesArgs,
     "add_file_association": AddFileAssociationArgs,
     "register_file": RegisterFileArgs,
+    # entity_associations.py
+    "add_entity_association": AddEntityAssociationArgs,
+    "remove_entity_association": RemoveEntityAssociationArgs,
+    "list_entity_associations": ListEntityAssociationsArgs,
     "get_finding": GetFindingArgs,
     "list_findings": ListFindingsArgs,
     "update_finding": UpdateFindingArgs,

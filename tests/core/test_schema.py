@@ -120,6 +120,99 @@ class TestClaimLeaseSchema:
         conn.close()
 
 
+class TestEntityAssociationsSchema:
+    """Verify the v15 entity_associations table per ADR-029 (Clarion B.7)."""
+
+    def test_fresh_schema_contains_entity_associations_table(self, tmp_path: Path) -> None:
+        conn = _make_db(tmp_path)
+        conn.executescript(SCHEMA_SQL)
+
+        tables = _get_table_names(conn)
+        assert "entity_associations" in tables
+
+        columns = _get_table_columns(conn, "entity_associations")
+        assert set(columns) == {
+            "issue_id",
+            "clarion_entity_id",
+            "content_hash_at_attach",
+            "attached_at",
+            "attached_by",
+        }
+        # Composite PK — no surrogate association_id.
+        pk_rows = conn.execute("PRAGMA table_info(entity_associations)").fetchall()
+        pk_columns = {row[1] for row in pk_rows if row[5]}
+        assert pk_columns == {"issue_id", "clarion_entity_id"}
+
+        # Reverse-lookup index per ADR-029 §"Decision 1".
+        assert "ix_entity_assoc_entity" in _get_index_names(conn)
+        conn.close()
+
+    def test_fresh_schema_no_entity_id_check_constraint(self, tmp_path: Path) -> None:
+        """Federation §5 — clarion_entity_id must be opaque (no grammar parsing).
+
+        Pin the absence of any CHECK constraint on the entity_id column.
+        Adding one would couple Filigree to ADR-003's grammar and break
+        the federation enrich-only rule.
+        """
+        conn = _make_db(tmp_path)
+        conn.executescript(SCHEMA_SQL)
+        # Any string must insert successfully — including obviously-malformed
+        # Clarion-shaped IDs. Use raw SQL to bypass any future application-
+        # layer validation.
+        conn.execute(
+            "INSERT INTO issues (id, title, created_at, updated_at) VALUES (?, ?, ?, ?)",
+            ("filigree-test", "t", "2026-05-17T00:00:00+00:00", "2026-05-17T00:00:00+00:00"),
+        )
+        conn.execute(
+            "INSERT INTO entity_associations VALUES (?, ?, ?, ?, ?)",
+            ("filigree-test", "not-a-clarion-grammar-id", "abc", "2026-05-17T00:00:00+00:00", "tester"),
+        )
+        conn.commit()
+        conn.close()
+
+    def test_cascade_delete_removes_associations(self, tmp_path: Path) -> None:
+        """ON DELETE CASCADE on issue_id — associations die with their issue."""
+        conn = _make_db(tmp_path)
+        conn.executescript(SCHEMA_SQL)
+        conn.execute("PRAGMA foreign_keys=ON")
+        conn.execute(
+            "INSERT INTO issues (id, title, created_at, updated_at) VALUES (?, ?, ?, ?)",
+            ("filigree-test", "t", "2026-05-17T00:00:00+00:00", "2026-05-17T00:00:00+00:00"),
+        )
+        conn.execute(
+            "INSERT INTO entity_associations VALUES (?, ?, ?, ?, ?)",
+            ("filigree-test", "py:func:foo", "abc", "2026-05-17T00:00:00+00:00", "tester"),
+        )
+        conn.commit()
+
+        conn.execute("DELETE FROM issues WHERE id = ?", ("filigree-test",))
+        conn.commit()
+        rows = conn.execute("SELECT * FROM entity_associations").fetchall()
+        assert rows == []
+        conn.close()
+
+    def test_migration_v14_to_v15_adds_table(self, tmp_path: Path) -> None:
+        """Pin the v14→v15 migration in isolation, not just CURRENT-1."""
+        conn = _make_db(tmp_path)
+        conn.executescript(SCHEMA_SQL)
+        # Bump version *down* to v14 and drop the table so the migration
+        # has to re-create it.
+        conn.execute("PRAGMA user_version = 14")
+        conn.execute("DROP INDEX IF EXISTS ix_entity_assoc_entity")
+        conn.execute("DROP TABLE IF EXISTS entity_associations")
+        conn.commit()
+        assert "entity_associations" not in _get_table_names(conn)
+
+        apply_pending_migrations(conn, CURRENT_SCHEMA_VERSION)
+
+        assert "entity_associations" in _get_table_names(conn)
+        assert "ix_entity_assoc_entity" in _get_index_names(conn)
+        columns = _get_table_columns(conn, "entity_associations")
+        assert "clarion_entity_id" in columns
+        assert "content_hash_at_attach" in columns
+        conn.close()
+
+
 # ---------------------------------------------------------------------------
 # Migration runner tests
 # ---------------------------------------------------------------------------
