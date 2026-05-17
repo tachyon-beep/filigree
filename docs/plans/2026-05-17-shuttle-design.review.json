@@ -1,0 +1,250 @@
+{
+  "verdict": "CHANGES_REQUESTED",
+  "summary": "Shuttle architecture design has 6 blocking issues with strong cross-reviewer convergence on three structural problems: (1) the Section 11.5 planning-pack deprecation is presented as a clean cut but breaks pack dependency graphs and orphans types/relations (caught by all 4 reviewers); (2) prose_blocks 'append-only with mutable cache column' is internally inconsistent (caught by all 4); (3) the Loom federation peer is treated as a scheduling note but is a hard prerequisite whose URI scheme is a one-way door (caught by Architecture, Quality, Systems). Specialist findings include a non-expressible polymorphic FK (Systems), total absence of test strategy and observability (Quality), and Wardline being aspirational while presented as a peer (Reality). 28 warnings consolidated to 14. The design is salvageable but requires structural revision plus splitting into 3 documents (Shuttle proper, filigree planning-pack deprecation plan, Loom URI scheme spec) before implementation begins.",
+  "plan_file": "/home/john/filigree/docs/plans/2026-05-17-shuttle-design.md",
+  "reviewed_at": "2026-05-17T00:00:00Z",
+  "reviewers": ["reality", "architecture", "quality", "systems"],
+  "convergence_signal": {
+    "caught_by_all_four": [
+      "Section 11.5 planning-pack deprecation is underspecified / structurally broken",
+      "prose_blocks append-only with write-through mutable cache is internally inconsistent"
+    ],
+    "caught_by_three": [
+      "Loom is a hard dependency with no spec; URI scheme is a one-way door",
+      "ready_for_review event has no Clarion consumer and no orphan path"
+    ],
+    "specialist_unique": {
+      "reality": "Section 11.5 incorrectly claims release is in the planning pack (it has its own release pack)",
+      "architecture": "Premature divergence of federation primitives instead of extracting loom-core",
+      "quality": "No test strategy, no observability, no force escape hatch definition",
+      "systems": "Polymorphic FK not expressible in SQLite as written; clock skew in block ordering"
+    }
+  },
+  "blocking_issues": [
+    {
+      "id": "B1",
+      "sources": ["reality", "architecture", "quality", "systems"],
+      "issue": "Section 11.5 planning-pack deprecation is structurally broken and underspecified",
+      "evidence": "Reality: design says release is in planning pack but it lives in a separate release pack (templates_data.py:1527). Architecture: release and roadmap packs declare requires_packs:['core','planning']; deprecating planning's milestone/phase/step leaves ghost dependencies. Systems: planning pack has 5 types (milestone, phase, step, work_package, deliverable) plus relations; option (c) addresses 3, orphans 2. Quality: no migration script, no validation pass, no rollback, no sequencing. 2 live milestones exist in current .filigree/filigree.db.",
+      "severity": 4,
+      "likelihood": 3,
+      "reversibility": 3,
+      "priority_score": 36,
+      "resolution": "Split Section 11.5 into a dedicated filigree planning-pack deprecation plan. Inventory all 5 planning types + relations + dependent packs (release, roadmap). Specify migration tool for live milestone data, pack-dependency resolution sequence, rollback path. Do not present option (c) as a clean cut."
+    },
+    {
+      "id": "B2",
+      "sources": ["reality", "architecture", "quality", "systems"],
+      "issue": "prose_blocks 'append-only with mutable cache column' is internally inconsistent",
+      "evidence": "Systems: cache column re-introduces mutation onto append-only store; Loom reads from cache see stale data; rebuild divergence undefined. Architecture: one-way-door framing in Section 11.2 is backwards — mutable -> append-only (Batch 1->2) is the expensive direction, not the reverse. Quality: concurrent supersession creates forked chains with undefined renderer behavior. Reality: 'append-only event log' overstates physical immutability (compact_events() at db_events.py:501,523 deletes).",
+      "severity": 4,
+      "likelihood": 3,
+      "reversibility": 2,
+      "priority_score": 24,
+      "resolution": "Demote prose cache to explicitly non-authoritative read cache. Require Loom reads go through blocks API. Specify rebuild semantics and ordering (monotonic write counter, not wall clock — Systems R6). Specify Batch 1 -> Batch 2 migration explicitly (existing description becomes first prose_block with author='migration'). Use 'operationally append-only' language; acknowledge compact_events precedent."
+    },
+    {
+      "id": "B3",
+      "sources": ["architecture", "quality", "systems"],
+      "issue": "Loom is a hard prerequisite treated as a scheduling note; URI scheme is a one-way door",
+      "evidence": "Architecture: Section 11.6 acknowledges URI scheme as 'a Loom-spec concern' but the URI shape determines prepare_step resolution mechanism and gets baked into stored attachments. Quality: no Loom API contract tests specified; no authorization model for Loom attachment writes; URI self-registration has no collision protection. Systems: prepare_step batched Loom call has no partial-failure spec — subagent acts on incomplete StepPrepBrief without knowing.",
+      "severity": 4,
+      "likelihood": 3,
+      "reversibility": 3,
+      "priority_score": 36,
+      "resolution": "Split Section 11.6 into a separate Loom URI scheme spec document. That spec must be written and reviewed before Shuttle Batch 3 begins. Add per-attachment status (resolved/unavailable/not_found/timeout) to StepPrepBrief. Specify URI collision protection and attachment authorization model. State explicitly that Shuttle Batches 1+2 are useful solo-agent value; fleet value lands only after Loom spec ships."
+    },
+    {
+      "id": "B4",
+      "sources": ["quality", "systems"],
+      "issue": "ready_for_review event has no Clarion consumer and no orphan path",
+      "evidence": "Systems: Shuttle ships before Clarion. record_event(kind='ready_for_review') fires with no listener, no timeout, no reaper, no replay-from-event-log statement. Step appears healthy; no review happens silently. Quality: no observability means the silent failure is undetectable. Reality flagged Clarion as 'active partner' but Wardline (and arguably Clarion's review consumer for ready_for_review) is aspirational.",
+      "severity": 3,
+      "likelihood": 3,
+      "reversibility": 2,
+      "priority_score": 18,
+      "resolution": "Specify orphan path: TTL on unconsumed ready_for_review events with surfacing to step state, OR explicit 'Clarion replays from event log on first connect' contract. Add minimum observability: log + metric for events with no consumer attached. Define handoff contract in Shuttle spec, not deferred to Clarion."
+    },
+    {
+      "id": "B5",
+      "sources": ["systems"],
+      "issue": "Polymorphic foreign key in shuttle_attachments and prose_blocks is not expressible as written",
+      "evidence": "Both shuttle_attachments.shuttle_object_id and prose_blocks.parent_id reference 'shuttle objects' meaning plan, stage, or step. SQLite FK mechanism requires a single target table. Schema as written will not run.",
+      "severity": 4,
+      "likelihood": 3,
+      "reversibility": 2,
+      "priority_score": 24,
+      "resolution": "Pick one of: (a) per-kind attachment/block tables, (b) polymorphic parent table (shuttle_objects with kind column, child tables FK to it), (c) check-constrained (parent_kind, parent_id) pair with app-level integrity. Decide before Batch 1 schema lands; this is a true one-way door once data exists."
+    },
+    {
+      "id": "B6",
+      "sources": ["quality"],
+      "issue": "No test strategy, no observability, no force-escape-hatch definition anywhere in design",
+      "evidence": "Zero test types, file paths, commands, or coverage expectations across 9 specifications. No logging/metrics/traces requirements for a component that owns cross-component handoffs and batched external calls. 'force' bypass referenced in Section 5.2 with no actor model, audit trail, or definition.",
+      "severity": 3,
+      "likelihood": 3,
+      "reversibility": 1,
+      "priority_score": 9,
+      "resolution": "Add a Testing & Observability section before Section 10 (Batching). Minimum: kind-gated field validator tests, prose_blocks cache consistency tests, prepare_step partial-failure tests, Loom API contract tests, observability requirements for ready_for_review and prepare_step. Define 'force' as audited actor-scoped escape hatch with event-log trail or remove it."
+    }
+  ],
+  "warnings": [
+    {
+      "id": "W1",
+      "sources": ["architecture"],
+      "issue": "Premature divergence of federation primitives",
+      "priority_score": 12,
+      "recommendation": "Before Shuttle Batch 1, extract filigree's mature claim/heartbeat/expected_assignee/event-log primitives into loom-core (or filigree-primitives). Shuttle imports rather than re-implements. Section 3.1's 'shared library later' framing is the standard anti-pattern."
+    },
+    {
+      "id": "W2",
+      "sources": ["reality"],
+      "issue": "Design blurs 'exists' vs 'aspirational' for Loom peers",
+      "priority_score": 9,
+      "recommendation": "Wardline is named-only in ADR-002:21 with no code/contracts/endpoints. Add an honest status table to Section 3: which peers exist, which are aspirational. Don't lean design weight on aspirational peers."
+    },
+    {
+      "id": "W3",
+      "sources": ["architecture"],
+      "issue": "Section 8 surviving objections are admissions, not mitigations",
+      "priority_score": 8,
+      "recommendation": "export_plan is one-way. Re-import from markdown projection loses authorship history, block supersession, outcome enumerations. State explicitly that Shuttle plans are not equivalent to narrative plans for reasoning-history use cases."
+    },
+    {
+      "id": "W4",
+      "sources": ["systems"],
+      "issue": "record_event idempotency unspecified",
+      "priority_score": 8,
+      "recommendation": "Adopt the existing filigree pattern (INSERT OR IGNORE with dedup index, db_events.py:97). State this in Shuttle's event-log spec rather than letting each call site reinvent."
+    },
+    {
+      "id": "W5",
+      "sources": ["systems"],
+      "issue": "Clock skew in block ordering",
+      "priority_score": 8,
+      "recommendation": "Use monotonic per-parent write counter for block ordering, not wall-clock timestamp. Wall-clock is fine for display."
+    },
+    {
+      "id": "W6",
+      "sources": ["systems"],
+      "issue": "Supersession tip-check missing — mutual supersession possible",
+      "priority_score": 6,
+      "recommendation": "Add expected_tip parameter to supersede operation. Without it: A supersedes B while B supersedes A creates forked chain with undefined render."
+    },
+    {
+      "id": "W7",
+      "sources": ["quality"],
+      "issue": "Kind-gated enforcement is advisory ('expected') not validated",
+      "priority_score": 6,
+      "recommendation": "Specify whether kind-gated fields are validator-enforced or advisory. If advisory, say so; if enforced, point to validator location."
+    },
+    {
+      "id": "W8",
+      "sources": ["quality"],
+      "issue": "step.kind mutation undefined",
+      "priority_score": 6,
+      "recommendation": "State whether step.kind is immutable post-creation or transitions are allowed (and which). Affects field-gating semantics over a step's lifetime."
+    },
+    {
+      "id": "W9",
+      "sources": ["quality", "systems"],
+      "issue": "append_prose idempotency window unspecified",
+      "priority_score": 6,
+      "recommendation": "Section 10 mentions a 'short window' — give it a number (e.g., 30s) and a dedup key (parent_id + author + content_hash)."
+    },
+    {
+      "id": "W10",
+      "sources": ["systems"],
+      "issue": "diff_since_my_last_touch scope is ambiguous",
+      "priority_score": 5,
+      "recommendation": "Specify whether scope is step or stage. Affects which decisions/blocks/events the subagent sees on resume."
+    },
+    {
+      "id": "W11",
+      "sources": ["quality"],
+      "issue": "prose_blocks has no PII/redaction story",
+      "priority_score": 5,
+      "recommendation": "Append-only stores make redaction structurally hard. State the policy: never log PII into blocks, or specify a redaction-via-supersession contract."
+    },
+    {
+      "id": "W12",
+      "sources": ["quality", "systems"],
+      "issue": "Git-checkin workaround for .shuttle/ is net-negative",
+      "priority_score": 5,
+      "recommendation": "Drop the .shuttle/ git-checkin option. The .filigree/ precedent only tracks scaffold (gitkeep + scanner config), not the SQLite database. Binary diffs and merge conflicts are unresolvable."
+    },
+    {
+      "id": "W13",
+      "sources": ["quality"],
+      "issue": "Canary 9.4 (TDD event omission >20% threshold) is unfalsifiable without instrumentation",
+      "priority_score": 4,
+      "recommendation": "Tie canary thresholds to observability hooks defined in B6's resolution. Without instrumentation the canaries are aspirational."
+    },
+    {
+      "id": "W14",
+      "sources": ["architecture"],
+      "issue": "followup_steps on spike is questionable; consider parent_spike_id on spawned step",
+      "priority_score": 4,
+      "recommendation": "Inverting the relation (spawned steps point to parent spike) is more idiomatic and avoids unbounded list growth on the spike."
+    }
+  ],
+  "recommendations": [
+    {
+      "type": "SPLIT_DOCUMENT",
+      "source": "architecture",
+      "suggestion": "Split this design into 3 documents: (1) Shuttle proper (Sections 1-10, revised), (2) Filigree planning-pack deprecation plan (expanded 11.5), (3) Loom URI scheme spec (expanded 11.6). Each has different reviewers, timelines, and approval gates."
+    },
+    {
+      "type": "PREREQUISITE",
+      "source": "architecture",
+      "suggestion": "Loom URI scheme spec must ship before Shuttle Batch 3 begins. URIs in stored attachments are a one-way door."
+    },
+    {
+      "type": "EXTRACT_SHARED_LIBRARY",
+      "source": "architecture",
+      "suggestion": "Extract loom-core (or filigree-primitives) from filigree's mature claim/heartbeat/event-log code before Shuttle Batch 1. Shuttle imports."
+    },
+    {
+      "type": "ACKNOWLEDGE_USER_POPULATION_SEQUENCING",
+      "source": "architecture",
+      "suggestion": "Make explicit: Batches 1+2 deliver solo-agent value; fleet coordination via prepare_step needs Loom+Clarion and lands in Batch 3."
+    },
+    {
+      "type": "ADD_TESTING_OBSERVABILITY_SECTION",
+      "source": "quality",
+      "suggestion": "Add explicit Testing & Observability section before Section 10. Without it no canary in Section 9 is falsifiable."
+    },
+    {
+      "type": "STRONG_SECTION",
+      "source": "architecture",
+      "suggestion": "Canary trigger model in 6.2/9 is one of the design's strongest sections — preserve it through revision."
+    },
+    {
+      "type": "REMOVE_PROVENANCE_SECTION",
+      "source": "quality",
+      "suggestion": "Section 12 (Provenance) belongs in commit message, not spec body. Remove."
+    }
+  ],
+  "conflicts_resolved": [
+    {
+      "issue": "Direction of prose_blocks one-way door",
+      "architecture_view": "Section 11.2 framing is right call for wrong stated reason; expensive direction is mutable -> append-only (Batch 1 -> Batch 2)",
+      "systems_view": "Cache write-through re-introduces mutation onto append-only; semantic inconsistency in either direction",
+      "resolution": "Both correct, different layers. Architecture is right about migration direction (Batch 1 -> 2 is the expensive cut); Systems is right that the cache column makes the 'append-only' claim semantically muddy regardless. B2 resolution covers both."
+    },
+    {
+      "issue": "Severity of Section 11.5",
+      "reality_view": "Warning (factual error about release pack)",
+      "architecture_view": "Blocking (pack dependency graph)",
+      "quality_view": "Blocking (no migration mechanism)",
+      "systems_view": "Blocking (orphaned types and relations)",
+      "resolution": "Blocking. Three of four reviewers flagged it as blocker; Reality's warning was scoped narrower to a factual claim. Consolidated as B1 with all four perspectives."
+    }
+  ],
+  "reviewer_summaries": {
+    "reality": { "status": "ISSUES_FOUND", "blocking": 0, "warnings": 4 },
+    "architecture": { "status": "ISSUES_FOUND", "blocking": 2, "warnings": 4 },
+    "quality": { "status": "ISSUES_FOUND", "blocking": 5, "warnings": 12 },
+    "systems": { "status": "ISSUES_FOUND", "blocking": 1, "warnings": 8 }
+  }
+}

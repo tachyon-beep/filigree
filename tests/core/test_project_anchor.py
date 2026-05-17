@@ -399,6 +399,201 @@ class TestForeignDatabaseDetection:
             find_filigree_anchor(inner)
 
 
+class TestGitWorktreeDiscovery:
+    """Git linked worktrees place a ``.git`` *file* (not directory) at the
+    worktree root pointing at ``<main_repo>/.git/worktrees/<name>/``. Naïve
+    walk-up discovery would treat that file as a project boundary and raise
+    ``ForeignDatabaseError`` even though the worktree belongs to the same
+    project as the main worktree. Discovery must recognise the worktree
+    pointer and redirect to the main worktree root.
+    """
+
+    @staticmethod
+    def _make_main_repo(tmp_path: Path, *, with_anchor: bool = True) -> Path:
+        """Set up a main repo with ``.git/``, optionally with a filigree anchor."""
+        repo = tmp_path / "main-repo"
+        repo.mkdir(parents=True)
+        (repo / ".git").mkdir()
+        if with_anchor:
+            write_conf(
+                repo / CONF_FILENAME,
+                {"version": 1, "project_name": "main", "prefix": "main", "db": ".filigree/filigree.db"},
+            )
+            (repo / FILIGREE_DIR_NAME).mkdir()
+        return repo
+
+    @staticmethod
+    def _make_worktree(main_repo: Path, worktree_root: Path, name: str) -> Path:
+        """Create a linked-worktree skeleton: ``.git`` file + main-repo bookkeeping."""
+        wt_admin = main_repo / ".git" / "worktrees" / name
+        wt_admin.mkdir(parents=True)
+        worktree_root.mkdir(parents=True, exist_ok=True)
+        (worktree_root / ".git").write_text(f"gitdir: {wt_admin}\n")
+        return worktree_root
+
+    def test_worktree_inside_main_repo_finds_main_anchor(self, tmp_path: Path) -> None:
+        """``main-repo/.worktrees/feature-x/`` resolves to main-repo's anchor."""
+        main = self._make_main_repo(tmp_path)
+        wt = self._make_worktree(main, main / ".worktrees" / "feature-x", "feature-x")
+
+        project_root, conf_path = find_filigree_anchor(wt)
+        assert project_root == main
+        assert conf_path == main / CONF_FILENAME
+
+    def test_worktree_outside_main_repo_finds_main_anchor(self, tmp_path: Path) -> None:
+        """Worktree placed as a sibling of the repo still resolves correctly."""
+        main = self._make_main_repo(tmp_path)
+        wt = self._make_worktree(main, tmp_path / "sibling-worktree", "sibling")
+
+        project_root, conf_path = find_filigree_anchor(wt)
+        assert project_root == main
+        assert conf_path == main / CONF_FILENAME
+
+    def test_deep_subdir_inside_worktree_resolves(self, tmp_path: Path) -> None:
+        """Walk-up from several levels deep inside a worktree still works."""
+        main = self._make_main_repo(tmp_path)
+        wt = self._make_worktree(main, main / ".worktrees" / "feature-x", "feature-x")
+        deep = wt / "src" / "pkg"
+        deep.mkdir(parents=True)
+
+        project_root, conf_path = find_filigree_anchor(deep)
+        assert project_root == main
+        assert conf_path == main / CONF_FILENAME
+
+    def test_find_filigree_conf_also_resolves_worktree(self, tmp_path: Path) -> None:
+        """The strict variant must apply the same redirect."""
+        main = self._make_main_repo(tmp_path)
+        wt = self._make_worktree(main, tmp_path / "wt", "wt")
+
+        assert find_filigree_conf(wt) == main / CONF_FILENAME
+
+    def test_worktree_of_uninitialised_project_raises_not_initialised(self, tmp_path: Path) -> None:
+        """Worktree of a repo with no anchor must raise ``ProjectNotInitialisedError``,
+        not ``ForeignDatabaseError`` — the boundary guard fired spuriously before.
+        """
+        main = self._make_main_repo(tmp_path, with_anchor=False)
+        wt = self._make_worktree(main, tmp_path / "wt", "wt")
+
+        with pytest.raises(ProjectNotInitialisedError) as excinfo:
+            find_filigree_anchor(wt)
+        # Specifically NOT a ForeignDatabaseError — there is no foreign DB here.
+        assert not isinstance(excinfo.value, ForeignDatabaseError)
+
+    def test_submodule_still_a_boundary(self, tmp_path: Path) -> None:
+        """Submodules use a ``.git`` file too, but with ``modules/`` not
+        ``worktrees/`` — must remain a project boundary.
+        """
+        write_conf(
+            tmp_path / CONF_FILENAME,
+            {"version": 1, "project_name": "outer", "prefix": "outer", "db": ".filigree/filigree.db"},
+        )
+        submodule = tmp_path / "submodule"
+        submodule.mkdir()
+        (submodule / ".git").write_text("gitdir: ../.git/modules/submodule\n")
+
+        with pytest.raises(ForeignDatabaseError):
+            find_filigree_anchor(submodule)
+
+    def test_relative_gitdir_in_worktree_pointer(self, tmp_path: Path) -> None:
+        """Some git versions write a relative ``gitdir:`` path. Must still resolve."""
+        main = self._make_main_repo(tmp_path)
+        wt_admin = main / ".git" / "worktrees" / "rel"
+        wt_admin.mkdir(parents=True)
+        wt = main / ".worktrees" / "rel"
+        wt.mkdir(parents=True)
+        # Relative pointer: from wt/.git up to main/.git/worktrees/rel
+        rel = os.path.relpath(wt_admin, wt)
+        (wt / ".git").write_text(f"gitdir: {rel}\n")
+
+        project_root, _ = find_filigree_anchor(wt)
+        assert project_root == main
+
+    def test_nested_conf_inside_worktree_wins_over_main(self, tmp_path: Path) -> None:
+        """A nested ``.filigree.conf`` inside a worktree subtree must still win.
+
+        Codex review #39: the redirect must not skip past closer anchors in
+        the worktree's own subtree, otherwise sub-projects inside a worktree
+        get routed to the main repo's DB instead of their own.
+        """
+        main = self._make_main_repo(tmp_path)
+        wt = self._make_worktree(main, tmp_path / "wt", "wt")
+        # Nested sub-project inside the worktree, with its own conf.
+        nested = wt / "subproject"
+        nested.mkdir()
+        nested_conf = nested / CONF_FILENAME
+        write_conf(
+            nested_conf,
+            {"version": 1, "project_name": "nested", "prefix": "nested", "db": ".filigree/filigree.db"},
+        )
+
+        # From inside the nested sub-project: nested wins, not main.
+        project_root, conf_path = find_filigree_anchor(nested / "src")
+        assert project_root == nested
+        assert conf_path == nested_conf
+
+        # Strict resolver agrees.
+        assert find_filigree_conf(nested / "src") == nested_conf
+
+        # And from the worktree root itself (above nested): we redirect to
+        # main (no nested anchor in this direct ancestry).
+        project_root, _ = find_filigree_anchor(wt)
+        assert project_root == main
+
+    def test_nested_legacy_dir_inside_worktree_wins_over_main(self, tmp_path: Path) -> None:
+        """A nested legacy ``.filigree/`` inside a worktree subtree also wins."""
+        main = self._make_main_repo(tmp_path)
+        wt = self._make_worktree(main, tmp_path / "wt", "wt")
+        nested = wt / "legacy-sub"
+        nested.mkdir()
+        (nested / FILIGREE_DIR_NAME).mkdir()
+
+        project_root, conf_path = find_filigree_anchor(nested / "deep" / "code")
+        assert project_root == nested
+        assert conf_path is None
+
+    def test_foreign_database_error_reports_original_cwd(self, tmp_path: Path) -> None:
+        """When the redirect resolves a worktree and the *main* worktree itself
+        lives inside a foreign project, ``ForeignDatabaseError.cwd`` must report
+        the caller's original CWD (inside the worktree), not the redirected
+        main worktree root — otherwise the diagnostic points at the wrong place.
+        """
+        # Outer project has its own .filigree.conf
+        write_conf(
+            tmp_path / CONF_FILENAME,
+            {"version": 1, "project_name": "outer", "prefix": "outer", "db": ".filigree/filigree.db"},
+        )
+        # Main repo nested inside the outer project, with no anchor of its own.
+        main = self._make_main_repo(tmp_path / "main", with_anchor=False)
+        # Worktree of the main repo.
+        wt = self._make_worktree(main, tmp_path / "wt", "wt")
+        wt_subdir = wt / "src"
+        wt_subdir.mkdir()
+
+        with pytest.raises(ForeignDatabaseError) as excinfo:
+            find_filigree_anchor(wt_subdir)
+        # The redirect resolved to ``main``; the boundary is ``main`` itself;
+        # but ``cwd`` must point at the caller's original location.
+        assert excinfo.value.cwd == wt_subdir.resolve()
+        assert excinfo.value.git_boundary == main.resolve()
+
+    def test_malformed_git_file_is_left_alone(self, tmp_path: Path) -> None:
+        """A ``.git`` file with no ``gitdir:`` line falls back to start-unchanged
+        behaviour — the existing walk-up handles whatever ancestry exists.
+        """
+        write_conf(
+            tmp_path / CONF_FILENAME,
+            {"version": 1, "project_name": "outer", "prefix": "outer", "db": ".filigree/filigree.db"},
+        )
+        weird = tmp_path / "weird"
+        weird.mkdir()
+        (weird / ".git").write_text("# not a worktree pointer\n")
+
+        # ``.git`` is a file, but not a worktree pointer — the existing
+        # boundary logic still treats it as a boundary and refuses.
+        with pytest.raises(ForeignDatabaseError):
+            find_filigree_anchor(weird)
+
+
 # ---------------------------------------------------------------------------
 # FiligreeDB.from_project / from_conf — discovery integration
 # ---------------------------------------------------------------------------
