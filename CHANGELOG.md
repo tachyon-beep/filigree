@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`start_work` / `start_next_work` hold the writer lock only across the
+  claim+update composite (2.1.0 §2.2).** Candidate discovery
+  (`get_ready`) and per-candidate template lookups
+  (`tpl.reachable_working_status`) now run lock-free in the public
+  wrappers; the new private `_start_work_locked` is the only piece
+  decorated with `@_in_immediate_tx`. Public signatures unchanged. A
+  new `_StartCandidateUnclaimableError` internal sentinel wraps
+  claim-phase race failures so the `start_next_work` iterator can
+  distinguish "try a different candidate" from a user-supplied error
+  in the transition phase (e.g. an explicit bogus `target_status`),
+  which propagates unchanged. `start_work` unwraps the sentinel to
+  preserve its public API contract. Closes embedded-db M2 from the
+  2.1.0 panel review.
+
 - **Every write method on `IssuesMixin` now begins `BEGIN IMMEDIATE`
   before the first SQL statement and retries transient `SQLITE_BUSY` /
   `SQLITE_LOCKED` (2.1.0 §2.1).** New `@_in_immediate_tx("op_name")` and

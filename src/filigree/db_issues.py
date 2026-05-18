@@ -39,6 +39,19 @@ logger = logging.getLogger(__name__)
 _REOPEN_CLEAR_FIELDS = frozenset({"close_reason"})
 DEFAULT_CLAIM_LEASE_HOURS = 48
 
+
+class _StartCandidateUnclaimableError(Exception):
+    """Internal sentinel: ``_start_work_locked``'s claim phase failed.
+
+    Wraps the original ``ValueError`` / ``KeyError`` from ``claim_issue`` so
+    the ``start_next_work`` iterator can distinguish "try a different
+    candidate" from a user-supplied error in the transition phase (which
+    propagates unchanged). Outside the iteration loop, ``start_work``
+    unwraps the sentinel and re-raises the original exception to preserve
+    its public API contract (2.1.0 §2.2).
+    """
+
+
 _LIST_ISSUE_SORT_COLUMNS = {
     "created_at": "i.created_at",
     "updated_at": "i.updated_at",
@@ -1578,8 +1591,6 @@ class IssuesMixin(DBMixinProtocol):
             logger.warning("claim_next: all %d candidate(s) failed to claim for '%s'", skipped, assignee)
         return None
 
-    @_retry_busy()
-    @_in_immediate_tx("start_work")
     def start_work(
         self,
         issue_id: str,
@@ -1590,13 +1601,13 @@ class IssuesMixin(DBMixinProtocol):
     ) -> Issue:
         """Atomically claim an issue and transition it to a working status.
 
-        Phase D6 composed operation. The ``@_in_immediate_tx`` decorator owns
-        the surrounding ``BEGIN IMMEDIATE`` + commit/rollback lifecycle. The
-        inner ``claim_issue`` and ``update_issue`` calls pass
-        ``_skip_begin=True`` so they run inside this outer transaction. If
-        the transition fails, the decorator rolls back the whole composite —
-        both the attempted claim and its audit event vanish, so failed
-        starts do not look like real claim/release handoffs.
+        Phase D6 composed operation. ``target_status`` resolution runs
+        lock-free in this public wrapper; the writer lock is acquired only
+        inside ``_start_work_locked``, which composes ``claim_issue`` +
+        ``update_issue`` under one ``BEGIN IMMEDIATE`` (2.1.0 §2.2). The
+        held-writer window shrinks to claim UPDATE + status UPDATE + event
+        INSERTs + COMMIT — the prior implementation held the lock through
+        the template lookup as well.
 
         ``target_status`` defaults to the unique wip-category status reachable
         from the issue's current status. If the current status can transition
@@ -1611,21 +1622,20 @@ class IssuesMixin(DBMixinProtocol):
         wiping out an unrelated, pre-existing claim.
         """
         actor = actor or assignee
-
-        issue = self.claim_issue(issue_id, assignee=assignee, actor=actor, _skip_begin=True)
-
+        self._check_id_prefix(issue_id)
         if target_status is None:
-            tpl = self.templates.get_type(issue.type)
-            if tpl is None:
-                from filigree.types.api import InvalidTransitionError
+            target_status = self._resolve_start_target(issue_id)
+        try:
+            return self._start_work_locked(
+                issue_id,
+                assignee=assignee,
+                target_status=target_status,
+                actor=actor,
+            )
+        except _StartCandidateUnclaimableError as exc:
+            # Public API contract: surface the underlying claim error.
+            raise exc.__cause__ from None  # type: ignore[misc]
 
-                raise InvalidTransitionError(issue.type, issue.status)
-            target_status = tpl.reachable_working_status(issue.status)
-
-        return self.update_issue(issue_id, status=target_status, actor=actor, _skip_begin=True)
-
-    @_retry_busy()
-    @_in_immediate_tx("start_next_work")
     def start_next_work(
         self,
         *,
@@ -1639,39 +1649,116 @@ class IssuesMixin(DBMixinProtocol):
         """Claim the highest-priority ready issue (filtered) and atomically
         transition it to a working status.
 
-        Phase D6 composed operation: ``claim_next`` + atomic transition. The
-        ``@_in_immediate_tx`` decorator owns the outer transaction; inner
-        calls pass ``_skip_begin=True``. On exception the decorator rolls
-        back the whole composite — both the attempted claim and its
-        ``claimed`` event vanish.
+        Phase D6 composed operation. Candidate discovery (``get_ready``) and
+        per-candidate ``target_status`` resolution run lock-free; only the
+        per-candidate claim+transition composite acquires a writer lock,
+        via ``_start_work_locked`` (2.1.0 §2.2). On a per-candidate race
+        (claim conflict, status mismatch, deleted issue), the iteration
+        continues to the next candidate without holding any lock.
 
         Returns ``None`` if no ready issue matches the filters.
 
         Tie-break ordering inherits from ``claim_next``: priority asc,
         created_at asc, issue_id asc.
         """
+        if not assignee or not assignee.strip():
+            msg = "Assignee cannot be empty"
+            raise ValueError(msg)
         actor = actor or assignee
-        claimed_with_prior = self._claim_next_with_prior(
-            assignee,
-            type_filter=type_filter,
-            priority_min=priority_min,
-            priority_max=priority_max,
-            actor=actor,
-            _skip_begin=True,
-        )
-        if claimed_with_prior is None:
-            return None
-        claimed, _prior_assignee = claimed_with_prior
 
-        if target_status is None:
-            tpl = self.templates.get_type(claimed.type)
-            if tpl is None:
-                from filigree.types.api import InvalidTransitionError
+        # Discover candidates outside any writer transaction.
+        ready = self.get_ready()
 
-                raise InvalidTransitionError(claimed.type, claimed.status)
-            target_status = tpl.reachable_working_status(claimed.status)
+        skipped = 0
+        for issue in ready:
+            if type_filter is not None and issue.type != type_filter:
+                continue
+            if priority_min is not None and issue.priority < priority_min:
+                continue
+            if priority_max is not None and issue.priority > priority_max:
+                continue
 
-        return self.update_issue(claimed.id, status=target_status, actor=actor, _skip_begin=True)
+            # Resolve target_status per-candidate, lock-free. Template
+            # errors (no template, AmbiguousTransitionError, no reachable
+            # wip status) propagate — they signal a programmer error or
+            # workflow mismatch that retrying a different candidate
+            # cannot fix.
+            if target_status is None:
+                tpl = self.templates.get_type(issue.type)
+                if tpl is None:
+                    from filigree.types.api import InvalidTransitionError
+
+                    raise InvalidTransitionError(issue.type, issue.status)
+                this_target = tpl.reachable_working_status(issue.status)
+            else:
+                this_target = target_status
+
+            try:
+                return self._start_work_locked(
+                    issue.id,
+                    assignee=assignee,
+                    target_status=this_target,
+                    actor=actor,
+                )
+            except _StartCandidateUnclaimableError as exc:
+                # Race / status mismatch / deleted — try next candidate.
+                skipped += 1
+                logger.debug("start_next_work: skipping %s: %s", issue.id, exc.__cause__)
+                continue
+
+        if skipped:
+            logger.warning("start_next_work: all %d candidate(s) failed to claim for '%s'", skipped, assignee)
+        return None
+
+    def _resolve_start_target(self, issue_id: str) -> str:
+        """Resolve the default wip-target status for ``issue_id`` lock-free.
+
+        Reads the issue's type and current status, then asks the template
+        for the unique reachable wip-category status. Surfaces
+        ``InvalidTransitionError`` / ``AmbiguousTransitionError`` for
+        callers that did not pass an explicit ``target_status``.
+        """
+        row = self.conn.execute("SELECT type, status FROM issues WHERE id = ?", (issue_id,)).fetchone()
+        if row is None:
+            msg = f"Issue not found: {issue_id}"
+            raise KeyError(msg)
+        tpl = self.templates.get_type(row["type"])
+        if tpl is None:
+            from filigree.types.api import InvalidTransitionError
+
+            raise InvalidTransitionError(row["type"], row["status"])
+        return tpl.reachable_working_status(row["status"])
+
+    @_retry_busy()
+    @_in_immediate_tx("start_work")
+    def _start_work_locked(
+        self,
+        issue_id: str,
+        *,
+        assignee: str,
+        target_status: str,
+        actor: str,
+    ) -> Issue:
+        """Private critical section for ``start_work`` / ``start_next_work``.
+
+        The ``@_in_immediate_tx`` decorator wraps a tight claim+update
+        composite — no template lookups, no candidate discovery — so the
+        writer lock is held only across the SQL writes (2.1.0 §2.2). On
+        exception the decorator rolls back both the claim and its audit
+        event.
+
+        Claim-phase failures (race, status mismatch, deleted issue) are
+        repackaged as ``_StartCandidateUnclaimableError`` so the
+        ``start_next_work`` iterator can distinguish "try another
+        candidate" from a user-supplied error in the transition phase
+        (e.g. a bogus explicit ``target_status``), which propagates
+        unchanged.
+        """
+        try:
+            self.claim_issue(issue_id, assignee=assignee, actor=actor, _skip_begin=True)
+        except (ValueError, KeyError) as exc:
+            raise _StartCandidateUnclaimableError(issue_id) from exc
+        return self.update_issue(issue_id, status=target_status, actor=actor, _skip_begin=True)
 
     def _batch_with_transition_errors(
         self,
