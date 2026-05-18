@@ -9,7 +9,9 @@ if TYPE_CHECKING:
 
 ISOTimestamp = NewType("ISOTimestamp", str)
 IssueId = NewType("IssueId", str)
-ClarionEntityId = NewType("ClarionEntityId", str)
+FileId = NewType("FileId", str)
+EntityId = NewType("EntityId", str)
+ClarionEntityId = EntityId
 ContentHash = NewType("ContentHash", str)
 
 _MAX_CONTENT_HASH_LEN = 512
@@ -23,8 +25,16 @@ def make_issue_id(value: str) -> IssueId:
     return IssueId(value)
 
 
-def make_clarion_entity_id(value: str) -> ClarionEntityId:
-    """Validate and brand an opaque Clarion entity id.
+def make_file_id(value: str) -> FileId:
+    """Validate and brand a Filigree-local file id crossing an untyped boundary."""
+    if not isinstance(value, str) or not value.strip():
+        msg = "file_id must not be blank"
+        raise ValueError(msg)
+    return FileId(value)
+
+
+def make_entity_id(value: str) -> EntityId:
+    """Validate and brand an opaque federated entity id.
 
     Filigree deliberately does not parse Clarion's entity-id grammar; this only
     rejects empty values at the local boundary.
@@ -32,7 +42,12 @@ def make_clarion_entity_id(value: str) -> ClarionEntityId:
     if not isinstance(value, str) or not value.strip():
         msg = "entity_id must not be blank"
         raise ValueError(msg)
-    return ClarionEntityId(value)
+    return EntityId(value)
+
+
+def make_clarion_entity_id(value: str) -> ClarionEntityId:
+    """Backward-compatible alias for Clarion-specific entity branding."""
+    return make_entity_id(value)
 
 
 def make_content_hash(value: str) -> ContentHash:
@@ -70,6 +85,7 @@ AnnotationTargetType = Literal["issue", "file", "finding", "observation"]
 AnnotationRelationship = Literal["relevant_to", "must_consider", "evidence_for", "explains", "created_from", "promoted_to"]
 AnnotationAnchorState = Literal["current", "line_drifted", "content_changed_anchor_found", "stale", "file_missing"]
 AnnotationProvenanceTrustLevel = Literal["complete", "partial", "minimal"]
+RegistryBackend = Literal["local", "clarion"]
 
 
 class _ProjectConfigRequired(TypedDict):
@@ -77,6 +93,14 @@ class _ProjectConfigRequired(TypedDict):
 
     prefix: str
     version: int
+
+
+class ClarionConfig(TypedDict, total=False):
+    """ADR-014 Clarion registry backend configuration."""
+
+    base_url: str
+    timeout_seconds: int | float
+    allow_local_fallback: bool
 
 
 class ProjectConfig(_ProjectConfigRequired, total=False):
@@ -89,8 +113,8 @@ class ProjectConfig(_ProjectConfigRequired, total=False):
     name: str
     enabled_packs: list[str]
     mode: str
-    registry_backend: str
-    clarion: dict[str, Any]
+    registry_backend: RegistryBackend
+    clarion: ClarionConfig
 
 
 _T = TypeVar("_T")
@@ -151,7 +175,7 @@ class FileRecordDict(TypedDict):
     language: str
     file_type: str
     content_hash: str
-    registry_backend: str
+    registry_backend: RegistryBackend
     created_by: str
     updated_by: str
     first_seen: ISOTimestamp

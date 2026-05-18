@@ -15,8 +15,8 @@ import pytest
 from filigree.core import FiligreeDB, write_config
 from filigree.mcp_server import call_tool, list_tools  # type: ignore[attr-defined]
 from filigree.mcp_tools.scanners import _validate_localhost_url
-from filigree.registry import ResolvedFile
 from filigree.types.api import ErrorCode
+from tests._fakes.registry import PathRegistry
 from tests.mcp._helpers import _parse
 
 
@@ -64,21 +64,6 @@ class _FakeProc:
 
     def poll(self) -> None:
         return None
-
-
-class _PathRegistry:
-    def resolve_file(self, path: str, *, language: str = "", actor: str = "") -> ResolvedFile:
-        file_path = path.replace("/", "-")
-        return {
-            "file_id": f"core:file:{file_path}",
-            "content_hash": "",
-            "canonical_path": path,
-            "language": language,
-            "registry_backend": "local",
-        }
-
-    def is_displaced(self) -> bool:
-        return False
 
 
 class TestPreviewScanTool:
@@ -390,7 +375,7 @@ class TestTriggerScanBatchTool:
     async def test_batch_scan_uses_registry_resolved_file_ids(self, mcp_db: FiligreeDB) -> None:
         files = _make_target_files(mcp_db, ["batch_registry_a.py", "batch_registry_b.py"])
         _write_scanner_toml(mcp_db)
-        mcp_db.registry = _PathRegistry()
+        mcp_db.registry = PathRegistry()
         try:
             with patch(
                 "filigree.scanner_runtime.subprocess.Popen",
@@ -885,7 +870,7 @@ class TestTriggerScanCooldownReservation:
     async def test_trigger_scan_uses_registry_resolved_file_id(self, mcp_db: FiligreeDB) -> None:
         files = _make_target_files(mcp_db, ["trigger_registry.py"])
         _write_scanner_toml(mcp_db)
-        mcp_db.registry = _PathRegistry()
+        mcp_db.registry = PathRegistry()
         try:
             with patch("filigree.scanner_runtime.subprocess.Popen", return_value=_FakeProc(100)):
                 data = _parse(

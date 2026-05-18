@@ -449,7 +449,8 @@ class ErrorCode(StrEnum):
     NOT_INITIALIZED = "NOT_INITIALIZED"
     IO = "IO"
     INVALID_API_URL = "INVALID_API_URL"
-    FILIGREE_FILE_REGISTRY_DISPLACED = "FILIGREE_FILE_REGISTRY_DISPLACED"
+    FILE_REGISTRY_DISPLACED = "FILE_REGISTRY_DISPLACED"
+    REGISTRY_UNAVAILABLE = "REGISTRY_UNAVAILABLE"
     STOP_FAILED = "STOP_FAILED"
     SCHEMA_MISMATCH = "SCHEMA_MISMATCH"
     INTERNAL = "INTERNAL"
@@ -703,9 +704,9 @@ def errorcode_to_http_status(code: ErrorCode) -> int:
             return 403
         case ErrorCode.NOT_FOUND:
             return 404
-        case ErrorCode.CONFLICT | ErrorCode.INVALID_TRANSITION | ErrorCode.FILIGREE_FILE_REGISTRY_DISPLACED:
+        case ErrorCode.CONFLICT | ErrorCode.INVALID_TRANSITION | ErrorCode.FILE_REGISTRY_DISPLACED:
             return 409
-        case ErrorCode.NOT_INITIALIZED | ErrorCode.SCHEMA_MISMATCH:
+        case ErrorCode.NOT_INITIALIZED | ErrorCode.SCHEMA_MISMATCH | ErrorCode.REGISTRY_UNAVAILABLE:
             # Service exists but is not in a state where it can answer —
             # 503 lets clients retry once the project is initialized or
             # the schema is migrated.
@@ -804,6 +805,8 @@ LEGACY_CODE_TO_ERRORCODE: dict[str, ErrorCode] = {
     "import_error": ErrorCode.IO,
     "batch_all_failed": ErrorCode.VALIDATION,  # rare; used in scanner batch path
     "invalid_api_url": ErrorCode.INVALID_API_URL,
+    "FILIGREE_FILE_REGISTRY_DISPLACED": ErrorCode.FILE_REGISTRY_DISPLACED,
+    "registry_unavailable": ErrorCode.REGISTRY_UNAVAILABLE,
     "stop_failed": ErrorCode.STOP_FAILED,
     # --- Added during Stage 2a sweep — legacy codes discovered beyond the
     # --- original 19-code mapping. Mapping decisions documented in

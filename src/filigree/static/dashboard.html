@@ -229,6 +229,18 @@ tailwind.config = {
   </div>
 </header>
 
+<div id="registryFallbackBanner"
+     role="status"
+     aria-live="polite"
+     class="hidden shrink-0 px-4 py-2 text-xs border-b"
+     style="background:#451A03;color:#FDE68A;border-color:#92400E">
+  <div class="max-w-7xl mx-auto flex items-center gap-2">
+    <span aria-hidden="true">&#9888;</span>
+    <span class="font-medium">Clarion registry fallback active</span>
+    <span>File records are being created locally while Clarion is unavailable.</span>
+  </div>
+</div>
+
 <!-- Main content area -->
 <main class="flex flex-1 overflow-hidden relative">
   <!-- Graph view -->

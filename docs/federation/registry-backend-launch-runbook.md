@@ -90,6 +90,15 @@ After rollback, set `registry_backend: local` or stop Filigree until Clarion is
 healthy. Re-run `GET /api/files/_schema` and a small scan ingest before
 returning writers to service.
 
+### Lost Rollback Manifest
+
+There is no supported `migrate-registry --to local` reconstruction path after
+the rollback manifest is lost. The manifest is the only artifact that records
+the old Filigree-local file IDs and every rewritten reference. If it is missing,
+restore the pre-migration database backup from step 2, or keep the project in
+`clarion` mode and repair Clarion availability/indexing. Do not attempt a
+hand-written local rollback against a live database.
+
 ## Failure Modes
 
 - If Clarion is unreachable in `clarion` mode, auto-create write paths return
@@ -98,7 +107,7 @@ returning writers to service.
   auto-creates through `LocalRegistry` while the project remains configured for
   `clarion`; do not leave it enabled after the incident.
 - Direct local file registration returns
-  `FILIGREE_FILE_REGISTRY_DISPLACED`. Use Clarion's read API instead.
+  `FILE_REGISTRY_DISPLACED`. Use Clarion's read API instead.
 - `entity_associations` is a peer primitive and is not migrated by
   `migrate-registry`; file identity displacement is additive over it.
 

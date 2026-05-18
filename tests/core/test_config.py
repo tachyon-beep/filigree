@@ -60,6 +60,46 @@ class TestReadConfig:
         assert config["clarion"]["timeout_seconds"] == 3
         assert config["clarion"]["allow_local_fallback"] is True
 
+    def test_read_config_rejects_invalid_clarion_base_url(self, tmp_path: Path) -> None:
+        filigree_dir = tmp_path / ".filigree"
+        filigree_dir.mkdir()
+        write_config(
+            filigree_dir,
+            {
+                "prefix": "proj",
+                "version": 1,
+                "registry_backend": "clarion",
+                "clarion": {"base_url": "file:///tmp/clarion"},
+            },
+        )
+
+        with pytest.raises(ValueError, match=r"base_url"):
+            read_config(filigree_dir)
+
+    def test_read_config_rejects_unknown_clarion_keys(self, tmp_path: Path) -> None:
+        filigree_dir = tmp_path / ".filigree"
+        filigree_dir.mkdir()
+        write_config(
+            filigree_dir,
+            {
+                "prefix": "proj",
+                "version": 1,
+                "registry_backend": "clarion",
+                "clarion": {"base-url": "http://localhost:9111"},
+            },
+        )
+
+        with pytest.raises(ValueError, match=r"base-url"):
+            read_config(filigree_dir)
+
+    def test_read_config_requires_clarion_base_url_when_backend_is_clarion(self, tmp_path: Path) -> None:
+        filigree_dir = tmp_path / ".filigree"
+        filigree_dir.mkdir()
+        write_config(filigree_dir, {"prefix": "proj", "version": 1, "registry_backend": "clarion"})
+
+        with pytest.raises(ValueError, match=r"clarion\.base_url"):
+            read_config(filigree_dir)
+
     def test_non_dict_json_returns_defaults(self, tmp_path: Path) -> None:
         """Config with valid JSON that is not an object falls back to defaults."""
         filigree_dir = tmp_path / ".filigree"
@@ -117,7 +157,15 @@ class TestFromFiligreeDir:
     def test_registry_backend_passed_from_project_config(self, tmp_path: Path) -> None:
         filigree_dir = tmp_path / ".filigree"
         filigree_dir.mkdir()
-        write_config(filigree_dir, {"prefix": "proj", "version": 1, "registry_backend": "clarion"})
+        write_config(
+            filigree_dir,
+            {
+                "prefix": "proj",
+                "version": 1,
+                "registry_backend": "clarion",
+                "clarion": {"base_url": "http://clarion.test"},
+            },
+        )
 
         db = FiligreeDB.from_filigree_dir(filigree_dir)
         try:

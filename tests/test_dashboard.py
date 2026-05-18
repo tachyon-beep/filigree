@@ -14,6 +14,7 @@ import logging
 import time
 from collections.abc import AsyncIterator
 from pathlib import Path
+from typing import Any
 from unittest.mock import patch
 
 import pytest
@@ -370,6 +371,55 @@ class TestMainGlobalReset:
         assert ".filigree.conf" in stderr
         assert "Run `filigree doctor`" in stderr
         assert "Traceback" not in stderr
+
+    def test_ethereal_main_logs_local_registry_fallback(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        filigree_dir = tmp_path / FILIGREE_DIR_NAME
+        filigree_dir.mkdir()
+        write_config(
+            filigree_dir,
+            {
+                "prefix": "dash",
+                "version": 1,
+                "registry_backend": "clarion",
+                "clarion": {"base_url": "http://clarion.test"},
+            },
+        )
+        write_conf(
+            tmp_path / CONF_FILENAME,
+            {
+                "version": 1,
+                "project_name": "dash",
+                "prefix": "dash",
+                "db": ".filigree/filigree.db",
+                "registry_backend": "clarion",
+                "clarion": {"base_url": "http://clarion.test"},
+            },
+        )
+        db = FiligreeDB(filigree_dir / DB_FILENAME, prefix="dash")
+        db.initialize()
+        db.close()
+        monkeypatch.chdir(tmp_path)
+        captured: dict[str, Any] = {}
+
+        def fake_run(*args: object, **kwargs: object) -> None:
+            captured["config"] = dict(dash_module._config)
+            captured["clarion_config"] = dict(dash_module._db.clarion_config) if dash_module._db is not None else {}
+            captured["allow_local_fallback"] = dash_module._db.allow_local_fallback if dash_module._db is not None else False
+
+        monkeypatch.setattr("uvicorn.run", fake_run)
+
+        with caplog.at_level(logging.WARNING, logger="filigree.dashboard"):
+            dash_module.main(port=9999, no_browser=True, server_mode=False, allow_local_fallback=True)
+
+        assert "Clarion registry backend unavailable; using local file registry fallback" in caplog.text
+        assert captured["allow_local_fallback"] is True
+        assert captured["config"]["clarion"] == {"base_url": "http://clarion.test"}
+        assert captured["clarion_config"] == {"base_url": "http://clarion.test"}
 
     def test_dashboard_structured_log_does_not_leak_paths(
         self,

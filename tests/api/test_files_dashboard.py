@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import socket
 from collections.abc import AsyncGenerator, Generator
 from pathlib import Path
 
@@ -12,7 +11,6 @@ from httpx import ASGITransport, AsyncClient
 import filigree.dashboard as dash_module
 from filigree.core import FiligreeDB
 from filigree.dashboard import create_app
-from filigree.registry import ClarionRegistry
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -401,15 +399,8 @@ class TestScanResultsEndpointEnhancements:
         )
         assert resp.status_code == 200
 
-    async def test_clarion_registry_unavailable_returns_503(self, client: AsyncClient, api_db: FiligreeDB) -> None:
-        with socket.socket() as sock:
-            sock.bind(("127.0.0.1", 0))
-            host, port = sock.getsockname()
-        api_db.registry_backend = "clarion"
-        api_db.clarion_config = {"base_url": f"http://{host}:{port}", "timeout_seconds": 0.1}
-        api_db.registry = ClarionRegistry(f"http://{host}:{port}", timeout_seconds=0.1)
-
-        resp = await client.post(
+    async def test_clarion_registry_unavailable_returns_503(self, unavailable_clarion_client: AsyncClient) -> None:
+        resp = await unavailable_clarion_client.post(
             "/api/v1/scan-results",
             json={
                 "scan_source": "ruff",
@@ -419,7 +410,7 @@ class TestScanResultsEndpointEnhancements:
 
         assert resp.status_code == 503
         data = resp.json()
-        assert data["code"] == "IO"
+        assert data["code"] == "REGISTRY_UNAVAILABLE"
         assert "Clarion registry unavailable" in data["error"]
 
     async def test_new_finding_ids_in_response(self, client: AsyncClient) -> None:

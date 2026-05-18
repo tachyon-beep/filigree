@@ -275,7 +275,7 @@ running in `local` or `clarion` mode.
 
 Direct file registration is displaced in `clarion` mode. MCP `register_file`
 and CLI `filigree register-file` return
-`FILIGREE_FILE_REGISTRY_DISPLACED` with the Clarion read URL to use instead.
+`FILE_REGISTRY_DISPLACED` with the Clarion read URL to use instead.
 Auto-create surfaces (`POST /api/v1/scan-results`,
 `POST /api/loom/scan-results`, `POST /api/scan-results`, observations, and
 scanner helpers) route through the registry backend and should not emit that

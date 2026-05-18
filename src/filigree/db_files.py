@@ -22,6 +22,7 @@ from filigree.types.core import AssocType, FindingStatus, Severity
 from filigree.types.files import ScanIngestResult
 
 if TYPE_CHECKING:
+    from filigree.registry import ResolvedFile
     from filigree.types.core import ObservationDict, PaginatedResult, ScanFindingDict
     from filigree.types.files import (
         CleanStaleResult,
@@ -181,6 +182,21 @@ class FilesMixin(DBMixinProtocol):
             metadata=self._parse_metadata(row["metadata"], f"scan_finding:{row['file_id']}"),
         )
 
+    def _is_local_registry_fallback_row(self, registry_backend: str) -> bool:
+        return (
+            getattr(self, "registry_backend", "local") == "clarion"
+            and bool(getattr(self, "allow_local_fallback", False))
+            and registry_backend == "local"
+        )
+
+    def _record_registry_fallback_event(self, file_id: str, *, actor: str, now: str) -> None:
+        self.conn.execute(
+            "INSERT INTO file_events "
+            "(file_id, event_type, field, old_value, new_value, actor, created_at) "
+            "VALUES (?, 'registry_local_fallback', 'registry_backend', 'clarion', 'local', ?, ?)",
+            (file_id, actor, now),
+        )
+
     # -- File registration ---------------------------------------------------
 
     def register_file(
@@ -213,6 +229,27 @@ class FilesMixin(DBMixinProtocol):
             changes: list[tuple[str, str, str]] = []  # (field, old, new)
             current_language = existing["language"] or ""
             next_language = language or (inferred_language if not current_language else "")
+            if self.registry.is_displaced():
+                resolved = self.registry.resolve_file(
+                    path,
+                    language=next_language or current_language,
+                    actor=actor,
+                )
+                if resolved["file_id"] != existing["id"]:
+                    msg = (
+                        f"Existing file {path!r} resolves to registry id {resolved['file_id']!r}, "
+                        f"but stored file id is {existing['id']!r}; run migrate-registry before re-registering"
+                    )
+                    raise ValueError(msg)
+                for field, next_value in (
+                    ("content_hash", resolved["content_hash"]),
+                    ("registry_backend", resolved["registry_backend"]),
+                ):
+                    current_value = existing[field] or ""
+                    if next_value != current_value:
+                        updates.append(f"{field} = ?")
+                        params.append(next_value)
+                        changes.append((field, current_value, next_value))
             if next_language and next_language != current_language:
                 updates.append("language = ?")
                 params.append(next_language)
@@ -276,6 +313,18 @@ class FilesMixin(DBMixinProtocol):
         stored_language = resolved["language"] or stored_language
         content_hash = resolved["content_hash"]
         registry_backend = resolved["registry_backend"]
+        storage_existing = self.conn.execute(
+            "SELECT path FROM file_records WHERE path = ? OR id = ?",
+            (stored_path, file_id),
+        ).fetchone()
+        if storage_existing is not None:
+            return self.register_file(
+                storage_existing["path"],
+                language=language,
+                file_type=file_type,
+                metadata=metadata,
+                actor=actor,
+            )
         try:
             self.conn.execute(
                 "INSERT INTO file_records "
@@ -295,11 +344,23 @@ class FilesMixin(DBMixinProtocol):
                     json.dumps(metadata or {}),
                 ),
             )
+            if self._is_local_registry_fallback_row(registry_backend):
+                self._record_registry_fallback_event(file_id, actor=actor, now=now)
             self.conn.commit()
         except sqlite3.IntegrityError:
             self.conn.rollback()
-            if self.conn.execute("SELECT id FROM file_records WHERE path = ?", (path,)).fetchone() is not None:
-                return self.register_file(path, language=language, file_type=file_type, metadata=metadata, actor=actor)
+            storage_existing = self.conn.execute(
+                "SELECT path FROM file_records WHERE path IN (?, ?) OR id = ?",
+                (path, stored_path, file_id),
+            ).fetchone()
+            if storage_existing is not None:
+                return self.register_file(
+                    storage_existing["path"],
+                    language=language,
+                    file_type=file_type,
+                    metadata=metadata,
+                    actor=actor,
+                )
             raise
         except Exception:
             self.conn.rollback()
@@ -613,7 +674,8 @@ class FilesMixin(DBMixinProtocol):
         try:
             with path.open("rb") as handle:
                 return sum(1 for _ in handle)
-        except OSError:
+        except OSError as exc:
+            logger.debug("Could not count lines for %s: %s", path, exc)
             return None
 
     def _normalize_line_attribution_for_existing_files(self, findings: list[dict[str, Any]]) -> list[str]:
@@ -669,11 +731,12 @@ class FilesMixin(DBMixinProtocol):
         now: str,
         stats: ScanIngestResult,
         actor: str,
+        resolved_file: ResolvedFile | None = None,
     ) -> str:
         """Create or update a file record, returning its id."""
         inferred_language = _infer_language_from_path(path) if infer_language else ""
-        existing_file = self.conn.execute("SELECT id, language FROM file_records WHERE path = ?", (path,)).fetchone()
-        if existing_file is not None:
+
+        def update_existing_file(existing_file: sqlite3.Row) -> str:
             file_id: str = existing_file["id"]
             update_parts = ["updated_at = ?", "updated_by = ?"]
             update_params: list[Any] = [now, actor]
@@ -688,26 +751,61 @@ class FilesMixin(DBMixinProtocol):
                 update_params,
             )
             stats["files_updated"] += 1
+            return file_id
+
+        existing_file = self.conn.execute("SELECT id, language FROM file_records WHERE path = ?", (path,)).fetchone()
+        if existing_file is not None:
+            file_id = update_existing_file(existing_file)
         else:
             stored_language = language or inferred_language
-            resolved = self.registry.resolve_file(
-                path,
-                language=stored_language,
-                actor=actor,
-            )
+            resolved = resolved_file or self.registry.resolve_file(path, language=stored_language, actor=actor)
             file_id = resolved["file_id"]
             stored_path = resolved["canonical_path"]
             stored_language = resolved["language"] or stored_language
             content_hash = resolved["content_hash"]
             registry_backend = resolved["registry_backend"]
-            self.conn.execute(
-                "INSERT INTO file_records "
-                "(id, path, language, content_hash, registry_backend, created_by, updated_by, first_seen, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (file_id, stored_path, stored_language, content_hash, registry_backend, actor, actor, now, now),
-            )
-            stats["files_created"] += 1
+            storage_existing = self.conn.execute(
+                "SELECT id, language FROM file_records WHERE path = ? OR id = ?",
+                (stored_path, file_id),
+            ).fetchone()
+            if storage_existing is not None:
+                file_id = update_existing_file(storage_existing)
+            else:
+                try:
+                    self.conn.execute(
+                        "INSERT INTO file_records "
+                        "(id, path, language, content_hash, registry_backend, created_by, updated_by, first_seen, updated_at) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        (file_id, stored_path, stored_language, content_hash, registry_backend, actor, actor, now, now),
+                    )
+                except sqlite3.IntegrityError:
+                    storage_existing = self.conn.execute(
+                        "SELECT id, language FROM file_records WHERE path IN (?, ?) OR id = ?",
+                        (path, stored_path, file_id),
+                    ).fetchone()
+                    if storage_existing is None:
+                        raise
+                    file_id = update_existing_file(storage_existing)
+                else:
+                    if self._is_local_registry_fallback_row(registry_backend):
+                        self._record_registry_fallback_event(file_id, actor=actor, now=now)
+                    stats["files_created"] += 1
         return file_id
+
+    def _pre_resolve_scan_file_records(self, findings: list[dict[str, Any]], *, actor: str) -> dict[str, ResolvedFile]:
+        """Resolve new scan file identities before the write transaction opens."""
+        resolved_files: dict[str, ResolvedFile] = {}
+        for f in findings:
+            path = f["path"]
+            if path in resolved_files:
+                continue
+            existing_file = self.conn.execute("SELECT 1 FROM file_records WHERE path = ?", (path,)).fetchone()
+            if existing_file is not None:
+                continue
+            inferred_language = _infer_language_from_path(path) if "language" not in f else ""
+            stored_language = f.get("language", "") or inferred_language
+            resolved_files[path] = self.registry.resolve_file(path, language=stored_language, actor=actor)
+        return resolved_files
 
     def _upsert_finding(
         self,
@@ -953,6 +1051,7 @@ class FilesMixin(DBMixinProtocol):
         )
 
         seen_finding_ids: dict[str, list[str]] = {}
+        file_resolutions = self._pre_resolve_scan_file_records(findings, actor=actor)
 
         try:
             for f in findings:
@@ -963,6 +1062,7 @@ class FilesMixin(DBMixinProtocol):
                     now=now,
                     stats=stats,
                     actor=actor,
+                    resolved_file=file_resolutions.get(f["path"]),
                 )
                 self._upsert_finding(
                     f=f,

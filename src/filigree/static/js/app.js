@@ -11,7 +11,7 @@
 
 // --- Module imports ---
 
-import { fetchAllData, fetchDashboardConfig, fetchProjects } from "./api.js";
+import { fetchAllData, fetchDashboardConfig, fetchFileSchema, fetchProjects } from "./api.js";
 import {
   applyFilters,
   applyTypeFilter,
@@ -155,6 +155,7 @@ async function fetchData() {
     if (!state.graphConfigLoaded) {
       await loadDashboardConfig();
     }
+    await loadRegistryFallbackBanner();
     const data = await fetchAllData();
     if (!data) {
       console.warn("fetchData: non-OK response");
@@ -201,6 +202,22 @@ async function loadDashboardConfig() {
     graph_mode_configured: null,
   };
   state.graphConfigLoaded = true;
+}
+
+async function loadRegistryFallbackBanner() {
+  const banner = document.getElementById("registryFallbackBanner");
+  if (!banner) return;
+  try {
+    const schema = await fetchFileSchema();
+    if (schema?.config_flags?.allow_local_fallback) {
+      banner.classList.remove("hidden");
+    } else {
+      banner.classList.add("hidden");
+    }
+  } catch (err) {
+    console.warn("[loadRegistryFallbackBanner] Failed to load file schema:", err);
+    banner.classList.add("hidden");
+  }
 }
 
 function updateStats() {

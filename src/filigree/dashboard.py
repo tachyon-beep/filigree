@@ -261,8 +261,8 @@ class ProjectStore:
                 if db is not None:
                     db.close()
                 raise
-            except _EXPECTED_PROJECT_CONFIG_ERRORS:
-                logger.warning("Invalid project configuration for key=%r path=%s", key, filigree_path)
+            except _EXPECTED_PROJECT_CONFIG_ERRORS as exc:
+                logger.warning("Invalid project configuration for key=%r path=%s: %s", key, filigree_path, exc)
                 if db is not None:
                     db.close()
                 raise
@@ -781,10 +781,12 @@ def main(
             _config.update(config)
             db = _open_db_for_filigree_dir(filigree_dir, check_same_thread=False)
             if allow_local_fallback and db.registry_backend == "clarion":
+                logger.warning(
+                    "Clarion registry backend unavailable; using local file registry fallback",
+                    extra={"tool": "dashboard", "registry_backend": db.registry_backend},
+                )
                 db.allow_local_fallback = True
-                db.clarion_config["allow_local_fallback"] = True
                 db.registry = LocalRegistry(lambda: db._generate_unique_id("file_records", "f"))
-                _config.setdefault("clarion", {})["allow_local_fallback"] = True
             _db = db
         except SchemaVersionMismatchError as exc:
             # Forward schema mismatch — exit cleanly (code 3, matching

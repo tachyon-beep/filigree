@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from filigree.core import FiligreeDB
 from filigree.mcp_server import call_tool  # type: ignore[attr-defined]
-from filigree.registry import ResolvedFile
+from filigree.registry import RegistryFileNotFoundError, RegistryUnavailableError, ResolvedFile
 from filigree.types.api import ErrorCode
 from tests.mcp._helpers import _parse
 
@@ -109,6 +109,98 @@ class TestReportFindingTool:
         )
 
         assert data["file_id"] == "core:file:report-target@src/report_target.py"
+
+    async def test_report_finding_registry_unavailable_returns_error_response(self, mcp_db: FiligreeDB) -> None:
+        class UnavailableRegistry:
+            def resolve_file(self, path: str, *, language: str = "", actor: str = "") -> ResolvedFile:
+                raise RegistryUnavailableError("Clarion registry unavailable for test")
+
+            def is_displaced(self) -> bool:
+                return False
+
+        mcp_db.registry = UnavailableRegistry()
+
+        data = _parse(
+            await call_tool(
+                "report_finding",
+                {
+                    "file_path": "src/report_target.py",
+                    "rule_id": "agent-noted-risk",
+                    "message": "Agent spotted a follow-up risk",
+                    "severity": "medium",
+                },
+            )
+        )
+
+        assert data["code"] == ErrorCode.IO
+        assert "Registry unavailable" in data["error"]
+        assert data["details"]["cause"] == "registry_unavailable"
+
+    async def test_report_finding_registry_file_not_found_returns_not_found(self, mcp_db: FiligreeDB) -> None:
+        class MissingFileRegistry:
+            def resolve_file(self, path: str, *, language: str = "", actor: str = "") -> ResolvedFile:
+                raise RegistryFileNotFoundError(
+                    "Clarion registry could not resolve file at http://clarion.test/api/v1/files?path=missing.py: "
+                    "HTTP 404 not indexed",
+                    status_code=404,
+                    url="http://clarion.test/api/v1/files?path=missing.py",
+                )
+
+            def is_displaced(self) -> bool:
+                return False
+
+        mcp_db.registry = MissingFileRegistry()
+
+        data = _parse(
+            await call_tool(
+                "report_finding",
+                {
+                    "file_path": "missing.py",
+                    "rule_id": "agent-noted-risk",
+                    "message": "Agent spotted a follow-up risk",
+                    "severity": "medium",
+                },
+            )
+        )
+
+        assert data["code"] == ErrorCode.NOT_FOUND
+        assert data["details"]["cause"] == "registry_file_not_found"
+
+    async def test_report_finding_does_not_register_file_after_ingest(self, mcp_db: FiligreeDB) -> None:
+        class CountingCanonicalRegistry:
+            resolve_calls = 0
+
+            def resolve_file(self, path: str, *, language: str = "", actor: str = "") -> ResolvedFile:
+                self.resolve_calls += 1
+                canonical_path = path.casefold()
+                return {
+                    "file_id": f"core:file:{canonical_path.replace('/', ':')}",
+                    "content_hash": f"hash:{canonical_path}",
+                    "canonical_path": canonical_path,
+                    "language": language,
+                    "registry_backend": "clarion",
+                }
+
+            def is_displaced(self) -> bool:
+                return False
+
+        registry = CountingCanonicalRegistry()
+        mcp_db.registry = registry
+
+        data = _parse(
+            await call_tool(
+                "report_finding",
+                {
+                    "file_path": "SRC/Report_Target.py",
+                    "rule_id": "agent-noted-risk",
+                    "message": "Agent spotted a follow-up risk",
+                    "severity": "medium",
+                },
+            )
+        )
+
+        assert data["file_id"] == "core:file:src:report_target.py"
+        assert registry.resolve_calls == 1
 
     async def test_report_finding_default_does_not_create_observation(self, mcp_db: FiligreeDB) -> None:
         data = _parse(

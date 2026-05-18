@@ -19,6 +19,7 @@ from filigree.types.core import (
     FindingStatus,
     ISOTimestamp,
     IssueDict,
+    RegistryBackend,
     ScanFindingDict,
     Severity,
     StatusCategory,
@@ -123,7 +124,7 @@ class FileRecord:
     language: str = ""
     file_type: str = ""
     content_hash: str = ""
-    registry_backend: str = "local"
+    registry_backend: RegistryBackend = "local"
     created_by: str = ""
     updated_by: str = ""
     first_seen: ISOTimestamp = _EMPTY_TS

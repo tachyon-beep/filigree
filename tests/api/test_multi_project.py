@@ -230,6 +230,21 @@ class TestProjectStore:
             project_store.get_db("alpha")
         assert "Failed to open project DB" in caplog.text
 
+    def test_get_db_config_warning_includes_underlying_cause(
+        self,
+        project_store: ProjectStore,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        def _bad_config(_filigree_dir: Path, *, check_same_thread: bool = True) -> FiligreeDB:
+            raise ValueError("clarion.base_url must use http(s)")
+
+        monkeypatch.setattr(dash_module, "_open_db_for_filigree_dir", _bad_config)
+        with caplog.at_level("WARNING", logger="filigree.dashboard"), pytest.raises(ValueError, match=r"clarion\.base_url"):
+            project_store.get_db("alpha")
+        assert "Invalid project configuration" in caplog.text
+        assert "clarion.base_url must use http(s)" in caplog.text
+
     def test_load_skips_missing_dir(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         import json
 

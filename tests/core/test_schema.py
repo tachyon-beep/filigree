@@ -102,6 +102,10 @@ class TestFileRegistryBackendSchema:
             conn.execute("ALTER TABLE file_records DROP COLUMN content_hash")
         if "registry_backend" in existing_columns:
             conn.execute("ALTER TABLE file_records DROP COLUMN registry_backend")
+        conn.execute(
+            "INSERT INTO file_records (id, path, first_seen, updated_at) VALUES (?, ?, ?, ?)",
+            ("existing-f-1", "src/existing.py", "2026-05-18T00:00:00+00:00", "2026-05-18T00:00:00+00:00"),
+        )
         conn.commit()
 
         apply_pending_migrations(conn, 17)
@@ -109,6 +113,11 @@ class TestFileRegistryBackendSchema:
         columns = _get_table_columns(conn, "file_records")
         assert columns["content_hash"] == "TEXT"
         assert columns["registry_backend"] == "TEXT"
+        existing_row = conn.execute(
+            "SELECT content_hash, registry_backend FROM file_records WHERE id = ?",
+            ("existing-f-1",),
+        ).fetchone()
+        assert dict(existing_row) == {"content_hash": "", "registry_backend": "local"}
         row = conn.execute(
             "INSERT INTO file_records (id, path, first_seen, updated_at) VALUES (?, ?, ?, ?) RETURNING content_hash, registry_backend",
             ("f-1", "src/a.py", "2026-05-19T00:00:00+00:00", "2026-05-19T00:00:00+00:00"),

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import builtins
 import json
+import logging
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
 from datetime import UTC, datetime, timedelta
@@ -2592,15 +2593,39 @@ class TestFileTools:
         assert "id" not in detail["file"]
         assert detail["file"]["path"] == "src/example.py"
 
-    async def test_register_file_displaced_under_clarion_mode(self, mcp_db: FiligreeDB) -> None:
+    async def test_register_file_displaced_under_clarion_mode(
+        self, mcp_db: FiligreeDB, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        class DisplacedRegistry:
+            def resolve_file(self, path: str, *, language: str = "", actor: str = "") -> dict[str, str]:
+                raise AssertionError("explicit register_file should be rejected before resolution")
+
+            def is_displaced(self) -> bool:
+                return True
+
+        mcp_db.registry_backend = "clarion"
+        mcp_db.clarion_config = {"base_url": "http://localhost:9111"}
+        mcp_db.registry = DisplacedRegistry()
+
+        with caplog.at_level(logging.WARNING, logger="filigree.mcp_tools.files"):
+            data = _parse(await call_tool("register_file", {"path": "src/example.py", "language": "python"}))
+
+        assert data["code"] == ErrorCode.FILE_REGISTRY_DISPLACED
+        assert "http://localhost:9111/api/v1/files" in data["error"]
+        assert "src/example.py" in data["error"]
+        records = [record for record in caplog.records if record.message == "file_registry_displaced_registration_rejected"]
+        assert records
+        assert records[0].tool == "mcp"
+        assert records[0].file_path == "src/example.py"
+
+    async def test_register_file_displacement_uses_registry_protocol(self, mcp_db: FiligreeDB) -> None:
         mcp_db.registry_backend = "clarion"
         mcp_db.clarion_config = {"base_url": "http://localhost:9111"}
 
-        data = _parse(await call_tool("register_file", {"path": "src/example.py", "language": "python"}))
+        data = _parse(await call_tool("register_file", {"path": "src/protocol.py", "language": "python"}))
 
-        assert data["code"] == ErrorCode.FILIGREE_FILE_REGISTRY_DISPLACED
-        assert "http://localhost:9111/api/v1/files" in data["error"]
-        assert "src/example.py" in data["error"]
+        assert "error" not in data
+        assert data["path"] == "src/protocol.py"
 
     async def test_register_file_infers_language_without_hint(self, mcp_db: FiligreeDB) -> None:
         py = _parse(await call_tool("register_file", {"path": "src/inferred.py"}))

@@ -39,10 +39,10 @@ def test_batch_response_is_generic() -> None:
 def test_error_code_enum_members() -> None:
     from filigree.types.api import ErrorCode
 
-    # Exact 12-member set. SCHEMA_MISMATCH and INTERNAL were added so the
+    # Exact 13-member set. SCHEMA_MISMATCH and INTERNAL were added so the
     # typed SchemaVersionMismatchError and the catch-all except-Exception
     # paths have dedicated codes rather than aliasing onto IO/VALIDATION.
-    # FILIGREE_FILE_REGISTRY_DISPLACED is the ADR-014 direct-registration
+    # FILE_REGISTRY_DISPLACED is the ADR-014 direct-registration
     # conflict code for projects whose file registry is owned by Clarion.
     expected = {
         "VALIDATION",
@@ -53,7 +53,8 @@ def test_error_code_enum_members() -> None:
         "NOT_INITIALIZED",
         "IO",
         "INVALID_API_URL",
-        "FILIGREE_FILE_REGISTRY_DISPLACED",
+        "FILE_REGISTRY_DISPLACED",
+        "REGISTRY_UNAVAILABLE",
         "STOP_FAILED",
         "SCHEMA_MISMATCH",
         "INTERNAL",
@@ -66,6 +67,12 @@ def test_error_code_is_str_subclass() -> None:
 
     assert ErrorCode.VALIDATION == "VALIDATION"
     assert isinstance(ErrorCode.VALIDATION, str)
+
+
+def test_legacy_displaced_registry_code_maps_to_current_name() -> None:
+    from filigree.types.api import LEGACY_CODE_TO_ERRORCODE, ErrorCode
+
+    assert LEGACY_CODE_TO_ERRORCODE["FILIGREE_FILE_REGISTRY_DISPLACED"] is ErrorCode.FILE_REGISTRY_DISPLACED
 
 
 def test_event_type_reversibility_classifier_is_total() -> None:
@@ -228,5 +235,6 @@ def test_errorcode_to_http_status_is_exhaustive() -> None:
     assert errorcode_to_http_status(ErrorCode.PERMISSION) == 403
     assert errorcode_to_http_status(ErrorCode.NOT_INITIALIZED) == 503
     assert errorcode_to_http_status(ErrorCode.SCHEMA_MISMATCH) == 503
+    assert errorcode_to_http_status(ErrorCode.REGISTRY_UNAVAILABLE) == 503
     assert errorcode_to_http_status(ErrorCode.INTERNAL) == 500
     assert errorcode_to_http_status(ErrorCode.IO) == 500

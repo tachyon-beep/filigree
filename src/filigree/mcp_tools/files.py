@@ -544,16 +544,27 @@ async def _handle_register_file(arguments: dict[str, Any]) -> list[TextContent]:
         return _text(ErrorResponse(error="Project directory not initialized", code=ErrorCode.NOT_INITIALIZED))
 
     canonical_path = str(target.relative_to(filigree_dir.resolve().parent))
-    if tracker.registry_backend == "clarion":
-        base_url = str(tracker.clarion_config.get("base_url", "http://localhost:9111"))
+    if tracker.registry.is_displaced():
+        base_url = str(tracker.clarion_config.get("base_url", ""))
         read_url = clarion_file_read_url(base_url, canonical_path, language=language or "")
+        _logger.warning(
+            "file_registry_displaced_registration_rejected",
+            extra={
+                "tool": "mcp",
+                "file_path": canonical_path,
+                "language": language or "",
+                "registry_backend": tracker.registry_backend,
+                "clarion_base_url": base_url,
+                "actor": actor,
+            },
+        )
         return _text(
             ErrorResponse(
                 error=(
                     "File registration is displaced to Clarion for this project. "
                     f"Use Clarion's read API instead: {read_url} (path: {canonical_path})"
                 ),
-                code=ErrorCode.FILIGREE_FILE_REGISTRY_DISPLACED,
+                code=ErrorCode.FILE_REGISTRY_DISPLACED,
             )
         )
     try:

@@ -12,7 +12,7 @@ Filigree gains a pluggable `RegistryProtocol` selected by a `registry_backend` c
 - `local` (default, unchanged behaviour) — Filigree's native UUID-derived file IDs.
 - `clarion` (opt-in, per-project) — Filigree delegates file-identity resolution to Clarion's HTTP read API; `file_records.id` stores Clarion's symbolic entity ID (`core:file:{hash}@{path}` per Clarion ADR-003).
 
-A `FILIGREE_FILE_REGISTRY_DISPLACED` error code surfaces direct file-registration attempts that conflict with `clarion` mode. The `registry_backend` value is published in `GET /api/files/_schema.config_flags` for capability probing. Fail-closed startup applies only under `clarion` mode (an `--allow-local-fallback` escape exists for single-operator recovery).
+A `FILE_REGISTRY_DISPLACED` error code surfaces direct file-registration attempts that conflict with `clarion` mode. The `registry_backend` value is published in `GET /api/files/_schema.config_flags` for capability probing. Fail-closed startup applies only under `clarion` mode (an `--allow-local-fallback` escape exists for single-operator recovery).
 
 The new column `file_records.content_hash` stores the hash Clarion supplied at resolution time, reusing the same drift-vocabulary that ADR-029's `entity_associations.content_hash_at_attach` introduced. There is one drift signal across both surfaces.
 
@@ -39,7 +39,7 @@ ADR-029's defence — opaque-string IDs, no schema surgery, no Clarion-runtime d
 
 ### The "thrown away" history
 
-Clarion ADR-014 (2026-04-18) designed this displacement in detail: `RegistryProtocol` trait, `local`/`clarion` modes, `FILIGREE_FILE_REGISTRY_DISPLACED` error code, capability probe via `_schema.config_flags`, fail-closed startup, `--allow-local-fallback` recovery flag. The Filigree-side ADR was never drafted; the WP10 work package on the Clarion side was deferred to v0.2 by the Sprint 2 scope amendment (2026-05-16). This ADR adopts Clarion ADR-014's design near-verbatim and is the Filigree-side counterpart that closes the cross-product story.
+Clarion ADR-014 (2026-04-18) designed this displacement in detail: `RegistryProtocol` trait, `local`/`clarion` modes, `FILE_REGISTRY_DISPLACED` error code, capability probe via `_schema.config_flags`, fail-closed startup, `--allow-local-fallback` recovery flag. The Filigree-side ADR was never drafted; the WP10 work package on the Clarion side was deferred to v0.2 by the Sprint 2 scope amendment (2026-05-16). This ADR adopts Clarion ADR-014's design near-verbatim and is the Filigree-side counterpart that closes the cross-product story.
 
 ## Decision
 
@@ -116,27 +116,42 @@ Schema version bumps; migration is forward-only and additive (no FK rewrites, no
 
 ### 5. ID rewrite policy under backend swap
 
-A project that flips from `local` to `clarion` mid-life will have existing `file_records` rows with Filigree-native IDs and four NOT-NULL FK consumers pointing at those IDs. The displacement story therefore needs a row-ID rewrite path:
+A project that flips from `local` to `clarion` mid-life will have existing `file_records` rows with Filigree-native IDs and multiple consumers pointing at those IDs. The displacement story therefore needs a row-ID rewrite path:
 
-- A new CLI verb `filigree migrate-registry --to clarion [--dry-run]` issues `resolve_file` for every existing row, fetches Clarion's entity ID, and rewrites `file_records.id` and all four FK consumers (`scan_findings.file_id`, `file_associations.file_id`, `file_events.file_id`, plus the `entity_associations` table introduced in PR #42 — verified to *not* hold file IDs, only entity IDs, so untouched here) inside a single SQLite transaction.
+- A new CLI verb `filigree migrate-registry --to clarion [--dry-run]` issues `resolve_file` for every existing row, fetches Clarion's entity ID, and rewrites `file_records.id`, six relational file-ID consumers (`scan_findings.file_id`, `file_associations.file_id`, `file_events.file_id`, `observations.file_id`, `observation_links.file_id`, and `annotations.file_id`), and `scan_runs.file_ids` JSON references inside a single SQLite transaction. The `entity_associations` table introduced in PR #42 is verified to *not* hold file IDs, only entity IDs, so it is untouched here.
 - Rows whose paths Clarion cannot resolve (deleted-on-disk, outside-project, etc.) are flagged in the manifest; the operator chooses delete-row or keep-as-orphan.
 - Rollback uses the same manifest in reverse.
 
 The migration is not run automatically. A capability-probe mismatch (registry says `clarion` but rows have `registry_backend = 'local'`) raises `RegistryStateMismatch` on next write and halts auto-create paths until the operator runs the migration or reverts the flag.
 
-### 6. `FILIGREE_FILE_REGISTRY_DISPLACED` error code
+### 6. `FILE_REGISTRY_DISPLACED` error code
 
-Under `clarion` mode, the following direct-mutation paths return `FILIGREE_FILE_REGISTRY_DISPLACED`:
+Under `clarion` mode, the following direct-mutation paths return `FILE_REGISTRY_DISPLACED`:
 
 - MCP tool `register_file`.
 - CLI verb `filigree register-file`.
 - HTTP `POST /api/files` direct-create (if/when it exists; currently not exposed).
 
-The error message includes the Clarion read URL the operator should use instead. The three auto-create paths route through `RegistryProtocol` and never raise this code — they get Clarion IDs transparently.
+The error message includes the Clarion read URL the operator should use instead.
+
+Implicit auto-create paths route through `RegistryProtocol` and never raise this code — they get Clarion IDs transparently. This is intentional asymmetry: direct operator requests to create file identity in Filigree are displaced, while issue/scan/annotation workflows that need a file row as supporting metadata resolve that identity through Clarion. The implicit surface currently includes:
+
+- `FiligreeDB.register_file` when called by internal DB and scanner flows.
+- `FiligreeDB.process_scan_results` through `_upsert_file_record`.
+- `ObservationsMixin.create_observation`.
+- `AnnotationsMixin.annotate_file`.
+- Scanner and finding surfaces such as `report_finding`, `preview-scan`, `trigger-scan`, and `trigger-scan-batch`.
+
+`delete_file_record` is intentionally not displaced. It is Filigree-local
+administrative cleanup of a stored tracking row and its local associations or
+findings; it does not delete or mutate the Clarion entity identified by
+`file_id`. Operators may delete stale Filigree rows in `clarion` mode by
+explicit file ID, subject to the same local conflict/`--force` rules as
+`local` mode.
 
 ### 7. Fail-closed startup under `clarion` mode
 
-If `registry_backend: clarion` is configured but the Clarion HTTP read API is unreachable at Filigree startup, the three auto-create paths return `503 Service Unavailable` with `RegistryUnavailableError`. Read paths (`GET /api/loom/files`, `GET /api/loom/issues/.../files`) continue to operate against stored rows.
+If `registry_backend: clarion` is configured but the Clarion HTTP read API is unreachable at Filigree startup, implicit auto-create paths return `503 Service Unavailable` with `RegistryUnavailableError`. Read paths (`GET /api/loom/files`, `GET /api/loom/issues/.../files`) continue to operate against stored rows.
 
 `allow_local_fallback: true` (in `.filigree.conf` or via `--allow-local-fallback`) downgrades the failure to a `WARN` and routes auto-creates through `LocalRegistry`. The flag is for single-operator recovery, not steady-state operation; the dashboard surfaces a banner while it is active.
 
@@ -162,7 +177,7 @@ Drop `local`; always delegate. Filigree without Clarion fails to start.
 
 Add an `association_kind: 'file' | 'entity'` discriminator to `entity_associations`; let files ride.
 
-**Why rejected**: same reason ADR-029 rejected merging file_associations and entity_associations — overloading. `file_records.id` is referenced by four NOT-NULL FKs; routing those references through a discriminated union would touch more code than the `RegistryProtocol` refactor and would leave `file_records.id` itself still shadowed.
+**Why rejected**: same reason ADR-029 rejected merging file_associations and entity_associations — overloading. `file_records.id` is referenced by six relational consumers plus `scan_runs.file_ids` JSON references; routing those references through a discriminated union would touch more code than the `RegistryProtocol` refactor and would leave `file_records.id` itself still shadowed.
 
 ### Alternative 4 — Schema-level join across two DBs (Filigree + Clarion)
 
@@ -182,7 +197,7 @@ Add an `association_kind: 'file' | 'entity'` discriminator to `entity_associatio
 ### Negative
 
 - Two code paths per auto-create operation. Test surface doubles for file-registry behaviour (parameterise the test suite over `registry_backend ∈ {local, clarion}`).
-- One synchronous RPC hop per Filigree write that touches `file_records` under `clarion` mode. Loopback HTTP cost ~1–5ms; acceptable for developer workloads, would need batched resolution for high-throughput scans (Phase E candidate).
+- One synchronous RPC hop per Filigree write that touches `file_records` under `clarion` mode. Loopback HTTP cost ~1–5ms; acceptable for developer workloads. `ClarionRegistry` does not retry failed HTTP calls in this release; failures surface immediately as `RegistryUnavailableError` so operators do not accidentally duplicate writes across products. Batched resolution and retry policy are deferred together for high-throughput scans, where Clarion can define idempotency and partial-failure semantics explicitly.
 - Cross-product launch sequencing: under `clarion` mode the operator must start Clarion's HTTP read API before Filigree, or set `--allow-local-fallback` for recovery.
 - The `migrate-registry` CLI verb is a one-way operation in practice (rollback only works inside the reversibility window). Documented as a hard boundary.
 
@@ -199,7 +214,7 @@ The work has a fixed one-way dependency: Filigree's `clarion` mode is a no-op un
 |---|---|---|
 | **A** | Clarion | Add an `axum`-based HTTP read server to `clarion-cli/src/serve.rs`. Expose `GET /api/v1/files?path=&language=` returning `{entity_id, content_hash, canonical_path, language}`. Wire into `clarion serve`. Surface in `clarion.yaml`. Document in Clarion's contracts directory. |
 | **B** | Filigree | Land `RegistryProtocol` interface and `LocalRegistry`; refactor `_upsert_file_record`, `register_file`, and the three `tracker.register_file` call sites to consume the protocol. Behavior-preserving — no flag yet, default-only. Schema migration adds `content_hash` and `registry_backend` columns (empty values under `local`). |
-| **C** | Filigree | Add `registry_backend` config flag, `ClarionRegistry` impl, capability probe (`_schema.config_flags`), `FILIGREE_FILE_REGISTRY_DISPLACED` error code, fail-closed startup, `--allow-local-fallback` escape, the `migrate-registry` CLI verb. |
+| **C** | Filigree | Add `registry_backend` config flag, `ClarionRegistry` impl, capability probe (`_schema.config_flags`), `FILE_REGISTRY_DISPLACED` error code, fail-closed startup, `--allow-local-fallback` escape, the `migrate-registry` CLI verb. |
 | **D** | Both | Cross-process integration tests against a live Clarion read API. Parity tests parameterised over `registry_backend ∈ {local, clarion}`. Capability-probe handshake tests. |
 | **E** | Both | Documentation: Filigree `docs/federation/contracts.md` references the Clarion read surface; Clarion's `loom.md` §2 claim is restated as factual rather than aspirational; cross-project launch runbook published. |
 
@@ -221,7 +236,9 @@ Phase A must ship before Phase C can land an integration that does anything obse
 - Sprint 2 scope amendment (defer): `/home/john/clarion/docs/implementation/sprint-2/scope-amendment-2026-05.md`.
 - Clarion integration recon: `/home/john/clarion/docs/clarion/v0.1/reviews/pre-restructure/integration-recon.md` (auto-create paths and FK survey).
 - Filigree auto-create paths (verified 2026-05-19):
-  - `src/filigree/db_files.py:640` `_upsert_file_record`
-  - `src/filigree/db_files.py:184` `register_file`
+  - `src/filigree/db_files.py:186` `register_file`
+  - `src/filigree/db_files.py:663` `_upsert_file_record`
   - `src/filigree/db_observations.py:223` `register_file`
+  - `src/filigree/db_annotations.py:655` `register_file`
+  - `src/filigree/cli_commands/scanners.py:382,:579,:1051` `tracker.register_file`
   - `src/filigree/mcp_tools/scanners.py:657,:746,:964` `tracker.register_file`

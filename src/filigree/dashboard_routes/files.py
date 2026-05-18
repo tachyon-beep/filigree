@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
     from fastapi import APIRouter
+    from fastapi.responses import JSONResponse
 
 from starlette.requests import Request
 
@@ -24,13 +25,19 @@ from filigree.dashboard_routes.common import (
     _parse_pagination,
     _safe_int,
 )
-from filigree.registry import REGISTRY_BACKEND_FEATURES, RegistryUnavailableError
+from filigree.registry import REGISTRY_BACKEND_FEATURES, RegistryFileNotFoundError, RegistryResolutionError, RegistryUnavailableError
 from filigree.types.api import ErrorCode
 from filigree.types.core import AssocType, FindingStatus, Severity
 
 logger = logging.getLogger(__name__)
 
 _MAX_MIN_FINDINGS = 2_147_483_647
+
+
+def _registry_resolution_error_response(exc: RegistryResolutionError) -> JSONResponse:
+    if isinstance(exc, RegistryFileNotFoundError):
+        return _error_response(str(exc), ErrorCode.NOT_FOUND, 404)
+    return _error_response(str(exc), ErrorCode.VALIDATION, 400)
 
 # ---------------------------------------------------------------------------
 # Shared request parsing
@@ -360,8 +367,10 @@ def create_classic_router() -> APIRouter:
             return _error_response(parsed, ErrorCode.VALIDATION, 400)
         try:
             result = db.process_scan_results(**parsed)
+        except RegistryResolutionError as e:
+            return _registry_resolution_error_response(e)
         except RegistryUnavailableError as e:
-            return _error_response(str(e), ErrorCode.IO, 503)
+            return _error_response(str(e), ErrorCode.REGISTRY_UNAVAILABLE, 503)
         except ValueError as e:
             return _error_response(str(e), ErrorCode.VALIDATION, 400)
         return JSONResponse(result)
@@ -420,8 +429,10 @@ def create_loom_router() -> APIRouter:
             return _error_response(parsed, ErrorCode.VALIDATION, 400)
         try:
             result = db.process_scan_results(**parsed)
+        except RegistryResolutionError as e:
+            return _registry_resolution_error_response(e)
         except RegistryUnavailableError as e:
-            return _error_response(str(e), ErrorCode.IO, 503)
+            return _error_response(str(e), ErrorCode.REGISTRY_UNAVAILABLE, 503)
         except ValueError as e:
             return _error_response(str(e), ErrorCode.VALIDATION, 400)
         return JSONResponse(scan_ingest_result_to_loom(result))
@@ -552,8 +563,10 @@ def create_living_surface_router() -> APIRouter:
             return _error_response(parsed, ErrorCode.VALIDATION, 400)
         try:
             result = db.process_scan_results(**parsed)
+        except RegistryResolutionError as e:
+            return _registry_resolution_error_response(e)
         except RegistryUnavailableError as e:
-            return _error_response(str(e), ErrorCode.IO, 503)
+            return _error_response(str(e), ErrorCode.REGISTRY_UNAVAILABLE, 503)
         except ValueError as e:
             return _error_response(str(e), ErrorCode.VALIDATION, 400)
         return JSONResponse(scan_ingest_result_to_loom(result))

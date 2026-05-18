@@ -51,7 +51,7 @@ Maps onto ADR-014 Phases B / C / E.
 | F-C.1 | `registry_backend` config flag wiring (`.filigree.conf`, `ProjectConfig`) | §2 |
 | F-C.2 | `ClarionRegistry` implementation (reqwest-equivalent in Python) | §1 |
 | F-C.3 | Capability probe in `GET /api/files/_schema.config_flags` | §4 |
-| F-C.4 | `FILIGREE_FILE_REGISTRY_DISPLACED` error code + the three direct-mutation surfaces that emit it | §6 |
+| F-C.4 | `FILE_REGISTRY_DISPLACED` error code + the three direct-mutation surfaces that emit it | §6 |
 | F-C.5 | Fail-closed startup under `clarion` mode; `--allow-local-fallback` flag | §7 |
 | F-C.6 | `filigree migrate-registry` CLI verb (dry-run, execute, rollback, manifest) | §5 |
 | F-E.1 | `docs/federation/contracts.md` update referencing Clarion's read API | §8 |

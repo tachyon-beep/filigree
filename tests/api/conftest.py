@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import socket
 from collections.abc import AsyncIterator, Generator
 from pathlib import Path
 
@@ -33,6 +34,71 @@ def dashboard_db(populated_db: PopulatedDB) -> PopulatedDB:
 async def client(dashboard_db: PopulatedDB) -> AsyncIterator[AsyncClient]:
     """Create a test client backed by a single-project DB (ethereal mode)."""
     dash_module._db = dashboard_db.db
+    app = create_app()
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as c:
+        yield c
+    dash_module._db = None
+
+
+def _unused_localhost_url() -> str:
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        host, port = sock.getsockname()
+    return f"http://{host}:{port}"
+
+
+@pytest.fixture
+def clarion_fallback_dashboard_db(tmp_path: Path) -> Generator[FiligreeDB, None, None]:
+    """Dashboard DB configured through the real Clarion fallback constructor path."""
+    db = FiligreeDB(
+        tmp_path / "filigree.db",
+        prefix="test",
+        check_same_thread=False,
+        registry_backend="clarion",
+        clarion_config={
+            "base_url": "http://clarion.test",
+            "allow_local_fallback": True,
+        },
+    )
+    db.initialize()
+    yield db
+    db.close()
+
+
+@pytest.fixture
+async def clarion_fallback_client(clarion_fallback_dashboard_db: FiligreeDB) -> AsyncIterator[AsyncClient]:
+    """Dashboard client backed by a constructor-validated Clarion fallback DB."""
+    dash_module._db = clarion_fallback_dashboard_db
+    app = create_app()
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as c:
+        yield c
+    dash_module._db = None
+
+
+@pytest.fixture
+def unavailable_clarion_dashboard_db(tmp_path: Path) -> Generator[FiligreeDB, None, None]:
+    """Dashboard DB configured through real Clarion init with an unreachable endpoint."""
+    db = FiligreeDB(
+        tmp_path / "filigree.db",
+        prefix="test",
+        check_same_thread=False,
+        registry_backend="clarion",
+        clarion_config={
+            "base_url": _unused_localhost_url(),
+            "timeout_seconds": 0.1,
+        },
+    )
+    db.initialize()
+    yield db
+    db.close()
+
+
+@pytest.fixture
+async def unavailable_clarion_client(unavailable_clarion_dashboard_db: FiligreeDB) -> AsyncIterator[AsyncClient]:
+    """Dashboard client backed by a constructor-validated unreachable Clarion DB."""
+    dash_module._db = unavailable_clarion_dashboard_db
     app = create_app()
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as c:

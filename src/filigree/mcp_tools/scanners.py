@@ -11,7 +11,7 @@ import shutil
 import sqlite3
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from mcp.types import TextContent, Tool
 
@@ -19,12 +19,14 @@ from filigree.bundled_scanners import BUNDLED_SCANNERS, bundled_scanner_matches,
 from filigree.core import VALID_SEVERITIES
 from filigree.mcp_tools.common import _list_response, _parse_args, _text, _validate_int_range
 from filigree.mcp_tools.payloads import finding_to_mcp
+from filigree.registry import RegistryFileNotFoundError, RegistryResolutionError, RegistryUnavailableError
 from filigree.scanner_callback import ScannerApiUrlResolution, resolve_scanner_api_url_with_source
 from filigree.scanner_prompts import PROMPT_PACKS, applicable_prompt_pack_names, expand_prompt_pack_names, list_prompt_packs
 from filigree.scanner_runtime import ScannerSpawnError, _spawn_scan
 from filigree.scanners import list_scanners as _list_scanners
 from filigree.scanners import load_scanner, validate_scanner_command
 from filigree.types.api import ErrorCode, ErrorResponse
+from filigree.types.files import ScanIngestResult
 from filigree.types.inputs import (
     DisableScannerArgs,
     EnableScannerArgs,
@@ -124,6 +126,38 @@ def _report_finding_observation_ids(
     """
     observations = tracker.list_observations(file_id=file_id, limit=10000)
     return [observation["id"] for observation in observations if observation.get("source_finding_id") == finding_id]
+
+
+def _reported_finding_record(
+    tracker: Any,
+    result: ScanIngestResult,
+    *,
+    rule_id: str,
+    line_start: int | None,
+    message: str,
+    severity: str,
+) -> dict[str, Any] | None:
+    for finding_id in result.get("new_finding_ids", []):
+        try:
+            return cast(dict[str, Any], tracker.get_finding(finding_id))
+        except KeyError:
+            continue
+
+    matching_findings = cast(
+        list[dict[str, Any]],
+        tracker.list_findings_global(scan_source="agent", limit=10000)["findings"],
+    )
+    return next(
+        (
+            item
+            for item in matching_findings
+            if item["rule_id"] == rule_id
+            and item.get("line_start") == line_start
+            and item.get("message") == message
+            and item.get("severity") == severity
+        ),
+        None,
+    )
 
 
 def register(
@@ -649,27 +683,46 @@ async def _handle_report_finding(arguments: dict[str, Any]) -> list[TextContent]
             create_observations=create_observation,
             observation_actor=actor,
         )
+    except RegistryResolutionError as exc:
+        _logger.error("report_finding registry resolution failed: %s", exc)
+        code = ErrorCode.NOT_FOUND if isinstance(exc, RegistryFileNotFoundError) else ErrorCode.VALIDATION
+        cause = "registry_file_not_found" if isinstance(exc, RegistryFileNotFoundError) else "registry_resolution_rejected"
+        return _text(
+            ErrorResponse(
+                error=f"Registry could not resolve file while reporting finding: {exc}",
+                code=code,
+                details={"cause": cause},
+            )
+        )
+    except RegistryUnavailableError as exc:
+        _logger.error("report_finding registry unavailable: %s", exc)
+        return _text(
+            ErrorResponse(
+                error=f"Registry unavailable while reporting finding: {exc}",
+                code=ErrorCode.IO,
+                details={"cause": "registry_unavailable"},
+            )
+        )
     except (ValueError, sqlite3.Error) as exc:
         _logger.error("report_finding failed: %s", exc)
         return _text(ErrorResponse(error=f"Failed to report finding: {exc}", code=ErrorCode.IO))
 
-    normalized_path = finding["path"]
-    file_record = tracker.register_file(normalized_path)
-    matching_findings = tracker.list_findings_global(
-        file_id=file_record.id,
-        scan_source="agent",
-        limit=10000,
-    )["findings"]
     line_start = args.get("line_start")
-    finding_record = next(
-        (item for item in matching_findings if item["rule_id"] == rule_id and item.get("line_start") == line_start),
-        None,
+    finding_record = _reported_finding_record(
+        tracker,
+        result,
+        rule_id=rule_id,
+        line_start=line_start,
+        message=message,
+        severity=severity,
     )
     if finding_record is None:
         return _text(ErrorResponse(error="Reported finding was not found after ingestion", code=ErrorCode.IO))
 
     observation_ids = (
-        _report_finding_observation_ids(tracker, file_id=file_record.id, finding_id=finding_record["id"]) if create_observation else []
+        _report_finding_observation_ids(tracker, file_id=finding_record["file_id"], finding_id=finding_record["id"])
+        if create_observation
+        else []
     )
     response: dict[str, Any] = {
         **finding_to_mcp(finding_record),

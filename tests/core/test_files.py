@@ -2,19 +2,37 @@
 
 from __future__ import annotations
 
+import logging
 import sqlite3
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
 from filigree.core import FiligreeDB, ScanFinding, _normalize_scan_path
-from filigree.db_files import _safe_json_loads
+from filigree.db_files import _safe_json_loads  # type: ignore[attr-defined]
 from filigree.registry import ResolvedFile
+from filigree.types.core import make_entity_id, make_file_id
+from tests._fakes.registry import FixedRegistry
 
 # ---------------------------------------------------------------------------
 # Schema tests
 # ---------------------------------------------------------------------------
+
+
+class _CasefoldingRegistry:
+    def resolve_file(self, path: str, *, language: str = "", actor: str = "") -> ResolvedFile:
+        canonical_path = path.casefold()
+        return {
+            "file_id": make_file_id(f"core:file:{canonical_path.replace('/', ':')}"),
+            "content_hash": f"hash:{canonical_path}",
+            "canonical_path": canonical_path,
+            "language": language,
+            "registry_backend": "clarion",
+        }
+
+    def is_displaced(self) -> bool:
+        return False
 
 
 class TestFileSchema:
@@ -46,20 +64,15 @@ class TestRegisterFile:
     """Tests for registering and retrieving file records."""
 
     def test_register_file_uses_registry_resolved_file_id(self, tmp_path: Path) -> None:
-        class FixedRegistry:
-            def resolve_file(self, path: str, *, language: str = "", actor: str = "") -> ResolvedFile:
-                return {
-                    "file_id": "core:file:def456@src/direct.py",
-                    "content_hash": "hash-direct",
-                    "canonical_path": path,
-                    "language": language,
-                    "registry_backend": "clarion",
-                }
-
-            def is_displaced(self) -> bool:
-                return False
-
-        db = FiligreeDB(tmp_path / "filigree.db", prefix="test", registry=FixedRegistry())
+        db = FiligreeDB(
+            tmp_path / "filigree.db",
+            prefix="test",
+            registry=FixedRegistry(
+                file_id="core:file:def456@src/direct.py",
+                content_hash="hash-direct",
+                registry_backend="clarion",
+            ),
+        )
         try:
             db.initialize()
 
@@ -140,6 +153,59 @@ class TestRegisterFile:
 
         assert registered.path == "src/race.py"
         assert registered.language == "python"
+
+    def test_register_file_recovers_when_registry_canonicalizes_path(self, tmp_path: Path) -> None:
+        db = FiligreeDB(tmp_path / "filigree.db", prefix="test", registry=_CasefoldingRegistry())
+        try:
+            db.initialize()
+
+            created = db.register_file("src/main.py", language="python")
+            recovered = db.register_file("SRC/Main.py", language="python")
+
+            assert recovered.id == created.id
+            assert recovered.path == "src/main.py"
+            assert db.conn.execute("SELECT count(*) FROM file_records").fetchone()[0] == 1
+        finally:
+            db.close()
+
+    def test_register_existing_file_refreshes_displaced_registry_metadata(self, tmp_path: Path) -> None:
+        class RefreshingRegistry:
+            calls = 0
+
+            def resolve_file(self, path: str, *, language: str = "", actor: str = "") -> ResolvedFile:
+                self.calls += 1
+                return {
+                    "file_id": make_entity_id("core:file:stable@src/refresh.py"),
+                    "content_hash": f"sha256:refresh-{self.calls}",
+                    "canonical_path": path,
+                    "language": language,
+                    "registry_backend": "clarion",
+                }
+
+            def is_displaced(self) -> bool:
+                return True
+
+        registry = RefreshingRegistry()
+        db = FiligreeDB(tmp_path / "filigree.db", prefix="test", registry=registry, registry_backend="clarion")
+        try:
+            db.initialize()
+
+            created = db.register_file("src/refresh.py", language="python")
+            db.conn.execute(
+                "UPDATE file_records SET content_hash = '', registry_backend = 'local' WHERE id = ?",
+                (created.id,),
+            )
+            db.conn.commit()
+            updated = db.register_file("src/refresh.py", language="python")
+
+            assert created.id == updated.id
+            assert updated.content_hash == "sha256:refresh-2"
+            assert updated.registry_backend == "clarion"
+            assert registry.calls == 2
+            events = db.get_file_timeline(updated.id, event_type="file_metadata_update")
+            assert {event["data"]["field"] for event in events["results"]} >= {"content_hash", "registry_backend"}
+        finally:
+            db.close()
 
     def test_register_updates_language(self, db: FiligreeDB) -> None:
         db.register_file("src/main.py", language="")
@@ -368,11 +434,21 @@ class TestListFiles:
 class TestProcessScanResults:
     """Tests for ingesting scan findings."""
 
+    def test_count_file_lines_logs_oserror_at_debug(self, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+        missing = tmp_path / "missing.py"
+
+        with caplog.at_level(logging.DEBUG, logger="filigree.db_files"):
+            result = FiligreeDB._count_file_lines(missing)
+
+        assert result is None
+        assert "Could not count lines for" in caplog.text
+        assert str(missing) in caplog.text
+
     def test_ingest_uses_registry_resolved_file_id(self, tmp_path: Path) -> None:
         class FixedRegistry:
             def resolve_file(self, path: str, *, language: str = "", actor: str = "") -> ResolvedFile:
                 return {
-                    "file_id": "core:file:abc123@src/main.py",
+                    "file_id": make_entity_id("core:file:abc123@src/main.py"),
                     "content_hash": "hash-ingest",
                     "canonical_path": path,
                     "language": language,
@@ -406,6 +482,74 @@ class TestProcessScanResults:
             assert file_record.registry_backend == "clarion"
             finding = db.get_finding(result["new_finding_ids"][0])
             assert finding["file_id"] == "core:file:abc123@src/main.py"
+        finally:
+            db.close()
+
+    def test_ingest_resolves_new_files_before_write_transaction(self, tmp_path: Path) -> None:
+        transaction_states: list[bool] = []
+
+        class InspectingRegistry:
+            db: FiligreeDB | None = None
+
+            def resolve_file(self, path: str, *, language: str = "", actor: str = "") -> ResolvedFile:
+                assert self.db is not None
+                transaction_states.append(self.db.conn.in_transaction)
+                return {
+                    "file_id": make_entity_id(f"core:file:{path.replace('/', ':')}"),
+                    "content_hash": f"hash:{path}",
+                    "canonical_path": path,
+                    "language": language,
+                    "registry_backend": "clarion",
+                }
+
+            def is_displaced(self) -> bool:
+                return True
+
+        registry = InspectingRegistry()
+        db = FiligreeDB(
+            tmp_path / "filigree.db",
+            prefix="test",
+            registry=registry,
+            registry_backend="clarion",
+            clarion_config={"base_url": "http://clarion.test"},
+        )
+        registry.db = db
+        try:
+            db.initialize()
+
+            db.process_scan_results(
+                scan_source="ruff",
+                findings=[
+                    {"path": "src/first.py", "rule_id": "E501", "severity": "low", "message": "one"},
+                    {"path": "src/second.py", "rule_id": "E502", "severity": "low", "message": "two"},
+                ],
+            )
+
+            assert transaction_states == [False, False]
+        finally:
+            db.close()
+
+    def test_ingest_recovers_when_registry_canonicalizes_path(self, tmp_path: Path) -> None:
+        db = FiligreeDB(tmp_path / "filigree.db", prefix="test", registry=_CasefoldingRegistry())
+        try:
+            db.initialize()
+            first = db.process_scan_results(
+                scan_source="ruff",
+                findings=[{"path": "src/main.py", "rule_id": "E501", "severity": "low", "message": "one"}],
+            )
+
+            second = db.process_scan_results(
+                scan_source="ruff",
+                findings=[{"path": "SRC/Main.py", "rule_id": "E502", "severity": "low", "message": "two"}],
+            )
+
+            assert first["files_created"] == 1
+            assert second["files_created"] == 0
+            assert second["files_updated"] == 1
+            assert db.conn.execute("SELECT count(*) FROM file_records").fetchone()[0] == 1
+            file_record = db.get_file_by_path("src/main.py")
+            assert file_record is not None
+            assert len(db.get_findings(file_record.id)) == 2
         finally:
             db.close()
 
@@ -652,7 +796,7 @@ class TestProcessScanResults:
         assert f is not None
         finding = db.get_findings(f.id)[0]
         with pytest.raises(ValueError, match="Invalid finding status"):
-            db.update_finding(finding.id, file_id=f.id, status="bogus")
+            db.update_finding(finding.id, file_id=f.id, status=cast(Any, "bogus"))
 
     def test_ingest_finding_missing_path(self, db: FiligreeDB) -> None:
         with pytest.raises(ValueError, match="path"):
@@ -1602,7 +1746,7 @@ class TestFileAssociations:
         f = db.register_file("src/main.py")
         issue = db.create_issue("Fix bug")
         with pytest.raises(ValueError, match="assoc_type"):
-            db.add_file_association(f.id, issue.id, "invalid_type")
+            db.add_file_association(f.id, issue.id, cast(Any, "invalid_type"))
 
     def test_multiple_association_types(self, db: FiligreeDB) -> None:
         f = db.register_file("src/main.py")
@@ -1776,7 +1920,7 @@ class TestFileDetailCore:
         class _ConnProxy:
             """Proxy that raises 'database is locked' for observation queries."""
 
-            def execute(self, sql: str, params: object = ()) -> object:
+            def execute(self, sql: str, params: tuple[Any, ...] = ()) -> object:
                 if "observations" in sql:
                     raise sqlite3.OperationalError("database is locked")
                 return real_conn.execute(sql, params)
@@ -3026,12 +3170,12 @@ class TestScanFindingPostInit:
 
     def test_valid_severity_accepted(self) -> None:
         for sev in ("critical", "high", "medium", "low", "info"):
-            f = ScanFinding(id="x", file_id="y", severity=sev)  # type: ignore[arg-type]
+            f = ScanFinding(id="x", file_id="y", severity=sev)
             assert f.severity == sev
 
     def test_valid_status_accepted(self) -> None:
         for status in ("open", "acknowledged", "fixed", "false_positive", "unseen_in_latest"):
-            f = ScanFinding(id="x", file_id="y", status=status)  # type: ignore[arg-type]
+            f = ScanFinding(id="x", file_id="y", status=status)
             assert f.status == status
 
 

@@ -15,6 +15,7 @@ import tomllib
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from filigree.core import (
     CONF_FILENAME,
@@ -103,6 +104,51 @@ def _validate_filigree_mcp_entry(entry: object) -> dict[str, object]:
     else:
         raise ValueError(f"unknown mcpServers.filigree.type: {transport!r}")
     return entry
+
+
+def _doctor_file_registry_backend_state(
+    conn: sqlite3.Connection,
+    *,
+    registry_settings: dict[str, Any] | None,
+    schema_version: int | None,
+) -> CheckResult | None:
+    """Return a doctor result for ADR-014 registry/data consistency."""
+    if schema_version is None or schema_version < 17:
+        return None
+    settings = registry_settings or {}
+    if settings.get("registry_backend", "local") != "clarion":
+        return None
+    clarion = settings.get("clarion")
+    allow_local_fallback = bool(clarion.get("allow_local_fallback", False)) if isinstance(clarion, dict) else False
+    if allow_local_fallback:
+        return CheckResult(
+            "File registry backend state",
+            True,
+            "Clarion is configured with local fallback enabled; local file_records may be intentional during fallback.",
+        )
+    try:
+        local_count = int(
+            conn.execute(
+                "SELECT COUNT(*) FROM file_records WHERE registry_backend != ?",
+                ("clarion",),
+            ).fetchone()[0]
+        )
+    except sqlite3.Error as exc:
+        return CheckResult(
+            "File registry backend state",
+            False,
+            f"Could not inspect file registry backend state: {exc}",
+            fix_hint="Database may be corrupted. Restore from backup or run: filigree doctor --fix",
+        )
+    if local_count:
+        return CheckResult(
+            "File registry backend state",
+            False,
+            f"Project is configured for Clarion but {local_count} file_records row(s) still use local registry identity.",
+            fix_hint="Run: filigree migrate-registry --to clarion --dry-run, then --execute after reviewing unresolved rows.",
+            code="registry_backend_hybrid_state",
+        )
+    return CheckResult("File registry backend state", True, "All file_records rows use Clarion registry identity.")
 
 
 def _is_absolute_command_path(path: str) -> bool:
@@ -380,6 +426,7 @@ def run_doctor(project_root: Path | None = None) -> list[CheckResult]:
     # conf_db_path is the authoritative DB location when the conf declares it;
     # falls back to .filigree/DB_FILENAME for legacy installs or unreadable confs.
     conf_db_path: Path | None = None
+    conf_data: dict[str, Any] | None = None
     if conf_path.exists():
         try:
             conf_data = read_conf(conf_path)
@@ -422,11 +469,13 @@ def run_doctor(project_root: Path | None = None) -> list[CheckResult]:
 
     # 2. Check config.json
     config_path = filigree_dir / CONFIG_FILENAME
+    config_data: dict[str, Any] | None = None
     if config_path.exists():
         try:
             config = json.loads(config_path.read_text())
             if not isinstance(config, dict):
                 raise ValueError("config.json must be a JSON object")
+            config_data = config
             prefix = config.get("prefix", "?")
             results.append(CheckResult("config.json", True, f"Prefix: {prefix}"))
         except json.JSONDecodeError as e:
@@ -526,6 +575,13 @@ def run_doctor(project_root: Path | None = None) -> list[CheckResult]:
                     )
                 else:
                     results.append(CheckResult("Schema version", True, f"v{schema_version}"))
+                    registry_state = _doctor_file_registry_backend_state(
+                        conn,
+                        registry_settings=conf_data if conf_data is not None else config_data,
+                        schema_version=schema_version,
+                    )
+                    if registry_state is not None:
+                        results.append(registry_state)
         except sqlite3.Error as e:
             results.append(
                 CheckResult(
